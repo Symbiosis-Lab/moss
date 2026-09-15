@@ -52,31 +52,14 @@ jobs:
             | gh api "repos/Symbiosis-Lab/homebrew-tap/dispatches" --input -
           echo "dispatched $TAG to Symbiosis-Lab/homebrew-tap"
 
-          # moss's own release-plz-release / changesets-release jobs sit behind
-          # the `crates-io` / `npm` deployment environments, both of which are
-          # restricted to `main`. repository_dispatch always runs on the
-          # DEFAULT branch (develop here), so a dispatch there fails outright —
-          # "Branch 'develop' is not allowed to deploy ... due to environment
-          # protection rules" (found 2026-08-21, cutting v0.11.5: the dispatch
-          # ran and failed, and the failure was invisible until someone read
-          # the Actions tab). workflow_dispatch takes an explicit --ref, so
-          # this is the one leg that has to use it instead, pinned to main.
-          gh workflow run release.yml --repo Symbiosis-Lab/moss --ref main -f publish=crates-io
-          echo "dispatched $TAG to Symbiosis-Lab/moss (crates-io)"
-          gh workflow run release.yml --repo Symbiosis-Lab/moss --ref main -f publish=npm
-          echo "dispatched $TAG to Symbiosis-Lab/moss (npm)"
-
-          # The wrapper is a third leg, not part of release.yml. It used to ride
-          # the repository_dispatch this file sent before 2026-08-25; splitting
-          # that into the two targeted calls above dropped it, and v0.11.7 shipped
-          # with npx serving 0.11.5 until it was dispatched by hand.
+          # crates.io/npm publishing now happens in this same repo's release.yml,
+          # which self-triggers on `release: published` — no dispatch needed here.
           #
-          # NO --ref, unlike the two legs above. Those need main because their
-          # jobs sit behind branch-restricted deployment environments; this one
-          # uses NPM_TOKEN directly and has no such gate. It must run on the
-          # default branch because its last step commits the published version
-          # back into packages/moss/package.json and pushes to the branch it ran
-          # on — which main rejects, since main takes pull requests only. Pinning
-          # main here turns a successful publish into a red run (v0.11.7).
+          # The wrapper dispatch below still needs a manual call: it's a separate
+          # workflow, not a job inside release.yml. It runs with no --ref (unlike
+          # a branch-restricted deploy) because its last step commits the published
+          # version back into packages/moss/package.json and pushes to the branch
+          # it ran on — pinning --ref main would push to a branch that only takes
+          # pull requests, turning a successful publish into a red run (v0.11.7).
           gh workflow run publish-moss-wrapper.yml --repo Symbiosis-Lab/moss
           echo "dispatched $TAG to Symbiosis-Lab/moss (npm wrapper)"
