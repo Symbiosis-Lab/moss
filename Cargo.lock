@@ -2912,11 +2912,13 @@ version = "0.15.0"
 dependencies = [
  "proptest",
  "pulldown-cmark",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml 0.9.34+deprecated",
  "specta",
  "unicode-normalization",
+ "walkdir",
 ]
 
 [[package]]

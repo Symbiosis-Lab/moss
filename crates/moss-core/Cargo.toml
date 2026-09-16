@@ -44,3 +44,10 @@ specta = ["dep:specta"]
 # user-provided strings (filenames, frontmatter, content); proptest is the
 # cheapest way to assert "never panics on arbitrary UTF-8" as a contract.
 proptest = "1.5"
+# components_sync_test.rs scans Rust/CSS source for class-name literals and
+# `.moss-*` selectors against the COMPONENTS table. Same version as
+# moss-build's own (non-dev) regex dependency.
+regex = "1.12.2"
+# components_sync_test.rs, img_contract_test.rs: recursive source-tree walk.
+# Same version as moss-build's own (non-dev) walkdir dependency.
+walkdir = "2.4"
