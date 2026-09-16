@@ -182,6 +182,21 @@ impl AssetRegistry {
             .map(|(k, _)| k.clone())
             .collect()
     }
+    /// Snapshot of every registry key currently in the `Pending` state — this
+    /// build's own promises not yet kept. Used by the publish-time promise
+    /// gate (`link_audit::dead_links_among_promises`) to tell "a link into
+    /// this build's own in-flight encode" apart from a pre-existing broken
+    /// link, the one distinction a page-vs-manifest diff alone cannot see.
+    pub fn pending_keys(&self) -> std::collections::HashSet<String> {
+        self.assets
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|(_, s)| matches!(s, AssetState::Pending(_)))
+            .map(|(k, _)| k.clone())
+            .collect()
+    }
+
     pub fn clear(&self) {
         let mut assets = self.assets.write().unwrap();
         assets.clear();
@@ -386,6 +401,26 @@ mod asset_registry_tests {
         );
         r.clear();
         assert_eq!(r.source_passthrough("assets/hero.webp"), None);
+    }
+
+    #[test]
+    fn pending_keys_lists_only_pending_entries() {
+        let r = AssetRegistry::new();
+        assert!(r.pending_keys().is_empty());
+        r.set_pending("videos/clip.mp4".into(), None, None);
+        r.set_pending("assets/ok.webp".into(), None, None);
+        r.set_ready("assets/ok.webp".into());
+        r.set_pending("assets/bad.webp".into(), None, None);
+        r.set_failed("assets/bad.webp".into(), "encode error".into());
+
+        let pending = r.pending_keys();
+        assert_eq!(pending.len(), 1);
+        assert!(pending.contains("videos/clip.mp4"));
+        assert!(!pending.contains("assets/ok.webp"), "Ready is not Pending");
+        assert!(
+            !pending.contains("assets/bad.webp"),
+            "a permanently failed encode must stop being a pending promise"
+        );
     }
 
     #[test]

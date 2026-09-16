@@ -1635,6 +1635,67 @@ pub(crate) struct SealPorts {
 /// produced `sealed`. `false` makes the promotion below a no-op
 /// (`ship::Promotion::Withheld`) and, through `tail_owns_shared_state`, keeps
 /// this tail off `hashes.json` and the staging sweep as well.
+/// Run the whole-site link audit, then record which of its dead links are
+/// THIS build's own still-pending promise: a video, or its poster, that
+/// `blocking.rs`'s synchronous render already referenced but whose background
+/// encode has not landed. Pulled out of `advertise_sealed` so it is testable
+/// on its own — a `stage_dir`, a `SealedManifest`, and an `AssetRegistry` —
+/// without the rest of the seal tail's materialize/persist machinery.
+///
+/// The publish gate (`deploy::refuse_publish`) refuses on exactly this
+/// recorded subset. Every OTHER dead link `link_audit::audit` finds — a
+/// stale link to a deleted page, an external host, a deliberately unbuilt
+/// draft, an optional variant nothing ever dispatched, or a permanently
+/// failed encode (which drops out of `pending_keys()` the moment it fails) —
+/// stays advisory-only, exactly as it already was; see the false-refusal
+/// cases pinned in `link_audit_tests.rs`.
+///
+/// This closes a race rather than narrowing it: `FolderSession::has_ui_bound`
+/// / `wait_for_in_flight_work` (the desktop shell's
+/// `src-tauri/src/build_shell.rs`) can still observe "no in-flight work" in
+/// the gap between a video's own `end_ui_bound()` and the follow-up
+/// rebuild's admission — that gap is unaffected by this change. What changes
+/// is that a publish landing in it can no longer ship a page whose asset it
+/// promised and did not deliver, because the promise recorded here outlives
+/// the counter's timing. `has_ui_bound`/`wait_for_in_flight_work` keep their
+/// job as a UX/perf wait (skip a redundant upload, show the "waiting for
+/// background tasks" spinner) for three consumers this change does not touch
+/// and does not need to: the window-close handler, the CLI's post-build wait
+/// (`build/cli_output.rs`'s `finish_cli_build`), and the preview server's
+/// own 600s wait (desktop `preview/commands.rs`).
+fn record_promise_gate(
+    stage_dir: &std::path::Path,
+    sealed: &crate::build::manifest::SealedManifest,
+    assets: Option<&std::sync::Arc<crate::types::assets::AssetRegistry>>,
+    folder_path: &str,
+) -> Vec<crate::build::manifest::link_audit::DeadLink> {
+    let dead_links = crate::build::manifest::link_audit::audit_and_report(stage_dir, sealed);
+
+    // Posters are deliberately not registry-tracked (`DeliveryKind::
+    // registry_tracked` in `build/media/video.rs`) — nothing ever calls
+    // `set_pending` for one. Derive its key from the sibling video's own
+    // pending mp4 key instead, via the same `to_thumb`/`to_mp4` pair
+    // `moss-core`'s video renderer used to write `poster=` in the first
+    // place, so the two keys always agree.
+    let promised: std::collections::HashSet<String> = assets
+        .map(|registry| {
+            let mut keys = registry.pending_keys();
+            let posters: Vec<String> = keys
+                .iter()
+                .filter_map(|k| moss_core::asset_paths::to_thumb_if_video(k))
+                .collect();
+            keys.extend(posters);
+            keys
+        })
+        .unwrap_or_default();
+
+    let unfulfilled =
+        crate::build::manifest::link_audit::dead_links_among_promises(&dead_links, &promised);
+    crate::system::build_records::records()
+        .record_promised_dead_links(folder_path, unfulfilled.clone());
+    unfulfilled
+}
+
 async fn advertise_sealed(
     ports: &SealPorts,
     mp: &crate::moss_paths::MossPaths,
@@ -1699,8 +1760,12 @@ async fn advertise_sealed(
     );
 
     // Last moment the manifest and the stage agree on what shipped — the one
-    // place a whole-site link check can run (moss#1187), and advisory only.
-    crate::build::manifest::link_audit::audit_and_report(stage_dir, &sealed);
+    // place a whole-site link check can run (moss#1187). Advisory for almost
+    // every dead link it finds; the one exception is this build's own
+    // still-unfulfilled promise, which `record_promise_gate` below carries to
+    // `refuse_publish` — see that function's doc and `link_audit`'s module
+    // docs on the moss#1187-adjacent publish/media race this closes.
+    record_promise_gate(stage_dir, &sealed, assets.as_ref(), folder_path);
 
     // 1. Copy stage_dir → generations/<gen-id>/ and swap `current`. mat_ok gates
     //    advertisement to deploy: a failed materialize must NOT publish a
@@ -2134,4 +2199,8 @@ mod media_settle_rerender_tests {
 #[cfg(test)]
 #[path = "build/epoch_ordering_tests.rs"]
 mod epoch_ordering_tests;
+
+#[cfg(test)]
+#[path = "build/promise_gate_tests.rs"]
+mod promise_gate_tests;
 

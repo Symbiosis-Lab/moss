@@ -40,6 +40,17 @@
 //! Counting it would fail an existing `--strict` CI on upgrade for a site that
 //! is not broken, which is a worse outcome than the miss this closes. Promoting
 //! it later is a one-word change once the field tells us the false-positive rate.
+//!
+//! One exception, added 2026-09-16: [`dead_links_among_promises`] scopes this
+//! audit's output down to the references THIS build itself made and has not
+//! yet kept — a video (or its poster) dispatched to a background encode
+//! before the page that embeds it was sealed. That subset is not a maybe;
+//! moss knows for certain it will produce the file, on this same folder, from
+//! this same build. `deploy::refuse_publish` refuses on it, the same way it
+//! already refuses on missing media — closing the window where a publish
+//! could land between a generation's seal and the follow-up rebuild that
+//! completes it, shipping a live page with a dead `<video>`. Every other dead
+//! link this module finds stays exactly as advisory as before.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -51,7 +62,14 @@ use crate::build::served_path::ServedPath;
 /// than written into the scan loop so ratchet row (p) — which reads a literal
 /// `href=\"` inside a `find`/`split` argument as an HTML string-mutation pass —
 /// does not count a read-only audit as one.
-const URL_ATTRS: [&str; 2] = ["href=", "src="];
+///
+/// `poster=` joined the other two 2026-09-16: `moss_core::render::video`
+/// emits it unconditionally (the still frame shown before a `<video>`'s real
+/// source lands), derived from the same source path as `src=` via the same
+/// `to_thumb`/`to_mp4` pair — so a video still mid-encode leaves exactly the
+/// same kind of unsatisfied reference in `poster=` that it does in `src=`,
+/// and until now this module could not see it.
+const URL_ATTRS: [&str; 3] = ["href=", "src=", "poster="];
 
 /// One root-relative reference whose target the build did not write.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -189,8 +207,12 @@ pub fn audit(stage_dir: &Path, sealed: &SealedManifest) -> Vec<DeadLink> {
 }
 
 /// Run the audit and say what it found. The entry point the seal tail calls.
-pub fn audit_and_report(stage_dir: &Path, sealed: &SealedManifest) {
-    for link in audit(stage_dir, sealed) {
+/// Returns the full list (still advisory) so the caller can additionally
+/// scope it down to this build's own unfulfilled promises — see
+/// [`dead_links_among_promises`].
+pub fn audit_and_report(stage_dir: &Path, sealed: &SealedManifest) -> Vec<DeadLink> {
+    let dead = audit(stage_dir, sealed);
+    for link in &dead {
         // `log::warn!`, not `log_warn_problem!` — see the module docs on why
         // this stays out of the `--strict` count.
         log::warn!(
@@ -199,6 +221,28 @@ pub fn audit_and_report(stage_dir: &Path, sealed: &SealedManifest) {
             link.page
         );
     }
+    dead
+}
+
+/// Of `dead`, the ones a key in `promised` would resolve — this build's own
+/// still-pending promise (a video, or its poster, the render phase already
+/// referenced but whose encode has not landed) rather than a pre-existing
+/// broken link. `promised` is `AssetRegistry::pending_keys()` plus, for each
+/// pending video, its derived poster key (posters are never registry-tracked
+/// — see `DeliveryKind::registry_tracked` in `build/media/video.rs`).
+///
+/// This is the one subset the publish gate refuses on (`deploy::
+/// refuse_publish`); everything else `audit` finds stays advisory-only,
+/// exactly as the module docs describe — a stale link to a deleted page, an
+/// external host, a deliberately unbuilt draft, or an optional variant the
+/// site never emits all resolve to no promise and pass through untouched.
+pub fn dead_links_among_promises(dead: &[DeadLink], promised: &HashSet<String>) -> Vec<DeadLink> {
+    dead.iter()
+        .filter(|link| {
+            candidate_keys(&link.href).is_some_and(|keys| keys.iter().any(|k| promised.contains(k)))
+        })
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]

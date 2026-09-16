@@ -351,11 +351,30 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 /// plugin deploy, a second call site added later" — which the CLI could not
 /// honour, because it could not name the function. The evidence it reads
 /// (`build_records`) crossed in 2026-08-29; the verdict followed here.
+///
+/// A second rule joined 2026-09-16, alongside this one rather than as a
+/// separate gate function: a generation can seal before a video it dispatched
+/// (or that video's poster) has finished encoding, and a publish landing in
+/// that window used to ship a page referencing bytes this build never wrote.
+/// `build::manifest::link_audit::dead_links_among_promises` — run on every
+/// seal via `build.rs`'s `record_promise_gate` — is what tells that case
+/// apart from an ordinary missing file: it is this build's OWN still-pending
+/// promise, not something broken. Distinct wording, `in_flight_refusal_text`:
+/// "fix this" would be the wrong thing to tell an author about a video moss
+/// itself hasn't finished encoding yet.
 pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
-    match crate::system::build_records::records().missing_media(folder_path) {
-        Some(missing) if !missing.is_empty() => Err(refusal_text(missing.len())),
-        _ => Ok(()),
+    let records = crate::system::build_records::records();
+    if let Some(missing) = records.missing_media(folder_path) {
+        if !missing.is_empty() {
+            return Err(refusal_text(missing.len()));
+        }
     }
+    if let Some(unfulfilled) = records.promised_dead_links(folder_path) {
+        if !unfulfilled.is_empty() {
+            return Err(in_flight_refusal_text(unfulfilled.len()));
+        }
+    }
+    Ok(())
 }
 
 /// The refusal a user reads. Says what did not happen, not which subsystem said
@@ -369,6 +388,23 @@ pub(crate) fn refusal_text(count: usize) -> String {
     format!(
         "Nothing published — {subject}. A published site can't show a broken image. \
          Fix these, then publish again."
+    )
+}
+
+/// The refusal for this build's own in-flight media — see the second rule on
+/// [`refuse_publish`]. The reference is not broken, it is a moment early, so
+/// this reads as "wait" rather than "fix" — the wording is the only thing
+/// that tells the two refusals apart, and getting it backwards would send an
+/// author hunting for a broken file that does not exist.
+pub(crate) fn in_flight_refusal_text(count: usize) -> String {
+    let subject = if count == 1 {
+        "1 file is still being prepared".to_string()
+    } else {
+        format!("{count} files are still being prepared")
+    };
+    format!(
+        "Nothing published — {subject}. moss is still finishing a video in the background. \
+         Publish again in a moment."
     )
 }
 
@@ -818,3 +854,7 @@ mod not_allowlisted_message_tests {
 #[cfg(test)]
 #[path = "deploy/missing_media_gate_tests.rs"]
 mod missing_media_gate_tests;
+
+#[cfg(test)]
+#[path = "deploy/promised_dead_links_gate_tests.rs"]
+mod promised_dead_links_gate_tests;

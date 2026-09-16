@@ -34,6 +34,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use crate::build::manifest::link_audit::DeadLink;
 use crate::build::types::MissingMedia;
 use crate::types::content::SiteHashes;
 
@@ -45,6 +46,10 @@ pub struct BuildRecords {
     /// await point.
     content_hashes: Mutex<HashMap<String, SiteHashes>>,
     missing_media: Mutex<HashMap<String, Vec<MissingMedia>>>,
+    /// This seal's own still-pending promises the link audit caught dead —
+    /// see `link_audit::dead_links_among_promises` and `refuse_publish`.
+    /// Same replace-not-merge contract as `missing_media`.
+    promised_dead_links: Mutex<HashMap<String, Vec<DeadLink>>>,
 }
 
 impl BuildRecords {
@@ -109,6 +114,31 @@ impl BuildRecords {
         self.missing_media
             .lock()
             .expect("missing_media lock poisoned — a thread panicked while holding it")
+            .get(&Self::key(folder_path))
+            .cloned()
+    }
+
+    /// Record which of this seal's dead links are this build's own
+    /// still-pending promise, replacing the previous answer.
+    ///
+    /// Always called, including with an empty `Vec` — same reasoning as
+    /// `record_missing_media`: a video that finishes encoding between one
+    /// seal and the next must have its refusal cleared by the CLEAN verdict,
+    /// not left standing because nothing wrote over it.
+    pub fn record_promised_dead_links(&self, folder_path: &str, dead: Vec<DeadLink>) {
+        self.promised_dead_links
+            .lock()
+            .expect("promised_dead_links lock poisoned — a thread panicked while holding it")
+            .insert(Self::key(folder_path), dead);
+    }
+
+    /// What the last seal of `folder_path` found among its own unfulfilled
+    /// promises. `None` when no seal has recorded a verdict in this process —
+    /// not "clean", the same distinction `missing_media` draws.
+    pub fn promised_dead_links(&self, folder_path: &str) -> Option<Vec<DeadLink>> {
+        self.promised_dead_links
+            .lock()
+            .expect("promised_dead_links lock poisoned — a thread panicked while holding it")
             .get(&Self::key(folder_path))
             .cloned()
     }

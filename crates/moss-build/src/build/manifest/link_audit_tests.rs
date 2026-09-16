@@ -103,6 +103,16 @@ fn href_and_src_are_read_and_lookalike_attributes_are_not() {
     assert_eq!(got, vec!["/a/", "/b.png", "/f.css"]);
 }
 
+/// `poster=` joined `href=`/`src=` 2026-09-16 so a video's still-frame gets
+/// the same dead-link coverage as its `src` — see the module docs.
+#[test]
+fn poster_is_read_like_href_and_src() {
+    let html = r#"<video src="/videos/clip.mp4" poster="/videos/clip.thumb.jpg" data-thumb-src="/videos/clip.thumb.jpg"></video>"#;
+    let mut got = url_attr_values(html);
+    got.sort();
+    assert_eq!(got, vec!["/videos/clip.mp4", "/videos/clip.thumb.jpg"]);
+}
+
 #[test]
 fn an_unterminated_attribute_ends_the_scan_without_hanging() {
     assert_eq!(url_attr_values(r#"<a href="/never-closed"#), Vec::<String>::new());
@@ -156,4 +166,96 @@ fn a_file_present_in_the_stage_but_absent_from_the_manifest_is_not_dead() {
     assert_eq!(dead.iter().map(|d| d.href.as_str()).collect::<Vec<_>>(), vec!["/nope/"]);
 
     let _ = std::fs::remove_dir_all(&stage);
+}
+
+// ── dead_links_among_promises: the publish-refusing subset ──────────────────
+
+fn promised(keys: &[&str]) -> HashSet<String> {
+    keys.iter().map(|k| k.to_string()).collect()
+}
+
+/// The moss#1187-adjacent race this exists for: a video's page seals before
+/// its encode lands, so the mp4 and the poster both read as dead links, and
+/// both are keys this build itself promised (`AssetRegistry::pending_keys()`
+/// for the mp4, its derived poster key for the other).
+#[test]
+fn a_video_and_its_poster_still_mid_encode_are_both_promised() {
+    let dead = dead_links_in_page(
+        "clip/index.html",
+        r#"<video src="/videos/clip.mp4" poster="/videos/clip.thumb.jpg"></video>"#,
+        &satisfied(&[]),
+        no_stage(),
+    );
+    assert_eq!(dead.len(), 2);
+
+    let promises = promised(&["videos/clip.mp4", "videos/clip.thumb.jpg"]);
+    let gated = dead_links_among_promises(&dead, &promises);
+    assert_eq!(gated.len(), 2, "both the mp4 and its poster must gate publish");
+}
+
+/// An external URL never even reaches `dead_links_in_page` (it is not a
+/// root-relative candidate at all), so it cannot gate a publish either —
+/// pinned here at the layer the publish gate actually reads.
+#[test]
+fn an_external_url_is_not_promised_because_it_was_never_a_candidate() {
+    let dead = dead_links_in_page(
+        "clip/index.html",
+        r#"<video poster="https://cdn.example.com/clip.thumb.jpg"></video>"#,
+        &satisfied(&[]),
+        no_stage(),
+    );
+    assert!(dead.is_empty(), "an external URL must not be scanned as a candidate");
+}
+
+/// A deliberately unbuilt draft: the page it links to was never sealed and
+/// was never promised by any in-flight encode either. Advisory, not a
+/// refusal — the author left it out on purpose.
+#[test]
+fn a_link_to_an_unbuilt_draft_is_not_promised() {
+    let dead = dead_links_in_page(
+        "clip/index.html",
+        r#"<a href="/drafts/unfinished/">still a draft</a>"#,
+        &satisfied(&[]),
+        no_stage(),
+    );
+    assert_eq!(dead.len(), 1);
+    let promises = promised(&["videos/clip.mp4"]);
+    assert!(dead_links_among_promises(&dead, &promises).is_empty());
+}
+
+/// An optional variant the site never dispatched (no `set_pending` ever ran
+/// for it) is not this build's promise, however dead the link reads.
+#[test]
+fn an_optional_variant_never_dispatched_is_not_promised() {
+    let dead = dead_links_in_page(
+        "clip/index.html",
+        r#"<source src="/img/hero.avif">"#,
+        &satisfied(&[]),
+        no_stage(),
+    );
+    assert_eq!(dead.len(), 1);
+    let promises = promised(&["videos/clip.mp4"]);
+    assert!(dead_links_among_promises(&dead, &promises).is_empty());
+}
+
+/// A permanently failed encode must never gate publish forever — there is no
+/// override, so a stuck refusal would have no way out. The caller is
+/// responsible for this by construction: a failed key drops out of
+/// `AssetRegistry::pending_keys()` (see `assets.rs`'s own test), so it never
+/// reaches `promised` in the first place. Pinned here at the filter itself so
+/// the property holds even if a caller passes a stale promise set by mistake
+/// — i.e. NOT promised is the only thing that keeps this safe, and that is
+/// exactly what this test fixes in place.
+#[test]
+fn a_key_absent_from_promised_never_gates_however_dead_the_link() {
+    let dead = dead_links_in_page(
+        "clip/index.html",
+        r#"<video src="/videos/clip.mp4" poster="/videos/clip.thumb.jpg"></video>"#,
+        &satisfied(&[]),
+        no_stage(),
+    );
+    assert_eq!(dead.len(), 2);
+    // The failed video's keys are simply not in the promised set — exactly
+    // what a caller sees after `set_failed` has run.
+    assert!(dead_links_among_promises(&dead, &promised(&[])).is_empty());
 }
