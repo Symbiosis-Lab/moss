@@ -155,6 +155,28 @@ function createMockUrlConfig(): MockUrlConfig;
 
 ***
 
+### enforceMossFence()
+
+```ts
+function enforceMossFence(pluginId, relativePath): void;
+```
+
+Throws the same message the real Rust guard returns, unless the path is
+the calling plugin's own shared-social-data file.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `pluginId` | `string` \| `null` \| `undefined` |
+| `relativePath` | `string` |
+
+#### Returns
+
+`void`
+
+***
+
 ### setupMockTauri()
 
 ```ts
