@@ -4085,6 +4085,201 @@ fn self_heal_then_emit_registers_relinked_webp() {
     }
 }
 
+// ----- Commit 2: self-heal a just-dispatched batch's own output before registration -----
+
+/// The exact coherence violation real uploads showed: `[ERROR] [image]
+/// coherence violation: staged .webp missing (3× this build); skipping
+/// manifest registration. … Upstream staging-link reported success but the
+/// bytes are not on disk.` `convert_single_image`'s `link_to` really did
+/// succeed — this test encodes through the real pipeline first, so the
+/// staged bytes are genuinely present at that moment — but
+/// `run_image_conversion` registers a whole batch's outputs only ONCE,
+/// after every item finishes. On a cloud-synced vault the exclusion marker
+/// on `.moss/build/staging` can silently fail to stick (moss#964 measured
+/// it ABSENT on `.moss/build` while present on `.moss/cache` on a real
+/// vault), so the provider can evict an early-finished item's `.webp`
+/// before that shared registration pass reads it back.
+///
+/// `self_heal_before_registration` closes that gap by re-verifying (and
+/// here, re-materializing from the still-intact CAS blob) every one of a
+/// batch's own outputs immediately before registration. This is a
+/// different call site from `self_heal_then_emit_registers_relinked_webp`
+/// above, which covers the OLDER, already-existing self-heal for a
+/// *carried-forward* (skip-branch) image; this one covers an image that
+/// was *just dispatched and encoded in this very round*.
+#[test]
+fn an_evicted_batch_output_is_healed_before_registration_not_silently_dropped() {
+    let h = harness();
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 400, 300);
+    let cfg = ImageCompressionConfig::default();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+
+    // Encode through the real pipeline: this IS the "Upstream staging-link
+    // reported success" moment — link_to really did put good bytes at
+    // photo.webp, and the CAS blob it came from is independently intact.
+    let outcome = convert_single_image(
+        &src,
+        &source_oid,
+        "photo.webp",
+        &h.temp,
+        &h.staging,
+        &h.objects,
+        &h.transforms,
+        &cfg,
+        None,
+        None,
+        &HashMap::new(),
+    );
+    assert!(
+        outcome.error.is_none(),
+        "encode failed: {:?}",
+        outcome.error
+    );
+    let staged = h.staging.join("photo.webp");
+    assert!(
+        staged.exists(),
+        "precondition: staged webp present after encode"
+    );
+
+    let item = ImageConversionItem {
+        source_path: PathBuf::from("photo.jpg"),
+        source_oid: source_oid.clone(),
+        ext: "jpg".to_string(),
+        dimensions: None,
+        skip: None,
+    };
+
+    // Simulate the eviction race: the provider zeroes the staged file to a
+    // dataless placeholder sometime between this item's own successful
+    // link_to (above) and the batch-wide registration pass about to run
+    // below — the 0-byte-stub convention `output_present` (and this
+    // codebase's own tests) already use to stand in for `SF_DATALESS`.
+    fs::write(&staged, b"").unwrap();
+    assert_eq!(
+        fs::metadata(&staged).unwrap().len(),
+        0,
+        "precondition: staged webp evicted (0 bytes)"
+    );
+
+    // Control: registering now, WITHOUT the self-heal this fix adds, must
+    // silently drop the path — reproducing the exact bug (a coherence
+    // violation logged, no File message, the image vanishes from the built
+    // site with no user-visible error).
+    {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
+        emit_image_outputs_via_channel(
+            &Some(tx),
+            &["photo.webp".to_string()],
+            &h.staging,
+            &std::collections::HashSet::new(),
+            None,
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "control: an evicted staged webp must NOT be registered without self-heal — \
+             confirms this scenario reproduces the coherence violation"
+        );
+    }
+
+    // The fix: verify (and here, re-materialize from the surviving CAS
+    // blob) every one of this batch's own outputs before registration ever
+    // runs.
+    let params = cfg.to_params();
+    let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
+    let healed = self_heal_before_registration(
+        &[item],
+        h._tmp.path(),
+        &HashMap::new(),
+        &h.staging,
+        &h.objects,
+        &h.transforms,
+        &params,
+        &mut index,
+        &HashMap::new(),
+        &std::collections::HashSet::new(),
+    );
+    assert_eq!(
+        healed, 1,
+        "self-heal must recover exactly the one evicted output"
+    );
+    assert!(
+        fs::metadata(&staged).unwrap().len() > 0,
+        "staged webp must be restored to real bytes, not left as a 0-byte stub"
+    );
+
+    // Registering again now succeeds: the image is present, not silently
+    // missing — the outcome this fix requires.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
+    emit_image_outputs_via_channel(
+        &Some(tx),
+        &["photo.webp".to_string()],
+        &h.staging,
+        &std::collections::HashSet::new(),
+        None,
+    );
+    match rx.try_recv() {
+        Ok(EmitMessage::File {
+            rel_path,
+            hash,
+            bucket,
+        }) => {
+            assert_eq!(rel_path, "photo.webp");
+            assert!(
+                !hash.is_empty(),
+                "registered variant must carry a content hash"
+            );
+            assert!(matches!(bucket, HashBucket::ImageVariants));
+        }
+        other => panic!(
+            "expected a File registration after self-heal, got {:?}",
+            other
+        ),
+    }
+}
+
+/// No CAS blob for the source (genuinely never encoded, not merely
+/// evicted) ⇒ `self_heal_before_registration` must not fabricate a phantom
+/// file — mirrors `rematerialize_noop_without_cas_blob`, at this new call
+/// site.
+#[test]
+fn self_heal_before_registration_does_not_fabricate_without_a_cas_blob() {
+    let h = harness();
+    let src = h._tmp.path().join("never-encoded.jpg");
+    make_big_jpeg(&src, 200, 200);
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let item = ImageConversionItem {
+        source_path: PathBuf::from("never-encoded.jpg"),
+        source_oid,
+        ext: "jpg".to_string(),
+        dimensions: None,
+        skip: None,
+    };
+    let cfg = ImageCompressionConfig::default();
+    let params = cfg.to_params();
+    let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
+    let healed = self_heal_before_registration(
+        &[item],
+        h._tmp.path(),
+        &HashMap::new(),
+        &h.staging,
+        &h.objects,
+        &h.transforms,
+        &params,
+        &mut index,
+        &HashMap::new(),
+        &std::collections::HashSet::new(),
+    );
+    assert_eq!(
+        healed, 0,
+        "no CAS blob exists — nothing to heal, and nothing fabricated"
+    );
+    assert!(
+        !h.staging.join("never-encoded.webp").exists(),
+        "must not create a phantom staged file"
+    );
+}
+
 /// Per-item skip/dispatch, exercised through two siblings with the SAME
 /// recorded (matching) fingerprint but different on-disk state. `kept.jpg`'s
 /// variant is already staged, so it takes the cheap skip path: self-heal

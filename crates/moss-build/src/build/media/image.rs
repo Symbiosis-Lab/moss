@@ -2239,6 +2239,36 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     let converted_count = converted_count.load(Ordering::SeqCst);
     let produced_webp_paths = produced_webp_paths.into_inner().unwrap();
 
+    // Self-heal before registering: this batch's own outputs are verified
+    // present (re-materializing from CAS if not) right before both
+    // registration call sites below read them, closing the eviction race
+    // `self_heal_before_registration` documents. Scoped to `ctx.items` (this
+    // batch only, already small after per-image dispatch) so a large vault's
+    // untouched images are never touched here. The lock is released before
+    // `into_inner()` below moves the same `HashIndex` out for its own save.
+    {
+        let mut hash_index_guard = bg_hash_index.lock().unwrap();
+        let params = ctx.config.to_params();
+        let healed = self_heal_before_registration(
+            &ctx.items,
+            project_root,
+            dir_overrides,
+            &ctx.staging_dir,
+            &objects,
+            &transforms,
+            &params,
+            &mut hash_index_guard,
+            &ctx.rung_collisions,
+            &suppressed,
+        );
+        if healed > 0 {
+            log::info!(
+                "[image] self-heal: re-materialized {} staged .webp file(s) from CAS before registration",
+                healed
+            );
+        }
+    }
+
     // Persist the hash index so the next build's blocking `collect_images_for_
     // conversion` stat-matches instead of re-hashing every image (mirrors the
     // video worker at video.rs). save_merging (not save): the video worker writes
@@ -2535,6 +2565,87 @@ fn rematerialize_webp_from_cas(
             false
         }
     }
+}
+
+/// Self-heal every base + rung output `items` are expected to have
+/// produced, immediately before `run_image_conversion` registers them.
+///
+/// **Why this exists.** A successful `link_to` at encode time is not proof
+/// the bytes survive to registration: `run_image_conversion` registers the
+/// whole batch's `produced_webp_paths` only ONCE, after every item in the
+/// batch finishes, so an early-finished item's `.webp` sits in
+/// `.moss/build/staging` for as long as the rest of the batch takes. On a
+/// cloud-synced vault (iCloud / Google Drive) that staging directory's
+/// exclusion marker (`moss_paths::exclude_from_cloud_sync`,
+/// `com.apple.fileprovider.ignore#P`) can silently fail to stick — moss#964
+/// measured it ABSENT on `.moss/build` while present on `.moss/cache` on a
+/// real vault — so the provider can evict a just-staged `.webp` before this
+/// batch's own registration pass reads it back:
+/// `emit_image_outputs_via_channel`'s `output_present` check then finds it
+/// gone and silently drops it ("coherence violation: staged .webp missing
+/// … Upstream staging-link reported success but the bytes are not on
+/// disk"), with no further attempt to recover it.
+///
+/// The CAS blob store (`.moss/cache`) keeps its own exclusion marker far
+/// more reliably (moss#964's own field data), so re-linking from there
+/// recovers the bytes without a full re-encode — the same self-heal
+/// `dispatch_image_conversions`'s skip branch already relies on for a
+/// *carried-forward* image, reused here for one that was *just dispatched*
+/// in the batch that is about to register it. No-op per candidate whose
+/// staging file is already present. Returns the count actually healed.
+fn self_heal_before_registration(
+    items: &[ImageConversionItem],
+    source_root: &Path,
+    dir_overrides: &HashMap<String, String>,
+    staging_dir: &Path,
+    objects: &crate::build::cache::ObjectStore,
+    transforms: &crate::build::cache::TransformCache,
+    params: &serde_json::Value,
+    hash_index: &mut crate::build::cache::HashIndex,
+    rung_collisions: &HashMap<String, PathBuf>,
+    suppressed: &std::collections::HashSet<String>,
+) -> usize {
+    let mut healed = 0usize;
+    for item in items {
+        let rel_source = item.source_path.to_string_lossy().to_string();
+        let mapped = crate::build::scan::page_map::resolve_path_with_overrides(&rel_source, dir_overrides);
+        let relative_webp = moss_core::asset_paths::to_webp(&mapped);
+        if !suppressed.contains(&relative_webp) {
+            healed += usize::from(rematerialize_webp_from_cas(
+                objects,
+                transforms,
+                params,
+                hash_index,
+                &source_root.join(&item.source_path),
+                &rel_source,
+                &staging_dir.join(&relative_webp),
+                "image/webp",
+            ));
+        }
+        if moss_core::asset_paths::is_ladder_source_ext(&item.ext) {
+            if let Some((w, h)) = item.dimensions {
+                for &rung in moss_core::asset_paths::ladder_rungs(w, h, false) {
+                    let rung_rel = moss_core::asset_paths::to_webp_rung(&mapped, rung);
+                    if rung_collisions.contains_key(&rung_rel) {
+                        continue;
+                    }
+                    if !suppressed.contains(&rung_rel) {
+                        healed += usize::from(rematerialize_webp_from_cas(
+                            objects,
+                            transforms,
+                            params,
+                            hash_index,
+                            &source_root.join(&item.source_path),
+                            &rel_source,
+                            &staging_dir.join(&rung_rel),
+                            &format!("image/webp-w{}", rung),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    healed
 }
 
 // `update_image_hashes` removed in #620 Item 2. Pre-Track A this performed
