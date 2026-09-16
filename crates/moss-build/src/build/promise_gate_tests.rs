@@ -14,6 +14,7 @@ use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::served_path::ServedPath;
 use crate::types::assets::AssetRegistry;
 use crate::types::content::SiteHashes;
+use crate::types::services::{BackgroundContext, BuildServices};
 
 /// A portable tempdir under `target/test-tmp`, matching
 /// `epoch_ordering_tests.rs`'s own fixture: the system tempdir can itself sit
@@ -70,21 +71,73 @@ fn a_video_and_poster_still_pending_at_seal_time_gate_publish() {
 }
 
 /// A permanently failed encode must not gate publish forever — there is no
-/// override, so a stuck refusal would leave the author with no way out. The
-/// registry mirrors what `set_failed` really does: the key drops OUT of
-/// `pending_keys()`.
+/// override, so a stuck refusal would leave the author with no way out.
+///
+/// Drives the REAL failure path end to end, rather than hand-calling
+/// `AssetRegistry::set_failed`: no FFmpeg, and the fallback copy's
+/// destination is obstructed by a plain file where its parent directory
+/// belongs (the read-only-output / disk-full shape, reproducible without
+/// root — same fixture as `video::tests::
+/// a_video_that_could_not_even_be_copied_fails_the_media_job`). That is
+/// `ItemStep::shipped_original`'s `Err(e)` arm in `build/media/video.rs`,
+/// which until 2026-09-16 left the key `Pending` forever on this exit: a
+/// rebuild repeats the same copy failure, and with no override this gate
+/// would then refuse the folder's publish indefinitely.
 #[test]
 fn a_permanently_failed_video_does_not_gate_publish() {
     let tmp = stage_dir();
     let folder = format!("/promise-gate-failed-{}", uuid::Uuid::new_v4());
     let sealed = sealed_with_one_page(tmp.path(), VIDEO_PAGE);
 
+    // Seal-time promise: the render phase already referenced the video and
+    // registered it Pending, exactly as `blocking.rs` does.
     let assets = std::sync::Arc::new(AssetRegistry::new());
     assets.set_pending("videos/clip.mp4".into(), None, None);
-    assets.set_failed("videos/clip.mp4".into(), "ffmpeg exited non-zero".into());
-
+    assert!(
+        crate::deploy::refuse_publish(&folder).is_ok(),
+        "no verdict recorded yet must not itself refuse"
+    );
     let unfulfilled = record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder);
-    assert!(unfulfilled.is_empty(), "a failed encode's dead link must not be this build's promise");
+    assert_eq!(unfulfilled.len(), 2, "a still-Pending video must gate publish once");
+    assert!(
+        crate::deploy::refuse_publish(&folder).is_err(),
+        "landing before the encode resolves must be refused"
+    );
+
+    // The follow-up rebuild: source exists (so the item is not a not-found
+    // skip), no FFmpeg (every encode fails, landing in `shipped_original`),
+    // and the fallback copy's own destination is obstructed.
+    let vault = tmp.path().join("vault");
+    std::fs::create_dir_all(vault.join("videos")).unwrap();
+    std::fs::write(vault.join("videos/clip.mov"), b"not a real video").unwrap();
+    std::fs::write(tmp.path().join("videos"), b"in the way of the fallback copy").unwrap();
+
+    let mut svc = BuildServices::headless();
+    svc.assets = Some(assets.clone());
+    let ctx = BackgroundContext {
+        video_items: vec!["videos/clip.mov".to_string()],
+        source_path: vault.display().to_string(),
+        staging_dir: tmp.path().to_path_buf(),
+        moss_dir: tmp.path().join(".moss"),
+        ffmpeg_bin_path: Some(tmp.path().join("no-such-ffmpeg").display().to_string()),
+        ..BackgroundContext::for_test()
+    };
+    crate::build::media::video::run_video_conversion(&svc, &ctx, 0, None);
+
+    assert!(
+        !tmp.path().join("videos/clip.mp4").exists(),
+        "precondition: the fallback copy must really have failed"
+    );
+    assert!(
+        !assets.pending_keys().contains("videos/clip.mp4"),
+        "a permanently failed encode must stop being a pending promise"
+    );
+
+    let unfulfilled_again = record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder);
+    assert!(
+        unfulfilled_again.is_empty(),
+        "a failed encode's dead link must not be this build's promise"
+    );
     assert!(
         crate::deploy::refuse_publish(&folder).is_ok(),
         "a permanently failed video must not block publish"

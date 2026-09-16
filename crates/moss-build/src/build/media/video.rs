@@ -524,7 +524,18 @@ impl ItemStep {
     /// A failed copy delivers nothing, rather than promising a URL for bytes
     /// that never landed — and says so in an advisory of its own. `encoded` is
     /// false by construction: no new bytes means no media child Job (FIX 1b).
+    ///
+    /// A failed copy also retracts the `.mp4` promise via `set_failed`
+    /// (2026-09-16 thermo review of the promise gate). Without it the key
+    /// registered by `blocking.rs`'s `set_pending` stayed `Pending` forever —
+    /// a rebuild hits the same copy failure every time — and the publish
+    /// promise gate this arm feeds (`link_audit::dead_links_among_promises`)
+    /// has no override, so the folder's publish would be blocked
+    /// indefinitely. `services` is only needed for this registry write; every
+    /// other outcome here (delivered bytes, or none at all) still flows
+    /// through the caller's one `record_deliveries` call.
     fn shipped_original(
+        services: &BuildServices,
         source_file: &Path,
         staging_dir: &Path,
         mapped_source: &str,
@@ -550,6 +561,13 @@ impl ItemStep {
                     item,
                     crate::infra::app_advisory::fmt("video_not_published", &[("err", &e)]),
                 ));
+                // Terminal: this key leaves `pending_keys()` so the promise
+                // gate stops refusing this folder's publish over a video that
+                // will never arrive (a permanently failed encode already
+                // takes this same exit through `set_failed`).
+                if let Some(ref registry) = services.assets {
+                    registry.set_failed(url, e);
+                }
                 Vec::new()
             }
         };
@@ -847,6 +865,7 @@ pub(crate) fn run_video_conversion(
             let Some(ffmpeg) = ffmpeg.as_ref() else {
                 // No advisory: this one is the environment's, pushed once above.
                 break 'item ItemStep::shipped_original(
+                    services,
                     &source_file,
                     &ctx.staging_dir,
                     &mapped_source,
@@ -900,6 +919,7 @@ pub(crate) fn run_video_conversion(
                         epoch, filename, MATERIALIZE_DEADLINE
                     );
                     break 'item ItemStep::shipped_original(
+                        services,
                         &source_file,
                         &ctx.staging_dir,
                         &mapped_source,
@@ -930,6 +950,7 @@ pub(crate) fn run_video_conversion(
                     // nothing, leaving the page with no video at all.
                     log::warn!("Failed to hash video {}: {}", filename, e);
                     break 'item ItemStep::shipped_original(
+                        services,
                         &source_file,
                         &ctx.staging_dir,
                         &mapped_source,
@@ -1055,6 +1076,7 @@ pub(crate) fn run_video_conversion(
                 // Shipped for a shared waiter too: the leader wrote ITS output
                 // path, which is a different file when two sources share an oid.
                 break 'item ItemStep::shipped_original(
+                    services,
                     &source_file,
                     &ctx.staging_dir,
                     &mapped_source,
