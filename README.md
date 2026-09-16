@@ -8,6 +8,8 @@ There's no database, no CMS, and no lock-in — the folder on disk is the site. 
 
 ## Install
 
+Desktop app (macOS): download `moss.dmg` from [Releases](https://github.com/Symbiosis-Lab/moss/releases/latest), or run `moss desktop install` from an existing CLI install to fetch and verify it automatically.
+
 macOS (desktop app + CLI, as a Homebrew cask):
 
 ```sh
@@ -27,8 +29,6 @@ npm install -g @symbiosis-lab/moss
 ```
 
 `cargo install moss-cli` is coming — the crate is reserved on crates.io but not yet published.
-
-Or download a binary or the macOS/Windows app directly from [Releases](https://github.com/Symbiosis-Lab/moss/releases/latest).
 
 ## Quick start
 
@@ -55,15 +55,13 @@ moss deploy ~/blog/           # build and publish on every later run
 | `packages/obsidian-moss` | the Obsidian plugin |
 | `site/` | the source of [mosspub.com](https://mosspub.com), including the docs |
 
-The desktop app (macOS and Windows) is built from a private repository; its release assets — and its bug reports — live here.
-
 ## Documentation
 
 Full docs: [mosspub.com/docs](https://mosspub.com/docs). Source: [site/docs/](site/docs/). Changes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Issues
 
-[Open an issue](https://github.com/Symbiosis-Lab/moss/issues) for the CLI, the build engine, any of the packages above, or the desktop app — desktop bug reports go here too, even though its source isn't.
+[Open an issue](https://github.com/Symbiosis-Lab/moss/issues) for the CLI, the build engine, any of the packages above, or the desktop app.
 
 ## License
 

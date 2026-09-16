@@ -5353,7 +5353,7 @@ One email. We write only when there's a build for you.
 :::subscribe {button="Request access"}
 :::
 
-If you'd rather just watch from a distance, the releases are on [GitHub](https://github.com/Symbiosis-Lab/moss-releases) and you can send notes to [hi@symbiosis-lab.org](mailto:hi@symbiosis-lab.org).
+If you'd rather just watch from a distance, the releases are on [GitHub](https://github.com/Symbiosis-Lab/moss) and you can send notes to [hi@symbiosis-lab.org](mailto:hi@symbiosis-lab.org).
 
 ---
 
@@ -5408,7 +5408,7 @@ Markdown 文件。使用内置编辑器、Obsidian、或者任意其他软件。
 :::subscribe {button="申请测试"}
 :::
 
-如果你只想远远看看，发布版在 [GitHub](https://github.com/Symbiosis-Lab/moss-releases) 上，反馈邮箱 [hi@symbiosis-lab.org](mailto:hi@symbiosis-lab.org)。
+如果你只想远远看看，发布版在 [GitHub](https://github.com/Symbiosis-Lab/moss) 上，反馈邮箱 [hi@symbiosis-lab.org](mailto:hi@symbiosis-lab.org)。
 
 ---
 
@@ -5463,5 +5463,5 @@ Markdown 檔案。使用內建編輯器、Obsidian、或者任何軟體。
 :::subscribe {button="申請測試"}
 :::
 
-如果你只想遠遠看看，發佈版在 [GitHub](https://github.com/Symbiosis-Lab/moss-releases) 上，回饋郵箱 [hi@symbiosis-lab.org](mailto:hi@symbiosis-lab.org)。
+如果你只想遠遠看看，發佈版在 [GitHub](https://github.com/Symbiosis-Lab/moss) 上，回饋郵箱 [hi@symbiosis-lab.org](mailto:hi@symbiosis-lab.org)。
 
