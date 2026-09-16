@@ -4275,9 +4275,14 @@ fn build_test_sealed(folder_path: &str) -> Result<Vec<String>, String> {
 }
 
 /// Drive the full production SHIP TAIL, not just the build: seal → prune
-/// orphaned `.webp` → write `hashes.json` → stale-clean staging. Mirrors
-/// `build.rs`'s `exits_after_build` branch, which is the only place all four
-/// run in order.
+/// orphaned `.webp` → reclaim what the prune orphaned → write `hashes.json`
+/// → promote. Mirrors `build.rs`'s `exits_after_build` branch, which is the
+/// only place all of these run in order — this harness has no next build in
+/// its own process either, so it calls `ship::reclaim_staging_now` exactly
+/// where that branch does (moss#… the 2026-09-16 regression: without this
+/// call a single call here left an orphan's `.webp` sitting in staging, which
+/// every assertion below would have missed since none of them ran a SECOND
+/// build to let `pipeline::sweep_staging` cover for it).
 ///
 /// `build_test` and `build_test_sealed` both stop at the seal, so neither can
 /// observe anything the tail decides — and the tail is where the staging tree
@@ -4285,10 +4290,11 @@ fn build_test_sealed(folder_path: &str) -> Result<Vec<String>, String> {
 /// prune runs. Returns the keys the prune condemned so a caller can assert a
 /// converged build condemns nothing.
 ///
-/// It promotes, too. Staging's sweep runs at the START of a build and only
-/// once a generation is promoted (`pipeline::sweep_staging`), so a harness
-/// that sealed without promoting would leave every staged file the manifest
-/// dropped sitting on disk forever.
+/// It promotes, too, for the multi-call case: a caller that runs this
+/// harness again on the same folder still exercises `pipeline::sweep_staging`
+/// at that next build's start, reading the `hashes.json` this call just
+/// wrote — which needs a promoted generation to be the one the server is
+/// considered "on" (see `sweep_staging`'s `served_from_current` doc).
 fn build_test_shipped(
     folder_path: &str,
 ) -> Result<std::collections::HashSet<String>, String> {
@@ -4333,6 +4339,11 @@ fn build_test_shipped(
         let scan = crate::build::media::orphan_prune::extract_referenced_tails(&stage_dir);
         let pruned =
             crate::build::ship::prune_orphaned_webp_before_ship(&mp, &mut sealed, &scan);
+        // Mirrors `advertise_sealed`'s `reclaim_stage_dir_when_done = true`
+        // arm: this harness never has a next build in the same process
+        // either, so without this call staging would hold orphaned bytes no
+        // test here could ever observe going away.
+        crate::build::ship::reclaim_staging_now(&stage_dir, &sealed);
         let _ = sealed.write_to_disk(&mp.hashes());
         crate::build::ship::materialize_and_promote(
             &sealed,
@@ -4535,6 +4546,66 @@ fn a_build_that_changes_nothing_does_nothing() {
         "a suppressed variant a page now references must be produced again on \
          that same build, not one build later — the page already promises it, \
          and <picture> does not recover from a chosen source that 404s (ADR-013)"
+    );
+}
+
+/// A one-shot build's own orphan prune must remove the orphaned `.webp`
+/// BYTES from `stage_dir`, not just its `sealed` entry.
+///
+/// The 2026-09-16 regression this test would have caught: `f003326` moved the
+/// physical unlink out of `prune_orphaned_webp_before_ship` (mid-flight 404s
+/// under a live preview server — a real bug, correctly fixed) and deferred it
+/// to `pipeline::sweep_staging`, which only runs at the START of a NEXT
+/// build. `build_test_shipped` here, a real `moss build`, and every
+/// moss-desktop snapshot-test fixture are all one-shot: the process exits
+/// after this one build, so a next build that would do the sweeping never
+/// comes, and the orphaned bytes shipped in anything that read `stage_dir`
+/// directly. `ship::reclaim_staging_now` closes that gap for exactly the
+/// build shape that proves nobody is left to read `stage_dir` afterward.
+///
+/// Ablate by commenting out the `reclaim_staging_now` call in
+/// `build_test_shipped` above: `gone.webp` then survives on disk after build
+/// 2 and the last assertion here goes red.
+#[test]
+fn a_dropped_reference_reclaims_its_webp_bytes_on_the_same_build() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+
+    fs::write(
+        test_dir.join("index.md"),
+        "---\ntitle: Home\ndate: 2026-01-02\n---\n\n# Home\n\n![Cover](gone.jpg)\n",
+    )
+    .unwrap();
+    make_big_jpeg_at(&test_dir.join("gone.jpg"), 2400, 1800);
+
+    build_test_shipped(folder_path).expect("build 1: image referenced");
+
+    let stage_dir = test_dir.join(".moss/build/staging");
+    assert!(
+        stage_dir.join("gone.webp").is_file(),
+        "fixture guard: the referenced image must produce a staged .webp, or \
+         nothing below tests anything"
+    );
+
+    // Drop the reference. The source image stays in the vault — this is the
+    // orphan prune's case to act on, not the deleted-source path
+    // (`drop_absent_outputs`) or a removed-source fingerprint retention.
+    fs::write(
+        test_dir.join("index.md"),
+        "---\ntitle: Home\ndate: 2026-01-02\n---\n\n# Home\n\nNo image now.\n",
+    )
+    .unwrap();
+
+    let pruned = build_test_shipped(folder_path).expect("build 2: reference dropped");
+    assert!(
+        pruned.contains("gone.webp"),
+        "the prune must condemn the now-orphaned variant: {pruned:?}"
+    );
+    assert!(
+        !stage_dir.join("gone.webp").exists(),
+        "the orphaned .webp must be gone from staging after THIS build — a \
+         real `moss build` (and every moss-desktop snapshot-test fixture) is \
+         a one-shot process with no next build to defer the reclaim to"
     );
 }
 

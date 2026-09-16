@@ -1922,9 +1922,15 @@ pub(crate) fn send_progress(
 /// tail instead is the bug this call exists to close: the tail is detached and
 /// runs *while* the frontend is refetching the page it just rebuilt.
 ///
-/// Waiting a build costs nothing but local disk. `ship_phase` copies
-/// `sealed.files()` and nothing else, so an unswept staged file can never reach
-/// a generation, a deploy, or a published site.
+/// Waiting a build costs nothing but local disk **when there is a next
+/// build to do the waiting for** — `ship_phase` copies `sealed.files()` and
+/// nothing else, so an unswept staged file can never reach a generation, a
+/// deploy, or a published site. A one-shot invocation (`moss build`,
+/// `build_sync`, a snapshot test) never gets a next build in the same
+/// process, so this function alone leaves its orphaned bytes in `stage_dir`
+/// forever; `ship::reclaim_staging_now` is that build's own last chance and
+/// runs from `advertise_sealed` instead of here, once the caller has proven
+/// nothing else will read `stage_dir` again (see that function's doc).
 ///
 /// `served_from_current` is the precondition, not a preference: without a
 /// promoted generation the server may still be resting on staging itself

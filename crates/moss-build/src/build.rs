@@ -1341,6 +1341,10 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                             publishable,
                             seal_freshness,
                             &folder_path_for_mat,
+                            // Detached: the app or a `--serve --watch` process
+                            // outlives this task, and may still be reading
+                            // `stage_dir`. Never reclaim here.
+                            false,
                         )
                         .await;
                     }
@@ -1411,6 +1415,11 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                         publishable,
                         crate::build::feeds::search_lane::Freshness::Now,
                         &folder_path,
+                        // Inline arm: per the comment above, the caller drops
+                        // the tokio runtime as soon as this returns — nothing
+                        // reads `stage_dir` again in this process. Reclaim now
+                        // or never.
+                        true,
                     )
                     .await;
                 }
@@ -1713,6 +1722,16 @@ async fn advertise_sealed(
     // so a `MossPaths` normalization can never drift the two apart. See the
     // step-7b call into `trigger_media_settle_rerender` below.
     folder_path: &str,
+    // True only from the `exits_after_build` call site (CLI / `build_sync` /
+    // the snapshot-test harness), where the caller drops the tokio runtime as
+    // soon as this returns — no server, no watcher, nothing reads `stage_dir`
+    // again in this process. `pipeline::sweep_staging` reclaims what a build
+    // orphans, but only at the START of a FUTURE build in this same folder;
+    // a one-shot invocation never has one, so without this flag its orphaned
+    // `.webp` bytes sit in staging forever and ship in anything that reads
+    // that tree directly (a raw copy of staging, a snapshot test). See
+    // `ship::reclaim_staging_now`.
+    reclaim_stage_dir_when_done: bool,
 ) {
     let reporter = ports.events.as_ref();
     let announcer = ports.announcer.as_ref();
@@ -1742,7 +1761,8 @@ async fn advertise_sealed(
     //
     // It serializes WRITERS. It is not, and cannot be, a reader-side guard:
     // the preview server takes no lock, so the rule that keeps it whole is
-    // that nothing in this tail unlinks from `stage_dir` at all.
+    // that nothing in this tail unlinks from `stage_dir` — unless
+    // `reclaim_stage_dir_when_done` says nobody is left to read it (below).
     let _stage_write_guard = match session {
         Some(s) => Some(s.lock_stage_write().await),
         None => None,
@@ -1761,6 +1781,18 @@ async fn advertise_sealed(
         &mut sealed,
         assets.as_ref().map(|r| r.failed_keys()).unwrap_or_default(),
     );
+
+    // `sealed` is now final — every pass that can drop a manifest entry has
+    // run. On the one-shot path (`reclaim_stage_dir_when_done`), this is also
+    // the only chance this process gets to reclaim what it orphaned:
+    // `pipeline::sweep_staging` would otherwise defer that to a next build
+    // that never comes (see the parameter doc). Safe here specifically
+    // because that caller has no server and is about to drop the runtime —
+    // the live-preview hazard `reclaim_stage_dir_when_done` is false for
+    // (a detached seal, server still on `stage_dir`) does not apply.
+    if reclaim_stage_dir_when_done {
+        crate::build::ship::reclaim_staging_now(stage_dir, &sealed);
+    }
 
     // Last moment the manifest and the stage agree on what shipped — the one
     // place a whole-site link check can run (moss#1187). Advisory for almost

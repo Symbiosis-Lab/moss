@@ -507,7 +507,9 @@ pub fn materialize_and_promote(
 /// staging holds; unlinking the staged bytes as well bought nothing but local
 /// disk, and bought it out of the directory the preview server is reading at
 /// that instant. `build::pipeline`'s pre-render sweep unlinks them at the next
-/// build's start, after the server has moved to `current`.
+/// build's start, after the server has moved to `current` — and
+/// [`reclaim_staging_now`] unlinks them right after this call returns, on the
+/// one path that proves there is no next build to wait for.
 ///
 /// Opt-out via `[build].prune_orphaned_images = false`. Default on: the win
 /// is upload bytes and seta quota (moss-seta#297 S1), NOT local disk — the
@@ -595,6 +597,39 @@ pub(crate) fn prune_orphaned_webp_before_ship(
     // pointed at them. An unshipped file whose reference survives in HTML is a
     // live 404, and `<picture>` renders it blank rather than falling back.
     removed_keys
+}
+
+/// Reclaim `stage_dir` bytes this build orphaned, for the ONE build shape
+/// where nothing will ever sweep them: a one-shot invocation (`moss build`,
+/// `build_sync`, every snapshot-test fixture) whose caller drops the tokio
+/// runtime as soon as the seal tail returns.
+///
+/// `prune_orphaned_webp_before_ship` and `drop_absent_outputs` only ever drop
+/// entries from `sealed` — see their docs — because the preview server may
+/// still be reading `stage_dir` while the seal tail runs (moss#1187-adjacent;
+/// see `build::pipeline::sweep_staging`'s doc for the 404 this avoids).
+/// `sweep_staging` is how those bytes are normally reclaimed, but it runs at
+/// the START of a FUTURE build in the same folder, using the manifest that
+/// build inherits. A build that is the last one in its process never gets a
+/// future build to do that, so without this call its orphaned `.webp` bytes
+/// sit in `stage_dir` forever and ship in anything that reads that tree
+/// directly — a raw copy of staging, a snapshot test comparing it
+/// byte-for-byte. moss#976 B2 measured exactly that shape on a real site.
+///
+/// `sealed` must be the FINAL manifest — call this after every pass that can
+/// drop an entry (`degrade::repair_staged_html`), never before. The caller is
+/// responsible for proving nobody else reads `stage_dir` past this point; see
+/// the call site in `advertise_sealed`.
+pub(crate) fn reclaim_staging_now(
+    stage_dir: &std::path::Path,
+    sealed: &crate::build::manifest::SealedManifest,
+) {
+    let hashes = sealed.site_hashes_view();
+    crate::build::media::pipeline::remove_stale_files(stage_dir, hashes, "staging (final build)");
+    crate::build::media::pipeline::remove_stale_dirs(
+        stage_dir,
+        &crate::build::media::pipeline::compute_expected_dirs(hashes),
+    );
 }
 
 /// Drop manifest entries whose output is not on disk.
