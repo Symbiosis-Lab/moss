@@ -291,14 +291,14 @@ body[data-typesetting="vertical"] .moss-collection-cover-body {
 [data-typesetting="vertical"] .moss-cards-minimal-year-group {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 1em;
   align-items: flex-start;
 }
-[data-typesetting="vertical"] .moss-cards[data-layout="minimal"] .moss-card-meta {
+[data-typesetting="vertical"] .moss-cards[data-layout="minimal"] .moss-prefix-link-prefix {
   text-orientation: upright;
   letter-spacing: 0.05em;
 }
-[data-typesetting="vertical"] .moss-cards[data-layout="minimal"] .moss-card-title {
+[data-typesetting="vertical"] .moss-cards[data-layout="minimal"] .moss-prefix-link-title {
   line-height: 1.9;
 }
 
