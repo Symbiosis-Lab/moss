@@ -205,25 +205,28 @@ pub struct PageVerdict {
 }
 
 /// The verification state machine's announcable states. `Checking`/`Live`/
-/// `Unreachable` are OnionPress's; the other four are moss-hosting's,
+/// `Unreachable` are OnionPress's; the other three are moss-hosting's,
 /// produced by `classify_moss_verification` (design
-/// `docs/archive/2026-09-10-publish-receipt-design.md` §4a's 5-row table —
-/// `Live` is that table's first row, shared rather than duplicated).
+/// `docs/archive/2026-09-10-publish-receipt-design.md` §4a's table, as
+/// amended by ADR-084 — `Live` is that table's first row, shared rather than
+/// duplicated).
 /// `rename_all` is `snake_case`, not the old `lowercase`, so `UnreachableHere`
 /// serializes as `"unreachable_here"`; every pre-existing variant is a single
 /// word, so its wire value is unchanged by the switch.
+///
+/// There is deliberately no "the public address is serving an older version"
+/// state. A CDN that rewrites HTML on the way out makes the served bytes
+/// differ from the published bytes on every request, so that state was
+/// unfalsifiable from the client and fired on healthy sites (ADR-084).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum PublishVerdictState {
     Checking,
     Live,
     Unreachable,
-    /// Control probe confirms the new generation; the public fetch still
-    /// returns the previous version. moss keeps checking.
-    Stale,
     /// Control probe confirms the new generation; the public fetch itself
-    /// failed (timeout, DNS, TLS) — a connection problem on this computer,
-    /// not the site.
+    /// failed (timeout, DNS, TLS, a non-2xx answer) — a connection problem on
+    /// this computer, not the site.
     UnreachableHere,
     /// The control probe itself is unreachable: this computer looks offline,
     /// and nothing about the site can be concluded.
@@ -496,7 +499,6 @@ pub enum PublishReceiptLive {
     Unverifiable,
     Checking,
     Live,
-    Stale,
     UnreachableHere,
     Offline,
     Incomplete,

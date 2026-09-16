@@ -86,9 +86,9 @@ pub trait DeployPorts: Send + Sync {
     /// costs the nicer URL, never the publish.
     async fn ensure_domain_ready(&self, folder_path: &str);
 
-    /// Kick off the one-shot moss-hosting verification burst — does moss's
-    /// own backend now say this generation is live, and do the home page's
-    /// bytes match — without blocking the publish's own return.
+    /// Kick off the one-shot verification burst — does the origin now say
+    /// this generation is live, and does the public address reach the site —
+    /// without blocking the publish's own return.
     ///
     /// Design §4a's two probes, called from `push.rs` right after
     /// `record_landed` returns (task 4-6 moved this past landing: the page
@@ -104,13 +104,10 @@ pub trait DeployPorts: Send + Sync {
     /// `summary` is the same completion-scoped Added/Moved/Removed rows
     /// [`after_landing`](DeployPorts::after_landing) receives — computed once
     /// by `landed::record_what_is_live` and threaded to both callers, never
-    /// recomputed. `page_entries` carries the sealed manifest's own entry
-    /// string for each Added row's output file (`path` -> entry), the same
-    /// per-file lookup `home_page_entry` already makes for the home page —
-    /// Moved and Removed rows verify without one (a Moved row's redirect
-    /// stub is regenerated locally and byte-compared; a Removed row wants
-    /// only a 404), so a row with no entry here is either one of those or an
-    /// Added row this build's manifest has no output for.
+    /// recomputed. No manifest entries ride along: the public half of the
+    /// burst proves reachability, not byte identity, since an HTML-rewriting
+    /// CDN in front of a site makes the served bytes differ from the
+    /// published bytes on every request (ADR-084).
     async fn begin_moss_verification(
         &self,
         identity: &crate::identity::Identity,
@@ -118,8 +115,6 @@ pub trait DeployPorts: Send + Sync {
         site_id: &str,
         folder_path: &str,
         generation_id: &str,
-        home_page_entry: Option<&str>,
-        page_entries: &std::collections::HashMap<String, String>,
         summary: &crate::deploy::change_record::PageChangeSummary,
     );
 }
@@ -177,8 +172,6 @@ mod tests {
             _site_id: &str,
             _folder_path: &str,
             _generation_id: &str,
-            _home_page_entry: Option<&str>,
-            _page_entries: &std::collections::HashMap<String, String>,
             _summary: &crate::deploy::change_record::PageChangeSummary,
         ) {
         }

@@ -45,8 +45,6 @@ impl crate::build::ports::deploy::DeployPorts for HeadlessDeployPorts {
         _site_id: &str,
         _folder_path: &str,
         _generation_id: &str,
-        _home_page_entry: Option<&str>,
-        _page_entries: &std::collections::HashMap<String, String>,
         _summary: &crate::deploy::change_record::PageChangeSummary,
     ) {
     }

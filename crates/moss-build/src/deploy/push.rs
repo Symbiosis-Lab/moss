@@ -494,32 +494,15 @@ async fn push_site_inner_impl(
         crate::deploy::change_record::PageChangeSummary::default()
     };
 
-    // One-shot moss-hosting verification burst: does moss's own backend now
-    // say this generation is live, and do the home page's (and, task 4-6,
-    // each named page's) bytes match. This supersedes the ad-hoc skew log it
+    // One-shot verification burst: does the origin now say this generation
+    // is live, and does the public address reach the site (and, task 4-6,
+    // each named page's URL). This supersedes the ad-hoc skew log it
     // replaces — `ControlProbe::ServingOlderGeneration` is the same "server
     // is on a different generation" comparison, now folded into a real
     // verdict instead of a diagnostic-only warning. Fire-and-forget by the
     // port's own contract (see `DeployPorts::begin_moss_verification`): this
     // await returns once the implementation has *started* the burst, never
     // once it has finished, so it cannot hold up `push_site`'s own return.
-    //
-    // `page_entries` gives an Added row's verification the same byte
-    // comparison the home page gets: `redirects::pretty_url_to_fs_path`
-    // turns a pretty URL back into the manifest's own file key (moss's
-    // directory-style output convention — the function this crate already
-    // uses to place a redirect stub on disk for the same URL shape). Moved
-    // and Removed rows need no entry here; see `DeployPorts::
-    // begin_moss_verification`'s doc.
-    let page_entries: std::collections::HashMap<String, String> = page_summary
-        .records
-        .iter()
-        .filter(|r| r.kind == crate::deploy::change_record::PageChangeKind::Added)
-        .filter_map(|r| {
-            let file_path = crate::build::feeds::redirects::pretty_url_to_fs_path(&r.path);
-            sealed.files().get(&file_path).map(|entry| (r.path.clone(), entry.clone()))
-        })
-        .collect();
     ports
         .begin_moss_verification(
             identity,
@@ -527,8 +510,6 @@ async fn push_site_inner_impl(
             &site_id,
             &folder_path_str,
             sealed.generation_id(),
-            sealed.files().get("index.html").map(String::as_str),
-            &page_entries,
             &page_summary,
         )
         .await;
@@ -881,7 +862,6 @@ mod tests {
         site_id: String,
         folder_path: String,
         generation_id: String,
-        home_page_entry: Option<String>,
         summary: crate::deploy::change_record::PageChangeSummary,
     }
 
@@ -917,15 +897,12 @@ mod tests {
             site_id: &str,
             folder_path: &str,
             generation_id: &str,
-            home_page_entry: Option<&str>,
-            _page_entries: &std::collections::HashMap<String, String>,
             summary: &crate::deploy::change_record::PageChangeSummary,
         ) {
             self.events.lock().unwrap().push(SpyEvent::Verification(VerificationCall {
                 site_id: site_id.to_string(),
                 folder_path: folder_path.to_string(),
                 generation_id: generation_id.to_string(),
-                home_page_entry: home_page_entry.map(str::to_string),
                 summary: summary.clone(),
             }));
         }
@@ -936,10 +913,9 @@ mod tests {
     /// succeeded AND `record_landed` (`after_landing`) has already run —
     /// task 4-6 moved the burst past landing so it can carry the same
     /// `PageChangeSummary` landing computed, never a second copy — carrying
-    /// this publish's generation id, its sealed home-page manifest entry,
-    /// and that summary. Ablation lives at the call site in
-    /// `push_site_inner_impl` — comment it out and this assertion goes red
-    /// with zero recorded calls.
+    /// this publish's generation id and that summary. Ablation lives at the
+    /// call site in `push_site_inner_impl` — comment it out and this
+    /// assertion goes red with zero recorded calls.
     #[tokio::test]
     async fn commit_sync_success_calls_begin_moss_verification() {
         let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -1005,11 +981,6 @@ mod tests {
         assert_eq!(call.site_id, "verify-test");
         assert_eq!(call.folder_path, dir.path().to_string_lossy().to_string());
         assert_eq!(call.generation_id, sealed.generation_id());
-        assert_eq!(
-            call.home_page_entry.as_deref(),
-            sealed.files().get("index.html").map(String::as_str),
-            "the burst must carry the sealed manifest's own home-page entry"
-        );
         assert_eq!(
             call.summary,
             crate::deploy::change_record::PageChangeSummary::default(),
