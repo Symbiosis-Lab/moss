@@ -38,18 +38,43 @@ use crate::build::manifest::link_audit::DeadLink;
 use crate::build::types::MissingMedia;
 use crate::types::content::SiteHashes;
 
+/// One per-folder verdict, replaced wholesale on every write, never merged.
+/// `None` on read means no build has answered yet in this process — distinct
+/// from "clean" (an empty `Vec`, or whatever value a build genuinely
+/// produced). `content_hashes`, `missing_media` and `promised_dead_links`
+/// used to hand-write this insert/clone pair three times over; collapsed
+/// 2026-09-16 (thermo review of the publish promise gate) since the three
+/// differ only in `V`.
+struct FolderSlot<V>(Mutex<HashMap<String, V>>);
+
+impl<V> Default for FolderSlot<V> {
+    fn default() -> Self {
+        Self(Mutex::new(HashMap::new()))
+    }
+}
+
+impl<V: Clone> FolderSlot<V> {
+    fn record(&self, key: String, value: V) {
+        self.0.lock().expect("FolderSlot lock poisoned — a thread panicked while holding it").insert(key, value);
+    }
+
+    fn get(&self, key: &str) -> Option<V> {
+        self.0.lock().expect("FolderSlot lock poisoned — a thread panicked while holding it").get(key).cloned()
+    }
+
+    fn forget(&self, key: &str) {
+        self.0.lock().expect("FolderSlot lock poisoned — a thread panicked while holding it").remove(key);
+    }
+}
+
 /// The per-folder records the build tail writes and the watcher reads.
 #[derive(Default)]
 pub struct BuildRecords {
-    /// `std::Mutex` throughout: every access is a single map operation and no
-    /// `.await` is ever held while a guard is live. Never hold one across an
-    /// await point.
-    content_hashes: Mutex<HashMap<String, SiteHashes>>,
-    missing_media: Mutex<HashMap<String, Vec<MissingMedia>>>,
+    content_hashes: FolderSlot<SiteHashes>,
+    missing_media: FolderSlot<Vec<MissingMedia>>,
     /// This seal's own still-pending promises the link audit caught dead —
     /// see `link_audit::dead_links_among_promises` and `refuse_publish`.
-    /// Same replace-not-merge contract as `missing_media`.
-    promised_dead_links: Mutex<HashMap<String, Vec<DeadLink>>>,
+    promised_dead_links: FolderSlot<Vec<DeadLink>>,
 }
 
 impl BuildRecords {
@@ -59,100 +84,59 @@ impl BuildRecords {
         crate::vault_root::resolve_input(folder_path).to_string_lossy().into_owned()
     }
 
-    /// Record the build's IN-MEMORY content hashes for `folder_path`, so the
-    /// watcher decides the live-preview refresh from race-free data instead of
-    /// re-reading the `hashes.json` a detached seal task writes at an
-    /// unpredictable time.
-    ///
-    /// Callers must gate this on `should_stash_hashes`: the record must
-    /// describe what the screen shows, so a withheld or cancelled build must
-    /// not write one.
+    /// Record so the watcher can diff the live screen against race-free data
+    /// instead of re-reading the `hashes.json` a detached seal task writes at
+    /// an unpredictable time. Callers must gate this on `should_stash_hashes`
+    /// — the record must describe what the screen shows, so a withheld or
+    /// cancelled build must not write one.
     pub fn record_content_hashes(&self, folder_path: &str, hashes: SiteHashes) {
-        self.content_hashes
-            .lock()
-            .expect("content_hashes lock poisoned — a thread panicked while holding it")
-            .insert(Self::key(folder_path), hashes);
+        self.content_hashes.record(Self::key(folder_path), hashes);
     }
 
-    /// Clone (and RETAIN) the last recorded content hashes for `folder_path`.
-    ///
-    /// Retaining is load-bearing: the slot holds the LAST build's race-free
-    /// hashes, which serve as BOTH the `new` side of the just-finished
-    /// rebuild's diff and the `previous` (baseline) side of the NEXT rebuild's.
-    /// See `crate::build::watch::baseline_for_rebuild` and
-    /// docs/archive/2026-06-04-editor-preview-sync-repro-and-fix.md.
-    ///
-    /// `None` means no build of this folder has finished in this process yet —
-    /// callers fall back to `load_previous_hashes`.
+    /// Retaining (not consuming) is load-bearing: the same value serves as
+    /// BOTH the `new` side of the just-finished rebuild's diff and the
+    /// `previous` (baseline) side of the NEXT rebuild's — see
+    /// `crate::build::watch::baseline_for_rebuild`. `None` means no build of
+    /// this folder has finished in this process yet; callers fall back to
+    /// `load_previous_hashes`.
     pub fn content_hashes(&self, folder_path: &str) -> Option<SiteHashes> {
-        self.content_hashes
-            .lock()
-            .expect("content_hashes lock poisoned — a thread panicked while holding it")
-            .get(&Self::key(folder_path))
-            .cloned()
+        self.content_hashes.get(&Self::key(folder_path))
     }
 
-    /// Record what this build could not find, replacing the previous answer.
-    ///
     /// Always called, including with an empty `Vec` — that is how a fixed
-    /// reference stops blocking a publish. Writing only on failure would leave
-    /// the last broken build's verdict standing forever, and a publish blocked
-    /// over a file the author already fixed is the worst outcome available
-    /// here, since there is deliberately no override.
+    /// reference stops blocking a publish. Writing only on failure would
+    /// leave the last broken build's verdict standing forever, and there is
+    /// deliberately no override.
     pub fn record_missing_media(&self, folder_path: &str, missing: Vec<MissingMedia>) {
-        self.missing_media
-            .lock()
-            .expect("missing_media lock poisoned — a thread panicked while holding it")
-            .insert(Self::key(folder_path), missing);
+        self.missing_media.record(Self::key(folder_path), missing);
     }
 
-    /// What the last build of `folder_path` found missing.
-    ///
-    /// `None` when no build of this folder has finished in this process — which
-    /// is NOT "clean", and callers must not treat it as a verdict.
+    /// What the last build of `folder_path` found missing. `None` means no
+    /// build has finished in this process — which is NOT "clean".
     pub fn missing_media(&self, folder_path: &str) -> Option<Vec<MissingMedia>> {
-        self.missing_media
-            .lock()
-            .expect("missing_media lock poisoned — a thread panicked while holding it")
-            .get(&Self::key(folder_path))
-            .cloned()
+        self.missing_media.get(&Self::key(folder_path))
     }
 
-    /// Record which of this seal's dead links are this build's own
-    /// still-pending promise, replacing the previous answer.
-    ///
-    /// Always called, including with an empty `Vec` — same reasoning as
-    /// `record_missing_media`: a video that finishes encoding between one
-    /// seal and the next must have its refusal cleared by the CLEAN verdict,
-    /// not left standing because nothing wrote over it.
+    /// Always called, including with an empty `Vec` — a video that finishes
+    /// encoding between one seal and the next must have its refusal cleared
+    /// by the CLEAN verdict, not left standing because nothing wrote over it.
     pub fn record_promised_dead_links(&self, folder_path: &str, dead: Vec<DeadLink>) {
-        self.promised_dead_links
-            .lock()
-            .expect("promised_dead_links lock poisoned — a thread panicked while holding it")
-            .insert(Self::key(folder_path), dead);
+        self.promised_dead_links.record(Self::key(folder_path), dead);
     }
 
     /// What the last seal of `folder_path` found among its own unfulfilled
-    /// promises. `None` when no seal has recorded a verdict in this process —
-    /// not "clean", the same distinction `missing_media` draws.
+    /// promises. `None` means no seal has recorded a verdict — not "clean",
+    /// the same distinction `missing_media` draws.
     pub fn promised_dead_links(&self, folder_path: &str) -> Option<Vec<DeadLink>> {
-        self.promised_dead_links
-            .lock()
-            .expect("promised_dead_links lock poisoned — a thread panicked while holding it")
-            .get(&Self::key(folder_path))
-            .cloned()
+        self.promised_dead_links.get(&Self::key(folder_path))
     }
 
-    /// Drop the content-hash baseline for a folder moss is no longer watching.
-    ///
-    /// Called on a folder switch: returning to the folder falls back to disk
-    /// for the first rebuild, which is correct — a baseline that was never
-    /// compared against a live screen is not one.
+    /// Drop the content-hash baseline for a folder moss is no longer
+    /// watching: returning to the folder falls back to disk for the first
+    /// rebuild, which is correct — a baseline never compared against a live
+    /// screen is not one.
     pub fn forget_content_hashes(&self, folder_path: &str) {
-        self.content_hashes
-            .lock()
-            .expect("content_hashes lock poisoned — a thread panicked while holding it")
-            .remove(&Self::key(folder_path));
+        self.content_hashes.forget(&Self::key(folder_path));
     }
 }
 
