@@ -2286,19 +2286,22 @@ header:has(+ .moss-hero) .main-nav {
 /*
  * Morphing font control
  *
- * A single glyph next to the date morphs into a 4-button pill on click.
- * The trigger (lone glyph) and the pill are never both visible — they swap
- * at the moment of overlap so the user perceives one continuous element.
- *
- * Open:  trigger slides to its slot in the pill → pill fades in
- * Close: pill fades out → trigger appears at active slot → slides home
+ * A single glyph next to the date opens a 4-button size picker that grows
+ * out of it. The trigger is the fixed anchor (ADR-024 rule 1) — it never
+ * moves and carries no runtime position; `.font-pill` is the second,
+ * differently-sized object (ADR-049) that grows from the anchor's point,
+ * carrying a JS-computed `--pill-offset` so its active button always lines
+ * up under the trigger's fixed slot. Trigger and pill are never both
+ * visible — trigger hides, pill shows — but because the pill's active
+ * button coincides with the trigger's slot, this reads as one glyph
+ * unfolding rather than two nodes swapping.
  *
  * Structure:
  *   .date-line
  *     .date
  *     .font-anchor            position: relative wrapper
- *       .font-trigger         position: absolute, overlays first pill button
- *       .font-pill#fontPill   always in layout (visibility:hidden when closed)
+ *       .font-trigger         position: absolute, static inline-start
+ *       .font-pill#fontPill   position: relative, grows via transform
  */
 .date-line {
   display: flex;
@@ -2411,19 +2414,14 @@ header:has(+ .moss-hero) .main-nav {
      resolves to. The cross axis is left unset (both `inset-block-*` stay
      auto) so `.font-anchor`'s `align-items: center` places it there instead:
      an absolutely positioned flex child with an auto cross-axis inset is
-     still aligned by the flex container. That is what used to be
-     `top: 50%; transform: translateY(-50%)` — a physical-axis fix for what
-     is actually a flex-alignment job, and one CSS was already able to do
-     without either property once it was stated in logical terms. */
+     still aligned by the flex container. This is the fixed anchor: no JS
+     ever writes to it, so it needs no transition either. */
   inset-inline-start: 3px; /* = font-pill padding, aligns with first button */
   z-index: 3;
   white-space: nowrap;
 }
 .font-trigger:hover { color: var(--moss-color-text); }
 .font-trigger.hidden { opacity: 0; pointer-events: none; }
-.font-trigger.sliding {
-  transition: inset-inline-start 280ms cubic-bezier(0.4, 0, 0.2, 1);
-}
 
 /* Trigger size variants — match pill button sizes */
 .font-trigger.size-small  { font-size: 0.85em; }
@@ -2431,6 +2429,14 @@ header:has(+ .moss-hero) .main-nav {
 .font-trigger.size-large  { font-size: 1.12em; }
 .font-trigger.size-xlarge { font-size: 1.25em; }
 
+/* The pill is the second, differently-sized object (ADR-049) that grows
+   from the trigger's fixed point — it moves, the anchor never does.
+   `--pill-offset` (set once per selectScale() in theme.ts) shifts the pill
+   so its *active* button lands exactly under the trigger's 3px slot; the
+   grow transform shares that same fixed point via `transform-origin`.
+   `position: relative`, not `absolute` — the pill stays a normal flex item
+   of `.font-anchor` (at its unshifted rest box) so the anchor keeps a real
+   size to align the trigger against; only its painted position moves. */
 .font-pill {
   display: inline-flex;
   align-items: center;
@@ -2438,13 +2444,25 @@ header:has(+ .moss-hero) .main-nav {
   border-radius: 20px;
   padding: 3px;
   gap: 2px;
+  position: relative;
+  inset-inline-start: calc(3px - var(--pill-offset, 0px));
+  transform-origin: inline-start;
   visibility: hidden;
   opacity: 0;
-  transition: opacity 150ms ease, visibility 150ms ease;
+  transform: scaleX(0.001);
+  transition: opacity 150ms ease, visibility 150ms ease, transform 280ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 .font-pill.visible {
   visibility: visible;
   opacity: 1;
+  transform: scaleX(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .font-trigger,
+  .font-pill {
+    transition: none;
+  }
 }
 
 .font-pill button {

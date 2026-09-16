@@ -112,6 +112,16 @@ body[data-typesetting="vertical"] .breadcrumb-separator::before {
   color: var(--moss-color-muted);
 }
 
+/* ── Font selector (vertical mode) ──
+   transform's scale axis has no logical form either, same as translate and
+   aspect-ratio elsewhere in this file — scaleX/scaleY swap by hand per mode. */
+body[data-typesetting="vertical"] .font-pill {
+  transform: scaleY(0.001);
+}
+body[data-typesetting="vertical"] .font-pill.visible {
+  transform: scaleY(1);
+}
+
 /* ── Hero ──
    Horizontally the hero bleeds edge to edge; a vertical figure is sized to
    the column measure instead (research §5, jlreq 4.3.2): the plate stands in
