@@ -206,16 +206,60 @@ pub fn audit(stage_dir: &Path, sealed: &SealedManifest) -> Vec<DeadLink> {
     dead
 }
 
+/// How many dead links the summary line quotes by name before falling back to
+/// "and N more" — enough to start a grep, not enough to recreate the flood
+/// this module used to produce.
+const SUMMARY_EXAMPLES: usize = 3;
+
+/// The one-line WARN summary for `dead`, or `None` when there's nothing to
+/// report. Split out from `audit_and_report` so the wording is testable
+/// without capturing the global `log` sink.
+fn summary_line(dead: &[DeadLink]) -> Option<String> {
+    if dead.is_empty() {
+        return None;
+    }
+    let examples: Vec<String> = dead
+        .iter()
+        .take(SUMMARY_EXAMPLES)
+        .map(|link| format!("'{}' in '{}'", link.href, link.page))
+        .collect();
+    let remainder = dead.len() - examples.len();
+    let suffix = if remainder > 0 {
+        format!(", and {remainder} more")
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "Dead links: {} root-relative reference(s) this build wrote no page or asset for ({}{}) — see debug logs for the full list",
+        dead.len(),
+        examples.join(", "),
+        suffix,
+    ))
+}
+
 /// Run the audit and say what it found. The entry point the seal tail calls.
+///
+/// One `log::warn!` per BUILD, not per link (2026-09-16): a site with one
+/// stale namespace produces one dead href repeated on every page that linked
+/// it, and at 100+ occurrences that flood pushed real errors out of the "RECENT
+/// ERRORS" window a Send Logs bundle keeps (100 most recent warn/error
+/// signatures) — a user's bundle held nothing but `link_audit` lines. The
+/// per-link detail moves to `log::debug!`, which the headless logger still
+/// captures for anyone re-running with verbose logging; only the warn-level
+/// signature is what a bundle's summary competes over.
+///
 /// Returns the full list (still advisory) so the caller can additionally
 /// scope it down to this build's own unfulfilled promises — see
 /// [`dead_links_among_promises`].
 pub fn audit_and_report(stage_dir: &Path, sealed: &SealedManifest) -> Vec<DeadLink> {
     let dead = audit(stage_dir, sealed);
+    // `log::warn!`, not `log_warn_problem!` — see the module docs on why this
+    // stays out of the `--strict` count.
+    if let Some(line) = summary_line(&dead) {
+        log::warn!("{line}");
+    }
     for link in &dead {
-        // `log::warn!`, not `log_warn_problem!` — see the module docs on why
-        // this stays out of the `--strict` count.
-        log::warn!(
+        log::debug!(
             "Dead link: '{}' in '{}' — this build wrote no page or asset there",
             link.href,
             link.page

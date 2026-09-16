@@ -259,3 +259,51 @@ fn a_key_absent_from_promised_never_gates_however_dead_the_link() {
     // what a caller sees after `set_failed` has run.
     assert!(dead_links_among_promises(&dead, &promised(&[])).is_empty());
 }
+
+// ── the WARN summary (2026-09-16) ───────────────────────────────────────────
+//
+// audit_and_report used to `log::warn!` once PER dead link — a site with one
+// stale namespace repeated across 100+ pages flooded a Send Logs bundle's
+// "RECENT ERRORS" (its 100 most-recent warn/error signatures) with nothing
+// but this module. The fix is one WARN per build naming a few examples, with
+// the full per-link list moved to DEBUG.
+
+fn dead_links(pairs: &[(&str, &str)]) -> Vec<DeadLink> {
+    pairs
+        .iter()
+        .map(|(page, href)| DeadLink { page: page.to_string(), href: href.to_string() })
+        .collect()
+}
+
+#[test]
+fn no_dead_links_produces_no_summary() {
+    assert_eq!(summary_line(&dead_links(&[])), None);
+}
+
+#[test]
+fn a_summary_names_every_link_up_to_the_example_cap() {
+    let links = dead_links(&[("a.html", "/x"), ("b.html", "/y")]);
+    let line = summary_line(&links).unwrap();
+    assert!(line.contains("2 root-relative reference"), "{line}");
+    assert!(line.contains("'/x' in 'a.html'"), "{line}");
+    assert!(line.contains("'/y' in 'b.html'"), "{line}");
+    assert!(!line.contains("more"), "{line}");
+}
+
+/// The regression case: 100+ occurrences of one dead link must cost the
+/// bundle ONE warn-level line, not one per occurrence.
+#[test]
+fn a_summary_past_the_example_cap_names_a_few_and_counts_the_rest() {
+    let links = dead_links(&[
+        ("a.html", "/x"),
+        ("b.html", "/x"),
+        ("c.html", "/x"),
+        ("d.html", "/x"),
+        ("e.html", "/x"),
+    ]);
+    let line = summary_line(&links).unwrap();
+    assert!(line.contains("5 root-relative reference"), "{line}");
+    assert!(line.contains("and 2 more"), "{line}");
+    // Exactly SUMMARY_EXAMPLES (3) occurrences named, not all 5.
+    assert_eq!(line.matches("'/x' in").count(), 3, "{line}");
+}
