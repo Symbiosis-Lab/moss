@@ -1,0 +1,69 @@
+{
+  "name": "@symbiosis-lab/moss-api",
+  "version": "0.12.0",
+  "description": "Official API for building moss plugins - types and utilities for plugin development",
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.mts"
+    },
+    "./testing": {
+      "import": "./dist/testing/index.mjs",
+      "types": "./dist/testing/index.d.mts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch --no-clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "docs": "typedoc",
+    "prepublishOnly": "npm run build && npm run test"
+  },
+  "keywords": [
+    "moss",
+    "plugin",
+    "sdk",
+    "api",
+    "tauri",
+    "publishing",
+    "syndication"
+  ],
+  "author": "Guo Liu",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Symbiosis-Lab/moss-api.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Symbiosis-Lab/moss-api/issues"
+  },
+  "homepage": "https://github.com/Symbiosis-Lab/moss-api#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": false
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.2.7",
+    "tsdown": "^0.18.4",
+    "typedoc": "0.28.20",
+    "typedoc-plugin-markdown": "4.12.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

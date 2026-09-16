@@ -1,0 +1,40 @@
+name: Bug report
+description: Report a bug in @symbiosis-lab/moss-api
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+        For questions or general discussion, use [Discussions](../discussions) instead.
+  - type: input
+    id: version
+    attributes:
+      label: moss-api version
+      placeholder: "e.g. 0.8.0"
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      placeholder: "node --version"
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Smallest code that triggers the bug.
+      render: typescript
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
