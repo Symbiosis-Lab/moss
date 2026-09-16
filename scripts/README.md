@@ -63,7 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Pin to the release whose contract these docs describe:
-      - run: curl -L -o moss https://github.com/Symbiosis-Lab/moss-releases/releases/download/${MOSS_VERSION}/moss-darwin-universal && chmod +x moss
+      - run: curl -L -o moss https://github.com/Symbiosis-Lab/moss/releases/download/${MOSS_VERSION}/moss-darwin-universal && chmod +x moss
         env: { MOSS_VERSION: v0.7.12 }   # bump in lockstep with releases
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
@@ -88,10 +88,7 @@ fi
 
 ### Release-refresh (run in THIS repo, no cross-repo token needed)
 
-A `workflow_dispatch` job here (triggered after a moss release) bumps the pinned
-`MOSS_VERSION`, runs `--write`, and opens a PR — so each released contract is
-captured and the docs never lag a version. Running it *in* moss-releases avoids
-the cross-repo PAT a moss→moss-releases push would need.
+A `workflow_dispatch` job here (triggered after a moss release) bumps the pinned `MOSS_VERSION`, runs `--write`, and opens a PR — so each released contract is captured and the docs never lag a version.
 
 ```yaml
 # refresh-reference.yml
@@ -102,7 +99,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: curl -L -o moss https://github.com/Symbiosis-Lab/moss-releases/releases/download/${{ inputs.version }}/moss-darwin-universal && chmod +x moss
+      - run: curl -L -o moss https://github.com/Symbiosis-Lab/moss/releases/download/${{ inputs.version }}/moss-darwin-universal && chmod +x moss
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
       - run: MOSS_BIN=./moss node scripts/sync-reference.mjs --write

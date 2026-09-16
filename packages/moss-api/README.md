@@ -7,15 +7,13 @@
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![bundle size](https://img.shields.io/bundlephobia/minzip/@symbiosis-lab/moss-api)](https://bundlephobia.com/package/@symbiosis-lab/moss-api)
 
-> **Read-only mirror.** Source lives in the private moss monorepo. PRs cannot be merged here — see [CONTRIBUTING.md](CONTRIBUTING.md).
-
 [moss](https://mosspub.com) is a desktop publishing app; this package is its plugin API surface. Use it to write plugins that publish posts, manage site assets, or extend the editor.
 
 - [Quickstart](#quickstart)
 - [Anatomy of a plugin](#anatomy-of-a-plugin)
 - [API reference](#api-reference)
 - [Stability](#stability)
-- [Discussions](https://github.com/Symbiosis-Lab/moss-api/discussions) · [Issues](https://github.com/Symbiosis-Lab/moss-api/issues) · [moss.pub](https://mosspub.com)
+- [Issues](https://github.com/Symbiosis-Lab/moss/issues) · [moss.pub](https://mosspub.com)
 
 ## Quickstart
 

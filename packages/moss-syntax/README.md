@@ -59,10 +59,7 @@ new variant is a semver break and needs its own ADR. A syntax feature that
 seems to want one should first be tried as a transform over the existing
 `Other` passthrough — which is how math itself ships.
 
-**The Obsidian plugin needs a public repo.** Obsidian stopped accepting new
-closed-source plugins in May 2026. Nothing in this package is private, but moss
-itself is, which is why this package stays `"private": true` with no changesets
-entry until the mirror pipeline publishes it.
+**The Obsidian plugin needs a public repo.** Obsidian stopped accepting new closed-source plugins in May 2026. This package stays `"private": true` with no changesets entry until the mirror pipeline publishes it.
 
 ## Fixtures
 
