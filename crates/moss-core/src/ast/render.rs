@@ -16,7 +16,7 @@
 //! # Why the AST renders (not pulldown-cmark)
 //!
 //! Cross-SSG research (2026-05-27) — see
-//! [docs/archive/2026-05-27-typed-ast-cross-ssg-research.md](../../../../docs/archive/2026-05-27-typed-ast-cross-ssg-research.md)
+//! [docs/archive/2026-05-27-typed-ast-cross-ssg-research.md](../../../../../docs/archive/2026-05-27-typed-ast-cross-ssg-research.md)
 //! — confirms every AST-bearing SSG with secondary consumers (link
 //! graphs, editors, validators, multi-target rendering) puts the AST at
 //! the rendering source:
@@ -39,9 +39,9 @@
 //! `scan_shortcodes`, `has_shortcode_recursive`, future WASM editor,
 //! future LSP-style diagnostics) — AST is non-optional.
 //!
-//! See [docs/reference/typed-body-ast.md](../../../../docs/reference/typed-body-ast.md)
+//! See [docs/reference/typed-body-ast.md](../../../../../docs/reference/typed-body-ast.md)
 //! for the design intent + 7 principles, and
-//! [docs/archive/2026-05-27-phase4-typed-ast-completion.md](../../../../docs/archive/2026-05-27-phase4-typed-ast-completion.md)
+//! [docs/archive/2026-05-27-phase4-typed-ast-completion.md](../../../../../docs/archive/2026-05-27-phase4-typed-ast-completion.md)
 //! for the Phase 4 execution plan.
 
 use super::document::{BlockMeta, Document};

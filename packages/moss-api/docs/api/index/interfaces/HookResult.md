@@ -49,6 +49,18 @@ Detailed message for logs/debugging
 
 ***
 
+### setup?
+
+```ts
+optional setup?: 
+  | SetupVerdict
+  | LegacySetupVerdict;
+```
+
+Setup verdict (populated by the optional `check_setup` hook)
+
+***
+
 ### success
 
 ```ts

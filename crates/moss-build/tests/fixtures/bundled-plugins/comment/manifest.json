@@ -1,0 +1,7 @@
+{
+  "name": "comment",
+  "version": "0.3.0",
+  "display_name": "Comments",
+  "entry": "main.bundle.js",
+  "capabilities": ["process"]
+}

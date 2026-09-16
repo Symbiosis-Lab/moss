@@ -30,6 +30,27 @@ Clear all cookies
 
 ***
 
+### clearCookies()
+
+```ts
+clearCookies(pluginName, projectPath): void;
+```
+
+Remove every cookie stored for one plugin/project
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `pluginName` | `string` |
+| `projectPath` | `string` |
+
+#### Returns
+
+`void`
+
+***
+
 ### getCookies()
 
 ```ts

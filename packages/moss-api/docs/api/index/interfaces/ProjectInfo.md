@@ -2,15 +2,11 @@
 
 # Interface: ProjectInfo
 
+Wire truth: `ProjectInfo` in moss's `crates/moss-build/src/plugins/types.rs`.
+`project_type` and `content_folders` were removed there (2026); this type
+carried them for months after — keep the two in sync.
+
 ## Properties
-
-### content\_folders
-
-```ts
-content_folders: string[];
-```
-
-***
 
 ### folder\_name?
 
@@ -32,19 +28,13 @@ optional homepage_file?: string;
 
 ***
 
-### lang?
+### lang
 
 ```ts
-optional lang?: string;
+lang: string;
 ```
 
-***
-
-### project\_type
-
-```ts
-project_type: string;
-```
+BCP-47 language code detected from content (e.g. "en", "zh-hant"). Always sent.
 
 ***
 

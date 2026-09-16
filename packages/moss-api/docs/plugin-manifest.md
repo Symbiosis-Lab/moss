@@ -46,7 +46,7 @@ your first publish costs a version bump.
 | `icon` | string | Filename in `assets/`; falls back to `icon.svg`, `icon.png`, `logo.svg`, `logo.png` |
 | `global_name` | string | IIFE global name; defaults to PascalCase name + `Plugin` |
 | `repository`, `homepage` | string | Display and provenance only |
-| `min_moss_version` | string | Semver floor. **Nothing compares it today** — moss parses it and never checks it, so it documents your intent rather than enforcing it |
+| `min_moss_version` | string | Semver floor. The registry client checks it at install and load; a moss older than the check ignores the field |
 | `preview` | boolean | Hides the plugin from the catalog unless the user enables preview features. Only read for plugins bundled into the moss binary today; the catalog that would read it for a downloaded plugin does not exist yet |
 
 ## What the plugin does
@@ -96,17 +96,28 @@ this note says otherwise.
 
 ## Configuration
 
-| Field | Type | Notes |
-|---|---|---|
-| `config` | object | Default values |
-| `config_schema` | object | Field name → `"string"`, `"boolean"`, or `"array"`. Those three are all the settings UI renders; anything else draws a disabled row reading "unsupported field type" |
-| `config_labels` | object | Field name → label in settings |
-| `config_descriptions` | object | Field name → help text |
-| `config_placeholders` | object | Field name → input placeholder |
-| `config_verify` | object | Field name → endpoint probe spec; settings shows "Server unreachable" on failure |
+Settings are declared as a `setup.settings` list on the contribution they belong to — see [Setup](#setup-what-the-user-arranges-first) below. Each field is one object:
 
-At runtime, values merge in this order: `config.json` > `config.toml` >
-manifest defaults (see [runtime-environment.md](runtime-environment.md)).
+| Key | Notes |
+|---|---|
+| `key` | **Required.** The config key, and for a `secret` the keystore name `moss.getSecret(key)` reads |
+| `type` | **Required.** `"string"`, `"number"`, `"boolean"`, or `"secret"` |
+| `label` | Display label; defaults to the key, title-cased |
+| `description` | Help text under the field |
+| `default` | Applied when the user has set nothing. A `secret` must not declare one |
+| `options` | `{value, label}` list; makes a `string` field a dropdown |
+| `required` | The publish gate asks for it when empty |
+| `hidden` | A real config key moss never draws — plugin bookkeeping, or a secret a login flow deposits |
+| `placeholder` | Input placeholder |
+| `help_url` | "Where do I get this?" link |
+| `pattern`, `pattern_message` | Regex the value must match, and what to say when it doesn't |
+| `when` | `{key: value}` conditions on earlier fields; all must match for the field to apply |
+
+A `secret` value goes to the OS keystore and comes back through `moss.getSecret(key)` — it never appears in `ctx.config` or on disk.
+
+The pre-contract spellings still parse, as aliases folded into `settings`: `config_schema` (its `"enum"` becomes a `string` with `options`; `"array"` is no longer drawn), `config_options`, `config_labels` (a dotted `"<field>.<value>"` key labels one option), `config_descriptions`, `config_placeholders`, and `setup.credentials` (each entry becomes a `secret` field). `config_verify` is gone — no plugin ever used it. Write `settings`.
+
+At runtime, values merge in this order: `config.json` > `config.toml` > manifest defaults (see [runtime-environment.md](runtime-environment.md)). `config` in the manifest still supplies plugin-wide defaults; a field's `default` is the per-setting way to say the same thing.
 
 **Config is for the user's settings, not your plugin's bookkeeping.** State your
 plugin maintains for itself (sequence numbers, draft ids, caches) belongs in
@@ -121,10 +132,10 @@ is yours to do without asking.
 
 | Field | Type | Notes |
 |---|---|---|
-| `requires` | string[] | Host grants. Today: `"execute_binary"` (run native processes). Absent or unlisted = refused, fail-closed |
+| `requires` | string[] | Host grants, named per binary: `"execute_binary:git"` runs exactly `git`. Absent or unlisted = refused, fail-closed. The bare `"execute_binary"` blanket is deprecated — it still grants everything, with a warning per run |
 | `domain` | string | The domain whose cookies you may read and write |
 | `domains` | string[] | Every domain you operate on (e.g. production + staging), so a force-fresh login clears all of them |
-| `requires_stack` | boolean | Needs a machine-wide companion install on first install |
+| `requires_stack` | boolean | Legacy alias: parses as `"needs": ["stack"]` on every contribution's setup block; a plugin that declares `contributes.stack` also carries its own artifact pin |
 
 Using the keystore is **not** a gated capability: you only ever sign with your
 own scoped key, so it costs nobody else anything.
@@ -164,17 +175,40 @@ What is coming:
 "contributes": {
   "channel": {
     "display_name": "Matters",
-    "requires_login": true,
-    "imports": true
+    "imports": true,
+    "login": true
   }
 }
 ```
 
-`contributes.deploy_target` replaces the `deploy` capability.
-`contributes.channel` replaces `syndicate`, `login` and `import`: syndication is
-what a channel *is*, so it needs no flag, and the two flags say whether the user
-has to connect an account first and whether their existing posts can be pulled
-back into the folder.
+`contributes.deploy_target` replaces the `deploy` capability. `contributes.channel` replaces `syndicate`, `login` and `import`: syndication is what a channel *is*, so it needs no flag; `imports` says existing posts can be pulled back into the folder; and `login` says the user connects an account, which is you exporting `login` for moss to invoke. `login` was called `requires_login` before 2026-08-30 and both spellings still read.
+
+```json
+"contributes": {
+  "stack": {
+    "id": "onionpress",
+    "version": "v2.4.110-moss.2",
+    "sources": [
+      { "kind": "download", "platform": "darwin-arm64", "url": "https://github.com/…/onionpress.dmg", "sha256": "68e4…", "archive_format": "dmg", "executable": "OnionPress.app/Contents/MacOS/onionpress" },
+      { "kind": "path", "platform": "linux-x64", "binary": "onionpress" }
+    ],
+    "start": ["start"],
+    "stop": ["quit"]
+  }
+}
+```
+
+`contributes.stack` replaces `requires_stack`: the plugin now carries the pin for the machine-wide companion process it needs, instead of moss compiling one in. A `download` source is refused if it has no `sha256` — not warned, not defaulted — because that hash is the only thing standing between the user and an unverified binary; a `path` source is exempt, since it fetches nothing to hash.
+
+### Setup: what the user arranges first
+
+Any contribution — a channel as much as a deploy target — can carry a `setup` block saying what the user must arrange before it works. It is the same block wherever it sits, and it is scoped by where it sits: there is no field naming what it applies to. Three members, ordered by what they cost moss to evaluate:
+
+- `needs` — preconditions the host checks with no plugin code running. `"stack"` means moss's machine-wide companion install; a failed need becomes a blocker whose remedy moss owns. A plugin naming `"stack"` here also declares `contributes.stack`, above.
+- `settings` — the fields moss draws, from the [Configuration](#configuration) vocabulary. Order is display order, and a `when` may only reference a field declared earlier in the list.
+- `check` — `true` says you implement the `check_setup(ctx)` hook, for the answers only your code can give: is the daemon running, is the token still valid. It returns `{status: "ready"}` or `{status: "blocked", blockers}`. Each blocker has an `id` and a `message`, and may carry a `form` — the same field vocabulary again — plus a `submit` label; when the user submits it, your hook runs again with the blocker's id as `ctx.action` and the values in `ctx.values`. Return `field_errors` (`{key: message}`) to re-ask with the messages under the fields. A rejected stored token is not yours to re-collect: return a blocker whose id is `moss:credentials` and moss opens its own credential modal.
+
+Note that a `setup` block is not a login: a channel authenticated by one API token declares a `secret` setting and leaves `login` alone, and moss will not offer to connect an account that does not exist.
 
 Still to come: `process` disappears from the manifest entirely — which hooks
 your plugin exports will be read from your code at install time rather than

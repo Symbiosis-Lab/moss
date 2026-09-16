@@ -323,7 +323,7 @@ mod tests {
         expected: Vec<ShortcodeToken>,
     }
 
-    const FIXTURES: &str = include_str!("../../../tests/fixtures/shortcode-tokens.json");
+    const FIXTURES: &str = include_str!("../tests/fixtures/shortcode-tokens.json");
 
     #[test]
     fn fixture_driven_tests() {

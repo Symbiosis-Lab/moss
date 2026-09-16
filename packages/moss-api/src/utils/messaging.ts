@@ -122,8 +122,7 @@ export type PluginHook =
   | "publish"
   | "deploy"
   | "syndicate"
-  | "process"
-  | "enhance";
+  | "process";
 
 /**
  * `TriggerContext` mirrors the closed Rust enum. Tells the router *why*

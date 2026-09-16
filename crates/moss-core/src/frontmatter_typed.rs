@@ -298,6 +298,12 @@ pub struct FrontMatter {
     /// Cap the children feed at N items. If truncated, a "More →" link
     /// is added. Absent = no cap.
     pub children_limit: Option<u32>,
+    /// Wikilink to a page the truncated "More →" link should point at,
+    /// instead of the listing's own folder (e.g. "[[Everything]]").
+    pub children_more: Option<String>,
+    /// Listing filter: "only" keeps pages that have a cover. Applied after
+    /// flattening and before `children_limit`. Absent = no filter.
+    pub children_covers: Option<String>,
     /// Internal: marks frontmatter that came from the deprecated `sidebar:` alias.
     /// Used by the sidebar callsite to apply the legacy default-3 limit on cross-ref.
     /// Skip-serialize so the form doesn't round-trip the synthetic flag back into the file.
@@ -331,7 +337,7 @@ pub struct FrontMatter {
     /// Translation key for linking arbitrary files as translations
     #[serde(rename = "translationKey")]
     pub translation_key: Option<String>,
-    /// Whether to show comments on this page (default: true)
+    /// Whether to show comments on this page: default true on an article; default FALSE on a folder-index page (homepage included), which needs explicit `comments: true` to opt in (#1013)
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub comments: Option<bool>,
     /// Durable page identity: 8 RANDOM hex chars minted at first build — never derivable, never changed once published (docs/reference/social-data-standard.md)
@@ -905,6 +911,14 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                     ),
                 },
                 "children_limit" => frontmatter.children_limit = value.parse().ok(),
+                "children_more" => frontmatter.children_more = Some(value.to_string()),
+                "children_covers" => match value {
+                    "only" => frontmatter.children_covers = Some(value.to_string()),
+                    _ => eprintln!(
+                        "Warning: children_covers: \"{}\" is not valid. Use \"only\".",
+                        value
+                    ),
+                },
                 "description" => frontmatter.description = Some(value.to_string()),
                 "lang" => frontmatter.lang = Some(value.to_string()),
                 "translationKey" | "translation_key" => {

@@ -1204,6 +1204,24 @@ mod tests {
     }
 
     #[test]
+    fn test_fm_wikilink_root() {
+        // `children: '[[/]]'` lists the whole site and genuinely resolves
+        // (the listing path treats "/" as the vault root), but the generic
+        // diagnostics scanner has no per-key knowledge and was reporting it
+        // "Unresolved frontmatter wikilink" on every build. Fixed at the
+        // shared root: ContentGraph::resolve_path now resolves a bare "/"
+        // reference to the literal string "/", not "" — normalize_children
+        // (frontmatter_union.rs) treats an empty children value as "no
+        // listing", so resolving to "" silently dropped the listing again
+        // even once the diagnostic false-positive was gone.
+        let graph = fm_test_graph();
+        let fm = "---\nchildren: \"[[/]]\"\n---\n";
+        let result = resolve_frontmatter_wikilinks(fm, &graph, "index.md");
+        assert_eq!(result.content, "---\nchildren: \"/\"\n---\n");
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
     fn test_fm_wikilink_multiple() {
         let graph = fm_test_graph();
         let fm = "---\nsidebar: \"[[news]]\"\ncover: \"[[photo.jpg]]\"\n---\n";

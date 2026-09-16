@@ -1,0 +1,48 @@
+# The open moss CLI (ADR-050, open-CLI slice 3 / #1019): `moss build` with no
+# window system anywhere in the dependency graph. check-crate-dag.mjs arms its
+# moss-cli rule on this crate's existence — no tauri/wry, and never the app
+# crate.
+[package]
+name = "moss-cli"
+version = "0.14.1"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The open moss CLI: build a moss site headless, no webview runtime"
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "moss-cli"
+path = "src/main.rs"
+
+[dependencies]
+moss-build = { path = "../moss-build" }
+log = "0.4"
+# The app binary loads `.env` before dispatch (`src-tauri/src/main.rs`), so a
+# crossed verb reading `MOSS_ENV`/`MOSS_SETA_URL` saw a developer's local
+# environment there and production here. Same crate, same call, same answer.
+dotenvy = "0.15"
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "signal", "time"] }
+# `desktop::verified_artifact` checks the release tarball's signature before
+# `moss desktop install` writes anything. Already in the lock at 0.2.4 via
+# `tauri-plugin-updater`; this adds no new crate and no version bump.
+minisign-verify = "0.2"
+# `UpdaterManifest` (`latest.json`) parsing, and the outer base64 layer both
+# `pubkey` and a manifest signature are wrapped in. Same version strings as
+# moss-build's, already in the lock via it — no new crate, no version bump.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.21"
+
+[dev-dependencies]
+tempfile = "3.0"
+# Only the fixture builders in `desktop_tests.rs` still use these —
+# `install_bundle` now unpacks through `moss_build::system::tar_safe`
+# (docs/archive/2026-09-12-tar-safe-unification-plan.md). Same version
+# strings as moss-build's and src-tauri's, both already in the lock — no new
+# crate, no version bump.
+flate2 = "1"
+tar = "0.4"

@@ -5,10 +5,8 @@ import type {
   PluginCategory,
   BaseContext,
   ProcessContext,
-  GenerateContext,
   DeployContext,
   SyndicateContext,
-  SourceFiles,
   ArticleInfo,
   DeploymentInfo,
   HookResult,
@@ -17,21 +15,18 @@ import type {
   ProgressMessage,
   ErrorMessage,
   CompleteMessage,
-  PageNode,
 } from "../../index.js";
 
 describe("Type Definitions", () => {
   describe("ProjectInfo", () => {
     it("accepts valid ProjectInfo object with all fields", () => {
       const info: ProjectInfo = {
-        project_type: "blog",
-        content_folders: ["posts", "pages"],
         total_files: 10,
         homepage_file: "index.md",
+        folder_name: "My Blog",
         site_name: "My Blog",
+        lang: "en",
       };
-      expect(info.project_type).toBe("blog");
-      expect(info.content_folders).toHaveLength(2);
       expect(info.total_files).toBe(10);
       expect(info.homepage_file).toBe("index.md");
       expect(info.site_name).toBe("My Blog");
@@ -39,9 +34,8 @@ describe("Type Definitions", () => {
 
     it("accepts ProjectInfo without optional homepage_file", () => {
       const info: ProjectInfo = {
-        project_type: "docs",
-        content_folders: [],
         total_files: 0,
+        lang: "en",
       };
       expect(info.homepage_file).toBeUndefined();
     });
@@ -77,170 +71,6 @@ describe("Type Definitions", () => {
     });
   });
 
-  describe("PageNode", () => {
-    it("accepts a leaf page node (markdown file)", () => {
-      const node: PageNode = {
-        source_path: "articles/hello.md",
-        url_path: "articles/hello.html",
-        title: "Hello World",
-        slug: "hello",
-        content_html: "<h1>Hello</h1>",
-        is_folder: false,
-        children: [],
-        date: "2025-01-15",
-        nav: false,
-        draft: false,
-        flatten: false,
-        list_style: "list",
-        also_in: [],
-        frontmatter: { custom_field: "value" },
-      };
-      expect(node.is_folder).toBe(false);
-      expect(node.children).toHaveLength(0);
-      expect(node.title).toBe("Hello World");
-      expect(node.content_html).toBe("<h1>Hello</h1>");
-    });
-
-    it("accepts a folder page node with children", () => {
-      const child: PageNode = {
-        source_path: "posts/first.md",
-        url_path: "posts/first.html",
-        title: "First Post",
-        slug: "first",
-        content_html: "<p>Content</p>",
-        is_folder: false,
-        children: [],
-        nav: false,
-        draft: false,
-        flatten: false,
-        list_style: "list",
-        also_in: [],
-        frontmatter: {},
-      };
-
-      const folder: PageNode = {
-        source_path: "posts",
-        url_path: "posts/index.html",
-        title: "Posts",
-        slug: "posts",
-        content_html: "",
-        is_folder: true,
-        children: [child],
-        nav: true,
-        nav_weight: 1,
-        draft: false,
-        flatten: false,
-        list_style: "list",
-        also_in: [],
-        frontmatter: {},
-      };
-      expect(folder.is_folder).toBe(true);
-      expect(folder.children).toHaveLength(1);
-      expect(folder.children[0].title).toBe("First Post");
-      expect(folder.nav_weight).toBe(1);
-    });
-
-    it("accepts a folder with flatten and grid list_style", () => {
-      const node: PageNode = {
-        source_path: "portfolio",
-        url_path: "portfolio/index.html",
-        title: "Portfolio",
-        slug: "portfolio",
-        content_html: "<p>My work</p>",
-        is_folder: true,
-        children: [],
-        nav: true,
-        draft: false,
-        flatten: true,
-        list_style: "grid",
-        also_in: [],
-        cover: "portfolio-cover.jpg",
-        frontmatter: {},
-      };
-      expect(node.flatten).toBe(true);
-      expect(node.list_style).toBe("grid");
-      expect(node.cover).toBe("portfolio-cover.jpg");
-    });
-
-    it("accepts a page with also_in cross-references", () => {
-      const node: PageNode = {
-        source_path: "articles/my-post.md",
-        url_path: "articles/my-post.html",
-        title: "My Post",
-        slug: "my-post",
-        content_html: "<p>Content</p>",
-        is_folder: false,
-        children: [],
-        nav: false,
-        draft: false,
-        flatten: false,
-        list_style: "list",
-        also_in: ["weekly-highlights", "best-of-2024"],
-        frontmatter: {},
-      };
-      expect(node.also_in).toHaveLength(2);
-      expect(node.also_in).toContain("weekly-highlights");
-    });
-
-    it("accepts optional fields as undefined", () => {
-      const node: PageNode = {
-        source_path: "about.md",
-        url_path: "about.html",
-        title: "About",
-        slug: "about",
-        content_html: "<p>About</p>",
-        is_folder: false,
-        children: [],
-        nav: true,
-        draft: false,
-        flatten: false,
-        list_style: "list",
-        also_in: [],
-        frontmatter: {},
-      };
-      expect(node.date).toBeUndefined();
-      expect(node.nav_weight).toBeUndefined();
-      expect(node.cover).toBeUndefined();
-    });
-  });
-
-  describe("GenerateContext with page_tree", () => {
-    it("accepts GenerateContext with optional page_tree field", () => {
-      const ctx: GenerateContext = {
-        project_info: {
-          project_type: "blog",
-          content_folders: ["posts"],
-          total_files: 5,
-        },
-        config: {},
-        source_files: {
-          markdown: ["index.md"],
-          pages: [],
-          docx: [],
-          other: [],
-        },
-        page_tree: {
-          source_path: "",
-          url_path: "index.html",
-          title: "Home",
-          slug: "",
-          content_html: "<p>Welcome</p>",
-          is_folder: true,
-          children: [],
-          nav: false,
-          draft: false,
-          flatten: false,
-          list_style: "list",
-          also_in: [],
-          frontmatter: {},
-        },
-      };
-      expect(ctx.page_tree).toBeDefined();
-      expect(ctx.page_tree!.is_folder).toBe(true);
-      expect(ctx.page_tree!.title).toBe("Home");
-    });
-  });
-
   describe("PluginCategory", () => {
     it("accepts all valid category values", () => {
       const categories: PluginCategory[] = [
@@ -261,10 +91,9 @@ describe("Type Definitions", () => {
 
   describe("Context Types", () => {
     const baseProjectInfo: ProjectInfo = {
-      project_type: "blog",
-      content_folders: ["posts"],
       total_files: 5,
       site_name: "My Blog",
+      lang: "en",
     };
 
     it("accepts valid BaseContext", () => {
@@ -281,22 +110,8 @@ describe("Type Definitions", () => {
         project_info: baseProjectInfo,
         config: {},
       };
-      expect(ctx.project_info.project_type).toBe("blog");
+      expect(ctx.project_info.lang).toBe("en");
       expect(ctx.trigger).toBeUndefined();
-    });
-
-    it("accepts GenerateContext with source_files", () => {
-      const ctx: GenerateContext = {
-        project_info: baseProjectInfo,
-        config: {},
-        source_files: {
-          markdown: ["post1.md", "post2.md"],
-          pages: ["about.md"],
-          docx: [],
-          other: ["image.png"],
-        },
-      };
-      expect(ctx.source_files.markdown).toHaveLength(2);
     });
 
     it("accepts DeployContext with site_files", () => {
@@ -351,29 +166,6 @@ describe("Type Definitions", () => {
       expect(ctx.articles).toHaveLength(1);
       expect(ctx.articles[0].title).toBe("Hello World");
       expect(ctx.deployment?.method).toBe("github-pages");
-    });
-  });
-
-  describe("SourceFiles", () => {
-    it("accepts valid SourceFiles object", () => {
-      const files: SourceFiles = {
-        markdown: ["a.md", "b.md"],
-        pages: ["about.md"],
-        docx: ["doc.docx"],
-        other: ["image.png", "style.css"],
-      };
-      expect(files.markdown).toContain("a.md");
-      expect(files.docx).toContain("doc.docx");
-    });
-
-    it("accepts SourceFiles with empty arrays", () => {
-      const files: SourceFiles = {
-        markdown: [],
-        pages: [],
-        docx: [],
-        other: [],
-      };
-      expect(files.markdown).toHaveLength(0);
     });
   });
 

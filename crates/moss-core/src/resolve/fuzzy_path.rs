@@ -242,6 +242,34 @@ pub fn percent_decode_path(path: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| path.to_string())
 }
 
+/// Turn an asset URL as it appears **inside emitted HTML** back into the
+/// site-root-relative path it names — the one inverse of the two encoders every
+/// moss-emitted asset URL passes through, in the order that undoes them:
+/// [`percent_encode_path_segments`] first, then [`crate::media::html_escape`].
+///
+/// Query/fragment are dropped; `./`, `../` and a leading `/` are left intact,
+/// because they are what tells the caller where the reference points relative
+/// to the file that wrote it.
+///
+/// Every step is load-bearing and the order is not free:
+///
+/// 1. **Entity-decode first.** An HTML parser does NOT hand back decoded
+///    attribute text — `lol_html`'s `get_attribute` returns the raw source
+///    bytes with `&amp;`/`&#39;` intact — and `percent_encode_path_segments`
+///    deliberately leaves `&` and `'` unencoded, so a file named `a&b.jpg` is
+///    emitted as `a&amp;b.jpg`. `&amp;` is not a filename, and a lookup that
+///    skips this step misses every asset whose name carries one.
+/// 2. **Then split off `?query`/`#fragment`.** Splitting before the entity
+///    decode would cut inside `&#39;`, whose `#` is not a fragment.
+/// 3. **Then percent-decode.** Decoding before the split would turn a filename
+///    whose literal `?` was encoded as `%3F` into a query separator and
+///    truncate the key.
+pub fn decode_html_reference_path(raw: &str) -> String {
+    let entity_decoded = crate::html_entities::decode(raw);
+    let (path_only, _suffix) = split_url_path(&entity_decoded);
+    percent_decode_path(path_only)
+}
+
 fn hex_val(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
@@ -405,6 +433,21 @@ mod tests {
     #[test]
     fn percent_decode_path_falls_back_on_invalid_utf8() {
         assert_eq!(percent_decode_path("bad%FF.png"), "bad%FF.png");
+    }
+
+    /// Each of the three steps in the documented order, pinned by an input that
+    /// only that order gets right. Every wrong order yields a SHORTER key, and a
+    /// short key silently matches no manifest entry: the repair pass no-ops and
+    /// the page ships a `<source>` for a variant that was never encoded.
+    #[test]
+    fn decode_html_reference_path_undoes_both_encoders_in_order() {
+        // Skipping the entity decode leaves `&amp;`, which is not a filename.
+        assert_eq!(decode_html_reference_path("a&amp;b.webp"), "a&b.webp");
+        // Splitting before it cuts at the `#` inside `&#39;`, yielding `it&`.
+        assert_eq!(decode_html_reference_path("it&#39;s.webp"), "it's.webp");
+        // Percent-decoding before the split turns an encoded literal `?` into a
+        // query separator and truncates to `a`.
+        assert_eq!(decode_html_reference_path("a%3Fb.webp?v=2#f"), "a?b.webp");
     }
 
     // -- resolve_reference tests --

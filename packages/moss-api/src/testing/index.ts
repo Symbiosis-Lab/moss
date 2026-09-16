@@ -46,6 +46,7 @@ export {
   createMockUrlConfig,
   createMockBinaryConfig,
   createMockCookieStorage,
+  createMockSecretStorage,
   createMockBrowserTracker,
   createMockDialogTracker,
   // Types
@@ -59,6 +60,7 @@ export {
   type MockBinaryConfig,
   type MockBinaryResult,
   type MockCookieStorage,
+  type MockSecretStorage,
   type MockBrowserTracker,
   type MockDialogTracker,
   type MockDialogResult,

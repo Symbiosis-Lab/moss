@@ -156,19 +156,19 @@ fn path_query_matches_across_an_omitted_directory() {
     // THE CORPUS BUG: `關於/頭像-李柏萱.png` written for a file that lives at
     // `關於/assets/頭像-李柏萱.png`. The filename-only matcher found nothing.
     let t = vec![asset("關於/assets/頭像-李柏萱.png")];
-    assert_eq!(rank(&t, &ctx(Embed, "關於/頭像-李", "在場.md")).len(), 1);
+    assert_eq!(rank(&t, &ctx(Embed, "關於/頭像-李", "潮汐.md")).len(), 1);
 }
 
 #[test]
 fn path_query_rejects_a_different_directory() {
     let t = vec![asset("關於/assets/頭像-李柏萱.png")];
-    assert!(rank(&t, &ctx(Embed, "獎項/頭像-李", "在場.md")).is_empty());
+    assert!(rank(&t, &ctx(Embed, "獎項/頭像-李", "潮汐.md")).is_empty());
 }
 
 #[test]
 fn partial_directory_segment_still_lists_the_subtree() {
     let t = vec![asset("關於/assets/f99cc68b.png"), asset("關於/assembly.png")];
-    let ranked = rank(&t, &ctx(Embed, "關於/ass", "在場.md"));
+    let ranked = rank(&t, &ctx(Embed, "關於/ass", "潮汐.md"));
     assert_eq!(ranked.len(), 2);
     // `assembly.png` matches on the FILENAME; the subtree listing under
     // `assets/` matched only a directory.
@@ -193,7 +193,7 @@ fn bare_query_ordering_is_unchanged_by_path_keys() {
 #[test]
 fn contiguous_suffix_dir_match_outranks_a_gapped_one() {
     let t = vec![asset("關於/deep/assets/x.png"), asset("assets/x.png")];
-    let ranked = rank(&t, &ctx(Embed, "assets/x", "在場.md"));
+    let ranked = rank(&t, &ctx(Embed, "assets/x", "潮汐.md"));
     assert_eq!(ranked[0], &t[1]);
 }
 
@@ -217,7 +217,7 @@ fn heading_candidates_ignore_slashes_in_the_query() {
 #[test]
 fn trailing_slash_lists_only_that_directory() {
     let t = vec![asset("關於/assets/a.png"), asset("獎項/b.png")];
-    let ranked = rank(&t, &ctx(Embed, "關於/", "在場.md"));
+    let ranked = rank(&t, &ctx(Embed, "關於/", "潮汐.md"));
     assert_eq!(ranked.len(), 1);
     assert_eq!(ranked[0], &t[0]);
 }
@@ -227,7 +227,7 @@ fn trailing_slash_lists_only_that_directory() {
 #[test]
 fn a_folder_lists_under_a_trailing_slash_but_never_itself() {
     let t = vec![folder("關於"), folder("關於/assets"), asset("關於/near.png")];
-    let ranked = rank(&t, &ctx(Embed, "關於/", "在場.md"));
+    let ranked = rank(&t, &ctx(Embed, "關於/", "潮汐.md"));
     assert_eq!(ranked.len(), 2, "the folder the author is already inside is not offered");
     // The file matched the same segment as the subfolder; files first.
     assert_eq!(ranked[0], &t[2]);
@@ -348,7 +348,7 @@ fn insert_for_always_round_trips_through_the_resolver() {
     ];
     let idx = FakeAssetIndex::new(&paths);
 
-    for from_rel in ["在場.md", "關於/歷季得獎者.md"] {
+    for from_rel in ["潮汐.md", "關於/歷季得獎者.md"] {
         for rel in [
             "關於/assets/頭像-李柏萱.png",
             "關於/近照.png",
@@ -375,7 +375,7 @@ fn insert_for_always_round_trips_through_the_resolver() {
     b.add_file("notes/ideas.md", "notes/ideas");
     b.add_file("關於/歷季得獎者.md", "關於/歷季得獎者");
     let graph = b.build();
-    for from_rel in ["在場.md", "關於/歷季得獎者.md"] {
+    for from_rel in ["潮汐.md", "關於/歷季得獎者.md"] {
         for c in [ctx(Wikilink, "notes/id", from_rel), ctx(Inline, "id", from_rel)] {
             let emitted = insert_for(&page("notes/ideas.md"), &c);
             assert_eq!(emitted, "notes/ideas");

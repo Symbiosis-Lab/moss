@@ -100,6 +100,16 @@ The project path used for internal context
 
 ***
 
+### secretStorage
+
+```ts
+secretStorage: MockSecretStorage;
+```
+
+Secret storage
+
+***
+
 ### urlConfig
 
 ```ts

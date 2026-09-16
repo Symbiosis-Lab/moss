@@ -1,0 +1,67 @@
+{
+  "name": "@symbiosis-lab/moss-syntax",
+  "version": "0.1.0",
+  "private": true,
+  "description": "moss's markdown syntax layer — shortcode/wikilink/math grammars and pure line parsers, shared by the moss editor and the Obsidian plugin",
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.mts"
+    },
+    "./cm6": {
+      "import": "./dist/cm6/index.mjs",
+      "types": "./dist/cm6/index.d.mts"
+    },
+    "./cm6/cm-shortcode-block.css": "./src/cm6/cm-shortcode-block.css"
+  },
+  "files": [
+    "dist",
+    "src/cm6/cm-shortcode-block.css",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch --no-clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "keywords": [
+    "moss",
+    "markdown",
+    "shortcode",
+    "wikilink",
+    "lezer",
+    "codemirror"
+  ],
+  "author": "Guo Liu",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "peerDependencies": {
+    "@codemirror/language": "^6",
+    "@codemirror/lint": "^6",
+    "@codemirror/state": "^6",
+    "@codemirror/view": "^6",
+    "@lezer/highlight": "^1",
+    "@lezer/markdown": "^1"
+  },
+  "devDependencies": {
+    "@codemirror/lang-markdown": "^6.5.1",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/lint": "6.9.5",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.6",
+    "@lezer/highlight": "^1.2.3",
+    "@lezer/markdown": "^1.7.2",
+    "jsdom": "^26.1.0",
+    "tsdown": "^0.18.4",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

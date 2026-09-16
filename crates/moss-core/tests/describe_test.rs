@@ -187,7 +187,7 @@ fn describe_plugin_contract_structs_serialize_correctly() {
 
 /// The seven hooks the 2026-08-03 audit found invisible.
 ///
-/// okagaki and 在場 — the two most heavily customized moss sites — between them
+/// okagaki and 潮汐 — the two most heavily customized moss sites — between them
 /// set six custom properties and hung their layouts off three structural
 /// attributes. Before schema v6, `describe --json` reported **none** of them,
 /// so an agent given moss's own contract could not have written either theme.
@@ -202,7 +202,7 @@ fn the_hooks_the_flagship_themes_actually_used_are_discoverable() {
     for hook in [
         // set by okagaki
         "--moss-hero-object-position",
-        // set by 在場
+        // set by 潮汐
         "--moss-grid-image-ratio",
         "--moss-grid-image-radius",
         "--moss-grid-image-fit",

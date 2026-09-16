@@ -1,0 +1,152 @@
+/* Review plugin — header and colophon styles
+ * Uses moss design tokens. Works in light and dark mode.
+ * Side-by-side layout on all screen sizes (matches collection-cover pattern).
+ */
+
+/* Header — cover + title/subtitle/creator */
+.review-header {
+  display: flex;
+  gap: var(--moss-space-lg, 2rem);
+  align-items: flex-start;
+  margin: 1rem 0 2rem;
+}
+
+.review-cover {
+  width: 150px;
+  max-width: 30%;
+  height: auto;
+  object-fit: cover;
+  border-radius: 4px;
+  flex-shrink: 0;
+  margin: 0; /* Override global img margin for flex alignment */
+}
+
+.review-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.review-meta-title {
+  font-weight: 600;
+  font-size: 1.05em;
+  color: var(--moss-color-text, #333);
+}
+
+.review-meta-subtitle {
+  font-size: 0.9em;
+  color: var(--moss-color-muted, #666);
+}
+
+.review-meta-creator {
+  font-size: 0.9em;
+  color: var(--moss-color-muted, #666);
+}
+
+.review-sep {
+  color: var(--moss-color-muted, #666);
+  margin: 0 0.15em;
+}
+
+/* Colophon — card with cover + details */
+.review-colophon {
+  display: flex;
+  gap: var(--moss-space-lg, 2rem);
+  align-items: flex-start;
+  /* Sits directly under the date/reading-prefs row as an intro card, so it
+     needs only light separation above; the larger gap goes below, before the
+     body. (When this block lived at the article's end, both were 3rem.) */
+  margin-top: 1.5rem;
+  margin-bottom: 2.5rem;
+  padding: 1.25rem;
+  background: var(--moss-color-surface, #f8f8f8);
+  border-radius: 8px;
+  font-size: 0.9em;
+  color: var(--moss-color-muted, #666);
+}
+
+.review-colophon-cover {
+  width: 150px;
+  /* Fixed book-cover slot: a 2:3 portrait box that the cover fills. Without a
+     definite height `object-fit` is a no-op; `aspect-ratio` gives the box a
+     height (≈150×225) so `object-fit: cover` actually fills it and normalizes
+     odd-ratio covers. Real book covers are ~2:3, so cropping is negligible.
+     No `max-width` clamp: a percentage cap collapsed the cover to ~90px on
+     phones — it stopped filling the box and cramped the details. The cover holds
+     its designed width; the narrow-screen step at the bottom keeps it balanced. */
+  aspect-ratio: 2 / 3;
+  height: auto;
+  object-fit: cover;
+  /* Anchor the crop to the top: covers/posters (incl. non-2:3 movie/music
+     covers from NeoDB) carry their title art up top, so top-anchoring keeps it
+     visible when the source isn't a clean 2:3. */
+  object-position: top;
+  border-radius: 4px;
+  flex-shrink: 0;
+  margin: 0; /* Override global img margin for flex alignment */
+}
+
+.review-colophon-details {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  /* Bibliographic metadata is structured data — always left-aligned, never
+     justified, even on Chinese pages whose body prose is justified. Without
+     this the (often English) title/author/publisher justify into ugly
+     whitespace rivers, worst of all in the narrow mobile column. */
+  text-align: left;
+}
+
+.review-colophon-title {
+  font-weight: 600;
+  color: var(--moss-color-text, #333);
+  font-size: 1.05em;
+}
+
+.review-colophon-subtitle {
+  font-size: 0.9em;
+  color: var(--moss-color-muted, #666);
+}
+
+.review-colophon-identity {
+  font-size: 0.95em;
+}
+
+.review-rating {
+  font-size: 1.2em;
+  color: var(--moss-color-accent, #c9a84c);
+  letter-spacing: 0.05em;
+}
+
+.review-community-rating {
+  font-size: 0.85em;
+}
+
+.review-biblio {
+  line-height: 1.5;
+}
+
+.review-links a {
+  color: var(--moss-color-accent, #c9a84c);
+  text-decoration: none;
+}
+
+.review-links a:hover {
+  text-decoration: underline;
+}
+
+/* Narrow screens: step the cover down from its 150px designed width and tighten
+   the gap so the details column stays comfortable. The cover still fills its
+   2:3 box; the layout stays side-by-side. */
+@media (max-width: 32rem) {
+  .review-colophon {
+    gap: var(--moss-space-md, 1.5rem);
+  }
+  .review-colophon-cover {
+    width: 120px;
+  }
+}

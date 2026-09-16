@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`date:` accepts a year or a year and month**, not only a full `YYYY-MM-DD`. A page datable to 1697, or to its eighth month but no further, takes `date: "1697"` or `date: 1697-09` and is no longer warned about. Listings print what was given ("1697 · 09", or bare "1697") and sort mixed precision by year, so the previous workaround — padding the unknown part to `-01-01` — is no longer needed to keep the validator quiet; it was never a vaguer claim than the truth, just a different one that cards printed as a real month.
+
 ### Added
 
 - **`sort::cmp_labels`** — the one comparator for ordering user-visible listing labels by title. Case is a tiebreak, not a primary key, so `mao` now sorts between `Kayla` and `Scarly` instead of after every capitalised name. All title-axis and dateless-tiebreak label sorts now route through it.

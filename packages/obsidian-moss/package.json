@@ -1,0 +1,37 @@
+{
+  "name": "@symbiosis-lab/obsidian-moss",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Obsidian plugin that builds and previews the current vault as a moss website via the moss CLI",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "npm run build && wdio run e2e/wdio.conf.mts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@symbiosis-lab/moss-syntax": "workspace:*"
+  },
+  "devDependencies": {
+    "@codemirror/state": "^6.5.4",
+    "@codemirror/view": "^6.36.1",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.10.0",
+    "@wdio/cli": "^9.29.1",
+    "@wdio/globals": "^9.29.1",
+    "@wdio/local-runner": "^9.29.1",
+    "@wdio/mocha-framework": "^9.29.1",
+    "esbuild": "^0.25.12",
+    "expect-webdriverio": "^5.7.0",
+    "mocha": "^10.8.2",
+    "obsidian": "^1.13.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7",
+    "wdio-obsidian-reporter": "^3.1.1",
+    "wdio-obsidian-service": "^3.1.1"
+  }
+}

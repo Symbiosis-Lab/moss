@@ -130,13 +130,12 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
         open_tag.push('"');
         // A ratio rides as a CUSTOM PROPERTY, never as an inline
         // `grid-template-columns`. An inline declaration outranks every
-        // stylesheet rule, so `:::grid 2 1:2` used to stay two columns at
-        // every viewport — the mobile collapse (`@media (max-width: 768px)
-        // .moss-grid[data-columns] { grid-template-columns: 1fr }`) could
-        // never reach it. Handing the value over as `--moss-grid-ratio` puts
-        // it back in the cascade: the column rules read
-        // `grid-template-columns: var(--moss-grid-ratio, <default>)`, and the
-        // mobile rule simply doesn't read the variable. Same shape as
+        // stylesheet rule, so a theme's own override (or any future rule
+        // reading `grid-template-columns`) could never reach a `:::grid 2
+        // 1:2` cell if the ratio arrived inline. Handing the value over as
+        // `--moss-grid-ratio` puts it back in the cascade: the column rules
+        // read `grid-template-columns: var(--moss-grid-ratio, <default>)`,
+        // an ordinary value an ordinary rule can still outrank. Same shape as
         // `--moss-gallery-columns` next door.
         //
         // `minmax(0, Nfr)` rather than a bare `Nfr` for the reason spelled out

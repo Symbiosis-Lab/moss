@@ -1,0 +1,4 @@
+main.js
+node_modules/
+.obsidian-cache/
+e2e/vault/.obsidian/plugins/

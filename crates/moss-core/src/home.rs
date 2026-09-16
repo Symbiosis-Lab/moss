@@ -193,26 +193,44 @@ pub fn is_index_stem(stem: &str) -> bool {
     INDEX_STEMS.contains(&stem.to_lowercase().as_str())
 }
 
+/// An index stem in any language: `index`, `readme`, and their
+/// language-suffixed forms like `index.zh-hans`. Matching is case-insensitive.
+///
+/// Separate from [`is_home_file`] because the two answer different questions.
+/// This one asks whether the stem is boilerplate — a name carrying no text
+/// worth keeping, so a caller may reach for the folder's name instead.
+/// `is_home_file` also says yes to a self-named folder note, whose stem IS
+/// the title; a caller that conflates the two throws that title away.
+///
+/// ```
+/// assert!(moss_core::home::is_index_stem_any_lang("index.zh-hans"));
+/// assert!(moss_core::home::is_index_stem_any_lang("README"));
+/// assert!(!moss_core::home::is_index_stem_any_lang("William Blake"));
+/// ```
+pub fn is_index_stem_any_lang(stem: &str) -> bool {
+    is_index_stem(stem) || strip_lang_suffix(stem).is_some_and(is_index_stem)
+}
+
 /// Check if a file stem acts as a home/index file in a given folder context.
 ///
-/// Returns true if the stem is a recognized index stem (index, readme, etc.),
-/// including language-suffixed variants like `index.zh-hans`.
-/// Also matches self-named folder notes. Matching is case-insensitive.
+/// Returns true for any [`is_index_stem_any_lang`] stem, and also for a
+/// self-named folder note. Matching is case-insensitive.
 pub fn is_home_file(stem: &str, parent_folder_name: &str) -> bool {
-    // Direct index stem match
-    if is_index_stem(stem) {
+    if is_index_stem_any_lang(stem) {
         return true;
     }
 
-    // Language-suffixed index stem (e.g., "index.zh-hans")
-    if let Some(bare) = strip_lang_suffix(stem) {
-        if is_index_stem(bare) {
-            return true;
-        }
-    }
-
-    // Self-named folder note
-    !parent_folder_name.is_empty() && stem.to_lowercase() == parent_folder_name.to_lowercase()
+    // Self-named folder note. Compared as slugs, not raw lowercase strings:
+    // a folder on disk is conventionally kebab-case (`william-blake/`) while
+    // the note inside it carries the human title (`William Blake.md`) — the
+    // same normalization `generate_slug` already applies to every URL
+    // segment in the site. A raw-string compare never matched that pair
+    // (blakesnotebook.com's root folder-note, moss#1101): the file silently
+    // stopped being the folder's home and fell back to an ordinary slugged
+    // page, which is what let a ROOT vault with no other home candidate
+    // synthesize an empty index at `/`.
+    !parent_folder_name.is_empty()
+        && crate::content_graph::generate_slug(stem) == crate::content_graph::generate_slug(parent_folder_name)
 }
 
 /// Find the home file among filenames, with folder-name awareness.
@@ -261,9 +279,19 @@ pub fn detect_home_file_in_folder<'a>(
         }
     }
 
-    // Priority 4: self-named folder note
-    let self_named = format!("{}.md", folder_name.to_lowercase());
-    if let Some(&f) = filenames.iter().find(|f| f.to_lowercase() == self_named) {
+    // Priority 4: self-named folder note. Slug-compared, not raw-lowercase —
+    // see `is_home_file`'s comment: a kebab-case folder (`william-blake/`)
+    // and the titled note inside it (`William Blake.md`) are the same
+    // identity once normalized through the same `generate_slug` every URL
+    // segment already goes through.
+    let folder_slug = crate::content_graph::generate_slug(folder_name);
+    if let Some(&f) = filenames.iter().find(|f| {
+        let lower = f.to_lowercase();
+        match lower.strip_suffix(".md") {
+            Some(stem) => crate::content_graph::generate_slug(stem) == folder_slug,
+            None => false,
+        }
+    }) {
         return Some(f);
     }
 
@@ -531,6 +559,19 @@ mod tests {
         );
     }
 
+    /// Same fixture as `is_home_file`'s slug test, at the folder-detection
+    /// level `compute_home_file_winners` calls: a titled root note beats
+    /// alphabetical fallback against its kebab-case folder even though
+    /// neither string is a literal substring of the other.
+    #[test]
+    fn test_self_named_beats_alphabetical_fallback_across_hyphen_and_space() {
+        let files = vec!["Archive.md", "William Blake.md"];
+        assert_eq!(
+            detect_home_file_in_folder(&files, "william-blake"),
+            Some("William Blake.md")
+        );
+    }
+
     // --- detect_home_file_in_folder_marked (home: true marker) ---
 
     #[test]
@@ -593,6 +634,25 @@ mod tests {
     fn test_is_home_file_self_named_case_insensitive() {
         assert!(is_home_file("Recipes", "recipes"));
         assert!(is_home_file("recipes", "Recipes"));
+    }
+
+    /// blakesnotebook.com's root folder-note: a titled file (`William
+    /// Blake.md`, spaces and capitals) inside a kebab-case vault folder
+    /// (`william-blake/`). Both slugify to the same string, so this is the
+    /// same self-named identity a raw lowercase compare cannot see (moss#1101).
+    #[test]
+    fn test_is_home_file_self_named_across_case_space_and_hyphen() {
+        assert!(is_home_file("william blake", "william-blake"));
+        assert!(is_home_file("William Blake", "william-blake"));
+    }
+
+    /// The slug normalization must not turn genuinely different names into a
+    /// false match — only names that collapse to the same slug are "the
+    /// same" self-named note.
+    #[test]
+    fn test_is_home_file_self_named_slug_mismatch_still_rejected() {
+        assert!(!is_home_file("archive", "william-blake"));
+        assert!(!is_home_file("william blakes", "william-blake"));
     }
 
     #[test]
@@ -773,6 +833,24 @@ mod tests {
         assert_eq!(
             site_name(Some("README.md"), Some("README"), "Docs"),
             "Docs"
+        );
+    }
+
+    /// blakesnotebook.com end-to-end (moss's 2026-09-14 fix): a self-named
+    /// root folder-note whose stem case doesn't match the disk folder name
+    /// must keep its own casing as the site name. `homepage_title` here is
+    /// the pipeline's already-resolved `doc.title`, i.e. the output of
+    /// `heading::filename_text_with_root` once that function stops
+    /// substituting the folder name for a self-named note.
+    #[test]
+    fn test_site_name_self_named_mismatched_case_keeps_own_title() {
+        assert_eq!(
+            site_name(
+                Some("William Blake.md"),
+                Some("William Blake"),
+                "william-blake"
+            ),
+            "William Blake"
         );
     }
 }

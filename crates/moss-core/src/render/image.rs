@@ -1,7 +1,7 @@
 //! Image HTML synthesizer — the single entry point for emitting `<img>` /
 //! `<picture>` markup in moss output.
 //!
-//! See [`docs/reference/structural-html-emission.md`](../../../../docs/reference/structural-html-emission.md)
+//! See [`docs/reference/structural-html-emission.md`](../../../../../docs/reference/structural-html-emission.md)
 //! for the architectural principle: structural HTML decisions are made at the
 //! typed-data layer (pulldown-cmark events, shortcode AST, typed component
 //! props), with all three call sites converging on the function in this
@@ -168,7 +168,16 @@ pub enum ImageContext<'a> {
     /// Always emits bare `<img>` or `<picture><img></picture>`.
     MarkdownInline,
     /// `:::hero` shortcode body image. The hero wrapper handles layout.
-    Hero,
+    ///
+    /// `plate: true` is the `:::hero {.plate}` variant (2026-09-11): the
+    /// image must render whole, never cropped, never upscaled past its
+    /// delivered pixels — shown at up to its full deployed width rather
+    /// than clamped to the viewport-derived default. `sizes=` has to say
+    /// so or the srcset ladder starves it into a blurry upscale (see
+    /// `ctx_sizes::SIZES_HERO_PLATE`). Detected from the shortcode's raw
+    /// class list via `hero_is_plate` — a theme never spells `data-fit`
+    /// itself, it just writes `{.plate}`.
+    Hero { plate: bool },
     /// Folder-card cover or child-summary cover image.
     FolderCardCover,
     /// External-link preview thumbnail image.
@@ -234,6 +243,16 @@ pub enum ImageContext<'a> {
     /// `eager` options are ignored — the hero `<header>` wraps and CSS
     /// handles loading priority.
     HeroBare,
+}
+
+/// Whether a `:::hero`'s raw class list (`HeroShortcode::classes` /
+/// `HeroArgs::classes`, space-separated, exactly what the author wrote in
+/// `{.foo .bar}`) names the `plate` variant. The sole place that
+/// interprets the token — callers pass the result into `ImageContext::Hero
+/// { plate }` and into the `data-fit="plate"` attribute, so `.plate`
+/// itself never has to appear in emitted HTML or theme CSS.
+pub fn hero_is_plate(classes: &str) -> bool {
+    classes.split_ascii_whitespace().any(|t| t == "plate")
 }
 
 /// Optional rendering attributes a caller may pass.
@@ -425,7 +444,8 @@ pub fn synthesize_image_html(
     let sizes_value: &str = match options.sizes {
         Some(s) => s,
         None => match &context {
-            ImageContext::Hero => ctx_sizes::SIZES_FULL_BLEED,
+            ImageContext::Hero { plate: true } => ctx_sizes::SIZES_HERO_PLATE,
+            ImageContext::Hero { plate: false } => ctx_sizes::SIZES_FULL_BLEED,
             ImageContext::MarkdownStandalone { width: Some(w), .. } => {
                 ctx_sizes::sizes_for_data_width(w).unwrap_or(ctx_sizes::SIZES_BODY)
             }

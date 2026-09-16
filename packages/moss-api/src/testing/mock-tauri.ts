@@ -64,9 +64,6 @@ export interface MockFilesystem {
   clear(): void;
 }
 
-/**
- * Create a new mock filesystem instance
- */
 export function createMockFilesystem(): MockFilesystem {
   const files = new Map<string, MockFile>();
 
@@ -126,9 +123,6 @@ export interface DownloadTracker {
   reset(): void;
 }
 
-/**
- * Create a new download tracker instance
- */
 export function createDownloadTracker(): DownloadTracker {
   let activeDownloads = 0;
   let maxConcurrent = 0;
@@ -211,9 +205,6 @@ export interface MockUrlConfig {
   reset(): void;
 }
 
-/**
- * Create a new URL config instance
- */
 export function createMockUrlConfig(): MockUrlConfig {
   const responses = new Map<string, MockUrlResponse | MockUrlResponse[]>();
   const callCounts = new Map<string, number>();
@@ -286,9 +277,6 @@ export interface MockBinaryConfig {
   reset(): void;
 }
 
-/**
- * Create a new binary config instance
- */
 export function createMockBinaryConfig(): MockBinaryConfig {
   const results = new Map<string, MockBinaryResult>();
 
@@ -344,13 +332,12 @@ export interface MockCookieStorage {
     projectPath: string,
     cookies: Array<{ name: string; value: string; domain?: string; path?: string }>
   ): void;
+  /** Remove every cookie stored for one plugin/project */
+  clearCookies(pluginName: string, projectPath: string): void;
   /** Clear all cookies */
   clear(): void;
 }
 
-/**
- * Create a new cookie storage instance
- */
 export function createMockCookieStorage(): MockCookieStorage {
   const cookies = new Map<
     string,
@@ -371,8 +358,70 @@ export function createMockCookieStorage(): MockCookieStorage {
       const key = `${pluginName}:${projectPath}`;
       cookies.set(key, newCookies);
     },
+    clearCookies(pluginName: string, projectPath: string) {
+      cookies.delete(`${pluginName}:${projectPath}`);
+    },
     clear() {
       cookies.clear();
+    },
+  };
+}
+
+// ============================================================================
+// Secret Storage
+// ============================================================================
+
+/**
+ * Mock secret storage.
+ *
+ * Scoped by plugin, as the host scopes it — a mock keyed only by the secret's
+ * name would let a test pass that the host would refuse.
+ *
+ * `seed` stands in for the user answering moss's modal; a plugin's own
+ * `setSecret` writes the same store. `rejectSecret` re-asks, so the mock answers
+ * for the user — it cancels unless a test called `answerNextPrompt`, because
+ * cancel is the case plugins forget to handle.
+ */
+export interface MockSecretStorage {
+  /** Store a secret as if the user had answered moss's credential modal. */
+  seed(pluginName: string, key: string, value: string): void;
+  /** What `getSecret` would return: the stored value, or `null`. */
+  get(pluginName: string, key: string): string | null;
+  /** Did the plugin tell moss to forget this secret? */
+  wasRejected(pluginName: string, key: string): boolean;
+  /** What the next re-prompt answers. Consumed by one `reject`, then cancel again. */
+  answerNextPrompt(value: string | null): void;
+  /** Forget it, re-ask, and answer — what `rejectSecret` does end to end. */
+  reject(pluginName: string, key: string): string | null;
+  clear(): void;
+}
+
+export function createMockSecretStorage(): MockSecretStorage {
+  const secrets = new Map<string, string>();
+  const rejected = new Set<string>();
+  let nextPromptAnswer: string | null = null;
+  const at = (plugin: string, key: string) => `${plugin}:${key}`;
+
+  return {
+    // Empty erases, as the host's store does. Seeding `""` would otherwise
+    // model a state the host cannot hold — a stored-but-unusable credential —
+    // and every stored-ness check in moss would read it as present.
+    seed: (plugin, key, value) =>
+      void (value === "" ? secrets.delete(at(plugin, key)) : secrets.set(at(plugin, key), value)),
+    get: (plugin, key) => secrets.get(at(plugin, key)) ?? null,
+    wasRejected: (plugin, key) => rejected.has(at(plugin, key)),
+    answerNextPrompt: (value) => void (nextPromptAnswer = value),
+    reject: (plugin, key) => {
+      rejected.add(at(plugin, key));
+      const answer = nextPromptAnswer;
+      nextPromptAnswer = null;
+      if (answer === null) secrets.delete(at(plugin, key));
+      else secrets.set(at(plugin, key), answer);
+      return answer;
+    },
+    clear: () => {
+      secrets.clear();
+      rejected.clear();
     },
   };
 }
@@ -399,9 +448,6 @@ export interface MockBrowserTracker {
   reset(): void;
 }
 
-/**
- * Create a new browser tracker instance
- */
 export function createMockBrowserTracker(): MockBrowserTracker {
   const openedUrls: string[] = [];
   const systemBrowserUrls: string[] = [];
@@ -473,9 +519,6 @@ export interface MockDialogTracker {
   reset(): void;
 }
 
-/**
- * Create a new dialog tracker instance
- */
 export function createMockDialogTracker(): MockDialogTracker {
   const shownDialogs: Array<{ url: string; title: string; width: number; height: number }> = [];
   const submittedResults = new Map<string, MockDialogResult>();
@@ -571,6 +614,8 @@ export interface MockTauriContext {
   binaryConfig: MockBinaryConfig;
   /** Cookie storage */
   cookieStorage: MockCookieStorage;
+  /** Secret storage */
+  secretStorage: MockSecretStorage;
   /** Browser open/close tracking */
   browserTracker: MockBrowserTracker;
   /** Dialog interaction tracking */
@@ -624,6 +669,7 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
   const urlConfig = createMockUrlConfig();
   const binaryConfig = createMockBinaryConfig();
   const cookieStorage = createMockCookieStorage();
+  const secretStorage = createMockSecretStorage();
   const browserTracker = createMockBrowserTracker();
   const dialogTracker = createMockDialogTracker();
 
@@ -787,16 +833,6 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
         return null;
       }
 
-      case "list_plugin_files": {
-        const pn = payload?.pluginName as string;
-        const pp = payload?.projectPath as string;
-        const prefix = `${pp}/.moss/plugins/${pn}/`;
-        const allPaths = filesystem.listFiles();
-        return allPaths
-          .filter((p) => p.startsWith(prefix))
-          .map((p) => p.substring(prefix.length));
-      }
-
       case "plugin_file_exists": {
         const pn = payload?.pluginName as string;
         const pp = payload?.projectPath as string;
@@ -926,7 +962,23 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
           domain?: string;
           path?: string;
         }>;
+        // The host refuses this (plugins/cookie_store.rs). The mock accepting
+        // it — and clearing the store, which the host never did — is what let
+        // github's broken `clearToken` test green for as long as it did.
+        if (!cookies || cookies.length === 0) {
+          throw new Error(
+            "set_plugin_cookie was called with no cookies, so it would store nothing. " +
+              "To remove stored cookies, call clearPluginCookies() instead."
+          );
+        }
         cookieStorage.setCookies(pluginName, projectPath, cookies);
+        return null;
+      }
+
+      case "clear_plugin_cookies": {
+        const pluginName = payload?.pluginName as string;
+        const projectPath = payload?.projectPath as string;
+        cookieStorage.clearCookies(pluginName, projectPath);
         return null;
       }
 
@@ -985,6 +1037,27 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
       }
 
       // ======================================================================
+      // Secrets — scoped to the calling plugin, as the host scopes them.
+      //
+      // Scoping is modelled; THE KEY GATE IS NOT. The host refuses
+      // `set_plugin_secret` for a key the manifest declared as user-supplied —
+      // a `setup.credentials` entry or a `config_schema` field typed `secret`
+      // (ADR-072 §3) — and this mock seeds unconditionally, so a green test
+      // here is never a verdict that the host would have allowed the call. The
+      // gate is proved in Rust, at the seam that reads the manifest.
+      // ======================================================================
+      case "get_plugin_secret": {
+        return secretStorage.get(pluginName, payload?.key as string);
+      }
+      case "reject_plugin_secret": {
+        return secretStorage.reject(pluginName, payload?.key as string);
+      }
+      case "set_plugin_secret": {
+        secretStorage.seed(pluginName, payload?.key as string, payload?.value as string);
+        return null;
+      }
+
+      // ======================================================================
       // Messaging (silent no-op)
       // ======================================================================
       case "plugin_message": {
@@ -1038,6 +1111,7 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
     urlConfig,
     binaryConfig,
     cookieStorage,
+    secretStorage,
     browserTracker,
     dialogTracker,
     projectPath,
@@ -1051,6 +1125,7 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
       urlConfig.reset();
       binaryConfig.reset();
       cookieStorage.clear();
+      secretStorage.clear();
       browserTracker.reset();
       dialogTracker.reset();
       eventListeners.clear();

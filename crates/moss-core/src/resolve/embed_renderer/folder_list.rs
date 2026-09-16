@@ -15,11 +15,23 @@ pub struct FolderEmbedParams {
     pub style: Option<String>,   // "list" | "summary" | "grid"
     pub depth: Option<String>,   // "direct" | "all"
     pub group: Option<String>,   // "year" | "none"
+    /// Listing filter: "only" keeps pages that have a cover. Applied after
+    /// flattening (`depth:all`) and before `limit`, so a capped listing
+    /// counts the limit off the covered set rather than the full set.
+    pub covers: Option<String>,
     /// Raw sizing token (e.g. `"80%"`, `"800x600"`). Parsed to a `Sizing`
     /// at render time and applied ONLY to the static-index iframe branch
     /// (the card-grid listing branch ignores it). Stored raw so the
     /// pothole→marker→render round-trip stays a plain string.
     pub size: Option<String>,
+    /// `more:<target>` — a wikilink-or-plain-name reference to the page the
+    /// truncated "More →" link should point at, resolved in moss-build
+    /// against `all_docs` the same way `children_more` frontmatter is
+    /// (moss-core has no document set to resolve against). Lets a body
+    /// embed (`![[/|more:Archive]]`) name a target the way `children_more`
+    /// frontmatter already can; `synthesize_children_marker` sets this
+    /// field from `children_more` too, so both sources share one field.
+    pub more: Option<String>,
     /// Internal: this is the root homepage's own depth=all self-listing, so scope it
     /// to the default language tree — on a multilingual site (gated at render time by
     /// `ProjectStructure.has_language_trees`) drop docs under a language-prefix folder
@@ -57,6 +69,13 @@ pub fn parse_params(raw: &str) -> FolderEmbedParams {
                 "style" => out.style = Some(v.trim().to_string()),
                 "depth" => out.depth = Some(v.trim().to_string()),
                 "group" => out.group = Some(v.trim().to_string()),
+                "covers" => out.covers = Some(v.trim().to_string()),
+                "more" => {
+                    let v = v.trim();
+                    if !v.is_empty() {
+                        out.more = Some(v.to_string());
+                    }
+                }
                 _ => {}
             }
         } else if is_size_token(tok) {
@@ -67,7 +86,7 @@ pub fn parse_params(raw: &str) -> FolderEmbedParams {
             // params above carry a `:` and never reach this branch.
             out.size = Some(tok.to_string());
         }
-        // unknown bare flags (e.g. legacy "more") silently ignored
+        // unknown bare flags (e.g. a bare "more" with no `:target`) silently ignored
     }
     out
 }
@@ -89,9 +108,9 @@ fn is_size_token(tok: &str) -> bool {
 
 /// Marker prefix for folder-list embeds emitted by moss-core.
 /// The src-tauri marker resolver (Task 16) reads everything between the prefix
-/// and the terminator as `path=...|from=...|limit=N|more|sort=axis`. The `path`
-/// is the user-written target (which may carry a leading `/`); `from` is the
-/// source markdown file path, used for resolving relative paths against the
+/// and the terminator as `path=...|from=...|limit=N|more=target|sort=axis`. The
+/// `path` is the user-written target (which may carry a leading `/`); `from` is
+/// the source markdown file path, used for resolving relative paths against the
 /// current document's location.
 pub const MARKER_FOLDER_LIST: &str = "<!--MOSS_MARKER_FOLDER_LIST:";
 pub const MARKER_END: &str = "-->";
@@ -106,6 +125,12 @@ pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String
     }
     if let Some(ref g) = params.group {
         parts.push(format!("group={}", g));
+    }
+    if let Some(ref c) = params.covers {
+        parts.push(format!("covers={}", c));
+    }
+    if let Some(ref m) = params.more {
+        parts.push(format!("more={}", m));
     }
     if let Some(ref sz) = params.size {
         parts.push(format!("size={}", sz));

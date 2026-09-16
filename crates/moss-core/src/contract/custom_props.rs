@@ -31,7 +31,7 @@
 /// is set *on a component or a scope* to change that component.
 ///
 /// The distinction matters because it is the whole theming API in practice.
-/// Audited 2026-08-03: the two most heavily customized moss sites (okagaki, 在場)
+/// Audited 2026-08-03: the two most heavily customized moss sites (okagaki, 潮汐)
 /// overrode **zero** design tokens between them and set six of these. None was
 /// discoverable — not in `moss describe --json`, not in any published doc — so
 /// okagaki hand-fought the hero height caps that `--moss-hero-max-height` exists
@@ -66,8 +66,8 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
     CustomProp {
         name: "--moss-hero-max-height",
         owner: "moss-hero",
-        default: "70vh",
-        description: "Cap on hero media height on desktop. Set `none` for a hero that fills its container. Note the wrapper has its own cap — `.moss-hero { max-height: min(80vh, 800px) }` reads the same property, so setting it once lifts both.",
+        default: "70vb",
+        description: "Cap on hero media block size on desktop (height horizontally, width under vertical typesetting). Set `none` for a hero that fills its container. Note the wrapper has its own cap — `.moss-hero { max-block-size: min(80vb, 800px) }` reads the same property, so setting it once lifts both.",
     },
     CustomProp {
         name: "--moss-hero-object-position",
@@ -103,7 +103,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-grid-ratio",
         owner: "moss-grid",
         default: "repeat(N, minmax(0, 1fr))",
-        description: "Track widths for a `:::grid`, as a `grid-template-columns` value. moss sets it on the element when the author writes a ratio (`:::grid 2 1:2` → `2fr 1fr`); the fallback is the even split for whatever `data-columns` says, and a ratio-less grid with no `data-columns` falls back to `initial`. It is a property rather than an inline `grid-template-columns` on purpose: an inline declaration beats every stylesheet rule, including the mobile collapse, so a ratio grid stayed multi-column on a phone. A theme setting this by hand overrides the author's ratio at every width — the mobile collapse still wins, because that rule does not read the property.",
+        description: "Track widths for a `:::grid`, as a `grid-template-columns` value. moss sets it on the element when the author writes a ratio (`:::grid 2 1:2` → `2fr 1fr`); the fallback is the even split for whatever `data-columns` says, and a ratio-less grid with no `data-columns` falls back to `initial`. It is a property rather than an inline `grid-template-columns` on purpose: an inline declaration beats every stylesheet rule, so a theme rule could never override it if it arrived inline. A theme setting this custom property by hand overrides the author's ratio at every width, same as any other cascade value.",
     },
     CustomProp {
         name: "--moss-grid-image-ratio",
@@ -127,7 +127,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-card-cover-ratio",
         owner: "moss-card-cover",
         default: "4 / 3",
-        description: "Aspect ratio of card cover images. Same reasoning as `--moss-grid-image-ratio`, for `:::cards` rather than `:::grid`.",
+        description: "Aspect ratio of card cover images. Same reasoning as `--moss-grid-image-ratio`, for `:::cards` rather than `:::grid`. `aspect-ratio` has no logical spelling, so vertical typesetting overrides this to the transposed `3 / 4` in `site/vertical.css` rather than expressing the ratio once.",
     },
     CustomProp {
         name: "--moss-card-cover-fit",
@@ -152,6 +152,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         owner: "moss-card",
         default: "var(--moss-color-bg, #fff)",
         description: "Fallback background in the `--moss-cover-color` chain, for a scope that wants a different neutral than the site background without redefining the `--moss-color-bg` token.",
+    },
+    CustomProp {
+        name: "--moss-sheet-away",
+        owner: "moss-footnotes-lifted",
+        default: "1",
+        description: "How far the lifted footnote sheet sits from its docked position (1 = away, 0 = docked). Written per-element at runtime by sidenotes.ts as the sheet scrolls back into its slot, and removed on dismiss. Not a theme hook: a hand-set value is overwritten on the next scroll frame.",
     },
     CustomProp {
         name: "--moss-nav-width",
@@ -193,7 +199,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-mark-drop-paint",
         owner: "moss-mark",
         default: "var(--moss-mark-drop)",
-        description: "The same for the mark's green drop, the satellite the eye weighs. Unset, it takes the ground's drop colour (`#6b8e4e` on paper, lifted to `#8aba6a` on dark). Reach for this pair rather than `opacity` whenever a surface wants the mark quieter: opacity bleaches the green to a sage grey while the black half merely fades, and the two-tone reading is the design.",
+        description: "The same for the mark's green, the far-end ink the eye weighs. Unset, it takes the ground's drop colour (`#4f7031` on paper, lifted to `#a3d483` on dark). Reach for this pair rather than `opacity` whenever a surface wants the mark quieter: opacity bleaches the green to a sage grey while the black half merely fades, and the two-tone reading is the design.",
     },
     CustomProp {
         name: "--moss-mark-fade",

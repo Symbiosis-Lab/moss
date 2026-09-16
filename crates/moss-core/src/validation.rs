@@ -176,7 +176,7 @@ pub fn validate_frontmatter(
                             diags.push(Diagnostic {
                                 severity: Severity::Warning,
                                 message: format!(
-                                    "field '{}' has invalid date format '{}'; expected YYYY-MM-DD",
+                                    "field '{}' has invalid date format '{}'; expected YYYY, YYYY-MM or YYYY-MM-DD",
                                     name, s
                                 ),
                                 path: Some(name.clone()),
@@ -315,51 +315,50 @@ fn yaml_type_name(value: &serde_yaml::Value) -> &'static str {
     }
 }
 
-/// Validate a date string in YYYY-MM-DD format.
+/// Validate a frontmatter date: `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`.
 ///
-/// Requires exactly 10 characters: 4 digits, dash, 2 digits, dash, 2 digits.
+/// Reduced precision is accepted because a date is often known only to the year
+/// or the month, and padding the rest to `-01-01` is a claim the card then
+/// prints as a real "· 01". The other layers already agree: `format_date_string`
+/// renders `1697-09` as "1697 · 09" and a bare year as itself, and the sort axis
+/// compares the strings lexically, which orders mixed precision by year.
 fn is_valid_date(s: &str) -> bool {
-    // Strict format: YYYY-MM-DD (exactly 10 chars)
-    if s.len() != 10 {
-        return false;
-    }
-
-    let bytes = s.as_bytes();
-    if bytes[4] != b'-' || bytes[7] != b'-' {
-        return false;
-    }
-
-    // Verify all digit positions are ASCII digits.
-    for &i in &[0, 1, 2, 3, 5, 6, 8, 9] {
-        if !bytes[i].is_ascii_digit() {
-            return false;
-        }
-    }
-
-    // The byte-position checks above guarantee the three-segment shape and
-    // ASCII-digit content, so the parses below cannot fail today. But "panics
-    // only when the author was right" is the same shape that just bit us in
-    // `date.rs` — refactor the byte checks above and these `.unwrap()`s become
-    // a panic on user input. Use slice-pattern destructuring + `let-else`
-    // instead so the compiler enforces the three-segment shape, and bail
-    // cleanly via `Result::Err` rather than a panic if parsing ever fails.
     let parts: Vec<&str> = s.split('-').collect();
-    let [year_str, month_str, day_str] = parts.as_slice() else {
+    if parts.len() > 3 {
+        return false;
+    }
+    let is_fixed_digits = |p: &str, n: usize| p.len() == n && p.bytes().all(|b| b.is_ascii_digit());
+
+    if !is_fixed_digits(parts[0], 4) {
+        return false;
+    }
+    let Ok(year) = parts[0].parse::<u32>() else {
         return false;
     };
-    let Ok(year) = year_str.parse::<u32>() else {
+    if year < 1 {
         return false;
+    }
+    let Some(month_str) = parts.get(1) else {
+        return true;
     };
+    if !is_fixed_digits(month_str, 2) {
+        return false;
+    }
     let Ok(month) = month_str.parse::<u32>() else {
         return false;
     };
+    if !(1..=12).contains(&month) {
+        return false;
+    }
+    let Some(day_str) = parts.get(2) else {
+        return true;
+    };
+    if !is_fixed_digits(day_str, 2) {
+        return false;
+    }
     let Ok(day) = day_str.parse::<u32>() else {
         return false;
     };
-
-    if year < 1 || month < 1 || month > 12 || day < 1 {
-        return false;
-    }
 
     let days_in_month = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
@@ -374,7 +373,7 @@ fn is_valid_date(s: &str) -> bool {
         _ => return false,
     };
 
-    day <= days_in_month
+    (1..=days_in_month).contains(&day)
 }
 
 // ---------------------------------------------------------------------------
@@ -759,8 +758,29 @@ mod tests {
         assert!(!is_valid_date("2024-04-31")); // April has 30 days
         assert!(!is_valid_date("not-a-date"));
         assert!(!is_valid_date("2024/01/15")); // wrong separator
-        assert!(!is_valid_date("2024-1-5")); // this passes since parse() accepts it
+        assert!(!is_valid_date("2024-1-5")); // segments are fixed-width, not just parseable
         assert!(!is_valid_date("1900-02-29")); // not a leap year (divisible by 100 but not 400)
+    }
+
+    #[test]
+    fn reduced_precision_dates_are_valid() {
+        // A historical page often knows the year, or the year and month, and no
+        // more. Padding to `-01-01` is not a smaller claim than the truth, it is
+        // a different one, and the card prints it as a real "· 01".
+        assert!(is_valid_date("1697"));
+        assert!(is_valid_date("1697-09"));
+        assert!(is_valid_date("1674-06-10"));
+
+        // Reduced precision is not licence for a malformed segment.
+        assert!(!is_valid_date("169"));
+        assert!(!is_valid_date("16970"));
+        assert!(!is_valid_date("1697-9"));
+        assert!(!is_valid_date("1697-13"));
+        assert!(!is_valid_date("1697-09-"));
+        assert!(!is_valid_date("1697-09-1"));
+        assert!(!is_valid_date("1697-09-10-01"));
+        assert!(!is_valid_date("0000"));
+        assert!(!is_valid_date(""));
     }
 
     // -----------------------------------------------------------------------

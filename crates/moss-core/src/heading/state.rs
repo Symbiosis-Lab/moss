@@ -100,14 +100,19 @@ pub fn filename_text(file_path: &str) -> String {
     filename_text_with_root(file_path, None)
 }
 
-/// Like [`filename_text`], but root-aware: for an index-stem / self-named
-/// folder note at the project root (where `Path::parent()` has no
-/// `file_name`), the resolved text is `root_folder_name` rather than the bare
-/// stem. This is the fix for #775 — a root `index.md` home page must read the
-/// folder name in `<title>`/chrome, not "index".
+/// Like [`filename_text`], but root-aware: for an index stem at the project
+/// root (where `Path::parent()` has no `file_name`), the resolved text is
+/// `root_folder_name` rather than the bare stem. This is the fix for #775 —
+/// a root `index.md` home page must read the folder name in `<title>`/chrome,
+/// not "index".
 ///
-/// Mirrors the parent-name resolution in [`compute`] (`heading/state.rs` root
-/// fallback) so the text answer and the visibility answer agree at the root.
+/// Shares [`compute`]'s root fallback for the parent name, but deliberately
+/// not its folder-note predicate: `compute` asks [`home::is_home_file`]
+/// because a self-named note IS the folder's home and its H1 should be
+/// suppressed, while this function asks only whether the stem is boilerplate,
+/// because that same note's stem is the title worth keeping. The two answers
+/// diverge on exactly one input and are meant to.
+///
 /// No title-casing: hyphens/underscores become spaces, everything else is
 /// verbatim (same rule as the nested case).
 pub fn filename_text_with_root(file_path: &str, root_folder_name: Option<&str>) -> String {
@@ -125,11 +130,14 @@ pub fn filename_text_with_root(file_path: &str, root_folder_name: Option<&str>) 
         .and_then(|p| p.file_name())
         .and_then(|s| s.to_str())
         .or(root_folder_name);
-    // The one home-file rule (`is_home_file`), so the text answer agrees with
-    // the visibility answer in [`compute`]: until 2026-09-06 this arm knew the
-    // bare index stems only, and `essays/index.zh-hans.md` was titled
-    // "index.zh hans" while its bare twin read "essays".
-    let is_folder_note = home::is_home_file(stem, parent_name.unwrap_or(""));
+    // Deliberately the index-stem test, not `is_home_file`: substituting the
+    // parent name is right for an `index.md`, whose stem carries no text worth
+    // keeping, and wrong for a self-named note (`William Blake.md` in
+    // `william-blake/`), whose stem already IS the title, properly cased.
+    // `is_home_file` says yes to both, so using it here title-cased the
+    // parent's raw disk name and lost the casing — blakesnotebook.com's site
+    // name, docs/archive/2026-09-14-blakesnotebook-five-fixes-plan.md.
+    let is_folder_note = home::is_index_stem_any_lang(stem);
     let source_name = if is_folder_note {
         parent_name.unwrap_or(stem)
     } else {
@@ -145,23 +153,29 @@ pub fn filename_text_with_root(file_path: &str, root_folder_name: Option<&str>) 
 ///
 /// 1. the first non-blank line opens a hero (`:::hero`, optionally followed by
 ///    attributes), and
-/// 2. **the block has something inside it.**
+/// 2. **the block has overlay text of its own, once its image is accounted
+///    for.**
 ///
-/// Without (2) this returned `true` for `:::hero {image=cover.jpg}` / `:::` —
-/// an image-only cover, which is the obvious way to write "full-bleed cover
-/// photo" and by far the commonest hero there is. moss suppressed the title,
-/// and the hero renderer draws only the image, the overlay and the caption; it
-/// never consults `doc.title`. So the slot was handed to a component that put
-/// nothing in it and the title vanished from the page — silently, because
-/// `<title>`, the OG tags and RSS all resolve the same text by other paths.
-/// One site adopted full-bleed covers in two commits and lost the visible
-/// heading on 87 pages at once.
+/// Without (2) this returned `true` for any hero with a non-blank body line —
+/// including an image-only cover, which is the obvious way to write
+/// "full-bleed cover photo" and by far the commonest hero there is, in either
+/// of its two syntaxes: `:::hero {image=cover.jpg}` / `:::`, or the plain
+/// body-image form `:::hero {.plate}` / `![cover](cover.jpg)` / `:::`. moss
+/// suppressed the title, and the hero renderer draws only the image, the
+/// overlay and the caption; it never consults `doc.title`. So the slot was
+/// handed to a component that put nothing in it and the title vanished from
+/// the page — silently, because `<title>`, the OG tags and RSS all resolve
+/// the same text by other paths. One site adopted full-bleed covers across 87
+/// pages this way, and a second adopted the body-image form across 62 more.
 ///
-/// "Something inside" rather than "a heading inside" is deliberate: any
-/// overlay content means the author put *something* in the title slot, and
-/// widening the test to look for `#` would change what already-shipped sites
-/// render. This is the narrowest rule that fixes the empty case, so no hero
-/// that renders anything today changes behaviour.
+/// "Has overlay text" rather than "has a heading" is deliberate: any overlay
+/// content means the author put *something* in the title slot, and widening
+/// the test to look for `#` would change what already-shipped sites render.
+/// This is the narrowest rule that fixes the image-only case, so no hero
+/// that renders text today changes behaviour. Delegates the image-vs-overlay
+/// split to [`crate::ast::extract_hero::hero_body_has_overlay_content`], the
+/// same logic `parse_hero` uses to decide what the renderer actually draws,
+/// so this can't disagree with it about which body lines are the image.
 ///
 /// Attributes on the opening line do not count as content — `caption=` and
 /// `image=` live there, and neither is a title.
@@ -180,12 +194,17 @@ pub fn hero_at_top_owns_title(body_markdown: &str) -> bool {
     if !opens_hero {
         return false;
     }
+    let args = trimmed
+        .strip_prefix(":::hero")
+        .unwrap_or_default()
+        .trim_start();
 
     // Stop at the block's own fence. An unterminated hero runs to the end of
     // the body, which is what the renderer does with it too.
-    lines
-        .take_while(|line| line.trim() != ":::")
-        .any(|line| !line.trim().is_empty())
+    let body_lines: Vec<&str> = lines.take_while(|line| line.trim() != ":::").collect();
+    let body = body_lines.join("\n");
+
+    crate::ast::extract_hero::hero_body_has_overlay_content(args, &body)
 }
 
 /// Compute the full heading state for a page.
@@ -351,6 +370,20 @@ mod tests {
         assert_eq!(
             filename_text_with_root("about.md", Some("My Site")),
             "about"
+        );
+    }
+
+    /// blakesnotebook.com's root folder-note (moss's 2026-09-14 fix): a
+    /// self-named note whose stem case doesn't match the disk folder's
+    /// kebab-case name must keep its OWN casing, not the folder's. Before
+    /// the fix this went through `is_home_file`'s self-named branch and
+    /// substituted the raw disk name ("william-blake" → "william blake"),
+    /// throwing away the file's properly-cased stem.
+    #[test]
+    fn text_root_self_named_mismatched_case_keeps_own_stem() {
+        assert_eq!(
+            filename_text_with_root("William Blake.md", Some("william-blake")),
+            "William Blake"
         );
     }
 
@@ -521,10 +554,12 @@ mod tests {
 
     #[test]
     fn hero_at_top_hides_heading_when_title_absent() {
+        // Real overlay text (not a bare media reference) — the hero has
+        // something of its own to put in the title slot.
         let s = compute(HeadingInputs {
             file_path: "posts/article.md",
             frontmatter_title: None,
-            body_markdown: ":::hero\nimage: x.jpg\n:::\n\nBody.",
+            body_markdown: ":::hero\n# Overlay heading\n:::\n\nBody.",
             root_folder_name: None,
             is_home_override: false,
             slot_only: false,
@@ -563,6 +598,26 @@ mod tests {
         });
         assert!(s.visible, "an empty hero renders no title, so the page keeps its own");
         assert_eq!(s.text, "在前線，一座文學博物館的抵抗");
+    }
+
+    #[test]
+    fn an_image_only_hero_via_body_media_fallback_does_not_take_the_title_with_it() {
+        // The other 62-page regression: the client-site convention is a
+        // plain body-image line rather than an `image=` attribute —
+        // `:::hero {.plate}` / `![cover](cover.jpg)` / `:::`. The image line
+        // is non-blank, so a bare "any non-empty line" check wrongly counts
+        // it as overlay content and suppresses the title exactly like the
+        // `image=` case above.
+        let s = compute(HeadingInputs {
+            file_path: "畫/安晚冊.md",
+            frontmatter_title: Some("安晚冊"),
+            body_markdown: ":::hero {.plate}\n![安晚冊](安晚冊.jpg)\n:::\n\n正文。",
+            root_folder_name: None,
+            is_home_override: false,
+            slot_only: false,
+        });
+        assert!(s.visible, "a body-image-only hero renders no title, so the page keeps its own");
+        assert_eq!(s.text, "安晚冊");
     }
 
     #[test]
@@ -663,6 +718,14 @@ mod tests {
         // Attributes on the opening line are not content — `caption=` and
         // `image=` live there and neither is a title.
         assert!(!hero_at_top_owns_title(":::hero {image=c.jpg caption=\"A street\"}\n:::"));
+
+        // Body-image fallback (no `image=` attr, no positional path): a
+        // leading run of media lines is the image, not overlay content —
+        // the 62-page regression this change fixes.
+        assert!(!hero_at_top_owns_title(":::hero {.plate}\n![cover](cover.jpg)\n:::"));
+        assert!(!hero_at_top_owns_title(":::hero\ncover.jpg\n:::"));
+        // But real overlay text AFTER the image run still claims the slot.
+        assert!(hero_at_top_owns_title(":::hero {.plate}\n![cover](cover.jpg)\n\n# A caption\n:::"));
 
         // Not at the top → the hero is a body block like any other.
         assert!(!hero_at_top_owns_title("# Heading\n:::hero\n# Overlay\n:::"));

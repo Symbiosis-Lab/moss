@@ -195,7 +195,7 @@ fn eager_swaps_loading_attr_and_adds_fetchpriority() {
         "photo.jpg",
         "Hero",
         &s,
-        ImageContext::Hero,
+        ImageContext::Hero { plate: false },
         &ImageRenderOptions {
             eager: true,
             ..Default::default()
@@ -321,7 +321,7 @@ fn extra_attrs_passed_through_verbatim() {
         "hero.jpg",
         "",
         &s,
-        ImageContext::Hero,
+        ImageContext::Hero { plate: false },
         &ImageRenderOptions {
             eager: true,
             extra_attrs: Some(r#"data-cover-fit="cover""#),
@@ -356,7 +356,7 @@ fn lqip_style_suppressed_when_extra_attrs_has_style() {
         "hero.jpg",
         "",
         &s,
-        ImageContext::Hero,
+        ImageContext::Hero { plate: false },
         &ImageRenderOptions {
             eager: true,
             extra_attrs: Some(r#"style="object-fit:cover;object-position:50% 50%""#),
@@ -1054,7 +1054,34 @@ fn folder_card_cover_uses_card_sizes() {
         &ImageRenderOptions::default(),
     );
     assert!(
-        html.contains(r#"sizes="(min-width: 48rem) 24rem, 100vw""#),
+        html.contains(r#"sizes="auto, (min-width: 48rem) 24rem, 100vw""#),
+        "got: {html}"
+    );
+}
+
+#[test]
+fn folder_card_cover_eager_still_gets_auto_sizes() {
+    // `sizes="auto"` only binds when the img carries `loading="lazy"`
+    // (HTML spec) — an eager, high-fetchpriority card (the first card in
+    // a listing) is a browser that "doesn't support auto" as far as this
+    // attribute is concerned, so it needs no special-cased sizes string:
+    // the same `auto, <fallback>` value falls through to the fallback for
+    // it automatically, same as WebKit today. This pins that no branch in
+    // the renderer needs to vary `sizes` by `options.eager`.
+    let assets = snapshot_dims("cover.jpg", 2000, 1200);
+    let html = synthesize_image_html(
+        "cover.jpg",
+        "",
+        &assets,
+        ImageContext::FolderCardCover,
+        &ImageRenderOptions {
+            eager: true,
+            ..ImageRenderOptions::default()
+        },
+    );
+    assert!(html.contains(r#"loading="eager""#), "got: {html}");
+    assert!(
+        html.contains(r#"sizes="auto, (min-width: 48rem) 24rem, 100vw""#),
         "got: {html}"
     );
 }
@@ -1192,10 +1219,71 @@ fn hero_context_uses_full_bleed_sizes() {
         "hero.jpg",
         "",
         &assets,
-        ImageContext::Hero,
+        ImageContext::Hero { plate: false },
         &ImageRenderOptions::default(),
     );
     assert!(html.contains(r#"sizes="100vw""#), "got: {html}");
+}
+
+// --- hero plate variant (2026-09-11) -----------------------------------
+//
+// `:::hero {.plate}` renders whole, never upscaled — the srcset `sizes=`
+// value has to say so or the ladder resolves against viewport width and
+// starves a wide plate into a blurry upscale (docs/archive/
+// 2026-09-11-hero-plate-variant.md). `hero_context_uses_full_bleed_sizes`
+// above is the same fixture shape with `plate: false`, so a diff of the
+// two tests is the whole behavioral delta this variant adds.
+
+#[test]
+fn hero_plate_context_uses_fixed_sizes_not_viewport() {
+    // A 3400x447 handscroll (long-edge > DEPLOY_MAX_EDGE) deploys at
+    // 2400x316 — same fixture shape moss's own asset_paths::deployed_width
+    // would compute for it.
+    let assets = snapshot_dims("scroll.jpg", 2400, 316);
+    let html = synthesize_image_html(
+        "scroll.jpg",
+        "",
+        &assets,
+        ImageContext::Hero { plate: true },
+        &ImageRenderOptions::default(),
+    );
+    assert!(
+        html.contains(r#"sizes="2400px""#),
+        "plate hero must fix sizes= at/above DEPLOY_MAX_EDGE so the base \
+         (highest-resolution) srcset rung is always selected; got: {html}"
+    );
+    assert!(
+        !html.contains(r#"sizes="100vw""#),
+        "plate must not keep the ordinary hero's viewport-relative sizes; got: {html}"
+    );
+}
+
+#[test]
+fn hero_plate_false_is_byte_identical_to_unit_hero() {
+    // plate: false must not perturb the ordinary hero's emitted HTML —
+    // adding the field is a pure extension, not a behavior change for
+    // every hero that isn't a plate.
+    let assets = snapshot_dims("hero.jpg", 2400, 985);
+    let plain = synthesize_image_html(
+        "hero.jpg",
+        "",
+        &assets,
+        ImageContext::Hero { plate: false },
+        &ImageRenderOptions::default(),
+    );
+    let plate = synthesize_image_html(
+        "hero.jpg",
+        "",
+        &assets,
+        ImageContext::Hero { plate: true },
+        &ImageRenderOptions::default(),
+    );
+    assert_ne!(
+        plain, plate,
+        "plate must change the emitted sizes= attribute"
+    );
+    assert!(plain.contains(r#"sizes="100vw""#), "got: {plain}");
+    assert!(plate.contains(r#"sizes="2400px""#), "got: {plate}");
 }
 
 #[test]
@@ -1538,7 +1626,7 @@ fn webp_source_card_context_uses_card_sizes() {
     );
     assert!(
             html.contains(
-                r#"srcset="cover.w800.webp 800w, cover.w1600.webp 1600w, cover.webp 2000w" sizes="(min-width: 48rem) 24rem, 100vw""#
+                r#"srcset="cover.w800.webp 800w, cover.w1600.webp 1600w, cover.webp 2000w" sizes="auto, (min-width: 48rem) 24rem, 100vw""#
             ),
             "got: {html}"
         );
@@ -1569,7 +1657,7 @@ fn webp_source_hero_context_uses_full_bleed_sizes() {
         "hero.webp",
         "",
         &assets,
-        ImageContext::Hero,
+        ImageContext::Hero { plate: false },
         &ImageRenderOptions::default(),
     );
     assert!(

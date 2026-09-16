@@ -25,8 +25,8 @@
 //! universally regarded as Gatsby's mistake — lossy AST forces consumers
 //! into a plugin ecosystem they wouldn't need if the AST were faithful.
 //!
-//! See [docs/archive/2026-05-27-typed-ast-cross-ssg-research.md](../../../../docs/archive/2026-05-27-typed-ast-cross-ssg-research.md)
-//! for the full research synthesis and [typed-body-ast.md](../../../../docs/reference/typed-body-ast.md)
+//! See [docs/archive/2026-05-27-typed-ast-cross-ssg-research.md](../../../../../docs/archive/2026-05-27-typed-ast-cross-ssg-research.md)
+//! for the full research synthesis and [typed-body-ast.md](../../../../../docs/reference/typed-body-ast.md)
 //! for the design intent + 7 principles.
 
 use super::grid_parts::GridParts;
@@ -75,7 +75,7 @@ pub trait RenderHooks {
     /// Every comparable AST-bearing SSG passes title to its render hook
     /// (Hugo's `linkContext.Title`, Markdoc, mdast's `Resource.title`,
     /// comrak, Pandoc) — see
-    /// [docs/archive/2026-05-27-typed-ast-cross-ssg-research.md](../../../../docs/archive/2026-05-27-typed-ast-cross-ssg-research.md).
+    /// [docs/archive/2026-05-27-typed-ast-cross-ssg-research.md](../../../../../docs/archive/2026-05-27-typed-ast-cross-ssg-research.md).
     fn render_link(
         &self,
         out: &mut String,
@@ -427,6 +427,7 @@ pub trait RenderHooks {
                     class_attr.push(' ');
                     class_attr.push_str(&args.classes);
                 }
+                let is_plate = crate::render::image::hero_is_plate(&args.classes);
                 out.push_str(r#"<section class=""#);
                 out.push_str(&escape_attr(&class_attr));
                 out.push('"');
@@ -444,6 +445,9 @@ pub trait RenderHooks {
                     out.push_str(r#" data-width=""#);
                     out.push_str(w);
                     out.push('"');
+                }
+                if is_plate {
+                    out.push_str(r#" data-fit="plate""#);
                 }
                 // Click-to-source: emit a point source range on the Hero's
                 // outermost element so the bridge's `resolveSourceTarget`
@@ -471,7 +475,10 @@ pub trait RenderHooks {
                     };
                     let empty_snapshot = crate::asset_snapshot::AssetSnapshot::new();
                     let (snap, ctx) = match self.gallery_assets() {
-                        Some(s) => (s, crate::render::image::ImageContext::Hero),
+                        Some(s) => (
+                            s,
+                            crate::render::image::ImageContext::Hero { plate: is_plate },
+                        ),
                         None => (&empty_snapshot, crate::render::image::ImageContext::HeroBare),
                     };
                     let opts = crate::render::image::ImageRenderOptions::default();
@@ -1201,11 +1208,11 @@ mod tests {
         let mut out = String::new();
         hooks.render_link(
             &mut out,
-            &ResolvedUrl::new("../docs/", UrlKind::Wikilink),
+            &ResolvedUrl::new("../../docs/", UrlKind::Wikilink),
             false,
             "Docs",
         );
-        assert_eq!(out, r#"<a class="wikilink" href="../docs/">Docs</a>"#);
+        assert_eq!(out, r#"<a class="wikilink" href="../../docs/">Docs</a>"#);
     }
 
     #[test]
@@ -1218,11 +1225,11 @@ mod tests {
         let mut out = String::new();
         hooks.render_link(
             &mut out,
-            &ResolvedUrl::new("../docs/", UrlKind::Internal),
+            &ResolvedUrl::new("../../docs/", UrlKind::Internal),
             true,
             "Docs",
         );
-        assert_eq!(out, r#"<a class="wikilink" href="../docs/">Docs</a>"#);
+        assert_eq!(out, r#"<a class="wikilink" href="../../docs/">Docs</a>"#);
     }
 
     #[test]
@@ -1663,6 +1670,34 @@ mod tests {
         assert!(out.contains(r#"height="1080""#), "got: {out}");
     }
 
+    #[test]
+    fn hero_plate_class_emits_data_fit_and_fixed_sizes() {
+        // `:::hero {.plate}`: the raw `plate` class becomes `data-fit="plate"`
+        // on the section, and the inner image's `sizes=` fixes at/above
+        // DEPLOY_MAX_EDGE instead of the ordinary hero's viewport-relative
+        // 100vw — see docs/archive/2026-09-11-hero-plate-variant.md.
+        let src = "scroll.jpg";
+        let mut snap = AssetSnapshot::new();
+        snap.dimensions.insert(PathBuf::from(src), (2400, 316));
+        snap.variants.insert(
+            PathBuf::from("scroll"),
+            VariantKindSet { webp: true, avif: false, hls: false },
+        );
+        let sc = Shortcode::Hero(HeroShortcode {
+            image: Some(Url::resolved(src, UrlKind::Asset)),
+            classes: "plate".to_string(),
+            ..Default::default()
+        });
+        let mut out = String::new();
+        DefaultHooks::with_snapshot(&snap).render_shortcode(&mut out, &sc, None);
+        assert!(
+            out.contains(r#"<section class="moss-hero plate" data-fit="plate""#),
+            "got: {out}",
+        );
+        assert!(out.contains(r#"sizes="2400px""#), "got: {out}");
+        assert!(!out.contains(r#"sizes="100vw""#), "got: {out}");
+    }
+
     // ── DefaultHooks::render_image synth path (Phase 4 PR1) ──────────
     //
     // The `RenderHooks::render_image` default emits a bare `<img>`. The
@@ -1912,7 +1947,7 @@ mod tests {
 
         // Three columns in the content column, so each cell gets a third of
         // that band — NOT the whole column.
-        let cell_sizes = "(min-width: 48rem) calc(min(47.25rem, 100vw) / 3), 100vw";
+        let cell_sizes = "calc(min(47.25rem, 100vw) / 3)";
         assert!(
             in_hero.contains(&format!(r#"sizes="{cell_sizes}""#)),
             "grid cell inside a hero overlay must scope sizes= to the cell; got: {in_hero}"
@@ -1970,10 +2005,11 @@ mod tests {
     }
 
     /// A ratio must arrive as a variable the stylesheet reads, never as an
-    /// inline `grid-template-columns`. Inline wins over every rule, so a
-    /// `:::grid 2 1:2` used to keep two columns at 320px — the mobile collapse
-    /// had no way to reach it. Text-level assertion; the fact that the
-    /// collapse then actually happens is a render gate (grid-mobile-collapse).
+    /// inline `grid-template-columns`. Inline wins over every rule, so an
+    /// inline ratio would be unoverridable by any stylesheet rule, present
+    /// or future. Text-level assertion; the render gate (grid-mobile-collapse)
+    /// checks that the emitted markup actually lays out as expected in both
+    /// engines.
     #[test]
     fn render_shortcode_grid_ratio_is_a_custom_property_not_inline_columns() {
         use crate::ast::shortcode::{GridShortcode, Shortcode};
@@ -2071,7 +2107,7 @@ mod tests {
         let mut out = String::new();
         hooks.render_shortcode(&mut out, &grid, None);
         assert!(
-            out.contains(r#"sizes="(min-width: 48rem) calc(min(1200px, 100vw) / 3), 100vw""#),
+            out.contains(r#"sizes="calc(min(1200px, 100vw) / 3)""#),
             "a widthless figure in a 3-col page grid declares the cell track; got: {out}"
         );
 

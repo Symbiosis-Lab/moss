@@ -1,0 +1,412 @@
+/* Footnote styling, all of it — the endnote list, the markers, the :target
+   wash, and the margin sidenotes / bottom sheets. Gated on
+   `SiteAssets::has_footnotes`, so a site with no notes ships none of this;
+   core styles no `.moss-footnote*` element (a partial may only style what
+   it owns — stylesheet_tests.rs).
+
+   Design: docs/archive/2026-08-24-footnote-sidenotes-design.md, layout (C):
+   a gutter is reserved on the right at wide viewports and the column moves
+   left only if the window is too narrow to hold both — so a footnoted page
+   and a plain page read as the same layout, whichever of them a reader is on.
+   Nav, article, comments and footer all move together, which keeps their
+   shared left edge aligned. Column + gutter were centred as ONE ASSEMBLY
+   until 2026-09-01, which cost a 140px move at every width and gave 244 of
+   one site's 252 pages an empty band; the move is now only what the window is
+   short (docs/archive/2026-09-01-sidenote-gutter-shift-amount.md), zero from
+   about 1316px up, and core derives it in site.css as --moss-sidenote-inset.
+
+   The reserve is measured, not breakpointed, within the coarse 76rem gate:
+   clamped between zero and a full note column by the space the page actually
+   has.
+
+   THREE kinds of page are scoped out, and the eligibility selector below says
+   so once per rule it governs: `data-content-width="full"` pages, sidebar
+   pages (whose right margin `.latest-sidebar` already owns), and the site's
+   front page (`data-page="home"`). On those, the sidenote script still runs
+   and the reader gets the SHEET presentation at any width — the design's
+   "no gutter to place notes in" fallback.
+
+   The front page joined that list on 2026-08-30
+   (docs/archive/2026-08-30-sidenote-gutter-page-kind.md). The consistency the
+   reserve buys is between pages a reader experiences as the same layout, and
+   a front page is a composition — a hero and card grids, no reading column to
+   keep aligned with anything, so the reserve buys it nothing to be consistent
+   about. (Its original reason was the 140px shift and 280px empty margin it
+   paid; that cost is now 0px above 1316px, and the scope-out stays on the
+   reason above, which does not depend on the number.) Scoping by PRESENCE OF NOTES
+   instead was measured and rejected: on the site that reported this, 4 of 232
+   pages carry notes and all 4 sit among 185 siblings rendered from the same
+   template, so the column would jump 140px between adjacent articles of one
+   series — the wobble layout (A) was rejected for, in its worst form.
+
+   The eligibility selector is written three times below — once to declare the
+   reserve, once to give `.moss-sidenote` its box, once to retire the endnote
+   list — and THE THREE MUST STAY IDENTICAL. A test in stylesheet_tests.rs
+   (`sidenote_eligibility_selector_is_written_identically`) fails if they
+   drift, because drift here is not cosmetic: a page that is scoped out of the reserve but not
+   out of the other two loses `--moss-sidenote-reserve`, so the asides fall
+   back to `width: auto` and float full-measure over the prose WHILE the
+   endnote list retires to `display: none` — the notes broken and gone at once.
+   Hoisting the condition into a shared custom property was considered and
+   rejected: it needs two properties of opposite sense, and every `var(--moss-*)`
+   read must carry a row in CUSTOM_PROPS, which is a catalogue of theme hooks
+   rather than of internal plumbing.
+
+   The stacking is `clear: right`, not arithmetic: two notes cited a line
+   apart stack below one another, re-solved by the engine on resize, on the
+   reader font-scale control, and in print, with no script running.
+
+   At wide widths the endnote list retires behind `.moss-footnotes-cloned`
+   (set by sidenotes.ts only when every note was cloned — the atomic
+   licence), under the same screen-scoped media condition that shows the
+   margin asides — so print never retires it and needs no restore rules.
+   At narrow widths the list is the interface: sidenotes.ts lifts the SAME
+   section as a bottom sheet via `.moss-footnotes-lifted` (position:
+   sticky + a height clip). One surface, nothing cloned into a sheet.
+   Design: docs/archive/2026-08-25-sidenote-sheet-one-surface-redesign.md.
+
+   Wrapped in @layer shortcodes to match the position the footnote rules hold
+   inside site.css; multiple @layer blocks of the same name merge. */
+
+@layer shortcodes {
+
+/* Footnotes (ADR-034). The renderer appends `.moss-footnotes` after the body
+   on any page that defines one, so the section is its own closing movement:
+   a rule, smaller type, and quieter colour set it apart from the article
+   without hiding it. Numbering comes from the `<ol>`, so the markers and the
+   list agree even if a reader's stylesheet drops our type scale. */
+.moss-footnotes {
+  margin-top: var(--moss-space-2xl);
+  padding-top: var(--moss-space-lg);
+  border-top: 1px solid var(--moss-border-light);
+  font-size: var(--moss-size-sm);
+  color: var(--moss-color-text-secondary);
+}
+
+/* Full-bleed: the section escapes its padded, centred container so its
+   rule — and, lifted, the sheet surface — spans the viewport, while
+   `.moss-footnote-scroller` rebuilds the container's own geometry inside
+   (same max-width, same padding), so the notes sit on the article's exact
+   measure. This is what lets the sheet dock with no width jump: stuck and
+   in-flow, the surface is the same box. Scoped out of vertical
+   typesetting, where an inline-axis 100vw is nonsense. */
+body:not([data-typesetting="vertical"]) .moss-footnotes {
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+}
+
+.moss-footnotes ol {
+  padding-left: var(--moss-space-lg);
+}
+
+.moss-footnotes li {
+  margin-bottom: var(--moss-space-sm);
+}
+
+/* The marker rides the baseline like any superscript; `line-height: 0` keeps
+   it from opening up the line box, so a footnoted paragraph sets on the same
+   leading as its neighbours. */
+.moss-footnote-ref {
+  font-size: 0.75em;
+  line-height: 0;
+  vertical-align: super;
+}
+
+.moss-footnote-ref a {
+  text-decoration: none;
+}
+
+/* Return arrow: an affordance, not prose. Never underlined, and it must not
+   be mistaken for the note's last word. */
+.moss-footnote-backref {
+  text-decoration: none;
+  margin-left: 0.25em;
+}
+
+/* :target highlight: a reader landing on a footnote (forward, #fn-N) or
+   back at its marker (backward, #fnref-N) is dropped into one of 150+
+   visually-identical numbered lines with nothing to say "you are here".
+   The backref already sets href="#fnref-N" and the marker already carries
+   that id (footnotes.rs), so both directions come free from one selector
+   list. Fades out rather than sitting permanently, so it reads as an
+   arrival cue, not a permanent state change.
+
+   Reuses --moss-color-accent-quiet despite tokens.json's own note that the
+   token is "never a focus indicator" — that caveat rules out substituting
+   it for a focus RING under WCAG 1.4.11, which this isn't. This is a
+   transient arrival cue that supplements scroll position (and, via
+   tabindex=-1, actual focus movement); it doesn't stand in for either. */
+.moss-footnotes li:target,
+.moss-footnote-ref:target {
+  animation: moss-footnote-target-wash 2.4s ease-out;
+}
+
+/* The endnote `<li>` washes a full text line, but `<sup>` is inline and one
+   digit wide — without a little box around it the arrival cue reads as a
+   rendering speck rather than a mark on the number you came back to. The
+   padding is unconditional, not on `:target`: adding it at arrival would
+   widen the marker and shift the rest of the line sideways at exactly the
+   moment the reader is looking at it, and `:target` persists after the wash
+   decays, so the shift would never come back. */
+.moss-footnote-ref {
+  padding-inline: 0.15em;
+  border-radius: 3px;
+}
+
+@keyframes moss-footnote-target-wash {
+  from {
+    background-color: var(--moss-color-accent-quiet);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Reduced motion removes the FADE, not the highlight itself — a static
+     wash still tells the reader where they landed, it just doesn't animate
+     there. Same pattern as every other prefers-reduced-motion block in
+     this file: the cue survives, only its motion is cut. */
+  .moss-footnotes li:target,
+  .moss-footnote-ref:target {
+    animation: none;
+    background-color: var(--moss-color-accent-quiet);
+  }
+}
+
+.moss-sidenote {
+  display: none;
+}
+
+
+@media screen and (min-width: 76rem) {
+  body:where(:not([data-page="home"]):not([data-content-width="full"]):not(:has(main.has-sidebar))) {
+    /* Gap + note column, clamped to the space this page actually has after
+       the column and both container paddings. 100vw includes the scrollbar,
+       which errs a few px small — the safe direction. */
+    --moss-sidenote-reserve: clamp(
+      0px,
+      calc(100vw - var(--moss-content-width) - 2 * var(--moss-container-padding)),
+      calc(16rem + var(--moss-space-md))
+    );
+  }
+
+  /* The shift itself lives in core (site.css, the centre-shift hook): those
+     are core's elements, and a partial may only style what it owns. This
+     partial's whole contribution to the shift is defining the variable the
+     hook reads — the ownership rule's variable clause. */
+
+  body:where(:not([data-page="home"]):not([data-content-width="full"]):not(:has(main.has-sidebar)))
+    .moss-sidenote {
+    --moss-sidenote-width: max(
+      0px,
+      calc(var(--moss-sidenote-reserve) - var(--moss-space-md))
+    );
+    display: block;
+    float: right;
+    clear: right;
+    width: var(--moss-sidenote-width);
+    /* Pull right by exactly the reserve, from the container's CONTENT edge:
+       the note's left edge sits one gap past the column, its right edge at the
+       reserve's end. That it lands inside the viewport is core's arithmetic,
+       not this rule's — site.css derives --moss-sidenote-inset assuming this
+       pull is one reserve and no more, so changing this value means changing
+       that clamp with it. */
+    margin: 0 calc(-1 * var(--moss-sidenote-reserve)) var(--moss-space-sm) 0;
+    font-size: var(--moss-size-sm);
+    line-height: 1.5;
+    /* The note is an aside, not the argument: quieter than body text, and
+       left-aligned even in a justified column so its short measure doesn't
+       open rivers. */
+    color: var(--moss-color-text-secondary);
+    text-align: left;
+  }
+
+  /* The aside is emitted inside `.moss-footnote-ref`, whose superscript
+     metrics would otherwise set the whole note as tiny raised text.
+     `font-size` and `line-height` are re-declared on the aside above (both
+     inherit, so overriding them there is enough); `vertical-align` does not
+     inherit, so it is the one property the descendants must reset for
+     themselves. */
+  .moss-sidenote * {
+    vertical-align: baseline;
+  }
+
+  /* Paragraphs inside a note are already narrow; the column cap meant for
+     body text would do nothing but is wrong in kind, and the last one should
+     not push a trailing margin into the next note. */
+  .moss-sidenote p {
+    max-width: none;
+    margin: 0 0 var(--moss-space-xs) 0;
+  }
+
+  .moss-sidenote p:last-child {
+    margin-bottom: 0;
+  }
+}
+
+/* Retirement: once every note has a margin twin (the atomic licence,
+   class set by sidenotes.ts), the endnote list leaves flow, tab order and
+   the accessibility tree at exactly the widths where the margin shows.
+   Screen-scoped like the margin block above, so paper always gets the
+   list and the old print-restore rules could be deleted. */
+@media screen and (min-width: 76rem) {
+  body:where(:not([data-page="home"]):not([data-content-width="full"]):not(:has(main.has-sidebar)))
+    .moss-footnotes-cloned {
+    display: none;
+  }
+}
+
+/* The number ties the note to its marker; it is the only part of the
+   note that is raised, and it is the reason a reader can tell two
+   adjacent notes apart. Applies in the margin and in the sheets alike. */
+.moss-sidenote-number {
+  font-size: 0.75em;
+  vertical-align: super;
+  line-height: 0;
+  margin-right: 0.35em;
+  color: var(--moss-color-accent);
+}
+
+/* The arrival cue, class-shaped: `:target` cannot reach the margin aside
+   (it carries no note id by design), so sidenotes.ts moves this class to
+   whichever element the reader landed on — an aside, a note in the sheet,
+   or the marker a backref returned them to. Same keyframes, same reduced-motion contract as the
+   `li:target` wash above. */
+.moss-footnote-landed {
+  animation: moss-footnote-target-wash 2.4s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .moss-footnote-landed {
+    animation: none;
+    background-color: var(--moss-color-accent-quiet);
+  }
+}
+
+/* ---- The sheet (narrow / no-gutter presentation) ----------------------- */
+
+/* The section's heading, JS-inserted (the pure renderer has no language).
+   Differentiated by type, not lines: the display face small and muted with
+   wide letter-spacing, against the darker text of the notes — no divider,
+   per the design's minimal-sheet ruling. */
+.moss-footnotes-title {
+  margin: 0 0 var(--moss-space-sm);
+  font-family: var(--moss-font-heading);
+  font-size: var(--moss-size-xs);
+  font-weight: var(--moss-font-heading-weight);
+  letter-spacing: 0.12em;
+  color: var(--moss-color-muted);
+}
+
+/* The grabber: a full-width touch strip (24px — WCAG 2.5.8's floor)
+   drawing the standard pill. Exists in the DOM always, visible only on the
+   lifted sheet; its opacity rides the dock's --moss-sheet-away fade. */
+.moss-footnote-grab {
+  display: none;
+}
+
+.moss-footnotes-lifted .moss-footnote-grab {
+  display: block;
+  flex: none;
+  width: 100%;
+  padding: 10px 0;
+  border: 0;
+  background: none;
+  cursor: grab;
+  opacity: var(--moss-sheet-away, 1);
+}
+
+.moss-footnotes-lifted .moss-footnote-grab::after {
+  content: "";
+  display: block;
+  width: 34px;
+  height: 4px;
+  margin: 0 auto;
+  border-radius: 2px;
+  background: var(--moss-border-strong);
+}
+
+/* Lifted: the SAME section, stuck to the viewport bottom and clipped to a
+   JS-driven height. It never leaves flow — scrolling the page to its true
+   place docks it back, chrome fading continuously via --moss-sheet-away
+   (1 = away from its slot, 0 = docked). touch-action: none because the
+   sheet itself is the drag surface; the inner scroller re-enables pan-y
+   at the expanded detent. */
+.moss-footnotes-lifted {
+  position: sticky;
+  bottom: 0;
+  /* The clip animates every frame; scroll anchoring would read that as
+     content moving under the reader and scroll the page to compensate. */
+  overflow-anchor: none;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  touch-action: none;
+  margin-top: 0;
+  padding-top: 0;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: color-mix(
+    in srgb,
+    var(--moss-color-surface) calc(var(--moss-sheet-away, 1) * 100%),
+    var(--moss-color-bg)
+  );
+  border-top: 1px solid var(--moss-border-medium);
+  border-radius: calc(16px * var(--moss-sheet-away, 1))
+    calc(16px * var(--moss-sheet-away, 1)) 0 0;
+  box-shadow: 0 -6px 22px
+    color-mix(in srgb, var(--moss-shadow-color) calc(9% * var(--moss-shadow-strength) * var(--moss-sheet-away, 1)), transparent);
+}
+
+/* The `.container` geometry, rebuilt: the full-bleed section took the
+   sheet surface to the viewport edges, so its content re-centres on the
+   article's own measure — note text and article text share one width. */
+.moss-footnote-scroller {
+  max-inline-size: var(--moss-content-width);
+  margin: 0 auto;
+  padding: 0 var(--moss-container-padding);
+}
+
+/* Hanging indent (悬挂缩进), the standard footnote setting: the figure sits
+   in its own gutter to the LEFT of the note, and every wrapped line returns
+   to where the first line's text began — so the text block reads as one
+   column and the numbers as a rail beside it. The figure is small and
+   raised, the same voice as the marker in the text. (Vertical typesetting
+   keeps its own list conventions.) */
+body:not([data-typesetting="vertical"]) .moss-footnotes ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: moss-fn;
+}
+body:not([data-typesetting="vertical"]) .moss-footnotes li {
+  counter-increment: moss-fn;
+  position: relative;
+  padding-left: 1.75em;
+}
+body:not([data-typesetting="vertical"]) .moss-footnotes li > p:first-child::before {
+  content: counter(moss-fn);
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-size: var(--moss-size-2xs);
+  font-weight: 600;
+  color: var(--moss-color-ui-accent);
+}
+
+.moss-footnotes-lifted .moss-footnote-scroller {
+  flex: 1;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  /* Runway: enough that late notes can reach the peek and reading slots;
+     scrollable whitespace below the last note stays modest. */
+  padding-bottom: 16vh;
+}
+
+.moss-footnotes-lifted .moss-footnote-scroller[data-scrolly] {
+  overflow-y: auto;
+  touch-action: pan-y;
+}
+}

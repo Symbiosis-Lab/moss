@@ -188,6 +188,57 @@ fn first_paragraph_plain_text(blocks: &[Block]) -> String {
 // one owner. `shortcode_extract` still routes the `:::hero` name to
 // `parse_hero`; everything that decides what a hero's image IS lives here.
 
+/// Split a hero directive line's args into the positional path (before any
+/// `{`) and the parsed attribute block. Shared by [`parse_hero`] and
+/// [`hero_body_has_overlay_content`] so the two can't drift on where the
+/// image path lives — both need this split to find Priority 1/2's image
+/// source before falling back to the body.
+fn split_hero_directive_args(args: &str) -> (&str, crate::ast::attrs::AttrBlock) {
+    let trimmed_args = args.trim();
+    let (positional, attr_block): (&str, &str) = if let Some(pos) = trimmed_args.find('{') {
+        // char-aligned: pos points to ASCII '{' from str::find — safe to slice.
+        #[allow(clippy::string_slice)]
+        (trimmed_args[..pos].trim(), &trimmed_args[pos..])
+    } else {
+        (trimmed_args, "")
+    };
+    let parsed = if attr_block.is_empty() {
+        Default::default()
+    } else {
+        crate::ast::attrs::parse_attrs(attr_block).unwrap_or_default()
+    };
+    (positional, parsed)
+}
+
+/// Whether a `:::hero` block's body carries any overlay text of its own,
+/// once the image source is accounted for — used by
+/// [`crate::heading::hero_at_top_owns_title`] to decide whether the hero
+/// owns the page's title slot.
+///
+/// Mirrors [`parse_hero`]'s image-source priority rather than a bare
+/// "any non-blank line" check: when the image comes from the `image=`
+/// attribute or a directive-line path, every body line is overlay text.
+/// But the common client-site shape is Priority 3 (body-image fallback,
+/// e.g. `:::hero {.plate}` / `![cover](cover.jpg)` / `:::`) — there the
+/// leading run of media lines IS the image, not a title, and treating it
+/// as "content" reproduces the 87-page regression `hero_at_top_owns_title`
+/// was written to fix, just via the other image syntax.
+pub(crate) fn hero_body_has_overlay_content(args: &str, body: &str) -> bool {
+    let (positional, parsed) = split_hero_directive_args(args);
+    let has_image_attr = parsed.get("image").is_some();
+
+    if has_image_attr || !positional.is_empty() {
+        // Priority 1/2: the image is named on the directive line, so the
+        // body is pure overlay.
+        return body.lines().any(|line| !line.trim().is_empty());
+    }
+
+    // Priority 3: the leading run of media lines are slides, not overlay.
+    let lines: Vec<&str> = body.lines().collect();
+    let run = hero_media_run(&lines);
+    run.overlay.iter().any(|&k| !lines[k].trim().is_empty())
+}
+
 /// Parse a `:::hero` block in any of three syntactic forms.
 ///
 /// Image source priority:
@@ -209,24 +260,7 @@ fn first_paragraph_plain_text(blocks: &[Block]) -> String {
 /// misspelled `:::name` shortcode nested inside the overlay) — see
 /// [`parse_overlay_to_blocks`].
 pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroShortcode, bool, Vec<String>) {
-    let trimmed_args = args.trim();
-
-    // Split args on the first `{` to separate the directive-line path
-    // (if any) from the attribute block (if any).
-    let (positional, attr_block): (&str, &str) = if let Some(pos) = trimmed_args.find('{') {
-        // char-aligned: pos points to ASCII '{' from str::find — safe to slice.
-        #[allow(clippy::string_slice)]
-        (trimmed_args[..pos].trim(), &trimmed_args[pos..])
-    } else {
-        (trimmed_args, "")
-    };
-
-    // Parse the attribute block, if present.
-    let parsed = if attr_block.is_empty() {
-        Default::default()
-    } else {
-        crate::ast::attrs::parse_attrs(attr_block).unwrap_or_default()
-    };
+    let (positional, parsed) = split_hero_directive_args(args);
     let classes = parsed.class_string();
     let width = parsed.width.map(str::to_string);
     let mobile = parsed.get("mobile").map(str::to_string);

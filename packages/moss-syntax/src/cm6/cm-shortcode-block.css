@@ -1,0 +1,153 @@
+/* The .cm-line box spans the full editor width (the 28px text inset lives in
+   .cm-line { padding-left/right }, NOT on .cm-content), so a direct
+   `background` would bleed past the content column on BOTH sides. Use the same
+   ::before technique as callout/blockquote: pin an absolutely-positioned
+   pseudo-element to the reading column with --moss-editor-line-inset on each
+   side, so the tint starts and ends exactly where body text does.
+
+   Both sides matter, not just the left. Once the measure cap engages (a wide
+   or document-mode surface, --moss-editor-line-inset > the 16px spine) a
+   `right: 0` tint runs hundreds of px past the text it is supposed to be
+   backing, and the block reads as full-bleed chrome instead of content. */
+.moss-editor-cm .cm-line.cm-sc-line-body,
+.moss-editor-cm .cm-line.cm-sc-line-openrest,
+.moss-editor-cm .cm-line.cm-sc-line-closerest {
+  position: relative;
+}
+.moss-editor-cm .cm-line.cm-sc-line-body::before,
+.moss-editor-cm .cm-line.cm-sc-line-openrest::before,
+.moss-editor-cm .cm-line.cm-sc-line-closerest::before {
+  content: "";
+  position: absolute;
+  left: var(--moss-editor-line-inset, 28px);
+  right: var(--moss-editor-line-inset, 28px);
+  top: 0;
+  bottom: 0;
+  background: rgba(120, 120, 138, 0.06);
+  pointer-events: none;
+}
+/* Active state (cursor inside the block → whole subtree revealed as raw source):
+   same ::before technique so the tint aligns to the content inset instead of
+   bleeding to the editor's left edge. Active lines carry only `cm-sc-line-active`
+   (not the resting body/openrest/closerest classes), so this needs its own rule. */
+.moss-editor-cm .cm-line.cm-sc-line-active {
+  position: relative;
+}
+.moss-editor-cm .cm-line.cm-sc-line-active::before {
+  content: "";
+  position: absolute;
+  left: var(--moss-editor-line-inset, 28px);
+  right: var(--moss-editor-line-inset, 28px);
+  top: 0;
+  bottom: 0;
+  background: rgba(120, 120, 138, 0.04);
+  pointer-events: none;
+}
+/* Close-fence rule. The line's own `border-bottom` would span the full editor
+   width — the same bleed the tints above avoid — so the rule is drawn on the
+   inset ::before instead and ends where the text column ends. The pseudo box is
+   pinned top/bottom, so the border paints on its bottom edge. */
+.cm-sc-line-closerest {
+  opacity: 0.5;
+}
+.moss-editor-cm .cm-line.cm-sc-line-closerest::before {
+  border-bottom: 1px solid var(--moss-border-medium, #d1cdc4);
+}
+/* Cell divider (`+++` between grid/buttons cells): the literal is hidden and the
+   line is drawn as a soft DASHED rule — distinct from the solid close-fence rule
+   above, so a cell break never reads as a thematic break. */
+.moss-editor-cm .cm-line.cm-sc-line-divider {
+  position: relative;
+  opacity: 0.55;
+}
+.moss-editor-cm .cm-line.cm-sc-line-divider::before {
+  content: "";
+  position: absolute;
+  left: var(--moss-editor-line-inset, 28px);
+  right: var(--moss-editor-line-inset, 28px);
+  top: 0;
+  bottom: 0;
+  background: rgba(120, 120, 138, 0.06);
+  border-top: 1px dashed var(--moss-border-medium, #d1cdc4);
+  pointer-events: none;
+}
+/* Deprecated cell divider (`---` inside a grid). It still builds, so this is a
+   nudge, not an alarm: the same body tint as the rest of the block, plus a warm
+   marker in the left inset that a correct `+++` divider never draws. No dashed
+   rule — that shape is reserved for the canonical divider above. */
+.moss-editor-cm .cm-line.cm-sc-line-legacy-divider {
+  position: relative;
+}
+.moss-editor-cm .cm-line.cm-sc-line-legacy-divider::before {
+  content: "";
+  position: absolute;
+  left: var(--moss-editor-line-inset, 28px);
+  right: var(--moss-editor-line-inset, 28px);
+  top: 0;
+  bottom: 0;
+  background: rgba(120, 120, 138, 0.06);
+  border-left: 2px solid rgba(176, 132, 44, 0.55);
+  pointer-events: none;
+}
+/* The "use +++" note. Same 11px system-font register as the micro-tag so the
+   two read as one annotation language. */
+.cm-sc-legacy-hint {
+  display: inline-flex; align-items: center;
+  margin-left: 10px;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 11px; line-height: inherit;
+  color: rgb(146, 108, 32);
+  opacity: 0.85;
+  user-select: none; cursor: pointer; vertical-align: baseline;
+}
+.cm-sc-legacy-hint:hover { opacity: 1; }
+[data-theme="dark"] .cm-sc-legacy-hint { color: rgb(214, 174, 96); }
+
+/* Micro-tag — EXACTLY one prose-line tall: no padding, inherit line-height so
+   toggling tag↔source shifts nothing vertically. */
+.cm-sc-tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 11px; line-height: inherit;
+  color: var(--moss-color-text-secondary, #5d5853);
+  user-select: none; cursor: pointer; vertical-align: baseline;
+}
+.cm-sc-tag-ic { font-size: 13px; line-height: 1; }
+/* A hero's own picture, standing in for the `◉`. Sized in the same box the
+ * glyph occupies so the line height never depends on whether the asset has
+ * resolved yet — an image that reflowed the document on arrival would be a
+ * worse answer than no image at all. `cover` because the box is square and
+ * the picture is not; the point here is recognition, not composition. */
+.cm-sc-tag-thumb {
+  inline-size: 18px; block-size: 18px;
+  object-fit: cover;
+  border-radius: 3px;
+  flex: 0 0 auto;
+  background: var(--moss-color-surface, #f2efe9);
+}
+/* The named file isn't there — the same fact `.cm-asset-unresolved` states
+ * over a broken `![[…]]`, so it reads in the same colour at the same weight.
+ * editor.css already decided this once: a missing ASSET is error-coloured
+ * (`--moss-ref-broken`), while a missing internal LINK is dimmed and never
+ * red, because typing toward a page you haven't written yet is normal and
+ * pointing at a file that does not exist is not. A hero's image is an asset. */
+.cm-sc-tag-ic--missing {
+  color: var(--link-unresolved-color);
+  opacity: var(--link-unresolved-opacity);
+  cursor: help;
+}
+.cm-sc-tag-nm { font-weight: 600; }
+
+/* Revealed-fence token highlighting (active block → raw source). Delimiter vs
+   payload classes are deliberately distinct (the Obsidian formatting/payload
+   split): colons + braces read as machinery, the name reads as the keyword it
+   is, attr keys sit one register down, values stay body-colored. All colors
+   come from the shared --moss-hl-* tokens (theme-aware, defined for light and
+   dark in the host app); fallbacks are the light-theme values. "Muted" here is
+   clearly legible — the same register the standard-markdown link brackets get
+   from mossHighlight — not barely-there. */
+.cm-sc-delim { color: var(--moss-hl-punct, #5a5550); }
+.cm-sc-name { color: var(--moss-hl-keyword, #7a5834); font-weight: 600; }
+.cm-sc-attr-key { color: var(--moss-hl-attr, #5a6a4a); }
+.cm-sc-tag-at { opacity: 0; transition: opacity 120ms; }
+.cm-sc-line-openrest:hover .cm-sc-tag-at { opacity: 1; }

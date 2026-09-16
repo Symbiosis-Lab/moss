@@ -51,6 +51,7 @@ describe("my plugin", () => {
 | [MockDialogTracker](interfaces/MockDialogTracker.md) | Tracks dialog interactions for testing |
 | [MockFile](interfaces/MockFile.md) | A file stored in the mock filesystem |
 | [MockFilesystem](interfaces/MockFilesystem.md) | In-memory filesystem for testing file operations |
+| [MockSecretStorage](interfaces/MockSecretStorage.md) | Mock secret storage. |
 | [MockTauriContext](interfaces/MockTauriContext.md) | Context returned by setupMockTauri with all mock utilities |
 | [MockUrlConfig](interfaces/MockUrlConfig.md) | URL response configuration for mocking HTTP requests |
 | [MockUrlResponse](interfaces/MockUrlResponse.md) | Configuration for a mocked URL response |
@@ -64,8 +65,6 @@ describe("my plugin", () => {
 function createDownloadTracker(): DownloadTracker;
 ```
 
-Create a new download tracker instance
-
 #### Returns
 
 [`DownloadTracker`](interfaces/DownloadTracker.md)
@@ -77,8 +76,6 @@ Create a new download tracker instance
 ```ts
 function createMockBinaryConfig(): MockBinaryConfig;
 ```
-
-Create a new binary config instance
 
 #### Returns
 
@@ -92,8 +89,6 @@ Create a new binary config instance
 function createMockBrowserTracker(): MockBrowserTracker;
 ```
 
-Create a new browser tracker instance
-
 #### Returns
 
 [`MockBrowserTracker`](interfaces/MockBrowserTracker.md)
@@ -105,8 +100,6 @@ Create a new browser tracker instance
 ```ts
 function createMockCookieStorage(): MockCookieStorage;
 ```
-
-Create a new cookie storage instance
 
 #### Returns
 
@@ -120,8 +113,6 @@ Create a new cookie storage instance
 function createMockDialogTracker(): MockDialogTracker;
 ```
 
-Create a new dialog tracker instance
-
 #### Returns
 
 [`MockDialogTracker`](interfaces/MockDialogTracker.md)
@@ -134,11 +125,21 @@ Create a new dialog tracker instance
 function createMockFilesystem(): MockFilesystem;
 ```
 
-Create a new mock filesystem instance
-
 #### Returns
 
 [`MockFilesystem`](interfaces/MockFilesystem.md)
+
+***
+
+### createMockSecretStorage()
+
+```ts
+function createMockSecretStorage(): MockSecretStorage;
+```
+
+#### Returns
+
+[`MockSecretStorage`](interfaces/MockSecretStorage.md)
 
 ***
 
@@ -147,8 +148,6 @@ Create a new mock filesystem instance
 ```ts
 function createMockUrlConfig(): MockUrlConfig;
 ```
-
-Create a new URL config instance
 
 #### Returns
 

@@ -1,0 +1,178 @@
+/* The moss mark, and the name beside it: the one place the brand's face is
+   written down for both bundles.
+
+   Two surfaces draw the pair — the launcher's title bar (macOS, where the
+   webview draws its own title) and the colophon at the foot of every built
+   site — and they are different bundles. Vite inlines this file into
+   launcher.css through `@import`; `build/emit/stylesheet.rs` appends it to the
+   site sheet. Until 2026-08-30 each carried its own copy of the ink colour,
+   the green drop's dark lift and the Chinese face, and `mark_sync_test` held
+   the copies equal by comparing text. Now there is one copy, and the test
+   holds the consumers to it instead.
+
+   ── The proportion ──
+
+   Measured 2026-08-30 for the ink-drop mark (ink against ink at 2×, in
+   WebKit and Chromium — docs/archive/2026-08-30-mark-wordmark-proportion.md
+   has that method, tables and renders) and re-measured 2026-09-12 for the
+   leaf mark by rasterising mark-small.svg with rsvg-convert (8× supersample,
+   box downscale, 50% alpha threshold). The proportion RULE below is
+   unchanged; the numbers in this section are the leaf's own.
+
+   Inline, mark and name as peers: the mark's VISIBLE ink stands as tall as the
+   name's full-letter band, and the ink gap between them is the height of the
+   mark's drop. Stacked, the name a caption under the mark: the mark's ink is
+   twice the band.
+
+   "Full-letter band" is where the two scripts differ, and the only place.
+   Latin reads the ascender band even for an all-x-height word — `moss` at
+   12px/600 in the UI sans paints 6.5px of x-height inside a 9px band. CJK
+   reads the character body — 青苔 in Long Cang paints 0.94em, 15px at 16px.
+   So one mark that is right beside `moss` is a third too small beside 青苔,
+   which is what shipped: 16px was chosen for 青苔 by matching its pixel MASS
+   to `moss`'s, a rule that related the two names to each other and never
+   either of them to the mark.
+
+   "Visible ink" is not the SVG's box. Where the ink-drop's fine spray rays
+   aliased in and out and pushed its fill from 64% at 14px to 92% at 24px,
+   the leaf's ink sits in broader lobes: at a 50% threshold it holds a flat
+   34–35% of its box from 14px to 24px. Size from this table, never from
+   the viewBox:
+
+     box px        14    15    16    17    18    19    20    22    24
+     ink height    10    11    12    13    14    16    14    18    19
+     drop height   7.2   7.8   8.3   8.8   9.3   9.8  10.3  11.3  12.3
+
+   The drop — the 10–90% ink-mass core, the blot the eye weighs — is the
+   stable one at ~0.515× the box (measured 0.512–0.517 across the table
+   above); the gap is set from it because the rays need clearing from the
+   name's first stroke.
+
+   Applied:  inline, Latin   mark 14px   `moss` 12px/600   gap 4px   ink gap 7.2
+             inline, CJK     mark 18px   青苔 16px/400     gap 4px   ink gap 9.3
+             stacked         mark 24px   name 12px         2.1× Latin, 1.7× CJK
+
+   Each surface writes its own numbers beside its own layout (launcher.css,
+   the colophon in site.css); this file owns what both share. */
+
+/* The mark is ink, not text: the ground's own black or near-white, never the
+   muted grey of whatever wording sits beside it. The launcher draws it that
+   way and never changes it.
+
+   The colophon is the exception, and the reason the ink is named here rather
+   than painted straight. There the mark rests in the credit's own grey and
+   takes its ink only when the credit is reached for, so a surface needs a way
+   to say "paint something else" without restating a colour on every ground.
+   `--moss-mark-ink` and `--moss-mark-drop` are what this ground's ink IS; the
+   two `*-paint` properties are what gets painted. Nothing sets the paint here,
+   so the fallback is the ink and the mark is inked by default — the launcher
+   mentions none of the four.
+
+   `--moss-mark-fade` is the same opt-in for the change itself: 0s unless a
+   surface says otherwise, so the launcher's mark still snaps between grounds
+   the way the rest of its chrome does.
+
+   Never an opacity, whatever a surface wants quieter. It would bleach the
+   green drop to a sage grey while the black half merely faded, and the
+   two-tone reading is the design. One grey chosen for both halves is a mark
+   drawn in one ink; a bleached green is a broken mark.
+
+   `currentColor` reaches the black drop only. The green one is a literal fill
+   in the SVG, so it takes a rule of its own, keyed on the literal it is
+   painted with: the SVG arrives whole — substituted into the colophon, pasted
+   into the launcher — and carries no classes of its own. A selector on a
+   literal stops matching silently if the literal moves, which is why
+   `mark_sync_test` holds every painter, and this file, to #4f7031. That rule
+   is here and nowhere else now, including for the light ground, so a surface
+   that wants the drop somewhere else changes a value rather than adding a
+   second selector on the same literal. */
+.moss-mark {
+  --moss-mark-ink: #000;
+  --moss-mark-drop: #4f7031;
+  color: var(--moss-mark-paint, var(--moss-mark-ink));
+  transition: color var(--moss-mark-fade, 0s) cubic-bezier(0.37, 0, 0.63, 1);
+}
+
+.moss-mark [fill="#4f7031"] {
+  fill: var(--moss-mark-drop-paint, var(--moss-mark-drop));
+  transition: fill var(--moss-mark-fade, 0s) cubic-bezier(0.37, 0, 0.63, 1);
+}
+
+.moss-mark svg {
+  display: block;
+}
+
+/* Both inks move on a dark ground, not just the black one. Left at #4f7031 the
+   green sits a shade above a dark ground beside a drop turned near-white — the
+   two-tone reading inverts and the tips go to a smudge. #a3d483 is the mark's
+   own lift, chosen by the same contrast argument as the light value (the
+   numbers are in icon.svg's header comment) — it only coincides with
+   `--moss-hl-string`, which was chosen for the OLD mark and is a separate
+   decision that does not move with this one.
+   icon.svg, served standalone as the favicon where no stylesheet reaches it,
+   carries the DROP's half of this rule in a <style> of its own; the ink's half
+   it deliberately does not, for the reason below. Both arms are written out
+   because a site may be dark by toggle or by system preference, and the toggle
+   wins.
+
+   #ccc rather than #fff, and the paper arm keeps its #000 rather than
+   softening to match. The mark is a solid mass where a name is strokes:
+   measured 2026-08-30 in WebKit at 2×, each over its own box, the mark's ink
+   covers 41% of it against 28–31% for the name beside it. So equal ink
+   lightness is not equal weight, and at #fff the mark carried 1.6× the name's
+   rendered light beside `moss` and 2.0× beside 青苔 — the pair the proportion
+   rule above sizes as peers, read as a lit blob with a caption. #ccc puts that
+   at 0.98 and 1.23.
+
+   Paper cannot be corrected the same way and does not need to be: the same
+   sweep on #f5f6f7 moved the ratio only 1.52 → 1.43 across 21 L* of ink,
+   because a ground at Y=0.92 leaves ink nowhere to go. A screen emits above
+   its ground and never below it, so lightness is a lever on one ground only
+   and glare exists on one ground only. What the two arms share is the size of
+   the step, not its direction: #ccc sits 11.2 L* under the chrome's own name
+   where #000 sits 11.5 L* past it.
+
+   icon.svg stays at #fff, the one place the two copies of this policy are
+   meant to disagree, because neither half of the argument above reaches it. It
+   is the DETAILED mark, whose spray does not resolve small: at 16px it covers
+   29–32% of its box — a word's worth of ink, not a mass — so there is no
+   over-weight to correct. It has no name to stand beside either; a tab title
+   is the browser's chrome, not moss's, and the mark's job there is to be
+   recognised, not to defer. And its ground is a tab strip near #35363a, 14 L*
+   lighter than this chrome's #16191c, which leaves far less contrast to spend:
+   #ccc would take it from 12.1:1 to 7.5:1 at the size the mark is smallest.
+   `the_two_dark_inks_stay_deliberately_apart` in mark_sync_test holds both
+   literals, so neither can follow the other out of tidiness.
+
+   One block per ground rather than one per half: naming the ink instead of
+   painting it is what lets the drop's lift ride along with the black half's,
+   where it used to need a second rule. */
+[data-theme="dark"] .moss-mark {
+  --moss-mark-ink: #ccc;
+  --moss-mark-drop: #a3d483;
+}
+
+/* The Chinese name is set in Long Cang, a 行書 running hand: the mark is a real
+   ink drop, photographed and traced, and a written name is the only kind that
+   does not contradict it. Named ahead of the body stack rather than instead of
+   it — the `@font-face` (generated in stylesheet.rs for the site, written in
+   launcher.css for the app, both over one woff2) confines itself by
+   `unicode-range` to the two characters it holds, so anything else the element
+   might ever carry falls through to the body font.
+
+   400, whatever the chrome around it weighs: the face ships one weight, and a
+   webview asked for a heavier one synthesizes it by thickening the strokes,
+   the one thing a brush hand cannot survive.
+
+   Keyed on the element's own inherited lang, which each surface declares on the
+   pair's container in the same write as the text — never the page's or the
+   window's, which are a different claim even where they agree. The colophon's
+   `:lang(zh)` comment in site.css records the bug that taught it.
+
+   The Latin name is deliberately not set in Long Cang's own Latin: at 12px it
+   puts half the body font's ink on the page and needs 18px to match. The size
+   is the surface's to set, so it is not here. */
+.moss-wordmark:lang(zh) {
+  font-family: 'Moss Long Cang', var(--moss-font-body);
+  font-weight: 400;
+}

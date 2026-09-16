@@ -69,7 +69,7 @@ fn nested_arity_parity() {
     // :::grid wrapping ::::buttons — editor tracks depth correctly and emits
     // only the outer grid as a top-level block; extractor also extracts only
     // the outer grid (inner buttons body is stored as raw cell text).
-    let md = include_str!("../../../tests/fixtures/parser-parity/nested-arity.md");
+    let md = include_str!("fixtures/parser-parity/nested-arity.md");
     check_parity(md, "nested-arity");
 }
 
@@ -78,7 +78,7 @@ fn gallery_single_block_parity() {
     // Uses :::gallery (a known typed name) to verify single-block agreement.
     // (Fixture file is still named hyphenated-names.md but contains :::gallery;
     //  see module comment for why the original :::my-widget was swapped out.)
-    let md = include_str!("../../../tests/fixtures/parser-parity/hyphenated-names.md");
+    let md = include_str!("fixtures/parser-parity/hyphenated-names.md");
     check_parity(md, "hyphenated-names");
 }
 
@@ -104,7 +104,7 @@ fn hyphenated_name_editor_scan_recognises_unknown() {
 #[test]
 fn positional_args_parity() {
     // :::grid with a positional column-count arg and ratio string.
-    let md = include_str!("../../../tests/fixtures/parser-parity/positional-args.md");
+    let md = include_str!("fixtures/parser-parity/positional-args.md");
     check_parity(md, "positional-args");
 }
 
@@ -113,6 +113,6 @@ fn multiline_attrs_parity() {
     // :::subscribe with a multi-line attribute block. extract_shortcodes
     // joins the attribute lines; editor_scan treats them as body lines. Both
     // must still agree: 1 top-level block named "subscribe".
-    let md = include_str!("../../../tests/fixtures/parser-parity/multiline-attrs.md");
+    let md = include_str!("fixtures/parser-parity/multiline-attrs.md");
     check_parity(md, "multiline-attrs");
 }

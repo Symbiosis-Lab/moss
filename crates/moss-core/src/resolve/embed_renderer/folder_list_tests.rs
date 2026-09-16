@@ -88,3 +88,58 @@ fn marker_omits_size_when_absent() {
     let m = emit_marker("/p/", "index.md", &p);
     assert!(!m.contains("size="));
 }
+
+#[test]
+fn parses_covers_only() {
+    let p = parse_params("depth:all,covers:only,limit:6");
+    assert_eq!(p.covers, Some("only".to_string()));
+    assert_eq!(p.depth, Some("all".to_string()));
+    assert_eq!(p.limit, Some(6));
+}
+
+#[test]
+fn marker_roundtrips_covers() {
+    let p = FolderEmbedParams {
+        covers: Some("only".to_string()),
+        ..Default::default()
+    };
+    let m = emit_marker("/p/", "index.md", &p);
+    assert!(m.contains("covers=only"));
+}
+
+#[test]
+fn parses_more_target() {
+    let p = parse_params("limit:2,more:Archive");
+    assert_eq!(p.more, Some("Archive".to_string()));
+    assert_eq!(p.limit, Some(2));
+}
+
+#[test]
+fn bare_more_flag_with_no_target_is_ignored() {
+    // The legacy bare `more` (no `:target`) stays a no-op — only the keyed
+    // `more:target` form sets the field.
+    let p = parse_params("more");
+    assert_eq!(p.more, None);
+}
+
+#[test]
+fn keyed_more_with_empty_target_is_ignored() {
+    // `more:` (colon present, nothing after it) must stay a no-op the same
+    // way the bare flag is — an empty target resolves to nothing and would
+    // otherwise reach folder_embed's render_one as `Some("")`, which fails
+    // resolve_more_link_target and fires its unresolved-target warning on
+    // an empty string. synthesize_children_marker already filters an empty
+    // `children_more` the same way; the embed grammar needs the same guard.
+    let p = parse_params("limit:2,more:");
+    assert_eq!(p.more, None);
+}
+
+#[test]
+fn marker_roundtrips_more() {
+    let p = FolderEmbedParams {
+        more: Some("Archive".to_string()),
+        ..Default::default()
+    };
+    let m = emit_marker("/p/", "index.md", &p);
+    assert!(m.contains("more=Archive"));
+}

@@ -40,65 +40,6 @@ export interface ProcessContext extends BaseContext {
 }
 
 /**
- * A node in the universal Page Tree.
- *
- * Every markdown file and every folder produces one PageNode.
- * Folders have is_folder=true and may have children.
- * This is the universal intermediate representation consumed by
- * both the built-in generator and SSG plugins.
- *
- * @category Hook contexts
- */
-export interface PageNode {
-  /** Relative source path (e.g., "articles/hello.md" or "articles") */
-  source_path: string;
-  /** Output URL path (e.g., "articles/hello.html") */
-  url_path: string;
-  /** Page title (from frontmatter, H1, or filename) */
-  title: string;
-  /** URL-safe slug */
-  slug: string;
-  /** Rendered HTML content (empty string for auto-generated folder pages) */
-  content_html: string;
-
-  /** Whether this node represents a folder */
-  is_folder: boolean;
-  /** Child nodes (populated for folders) */
-  children: PageNode[];
-
-  /** Publication date (ISO string) */
-  date?: string;
-  /** Cover image path */
-  cover?: string;
-  /** Whether this page appears in header navigation */
-  nav: boolean;
-  /** Navigation ordering (lower = first) */
-  nav_weight?: number;
-  /** Whether this page is a draft — rendered and published at its direct URL but hidden from listings, feeds, and navigation. */
-  draft: boolean;
-  /** Recursively list all nested content */
-  flatten: boolean;
-  /** How children display: "list", "grid", or "sidebar" */
-  list_style: "list" | "grid" | "sidebar";
-  /** Folder paths where this article also appears in child lists */
-  also_in: string[];
-
-  /** Raw frontmatter for plugin-specific fields */
-  frontmatter: Record<string, unknown>;
-}
-
-/**
- * Context for on_build hook (generator plugins)
- *
- * @category Hook contexts
- */
-export interface GenerateContext extends BaseContext {
-  source_files: SourceFiles;
-  /** Resolved Page Tree — universal content model for all generators */
-  page_tree?: PageNode;
-}
-
-/**
  * Context for on_deploy hook (deployer plugins)
  *
  * @category Hook contexts
@@ -143,6 +84,53 @@ export interface ConfigureDomainContext extends BaseContext {
 }
 
 /**
+ * Context for the optional `check_setup` hook (deploy plugins).
+ *
+ * Deliberately not a {@link BaseContext}: this runs on the Publish click,
+ * before the build, so it carries no project scan — only where the folder is,
+ * the plugin's resolved settings, and what the user just submitted.
+ *
+ * `action` is what makes the probe a conversation rather than a verdict. The
+ * first call arrives without one; submitting a blocker's form calls the same
+ * hook again with that blocker's `id` as `action` and the form's `values`,
+ * and the plugin does the work and answers with the next state. Every call is
+ * cold — re-derive the current step from durable state, never from memory.
+ *
+ * ```typescript
+ * export async function check_setup(ctx: SetupContext): Promise<HookResult> {
+ *   if (ctx.action === "start_daemon") await startDaemon();
+ *   if (await daemonIsUp()) return { success: true, setup: { status: "ready" } };
+ *   return {
+ *     success: true,
+ *     setup: {
+ *       status: "blocked",
+ *       blockers: [{
+ *         id: "start_daemon",
+ *         message:
+ *           "The IPFS daemon isn't running. It keeps running after moss quits.",
+ *         form: { fields: [], submit: "Start it" },
+ *       }],
+ *     },
+ *   };
+ * }
+ * ```
+ *
+ * @category Hook contexts
+ */
+export interface SetupContext {
+  /** Absolute path to the project folder about to be published */
+  project_path: string;
+  /** The plugin's resolved plain settings (declared defaults ∪ saved values) */
+  settings: Record<string, unknown>;
+  /** @deprecated The same map as {@link SetupContext.settings}, pre-contract name. */
+  config: Record<string, unknown>;
+  /** The id of the blocker whose form was submitted, absent on the first call */
+  action?: string;
+  /** The submitted form values riding with `action`; empty for a button */
+  values?: Record<string, unknown>;
+}
+
+/**
  * Context for after_deploy hook (syndicator plugins)
  *
  * @category Hook contexts
@@ -151,18 +139,6 @@ export interface SyndicateContext extends BaseContext {
   site_files: string[];
   articles: ArticleInfo[];
   deployment?: DeploymentInfo;
-}
-
-/**
- * Source files categorized by type
- *
- * @category Hook contexts
- */
-export interface SourceFiles {
-  markdown: string[];
-  pages: string[];
-  docx: string[];
-  other: string[];
 }
 
 /**
@@ -194,6 +170,47 @@ export interface DeploymentInfo {
   metadata: Record<string, string>;
   /** DNS target for custom domain configuration */
   dns_target?: DnsTarget;
+  /**
+   * Every way to reach what was just published. moss keeps these in the
+   * deployment record and lists them in the deploy tab whenever it is open,
+   * so an address returned here outlives the toast that announced it.
+   */
+  addresses?: DeployAddress[];
+}
+
+/**
+ * What one address IS, which decides how moss offers it.
+ *
+ * A kind moss does not recognise still renders — as a labelled row with its
+ * value — so a plugin may name one outside this list.
+ *
+ * @category Hook contexts
+ */
+export type AddressKind = "cid" | "ipns" | "gateway" | "domain";
+
+/**
+ * One way to reach the published site.
+ *
+ * A publish usually produces several: the CID that names these exact bytes,
+ * the IPNS name that will name the next ones too, the gateway URL that makes
+ * either reachable from a browser.
+ *
+ * Give an address a `url` when it opens in a browser, a `value` when it is
+ * also (or only) worth copying — moss shows both when both are given, a
+ * copy button when only `value` is set, and an open link when only `url` is.
+ *
+ * @category Hook contexts
+ */
+export interface DeployAddress {
+  kind: AddressKind | (string & {});
+  /** Shown verbatim as the row's label, e.g. "IPFS CID". */
+  label: string;
+  /** Openable in a browser. */
+  url?: string;
+  /** The literal string to copy — beside `url`, or on its own. */
+  value?: string;
+  /** One line of context shown beside it, e.g. "Public gateway, may be slow". */
+  note?: string;
 }
 
 /**

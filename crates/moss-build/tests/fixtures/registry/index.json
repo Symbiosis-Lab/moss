@@ -1,0 +1,67 @@
+{
+    "schema_version": 1,
+    "serial": 30,
+    "entries": [
+        {
+            "type": "plugin",
+            "id": "github",
+            "display_name": "GitHub",
+            "version": "1.6.0",
+            "description": "Deploy to GitHub Pages via GitHub Actions",
+            "author": "moss team",
+            "capabilities": [],
+            "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/github-v1.6.0/github-1.6.0.zip",
+            "sha256": "6240a1fee89ef8645cbc25aca4b1e4b1a3838df67c1cc52448e58dd7af292a51",
+            "size_bytes": 19718,
+            "min_moss_version": "0.11.7",
+            "requires": [
+                "execute_binary:git",
+                "execute_binary:readlink",
+                "execute_binary:rm",
+                "execute_binary:sh",
+                "execute_binary:find"
+            ],
+            "icon_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/github-v1.6.0/github-1.6.0-icon.svg",
+            "preview": true
+        },
+        {
+            "type": "plugin",
+            "id": "matters",
+            "display_name": "Matters",
+            "version": "1.5.2",
+            "description": "Syndicate your articles to Matters.town (POSSE)",
+            "author": "moss team",
+            "capabilities": [
+                "process"
+            ],
+            "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/matters-v1.5.2/matters-1.5.2.zip",
+            "sha256": "85302898f5b511e2804c8f070a3c0c68b9f66737ce7b55c5af44f5d3350c6019",
+            "size_bytes": 36500,
+            "min_moss_version": "0.11.7",
+            "icon_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/matters-v1.5.2/matters-1.5.2-icon.svg",
+            "preview": true
+        },
+        {
+            "type": "plugin",
+            "id": "onionpress",
+            "display_name": "onionpress",
+            "version": "0.4.1",
+            "description": "Publish moss sites to a self-hosted OnionPress (.onion) receiver",
+            "author": "moss team",
+            "capabilities": [
+                "deploy"
+            ],
+            "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/onionpress-v0.4.1/onionpress-0.4.1.zip",
+            "sha256": "2829794daf6c3b4f44ed95c53e6032f3ddf614da0a87af3699cde11d85679fa4",
+            "size_bytes": 14309,
+            "requires": [
+                "execute_binary:curl",
+                "execute_binary:tar",
+                "execute_binary:rm"
+            ],
+            "icon_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/onionpress-v0.4.1/onionpress-0.4.1-icon.svg",
+            "preview": true,
+            "requires_stack": true
+        }
+    ]
+}

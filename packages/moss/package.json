@@ -1,0 +1,53 @@
+{
+  "name": "@symbiosis-lab/moss",
+  "version": "0.14.1",
+  "description": "moss on your PATH — npm wrapper that installs the moss CLI binary from moss-releases",
+  "bin": {
+    "moss": "bin/moss.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js",
+    "test": "node --test test/*.test.js",
+    "test:smoke": "node bin/moss.js --version"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "install.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "keywords": [
+    "moss",
+    "publishing",
+    "static-site",
+    "cli"
+  ],
+  "author": "Guo Liu",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Symbiosis-Lab/moss-releases.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Symbiosis-Lab/moss-releases/issues"
+  },
+  "homepage": "https://mosspub.com",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": false
+  }
+}

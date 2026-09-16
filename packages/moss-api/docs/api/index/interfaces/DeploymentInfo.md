@@ -6,6 +6,18 @@ Deployment result information
 
 ## Properties
 
+### addresses?
+
+```ts
+optional addresses?: DeployAddress[];
+```
+
+Every way to reach what was just published. moss keeps these in the
+deployment record and lists them in the deploy tab whenever it is open,
+so an address returned here outlives the toast that announced it.
+
+***
+
 ### deployed\_at
 
 ```ts

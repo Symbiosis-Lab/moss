@@ -1,0 +1,70 @@
+{
+  "$note": "Golden vectors for `[editor].attachment_folder` — where a dropped or pasted image lands. This is a CROSS-LANGUAGE CONTRACT, and it exists because the placement rule is now implemented twice: Rust owns the real placement (`attachment_dir_for_page` in src-tauri/src/editor/attachments.rs, read at store time) and TypeScript owns the Site-settings preview line (`attachmentDirForPage` in frontend/app/settings/attachment-placement.ts, recomputed on every keystroke). A preview that disagreed with the placement would be worse than no preview at all, so both sides read THIS FILE directly — there is no generated copy, so the two cannot drift.",
+
+  "$encoding": "One stored string, three meanings: \"\" = next to the page; \"./NAME\" = subfolder of the page's own folder; \"NAME\" = folder relative to the site root.",
+
+  "placement": [
+    { "raw": "", "page": "posts/2026-08-02-on-gardens.md", "dir": "posts", "note": "default: beside the page" },
+    { "raw": "", "page": "index.md", "dir": "", "note": "page at the site root -> the root" },
+    { "raw": "./assets", "page": "posts/2026-08-02-on-gardens.md", "dir": "posts/assets", "note": "subfolder of the page's folder" },
+    { "raw": "./assets", "page": "index.md", "dir": "assets", "note": "page at the root: the subfolder IS a root folder" },
+    { "raw": "./img", "page": "a/b/c.md", "dir": "a/b/img", "note": "nested page keeps its whole folder" },
+    { "raw": "./a/b", "page": "posts/p.md", "dir": "posts/a/b", "note": "multi-segment subfolder" },
+    { "raw": "assets", "page": "posts/2026-08-02-on-gardens.md", "dir": "assets", "note": "bare value is site-wide, page location irrelevant" },
+    { "raw": "assets", "page": "index.md", "dir": "assets", "note": "same folder from a root page" },
+    { "raw": "media/img", "page": "posts/p.md", "dir": "media/img", "note": "multi-segment site-wide folder" },
+    { "raw": "assets/", "page": "posts/p.md", "dir": "assets", "note": "trailing slash normalizes away" },
+    { "raw": "./assets//", "page": "posts/p.md", "dir": "posts/assets", "note": "repeated trailing slashes normalize away" },
+    { "raw": "./", "page": "posts/p.md", "dir": "posts", "note": "\"./\" degenerates to the default" },
+    { "raw": ".", "page": "posts/p.md", "dir": "posts", "note": "\".\" degenerates to the default" },
+    { "raw": "  assets  ", "page": "posts/p.md", "dir": "assets", "note": "surrounding whitespace is trimmed" }
+  ],
+
+  "$validation_note": "`error` is null when the value is accepted, else the KIND of rejection: \"absolute\" (a path that would escape the site — leading slash, leading backslash, or a Windows drive prefix, checked on every platform because config.toml travels) or \"dotdot\" (any `..` component, split on both slash flavours).",
+
+  "validation": [
+    { "raw": "", "error": null },
+    { "raw": "assets", "error": null },
+    { "raw": "./assets", "error": null },
+    { "raw": "media/img", "error": null },
+    { "raw": "./a/b", "error": null },
+    { "raw": "..hidden", "error": null, "note": "leading dots are only a problem as a whole component" },
+    { "raw": "/tmp/assets", "error": "absolute" },
+    { "raw": "\\\\server\\share", "error": "absolute" },
+    { "raw": "C:assets", "error": "absolute" },
+    { "raw": "C:\\images", "error": "absolute" },
+    { "raw": "../assets", "error": "dotdot" },
+    { "raw": "./assets/../..", "error": "dotdot" },
+    { "raw": "a/../b", "error": "dotdot" },
+    { "raw": "a\\..\\b", "error": "dotdot", "note": "backslash separators count too" }
+  ],
+
+  "$exclusion_note": "The inverse question, asked by the build: is this scanned directory attachment storage rather than a section of the site? Storage gets no index page, no listing row, no nav entry. `dir` is a project-relative directory path; `excluded` is the answer. Only Rust reads this array — the Site-settings preview shows placement, not exclusion — but the encoding stays defined in ONE file so the two questions cannot drift apart.",
+
+  "exclusion": [
+    { "raw": "", "dir": "assets", "excluded": false, "note": "default: attachments sit beside the page, so no folder is storage" },
+    { "raw": "", "dir": "posts/assets", "excluded": false },
+    { "raw": ".", "dir": "assets", "excluded": false, "note": "\".\" degenerates to the default" },
+
+    { "raw": "assets", "dir": "assets", "excluded": true, "note": "bare value: exactly this root folder" },
+    { "raw": "assets", "dir": "assets/songs-of-innocence", "excluded": true, "note": "and everything beneath it" },
+    { "raw": "assets", "dir": "posts/assets", "excluded": false, "note": "bare value is root-anchored: a same-named folder elsewhere is content" },
+    { "raw": "assets", "dir": "assets-and-crafts", "excluded": false, "note": "prefix match must stop at a segment boundary" },
+    { "raw": "assets/", "dir": "assets", "excluded": true, "note": "trailing slash normalizes away" },
+    { "raw": "media/img", "dir": "media/img/2024", "excluded": true, "note": "multi-segment root folder" },
+    { "raw": "media/img", "dir": "media", "excluded": false, "note": "the parent of a storage folder is still content" },
+
+    { "raw": "./assets", "dir": "assets", "excluded": true, "note": "a root-level page's own folder IS the root, so root assets/ is storage" },
+    { "raw": "./assets", "dir": "posts/assets", "excluded": true, "note": "matches at any depth" },
+    { "raw": "./assets", "dir": "posts/assets/2024", "excluded": true, "note": "and everything beneath a match" },
+    { "raw": "./assets", "dir": "posts", "excluded": false },
+    { "raw": "./assets", "dir": "posts/assets-old", "excluded": false, "note": "segment boundary again" },
+    { "raw": "./assets", "dir": "my-assets", "excluded": false },
+    { "raw": "./a/b", "dir": "posts/a/b", "excluded": true, "note": "multi-segment subfolder, contiguous" },
+    { "raw": "./a/b", "dir": "posts/a/x/b", "excluded": false, "note": "the segments must be contiguous" },
+    { "raw": "./", "dir": "assets", "excluded": false, "note": "\"./\" degenerates to the default" },
+
+    { "raw": "assets", "dir": "", "excluded": false, "note": "the site root is never storage" },
+    { "raw": "./assets", "dir": "", "excluded": false }
+  ]
+}

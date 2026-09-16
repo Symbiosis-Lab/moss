@@ -31,7 +31,7 @@ pub fn reference_kind_for_ext(ext: &str) -> ExtKind {
 /// The diagnostic an *unresolvable* reference to this extension deserves.
 ///
 /// Media the browser would have rendered in place leaves a visible hole when
-/// the file is absent — which is what `missing_media::refuse_publish` exists
+/// the file is absent — which is what `deploy::refuse_publish` exists
 /// to catch, so it blocks. A markdown transclusion or an unknown extension
 /// degrades to an ordinary link instead, so it stays advisory.
 pub fn missing_reference_kind(ext: Option<&str>) -> crate::resolve::DiagnosticKind {

@@ -106,7 +106,7 @@ Plain `"cancel"` carries no label.
 ### PluginHook
 
 ```ts
-type PluginHook = "import" | "publish" | "deploy" | "syndicate" | "process" | "enhance";
+type PluginHook = "import" | "publish" | "deploy" | "syndicate" | "process";
 ```
 
 `PluginHook` mirrors the closed Rust enum in
@@ -272,27 +272,40 @@ await task.succeeded(`Imported ${articles.length} articles`);
 
 ## Hook contexts
 
-| Interface | Description |
-| ------ | ------ |
-| [ArticleInfo](interfaces/ArticleInfo.md) | Article information for syndication |
-| [BaseContext](interfaces/BaseContext.md) | Base context shared by all hooks |
-| [ConfigureDomainContext](interfaces/ConfigureDomainContext.md) | Context for configure_domain hook (custom domain setup on deploy platform) |
-| [DeployContext](interfaces/DeployContext.md) | Context for on_deploy hook (deployer plugins) |
-| [DeploymentInfo](interfaces/DeploymentInfo.md) | Deployment result information |
-| [DnsRecord](interfaces/DnsRecord.md) | A single DNS record provided by deploy plugins |
-| [DnsTarget](interfaces/DnsTarget.md) | DNS configuration provided by deploy plugins |
-| [GenerateContext](interfaces/GenerateContext.md) | Context for on_build hook (generator plugins) |
-| [PageNode](interfaces/PageNode.md) | A node in the universal Page Tree. |
-| [ProcessContext](interfaces/ProcessContext.md) | Context for before_build hook (process capability) |
-| [SourceFiles](interfaces/SourceFiles.md) | Source files categorized by type |
-| [SyndicateContext](interfaces/SyndicateContext.md) | Context for after_deploy hook (syndicator plugins) |
+### AddressKind
+
+```ts
+type AddressKind = "cid" | "ipns" | "gateway" | "domain";
+```
+
+What one address IS, which decides how moss offers it.
+
+A kind moss does not recognise still renders — as a labelled row with its
+value — so a plugin may name one outside this list.
 
 ## Hooks
 
-| Interface | Description |
-| ------ | ------ |
-| [HookResult](interfaces/HookResult.md) | Standard result returned from hook execution |
-| [HookToast](interfaces/HookToast.md) | Outcome notification described by a hook result. |
+### SetupVerdict
+
+```ts
+type SetupVerdict = 
+  | {
+  status: "ready";
+}
+  | {
+  blockers: SetupBlocker[];
+  status: "blocked";
+};
+```
+
+The `check_setup` verdict: `ready`, or `blocked` with blockers. There is no
+third verdict — a hook that cannot tell answers `blocked` with a message
+that says so and a zero-field retry form.
+
+On any answering verdict that is not a `field_errors` re-ask, moss persists
+each submitted value whose key matches a declared setting: a `secret` into
+the keystore, anything else into your config. Values your flow derived
+(rather than the user typed) belong in your own state file.
 
 ## Filesystem
 
@@ -1621,24 +1634,6 @@ type PluginMessage =
 
 Messages that plugins can send to moss
 
-## Enhance
-
-### EnhanceContent
-
-```ts
-type EnhanceContent = 
-  | {
-  html: string;
-  type: "static";
-}
-  | {
-  pages: Record<string, string>;
-  type: "per-page";
-};
-```
-
-Content declaration for a single slot.
-
 ## Social
 
 | Interface | Description |
@@ -1726,6 +1721,119 @@ secp256k1-schnorr: BIP-340). Any protocol framing (an IPNS record's
 #### Returns
 
 `Promise`\<`Uint8Array`\<`ArrayBufferLike`\>\>
+
+## Secrets
+
+### getSecret()
+
+```ts
+function getSecret(key): Promise<string | null>;
+```
+
+Your secret stored under `key`, or `null` if there is none.
+
+`null` is the normal first-run answer, not an error. If your manifest
+declares the key under `setup.credentials`, moss has already asked for it
+before your hook ran, so `null` here means the user cancelled.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `key` | `string` |
+
+#### Returns
+
+`Promise`\<`string` \| `null`\>
+
+***
+
+### rejectSecret()
+
+```ts
+function rejectSecret(key, options?): Promise<string | null>;
+```
+
+Tell moss the secret stored under `key` does not work — and get a replacement.
+
+Rejecting forgets the stored value and re-draws moss's own credential modal,
+carrying your `detail` sentence as the reason — one sentence saying why you
+are asking again, rendered above moss's own field. You supply the words and
+no pixels. It resolves with the new value, or `null` if the user cancelled.
+So the error path is a retry, not a failed publish with an explanation:
+
+```ts
+const fresh = await moss.rejectSecret("pinata_jwt", {
+  detail: "Pinata says this token is no longer valid.",
+});
+if (fresh === null) return; // the user declined; stop, don't loop
+```
+
+Call this when the service rejects the credential itself — a 401, a revoked
+token — not when a request merely failed. Rejecting on a network error throws
+away a perfectly good token AND interrupts the user for nothing.
+
+The wait is the user's, so it is unbounded: moss's inactivity watchdog counts
+an open credential modal as progress, not as a hung hook. With no window to
+draw in — a headless `moss build` — the value is forgotten and `null` comes
+back immediately, which is the honest answer when nobody can be asked.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `key` | `string` |
+| `options?` | \{ `detail?`: `string`; \} |
+| `options.detail?` | `string` |
+
+#### Returns
+
+`Promise`\<`string` \| `null`\>
+
+***
+
+### setSecret()
+
+```ts
+function setSecret(key, value): Promise<void>;
+```
+
+Store what an authenticated flow returned to you.
+
+**You may never draw the input yourself.** This is for a token you already
+hold because a login moss supervised produced it — an OAuth redirect, a
+session exchange. If what you want is to *ask* the user for a credential,
+declare it in your manifest's `setup.credentials` and moss will draw the
+field; a plugin-drawn password box is a registry blocker, not a style choice.
+
+Refused for any key your manifest declared as one moss asks the user for — a
+`setup.credentials` entry, or a `config_schema` field of type `secret`. Those
+slots hold what a person typed into moss's modal, and a plugin quietly
+replacing one would leave the user believing their own token is still there.
+If you need such a credential replaced, call [rejectSecret](#rejectsecret): moss
+forgets it and asks again, and you get the new value back. Every other key in
+your scope is yours to write. The key is scoped to your plugin automatically
+— you cannot write another plugin's secret, the same way you cannot read one.
+
+An empty `value` erases the key — that is how you sign a user out, and moss
+then reports nothing stored for the slot. Earlier releases stored the empty
+string literally, so a signed-out account went on showing as connected.
+
+Why here and not in your own plugin folder: `.moss/plugins/` is inside the
+user's repo and is not gitignored, so a token you keep yourself is a token
+that gets committed and pushed. This is the same custody argument moss already
+makes for signing keys.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `key` | `string` |
+| `value` | `string` |
+
+#### Returns
+
+`Promise`\<`void`\>
 
 ## Tauri core (deprecated)
 

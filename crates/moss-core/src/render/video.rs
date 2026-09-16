@@ -80,9 +80,11 @@
 //!   moss renders HTML before the video worker runs, so a video's first build
 //!   ships the single-src form with live hydration and the ladder appears on
 //!   the next build, off the transform cache. That ordering is also what keeps
-//!   ADR-013's never-404 rule: `<video>` recovers from a failed `<source>` no
-//!   better than `<picture>` does, so a `.m3u8` URL is only offered when its
-//!   bytes exist.
+//!   ADR-013's never-404 rule. A `<video>` does advance past a failed
+//!   `<source>` (that is what the MP4 last-resort below relies on), but only
+//!   before `readyState` reaches HAVE_METADATA; after that the resource is
+//!   chosen for good, and a 404 inside a chosen ladder plays nothing. So a
+//!   `.m3u8` URL is only offered when its bytes exist.
 //!
 //! The progressive MP4 is always the last `<source>`, so a browser that
 //! understands neither HLS natively nor hls.js still plays the video. A plain

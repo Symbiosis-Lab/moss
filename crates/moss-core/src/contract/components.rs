@@ -246,14 +246,21 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "Auto-generated listing of child pages. The single canonical container; layout density on `data-layout` (`grid` for cover-led tiles, `list` for cover+excerpt rows, `minimal` for text-only year-grouped indexes). Wrapped in `.moss-cards-container` to scope CSS container queries.",
+        description: "A listing of child pages — auto-generated from a folder's children, or hand-picked by a `:::grid {.summary}` fence, which emits this same container so both read through one card renderer. The single canonical container; layout density on `data-layout` (`grid` for cover-led tiles, `list` for cover+excerpt rows, `minimal` for text-only year-grouped indexes). Wrapped in `.moss-cards-container` to scope CSS container queries.",
     },
     ComponentEntry {
         class: "moss-cards-container",
         kind: "container",
         parent: "",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-cards-container">
+        data_attrs: &[
+            DataAttr {
+                name: "data-embed",
+                values: &[""],
+                default: "",
+                description: "Boolean presence flag: emitted only for a body `![[folder/|…]]` embed, never for the frontmatter-synthesized listing (homepage / folder index) — both render through the same `generate_children`, so this is the one thing in the markup that tells them apart. CSS uses it to give an embedded listing ordinary block rhythm (`--moss-space-md`, matching `.moss-gallery`) instead of the larger section-break margin the trailing automatic listing keeps.",
+            },
+        ],
+        example_html: r#"<div class="moss-cards-container" data-embed>
   <div class="moss-cards" data-layout="grid">...</div>
 </div>"#,
         example_markdown: "",
@@ -367,12 +374,19 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         class: "moss-card-cover",
         kind: "instance",
         parent: "moss-card",
-        data_attrs: &[],
+        data_attrs: &[
+            DataAttr {
+                name: "data-cover",
+                values: &["quote"],
+                default: "",
+                description: "Emitted iff this card has no cover of its own AND at least one sibling in the same listing does. Fills the slot with the page's description as text (or its title, with none) instead of the empty `.moss-card-no-cover` placeholder — a letter without a photo in a listing of photographed pieces. Absent when the whole listing is coverless (every card gets the plain placeholder there) and absent on a card that has its own cover.",
+            },
+        ],
         example_html: r#"<div class="moss-card-cover"><img src="..." /></div>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "Cover media slot inside `.moss-card`. Gets `.moss-card-no-cover` modifier when no image is present.",
+        description: "Cover media slot inside `.moss-card`. Gets `.moss-card-no-cover` modifier when no image is present, or `data-cover=\"quote\"` when a sibling card in the same listing has a cover and this one doesn't.",
     },
     ComponentEntry {
         class: "moss-card-no-cover",
@@ -425,9 +439,9 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         data_attrs: &[],
         example_html: r#"<div class="moss-card-head">...</div>"#,
         example_markdown: "",
-        status: Status::Confirmed,
+        status: Status::Retired,
         since: "1",
-        description: "Header row of a `.moss-card-body` (title + kicker + meta).",
+        description: "Retired 2026-09 — kicker, meta and title sit directly in `.moss-card-body`.",
     },
     ComponentEntry {
         class: "moss-card-title",
@@ -476,7 +490,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
     ComponentEntry {
         class: "moss-card-title-link",
         kind: "instance",
-        parent: "moss-card-head",
+        parent: "moss-card-body",
         data_attrs: &[],
         example_html: r#"<a class="moss-card-title-link" href="https://outlet.example/article"><h3 class="moss-card-title">Article Title</h3></a>"#,
         example_markdown: "",
@@ -516,17 +530,6 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         status: Status::Confirmed,
         since: "1",
         description: "Excerpt / description paragraph inside a `.moss-card` — below the title in both grid- and list-layout cards.",
-    },
-    ComponentEntry {
-        class: "moss-card-count",
-        kind: "instance",
-        parent: "moss-card",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-card-count">4 articles</div>"#,
-        example_markdown: "",
-        status: Status::Confirmed,
-        since: "1",
-        description: "Tertiary subtitle line showing `N articles` for a folder card. Renders only on non-date listings when the folder card has no `description` to display.",
     },
     ComponentEntry {
         class: "moss-embed-more",
@@ -669,7 +672,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-head`.",
+        description: "Retired in Phase 1c — collapsed into `.moss-card-body`.",
     },
     ComponentEntry {
         class: "moss-card-list-kicker",
@@ -1160,6 +1163,12 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 default: "",
                 description: "Present when the hero carries `caption=\"…\"`. Such a hero is a photograph on display rather than a backdrop for overlay text, and a caption that names a subject is a promise the subject is in frame — so site.css shows the whole image instead of the default crop-to-fill: the box takes the picture's own shape, centred, bounded by `--moss-hero-max-height` rather than filling the frame. Put the crop back on the image itself (`image=cover.jpg|cover top`), which lands as an inline style and wins.",
             },
+            DataAttr {
+                name: "data-fit",
+                values: &["plate"],
+                default: "",
+                description: "Emitted from `:::hero {.plate}` (the `.plate` token is a trigger, not a class a theme has to style — moss reads it and emits this attribute instead). A plate is an artwork, manuscript or photograph reproduction that must be shown WHOLE: never cropped, and never enlarged past the pixels it was delivered at. site.css drops the `--moss-hero-max-height` cap and sizes the image at its own intrinsic size (`inline-size: auto; block-size: auto`, `object-fit: contain`), shrunk to fit the column but never stretched past it — unlike plain `data-captioned`, which still bounds the frame at the default cap and can upscale a wide image into it. The `sizes=` attribute on the inner `<img>` moves with it (`SIZES_HERO_PLATE`, a fixed value ≥ the deploy cap) so the srcset ladder fetches the base rung instead of a viewport-sized one that then gets stretched. Use `.plate` instead of a caption/plain hero when the object's own aspect ratio — not the layout's — must drive its displayed size, e.g. a 7.6:1 handscroll that a 100vw-derived `sizes=` would otherwise blur.",
+            },
         ],
         example_html: r#"<section class="moss-hero" data-width="page">
   <div class="moss-hero-content">...</div>
@@ -1304,7 +1313,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-columns",
                 values: &["1", "2", "3", "4"],
                 default: "",
-                description: "Column count, from `:::grid N`. Note the responsive default: below 768px moss collapses `[data-columns]` to a single column, which is right for a grid of cards and wrong for a grid of short text lines. Re-assert `grid-template-columns` inside your own media query if yours is the latter. A ratio (`:::grid 2 1:2`) arrives as the custom property `--moss-grid-ratio` on the element, so it stays overridable — the collapse applies to ratio grids too.",
+                description: "How many cards sit on one line of the grid, from `:::grid N`. Same track count at every viewport width — there is no mobile collapse to a single column, so a grid of cards and a grid of short text lines both keep their authored count on a phone. A ratio (`:::grid 2 1:2`) arrives as the custom property `--moss-grid-ratio` on the element, so it stays overridable at every width.",
             },
         ],
         example_html: r#"<div class="moss-grid" data-width="wide">
@@ -1313,7 +1322,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: ":::grid {cols=2}\nLeft cell\n+++\nRight cell\n:::\n",
         status: Status::Confirmed,
         since: "0",
-        description: "Generic grid container (used by profiles, link previews, etc.). Modifier classes: `profiles`, `featured`, `no-cards`. v1 adds `data-width` (P9).",
+        description: "Generic grid container (used by profiles, link previews, etc.). Modifier classes: `profiles`, `featured`, `no-cards`, `summary`. `summary` REPLACES this container rather than decorating it: the fence emits `.moss-cards-container > .moss-cards[data-layout=\"list\"]` instead, so a `.moss-grid` never reaches the page and a column count is dropped. v1 adds `data-width` (P9).",
     },
     ComponentEntry {
         class: "moss-grid-card",
@@ -1387,7 +1396,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-columns",
                 values: &[],
                 default: "",
-                description: "Column count, from `:::gallery N` — the author names it rather than moss inferring it. The **opposite** of `.moss-grid[data-columns]` on mobile: below 48rem the grid collapses to one column, while the gallery uses `auto-fill` to keep as many tracks as clear 88px. N becomes a maximum rather than a mandate, and a gallery that already fits stays at its authored count. Collapsing a wall of thumbnails to one column is wrong; collapsing prose cells is right.",
+                description: "Column count, from `:::gallery N` — the author names it rather than moss inferring it. Unlike `:::grid`, which keeps its authored count at every viewport, a gallery uses `auto-fill` below 48rem to keep as many tracks as clear 88px: N becomes a maximum rather than a mandate, and a gallery that already fits stays at its authored count. A wall of thumbnails should thin out on a phone; a grid of cards should not.",
             },
         ],
         example_html: r#"<div class="moss-gallery" data-width="page">
@@ -2324,7 +2333,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "main-nav",
         data_attrs: &[],
-        example_html: r#"<a href="/" class="site-name">在場</a>"#,
+        example_html: r#"<a href="/" class="site-name">潮汐</a>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
@@ -2368,7 +2377,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "chrome",
         parent: "main-nav",
         data_attrs: &[],
-        example_html: r#"<div class="nav-left"><a href="/" class="site-name">在場</a></div>"#,
+        example_html: r#"<div class="nav-left"><a href="/" class="site-name">潮汐</a></div>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",

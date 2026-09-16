@@ -1,0 +1,283 @@
+{
+  "$schema_note": "Golden vectors for the folder-embed pothole grammar (`![[/folder/|key:value,...]]`). This is a CROSS-LANGUAGE CONTRACT: `moss_core::resolve::embed_renderer::folder_list::parse_params` is checked against it by tests/folder_embed_params.rs, and the editor's read-side twin `parseFolderParams` (packages/moss-syntax/src/cm6/cm-image-extract.ts) by packages/moss-syntax/src/cm6/__tests__/cm-image-extract.test.ts. Add a vector before you add a key. Every `expect` below was DERIVED BY RUNNING parse_params, never by reasoning about the grammar.",
+  "rules_as_measured": ["Last wins WITH RESET. Each keyed token ASSIGNS, so `sort:weight,sort:weght` yields NO sort - the later unparseable value clears the earlier good one. Same for `limit:3,limit:abc`. A 'drop unparseable values' reading would keep the first, and is wrong.", "`style`, `depth` and `group` have no whitelist: any string is kept verbatim. Only `sort` is validated (date|weight|title) and only `limit` is numeric.", "`limit` goes through `usize::from_str`, so a leading `+` is accepted and an out-of-range integer yields no limit.", "Token, key and value are each trimmed independently.", "Bare tokens (no `:`) never produce any of the five charted fields. A bare sizing token sets `size`, which the listing branch ignores and this fixture therefore does not carry."],
+  "charted_fields": ["style", "sort", "depth", "group", "limit"],
+  "vectors": [
+    {
+      "name": "empty",
+      "input": "",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": null
+      },
+      "note": "all null"
+    },
+    {
+      "name": "style-grid",
+      "input": "style:grid",
+      "expect": {
+        "style": "grid",
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": null
+      },
+      "note": "the card-grid style"
+    },
+    {
+      "name": "sort-date",
+      "input": "sort:date",
+      "expect": {
+        "style": null,
+        "sort": "date",
+        "depth": null,
+        "group": null,
+        "limit": null
+      },
+      "note": "a recognised sort axis"
+    },
+    {
+      "name": "depth-all",
+      "input": "depth:all",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": "all",
+        "group": null,
+        "limit": null
+      },
+      "note": "the depth switch the card reads"
+    },
+    {
+      "name": "group-year",
+      "input": "group:year",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": null,
+        "group": "year",
+        "limit": null
+      },
+      "note": "grouping key, kept verbatim"
+    },
+    {
+      "name": "limit-basic",
+      "input": "limit:5",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": 5
+      },
+      "note": "a plain limit"
+    },
+    {
+      "name": "combined",
+      "input": "limit:3,depth:all,group:year,style:grid,sort:title",
+      "expect": {
+        "style": "grid",
+        "sort": "title",
+        "depth": "all",
+        "group": "year",
+        "limit": 3
+      },
+      "note": "order-independence"
+    },
+    {
+      "name": "whitespace",
+      "input": " style : grid , sort : weight ",
+      "expect": {
+        "style": "grid",
+        "sort": "weight",
+        "depth": null,
+        "group": null,
+        "limit": null
+      },
+      "note": "token, key and value are each trimmed"
+    },
+    {
+      "name": "unknown-key",
+      "input": "limit:3,layout:minimal",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": 3
+      },
+      "note": "an unknown key is dropped; limit survives"
+    },
+    {
+      "name": "bad-sort-axis",
+      "input": "sort:weght",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": null
+      },
+      "note": "an unparseable axis yields no sort"
+    },
+    {
+      "name": "sort-reset-by-later-bad-axis",
+      "input": "sort:weight,sort:weght",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": null
+      },
+      "note": "LAST WINS WITH RESET"
+    },
+    {
+      "name": "limit-reset-by-later-bad",
+      "input": "limit:3,limit:abc",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": null
+      },
+      "note": "same shape for limit"
+    },
+    {
+      "name": "limit-zero",
+      "input": "limit:0",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": 0
+      },
+      "note": "parses to 0; the build's truncation guard is n > 0"
+    },
+    {
+      "name": "limit-plus-sign",
+      "input": "limit:+4",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": 4
+      },
+      "note": "usize::from_str accepts a leading +"
+    },
+    {
+      "name": "limit-overflow",
+      "input": "limit:99999999999999999999999",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": null
+      },
+      "note": "out of usize range"
+    },
+    {
+      "name": "bare-legacy-flag",
+      "input": "limit:5,more",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": 5
+      },
+      "note": "bare tokens are ignored"
+    },
+    {
+      "name": "bare-size-token",
+      "input": "limit:3,80%",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": 3
+      },
+      "note": "size is not one of the five charted fields"
+    },
+    {
+      "name": "duplicate-style-last-wins",
+      "input": "style:list,style:grid",
+      "expect": {
+        "style": "grid",
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": null
+      },
+      "note": "last wins"
+    },
+    {
+      "name": "no-style-whitelist",
+      "input": "style:wildcard",
+      "expect": {
+        "style": "wildcard",
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": null
+      },
+      "note": "any string is kept"
+    },
+    {
+      "name": "depth-not-all",
+      "input": "depth:deep",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": "deep",
+        "group": null,
+        "limit": null
+      },
+      "note": "kept verbatim; the card treats it as direct"
+    },
+    {
+      "name": "nel-is-trimmed",
+      "input": "sort:date",
+      "expect": {
+        "style": null,
+        "sort": "date",
+        "depth": null,
+        "group": null,
+        "limit": null
+      },
+      "note": "U+0085 NEL has the Unicode White_Space property, so Rust `str::trim` strips it. JS `String.prototype.trim` does NOT — the reason parseFolderParams trims with an explicit White_Space class instead. Found by a differential fuzz over both real parsers."
+    },
+    {
+      "name": "bom-is-not-trimmed-limit",
+      "input": "limit:\ufeff3",
+      "expect": {
+        "style": null,
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": null
+      },
+      "note": "U+FEFF is in the JS WhiteSpace production but has NO Unicode White_Space property, so Rust keeps it and `usize::from_str` rejects the value. The build sets no limit; the card must not chip one."
+    },
+    {
+      "name": "bom-is-not-trimmed-style",
+      "input": "style:\ufeffgrid",
+      "expect": {
+        "style": "\ufeffgrid",
+        "sort": null,
+        "depth": null,
+        "group": null,
+        "limit": null
+      },
+      "note": "same code point on an unvalidated key: the build keeps the BOM in the style string (so it is not `grid` and the grid renderer will not fire)."
+    }
+  ]
+}

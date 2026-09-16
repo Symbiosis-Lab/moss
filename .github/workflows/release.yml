@@ -1,0 +1,80 @@
+# Publishes moss-core (crates.io) and moss-api, moss-syntax, obsidian-moss,
+# and moss (npm) once open/ is a repo root — plugins never move to open/, so
+# they are not among these. Lifted from release.yml's `release-plz-release`
+# (release.yml:957-979) and `changesets-release` (release.yml:989-1014)
+# verbatim except the trigger: today both fire on
+# `repository_dispatch: moss-release-published`, sent cross-repo by
+# moss-releases' announce-release.yml. After the flip, the repo that
+# publishes the GitHub Release *is* the repo that hosts the crates and
+# packages — there is no cross-repo hop left to make, so both fire directly
+# on `release: types: [published]` here, with `workflow_dispatch` kept for a
+# manual re-run with the same `publish` input.
+
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Which manual step to run'
+        required: false
+        default: none
+        type: choice
+        options: [none, npm, crates-io]
+
+permissions:
+  contents: read
+
+jobs:
+  release-plz-release:
+    if: >-
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'crates-io')
+    concurrency:
+      group: release-plz
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: write
+      pull-requests: read   # release-plz looks up PR-of-commit for changelog enrichment
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5.129
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  changesets-release:
+    if: >-
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'npm')
+    concurrency:
+      group: changesets
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: write
+      id-token: write   # required for npm provenance (no-op while source repo is private)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm changeset publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "false"

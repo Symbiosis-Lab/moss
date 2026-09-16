@@ -336,7 +336,10 @@ mod tests {
         // the head and the foot of an article.)
         // (`author_page`/`tag_page` added 2026-09 — term-page claims; see
         // moss_core::terms.)
-        assert_eq!(schema.frontmatter.fields.len(), 40);
+        // (`children_more` added 2026-09 — names the More link's target when
+        // `children_limit` truncates a listing, even on a self-listing.)
+        // (`children_covers` added 2026-09 — "only" keeps pages with a cover.)
+        assert_eq!(schema.frontmatter.fields.len(), 42);
     }
 
     #[test]

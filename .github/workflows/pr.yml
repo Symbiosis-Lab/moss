@@ -1,0 +1,292 @@
+# The open repo's PR gate. Written under open/.github/workflows/ in the
+# desktop repo per docs/archive/2026-09-13-f3-open-repo-ci-plan.md (F3); GitHub
+# does not execute a nested .github/, so this file is inert until open/
+# becomes a repo root at F6. Once the flip lands, every `open/crates/…` /
+# `open/packages/…` path the lifted steps below read becomes `crates/…` /
+# `packages/…` — this file already reflects that rewrite.
+#
+# Unlike the desktop's pr.yml, there is no detect-changes job here: this
+# repo's PR gate has no plugins/frontend filters to route around (plan §1,
+# detect-changes row) — every job below runs on every PR.
+
+name: PR
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ==========================================================================
+  # Rust tests for the three crates. Authored fresh, not lifted: the desktop's
+  # own `rust-tests` (pr.yml:862-1055) runs `cargo test --tests --all-features`
+  # from `working-directory: src-tauri`, without `--workspace`, so it is not a
+  # template for a workspace-wide pass. Modeled instead on maint.yml's
+  # `rust-tests-windows` "Run Rust tests (workspace)" step (maint.yml:750-752,
+  # `cargo test --workspace --all-features --no-fail-fast`), scoped to the
+  # three open crates. Surrounding scaffolding (checkout, toolchain, cache,
+  # apt install, pnpm install) is lifted from `rust-tests` (pr.yml:862-981);
+  # the "Build frontend", "Check for duplicate dependencies", and "Verify
+  # generated artifacts" steps are dropped — none apply without src-tauri.
+  rust-tests:
+    name: Rust Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+          shared-key: linux
+
+      # moss-build's own build scripts still probe for libwebkit2gtk even
+      # headless (pr.yml:962-975).
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev xvfb
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          SKIP_RUST_INSTALL: 1
+
+      - name: Run Rust tests (workspace, scoped to the open crates)
+        run: xvfb-run --auto-servernum cargo test --workspace --all-features -p moss-core -p moss-build -p moss-cli --no-fail-fast
+
+  # ==========================================================================
+  # Same invocation as .githooks/pre-push:111 and maint.yml's
+  # rust-tests-macos "Clippy" step (maint.yml:676-678) — the two places this
+  # already exists — scoped to the three crates the same way as rust-tests.
+  # ==========================================================================
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+          shared-key: linux-clippy
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+
+      - name: Clippy (workspace, all targets, all features, open crates)
+        run: cargo clippy --workspace --all-targets --all-features -p moss-core -p moss-build -p moss-cli
+
+  # ==========================================================================
+  # Lifted verbatim from pr.yml:475-487 ("Rust advisories") — it already runs
+  # from repo root with no path assumptions. .cargo/audit.toml here carries
+  # the desktop file's advisory-acceptance list trimmed to what applies to
+  # these three crates' dependency tree (see that file's own header).
+  # ==========================================================================
+  cargo-audit:
+    name: Rust advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Audit Cargo.lock against the RustSec database
+        run: cargo audit
+
+  # ==========================================================================
+  # Lifted verbatim from pr.yml:627-646 ("moss-core packages cleanly").
+  # ==========================================================================
+  moss-core-package:
+    name: moss-core packages cleanly
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify moss-core packages cleanly
+        run: |
+          cargo package -p moss-core --no-verify
+          cd target/package
+          tar xzf moss-core-*.crate
+          cd moss-core-*/
+          cargo build --release
+
+  # ==========================================================================
+  # Builds moss-cli for the CLI end-to-end job below. Lifted from pr.yml's
+  # "Build the open CLI binary" step (pr.yml:1174-1177); the artifact upload
+  # replaces build-app's shared-download shape since this repo has no app
+  # binary to ride alongside.
+  # ==========================================================================
+  build-cli:
+    name: Build moss-cli
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+          shared-key: linux-cli-release
+
+      - name: Build the moss-cli binary
+        run: |
+          cargo build --release -p moss-cli
+          test -f ./target/release/moss-cli || { echo "::error::moss-cli not found after build"; exit 1; }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: moss-cli-linux-release
+          path: target/release/moss-cli
+          retention-days: 1
+          if-no-files-found: error
+
+  # ==========================================================================
+  # NEW, not lifted — no existing desktop job runs an end-to-end check against
+  # moss-cli alone. `src-tauri/tests/cli_binary_parity_test.rs`'s non-parity
+  # assertions cannot run here (there is no app binary in this repo to compare
+  # against), so that half of CLI coverage stays desktop-only. The shape below
+  # follows pr.yml's `render-gates` job, which already drives `moss-cli`
+  # directly via `MOSS_CLI_BIN` (pr.yml:1271-1332) alongside the app: a guide
+  # listing, a headless build, and an output-file assertion, matching
+  # release.yml's `build-linux-cli` "Verify it runs with no display" step
+  # (164-174) in spirit even though that step targets the app binary, not this
+  # one.
+  # ==========================================================================
+  cli-e2e:
+    name: CLI end-to-end (headless)
+    needs: build-cli
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: moss-cli-linux-release
+          path: target/release/
+
+      - name: Restore the executable bit
+        run: |
+          chmod +x target/release/moss-cli
+          ./target/release/moss-cli --version
+
+      - name: List guides (headless)
+        run: xvfb-run --auto-servernum ./target/release/moss-cli guide --list
+
+      # No minimal-vault fixture exists under open/ today, and `moss build`
+      # has no --output flag (real surface:
+      # `moss build <folder> [--serve|--watch|--no-plugins|--allow-plugins|
+      # --wait-plugins|--strict|--site-url=<url>]`, crates/moss-build/src/
+      # cli/commands.rs). A build writes into `<folder>/.moss/build/current`
+      # (a symlink to the generation directory), not to a path the caller
+      # names — verified locally (2026-09-13): `moss-cli build /tmp/vault
+      # --no-plugins --strict` against a two-line index.md produced
+      # `/tmp/vault/.moss/build/current/index.html` and exited 0.
+      - name: Build a fixture vault (headless)
+        run: |
+          mkdir -p /tmp/moss-cli-e2e-vault
+          cat > /tmp/moss-cli-e2e-vault/index.md <<'EOF'
+          ---
+          title: index
+          ---
+
+          index body
+          EOF
+          xvfb-run --auto-servernum ./target/release/moss-cli build /tmp/moss-cli-e2e-vault --no-plugins --strict
+          test -f /tmp/moss-cli-e2e-vault/.moss/build/current/index.html || { echo "::error::moss-cli build produced no .moss/build/current/index.html"; exit 1; }
+
+  # ==========================================================================
+  # Lifted wholesale from pr.yml:709-776 ("Packages Tests"), dropping the
+  # open/ prefix on every `cd`.
+  # ==========================================================================
+  test-packages:
+    name: Packages Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          SKIP_RUST_INSTALL: 1
+
+      - name: Typecheck moss-api (source + tests)
+        run: cd packages/moss-api && pnpm run typecheck
+
+      - name: Test moss-api with coverage
+        run: cd packages/moss-api && npx vitest run --coverage
+
+      - name: Typecheck moss-syntax (source + tests)
+        run: cd packages/moss-syntax && pnpm run typecheck
+
+      - name: Build moss-syntax
+        run: cd packages/moss-syntax && pnpm run build
+
+      - name: Test moss-syntax
+        run: cd packages/moss-syntax && npx vitest run
+
+      - name: Test moss npm wrapper
+        run: cd packages/moss && npm test
+
+      - name: Verify moss-api API reference is up-to-date
+        run: |
+          cd packages/moss-api
+          pnpm run docs
+          if [ -n "$(git status --porcelain -- docs/api)" ]; then
+            echo "::error::moss-api API reference out of sync with source. Run: cd packages/moss-api && pnpm run docs"
+            git status --porcelain -- docs/api
+            git diff -- docs/api
+            exit 1
+          fi
+
+      - uses: codecov/codecov-action@v6
+        if: always()
+        with:
+          files: "packages/moss-api/coverage/lcov.info"
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: packages
+          fail_ci_if_error: false

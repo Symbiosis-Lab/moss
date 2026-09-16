@@ -1,0 +1,36 @@
+# New file — the desktop's .github/dependabot.yml has nothing scoped to
+# open/ (F2's export recipe confirmed this). Mirrors that file's
+# groups.all-dependencies / monthly-schedule shape (docs/archive/
+# 2026-09-13-f3-open-repo-ci-plan.md §2), for the three ecosystems this
+# repo root actually has.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      all-dependencies:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+    rebase-strategy: "disabled"
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      all-dependencies:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+    rebase-strategy: "disabled"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      all-dependencies:
+        patterns: ["*"]
+    open-pull-requests-limit: 3
+    rebase-strategy: "disabled"

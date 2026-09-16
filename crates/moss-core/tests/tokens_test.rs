@@ -6,9 +6,23 @@ use moss_core::contract::tokens::load_tokens;
 fn load_tokens_parses_w3c_format() {
     let tokens = load_tokens().expect("tokens.json must parse");
 
-    // Top-level groups are present in source order (from $order field)
+    // Groups come out in `$order`, which is deliberately not alphabetical — so
+    // reading the expected list out of the same file still catches a loader
+    // that fell back to serde's map order. Naming the groups here instead
+    // turned every new group into a failing test: `elevation` landed in
+    // 557b28c22 and this assertion was red on develop until it was read.
+    let source: serde_json::Value =
+        serde_json::from_str(include_str!("../src/contract/tokens.json"))
+            .expect("tokens.json must parse");
+    let declared: Vec<&str> = source["$order"]
+        .as_array()
+        .expect("tokens.json must have a $order array")
+        .iter()
+        .map(|v| v.as_str().expect("$order entries are strings"))
+        .collect();
+
     let group_names: Vec<&str> = tokens.groups.iter().map(|g| g.name.as_str()).collect();
-    assert_eq!(group_names, vec!["typography", "color", "code", "syntax", "layout", "spacing"]);
+    assert_eq!(group_names, declared);
 }
 
 #[test]

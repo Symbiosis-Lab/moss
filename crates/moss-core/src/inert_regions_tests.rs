@@ -52,10 +52,10 @@ fn mask_is_utf8_safe_across_cjk_prose() {
     // The #903 bug-1 shape: byte scanning that lands inside a multi-byte
     // char. Every ASCII byte we match is a full char, so this must not panic
     // and must not corrupt the CJK text.
-    let md = "在場《紀念》— see `代碼` and <!-- 註解 --> 然後結束\n";
+    let md = "潮汐《紀念》— see `代碼` and <!-- 註解 --> 然後結束\n";
     let masked = mask_inert(md);
     assert_eq!(masked.len(), md.len());
-    assert!(masked.starts_with("在場《紀念》— see "));
+    assert!(masked.starts_with("潮汐《紀念》— see "));
     assert!(masked.ends_with(" 然後結束\n"));
     assert!(!masked.contains("代碼"));
     assert!(!masked.contains("註解"));

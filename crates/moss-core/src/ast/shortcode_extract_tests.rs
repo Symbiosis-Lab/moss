@@ -1100,7 +1100,7 @@ fn extracts_grid_with_compound_link_cell_typed_as_link_card() {
 
 #[test]
 fn compound_link_image_cell_with_caption_paragraphs_becomes_card_plus_siblings() {
-    // Real-world shape from frontline's "翻譯 · 得獎作品" grid: an
+    // Real-world shape from harbor's "翻譯 · 得獎作品" grid: an
     // image wrapped in a link, followed (after a blank line) by caption
     // paragraphs. Before this fix, `detect_compound_link` required the
     // cell to literally END in `)`, so this cell fell through to the
@@ -2127,7 +2127,7 @@ fn render_markdown(md: &str) -> String {
 
 #[test]
 fn shortcode_inside_an_html_comment_is_not_extracted() {
-    // moss#903 bug 2, verbatim from the report: a frontlinefellowship page
+    // moss#903 bug 2, verbatim from the report: a harborweekly page
     // parked a gallery inside a TODO comment. The extractor knew about code
     // fences and nothing else, so it extracted the `:::gallery`, replaced
     // lines 2-4 of the comment with a sentinel, and left the comment's own
@@ -2375,7 +2375,7 @@ fn url_raw(u: &crate::ast::url::Url) -> &str {
 
 #[test]
 fn gallery_bare_paths_span_exactly() {
-    // The frontline shape: CJK directory-relative bare paths.
+    // The harbor shape: CJK directory-relative bare paths.
     let src = ":::gallery 8 {.profiles}\n關於/頭像-李柏萱.png\n關於/頭像-李年.png\n:::\n";
     let s = spans(src);
     assert_eq!(s.len(), 2, "{s:?}");

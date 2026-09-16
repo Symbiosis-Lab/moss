@@ -1,0 +1,263 @@
+/* ============================================================================
+   Site search — the search overlay and its nav trigger.
+
+   Gated partial: ships only when `[site].search` is on, which is OFF by
+   default (it also requires `experimental.preview_features`). Registered in
+   `build/emit/stylesheet.rs`'s CSS_PARTIALS; see
+   docs/archive/2026-08-04-ship-what-the-site-needs.md.
+
+   Extracted from site.css lines 1469-1705 on 2026-08-04. The section's comment
+   header ran to line 1975, but the rules from 1707 on are theme-toggle,
+   language-toggle, article-header, reading-font and GitHub/mobile-menu chrome
+   that had been filed under the wrong heading — they style core's elements and
+   stayed in core. The boundary is where search's own rules end, not where the
+   comment does.
+   ========================================================================= */
+
+@layer shortcodes {
+
+/* ---------------------------------------------------------------------------
+   Site search — "Quiet Palette"
+   ---------------------------------------------------------------------------
+   Trigger: the nav-theme-btn box model with a pill radius. The pill is a
+   hover/focus affordance, not a resting fill — at rest the button is
+   transparent, exactly like the theme and language toggles beside it, so the
+   three read as one family. It used to carry a permanent
+   --moss-color-surface fill, which over a hero image rendered as a bright disc
+   and made search the single loudest element in the nav (and read as taller
+   and heavier than its siblings). The hover fill is a color-mix over surface
+   rather than a flat token so it holds up over any backdrop. 18px is the same
+   absolute radius the app shell's pills use; it is NOT proportional, here or on
+   the panel below.
+
+   Panel: top-anchored at 18vh (where the nav already is), translucent backdrop
+   so the article stays legible underneath — you are still on this page, not
+   behind a modal. Radius stays at a fixed 18px however tall the panel grows: a
+   proportional radius on a tall panel reads as a blob.
+
+   Rows are flat and hairline-separated — no cards, no shadows. Selection is a
+   2px accent left-border plus a ~4% accent tint, never a solid fill block.
+   Runtime: frontend/site/search.ts.
+   --------------------------------------------------------------------------- */
+
+.nav-search-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  box-sizing: border-box;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--moss-color-text-secondary);
+  font-size: 1rem;
+  padding: 0.25rem;
+  /* Fixed absolute radius — deliberately not 50%/999px-as-a-shape-hack. */
+  border-radius: 18px;
+  transition: color 0.2s, background-color 0.2s;
+  line-height: 1;
+}
+.nav-search-btn:hover {
+  color: var(--moss-color-ui-accent);
+  background: color-mix(in srgb, var(--moss-color-ui-accent) 8%, var(--moss-color-surface));
+}
+.nav-search-btn:focus { outline: none; }
+.nav-search-btn:focus-visible { outline: 2px solid var(--moss-color-ui-accent); outline-offset: 2px; }
+
+.search-icon {
+  display: block;
+  width: 1.125em;
+  height: 1.125em;
+}
+
+/* --- Overlay --- */
+
+.moss-search {
+  position: fixed;
+  inset: 0;
+  /* Above sticky nav (100) and toasts (2000); below the media lightbox. */
+  z-index: 3000;
+}
+.moss-search[hidden] { display: none; }
+
+.moss-search__backdrop {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--moss-color-bg) 88%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.moss-search__panel {
+  position: relative;
+  box-sizing: border-box;
+  margin: 18vh auto 0;
+  width: calc(100% - 2 * var(--moss-space-sm));
+  max-width: 36rem;
+  max-height: 64vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--moss-color-bg);
+  border: 1px solid var(--moss-border-light);
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+/* --- Input row --- */
+
+.moss-search__field {
+  display: flex;
+  align-items: center;
+  gap: var(--moss-space-xs);
+  padding: var(--moss-space-xs) var(--moss-space-sm);
+  color: var(--moss-color-muted);
+}
+
+.moss-search__field-icon {
+  display: block;
+  flex: none;
+  width: 1.125em;
+  height: 1.125em;
+}
+
+.moss-search__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: none;
+  outline: none;
+  padding: var(--moss-space-xs) 0;
+  font-family: var(--moss-font-body);
+  font-size: var(--moss-size-md);
+  font-weight: var(--moss-font-weight-body);
+  color: var(--moss-color-text);
+}
+.moss-search__input::placeholder { color: var(--moss-color-muted); }
+
+/* Indeterminate 1px hairline — only shown past 200ms of genuine chunk-fetch
+   latency, so a fast query never flashes it. */
+.moss-search__progress {
+  height: 1px;
+  overflow: hidden;
+  background: none;
+}
+.moss-search__progress[hidden] { display: none; }
+.moss-search__progress::before {
+  content: "";
+  display: block;
+  height: 1px;
+  width: 40%;
+  background: var(--moss-color-ui-accent);
+  animation: moss-search-progress 1.1s ease-in-out infinite;
+}
+@keyframes moss-search-progress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .moss-search__progress::before { animation: none; width: 100%; opacity: 0.5; }
+}
+
+/* Inset seam, not a full-bleed edge-to-edge divider: inset by the corner
+   radius so the hairline never runs into the rounded corners.
+
+   Neutral, not accent-tinted. It was --moss-color-accent-quiet, which put a
+   green rule directly under the input — close enough to a focus underline that
+   it read as one, on a field that is always focused and has no focus state to
+   express. It is a divider between the query and its results, so it takes the
+   same --moss-border-light every other hairline in this panel uses (the panel
+   border, the row separators). */
+.moss-search__seam {
+  height: 1px;
+  margin-inline: 18px;
+  background: var(--moss-border-light);
+}
+
+/* --- Results --- */
+
+.moss-search__body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.moss-search__status {
+  margin: 0;
+  padding: var(--moss-space-sm);
+  font-size: var(--moss-size-xs);
+  color: var(--moss-color-text-secondary);
+}
+.moss-search__status[hidden] { display: none; }
+
+.moss-search__results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.moss-search__row + .moss-search__row {
+  border-top: 1px solid var(--moss-border-light);
+}
+
+.moss-search__link {
+  display: block;
+  padding: var(--moss-space-xs) var(--moss-space-sm);
+  border-left: 2px solid transparent;
+  text-decoration: none;
+  color: inherit;
+}
+.moss-search__link:hover,
+.moss-search__link.is-selected,
+.moss-search__link:focus-visible {
+  outline: none;
+  border-left-color: var(--moss-color-ui-accent);
+  background: color-mix(in srgb, var(--moss-color-ui-accent) 4%, transparent);
+}
+
+.moss-search__title {
+  display: block;
+  font-size: var(--moss-size-sm);
+  color: var(--moss-color-text);
+}
+
+.moss-search__excerpt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 0.125rem;
+  font-size: var(--moss-size-2xs);
+  line-height: 1.5;
+  color: var(--moss-color-text-secondary);
+}
+
+/* Pagefind wraps matched terms in <mark>. Colour emphasis, never a highlighter
+   box — a bright fill block is the one thing moss's palette does not do. */
+.moss-search__excerpt mark {
+  background: none;
+  color: var(--moss-color-ui-accent);
+  font-weight: 500;
+}
+
+/* Below the hamburger breakpoint the floating card has nowhere to float: go
+   full-bleed and drop the blur (it is the expensive part on small devices). */
+@media (max-width: 20rem) {
+  .moss-search__backdrop {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .moss-search__panel {
+    margin: 0;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    border: none;
+    border-radius: 0;
+  }
+  .moss-search__seam { margin-inline: var(--moss-space-sm); }
+}
+
+} /* @layer shortcodes */

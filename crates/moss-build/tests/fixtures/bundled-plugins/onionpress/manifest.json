@@ -1,0 +1,13 @@
+{
+  "name": "onionpress",
+  "version": "0.4.1",
+  "description": "Publish moss sites to a self-hosted OnionPress (.onion) receiver",
+  "author": "moss team",
+  "entry": "main.bundle.js",
+  "capabilities": ["deploy"],
+  "global_name": "OnionpressPlugin",
+  "icon": "icon.svg",
+  "requires": ["execute_binary:curl", "execute_binary:tar", "execute_binary:rm"],
+  "requires_stack": true,
+  "preview": true
+}

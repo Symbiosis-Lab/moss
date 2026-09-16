@@ -63,6 +63,11 @@ export {
   signWithKey,
   type KeyAlgorithm,
   type KeyInfo,
+  // Secrets — the same custody, for a token you do read. moss draws every
+  // credential field; `setSecret` is for a token a supervised login handed you.
+  getSecret,
+  rejectSecret,
+  setSecret,
 } from "./keystore.js";
 
 // Plugin Storage (plugin's private directory)

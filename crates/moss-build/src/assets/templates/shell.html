@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html data-moss-html-version="1" lang="{lang}"{html_class_attr}>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <meta name="description" content="{description}">
+    <meta name="theme-color" content="{theme_color_light}" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="{theme_color_dark}" media="(prefers-color-scheme: dark)">
+    {og_tags}
+    {canonical_link}
+    {hreflang_links}
+    {twitter_tags}
+    {apple_touch_icon}
+    {schema_json_ld}
+    {favicon}{robots_meta}
+    {rss_link}
+    {analytics}
+    <script>var t=null;try{t=localStorage.getItem("moss-theme")}catch(e){}document.documentElement.setAttribute("data-theme",t||((window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light"));</script>
+    <link rel="stylesheet" href="{css_path}">{user_css_link}
+    <!-- slot:head-end -->
+</head>
+<body{body_attrs}{content_width_attr}{typesetting_attr}><a class="moss-skip-link" href="#main-content">{skip_link_label}</a>{nav_island}
+    <header>
+        <nav class="main-nav container">
+            <div class="nav-content">
+                {navigation}
+            </div>
+        </nav>
+    </header>
+
+    {hero_section}
+{main_content}
+
+    {footer}
+
+    <div class="moss-colophon">
+        <a href="https://mosspub.com" target="_blank" rel="noopener" aria-label="{colophon_text}" lang="{colophon_lang}">
+            <span class="moss-colophon-icon moss-mark" aria-hidden="true">{moss_mark}</span>
+            <span class="moss-colophon-label moss-wordmark">{colophon_name}</span>
+        </a>
+    </div>
+
+    <script src="{js_path}"{lazy_chunk_attrs}></script>{runtime_js_tags}{user_js_tag}
+    <!-- slot:body-end -->
+</body>
+</html>

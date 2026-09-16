@@ -1,0 +1,205 @@
+[
+  {
+    "description": "Full opening line with all token types",
+    "input": ":::grid 3 1:2 {.profiles .featured}",
+    "kind": "opening",
+    "expected": [
+      { "type": "fence", "from": 0, "to": 3 },
+      { "type": "name", "from": 3, "to": 7 },
+      { "type": "number", "from": 8, "to": 9 },
+      { "type": "ratio", "from": 10, "to": 13 },
+      { "type": "braceOpen", "from": 14, "to": 15 },
+      { "type": "className", "from": 15, "to": 24 },
+      { "type": "className", "from": 25, "to": 34 },
+      { "type": "braceClose", "from": 34, "to": 35 }
+    ]
+  },
+  {
+    "description": "Name only — no arguments",
+    "input": ":::hero",
+    "kind": "opening",
+    "expected": [
+      { "type": "fence", "from": 0, "to": 3 },
+      { "type": "name", "from": 3, "to": 7 }
+    ]
+  },
+  {
+    "description": "Name only — toc (short name)",
+    "input": ":::toc",
+    "kind": "opening",
+    "expected": [
+      { "type": "fence", "from": 0, "to": 3 },
+      { "type": "name", "from": 3, "to": 6 }
+    ]
+  },
+  {
+    "description": "Name with single number argument",
+    "input": ":::gallery 3",
+    "kind": "opening",
+    "expected": [
+      { "type": "fence", "from": 0, "to": 3 },
+      { "type": "name", "from": 3, "to": 10 },
+      { "type": "number", "from": 11, "to": 12 }
+    ]
+  },
+  {
+    "description": "Grid with number and ratio",
+    "input": ":::grid 2 1:2",
+    "kind": "opening",
+    "expected": [
+      { "type": "fence", "from": 0, "to": 3 },
+      { "type": "name", "from": 3, "to": 7 },
+      { "type": "number", "from": 8, "to": 9 },
+      { "type": "ratio", "from": 10, "to": 13 }
+    ]
+  },
+  {
+    "description": "Leading whitespace — offsets account for it",
+    "input": "  :::grid 3",
+    "kind": "opening",
+    "expected": [
+      { "type": "fence", "from": 2, "to": 5 },
+      { "type": "name", "from": 5, "to": 9 },
+      { "type": "number", "from": 10, "to": 11 }
+    ]
+  },
+  {
+    "description": "Unknown args — only fence and name tokenized",
+    "input": ":::grid abc",
+    "kind": "opening",
+    "expected": [
+      { "type": "fence", "from": 0, "to": 3 },
+      { "type": "name", "from": 3, "to": 7 }
+    ]
+  },
+  {
+    "description": "Unclosed braces — partial tokens still emitted",
+    "input": ":::grid 3 {.profiles",
+    "kind": "opening",
+    "expected": [
+      { "type": "fence", "from": 0, "to": 3 },
+      { "type": "name", "from": 3, "to": 7 },
+      { "type": "number", "from": 8, "to": 9 },
+      { "type": "braceOpen", "from": 10, "to": 11 },
+      { "type": "className", "from": 11, "to": 20 }
+    ]
+  },
+  {
+    "description": "Multiple ratios",
+    "input": ":::grid 3 1:2 1:1",
+    "kind": "opening",
+    "expected": [
+      { "type": "fence", "from": 0, "to": 3 },
+      { "type": "name", "from": 3, "to": 7 },
+      { "type": "number", "from": 8, "to": 9 },
+      { "type": "ratio", "from": 10, "to": 13 },
+      { "type": "ratio", "from": 14, "to": 17 }
+    ]
+  },
+  {
+    "description": "Multiple classes without other args",
+    "input": ":::grid {.a .b .c}",
+    "kind": "opening",
+    "expected": [
+      { "type": "fence", "from": 0, "to": 3 },
+      { "type": "name", "from": 3, "to": 7 },
+      { "type": "braceOpen", "from": 8, "to": 9 },
+      { "type": "className", "from": 9, "to": 11 },
+      { "type": "className", "from": 12, "to": 14 },
+      { "type": "className", "from": 15, "to": 17 },
+      { "type": "braceClose", "from": 17, "to": 18 }
+    ]
+  },
+  {
+    "description": "Buttons — name only, no args",
+    "input": ":::buttons",
+    "kind": "opening",
+    "expected": [
+      { "type": "fence", "from": 0, "to": 3 },
+      { "type": "name", "from": 3, "to": 10 }
+    ]
+  },
+  {
+    "description": "Closing line",
+    "input": ":::",
+    "kind": "closing",
+    "expected": [
+      { "type": "fence", "from": 0, "to": 3 }
+    ]
+  },
+  {
+    "description": "Closing line with leading whitespace",
+    "input": "  :::",
+    "kind": "closing",
+    "expected": [
+      { "type": "fence", "from": 2, "to": 5 }
+    ]
+  },
+  {
+    "description": "Divider line (deprecated --- form)",
+    "input": "---",
+    "kind": "divider",
+    "expected": [
+      { "type": "divider", "from": 0, "to": 3 }
+    ]
+  },
+  {
+    "description": "Divider line (canonical +++ form)",
+    "input": "+++",
+    "kind": "divider",
+    "expected": [
+      { "type": "divider", "from": 0, "to": 3 }
+    ]
+  },
+  {
+    "description": "Divider line with leading whitespace (deprecated ---)",
+    "input": "  ---",
+    "kind": "divider",
+    "expected": [
+      { "type": "divider", "from": 2, "to": 5 }
+    ]
+  },
+  {
+    "description": "Divider line with leading whitespace (canonical +++)",
+    "input": "  +++",
+    "kind": "divider",
+    "expected": [
+      { "type": "divider", "from": 2, "to": 5 }
+    ]
+  },
+  {
+    "description": "Tab-indented opening line",
+    "input": "\t:::grid 3",
+    "kind": "opening",
+    "expected": [
+      { "type": "fence", "from": 1, "to": 4 },
+      { "type": "name", "from": 4, "to": 8 },
+      { "type": "number", "from": 9, "to": 10 }
+    ]
+  },
+  {
+    "description": "Grid with class containing hyphens in class name",
+    "input": ":::grid 2 {.my-class}",
+    "kind": "opening",
+    "expected": [
+      { "type": "fence", "from": 0, "to": 3 },
+      { "type": "name", "from": 3, "to": 7 },
+      { "type": "number", "from": 8, "to": 9 },
+      { "type": "braceOpen", "from": 10, "to": 11 },
+      { "type": "className", "from": 11, "to": 20 },
+      { "type": "braceClose", "from": 20, "to": 21 }
+    ]
+  },
+  {
+    "description": "Hyphenated shortcode name (plugin-style)",
+    "kind": "opening",
+    "input": ":::my-widget {cols=2}",
+    "expected": [
+      { "type": "fence",      "from": 0,  "to": 3  },
+      { "type": "name",       "from": 3,  "to": 12 },
+      { "type": "braceOpen",  "from": 13, "to": 14 },
+      { "type": "number",     "from": 19, "to": 20 },
+      { "type": "braceClose", "from": 20, "to": 21 }
+    ]
+  }
+]

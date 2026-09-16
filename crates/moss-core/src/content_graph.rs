@@ -83,6 +83,26 @@ fn ext_match_score(ref_ext: Option<&str>, candidate: &str) -> u8 {
     }
 }
 
+/// Score a candidate's page-ness against a bare (extensionless) reference.
+///
+/// A reference that names no extension can't express asset intent, so a
+/// stem collision between a page and a same-named asset — `古梅圖.md` next
+/// to `古梅圖.jpg` — must not fall through to the alphabetical tiebreaker,
+/// where an asset's extension can sort ahead of `.md` for no reason a reader
+/// would recognize (`[[古梅圖]]` resolved to the plate, not the page). Once
+/// the reference already carries an extension, `ext_match_score` is the
+/// authority on what the caller wants and this term must not fight it, so
+/// it stays 0 for every candidate in that case.
+fn page_preference_score(ref_ext: Option<&str>, candidate: &str) -> u8 {
+    if ref_ext.is_some() {
+        return 0;
+    }
+    match path_extension(candidate) {
+        Some(ext) if ext.eq_ignore_ascii_case("md") => 1,
+        _ => 0,
+    }
+}
+
 /// Score a candidate path's language-tree alignment with the source's
 /// language-tree prefix.
 ///
@@ -279,8 +299,12 @@ impl ContentGraph {
     /// Ambiguity tiebreakers, applied in order:
     /// candidates whose extension matches the reference's extension win first
     /// (e.g. `![[scale-compare.png]]` prefers a `.png` sibling over a `.html`
-    /// sibling — only applies when the reference carries an extension);
-    /// candidates in the same language tree as the source are preferred next;
+    /// sibling — only applies when the reference carries an extension); then,
+    /// only when the reference is bare (no extension), a `.md` candidate
+    /// wins over a same-stem asset (`[[古梅圖]]` prefers the page over the
+    /// sibling `.jpg` — a bare reference can't express asset intent, so a
+    /// caller that wants the asset must name its extension); candidates in
+    /// the same language tree as the source are preferred next;
     /// then longest common directory prefix with `from_path`; then alphabetical
     /// by normalized path (so results are independent of registration order
     /// when all earlier keys tie).
@@ -288,6 +312,28 @@ impl ContentGraph {
         let norm_ref = normalize_path(reference);
         let norm_from = normalize_path(from_path);
         let ref_ext = path_extension(&norm_ref);
+
+        // A reference of one or more slashes and nothing else (`/`, `//`, …)
+        // names the vault root itself, not a missing file. Return "/" rather
+        // than "" — `frontmatter_ref_to_stem`, `resolve_children_source_folder_path`,
+        // `synthesize_children_marker` and `resolve_folder_id` (moss-build's
+        // folder_embed.rs) all special-case a literal "/" down to the empty
+        // folder-id already, for the "root" sense that `children: '[[/]]'`
+        // needs; but a resolved value of "" was itself dropped by
+        // `normalize_children` (frontmatter_union.rs), which treats an empty
+        // children value as "no listing" — so the frontmatter substitution
+        // must land on "/", not "". Body wikilinks are unaffected: `pinned_url`
+        // strips a leading "/" before mapping, so `pinned_url("")` and
+        // `pinned_url("/")` already produced the same "/" href. This function
+        // is the single source of truth for wikilink resolution generally, so
+        // a bare `[[/]]` — in frontmatter or body — resolves through the same
+        // call every other wikilink does instead of the generic diagnostics
+        // scanner (which has no per-key knowledge) reporting it unresolved.
+        // Guarded on `reference` being non-empty so an actually-empty
+        // reference (`[[]]`) is unaffected.
+        if !reference.is_empty() && norm_ref.is_empty() {
+            return Some("/".to_string());
+        }
 
         // Language-tree prefix of the source file, if any.
         // E.g. "zh-hans/about.md" -> Some("zh-hans").  Used to prefer
@@ -364,12 +410,14 @@ impl ContentGraph {
                         let candidate_dirs = dir_components(&normalized);
                         let tree_match = lang_tree_match(&normalized, from_lang);
                         let ext_match = ext_match_score(ref_ext.as_deref(), &normalized);
+                        let page_score = page_preference_score(ref_ext.as_deref(), &normalized);
                         // Final key: alphabetical-by-path, ascending (Reverse so
                         // smaller path wins under max_by_key). Removes residual
                         // dependence on registration order when all other keys
                         // tie — see "then alphabetical" in the doc comment.
                         (
                             ext_match,
+                            page_score,
                             tree_match,
                             common_prefix_len(&candidate_dirs, &from_dirs),
                             std::cmp::Reverse(normalized.clone()),
@@ -412,12 +460,14 @@ impl ContentGraph {
                         let candidate_dirs = dir_components(&normalized);
                         let tree_match = lang_tree_match(&normalized, from_lang);
                         let ext_match = ext_match_score(ref_ext.as_deref(), &normalized);
+                        let page_score = page_preference_score(ref_ext.as_deref(), &normalized);
                         // Final key: alphabetical-by-path, ascending (Reverse so
                         // smaller path wins under max_by_key). Removes residual
                         // dependence on registration order when all other keys
                         // tie — see "then alphabetical" in the doc comment.
                         (
                             ext_match,
+                            page_score,
                             tree_match,
                             common_prefix_len(&candidate_dirs, &from_dirs),
                             std::cmp::Reverse(normalized.clone()),
@@ -769,6 +819,25 @@ mod tests {
 
         assert_eq!(g.resolve_path("nonexistent", ""), None);
         assert_eq!(g.resolve_path("posts/missing.md", ""), None);
+    }
+
+    #[test]
+    fn test_root_reference_resolves_to_slash() {
+        // `[[/]]` names the vault root, not a missing file — resolve_path is
+        // the single source of truth for wikilink resolution, so it must
+        // agree with the "/" root convention that resolve_folder_id and
+        // frontmatter_ref_to_stem already fold down to the empty folder-id
+        // for `children: '[[/]]'`. Resolving to a literal "/" (not "") matters
+        // for the frontmatter substitution: `normalize_children` treats an
+        // empty children value as "no listing", so "" would silently drop
+        // the listing again.
+        let g = sample_graph();
+
+        assert_eq!(g.resolve_path("/", "posts/hello.md"), Some("/".to_string()));
+        assert_eq!(g.resolve_path("//", "posts/hello.md"), Some("/".to_string()));
+        // An actually-empty reference (`[[]]`) is a different, still-unresolved
+        // case — it never named a root at all.
+        assert_eq!(g.resolve_path("", "posts/hello.md"), None);
     }
 
     // 9. Exact relative path wins over filename
@@ -1145,6 +1214,42 @@ mod tests {
     }
 
     #[test]
+    fn stem_collision_bare_ref_prefers_page_over_asset() {
+        // A folder holding both a page and a same-stem asset — 古梅圖.md
+        // beside 古梅圖.jpg, one per work in the zhu-da vault — must resolve
+        // a bare `[[古梅圖]]` to the page. Before this test, the ambiguity
+        // fell through to the alphabetical tiebreaker, where ".jpg" sorts
+        // ahead of ".md" and the link silently became a dead label card
+        // pointing at the plate. ".jpg" alphabetically precedes ".md", so
+        // this fails without the page-preference term.
+        let mut b = ContentGraphBuilder::new();
+        b.add_file("畫/古梅圖.md", "/畫/古梅圖.md");
+        b.add_file("畫/古梅圖.jpg", "/畫/古梅圖.jpg");
+        let g = b.build();
+
+        assert_eq!(
+            g.resolve_path("古梅圖", "其他/note.md"),
+            Some("畫/古梅圖.md".into())
+        );
+    }
+
+    #[test]
+    fn stem_collision_bare_ref_extension_intent_still_wins() {
+        // A caller that names the extension explicitly still gets the asset
+        // — page preference only applies to a bare reference, which can't
+        // express asset intent in the first place.
+        let mut b = ContentGraphBuilder::new();
+        b.add_file("畫/古梅圖.md", "/畫/古梅圖.md");
+        b.add_file("畫/古梅圖.jpg", "/畫/古梅圖.jpg");
+        let g = b.build();
+
+        assert_eq!(
+            g.resolve_path("古梅圖.jpg", "其他/note.md"),
+            Some("畫/古梅圖.jpg".into())
+        );
+    }
+
+    #[test]
     fn stem_collision_md_wins_over_html_sibling() {
         // The most common real case: a wikilink to `.md` (or no-extension
         // markdown ref) should not get hijacked by a `.html` sibling that
@@ -1174,6 +1279,23 @@ mod tests {
         assert_eq!(
             g.resolve_path("a/scale.png", "vault/notes/article.md"),
             Some("vault/a/scale.png".into())
+        );
+    }
+
+    #[test]
+    fn stem_collision_suffix_match_arm_bare_ref_prefers_page() {
+        // Same page-preference rule as the bare-stem arm, but exercised
+        // through the suffix-match arm (step 2b) with a folder-qualified bare
+        // reference — the two arms carry duplicated tiebreaker logic and both
+        // must apply the rule.
+        let mut b = ContentGraphBuilder::new();
+        b.add_file("vault/畫/古梅圖.md", "/vault/畫/古梅圖.md");
+        b.add_file("vault/畫/古梅圖.jpg", "/vault/畫/古梅圖.jpg");
+        let g = b.build();
+
+        assert_eq!(
+            g.resolve_path("畫/古梅圖", "vault/other/note.md"),
+            Some("vault/畫/古梅圖.md".into())
         );
     }
 

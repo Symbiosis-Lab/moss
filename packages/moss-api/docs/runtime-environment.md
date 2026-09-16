@@ -162,14 +162,6 @@ the missing globals listed above — a plain grep for `ReadableStream`,
 `crypto.subtle`, `getRandomValues`, `FormData`, and `process.env` catches most
 incompatibilities — and exercise the plugin once in a real moss.
 
-## Escape hatch
+## There is no escape hatch
 
-`MOSS_PLUGIN_ENGINE=webview` forces the previous webview-based engine, and moss
-falls back to it on its own: if **any** plugin discovered in the project
-declares the `enhance` capability, the whole manager switches, so every plugin
-in that project runs under the legacy engine — yours included, even though your
-manifest doesn't declare `enhance`. Your own manifest therefore doesn't
-guarantee you the QuickJS environment; a plugin the user installed alongside
-yours can move you off it. Either way the webview engine is a debugging aid on
-its way out, and new plugins should be written against the QuickJS environment
-described here.
+QuickJS is the only plugin engine. The `MOSS_PLUGIN_ENGINE=webview` variable and the webview engine behind it were removed with the `enhance` capability (ADR-055) — every plugin runs in the QuickJS environment described here, in its own Context, and nothing another plugin in the same project declares can move you off it.

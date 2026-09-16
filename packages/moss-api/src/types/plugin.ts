@@ -2,10 +2,14 @@
  * Base plugin types shared across all moss plugins
  */
 
-/** @category Plugin manifest */
+/**
+ * Wire truth: `ProjectInfo` in moss's `crates/moss-build/src/plugins/types.rs`.
+ * `project_type` and `content_folders` were removed there (2026); this type
+ * carried them for months after — keep the two in sync.
+ *
+ * @category Plugin manifest
+ */
 export interface ProjectInfo {
-  project_type: string;
-  content_folders: string[];
   total_files: number;
   homepage_file?: string;
   /**
@@ -15,7 +19,8 @@ export interface ProjectInfo {
    */
   folder_name?: string;
   site_name?: string;
-  lang?: string;
+  /** BCP-47 language code detected from content (e.g. "en", "zh-hant"). Always sent. */
+  lang: string;
 }
 
 /** @category Plugin manifest */

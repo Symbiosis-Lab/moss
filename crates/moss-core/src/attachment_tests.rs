@@ -7,8 +7,9 @@ use super::*;
 // which draws the live "posts/on-gardens.md → posts/assets/photo.png" line the
 // user reads while typing the folder name). A preview that disagreed with the
 // placement would be worse than no preview, so both sides are checked against
-// ONE file — tests/fixtures/attachment-placement.vectors.json — read directly,
-// with no generated copy in between. Add a case there and both languages get it.
+// ONE file — open/crates/moss-core/tests/fixtures/attachment-placement.vectors.json
+// — read directly, with no generated copy in between. Add a case there and
+// both languages get it.
 //
 // The `exclusion` array is Rust-only (the settings preview shows placement, not
 // exclusion) but lives in the same file so the two questions the encoding
@@ -43,7 +44,7 @@ struct ExclusionVector {
 
 fn vectors() -> Vectors {
     serde_json::from_str(include_str!(
-        "../../../tests/fixtures/attachment-placement.vectors.json"
+        "../tests/fixtures/attachment-placement.vectors.json"
     ))
     .expect("attachment-placement.vectors.json parses")
 }

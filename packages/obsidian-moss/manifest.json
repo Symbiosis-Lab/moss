@@ -1,0 +1,10 @@
+{
+  "id": "moss",
+  "name": "moss",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Build and preview this vault as a website with moss. Requires the moss CLI (npm i -g @symbiosis-lab/moss or Homebrew).",
+  "author": "Symbiosis Lab",
+  "authorUrl": "https://mosspub.com",
+  "isDesktopOnly": true
+}

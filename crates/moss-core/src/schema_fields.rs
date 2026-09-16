@@ -739,6 +739,31 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "children_more",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=1, Importance=2 → score=86
+        score: 87,
+        description: "Wikilink to a page the 'More \u{2192}' link should point at when children_limit truncates the feed. Fires even when the feed is listing this page's own folder.",
+        label: Some("More Link"),
+        label_key: "chip.children_more.label",
+        group: "Child Styles",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "children_covers",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["only"]),
+        // Frequency=1, Importance=2 → score=86
+        score: 87,
+        description: "Keep only pages with a cover. \"only\" — e.g. the home page of an artist's site lists the latest works that have a picture. Absent = no filter.",
+        label: Some("Covers"),
+        label_key: "chip.children_covers.label",
+        group: "Child Styles",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "_from_sidebar_alias",
         field_type: FieldType::Boolean,
         widget: Widget::Checkbox,

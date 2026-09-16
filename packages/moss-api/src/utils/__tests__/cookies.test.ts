@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { getPluginCookie, setPluginCookie, clearPluginCookies } from "../cookies.js";
+import { setupMockTauri, type MockTauriContext } from "../../testing/index.js";
 
 describe("Cookie Utilities", () => {
   const originalWindow = globalThis.window;
@@ -170,23 +171,6 @@ describe("Cookie Utilities", () => {
       });
     });
 
-    it("handles empty cookie array", async () => {
-      mockWindow.__MOSS_INTERNAL_CONTEXT__ = {
-        plugin_name: "plugin",
-        project_path: "/project",
-        moss_dir: "/project/.moss",
-      };
-      mockInvoke.mockResolvedValue(undefined);
-
-      await setPluginCookie([]);
-
-      expect(mockInvoke).toHaveBeenCalledWith("set_plugin_cookie", {
-        pluginName: "plugin",
-        projectPath: "/project",
-        cookies: [],
-      });
-    });
-
     it("propagates errors from Tauri", async () => {
       mockWindow.__MOSS_INTERNAL_CONTEXT__ = {
         plugin_name: "plugin",
@@ -235,5 +219,43 @@ describe("Cookie Utilities", () => {
 
       await expect(clearPluginCookies()).rejects.toThrow("Failed to clear cookies");
     });
+  });
+});
+
+// The mock ships to plugin authors as the thing they test against, so where it
+// disagrees with the host their suite goes green on behavior production does
+// not have. It did: `setPluginCookie([])` cleared the mock's store and was
+// ignored by the host, and github's sign-out shipped broken behind a green test.
+describe("the testing mock matches the host's cookie contract", () => {
+  let ctx: MockTauriContext;
+
+  beforeEach(() => {
+    ctx = setupMockTauri({ pluginName: "plugin", projectPath: "/project" });
+  });
+
+  afterEach(() => {
+    ctx.cleanup();
+  });
+
+  it("refuses an empty write instead of treating it as a clear", async () => {
+    ctx.cookieStorage.setCookies("plugin", "/project", [
+      { name: "session", value: "keep-me" },
+    ]);
+
+    await expect(setPluginCookie([])).rejects.toThrow(/clearPluginCookies\(\)/);
+
+    expect(ctx.cookieStorage.getCookies("plugin", "/project")).toEqual([
+      { name: "session", value: "keep-me" },
+    ]);
+  });
+
+  it("clears through clearPluginCookies", async () => {
+    ctx.cookieStorage.setCookies("plugin", "/project", [
+      { name: "session", value: "drop-me" },
+    ]);
+
+    await clearPluginCookies();
+
+    expect(ctx.cookieStorage.getCookies("plugin", "/project")).toEqual([]);
   });
 });

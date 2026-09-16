@@ -864,13 +864,13 @@ fn image_href_is_identical_from_root_and_from_a_nested_note() {
     // asset copier writes (`MIRROR/` → `/mirror/`) — not the source spelling,
     // and not a case-folded guess.
     let graph = graph_with(&[
-        "MIRROR/在場/cover-IMG.png",
+        "MIRROR/潮汐/cover-IMG.png",
         "index.md",
-        "MIRROR/在場/note.md",
+        "MIRROR/潮汐/note.md",
     ]);
     let from_root = resolve_image_src("cover-IMG.png", "index.md", &graph);
-    let from_deep = resolve_image_src("cover-IMG.png", "MIRROR/在場/note.md", &graph);
-    assert_eq!(from_root, "/mirror/%E5%9C%A8%E5%A0%B4/cover-IMG.png");
+    let from_deep = resolve_image_src("cover-IMG.png", "MIRROR/潮汐/note.md", &graph);
+    assert_eq!(from_root, "/mirror/%E6%BD%AE%E6%B1%90/cover-IMG.png");
     assert_eq!(
         from_root, from_deep,
         "the referencing note's depth must not change the emitted URL"
@@ -896,7 +896,7 @@ fn every_kind_of_missing_media_is_reported_as_blocking() {
     // "Media" is not just images. A video, an audio file, a PDF and a bare
     // wikilink embed all reach the reader as a hole in the page, so all four
     // produce the one diagnostic kind the publish gate refuses on
-    // (`missing_media::refuse_publish`). Marking only images would ship a site
+    // (`deploy::refuse_publish`). Marking only images would ship a site
     // with a dead <video> and call it clean.
     let graph = graph_with(&["assets/photo.jpg", "post.md"]);
     for markdown in [

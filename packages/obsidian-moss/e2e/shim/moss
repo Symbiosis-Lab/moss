@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Hermetic stand-in for the moss CLI, used by the wdio e2e suite.
+#
+# Prints byte-identical output to the real binary (captured from
+# `moss build <folder> --serve --no-plugins`, moss 0.11.1, 2026-08-11 —
+# see test/cli.test.ts for the same capture) and serves e2e/shim/site on a
+# free port. `describe --json` answers with the plugin's bundled snapshot,
+# which IS a real capture — one source of truth, no drift.
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+cmd="${1:-}"
+case "$cmd" in
+  describe)
+    cat "$DIR/../../src/describe-snapshot.json"
+    ;;
+  build)
+    folder="${2:-}"
+    port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+    echo "Building website from: $folder" >&2
+    echo "[ 10%] build: Building site..." >&2
+    echo "[done] Build complete" >&2
+    echo "📁 'shim-vault': Site generated at $folder/.moss/build/current" >&2
+    python3 -m http.server "$port" --bind 127.0.0.1 --directory "$DIR/site" >/dev/null 2>&1 &
+    server=$!
+    trap 'kill "$server" 2>/dev/null || true' TERM INT EXIT
+    sleep 0.5
+    echo "🌐 Preview server ready! Access at http://localhost:$port" >&2
+    echo "Press Ctrl+C to stop the server" >&2
+    wait "$server"
+    ;;
+  --version|-V)
+    echo "moss 0.11.1-shim"
+    ;;
+  *)
+    echo "Unknown command: $cmd" >&2
+    exit 1
+    ;;
+esac

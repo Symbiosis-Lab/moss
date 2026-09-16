@@ -1,0 +1,133 @@
+/* moss site stylesheet partial: callouts
+   Shipped only when `SiteAssets::callouts` is true — see
+   src-tauri/src/build/emit/stylesheet.rs (CSS_PARTIALS).
+   Wrapped in @layer shortcodes to match the position these rules
+   held inside site.css; multiple @layer blocks of the same name merge. */
+
+@layer shortcodes {
+
+/* ==========================================================================
+   17. Callouts (Obsidian-compatible callout syntax)
+
+   Rendered from:
+     > [!warning] Watch Out
+     > Be careful here.
+
+   Into:
+     <div class="callout" data-type="warning">
+       <div class="callout-title">Watch Out</div>
+       <div class="callout-content">...</div>
+     </div>
+
+   Supported types: note, tip, warning, caution, important, info, abstract,
+   todo, success, question, failure, danger, bug, example, quote, pending
+   ========================================================================== */
+
+/* Callout custom properties — one per type */
+:root {
+  --callout-note:      #448aff;
+  --callout-info:      #448aff;
+  --callout-tip:       #00bfa5;
+  --callout-warning:   #ff9100;
+  --callout-caution:   #ff9100;
+  --callout-important: #ff5252;
+  --callout-danger:    #ff5252;
+  --callout-success:   #00c853;
+  --callout-question:  #ffab00;
+  --callout-failure:   #ff6d00;
+  --callout-bug:       #ff6d00;
+  --callout-abstract:  #7c4dff;
+  --callout-todo:      #7c4dff;
+  --callout-example:   #536dfe;
+  --callout-quote:     #9e9e9e;
+  --callout-pending:   #d4a017; /* mustard — "content not ready yet" (SoCiviC dogfood) */
+}
+
+/* Base callout container */
+.callout {
+  --callout-color: #448aff; /* default: note/info blue */
+  border-left: 3px solid var(--callout-color);
+  border-radius: 6px;
+  background-color: color-mix(in srgb, var(--callout-color) 8%, var(--moss-color-bg));
+  margin: var(--moss-space-md) 0;
+  padding: var(--moss-space-sm) var(--moss-space-md);
+  max-inline-size: var(--moss-content-width);
+}
+
+/* Callout title */
+.callout-title {
+  font-weight: 480;
+  color: var(--callout-color);
+  margin-bottom: var(--moss-space-xs);
+  line-height: 1.4;
+}
+
+/* Callout body */
+.callout-content {
+  color: var(--moss-color-text-secondary);
+  line-height: 1.6;
+}
+
+.callout-content p {
+  margin: 0 0 var(--moss-space-xs) 0;
+  max-width: none;
+  width: auto;
+}
+
+.callout-content p:last-child {
+  margin-bottom: 0;
+}
+
+/* Per-type accent colors */
+.callout[data-type="note"]     { --callout-color: var(--callout-note); }
+.callout[data-type="info"]     { --callout-color: var(--callout-info); }
+.callout[data-type="tip"]      { --callout-color: var(--callout-tip); }
+.callout[data-type="warning"]  { --callout-color: var(--callout-warning); }
+.callout[data-type="caution"]  { --callout-color: var(--callout-caution); }
+.callout[data-type="important"] { --callout-color: var(--callout-important); }
+.callout[data-type="danger"]   { --callout-color: var(--callout-danger); }
+.callout[data-type="success"]  { --callout-color: var(--callout-success); }
+.callout[data-type="question"] { --callout-color: var(--callout-question); }
+.callout[data-type="failure"]  { --callout-color: var(--callout-failure); }
+.callout[data-type="bug"]      { --callout-color: var(--callout-bug); }
+.callout[data-type="abstract"] { --callout-color: var(--callout-abstract); }
+.callout[data-type="todo"]     { --callout-color: var(--callout-todo); }
+.callout[data-type="example"]  { --callout-color: var(--callout-example); }
+.callout[data-type="quote"]    { --callout-color: var(--callout-quote); }
+.callout[data-type="pending"]  { --callout-color: var(--callout-pending); }
+
+/* Pending callout — "content not ready yet" placeholder.
+   Visual language (from SoCiviC Theatre dogfood):
+     - Dashed left border (vs solid) signals unfinished work
+     - Pale yellow fill distinguishes from live content
+     - Monospace body reads as "draft/spec", not prose
+     - "PENDING ·" prefix on title makes status unmistakable at a glance
+*/
+.callout[data-type="pending"] {
+  border-left-style: dashed;
+  background-color: #fff8e7; /* pale yellow — SoCiviC dogfood */
+}
+
+.callout[data-type="pending"] .callout-title::before {
+  content: "PENDING \00B7\00A0"; /* \00B7 = middle dot (·), \00A0 = non-breaking space — both escaped so the minifier doesn't strip trailing whitespace */
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  opacity: 0.85;
+}
+
+.callout[data-type="pending"] .callout-content {
+  font-family: var(--moss-font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 0.95em;
+}
+
+/* Dark mode — deepen background tint so it reads against dark surfaces */
+[data-theme="dark"] .callout {
+  background-color: color-mix(in srgb, var(--callout-color) 12%, var(--moss-color-bg));
+}
+
+/* Pending keeps its pale-yellow identity in dark mode by tinting the accent */
+[data-theme="dark"] .callout[data-type="pending"] {
+  background-color: color-mix(in srgb, var(--callout-pending) 18%, var(--moss-color-bg));
+}
+
+} /* @layer shortcodes */
