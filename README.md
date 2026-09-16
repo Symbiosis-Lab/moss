@@ -1,3 +1,5 @@
+This repository's code now lives at [Symbiosis-Lab/moss](https://github.com/Symbiosis-Lab/moss), under `crates/moss-core`; the crates.io package name is unchanged. This repository is archived and no longer accepts issues or pull requests.
+
 # moss-core
 
 > Pure-Rust content engine that powers moss.
