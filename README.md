@@ -1,3 +1,5 @@
+This repository's code now lives at [Symbiosis-Lab/moss](https://github.com/Symbiosis-Lab/moss), under `packages/moss-api`; the npm package name is unchanged. This repository is archived and no longer accepts issues or pull requests.
+
 # @symbiosis-lab/moss-api
 
 > TypeScript API for writing moss plugins.
