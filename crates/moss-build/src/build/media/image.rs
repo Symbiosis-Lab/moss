@@ -1354,61 +1354,77 @@ pub(crate) fn convert_single_image(
 // Fingerprint (for skip-on-no-change)
 // ---------------------------------------------------------------------------
 
-/// SHA-256 fingerprint of the image set + config: sort by path, hash
-/// `(path, size, mtime)` tuples + JSON config params. Whole-set, unlike
-/// video's per-item `compute_video_item_fingerprint` (build/media/video.rs).
-pub(crate) fn compute_image_set_fingerprint(
+/// SHA-256 fingerprint of one image's `(path, size, mtime)` plus the
+/// compression config. Matching the previous dispatch's fingerprint for THIS
+/// path means this one image is unchanged, and — combined with its output
+/// still being present on disk, checked separately in
+/// `dispatch_image_conversions` — there is no reason to re-encode it. The
+/// compression params are folded in so a config change re-dispatches every
+/// image's fingerprint even when no file moved.
+///
+/// Per item, not per set: mirrors `compute_video_item_fingerprint`
+/// (build/media/video.rs, commit 5323496908) — the old scheme hashed the
+/// whole sorted image list into one fingerprint, so any single added,
+/// changed or removed image invalidated it and forced a full re-dispatch,
+/// which drops every OTHER, untouched image out of that round's manifest if
+/// the async batch doesn't finish registering them before the build seals.
+///
+/// Returns `None` when the source can't be stat'd (missing / unreadable) —
+/// the caller must treat that as "cannot prove unchanged" and dispatch it.
+pub(crate) fn compute_image_item_fingerprint(
     source_path: &str,
-    image_items: &[ImageConversionItem],
+    item: &Path,
     config: &ImageCompressionConfig,
-) -> String {
+) -> Option<String> {
     use sha2::{Digest, Sha256};
 
-    let mut hasher = Sha256::new();
-    let mut entries: Vec<(String, u64, u64)> = image_items
-        .iter()
-        .filter_map(|item| {
-            let source = Path::new(source_path).join(&item.source_path);
-            let meta = fs::metadata(&source).ok()?;
-            let mtime = meta
-                .modified()
-                .ok()?
-                .duration_since(std::time::UNIX_EPOCH)
-                .ok()?
-                .as_secs();
-            Some((
-                item.source_path.to_string_lossy().to_string(),
-                meta.len(),
-                mtime,
-            ))
-        })
-        .collect();
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let source = Path::new(source_path).join(item);
+    let meta = fs::metadata(&source).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
 
-    for (path, size, mtime) in &entries {
-        hasher.update(path.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(size.to_le_bytes());
-        hasher.update(mtime.to_le_bytes());
-    }
+    let mut hasher = Sha256::new();
+    hasher.update(item.to_string_lossy().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(meta.len().to_le_bytes());
+    hasher.update(mtime.to_le_bytes());
     hasher.update(config.to_params().to_string().as_bytes());
-    format!("{:x}", hasher.finalize())
+    Some(format!("{:x}", hasher.finalize()))
 }
 
 /// Module-local fingerprint cache for image conversion (independent of
-/// `VideoConversionState`, which owns the video fingerprint).
-fn image_fingerprint_cell() -> &'static Mutex<Option<String>> {
-    static IMAGE_FINGERPRINT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    IMAGE_FINGERPRINT.get_or_init(|| Mutex::new(None))
+/// `VideoConversionState`, which owns the video fingerprint), keyed by each
+/// image's relative source path. Per-item, not per-set — mirrors
+/// `VideoConversionState::last_video_fingerprints`.
+fn image_fingerprint_cell() -> &'static Mutex<HashMap<String, String>> {
+    static IMAGE_FINGERPRINTS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    IMAGE_FINGERPRINTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Returns `true` if `new` matches the previous fingerprint (skip dispatch).
-/// Always updates the stored value.
-pub(crate) fn check_and_update_image_fingerprint(new: &str) -> bool {
-    let mut guard = image_fingerprint_cell().lock().expect("image fp mutex");
-    let unchanged = guard.as_deref() == Some(new);
-    *guard = Some(new.to_string());
-    unchanged
+/// Check `path`'s fingerprint against the value stored from the last
+/// dispatch that considered it, and update the stored value to `new`.
+/// Returns `true` if it matches (this one image is unchanged), `false`
+/// otherwise. Independent per path: a change to one image's stored
+/// fingerprint never affects another's.
+pub(crate) fn check_and_update_image_item_fingerprint(path: &str, new: &str) -> bool {
+    let mut map = image_fingerprint_cell().lock().expect("image fp mutex");
+    let matches = map.get(path).map(String::as_str) == Some(new);
+    map.insert(path.to_string(), new.to_string());
+    matches
+}
+
+/// Drop stored fingerprints for paths not in `keep` — called once per
+/// dispatch with the current image set, so a removed image's entry doesn't
+/// linger forever, and a removed-then-re-added image is treated as new
+/// rather than replaying a stale match against bytes that may since have
+/// changed. Mirrors `VideoConversionState::retain_item_fingerprints`.
+pub(crate) fn retain_image_item_fingerprints(keep: &std::collections::HashSet<String>) {
+    let mut map = image_fingerprint_cell().lock().expect("image fp mutex");
+    map.retain(|k, _| keep.contains(k));
 }
 
 // ---------------------------------------------------------------------------
@@ -2539,6 +2555,22 @@ fn rematerialize_webp_from_cas(
 ///
 /// When `tx` is `Some`, each produced `.webp` path is registered via the
 /// coordinator channel instead of the legacy `update_image_hashes` disk write.
+///
+/// In GUI mode the skip/dispatch decision is made per image, not for the set
+/// as a whole: each image's own fingerprint
+/// (`compute_image_item_fingerprint`) is compared against the fingerprint
+/// recorded the last time THAT image was considered. An image whose
+/// fingerprint matches is a skip candidate; self-heal (re-materializing its
+/// `.webp` from the CAS blob store) is attempted before deciding, and only
+/// if that leaves the output present is it carried forward without ever
+/// entering `run_image_conversion` — its output keys (base + any ladder
+/// rungs) are re-registered so seal() doesn't prune them. Everything else —
+/// new, changed, or an unchanged image whose self-heal still leaves the
+/// output missing — is dispatched. One added or changed image therefore no
+/// longer forces every other, untouched image to re-dispatch and drop out
+/// of this round's manifest before the async batch finishes registering
+/// them (mirrors `dispatch_video_conversions`, build/media/video.rs, commit
+/// 5323496908).
 pub(crate) fn dispatch_image_conversions(
     services: Option<&BuildServices>,
     ctx: &BackgroundContext,
@@ -2551,93 +2583,63 @@ pub(crate) fn dispatch_image_conversions(
     let Some(svc) = services else { return };
 
     let config = ImageCompressionConfig::default();
-    let run_ctx = ImageRunContext::from_background(ctx, config.clone());
-    let run_ctx = if let Some(t) = tx {
-        run_ctx.with_tx(t)
-    } else {
-        run_ctx
-    };
 
     if let Some(spawner) = svc.spawner.clone() {
-        // GUI mode: fingerprint-skip, then increment counter, then spawn.
-        let fp = compute_image_set_fingerprint(&ctx.source_path, &ctx.image_items, &config);
-        if check_and_update_image_fingerprint(&fp) {
-            log::info!(
-                "Image set unchanged ({} images), skipping re-dispatch",
-                ctx.image_items.len()
+        use std::collections::HashSet;
+
+        let heal_paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
+        let heal_objects = crate::build::cache::ObjectStore::new(heal_paths.cache_objects());
+        let heal_transforms = crate::build::cache::TransformCache::new(
+            heal_paths.cache_transforms(),
+            crate::build::cache::ObjectStore::new(heal_paths.cache_objects()),
+        );
+        let heal_params = config.to_params();
+        let mut heal_index =
+            crate::build::cache::HashIndex::load(&heal_paths.cache_hash_index());
+        let heal_root = Path::new(&ctx.source_path);
+
+        // WHAT to heal is the ship-time prune's verdict, not the disk scan
+        // this loop walks (moss#1085): `ctx.image_items` is every image
+        // file under the vault, and the prune keeps only what something
+        // points at. See `orphan_prune::suppressed_variants`.
+        let heal_suppressed = suppressed_variants_for(&heal_paths, &ctx.staging_dir);
+
+        let total_items = ctx.image_items.len();
+        let mut skip_paths: Vec<String> = Vec::new();
+        let mut to_dispatch: Vec<ImageConversionItem> = Vec::new();
+        let mut current_paths: HashSet<String> = HashSet::new();
+        let mut healed_count: usize = 0;
+
+        for item in &ctx.image_items {
+            let rel_source = item.source_path.to_string_lossy().to_string();
+            current_paths.insert(rel_source.clone());
+
+            let mapped = crate::build::scan::page_map::resolve_path_with_overrides(
+                &rel_source,
+                &ctx.dir_overrides,
             );
+            let relative_webp = moss_core::asset_paths::to_webp(&mapped);
+            let staging_path = ctx.staging_dir.join(&relative_webp);
 
-            // Option 2 (preserves perf, restores registration): even though
-            // we're skipping the encode work, we MUST still restore the
-            // *manifest* registration that downstream stale-cleanup needs.
-            // Without this, the seal+stale-cleanup pass deleted
-            // assets/header.webp from site/ AND staging/ — verified at
-            // ~/Library/Logs/host.moss.publisher/moss.log L2006/L2446/L2450
-            // on 2026-05-19:
-            //
-            //   L2006 13:56:49 INFO  Image set unchanged (3 images), skipping re-dispatch
-            //   L2446 13:56:49 DEBUG [background-assets] Removed stale from site: assets/header.webp
-            //   L2450 13:56:49 DEBUG [background-assets] Removed stale from staging: assets/header.webp
-            //
-            // The manifest is what stale-cleanup honors;
-            // `emit_image_outputs_via_channel` is the registration path
-            // (sends `EmitMessage::File { bucket: ImageVariants }` per
-            // produced .webp). It also does an existence check before
-            // emitting, so files missing from staging are not falsely
-            // claimed. AssetRegistry state mirrors: `set_ready` only for
-            // items whose staging file exists; `set_pending` (left as-is
-            // from the build pipeline's earlier set_pending call) for
-            // missing items so the preview server keeps serving the
-            // placeholder until the next encode lands the byte.
-            //
-            // Pattern: Bazel's FindMissingBlobs invariant — a manifest-
-            // level "hit" must not stand in for a filesystem-level
-            // "present" (bazel.build/remote/caching). The skip optimizes
-            // away the encode work, NOT the registration.
-            //
-            // See docs/archive/2026-05-20-image-variant-honest-mirror.md
-            // (Layer 5A, Option 2).
-            // Self-heal (2026-07-05): before registering, re-materialize every
-            // registered `.webp` from the CAS blob store into the CURRENT
-            // staging generation. The fingerprint-skip optimizes away the
-            // ENCODE, not the on-disk presence — a rapid rebuild burst can orphan
-            // an in-flight encode's staged output, which would otherwise leave a
-            // permanent `coherence violation: staged .webp missing` and a blank
-            // preview slot. See `rematerialize_webp_from_cas`.
-            let heal_paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
-            let heal_objects = crate::build::cache::ObjectStore::new(heal_paths.cache_objects());
-            let heal_transforms = crate::build::cache::TransformCache::new(
-                heal_paths.cache_transforms(),
-                crate::build::cache::ObjectStore::new(heal_paths.cache_objects()),
-            );
-            let heal_params = config.to_params();
-            let mut heal_index =
-                crate::build::cache::HashIndex::load(&heal_paths.cache_hash_index());
-            let heal_root = Path::new(&ctx.source_path);
+            // A fingerprint that can't be computed (source unreadable) can't
+            // be proven unchanged either — dispatch it rather than risk
+            // carrying forward a stale skip.
+            let fingerprint_matched = match compute_image_item_fingerprint(
+                &ctx.source_path,
+                &item.source_path,
+                &config,
+            ) {
+                Some(fp) => check_and_update_image_item_fingerprint(&rel_source, &fp),
+                None => false,
+            };
 
-            // WHAT to heal is the ship-time prune's verdict, not the disk scan
-            // this loop walks (moss#1085): `ctx.image_items` is every image
-            // file under the vault, and the prune keeps only what something
-            // points at. See `orphan_prune::suppressed_variants`.
-            let heal_suppressed = suppressed_variants_for(&heal_paths, &ctx.staging_dir);
-
-            let mut skip_paths: Vec<String> = Vec::new();
-            let mut healed_count: usize = 0;
-            for item in &ctx.image_items {
-                let mapped = crate::build::scan::page_map::resolve_path_with_overrides(
-                    &item.source_path.to_string_lossy(),
-                    &run_ctx.dir_overrides,
-                );
-                let relative_webp = moss_core::asset_paths::to_webp(&mapped);
-                skip_paths.push(relative_webp.clone());
-
-                let staging_path = ctx.staging_dir.join(&relative_webp);
-
-                // Re-materialize from CAS if the staged `.webp` was orphaned
-                // (missing / 0-byte). No-op when a valid file is already present,
-                // or when the source was never encoded (no CAS blob) — the latter
-                // is a genuine miss the coherence guard should still catch.
-                let rel_source = item.source_path.to_string_lossy();
+            // Self-heal is only attempted for a skip CANDIDATE: resolving the
+            // source hash can require a real read+hash on a cache miss (see
+            // `rematerialize_webp_from_cas`), and a genuinely changed image
+            // is about to be dispatched (and re-hashed) anyway — attempting
+            // it here first would pay that cost twice on the hot path this
+            // runs on every rebuild.
+            let outputs_present = if fingerprint_matched {
                 if !heal_suppressed.contains(&relative_webp) {
                     healed_count += usize::from(rematerialize_webp_from_cas(
                         &heal_objects,
@@ -2650,58 +2652,50 @@ pub(crate) fn dispatch_image_conversions(
                         "image/webp",
                     ));
                 }
+                std::fs::metadata(&staging_path).is_ok_and(|m| m.len() > 0)
+            } else {
+                false
+            };
 
-                // Only flip AssetRegistry to Ready when the staging file
-                // actually exists. Otherwise leave the prior `set_pending`
-                // entry in place so the preview server serves the LQIP
-                // placeholder until the next encode catches up.
+            if fingerprint_matched && outputs_present {
+                // Re-register every key the encode path delivers for this
+                // image so seal() keeps them. `emit_image_outputs_via_channel`'s
+                // existence check drops any key whose staging file is absent
+                // rather than registering a lie.
+                skip_paths.push(relative_webp.clone());
                 if let Some(ref asset_reg) = svc.assets {
-                    if staging_path.exists() {
-                        // Relay an AssetReady swap ONLY when set_ready actually
-                        // flips the asset Pending→Ready (still showing its LQIP
-                        // placeholder) — e.g. a just-re-dropped / re-viewed image
-                        // whose .webp is already on disk (2026-07-02). Gating on
-                        // the transition (not merely staging_path.exists()) is
-                        // essential: on a text-only rebuild the set is unchanged
-                        // and every on-disk .webp is already Ready, so an
-                        // ungated emit would re-fetch+decode every on-page image
-                        // (cache-bust vs a no-store placeholder) on EVERY save,
-                        // scaling with image count. The transition gate emits
-                        // exactly when a swap is genuinely needed.
-                        if asset_reg.set_ready(relative_webp.clone()) {
-                            svc.reporter.report(&PipelineEvent::AssetReady {
-                                path: relative_webp,
-                                asset_type: "image".to_string(),
-                            });
-                        }
+                    // Relay an AssetReady swap ONLY when set_ready actually
+                    // flips the asset Pending→Ready — e.g. a just-re-dropped
+                    // / re-viewed image whose .webp is already on disk
+                    // (2026-07-02). Gating on the transition (not merely
+                    // "present") is essential: on a text-only rebuild every
+                    // on-disk .webp is already Ready, so an ungated emit
+                    // would re-fetch+decode every on-page image on EVERY
+                    // save, scaling with image count.
+                    if asset_reg.set_ready(relative_webp.clone()) {
+                        svc.reporter.report(&PipelineEvent::AssetReady {
+                            path: relative_webp,
+                            asset_type: "image".to_string(),
+                        });
                     }
                 }
 
                 // Ladder rungs ride the same skip-path registration +
-                // self-heal (Task 5). Without this, a text-only rebuild's
-                // stale cleanup would delete every rung file — they'd be
-                // absent from the manifest — the exact deletion class the
-                // base paths guard against (L2446). Ladder membership from
-                // the SCAN dims + the same ext gate registration used (now
-                // png/jpg/jpeg AND webp per Phase B, Task 12 — a webp source's
-                // rungs heal here too); collided paths belong to the user's
-                // file and are skipped with the same membership test as
-                // everywhere else. `false` literal + dims agreement (now
-                // covering EXIF-oriented png/webp — scan swaps to match encode,
-                // design follow-up #1): see asset_paths::ladder_rungs.
+                // self-heal (Task 5), only for an image that is itself
+                // skipping — a dispatched image gets fresh rungs from
+                // `run_image_conversion`. Without this, a text-only
+                // rebuild's stale cleanup would delete every rung file —
+                // they'd be absent from the manifest. Collided paths belong
+                // to the user's own file and are skipped with the same
+                // membership test as everywhere else.
                 if moss_core::asset_paths::is_ladder_source_ext(&item.ext) {
                     if let Some((w, h)) = item.dimensions {
                         for &rung in moss_core::asset_paths::ladder_rungs(w, h, false) {
-                            let rung_rel =
-                                moss_core::asset_paths::to_webp_rung(&mapped, rung);
-                            if run_ctx.rung_collisions.contains_key(&rung_rel) {
+                            let rung_rel = moss_core::asset_paths::to_webp_rung(&mapped, rung);
+                            if ctx.rung_collisions.contains_key(&rung_rel) {
                                 continue;
                             }
-                            skip_paths.push(rung_rel.clone());
                             let rung_staging = ctx.staging_dir.join(&rung_rel);
-                            // Same gate as the base above: a rung is a variant
-                            // like any other, and the prune judges it by the
-                            // same reference set.
                             if !heal_suppressed.contains(&rung_rel) {
                                 healed_count += usize::from(rematerialize_webp_from_cas(
                                     &heal_objects,
@@ -2714,15 +2708,10 @@ pub(crate) fn dispatch_image_conversions(
                                     &format!("image/webp-w{}", rung),
                                 ));
                             }
-                            // Same transition-gated AssetReady relay as the
-                            // base above: emit ONLY when set_ready actually
-                            // flips Pending→Ready, so a text-only rebuild
-                            // doesn't re-fetch every on-page image.
-                            if let Some(ref asset_reg) = svc.assets {
-                                if rung_staging.exists() {
-                                    if asset_reg
-                                        .set_ready(rung_rel.clone())
-                                    {
+                            skip_paths.push(rung_rel.clone());
+                            if rung_staging.exists() {
+                                if let Some(ref asset_reg) = svc.assets {
+                                    if asset_reg.set_ready(rung_rel.clone()) {
                                         svc.reporter.report(&PipelineEvent::AssetReady {
                                             path: rung_rel,
                                             asset_type: "image".to_string(),
@@ -2733,22 +2722,59 @@ pub(crate) fn dispatch_image_conversions(
                         }
                     }
                 }
+            } else {
+                if fingerprint_matched {
+                    log::info!(
+                        "Image '{}' unchanged but its .webp is missing — \
+                         re-dispatching to self-heal instead of skipping",
+                        rel_source
+                    );
+                }
+                to_dispatch.push(item.clone());
             }
-            // ONE line, not one per file: the per-file form was 96% of an upload.
-            if healed_count > 0 { log::info!("[image] self-heal: re-materialized {} staged .webp file(s) from CAS", healed_count); }
-            // Emit the manifest registrations so seal+stale-cleanup
-            // preserves the files. The function's pre-flight check skips
-            // any path whose staging file is absent.
-            // No registry: absent here means not-yet-encoded, not vanished, so
-            // the contract above keeps these `Pending` and preview serves the
-            // original. `Failed` would kill that passthrough — and since
-            // `output_present` is false for a cloud-evicted file, it would
-            // strip the `<source>` of a healthy variant on a synced vault.
-            emit_image_outputs_via_channel(
-                &run_ctx.tx, &skip_paths, &ctx.staging_dir, &heal_suppressed, None,
-            );
+        }
 
+        // Drop stored fingerprints for images no longer in the current set,
+        // so a removed-then-re-added image starts fresh rather than
+        // replaying a stale match against bytes that may since have
+        // changed. Bounds the map to the live image set.
+        retain_image_item_fingerprints(&current_paths);
+
+        // ONE line, not one per file: the per-file form was 96% of an upload.
+        if healed_count > 0 {
+            log::info!(
+                "[image] self-heal: re-materialized {} staged .webp file(s) from CAS",
+                healed_count
+            );
+        }
+        // Emit the manifest registrations so seal+stale-cleanup preserves
+        // the carried-forward files. No registry: absent here means
+        // not-yet-encoded, not vanished, so the contract keeps these
+        // `Pending` and preview serves the original. `Failed` would kill
+        // that passthrough — and since `output_present` is false for a
+        // cloud-evicted file, it would strip the `<source>` of a healthy
+        // variant on a synced vault. See
+        // docs/archive/2026-05-20-image-variant-honest-mirror.md (Layer 5A).
+        if !skip_paths.is_empty() {
+            emit_image_outputs_via_channel(
+                &tx, &skip_paths, &ctx.staging_dir, &heal_suppressed, None,
+            );
+        }
+
+        if to_dispatch.is_empty() {
+            log::info!(
+                "Image set unchanged ({} images), skipping re-dispatch — re-registered carry-forward output keys",
+                total_items
+            );
             return;
+        }
+        if to_dispatch.len() < total_items {
+            log::info!(
+                "{} of {} images unchanged, carrying forward output keys; dispatching {} for conversion",
+                total_items - to_dispatch.len(),
+                total_items,
+                to_dispatch.len()
+            );
         }
 
         // (Pre-Track A, this called `svc.image_cancellation.start_new_conversion()`
@@ -2757,7 +2783,19 @@ pub(crate) fn dispatch_image_conversions(
         // and the bridge inside `run_image_conversion` reads from a fresh
         // local AtomicBool seeded `false` per call. No reset needed.)
 
-        let total = ctx.image_items.len() as u32;
+        // Only the changed/new/missing-output subset ever enters
+        // run_image_conversion's loop — unchanged images never contend for
+        // an encode permit or a megapixel-budget slot behind one large
+        // encode.
+        let mut run_ctx = ImageRunContext::from_background(ctx, config.clone());
+        run_ctx.items = to_dispatch;
+        let run_ctx = if let Some(t) = tx {
+            run_ctx.with_tx(t)
+        } else {
+            run_ctx
+        };
+
+        let total = run_ctx.items.len() as u32;
         for _ in 0..total {
             svc.begin_ui_bound();
         }
@@ -2784,7 +2822,7 @@ pub(crate) fn dispatch_image_conversions(
 
         log::info!(
             "Spawning background image conversion for {} images",
-            ctx.image_items.len()
+            run_ctx.items.len()
         );
         // Image dispatch does not use epochs — unlike video, there is no
         // long-running external process to cancel (encoding a single image
@@ -2801,7 +2839,16 @@ pub(crate) fn dispatch_image_conversions(
             run_image_conversion(&services_arc, &run_ctx);
         }));
     } else {
-        // Headless mode: run synchronously.
+        // Headless mode: run synchronously, every item, every time — a
+        // headless build is called once per invocation, so there is no
+        // previous dispatch to compare against.
+        let run_ctx = ImageRunContext::from_background(ctx, config.clone());
+        let run_ctx = if let Some(t) = tx {
+            run_ctx.with_tx(t)
+        } else {
+            run_ctx
+        };
+
         let total = ctx.image_items.len() as u32;
         for _ in 0..total {
             svc.begin_ui_bound();

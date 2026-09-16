@@ -156,24 +156,25 @@ fn fingerprint_deterministic_same_input() {
     img.save_with_format(&img_path, image::ImageFormat::Jpeg)
         .unwrap();
 
-    let items = vec![ImageConversionItem {
-        source_path: PathBuf::from("a.jpg"),
-        source_oid: "0123456789abcdef".to_string(),
-        ext: "jpg".to_string(),
-        dimensions: None,
-        skip: None,
-    }];
     let cfg = ImageCompressionConfig::default();
-
     let source_str = root.to_string_lossy().to_string();
-    let fp1 = compute_image_set_fingerprint(&source_str, &items, &cfg);
-    let fp2 = compute_image_set_fingerprint(&source_str, &items, &cfg);
+    let fp1 = compute_image_item_fingerprint(&source_str, Path::new("a.jpg"), &cfg);
+    let fp2 = compute_image_item_fingerprint(&source_str, Path::new("a.jpg"), &cfg);
     assert_eq!(fp1, fp2);
-    assert_eq!(fp1.len(), 64, "sha256 hex should be 64 chars");
+    assert_eq!(
+        fp1.expect("source exists and is stat-able").len(),
+        64,
+        "sha256 hex should be 64 chars"
+    );
 }
 
+/// Two different images with byte-identical content must not alias to the
+/// same per-item fingerprint — the path is part of the hashed identity, not
+/// just size/mtime. Replaces `fingerprint_sort_agnostic`, which asserted the
+/// old whole-SET fingerprint was order-independent; per-item fingerprinting
+/// has no set to order.
 #[test]
-fn fingerprint_sort_agnostic() {
+fn fingerprint_differs_by_path_even_with_identical_content() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     for name in ["a.jpg", "b.jpg"] {
@@ -183,29 +184,29 @@ fn fingerprint_sort_agnostic() {
         img.save_with_format(&p, image::ImageFormat::Jpeg).unwrap();
     }
 
-    let items1 = vec![
-        ImageConversionItem {
-            source_path: PathBuf::from("a.jpg"),
-            source_oid: "a".to_string(),
-            ext: "jpg".to_string(),
-            dimensions: None,
-            skip: None,
-        },
-        ImageConversionItem {
-            source_path: PathBuf::from("b.jpg"),
-            source_oid: "b".to_string(),
-            ext: "jpg".to_string(),
-            dimensions: None,
-            skip: None,
-        },
-    ];
-    let items2 = vec![items1[1].clone(), items1[0].clone()];
-
     let cfg = ImageCompressionConfig::default();
     let root_str = root.to_string_lossy().to_string();
-    let fp1 = compute_image_set_fingerprint(&root_str, &items1, &cfg);
-    let fp2 = compute_image_set_fingerprint(&root_str, &items2, &cfg);
-    assert_eq!(fp1, fp2);
+    let fp_a = compute_image_item_fingerprint(&root_str, Path::new("a.jpg"), &cfg);
+    let fp_b = compute_image_item_fingerprint(&root_str, Path::new("b.jpg"), &cfg);
+    assert_ne!(
+        fp_a, fp_b,
+        "two different images with identical bytes must not alias to the same per-item fingerprint"
+    );
+}
+
+/// An unstat-able source (never written) must not produce a fingerprint —
+/// the caller (`dispatch_image_conversions`) treats `None` as "cannot prove
+/// unchanged" and dispatches it rather than caching a bogus value.
+#[test]
+fn fingerprint_missing_source_returns_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = ImageCompressionConfig::default();
+    let fp = compute_image_item_fingerprint(
+        &tmp.path().to_string_lossy(),
+        Path::new("missing.jpg"),
+        &cfg,
+    );
+    assert!(fp.is_none(), "an unstat-able source must not produce a fingerprint");
 }
 
 // ----- convert_single_image happy path + cache hit + legacy sentinel handling -----
@@ -1929,15 +1930,34 @@ fn image_fingerprint_test_lock() -> &'static std::sync::Mutex<()> {
 #[test]
 fn fingerprint_cache_returns_true_on_unchanged() {
     let _guard = image_fingerprint_test_lock().lock();
-    // Use unique values per run to avoid state from other tests.
+    // Use a unique path AND unique values per run to avoid state from other tests.
+    let path = format!("img-{}.jpg", uuid::Uuid::new_v4());
     let a = format!("fp-a-{}", uuid::Uuid::new_v4());
-    // First call: no prior state → unchanged = false
-    assert!(!check_and_update_image_fingerprint(&a));
+    // First call: no prior state for this path → unchanged = false
+    assert!(!check_and_update_image_item_fingerprint(&path, &a));
     // Second call with same value → unchanged = true
-    assert!(check_and_update_image_fingerprint(&a));
+    assert!(check_and_update_image_item_fingerprint(&path, &a));
     // Different value → unchanged = false
     let b = format!("fp-b-{}", uuid::Uuid::new_v4());
-    assert!(!check_and_update_image_fingerprint(&b));
+    assert!(!check_and_update_image_item_fingerprint(&path, &b));
+}
+
+/// The core per-item property: one path's fingerprint is independent of
+/// another's. Before per-item fingerprinting a single whole-set fingerprint
+/// covered every image, so checking path B always invalidated whatever path
+/// A had just recorded. Only inserts (never removes) other paths' entries,
+/// so — unlike a `retain` call — it is safe to run beside any other test
+/// touching this process-global cache without taking `image_fingerprint_
+/// test_lock()`.
+#[test]
+fn fingerprint_cache_is_independent_per_path() {
+    let path_a = format!("a-{}.jpg", uuid::Uuid::new_v4());
+    let path_b = format!("b-{}.jpg", uuid::Uuid::new_v4());
+    check_and_update_image_item_fingerprint(&path_a, "fp-a");
+    check_and_update_image_item_fingerprint(&path_b, "fp-b");
+    // Both still match their own last-recorded fingerprint.
+    assert!(check_and_update_image_item_fingerprint(&path_a, "fp-a"));
+    assert!(check_and_update_image_item_fingerprint(&path_b, "fp-b"));
 }
 
 // ======================================================================
@@ -2479,6 +2499,158 @@ async fn test_webp_survives_stale_cleanup_after_dispatch() {
     assert!(
         webp_output.exists(),
         ".webp must survive stale cleanup when registered in image_outputs"
+    );
+}
+
+/// The data-loss guard per-item fingerprinting exists for: a vault with 3
+/// already-converted images, adding a 4th, must dispatch ONLY the new one.
+/// Before per-item fingerprinting, adding any one image invalidated the
+/// WHOLE-SET fingerprint and re-dispatched all four; combined with
+/// `emit_image_outputs_via_channel` only registering what a round actually
+/// finished, a build that sealed before the async batch re-registered the
+/// three untouched images would let the seal's own stale-file sweep delete
+/// their already-finished, physically-present outputs (the same class of
+/// bug `5323496908` fixed for video, now enforced per image).
+///
+/// Ablate by reverting `dispatch_image_conversions`'s GUI branch to the old
+/// whole-set decision (`compute_image_set_fingerprint` +
+/// `check_and_update_image_fingerprint`, dispatching every item whenever
+/// the set doesn't match) and this goes red: every untouched image's
+/// sentinel bytes are gone, overwritten by a real re-encode.
+#[tokio::test]
+async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_sweep() {
+    use crate::build::coordinator::test_utils;
+    use crate::build::media::pipeline::{compute_expected_dirs, remove_stale_dirs, remove_stale_files};
+
+    /// Runs blocking work inline on whatever thread calls it — used here so
+    /// the whole dispatch (including any actually-dispatched encode) is
+    /// finished by the time `spawn_blocking` returns, with no separate wait.
+    struct InlineSpawner;
+    impl crate::build::ports::spawner::Spawner for InlineSpawner {
+        fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+            task();
+        }
+        fn spawn(
+            &self,
+            _task: crate::build::ports::spawner::Task,
+        ) -> crate::build::ports::spawner::Joining {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    let _guard = image_fingerprint_test_lock().lock();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+
+    let cfg = ImageCompressionConfig::default();
+
+    // Three already-converted images: real source bytes on disk, a staged
+    // `.webp` with SENTINEL bytes a real encode would never produce, and a
+    // primed per-item fingerprint so dispatch takes the skip branch for
+    // each. The sentinel surviving unchanged is the disk-level proof that
+    // an image was NOT re-dispatched.
+    let mut items: Vec<ImageConversionItem> = Vec::new();
+    let mut untouched_webps: Vec<PathBuf> = Vec::new();
+    for (i, name) in ["one.jpg", "two.jpg", "three.jpg"].iter().enumerate() {
+        let path = root.join(name);
+        make_big_jpeg(&path, 400, 300);
+        let source_oid = crate::build::cache::ObjectStore::hash_file(&path).unwrap();
+        let item = ImageConversionItem {
+            source_path: PathBuf::from(*name),
+            source_oid,
+            ext: "jpg".to_string(),
+            dimensions: None,
+            skip: None,
+        };
+        let webp_rel = format!("{}.webp", name.trim_end_matches(".jpg"));
+        let webp_path = staging.join(&webp_rel);
+        fs::write(&webp_path, format!("SENTINEL-{}", i)).unwrap();
+        let fp = compute_image_item_fingerprint(&root.to_string_lossy(), &item.source_path, &cfg)
+            .expect("source exists and is stat-able");
+        check_and_update_image_item_fingerprint(&item.source_path.to_string_lossy(), &fp);
+        untouched_webps.push(webp_path);
+        items.push(item);
+    }
+
+    // A brand new, never-before-seen fourth image — no staged output, no
+    // primed fingerprint.
+    let new_path = root.join("four.jpg");
+    make_big_jpeg(&new_path, 400, 300);
+    let new_oid = crate::build::cache::ObjectStore::hash_file(&new_path).unwrap();
+    items.push(ImageConversionItem {
+        source_path: PathBuf::from("four.jpg"),
+        source_oid: new_oid,
+        ext: "jpg".to_string(),
+        dimensions: None,
+        skip: None,
+    });
+
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: items,
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+
+    let services = BuildServices {
+        spawner: Some(std::sync::Arc::new(InlineSpawner)),
+        ..BuildServices::headless()
+    };
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    // blocking_send (inside emit_image_outputs_via_channel) requires a
+    // non-async thread — spawn_blocking, as in production where the
+    // dispatcher runs from the blocking render phase.
+    tokio::task::spawn_blocking(move || {
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    })
+    .await
+    .unwrap();
+
+    let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+    let view = sealed.site_hashes_view();
+    remove_stale_files(&staging, view, "test");
+    remove_stale_dirs(&staging, &compute_expected_dirs(view));
+
+    for (i, webp_path) in untouched_webps.iter().enumerate() {
+        assert!(
+            webp_path.exists(),
+            "'{}' (untouched image output) was deleted by the stale sweep after a \
+             sibling image was added — sealed image_outputs: {:?}",
+            webp_path.display(),
+            sealed.image_outputs()
+        );
+        assert_eq!(
+            fs::read(webp_path).unwrap(),
+            format!("SENTINEL-{}", i).into_bytes(),
+            "'{}' content changed — it was re-dispatched even though its own \
+             fingerprint and output were unchanged",
+            webp_path.display()
+        );
+    }
+
+    // The new image WAS dispatched: no ffmpeg-style stand-in here — a real
+    // JPEG decode+WebP encode ran, so its bytes are not the sentinel.
+    let new_webp = staging.join("four.webp");
+    assert!(
+        new_webp.exists(),
+        "the new image must have been dispatched and produced a .webp output"
+    );
+    assert_ne!(
+        fs::read(&new_webp).unwrap(),
+        b"SENTINEL-0".to_vec(),
+        "the new image's output must be a real encode, not a carried-forward sentinel"
     );
 }
 
@@ -3913,18 +4085,24 @@ fn self_heal_then_emit_registers_relinked_webp() {
     }
 }
 
-/// The fingerprint-skip self-heal re-registers what an EARLIER build produced,
-/// so an absent staged `.webp` there means not-yet-encoded, never vanished, and
-/// the entry must stay `Pending`. Two things break if it settles `Failed`: the
-/// preview server serves the original source bytes for a Pending variant and
-/// gates that passthrough on `!is_failed` (`ops/serve/router.rs`), and
-/// `output_present` is false for a cloud-evicted file, so on a Google-Drive or
-/// iCloud vault `degrade` would strip the `<source>` of a perfectly healthy
-/// variant (moss#1044). The call site says this by passing `None`; a unit test
-/// on `emit_image_outputs_via_channel` cannot see which argument its caller
-/// passes, which is why this one drives `dispatch_image_conversions`.
+/// Per-item skip/dispatch, exercised through two siblings with the SAME
+/// recorded (matching) fingerprint but different on-disk state. `kept.jpg`'s
+/// variant is already staged, so it takes the cheap skip path: self-heal
+/// re-registers it WITHOUT ever entering `run_image_conversion` (proven by
+/// its sentinel bytes surviving unchanged). `pending.jpg`'s variant was
+/// never actually produced — a matched fingerprint was never proof the
+/// LAST run that considered it actually left the file on disk — so it must
+/// be dispatched and encoded this round rather than silently staying
+/// unregistered forever (mirrors `dispatch_video_conversions`'s identical
+/// self-heal-by-redispatch rule for a missing output, video.rs). Before
+/// this per-item fix, this file's `self_heal_leaves_a_not_yet_encoded_
+/// variant_pending_rather_than_failed` asserted `pending.webp` stayed
+/// `Pending` forever under a matching WHOLE-SET fingerprint; the never-
+/// mark-Failed half of that concern (moss#1044) still holds and is
+/// asserted below, now satisfied by actually encoding the image instead of
+/// leaving it stuck.
 #[test]
-fn self_heal_leaves_a_not_yet_encoded_variant_pending_rather_than_failed() {
+fn a_missing_output_is_dispatched_while_its_unaffected_sibling_takes_the_skip_path() {
     /// Runs blocking work inline. Only its presence matters here — it is what
     /// puts `dispatch_image_conversions` on the GUI (fingerprint-skip) path —
     /// but it runs the task honestly so a missed skip encodes rather than
@@ -3992,43 +4170,59 @@ fn self_heal_leaves_a_not_yet_encoded_variant_pending_rather_than_failed() {
         ..BuildServices::headless()
     };
 
-    // Prime the fingerprint cell with this image set's own fingerprint, which
-    // is what a rebuild that changed no image looks like to dispatch.
-    let fp = compute_image_set_fingerprint(
-        &ctx.source_path,
-        &ctx.image_items,
-        &ImageCompressionConfig::default(),
-    );
-    check_and_update_image_fingerprint(&fp);
+    // Prime BOTH images' own fingerprints, which is what a rebuild that
+    // changed neither image's bytes looks like to dispatch.
+    let cfg = ImageCompressionConfig::default();
+    for item in &items {
+        let rel = item.source_path.to_string_lossy().to_string();
+        let fp = compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &cfg)
+            .expect("source exists and is stat-able");
+        check_and_update_image_item_fingerprint(&rel, &fp);
+    }
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
     dispatch_image_conversions(Some(&services), &ctx, Some(tx));
 
-    // The self-heal registration ran: the variant that IS on disk reached the
-    // coordinator. Without this the assertions below would pass vacuously on
-    // any build that never took the fingerprint-skip branch at all.
     let registered: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
         .filter_map(|msg| match msg {
             EmitMessage::File { rel_path, .. } => Some(rel_path),
             _ => None,
         })
         .collect();
+
+    // kept.jpg took the skip path: self-heal found the variant already on
+    // disk and re-registered it WITHOUT re-encoding — its sentinel bytes
+    // prove no real encode touched it, even though its SIBLING dispatched.
     assert!(
         registered.contains(&"kept.webp".to_string()),
-        "self-heal must register the staged variant; got {:?}",
+        "self-heal must register the already-staged variant; got {:?}",
         registered
     );
+    assert_eq!(
+        fs::read(staging.join("kept.webp")).unwrap(),
+        b"kept-bytes",
+        "kept.jpg must not be re-encoded just because a sibling image's output was missing"
+    );
 
+    // pending.jpg's matched fingerprint was never proof the last run that
+    // considered it actually left the file on disk: it must be dispatched
+    // and registered once encoded, not left permanently unregistered.
     assert!(
-        matches!(registry.get("pending.webp"), Some(AssetState::Pending(_))),
-        "a not-yet-encoded variant must stay Pending so preview keeps serving \
-         the source; got {:?}",
+        registered.contains(&"pending.webp".to_string()),
+        "a missing output behind a matched fingerprint must be dispatched and \
+         registered once encoded; got {:?}",
+        registered
+    );
+    assert!(
+        matches!(registry.get("pending.webp"), Some(AssetState::Ready)),
+        "the missing variant must reach Ready once dispatch encodes it; got {:?}",
         registry.get("pending.webp")
     );
     assert!(
         registry.failed_keys().is_empty(),
-        "self-heal must settle nothing Failed — on a synced vault an evicted \
-         file reads absent and `degrade` would strip a healthy <source>; \
+        "neither variant may settle Failed — on a synced vault an evicted \
+         file reads absent too, and `degrade` would strip a healthy <source> \
+         if a merely-not-yet-encoded variant were ever marked Failed; \
          failed: {:?}",
         registry.failed_keys()
     );

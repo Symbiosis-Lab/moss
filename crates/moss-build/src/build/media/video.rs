@@ -1273,9 +1273,9 @@ fn summarize_video_coherence_violations(
 /// video encodes finish): the old scheme hashed the whole sorted video list
 /// into one fingerprint, so any single added/changed/removed video
 /// invalidated it and forced a full re-dispatch — cancelling and re-running
-/// every OTHER, untouched video too. Mirrors `compute_image_set_fingerprint`'s
-/// per-entry `(path, size, mtime)` stat tuple: the same identity scheme,
-/// resolved for one path instead of hashed over a sorted set.
+/// every OTHER, untouched video too. Same identity scheme as
+/// `compute_image_item_fingerprint` (build/media/image.rs), which mirrored
+/// this fix for images in turn.
 ///
 /// Returns `None` when the source can't be stat'd (missing / unreadable) —
 /// the caller must treat that as "cannot prove unchanged" and dispatch it.
