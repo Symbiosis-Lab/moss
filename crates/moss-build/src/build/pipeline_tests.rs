@@ -2,7 +2,7 @@ use super::super::media::pipeline::{
     compute_expected_dirs, copy_deferred_assets, is_image_extension,
     remove_stale_dirs, remove_stale_files, stage_copy, stage_write,
 };
-use super::super::video::{compute_video_set_fingerprint, run_video_conversion};
+use super::super::video::{compute_video_item_fingerprint, run_video_conversion};
 use super::*;
 use crate::types::services::BackgroundContext;
 use crate::build::scan::scan::scan_folder;
@@ -1574,37 +1574,36 @@ fn test_run_video_conversion_task_tracker_with_session() {
 }
 
 // =========================================================================
-// Tests for Video Set Fingerprinting (Step 3)
+// Tests for Video Item Fingerprinting (per-item, not per-set)
 // =========================================================================
 
 #[test]
-fn test_compute_video_set_fingerprint_deterministic() {
+fn test_compute_video_item_fingerprint_deterministic() {
     use crate::build::media::ffmpeg::VideoCompressionConfig;
 
     let dir = tempfile::tempdir().unwrap();
     let video_path = dir.path().join("test.mov");
     std::fs::write(&video_path, b"fake video data").unwrap();
 
-    let items = vec!["test.mov".to_string()];
     let config = VideoCompressionConfig::default();
 
-    let fp1 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items, &config);
-    let fp2 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items, &config);
+    let fp1 = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "test.mov", &config);
+    let fp2 = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "test.mov", &config);
     assert_eq!(fp1, fp2, "Same inputs should produce same fingerprint");
+    assert!(fp1.is_some());
 }
 
 #[test]
-fn test_compute_video_set_fingerprint_changes_with_content() {
+fn test_compute_video_item_fingerprint_changes_with_content() {
     use crate::build::media::ffmpeg::VideoCompressionConfig;
 
     let dir = tempfile::tempdir().unwrap();
     let video_path = dir.path().join("test.mov");
     std::fs::write(&video_path, b"video data v1").unwrap();
 
-    let items = vec!["test.mov".to_string()];
     let config = VideoCompressionConfig::default();
 
-    let fp1 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items, &config);
+    let fp1 = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "test.mov", &config);
 
     std::fs::write(
         &video_path,
@@ -1612,7 +1611,7 @@ fn test_compute_video_set_fingerprint_changes_with_content() {
     )
     .unwrap();
 
-    let fp2 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items, &config);
+    let fp2 = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "test.mov", &config);
     assert_ne!(
         fp1, fp2,
         "Different content/size should produce different fingerprint"
@@ -1620,14 +1619,12 @@ fn test_compute_video_set_fingerprint_changes_with_content() {
 }
 
 #[test]
-fn test_compute_video_set_fingerprint_changes_with_config() {
+fn test_compute_video_item_fingerprint_changes_with_config() {
     use crate::build::media::ffmpeg::VideoCompressionConfig;
 
     let dir = tempfile::tempdir().unwrap();
     let video_path = dir.path().join("test.mov");
     std::fs::write(&video_path, b"fake video data").unwrap();
-
-    let items = vec!["test.mov".to_string()];
 
     let config1 = VideoCompressionConfig::default();
     let config2 = VideoCompressionConfig {
@@ -1635,8 +1632,8 @@ fn test_compute_video_set_fingerprint_changes_with_config() {
         ..Default::default()
     };
 
-    let fp1 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items, &config1);
-    let fp2 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items, &config2);
+    let fp1 = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "test.mov", &config1);
+    let fp2 = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "test.mov", &config2);
     assert_ne!(
         fp1, fp2,
         "Different compression config should produce different fingerprint"
@@ -1644,53 +1641,48 @@ fn test_compute_video_set_fingerprint_changes_with_config() {
 }
 
 #[test]
-fn test_compute_video_set_fingerprint_empty_videos() {
+fn test_compute_video_item_fingerprint_missing_source_returns_none() {
     use crate::build::media::ffmpeg::VideoCompressionConfig;
 
     let dir = tempfile::tempdir().unwrap();
     let config = VideoCompressionConfig::default();
 
-    let fp = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &[], &config);
-    assert!(
-        !fp.is_empty(),
-        "Empty video set should still produce a fingerprint"
+    // No file written at "missing.mov" — the caller (dispatch_video_conversions)
+    // must treat `None` as "cannot prove unchanged" and dispatch it, never as
+    // a distinct, cacheable fingerprint value of its own.
+    let fp = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "missing.mov", &config);
+    assert!(fp.is_none(), "An unstat-able source must not produce a fingerprint");
+}
+
+#[test]
+fn test_compute_video_item_fingerprint_differs_by_path_even_with_identical_content() {
+    use crate::build::media::ffmpeg::VideoCompressionConfig;
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.mov"), b"same bytes").unwrap();
+    std::fs::write(dir.path().join("b.mov"), b"same bytes").unwrap();
+
+    let config = VideoCompressionConfig::default();
+
+    let fp_a = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "a.mov", &config);
+    let fp_b = compute_video_item_fingerprint(dir.path().to_str().unwrap(), "b.mov", &config);
+    assert_ne!(
+        fp_a, fp_b,
+        "two different videos with identical bytes must not alias to the same per-item fingerprint"
     );
 }
 
 #[test]
-fn test_compute_video_set_fingerprint_order_independent() {
-    use crate::build::media::ffmpeg::VideoCompressionConfig;
-
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("a.mov"), b"video a").unwrap();
-    std::fs::write(dir.path().join("b.mov"), b"video b").unwrap();
-
-    let items_ab = vec![
-        "a.mov".to_string(),
-        "b.mov".to_string(),
-    ];
-    let items_ba = vec![
-        "b.mov".to_string(),
-        "a.mov".to_string(),
-    ];
-    let config = VideoCompressionConfig::default();
-
-    let fp1 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items_ab, &config);
-    let fp2 = compute_video_set_fingerprint(dir.path().to_str().unwrap(), &items_ba, &config);
-    assert_eq!(fp1, fp2, "Order of items should not affect fingerprint");
-}
-
-#[test]
-fn test_dispatch_skips_when_fingerprint_unchanged() {
+fn test_dispatch_skips_when_item_fingerprint_unchanged() {
     let services = BuildServices::headless();
     let fingerprint = "test_fingerprint_abc123";
 
     assert!(!services
         .cancellation
-        .check_and_update_fingerprint(fingerprint));
+        .check_and_update_item_fingerprint("videos/a.mov", fingerprint));
     assert!(services
         .cancellation
-        .check_and_update_fingerprint(fingerprint));
+        .check_and_update_item_fingerprint("videos/a.mov", fingerprint));
 }
 
 // =========================================================================

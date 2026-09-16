@@ -1261,61 +1261,69 @@ fn summarize_video_coherence_violations(
     lines
 }
 
-/// A SHA-256 over sorted `(path, size, mtime)` tuples plus the compression
-/// config. Matching the previous dispatch's fingerprint means the video set is
-/// unchanged and there is no reason to cancel and restart. The compression
-/// params are in it so a config change (`video_max_size_mb` from a deploy
-/// plugin) re-dispatches even when no video file moved.
-pub(crate) fn compute_video_set_fingerprint(
+/// A SHA-256 over one video's `(path, size, mtime)` plus the compression
+/// config. Matching the previous dispatch's fingerprint for THIS path means
+/// this one video is unchanged, and — combined with its outputs still being
+/// present on disk, checked separately in `dispatch_video_conversions` —
+/// there is no reason to re-encode it. The compression params are folded in
+/// so a config change (`video_max_size_mb` from a deploy plugin) invalidates
+/// every video's fingerprint even when no file moved.
+///
+/// Per item, not per set (a prerequisite for sealing a build before slow
+/// video encodes finish): the old scheme hashed the whole sorted video list
+/// into one fingerprint, so any single added/changed/removed video
+/// invalidated it and forced a full re-dispatch — cancelling and re-running
+/// every OTHER, untouched video too. Mirrors `compute_image_set_fingerprint`'s
+/// per-entry `(path, size, mtime)` stat tuple: the same identity scheme,
+/// resolved for one path instead of hashed over a sorted set.
+///
+/// Returns `None` when the source can't be stat'd (missing / unreadable) —
+/// the caller must treat that as "cannot prove unchanged" and dispatch it.
+pub(crate) fn compute_video_item_fingerprint(
     source_path: &str,
-    video_items: &[String],
+    item: &str,
     compression_config: &crate::build::media::ffmpeg::VideoCompressionConfig,
-) -> String {
+) -> Option<String> {
     use sha2::{Digest, Sha256};
 
+    let source = Path::new(source_path).join(item);
+    let meta = fs::metadata(&source).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+
     let mut hasher = Sha256::new();
-
-    // Collect (path, size, mtime) tuples and sort by path for deterministic ordering
-    let mut entries: Vec<(String, u64, u64)> = video_items
-        .iter()
-        .filter_map(|item| {
-            let source = Path::new(source_path).join(&item);
-            let meta = fs::metadata(&source).ok()?;
-            let mtime = meta
-                .modified()
-                .ok()?
-                .duration_since(std::time::UNIX_EPOCH)
-                .ok()?
-                .as_secs();
-            Some((item.clone(), meta.len(), mtime))
-        })
-        .collect();
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-
-    for (path, size, mtime) in &entries {
-        hasher.update(path.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(size.to_le_bytes());
-        hasher.update(mtime.to_le_bytes());
-    }
+    hasher.update(item.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(meta.len().to_le_bytes());
+    hasher.update(mtime.to_le_bytes());
 
     // Include compression params so config changes trigger re-dispatch
     let params = compression_config.to_params();
     hasher.update(params.to_string().as_bytes());
 
-    format!("{:x}", hasher.finalize())
+    Some(format!("{:x}", hasher.finalize()))
 }
 
 /// Spawn the video worker — one owner for both the first-build and rebuild
 /// paths in `build_inner()`.
 ///
-/// Before cancelling an in-progress conversion it compares the video set's
-/// fingerprint with the previous dispatch's; on a match the existing conversion
-/// keeps running (the user changed markdown, not video), and the carry-forward
-/// output keys are re-registered so seal does not prune them.
+/// The skip/dispatch decision is made per video, not for the set as a whole:
+/// each video's own fingerprint (`compute_video_item_fingerprint`) is compared
+/// against the fingerprint recorded the last time THAT video was considered.
+/// A video whose fingerprint matches and whose canonical outputs (mp4 +
+/// poster) are still present on disk is carried forward — its output keys are
+/// re-registered so seal() doesn't prune them — without ever entering
+/// `run_video_conversion`. Only the changed / new / missing-output subset is
+/// actually dispatched to the encoder, so one added video no longer cancels
+/// and re-runs every other, untouched video (a prerequisite for sealing a
+/// build before slow video encodes finish).
 pub(crate) fn dispatch_video_conversions(
     services: Option<&BuildServices>,
-    background_ctx: BackgroundContext,
+    mut background_ctx: BackgroundContext,
     tx: Option<mpsc::Sender<EmitMessage>>,
 ) {
     if background_ctx.video_items.is_empty() {
@@ -1339,98 +1347,117 @@ pub(crate) fn dispatch_video_conversions(
                 },
                 None => crate::build::media::ffmpeg::VideoCompressionConfig::default(),
             };
-            let fingerprint = compute_video_set_fingerprint(
-                &background_ctx.source_path,
-                &background_ctx.video_items,
-                &compression_config,
-            );
 
-            // Check fingerprint: if video set unchanged AND all canonical
-            // outputs are present + non-zero, let existing conversion continue.
-            //
-            // The output check is the self-heal seam — without it, a previous
-            // dispatch killed mid-`link_to` leaves 0-byte stubs in canonical
-            // and every subsequent dispatch with the same input set skips,
-            // so the user sees a permanent loader on the affected card. The
-            // per-video fast-path inside run_video_conversion already heals
-            // 0-byte canonical outputs, but it never runs because the dispatch
-            // is skipped here.
-            //
-            // Note: when this path forces re-dispatch, in_flight_videos.clear()
-            // below kills any in-flight conversion. That's intended — if outputs
-            // are bad, restart beats letting a possibly-stuck conversion run.
-            let fingerprint_matched = svc.cancellation.check_and_update_fingerprint(&fingerprint);
             use crate::build::render::resolve_path_with_overrides;
             use moss_core::asset_paths;
-            let dir_overrides = &background_ctx.dir_overrides;
+            let dir_overrides = background_ctx.dir_overrides.clone();
+            let total_items = background_ctx.video_items.len();
+
+            // Per-item decision. `skip_paths` carries forward the output keys
+            // of videos staying put — still re-registered every round, or
+            // seal()'s `video_outputs.retain` prunes them as untouched and the
+            // stale sweep deletes a physically-present file (the same class of
+            // bug 71ee43bc1c fixed for the whole set, now enforced per item).
+            // `to_dispatch` is the subset that actually needs the encoder.
             let mut skip_paths: Vec<String> = Vec::new();
-            // The unconditionally-expected outputs per item — every completed
-            // conversion produces exactly these two. Checked for existence
-            // below; the HLS ladder is NOT (next paragraph).
-            let mut required_paths: Vec<String> = Vec::new();
+            let mut to_dispatch: Vec<String> = Vec::new();
+            let mut current_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+
             for item in &background_ctx.video_items {
-                let mapped = resolve_path_with_overrides(&item, &dir_overrides);
+                current_paths.insert(item.clone());
+                let mapped = resolve_path_with_overrides(item, &dir_overrides);
                 let mp4 = asset_paths::to_mp4(&mapped);
                 let thumb = asset_paths::to_thumb(&mapped);
-                required_paths.push(mp4.clone());
-                required_paths.push(thumb.clone());
-                skip_paths.push(mp4);
-                skip_paths.push(thumb);
-                // The full ladder as a candidate set: video_ladder_rungs
-                // truncates from the top only, so any real ladder is a
-                // prefix of it and the existence check filters the rest. NOT
-                // in `required_paths` — a video with fewer rungs than the max
-                // ladder never produces the excess candidates, so checking
-                // them for existence would force a re-dispatch on every fully
-                // healthy build that merely has a short ladder.
-                skip_paths.extend(asset_paths::hls_outputs(&mapped, &asset_paths::VIDEO_LADDER));
+
+                // The output check is the self-heal seam — without it, a
+                // previous dispatch killed mid-`link_to` leaves 0-byte stubs
+                // in canonical and every subsequent dispatch with a matching
+                // fingerprint skips, so the user sees a permanent loader on
+                // the affected card. Requiring the files to actually be there
+                // is what `run_video_conversion`'s per-video fast path
+                // already promises, but the code must check it here too or
+                // that fast path never runs.
+                let outputs_present = [&mp4, &thumb].iter().all(|p| {
+                    std::fs::metadata(background_ctx.staging_dir.join(p)).is_ok_and(|m| m.len() > 0)
+                });
+
+                // A fingerprint that can't be computed (source unreadable)
+                // can't be proven unchanged either — dispatch it rather than
+                // risk carrying forward a stale skip.
+                let fingerprint_matched = match compute_video_item_fingerprint(
+                    &background_ctx.source_path,
+                    item,
+                    &compression_config,
+                ) {
+                    Some(fp) => svc.cancellation.check_and_update_item_fingerprint(item, &fp),
+                    None => false,
+                };
+
+                if fingerprint_matched && outputs_present {
+                    // Re-register every key the encode path delivers for this
+                    // video so seal() keeps them. emit_video_outputs_via_channel's
+                    // existence check drops the keys whose staging file is
+                    // absent (the HLS ladder's excess candidates, normally)
+                    // rather than registering a lie.
+                    skip_paths.push(mp4);
+                    skip_paths.push(thumb);
+                    // The full ladder as a candidate set: video_ladder_rungs
+                    // truncates from the top only, so any real ladder is a
+                    // prefix of it and the existence check filters the rest.
+                    skip_paths.extend(asset_paths::hls_outputs(&mapped, &asset_paths::VIDEO_LADDER));
+                } else {
+                    if fingerprint_matched {
+                        log::info!(
+                            "Video '{}' unchanged but a required output is missing — \
+                             re-dispatching to self-heal instead of skipping",
+                            item
+                        );
+                    }
+                    to_dispatch.push(item.clone());
+                }
             }
-            // Was: `if fingerprint_matched { skip }`. A matched fingerprint
-            // alone was never proof the SKIP's own last run actually left the
-            // files on disk — `emit_video_outputs_via_channel` below silently
-            // drops a missing path from the manifest (logging "[video]
-            // coherence violation: staged output missing") instead of feeding
-            // that back into the next dispatch decision, so a page whose
-            // poster or mp4 went missing (deleted by a stale sweep after a
-            // registration that never landed, e.g. moss#… the superseded-run
-            // gap) stayed on a dead link forever: every later build re-hit
-            // the identical fingerprint, skipped again, and logged the same
-            // violation again. Requiring the files to actually be there is
-            // what the doc above already promised ("all canonical outputs
-            // are present + non-zero") but the code never checked before now.
-            let outputs_present = required_paths.iter().all(|p| {
-                std::fs::metadata(background_ctx.staging_dir.join(p))
-                    .is_ok_and(|m| m.len() > 0)
-            });
-            if fingerprint_matched && outputs_present {
-                // Fingerprint matched: video set unchanged. Re-register every
-                // key the encode path delivers, so seal()'s
-                // video_outputs.retain keeps them — an untouched key is pruned
-                // at seal and the stale sweep then deletes a physically
-                // present file → live 404. emit_video_outputs_via_channel's
-                // existence check drops the keys whose staging file is absent
-                // (the HLS ladder's excess candidates, normally) rather than
-                // registering a lie.
-                log::info!(
-                    "Video set unchanged ({} videos), skipping re-dispatch — re-registering carry-forward output keys",
-                    background_ctx.video_items.len()
-                );
+
+            // Drop stored fingerprints for videos no longer in the current
+            // set, so a removed-then-re-added video starts fresh rather than
+            // replaying a stale match against bytes that may since have
+            // changed. Bounds the map to the live video set.
+            svc.cancellation.retain_item_fingerprints(&current_paths);
+
+            if !skip_paths.is_empty() {
                 emit_video_outputs_via_channel(&tx, &skip_paths, &background_ctx.staging_dir);
+            }
+
+            if to_dispatch.is_empty() {
+                log::info!(
+                    "Video set unchanged ({} videos), skipping re-dispatch — re-registered carry-forward output keys",
+                    total_items
+                );
                 return;
             }
-            if fingerprint_matched {
+            if to_dispatch.len() < total_items {
                 log::info!(
-                    "Video set unchanged ({} videos) but a required output is missing — \
-                     re-dispatching to self-heal instead of skipping",
-                    background_ctx.video_items.len()
+                    "{} of {} videos unchanged, carrying forward output keys; dispatching {} for conversion",
+                    total_items - to_dispatch.len(),
+                    total_items,
+                    to_dispatch.len()
                 );
             }
+
+            // Only the changed/new/missing-output subset ever enters
+            // run_video_conversion's loop — unchanged videos never contend
+            // for an encode permit, an iCloud materialization wait, or a
+            // UiBound slot behind one slow encode.
+            background_ctx.video_items = to_dispatch;
 
             // Bump the epoch so stale tasks exit on their next epoch check — the sole
             // halt signal for a prior epoch, and what keeps concurrent FFmpeg
             // processes from piling up when rebuilds land during a conversion
             // (common on iCloud Drive). Clearing singleflight lets the cancelled
-            // videos be re-dispatched while the old task drains.
+            // videos be re-dispatched while the old task drains. This clears the
+            // WHOLE singleflight map, same as before per-item fingerprinting —
+            // narrowing it to just the dispatched subset's source_oids would
+            // need hashing every video up front, which is exactly the
+            // multi-GB-file cost this change avoids.
             svc.in_flight_videos.clear();
             let epoch = svc.cancellation.start_new_conversion();
 
@@ -1555,159 +1582,308 @@ mod tests {
         tempfile::TempDir::new_in(&test_tmp).unwrap()
     }
 
-    /// A second build of a settled video site keeps every file the first one
-    /// staged. The skip branch is the only thing that re-registers them, so this
-    /// drives the real seam: dispatch → seal → the stale sweep `advertise_sealed`
-    /// runs (`build.rs`, step 4). Subsumes the emit-level positive case, which
-    /// asserted the mp4 and poster keys reached the sealed manifest and could not
-    /// see either the dispatch that produces them or the deletion that follows.
-    #[tokio::test]
-    async fn a_skip_dispatch_keeps_the_hls_ladder_through_stale_cleanup() {
-        use crate::build::coordinator::test_utils;
-        use crate::build::media::pipeline::{compute_expected_dirs, remove_stale_dirs, remove_stale_files};
-        use crate::types::content::SiteHashes;
-        use crate::types::services::BackgroundContext;
+    // ── Per-item dispatch: one video's fate must not follow its siblings' ──
+    //
+    // These four tests replace `a_skip_dispatch_keeps_the_hls_ladder_through_
+    // stale_cleanup` and `a_matched_fingerprint_with_missing_outputs_is_not_
+    // skipped` (both whole-set), which they subsume: the ladder-carry-forward
+    // property lives on in test (a) below, and the missing-output self-heal
+    // lives on in test (c) — both now proven per item instead of per set.
+
+    /// Shared rig: writes `item`'s bytes into `vault`, stages a full output
+    /// set (mp4 + poster, plus an HLS ladder when `ladder` is true) under
+    /// `staging` with SENTINEL bytes that are deliberately NOT what a real
+    /// encode of `source_bytes` would produce, and primes `svc`'s per-item
+    /// fingerprint so a following dispatch with the SAME source bytes takes
+    /// the skip branch for `item` alone.
+    ///
+    /// The sentinel-vs-real-bytes gap is the whole test mechanism below:
+    /// every test's `ffmpeg_bin_path` points at a binary that does not
+    /// exist, so a DISPATCHED item's mp4 is overwritten by
+    /// `ItemStep::shipped_original`'s fallback copy of the CURRENT vault
+    /// bytes (same technique as `a_video_that_could_not_even_be_copied_
+    /// fails_the_media_job`). A SKIPPED item's mp4 never goes through that
+    /// path, so it keeps the sentinel unchanged — the observable, disk-level
+    /// proof of "was not re-dispatched" this suite is built on.
+    fn stage_and_prime_video(
+        svc: &BuildServices,
+        vault: &Path,
+        staging: &Path,
+        item: &str,
+        source_bytes: &[u8],
+        ladder: bool,
+    ) -> Vec<String> {
         use moss_core::asset_paths;
 
-        let tmp = portable_tmpdir();
-        let vault = tmp.path().join("vault");
-        let staging = tmp.path().join("stage");
+        std::fs::create_dir_all(vault.join(item).parent().unwrap()).unwrap();
+        std::fs::write(vault.join(item), source_bytes).unwrap();
 
-        let item = "videos/talk.mov".to_string();
-        std::fs::create_dir_all(vault.join("videos")).unwrap();
-        std::fs::write(vault.join(&item), b"source bytes").unwrap();
-
-        // Build N's outputs, on disk: mp4, poster, and a 3-rung ladder (a
-        // 640-wide source — deliberately shorter than VIDEO_LADDER).
-        let rungs = asset_paths::video_ladder_rungs(640);
-        let ladder = asset_paths::hls_outputs(&item, rungs);
-        let mut staged = vec![asset_paths::to_mp4(&item), asset_paths::to_thumb(&item)];
-        staged.extend(ladder.clone());
+        let mut staged = vec![asset_paths::to_mp4(item), asset_paths::to_thumb(item)];
+        if ladder {
+            let rungs = asset_paths::video_ladder_rungs(640);
+            staged.extend(asset_paths::hls_outputs(item, rungs));
+        }
         for key in &staged {
             let abs = staging.join(key);
             std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
-            std::fs::write(&abs, b"x").unwrap();
+            std::fs::write(&abs, b"STAGED-SENTINEL").unwrap();
         }
 
-        let mut svc = BuildServices::headless();
-        svc.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
-        // Prime the fingerprint with build N's, so build N+1 takes the skip branch.
-        let fingerprint = compute_video_set_fingerprint(
+        let fingerprint = compute_video_item_fingerprint(
             &vault.display().to_string(),
-            std::slice::from_ref(&item),
+            item,
             &crate::build::media::ffmpeg::VideoCompressionConfig::default(),
-        );
-        assert!(!svc.cancellation.check_and_update_fingerprint(&fingerprint));
+        )
+        .expect("source file exists and is stat-able");
+        assert!(!svc.cancellation.check_and_update_item_fingerprint(item, &fingerprint));
 
-        let ctx = BackgroundContext {
-            video_items: vec![item.clone()],
-            source_path: vault.display().to_string(),
-            staging_dir: staging.clone(),
-            ..BackgroundContext::for_test()
-        };
-        let (tx, rx) = test_utils::build_test_coordinator();
-        // blocking_send requires a non-async thread — as in production, where the
-        // dispatcher is called from the blocking render phase.
-        tokio::task::spawn_blocking(move || {
-            dispatch_video_conversions(Some(&svc), ctx, Some(tx));
-        })
-        .await
-        .unwrap();
-        let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
-
-        let view = sealed.site_hashes_view();
-        remove_stale_files(&staging, view, "test");
-        remove_stale_dirs(&staging, &compute_expected_dirs(view));
-
-        for key in &staged {
-            assert!(
-                staging.join(key).exists(),
-                "'{}' was deleted by the stale sweep after a skip dispatch — \
-                 the deploy would remove a physically-present file and the page's \
-                 <source> would 404; sealed video_outputs: {:?}",
-                key,
-                view.video_outputs
-            );
-        }
+        staged
     }
 
-    /// A matching fingerprint alone must NOT take the skip branch when a
-    /// required output (mp4 or poster) is missing from staging — the exact
-    /// gap `emit_video_outputs_via_channel`'s "coherence violation: staged
-    /// output missing" log reports every rebuild without ever healing it,
-    /// because the OLD code decided to skip before checking existence at
-    /// all. Unlike `a_skip_dispatch_keeps_the_hls_ladder_through_stale_
-    /// cleanup` (which pre-stages every output and asserts the skip
-    /// branch), this pre-stages NOTHING and asserts the dispatcher instead
-    /// takes the re-dispatch branch: `cancellation.start_new_conversion()`
-    /// bumps the epoch only on that branch, so a bumped epoch is the
-    /// dispatch decision made visible without needing a real ffmpeg
-    /// round-trip — `ffmpeg_bin_path` points at a binary that does not
-    /// exist (the same "every encode fails" shape used in
-    /// `a_video_that_could_not_even_be_copied_fails_the_media_job`), and
-    /// the encode failing is irrelevant to what this test asserts: only
-    /// the SKIP-vs-DISPATCH decision, not the outcome.
-    #[tokio::test]
-    async fn a_matched_fingerprint_with_missing_outputs_is_not_skipped() {
+    /// Run `dispatch_video_conversions` against `video_items` (an ffmpeg
+    /// binary that doesn't exist, so any real dispatch takes the
+    /// `shipped_original` fallback path) and wait for any spawned background
+    /// conversion to finish, returning the sealed manifest.
+    async fn dispatch_and_seal(
+        svc: &BuildServices,
+        vault: &Path,
+        staging: &Path,
+        moss_dir: &Path,
+        video_items: Vec<String>,
+    ) -> crate::build::manifest::SealedManifest {
         use crate::build::coordinator::test_utils;
         use crate::types::content::SiteHashes;
         use crate::types::services::BackgroundContext;
 
-        let tmp = portable_tmpdir();
-        let vault = tmp.path().join("vault");
-        let staging = tmp.path().join("stage");
-        let item = "videos/talk.mov".to_string();
-        std::fs::create_dir_all(vault.join("videos")).unwrap();
-        std::fs::write(vault.join(&item), b"source bytes").unwrap();
-        std::fs::create_dir_all(&staging).unwrap();
-        // Deliberately no mp4 / poster staged — the "outputs went missing"
-        // state a superseded run or a stale sweep can leave behind.
-
-        let mut svc = BuildServices::headless();
-        svc.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
-        let fingerprint = compute_video_set_fingerprint(
-            &vault.display().to_string(),
-            std::slice::from_ref(&item),
-            &crate::build::media::ffmpeg::VideoCompressionConfig::default(),
-        );
-        // Prime it exactly as the skip test does: matches on the SECOND call.
-        assert!(!svc.cancellation.check_and_update_fingerprint(&fingerprint));
-        let epoch_before = svc.cancellation.current_id();
-
         let ctx = BackgroundContext {
-            video_items: vec![item.clone()],
+            video_items,
             source_path: vault.display().to_string(),
-            staging_dir: staging.clone(),
-            // `for_test()`'s default `moss_dir` is empty, which resolves the
-            // CAS/HashIndex paths this run touches relative to the crate's
-            // CWD instead of the test's own temp dir — an empty PathBuf must
-            // never reach a real cache touch. Scoped here like the sibling
-            // test above.
-            moss_dir: tmp.path().join(".moss"),
-            ffmpeg_bin_path: Some(tmp.path().join("no-such-ffmpeg").display().to_string()),
+            staging_dir: staging.to_path_buf(),
+            moss_dir: moss_dir.to_path_buf(),
+            ffmpeg_bin_path: Some(moss_dir.join("no-such-ffmpeg").display().to_string()),
             ..BackgroundContext::for_test()
         };
         let (tx, rx) = test_utils::build_test_coordinator();
-        // `cancellation` is Arc-shared across a clone (same pattern
-        // `dispatch_video_conversions` itself uses to reach a spawned task),
-        // so the clone moved into the closure and the original checked below
-        // observe the SAME epoch counter.
+        // `cancellation` is Arc-shared across the clone, so the caller's
+        // `svc` observes the same epoch/fingerprint state afterward.
         let svc_for_dispatch = svc.clone();
+        // blocking_send requires a non-async thread — as in production, where
+        // the dispatcher is called from the blocking render phase.
         tokio::task::spawn_blocking(move || {
             dispatch_video_conversions(Some(&svc_for_dispatch), ctx, Some(tx));
         })
         .await
         .unwrap();
-        // Draining waits for the spawned encode attempt's own `tx` clone to
-        // drop, i.e. for `run_video_conversion` to return — the same
-        // synchronization the skip test relies on.
-        let _sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+        test_utils::drain_into_sealed(rx, SiteHashes::default()).await
+    }
+
+    /// (a) The data-loss guard this whole change exists for: a vault with 3
+    /// already-converted videos, adding a 4th, must dispatch ONLY the new
+    /// one. Before per-item fingerprinting, adding any one video invalidated
+    /// the WHOLE-SET fingerprint and re-dispatched all four; combined with
+    /// seal()'s `video_outputs.retain` pruning untouched keys, a round that
+    /// dispatches in the background could seal before re-registering the
+    /// three untouched videos and the stale sweep would then delete their
+    /// physically-present files. Also carries forward the HLS-ladder-survival
+    /// property the whole-set predecessor test covered (video #1).
+    #[tokio::test]
+    async fn a_new_video_only_dispatches_the_new_one_others_survive_seal_and_stale_sweep() {
+        use crate::build::media::pipeline::{compute_expected_dirs, remove_stale_dirs, remove_stale_files};
+        use moss_core::asset_paths;
+
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+
+        let mut svc = BuildServices::headless();
+        svc.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+
+        let item1 = "videos/one.mov".to_string();
+        let item2 = "videos/two.mov".to_string();
+        let item3 = "videos/three.mov".to_string();
+        let item4 = "videos/four.mov".to_string(); // brand new: never staged or primed
+
+        let mut untouched = stage_and_prime_video(&svc, &vault, &staging, &item1, b"one-bytes", true);
+        untouched.extend(stage_and_prime_video(&svc, &vault, &staging, &item2, b"two-bytes", false));
+        untouched.extend(stage_and_prime_video(&svc, &vault, &staging, &item3, b"three-bytes", false));
+        std::fs::write(vault.join(&item4), b"four-bytes").unwrap();
+
+        let sealed = dispatch_and_seal(
+            &svc,
+            &vault,
+            &staging,
+            &moss_dir,
+            vec![item1.clone(), item2.clone(), item3.clone(), item4.clone()],
+        )
+        .await;
+
+        let view = sealed.site_hashes_view();
+        remove_stale_files(&staging, view, "test");
+        remove_stale_dirs(&staging, &compute_expected_dirs(view));
+
+        for key in &untouched {
+            let abs = staging.join(key);
+            assert!(
+                abs.exists(),
+                "'{}' (untouched video output) was deleted by the stale sweep after a \
+                 sibling video was added — sealed video_outputs: {:?}",
+                key,
+                view.video_outputs
+            );
+            assert_eq!(
+                std::fs::read(&abs).unwrap(),
+                b"STAGED-SENTINEL",
+                "'{}' content changed — it was re-dispatched even though its own \
+                 fingerprint and outputs were unchanged",
+                key
+            );
+        }
+
+        // The new video WAS dispatched: no ffmpeg, so its mp4 is the
+        // shipped_original fallback copy of its own source bytes.
+        let new_mp4 = staging.join(asset_paths::to_mp4(&item4));
+        assert_eq!(
+            std::fs::read(&new_mp4).unwrap(),
+            b"four-bytes",
+            "the new video must have been dispatched and produced an mp4 output"
+        );
+    }
+
+    /// (b) Editing one video's bytes must dispatch only that video.
+    #[tokio::test]
+    async fn a_changed_videos_bytes_only_dispatches_that_video() {
+        use moss_core::asset_paths;
+
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+
+        let mut svc = BuildServices::headless();
+        svc.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+
+        let item1 = "videos/one.mov".to_string();
+        let item2 = "videos/two.mov".to_string();
+
+        let staged1 = stage_and_prime_video(&svc, &vault, &staging, &item1, b"one-bytes", false);
+        let staged2 = stage_and_prime_video(&svc, &vault, &staging, &item2, b"two-bytes", false);
+
+        // A re-encode, not an add/remove: video #2's SOURCE bytes change.
+        std::fs::write(vault.join(&item2), b"two-bytes-CHANGED").unwrap();
+
+        let _sealed =
+            dispatch_and_seal(&svc, &vault, &staging, &moss_dir, vec![item1.clone(), item2.clone()]).await;
+
+        for key in &staged1 {
+            assert_eq!(
+                std::fs::read(staging.join(key)).unwrap(),
+                b"STAGED-SENTINEL",
+                "'{}' (unchanged video) must not be re-dispatched when a SIBLING video's bytes change",
+                key
+            );
+        }
+        let mp4_2 = staging.join(asset_paths::to_mp4(&item2));
+        assert_eq!(
+            std::fs::read(&mp4_2).unwrap(),
+            b"two-bytes-CHANGED",
+            "the changed video must be re-dispatched and its mp4 must reflect the new bytes"
+        );
+        let _ = staged2; // only the mp4 identity matters here; asserted above
+    }
+
+    /// (c) A missing required output (the 71ee43bc1c gap, now per item) must
+    /// re-dispatch only the video whose output vanished.
+    #[tokio::test]
+    async fn a_missing_output_only_dispatches_that_video() {
+        use moss_core::asset_paths;
+
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+
+        let mut svc = BuildServices::headless();
+        svc.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+
+        let item1 = "videos/one.mov".to_string();
+        let item2 = "videos/two.mov".to_string();
+
+        let staged1 = stage_and_prime_video(&svc, &vault, &staging, &item1, b"one-bytes", false);
+        let _staged2 = stage_and_prime_video(&svc, &vault, &staging, &item2, b"two-bytes", false);
+
+        // Video #2's mp4 vanished (a stale sweep / crash artifact) even
+        // though its source never changed.
+        let mp4_2 = staging.join(asset_paths::to_mp4(&item2));
+        std::fs::remove_file(&mp4_2).unwrap();
+
+        let epoch_before = svc.cancellation.current_id();
+        let _sealed =
+            dispatch_and_seal(&svc, &vault, &staging, &moss_dir, vec![item1.clone(), item2.clone()]).await;
 
         assert!(
             svc.cancellation.current_id() > epoch_before,
-            "a matched fingerprint with a missing required output must still \
-             re-dispatch (bump the epoch), not silently skip and drop the key"
+            "a video with a matched fingerprint but a missing required output must still re-dispatch"
         );
+        for key in &staged1 {
+            assert_eq!(
+                std::fs::read(staging.join(key)).unwrap(),
+                b"STAGED-SENTINEL",
+                "'{}' (unaffected video) must not be re-dispatched when a SIBLING video's output is missing",
+                key
+            );
+        }
+        assert_eq!(
+            std::fs::read(&mp4_2).unwrap(),
+            b"two-bytes",
+            "the missing output must be self-healed (recreated) by the re-dispatch"
+        );
+    }
+
+    /// (d) Removing a video from the vault must clean only its own outputs;
+    /// every other video's outputs survive the seal and the stale sweep.
+    #[tokio::test]
+    async fn a_removed_video_is_cleaned_others_survive() {
+        use crate::build::media::pipeline::{compute_expected_dirs, remove_stale_dirs, remove_stale_files};
+
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+
+        let mut svc = BuildServices::headless();
+        svc.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+
+        let item1 = "videos/one.mov".to_string();
+        let item2 = "videos/two.mov".to_string();
+
+        let staged1 = stage_and_prime_video(&svc, &vault, &staging, &item1, b"one-bytes", false);
+        let staged2 = stage_and_prime_video(&svc, &vault, &staging, &item2, b"two-bytes", false);
+
+        // Video #2 is gone from the vault, and therefore from this build's
+        // video_items — dispatch never even sees it.
+        std::fs::remove_file(vault.join(&item2)).unwrap();
+
+        let sealed = dispatch_and_seal(&svc, &vault, &staging, &moss_dir, vec![item1.clone()]).await;
+        let view = sealed.site_hashes_view();
+        remove_stale_files(&staging, view, "test");
+        remove_stale_dirs(&staging, &compute_expected_dirs(view));
+
+        for key in &staged1 {
+            assert!(
+                staging.join(key).exists(),
+                "'{}' (still-live video) must survive a sibling video's removal",
+                key
+            );
+            assert_eq!(std::fs::read(staging.join(key)).unwrap(), b"STAGED-SENTINEL");
+        }
+        for key in &staged2 {
+            assert!(
+                !staging.join(key).exists(),
+                "'{}' (removed video's output) must be cleaned by the stale sweep",
+                key
+            );
+        }
     }
 
     /// Negative case: when staging files are absent, keys are NOT emitted.

@@ -1354,10 +1354,9 @@ pub(crate) fn convert_single_image(
 // Fingerprint (for skip-on-no-change)
 // ---------------------------------------------------------------------------
 
-/// SHA-256 fingerprint of the image set + config.
-///
-/// Mirrors `compute_video_set_fingerprint` — sort by path, hash
-/// `(path, size, mtime)` tuples + JSON config params.
+/// SHA-256 fingerprint of the image set + config: sort by path, hash
+/// `(path, size, mtime)` tuples + JSON config params. Whole-set, unlike
+/// video's per-item `compute_video_item_fingerprint` (build/media/video.rs).
 pub(crate) fn compute_image_set_fingerprint(
     source_path: &str,
     image_items: &[ImageConversionItem],

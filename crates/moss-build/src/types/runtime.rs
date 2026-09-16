@@ -370,8 +370,8 @@ impl Default for ChildProcessRegistry {
 /// `FolderSession::cancel`. This state retains:
 /// - `conversion_id`: monotonically increasing epoch for filtering stale
 ///   progress events and for inter-task epoch checks
-/// - `last_video_fingerprint`: short-circuits re-dispatch when the video set
-///   hasn't changed
+/// - `last_video_fingerprints`: short-circuits re-dispatch, per video, when
+///   that one video hasn't changed
 ///
 /// The legacy `cancel()` / `is_cancelled()` methods remain as deprecated
 /// no-ops to keep API churn local; callers that need to read cancellation
@@ -380,12 +380,13 @@ impl Default for ChildProcessRegistry {
 pub struct VideoConversionState {
     /// Monotonically increasing ID for the current conversion
     conversion_id: AtomicU64,
-    /// Fingerprint of the last dispatched video set (SHA-256 of sorted video
-    /// paths + sizes + mtimes + compression params). When a rebuild triggers
-    /// dispatch and the fingerprint matches, we skip cancellation and let the
-    /// in-progress conversion continue — the video set hasn't changed, so there's
-    /// no reason to restart.
-    last_video_fingerprint: std::sync::Mutex<Option<String>>,
+    /// Fingerprint of the last dispatch that considered each video, keyed by
+    /// the video's relative source path. Per-item (not a single whole-set
+    /// fingerprint) so that one added/changed/removed video no longer
+    /// invalidates every other, untouched video's skip decision — see
+    /// `compute_video_item_fingerprint` and
+    /// `dispatch_video_conversions` in `build/media/video.rs`.
+    last_video_fingerprints: std::sync::Mutex<HashMap<String, String>>,
 }
 
 impl VideoConversionState {
@@ -394,7 +395,7 @@ impl VideoConversionState {
     pub fn new() -> Self {
         Self {
             conversion_id: AtomicU64::new(0),
-            last_video_fingerprint: std::sync::Mutex::new(None),
+            last_video_fingerprints: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -424,16 +425,26 @@ impl VideoConversionState {
         self.conversion_id.load(Ordering::SeqCst)
     }
 
-    /// Check if the video set fingerprint matches the last dispatched conversion.
-    /// Returns true if the fingerprint matches (no change), false otherwise.
-    /// Updates the stored fingerprint to the new value.
-    pub fn check_and_update_fingerprint(&self, new_fingerprint: &str) -> bool {
-        let mut last = self.last_video_fingerprint.lock().unwrap();
-        let matches = last.as_deref() == Some(new_fingerprint);
-        if !matches {
-            *last = Some(new_fingerprint.to_string());
-        }
+    /// Check `path`'s fingerprint against the value stored from the last
+    /// dispatch that considered it, and update the stored value to
+    /// `new_fingerprint`. Returns true if it matches (this one video is
+    /// unchanged), false otherwise. Independent per path: a change to one
+    /// video's stored fingerprint never affects another's.
+    pub fn check_and_update_item_fingerprint(&self, path: &str, new_fingerprint: &str) -> bool {
+        let mut map = self.last_video_fingerprints.lock().unwrap();
+        let matches = map.get(path).map(String::as_str) == Some(new_fingerprint);
+        map.insert(path.to_string(), new_fingerprint.to_string());
         matches
+    }
+
+    /// Drop stored fingerprints for paths not in `keep` — called once per
+    /// dispatch with the current video set, so a removed video's entry
+    /// doesn't linger forever, and a removed-then-re-added video is treated
+    /// as new rather than replaying a stale match against bytes that may
+    /// since have changed.
+    pub fn retain_item_fingerprints(&self, keep: &HashSet<String>) {
+        let mut map = self.last_video_fingerprints.lock().unwrap();
+        map.retain(|k, _| keep.contains(k));
     }
 }
 
@@ -908,27 +919,53 @@ mod tests {
     }
 
     #[test]
-    fn test_video_conversion_fingerprint_first_call_returns_false() {
+    fn test_video_item_fingerprint_first_call_returns_false() {
         let state = VideoConversionState::new();
         // First call with any fingerprint should return false (no previous)
-        assert!(!state.check_and_update_fingerprint("abc123"));
+        assert!(!state.check_and_update_item_fingerprint("a.mov", "abc123"));
     }
 
     #[test]
-    fn test_video_conversion_fingerprint_same_returns_true() {
+    fn test_video_item_fingerprint_same_returns_true() {
         let state = VideoConversionState::new();
-        state.check_and_update_fingerprint("abc123");
+        state.check_and_update_item_fingerprint("a.mov", "abc123");
         // Second call with same fingerprint should return true (match)
-        assert!(state.check_and_update_fingerprint("abc123"));
+        assert!(state.check_and_update_item_fingerprint("a.mov", "abc123"));
     }
 
     #[test]
-    fn test_video_conversion_fingerprint_different_returns_false() {
+    fn test_video_item_fingerprint_different_returns_false() {
         let state = VideoConversionState::new();
-        state.check_and_update_fingerprint("abc123");
+        state.check_and_update_item_fingerprint("a.mov", "abc123");
         // Different fingerprint should return false and update
-        assert!(!state.check_and_update_fingerprint("def456"));
+        assert!(!state.check_and_update_item_fingerprint("a.mov", "def456"));
         // Now the new fingerprint should match
-        assert!(state.check_and_update_fingerprint("def456"));
+        assert!(state.check_and_update_item_fingerprint("a.mov", "def456"));
+    }
+
+    /// The core per-item property: one path's fingerprint is independent of
+    /// another's. Before this change a single `Option<String>` fingerprint
+    /// covered the whole video set, so checking path B always invalidated
+    /// whatever path A had just recorded.
+    #[test]
+    fn test_video_item_fingerprint_is_independent_per_path() {
+        let state = VideoConversionState::new();
+        state.check_and_update_item_fingerprint("a.mov", "fp-a");
+        state.check_and_update_item_fingerprint("b.mov", "fp-b");
+        // Both still match their own last-recorded fingerprint.
+        assert!(state.check_and_update_item_fingerprint("a.mov", "fp-a"));
+        assert!(state.check_and_update_item_fingerprint("b.mov", "fp-b"));
+    }
+
+    #[test]
+    fn test_retain_item_fingerprints_drops_removed_paths() {
+        let state = VideoConversionState::new();
+        state.check_and_update_item_fingerprint("a.mov", "fp-a");
+        state.check_and_update_item_fingerprint("b.mov", "fp-b");
+        state.retain_item_fingerprints(&HashSet::from(["a.mov".to_string()]));
+        // "a.mov" is still known...
+        assert!(state.check_and_update_item_fingerprint("a.mov", "fp-a"));
+        // ...but "b.mov" was dropped, so the same fingerprint now reads as new.
+        assert!(!state.check_and_update_item_fingerprint("b.mov", "fp-b"));
     }
 }
