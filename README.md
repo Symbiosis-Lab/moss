@@ -8,13 +8,6 @@ There's no database, no CMS, and no lock-in — the folder on disk is the site. 
 
 ## Install
 
-Homebrew (macOS and Linux) needs the tap trusted once, before the first install:
-
-```sh
-brew tap symbiosis-lab/tap
-brew trust symbiosis-lab/tap
-```
-
 macOS (desktop app + CLI, as a Homebrew cask):
 
 ```sh
