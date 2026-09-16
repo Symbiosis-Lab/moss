@@ -47,6 +47,26 @@ fn version_ahead_is_rejected() {
 }
 
 #[test]
+fn version_ahead_predicate_flags_only_a_newer_declared_version() {
+    let ahead: toml::Table =
+        toml::from_str(&format!("schema_version = {}", CURRENT_VERSION + 1)).unwrap();
+    assert_eq!(version_ahead(&ahead), Some(CURRENT_VERSION + 1));
+
+    let current: toml::Table =
+        toml::from_str(&format!("schema_version = {}", CURRENT_VERSION)).unwrap();
+    assert_eq!(version_ahead(&current), None);
+
+    let behind: toml::Table = toml::from_str("schema_version = 0").unwrap();
+    assert_eq!(version_ahead(&behind), None);
+
+    // No key at all — e.g. `.moss/state.toml`, which shares the managed-TOML
+    // write primitive but carries no top-level `schema_version` of its own.
+    // `write_managed_toml`'s guard relies on this reading as "not ahead".
+    let untagged: toml::Table = toml::from_str("[deployment]\nsite_id = \"x\"").unwrap();
+    assert_eq!(version_ahead(&untagged), None);
+}
+
+#[test]
 fn migrate_to_current_is_idempotent() {
     let mut raw: toml::Table = toml::from_str("[hooks]\nsyndicate = [\"email\"]").unwrap();
     assert!(migrate_to_current(&mut raw).unwrap());

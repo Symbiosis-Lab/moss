@@ -397,8 +397,13 @@ async fn dispatch_command_core(
             reply_json(&r)
         }
         "read_project_file" => {
+            // host.plugin is the engine's own authoritative identity for the
+            // running plugin (never client-supplied), so the shared
+            // social-data door in read_project_file_impl gets a trustworthy
+            // plugin_id the same way the Tauri command path gets one from
+            // moss-api's ctx.plugin_name.
             let r = crate::plugins::project_files::read_project_file_impl(
-                host.project_path, &req_str(&args, "relativePath")?).await?;
+                host.project_path, host.plugin, &req_str(&args, "relativePath")?).await?;
             reply_json(&r)
         }
         "read_site_file" => {
@@ -410,7 +415,7 @@ async fn dispatch_command_core(
         }
         "write_project_file" => {
             crate::plugins::project_files::write_project_file_impl(
-                host.project_path, &req_str(&args, "relativePath")?, &req_str(&args, "data")?).await?;
+                host.project_path, host.plugin, &req_str(&args, "relativePath")?, &req_str(&args, "data")?).await?;
             Ok("null".into())
         }
         "list_project_files" => {

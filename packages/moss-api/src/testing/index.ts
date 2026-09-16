@@ -65,3 +65,6 @@ export {
   type MockDialogTracker,
   type MockDialogResult,
 } from "./mock-tauri.js";
+
+// .moss/ sandbox fence mirror — see mock-moss-fence.ts
+export { enforceMossFence } from "./mock-moss-fence.js";

@@ -122,6 +122,11 @@ async fn request_rebuild(
         log::warn!("No rebuild worker registered for '{}' — building inline", folder_path);
         return inline_with_pump_gate(folder_path, host_ports, plugins, req).await;
     };
+    // Unlike the GUI, headless has no producer that can dispatch before this
+    // point: nothing constructs this `request_rebuild` closure (hence nothing
+    // can reach here) until `start()` registers the worker, and `start()` runs
+    // only after `run_headless_build`'s own initial `run_pipeline` returns —
+    // so no trigger can fire before the folder's first build completes.
     handle.enqueue(req);
 }
 

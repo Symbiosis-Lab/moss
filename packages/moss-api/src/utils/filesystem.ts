@@ -38,6 +38,10 @@ export async function readFile(relativePath: string): Promise<string> {
 
   return getTauriCore().invoke<string>("read_project_file", {
     projectPath: ctx.project_path,
+    // Identifies the caller for the one narrow `.moss/` exception
+    // (`.moss/data/social/<plugin>.json`) — every moss-api call runs inside a
+    // plugin hook, so ctx.plugin_name is always set here.
+    pluginName: ctx.plugin_name,
     relativePath,
   });
 }
@@ -70,6 +74,7 @@ export async function writeFile(
 
   await getTauriCore().invoke("write_project_file", {
     projectPath: ctx.project_path,
+    pluginName: ctx.plugin_name,
     relativePath,
     data: content,
   });

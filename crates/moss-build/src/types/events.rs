@@ -437,6 +437,23 @@ pub enum MossEvent {
     ///
     /// Routed via `emit_to("preview", …)` — NOT broadcast.
     FolderHealthChanged { folder: String, unavailable: bool, degraded: bool },
+
+    /// Windows only: the invisible `HTMAXBUTTON` Snap Layouts overlay
+    /// (`platform/windows/snap_overlay.rs`, Tasks 6-7 of
+    /// docs/archive/2026-09-14-windows-custom-caption-design.md) was entered
+    /// or left. The overlay covers the HTML maximize button and answers
+    /// non-client hit-testing itself, so ordinary CSS `:hover` never fires on
+    /// that button; this is the substitute signal. `hovering: true` on
+    /// enter, `false` on leave — emitted only on a CHANGE, never repeated
+    /// while the pointer sits still inside the overlay.
+    SnapOverlayHover { hovering: bool },
+    /// Companion to `SnapOverlayHover`: the overlay was clicked
+    /// (`WM_NCLBUTTONUP`). No payload — the actual maximize/restore toggle is
+    /// the frontend's job (`Window::toggleMaximize()`), not this event's;
+    /// the overlay is a child window, and `DefWindowProcW`'s own
+    /// non-client button handling has no effect on a child (only a real
+    /// top-level caption maximizes itself that way).
+    SnapOverlayClick,
 }
 
 /// The `PipelineEvent` -> `MossEvent` translation, with nowhere to send it yet.

@@ -33,7 +33,33 @@
 /// reachable through the proxy (split-tunnel VPNs, GFW users, sandboxed
 /// environments).
 pub fn proxied_ureq_agent(url: &str, timeout: std::time::Duration) -> ureq::Agent {
-    let mut builder = ureq::AgentBuilder::new().timeout(timeout);
+    // ureq's own default (`AgentBuilder::redirects` doc) — spelled out now
+    // that a second caller needs a different value, not a behavior change.
+    proxied_agent_builder(url, timeout, 5).build()
+}
+
+/// [`proxied_ureq_agent`] with automatic redirect-following disabled — for a
+/// caller that must re-validate every hop's target itself before following
+/// it (SSRF: a validated public host can 302/303/307/308 to an
+/// internal/loopback address the caller's own check never sees). See
+/// `vault::import::scrape::run::refuse_unsafe_scrape_url` and its
+/// redirect-following caller, the only consumer today.
+///
+/// A 3xx response comes back as `Ok` with the redirect status intact
+/// (ureq's documented `redirects(0)` behavior) rather than as an `Err`, so
+/// the caller can read its `Location` header and decide.
+pub fn proxied_ureq_agent_no_redirects(url: &str, timeout: std::time::Duration) -> ureq::Agent {
+    proxied_agent_builder(url, timeout, 0).build()
+}
+
+/// Shared proxy-resolution setup for both agent constructors above — the
+/// only difference between them is `redirects`.
+fn proxied_agent_builder(
+    url: &str,
+    timeout: std::time::Duration,
+    redirects: u32,
+) -> ureq::AgentBuilder {
+    let mut builder = ureq::AgentBuilder::new().timeout(timeout).redirects(redirects);
     if let Some(proxy_url) = resolve_proxy_for_url(url) {
         match ureq::Proxy::new(&proxy_url) {
             Ok(proxy) => {
@@ -47,7 +73,7 @@ pub fn proxied_ureq_agent(url: &str, timeout: std::time::Duration) -> ureq::Agen
             ),
         }
     }
-    builder.build()
+    builder
 }
 
 /// The proxy moss's HTTP clients should use for `url`, or `None` for a direct

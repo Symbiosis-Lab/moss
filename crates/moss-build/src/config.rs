@@ -101,6 +101,17 @@ impl ConfigFile {
         }
     }
 
+    /// `Some(v)` when this file declared a schema newer than this build
+    /// supports. Free — [`Self::parse`]'s `VersionAhead` short-circuits
+    /// before touching `root`, so the original `schema_version` survives
+    /// into `self.root` untouched and this is just [`migrations::version_ahead`]
+    /// over the table already in hand. Callers that already hold a
+    /// `ConfigFile` (e.g. the pipeline's one-parse-per-build `cfg`) should
+    /// call this instead of re-reading and re-parsing the file.
+    pub fn schema_version_ahead(&self) -> Option<u32> {
+        crate::config::migrations::version_ahead(&self.root)
+    }
+
     /// A string field under `[site]`, e.g. `lang`, `typesetting`.
     pub fn site_str(&self, field: &str) -> Option<&str> {
         self.root

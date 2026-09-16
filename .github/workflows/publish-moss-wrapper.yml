@@ -1,0 +1,151 @@
+# Publishes the @symbiosis-lab/moss npm wrapper (packages/moss) — and nothing else.
+#
+# The wrapper is versioned in LOCKSTEP with moss releases (its postinstall
+# downloads the matching moss binary), so it publishes on its own
+# cadence, outside the changesets flow that owns moss-api and the plugins
+# (.changeset/config.json ignores it for the same reason). This job therefore
+# uses the NPM_TOKEN repo secret directly rather than the `npm` deployment
+# environment: that environment exists to keep `changeset publish` — which
+# sweeps every unpublished workspace package — pinned to main. A single-package
+# publish of a version that must equal an existing moss tag has
+# nothing to sweep, and the guard step below enforces exactly that.
+#
+# WHY IT DOES THE VERSION BUMP ITSELF (2026-08-14): it used to read the version
+# out of packages/moss/package.json and go no further, so shipping the wrapper
+# took three separate human acts — edit the file, commit it, dispatch this. All
+# three were skipped for v0.11.2 and v0.11.3, and `npx @symbiosis-lab/moss`
+# installed 0.11.1 for two releases without anyone noticing. Now the version is
+# resolved from the newest published release and written back, so the whole
+# thing is one trigger.
+#
+# WHY IT CANNOT HANG OFF push-to-main: release.yml uploads to moss as a
+# DRAFT, whose download URLs 404 for everyone but us. A wrapper published then
+# would install nothing. The correct moment is when a human publishes the draft
+# — which is what `repository_dispatch` carries.
+name: Publish moss npm wrapper
+
+on:
+  repository_dispatch:
+    types: [moss-release-published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "moss version without the leading v (default: newest published release)"
+        required: false
+  # A backstop, not a schedule — the dispatch above is the real trigger. maint.yml
+  # argues that a cron is a standing bill that has to justify itself per run; this
+  # one converts "the wrapper silently sat two releases behind" into "at most a
+  # week behind, and it fixes itself." It cannot publish anything but a version
+  # that already exists as a published release, and it exits in seconds when npm
+  # is already current, which is every week but one.
+  schedule:
+    - cron: "23 6 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Which version are we publishing
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED: ${{ inputs.version || github.event.client_payload.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${REQUESTED:-}" ]; then
+            VERSION="${REQUESTED#v}"
+          else
+            # --exclude-drafts is the point — see the header.
+            VERSION=$(gh release list --repo Symbiosis-Lab/moss \
+              --exclude-drafts --exclude-pre-releases --limit 1 --json tagName \
+              -q '.[0].tagName')
+            VERSION="${VERSION#v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if npm view "@symbiosis-lab/moss@$VERSION" version > /dev/null 2>&1; then
+            echo "npm already has $VERSION — nothing to do."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: The version must be a real, published moss release
+        if: steps.target.outputs.needed == 'true'
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+        run: |
+          # Anonymous, on purpose: this asks the question a user's postinstall
+          # will ask. A draft answers 200 to us and 404 to them.
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' -L \
+            "https://github.com/Symbiosis-Lab/moss/releases/tag/v$VERSION")
+          if [ "$STATUS" != "200" ]; then
+            echo "moss has no published v$VERSION (HTTP $STATUS) — a published wrapper would install nothing."
+            exit 1
+          fi
+
+      - name: Set the wrapper to that version
+        if: steps.target.outputs.needed == 'true'
+        working-directory: packages/moss
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      # The Linux binary dynamically links webkit2gtk (until the open moss-cli
+      # replaces it — P1.5); without it the loader kills even `--version`.
+      - name: Install the runtime library the binary links
+        if: steps.target.outputs.needed == 'true'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libwebkit2gtk-4.1-0
+
+      - name: The wrapper's own tests
+        if: steps.target.outputs.needed == 'true'
+        working-directory: packages/moss
+        run: npm test
+
+      # This job runs from a checkout, where the postinstall deliberately skips
+      # the download (it can't tell this apart from a developer's `pnpm i`).
+      # Forcing it is what makes the next line a test of the download path
+      # rather than of the lazy fallback in bin/moss.js.
+      - name: Smoke-test the download path before publishing it
+        if: steps.target.outputs.needed == 'true'
+        working-directory: packages/moss
+        env:
+          MOSS_FORCE_BINARY_DOWNLOAD: '1'
+        run: |
+          node install.js
+          node bin/moss.js --version
+
+      - name: Publish
+        if: steps.target.outputs.needed == 'true'
+        working-directory: packages/moss
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Last, so the committed version can never claim a publish that failed.
+      - name: Record the bump in the repo
+        if: steps.target.outputs.needed == 'true'
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet packages/moss/package.json; then
+            echo "package.json already said $VERSION"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(moss-wrapper): $VERSION" -m "Published to npm by publish-moss-wrapper.yml. The wrapper's postinstall downloads the matching moss binary, so this version tracks the release exactly." packages/moss/package.json
+          git push origin "HEAD:${{ github.ref_name }}"

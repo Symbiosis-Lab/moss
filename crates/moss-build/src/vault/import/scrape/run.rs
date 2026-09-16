@@ -427,6 +427,162 @@ fn should_retry_status(status: Option<u16>) -> bool {
     }
 }
 
+/// Refuse a URL that is not a plain `http`/`https` request to a public host.
+///
+/// The import path hands `start_url` (and, via [`fetch_with_validated_redirects`],
+/// every redirect target reached while fetching it) straight to ureq — an
+/// attacker-controlled webview could otherwise point the app's own network
+/// stack at `file://` (reading local files into the imported vault, where
+/// they get published) or an internal service (`http://127.0.0.1:<port>`, a
+/// link-local cloud-metadata address). A URL that passes this check on
+/// `start_url` alone is not enough: a public host the check allowed can
+/// itself 302/303/307/308 to a loopback/link-local target, so
+/// [`fetch_with_validated_redirects`] re-runs this SAME function on every
+/// hop rather than trusting ureq's own redirect-following (which does not
+/// re-validate at all).
+///
+/// Checked on the URL string alone: DNS rebinding — a hostname that
+/// resolves to a loopback/link-local address only at connect time — is NOT
+/// covered here; that needs a connect-time check inside the fetch itself,
+/// out of scope for this string-level gate.
+pub fn refuse_unsafe_scrape_url(url_str: &str) -> Result<(), String> {
+    let url = url::Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
+    match url.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(format!(
+                "URL scheme '{other}' is not allowed — only http/https"
+            ))
+        }
+    }
+    // `url::Host::Ipv4`/`Ipv6` carry parsed addresses directly — `host_str()`
+    // returns an IPv6 literal WITH its brackets (`"[::1]"`), which fails a
+    // plain `str::parse::<IpAddr>()` and would silently let every bracketed
+    // IPv6 literal through unchecked.
+    match url.host() {
+        Some(url::Host::Domain(d)) => {
+            if d.eq_ignore_ascii_case("localhost") {
+                return Err("URL must not target localhost".to_string());
+            }
+        }
+        Some(url::Host::Ipv4(v4)) => {
+            let ip = std::net::IpAddr::V4(v4);
+            if is_loopback_or_link_local(&ip) {
+                return Err(format!(
+                    "URL must not target a loopback or link-local address ({ip})"
+                ));
+            }
+        }
+        Some(url::Host::Ipv6(v6)) => {
+            let ip = std::net::IpAddr::V6(v6);
+            if is_loopback_or_link_local(&ip) {
+                return Err(format!(
+                    "URL must not target a loopback or link-local address ({ip})"
+                ));
+            }
+        }
+        None => return Err("URL has no host".to_string()),
+    }
+    Ok(())
+}
+
+/// True for a loopback or link-local address, including an IPv4 address
+/// spelled as an IPv4-mapped IPv6 literal (`::ffff:127.0.0.1`) — a common
+/// bypass for a check that only inspects the IPv6 form directly.
+fn is_loopback_or_link_local(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => {
+            if v6.is_loopback() {
+                return true;
+            }
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return mapped.is_loopback() || mapped.is_link_local();
+            }
+            // fe80::/10
+            (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+/// Maximum redirect hops [`fetch_with_validated_redirects`] will follow —
+/// ureq's own former default (`AgentBuilder::redirects` doc), preserved so a
+/// legitimate multi-hop chain (http→https, then a trailing-slash or
+/// www-prefix canonicalization) keeps working exactly as it did when ureq
+/// followed redirects itself.
+const MAX_REDIRECT_HOPS: u32 = 5;
+
+/// `agent.get(url)`, following redirects by hand so every hop's target is
+/// re-validated by [`refuse_unsafe_scrape_url`] before it is followed —
+/// `agent` must be built with `redirects(0)`
+/// ([`crate::system::proxy::proxied_ureq_agent_no_redirects`]), or ureq
+/// would already have followed (and connected to) the first hop before this
+/// function ever saw it.
+///
+/// A `Location` header is resolved against the URL that sent it (it may be
+/// relative) before being checked and followed. A 3xx with no `Location`,
+/// or one that fails to parse even as a relative reference, is returned
+/// as-is rather than chased.
+fn fetch_with_validated_redirects(
+    agent: &ureq::Agent,
+    start_url: &str,
+    user_agent: &str,
+) -> Result<ureq::Response, ureq::Error> {
+    fetch_following_redirects(agent, start_url, user_agent, refuse_unsafe_scrape_url)
+}
+
+/// [`fetch_with_validated_redirects`]'s body, taking the per-hop validator as
+/// a parameter so the redirect-following MECHANISM (hop resolution, the hop
+/// cap, handing back a Location-less or unparsable 3xx as-is) is testable
+/// independently of the SSRF POLICY (`refuse_unsafe_scrape_url`) — every
+/// test server a unit test can stand up is itself a loopback address, so a
+/// test proving a legitimate same-host redirect is still followed cannot
+/// use the real policy without tripping its own loopback refusal. Production
+/// always calls the two-argument wrapper above, which always wires in the
+/// real policy; no caller outside this file's tests should call this
+/// directly.
+fn fetch_following_redirects(
+    agent: &ureq::Agent,
+    start_url: &str,
+    user_agent: &str,
+    validate: impl Fn(&str) -> Result<(), String>,
+) -> Result<ureq::Response, ureq::Error> {
+    // 400: a permanent, never-retried refusal (`should_retry_status` only
+    // retries 429/5xx) — a redirect target this function refused, or a
+    // chain that ran past the hop cap, will not look any different on a
+    // retry. `call_with_retry`'s error text is `"{code} {status_text}"`
+    // (it never reads the body), so the detail goes in `status_text`
+    // itself rather than being silently dropped.
+    const REFUSED_STATUS: u16 = 400;
+    let refused = |status_text: &str| {
+        ureq::Error::Status(
+            REFUSED_STATUS,
+            ureq::Response::new(REFUSED_STATUS, status_text, "")
+                .expect("status line without newlines always builds"),
+        )
+    };
+
+    let mut current = start_url.to_string();
+    for _ in 0..=MAX_REDIRECT_HOPS {
+        let response = agent.get(&current).set("User-Agent", user_agent).call()?;
+        if !(300..400).contains(&response.status()) {
+            return Ok(response);
+        }
+        let Some(location) = response.header("Location") else {
+            return Ok(response);
+        };
+        let next = match url::Url::parse(&current).and_then(|base| base.join(location)) {
+            Ok(joined) => joined.to_string(),
+            Err(_) => return Ok(response),
+        };
+        if let Err(msg) = validate(&next) {
+            return Err(refused(&format!("redirected to a disallowed URL: {msg}")));
+        }
+        current = next;
+    }
+    Err(refused(&format!("too many redirects (> {MAX_REDIRECT_HOPS})")))
+}
+
 /// `ureq::get` with up to 3 attempts (1 initial + 2 retries) and exponential
 /// backoff (500ms, then 1s) between attempts, for transient failures only
 /// (see [`should_retry_status`]). Permanent failures (4xx other than 429)
@@ -450,8 +606,11 @@ fn call_with_retry(
         }
         // Proxy-aware like every other moss HTTP client (system::proxy):
         // a direct connect times out on hosts only reachable via proxy.
-        let agent = crate::system::proxy::proxied_ureq_agent(url, timeout);
-        match agent.get(url).set("User-Agent", user_agent).call() {
+        // `_no_redirects`: this path re-validates every redirect hop itself
+        // (see `fetch_with_validated_redirects`) rather than trusting
+        // ureq's own follower, which never re-checks a Location header.
+        let agent = crate::system::proxy::proxied_ureq_agent_no_redirects(url, timeout);
+        match fetch_with_validated_redirects(&agent, url, user_agent) {
             Ok(resp) => return Ok(resp),
             Err(ureq::Error::Status(code, resp)) => {
                 let text = format!("{} {}", code, resp.status_text());
@@ -738,5 +897,202 @@ Content-Location: https://img.douban.com/a.png\r\n\
             body.contains("no article content found"),
             "the placeholder must say why: {body}"
         );
+    }
+
+    // ── refuse_unsafe_scrape_url ─────────────────────────────────────────
+
+    #[test]
+    fn refuses_file_scheme() {
+        let err = refuse_unsafe_scrape_url("file:///etc/passwd")
+            .expect_err("file:// must never be accepted");
+        assert!(err.contains("scheme"), "{err}");
+    }
+
+    #[test]
+    fn refuses_loopback_ipv4() {
+        let err = refuse_unsafe_scrape_url("http://127.0.0.1:8080/admin")
+            .expect_err("a loopback URL must be refused");
+        assert!(err.contains("loopback"), "{err}");
+    }
+
+    #[test]
+    fn refuses_loopback_ipv6() {
+        refuse_unsafe_scrape_url("http://[::1]/").expect_err("::1 must be refused");
+    }
+
+    #[test]
+    fn refuses_ipv4_mapped_loopback() {
+        // ::ffff:127.0.0.1 — a common bypass for a check that only inspects
+        // the plain IPv6 loopback form.
+        refuse_unsafe_scrape_url("http://[::ffff:127.0.0.1]/")
+            .expect_err("an IPv4-mapped loopback literal must be refused");
+    }
+
+    #[test]
+    fn refuses_link_local() {
+        // 169.254.169.254 — the AWS/GCP/Azure instance-metadata address, the
+        // canonical SSRF target.
+        let err = refuse_unsafe_scrape_url("http://169.254.169.254/latest/meta-data/")
+            .expect_err("a link-local URL must be refused");
+        assert!(err.contains("link-local"), "{err}");
+    }
+
+    #[test]
+    fn refuses_localhost_hostname() {
+        refuse_unsafe_scrape_url("http://localhost/").expect_err("localhost must be refused");
+    }
+
+    #[test]
+    fn allows_a_plain_https_url() {
+        assert!(refuse_unsafe_scrape_url("https://example.com/blog").is_ok());
+    }
+
+    #[test]
+    fn allows_a_plain_http_url() {
+        assert!(refuse_unsafe_scrape_url("http://example.com/blog").is_ok());
+    }
+
+    // ── fetch_with_validated_redirects (SSRF via redirect) ──────────────
+    //
+    // `refuse_unsafe_scrape_url` alone only checks the URL the caller typed
+    // — a public host that PASSES that check can still 302/303/307/308 to a
+    // loopback/link-local target, and ureq's own redirect-follower (what
+    // `proxied_ureq_agent`'s 5-redirect default drives) would walk straight
+    // into it with no re-check at all. These tests exercise the manual
+    // follower instead, using a mockito server as the "allowed host" that
+    // issues the redirect — mockito binds to 127.0.0.1, but that is the
+    // server ISSUING the 3xx, never a target these tests ask the follower to
+    // fetch, so it never trips `refuse_unsafe_scrape_url` itself.
+
+    fn no_redirect_test_agent(url: &str) -> ureq::Agent {
+        crate::system::proxy::proxied_ureq_agent_no_redirects(
+            url,
+            std::time::Duration::from_secs(5),
+        )
+    }
+
+    /// The detail this module's own refusals carry — `ureq::Error::Status`'s
+    /// `Display` only ever prints `"{url}: status code {code}"` (see
+    /// `ureq::error::Error`'s impl), so a test asserting on the human-
+    /// readable reason must read it off the wrapped `Response` directly.
+    fn refusal_detail(err: &ureq::Error) -> String {
+        match err {
+            ureq::Error::Status(_, resp) => resp.status_text().to_string(),
+            other => other.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_loopback_is_refused() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/start")
+            .with_status(302)
+            .with_header("Location", "http://127.0.0.1:1/internal")
+            .create_async()
+            .await;
+
+        let start = format!("{}/start", server.url());
+        let agent = no_redirect_test_agent(&start);
+        let err = fetch_with_validated_redirects(&agent, &start, "test-agent")
+            .expect_err("a redirect to a loopback address must be refused");
+        // Not just `.expect_err(...)`: an ablated per-hop check would still
+        // ATTEMPT the connection to 127.0.0.1:1 and get a real connection
+        // error back (nothing listens there in the sandbox) — an `Err` for
+        // the wrong reason. Asserting the detail is what actually
+        // distinguishes "the check refused this" from "the network did".
+        assert!(refusal_detail(&err).contains("disallowed"), "{}", refusal_detail(&err));
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_link_local_metadata_is_refused() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/start")
+            .with_status(302)
+            .with_header("Location", "http://169.254.169.254/latest/meta-data/")
+            .create_async()
+            .await;
+
+        let start = format!("{}/start", server.url());
+        let agent = no_redirect_test_agent(&start);
+        let err = fetch_with_validated_redirects(&agent, &start, "test-agent")
+            .expect_err("a redirect to the cloud-metadata address must be refused");
+        // Asserting the detail (not just "some Err") matters here: an
+        // ablated check would still connect-fail refusing this unroutable
+        // address in most sandboxes, which is an Err for the wrong reason —
+        // see `a_redirect_to_loopback_is_refused`'s comment.
+        assert!(refusal_detail(&err).contains("disallowed"), "{}", refusal_detail(&err));
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_ipv6_loopback_is_refused() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/start")
+            .with_status(302)
+            .with_header("Location", "http://[::1]/internal")
+            .create_async()
+            .await;
+
+        let start = format!("{}/start", server.url());
+        let agent = no_redirect_test_agent(&start);
+        let err = fetch_with_validated_redirects(&agent, &start, "test-agent")
+            .expect_err("a redirect to ::1 must be refused");
+        assert!(refusal_detail(&err).contains("disallowed"), "{}", refusal_detail(&err));
+    }
+
+    #[tokio::test]
+    async fn a_legitimate_redirect_is_still_followed() {
+        // Canonicalization (trailing slash, path rewrite — the same shape as
+        // an http→https upgrade) must keep working: only a redirect to a
+        // DISALLOWED target is refused, not every redirect. Exercises the
+        // `fetch_following_redirects` MECHANISM (hop-following, resolving a
+        // relative `Location`) with an always-allow validator — every test
+        // server available here is itself a loopback address, so the REAL
+        // `refuse_unsafe_scrape_url` would refuse this hop regardless of how
+        // legitimate it is (that policy is proven separately, on real
+        // public URLs, by `allows_a_plain_http(s)_url` above).
+        let mut server = mockito::Server::new_async().await;
+        let _redirect = server
+            .mock("GET", "/old-path")
+            .with_status(301)
+            .with_header("Location", "/new-path")
+            .create_async()
+            .await;
+        let _target = server
+            .mock("GET", "/new-path")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><body>ok</body></html>")
+            .create_async()
+            .await;
+
+        let start = format!("{}/old-path", server.url());
+        let agent = no_redirect_test_agent(&start);
+        let response = fetch_following_redirects(&agent, &start, "test-agent", |_| Ok(()))
+            .expect("a legitimate redirect must still be followed");
+        assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn a_redirect_chain_longer_than_the_hop_cap_is_refused() {
+        let mut server = mockito::Server::new_async().await;
+        let mut mocks = Vec::new();
+        for i in 0..=MAX_REDIRECT_HOPS {
+            mocks.push(
+                server
+                    .mock("GET", format!("/hop{i}").as_str())
+                    .with_status(302)
+                    .with_header("Location", &format!("/hop{}", i + 1))
+                    .create_async()
+                    .await,
+            );
+        }
+
+        let start = format!("{}/hop0", server.url());
+        let agent = no_redirect_test_agent(&start);
+        fetch_with_validated_redirects(&agent, &start, "test-agent")
+            .expect_err("a chain past MAX_REDIRECT_HOPS must be refused, not followed forever");
     }
 }

@@ -854,3 +854,106 @@ fn card_color_video_resolves_thumbnail_through_ladder() {
         "expected blue hue from video thumbnail, got {color:?}"
     );
 }
+
+/// The placeholder half of `card_color_video_resolves_thumbnail_through_ladder`:
+/// a page rendered BEFORE the background video phase writes `.thumb.jpg` gets
+/// no color (the video branch has no source-file fallback — see
+/// `resolve_color_source_path`'s doc), and — this is the fix this test backs
+/// — a SECOND call with nothing else changed except the file landing on disk
+/// resolves it correctly. `moss-build/src/build.rs`'s
+/// `trigger_media_settle_rerender` leans on exactly this: it doesn't patch
+/// the placeholder in place, it schedules the SAME render to run again once
+/// the poster settles, and this is the proof that a plain re-render is
+/// sufficient — no second mechanism is needed.
+#[test]
+fn card_color_video_self_heals_once_the_poster_lands() {
+    let tmp = repo_tmp();
+    let out_dir = tmp.path().join(".moss/build/current/videos");
+    std::fs::create_dir_all(&out_dir).unwrap();
+
+    // Before: background video conversion hasn't produced the thumbnail yet —
+    // the exact state a page renders in while the poster is still converting.
+    let before = resolve_card_color(
+        Some("videos/clip.mp4"),
+        Some(CoverType::Video),
+        Some(tmp.path()),
+        None,
+    );
+    assert_eq!(
+        before, None,
+        "no color before the poster exists — this is the bare placeholder a \
+         page ships while the poster is still converting"
+    );
+
+    // The background phase lands the poster — same path, same bytes shape as
+    // `video_cover_resolves_and_extracts_end_to_end`.
+    let img = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([0u8, 0, 255]));
+    image::DynamicImage::ImageRgb8(img)
+        .save_with_format(out_dir.join("clip.thumb.jpg"), image::ImageFormat::Jpeg)
+        .unwrap();
+
+    // After: a render that runs AFTER the poster landed — nothing else
+    // changed — now resolves the color. No cache entry, no special-cased
+    // "second call" behavior: it is the same function reading the same path,
+    // which is what makes triggering a plain re-render the correct fix.
+    let after = resolve_card_color(
+        Some("videos/clip.mp4"),
+        Some(CoverType::Video),
+        Some(tmp.path()),
+        None,
+    );
+    assert!(
+        after.as_deref().is_some_and(|c| {
+            c.starts_with("hsla(240,") || c.starts_with("hsla(239,") || c.starts_with("hsla(241,")
+        }),
+        "expected blue hue once the poster exists, got {after:?}"
+    );
+}
+
+/// The image-cover counterpart: a page rendered while the source is
+/// dataless/not-yet-materialized (the source path does not exist yet) bakes
+/// no color, and a render that runs after the source lands resolves it — no
+/// cache entry, same function, same path. `resolve_color_source_path` falls
+/// back to `output_root` when the source is absent (not the video-only "never
+/// falls back to source" rule), so the "before" state here has NEITHER file
+/// present, matching a genuinely unreadable source rather than a warm cache.
+/// This is the premise `trigger_media_settle_rerender`'s image/newly-added
+/// branch (build.rs) leans on for the brand-new-image case.
+#[test]
+fn card_color_image_self_heals_once_the_source_materializes() {
+    let tmp = repo_tmp();
+    let source_dir = tmp.path().join("assets");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    // Before: neither the source nor any output exists — the dataless state.
+
+    let before = resolve_card_color(
+        Some("assets/cover.jpg"),
+        Some(CoverType::Image),
+        Some(tmp.path()),
+        None,
+    );
+    assert_eq!(
+        before, None,
+        "no color before the source is readable — the bare placeholder a \
+         page ships while iCloud hasn't materialized the file yet"
+    );
+
+    // iCloud (or any other cloud provider) materializes the real bytes.
+    let img = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([255u8, 0, 0]));
+    image::DynamicImage::ImageRgb8(img)
+        .save_with_format(source_dir.join("cover.jpg"), image::ImageFormat::Jpeg)
+        .unwrap();
+
+    let after = resolve_card_color(
+        Some("assets/cover.jpg"),
+        Some(CoverType::Image),
+        Some(tmp.path()),
+        None,
+    );
+    assert!(
+        after.as_deref().is_some_and(|c| {
+            c.starts_with("hsla(0,") || c.starts_with("hsla(359,") || c.starts_with("hsla(1,")
+        }),
+        "expected red hue once the source is readable, got {after:?}"
+    );
+}

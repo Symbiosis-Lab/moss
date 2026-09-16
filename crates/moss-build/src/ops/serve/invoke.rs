@@ -506,6 +506,19 @@ async fn arm_list_tree(ctx: &Session, args: Value) -> ArmResult {
 /// not the editor-renders-source concern ADR-022 governs. The arm mirrors the
 /// command body: strip the project root the command reads from `AppState`, then
 /// call the SAME pure `resolve_url_for_file_inner` core.
+///
+/// Known gap: unlike the Tauri command (which asks the live `ServerState` for
+/// this folder's actual served dir), this arm passes `initial_serve_dir()` —
+/// the same cold-start-only heuristic `resolve_url_for_file_inner` used to
+/// compute internally before it took a `served_dir` parameter. `Session`
+/// (see `session.rs`) resolves the vault from the live `site_dir` at bind
+/// time but does not retain the pointer itself, and the `carrier!` macro
+/// hands every arm in a tier the same `(ctx, args)` pair, so reaching the
+/// live dir here would mean widening that shared signature (or adding a
+/// field to `Session`) for one arm out of eight. Out of scope for the fix
+/// that added `served_dir` — a page staged by a rebuild after this vault's
+/// first seal can still miss here even though the Tauri command now finds
+/// it.
 async fn arm_resolve_url_for_file(ctx: &Session, args: Value) -> ArmResult {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -530,7 +543,9 @@ async fn arm_resolve_url_for_file(ctx: &Session, args: Value) -> ArmResult {
         })?
         .to_string_lossy()
         .to_string();
-    let r = crate::editor::resolve::links::resolve_url_for_file_inner(&rel, &root)
+    let served_dir =
+        crate::moss_paths::MossPaths::from_moss_dir(root.join(".moss")).initial_serve_dir();
+    let r = crate::editor::resolve::links::resolve_url_for_file_inner(&rel, &root, &served_dir)
         .map_err(ArmError::Command)?;
     to_value(r)
 }

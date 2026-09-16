@@ -158,3 +158,42 @@ async fn a_publish_with_no_promoted_generation_refuses() {
     };
     assert!(err.contains("not sealed yet"), "got: {err}");
 }
+
+/// A version-ahead config refuses before the seal check even runs — this is
+/// the plugin route's half of the three-door guard (`push_site_inner_impl`
+/// for hosted, this for plugin, `push_prebuilt_inner` for prebuilt), all
+/// three calling `site_config::ensure_config_current`. `sealed: None` here
+/// would normally refuse with "not sealed yet" (see the test above); getting
+/// the schema_version message instead proves this check runs first. Ablated
+/// by deleting the `ensure_config_current(&folder_str)?;` call at the top of
+/// `run_plugin_deploy_inner`: goes red as the "not sealed yet" message from
+/// `require_sealed` instead.
+#[tokio::test]
+async fn a_version_ahead_config_refuses_before_the_seal_check() {
+    struct NoSink;
+    impl progress::DeploySink for NoSink {
+        fn deploy_progress(&self, _: progress::DeployProgress) {}
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let moss_dir = tmp.path().join(".moss");
+    std::fs::create_dir_all(&moss_dir).unwrap();
+    let future = crate::config::migrations::CURRENT_VERSION + 1;
+    std::fs::write(moss_dir.join("config.toml"), format!("schema_version = {future}\n")).unwrap();
+
+    let managers = crate::plugins::manager::ManagerCache::headless(
+        crate::build::ports::reporter::discard_owned(),
+    );
+    let ports = crate::deploy::one_shot::HeadlessDeployPorts;
+    let sink: std::sync::Arc<dyn progress::DeploySink> = std::sync::Arc::new(NoSink);
+    let err = run_plugin_deploy_inner(&PluginDeployContext {
+        folder: tmp.path(),
+        sealed: None,
+        managers: &managers,
+        sink: &sink,
+        ports: &ports,
+    })
+    .await
+    .expect_err("a version-ahead config must refuse");
+    assert!(err.contains("schema_version") && err.contains("newer"), "got: {err}");
+}

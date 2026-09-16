@@ -492,17 +492,28 @@ pub fn create_folder_inner(
 
 /// A project-relative path that has passed the **plugin** sandbox policy.
 ///
-/// Every plugin file command takes one of these rather than a `&str`, and
-/// [`PluginPath::sandboxed`] is the only way to make one. That is what makes
-/// the policy apply once instead of being hand-copied per command — and what
-/// makes "a plugin file command that forgot the fence" unwritable rather than
-/// merely unreviewed.
+/// Every plugin file command takes one of these rather than a `&str`, built
+/// through one of the door-specific constructors below — [`PluginPath::sandboxed`]
+/// for `read_project_file` / `write_project_file` (with the narrow
+/// [`PluginPath::shared_social_data`] exception those two commands also try
+/// first), [`PluginPath::storage`] for a plugin's own `.moss/plugins/<name>/`.
+/// That is what makes each policy apply once instead of being hand-copied per
+/// command — and what makes "a plugin file command that forgot the fence"
+/// unwritable rather than merely unreviewed.
 ///
 /// First-party code has no reason to construct one; if you are reaching for
 /// this from moss's own UI, the file you want has an owning module that should
 /// read it for you (see moss#997).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginPath(String);
+
+/// First-party file stems under `.moss/data/social/` — `review.json` is
+/// `build::features::review`'s colophon data. `shared_social_data` refuses a
+/// `plugin_id` matching one case-insensitively, so a plugin named "review"
+/// cannot claim the file just by legitimately matching its own id (the
+/// cross-plugin check alone would not catch that agreement). One list, so a
+/// future first-party writer adds its stem once.
+const RESERVED_SOCIAL_DATA_IDS: &[&str] = &["review"];
 
 impl PluginPath {
     /// The single plugin door: apply the sandbox policy to a plugin-supplied
@@ -522,7 +533,11 @@ impl PluginPath {
     /// plugins' stored credentials. A plugin that could read it could lift the
     /// signing key; one that could write it could grant itself capabilities it
     /// never declared. Plugins reach their own storage through
-    /// [`PluginPath::storage`] and build output through `read_site_file`.
+    /// [`PluginPath::storage`], build output through `read_site_file`, and the
+    /// shared comment-data directory through [`PluginPath::shared_social_data`]
+    /// — `write_project_file_impl` / `read_project_file_impl` try that
+    /// narrower door before falling back to this one, so its error message
+    /// still names the two doors that existed when it was written.
     pub fn sandboxed(relative_path: &str) -> Result<Self, String> {
         relative_segment_rules(relative_path)?;
         if first_segment_is_moss(relative_path) {
@@ -530,6 +545,80 @@ impl PluginPath {
                 "Access to .moss/ is not allowed. Use plugin storage (readPluginFile / writePluginFile) or readSiteFile instead."
                     .to_string(),
             );
+        }
+        Ok(Self(relative_path.to_string()))
+    }
+
+    /// The one documented exception to the `.moss/` fence above: the shared
+    /// comment-data directories from docs/reference/social-data-standard.md —
+    /// but only for the **caller's own** file.
+    ///
+    /// `.moss/data/social/` is a genuinely multi-writer directory by design —
+    /// every comment-source plugin (the Matters sync, a future Douban import,
+    /// any other) writes its own `<plugin_id>.json` file there directly, and
+    /// the build merges every file in the directory keyed by article uid
+    /// (`build::features::comment::load_all_social_comments`). Multi-writer
+    /// does not mean unowned: each plugin's slot in that shared directory is
+    /// exactly the one file named after it, so `plugin_id` is threaded in and
+    /// compared against the requested filename — the same caller-identity
+    /// shape [`PluginPath::storage`] uses for `.moss/plugins/<plugin_id>/`,
+    /// applied to a directory multiple plugins share instead of one each
+    /// plugin owns outright. Without this, any plugin could overwrite
+    /// first-party `.moss/data/social/review.json`
+    /// (`build/features/review.rs`) or a sibling plugin's comment file.
+    /// `.moss/social/` is the pre-#793 legacy home of the same data; it stays
+    /// reachable, under the same one-file-per-plugin rule plus its
+    /// `.migrated-bak` archive copy, only so the plugin's one-time reconcile
+    /// can find and migrate a straggler file.
+    ///
+    /// Deliberately narrow: exactly one filename segment, equal to
+    /// `<plugin_id>.json` (or, legacy directory only, `<plugin_id>.json.migrated-bak`),
+    /// under one of the two directories above — checked by the full path shape
+    /// rather than by stripping a prefix, so `.moss/data/social/../plugins/x/manifest.json`
+    /// does not read as "under `.moss/data/social/`" just because the string
+    /// starts that way. Anything else — another plugin's file, `review.json`,
+    /// nested subdirectories, `.moss/identity/`, `.moss/plugins/*/manifest.json`
+    /// — is refused here and falls through to the full [`PluginPath::sandboxed`]
+    /// fence in the caller.
+    pub fn shared_social_data(plugin_id: &str, relative_path: &str) -> Result<Self, String> {
+        if plugin_id.is_empty()
+            || plugin_id.contains('/')
+            || plugin_id.contains('\\')
+            || plugin_id.contains("..")
+            || plugin_id.contains('\0')
+        {
+            return Err("Invalid plugin id: must be a single path segment".to_string());
+        }
+        if RESERVED_SOCIAL_DATA_IDS
+            .iter()
+            .any(|reserved| plugin_id.eq_ignore_ascii_case(reserved))
+        {
+            return Err(format!(
+                "'{plugin_id}' names a first-party social-data file and cannot be used as a plugin id"
+            ));
+        }
+        relative_segment_rules(relative_path)?;
+        let normalized = relative_path.replace('\\', "/");
+        let segments: Vec<&str> = normalized
+            .split('/')
+            .filter(|seg| !seg.is_empty() && *seg != ".")
+            .collect();
+        let own_canonical_file = format!("{plugin_id}.json");
+        let own_legacy_archive_file = format!("{plugin_id}.json.migrated-bak");
+        let is_own_shared_social_path = match segments.as_slice() {
+            [moss, "data", "social", file] => {
+                moss.eq_ignore_ascii_case(".moss") && *file == own_canonical_file
+            }
+            [moss, "social", file] => {
+                moss.eq_ignore_ascii_case(".moss")
+                    && (*file == own_canonical_file || *file == own_legacy_archive_file)
+            }
+            _ => false,
+        };
+        if !is_own_shared_social_path {
+            return Err(format!(
+                "Not this plugin's shared social-data file (.moss/data/social/{own_canonical_file} or .moss/social/{own_canonical_file})"
+            ));
         }
         Ok(Self(relative_path.to_string()))
     }
@@ -614,12 +703,65 @@ impl PluginPath {
         Ok(Self(relative_path.to_string()))
     }
 
-    /// Join this validated path onto a base directory.
+    /// Join this validated path onto a base directory — the only way to turn
+    /// a `PluginPath` into something openable, so every plugin file
+    /// operation passes through the policy above AND through the symlink
+    /// check here.
     ///
-    /// The only way to turn a `PluginPath` into something openable, so every
-    /// plugin file operation passes through the policy above.
-    pub fn resolve_under(&self, base: &Path) -> PathBuf {
-        base.join(&self.0)
+    /// A validated `PluginPath` proves the *spelling* is safe; `base.join`
+    /// never touches disk, so a symlinked directory component can still
+    /// redirect it — `.moss/data/social` symlinked to `.moss/identity` would
+    /// let the shared social-data exception (`base` = the vault root, where
+    /// `.moss/identity/` is a legitimate subpath) write into the identity
+    /// directory despite every string-level check passing.
+    ///
+    /// Mirrors [`recheck_canonical_allowing_missing`] for the first-party
+    /// door: walk up to the deepest existing ancestor (nothing below it can
+    /// be a symlink), canonicalize it, and require it stay (a) under `base`
+    /// and (b) outside `base`'s own `.moss/identity/` — separate from (a)
+    /// because that path sits *inside* the vault root, so containment under
+    /// `base` alone would not exclude it there. A `base` that does not exist
+    /// yet (a brand-new plugin's storage directory) has nothing on disk to
+    /// have been symlinked, so this falls back to the lexical join.
+    pub fn resolve_under(&self, base: &Path) -> Result<PathBuf, String> {
+        let target = base.join(&self.0);
+        let base_canonical = match std::fs::canonicalize(base) {
+            Ok(b) => b,
+            Err(_) => return Ok(target),
+        };
+        // `.ok()`: absent for every base but the vault root, where containment
+        // under `base` already covers it (see doc above).
+        let identity_dir_canonical =
+            std::fs::canonicalize(base.join(".moss").join("identity")).ok();
+
+        let mut probe: &Path = target.as_path();
+        loop {
+            if probe.symlink_metadata().is_ok() {
+                let probe_canonical = std::fs::canonicalize(probe)
+                    .map_err(|e| format!("Failed to resolve '{}': {}", probe.display(), e))?;
+                if !probe_canonical.starts_with(&base_canonical) {
+                    return Err(format!(
+                        "'{}' resolves outside its allowed directory",
+                        self.0
+                    ));
+                }
+                if identity_dir_canonical
+                    .as_ref()
+                    .is_some_and(|identity_dir| probe_canonical.starts_with(identity_dir))
+                {
+                    return Err(format!(
+                        "'{}' resolves into .moss/identity/, which is never reachable this way",
+                        self.0
+                    ));
+                }
+                break;
+            }
+            match probe.parent() {
+                Some(parent) if parent != probe => probe = parent,
+                _ => break,
+            }
+        }
+        Ok(target)
     }
 
     /// The validated relative path, for log lines and error messages.

@@ -176,3 +176,31 @@ async fn a_normal_publish_is_rejected_while_a_prebuilt_publish_is_in_flight() {
         "an abandoned prebuilt publish must not leave the latch held"
     );
 }
+
+/// A version-ahead config refuses before the directory hash — this is the
+/// prebuilt route's half of the three-door guard (`push_site_inner_impl` for
+/// hosted, `run_plugin_deploy_inner` for plugin, this for prebuilt), all
+/// three calling `site_config::ensure_config_current`. The prebuilt dir is
+/// deliberately nonexistent — same trick as
+/// `prebuilt_publish_is_rejected_while_a_normal_publish_is_in_flight` above —
+/// so a refusal that reached `build_manifest_from_dir` would report THAT
+/// error instead, not the schema_version one. Ablated by deleting the
+/// `ensure_config_current(...)?;` call at the top of `push_prebuilt_inner`:
+/// goes red on "no such prebuilt dir" instead.
+#[tokio::test]
+async fn a_version_ahead_config_refuses_before_hashing_the_directory() {
+    let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let identity = Identity::generate().expect("generate identity");
+    let project = tmp_dir();
+    let moss_dir = project.path().join(".moss");
+    std::fs::create_dir_all(&moss_dir).unwrap();
+    let future = crate::config::migrations::CURRENT_VERSION + 1;
+    std::fs::write(moss_dir.join("config.toml"), format!("schema_version = {future}\n")).unwrap();
+    let missing = project.path().join("no-such-prebuilt-dir");
+
+    let err = push_prebuilt(project.path(), &missing, "guard-test-site", &identity, &silent())
+        .await
+        .expect_err("a version-ahead config must refuse");
+    assert!(err.contains("schema_version") && err.contains("newer"), "got: {err}");
+}

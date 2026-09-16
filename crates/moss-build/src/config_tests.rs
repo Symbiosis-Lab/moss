@@ -148,3 +148,23 @@ fn parse_migrates_a_v0_config_in_memory() {
     );
     assert!(config.section(&["features"]).is_none(), "[features] is dropped by the transform");
 }
+
+/// `parse`'s `VersionAhead` fallback logs and keeps the RAW table — which
+/// means the original `schema_version` survives into `self.root` untouched,
+/// so `schema_version_ahead()` recovers the real answer from the SAME parse
+/// this test constructs `config` from, no second read. Ablated by reverting
+/// `schema_version_ahead` to always return `None`: goes red on the `Some`
+/// assertion.
+#[test]
+fn schema_version_ahead_reads_off_the_same_parse_that_swallowed_the_error() {
+    let future = crate::config::migrations::CURRENT_VERSION + 2;
+    let config = ConfigFile::parse(&format!("schema_version = {future}\n")).unwrap();
+    assert_eq!(config.schema_version_ahead(), Some(future));
+
+    let current = ConfigFile::parse(&format!(
+        "schema_version = {}\n",
+        crate::config::migrations::CURRENT_VERSION
+    ))
+    .unwrap();
+    assert_eq!(current.schema_version_ahead(), None);
+}

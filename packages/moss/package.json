@@ -1,7 +1,7 @@
 {
   "name": "@symbiosis-lab/moss",
   "version": "0.14.1",
-  "description": "moss on your PATH — npm wrapper that installs the moss CLI binary from moss-releases",
+  "description": "moss on your PATH — npm wrapper that installs the moss CLI binary from moss",
   "bin": {
     "moss": "bin/moss.js"
   },
@@ -39,10 +39,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Symbiosis-Lab/moss-releases.git"
+    "url": "git+https://github.com/Symbiosis-Lab/moss.git"
   },
   "bugs": {
-    "url": "https://github.com/Symbiosis-Lab/moss-releases/issues"
+    "url": "https://github.com/Symbiosis-Lab/moss/issues"
   },
   "homepage": "https://mosspub.com",
   "publishConfig": {

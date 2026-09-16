@@ -89,6 +89,13 @@ advisory_strings! {
     // escape attempt / absolute path) named the check, not the loss.
     symlinks_skipped_one => { en: "{count} symlink was left out, so what it points at is missing from your site — its target is broken, or sits outside your folder", zh_hans: "有 {count} 个符号链接未被收录，它指向的内容因此不在你的网站上 —— 目标已失效，或位于文件夹之外", zh_hant: "有 {count} 個符號連結未被收錄，它指向的內容因此不在你的網站上 —— 目標已失效，或位於資料夾之外" },
     symlinks_skipped_many => { en: "{count} symlinks were left out, so what they point at is missing from your site — their targets are broken, or sit outside your folder", zh_hans: "有 {count} 个符号链接未被收录，它们指向的内容因此不在你的网站上 —— 目标已失效，或位于文件夹之外", zh_hant: "有 {count} 個符號連結未被收錄，它們指向的內容因此不在你的網站上 —— 目標已失效，或位於資料夾之外" },
+    // A newer moss (a different machine, a client's own copy) saved this
+    // vault's config.toml at a schema this build predates. `ConfigFile::parse`
+    // falls back to reading the raw, unmigrated table when that happens — every
+    // setting this build doesn't recognize the shape of reads as its default —
+    // so preview keeps rendering, but silently wrong. This is the notice that
+    // says so; publish refuses outright instead (see `push.rs`).
+    config_schema_version_ahead => { en: "Your site's settings were saved by a newer version of moss (schema {found}); this app only understands up to {max}, so some settings may be showing their defaults here. Update moss to see and publish the real configuration.", zh_hans: "你的网站设置是由较新版本的青苔保存的（schema {found}）；此应用只支持到 {max}，因此这里的部分设置可能显示为默认值。请更新青苔以查看并发布真实的配置。", zh_hant: "你的網站設定是由較新版本的青苔儲存的（schema {found}）；此應用程式只支援到 {max}，因此這裡的部分設定可能顯示為預設值。請更新青苔以檢視並發佈真實的設定。" },
     // `duplicate_note_id` — the non-live half of this pair — stood here and was
     // deleted on 2026-08-30. It fired only when moss had picked correctly and
     // nothing was at stake: either no page under that ID was published, or the

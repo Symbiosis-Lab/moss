@@ -34,6 +34,7 @@ describe("Filesystem Utilities", () => {
 
       expect(mockInvoke).toHaveBeenCalledWith("read_project_file", {
         projectPath: "/path/to/project",
+        pluginName: "test-plugin",
         relativePath: "README.md",
       });
       expect(content).toBe("# Hello World");
@@ -46,6 +47,7 @@ describe("Filesystem Utilities", () => {
 
       expect(mockInvoke).toHaveBeenCalledWith("read_project_file", {
         projectPath: "/path/to/project",
+        pluginName: "test-plugin",
         relativePath: "src/index.ts",
       });
     });
@@ -73,6 +75,7 @@ describe("Filesystem Utilities", () => {
 
       expect(mockInvoke).toHaveBeenCalledWith("write_project_file", {
         projectPath: "/path/to/project",
+        pluginName: "test-plugin",
         relativePath: "output/file.txt",
         data: "content",
       });
@@ -85,6 +88,7 @@ describe("Filesystem Utilities", () => {
 
       expect(mockInvoke).toHaveBeenCalledWith("write_project_file", {
         projectPath: "/path/to/project",
+        pluginName: "test-plugin",
         relativePath: "deep/nested/path/file.md",
         data: "# Title",
       });
@@ -167,6 +171,7 @@ describe("Filesystem Utilities", () => {
 
       expect(mockInvoke).toHaveBeenCalledWith("read_project_file", {
         projectPath: "/path/to/project",
+        pluginName: "test-plugin",
         relativePath: "file.txt",
       });
     });
@@ -193,6 +198,7 @@ describe("Filesystem Utilities", () => {
 
       expect(mockInvoke).toHaveBeenCalledWith("read_project_file", {
         projectPath: "/different/project",
+        pluginName: "other-plugin",
         relativePath: "file.md",
       });
     });

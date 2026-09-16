@@ -1359,34 +1359,71 @@ pub(crate) fn dispatch_video_conversions(
             // Note: when this path forces re-dispatch, in_flight_videos.clear()
             // below kills any in-flight conversion. That's intended — if outputs
             // are bad, restart beats letting a possibly-stuck conversion run.
-            if svc.cancellation.check_and_update_fingerprint(&fingerprint) {
+            let fingerprint_matched = svc.cancellation.check_and_update_fingerprint(&fingerprint);
+            use crate::build::render::resolve_path_with_overrides;
+            use moss_core::asset_paths;
+            let dir_overrides = &background_ctx.dir_overrides;
+            let mut skip_paths: Vec<String> = Vec::new();
+            // The unconditionally-expected outputs per item — every completed
+            // conversion produces exactly these two. Checked for existence
+            // below; the HLS ladder is NOT (next paragraph).
+            let mut required_paths: Vec<String> = Vec::new();
+            for item in &background_ctx.video_items {
+                let mapped = resolve_path_with_overrides(&item, &dir_overrides);
+                let mp4 = asset_paths::to_mp4(&mapped);
+                let thumb = asset_paths::to_thumb(&mapped);
+                required_paths.push(mp4.clone());
+                required_paths.push(thumb.clone());
+                skip_paths.push(mp4);
+                skip_paths.push(thumb);
+                // The full ladder as a candidate set: video_ladder_rungs
+                // truncates from the top only, so any real ladder is a
+                // prefix of it and the existence check filters the rest. NOT
+                // in `required_paths` — a video with fewer rungs than the max
+                // ladder never produces the excess candidates, so checking
+                // them for existence would force a re-dispatch on every fully
+                // healthy build that merely has a short ladder.
+                skip_paths.extend(asset_paths::hls_outputs(&mapped, &asset_paths::VIDEO_LADDER));
+            }
+            // Was: `if fingerprint_matched { skip }`. A matched fingerprint
+            // alone was never proof the SKIP's own last run actually left the
+            // files on disk — `emit_video_outputs_via_channel` below silently
+            // drops a missing path from the manifest (logging "[video]
+            // coherence violation: staged output missing") instead of feeding
+            // that back into the next dispatch decision, so a page whose
+            // poster or mp4 went missing (deleted by a stale sweep after a
+            // registration that never landed, e.g. moss#… the superseded-run
+            // gap) stayed on a dead link forever: every later build re-hit
+            // the identical fingerprint, skipped again, and logged the same
+            // violation again. Requiring the files to actually be there is
+            // what the doc above already promised ("all canonical outputs
+            // are present + non-zero") but the code never checked before now.
+            let outputs_present = required_paths.iter().all(|p| {
+                std::fs::metadata(background_ctx.staging_dir.join(p))
+                    .is_ok_and(|m| m.len() > 0)
+            });
+            if fingerprint_matched && outputs_present {
                 // Fingerprint matched: video set unchanged. Re-register every
                 // key the encode path delivers, so seal()'s
                 // video_outputs.retain keeps them — an untouched key is pruned
                 // at seal and the stale sweep then deletes a physically
                 // present file → live 404. emit_video_outputs_via_channel's
-                // existence check drops the keys whose staging file is absent,
-                // which is the self-heal: they fall through to the dispatch
-                // below on the next rebuild cycle.
+                // existence check drops the keys whose staging file is absent
+                // (the HLS ladder's excess candidates, normally) rather than
+                // registering a lie.
                 log::info!(
                     "Video set unchanged ({} videos), skipping re-dispatch — re-registering carry-forward output keys",
                     background_ctx.video_items.len()
                 );
-                use crate::build::render::resolve_path_with_overrides;
-                use moss_core::asset_paths;
-                let dir_overrides = &background_ctx.dir_overrides;
-                let mut skip_paths: Vec<String> = Vec::new();
-                for item in &background_ctx.video_items {
-                    let mapped = resolve_path_with_overrides(&item, &dir_overrides);
-                    skip_paths.push(asset_paths::to_mp4(&mapped));
-                    skip_paths.push(asset_paths::to_thumb(&mapped));
-                    // The full ladder as a candidate set: video_ladder_rungs
-                    // truncates from the top only, so any real ladder is a
-                    // prefix of it and the existence check filters the rest.
-                    skip_paths.extend(asset_paths::hls_outputs(&mapped, &asset_paths::VIDEO_LADDER));
-                }
                 emit_video_outputs_via_channel(&tx, &skip_paths, &background_ctx.staging_dir);
                 return;
+            }
+            if fingerprint_matched {
+                log::info!(
+                    "Video set unchanged ({} videos) but a required output is missing — \
+                     re-dispatching to self-heal instead of skipping",
+                    background_ctx.video_items.len()
+                );
             }
 
             // Bump the epoch so stale tasks exit on their next epoch check — the sole
@@ -1592,6 +1629,85 @@ mod tests {
                 view.video_outputs
             );
         }
+    }
+
+    /// A matching fingerprint alone must NOT take the skip branch when a
+    /// required output (mp4 or poster) is missing from staging — the exact
+    /// gap `emit_video_outputs_via_channel`'s "coherence violation: staged
+    /// output missing" log reports every rebuild without ever healing it,
+    /// because the OLD code decided to skip before checking existence at
+    /// all. Unlike `a_skip_dispatch_keeps_the_hls_ladder_through_stale_
+    /// cleanup` (which pre-stages every output and asserts the skip
+    /// branch), this pre-stages NOTHING and asserts the dispatcher instead
+    /// takes the re-dispatch branch: `cancellation.start_new_conversion()`
+    /// bumps the epoch only on that branch, so a bumped epoch is the
+    /// dispatch decision made visible without needing a real ffmpeg
+    /// round-trip — `ffmpeg_bin_path` points at a binary that does not
+    /// exist (the same "every encode fails" shape used in
+    /// `a_video_that_could_not_even_be_copied_fails_the_media_job`), and
+    /// the encode failing is irrelevant to what this test asserts: only
+    /// the SKIP-vs-DISPATCH decision, not the outcome.
+    #[tokio::test]
+    async fn a_matched_fingerprint_with_missing_outputs_is_not_skipped() {
+        use crate::build::coordinator::test_utils;
+        use crate::types::content::SiteHashes;
+        use crate::types::services::BackgroundContext;
+
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let item = "videos/talk.mov".to_string();
+        std::fs::create_dir_all(vault.join("videos")).unwrap();
+        std::fs::write(vault.join(&item), b"source bytes").unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        // Deliberately no mp4 / poster staged — the "outputs went missing"
+        // state a superseded run or a stale sweep can leave behind.
+
+        let mut svc = BuildServices::headless();
+        svc.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+        let fingerprint = compute_video_set_fingerprint(
+            &vault.display().to_string(),
+            std::slice::from_ref(&item),
+            &crate::build::media::ffmpeg::VideoCompressionConfig::default(),
+        );
+        // Prime it exactly as the skip test does: matches on the SECOND call.
+        assert!(!svc.cancellation.check_and_update_fingerprint(&fingerprint));
+        let epoch_before = svc.cancellation.current_id();
+
+        let ctx = BackgroundContext {
+            video_items: vec![item.clone()],
+            source_path: vault.display().to_string(),
+            staging_dir: staging.clone(),
+            // `for_test()`'s default `moss_dir` is empty, which resolves the
+            // CAS/HashIndex paths this run touches relative to the crate's
+            // CWD instead of the test's own temp dir — an empty PathBuf must
+            // never reach a real cache touch. Scoped here like the sibling
+            // test above.
+            moss_dir: tmp.path().join(".moss"),
+            ffmpeg_bin_path: Some(tmp.path().join("no-such-ffmpeg").display().to_string()),
+            ..BackgroundContext::for_test()
+        };
+        let (tx, rx) = test_utils::build_test_coordinator();
+        // `cancellation` is Arc-shared across a clone (same pattern
+        // `dispatch_video_conversions` itself uses to reach a spawned task),
+        // so the clone moved into the closure and the original checked below
+        // observe the SAME epoch counter.
+        let svc_for_dispatch = svc.clone();
+        tokio::task::spawn_blocking(move || {
+            dispatch_video_conversions(Some(&svc_for_dispatch), ctx, Some(tx));
+        })
+        .await
+        .unwrap();
+        // Draining waits for the spawned encode attempt's own `tx` clone to
+        // drop, i.e. for `run_video_conversion` to return — the same
+        // synchronization the skip test relies on.
+        let _sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+        assert!(
+            svc.cancellation.current_id() > epoch_before,
+            "a matched fingerprint with a missing required output must still \
+             re-dispatch (bump the epoch), not silently skip and drop the key"
+        );
     }
 
     /// Negative case: when staging files are absent, keys are NOT emitted.

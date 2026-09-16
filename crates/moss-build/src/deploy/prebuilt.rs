@@ -156,6 +156,13 @@ async fn push_prebuilt_inner(
     identity: &Identity,
     sink: &Arc<dyn DeploySink>,
 ) -> Result<PushResult, String> {
+    // The door guard every config-reading door shares
+    // (`site_config::ensure_config_current`) — `push_prebuilt` (the only
+    // caller, for both binaries) already takes `with_publish_guard`, but the
+    // check lives here, at the same call-order position as the hosted and
+    // plugin routes' own "_inner" bodies, so all three read the same way.
+    crate::build::site_config::ensure_config_current(&project_folder.to_string_lossy())?;
+
     sink.stage(
         progress::DeployStage::Preparing,
         0,

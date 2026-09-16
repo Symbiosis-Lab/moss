@@ -70,7 +70,22 @@ pub struct FolderSession {
     /// back-to-back text edits are never throttled by video/image
     /// encoding, only by (at most) one prior generation's
     /// materialize+cleanup pass.
-    stage_write_lock: Mutex<()>,
+    ///
+    /// `Arc`-wrapped so `register_session_in_registry` can CARRY IT FORWARD
+    /// into the next session on a reopen of the same folder, instead of
+    /// minting a fresh, unrelated `Mutex`. The lock's whole job is
+    /// serializing writes to a physical directory (`stage_dir`) that does
+    /// not change identity across a reopen — only the session (cancellation,
+    /// UI-bound counter) does. Before this shared it, a build that started
+    /// under the PRIOR session and was still running (unkillable —
+    /// `spawn_blocking`, see the worker's `OverdueWatchdog` doc) held the old
+    /// `Mutex`, while any build admitted under the NEW session — including
+    /// the reopened folder's own first build — acquired a brand-new, wholly
+    /// unrelated one: two pipelines writing `stage_dir` with no exclusion
+    /// between them, the same failure class part 1 of the open-double-build
+    /// fix closed for the pre-worker window, reachable here instead via a
+    /// reopen. See `tests::reopen_shares_the_stage_write_lock` below.
+    stage_write_lock: Arc<Mutex<()>>,
     /// The sweep's "project unavailable" verdict (watcher-reliability design,
     /// 2026-08-18, "Root-gone is a verdict, not a mechanism"): consecutive
     /// root-unreadable sweep passes put the folder here, and a readable pass
@@ -87,12 +102,20 @@ pub struct FolderSession {
 
 impl FolderSession {
     pub fn new(folder: PathBuf) -> Arc<Self> {
+        Self::with_stage_write_lock(folder, Arc::new(Mutex::new(())))
+    }
+
+    /// As [`new`](Self::new), but reusing a `stage_write_lock` a PRIOR
+    /// session for the same folder already held, instead of minting a fresh,
+    /// unrelated one. `register_session_in_registry` is the one caller: see
+    /// the field doc for why a reopen must carry this specific lock forward.
+    fn with_stage_write_lock(folder: PathBuf, stage_write_lock: Arc<Mutex<()>>) -> Arc<Self> {
         Arc::new(Self {
             folder,
             cancel: CancellationToken::new(),
             tasks: Mutex::new(JoinSet::new()),
             ui_bound: AtomicU32::new(0),
-            stage_write_lock: Mutex::new(()),
+            stage_write_lock,
             unavailable: AtomicBool::new(false),
         })
     }
@@ -318,8 +341,21 @@ pub(crate) fn register_session_in_registry(
     reg: &FolderSessionRegistry,
     folder_path: &str,
 ) -> Arc<FolderSession> {
-    // Step 1: drain any prior session(s) (folder-switch path).
+    // Step 1: drain any prior session(s) (folder-switch path). A prior
+    // session FOR THIS SAME FOLDER (a reopen) hands its stage_write_lock
+    // forward to the new session below, BEFORE its shutdown is spawned —
+    // shutdown fires `cancel` and drains `tasks` (empty in production; see
+    // the module doc), it does NOT wait for `ui_bound` to reach zero, so a
+    // build that started under the prior session can still be running,
+    // unkillable, when this function returns. Reusing the same `Mutex`
+    // (rather than each session minting its own) is what keeps that build
+    // and anything admitted under the NEW session serialized against each
+    // other regardless — see the field doc on `stage_write_lock`.
+    let mut reused_stage_write_lock = None;
     for prior in reg.drain() {
+        if prior.folder == std::path::Path::new(folder_path) {
+            reused_stage_write_lock = Some(prior.stage_write_lock.clone());
+        }
         tokio::spawn(async move {
             let leaked = prior.shutdown(Duration::from_secs(2)).await;
             if leaked > 0 {
@@ -332,7 +368,10 @@ pub(crate) fn register_session_in_registry(
     }
 
     // Step 2: construct the new session and insert.
-    let session = FolderSession::new(PathBuf::from(folder_path));
+    let session = match reused_stage_write_lock {
+        Some(lock) => FolderSession::with_stage_write_lock(PathBuf::from(folder_path), lock),
+        None => FolderSession::new(PathBuf::from(folder_path)),
+    };
     if let Some(prior) = reg.insert(folder_path.to_string(), session.clone()) {
         // Belt-and-suspenders: if a prior session was somehow still registered
         // (Step 1 drain raced with another insert, or future refactor decouples
@@ -388,6 +427,56 @@ mod tests {
         assert!(
             s.try_lock_stage_write().is_some(),
             "the probe must succeed once the holder releases"
+        );
+    }
+
+    /// Reopening the same folder must inherit the PRIOR session's
+    /// `stage_write_lock`, not mint a fresh, unrelated one — the reopen half
+    /// of the seal-persist-race-404 class part 1 of the open-double-build fix
+    /// left open. `register_session_in_registry`'s shutdown of the prior
+    /// session fires `cancel` and drains `tasks` (empty in production), but
+    /// does NOT wait for `ui_bound` to reach zero — a build started under the
+    /// prior session can still be running (unkillable — `spawn_blocking`)
+    /// when the new session is handed back. Simulated here by simply holding
+    /// the first session's guard across the reopen, standing in for that
+    /// still-running build: the second session's probe must see it held.
+    #[tokio::test]
+    async fn reopen_shares_the_stage_write_lock() {
+        let reg = FolderSessionRegistry::new();
+        let folder = "/tmp/reopen-stage-lock-test";
+
+        let first = register_session_in_registry(&reg, folder);
+        let held = first.lock_stage_write().await; // stands in for an in-flight build
+
+        let second = register_session_in_registry(&reg, folder);
+        assert!(
+            second.try_lock_stage_write().is_none(),
+            "a reopen must inherit the prior session's stage_write_lock — a \
+             build still running under the OLD session must block a build \
+             admitted under the NEW one, not race it on an unrelated Mutex"
+        );
+
+        drop(held);
+        assert!(
+            second.try_lock_stage_write().is_some(),
+            "the inherited lock must still work once the prior build releases it"
+        );
+    }
+
+    /// The inheritance above is keyed on folder path, not "whatever was
+    /// registered" — opening a DIFFERENT folder while one is in flight must
+    /// get its own, independent lock rather than blocking on an unrelated
+    /// folder's build.
+    #[tokio::test]
+    async fn opening_a_different_folder_gets_its_own_stage_write_lock() {
+        let reg = FolderSessionRegistry::new();
+        let a = register_session_in_registry(&reg, "/tmp/reopen-stage-lock-test-a");
+        let _held = a.lock_stage_write().await;
+
+        let b = register_session_in_registry(&reg, "/tmp/reopen-stage-lock-test-b");
+        assert!(
+            b.try_lock_stage_write().is_some(),
+            "a different folder's session must not inherit folder A's lock"
         );
     }
 

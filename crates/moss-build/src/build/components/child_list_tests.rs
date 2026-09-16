@@ -151,9 +151,82 @@ fn test_render_child_article() {
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
-    assert!(html.contains(r#"<span class="moss-prefix-link-prefix date">11</span>"#));
+    // No year heading sits above a flat row, so the prefix carries full
+    // precision — "2025 · 11", not "11" alone.
+    assert!(html.contains(r#"<span class="moss-prefix-link-prefix date">2025 · 11</span>"#));
     assert!(html.contains(r#"<span class="moss-prefix-link-title">My Article</span>"#));
     assert!(html.contains(r#"href="/blog/my-article/""#));
+}
+
+/// The bug this exists for: blakesnotebook.com's flat `writings/the-notebook`
+/// listing printed a bare "06" for a "1793-06" date, with no year anywhere on
+/// the page. `render_child` has no year heading above it (unlike the
+/// year-grouped rows), so it must never truncate to month-only.
+#[test]
+fn flat_row_shows_year_for_month_precision_date() {
+    let props = ChildItemProps {
+        title: "June Entry".to_string(),
+        url: "/writings/the-notebook/june.html".to_string(),
+        date_display: None,
+        date_raw: Some("1793-06".to_string()),
+        child_count: None,
+        description: None,
+        cover: None,
+        cover_type: None,
+        kicker: None,
+        permalink: None,
+    };
+    let html = render_child(&props, crate::i18n::Language::En, None);
+    assert!(
+        html.contains(r#"<span class="moss-prefix-link-prefix date">1793 · 06</span>"#),
+        "{html}"
+    );
+}
+
+/// When only `date_display` is set (no raw date), it is already the compact
+/// "year · month" form `props_for_document` produced — `render_child` must
+/// pass it through, not re-derive a month-only string from it.
+#[test]
+fn flat_row_passes_through_display_only_date_as_is() {
+    let props = ChildItemProps {
+        title: "Display Only".to_string(),
+        url: "/writings/display-only.html".to_string(),
+        date_display: Some("1793 · 06".to_string()),
+        date_raw: None,
+        child_count: None,
+        description: None,
+        cover: None,
+        cover_type: None,
+        kicker: None,
+        permalink: None,
+    };
+    let html = render_child(&props, crate::i18n::Language::En, None);
+    assert!(
+        html.contains(r#"<span class="moss-prefix-link-prefix date">1793 · 06</span>"#),
+        "{html}"
+    );
+}
+
+/// A year-only date has no month to lose — the flat row shows the bare year.
+#[test]
+fn flat_row_shows_bare_year_for_year_precision_date() {
+    let props = ChildItemProps {
+        title: "1793 Entry".to_string(),
+        url: "/writings/the-notebook/year.html".to_string(),
+        date_display: None,
+        date_raw: Some("1793".to_string()),
+        child_count: None,
+        description: None,
+        cover: None,
+        cover_type: None,
+        kicker: None,
+        permalink: None,
+    };
+    let html = render_child(&props, crate::i18n::Language::En, None);
+    assert!(
+        html.contains(r#"<span class="moss-prefix-link-prefix date">1793</span>"#),
+        "{html}"
+    );
 }
 
 /// The list card shape shared the summary and grid cards' bug in a second

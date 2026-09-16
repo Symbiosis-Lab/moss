@@ -1189,6 +1189,59 @@ pub fn make_symlink_skip_advisory(count: u32) -> Option<PipelineEvent> {
     )
 }
 
+/// Emit [`make_config_version_ahead_advisory`] for an already-parsed config,
+/// if it applies. Takes the parsed `ConfigFile` directly — never a path —
+/// so `build_inner`'s one read+parse of config.toml ("H-config") can feed
+/// this without a second read; `config::ConfigFile::schema_version_ahead`
+/// is free against a table already in hand. `run_vault_migrations` (run
+/// once at the entry point, before H-config) already logged the same
+/// condition once per vault per session; this is the author-facing twin,
+/// re-derived every build (not deduped) so it clears the moment the config
+/// is fixed or moss is updated, same as every other advisory. `cfg: None`
+/// (a config that could not be read) is silently not this advisory's story
+/// to tell — something downstream already owns surfacing a real read error.
+pub fn report_config_version_ahead(
+    reporter: Option<&dyn super::ports::reporter::BuildReporter>,
+    cfg: Option<&crate::config::ConfigFile>,
+) {
+    let Some(found) = cfg.and_then(|c| c.schema_version_ahead()) else {
+        return;
+    };
+    let Some(event) = make_config_version_ahead_advisory(found) else {
+        return;
+    };
+    if let Some(reporter) = reporter {
+        reporter.report(&event);
+    }
+}
+
+/// Build a `BackgroundProgress` advisory event for a config.toml a newer
+/// moss already stamped. `NeedsAction`, not `Blocking`: the build itself
+/// still renders (with the raw, unmigrated table — see
+/// `site_config::config_schema_version_ahead`'s doc), so this is a preview-
+/// time notice, not a build failure. Publish is the one path that refuses
+/// outright (`deploy/push.rs`), because shipping the defaulted config to a
+/// live site is the one consequence preview's "still shows something" excuse
+/// doesn't cover.
+pub fn make_config_version_ahead_advisory(found: u32) -> Option<PipelineEvent> {
+    advisory_event(
+        "config",
+        vec![Advisory {
+            scope: Scope::Config,
+            severity: Severity::NeedsAction,
+            item: None,
+            what: crate::infra::app_advisory::fmt(
+                "config_schema_version_ahead",
+                &[
+                    ("found", &found.to_string()),
+                    ("max", &crate::config::migrations::CURRENT_VERSION.to_string()),
+                ],
+            ),
+            action: Action::None,
+        }],
+    )
+}
+
 // `make_live_record_advisory` stood here and was deleted on 2026-08-29 — see
 // the tombstone in `infra::app_advisory` for why. It is a log fact now.
 
@@ -1421,6 +1474,32 @@ mod route_tests {
                 assert_eq!(advisories.len(), 1);
                 assert!(advisories[0].what.contains("3"), "message must mention count=3");
                 assert_eq!(advisories[0].severity, Severity::NeedsAction);
+            }
+            other => panic!("expected BackgroundProgress, got {other:?}"),
+        }
+    }
+
+    // =========================================================================
+    // config schema_version ahead → L1 advisory (preview's twin of the
+    // publish-time refusal in deploy/push.rs)
+    // =========================================================================
+
+    #[test]
+    fn config_version_ahead_advisory_is_needs_action_not_blocking() {
+        // NeedsAction, not Blocking: the build still renders (with the raw,
+        // unmigrated table) — this is a notice, not a build failure. Publish
+        // is the one path that refuses outright.
+        let event = make_config_version_ahead_advisory(9).expect("expected Some");
+        match event {
+            PipelineEvent::BackgroundProgress { task, completed, advisories, .. } => {
+                assert_eq!(task, "config");
+                assert!(completed);
+                assert_eq!(advisories.len(), 1);
+                let adv = &advisories[0];
+                assert_eq!(adv.severity, Severity::NeedsAction);
+                assert_eq!(adv.scope, Scope::Config);
+                assert!(adv.item.is_none(), "build-wide advisory has no item");
+                assert!(adv.what.contains('9'), "message must name the found version: {}", adv.what);
             }
             other => panic!("expected BackgroundProgress, got {other:?}"),
         }

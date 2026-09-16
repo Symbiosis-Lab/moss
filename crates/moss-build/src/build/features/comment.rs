@@ -467,6 +467,49 @@ mod tests {
         assert!(result.is_empty());
     }
 
+    /// Writer and reader must agree on one path. The Matters plugin never
+    /// touches the filesystem directly — it calls `writeFile`, which is
+    /// `write_project_file_impl` — so this writes through that same command
+    /// body, exactly like the plugin does, and confirms `load_all_social_comments`
+    /// (the build-side reader) sees the result. A regression in the `.moss/`
+    /// sandbox that blocks this path would leave the write silently refused
+    /// while this test still compiles against a mock-free real reader — the
+    /// gap `docs/reference/social-data-standard.md`'s writers actually hit.
+    #[tokio::test]
+    async fn social_data_written_through_write_project_file_is_visible_to_the_reader() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project_path = tmp.path().to_str().unwrap();
+
+        let payload = serde_json::json!({
+            "schemaVersion": "1.1.0",
+            "articles": {
+                "uid-from-plugin": {
+                    "comments": [{
+                        "id": "m1",
+                        "source": "matters",
+                        "content": "<p>via write_project_file</p>",
+                        "createdAt": "2026-09-01T00:00:00Z",
+                        "author": { "displayName": "Reader", "userName": "reader" }
+                    }]
+                }
+            }
+        });
+
+        crate::plugins::project_files::write_project_file_impl(
+            project_path,
+            Some("matters"),
+            ".moss/data/social/matters.json",
+            &payload.to_string(),
+        )
+        .await
+        .expect("the plugin's write_project_file call must be allowed for its own shared social-data file");
+
+        let result = load_all_social_comments(project_path, MATTERS_DOMAIN_FALLBACK);
+        let comments = result.get("uid-from-plugin").expect("reader must find the article the plugin wrote");
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].content, "<p>via write_project_file</p>");
+    }
+
     /// Regression: `load_all_social_comments` previously passed the file stem
     /// "comment" as the `source` field, stamping Artalk comments with
     /// `source: "comment"` instead of `"artalk"`. This broke the reply-button

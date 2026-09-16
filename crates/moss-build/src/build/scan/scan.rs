@@ -585,8 +585,12 @@ fn extract_media_metadata_cached(
 
         // Stat cache miss — extract metadata directly. This is fast because
         // ffprobe reads only the container header (~50ms), not the full file.
-        // Skip singleflight (which is hash-keyed, not applicable here).
-        log::debug!("Media meta stat-cache miss for {} (skipping hash)", relative_path);
+        // Skip singleflight (which is hash-keyed, not applicable here). A
+        // miss is the routine first-scan case, not a problem to flag — TRACE
+        // like the cache-hit branch above, not DEBUG (measured ~520
+        // lines/session in a real upload, 2026-09-15,
+        // docs/archive/2026-09-15-open-feedback-design.md).
+        log::trace!("Media meta stat-cache miss for {} (skipping hash)", relative_path);
         let meta = extract_media_metadata(
             abs_path, relative_path, extension, size, modified, ffmpeg,
         );
@@ -645,7 +649,8 @@ fn extract_media_metadata_cached(
         // the one true first-write path, since extract_media_metadata isn't
         // called on this branch. The result is cached below so every
         // subsequent scan of this unchanged file hits the branch above.
-        log::debug!(
+        // Same reasoning as the video branch above: routine, not DEBUG.
+        log::trace!(
             "Media meta stat-cache miss for {} (dimensions only; color/LQIP deferred)",
             relative_path
         );

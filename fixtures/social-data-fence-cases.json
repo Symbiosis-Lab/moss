@@ -1,0 +1,86 @@
+[
+  {
+    "pluginId": "matters",
+    "path": ".moss/data/social/matters.json",
+    "allowed": true,
+    "note": "a plugin's own canonical shared social-data file"
+  },
+  {
+    "pluginId": "matters",
+    "path": ".moss/social/matters.json",
+    "allowed": true,
+    "note": "a plugin's own file in the pre-#793 legacy directory"
+  },
+  {
+    "pluginId": "matters",
+    "path": ".moss/social/matters.json.migrated-bak",
+    "allowed": true,
+    "note": "a plugin's own legacy archive copy, written once by the reconcile"
+  },
+  {
+    "pluginId": "matters",
+    "path": ".moss/data/social/matters.json.migrated-bak",
+    "allowed": false,
+    "note": "the archive-copy suffix is legacy-directory-only, not canonical-directory"
+  },
+  {
+    "pluginId": "matters",
+    "path": ".moss/data/social/review.json",
+    "allowed": false,
+    "note": "first-party review colophon data (build/features/review.rs) is not this plugin's file"
+  },
+  {
+    "pluginId": "github",
+    "path": ".moss/data/social/matters.json",
+    "allowed": false,
+    "note": "cross-plugin write must be refused"
+  },
+  {
+    "pluginId": "matters",
+    "path": ".moss/data/social/douban.json",
+    "allowed": false,
+    "note": "cross-plugin write must be refused, reverse direction"
+  },
+  {
+    "pluginId": "matters",
+    "path": ".moss/data/social/nested/matters.json",
+    "allowed": false,
+    "note": "no nested subdirectories, even under the plugin's own name"
+  },
+  {
+    "pluginId": "matters",
+    "path": ".moss/identity/secret-key",
+    "allowed": false,
+    "note": "the identity secret stays fenced regardless of plugin identity"
+  },
+  {
+    "pluginId": "matters",
+    "path": ".moss/plugins/matters/manifest.json",
+    "allowed": false,
+    "note": "a plugin's own manifest stays fenced even for itself"
+  },
+  {
+    "pluginId": "matters",
+    "path": ".moss/config.toml",
+    "allowed": false,
+    "note": "ordinary .moss/ internals stay fenced"
+  },
+  {
+    "pluginId": null,
+    "path": ".moss/data/social/matters.json",
+    "allowed": false,
+    "note": "no plugin identity (a first-party caller) cannot reach the shared door at all"
+  },
+  {
+    "pluginId": "matters",
+    "path": "posts/hello.md",
+    "allowed": true,
+    "note": "an ordinary content path outside .moss/ is unaffected by the fence"
+  },
+  {
+    "pluginId": "review",
+    "path": ".moss/data/social/review.json",
+    "allowed": false,
+    "note": "a plugin manifest named review cannot claim review.json by matching its own reserved id"
+  }
+]

@@ -133,12 +133,18 @@ export interface SetupContext {
 /**
  * Context for after_deploy hook (syndicator plugins)
  *
+ * `trigger` is stamped by moss (ADR-015), same contract as
+ * {@link ProcessContext.trigger}. Syndication has exactly one production
+ * caller — the Publish click — so this is always `"manual_one"`; absent
+ * (older moss) ⇒ treat as `"background"`.
+ *
  * @category Hook contexts
  */
 export interface SyndicateContext extends BaseContext {
   site_files: string[];
   articles: ArticleInfo[];
   deployment?: DeploymentInfo;
+  trigger?: TriggerContext;
 }
 
 /**

@@ -118,6 +118,11 @@ async fn push_site_inner_impl(
 ) -> Result<PushResult, String> {
     let PushContext { folder_path, identity, site_id, sink, ports, events_lock } = *cx;
     let folder_path_str = folder_path.to_string_lossy().to_string();
+
+    // Refuse before touching the network, through the door guard every
+    // config-reading door shares (`site_config::ensure_config_current`).
+    crate::build::site_config::ensure_config_current(&folder_path_str)?;
+
     // `AppState::active_environment()` is `resolve_environment(project_path)`
     // and nothing else, and this function has the folder in hand. Reading it
     // straight off the folder deletes four `AppState` reads from a body that
@@ -1010,6 +1015,74 @@ mod tests {
             crate::deploy::change_record::PageChangeSummary::default(),
             "no article map on disk in this fixture — the same summary record_landed \
              returned and handed to after_landing, not a second, independently computed one"
+        );
+    }
+
+    /// A site whose `.moss/config.toml` was last saved by a newer moss must
+    /// never publish: the build behind this sealed manifest already rendered
+    /// with every setting this app doesn't recognize the shape of at its
+    /// silent default (`ConfigFile::parse`'s `VersionAhead` fallback), and
+    /// shipping that to the live site is not recoverable the way a stale
+    /// preview is. `MOSS_SETA_URL` points at a closed local port — reserved
+    /// and released before the test, guaranteed free, never production — as a
+    /// belt-and-suspenders check that the refusal fires before ANY network
+    /// call: if it didn't, this would hang or error on connection-refused
+    /// instead of returning the named error, and `spy.events` would be
+    /// non-empty. Ablated by deleting the version-ahead check at the top of
+    /// `push_site_inner_impl`: goes red as `result.is_ok()` (it reaches the
+    /// closed port, gets connection-refused, and — worse — every event that
+    /// mattering here is the ABSENCE of network activity, not its shape).
+    #[tokio::test]
+    async fn refuses_to_publish_a_version_ahead_config() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_url = std::env::var("MOSS_SETA_URL").ok();
+
+        // Reserve a free port, then release it: nothing listens there, so any
+        // connection attempt fails fast with connection-refused rather than
+        // hanging or reaching a real host.
+        let closed_addr = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap()
+        };
+        std::env::set_var("MOSS_SETA_URL", format!("http://{closed_addr}"));
+
+        let identity = Identity::generate().expect("generate identity");
+        let sealed = sealed_fixture();
+        let dir = tempfile::tempdir().unwrap();
+        let mp = MossPaths::new(dir.path());
+        std::fs::create_dir_all(mp.generation_dir(sealed.generation_id())).unwrap();
+        let moss_dir = dir.path().join(".moss");
+        std::fs::create_dir_all(&moss_dir).unwrap();
+        std::fs::write(
+            moss_dir.join("config.toml"),
+            format!("schema_version = {}\n", crate::config::migrations::CURRENT_VERSION + 1),
+        )
+        .unwrap();
+
+        let sink = progress::silent();
+        let spy = SpyPorts::default();
+        let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cx = PushContext {
+            folder_path: dir.path(),
+            identity: &identity,
+            site_id: "version-ahead-test",
+            sink: &sink,
+            ports: &spy,
+            events_lock: &events_lock,
+        };
+
+        let result = push_site_inner(&sealed, &cx).await;
+
+        match prev_url {
+            Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+
+        let err = result.expect_err("publish must be refused, not attempted");
+        assert!(err.contains("schema_version") && err.contains("newer"), "got: {err}");
+        assert!(
+            spy.events.lock().unwrap().is_empty(),
+            "no deploy port should have been touched — the refusal must come before any network activity"
         );
     }
 }

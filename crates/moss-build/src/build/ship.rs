@@ -354,9 +354,17 @@ static PROMOTED: LazyLock<std::sync::Mutex<std::collections::HashMap<std::path::
     LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 /// Mint the next promotion epoch. **Call in build order**, at a point still
-/// serialized against other builds of the same folder — `build.rs` mints one
-/// just before it spawns the detached seal task, which is the last moment a
-/// build is still ordered against its successor.
+/// serialized against other builds of the same folder — but "still
+/// serialized" is caller-specific, and callers now mint at three different
+/// such points, each sound for a different reason: `build.rs`'s own
+/// post-build fallback mints just before spawning the detached seal task,
+/// the last moment IT is still ordered against its successor; the rebuild
+/// worker mints at admission, before the build runs
+/// (`ops/watch.rs::attempt_admitted_rebuild`); `build_shell::build_folder`
+/// mints immediately, before the pipeline starts at all, because a worker
+/// can exist from folder-open onward and would otherwise be free to mint
+/// first (`docs/archive/2026-09-15-open-double-build-race.md`). See each
+/// call site for why its own point is still ordered against what it must be.
 ///
 /// A plain process-global counter: the comparison in `try_promote` is
 /// per-folder, so sharing the sequence across folders costs a few skipped

@@ -59,6 +59,49 @@ pub fn read_project_config(project_path: &str) -> Result<ConfigFile, String> {
     }
 }
 
+/// `Some(v)` when `.moss/config.toml` declares a schema newer than this
+/// build supports; `Ok(None)` covers absent, at, or behind current.
+///
+/// One read: [`read_project_config`]'s `ConfigFile::parse` swallows
+/// `VersionAhead` and falls back to the raw, unmigrated table, but the
+/// original `schema_version` survives into that table untouched (the
+/// migration short-circuits before mutating anything), so
+/// [`ConfigFile::schema_version_ahead`] recovers the real answer from the
+/// SAME parse rather than this function re-reading and re-parsing the file.
+/// A caller that already holds a `ConfigFile` should call the method
+/// directly instead of this free function.
+pub fn config_schema_version_ahead(project_path: &str) -> Result<Option<u32>, String> {
+    Ok(read_project_config(project_path)?.schema_version_ahead())
+}
+
+/// The shared refusal every outward door (publish, syndicate, email send)
+/// goes through before acting on a site's config: `get_site_*` /
+/// `get_services_config` read through `ConfigFile::parse`, which silently
+/// defaults every setting it doesn't recognize the shape of on
+/// `VersionAhead` — fine for preview (which says so via the advisory in
+/// `build/progress.rs`), not fine for a door that reaches a real audience
+/// (subscribers, syndication platforms, the live site). One function so
+/// there is one place these doors agree on, rather than three copies of the
+/// same check drifting.
+///
+/// A config READ failure (evicted, half-synced, permissions) is deliberately
+/// not a refusal here — only a *confirmed* `VersionAhead` is. These doors are
+/// not the config's authority; something upstream (the build this door
+/// follows, or the config's own readers) already owns surfacing a genuine
+/// read error, and refusing a publish or a send on a transient I/O hiccup
+/// this check merely stumbled over would be a new, unrelated failure mode.
+pub fn ensure_config_current(project_path: &str) -> Result<(), String> {
+    if let Ok(Some(found)) = config_schema_version_ahead(project_path) {
+        return Err(format!(
+            "This site's .moss/config.toml is schema_version {found}, newer than this app \
+             supports (up to {}). Acting now would use every unrecognized setting at its \
+             default. Update moss first.",
+            crate::config::migrations::CURRENT_VERSION,
+        ));
+    }
+    Ok(())
+}
+
 /// Read `[services.<kind>]` sections from .moss/config.toml. Permissive —
 /// unknown providers are preserved as-is in the `provider` field; wiring
 /// errors are not checked here. Call `validate()` on the returned config
@@ -392,5 +435,52 @@ mod attachment_folder_tests {
             "got: {}",
             err
         );
+    }
+}
+
+#[cfg(test)]
+mod version_ahead_guard_tests {
+    use super::*;
+
+    fn project_with_schema_version(v: u32) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let moss = dir.path().join(".moss");
+        std::fs::create_dir_all(&moss).unwrap();
+        std::fs::write(moss.join("config.toml"), format!("schema_version = {v}\n")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn config_schema_version_ahead_reads_through_the_one_parse_read_project_config_already_does() {
+        let dir = project_with_schema_version(crate::config::migrations::CURRENT_VERSION + 3);
+        let path = dir.path().to_str().unwrap();
+        assert_eq!(
+            config_schema_version_ahead(path).unwrap(),
+            Some(crate::config::migrations::CURRENT_VERSION + 3)
+        );
+
+        let dir = project_with_schema_version(crate::config::migrations::CURRENT_VERSION);
+        assert_eq!(config_schema_version_ahead(dir.path().to_str().unwrap()).unwrap(), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(config_schema_version_ahead(dir.path().to_str().unwrap()).unwrap(), None);
+    }
+
+    /// The one door guard every outward door (publish, syndicate, email
+    /// send) shares. Ablated by reverting `ensure_config_current` to
+    /// `Ok(())` unconditionally: goes red on `is_err()`.
+    #[test]
+    fn ensure_config_current_refuses_only_a_confirmed_version_ahead() {
+        let ahead = project_with_schema_version(crate::config::migrations::CURRENT_VERSION + 1);
+        let err = ensure_config_current(ahead.path().to_str().unwrap()).unwrap_err();
+        assert!(err.contains("schema_version") && err.contains("newer"), "got: {err}");
+
+        let current = project_with_schema_version(crate::config::migrations::CURRENT_VERSION);
+        assert!(ensure_config_current(current.path().to_str().unwrap()).is_ok());
+
+        // A read failure (no config at all here — genuinely absent) must not
+        // refuse: absence is not version-ahead.
+        let absent = tempfile::tempdir().unwrap();
+        assert!(ensure_config_current(absent.path().to_str().unwrap()).is_ok());
     }
 }

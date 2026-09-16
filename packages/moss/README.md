@@ -1,8 +1,6 @@
 # @symbiosis-lab/moss
 
-moss on your PATH. This package downloads the official [moss](https://@symbiosis-lab/moss.com)
-CLI binary from [moss-releases](https://github.com/Symbiosis-Lab/moss-releases)
-and exposes it as the `moss` command.
+moss on your PATH. This package downloads the official [moss](https://@symbiosis-lab/moss.com) CLI binary from [moss](https://github.com/Symbiosis-Lab/moss) and exposes it as the `moss` command.
 
 > **Publishing note:** the package is currently marked `"private": true` in
 > `package.json` so it cannot ship by accident. Flip that (remove the field)
@@ -74,6 +72,4 @@ against your own build.
 
 ## License
 
-The wrapper code in this package is MIT (see LICENSE). The moss binary it
-downloads is a separate work, distributed under its own terms via
-[moss-releases](https://github.com/Symbiosis-Lab/moss-releases).
+The wrapper code in this package is MIT (see LICENSE). The moss binary it downloads is a separate work, distributed under its own terms via [moss](https://github.com/Symbiosis-Lab/moss).

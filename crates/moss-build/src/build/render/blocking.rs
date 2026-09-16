@@ -2387,12 +2387,11 @@ pub fn generate_blocking_content(
             qr::emit_share_qr(&auto_url_path, true, &site_url, output_dir, pending)?;
             page_count += 1;
             auto_index_count += 1;
-
-            log::debug!(
-                "Auto-generated {}/index.html with {} children",
-                folder,
-                folder_docs.len()
-            );
+            // Per-folder DEBUG line removed 2026-09-15 (measured ~650
+            // lines/session in a real upload,
+            // docs/archive/2026-09-15-open-feedback-design.md) — redundant
+            // with the one INFO summary just below, which already carries
+            // the total; no build-affecting behavior depended on it.
         }
         drop(_phase_auto_index);
         log::info!(

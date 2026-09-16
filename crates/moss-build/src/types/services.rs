@@ -435,6 +435,43 @@ impl BuildServices {
 // Plugin HTML Store - For moss-plugin:// protocol
 // ============================================================================
 
+/// One stored HTML page: its content, and the plugin that registered it —
+/// `None` when the store call came from a webview rather than the trusted
+/// engine seam (see [`PluginHtmlStore::store`]).
+#[derive(Debug, Clone)]
+struct StoredHtml {
+    html: String,
+    owning_plugin: Option<String>,
+}
+
+/// The browser panel's in-flight/committed navigation, for the security
+/// property `write_project_file`/`read_project_file`'s caller-identity check
+/// depends on: `committed_page_id` must be `None` for the ENTIRE window
+/// between issuing a navigation and THAT SAME navigation's commit event —
+/// `webview.navigate()` only dispatches, so the OLD page's JS stays alive
+/// until the new document actually takes over, and a malicious old page
+/// could otherwise spray `write_project_file` claiming a sibling's (public)
+/// name and land while the store already named that sibling.
+///
+/// `expected_url` doubles as the per-navigation correlator: wry's
+/// `on_page_load` hook hands back only a URL, no navigation token, so
+/// ownership is granted only when a commit's URL still matches the MOST
+/// RECENT `begin_browser_panel_navigation` call's. Any OTHER commit —
+/// stale (superseded by a later `begin`), or one no `begin` ever announced
+/// at all (a link click, a page's own `window.location` self-navigation,
+/// `history.back()/forward()`, an external URL) — CLEARS `committed_page_id`
+/// to `None` rather than leaving whoever held it before; a mismatch is
+/// never treated as "nothing happened", only ever as "no owner". `generation`
+/// is the same guarantee restated as a plain counter, kept for tests and
+/// diagnostics.
+#[derive(Debug, Default, Clone)]
+struct BrowserPanelNavigation {
+    generation: u64,
+    expected_url: Option<String>,
+    pending_page_id: Option<String>,
+    committed_page_id: Option<String>,
+}
+
 /// Storage for plugin HTML content served via moss-plugin:// protocol
 ///
 /// Maps UUIDs to HTML content for plugin UIs. This enables serving dynamic HTML
@@ -446,8 +483,8 @@ impl BuildServices {
 /// and Tauri commands.
 #[derive(Debug, Default, Clone)]
 pub struct PluginHtmlStore {
-    /// Map of UUID -> HTML content
-    store: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
+    /// Map of UUID -> stored page
+    store: std::sync::Arc<std::sync::Mutex<HashMap<String, StoredHtml>>>,
     /// UUID of the `moss-plugin://` HTML page currently shown in the browser
     /// panel (single-slot), or `None`. Set at open/navigate and taken at
     /// teardown so the entry is freed using a tracked id rather than reading
@@ -455,7 +492,14 @@ pub struct PluginHtmlStore {
     /// `panic="abort"`, CRASHES the app when the URL is nil (the browser/login
     /// panel torn down before its first navigation committed). See
     /// `plugins/runtime/browser.rs`.
+    ///
+    /// This is teardown bookkeeping ONLY — it is set eagerly, before the
+    /// navigation it names has committed, so it must never back an
+    /// authorization decision. `browser_panel_navigation` below is the
+    /// commit-gated field that does.
     current_browser_page: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// The browser panel's navigation state — see [`BrowserPanelNavigation`].
+    browser_panel_navigation: std::sync::Arc<std::sync::Mutex<BrowserPanelNavigation>>,
 }
 
 impl PluginHtmlStore {
@@ -464,14 +508,27 @@ impl PluginHtmlStore {
         Self {
             store: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             current_browser_page: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            browser_panel_navigation: std::sync::Arc::new(std::sync::Mutex::new(
+                BrowserPanelNavigation::default(),
+            )),
         }
     }
 
-    /// Store HTML content and return its UUID
-    pub fn store(&self, html: String) -> String {
+    /// Store HTML content and return its UUID.
+    ///
+    /// `owning_plugin` records who this page belongs to, for
+    /// `write_project_file`/`read_project_file`'s caller-identity check (the
+    /// browser panel showing this page is the "webview URL" side of that
+    /// check — see `plugin_config.rs::verify_caller_plugin_identity`). It
+    /// must be `None` for a call that came from the webview-facing
+    /// `set_action_panel_html` command — only the trusted engine seam
+    /// (`AppHost::set_action_panel_html`, sourced from `host.plugin`) may
+    /// supply a real id, matching `open_action_panel`'s "no caller id"
+    /// precedent: a webview cannot be trusted to name itself.
+    pub fn store(&self, html: String, owning_plugin: Option<String>) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         if let Ok(mut map) = self.store.lock() {
-            map.insert(id.clone(), html);
+            map.insert(id.clone(), StoredHtml { html, owning_plugin });
         }
         id
     }
@@ -479,16 +536,27 @@ impl PluginHtmlStore {
     /// Retrieve HTML content by UUID
     pub fn get(&self, id: &str) -> Option<String> {
         if let Ok(map) = self.store.lock() {
-            map.get(id).cloned()
+            map.get(id).map(|entry| entry.html.clone())
         } else {
             None
         }
     }
 
+    /// The plugin that registered the page at `id`, or `None` if the page
+    /// has no recorded owner (webview-originated, or the id is unknown) —
+    /// the host-derived identity `write_project_file`/`read_project_file`
+    /// check a claimed `plugin_name` against.
+    pub fn owning_plugin(&self, id: &str) -> Option<String> {
+        self.store
+            .lock()
+            .ok()
+            .and_then(|map| map.get(id).and_then(|entry| entry.owning_plugin.clone()))
+    }
+
     /// Remove HTML content by UUID (for cleanup)
     pub fn remove(&self, id: &str) -> Option<String> {
         if let Ok(mut map) = self.store.lock() {
-            map.remove(id)
+            map.remove(id).map(|entry| entry.html)
         } else {
             None
         }
@@ -511,6 +579,89 @@ impl PluginHtmlStore {
             .lock()
             .ok()
             .and_then(|mut cur| cur.take())
+    }
+
+    /// Call BEFORE issuing the navigation (`webview.navigate()` or building
+    /// the webview with this as its initial URL) — never after. Bumps the
+    /// generation, records what this navigation is expected to commit as,
+    /// and — the load-bearing part — clears `committed_page_id` to `None`
+    /// synchronously, so [`committed_browser_panel_owner`] reports no owner
+    /// for the entire window until [`commit_browser_panel_navigation`]
+    /// proves THIS SAME navigation actually committed. Returns the new
+    /// generation (tests only; production code has no navigation token to
+    /// hand back to wry).
+    pub fn begin_browser_panel_navigation(&self, url: &str, page_id: Option<String>) -> u64 {
+        let mut nav = self
+            .browser_panel_navigation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        nav.generation += 1;
+        nav.expected_url = Some(url.to_string());
+        nav.pending_page_id = page_id;
+        nav.committed_page_id = None;
+        nav.generation
+    }
+
+    /// Call from the wry page-load hook once a navigation has PROVABLY
+    /// committed — `PageLoadEvent::Started`, which on every desktop backend
+    /// wry supports (WKWebView's `didCommitNavigation`, WebView2's
+    /// `ContentLoading`, WebKitGTK's `LoadEvent::Committed`) fires only
+    /// once the previous document has been superseded, guaranteeing its JS
+    /// context is dead. NOT `Finished`, which would leave a needlessly wide
+    /// (but not unsafe) "no owner" window after the new page has already
+    /// taken over.
+    ///
+    /// `committed_url` must equal the MOST RECENT
+    /// [`begin_browser_panel_navigation`] call's `url` to grant ownership —
+    /// any other value CLEARS `committed_page_id` to `None` rather than
+    /// leaving the prior owner in place. That covers two distinct cases the
+    /// same way on purpose: a stale event for a navigation this panel has
+    /// since moved past (superseded by a later `begin` before this one's
+    /// commit arrived — the per-navigation generation's reason to exist),
+    /// and a commit `begin` never announced at all — a link click, a page's
+    /// own `window.location` self-navigation, `history.back()/forward()`
+    /// (moss doesn't know the target URL ahead of a back/forward, so it
+    /// cannot call `begin` for it), or navigation to an external URL. Only
+    /// the first case is truly "ignore, keep the old state"; the second is
+    /// "a document loaded that no `begin` vouched for" and must drop
+    /// ownership, or the plugin that held it before an unannounced
+    /// navigation would go on being trusted for whatever loaded next.
+    pub fn commit_browser_panel_navigation(&self, committed_url: &str) {
+        let mut nav = self
+            .browser_panel_navigation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        nav.committed_page_id = if nav.expected_url.as_deref() == Some(committed_url) {
+            nav.pending_page_id.clone()
+        } else {
+            None
+        };
+    }
+
+    /// The plugin that owns the browser panel's CURRENTLY COMMITTED page —
+    /// `None` for a non-plugin page, for no page at all, AND for the entire
+    /// window between a navigation being issued and that exact navigation's
+    /// commit event. This is what `write_project_file`/`read_project_file`'s
+    /// caller-identity check reads; see [`BrowserPanelNavigation`]'s doc for
+    /// why it must never read the eagerly-set `current_browser_page` instead.
+    pub fn committed_browser_panel_owner(&self) -> Option<String> {
+        let page_id = self
+            .browser_panel_navigation
+            .lock()
+            .ok()
+            .and_then(|nav| nav.committed_page_id.clone())?;
+        self.owning_plugin(&page_id)
+    }
+
+    /// The current navigation generation — tests only, to assert that a
+    /// superseded `begin` call really did move the counter past the one a
+    /// stale commit event names.
+    #[cfg(test)]
+    pub(crate) fn current_browser_panel_generation(&self) -> u64 {
+        self.browser_panel_navigation
+            .lock()
+            .map(|nav| nav.generation)
+            .unwrap_or_default()
     }
 }
 
@@ -636,7 +787,7 @@ mod tests {
     fn test_plugin_html_store_and_retrieve() {
         let store = PluginHtmlStore::new();
         let html = "<html><body>Test</body></html>".to_string();
-        let id = store.store(html.clone());
+        let id = store.store(html.clone(), None);
         let retrieved = store.get(&id);
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap(), html);
@@ -647,8 +798,8 @@ mod tests {
         let store = PluginHtmlStore::new();
         let html1 = "<html><body>First</body></html>".to_string();
         let html2 = "<html><body>Second</body></html>".to_string();
-        let id1 = store.store(html1.clone());
-        let id2 = store.store(html2.clone());
+        let id1 = store.store(html1.clone(), None);
+        let id2 = store.store(html2.clone(), None);
         assert_eq!(store.get(&id1).unwrap(), html1);
         assert_eq!(store.get(&id2).unwrap(), html2);
     }
@@ -657,7 +808,7 @@ mod tests {
     fn test_plugin_html_store_remove() {
         let store = PluginHtmlStore::new();
         let html = "<html><body>Test</body></html>".to_string();
-        let id = store.store(html.clone());
+        let id = store.store(html.clone(), None);
         assert!(store.get(&id).is_some());
         let removed = store.remove(&id);
         assert!(removed.is_some());
@@ -670,7 +821,7 @@ mod tests {
         // The browser-panel teardown frees a moss-plugin:// entry by this
         // tracked id instead of reading the live (possibly-nil) webview URL.
         let store = PluginHtmlStore::new();
-        let id = store.store("<html></html>".to_string());
+        let id = store.store("<html></html>".to_string(), None);
 
         store.set_current_browser_page(Some(id.clone()));
         // take returns the tracked id, then clears it.
@@ -681,5 +832,158 @@ mod tests {
         store.set_current_browser_page(Some(id.clone()));
         store.set_current_browser_page(None);
         assert_eq!(store.take_current_browser_page(), None);
+    }
+
+    /// Only a store call carrying a real `owning_plugin` (the trusted engine
+    /// seam) records an owner — the webview-facing path always passes
+    /// `None`, and an unknown id has no owner at all.
+    #[test]
+    fn test_plugin_html_store_owning_plugin() {
+        let store = PluginHtmlStore::new();
+        let owned_id = store.store("<html></html>".to_string(), Some("matters".to_string()));
+        let unowned_id = store.store("<html></html>".to_string(), None);
+
+        assert_eq!(store.owning_plugin(&owned_id), Some("matters".to_string()));
+        assert_eq!(store.owning_plugin(&unowned_id), None);
+        assert_eq!(store.owning_plugin("not-a-real-id"), None);
+    }
+
+    // =========================================
+    // Browser-panel navigation gating (the b/navigate-in-place race)
+    // =========================================
+
+    /// The load-bearing property: from the moment a navigation is issued
+    /// until THAT SAME navigation's commit event, no page id is claimed as
+    /// owner — a caller cannot land during the in-flight window no matter
+    /// what it names, because `committed_browser_panel_owner` reports
+    /// `None` regardless of who claims to be it.
+    #[test]
+    fn begin_clears_the_owner_for_the_in_flight_window() {
+        let store = PluginHtmlStore::new();
+        let owned_id = store.store("<html></html>".to_string(), Some("matters".to_string()));
+
+        // A prior navigation already committed, naming matters as owner.
+        store.begin_browser_panel_navigation("moss-plugin://local/prev", Some(owned_id.clone()));
+        store.commit_browser_panel_navigation("moss-plugin://local/prev");
+        assert_eq!(store.committed_browser_panel_owner(), Some("matters".to_string()));
+
+        // Issuing the NEXT navigation clears the owner immediately — before
+        // any commit event for it can possibly have fired.
+        store.begin_browser_panel_navigation("moss-plugin://local/next", Some(owned_id.clone()));
+        assert_eq!(
+            store.committed_browser_panel_owner(),
+            None,
+            "no claim may be honored while the old page's JS could still be alive"
+        );
+    }
+
+    /// A commit event for a navigation this panel has since moved past
+    /// (its URL no longer matches what the CURRENT generation expects) is
+    /// ignored — a late/stale event cannot retroactively set the owner.
+    #[test]
+    fn a_stale_commit_event_for_a_superseded_navigation_is_ignored() {
+        let store = PluginHtmlStore::new();
+        let id_a = store.store("<html></html>".to_string(), Some("matters".to_string()));
+        let id_b = store.store("<html></html>".to_string(), Some("github".to_string()));
+
+        let gen_a = store.begin_browser_panel_navigation("moss-plugin://local/a", Some(id_a));
+        // Superseded before A's commit event ever arrived.
+        let gen_b = store.begin_browser_panel_navigation("moss-plugin://local/b", Some(id_b));
+        assert!(gen_b > gen_a, "generation must advance per navigation");
+
+        // A's late commit event finally arrives — its URL no longer matches
+        // what the panel is currently on, so it must not set the owner.
+        store.commit_browser_panel_navigation("moss-plugin://local/a");
+        assert_eq!(
+            store.committed_browser_panel_owner(),
+            None,
+            "a stale commit for a superseded navigation must not set the owner"
+        );
+        assert_eq!(store.current_browser_panel_generation(), gen_b);
+
+        // B's own (matching) commit event DOES set the owner.
+        store.commit_browser_panel_navigation("moss-plugin://local/b");
+        assert_eq!(store.committed_browser_panel_owner(), Some("github".to_string()));
+    }
+
+    /// The matching case end to end: owner is set only after the load event
+    /// for the CURRENT navigation, and reads back correctly.
+    #[test]
+    fn owner_set_after_the_matching_load_event() {
+        let store = PluginHtmlStore::new();
+        let id = store.store("<html></html>".to_string(), Some("matters".to_string()));
+
+        store.begin_browser_panel_navigation("moss-plugin://local/x", Some(id));
+        assert_eq!(store.committed_browser_panel_owner(), None, "not yet committed");
+
+        store.commit_browser_panel_navigation("moss-plugin://local/x");
+        assert_eq!(store.committed_browser_panel_owner(), Some("matters".to_string()));
+    }
+
+    /// A page that owns the panel can navigate itself away without moss ever
+    /// calling `begin` for the destination — a link click or a
+    /// `window.location` self-navigation. The resulting commit event's URL
+    /// does not match the (still-set-from-A) `expected_url`, and must CLEAR
+    /// the owner, not leave A trusted for whatever loaded next.
+    #[test]
+    fn a_self_navigation_commit_to_a_different_url_clears_the_prior_owner() {
+        let store = PluginHtmlStore::new();
+        let id_a = store.store("<html></html>".to_string(), Some("matters".to_string()));
+
+        store.begin_browser_panel_navigation("moss-plugin://local/a", Some(id_a));
+        store.commit_browser_panel_navigation("moss-plugin://local/a");
+        assert_eq!(store.committed_browser_panel_owner(), Some("matters".to_string()));
+
+        // A's own page navigates itself (link click / `window.location`) —
+        // no `begin` was ever called for this URL.
+        store.commit_browser_panel_navigation("https://attacker.example/payload");
+        assert_eq!(
+            store.committed_browser_panel_owner(),
+            None,
+            "an unannounced commit must drop the prior owner, not inherit it"
+        );
+    }
+
+    /// `browser_chrome_action("back")` evals `history.back()` without
+    /// knowing the destination URL, so it cannot call `begin` for it. The
+    /// resulting commit must not leave the panel attributed to whichever
+    /// plugin owned it before back/forward navigated away.
+    #[test]
+    fn a_back_forward_commit_with_no_announced_target_clears_the_owner() {
+        let store = PluginHtmlStore::new();
+        let id_a = store.store("<html></html>".to_string(), Some("matters".to_string()));
+
+        store.begin_browser_panel_navigation("moss-plugin://local/a", Some(id_a));
+        store.commit_browser_panel_navigation("moss-plugin://local/a");
+        assert_eq!(store.committed_browser_panel_owner(), Some("matters".to_string()));
+
+        // history.back() lands on whatever the webview's history holds —
+        // moss never announced this URL via `begin`.
+        store.commit_browser_panel_navigation("moss-plugin://local/previous-in-history");
+        assert_eq!(
+            store.committed_browser_panel_owner(),
+            None,
+            "a back/forward commit with no matching begin must clear the owner"
+        );
+    }
+
+    /// Navigating to an external (non-plugin) URL — e.g. a Matters/OAuth
+    /// login page — must also clear the owner, not preserve the plugin that
+    /// held the panel beforehand.
+    #[test]
+    fn a_commit_to_an_external_url_clears_the_owner() {
+        let store = PluginHtmlStore::new();
+        let id_a = store.store("<html></html>".to_string(), Some("matters".to_string()));
+
+        store.begin_browser_panel_navigation("moss-plugin://local/a", Some(id_a));
+        store.commit_browser_panel_navigation("moss-plugin://local/a");
+        assert_eq!(store.committed_browser_panel_owner(), Some("matters".to_string()));
+
+        store.commit_browser_panel_navigation("https://matters.town/oauth/authorize");
+        assert_eq!(
+            store.committed_browser_panel_owner(),
+            None,
+            "a commit to an external URL must clear the owner"
+        );
     }
 }

@@ -123,29 +123,30 @@ fn rebuild_interarrival() -> Option<std::time::Duration> {
     guard.replace(now).map(|prev| now.duration_since(prev))
 }
 
-/// Start file watching for live development mode.
+/// Register `folder_path`'s rebuild worker unconditionally, evicting and
+/// shutting down whatever was registered before — exactly `worker::register`'s
+/// own contract, plus spawning its loop. Safe to call even when a STALE
+/// worker from a torn-down previous session of the same folder (a re-open)
+/// might still be in the registry: `worker::register` shuts that one down and
+/// replaces it, so nothing already reused it can end up enqueueing into a
+/// handle that is about to stop draining its slot.
 ///
-/// Monitors the source folder for content file changes and triggers silent
-/// recompilation for seamless preview updates. Registers the folder's rebuild
-/// worker and supervision ledger, then hands the session loop to the host's
-/// spawner and returns.
-pub async fn start(config: WatchConfig) {
-    let WatchConfig {
-        folder_path,
-        spawner,
-        mut shutdown_rx,
-        emit,
-        dispatch,
-        attempt,
-    } = config;
-
+/// This is the primitive an OPEN sequence must call — never [`ensure_worker`],
+/// whose reuse-if-present behavior is only sound for a LATER call in the same
+/// sequence (see its doc). Confusing the two reintroduces exactly the race
+/// part 1 below closes, on a re-open instead of a cold open.
+pub fn register_worker(
+    folder_path: &str,
+    spawner: &Arc<dyn Spawner>,
+    attempt: RebuildAttempt,
+) -> Arc<worker::WorkerHandle> {
     // The folder's rebuild worker: drains the request slot one build at a
     // time, so no producer ever awaits a build inline (phase 1a of
     // docs/archive/2026-08-18-watcher-reliability-architecture.md). Spawned
     // even when the kill switch routes triggers to the inline body — the
     // publish thaw's catch-up rides the slot either way, and an idle worker
     // costs one parked task.
-    let worker_handle = worker::register(&folder_path);
+    let worker_handle = worker::register(folder_path);
     log::info!(
         "Rebuild path: {}",
         if worker::worker_enabled() {
@@ -162,6 +163,60 @@ pub async fn start(config: WatchConfig) {
                 .await;
         })));
     }
+    worker_handle
+}
+
+/// Ensure a rebuild worker is registered and running for `folder_path`,
+/// reusing one that is already there instead of always minting a fresh
+/// handle via [`register_worker`].
+///
+/// **Only sound as the SECOND call in an open sequence.** The intended use is
+/// `start()` below finding the handle a host's OWN early call already
+/// registered earlier in the SAME open (see `ensure_rebuild_worker` in
+/// `build_shell/watch.rs`, called at folder-open, before this driver ever
+/// starts) — nothing else can have touched this folder's registry entry in
+/// between, so reuse is safe. It is NOT what an open sequence's own first,
+/// early registration should call: an entry already present at THAT point
+/// could be a stale handle from a torn-down previous session of the same
+/// folder (a re-open racing its own teardown), whose loop may see
+/// `shutdown_requested()` and exit without draining anything enqueued into
+/// it after that point. `register_worker` is the eviction-safe primitive for
+/// that first call.
+///
+/// Seal-persist-race-404 fix, part 1 (moss open-double-build): without a host
+/// calling `register_worker` early, a trigger landing between folder-open and
+/// the watcher's own `start()` found no worker at all and fell back to
+/// building inline — a second, uncoordinated `run_pipeline` against the same
+/// `stage_dir` the open build was still writing. See
+/// `docs/archive/2026-09-15-open-double-build-race.md`.
+pub fn ensure_worker(
+    folder_path: &str,
+    spawner: &Arc<dyn Spawner>,
+    attempt: RebuildAttempt,
+) -> Arc<worker::WorkerHandle> {
+    match worker::get(folder_path) {
+        Some(existing) => existing,
+        None => register_worker(folder_path, spawner, attempt),
+    }
+}
+
+/// Start file watching for live development mode.
+///
+/// Monitors the source folder for content file changes and triggers silent
+/// recompilation for seamless preview updates. Registers the folder's rebuild
+/// worker and supervision ledger, then hands the session loop to the host's
+/// spawner and returns.
+pub async fn start(config: WatchConfig) {
+    let WatchConfig {
+        folder_path,
+        spawner,
+        mut shutdown_rx,
+        emit,
+        dispatch,
+        attempt,
+    } = config;
+
+    let worker_handle = ensure_worker(&folder_path, &spawner, attempt);
 
     // The folder's watcher-health ledger (phase 3 — supervision). The pump
     // records liveness into it, the sweep judges strikes against it, and the

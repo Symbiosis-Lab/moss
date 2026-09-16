@@ -1448,7 +1448,11 @@ pub(crate) fn copy_deferred_assets(
             // All other files, including any user-named custom.css/custom.js,
             // mirror through verbatim under _moss/theme/.
             if relative_path == "style.css" || relative_path == "script.js" {
-                log::warn!(
+                // Every build, unconditionally, for exactly these two files —
+                // not actionable by anyone reading the log, so DEBUG not WARN
+                // (2026-09-15, docs/archive/2026-09-15-open-feedback-design.md:
+                // measured ~170 lines/session in a real upload).
+                log::debug!(
                     "[background-assets] Skipping .moss/theme/{} — handled by blocking phase",
                     relative_path
                 );
@@ -1575,7 +1579,17 @@ pub(crate) fn copy_deferred_assets(
         .collect();
     for key in &stale_sources {
         site_hashes.sources.remove(key);
-        log::debug!("[background-assets] Removed stale source-cache entry: {}", key);
+    }
+    // One line for the whole prune, not one per entry — a rename/restructure
+    // or a first full-cache build could otherwise log ~1300 lines in a
+    // single "Send Logs" upload for information no individual key adds over
+    // the count (2026-09-15, docs/archive/2026-09-15-open-feedback-design.md).
+    if !stale_sources.is_empty() {
+        log::debug!(
+            "[background-assets] Removed {} stale source-cache entr{}",
+            stale_sources.len(),
+            if stale_sources.len() == 1 { "y" } else { "ies" }
+        );
     }
 
     // All background workers (image, video, assets) send their

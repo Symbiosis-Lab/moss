@@ -385,6 +385,7 @@ mod tests {
             articles: Vec::new(),
             deployment: None,
             config: HashMap::new(),
+            trigger: TriggerContext::Background,
         };
 
         let plugin_context =

@@ -235,7 +235,9 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
 
 /// Renders a single child list item as HTML.
 ///
-/// - For articles (child_count is None, date_display is Some): renders with month-only date prefix
+/// - For articles (child_count is None, date_display is Some): renders with the
+///   full-precision date prefix ("year · month", or "year" alone) — there is no
+///   year heading above this row to carry it, unlike the year-grouped rows.
 /// - For folders (child_count is Some): renders with count suffix (e.g., "4 篇")
 /// - For articles without date: renders title only
 pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typesetting: Option<&str>) -> String {
@@ -259,20 +261,22 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
             )
         }
     } else if let Some(ref date_raw) = props.date_raw {
-        // Article with date — the month, or the year when that is all the date
-        // says. Unlike the year-grouped rows above there is no heading here to
-        // carry the year, so a monthless date must still name itself.
-        let month = month_or_year(date_raw, lang, typesetting);
+        // Article with a raw date — full precision, since there is no year
+        // heading above this row (unlike the year-grouped rows) to carry it:
+        // "year · month" when the date has a month, "year" when that's all
+        // it has. Same compact form grid cards use.
+        let date = date_formatters::format_compact_date(date_raw, lang, typesetting);
         format!(
             r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix date">{}</span><span class="moss-prefix-link-title">{}</span></a></div>"#,
-            escaped_url, html_escape(&month), escaped_title
+            escaped_url, html_escape(&date), escaped_title
         )
     } else if let Some(ref date_display) = props.date_display {
-        // Article with display date but no raw date
-        let month = month_or_year(date_display, lang, typesetting);
+        // Article with a display date but no raw date. `date_display` is
+        // already the compact "year · month"/"year" form —
+        // `props_for_document` formatted it with `format_compact_date`.
         format!(
             r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix date">{}</span><span class="moss-prefix-link-title">{}</span></a></div>"#,
-            escaped_url, html_escape(&month), escaped_title
+            escaped_url, html_escape(date_display), escaped_title
         )
     } else {
         // Article without any date
@@ -281,22 +285,6 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
             escaped_url, escaped_title
         )
     }
-}
-
-/// The month of `date_str`, falling back to its year — both written in the
-/// numerals the page's typesetting calls for.
-fn month_or_year(
-    date_str: &str,
-    lang: crate::i18n::Language,
-    typesetting: Option<&str>,
-) -> String {
-    let month = date_formatters::format_month_prefix(date_str, lang, typesetting);
-    if !month.is_empty() {
-        return month;
-    }
-    date_formatters::extract_year(date_str)
-        .map(|y| date_formatters::format_year_heading(y, lang, typesetting))
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

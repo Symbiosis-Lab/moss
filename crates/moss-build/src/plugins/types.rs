@@ -538,6 +538,64 @@ pub struct SyndicateContext {
     /// Plugin configuration from .moss/config.toml
     #[serde(default)]
     pub config: HashMap<String, serde_json::Value>,
+
+    /// Why moss is invoking this hook (ADR-015). The one production caller,
+    /// `syndicate_to_platforms`, runs only from the user's Publish click —
+    /// always `ManualOne`, never the quiet `Background` default.
+    #[serde(default)]
+    pub trigger: TriggerContext,
+}
+
+#[cfg(test)]
+mod syndicate_context_trigger_tests {
+    use super::*;
+
+    /// A syndicate hook's own JSON wire (what the plugin actually reads) must
+    /// carry the loud `manual_one` value on the run moss really makes — not
+    /// silently deserialize into the quiet `Background` default a plugin
+    /// would otherwise treat as "no user is watching this".
+    #[test]
+    fn manual_one_serializes_and_round_trips() {
+        let ctx = SyndicateContext {
+            project_path: "/site".to_string(),
+            moss_dir: "/site/.moss".to_string(),
+            output_dir: "/site/.moss/site".to_string(),
+            project_info: ProjectInfo {
+                total_files: 0,
+                homepage_file: None,
+                folder_name: None,
+                site_name: None,
+                lang: "en".into(),
+            },
+            site_files: Vec::new(),
+            articles: Vec::new(),
+            deployment: None,
+            config: HashMap::new(),
+            trigger: TriggerContext::ManualOne,
+        };
+        let json = serde_json::to_string(&ctx).expect("serialize");
+        assert!(json.contains(r#""trigger":"manual_one""#), "got: {json}");
+
+        let round_tripped: SyndicateContext = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(round_tripped.trigger, TriggerContext::ManualOne);
+    }
+
+    /// A context serialized before this field existed (or any caller that
+    /// omits it) must deserialize to the quiet `Background` default, never
+    /// fail to parse or silently claim a user is present.
+    #[test]
+    fn absent_trigger_deserializes_to_background() {
+        let json = r#"{
+            "project_path": "/site",
+            "moss_dir": "/site/.moss",
+            "output_dir": "/site/.moss/site",
+            "project_info": { "total_files": 0, "homepage_file": null, "site_name": null, "lang": "en" },
+            "site_files": [],
+            "deployment": null
+        }"#;
+        let ctx: SyndicateContext = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(ctx.trigger, TriggerContext::Background);
+    }
 }
 
 /// Project information passed to plugins

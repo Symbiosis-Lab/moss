@@ -675,7 +675,26 @@ pub(crate) fn should_stash_hashes(publishable: bool, cancelled: bool) -> bool {
     publishable && !cancelled
 }
 
+/// Run one build end to end, then log the single `build.summary` INFO line
+/// aggregating every phase/count `run_pipeline_body` recorded — see
+/// `build/phase.rs`'s module doc for why the collector needs its own
+/// wrapper rather than living inside the traced body: the body's
+/// `Result<String, String>` has no room to carry timing data back out, and
+/// `PHASE_TIMINGS`-equivalent state must be gone by the time this fn
+/// returns, not read after the fact from a task that no longer exists.
 pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
+    let pipeline_start = std::time::Instant::now();
+    let (result, collector) =
+        crate::build::phase::with_collector(run_pipeline_body(config)).await;
+    crate::build::phase::log_build_summary(
+        &collector,
+        pipeline_start.elapsed(),
+        if result.is_ok() { "ok" } else { "error" },
+    );
+    result
+}
+
+async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     use crate::build::phase::PhaseTrace;
     let _pipeline_trace = PhaseTrace::start("run_pipeline");
     let folder_path = config.root.as_str().to_string();
@@ -893,7 +912,6 @@ pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
     };
 
     drop(_scan_trace);
-
 
     // Derive plugin wait behavior from PluginMode
     let skip_plugins = matches!(config.plugins, PluginMode::Skip);
@@ -1131,7 +1149,7 @@ pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
         })
     };
 
-    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents: _build_documents, content_hashes, missing_media, cancelled, home_ready: _home_ready, publishable } = {
+    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_media, cancelled, home_ready: _home_ready, publishable } = {
         // moss's own generator, always. A plugin could replace it wholesale
         // through the `generate` capability until ADR-055 retired it: three
         // months, no implementation, and the branch had already decayed into
@@ -1156,14 +1174,29 @@ pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
             let slot_resolver = make_slot_resolver(folder_path.clone(), cached_domain_config.clone(), ps.clone());
             let cache_keys_owned = cache_keys.clone();
             let (services, port_owned) = (services.clone(), port_owned.clone());
+            // Bridge the current build.summary collector (if any) onto the
+            // spawn_blocking closure's own OS thread: spawn_blocking does not
+            // inherit task-locals, so without this, every PhaseTrace inside
+            // pipeline::run (e.g. "slot_resolution") would go unrecorded. See
+            // build/phase.rs's module doc.
+            let phase_collector_for_blocking = crate::build::phase::current_collector();
             async move {
                 tokio::task::spawn_blocking(move || {
+                    let _blocking_scope = crate::build::phase::enter_blocking_scope(phase_collector_for_blocking);
                     pipeline::run(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned)
                 }).await.map_err(|e| BuildStopped::from(format!("Build task panicked: {}", e)))?
             }
         };
         retry_once_after_discard(attempt).await?
     };
+    // Feed the build.summary collector the counts that are already in scope
+    // here and nowhere else convenient — reading them back out of
+    // `run_pipeline`'s `Result<String, String>` after the fact isn't
+    // possible, so they're recorded at the point they're computed instead.
+    crate::build::phase::record_count("pages", build_documents.len());
+    crate::build::phase::record_count("missing_media", missing_media.len());
+    crate::build::phase::record_count("cancelled", cancelled as usize);
+    crate::build::phase::record_count("publishable", publishable as usize);
 
     // Stash the build's IN-MEMORY content hashes (keyed by folder) so the file
     // watcher's `do_rebuild_and_notify` decides the live-preview refresh from
@@ -1307,6 +1340,7 @@ pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
                             promotion_epoch,
                             publishable,
                             seal_freshness,
+                            &folder_path_for_mat,
                         )
                         .await;
                     }
@@ -1376,6 +1410,7 @@ pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
                         promotion_epoch,
                         publishable,
                         crate::build::feeds::search_lane::Freshness::Now,
+                        &folder_path,
                     )
                     .await;
                 }
@@ -1612,6 +1647,11 @@ async fn advertise_sealed(
     promotion_epoch: u64,
     publishable: bool,
     freshness: crate::build::feeds::search_lane::Freshness,
+    // The exact key `folder_session::registry()` and `ops::watch::worker`
+    // register under — passed rather than derived from `mp.project_root()`
+    // so a `MossPaths` normalization can never drift the two apart. See the
+    // step-7b call into `trigger_media_settle_rerender` below.
+    folder_path: &str,
 ) {
     let reporter = ports.events.as_ref();
     let announcer = ports.announcer.as_ref();
@@ -1860,10 +1900,81 @@ async fn advertise_sealed(
     //    mat_ok (the variants are actually on disk under current/). Empty set →
     //    nothing emitted (pure text edit / identical re-encode).
     if mat_ok && !settled_changed.is_empty() {
+        // 7b. Two settle kinds have no catch-up path once a page has already
+        // shipped a placeholder that consumed them — see
+        // `trigger_media_settle_rerender`'s doc for the full case-by-case
+        // reasoning. Reuses the render's own existing trigger path rather
+        // than growing a second one here.
+        trigger_media_settle_rerender(folder_path, &settled_changed, &previous_hashes);
         reporter.report(&crate::build::progress::PipelineEvent::AssetsSettled {
             changed: settled_changed,
         });
     }
+}
+
+/// Enqueue exactly one full re-render on `folder_path`'s rebuild worker when
+/// `settled` contains an asset a placeholder-consuming page can never
+/// self-heal from on its own:
+///
+/// - **Every video poster** (`asset_type == "thumbnail"`).
+///   `color_extract::resolve_card_color`'s video branch and
+///   `media::cover::render_cover_html`'s `<img class="cover-thumb">` both
+///   read straight from the OUTPUT thumb file with no source-file fallback,
+///   and no swap signal reaches the client either: `iframe-bridge.ts`'s
+///   `"thumbnail"` case only rewrites a `<video data-thumb-src>` element's
+///   `poster` attribute, and the grid-card markup emits neither that
+///   attribute nor any handle for the colour band (a static inline style).
+///   The colour and the thumbnail both resolve correctly on a fresh render —
+///   the same output-file lookup every render already makes.
+///
+/// - **A brand-new image** (`asset_type == "image"` AND `path` was absent
+///   from the PREVIOUS sealed manifest). `resolve_card_color`'s image branch
+///   decodes the SOURCE file on a cache miss, so a page bakes an empty
+///   `data-cover-color` only when that decode fails at render time (a
+///   dataless/not-yet-materialized source) — a client swap can't fix it for
+///   the same reason as the poster case: no colour payload ever reaches the
+///   browser. A RE-encode of an image this folder has settled before is
+///   excluded: any image with a PRIOR successful settle already enriched the
+///   persisted stat-cache entry `extract_media_metadata_cached` reads
+///   (scan.rs), so its color was already available to every render since —
+///   re-triggering on every such re-encode would Full-rebuild a large site
+///   on ordinary content-image churn the client already swaps live via
+///   `AssetsSettled`/`AssetReady`. This is the coarser of the two checks:
+///   without threading a live "which cover keys baked empty" set from the
+///   render phase through to here (a wider change across every
+///   `resolve_card_color` call site — grid_card.rs, grid_cells.rs,
+///   folder_embed.rs, child_summary.rs — for a condition this rare), "newly
+///   added" is the closest correlate this function's two existing inputs
+///   (the settle diff and the previous manifest) can compute.
+///
+/// A no-op when nothing is watching `folder_path` (`ops::watch::worker::get`
+/// returns `None` for a deploy, CLI build, or plugin install — none of which
+/// have a live preview to refresh). Self-limiting: the follow-up build
+/// reuses the SAME rebuild path a file edit already drives
+/// (`ops::watch::worker`), and that build's own `diff_settled_assets`
+/// compares against the manifest THIS build just sealed — an unchanged
+/// re-encode reports nothing new, so it triggers no further rebuild.
+fn trigger_media_settle_rerender(
+    folder_path: &str,
+    settled: &[crate::build::progress::SettledAsset],
+    previous: &crate::types::content::SiteHashes,
+) {
+    let needs_rerender = settled.iter().any(|a| {
+        a.asset_type == "thumbnail"
+            || (a.asset_type == "image" && !previous.files.contains_key(&a.path))
+    });
+    if !needs_rerender {
+        return;
+    }
+    let Some(worker) = crate::ops::watch::worker::get(folder_path) else {
+        return;
+    };
+    log::info!(
+        "media settle: a video poster or a brand-new image landed for '{}' — \
+         enqueueing a full re-render so grid-card covers pick up the color band and thumbnail",
+        folder_path
+    );
+    worker.enqueue(crate::ops::watch::worker::RebuildRequest::full());
 }
 
 /// Retain generations and sweep the content-addressed cache after a successful
@@ -1904,4 +2015,123 @@ fn collect_build_store(
     }
     store_gc::maybe_gc_cache(&mp.build_dir());
 }
+
+#[cfg(test)]
+mod media_settle_rerender_tests {
+    use super::trigger_media_settle_rerender;
+    use crate::build::progress::SettledAsset;
+    use crate::ops::watch::worker;
+    use crate::types::content::{file_entry, SiteHashes};
+
+    fn thumbnail(path: &str) -> SettledAsset {
+        SettledAsset { path: path.to_string(), asset_type: "thumbnail".to_string() }
+    }
+
+    fn image(path: &str) -> SettledAsset {
+        SettledAsset { path: path.to_string(), asset_type: "image".to_string() }
+    }
+
+    fn video(path: &str) -> SettledAsset {
+        SettledAsset { path: path.to_string(), asset_type: "video".to_string() }
+    }
+
+    /// A previous manifest that already knows `paths` — the "this image has
+    /// settled before" state `trigger_media_settle_rerender`'s image branch
+    /// reads to tell a re-encode from a brand-new arrival.
+    fn previous_knowing(paths: &[&str]) -> SiteHashes {
+        let mut h = SiteHashes::default();
+        for p in paths {
+            h.files.insert(p.to_string(), file_entry("prior-hash"));
+        }
+        h
+    }
+
+    /// A settled video poster is exactly the case `resolve_card_color`'s video
+    /// branch and the grid-card `<img class="cover-thumb">` cannot self-heal
+    /// without a fresh render (see `trigger_media_settle_rerender`'s doc) — so
+    /// it must enqueue on the SAME slot a file edit would.
+    #[test]
+    fn a_settled_thumbnail_enqueues_a_full_rebuild() {
+        let folder = "/tmp/media-settle-rerender-test-thumbnail";
+        let handle = worker::register(folder);
+        assert!(!handle.slot_occupied(), "clean start");
+
+        trigger_media_settle_rerender(
+            folder,
+            &[thumbnail("videos/clip.thumb.jpg")],
+            &SiteHashes::default(),
+        );
+
+        assert!(
+            handle.slot_occupied(),
+            "a settled thumbnail must enqueue a follow-up rebuild"
+        );
+        worker::deregister(folder, &handle);
+    }
+
+    /// A re-encode of an image this folder has settled before is excluded —
+    /// its color was already available to every render since the FIRST
+    /// settle (the persisted stat-cache entry `resolve_card_color`'s image
+    /// branch reads on a cache hit), so re-triggering here would pay a
+    /// full-site reload for ordinary content-image churn the client already
+    /// swaps live via `AssetsSettled`/`AssetReady`.
+    #[test]
+    fn a_reencoded_image_previously_settled_does_not_enqueue() {
+        let folder = "/tmp/media-settle-rerender-test-reencoded-image";
+        let handle = worker::register(folder);
+
+        trigger_media_settle_rerender(
+            folder,
+            &[image("assets/pic.webp"), video("videos/clip.mp4")],
+            &previous_knowing(&["assets/pic.webp"]),
+        );
+
+        assert!(
+            !handle.slot_occupied(),
+            "a re-encode of an already-known image, and a plain video settle, must not trigger a full re-render"
+        );
+        worker::deregister(folder, &handle);
+    }
+
+    /// A brand-new image (absent from the previous manifest) IS the case
+    /// `trigger_media_settle_rerender`'s doc names: its source may have been
+    /// unreadable (dataless) at the render that first referenced it, baking
+    /// an empty `data-cover-color` with no client-side fix. Must enqueue.
+    #[test]
+    fn a_brand_new_image_settle_enqueues_a_full_rebuild() {
+        let folder = "/tmp/media-settle-rerender-test-new-image";
+        let handle = worker::register(folder);
+
+        trigger_media_settle_rerender(
+            folder,
+            &[image("assets/new-cover.webp")],
+            &SiteHashes::default(), // previous manifest has never seen this path
+        );
+
+        assert!(
+            handle.slot_occupied(),
+            "a brand-new image settle must enqueue a follow-up rebuild"
+        );
+        worker::deregister(folder, &handle);
+    }
+
+    /// Deploy, `moss build`, and plugin-install builds never register a
+    /// worker (no live preview to refresh) — the function must not panic or
+    /// otherwise assume one exists.
+    #[test]
+    fn no_registered_worker_is_a_noop() {
+        let folder = "/tmp/media-settle-rerender-test-no-worker";
+        assert!(worker::get(folder).is_none(), "precondition: nothing registered");
+        trigger_media_settle_rerender(
+            folder,
+            &[thumbnail("videos/clip.thumb.jpg")],
+            &SiteHashes::default(),
+        );
+        assert!(worker::get(folder).is_none(), "still nothing registered");
+    }
+}
+
+#[cfg(test)]
+#[path = "build/epoch_ordering_tests.rs"]
+mod epoch_ordering_tests;
 

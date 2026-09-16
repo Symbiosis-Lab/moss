@@ -91,7 +91,27 @@ pub fn load_managed_toml(path: &Path) -> Result<ManagedToml, String> {
 /// each other's bytes into place. Until 2026-09-07 only `save_environment`
 /// committed atomically; nobody has argued for a config write that may be
 /// observed half-written, so it is now the one way.
+/// A document a newer moss already stamped is refused, not patched. Every
+/// writer above reaches `.moss/config.toml` through `load_managed_toml` +
+/// this function, and none of them checks `schema_version` before mutating —
+/// they diff-patch whatever keys the caller touched using THIS app's idea of
+/// their shape. On a v6 file with a v5 app, that writes a v5-shaped
+/// `[services.analytics]` (say) into a document a v6 app expects a different
+/// shape from, silently, with `schema_version` left at 6 so nothing downstream
+/// notices. Checking here, once, is what makes "no writer can corrupt a
+/// version-ahead config" true of all of them rather than of whichever ones
+/// remembered to ask. `state.toml` and the `[deployment_setup]` snapshot's own
+/// nested `schema_version` both read as v0 by `version_ahead` (no top-level
+/// key), so this never fires for either.
 pub fn write_managed_toml(path: &Path, original: &str, root: &Table) -> Result<(), String> {
+    if let Some(found) = crate::config::migrations::version_ahead(root) {
+        return Err(format!(
+            "{} is at schema_version {found}, newer than this build of moss supports (up to {}). \
+             Refusing to write — update moss before changing settings on this site.",
+            path.display(),
+            crate::config::migrations::CURRENT_VERSION,
+        ));
+    }
     let out = crate::infra::toml_rewrite::apply_changes(original, root)?;
     if out == original {
         return Ok(());
@@ -220,5 +240,35 @@ mod tests {
             .filter(|n| n.ends_with(".tmp"))
             .collect();
         assert!(strays.is_empty(), "no temp file may linger: {strays:?}");
+    }
+
+    /// A config a newer moss already stamped must come back from a write
+    /// attempt refused and byte-for-byte untouched — not patched with this
+    /// app's idea of a v5-shaped key inside a document it doesn't otherwise
+    /// understand. Ablated by commenting out the `version_ahead` guard in
+    /// `write_managed_toml`: this goes red (the write succeeds and
+    /// `save_site_str` mutates the file) without it.
+    #[test]
+    fn write_managed_toml_refuses_a_version_ahead_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let moss = tmp.path().join(".moss");
+        fs::create_dir_all(&moss).unwrap();
+        let original = format!(
+            "schema_version = {}\n\n[site]\ntitle = \"from the future\"\n",
+            crate::config::migrations::CURRENT_VERSION + 1
+        );
+        fs::write(moss.join("config.toml"), &original).unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let err = save_site_str(path, "lang", "en").expect_err(
+            "a write into a version-ahead config must be refused, not silently patched",
+        );
+        assert!(
+            err.contains("schema_version") && err.contains("newer"),
+            "error should name the condition: {err}"
+        );
+
+        let after = fs::read_to_string(moss.join("config.toml")).unwrap();
+        assert_eq!(after, original, "the file must be untouched byte-for-byte");
     }
 }

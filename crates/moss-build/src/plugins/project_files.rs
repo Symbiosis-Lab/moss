@@ -159,8 +159,10 @@ pub fn portable_rel_path(rel: &Path) -> String {
 /// * `relative_path` - Relative path within plugin's directory
 ///
 /// # Returns
-/// The full path to the file
-pub fn build_plugin_storage_path(project_path: &str, plugin_name: &str, relative_path: &PluginPath) -> std::path::PathBuf {
+/// The full path to the file, or an error if a symlink in the plugin's
+/// storage directory would redirect it outside that directory (see
+/// `PluginPath::resolve_under`).
+pub fn build_plugin_storage_path(project_path: &str, plugin_name: &str, relative_path: &PluginPath) -> Result<std::path::PathBuf, String> {
     relative_path.resolve_under(
         &std::path::Path::new(project_path)
             .join(".moss")
@@ -211,7 +213,7 @@ pub async fn read_plugin_file_impl(
     relative_path: &str,
 ) -> Result<String, String> {
     let stored = PluginPath::storage(plugin_name, relative_path)?;
-    let file_path = build_plugin_storage_path(project_path, plugin_name, &stored);
+    let file_path = build_plugin_storage_path(project_path, plugin_name, &stored)?;
     fs::read_to_string(&file_path)
         .map_err(|e| format!("Failed to read file: {}", e))
 }
@@ -240,7 +242,7 @@ pub async fn write_plugin_file_impl(
     log::info!(target: "plugin", "write_plugin_file: plugin={plugin_name} path={relative_path}");
     let outcome = async {
         let stored = PluginPath::storage(plugin_name, relative_path)?;
-        let file_path = build_plugin_storage_path(project_path, plugin_name, &stored);
+        let file_path = build_plugin_storage_path(project_path, plugin_name, &stored)?;
         write_file_with_dirs(&file_path, content.as_bytes())
     }.await;
     match &outcome {
@@ -267,7 +269,7 @@ pub async fn plugin_file_exists_impl(
     relative_path: &str,
 ) -> Result<bool, String> {
     let stored = PluginPath::storage(plugin_name, relative_path)?;
-    let file_path = build_plugin_storage_path(project_path, plugin_name, &stored);
+    let file_path = build_plugin_storage_path(project_path, plugin_name, &stored)?;
 
     Ok(file_path.exists() && file_path.is_file())
 }
@@ -283,6 +285,10 @@ pub async fn plugin_file_exists_impl(
 ///
 /// # Arguments
 /// * `project_path` - Absolute path to the project directory
+/// * `plugin_id` - The calling plugin's manifest name, when known. First-party
+///   callers (moss's own frontend, not a plugin) pass `None`; a plugin caller
+///   always has one, which is what makes `.moss/data/social/<plugin_id>.json`
+///   reachable at all — see `resolve_plugin_project_path`.
 /// * `relative_path` - Relative path from project root (e.g., "output/syndication.json")
 /// * `data` - File content to write
 ///
@@ -296,12 +302,13 @@ pub async fn plugin_file_exists_impl(
 /// Shared body for write_project_file — called by the Tauri command and the engine arm.
 pub async fn write_project_file_impl(
     project_path: &str,
+    plugin_id: Option<&str>,
     relative_path: &str,
     data: &str,
 ) -> Result<(), String> {
     log::info!(target: "plugin", "write_project_file: path={relative_path}");
     let outcome = async {
-        let file_path = PluginPath::sandboxed(relative_path)?.resolve_under(Path::new(project_path));
+        let file_path = resolve_plugin_project_path(project_path, plugin_id, relative_path)?;
         write_file_with_dirs(&file_path, data.as_bytes())
     }.await;
     match &outcome {
@@ -318,6 +325,8 @@ pub async fn write_project_file_impl(
 ///
 /// # Arguments
 /// * `project_path` - Absolute path to the project directory
+/// * `plugin_id` - The calling plugin's manifest name, when known — see
+///   `write_project_file_impl`'s doc for the `None` case.
 /// * `relative_path` - Relative path from project root (e.g., "posts/article.md")
 ///
 /// # Returns
@@ -330,11 +339,35 @@ pub async fn write_project_file_impl(
 /// Shared body for read_project_file — called by the Tauri command and the engine arm.
 pub async fn read_project_file_impl(
     project_path: &str,
+    plugin_id: Option<&str>,
     relative_path: &str,
 ) -> Result<String, String> {
-    let file_path = PluginPath::sandboxed(relative_path)?.resolve_under(Path::new(project_path));
+    let file_path = resolve_plugin_project_path(project_path, plugin_id, relative_path)?;
     fs::read_to_string(&file_path)
         .map_err(|e| format!("Failed to read file: {}", e))
+}
+
+/// Resolve a plugin-supplied project-relative path for `read_project_file` /
+/// `write_project_file`. Tries the narrow [`PluginPath::shared_social_data`]
+/// door first — the one documented exception to the `.moss/` fence — and
+/// falls back to the full [`PluginPath::sandboxed`] policy for everything
+/// else, so every other `.moss/` path (identity, plugin manifests, …) is
+/// refused exactly as before.
+///
+/// `plugin_id` gates the narrow door: only a caller with a known identity can
+/// reach it, and only for that identity's own file — `None` (a first-party
+/// caller) always falls straight through to the full fence.
+fn resolve_plugin_project_path(
+    project_path: &str,
+    plugin_id: Option<&str>,
+    relative_path: &str,
+) -> Result<std::path::PathBuf, String> {
+    if let Some(id) = plugin_id {
+        if let Ok(shared) = PluginPath::shared_social_data(id, relative_path) {
+            return shared.resolve_under(Path::new(project_path));
+        }
+    }
+    PluginPath::sandboxed(relative_path)?.resolve_under(Path::new(project_path))
 }
 
 /// Read a file from the active generation directory (.moss/build/current/)
@@ -363,7 +396,7 @@ pub async fn read_site_file_impl(
     let sandboxed = PluginPath::sandboxed(relative_path)?;
 
     let paths = MossPaths::new(Path::new(project_path));
-    let file_path = sandboxed.resolve_under(&paths.current_ptr());
+    let file_path = sandboxed.resolve_under(&paths.current_ptr())?;
 
     let bytes = fs::read(&file_path)
         .map_err(|e| format!("Failed to read site file '{}': {}", relative_path, e))?;

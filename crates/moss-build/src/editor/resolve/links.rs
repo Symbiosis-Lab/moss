@@ -5,7 +5,6 @@
 //! `commands.rs`.
 
 use crate::build::scan::article_map::ArticleMap;
-use crate::moss_paths::MossPaths;
 
 // ── URL→source path helper ────────────────────────────────────────────────
 
@@ -82,14 +81,21 @@ pub struct PageSource {
 }
 
 /// Inner logic for `resolve_url_for_file`, extracted for testability.
+///
+/// `served_dir` is the directory the disk-fallback branches below must
+/// consult — the CALLER's job to supply, not this function's to guess. Pass
+/// the live preview server's actual served directory when one is running for
+/// this folder; when none is (CLI, tests), pass
+/// `MossPaths::initial_serve_dir()` as the best available fallback. This
+/// function stays pure: it never asks a server for anything itself.
 pub fn resolve_url_for_file_inner(
     rel_path: &str,
     folder_path: &std::path::Path,
+    served_dir: &std::path::Path,
 ) -> Result<Option<String>, String> {
     use crate::build::scan::article_map::to_pretty_url;
 
     let moss_dir = folder_path.join(".moss");
-    let moss_paths = MossPaths::from_moss_dir(moss_dir.clone());
 
     // Slot files (`footer.md`) have no page of their own. `build_article_map`
     // now excludes them, but this function also falls back to probing
@@ -145,9 +151,20 @@ pub fn resolve_url_for_file_inner(
     // them — e.g. a legacy article map written before the `pages` field existed.
     // Modern builds record these in `pages`; this branch is defense-in-depth and
     // checks the compiled output on disk instead of trusting the map.
-    let site_dir = moss_paths.current_ptr();
+    //
+    // Must consult `served_dir` — the directory the CALLER says the preview
+    // server is actually serving right now — never a recomputed guess.
+    // `MossPaths::initial_serve_dir()` (current if it exists, else staging) is
+    // only correct before a vault's first seal; once `current` exists it stays
+    // the answer forever, even while the live server has moved back to
+    // `staging/` for a later rebuild (`SiteDirectoryState::switch_to`). A page
+    // already written to staging — whether during a long first build, before
+    // any generation is promoted, or by a later rebuild after one already was
+    // — must resolve, or the editor never navigates the preview to a file
+    // opened during that window. See df4ccb5d81, which fixed the pre-seal
+    // half of this and left the post-seal half in place.
     if rel_path == "index.md" || rel_path == "index.markdown" {
-        let site_file = site_dir.join("index.html");
+        let site_file = served_dir.join("index.html");
         if site_file.exists() {
             return Ok(Some("/".to_string()));
         }
@@ -156,13 +173,13 @@ pub fn resolve_url_for_file_inner(
         .strip_suffix("/index.md")
         .or_else(|| rel_path.strip_suffix("/index.markdown"))
     {
-        let site_file = site_dir.join(dir).join("index.html");
+        let site_file = served_dir.join(dir).join("index.html");
         if site_file.exists() {
             return Ok(Some(format!("/{}/", dir)));
         }
     }
 
-    // Fallback: check if .moss/build/current/{html_path} exists for non-article files
+    // Fallback: check if {served_dir}/{html_path} exists for non-article files
     // (e.g., standalone pages that aren't in the article map)
 
     // Try converting the source path to potential HTML output paths
@@ -171,14 +188,14 @@ pub fn resolve_url_for_file_inner(
         .trim_end_matches(".markdown");
 
     if stem != rel_path {
-        // It's a markdown file — try pretty URL paths in .moss/build/current/
+        // It's a markdown file — try pretty URL paths in served_dir
         let html_candidates = vec![
             format!("{}/index.html", stem),
             format!("{}.html", stem),
         ];
 
         for html_path in &html_candidates {
-            let site_path = site_dir.join(html_path);
+            let site_path = served_dir.join(html_path);
             if site_path.exists() {
                 let pretty = to_pretty_url(html_path);
                 return Ok(Some(format!("/{}", pretty)));
@@ -447,6 +464,7 @@ mod tests {
     use super::*;
     use crate::build::scan::article_map::ArticleMap;
     use crate::build::scan::article_map::ArticleInfo;
+    use crate::moss_paths::MossPaths;
     use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
@@ -459,6 +477,15 @@ mod tests {
             .join("test-tmp");
         fs::create_dir_all(&dir).unwrap();
         TempDir::new_in(&dir).unwrap()
+    }
+
+    /// The `served_dir` argument for every test below that never reaches the
+    /// disk-fallback branch (resolution happens via the `ArticleMap` first,
+    /// or returns `None` before either matters): the no-live-server fallback
+    /// a real caller would pass. Computed fresh each call so it sees whatever
+    /// `current`/`staging` the test has created by the time it calls this.
+    fn served(folder_path: &std::path::Path) -> std::path::PathBuf {
+        MossPaths::from_moss_dir(folder_path.join(".moss")).initial_serve_dir()
     }
 
     /// Build an `ArticleInfo` fixture (fields not relevant to classification
@@ -543,7 +570,8 @@ mod tests {
         }));
         assert!(result.is_ok(), "pipeline run failed: {:?}", result);
 
-        let resolved = resolve_url_for_file_inner(new_file_name, folder_path).unwrap();
+        let resolved =
+            resolve_url_for_file_inner(new_file_name, folder_path, &served(folder_path)).unwrap();
         assert!(
             resolved.is_some(),
             "a content-less (0-byte) newly-created markdown file must still \
@@ -573,8 +601,12 @@ mod tests {
             .insert("research/".to_string(), "Research/Research.md".to_string());
         map.save(&moss_dir).unwrap();
 
-        let result =
-            resolve_url_for_file_inner("Research/Research.md", folder_path).unwrap();
+        let result = resolve_url_for_file_inner(
+            "Research/Research.md",
+            folder_path,
+            &served(folder_path),
+        )
+        .unwrap();
 
         assert_eq!(result, Some("/research/".to_string()));
     }
@@ -592,7 +624,8 @@ mod tests {
         map.pages.insert(String::new(), "index.md".to_string());
         map.save(&moss_dir).unwrap();
 
-        let result = resolve_url_for_file_inner("index.md", folder_path).unwrap();
+        let result =
+            resolve_url_for_file_inner("index.md", folder_path, &served(folder_path)).unwrap();
 
         assert_eq!(result, Some("/".to_string()));
     }
@@ -612,8 +645,8 @@ mod tests {
             .insert("posts/".to_string(), "posts/index.md".to_string());
         map.save(&moss_dir).unwrap();
 
-        let result =
-            resolve_url_for_file_inner("posts/index.md", folder_path).unwrap();
+        let result = resolve_url_for_file_inner("posts/index.md", folder_path, &served(folder_path))
+            .unwrap();
 
         assert_eq!(result, Some("/posts/".to_string()));
     }
@@ -629,10 +662,87 @@ mod tests {
 
         ArticleMap::new().save(&moss_dir).unwrap();
 
-        let result =
-            resolve_url_for_file_inner("ghost/Ghost.md", folder_path).unwrap();
+        let result = resolve_url_for_file_inner("ghost/Ghost.md", folder_path, &served(folder_path))
+            .unwrap();
 
         assert_eq!(result, None);
+    }
+
+    /// A `draft: true` page in a CJK-named nested folder, with a CJK +
+    /// full-width-punctuation filename, whose HTML has landed in `staging/`
+    /// but the ArticleMap for this build hasn't been (re)saved yet. Two
+    /// windows share this fallback, and the caller must consult the served
+    /// dir it is actually told about — never a recomputed guess:
+    ///
+    /// - **Pre-seal** (`current` absent): the cold-start window on a large
+    ///   vault's first build. No live server is up yet, so the caller passes
+    ///   `MossPaths::initial_serve_dir()`, which degrades to `staging/`. Fixed
+    ///   by df4ccb5d81.
+    /// - **Post-seal** (`current` exists, a prior generation already
+    ///   promoted): a later rebuild re-stages a newer page before the article
+    ///   map resaves. The live server rests on `staging/` after every
+    ///   completed rebuild (`SiteDirectoryState::switch_to`), so the caller
+    ///   must pass THAT — passing `initial_serve_dir()` here instead answers
+    ///   `current/`, which no longer has the page, and misses it. This is the
+    ///   bug df4ccb5d81 left in place, and what threading `served_dir` from
+    ///   the live server fixes.
+    #[test]
+    fn resolves_staged_draft_page_via_the_caller_supplied_served_dir() {
+        let project = repo_temp();
+        let folder_path = project.path();
+        let moss_dir = folder_path.join(".moss");
+        let paths = MossPaths::from_moss_dir(moss_dir.clone());
+
+        // No article-map.json at all — ArticleMap::load() degrades to an
+        // empty map, matching the pre-first-save window. The ArticleMap
+        // lookup path must therefore miss and fall through to the disk
+        // fallback below.
+
+        // The page's HTML has already been written to staging/ — build
+        // output lands there before the article map is (re)saved.
+        let rel_path = "文字/信息网络/DWeb Camp，下次见.md";
+        let staged_html = paths
+            .staging_dir()
+            .join("文字/信息网络/DWeb Camp，下次见/index.html");
+        fs::create_dir_all(staged_html.parent().unwrap()).unwrap();
+        fs::write(&staged_html, "").unwrap();
+
+        // Pre-seal: no `current` pointer exists. A server-less caller's
+        // fallback (`initial_serve_dir()`) degrades to `staging/` and finds it.
+        assert_eq!(
+            resolve_url_for_file_inner(rel_path, folder_path, &paths.initial_serve_dir())
+                .unwrap(),
+            Some("/文字/信息网络/DWeb Camp，下次见/".to_string()),
+            "a page already staged before the first seal must resolve when \
+             the caller passes the no-live-server fallback"
+        );
+
+        // Seal: promote a generation, so `current` now exists.
+        fs::create_dir_all(paths.generation_dir("gen001")).unwrap();
+        fs::create_dir_all(paths.generations_dir()).unwrap();
+        paths.set_current_ptr("gen001").unwrap();
+
+        // Post-seal, passing the LIVE server's actual served dir (staging,
+        // where the live server rests after every completed rebuild): still
+        // resolves.
+        assert_eq!(
+            resolve_url_for_file_inner(rel_path, folder_path, &paths.staging_dir()).unwrap(),
+            Some("/文字/信息网络/DWeb Camp，下次见/".to_string()),
+            "a page staged by a rebuild after the first seal must resolve \
+             when the caller passes the live server's actual served dir"
+        );
+
+        // Post-seal, passing `initial_serve_dir()` instead (the old,
+        // cold-start-only heuristic): `current` exists now, so it answers
+        // `current/` and misses the page — the exact regression this test
+        // guards against.
+        assert_eq!(
+            resolve_url_for_file_inner(rel_path, folder_path, &paths.initial_serve_dir())
+                .unwrap(),
+            None,
+            "initial_serve_dir() is cold-start-only and must not stand in \
+             for the live server's served dir once current exists"
+        );
     }
 
     /// A slot file has no page, so the editor must resolve it to None and leave
@@ -657,11 +767,12 @@ mod tests {
         map.save(&moss_dir).unwrap();
 
         assert_eq!(
-            resolve_url_for_file_inner("footer.md", folder_path).unwrap(),
+            resolve_url_for_file_inner("footer.md", folder_path, &served(folder_path)).unwrap(),
             None,
         );
         assert_eq!(
-            resolve_url_for_file_inner("zh-hans/footer.md", folder_path).unwrap(),
+            resolve_url_for_file_inner("zh-hans/footer.md", folder_path, &served(folder_path))
+                .unwrap(),
             None,
         );
     }
@@ -688,11 +799,13 @@ mod tests {
         map.save(&moss_dir).unwrap();
 
         assert_eq!(
-            resolve_url_for_file_inner("docs/footer.md", folder_path).unwrap(),
+            resolve_url_for_file_inner("docs/footer.md", folder_path, &served(folder_path))
+                .unwrap(),
             Some("/docs/footer/".to_string()),
         );
         assert_eq!(
-            resolve_url_for_file_inner("footer-blog.md", folder_path).unwrap(),
+            resolve_url_for_file_inner("footer-blog.md", folder_path, &served(folder_path))
+                .unwrap(),
             Some("/footer-blog/".to_string()),
         );
     }

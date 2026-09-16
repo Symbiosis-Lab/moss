@@ -1,4 +1,4 @@
-// Downloads the moss CLI binary for this platform from moss-releases.
+// Downloads the moss CLI binary for this platform from moss.
 //
 // No dependencies: uses the global fetch that ships with Node >= 18.
 // The version defaults to this package's own version (the wrapper is
@@ -11,7 +11,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const RELEASES = 'https://github.com/Symbiosis-Lab/moss-releases/releases/download';
+const RELEASES = 'https://github.com/Symbiosis-Lab/moss/releases/download';
 
 const packageRoot = path.join(__dirname, '..');
 
@@ -88,7 +88,7 @@ function resolveAsset() {
   throw new Error(
     `moss-npm: no moss binary is published for ${platform}-${arch}.\n` +
       'Supported: macOS (x64/arm64), Linux (x64), and Windows (x64). ' +
-      'See https://github.com/Symbiosis-Lab/moss-releases for available builds.'
+      'See https://github.com/Symbiosis-Lab/moss for available builds.'
   );
 }
 

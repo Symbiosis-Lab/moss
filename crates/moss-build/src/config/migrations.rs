@@ -87,6 +87,19 @@ pub fn declared_version(raw: &toml::Table) -> u32 {
         .unwrap_or(0)
 }
 
+/// `Some(v)` when `raw` declares a schema a newer moss wrote — the one
+/// predicate every version-ahead guard shares, so a schema bump only has to
+/// touch [`CURRENT_VERSION`] once. `None` covers "absent, at, or behind
+/// current", which is every ordinary config `write_managed_toml` is asked to
+/// save. A document with no top-level `schema_version` key (e.g.
+/// `.moss/state.toml`) reads as v0 here, same as [`declared_version`], so
+/// this is safe to run against any managed TOML document, not just
+/// `config.toml`.
+pub fn version_ahead(raw: &toml::Table) -> Option<u32> {
+    let v = declared_version(raw);
+    (v > CURRENT_VERSION).then_some(v)
+}
+
 fn write_version(raw: &mut toml::Table, v: u32) {
     raw.insert("schema_version".to_string(), toml::Value::Integer(v as i64));
 }

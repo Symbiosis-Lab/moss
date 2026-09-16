@@ -2056,7 +2056,10 @@ fn year_groups_skip_resort_keeps_folders_flat_above() {
 fn no_group_skip_resort_stays_flat() {
     let alpha = make_doc("alpha.html", "Alpha", Some("2024-05-01"));
     let bravo = make_doc("bravo.html", "Bravo", Some("2025-03-01"));
-    let items = vec![&alpha, &bravo];
+    // Year-only date — the flat path must not lose the "the fix must also
+    // work for a bare year" regression.
+    let charlie = make_doc("charlie.html", "Charlie", Some("1793"));
+    let items = vec![&alpha, &bravo, &charlie];
     let all: Vec<&ParsedDocument> = items.clone();
 
     let project = test_project();
@@ -2085,6 +2088,25 @@ fn no_group_skip_resort_stays_flat() {
     assert!(
         out.contains("Alpha") && out.contains("Bravo"),
         "flat list must render items; got: {}",
+        out
+    );
+    // A flat row (no year heading above it) must show the full-precision
+    // date — never a bare month that leaves the year unstated anywhere on
+    // the page.
+    assert!(
+        out.contains(r#"<span class="moss-prefix-link-prefix date">2024 · 05</span>"#),
+        "flat row must show year and month, not month alone; got: {}",
+        out
+    );
+    assert!(
+        out.contains(r#"<span class="moss-prefix-link-prefix date">2025 · 03</span>"#),
+        "flat row must show year and month, not month alone; got: {}",
+        out
+    );
+    // Year-only date: no month to omit, renders the bare year.
+    assert!(
+        out.contains(r#"<span class="moss-prefix-link-prefix date">1793</span>"#),
+        "year-only date must render as the bare year in a flat listing; got: {}",
         out
     );
 }

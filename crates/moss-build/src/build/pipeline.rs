@@ -377,7 +377,6 @@ fn read_notebook_sibling(source: &std::path::Path) -> Option<String> {
 /// registration site never has to guess it back from a `jupyter/` prefix.
 type NotebookReceipt = (crate::build::served_path::ServedPath, String);
 
-
 /// Process notebook files in the background: download JupyterLite assets if not
 /// cached, copy them to the output, and generate viewer HTML pages.
 ///
@@ -1260,6 +1259,7 @@ fn build_inner(
     // against the lock wait.
     let t_config = std::time::Instant::now();
     let cfg = crate::build::site_config::read_project_config(folder_path).ok();
+    crate::build::progress::report_config_version_ahead(progress_sender, cfg.as_ref());
     let site_str =
         |field: &str| cfg.as_ref().and_then(|c| c.site_str(field)).map(str::to_string);
     let site_bool = |field: &str| cfg.as_ref().and_then(|c| c.site_bool(field));

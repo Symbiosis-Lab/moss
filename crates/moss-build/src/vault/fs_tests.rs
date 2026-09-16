@@ -182,16 +182,199 @@ fn plugin_storage_name_must_be_one_segment() {
     }
 }
 
+// ── Shared social-data exception (docs/reference/social-data-standard.md) ──
+
+/// `write_project_file` / `read_project_file` try `shared_social_data` first
+/// and fall back to `sandboxed` — so the fallback must still catch traversal
+/// spelled through the shared-directory prefix.
+#[test]
+fn shared_social_data_still_rejects_traversal() {
+    assert!(PluginPath::shared_social_data("matters", ".moss/data/social/../../../etc/passwd").is_err());
+    assert!(PluginPath::sandboxed(".moss/data/social/../../../etc/passwd").is_err());
+}
+
+#[test]
+fn shared_social_data_plugin_id_must_be_one_segment() {
+    for id in ["", "a/b", "a\\b", "..", "a\0b"] {
+        assert!(
+            PluginPath::shared_social_data(id, "matters.json").is_err(),
+            "must refuse plugin id {id:?}"
+        );
+    }
+}
+
+/// A plugin manifest naming itself "review" would otherwise pass the
+/// cross-plugin check trivially — the id and the file it claims genuinely
+/// agree — and land on first-party `review.json`
+/// (`build::features::review`). The reserved-id list refuses this before
+/// the filename comparison ever runs, case-insensitively (manifest names
+/// are conventionally lowercase, but the fence does not trust that).
+#[test]
+fn shared_social_data_rejects_the_reserved_review_id() {
+    for id in ["review", "Review", "REVIEW"] {
+        assert!(
+            PluginPath::shared_social_data(id, ".moss/data/social/review.json").is_err(),
+            "must refuse reserved plugin id {id:?}"
+        );
+        assert!(
+            PluginPath::shared_social_data(id, ".moss/social/review.json").is_err(),
+            "must refuse reserved plugin id {id:?} in the legacy directory too"
+        );
+    }
+}
+
+/// The example cases this rule must get right — own file, sibling's file,
+/// first-party `review.json`, the legacy directory, no plugin identity — are
+/// not hand-duplicated here. This test and the TS mock's own test
+/// (`plugins/matters/src/__tests__/social-integration.test.ts`) both read
+/// `open/fixtures/social-data-fence-cases.json`, so the Rust guard and its
+/// TS mirror cannot silently drift the way the mock and the real guard once
+/// did (the regression this whole exception exists to fix).
+///
+/// `allowed` mirrors what `resolve_plugin_project_path` actually decides:
+/// the shared door when a plugin id is given, falling back to the full
+/// sandbox fence — not `shared_social_data` in isolation, so an ordinary
+/// content path (no plugin id needed) is exercised too.
+#[test]
+fn shared_social_data_fixture_cases() {
+    let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("fixtures")
+        .join("social-data-fence-cases.json");
+    let raw = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", fixture_path.display()));
+    let cases: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
+    assert!(!cases.is_empty(), "fixture must not be empty");
+
+    for case in &cases {
+        let plugin_id = case["pluginId"].as_str();
+        let path = case["path"].as_str().unwrap();
+        let expected_allowed = case["allowed"].as_bool().unwrap();
+        let note = case["note"].as_str().unwrap_or("");
+
+        let actual_allowed = plugin_id
+            .is_some_and(|id| PluginPath::shared_social_data(id, path).is_ok())
+            || PluginPath::sandboxed(path).is_ok();
+
+        assert_eq!(
+            actual_allowed, expected_allowed,
+            "pluginId={plugin_id:?} path={path:?} ({note}): expected allowed={expected_allowed}, got {actual_allowed}"
+        );
+    }
+}
+
 // ── Resolution ─────────────────────────────────────────────────────────────
 
 #[test]
 fn resolve_under_joins_onto_the_base() {
+    // A non-existent base (nothing on disk could have been symlinked) falls
+    // back to the lexical join — see the symlink-containment tests below for
+    // the case where `base` does exist.
     let p = PluginPath::sandboxed("posts/hello.md").unwrap();
     assert_eq!(
-        p.resolve_under(Path::new("/tmp/site")),
-        PathBuf::from("/tmp/site/posts/hello.md")
+        p.resolve_under(Path::new("/tmp/site-that-does-not-exist-in-this-test")).unwrap(),
+        PathBuf::from("/tmp/site-that-does-not-exist-in-this-test/posts/hello.md")
     );
     assert_eq!(p.as_str(), "posts/hello.md");
+}
+
+// ── resolve_under: symlink containment ──────────────────────────────────────
+//
+// A validated PluginPath proves the SPELLING is safe; base.join alone never
+// touches disk, so a symlinked directory component can redirect a
+// lexically-safe path to a real location the caller was never granted.
+
+/// The reviewer's exact scenario: `.moss/data/social` symlinked to
+/// `.moss/identity` would otherwise let the shared social-data exception —
+/// bound to `base` = the vault root, where `.moss/identity/` is a legitimate
+/// subpath — write into the identity directory despite every string-level
+/// check on `shared_social_data` passing.
+#[cfg(unix)]
+#[test]
+fn shared_social_data_write_refused_when_its_directory_is_symlinked_into_identity() {
+    let root = project_root();
+    let identity_dir = root.path().join(".moss").join("identity");
+    std::fs::create_dir_all(&identity_dir).unwrap();
+    let secret_file = identity_dir.join("secret-key");
+    std::fs::write(&secret_file, "d34db33f").unwrap();
+
+    let data_dir = root.path().join(".moss").join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::os::unix::fs::symlink(&identity_dir, data_dir.join("social")).unwrap();
+
+    let plugin_path = PluginPath::shared_social_data("matters", ".moss/data/social/matters.json").unwrap();
+    let err = plugin_path
+        .resolve_under(root.path())
+        .expect_err("a symlinked .moss/data/social pointing into .moss/identity must be refused");
+    assert!(err.contains("identity"), "got: {err}");
+
+    // The refusal must be real, not cosmetic: nothing was written through
+    // the symlink, and the secret is exactly what it was before.
+    assert_eq!(
+        std::fs::read_to_string(&secret_file).unwrap(),
+        "d34db33f",
+        "a refused resolve_under must not have touched the identity directory"
+    );
+    assert!(
+        !identity_dir.join("matters.json").exists(),
+        "the plugin's file must not have landed inside .moss/identity/"
+    );
+}
+
+/// The same class of escape, but leaving the vault entirely — containment
+/// under `base` must hold even when the target is not `.moss/identity/`.
+#[cfg(unix)]
+#[test]
+fn resolve_under_refuses_a_symlink_escaping_the_vault_root() {
+    let root = project_root();
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), root.path().join("posts")).unwrap();
+
+    let plugin_path = PluginPath::sandboxed("posts/hello.md").unwrap();
+    let err = plugin_path
+        .resolve_under(root.path())
+        .expect_err("a symlinked directory pointing outside the vault must be refused");
+    assert!(err.contains("outside"), "got: {err}");
+    assert!(!outside.path().join("hello.md").exists());
+}
+
+/// The containment check must not refuse a symlink that resolves to
+/// somewhere ELSE inside `base` — otherwise this is a refusal of every
+/// symlink rather than of the ones that escape.
+#[cfg(unix)]
+#[test]
+fn resolve_under_allows_a_symlink_that_stays_inside_base() {
+    let root = project_root();
+    let real_dir = root.path().join("real-posts");
+    std::fs::create_dir_all(&real_dir).unwrap();
+    std::os::unix::fs::symlink(&real_dir, root.path().join("posts")).unwrap();
+
+    let plugin_path = PluginPath::sandboxed("posts/hello.md").unwrap();
+    let resolved = plugin_path
+        .resolve_under(root.path())
+        .expect("a symlink resolving inside the vault must be allowed");
+    assert_eq!(resolved, root.path().join("posts").join("hello.md"));
+}
+
+/// A brand-new plugin's storage directory (or the vault root of a project
+/// that was just opened) legitimately does not exist yet at the moment
+/// `resolve_under` runs — `write_file_with_dirs`'s `create_dir_all` creates
+/// it AFTER this call returns. There is nothing on disk to have been
+/// symlinked, so this must fall back to the lexical join rather than
+/// refusing every plugin's first write.
+#[test]
+fn resolve_under_allows_writes_when_base_does_not_exist_yet() {
+    let root = project_root();
+    let not_yet_created = root.path().join("does-not-exist-yet");
+
+    let plugin_path = PluginPath::storage("ipfs", "config.json").unwrap();
+    let resolved = plugin_path
+        .resolve_under(&not_yet_created)
+        .expect("a not-yet-created base must not refuse the write");
+    assert_eq!(resolved, not_yet_created.join("config.json"));
 }
 
 // ── Entry creation guards (create_file_inner / create_folder_inner) ────────

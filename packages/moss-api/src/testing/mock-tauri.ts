@@ -28,6 +28,8 @@
  * ```
  */
 
+import { enforceMossFence } from "./mock-moss-fence.js";
+
 // Define minimal types for invoke args
 interface InvokeArgs {
   [key: string]: unknown;
@@ -722,6 +724,8 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
       case "read_project_file": {
         const projectPath = payload?.projectPath as string;
         const relativePath = payload?.relativePath as string;
+        const pluginName = (payload?.pluginName as string | null | undefined) ?? null;
+        enforceMossFence(pluginName, relativePath);
         const fullPath = `${projectPath}/${relativePath}`;
         const file = filesystem.getFile(fullPath);
         if (file) {
@@ -734,6 +738,8 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
         const projectPath = payload?.projectPath as string;
         const relativePath = payload?.relativePath as string;
         const content = payload?.data as string; // Note: moss-api uses 'data' not 'content'
+        const pluginName = (payload?.pluginName as string | null | undefined) ?? null;
+        enforceMossFence(pluginName, relativePath);
         const fullPath = `${projectPath}/${relativePath}`;
         filesystem.setFile(fullPath, content);
         return null;
