@@ -1360,6 +1360,14 @@ pub(crate) fn dispatch_video_conversions(
             // bug 71ee43bc1c fixed for the whole set, now enforced per item).
             // `to_dispatch` is the subset that actually needs the encoder.
             let mut skip_paths: Vec<String> = Vec::new();
+            // Outputs of a video that IS being re-dispatched below, but whose
+            // previous mp4/poster are still sitting at that same path (the
+            // encode hasn't reached its atomic `link_to` swap yet). Registered
+            // as this build's own output too, same as `skip_paths`, so the
+            // core seal — which no longer waits for the encode, see below —
+            // does not read "not re-emitted this round" as "gone" and let the
+            // stale sweep delete a video that is still serving fine.
+            let mut carry_forward_paths: Vec<String> = Vec::new();
             let mut to_dispatch: Vec<String> = Vec::new();
             let mut current_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -1413,6 +1421,15 @@ pub(crate) fn dispatch_video_conversions(
                             item
                         );
                     }
+                    // A video with no prior output (first-ever encode) has
+                    // nothing to carry forward: it stays absent from this
+                    // build's manifest until its own encode finishes and the
+                    // follow-up rebuild (triggered below) registers it for
+                    // real — never a half-written or stale entry.
+                    if outputs_present {
+                        carry_forward_paths.push(mp4);
+                        carry_forward_paths.push(thumb);
+                    }
                     to_dispatch.push(item.clone());
                 }
             }
@@ -1425,6 +1442,9 @@ pub(crate) fn dispatch_video_conversions(
 
             if !skip_paths.is_empty() {
                 emit_video_outputs_via_channel(&tx, &skip_paths, &background_ctx.staging_dir);
+            }
+            if !carry_forward_paths.is_empty() {
+                emit_video_outputs_via_channel(&tx, &carry_forward_paths, &background_ctx.staging_dir);
             }
 
             if to_dispatch.is_empty() {
@@ -1479,9 +1499,45 @@ pub(crate) fn dispatch_video_conversions(
                 epoch,
                 background_ctx.video_items.len()
             );
-            spawner.spawn_blocking(Box::new(move || {
-                run_video_conversion(&services_arc, &background_ctx, epoch, tx);
-            }));
+            // The core seal must not wait for this encode — PROVIDED someone
+            // will notice when it finishes. `tx` is the manifest
+            // coordinator's sender; holding it open across a multi-minute
+            // two-pass encode is what used to block `seal+persist` behind
+            // one slow video. Every video this build isn't re-encoding has
+            // already registered its output above (skip_paths unchanged,
+            // carry_forward_paths mid-re-encode), so dropping `tx` early
+            // lets the coordinator close its channel as soon as every OTHER
+            // background worker finishes.
+            //
+            // That only converges, though, if something is watching this
+            // folder for the follow-up rebuild the encode asks for below —
+            // `ops::watch::worker` (the same lever a file edit already
+            // drives, and `trigger_media_settle_rerender` uses for an
+            // in-build poster settle). `register_worker`/`ensure_worker`
+            // register it at folder-open, before the first build ever runs
+            // (`ops/watch.rs`), so this read is reliable for the app and for
+            // `moss build --serve --watch` on every build including the
+            // first. A one-shot `moss build`, `moss deploy`, or a plugin
+            // install has no such worker and will exit the moment this
+            // function returns — there is nobody left to pick up a later
+            // "enqueue a rebuild", so a manifest sealed without this video
+            // would publish (or simply finish) permanently incomplete. For
+            // that case the split does not apply: the seal waits for this
+            // encode exactly as it did before this change.
+            let folder_path = background_ctx.source_path.clone();
+            if crate::ops::watch::worker::get(&folder_path).is_some() {
+                drop(tx);
+                spawner.spawn_blocking(Box::new(move || {
+                    run_video_conversion(&services_arc, &background_ctx, epoch, None);
+                    if let Some(worker) = crate::ops::watch::worker::get(&folder_path) {
+                        worker.enqueue(crate::ops::watch::worker::RebuildRequest::full());
+                    }
+                }));
+            } else {
+                spawner.spawn_blocking(Box::new(move || {
+                    run_video_conversion(&services_arc, &background_ctx, epoch, tx);
+                }));
+            }
         } else {
             // Headless mode: run synchronously with epoch=0
             // Increment tracker BEFORE calling run_video_conversion — the inner loop
@@ -1640,10 +1696,40 @@ mod tests {
         staged
     }
 
+    /// Register `folder`'s rebuild-worker slot for the duration of a test
+    /// unless the caller already registered one itself (found via `get`,
+    /// reused rather than replaced — replacing would orphan a handle the
+    /// caller is holding). Returns the handle and whether this call is the
+    /// owner responsible for deregistering it.
+    ///
+    /// `dispatch_video_conversions` only takes the seal/video split when
+    /// `ops::watch::worker::get(folder)` finds a registered worker (see its
+    /// doc) — matching the app and `moss build --serve --watch`, both of
+    /// which register at folder-open, before the first build. Most of this
+    /// suite wants that branch exercised; the one test that deliberately
+    /// does NOT (`a_build_with_no_registered_worker_waits_for_the_video_before_sealing`)
+    /// skips this helper.
+    fn ensure_worker_for_test(folder: &str) -> (std::sync::Arc<crate::ops::watch::worker::WorkerHandle>, bool) {
+        match crate::ops::watch::worker::get(folder) {
+            Some(existing) => (existing, false),
+            None => (crate::ops::watch::worker::register(folder), true),
+        }
+    }
+
     /// Run `dispatch_video_conversions` against `video_items` (an ffmpeg
     /// binary that doesn't exist, so any real dispatch takes the
-    /// `shipped_original` fallback path) and wait for any spawned background
-    /// conversion to finish, returning the sealed manifest.
+    /// `shipped_original` fallback path) and seal, returning the manifest.
+    ///
+    /// Registers `vault`'s rebuild-worker slot for the call (see
+    /// `ensure_worker_for_test`) so the split applies, then deliberately does
+    /// NOT wait for the spawned background conversion to finish — proving
+    /// that is the point of the seal/video split this helper exercises.
+    /// Wrapped in a bounded timeout rather than a bare `.await`: a regression
+    /// that goes back to holding the coordinator's sender open across the
+    /// encode must fail this test fast, not hang the suite. Callers that need
+    /// to inspect a DISPATCHED video's on-disk result after its encode runs
+    /// use `dispatch_with_controlled_spawner` below, which hands back a
+    /// spawner the test drives explicitly instead of racing a real one.
     async fn dispatch_and_seal(
         svc: &BuildServices,
         vault: &Path,
@@ -1655,9 +1741,12 @@ mod tests {
         use crate::types::content::SiteHashes;
         use crate::types::services::BackgroundContext;
 
+        let folder = vault.display().to_string();
+        let (worker, owns_worker) = ensure_worker_for_test(&folder);
+
         let ctx = BackgroundContext {
             video_items,
-            source_path: vault.display().to_string(),
+            source_path: folder.clone(),
             staging_dir: staging.to_path_buf(),
             moss_dir: moss_dir.to_path_buf(),
             ffmpeg_bin_path: Some(moss_dir.join("no-such-ffmpeg").display().to_string()),
@@ -1674,7 +1763,107 @@ mod tests {
         })
         .await
         .unwrap();
-        test_utils::drain_into_sealed(rx, SiteHashes::default()).await
+        let sealed = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            test_utils::drain_into_sealed(rx, SiteHashes::default()),
+        )
+        .await
+        .expect(
+            "the core seal must not wait for a still-running video encode — \
+             it hung instead of closing the coordinator's channel",
+        );
+        if owns_worker {
+            crate::ops::watch::worker::deregister(&folder, &worker);
+        }
+        sealed
+    }
+
+    /// A `Spawner` that CAPTURES `spawn_blocking` closures instead of running
+    /// them, so a test can assert on the seal's own state before a deferred
+    /// video encode ever runs (the point of the seal/video split), then run
+    /// the encode explicitly to observe what changes once it lands — without
+    /// racing a real background thread.
+    #[derive(Default)]
+    struct ControlledSpawner {
+        captured: std::sync::Mutex<Vec<Box<dyn FnOnce() + Send>>>,
+    }
+
+    impl crate::build::ports::spawner::Spawner for ControlledSpawner {
+        fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+            self.captured.lock().unwrap().push(task);
+        }
+        fn spawn(&self, _task: crate::build::ports::spawner::Task) -> crate::build::ports::spawner::Joining {
+            unimplemented!("the video dispatch path under test never uses the async spawn half")
+        }
+    }
+
+    impl ControlledSpawner {
+        /// Run every captured task, in the order they were queued, and clear
+        /// the queue. Simulates "the deferred video encode finishes now".
+        fn run_captured(&self) {
+            let tasks: Vec<_> = std::mem::take(&mut *self.captured.lock().unwrap());
+            for task in tasks {
+                task();
+            }
+        }
+
+        fn captured_count(&self) -> usize {
+            self.captured.lock().unwrap().len()
+        }
+    }
+
+    /// Like `dispatch_and_seal`, but installs a `ControlledSpawner` on `svc`
+    /// and hands it back instead of letting the deferred encode run on its
+    /// own. The returned manifest is exactly what the core seal produced —
+    /// still true to "does not wait" — and the caller decides when (or
+    /// whether) to call `.run_captured()` on the spawner to simulate the
+    /// encode landing. Also registers `vault`'s rebuild-worker slot (see
+    /// `ensure_worker_for_test`) so the split applies.
+    async fn dispatch_with_controlled_spawner(
+        svc: &mut BuildServices,
+        vault: &Path,
+        staging: &Path,
+        moss_dir: &Path,
+        video_items: Vec<String>,
+    ) -> (crate::build::manifest::SealedManifest, std::sync::Arc<ControlledSpawner>) {
+        use crate::build::coordinator::test_utils;
+        use crate::types::content::SiteHashes;
+        use crate::types::services::BackgroundContext;
+
+        let folder = vault.display().to_string();
+        let (worker, owns_worker) = ensure_worker_for_test(&folder);
+
+        let spawner = std::sync::Arc::new(ControlledSpawner::default());
+        svc.spawner = Some(spawner.clone());
+
+        let ctx = BackgroundContext {
+            video_items,
+            source_path: folder.clone(),
+            staging_dir: staging.to_path_buf(),
+            moss_dir: moss_dir.to_path_buf(),
+            ffmpeg_bin_path: Some(moss_dir.join("no-such-ffmpeg").display().to_string()),
+            ..BackgroundContext::for_test()
+        };
+        let (tx, rx) = test_utils::build_test_coordinator();
+        let svc_for_dispatch = svc.clone();
+        tokio::task::spawn_blocking(move || {
+            dispatch_video_conversions(Some(&svc_for_dispatch), ctx, Some(tx));
+        })
+        .await
+        .unwrap();
+        let sealed = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            test_utils::drain_into_sealed(rx, SiteHashes::default()),
+        )
+        .await
+        .expect(
+            "the core seal must not wait for a still-running video encode — \
+             it hung instead of closing the coordinator's channel",
+        );
+        if owns_worker {
+            crate::ops::watch::worker::deregister(&folder, &worker);
+        }
+        (sealed, spawner)
     }
 
     /// (a) The data-loss guard this whole change exists for: a vault with 3
@@ -1697,7 +1886,6 @@ mod tests {
         let moss_dir = tmp.path().join(".moss");
 
         let mut svc = BuildServices::headless();
-        svc.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
 
         let item1 = "videos/one.mov".to_string();
         let item2 = "videos/two.mov".to_string();
@@ -1709,14 +1897,22 @@ mod tests {
         untouched.extend(stage_and_prime_video(&svc, &vault, &staging, &item3, b"three-bytes", false));
         std::fs::write(vault.join(&item4), b"four-bytes").unwrap();
 
-        let sealed = dispatch_and_seal(
-            &svc,
+        // The core seal below must not wait for item4's encode — proven by
+        // never calling `spawner.run_captured()` until after every stale-
+        // sweep assertion has already run against the SEALED view.
+        let (sealed, spawner) = dispatch_with_controlled_spawner(
+            &mut svc,
             &vault,
             &staging,
             &moss_dir,
             vec![item1.clone(), item2.clone(), item3.clone(), item4.clone()],
         )
         .await;
+        assert_eq!(
+            spawner.captured_count(),
+            1,
+            "exactly one deferred encode (item4) must have been dispatched"
+        );
 
         let view = sealed.site_hashes_view();
         remove_stale_files(&staging, view, "test");
@@ -1740,9 +1936,12 @@ mod tests {
             );
         }
 
-        // The new video WAS dispatched: no ffmpeg, so its mp4 is the
-        // shipped_original fallback copy of its own source bytes.
+        // item4 has no prior output, so the seal above shipped without it —
+        // "current" is usable (every other video survived) even though this
+        // one video never finished. Only now does the encode run.
         let new_mp4 = staging.join(asset_paths::to_mp4(&item4));
+        assert!(!new_mp4.exists(), "the new video must not exist before its encode runs");
+        spawner.run_captured();
         assert_eq!(
             std::fs::read(&new_mp4).unwrap(),
             b"four-bytes",
@@ -1761,7 +1960,6 @@ mod tests {
         let moss_dir = tmp.path().join(".moss");
 
         let mut svc = BuildServices::headless();
-        svc.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
 
         let item1 = "videos/one.mov".to_string();
         let item2 = "videos/two.mov".to_string();
@@ -1772,9 +1970,42 @@ mod tests {
         // A re-encode, not an add/remove: video #2's SOURCE bytes change.
         std::fs::write(vault.join(&item2), b"two-bytes-CHANGED").unwrap();
 
-        let _sealed =
-            dispatch_and_seal(&svc, &vault, &staging, &moss_dir, vec![item1.clone(), item2.clone()]).await;
+        let (sealed, spawner) = dispatch_with_controlled_spawner(
+            &mut svc,
+            &vault,
+            &staging,
+            &moss_dir,
+            vec![item1.clone(), item2.clone()],
+        )
+        .await;
 
+        // Video #2's OLD output is still what's on disk — its re-encode
+        // hasn't run yet — and the core seal must carry it forward as this
+        // build's own output too, exactly like an unchanged video, so a
+        // stale sweep run against THIS seal (as `advertise_sealed`'s does)
+        // does not delete a video that is still serving fine mid-re-encode.
+        let view = sealed.site_hashes_view();
+        for key in &staged2 {
+            assert!(
+                view.video_outputs.contains(key),
+                "'{}' (mid-re-encode video's OLD output) must be carried forward into the \
+                 core seal — sealed video_outputs: {:?}",
+                key,
+                view.video_outputs
+            );
+        }
+        use crate::build::media::pipeline::{compute_expected_dirs, remove_stale_dirs, remove_stale_files};
+        remove_stale_files(&staging, view, "test");
+        remove_stale_dirs(&staging, &compute_expected_dirs(view));
+        for key in &staged2 {
+            assert_eq!(
+                std::fs::read(staging.join(key)).unwrap(),
+                b"STAGED-SENTINEL",
+                "'{}' (mid-re-encode video's OLD output) must survive the seal's stale-cleanup \
+                 byte-identically while the new encode is still running",
+                key
+            );
+        }
         for key in &staged1 {
             assert_eq!(
                 std::fs::read(staging.join(key)).unwrap(),
@@ -1783,13 +2014,15 @@ mod tests {
                 key
             );
         }
+
+        // Only now does the deferred encode run.
+        spawner.run_captured();
         let mp4_2 = staging.join(asset_paths::to_mp4(&item2));
         assert_eq!(
             std::fs::read(&mp4_2).unwrap(),
             b"two-bytes-CHANGED",
             "the changed video must be re-dispatched and its mp4 must reflect the new bytes"
         );
-        let _ = staged2; // only the mp4 identity matters here; asserted above
     }
 
     /// (c) A missing required output (the 71ee43bc1c gap, now per item) must
@@ -1804,7 +2037,6 @@ mod tests {
         let moss_dir = tmp.path().join(".moss");
 
         let mut svc = BuildServices::headless();
-        svc.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
 
         let item1 = "videos/one.mov".to_string();
         let item2 = "videos/two.mov".to_string();
@@ -1818,8 +2050,14 @@ mod tests {
         std::fs::remove_file(&mp4_2).unwrap();
 
         let epoch_before = svc.cancellation.current_id();
-        let _sealed =
-            dispatch_and_seal(&svc, &vault, &staging, &moss_dir, vec![item1.clone(), item2.clone()]).await;
+        let (_sealed, spawner) = dispatch_with_controlled_spawner(
+            &mut svc,
+            &vault,
+            &staging,
+            &moss_dir,
+            vec![item1.clone(), item2.clone()],
+        )
+        .await;
 
         assert!(
             svc.cancellation.current_id() > epoch_before,
@@ -1833,6 +2071,7 @@ mod tests {
                 key
             );
         }
+        spawner.run_captured();
         assert_eq!(
             std::fs::read(&mp4_2).unwrap(),
             b"two-bytes",
@@ -1884,6 +2123,180 @@ mod tests {
                 key
             );
         }
+    }
+
+    // ── The seal/video split: an in-flight encode must not hold the seal ──
+
+    /// When no rebuild worker is registered for the folder — a one-shot
+    /// `moss build`, `moss deploy`, or a plugin install, none of which stick
+    /// around to pick up a later "enqueue a rebuild" — the split must not
+    /// apply: the seal waits for the video exactly as it did before this
+    /// change, because nothing else will ever converge it. Without this
+    /// guard, a one-shot publish could adopt a manifest missing (or carrying
+    /// stale bytes for) a video that then never gets encoded at all in that
+    /// process's lifetime — a permanently broken link on a published site.
+    #[tokio::test]
+    async fn a_build_with_no_registered_worker_waits_for_the_video_before_sealing() {
+        // Deliberately NOT `dispatch_and_seal` / `dispatch_with_controlled_spawner`
+        // — both ensure a worker is registered so the split applies, which is
+        // exactly the one thing this test must not have. Inlines the same
+        // dispatch-and-drain shape without that step.
+        use crate::build::coordinator::test_utils;
+        use crate::types::content::SiteHashes;
+        use crate::types::services::BackgroundContext;
+        use moss_core::asset_paths;
+
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+
+        let mut svc = BuildServices::headless();
+        svc.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+
+        let item = "videos/clip.mov".to_string();
+        std::fs::create_dir_all(vault.join(&item).parent().unwrap()).unwrap();
+        std::fs::write(vault.join(&item), b"clip-bytes").unwrap();
+
+        let folder = vault.display().to_string();
+        assert!(
+            crate::ops::watch::worker::get(&folder).is_none(),
+            "precondition: no worker registered for this folder"
+        );
+
+        let ctx = BackgroundContext {
+            video_items: vec![item.clone()],
+            source_path: folder.clone(),
+            staging_dir: staging.clone(),
+            moss_dir: moss_dir.clone(),
+            ffmpeg_bin_path: Some(moss_dir.join("no-such-ffmpeg").display().to_string()),
+            ..BackgroundContext::for_test()
+        };
+        let (tx, rx) = test_utils::build_test_coordinator();
+        let svc_for_dispatch = svc.clone();
+        tokio::task::spawn_blocking(move || {
+            dispatch_video_conversions(Some(&svc_for_dispatch), ctx, Some(tx));
+        })
+        .await
+        .unwrap();
+        // No worker was ever registered, so the fallback (unsplit) path
+        // applies: this must resolve once the encode actually finishes, not
+        // hang — a bounded timeout distinguishes "waited correctly" from "wedged".
+        let sealed = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            test_utils::drain_into_sealed(rx, SiteHashes::default()),
+        )
+        .await
+        .expect("with no watcher, the seal must still complete once the encode finishes");
+
+        let mp4 = staging.join(asset_paths::to_mp4(&item));
+        assert_eq!(
+            std::fs::read(&mp4).unwrap(),
+            b"clip-bytes",
+            "with no watcher to pick up a later rebuild, the seal must wait for the encode"
+        );
+        assert!(
+            sealed.files().contains_key(&asset_paths::to_mp4(&item)),
+            "the sealed manifest must register the video's real output, not carry nothing forward"
+        );
+    }
+
+    /// A build whose one video never finishes still seals and leaves a
+    /// usable `current` — the whole point of this change. The deferred
+    /// encode's captured task is never run; if the core seal still depended
+    /// on it, `dispatch_with_controlled_spawner`'s bounded timeout would
+    /// panic instead of the assertions below ever running.
+    #[tokio::test]
+    async fn a_video_that_never_finishes_still_seals_and_leaves_a_usable_current() {
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+
+        let mut svc = BuildServices::headless();
+        let item = "videos/slow.mov".to_string();
+        std::fs::create_dir_all(vault.join(&item).parent().unwrap()).unwrap();
+        std::fs::write(vault.join(&item), b"slow-source-bytes").unwrap();
+
+        let (sealed, spawner) = dispatch_with_controlled_spawner(
+            &mut svc,
+            &vault,
+            &staging,
+            &moss_dir,
+            vec![item.clone()],
+        )
+        .await;
+
+        // Nothing panicked and nothing hung: the seal completed. A
+        // first-ever video has no prior output to carry forward, so it is
+        // correctly absent from this generation rather than half-written —
+        // "usable" means the rest of the site shipped, not that this one
+        // brand-new video did.
+        assert!(sealed.files().is_empty(), "a first-ever video has nothing to register yet");
+        assert_eq!(spawner.captured_count(), 1, "the encode was dispatched, just never run");
+    }
+
+    /// The video's later completion updates the page: once the deferred
+    /// encode lands, it asks for exactly one follow-up rebuild through the
+    /// same lever a file edit already drives (`ops::watch::worker`) — the
+    /// settle → re-render path picks it up from there, unchanged by this
+    /// fix. Inspects the worker's queue slot directly rather than running a
+    /// real rebuild: this test is about the SIGNAL, not the rebuild itself.
+    #[tokio::test]
+    async fn the_videos_later_completion_enqueues_exactly_one_rebuild() {
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+        let folder = vault.display().to_string();
+
+        let mut svc = BuildServices::headless();
+        let item = "videos/clip.mov".to_string();
+        std::fs::create_dir_all(vault.join(&item).parent().unwrap()).unwrap();
+        std::fs::write(vault.join(&item), b"clip-bytes").unwrap();
+
+        let worker = crate::ops::watch::worker::register(&folder);
+
+        let (_sealed, spawner) = dispatch_with_controlled_spawner(
+            &mut svc,
+            &vault,
+            &staging,
+            &moss_dir,
+            vec![item.clone()],
+        )
+        .await;
+        assert!(
+            worker.take().is_none(),
+            "the seal must not enqueue a rebuild before the deferred encode has run"
+        );
+
+        spawner.run_captured();
+        assert_eq!(
+            worker.take(),
+            Some(crate::ops::watch::worker::RebuildRequest::full()),
+            "the video's completion must enqueue exactly one follow-up rebuild"
+        );
+
+        crate::ops::watch::worker::deregister(&folder, &worker);
+    }
+
+    /// A build with no videos is unchanged: the early return at the top of
+    /// `dispatch_video_conversions` fires before any of this change's
+    /// machinery (carry-forward registration, the `tx` drop, the spawner)
+    /// runs at all.
+    #[tokio::test]
+    async fn a_build_with_no_videos_is_unchanged() {
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+
+        let mut svc = BuildServices::headless();
+        let (sealed, spawner) =
+            dispatch_with_controlled_spawner(&mut svc, &vault, &staging, &moss_dir, Vec::new()).await;
+
+        assert!(sealed.files().is_empty());
+        assert_eq!(spawner.captured_count(), 0, "no video items means no encode is ever dispatched");
     }
 
     /// Negative case: when staging files are absent, keys are NOT emitted.
