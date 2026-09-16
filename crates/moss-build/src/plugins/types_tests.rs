@@ -66,6 +66,41 @@ fn plugin_non_blocking_severities_pass_through() {
 }
 
 #[test]
+fn plugin_item_outside_the_site_root_is_dropped() {
+    use crate::advisory::{Action, Scope, Severity};
+    // `item` carries the same contract as `Advisory::item`: the frontend's
+    // click-to-open resolves it by joining it onto the open folder, so an
+    // absolute path or one that escapes via `..` would point that click
+    // anywhere on disk. A plugin proposing one is dropped to None rather
+    // than trusted.
+    for item in ["/etc/passwd", "../../etc/passwd", "posts/../../etc/passwd"] {
+        let proposed = PluginAdvisory {
+            scope: Scope::File,
+            severity: Severity::NeedsAction,
+            item: Some(item.to_string()),
+            what: "suspicious item".into(),
+            action: Action::None,
+        };
+        let clamped = clamp_plugin_advisory(proposed);
+        assert_eq!(clamped.item, None, "{item:?} must be dropped");
+    }
+
+    // A real site-relative path — with or without a directory — passes
+    // through untouched, same as every other field.
+    for item in ["clip.mov", "posts/2026/hello.md"] {
+        let proposed = PluginAdvisory {
+            scope: Scope::File,
+            severity: Severity::NeedsAction,
+            item: Some(item.to_string()),
+            what: "shipped unoptimized".into(),
+            action: Action::None,
+        };
+        let clamped = clamp_plugin_advisory(proposed);
+        assert_eq!(clamped.item.as_deref(), Some(item));
+    }
+}
+
+#[test]
 fn manifest_parses_registry_fields() {
     let json = r#"{
             "name": "example",

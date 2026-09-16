@@ -891,19 +891,27 @@ pub struct PluginAdvisory {
 /// and pass through unchanged.
 ///
 /// Every other field (`scope`/`item`/`what`/`action`) is passed through
-/// verbatim — the plugin owns meaning, moss owns the verdict.
+/// verbatim — the plugin owns meaning, moss owns the verdict. `item` gets one
+/// check first: it is supposed to be the site-relative path of the file the
+/// advisory is about (same contract as `Advisory::item`), and the frontend's
+/// click-to-open resolves it by joining it onto the open folder. A plugin
+/// proposing an absolute path or one that escapes the site root via `..`
+/// could point that click anywhere on disk, so such an item is dropped to
+/// `None` rather than trusted — a build-wide advisory with no item is always
+/// a safe fallback.
 pub fn clamp_plugin_advisory(p: PluginAdvisory) -> crate::advisory::Advisory {
-    use crate::advisory::{Action, Severity};
+    use crate::advisory::{is_site_relative, Action, Severity};
     let severity = match (&p.severity, &p.action) {
         // R13: a plugin Blocking without an actionable affordance can't pop the
         // panel — clamp to the hairline dot.
         (Severity::Blocking, Action::None) => Severity::NeedsAction,
         (s, _) => s.clone(),
     };
+    let item = p.item.filter(|item| is_site_relative(item));
     crate::advisory::Advisory {
         scope: p.scope,
         severity,
-        item: p.item,
+        item,
         what: p.what,
         action: p.action,
     }

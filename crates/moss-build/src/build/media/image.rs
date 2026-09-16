@@ -1612,19 +1612,19 @@ impl ItemStep {
     /// rung promise registration made before the worker ran, and say why. The one
     /// owner of a policy the decode-failure arm spelled out in full and the
     /// hash-failure arm not at all.
-    fn base_failed(filename: &str, webp: &str, rungs: Vec<(u32, String)>, err: String) -> Self {
+    fn base_failed(source_path: &str, webp: &str, rungs: Vec<(u32, String)>, err: String) -> Self {
         let mut failed = vec![(webp.to_string(), err.clone())];
         failed.extend(rungs.into_iter().map(|(_, rung)| (rung, err.clone())));
         Self::Handled {
             delivered: Vec::new(),
             failed,
-            advisories: vec![Advisory {
-                scope: Scope::File,
-                severity: Severity::ShippedDegraded,
-                item: Some(filename.to_string()),
-                what: crate::infra::app_advisory::fmt("shipped_without_optimizing", &[("err", &err)]),
-                action: Action::None,
-            }],
+            advisories: vec![Advisory::for_source(
+                Scope::File,
+                Severity::ShippedDegraded,
+                source_path,
+                crate::infra::app_advisory::fmt("shipped_without_optimizing", &[("err", &err)]),
+                Action::None,
+            )],
             encoded: false,
         }
     }
@@ -1632,18 +1632,18 @@ impl ItemStep {
     /// Still in the cloud: ask for the bytes and leave every promise Pending,
     /// because the build their arrival triggers runs this item for real. One
     /// owner for the gate before the encode and the race back mid-encode.
-    fn deferred_to_cloud(source_file: &Path, rel_source_str: &str, filename: &str) -> Self {
+    fn deferred_to_cloud(source_file: &Path, rel_source_str: &str) -> Self {
         crate::build::cloud_readiness::request_download(source_file);
         log::debug!("[image] {} is still in the cloud — deferring", rel_source_str);
-        Self::nothing_shipped(vec![Advisory {
-            scope: Scope::File,
+        Self::nothing_shipped(vec![Advisory::for_source(
+            Scope::File,
             // Transient and self-resolving: the tier the video gate's timeout
             // uses, not NeedsAction.
-            severity: Severity::ShippedDegraded,
-            item: Some(filename.to_string()),
-            what: crate::infra::app_advisory::t("still_downloading_cloud"),
-            action: Action::None,
-        }])
+            Severity::ShippedDegraded,
+            rel_source_str,
+            crate::infra::app_advisory::t("still_downloading_cloud"),
+            Action::None,
+        )])
     }
 
     /// Handled without producing bytes and without retracting a promise — an
@@ -1868,13 +1868,13 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
 
         if !source_file.exists() && !crate::build::icloud::is_still_in_the_cloud(&source_file) {
             log::warn!("Image not found: {}", rel_source_str);
-            return ItemStep::nothing_shipped(vec![Advisory {
-                scope: Scope::File,
-                severity: Severity::NeedsAction,
-                item: Some(filename.to_string()),
-                what: crate::infra::app_advisory::t("not_found"),
-                action: Action::None,
-            }]);
+            return ItemStep::nothing_shipped(vec![Advisory::for_source(
+                Scope::File,
+                Severity::NeedsAction,
+                &rel_source_str,
+                crate::infra::app_advisory::t("not_found"),
+                Action::None,
+            )]);
         }
 
         // Cloud gate. On a 1077-image Google Drive vault ~250 sources were
@@ -1892,7 +1892,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         // Two lstats per item, so this is also the negative cache: nothing to
         // remember between builds when re-deciding is this cheap.
         if crate::build::icloud::is_still_in_the_cloud(&source_file) {
-            return ItemStep::deferred_to_cloud(&source_file, &rel_source_str, &filename);
+            return ItemStep::deferred_to_cloud(&source_file, &rel_source_str);
         }
 
         // Derived before the hash resolution below, not after: a hash failure
@@ -1937,7 +1937,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                 Ok(oid) => oid,
                 Err(e) => {
                     log::warn!("Failed to hash image {}: {}", rel_source_str, e);
-                    return ItemStep::base_failed(&filename, &relative_webp, registered_rungs(), e);
+                    return ItemStep::base_failed(&rel_source_str, &relative_webp, registered_rungs(), e);
                 }
             }
         } else {
@@ -2066,7 +2066,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                 let Some(ref base_oid) = outcome.webp_oid.clone().filter(|_| outcome.error.is_none())
                 else {
                     return ItemStep::base_failed(
-                        &filename,
+                        &rel_source_str,
                         &relative_webp,
                         registered_rungs(),
                         "encode reported success without producing a variant".to_string(),
@@ -2080,7 +2080,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     let out = ctx.staging_dir.join(&relative_webp);
                     if !ensure_staged(&objects, base_oid, &out, &relative_webp) {
                         return ItemStep::base_failed(
-                            &filename,
+                            &rel_source_str,
                             &relative_webp,
                             registered_rungs(),
                             "link_to staging failed".to_string(),
@@ -2123,24 +2123,24 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                         // placeholder) + an advisory; the base success above
                         // stands and later rungs were still attempted.
                         if let Some(err) = rung_err {
-                            let rung_name = Path::new(&rung_rel)
-                                .file_name()
-                                .map(|s| s.to_string_lossy().to_string())
-                                .unwrap_or_else(|| rung_rel.clone());
                             log::warn!(
                                 "Rung {}w conversion failed for {}: {}",
                                 r.width, filename, err
                             );
-                            item_advisories.push(Advisory {
-                                scope: Scope::File,
-                                severity: Severity::ShippedDegraded,
-                                item: Some(rung_name),
-                                what: crate::infra::app_advisory::fmt(
+                            // Names the SOURCE image, not the failed rung's own
+                            // (build-output) path — `item` only ever means "the
+                            // source file this is about", and the rung width the
+                            // filename used to carry is said in `what` instead.
+                            item_advisories.push(Advisory::for_source(
+                                Scope::File,
+                                Severity::ShippedDegraded,
+                                &rel_source_str,
+                                crate::infra::app_advisory::fmt(
                                     "shipped_without_optimizing",
-                                    &[("err", &err)],
+                                    &[("err", &format!("{}w: {}", r.width, err))],
                                 ),
-                                action: Action::None,
-                            });
+                                Action::None,
+                            ));
                             failed.push((rung_rel.clone(), err));
                         }
                     }
@@ -2180,7 +2180,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             // the way a corrupt file is answered (Failed + a warning SVG), or a
             // race decides whether the user sees a broken image.
             Err(_) if crate::build::icloud::is_still_in_the_cloud(&source_file) => {
-                ItemStep::deferred_to_cloud(&source_file, &rel_source_str, &filename)
+                ItemStep::deferred_to_cloud(&source_file, &rel_source_str)
             }
             // Bazel's FindMissingBlobs invariant — a manifest-level "hit" must
             // not stand in for a filesystem-level "present". Failed is the
@@ -2191,7 +2191,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     eprintln!("  [{}/{}] Failed: {}: {}", index + 1, total, filename, e);
                 }
                 log::warn!("Image conversion failed for {}: {}", filename, e);
-                ItemStep::base_failed(&filename, &relative_webp, registered_rungs(), e)
+                ItemStep::base_failed(&rel_source_str, &relative_webp, registered_rungs(), e)
             }
         }
                     })();

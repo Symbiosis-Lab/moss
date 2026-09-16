@@ -1270,20 +1270,22 @@ pub fn make_duplicate_uid_advisory(
     let advisories: Vec<Advisory> = reassignments
         .iter()
         .filter(|r| r.live_thread_at_risk)
-        .map(|r| Advisory {
-            scope: Scope::File,
-            severity: Severity::NeedsAction,
-            item: Some(r.reassigned_path.clone()),
-            what: crate::infra::app_advisory::fmt(
-                "duplicate_note_id_live",
-                &[("keeper", &r.keeper_path), ("dup", &r.reassigned_path)],
-            ),
-            // The one advisory in moss that reports an act rather than a
-            // condition, and so the one that must outlive the build that
-            // raised it. See `Action::Acknowledge`.
-            action: Action::Acknowledge {
-                label: crate::infra::app_advisory::fmt("acknowledged_label", &[]),
-            },
+        .map(|r| {
+            Advisory::for_source(
+                Scope::File,
+                Severity::NeedsAction,
+                &r.reassigned_path,
+                crate::infra::app_advisory::fmt(
+                    "duplicate_note_id_live",
+                    &[("keeper", &r.keeper_path), ("dup", &r.reassigned_path)],
+                ),
+                // The one advisory in moss that reports an act rather than a
+                // condition, and so the one that must outlive the build that
+                // raised it. See `Action::Acknowledge`.
+                Action::Acknowledge {
+                    label: crate::infra::app_advisory::fmt("acknowledged_label", &[]),
+                },
+            )
         })
         .collect();
     advisory_event("markdown", advisories)

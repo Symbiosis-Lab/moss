@@ -528,6 +528,7 @@ impl ItemStep {
         source_file: &Path,
         staging_dir: &Path,
         mapped_source: &str,
+        item: &str,
         advisory: Option<Advisory>,
     ) -> Self {
         let url = moss_core::asset_paths::to_mp4(mapped_source);
@@ -541,9 +542,12 @@ impl ItemStep {
                 log::warn!("Fallback copy failed for {}: {}", mapped_source, e);
                 // The caller's advisory says why moss could not OPTIMIZE the
                 // video; only this arm knows the worse fact, that the page has
-                // no video at all.
+                // no video at all. `item`, not `mapped_source`: the advisory
+                // names the SOURCE file, and a `url:` override can make those
+                // two paths diverge (mapped_source is the OUTPUT's page-tree
+                // path, which need not exist anywhere on disk).
                 advisories.push(Advisory::blocking_file(
-                    mapped_source,
+                    item,
                     crate::infra::app_advisory::fmt("video_not_published", &[("err", &e)]),
                 ));
                 Vec::new()
@@ -827,13 +831,13 @@ pub(crate) fn run_video_conversion(
 
             if !source_file.exists() {
                 log::warn!("Video not found: {}", item);
-                break 'item ItemStep::advise(Advisory {
-                    scope: Scope::File,
-                    severity: Severity::NeedsAction,
-                    item: Some(filename.clone()),
-                    what: crate::infra::app_advisory::t("not_found"),
-                    action: Action::None,
-                });
+                break 'item ItemStep::advise(Advisory::for_source(
+                    Scope::File,
+                    Severity::NeedsAction,
+                    item,
+                    crate::infra::app_advisory::t("not_found"),
+                    Action::None,
+                ));
             }
 
             // No encoder: the original bytes ARE the deliverable. Decided here,
@@ -846,6 +850,7 @@ pub(crate) fn run_video_conversion(
                     &source_file,
                     &ctx.staging_dir,
                     &mapped_source,
+                    item,
                     None,
                 );
             };
@@ -898,17 +903,18 @@ pub(crate) fn run_video_conversion(
                         &source_file,
                         &ctx.staging_dir,
                         &mapped_source,
-                        Some(Advisory {
-                            scope: Scope::File,
+                        item,
+                        Some(Advisory::for_source(
+                            Scope::File,
                             // Transient and self-resolving (no user action): the original
                             // ships unoptimized and the next preview re-optimizes it. Use
                             // the calm "shipped, not optimal" tier, not NeedsAction — this
                             // is a soft notice, not a failure.
-                            severity: Severity::ShippedDegraded,
-                            item: Some(filename.clone()),
-                            what: crate::infra::app_advisory::t("still_downloading_icloud"),
-                            action: Action::None,
-                        }),
+                            Severity::ShippedDegraded,
+                            item,
+                            crate::infra::app_advisory::t("still_downloading_icloud"),
+                            Action::None,
+                        )),
                     );
                 }
             }
@@ -927,13 +933,14 @@ pub(crate) fn run_video_conversion(
                         &source_file,
                         &ctx.staging_dir,
                         &mapped_source,
-                        Some(Advisory {
-                            scope: Scope::File,
-                            severity: Severity::NeedsAction,
-                            item: Some(filename.clone()),
-                            what: crate::infra::app_advisory::t("could_not_read_file"),
-                            action: Action::None,
-                        }),
+                        item,
+                        Some(Advisory::for_source(
+                            Scope::File,
+                            Severity::NeedsAction,
+                            item,
+                            crate::infra::app_advisory::t("could_not_read_file"),
+                            Action::None,
+                        )),
                     );
                 }
             };
@@ -1051,13 +1058,14 @@ pub(crate) fn run_video_conversion(
                     &source_file,
                     &ctx.staging_dir,
                     &mapped_source,
-                    Some(Advisory {
-                        scope: Scope::File,
-                        severity: Severity::ShippedDegraded,
-                        item: Some(filename.clone()),
-                        what: crate::infra::app_advisory::fmt("shipped_without_optimizing", &[("err", err_detail)]),
-                        action: Action::None,
-                    }),
+                    item,
+                    Some(Advisory::for_source(
+                        Scope::File,
+                        Severity::ShippedDegraded,
+                        item,
+                        crate::infra::app_advisory::fmt("shipped_without_optimizing", &[("err", err_detail)]),
+                        Action::None,
+                    )),
                 );
             };
 
@@ -1100,19 +1108,19 @@ pub(crate) fn run_video_conversion(
             ItemStep::Handled {
                 delivered,
                 advisories: over_cap
-                    .map(|len| Advisory {
-                        scope: Scope::File,
-                        severity: Severity::ShippedDegraded,
-                        item: Some(filename.clone()),
-                        what: crate::infra::app_advisory::fmt(
+                    .map(|len| Advisory::for_source(
+                        Scope::File,
+                        Severity::ShippedDegraded,
+                        item,
+                        crate::infra::app_advisory::fmt(
                             "video_exceeds_size_target",
                             &[
                                 ("size", &format!("{:.0}", len as f64 / 1024.0 / 1024.0)),
                                 ("cap", &compression_config.max_size_mb.to_string()),
                             ],
                         ),
-                        action: Action::None,
-                    })
+                        Action::None,
+                    ))
                     .into_iter()
                     .collect(),
                 // Successful conversion (either by us or shared from another task)
@@ -2487,7 +2495,9 @@ mod tests {
         match &child.state {
             TaskState::Failed { advisory } => {
                 assert_eq!(advisory.severity, Severity::Blocking);
-                assert_eq!(advisory.item.as_deref(), Some("clip.mov"));
+                // The site-relative path, not the basename: a click has to
+                // resolve this against the open folder and find the real file.
+                assert_eq!(advisory.item.as_deref(), Some("videos/clip.mov"));
             }
             TaskState::Succeeded { advisories, .. } => panic!(
                 "no bytes reached the site and the media Job says it SUCCEEDED; \

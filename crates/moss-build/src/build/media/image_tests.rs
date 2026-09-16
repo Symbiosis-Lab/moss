@@ -740,6 +740,101 @@ async fn base_failure_fails_registered_rung_promises() {
     }
 }
 
+/// A base-failure advisory's `item` must be the site-relative path a click
+/// can actually open, not a bare filename. Before the fix, `base_failed`
+/// stripped the source path down to `Path::file_name()`; a source nested
+/// under a subdirectory (the field bug: a photo under `图片/摄影/`) then
+/// pointed the "open this file" click at `<site_root>/<basename>`, which
+/// exists nowhere. Same corrupt-JPEG trick as
+/// `base_failure_fails_registered_rung_promises`, but nested, and captured
+/// through the `BuildReporter` port — the only channel a headless worker
+/// (no Job registry, no window) hands an advisory out through.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn base_failed_advisory_names_the_full_nested_source_path() {
+    use crate::build::ports::reporter::BuildReporter;
+
+    #[derive(Default)]
+    struct RecordingReporter(std::sync::Mutex<Vec<PipelineEvent>>);
+    impl BuildReporter for RecordingReporter {
+        fn report(&self, event: &PipelineEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let img_rel = "图片/摄影/1570c6b2.jpg";
+    fs::create_dir_all(root.join("图片/摄影")).unwrap();
+    // JPEG magic bytes + garbage: passes has_image_magic, fails decode.
+    let mut corrupt = vec![0xFF, 0xD8, 0xFF, 0xE0];
+    corrupt.extend_from_slice(&[0xAB; 4096]);
+    fs::write(root.join(img_rel), &corrupt).unwrap();
+
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&root.join(img_rel)).unwrap();
+
+    let run_ctx = ImageRunContext {
+        items: vec![ImageConversionItem {
+            source_path: PathBuf::from(img_rel),
+            source_oid,
+            ext: "jpg".to_string(),
+            dimensions: None,
+            skip: None,
+        }],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        config: ImageCompressionConfig::default(),
+        dir_overrides: std::collections::HashMap::new(),
+        tx: None,
+        rung_collisions: Default::default(),
+    };
+
+    let recorder = std::sync::Arc::new(RecordingReporter::default());
+    let mut services = BuildServices::headless();
+    services.reporter = recorder.clone();
+    let services = std::sync::Arc::new(services);
+    services.begin_ui_bound();
+    let services_clone = services.clone();
+    tokio::task::spawn_blocking(move || {
+        run_image_conversion(&services_clone, &run_ctx);
+    })
+    .await
+    .unwrap();
+
+    let advisory = recorder
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|e| match e {
+            PipelineEvent::BackgroundProgress { completed: true, advisories, .. } => {
+                advisories.iter().find(|a| a.item.is_some()).cloned()
+            }
+            _ => None,
+        })
+        .expect("the completion event must carry the base-failure advisory");
+
+    let item = advisory.item.expect("advisory names a file");
+    assert_eq!(
+        item, img_rel,
+        "advisory item must be the full nested site-relative source path, not a basename"
+    );
+    // The guard for the whole class: whatever `item` names, it must actually
+    // resolve under the site root — this is what the frontend's click-to-open
+    // relies on (`resolveAgainstFolder`, which joins the folder + item verbatim).
+    assert!(
+        root.join(&item).exists(),
+        "site_root.join(item) must resolve to the real source file on disk"
+    );
+}
+
 /// A source moss cannot hash must retract its promises, not go quiet.
 ///
 /// The hash-failure arm was the one failure in the worker that told nobody:

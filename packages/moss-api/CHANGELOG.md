@@ -20,6 +20,7 @@ release heading.
 ### Changed
 
 - A `DeployAddress` with both `url` and `value` now renders both — a link and a copy button — instead of moss silently dropping `value` in favor of the link. An IPNS name can be both a bare copyable string and an openable gateway door; give it both fields and both show.
+- `AdvisoryProposal.item`'s doc now says what it has always meant: the site-relative path of the file the advisory is about (e.g. `posts/2026/hello.md`), omitted for a build-wide notice. moss also now enforces it — an `item` that is absolute or escapes the site root via `..` is dropped, so the advisory renders build-wide rather than pointing the reader's click at the wrong file.
 
 ## [0.13.0] - 2026-08-30
 

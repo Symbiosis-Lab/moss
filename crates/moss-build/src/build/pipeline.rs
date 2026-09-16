@@ -720,13 +720,13 @@ fn run_notebook_processing(
                     total,
                     message: crate::infra::app_advisory::fmt("skipped_notebook", &[("n", &(i + 1).to_string()), ("total", &total.to_string()), ("secs", &NOTEBOOK_IO_TIMEOUT_SECS.to_string()), ("name", &item.source_path)]),
                     completed: i + 1 == items.len(),
-                    advisories: vec![Advisory {
-                        scope: Scope::File,
-                        severity: Severity::ShippedDegraded,
-                        item: Some(item.source_path.to_string()),
-                        what: crate::infra::app_advisory::fmt("notebook_skip_advisory", &[("secs", &NOTEBOOK_IO_TIMEOUT_SECS.to_string())]),
-                        action: Action::None,
-                    }],
+                    advisories: vec![Advisory::for_source(
+                        Scope::File,
+                        Severity::ShippedDegraded,
+                        &item.source_path,
+                        crate::infra::app_advisory::fmt("notebook_skip_advisory", &[("secs", &NOTEBOOK_IO_TIMEOUT_SECS.to_string())]),
+                        Action::None,
+                    )],
                 });
                 continue;
             }
