@@ -208,6 +208,27 @@ impl WatcherHealth {
     pub async fn recreate_requested(&self) {
         self.recreate.notified().await;
     }
+
+    /// Whether this folder's watcher is in the backed-off "degraded to
+    /// sweep-only operation" state `strike` already logs (above) — true from
+    /// the first strike a backoff window suppresses, false again the moment
+    /// a delivered batch proves the watcher alive. A single honored strike is
+    /// NOT degraded: one recreation is the design's ordinary self-heal, and
+    /// reporting it would flap a host's health surface on routine recovery.
+    ///
+    /// Nothing reads this today: the sweep already bounds preview staleness
+    /// to one interval regardless of watcher health (a drift dispatch runs
+    /// before a strike is even armed), so this state is silent everywhere
+    /// except the ERROR log above — for up to [`RECREATE_BACKOFF_CAP`] at a
+    /// time, a persistently broken watcher drops rename fidelity and
+    /// responsiveness to `.moss/theme` and `.moss/config.toml` (paths only
+    /// the watcher reports; see `drift_eligible` in the sweep) with no
+    /// user-visible signal. A host can fold this into its own advisory
+    /// surface — e.g. this crate's `FolderHealthChanged.degraded`, which
+    /// today reflects only the rebuild worker's overdue-build watchdog.
+    pub fn is_degraded(&self) -> bool {
+        self.degraded_logged.load(Ordering::SeqCst)
+    }
 }
 
 /// The sweep's half of the strike rule: the one armed candidate, and the two

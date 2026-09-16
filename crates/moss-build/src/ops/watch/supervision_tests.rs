@@ -46,6 +46,41 @@ fn repeated_strikes_back_off_instead_of_hot_recreating() {
     );
 }
 
+/// A lone strike is an ordinary self-heal, not yet the state a host should
+/// surface to the user — `is_degraded` must not flap on routine recovery.
+#[test]
+fn a_lone_strike_is_not_yet_degraded() {
+    let h = WatcherHealth::new();
+    assert!(h.strike("test"));
+    assert!(!h.is_degraded(), "one recreation is a normal self-heal, not degraded");
+}
+
+/// A strike the backoff suppresses IS the "degraded to sweep-only operation"
+/// state the log already names — `is_degraded` is the only way a host
+/// outside this module can learn that, and nothing wired it in before this
+/// method existed, leaving a backoff window as long as `RECREATE_BACKOFF_CAP`
+/// (up to an hour) with no user-visible signal.
+#[test]
+fn a_backed_off_strike_reports_degraded() {
+    let h = WatcherHealth::new();
+    assert!(h.strike("test"));
+    assert!(!h.strike("test"), "second strike inside the window is suppressed");
+    assert!(h.is_degraded(), "the suppressed strike is the degraded state a host should surface");
+}
+
+/// A delivered batch is proof of life: it clears `degraded_logged` exactly
+/// like it resets the backoff exponent, so a host's health surface heals the
+/// instant the watcher does.
+#[test]
+fn a_delivered_batch_clears_degraded() {
+    let h = WatcherHealth::new();
+    assert!(h.strike("test"));
+    assert!(!h.strike("test"));
+    assert!(h.is_degraded());
+    h.note_batch();
+    assert!(!h.is_degraded(), "a live batch proves the watcher recovered");
+}
+
 /// A delivered batch is proof the recreated watcher works, so the backoff
 /// exponent resets — the next genuine death gets a prompt recreation again
 /// instead of inheriting an hour-long wait from a bad spell last week.
