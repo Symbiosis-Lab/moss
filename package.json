@@ -2,7 +2,24 @@
   "name": "moss",
   "private": true,
   "packageManager": "pnpm@10.29.3+sha512.498e1fb4cca5aa06c1dcf2611e6fafc50972ffe7189998c409e90de74566444298ffe43e6cd2acdc775ba1aa7cc5e092a8b7054c811ba8c5770f84693d33d2dc",
+  "scripts": {
+    "build:backend-scripts": "node scripts/build-backend-scripts.mjs",
+    "check:backend-scripts": "node scripts/build-backend-scripts.mjs && git diff --exit-code -- crates/moss-build/src/assets/js crates/moss-build/src/ops/serve/js"
+  },
   "devDependencies": {
-    "@changesets/cli": "^2.31.1"
+    "@changesets/cli": "^2.31.1",
+    "esbuild": "^0.25.12"
+  },
+  "dependencies": {
+    "hls.js": "1.7.1",
+    "idiomorph": "^0.7.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "patchedDependencies": {
+      "idiomorph@0.7.4": "patches/idiomorph@0.7.4.patch"
+    }
   }
 }

@@ -4,13 +4,28 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  idiomorph@0.7.4:
+    hash: d8e76155ecd44aaac794e5de0894c87fc288f90deb585f2d6ecaddece610b21b
+    path: patches/idiomorph@0.7.4.patch
+
 importers:
 
   .:
+    dependencies:
+      hls.js:
+        specifier: 1.7.1
+        version: 1.7.1
+      idiomorph:
+        specifier: ^0.7.4
+        version: 0.7.4(patch_hash=d8e76155ecd44aaac794e5de0894c87fc288f90deb585f2d6ecaddece610b21b)
     devDependencies:
       '@changesets/cli':
         specifier: ^2.31.1
         version: 2.31.1(@types/node@22.20.3)
+      esbuild:
+        specifier: ^0.25.12
+        version: 0.25.12
 
   packages/moss: {}
 
@@ -2135,6 +2150,9 @@ packages:
     resolution: {integrity: sha512-F/1DnUGPopORZi0ni+CvrCgHQ5FyEAHRLSApuYWMmrbSwoN2Mn/7k+Gl38gJnR7yyDZk6WLXwiGod1JOWNDKGw==}
     hasBin: true
 
+  hls.js@1.7.1:
+    resolution: {integrity: sha512-DlzIkeBAS9IIQ432k3BUf3HlwbsR0+trB1i2lDdN2gUkNkrehFurh0/48M5c1/EjlDkdGng1gwZIpwyPxvdZ/g==}
+
   hookable@6.1.1:
     resolution: {integrity: sha512-U9LYDy1CwhMCnprUfeAZWZGByVbhd54hwepegYTK7Pi5NvqEj63ifz5z+xukznehT7i6NIZRu89Ay1AZmRsLEQ==}
 
@@ -2182,6 +2200,9 @@ packages:
   iconv-lite@0.7.3:
     resolution: {integrity: sha512-IKXpvIzjnC9XTAUbVBcMfGS0EPaIXtW6v+zr+RRp+hqULEpo0owZax6wyRwPOJbWbzjYspQwusTsfVr0ifh4uQ==}
     engines: {node: '>=0.10.0'}
+
+  idiomorph@0.7.4:
+    resolution: {integrity: sha512-uCdSpLo3uMfqOmrwXTpR1k/sq4sSmKC7l4o/LdJOEU+MMMq+wkevRqOQYn3lP7vfz9Mv+USBEqPvi0XhdL9ENw==}
 
   ieee754@1.2.1:
     resolution: {integrity: sha512-dcyqhDvX1C46lXZcVqCpK+FtMRQVdIMN6/Df5js2zouUsqG7I6sFxitIC+7KYK29KdXOLHdu9zL4sFnoVQnqaA==}
@@ -5633,6 +5654,8 @@ snapshots:
 
   he@1.2.0: {}
 
+  hls.js@1.7.1: {}
+
   hookable@6.1.1: {}
 
   hosted-git-info@7.0.2:
@@ -5683,6 +5706,8 @@ snapshots:
   iconv-lite@0.7.3:
     dependencies:
       safer-buffer: 2.1.2
+
+  idiomorph@0.7.4(patch_hash=d8e76155ecd44aaac794e5de0894c87fc288f90deb585f2d6ecaddece610b21b): {}
 
   ieee754@1.2.1: {}
 

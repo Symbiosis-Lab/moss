@@ -254,6 +254,9 @@ jobs:
         env:
           SKIP_RUST_INSTALL: 1
 
+      - name: Backend JS bundles are up to date
+        run: pnpm run check:backend-scripts
+
       - name: Typecheck moss-api (source + tests)
         run: cd packages/moss-api && pnpm run typecheck
 
