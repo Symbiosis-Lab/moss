@@ -25,6 +25,119 @@ permissions:
 
 jobs:
   # ==========================================================================
+  # Gate: a moss-api or moss-core code change must land with a CHANGELOG
+  # entry. Lifted from the desktop repo's `changelogs` job (pr.yml, as of
+  # b05637b9c), dropping the open/ prefix and the plugins/ blocks (this repo
+  # has no plugins/ directory).
+  # ==========================================================================
+  changelogs:
+    name: Sub-package changelogs up to date
+    # Inherently a diff against the PR base: there is no `base_ref` on a
+    # workflow_dispatch, so this would resolve BASE to "origin/" and die.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check changelogs for changed sub-packages
+        run: |
+          set -euo pipefail
+
+          BASE="origin/${{ github.base_ref }}"
+          FAIL=0
+
+          # What this gate actually wants: a code change must arrive documented.
+          # It used to ask a narrower question — "is [Unreleased] non-empty?" —
+          # and that question has no satisfying answer on a release PR. Cutting
+          # a release means finalizing the changelog: the entries move OUT of
+          # [Unreleased] and under a `## [0.5.1] - 2026-08-07` heading. So the
+          # better a release was prepared, the more certainly this failed, and
+          # the only way to go green was to leave the changelog unfinalized on
+          # main. It blocked the v0.9.1 cut (PR #1000) for exactly that reason.
+          #
+          # So: documented means the changelog gained populated content that the
+          # base branch does not have — whether under [Unreleased] or under a new
+          # version heading. That also covers moss-api's unbracketed `## 0.10.0`;
+          # nothing here parses a heading's shape, only whether base already had it.
+
+          # Prints every `## ` heading whose section holds non-whitespace text.
+          # Reads the whole file in one awk pass and prints only heading lines,
+          # which keeps the output tiny — deliberate. The predecessor piped a
+          # whole section into `grep -qv` and was racy under `set -o pipefail`:
+          # grep -q exits on the first match and, for sections larger than awk's
+          # stdio buffer (~4 KB), awk's next write hits the closed pipe →
+          # SIGPIPE → pipefail reports the pipeline as failed → a false "empty"
+          # verdict (this bit the 4.7 KB matters [Unreleased]).
+          populated_headings() {
+            awk '
+              /^## / { if (h != "" && n > 0) print h; h = $0; n = 0; next }
+              h != "" && !/^[[:space:]]*$/ { n++ }
+              END { if (h != "" && n > 0) print h }
+            ' "$1"
+          }
+
+          BASE_COPIES=$(mktemp -d)
+          trap 'rm -rf "$BASE_COPIES"' EXIT
+
+          has_changelog_content() {
+            local file="$1"
+            [ -f "$file" ] || { echo "MISSING: $file"; return 1; }
+
+            local now
+            now=$(populated_headings "$file")
+
+            # The everyday case: work in flight, entries sitting in [Unreleased].
+            if grep -q '^## \[Unreleased\]' <<<"$now"; then return 0; fi
+
+            # The release case: [Unreleased] was drained into a version section
+            # that the base branch has never seen.
+            local basefile
+            basefile="$BASE_COPIES/$(echo "$file" | tr / _)"
+            git show "$BASE:$file" > "$basefile" 2>/dev/null || : > "$basefile"
+            comm -23 <(sort -u <<<"$now") <(populated_headings "$basefile" | sort -u) \
+              | grep -q .
+          }
+
+          # Returns true if any non-changelog files changed under a given path.
+          code_changed() {
+            local path="$1"
+            git diff --name-only "$BASE...HEAD" -- "$path" \
+              | grep -qv 'CHANGELOG\.md$'
+          }
+
+          # --- moss-api ---
+          if code_changed "packages/moss-api/"; then
+            if has_changelog_content "packages/moss-api/CHANGELOG.md"; then
+              echo "✓ moss-api: CHANGELOG documents this change"
+            else
+              echo "::error file=packages/moss-api/CHANGELOG.md::moss-api code changed but CHANGELOG.md documents nothing new. Add an entry under [Unreleased], or finalize it under a new version heading, before merging to main."
+              FAIL=1
+            fi
+          else
+            echo "– moss-api: no code changes"
+          fi
+
+          # --- moss-core ---
+          if code_changed "crates/moss-core/"; then
+            if has_changelog_content "crates/moss-core/CHANGELOG.md"; then
+              echo "✓ moss-core: CHANGELOG documents this change"
+            else
+              echo "::error file=crates/moss-core/CHANGELOG.md::moss-core code changed but CHANGELOG.md documents nothing new. Add an entry under [Unreleased], or finalize it under a new version heading, before merging to main."
+              FAIL=1
+            fi
+          else
+            echo "– moss-core: no code changes"
+          fi
+
+          exit $FAIL
+
+  # ==========================================================================
   # Rust tests for the three crates. Authored fresh, not lifted: the desktop's
   # own `rust-tests` (pr.yml:862-1055) runs `cargo test --tests --all-features`
   # from `working-directory: src-tauri`, without `--workspace`, so it is not a
