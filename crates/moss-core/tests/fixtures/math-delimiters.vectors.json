@@ -1,0 +1,193 @@
+{
+  "$schema_note": "Golden vectors for pulldown-cmark's `$`/`$$` open-close rules. This is a CROSS-LANGUAGE CONTRACT: the Rust parser is checked against it by tests/math_delimiters.rs today, and the future CM6 editor grammar (design H20) must agree with the same file so the editor's highlighting and the build's parsing cannot drift. Every `expect_math_spans` value below was DERIVED BY RUNNING pulldown-cmark 0.13.3 with `parser_options(true)`, never by reasoning about the spec.",
+  "rules_as_measured": [
+    "An opening `$` must NOT be followed by whitespace. `$ x $` is not math.",
+    "A closing `$` must be IMMEDIATELY preceded by a non-whitespace byte. This is the whole story behind the currency cases: `$5 and $10` is safe ONLY because the second `$` follows a space. Put any punctuation between two prices and it closes — `$5-$10`, `$5/$10`, `$9.99 ($8.99…)` are all math. The safety is a habit of English typography, not a property of ASCII or of currency.",
+    "The FIRST unescaped `$` after an opener is the ONLY closer candidate. If it is invalid (inline: preceded by whitespace; display: not a `$$` pair), the whole opener FAILS — the scan does not continue to a later `$`. Measured: `$a $b$ c$` → inline `b` (not `a $b`); `$$a$b$$` → inline `a` (not display `a$b`); `$$ $ $$` → no math. A failed `$$` opener is retried one position later, which is how `$$x$` yields inline `x` and `$$$a$$` yields display `a`. Escaped `\\$` is skipped and is never a candidate.",
+    "The test is on bytes, and it is not ASCII-aware: a CJK comma is non-whitespace, so `一个$5，两个$10` closes and becomes math. This is the real-world false-positive risk for moss's Chinese-language authors.",
+    "Code spans and fenced code are lexed before math and never yield math events.",
+    "A backslash-escaped `\\$` never opens or closes."
+  ],
+  "engine": "pulldown-cmark 0.13.3, Options::ENABLE_MATH",
+  "vectors": [
+    {
+      "input": "$E=mc^2$",
+      "expect_math_spans": [
+        {
+          "mode": "inline",
+          "tex": "E=mc^2"
+        }
+      ],
+      "note": "The base case: opener not followed by whitespace, closer preceded by non-whitespace."
+    },
+    {
+      "input": "Energy $E = mc^2$.",
+      "expect_math_spans": [
+        {
+          "mode": "inline",
+          "tex": "E = mc^2"
+        }
+      ],
+      "note": "The P1 regression case. With ENABLE_MATH and no handler arms this rendered as `<p>Energy .</p>` — the equation silently deleted."
+    },
+    {
+      "input": "$x$ and $y$",
+      "expect_math_spans": [
+        {
+          "mode": "inline",
+          "tex": "x"
+        },
+        {
+          "mode": "inline",
+          "tex": "y"
+        }
+      ],
+      "note": "Two independent spans; the prose between them is not swallowed."
+    },
+    {
+      "input": "$ x $",
+      "expect_math_spans": [],
+      "note": "Leading space after the opener disqualifies it. Not math."
+    },
+    {
+      "input": "$5 and $10",
+      "expect_math_spans": [],
+      "note": "SURPRISE vs the design doc, which listed ASCII currency as a false positive. It is NOT: the closing `$` is preceded by a space, so it cannot close. English-prose currency is safe by accident of spacing, which is exactly why the CJK case below is dangerous — the safety is not a rule, it is a habit of English typography."
+    },
+    {
+      "input": "Prices range $5-$10 today.",
+      "expect_math_spans": [
+        {
+          "mode": "inline",
+          "tex": "5-"
+        }
+      ],
+      "note": "A price RANGE is not safe, unlike `$5 and $10`: the closing `$` is preceded by `-`, a non-whitespace byte, so it closes. The counterexample to 'English currency is safe' — the hyphen, not the language, is what decides."
+    },
+    {
+      "input": "Buy for $9.99 ($8.99 for members).",
+      "expect_math_spans": [
+        {
+          "mode": "inline",
+          "tex": "9.99 ("
+        }
+      ],
+      "note": "A parenthetical price: the closing `$` is preceded by `(`. Same rule, and the span swallows the opening parenthesis."
+    },
+    {
+      "input": "Pick $5/$10 tiers.",
+      "expect_math_spans": [
+        {
+          "mode": "inline",
+          "tex": "5/"
+        }
+      ],
+      "note": "Slash-separated prices close for the same reason. Any punctuation between two prices reopens this whole class."
+    },
+    {
+      "input": "Costs $5, $10, and $15 total.",
+      "expect_math_spans": [],
+      "note": "Same reason: every `$` here follows a space. Realistic English prose with three prices survives untouched."
+    },
+    {
+      "input": "一个$5，两个$10",
+      "expect_math_spans": [
+        {
+          "mode": "inline",
+          "tex": "5，两个"
+        }
+      ],
+      "note": "THE false positive that matters for moss. CJK text has no inter-word spaces, so the second `$` is preceded by `，` (non-whitespace) and closes. `5，两个` becomes an equation. This is why `[site].math` is a per-site switch and why `moss doctor --math` scans imports."
+    },
+    {
+      "input": "(cost: $5) and ($10)",
+      "expect_math_spans": [
+        {
+          "mode": "inline",
+          "tex": "5) and ("
+        }
+      ],
+      "note": "False positive in ASCII too, once punctuation rather than a space precedes the closer: `(` before `$10` is non-whitespace."
+    },
+    {
+      "input": "a\\$5 and \\$10",
+      "expect_math_spans": [],
+      "note": "Backslash-escaped dollars never participate. This is the author's escape hatch when prose genuinely trips the rule."
+    },
+    {
+      "input": "`$E=mc^2$`",
+      "expect_math_spans": [],
+      "note": "Code spans are lexed first. Math never fires inside one."
+    },
+    {
+      "input": "```\n$E=mc^2$\n```",
+      "expect_math_spans": [],
+      "note": "Fenced code likewise. This is the empirical basis for defaulting `[site].math` on: every `$` found across the sibling repos lives inside fenced code."
+    },
+    {
+      "input": "$$ x^2 $$",
+      "expect_math_spans": [
+        {
+          "mode": "display",
+          "tex": " x^2 "
+        }
+      ],
+      "note": "Display math. Note the TeX retains its surrounding spaces verbatim — `$$` does not trim, unlike the inline opener's whitespace rule."
+    },
+    {
+      "input": "$$\n\\frac{a}{b}\n$$",
+      "expect_math_spans": [
+        {
+          "mode": "display",
+          "tex": "\n\\frac{a}{b}\n"
+        }
+      ],
+      "note": "Multi-line display math keeps its newlines in the TeX payload."
+    },
+    {
+      "input": "$a $b$ c$",
+      "expect_math_spans": [
+        {
+          "mode": "inline",
+          "tex": "b"
+        }
+      ],
+      "note": "First-candidate-decides, inline: the opener at position 0 sees its first `$` candidate preceded by a space and FAILS ENTIRELY — the scan does not continue to the later valid `$`. The second `$` then opens and closes as `b`. A continue-past-invalid-closers scan would wrongly yield `a $b`."
+    },
+    {
+      "input": "$$a$b$$",
+      "expect_math_spans": [
+        {
+          "mode": "inline",
+          "tex": "a"
+        }
+      ],
+      "note": "First-candidate-decides, display: the `$$` opener's first `$` candidate is a lone `$` (not a `$$` pair), so the display opener FAILS — it does not scan on to the closing `$$`. The retry at the second `$` opens inline math closed by that lone `$`, yielding inline `a`. A continue-scan would wrongly yield display `a$b`."
+    },
+    {
+      "input": "$$ $ $$",
+      "expect_math_spans": [],
+      "note": "Same display rule with nothing to salvage: the lone `$` kills the display opener; every retry position either opens on whitespace or finds no closer. No math at all — a continue-scan would wrongly yield display ` $ `."
+    },
+    {
+      "input": "$$$a$$",
+      "expect_math_spans": [
+        {
+          "mode": "display",
+          "tex": "a"
+        }
+      ],
+      "note": "A `$` run of three: the opener at position 0 fails on its immediate lone-`$` candidate, and the RETRY at position 1 forms `$$a$$` — display `a`, not `$a`. Pins the retry-at-pos+1 fallback for `$` runs longer than two."
+    },
+    {
+      "input": "$a < b & c$",
+      "expect_math_spans": [
+        {
+          "mode": "inline",
+          "tex": "a < b & c"
+        }
+      ],
+      "note": "The TeX payload is RAW — pulldown does no HTML escaping. Escaping is moss's job at AST construction, since the node is a raw-passthrough `Inline::Other`."
+    }
+  ]
+}

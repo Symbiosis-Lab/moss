@@ -1,0 +1,46 @@
+[package]
+name = "moss-core"
+version = "0.15.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Pure-Rust content engine for moss: AST, render, resolve, validate, frontmatter, schema."
+repository = "https://github.com/Symbiosis-Lab/moss-core"
+readme = "README.md"
+keywords = ["static-site", "markdown", "ast"]
+categories = ["text-processing"]
+publish = true
+
+[lints]
+workspace = true
+
+[dependencies]
+unicode-normalization = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+specta = { version = "=2.0.0-rc.20", features = ["derive"], optional = true }
+# Pulldown-cmark drives the body AST parser. Zero I/O, zero async,
+# zero-copy &str events — fits moss-core's "pure Rust" constraint.
+# Same version as src-tauri to avoid duplicate compilation.
+pulldown-cmark = { version = "0.13", default-features = false }
+
+[build-dependencies]
+serde_json = "1.0"
+
+[features]
+default = []
+# Inserts `Options::ENABLE_CJK_FRIENDLY_EMPHASIS` in `parser_options`
+# (pulldown-cmark#1059). Gated because that flag exists only in the `[patch]`
+# fork until pulldown releases it — with the feature OFF the published crate
+# still builds against crates.io pulldown. The app (src-tauri) turns it ON.
+# Retire together with the `[patch]`.
+cjk-friendly-emphasis = []
+# Enable specta::Type derives for Tauri command boundary types.
+specta = ["dep:specta"]
+
+[dev-dependencies]
+# Property-based tests for moss-core's pure functions. moss-core consumes
+# user-provided strings (filenames, frontmatter, content); proptest is the
+# cheapest way to assert "never panics on arbitrary UTF-8" as a contract.
+proptest = "1.5"

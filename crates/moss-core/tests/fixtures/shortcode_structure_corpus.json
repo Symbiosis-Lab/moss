@@ -1,0 +1,64 @@
+{
+  "_comment": [
+    "Shared shortcode-structure parity corpus — the SINGLE source of truth for",
+    "what block structure each markdown input has. Consumed by TWO enforced gates:",
+    "  • Rust  crates/moss-core/tests/shortcode_structure_parity.rs  (the BUILD parser, moss_core::ast::parse)",
+    "  • TS    packages/moss-syntax/src/__tests__/shortcode-corpus.test.ts  (the shared text scanner, scanShortcodeBlocks; the Lezer grammar is tied to it by scan.test.ts's cross-check)",
+    "Both must match this corpus, so the editor live-view parse can never drift from",
+    "the build without a red test. Structural facts only (names + nesting + grid cell",
+    "counts) — language-neutral, no byte offsets. `gridCells` is asserted for grid",
+    "blocks only (buttons store items, not cells, on the build side). Keep `+++`",
+    "unambiguous: never inside a nested block, where build cell-splitting is not",
+    "nesting-aware (tracked separately)."
+  ],
+  "cases": [
+    {
+      "name": "grid, no divider → one cell",
+      "input": ":::grid\nonly\n:::\n",
+      "blocks": [{ "name": "grid", "gridCells": 1, "children": [] }]
+    },
+    {
+      "name": "grid 2, one +++ → two cells",
+      "input": ":::grid 2\nleft\n+++\nright\n:::\n",
+      "blocks": [{ "name": "grid", "gridCells": 2, "children": [] }]
+    },
+    {
+      "name": "grid 1:1:2, two +++ → three cells",
+      "input": ":::grid 1:1:2\na\n+++\nb\n+++\nc\n:::\n",
+      "blocks": [{ "name": "grid", "gridCells": 3, "children": [] }]
+    },
+    {
+      "name": "top-level buttons (no children, not a grid)",
+      "input": ":::buttons\n[a](/a)\n+++\n[b](/b)\n:::\n",
+      "blocks": [{ "name": "buttons", "gridCells": null, "children": [] }]
+    },
+    {
+      "name": "nested ::::buttons inside :::grid (the leak bug)",
+      "input": ":::grid\n::::buttons\n[a](/a)\n::::\ncell\n:::\n",
+      "blocks": [{ "name": "grid", "gridCells": 1, "children": [{ "name": "buttons", "gridCells": null, "children": [] }] }]
+    },
+    {
+      "name": "SoCiviC homepage shape: grid 2, nested buttons in cell 1, +++ at grid level",
+      "input": ":::grid 2\nleft\n::::buttons {inverted}\n[a](/a)\n[b](/b)\n::::\n+++\nright\n:::\n",
+      "blocks": [{ "name": "grid", "gridCells": 2, "children": [{ "name": "buttons", "gridCells": null, "children": [] }] }]
+    },
+    {
+      "name": "two top-level blocks in order",
+      "input": ":::grid 2\nx\n+++\ny\n:::\n\ntext\n\n:::hero {image=h.png}\nhi\n:::\n",
+      "blocks": [
+        { "name": "grid", "gridCells": 2, "children": [] },
+        { "name": "hero", "gridCells": null, "children": [] }
+      ]
+    },
+    {
+      "name": "hero (no cells, no children)",
+      "input": ":::hero {image=h.png}\n# Title\nDeck\n:::\n",
+      "blocks": [{ "name": "hero", "gridCells": null, "children": [] }]
+    },
+    {
+      "name": "gallery (no cells, no children)",
+      "input": ":::gallery 3\n![](one.jpg)\n![](two.jpg)\n:::\n",
+      "blocks": [{ "name": "gallery", "gridCells": null, "children": [] }]
+    }
+  ]
+}

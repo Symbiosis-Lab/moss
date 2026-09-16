@@ -1,0 +1,69 @@
+{
+  "_comment": [
+    "Cross-language contract for RENDERING a shortcode attr value.",
+    "Rust side: crates/moss-core/tests/attr_value_render.rs feeds `rendered` to",
+    "the real `parse_attrs` grammar and requires the value back out as `raw`.",
+    "TS side: packages/moss-syntax/src/__tests__/completion-core.test.ts requires",
+    "`renderShortcodeAttrValue(raw) === rendered`.",
+    "Together: whatever the editor writes into `{image=…}` on an accepted asset",
+    "completion is provably parseable by the build. This file is the gate — do",
+    "not add a 'keep in sync with attrs.rs' comment instead; add a vector."
+  ],
+  "vectors": [
+    {
+      "raw": "photo.jpg",
+      "rendered": "photo.jpg",
+      "note": "ASCII bareword — unquoted, the common case"
+    },
+    {
+      "raw": "/assets/photo.jpg",
+      "rendered": "/assets/photo.jpg",
+      "note": "`/` and `.` are bareword chars, so an absolute path stays unquoted"
+    },
+    {
+      "raw": "a-b_c:d.png",
+      "rendered": "a-b_c:d.png",
+      "note": "the full bareword set: - _ : . / alphanumerics"
+    },
+    {
+      "raw": "關於/頭像.png",
+      "rendered": "\"關於/頭像.png\"",
+      "note": "CJK is NOT bareword — must be quoted or parse_attrs rejects the item"
+    },
+    {
+      "raw": "my photo.jpg",
+      "rendered": "\"my photo.jpg\"",
+      "note": "a space would end the value; quoting makes it one token"
+    },
+    {
+      "raw": "a\"b.png",
+      "rendered": "\"a\\\"b.png\"",
+      "note": "`\"` IS escapable — read_quoted's backslash arm takes any char"
+    },
+    {
+      "raw": "a\\b.png",
+      "rendered": "\"a\\\\b.png\"",
+      "note": "backslash must double or it would escape the next char"
+    },
+    {
+      "raw": "a}b.png",
+      "rendered": "\"a}b.png\"",
+      "note": "a `}` inside quotes does not close the block (parse_attrs_spanned doc)"
+    },
+    {
+      "raw": "a,b.png",
+      "rendered": "\"a,b.png\"",
+      "note": "`,` separates items outside quotes"
+    },
+    {
+      "raw": "photo.jpg|caption=Foo",
+      "rendered": "\"photo.jpg|caption=Foo\"",
+      "note": "the author's display-attrs suffix survives an accept; `|` forces quoting"
+    },
+    {
+      "raw": "圖片.png|width=50%",
+      "rendered": "\"圖片.png|width=50%\"",
+      "note": "CJK path plus suffix — the corpus shape"
+    }
+  ]
+}

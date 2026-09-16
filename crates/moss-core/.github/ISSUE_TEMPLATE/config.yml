@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and discussions
+    url: https://github.com/Symbiosis-Lab/moss-core/discussions
+    about: Please use Discussions for questions, patches, and general talk.
+  - name: Security vulnerabilities
+    url: https://github.com/Symbiosis-Lab/moss-core/security/advisories/new
+    about: Use private vulnerability reporting — do not file a public issue.
+  - name: moss app
+    url: https://mosspub.com
+    about: Learn more about moss.
