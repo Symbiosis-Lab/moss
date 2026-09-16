@@ -14,7 +14,9 @@
 //! - nav/content breakpoint: 48rem (see .claude/CLAUDE.md § "Navigation
 //!   Responsive Breakpoints")
 //! - `.moss-grid` runs 1–4 columns via data-columns within the content/wide
-//!   column, at every viewport width — no mobile collapse
+//!   column; a horizontal site collapses to 1 column below 768px, a
+//!   vertical one never does (site.css) — see `sizes_for_grid_cell`'s
+//!   `auto,` lead, which reads the real width instead of guessing it
 
 /// Hero images and `data-width="screen|full"` figures: span the viewport
 /// (bounded by the 2400px deploy cap).
@@ -103,9 +105,15 @@ pub fn sizes_for_data_width(width: &str) -> Option<&'static str> {
 /// column, or the escape band when the grid carries `data-width`
 /// (ADR-021 Corollary 2).
 ///
-/// `:::grid N` keeps N tracks at every viewport width — site.css carries no
-/// mobile collapse for it — so the column count divides the band the same
-/// way on a phone as on a desktop, with no narrow-viewport branch here.
+/// Leads with `auto,` for the same reason as [`SIZES_CARD`]: `:::grid N`
+/// keeps N tracks at every width on a vertical site but collapses to 1
+/// below 768px on a horizontal one (site.css), so no static formula fits
+/// both without knowing the page's typesetting — which this contract layer
+/// doesn't carry. `auto` sidesteps that by reading the cell's real
+/// laid-out width instead. The trailing static value is the pre-`auto`
+/// fallback: it only fires for an eager image or an engine without
+/// `sizes="auto"` support, so it stays the old always-N-tracks guess,
+/// suboptimal on a collapsed horizontal-mobile cell but never broken.
 ///
 /// This exists because the pre-escape mapping declared the CONTENT COLUMN
 /// for grid-cell images: a 3-across featured wall emitted
@@ -120,11 +128,12 @@ pub fn sizes_for_grid_cell(columns: u32, data_width: Option<&str>) -> String {
         _ => "min(47.25rem, 100vw)",
     };
     let cols = columns.max(1);
-    if cols == 1 {
+    let fallback = if cols == 1 {
         band.to_string()
     } else {
         format!("calc({band} / {cols})")
-    }
+    };
+    format!("auto, {fallback}")
 }
 
 #[cfg(test)]
@@ -138,11 +147,10 @@ mod tests {
         // requires the LAST comma-segment to be unconditional — no LEADING
         // media condition, i.e. it must not start with `(` — though it may
         // still be a `calc(…)` expression, which is why the check below is
-        // "does not start with", not "does not contain": `:::grid N` no
-        // longer has a narrow-viewport branch to be unconditional ABOUT
-        // (site.css carries no mobile collapse for it), so the whole value
-        // is now a single `calc()` segment with no media condition at all.
-        // Every media condition's parentheses must still balance.
+        // "does not start with", not "does not contain": the grid samples'
+        // trailing fallback segment is a `calc(…)` or bare `min(…)`/`100vw`
+        // value, never a media condition. Every media condition's
+        // parentheses must still balance.
         let grid_samples: Vec<String> = (1..=4)
             .flat_map(|n| {
                 [None, Some("wide"), Some("page"), Some("screen")]
@@ -190,21 +198,20 @@ mod tests {
     #[test]
     fn grid_cell_declares_cell_not_column() {
         // The motivating bug: a 3-across grid cell must declare ~band/3,
-        // not the full content column. No narrow-viewport branch: `:::grid
-        // N` keeps N tracks at every width, so one value covers every
-        // viewport.
+        // not the full content column, once past the `auto,` lead — the
+        // fallback that fires when `auto` doesn't apply.
         assert_eq!(
             sizes_for_grid_cell(3, None),
-            "calc(min(47.25rem, 100vw) / 3)"
+            "auto, calc(min(47.25rem, 100vw) / 3)"
         );
         assert_eq!(
             sizes_for_grid_cell(3, Some("page")),
-            "calc(min(1200px, 100vw) / 3)"
+            "auto, calc(min(1200px, 100vw) / 3)"
         );
         // Single column: no calc wrapper.
-        assert_eq!(sizes_for_grid_cell(1, Some("screen")), "100vw");
+        assert_eq!(sizes_for_grid_cell(1, Some("screen")), "auto, 100vw");
         // Zero-column defensive clamp.
-        assert_eq!(sizes_for_grid_cell(0, None), "min(47.25rem, 100vw)");
+        assert_eq!(sizes_for_grid_cell(0, None), "auto, min(47.25rem, 100vw)");
     }
 
     #[test]

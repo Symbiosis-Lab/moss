@@ -6136,13 +6136,18 @@ a.moss-grid-card:hover {
   text-decoration: underline;
 }
 
-/* Deliberately no mobile collapse: `:::grid N` names how many cards sit on
-   one line, and that line runs along the INLINE axis in either writing
-   mode — horizontal-tb wraps it across the page, vertical-rl stacks it down
-   the column — at every viewport width. See preview-cards.md. (A ratio grid,
-   `:::grid 2 1:2`, follows the same rule: the ratio is a column-WIDTH
-   split, not a track count, and per-count widths are meaningless to
-   collapse independently of the count itself.) */
+/* Collapses `:::grid N` to 1 column below 768px: the default (horizontal)
+   inline axis is viewport WIDTH, which shrinks sharply on mobile, so N
+   side-by-side cards get too narrow to read. Unconditional here — vertical
+   typesetting counters it in vertical.css (its inline axis is HEIGHT,
+   which barely shrinks, so it never needed to collapse) rather than this
+   rule excluding it, so core never has to name the `vertical` partial's
+   own `data-typesetting` token. See preview-cards.md. */
+@media (max-width: 768px) {
+  .moss-grid[data-columns] {
+    grid-template-columns: 1fr;
+  }
+}
 
 /* Gallery Shortcode
  *
