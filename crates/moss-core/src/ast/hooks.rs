@@ -1947,7 +1947,7 @@ mod tests {
 
         // Three columns in the content column, so each cell gets a third of
         // that band — NOT the whole column.
-        let cell_sizes = "calc(min(47.25rem, 100vw) / 3)";
+        let cell_sizes = "auto, calc(min(47.25rem, 100vw) / 3)";
         assert!(
             in_hero.contains(&format!(r#"sizes="{cell_sizes}""#)),
             "grid cell inside a hero overlay must scope sizes= to the cell; got: {in_hero}"
@@ -2107,7 +2107,7 @@ mod tests {
         let mut out = String::new();
         hooks.render_shortcode(&mut out, &grid, None);
         assert!(
-            out.contains(r#"sizes="calc(min(1200px, 100vw) / 3)""#),
+            out.contains(r#"sizes="auto, calc(min(1200px, 100vw) / 3)""#),
             "a widthless figure in a 3-col page grid declares the cell track; got: {out}"
         );
 
