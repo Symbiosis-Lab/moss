@@ -100,13 +100,6 @@ pub struct ReferenceScan {
     pub unreadable: Vec<std::path::PathBuf>,
 }
 
-/// Bytes freed and files removed by [`prune_orphaned_webp`].
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct PruneResult {
-    pub files_removed: usize,
-    pub bytes_freed: u64,
-}
-
 /// Walk `stage_dir` and collect every embedded image-path token from the
 /// scannable text file types, normalized to a site-root-relative tail with no
 /// leading `./`/`../`.
@@ -353,47 +346,26 @@ pub fn suppressed_variants(
         .collect()
 }
 
-/// Remove every `.webp` key in `image_outputs` whose normalized path is not
-/// among `referenced_tails`.
+/// Every `.webp` key in `image_outputs` whose normalized path is not among
+/// `referenced_tails`.
 ///
-/// Returns the removed keys (so the caller can also drop them from the sealed
-/// manifest — see [`crate::build::manifest::SealedManifest::remove_entries`])
-/// alongside the byte/file count. Errors removing an individual file are
-/// logged and skipped — a stray unremovable file costs bytes, not
-/// correctness, so it must never fail the build.
-pub fn prune_orphaned_webp(
-    stage_dir: &Path,
+/// Pure set arithmetic, and deliberately so: the keys it returns leave the
+/// sealed manifest, and `ship_phase` copies `sealed.files()` and nothing else,
+/// so dropping the entry is already the whole of "this variant does not ship".
+/// This used to unlink the staged file here as well, which is a write into the
+/// directory the preview server is reading — see the sweep in
+/// `build::pipeline`, which does the unlinking at the next build's start.
+pub fn orphaned_webp_keys(
     image_outputs: &HashSet<String>,
     referenced_tails: &HashSet<String>,
-) -> (HashSet<String>, PruneResult) {
-    let mut removed_keys = HashSet::new();
-    let mut result = PruneResult::default();
-
-    for key in image_outputs {
-        if !key.ends_with(".webp") {
-            continue; // raster fallback tier — see module docs
-        }
-        if referenced_tails.contains(key.as_str()) {
-            continue;
-        }
-        let full = stage_dir.join(key);
-        let size = std::fs::metadata(&full).map(|m| m.len()).unwrap_or(0);
-        match std::fs::remove_file(&full) {
-            Ok(()) => {
-                removed_keys.insert(key.clone());
-                result.files_removed += 1;
-                result.bytes_freed += size;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // Already absent — still drop it from the manifest.
-                removed_keys.insert(key.clone());
-            }
-            Err(e) => {
-                log::warn!("orphan prune: failed to remove {:?}: {}", full, e);
-            }
-        }
-    }
-    (removed_keys, result)
+) -> HashSet<String> {
+    image_outputs
+        .iter()
+        // `.png`/`.jpg` are the raster fallback tier — see module docs.
+        .filter(|key| key.ends_with(".webp"))
+        .filter(|key| !referenced_tails.contains(key.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// Decode an extracted token to a path via the shared HTML-reference

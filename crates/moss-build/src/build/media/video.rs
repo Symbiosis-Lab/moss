@@ -1990,8 +1990,10 @@ mod tests {
         // Video #2's OLD output is still what's on disk — its re-encode
         // hasn't run yet — and the core seal must carry it forward as this
         // build's own output too, exactly like an unchanged video, so a
-        // stale sweep run against THIS seal (as `advertise_sealed`'s does)
-        // does not delete a video that is still serving fine mid-re-encode.
+        // stale sweep run against THIS seal (as the next build's
+        // `pipeline::sweep_staging` does, off the `hashes.json` this seal
+        // writes) does not delete a video that is still serving fine
+        // mid-re-encode.
         let view = sealed.site_hashes_view();
         for key in &staged2 {
             assert!(

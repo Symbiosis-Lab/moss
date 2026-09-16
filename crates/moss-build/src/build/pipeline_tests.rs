@@ -4282,11 +4282,16 @@ fn build_test_sealed(folder_path: &str) -> Result<Vec<String>, String> {
 /// `build_test` and `build_test_sealed` both stop at the seal, so neither can
 /// observe anything the tail decides — and the tail is where the staging tree
 /// is complete, where the reference set is therefore complete, and where the
-/// prune runs. Returns the prune's own count so a caller can assert a
-/// converged build removes nothing.
+/// prune runs. Returns the keys the prune condemned so a caller can assert a
+/// converged build condemns nothing.
+///
+/// It promotes, too. Staging's sweep runs at the START of a build and only
+/// once a generation is promoted (`pipeline::sweep_staging`), so a harness
+/// that sealed without promoting would leave every staged file the manifest
+/// dropped sitting on disk forever.
 fn build_test_shipped(
     folder_path: &str,
-) -> Result<crate::build::media::orphan_prune::PruneResult, String> {
+) -> Result<std::collections::HashSet<String>, String> {
     let ps = scan_folder(folder_path)?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -4317,7 +4322,7 @@ fn build_test_shipped(
         )
         .map_err(crate::build::outcome::BuildStopped::into_message)?;
         let Some(handle) = bg_handle else {
-            return Ok(crate::build::media::orphan_prune::PruneResult::default());
+            return Ok(std::collections::HashSet::new());
         };
         let mut sealed = handle
             .await_completion()
@@ -4326,11 +4331,17 @@ fn build_test_shipped(
         let mp = crate::moss_paths::MossPaths::new(root.path());
         let stage_dir = mp.staging_dir();
         let scan = crate::build::media::orphan_prune::extract_referenced_tails(&stage_dir);
-        let (_pruned_keys, pruned) =
-            crate::build::ship::prune_orphaned_webp_before_ship(&mp, &stage_dir, &mut sealed, &scan);
+        let pruned =
+            crate::build::ship::prune_orphaned_webp_before_ship(&mp, &mut sealed, &scan);
         let _ = sealed.write_to_disk(&mp.hashes());
-        let view = sealed.site_hashes_view();
-        crate::build::media::pipeline::remove_stale_files(&stage_dir, view, "staging");
+        crate::build::ship::materialize_and_promote(
+            &sealed,
+            &mp,
+            &stage_dir,
+            None,
+            crate::build::ship::next_promotion_epoch(),
+            true,
+        )?;
         Ok(pruned)
     })
 }
@@ -4453,12 +4464,11 @@ fn a_build_that_changes_nothing_does_nothing() {
     let pruned = build_test_shipped(folder_path).expect("build 3");
     let after = stage_snapshot(&stage_dir);
 
-    assert_eq!(
-        pruned.files_removed, 0,
-        "a converged build must prune nothing — {} file(s)/{} bytes removed means \
-         something re-materialized variants the previous build had already \
-         deleted (moss#1085)",
-        pruned.files_removed, pruned.bytes_freed
+    assert!(
+        pruned.is_empty(),
+        "a converged build must condemn nothing — {pruned:?} means something \
+         re-materialized variants the previous build had already dropped \
+         (moss#1085)"
     );
 
     let changed: Vec<&String> = before
@@ -5097,8 +5107,9 @@ fn a_vault_whose_media_all_exists_leaves_the_publish_gate_open() {
 
 /// The presence pass is the last owner of "the manifest and the generation
 /// agree". Four entries, four fates, one call — a carried entry whose file a
-/// sync client evicted between builds is dropped; a 0-byte stub is unlinked
-/// so the next build regenerates rather than trusting it; a `_moss/math/`
+/// sync client evicted between builds is dropped; a 0-byte stub is dropped
+/// too, so the next build's pre-render sweep unlinks it rather than a producer
+/// trusting it; a `_moss/math/`
 /// entry survives unreadable because the published site still serves it
 /// (ADR-030) and un-promising one deletes it from a live site; a symlink
 /// entry survives, since `output_present` reads the link, not the target.
@@ -5157,8 +5168,11 @@ fn the_presence_pass_drops_only_the_outputs_that_are_really_gone() {
          names a path the generation does not contain, and deploy refuses the upload"
     );
     assert!(
-        !stub.to_disk(&stage).exists(),
-        "the stub is unlinked so the next build regenerates instead of trusting it"
+        stub.to_disk(&stage).exists(),
+        "the pass is read-only against staging — that tree is what the preview \
+         server is reading while the seal tail runs. The stub goes at the next \
+         build's start, via `pipeline::sweep_staging`, which finds it because \
+         this drop kept it out of `hashes.json`"
     );
     assert_ne!(
         sealed.generation_id(),

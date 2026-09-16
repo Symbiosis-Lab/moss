@@ -1730,16 +1730,19 @@ async fn advertise_sealed(
     // guard that `build_inner` (pipeline.rs) holds across its own
     // stage-writing span. This task runs detached — well after the
     // watcher's `is_rebuilding` lock has already released — so without this
-    // guard, the moss#867 degrade pass and steps 2 and 4 below (which all
-    // read/write/delete directly against the live, possibly-being-served
-    // `stage_dir`) can interleave with a NEXT rebuild's writes into that
-    // same directory, corrupting the generation that gets promoted to
-    // `current`. See `FolderSession::stage_write_lock` doc comment for the
-    // full rationale. Held from here through step 4 (the moss#867 rewrite
-    // plus the fast directory walk/copy/cleanup), not across anything
+    // guard, the moss#867 degrade pass and step 1 below (which read and
+    // rewrite the live, possibly-being-served `stage_dir`) can interleave
+    // with a NEXT rebuild's writes into that same directory, corrupting the
+    // generation that gets promoted to `current`. See
+    // `FolderSession::stage_write_lock` doc comment for the full rationale.
+    // Held from here through the materialize walk, not across anything
     // before this point — in particular NOT across the `await_completion`
     // media-encode wait that already happened before `advertise_sealed` was
     // called.
+    //
+    // It serializes WRITERS. It is not, and cannot be, a reader-side guard:
+    // the preview server takes no lock, so the rule that keeps it whole is
+    // that nothing in this tail unlinks from `stage_dir` at all.
     let _stage_write_guard = match session {
         Some(s) => Some(s.lock_stage_write().await),
         None => None,
@@ -1865,18 +1868,23 @@ async fn advertise_sealed(
         }
     }
 
-    // 4. Stale-file + stale-dir cleanup. Unconditional on `mat_ok` (staging is
-    //    still this build's), but not from a superseded tail — a newer build
-    //    already swept the same shared tree, and this view would delete its files.
+    // 4. Staging's stale-file and stale-dir sweep used to run here. It now
+    //    runs at the START of the next build (`pipeline::sweep_staging`),
+    //    because the preview server is reading `stage_dir` at this instant:
+    //    `pipeline::run` pointed it there when the render finished and nothing
+    //    moves it off until the next build begins, so an unlink here takes a
+    //    file out from under a live reader. Nothing is lost by waiting —
+    //    `ship_phase` copies `sealed.files()` and nothing else, so a stale
+    //    staged file could never reach a generation anyway, and the next
+    //    build sweeps against the `hashes.json` written just above, which is
+    //    the same view this sweep would have used. `owns_shared` made the same
+    //    judgement there that reading the persisted manifest makes here: a
+    //    superseded tail does not write `hashes.json`, so its view never
+    //    becomes the one the next build sweeps by.
     let view = sealed.site_hashes_view();
-    if owns_shared {
-        crate::build::media::pipeline::remove_stale_files(stage_dir, view, "staging");
-        let expected_dirs = crate::build::media::pipeline::compute_expected_dirs(view);
-        crate::build::media::pipeline::remove_stale_dirs(stage_dir, &expected_dirs);
-    }
 
     // Seal-persist-race-404 fix: release the stage-write guard now — steps
-    // 2-4 (the only ones touching `stage_dir`) are done. Everything below
+    // 2-3 (the only ones touching `stage_dir`) are done. Everything below
     // (advertising the manifest, progress events) doesn't touch the
     // filesystem, so there's nothing left to protect.
     drop(_stage_write_guard);

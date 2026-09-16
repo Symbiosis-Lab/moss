@@ -36,11 +36,19 @@ use std::path::Path;
 ///
 /// The order is load-bearing. Every removal pass runs before
 /// [`apply_to_staging`], which repairs the HTML LAST, after everything that can
-/// remove a file: until 2026-09-09 it ran first, so every removal shipped a
+/// remove a variant: until 2026-09-09 it ran first, so every removal shipped a
 /// live 404 that `<picture>` renders blank instead of falling back. The caller
 /// must in turn run this before it persists or materializes the generation,
-/// which would otherwise ship bytes deleted here, or advertise a manifest entry
-/// with no file behind it (deploy refuses the whole upload over one).
+/// which would otherwise advertise a manifest entry with no file behind it
+/// (deploy refuses the whole upload over one).
+///
+/// "Remove" here means remove from the MANIFEST. The preview server is reading
+/// `stage_dir` while this runs — the seal tail is detached, and nothing points
+/// the server away from staging until the next build starts — so the only write
+/// this whole sequence makes into it is [`apply_to_staging`]'s, which goes
+/// through `io_utils::write_output` and is therefore a rename, never a window
+/// where the page is absent. The staged bytes of an unshipped variant are
+/// unlinked by `build::pipeline`'s pre-render sweep instead.
 pub(crate) fn repair_staged_html(
     mp: &crate::moss_paths::MossPaths,
     stage_dir: &Path,
@@ -49,9 +57,7 @@ pub(crate) fn repair_staged_html(
 ) -> HashSet<String> {
     let mut unshippable = failed;
     let scan = crate::build::media::orphan_prune::extract_referenced_tails(stage_dir);
-    let (pruned_keys, _) =
-        crate::build::ship::prune_orphaned_webp_before_ship(mp, stage_dir, sealed, &scan);
-    unshippable.extend(pruned_keys);
+    unshippable.extend(crate::build::ship::prune_orphaned_webp_before_ship(mp, sealed, &scan));
     unshippable.extend(crate::build::ship::drop_absent_outputs(stage_dir, sealed));
     unshippable.extend(crate::build::ship::unregistered_referenced_variants(
         &scan, sealed, stage_dir,

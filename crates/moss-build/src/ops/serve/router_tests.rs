@@ -381,6 +381,156 @@ async fn frozen_generation_page_regains_preview_gate_attribute() {
     let _ = shutdown_tx.send(());
 }
 
+/// The seal tail runs DETACHED, and it runs against the very directory the
+/// preview server is reading: `pipeline::run` points the server at
+/// `staging/` when the render finishes, and nothing moves it off until the
+/// NEXT build starts. So any pass in that tail that unlinks a staged file
+/// takes the file out from under a live reader — and the frontend asks for
+/// pages at exactly that moment, because `refresh-preview` fires as soon as
+/// the build returns.
+///
+/// Driven step by step rather than raced: the repair pass is called directly
+/// and the served tree is fetched on both sides of it, so a regression is a
+/// deterministic 404 instead of a timing window that passes on a fast box.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_seal_tail_leaves_the_served_staging_tree_alone() {
+    use crate::build::manifest::{HashBucket, PendingManifest};
+    use crate::build::served_path::ServedPath;
+    use crate::moss_paths::MossPaths;
+    use crate::types::content::SiteHashes;
+
+    // Repo-local temp (project rule: never /tmp).
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    let vault = tempfile::TempDir::new_in(&base).expect("temp vault");
+
+    let mp = MossPaths::new(vault.path());
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(stage.join("assets")).unwrap();
+    let html = concat!(
+        "<html><body data-moss-preview>",
+        r#"<picture><source srcset="assets/kept.webp" type="image/webp">"#,
+        r#"<img src="assets/kept.jpg"></picture>"#,
+        "</body></html>\n",
+    );
+    std::fs::write(stage.join("index.html"), html).unwrap();
+    std::fs::write(stage.join("assets/kept.webp"), b"kept webp bytes").unwrap();
+    // Registered, on disk, and referenced by nothing: the orphan prune's arm.
+    std::fs::write(stage.join("assets/orphan.webp"), b"orphan webp bytes").unwrap();
+
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    pending.register(
+        &ServedPath::from_source("index.html").unwrap(),
+        html.as_bytes(),
+        HashBucket::Files,
+    );
+    for (rel, bytes) in [
+        ("assets/kept.webp", b"kept webp bytes".as_slice()),
+        ("assets/orphan.webp", b"orphan webp bytes".as_slice()),
+    ] {
+        pending.register(
+            &ServedPath::from_source(rel).unwrap(),
+            bytes,
+            HashBucket::ImageVariants,
+        );
+    }
+    let mut sealed = pending.seal();
+
+    let (port, shutdown_tx, _token) = serve_bound(stage.clone(), 59700).await;
+    let get = |rel: &str| {
+        let url = format!("http://localhost:{}/{}", port, rel);
+        match ureq::get(&url).timeout(std::time::Duration::from_secs(5)).call() {
+            Ok(r) => r.status(),
+            Err(ureq::Error::Status(code, _)) => code,
+            Err(e) => panic!("transport error fetching {rel}: {e}"),
+        }
+    };
+
+    // Control: everything the tail is about to walk over is reachable now.
+    assert_eq!(get("index.html"), 200, "control: the page must be served before the tail runs");
+    assert_eq!(get("assets/orphan.webp"), 200, "control: the orphan must be on disk before the tail runs");
+
+    crate::build::degrade::repair_staged_html(
+        &mp,
+        &stage,
+        &mut sealed,
+        std::collections::HashSet::new(),
+    );
+
+    assert_eq!(
+        get("index.html"),
+        200,
+        "the tail must not take the page out from under the reader"
+    );
+    assert_eq!(
+        get("assets/orphan.webp"),
+        200,
+        "an unreferenced variant leaves the GENERATION by leaving the manifest — \
+         unlinking it from the tree the preview is serving is a live 404"
+    );
+    assert!(
+        !sealed.files().contains_key("assets/orphan.webp"),
+        "it must still be dropped from the manifest, or ship_phase copies it into the generation"
+    );
+
+    // Finding 1 (thermo review of this same fix): `remove_stale_html` shares
+    // the "switch, then unlink" shape the tail's passes above had — the
+    // pipeline used to call it AFTER pointing the server at `stage_dir`, so
+    // a page whose source was deleted could sit reachable for a moment past
+    // the switch. The fix (`pipeline::build_inner`) moved the call to before
+    // the switch. Driven here with the same two steps, in that order,
+    // against a second real server whose pointer this block flips with the
+    // same `Arc<RwLock<PathBuf>>` cell `SiteDirectoryState::switch_to`
+    // mutates in production — not one function call in isolation.
+    use crate::build::media::pipeline::remove_stale_html;
+
+    std::fs::create_dir_all(stage.join("old-page")).unwrap();
+    std::fs::write(stage.join("old-page/index.html"), "<html>old</html>").unwrap();
+    let blocking_keys: std::collections::HashSet<String> =
+        std::iter::once("index.html".to_string()).collect();
+
+    let prev_gen = vault.path().join(".moss/build/current");
+    std::fs::create_dir_all(&prev_gen).unwrap();
+    let site_dir_cell = Arc::new(std::sync::RwLock::new(prev_gen));
+    let (port2, shutdown_tx2) = start_server(ServeConfig {
+        ..ServeConfig::new(site_dir_cell.clone(), 59750)
+    })
+    .await
+    .expect("second server should start");
+    let get2 = |rel: &str| {
+        let url = format!("http://localhost:{}/{}", port2, rel);
+        match ureq::get(&url).timeout(std::time::Duration::from_secs(5)).call() {
+            Ok(r) => r.status(),
+            Err(ureq::Error::Status(code, _)) => code,
+            Err(e) => panic!("transport error fetching {rel}: {e}"),
+        }
+    };
+
+    // The server starts parked on the stand-in for `current_ptr` — where
+    // `build_inner`'s own switch at the top of the function leaves it before
+    // this build's cleanup runs. `stage` is not reachable through it yet, so
+    // unlinking `old-page/index.html` here cannot 404 a live reader.
+    remove_stale_html(&stage, &blocking_keys, &std::collections::HashSet::new());
+
+    // Only now does the server move onto `stage` — mirroring the Step 5
+    // `switch_to` in `build_inner`, which runs after the cleanup above.
+    *site_dir_cell.write().unwrap() = stage.clone();
+
+    assert_eq!(
+        get2("old-page/index.html"),
+        404,
+        "the deleted source's page must already be gone by the moment the server can reach stage_dir"
+    );
+    assert_eq!(
+        get2("index.html"),
+        200,
+        "the kept page must be servable the instant the switch lands"
+    );
+
+    let _ = shutdown_tx2.send(());
+    let _ = shutdown_tx.send(());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_pdf_file_returns_unsupported_page() {
     // Verify that unsupported file types (PDF) get the "open in system viewer" page.

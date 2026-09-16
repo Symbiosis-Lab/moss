@@ -59,7 +59,7 @@ fn the_tail_strips_a_source_whose_variant_has_no_manifest_entry() {
     // this tail may touch it, or the pass is stripping live variants.
     std::fs::write(stage.join("assets/kept.webp"), b"kept webp bytes").unwrap();
     // On disk and registered, but referenced by no page: the orphan prune's
-    // arm. Deleting the prune from the tail leaves this file behind.
+    // arm. Deleting the prune from the tail leaves this entry in the manifest.
     std::fs::write(stage.join("assets/orphan.webp"), b"orphan webp bytes").unwrap();
     // `assets/gone.webp` is deliberately never written and never registered:
     // only the unregistered-reference pass can see it.
@@ -112,10 +112,15 @@ fn the_tail_strips_a_source_whose_variant_has_no_manifest_entry() {
          swap, so the presence pass must condemn its <source> too: {on_disk}"
     );
     assert!(
-        !stage.join("assets/orphan.webp").exists()
-            && !sealed.files().contains_key("assets/orphan.webp"),
-        "an unreferenced variant is the orphan prune's to remove, from disk and from \
-         the manifest both"
+        !sealed.files().contains_key("assets/orphan.webp"),
+        "an unreferenced variant is the orphan prune's to drop from the manifest, \
+         which is the whole of not shipping it — ship_phase copies sealed.files()"
+    );
+    assert!(
+        stage.join("assets/orphan.webp").exists(),
+        "and the bytes must stay: staging is what the preview server reads while \
+         this tail runs, so unlinking here is a live 404. `pipeline::sweep_staging` \
+         takes them at the next build's start"
     );
 
     // The manifest records the bytes the SITE serves, not staging's.

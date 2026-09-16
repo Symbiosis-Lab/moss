@@ -63,8 +63,8 @@ use std::fs;
 use std::path::Path;
 
 use super::media::pipeline::{
-    copy_dir_recursive, stage_copy, stage_write,
-    remove_stale_html,
+    compute_expected_dirs, copy_dir_recursive, stage_copy, stage_write,
+    remove_stale_dirs, remove_stale_files, remove_stale_html,
 };
 use crate::build::background::BackgroundHandle;
 use crate::build::render::generate_blocking_content;
@@ -1230,6 +1230,10 @@ fn build_inner(
     crate::build::io_utils::create_output_dir_all(&stage_dir)
         .map_err(|e| format!("Failed to create staging directory: {}", e))?;
 
+    // Step 2b: sweep the previous build's residue out of staging — here,
+    // because here is the one moment nobody is reading it.
+    sweep_staging(&stage_dir, &previous_hashes, current_ptr_exists);
+
     // Step 3: Build to staging directory using internal generator
     //
     // ALWAYS annotate /stage with data-source-* (+ data-moss-preview). The preview
@@ -1505,6 +1509,37 @@ fn build_inner(
         // Changes detected (or first build) — switch preview to enhanced site-stage/,
         // then copy to site/.
 
+        // Step 4b: Remove stale HTML pages from deleted source folders.
+        //
+        // Runs HERE, before Step 5 switches the server onto `stage_dir`, not
+        // after like this call used to. The server is off `stage_dir` at this
+        // point — parked on `current_ptr` since the top of this function, or
+        // not yet redirected on a first build — so unlinking here cannot take
+        // a page out from under a live reader. Running it after the switch
+        // was the same "switch, then unlink" ordering the seal-tail fix
+        // (`sweep_staging`) declared unsafe for the seal tail's own passes;
+        // this call isn't in the seal tail, but it shared the ordering bug.
+        // `blocking_keys` and the carried-forward `notebook_outputs()` are
+        // both already final by this point (set by `generate_blocking_content`
+        // and slot injection above), so moving the call earlier costs nothing.
+        //
+        // Runs unconditionally, including when this build deferred a page.
+        // Each deferred page's published output is reinstated in `blocking_keys`
+        // by `PendingManifest::carry_forward_deferred_page` (see the render
+        // pass), so it is protected by name rather than by skipping the sweep.
+        //
+        // The wholesale skip this replaces was both too weak and too strong: too
+        // weak because three LATER passes — `stale_carried_forward`, `seal`, and
+        // `remove_stale_files` — deleted the page anyway, and too strong because
+        // one wedged file suspended stale cleanup for the entire vault
+        // indefinitely.
+        // `pending.notebook_outputs()` carries background-phase JupyterLite
+        // assets (jupyter/**/index.html) forward from the previous build, so
+        // stale-html cleanup here doesn't delete them before
+        // `run_notebook_processing` below re-registers them.
+        remove_stale_html(&stage_dir, &background_ctx.blocking_keys, pending.notebook_outputs());
+        // gen_dir is immutable post-materialize — stale-html cleanup runs on staging only.
+
         // Step 5: Switch server pointer to staging (instant - preview shows enhanced content)
         //
         // Unless this build could not read its own sources. The switch is the
@@ -1541,25 +1576,6 @@ fn build_inner(
         // seconds after this build was dispatched and nineteen seconds before it
         // reached this line. See `ports::LivePortResolver` (moss#1061).
         send_progress(progress_sender, "complete", &crate::infra::app_advisory::t("build_complete"), 100, true, preview_port(), Some(is_empty));
-
-        // Step 6b: Remove stale HTML pages from deleted source folders.
-        //
-        // Runs unconditionally, including when this build deferred a page.
-        // Each deferred page's published output is reinstated in `blocking_keys`
-        // by `PendingManifest::carry_forward_deferred_page` (see the render
-        // pass), so it is protected by name rather than by skipping the sweep.
-        //
-        // The wholesale skip this replaces was both too weak and too strong: too
-        // weak because three LATER passes — `stale_carried_forward`, `seal`, and
-        // `remove_stale_files` — deleted the page anyway, and too strong because
-        // one wedged file suspended stale cleanup for the entire vault
-        // indefinitely.
-        // `pending.notebook_outputs()` carries background-phase JupyterLite
-        // assets (jupyter/**/index.html) forward from the previous build, so
-        // stale-html cleanup here doesn't delete them before
-        // `run_notebook_processing` below re-registers them.
-        remove_stale_html(&stage_dir, &background_ctx.blocking_keys, pending.notebook_outputs());
-        // gen_dir is immutable post-materialize — stale-html cleanup runs on staging only.
 
         // Server stays on site-stage/ (step 5) — no switch back to site/.
         // site-stage/ has data-source-line annotations for editor↔preview scroll sync.
@@ -1891,6 +1907,35 @@ pub(crate) fn send_progress(
             is_empty: empty,
         });
     }
+}
+
+/// Unlink whatever the previous build's manifest does not name: variants the
+/// orphan prune condemned, entries the presence pass dropped, outputs of pages
+/// that no longer exist, `.pending.*` litter from an interrupted write.
+///
+/// This is the whole of staging's garbage collection, and it lives at the start
+/// of a build for one reason: staging is the tree the preview server reads
+/// between builds. `pipeline::run` points the server at it when the render
+/// finishes, and only the `switch_to(current_ptr)` a few dozen lines above this
+/// call moves it off — so this is the first instant since then at which
+/// unlinking a staged file cannot 404 a live reader. Sweeping from the seal
+/// tail instead is the bug this call exists to close: the tail is detached and
+/// runs *while* the frontend is refetching the page it just rebuilt.
+///
+/// Waiting a build costs nothing but local disk. `ship_phase` copies
+/// `sealed.files()` and nothing else, so an unswept staged file can never reach
+/// a generation, a deploy, or a published site.
+///
+/// `served_from_current` is the precondition, not a preference: without a
+/// promoted generation the server may still be resting on staging itself
+/// (`MossPaths::initial_serve_dir`), and an empty manifest would authorize
+/// deleting every file in it.
+fn sweep_staging(stage_dir: &Path, previous: &SiteHashes, served_from_current: bool) {
+    if !served_from_current || previous.files.is_empty() {
+        return;
+    }
+    remove_stale_files(stage_dir, previous, "staging");
+    remove_stale_dirs(stage_dir, &compute_expected_dirs(previous));
 }
 
 /// Load previous hashes from .moss/build/hashes.json.

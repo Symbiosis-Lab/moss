@@ -13,8 +13,9 @@
 //! the open build's REAL epoch ends up lower than a concurrently-admitted
 //! worker build's, regardless of which one's pipeline work finishes first.
 //! This test drives that through the real `run_pipeline` ->
-//! `materialize_and_promote` -> `remove_stale_*` path, not a hand-picked
-//! `try_promote` call, mirroring the two callers' actual mint-order.
+//! `materialize_and_promote` path, not a hand-picked `try_promote` call,
+//! mirroring the two callers' actual mint-order, and reads the answer off
+//! `current` — the generation the preview serves and deploy publishes.
 //!
 //! Boundary, stated plainly: this does not invoke the `#[tauri::command]`
 //! `build_folder` itself — this repo has no mock-Tauri-app test harness, and
@@ -23,7 +24,7 @@
 //! exactly as the fixed src-tauri code produces it (open mints first, a
 //! worker admission mints later — see `next_promotion_epoch`'s own doc:
 //! "call in build order"), then drives both builds through the real
-//! seal/promotion/sweep machinery this crate owns.
+//! seal/promotion machinery this crate owns.
 
 use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
 use crate::vault_root::VaultRoot;
@@ -53,7 +54,7 @@ fn cfg(folder: &std::path::Path, epoch: u64) -> PipelineConfig {
         watch: false,
         start_server: false,
         // shell_attached: false + exits_after_build: true routes the seal
-        // (materialize_and_promote + remove_stale_*) through run_pipeline's
+        // (materialize_and_promote) through run_pipeline's
         // SYNCHRONOUS arm (build.rs's "No app context..." branch) instead of
         // a detached background task — the whole point here, since the test
         // needs to control exactly when each build's promotion attempt runs.
@@ -78,8 +79,14 @@ fn any_output_path_contains(dir: &std::path::Path, needle: &str) -> bool {
 /// folder. The worker's build always completes and promotes FIRST (real
 /// wall-clock order in the test); the epoch each mints is controlled by
 /// `open_epoch_is_lower`, matching whichever of the two call-order shapes is
-/// under test. Returns whether the worker's exclusive page survived the
-/// open build's later seal attempt.
+/// under test. Returns whether the worker's exclusive page is in the
+/// generation `current` points at once the open build's later seal has run.
+///
+/// `current`, not `staging`: staging is shared mutable scratch that the next
+/// build overwrites, and reading the answer off it only ever worked because
+/// a Superseded tail happened to skip the stale sweep. What the promotion
+/// guard actually decides is which frozen generation the preview serves and
+/// deploy publishes, and that is what this asks.
 async fn worker_page_survives_a_later_open_seal(open_epoch_is_lower: bool) -> bool {
     let (_tmp, folder) = fixture();
 
@@ -116,21 +123,23 @@ async fn worker_page_survives_a_later_open_seal(open_epoch_is_lower: bool) -> bo
     std::fs::remove_file(&extra).unwrap();
     run_pipeline(cfg(&folder, open_epoch)).await.expect("open build");
 
-    any_output_path_contains(&mp.staging_dir(), "worker-only")
+    // Resolve the symlink: walkdir does not descend through one.
+    let current = std::fs::canonicalize(mp.current_ptr()).expect("current must point somewhere");
+    any_output_path_contains(&current, "worker-only")
 }
 
 /// The scenario the thermo review named: the worker-admitted build finishes
 /// and promotes first; the open build's epoch — lower, because it was
 /// minted first, in true admission order — must be refused as Superseded
-/// when it finishes after, and a Superseded tail must never run
-/// `remove_stale_files`/`remove_stale_dirs` against `stage_dir`.
+/// when it finishes after, so `current` keeps pointing at the worker's
+/// generation.
 #[tokio::test(flavor = "multi_thread")]
-async fn open_builds_lower_epoch_is_refused_and_never_sweeps_the_workers_page() {
+async fn open_builds_lower_epoch_is_refused_and_current_keeps_the_workers_page() {
     assert!(
         worker_page_survives_a_later_open_seal(true).await,
         "the open build's epoch, minted first (lower), must be refused when \
-         it finishes after an already-promoted worker build — a Superseded \
-         tail must never sweep the worker's page out of stage_dir"
+         it finishes after an already-promoted worker build — `current` must \
+         still be the worker's generation, page and all"
     );
 }
 
@@ -138,18 +147,18 @@ async fn open_builds_lower_epoch_is_refused_and_never_sweeps_the_workers_page() 
 /// than asserted only by absence: if the open build's epoch were instead
 /// the HIGHER one — which is what `build_folder`'s OLD post-hoc mint could
 /// produce, since it can land on either side of a concurrent worker
-/// admission's own early mint — its later, stale seal wrongly promotes and
-/// its stale-sweep deletes the page only the worker's (actually current)
-/// generation has. A canary: if this ever starts passing the OTHER way
+/// admission's own early mint — its later, stale seal wrongly promotes, and
+/// `current` becomes a generation rendered from a scan that never saw the
+/// worker's page. A canary: if this ever starts passing the OTHER way
 /// (survives), something in `try_promote`'s epoch comparison changed, not
 /// just this ordering.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_higher_open_epoch_would_wrongly_promote_and_sweep_the_workers_page() {
+async fn a_higher_open_epoch_would_wrongly_promote_over_the_workers_generation() {
     assert!(
         !worker_page_survives_a_later_open_seal(false).await,
-        "expected the known-bad epoch ordering to delete the worker's page \
-         via the open build's wrongly-promoted stale-sweep — if it survived, \
-         the epoch guard is no longer comparing raw values, and this test \
-         (and the ordering fix's rationale) needs re-checking, not deleting"
+        "expected the known-bad epoch ordering to roll `current` back onto the \
+         open build's stale generation, which has no worker page — if it \
+         survived, the epoch guard is no longer comparing raw values, and this \
+         test (and the ordering fix's rationale) needs re-checking, not deleting"
     );
 }

@@ -5,7 +5,10 @@
 //! sealed" and "`current` points at a new generation":
 //!
 //! - the two post-seal passes that make the manifest and the disk agree —
-//!   `prune_orphaned_webp_before_ship` and `drop_absent_outputs`;
+//!   `prune_orphaned_webp_before_ship` and `drop_absent_outputs`. Both act on
+//!   the MANIFEST only: staging is what the preview server is reading while
+//!   this runs, so nothing here unlinks from it (see `build::pipeline`'s
+//!   pre-render sweep);
 //! - [`ship_phase`], which walks the sealed entries and derives each site/
 //!   file from its stage/ file (apply transform, or recreate a symlink);
 //! - [`materialize_and_promote`], which runs the above into a fresh
@@ -493,11 +496,18 @@ pub fn materialize_and_promote(
     Ok(if promoted { Promotion::Promoted } else { Promotion::Superseded })
 }
 
-/// Delete unreferenced `.webp` variants from `stage_dir` and drop them from
-/// `sealed`, before anything persists or ships this generation (moss#976
-/// B2). Called from [`crate::build::degrade::repair_staged_html`], the tail of
+/// Drop unreferenced `.webp` variants from `sealed`, before anything persists
+/// or ships this generation (moss#976 B2). Called from
+/// [`crate::build::degrade::repair_staged_html`], the tail of
 /// `advertise_sealed`, which since #1097 is the one seal tail on every path —
 /// it writes `hashes.json` and materializes from `stage_dir` right after.
+///
+/// **It does not touch `stage_dir`.** `ship_phase` copies `sealed.files()` and
+/// nothing else, so an entry dropped here cannot reach the generation whatever
+/// staging holds; unlinking the staged bytes as well bought nothing but local
+/// disk, and bought it out of the directory the preview server is reading at
+/// that instant. `build::pipeline`'s pre-render sweep unlinks them at the next
+/// build's start, after the server has moved to `current`.
 ///
 /// Opt-out via `[build].prune_orphaned_images = false`. Default on: the win
 /// is upload bytes and seta quota (moss-seta#297 S1), NOT local disk — the
@@ -505,11 +515,10 @@ pub fn materialize_and_promote(
 /// record for as long as the source image is in the vault, so `cache::gc`
 /// will not collect it. See `build::site_config` for why the off switch exists.
 ///
-/// Returns what it did. Nothing in production reads the count — the value is
-/// there so a test can assert a converged build removes NOTHING. That
-/// assertion is not cosmetic: heal-then-prune leaves the same bytes on disk
-/// either way, so the end state is identical whether the two agree or fight,
-/// and only the counter distinguishes them (moss#1085).
+/// Returns the condemned keys. A converged build must return NONE: heal-then-
+/// prune leaves the same bytes on disk either way, so the end state is
+/// identical whether the two agree or fight, and only this set distinguishes
+/// them (moss#1085).
 ///
 /// `scan` is passed in rather than taken here because
 /// [`unregistered_referenced_variants`] reads the same one: the two passes
@@ -518,17 +527,13 @@ pub fn materialize_and_promote(
 /// also what keeps that pass alive when `prune_orphaned_images` is off.
 pub(crate) fn prune_orphaned_webp_before_ship(
     mp: &crate::moss_paths::MossPaths,
-    stage_dir: &std::path::Path,
     sealed: &mut crate::build::manifest::SealedManifest,
     scan: &crate::build::media::orphan_prune::ReferenceScan,
-) -> (std::collections::HashSet<String>, crate::build::media::orphan_prune::PruneResult) {
+) -> std::collections::HashSet<String> {
     let project_path = mp.project_root().to_string_lossy().to_string();
     if !crate::build::site_config::get_build_prune_orphaned_images(&project_path).unwrap_or(true) {
         log::info!("orphan prune: disabled via [build].prune_orphaned_images");
-        return (
-            std::collections::HashSet::new(),
-            crate::build::media::orphan_prune::PruneResult::default(),
-        );
+        return std::collections::HashSet::new();
     }
     if !scan.unreadable.is_empty() {
         // Fail closed. An unreadable page shrinks the reference set, and a
@@ -552,20 +557,17 @@ pub(crate) fn prune_orphaned_webp_before_ship(
             scan.unreadable.len(),
             sample.join(", ")
         );
-        return (
-            std::collections::HashSet::new(),
-            crate::build::media::orphan_prune::PruneResult::default(),
-        );
+        return std::collections::HashSet::new();
     }
     let referenced = &scan.tails;
     let outputs = sealed.image_outputs().clone();
-    let (removed_keys, result) =
-        crate::build::media::orphan_prune::prune_orphaned_webp(stage_dir, &outputs, referenced);
-    if result.files_removed > 0 {
+    let removed_keys =
+        crate::build::media::orphan_prune::orphaned_webp_keys(&outputs, referenced);
+    if !removed_keys.is_empty() {
         log::info!(
-            "orphan prune: removed {} unreferenced .webp file(s), {} bytes freed",
-            result.files_removed,
-            result.bytes_freed
+            "orphan prune: {} unreferenced .webp variant(s) dropped from the generation; \
+             staging keeps the bytes until the next build sweeps it",
+            removed_keys.len()
         );
     }
     sealed.remove_entries(&removed_keys);
@@ -590,13 +592,12 @@ pub(crate) fn prune_orphaned_webp_before_ship(
     verdict.extend(removed_keys.iter().cloned());
     sealed.set_pruned_image_outputs(verdict);
     // The keys travel out so `degrade` can strip the `<source>` elements that
-    // pointed at them. A deleted file whose reference survives in HTML is a
+    // pointed at them. An unshipped file whose reference survives in HTML is a
     // live 404, and `<picture>` renders it blank rather than falling back.
-    (removed_keys, result)
+    removed_keys
 }
 
-/// Drop manifest entries whose output is not on disk, and unlink what is
-/// there but unusable.
+/// Drop manifest entries whose output is not on disk.
 ///
 /// The last owner of "the manifest and the generation agree". Registration
 /// happens from receipts, so an entry is normally exactly what this build
@@ -605,6 +606,13 @@ pub(crate) fn prune_orphaned_webp_before_ship(
 /// user may have deleted it. `output_present` is one `symlink_metadata` per
 /// entry and no read, so this costs a stat per manifest entry and cannot
 /// itself hit the eviction fault it exists to find.
+///
+/// Read-only against `stage_dir`. It used to unlink the unusable file — a
+/// 0-byte stub or a dataless placeholder — so the next build would regenerate
+/// rather than trust it. `build::pipeline`'s pre-render sweep does that
+/// instead, keyed off the same dropped entry and still before any producer
+/// looks, but at a moment when the preview server is no longer reading
+/// staging.
 ///
 /// `_moss/math/` is the exception and keeps its entry (ADR-030): those PNGs
 /// are append-only and the published site still serves them, so un-promising
@@ -629,10 +637,6 @@ pub(crate) fn drop_absent_outputs(
             crate::build::cloud_readiness::request_download(&path);
             continue;
         }
-        // Unlink whatever is standing in the way — a 0-byte stub or a
-        // dataless placeholder — so the next build regenerates rather than
-        // trusting it. A missing file makes this a no-op.
-        let _ = std::fs::remove_file(&path);
         absent.insert(rel.clone());
     }
     if !absent.is_empty() {
@@ -931,17 +935,17 @@ mod tests {
         );
     }
 
-    /// Fail closed, end to end: one unreadable page and the prune deletes
+    /// Fail closed, end to end: one unreadable page and the prune condemns
     /// NOTHING, keeps the manifest whole, and records no verdict.
     ///
     /// The scan's token matching errs wide, but its I/O used to err into an
     /// irreversible delete: an unreadable page silently shrank the reference
     /// set, and a smaller reference set authorizes more deletion (moss#976).
-    /// The control arm runs first so "removed nothing" cannot pass because the
-    /// orphan was unprunable to begin with.
+    /// The control arm runs first so "condemned nothing" cannot pass because
+    /// the orphan was unprunable to begin with.
     #[cfg(unix)]
     #[test]
-    fn prune_deletes_nothing_when_a_staged_page_cannot_be_read() {
+    fn prune_condemns_nothing_when_a_staged_page_cannot_be_read() {
         use std::os::unix::fs::PermissionsExt;
 
         let staged = |vault: &std::path::Path| {
@@ -962,8 +966,11 @@ mod tests {
         let control_vault = tempdir().unwrap();
         let (mp, stage, mut sealed) = staged(control_vault.path());
         let scan = crate::build::media::orphan_prune::extract_referenced_tails(&stage);
-        let (_, control) = prune_orphaned_webp_before_ship(&mp, &stage, &mut sealed, &scan);
-        assert_eq!(control.files_removed, 1, "control: this orphan IS prunable");
+        let control = prune_orphaned_webp_before_ship(&mp, &mut sealed, &scan);
+        assert!(
+            control.contains("assets/orphan.webp"),
+            "control: this orphan IS prunable"
+        );
 
         let vault = tempdir().unwrap();
         let (mp, stage, mut sealed) = staged(vault.path());
@@ -976,9 +983,8 @@ mod tests {
         );
 
         let scan = crate::build::media::orphan_prune::extract_referenced_tails(&stage);
-        let (removed, result) = prune_orphaned_webp_before_ship(&mp, &stage, &mut sealed, &scan);
+        let removed = prune_orphaned_webp_before_ship(&mp, &mut sealed, &scan);
 
-        assert_eq!(result.files_removed, 0, "removed: {removed:?}");
         assert!(removed.is_empty(), "removed: {removed:?}");
         assert!(
             stage.join("assets/orphan.webp").exists(),
