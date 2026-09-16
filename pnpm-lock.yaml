@@ -27,6 +27,21 @@ importers:
         specifier: ^0.25.12
         version: 0.25.12
 
+  crates/moss-build:
+    devDependencies:
+      idiomorph:
+        specifier: ^0.7.4
+        version: 0.7.4(patch_hash=d8e76155ecd44aaac794e5de0894c87fc288f90deb585f2d6ecaddece610b21b)
+      jsdom:
+        specifier: ^26.1.0
+        version: 26.1.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.3)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.23.13)(yaml@2.9.1)
+
   packages/moss: {}
 
   packages/moss-api:

@@ -1,0 +1,17 @@
+{
+  "name": "@symbiosis-lab/moss-build-js",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Vitest coverage for the site/bridge TypeScript sources under src/js-src, moved here from the desktop repo's frontend/site and frontend/bridge",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "idiomorph": "^0.7.4",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

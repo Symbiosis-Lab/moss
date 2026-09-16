@@ -275,6 +275,9 @@ jobs:
       - name: Test moss npm wrapper
         run: cd packages/moss && npm test
 
+      - name: Test moss-build site/bridge JS (js-src)
+        run: cd crates/moss-build && npx vitest run
+
       - name: Verify moss-api API reference is up-to-date
         run: |
           cd packages/moss-api
