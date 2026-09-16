@@ -114,9 +114,13 @@ body[data-typesetting="vertical"] .breadcrumb-separator::before {
 
 /* ── Font selector (vertical mode) ──
    transform's scale axis has no logical form either, same as translate and
-   aspect-ratio elsewhere in this file — scaleX/scaleY swap by hand per mode. */
+   aspect-ratio elsewhere in this file — scaleX/scaleY swap by hand per mode.
+   transform-origin is the same story: it has no logical keyword form (only
+   left/center/right/top/bottom or lengths), so the physical value in
+   site.css is horizontal-tb's, and this rule supplies vertical-rl's. */
 body[data-typesetting="vertical"] .font-pill {
   transform: scaleY(0.001);
+  transform-origin: top center;
 }
 body[data-typesetting="vertical"] .font-pill.visible {
   transform: scaleY(1);

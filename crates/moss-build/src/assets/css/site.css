@@ -2395,7 +2395,7 @@ header:has(+ .moss-hero) .main-nav {
 
 .font-anchor {
   position: relative;
-  margin-left: 0.75em;
+  margin-inline-start: 0.75em;
   display: flex;
   align-items: center;
 }
@@ -2406,7 +2406,8 @@ header:has(+ .moss-hero) .main-nav {
   color: var(--moss-color-muted);
   cursor: pointer;
   font-family: inherit;
-  padding: 4px 10px;
+  padding-block: 4px;
+  padding-inline: 10px;
   border-radius: 16px;
   position: absolute;
   /* Inline-axis offset only — `left` under horizontal-tb, `top` under
@@ -2446,7 +2447,8 @@ header:has(+ .moss-hero) .main-nav {
   gap: 2px;
   position: relative;
   inset-inline-start: calc(3px - var(--pill-offset, 0px));
-  transform-origin: inline-start;
+  transform-origin: left center; /* logical `inline-start` is invalid for transform-origin (no
+     logical keyword form) — vertical.css carries the vertical-mode override */
   visibility: hidden;
   opacity: 0;
   transform: scaleX(0.001);
@@ -2470,7 +2472,8 @@ header:has(+ .moss-hero) .main-nav {
   border: none;
   color: var(--moss-color-muted);
   cursor: pointer;
-  padding: 4px 10px;
+  padding-block: 4px;
+  padding-inline: 10px;
   border-radius: 16px;
   font-family: inherit;
   transition: color 0.15s ease, background 0.15s ease;
