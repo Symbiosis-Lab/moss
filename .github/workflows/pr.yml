@@ -257,6 +257,15 @@ jobs:
       - name: Backend JS bundles are up to date
         run: pnpm run check:backend-scripts
 
+      # This tree's own copy of the desktop repo's architecture ratchet (rows
+      # a/b/e — prod-lines-per-file, children-per-dir, mirror-comment
+      # markers), ported per docs/archive/
+      # 2026-09-16-boundary-gates-remeasured-for-dependency-model.md step 8:
+      # once the desktop side can no longer scan `open/crates`/`open/packages`,
+      # this repo has to ratchet its own tree.
+      - name: Ratchet (architecture size/marker budget)
+        run: node scripts/ratchet.mjs check
+
       - name: Typecheck moss-api (source + tests)
         run: cd packages/moss-api && pnpm run typecheck
 
