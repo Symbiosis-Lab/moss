@@ -146,6 +146,112 @@ pub(crate) fn verify_bytes(
     compare(file_path, expected, &algo.hash_bytes(bytes))
 }
 
+/// Settle pause between the first and second read of a file whose hash
+/// didn't match the sealed manifest, before trusting it enough to self-heal.
+///
+/// A single fresh read is not proof of anything: a torn read mid-write looks
+/// exactly like a finished rebuild's bytes, and only re-checking after a
+/// pause tells the two apart. 250ms mirrors the file watcher's own debounce
+/// window (`build/watch.rs`: "a fixed 250ms per-event delay via
+/// notify-debouncer-full") — the same "how long until a write has almost
+/// certainly settled" number this codebase already trusts elsewhere, rather
+/// than a new one invented for this check.
+pub(crate) const DRIFT_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How many leading bytes to sample when checking whether a file looks like
+/// a zeroed-out iCloud eviction stub, without reading a large chunked file in
+/// full. Matches the streaming hasher's own read buffer size ([`HashAlgo::hash_file`]).
+const ZEROED_STUB_SAMPLE_BYTES: usize = 64 * 1024;
+
+/// The one corruption shape this module knows how to recognize by content:
+/// iCloud's "optimize storage" eviction zeroes a file in place, leaving a
+/// stub of the right length and the wrong (all-zero) bytes —
+/// `a_zeroed_icloud_stub_is_rejected_before_it_is_uploaded` is the fixture
+/// this exists for. A torn write mid-rebuild does not look like this: it
+/// leaves whatever partial content the writer had actually flushed, which is
+/// essentially never all zero, so this check does not fire on the race this
+/// module exists to tolerate.
+fn looks_like_zeroed_stub(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && bytes.iter().all(|&b| b == 0)
+}
+
+/// Read up to `n` leading bytes of `path` — a cheap corruption sniff that
+/// does not require loading a large chunked file in full just to check
+/// whether it looks like a zeroed stub.
+async fn read_leading_bytes(path: &Path, n: usize) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncReadExt;
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| format!("Failed to open {}: {}", path.display(), e))?;
+    let mut buf = vec![0u8; n];
+    let read = file
+        .read(&mut buf)
+        .await
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+    buf.truncate(read);
+    Ok(buf)
+}
+
+/// How many self-heals one deploy tolerates before treating the pattern
+/// itself as the problem.
+///
+/// A drifted hash or two in one deploy is exactly the race this module
+/// exists to tolerate — a background rebuild racing the first one. More than
+/// that, in the SAME deploy, is not the same failure: it is evidence of
+/// something systemic (a stale or wrong stage directory, a build that never
+/// finished) that healing file-by-file would otherwise paper over silently,
+/// one warning at a time, until nobody notices the publish shipped mostly
+/// self-healed content. Floor of 3 so a small site's handful of files isn't
+/// capped at zero; 5% beyond that so a large site's tolerance scales with it.
+pub(crate) fn self_heal_cap(total_files: usize) -> usize {
+    (total_files / 20).max(3)
+}
+
+/// Enforce [`self_heal_cap`] against one more self-heal. Bumps the shared
+/// counter and, once the cap is crossed, returns the loud failure this
+/// module falls back to instead of quietly healing every remaining file —
+/// `UploadWindow`'s existing first-error-aborts-everything policy takes it
+/// from there.
+///
+/// `pub(crate)` because `deploy::push`'s symlink check (not routed through
+/// [`upload_regular_file`]) needs the identical cap discipline and must not
+/// grow a second copy of it.
+pub(crate) fn charge_self_heal(
+    throughput: &upload_policy::Throughput,
+    cap: usize,
+    file_path: &str,
+) -> Result<(), String> {
+    let n = throughput.note_self_heal();
+    if n as usize > cap {
+        return Err(format!(
+            "deploy: {n} files have drifted from the sealed manifest in this publish (cap {cap}) \
+             — likely something systemic (a stale build stage, a wrong directory) rather than an \
+             isolated race; aborting instead of self-healing the rest (triggered by {file_path})"
+        ));
+    }
+    Ok(())
+}
+
+/// The tail shared by both branches of [`upload_regular_file`] once a drift
+/// has cleared the settle-and-corruption checks: charge it against the
+/// deploy's cap, then log it. Not shared with `deploy::push`'s symlink
+/// check, which has its own message shape — only the two branches here are
+/// byte-for-byte identical past this point.
+fn accept_self_heal(
+    throughput: &upload_policy::Throughput,
+    cap: usize,
+    file_path: &str,
+    mismatch: &str,
+) -> Result<(), String> {
+    charge_self_heal(throughput, cap, file_path)?;
+    log::warn!(
+        "[deploy] {mismatch} — stable after a {:?} settle pause, uploading the bytes actually \
+         on disk instead",
+        DRIFT_SETTLE_DELAY
+    );
+    Ok(())
+}
+
 /// Upload one regular file, choosing single-PUT or chunked by size.
 ///
 /// This is the routing decision that was silently deleted by a refactor once
@@ -161,6 +267,18 @@ pub(crate) fn verify_bytes(
 /// 2026-08-04 bug: a 3.9 MB file at 25 KB/s sat just under the fixed 4 MiB
 /// threshold, so it took the single-PUT path, which has no chunking, no
 /// escalation and no resume, and timed out at 150 s on every attempt forever.
+/// `self_heal_cap` is the deploy-wide budget from [`self_heal_cap`] (the
+/// function) — every caller computes it once from its own file count and
+/// passes the same value into every call this deploy makes.
+///
+/// Returns `Ok(Some(actual_hash))` when the file was shipped with a hash
+/// different from `expected_hash` (a self-heal). The server has no
+/// independent source of truth for these hashes — `commit_sync` sends
+/// whatever the client asserts — so a caller that gets `Some` back MUST
+/// correct its own manifest entry for `file_path` to
+/// `content::file_entry(&actual_hash)` before it commits, or the server's
+/// committed record for this generation is permanently wrong for a file that
+/// was, in fact, uploaded correctly.
 pub async fn upload_regular_file(
     client: &MossSetaClient,
     site_id: &str,
@@ -171,22 +289,42 @@ pub async fn upload_regular_file(
     expected_hash: &str,
     algo: HashAlgo,
     throughput: &upload_policy::Throughput,
+    self_heal_cap: usize,
     on_bytes: Option<&(dyn Fn(u64) + Send + Sync)>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
+    let mut healed_hash: Option<String> = None;
     if throughput.needs_chunking(size) {
         // Verify BEFORE uploading. The bytes are never buffered on this path,
         // so the check has to stream the file — which also means it costs one
         // local read of a file we are about to spend far longer sending.
-        //
-        // A mismatch here no longer fails the deploy. On a live-edited,
-        // sync-backed vault (Google Drive) a raw/background asset can
-        // legitimately change on disk between the manifest being sealed and
-        // this upload running — a second build racing the first, not
-        // corruption. The hash just computed above is the file's real
-        // current state, so that is what gets shipped; only the drift is
-        // logged.
-        if let Err(e) = compare(file_path, expected_hash, &algo.hash_file(canonical)?) {
-            log::warn!("[deploy] {e} — uploading the bytes actually on disk instead");
+        let first_hash = algo.hash_file(canonical)?;
+        if let Err(e) = compare(file_path, expected_hash, &first_hash) {
+            // On a live-edited, sync-backed vault (Google Drive) a
+            // raw/background asset can legitimately change on disk between
+            // the manifest being sealed and this upload running — a second
+            // build racing the first, not corruption. But a single fresh
+            // read cannot tell that apart from a torn read mid-write, which
+            // looks identical. Settle, then re-hash: only a file reporting
+            // the SAME hash on both reads has actually stopped changing.
+            tokio::time::sleep(DRIFT_SETTLE_DELAY).await;
+            let second_hash = algo.hash_file(canonical)?;
+            if second_hash != first_hash {
+                return Err(format!(
+                    "{e} (still changing {:?} later — not self-healing a moving target)",
+                    DRIFT_SETTLE_DELAY
+                ));
+            }
+            // Stable is necessary but not sufficient: a zeroed iCloud
+            // eviction stub is perfectly stable across two reads while still
+            // being corruption, not content.
+            let sample = read_leading_bytes(canonical, ZEROED_STUB_SAMPLE_BYTES).await?;
+            if looks_like_zeroed_stub(&sample) {
+                return Err(format!(
+                    "{e} (looks like a zeroed stub, not a rebuilt file — refusing to self-heal)"
+                ));
+            }
+            accept_self_heal(throughput, self_heal_cap, file_path, &e)?;
+            healed_hash = Some(second_hash);
         }
         client
             .upload_file_chunked(
@@ -202,14 +340,33 @@ pub async fn upload_regular_file(
             .map_err(|e| format!("Failed to upload {}: {}", file_path, e))?;
     } else {
         // allow:raw_read built output being uploaded — dataless is absent (ADR-043)
-        let body = tokio::fs::read(canonical)
+        let mut body = tokio::fs::read(canonical)
             .await
             .map_err(|e| format!("Failed to read {}: {}", file_path, e))?;
-        // Same self-heal as the chunked branch above: `body` is already the
-        // file's true current bytes, so a stale manifest hash is logged and
-        // shipped anyway rather than failing the whole deploy.
         if let Err(e) = verify_bytes(file_path, &body, expected_hash, algo) {
-            log::warn!("[deploy] {e} — uploading the bytes actually on disk instead");
+            // Same self-heal discipline as the chunked branch: settle, then
+            // re-read from disk — `body` alone is only one sample and cannot
+            // tell a finished rebuild from a torn read mid-write.
+            tokio::time::sleep(DRIFT_SETTLE_DELAY).await;
+            let resettled = tokio::fs::read(canonical)
+                .await
+                .map_err(|e| format!("Failed to re-read {}: {}", file_path, e))?;
+            let first_hash = algo.hash_bytes(&body);
+            let second_hash = algo.hash_bytes(&resettled);
+            if second_hash != first_hash {
+                return Err(format!(
+                    "{e} (still changing {:?} later — not self-healing a moving target)",
+                    DRIFT_SETTLE_DELAY
+                ));
+            }
+            if looks_like_zeroed_stub(&resettled) {
+                return Err(format!(
+                    "{e} (looks like a zeroed stub, not a rebuilt file — refusing to self-heal)"
+                ));
+            }
+            accept_self_heal(throughput, self_heal_cap, file_path, &e)?;
+            body = resettled;
+            healed_hash = Some(second_hash);
         }
         throughput.note_single_put_file();
         // Timed across `upload_file`'s whole retry loop rather than one attempt,
@@ -228,7 +385,7 @@ pub async fn upload_regular_file(
             cb(size);
         }
     }
-    Ok(())
+    Ok(healed_hash)
 }
 
 /// A sliding window of in-flight upload tasks, admitting by bytes and by count.

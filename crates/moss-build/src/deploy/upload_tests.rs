@@ -141,13 +141,17 @@ async fn a_drifted_hash_self_heals_on_the_single_put_path() {
         stale_hash,
         HashAlgo::Xxh3,
         &throughput,
+        100, // self_heal_cap: generous, not what this test is about
         None,
     )
     .await;
 
-    assert!(
-        result.is_ok(),
-        "a hash drift must self-heal by shipping the current bytes, not fail the deploy: {result:?}"
+    let healed_hash = result
+        .expect("a hash drift stable across the settle pause must self-heal, not fail the deploy");
+    assert_eq!(
+        healed_hash,
+        Some(HashAlgo::Xxh3.hash_bytes(bytes)),
+        "the caller must get back the hash actually shipped, to correct commit_sync's manifest"
     );
     mock.assert_async().await;
 }
@@ -237,14 +241,179 @@ async fn a_drifted_hash_self_heals_on_the_chunked_path() {
         stale_hash,
         HashAlgo::Xxh3,
         &throughput,
+        100, // self_heal_cap: generous, not what this test is about
         None,
     )
     .await;
 
-    assert!(
-        result.is_ok(),
-        "a hash drift must self-heal on the chunked path too, not fail the deploy: {result:?}"
+    let healed_hash = result.expect(
+        "a hash drift stable across the settle pause must self-heal on the chunked path too, \
+         not fail the deploy",
     );
+    assert_eq!(
+        healed_hash,
+        Some(HashAlgo::Xxh3.hash_bytes(&bytes)),
+        "the caller must get back the hash actually shipped, to correct commit_sync's manifest"
+    );
+}
+
+// ── Self-heal is guarded, not automatic ──────────────────────────────────────
+
+/// A single fresh read is not proof of anything — the whole point of the
+/// settle-then-recheck. A file that is STILL CHANGING when the settle pause
+/// elapses must be refused loudly, the same as before self-heal existed.
+/// Simulated by overwriting the file partway through `DRIFT_SETTLE_DELAY`,
+/// well before `upload_regular_file`'s second read fires.
+#[tokio::test]
+async fn a_still_changing_file_does_not_self_heal() {
+    let bytes_v1 = b"version one, on disk when the first read happens";
+    let bytes_v2 = b"version two, landed mid-settle pause, not the same content";
+    let path = tmp_file("still-changing.bin", bytes_v1);
+
+    let path_for_writer = path.clone();
+    let bytes_v2_owned = bytes_v2.to_vec();
+    tokio::spawn(async move {
+        tokio::time::sleep(DRIFT_SETTLE_DELAY / 4).await;
+        tokio::fs::write(&path_for_writer, &bytes_v2_owned)
+            .await
+            .expect("overwrite mid-settle");
+    });
+
+    let identity = crate::identity::Identity::generate().expect("generate identity");
+    // Never actually dialed: a still-changing file is rejected before any
+    // network call is made, so this URL only needs to parse.
+    let client =
+        crate::seta::client::MossSetaClient::with_identity_and_url(&identity, "http://127.0.0.1:1");
+    let throughput = upload_policy::Throughput::new();
+
+    let result = upload_regular_file(
+        &client,
+        "her-blog",
+        "assets/raw/still-changing.bin",
+        &path,
+        bytes_v1.len() as u64,
+        "abc123def456abcd",
+        "0000000000000000",
+        HashAlgo::Xxh3,
+        &throughput,
+        100,
+        None,
+    )
+    .await;
+
+    let err =
+        result.expect_err("a file still changing across the settle pause must not self-heal");
+    assert!(err.contains("still changing"), "{err}");
+}
+
+/// Stability alone is not sufficient either: the concrete case the module was
+/// hardened for. An iCloud "optimize storage" eviction zeroes a file in
+/// place, and that zeroed state is perfectly STABLE across two reads — it is
+/// content, not a torn write, that makes it wrong to ship. Same fixture as
+/// `a_zeroed_icloud_stub_is_rejected_before_it_is_uploaded`, but exercised at
+/// `upload_regular_file`'s level so the settle-then-recheck path is what is
+/// actually pinned, not just the lower-level `verify_bytes` primitive it
+/// wraps.
+#[tokio::test]
+async fn a_zeroed_stub_does_not_self_heal_even_though_it_is_stable() {
+    let real_size = 4096;
+    let evicted = vec![0u8; real_size];
+    let path = tmp_file("zeroed-stub.bin", &evicted);
+
+    let identity = crate::identity::Identity::generate().expect("generate identity");
+    let client =
+        crate::seta::client::MossSetaClient::with_identity_and_url(&identity, "http://127.0.0.1:1");
+    let throughput = upload_policy::Throughput::new();
+
+    // A hash for the REAL (non-zero) content this manifest entry was sealed
+    // against — any value that isn't xxh3(all-zero bytes) demonstrates the
+    // point, since the file never changes and both reads agree on "zero".
+    let sealed_hash_for_real_content = "0000000000000001";
+
+    let result = upload_regular_file(
+        &client,
+        "her-blog",
+        "assets/photo.jpg",
+        &path,
+        real_size as u64,
+        "abc123def456abcd",
+        sealed_hash_for_real_content,
+        HashAlgo::Xxh3,
+        &throughput,
+        100,
+        None,
+    )
+    .await;
+
+    let err = result.expect_err(
+        "a zeroed iCloud stub must not self-heal even though it is stable across two reads",
+    );
+    assert!(err.contains("zeroed stub"), "{err}");
+}
+
+/// A drifted hash or two in one deploy is the race this module exists to
+/// tolerate. More than [`self_heal_cap`]'s budget, in the SAME deploy, must
+/// fail loudly instead of quietly healing every remaining file — the
+/// signature of something systemic (a stale stage, a wrong directory), not
+/// an isolated race. Driven directly at `upload_regular_file`'s level
+/// (rather than through a whole `push_site_inner` deploy) with an explicit
+/// low cap, so the assertion is deterministic and does not depend on how
+/// many files a real deploy happens to need.
+#[tokio::test]
+async fn a_self_heal_cap_stops_healing_the_rest_of_the_deploy() {
+    let identity = crate::identity::Identity::generate().expect("generate identity");
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("PUT", mockito::Matcher::Any)
+        .with_status(200)
+        .create_async()
+        .await;
+    let client = crate::seta::client::MossSetaClient::with_identity_and_url(&identity, &server.url());
+    let throughput = upload_policy::Throughput::new();
+    let cap = 2;
+
+    for n in 0..cap {
+        let bytes = format!("real content #{n}").into_bytes();
+        let path = tmp_file(&format!("cap-{n}.bin"), &bytes);
+        let result = upload_regular_file(
+            &client,
+            "her-blog",
+            &format!("assets/raw/cap-{n}.html"),
+            &path,
+            bytes.len() as u64,
+            "abc123def456abcd",
+            "0000000000000000",
+            HashAlgo::Xxh3,
+            &throughput,
+            cap,
+            None,
+        )
+        .await;
+        assert!(result.is_ok(), "file #{n} is within the cap: {result:?}");
+    }
+
+    // One more drifted file, still within the same deploy's shared
+    // Throughput — this is the one that crosses the cap.
+    let bytes = b"real content #over-cap".to_vec();
+    let path = tmp_file("cap-over.bin", &bytes);
+    let result = upload_regular_file(
+        &client,
+        "her-blog",
+        "assets/raw/cap-over.html",
+        &path,
+        bytes.len() as u64,
+        "abc123def456abcd",
+        "0000000000000000",
+        HashAlgo::Xxh3,
+        &throughput,
+        cap,
+        None,
+    )
+    .await;
+
+    let err = result.expect_err("crossing the self-heal cap must fail loudly, not heal silently");
+    assert!(err.contains("drifted from the sealed manifest"), "{err}");
+    assert!(err.contains(&format!("cap {cap}")), "{err}");
 }
 
 // ── Routing ──────────────────────────────────────────────────────────────────

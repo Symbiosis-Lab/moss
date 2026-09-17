@@ -338,6 +338,20 @@ fn the_deploy_summary_survives_zero_bytes_and_zero_elapsed() {
     assert!(line.contains("0 bytes"), "{line}");
 }
 
+/// A drifted-hash self-heal (`deploy::upload`) must be visible in the one
+/// line a human actually reads at the end of a deploy, not just in a
+/// per-file `log::warn!` that can scroll by. Printed even at 0 (the other
+/// test above), so the metric's absence is never confusable with "too old a
+/// build to have it".
+#[test]
+fn the_deploy_summary_reports_self_healed_files() {
+    let tp = Throughput::new();
+    tp.note_self_heal();
+    tp.note_self_heal();
+    let line = tp.deploy_summary(Duration::from_secs(1));
+    assert!(line.contains("2 self-healed drift(s)"), "{line}");
+}
+
 /// Confirmed bytes count even when the request is too short to be a bandwidth
 /// sample — the summary reports what transferred, the EWMA reports what it
 /// believes, and the short-request gate applies only to the latter.

@@ -141,7 +141,7 @@ async fn push_site_inner_impl(
     // are now emitted during generate_blocking_content (Gap #3 fix) so the seal
     // covers them and the generation-id is stable. No post-seal mutation of the
     // generation directory.
-    let manifest = sealed.files().clone();
+    let mut manifest = sealed.files().clone();
 
     let site_id = site_id.to_string();
 
@@ -313,6 +313,19 @@ async fn push_site_inner_impl(
     // crate::seta::upload_policy.
     let mut window = upload::UploadWindow::new();
 
+    // How many files this deploy tolerates self-healing before treating the
+    // pattern itself as evidence of a systemic problem (see
+    // `upload::self_heal_cap`), and where the concurrent upload tasks below
+    // report the corrected manifest entry for a file they self-healed —
+    // `commit_sync` sends `manifest` verbatim as the server's new source of
+    // truth, so a self-healed path's stale sealed entry must be corrected
+    // here before that call, or the server's committed record is
+    // permanently wrong for a file that was, in fact, uploaded correctly.
+    let self_heal_cap = upload::self_heal_cap(diff.need.len());
+    let self_heal_corrections: std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<String, String>>,
+    > = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+
     for file_path in &diff.need {
         // Symlinks report 0 bytes, which is honest: they carry a short target
         // string, not file content.
@@ -328,6 +341,7 @@ async fn push_site_inner_impl(
             let file_path = file_path.clone();
             let upload_state = std::sync::Arc::clone(&upload_state);
             let generation_id = generation_id_str.clone();
+            let self_heal_corrections = std::sync::Arc::clone(&self_heal_corrections);
             // One link estimate per deploy, shared by every task in the window:
             // it routes single-PUT vs chunked and sizes each PATCH from what
             // this uplink is actually doing. See crate::seta::upload_policy.
@@ -391,7 +405,7 @@ async fn push_site_inner_impl(
                             .map_err(|e| format!("Failed to stat {}: {}", file_path, e))?
                             .len();
                         let st_bytes = std::sync::Arc::clone(&upload_state);
-                        upload::upload_regular_file(
+                        let healed_hash = upload::upload_regular_file(
                             &client,
                             &site_id,
                             &file_path,
@@ -401,9 +415,16 @@ async fn push_site_inner_impl(
                             expected_hash,
                             upload::HashAlgo::Xxh3,
                             &throughput,
+                            self_heal_cap,
                             Some(&move |n: u64| credit_upload_bytes(&st_bytes, n)),
                         )
                         .await?;
+                        if let Some(actual_hash) = healed_hash {
+                            self_heal_corrections.lock().unwrap().insert(
+                                file_path.clone(),
+                                crate::types::content::file_entry(&actual_hash),
+                            );
+                        }
                     }
                     MODE_SYMLINK => {
                         // Symlink: read the target via read_link (does NOT
@@ -417,17 +438,40 @@ async fn push_site_inner_impl(
                         let target_str = target.to_string_lossy().into_owned();
                         let computed_entry = crate::types::content::symlink_entry(&target_str);
                         if computed_entry != entry_value {
-                            // Same self-heal as upload.rs's file-hash check: the
-                            // target just read via read_link is the symlink's
-                            // real current state, so a stale sealed entry is
-                            // logged and shipped anyway rather than failing the
-                            // whole deploy (a synced vault can legitimately
-                            // re-point a link between seal and upload).
+                            // Same self-heal discipline as upload.rs's
+                            // file-hash check: settle, then re-read. A
+                            // readlink is atomic, so this mainly catches a
+                            // link still being re-pointed by a racing
+                            // rebuild rather than a torn read.
+                            tokio::time::sleep(upload::DRIFT_SETTLE_DELAY).await;
+                            let resettled = tokio::fs::read_link(&full_path).await
+                                .map_err(|e| format!("Failed to re-read symlink {}: {}", file_path, e))?;
+                            let resettled_str = resettled.to_string_lossy().into_owned();
+                            if resettled_str != target_str {
+                                return Err(format!(
+                                    "Deploy integrity error: symlink '{file_path}' target does \
+                                     not match sealed manifest (still changing {:?} later — not \
+                                     self-healing a moving target)",
+                                    upload::DRIFT_SETTLE_DELAY
+                                ));
+                            }
+                            upload::charge_self_heal(&throughput, self_heal_cap, &file_path)?;
+                            // The target just read via read_link is the
+                            // symlink's real current state, confirmed stable
+                            // across a settle pause, so a stale sealed entry
+                            // is logged and shipped anyway rather than
+                            // failing the whole deploy (a synced vault can
+                            // legitimately re-point a link between seal and
+                            // upload).
                             log::warn!(
                                 "[deploy] symlink '{file_path}' target does not match sealed \
                                  manifest (sealed {entry_value}, actual {computed_entry}) — \
-                                 uploading the actual target instead"
+                                 stable after a settle pause, uploading the actual target instead"
                             );
+                            self_heal_corrections
+                                .lock()
+                                .unwrap()
+                                .insert(file_path.clone(), computed_entry.clone());
                         }
                         client.upload_symlink(&site_id, &file_path, target_str, &generation_id)
                             .await
@@ -461,6 +505,25 @@ async fn push_site_inner_impl(
     // reflects the true end state before Committing takes over.
     ticker.0.abort();
     sink.upload_sample(&upload_state);
+
+    // Fold in any self-heals discovered during upload. `commit_sync` below
+    // sends `manifest` verbatim as the server's new source of truth for this
+    // generation — it has no independent way to check these hashes — so a
+    // stale sealed entry left uncorrected here would commit a permanently
+    // wrong record for a file that was actually uploaded correctly.
+    {
+        let corrections = self_heal_corrections.lock().unwrap();
+        if !corrections.is_empty() {
+            log::info!(
+                "[deploy] correcting {} manifest {} to actually-shipped hashes before commit",
+                corrections.len(),
+                if corrections.len() == 1 { "entry" } else { "entries" }
+            );
+        }
+        for (path, entry) in corrections.iter() {
+            manifest.insert(path.clone(), entry.clone());
+        }
+    }
 
     // 9. Commit
     sink.stage(progress::DeployStage::Committing, 0, 0, "Making changes live...");
@@ -806,24 +869,42 @@ mod tests {
     /// which had each grown their own copy of this exact loop. Pattern from
     /// `seta::chunked_upload_tests::upload_file_chunked_sends_content_hash_header`.
     async fn mock_seta_sequence(responses: Vec<&'static [u8]>) -> std::net::SocketAddr {
+        let (addr, _last_request) = mock_seta_sequence_capturing(responses).await;
+        addr
+    }
+
+    /// Same as [`mock_seta_sequence`], but also hands back the LAST call's
+    /// raw request bytes — for a test that needs to inspect what that call
+    /// actually sent, e.g. `commit_sync`'s manifest body after a self-heal.
+    async fn mock_seta_sequence_capturing(
+        responses: Vec<&'static [u8]>,
+    ) -> (std::net::SocketAddr, tokio::sync::oneshot::Receiver<Vec<u8>>) {
         use tokio::net::TcpListener;
 
         let listener = TcpListener::bind::<std::net::SocketAddr>("127.0.0.1:0".parse().unwrap())
             .await
             .unwrap();
         let addr = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel();
 
         tokio::spawn(async move {
-            for resp in responses {
+            let last = responses.len().saturating_sub(1);
+            let mut tx = Some(tx);
+            for (i, resp) in responses.into_iter().enumerate() {
                 let (stream, _) = match listener.accept().await {
                     Ok(pair) => pair,
                     Err(_) => return,
                 };
-                crate::test_mock_http_conn(stream, resp).await;
+                let raw = crate::test_mock_http_conn(stream, resp).await;
+                if i == last {
+                    if let Some(tx) = tx.take() {
+                        let _ = tx.send(raw);
+                    }
+                }
             }
         });
 
-        addr
+        (addr, rx)
     }
 
     /// One page, `index.html` — enough for `push_site_inner_impl` to reach
@@ -1103,6 +1184,101 @@ mod tests {
         assert!(
             result.is_ok(),
             "a drifted symlink target must self-heal, not fail the whole deploy: {result:?}"
+        );
+    }
+
+    /// The stability guard and the manifest correction, proven together: the
+    /// server has no independent source of truth for the hashes it commits —
+    /// `commit_sync`'s POST body IS `{"manifest": <path→hash>, ...}` — so a
+    /// self-healed file whose manifest entry is left uncorrected commits a
+    /// permanently wrong record for a file that was, in fact, uploaded
+    /// correctly. Ablated by removing the `self_heal_corrections` fold-in
+    /// before the commit call: this goes red with the STALE sealed hash
+    /// still present in the committed body instead of the real one.
+    #[tokio::test]
+    async fn a_self_healed_file_corrects_its_manifest_entry_before_commit() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_url = std::env::var("MOSS_SETA_URL").ok();
+
+        let real_bytes = b"<html>Real, current content the sealed manifest never saw</html>";
+        let real_hash = crate::build::assets::paths::compute_binary_hash(real_bytes);
+        let stale_hash = "0000000000000000";
+        assert_ne!(real_hash, stale_hash, "fixture sanity: the drift must be real");
+
+        let (addr, commit_rx) = mock_seta_sequence_capturing(vec![
+            // 1. get_live_generation short-circuit: 404 -> Ok(None).
+            b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            // 2. sync_manifest: the drifted file needs uploading.
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"need\":[\"index.html\"],\"remove\":[]}",
+            // 3. the file's PUT.
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            // 4. commit_sync — captured below.
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"url\":\"https://healed-test.mosspub.com\",\"files_updated\":1,\"files_removed\":0,\"timestamp\":1700000000}",
+        ])
+        .await;
+        std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+
+        // Sealed manifest carries a stale hash for "index.html" — as if a
+        // background rebuild rewrote the file's real bytes after this
+        // manifest was sealed.
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let sp = ServedPath::from_source("index.html").unwrap();
+        pending.register_hashed(
+            &sp,
+            &crate::types::content::file_entry(stale_hash),
+            HashBucket::Files,
+        );
+        let sealed = pending.seal();
+
+        let identity = Identity::generate().expect("generate identity");
+        let dir = tempfile::tempdir().unwrap();
+        let mp = MossPaths::new(dir.path());
+        let gen_dir = mp.generation_dir(sealed.generation_id());
+        std::fs::create_dir_all(&gen_dir).unwrap();
+        // The real, current bytes on disk — what a racing rebuild actually
+        // wrote after the manifest above was sealed against `stale_hash`.
+        std::fs::write(gen_dir.join("index.html"), real_bytes).unwrap();
+
+        let sink = progress::silent();
+        let spy = SpyPorts::default();
+        let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cx = PushContext {
+            folder_path: dir.path(),
+            identity: &identity,
+            site_id: "healed-test",
+            sink: &sink,
+            ports: &spy,
+            events_lock: &events_lock,
+        };
+
+        let result = push_site_inner(&sealed, &cx).await;
+
+        match prev_url {
+            Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+
+        assert!(
+            result.is_ok(),
+            "a hash drift stable across the settle pause must self-heal, not fail the deploy: {result:?}"
+        );
+
+        let commit_request = commit_rx
+            .await
+            .expect("commit_sync must have been called for the publish to succeed");
+        let request_str = String::from_utf8_lossy(&commit_request);
+        let body = request_str
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .unwrap_or(&request_str);
+        assert!(
+            body.contains(&real_hash),
+            "commit_sync's manifest must carry the hash actually shipped for the self-healed \
+             file, not the stale sealed one: {body}"
+        );
+        assert!(
+            !body.contains(stale_hash),
+            "the stale sealed hash must not survive into the committed manifest: {body}"
         );
     }
 }

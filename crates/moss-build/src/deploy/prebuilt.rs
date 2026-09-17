@@ -171,7 +171,7 @@ async fn push_prebuilt_inner(
     );
 
     // 1. Hash the directory into a manifest.
-    let manifest = build_manifest_from_dir(prebuilt_dir)?;
+    let mut manifest = build_manifest_from_dir(prebuilt_dir)?;
     log::info!(
         "deploy(prebuilt): hashed {} files from {}",
         manifest.len(),
@@ -258,6 +258,15 @@ async fn push_prebuilt_inner(
         .map_err(|e| format!("Failed to resolve prebuilt dir: {}", e))?;
 
     let mut window = crate::deploy::upload::UploadWindow::new();
+    // Same self-heal accounting as `push_site_inner_impl`: `commit_sync`
+    // below sends `manifest` verbatim as the server's new source of truth,
+    // so a file that self-heals during upload needs its manifest entry
+    // corrected before that call, and this deploy needs the same cap on how
+    // many files may do so before the pattern itself fails the publish.
+    let self_heal_cap = crate::deploy::upload::self_heal_cap(diff.need.len());
+    let self_heal_corrections: std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<String, String>>,
+    > = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     for file_path in &diff.need {
         // Size drives window admission, so it must be known before the task
         // starts. A path that cannot be stat'd is admitted as 0 and fails
@@ -279,6 +288,7 @@ async fn push_prebuilt_inner(
             let generation_id = generation_id.clone();
             // Shared per-deploy link estimate; see moss_build::seta::upload_policy.
             let throughput = window.throughput();
+            let self_heal_corrections = std::sync::Arc::clone(&self_heal_corrections);
 
             window.spawn(admit_size, async move {
                 let full_path = prebuilt_dir.join(&file_path);
@@ -295,7 +305,7 @@ async fn push_prebuilt_inner(
                 let file_size = std::fs::metadata(&canonical)
                     .map_err(|e| format!("Failed to stat {}: {}", file_path, e))?
                     .len();
-                crate::deploy::upload::upload_regular_file(
+                let healed_hash = crate::deploy::upload::upload_regular_file(
                     &client,
                     &site_id,
                     &file_path,
@@ -305,6 +315,7 @@ async fn push_prebuilt_inner(
                     expected_hash,
                     crate::deploy::upload::HashAlgo::Sha256,
                     &throughput,
+                    self_heal_cap,
                     // This path reports FILE-count progress, so it passes no
                     // byte sink — but the stall watchdog needs the byte credit
                     // even when the UI doesn't. Without it a single large file
@@ -313,6 +324,12 @@ async fn push_prebuilt_inner(
                     Some(&|_n: u64| crate::infra::liveness::bump()),
                 )
                 .await?;
+                if let Some(actual_hash) = healed_hash {
+                    self_heal_corrections.lock().unwrap().insert(
+                        file_path.clone(),
+                        crate::types::content::file_entry(&actual_hash),
+                    );
+                }
                 crate::infra::liveness::bump();
                 // follow-up: this prebuilt (CLI build+deploy) path still emits
                 // FILE-COUNT progress; the interactive publish (deploy.rs) emits
@@ -340,6 +357,25 @@ async fn push_prebuilt_inner(
         }
     }
     window.drain().await?;
+
+    // Fold in any self-heals discovered during upload — see the comment
+    // where `self_heal_corrections` is created. `generation_id` was already
+    // computed from the pre-correction manifest above and stays fixed: it
+    // names the server-side directory this upload actually went into, not a
+    // hash of the manifest's final content.
+    {
+        let corrections = self_heal_corrections.lock().unwrap();
+        if !corrections.is_empty() {
+            log::info!(
+                "deploy(prebuilt): correcting {} manifest {} to actually-shipped hashes before commit",
+                corrections.len(),
+                if corrections.len() == 1 { "entry" } else { "entries" }
+            );
+        }
+        for (path, entry) in corrections.iter() {
+            manifest.insert(path.clone(), entry.clone());
+        }
+    }
 
     // 4. Commit — activates the new manifest server-side.
     sink.stage(

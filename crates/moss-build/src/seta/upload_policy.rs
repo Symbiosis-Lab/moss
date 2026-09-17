@@ -219,6 +219,13 @@ pub struct Throughput {
     /// Files routed to the chunked protocol vs. sent as one PUT.
     chunked_files: AtomicU64,
     single_put_files: AtomicU64,
+    /// Files whose sealed-manifest hash didn't match what was actually on
+    /// disk at upload time and got shipped anyway (self-healed) rather than
+    /// failing the deploy — see `deploy::upload`'s drift handling. Folded
+    /// into the summary line so a client hitting this repeatedly is visible
+    /// in the log a human reads, not only in a per-file `log::warn!` that
+    /// scrolls by.
+    self_healed_files: AtomicU64,
     /// Upload tasks currently admitted to the window — the shared view of
     /// `UploadWindow`'s task count, maintained by it on the same
     /// spawn/harvest lifecycle as its byte accounting. Lives here because the
@@ -280,6 +287,7 @@ impl Throughput {
             bytes_confirmed: AtomicU64::new(0),
             chunked_files: AtomicU64::new(0),
             single_put_files: AtomicU64::new(0),
+            self_healed_files: AtomicU64::new(0),
             in_flight: std::sync::atomic::AtomicUsize::new(0),
             effective_limit: std::sync::atomic::AtomicUsize::new(LIMIT_START),
             adaptive: std::sync::Mutex::new(AdaptiveState {
@@ -409,6 +417,15 @@ impl Throughput {
         self.single_put_files.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Record one self-heal (a file or symlink shipped with different bytes
+    /// than the sealed manifest expected, after `deploy::upload`'s stability
+    /// and corruption checks cleared it). Returns the new running total, so
+    /// the caller can enforce a per-deploy cap without a second shared
+    /// counter — see `deploy::upload::self_heal_cap`.
+    pub(crate) fn note_self_heal(&self) -> u64 {
+        self.self_healed_files.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
     /// The per-deploy roll-up behind the `upload summary` INFO line.
     ///
     /// Exists because the 2026-08-27 Shanghai baseline (28,190 B/s over 262
@@ -416,6 +433,10 @@ impl Throughput {
     /// differencing timestamps by hand. Everything a support log needs to say
     /// about upload performance is in this one greppable line; `elapsed` is the
     /// upload phase's wall time, supplied by the `UploadWindow` that owns it.
+    ///
+    /// `self-healed` is always printed, even at 0 — the whole point is to be
+    /// greppable across a log history, and a metric that only appears when
+    /// nonzero cannot be told apart from a build too old to have it.
     pub fn deploy_summary(&self, elapsed: Duration) -> String {
         let bytes = self.bytes_confirmed.load(Ordering::Relaxed);
         let requests = self.requests.load(Ordering::Relaxed);
@@ -426,7 +447,7 @@ impl Throughput {
         format!(
             "[deploy] upload summary: {} bytes in {:.0}s = {} B/s achieved; \
              {} requests, {} retried; {} chunked + {} single-PUT files; \
-             final estimate {} B/s, limit {}",
+             {} self-healed drift(s); final estimate {} B/s, limit {}",
             bytes,
             secs,
             rate,
@@ -434,6 +455,7 @@ impl Throughput {
             requests.saturating_sub(ok),
             self.chunked_files.load(Ordering::Relaxed),
             self.single_put_files.load(Ordering::Relaxed),
+            self.self_healed_files.load(Ordering::Relaxed),
             self.bytes_per_sec(),
             self.effective_limit(),
         )
