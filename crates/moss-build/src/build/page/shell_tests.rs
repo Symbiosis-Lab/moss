@@ -2849,6 +2849,20 @@ fn test_css_colophon_label_is_hidden_by_opacity_not_display_none() {
 }
 
 #[test]
+fn test_css_colophon_label_stays_visible_with_no_hover_to_arrive_from() {
+    // The label's hover reveal lives inside `@media (hover: hover)`, which is
+    // false on a touchscreen — a device that can never satisfy the gate must
+    // not be left with a hidden label it has no gesture to reveal.
+    let css = site_css_with_partials();
+    let rule = get_css_rule_in_media(&css, "@media (hover: none)", ".moss-colophon-label")
+        .expect("A (hover: none) rule for the colophon label should exist");
+    assert!(
+        rule.contains("opacity: 1"),
+        "No-hover devices should see the wording at rest, got: {rule}"
+    );
+}
+
+#[test]
 fn test_css_colophon_wording_is_out_of_flow_and_its_space_reserved() {
     // The mark holds its place: the wording is positioned out of flow, centred
     // on the mark's own axis, so revealing it moves nothing. That is also what
