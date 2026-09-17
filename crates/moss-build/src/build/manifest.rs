@@ -176,19 +176,22 @@ pub struct PendingManifest {
     /// generation carrying any of these is withheld — see
     /// `ship::ShipVerdict`.
     unverified: std::collections::BTreeMap<String, String>,
-    /// Output path → the CAS object id whose bytes are already staged there,
-    /// for entries where the producer knows one (currently only
-    /// `copy_deferred_assets`, via `EmitMessage::File`'s `oid` field).
+    /// Output path → how `ship_phase` should resolve these staged bytes, for
+    /// entries where a producer already knows more than "read `stage_dir`".
+    /// Every entry inserted here (via `register_with_hash`'s `oid` arg) is a
+    /// [`ShipSource::Cas`] — `Fingerprint` is stamped only after seal — but
+    /// the field lives on `PendingManifest` rather than only on
+    /// `SealedManifest` because [`seal`][PendingManifest::seal] carries it
+    /// straight into the sealed manifest's own map of the same name.
     ///
     /// In-memory only — deliberately not a field of `SiteHashes`/`hashes.json`.
-    /// `ship_phase` reads it (through `SealedManifest::staged_oid`) to copy an
-    /// entry straight from the immutable CAS blob instead of the mutable
+    /// `ship_phase` reads a `Cas` entry (through `SealedManifest::staged_oid`)
+    /// to copy straight from the immutable CAS blob instead of the mutable
     /// `stage_dir` path, closing the race where a concurrent build rewrites a
     /// path between this build sealing its hash and shipping its bytes. An
-    /// entry with no OID here (or one cleared by
-    /// [`SealedManifest::clear_staged_oids`]) ships from `stage_dir` exactly as
+    /// entry with no `Cas` source here ships from `stage_dir` exactly as
     /// before.
-    staged_oids: HashMap<String, String>,
+    ship_sources: HashMap<String, ShipSource>,
 }
 
 impl PendingManifest {
@@ -244,7 +247,7 @@ impl PendingManifest {
             carried_page_sources,
             page_sources: HashSet::new(),
             unverified: std::collections::BTreeMap::new(),
-            staged_oids: HashMap::new(),
+            ship_sources: HashMap::new(),
         }
     }
 
@@ -313,7 +316,7 @@ impl PendingManifest {
     ///
     /// `oid` is `Some` only when the sender already knows the CAS object
     /// backing these exact staged bytes (currently just `copy_deferred_assets`'
-    /// asset walk); see `staged_oids`.
+    /// asset walk); see `ship_sources`.
     pub(crate) fn apply_message(&mut self, rel_path: String, hash: &str, bucket: HashBucket, oid: Option<String>) {
         self.register_with_hash(rel_path, hash, bucket, oid);
     }
@@ -568,10 +571,11 @@ impl PendingManifest {
         // caller already knows one. Never cleared here on a `None` — the only
         // producer that ever passes `Some` (the asset walk) registers each
         // path once per build, so there is nothing for a later `None` to race
-        // against; `SealedManifest::clear_staged_oids` is the one place an
-        // entry loses its OID after the fact (a post-seal repair).
+        // against; `SealedManifest::stamp_ship_fingerprints` is the one place
+        // a `Cas` entry is replaced after the fact (a post-seal repair
+        // transitions it straight to `Fingerprint`).
         if let Some(oid) = oid {
-            self.staged_oids.insert(rel_path.clone(), oid);
+            self.ship_sources.insert(rel_path.clone(), ShipSource::Cas(oid));
         }
 
         // Unconditional: every artifact must reach the deploy wire manifest.
@@ -659,21 +663,20 @@ impl PendingManifest {
         inner.image_outputs.retain(|k| touched.contains(k));
         inner.video_outputs.retain(|k| touched.contains(k));
         inner.notebook_outputs.retain(|k| touched.contains(k));
-        // Mirrors the output-bucket prune above: an OID registered for a path
-        // this build ultimately did not keep must not survive into the sealed
-        // manifest either — `register_with_hash` unconditionally marks the
-        // path `touched` in the same call that records an OID, so this can
+        // Mirrors the output-bucket prune above: a ship source registered for
+        // a path this build ultimately did not keep must not survive into the
+        // sealed manifest either — `register_with_hash` unconditionally marks
+        // the path `touched` in the same call that records one, so this can
         // only drop entries the output-bucket prune above also dropped.
-        let mut staged_oids = self.staged_oids;
-        staged_oids.retain(|k, _| touched.contains(k));
+        let mut ship_sources = self.ship_sources;
+        ship_sources.retain(|k, _| touched.contains(k));
         let generation_id = compute_manifest_generation_id(&inner.files);
         SealedManifest {
             inner,
             blocking_keys: self.blocking_keys,
             generation_id,
             unverified: self.unverified,
-            staged_oids,
-            ship_fingerprints: HashMap::new(),
+            ship_sources,
         }
     }
 }
@@ -698,17 +701,22 @@ pub struct SealedManifest {
     /// Every output a producer or the presence pass could not verify, with the
     /// error — never persisted; it exists to withhold this generation.
     unverified: std::collections::BTreeMap<String, String>,
-    /// See [`PendingManifest::staged_oids`] — carried through `seal()` unchanged
-    /// apart from the mark-and-sweep prune every other bucket also gets.
-    staged_oids: HashMap<String, String>,
-    /// Stat-identity snapshot of `stage_dir.join(rel_path)`, for every
-    /// `100644:` entry with no `staged_oid`, taken once right after this
-    /// manifest sealed (`stamp_all_ship_fingerprints`) and re-taken for any
-    /// key a post-seal rewrite touches (`stamp_ship_fingerprints`). `ship_phase`
-    /// re-stats immediately before copying and demotes to a real hash
-    /// comparison on any disagreement — see `ship::verify_ship_integrity`.
-    /// Never persisted; exists only to make a seal-to-ship race audible.
-    ship_fingerprints: HashMap<String, ShipFingerprint>,
+    /// Output path → how `ship_phase` resolves this entry's bytes. An entry
+    /// carries a `Cas` source or a `Fingerprint`, never both — that is a
+    /// property of the map itself now, rather than two same-keyed maps kept
+    /// disjoint by discipline at their two write sites (moss#867-adjacent
+    /// hardening). See [`PendingManifest::ship_sources`] for the `Cas` half
+    /// (carried through `seal()` unchanged apart from the mark-and-sweep
+    /// prune every other bucket also gets) and
+    /// [`stamp_all_ship_fingerprints`][Self::stamp_all_ship_fingerprints] /
+    /// [`stamp_ship_fingerprints`][Self::stamp_ship_fingerprints] for the
+    /// `Fingerprint` half: stamped once right after seal for every `100644:`
+    /// entry with no live `Cas` source, and re-stamped for any key a
+    /// post-seal rewrite touches. `ship_phase` re-stats a `Fingerprint` entry
+    /// immediately before copying and demotes to a real hash comparison on
+    /// any disagreement — see `ship::verify_ship_integrity`. Never
+    /// persisted; exists only to make a seal-to-ship race audible.
+    ship_sources: HashMap<String, ShipSource>,
 }
 
 /// The forgery-resistant stat snapshot `ship_phase`'s integrity check compares
@@ -740,6 +748,32 @@ impl ShipFingerprint {
             inode,
         })
     }
+}
+
+/// Which of the two ways `ship_phase` can resolve an entry's staged bytes is
+/// on record for it — `Cas` before anything runs a post-seal rewrite,
+/// `Fingerprint` once one does. An entry with neither is read straight from
+/// the mutable `stage_dir` path, exactly as before either existed.
+///
+/// Replaces what used to be two same-keyed maps (`staged_oids`,
+/// `ship_fingerprints`) whose "an entry has one or the other, never both"
+/// invariant was maintained only by disciplined pairing at the two call
+/// sites that transitioned between them: `stamp_all_ship_fingerprints`'s
+/// `!staged_oids.contains_key(...)` filter, and `clear_staged_oids` +
+/// `stamp_ship_fingerprints` always being called together in
+/// `degrade::apply_to_staging`. A single map keyed to one of two variants
+/// makes the exclusivity structural — there is no second map left for an
+/// entry to also be in, so `stamp_ship_fingerprints` transitioning `Cas` to
+/// `Fingerprint` is one `insert` overwriting one slot, not a clear-then-stamp
+/// pair that could drift apart.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ShipSource {
+    /// The CAS object id backing this entry's staged bytes — `ship_phase`
+    /// reads the immutable blob instead of the mutable stage path.
+    Cas(String),
+    /// The stat-identity fingerprint taken at (or re-taken after) seal, for
+    /// an entry `ship_phase` will read from the mutable stage path.
+    Fingerprint(ShipFingerprint),
 }
 
 impl SealedManifest {
@@ -873,23 +907,15 @@ impl SealedManifest {
     }
 
     /// The CAS object id already backing `rel_path`'s staged bytes, if
-    /// [`copy_deferred_assets`] recorded one and it has not since been cleared
-    /// (a post-seal repair rewrote it directly — see
-    /// [`clear_staged_oids`][Self::clear_staged_oids]).
+    /// [`copy_deferred_assets`] recorded one and it has not since transitioned
+    /// to a [`ShipSource::Fingerprint`] (a post-seal repair rewrote it
+    /// directly — see [`stamp_ship_fingerprints`][Self::stamp_ship_fingerprints]).
     ///
     /// [`copy_deferred_assets`]: crate::build::media::pipeline::copy_deferred_assets
     pub(crate) fn staged_oid(&self, rel_path: &str) -> Option<&str> {
-        self.staged_oids.get(rel_path).map(|s| s.as_str())
-    }
-
-    /// Drop the staged CAS OID for `keys`: something rewrote `stage_dir`'s
-    /// bytes for these paths directly (bypassing the CAS entirely), so any OID
-    /// recorded before that write now names the PRE-rewrite bytes. Ship-by-OID
-    /// must not resurrect them — see `degrade::apply_to_staging`, the one
-    /// caller.
-    pub(crate) fn clear_staged_oids(&mut self, keys: &HashSet<String>) {
-        for key in keys {
-            self.staged_oids.remove(key);
+        match self.ship_sources.get(rel_path) {
+            Some(ShipSource::Cas(oid)) => Some(oid.as_str()),
+            _ => None,
         }
     }
 
@@ -897,15 +923,24 @@ impl SealedManifest {
     /// CAS-backed entry (never stamped), a symlink entry (never stamped), or
     /// one whose stage file could not be stat'd when stamping ran.
     pub(crate) fn ship_fingerprint(&self, rel_path: &str) -> Option<&ShipFingerprint> {
-        self.ship_fingerprints.get(rel_path)
+        match self.ship_sources.get(rel_path) {
+            Some(ShipSource::Fingerprint(fp)) => Some(fp),
+            _ => None,
+        }
     }
 
     /// Snapshot `stage_dir.join(key)`'s stat identity for each of `keys`,
-    /// replacing any fingerprint already recorded for that key. A key whose
-    /// file cannot be stat'd is left unfingerprinted (removed if it had one)
-    /// rather than erroring — `ship_phase`'s check fails open on a missing
-    /// fingerprint exactly as it does on a stat match: nothing to compare
-    /// against is not evidence of a race.
+    /// replacing whatever [`ShipSource`] was already recorded for that key —
+    /// a live `Cas` source included. That makes this the ONE transition point
+    /// from `Cas` to `Fingerprint`: a post-seal rewrite that bypasses the CAS
+    /// (`degrade::apply_to_staging`, the one caller outside of seal itself)
+    /// calls this and nothing else, so the entry it names can no longer read
+    /// as `Cas` afterward — there is no second map left for a stale OID to
+    /// survive in. A key whose file cannot be stat'd is left with no ship
+    /// source at all (removed if it had one) rather than erroring —
+    /// `ship_phase`'s check fails open on a missing fingerprint exactly as it
+    /// does on a stat match: nothing to compare against is not evidence of a
+    /// race.
     pub(crate) fn stamp_ship_fingerprints<'a>(
         &mut self,
         stage_dir: &Path,
@@ -914,28 +949,28 @@ impl SealedManifest {
         for key in keys {
             match std::fs::metadata(stage_dir.join(key)).ok().and_then(|m| ShipFingerprint::of(&m)) {
                 Some(fp) => {
-                    self.ship_fingerprints.insert(key.to_string(), fp);
+                    self.ship_sources.insert(key.to_string(), ShipSource::Fingerprint(fp));
                 }
                 None => {
-                    self.ship_fingerprints.remove(key);
+                    self.ship_sources.remove(key);
                 }
             }
         }
     }
 
-    /// Stamp every `100644:` entry that has no live `staged_oid` — the whole
-    /// set `ship_phase` will read from the mutable `stage_dir` rather than an
-    /// immutable CAS blob. Called once, right after this manifest seals and
-    /// before the post-seal repair passes run, so the window it protects is
-    /// exactly "seal to ship": a concurrent build's rewrite anywhere in that
-    /// window is what the fingerprint is meant to catch.
+    /// Stamp every `100644:` entry that has no live `Cas` ship source — the
+    /// whole set `ship_phase` will read from the mutable `stage_dir` rather
+    /// than an immutable CAS blob. Called once, right after this manifest
+    /// seals and before the post-seal repair passes run, so the window it
+    /// protects is exactly "seal to ship": a concurrent build's rewrite
+    /// anywhere in that window is what the fingerprint is meant to catch.
     pub(crate) fn stamp_all_ship_fingerprints(&mut self, stage_dir: &Path) {
         let keys: Vec<String> = self
             .inner
             .files
             .iter()
             .filter(|(k, v)| {
-                !self.staged_oids.contains_key(k.as_str())
+                !matches!(self.ship_sources.get(k.as_str()), Some(ShipSource::Cas(_)))
                     && crate::types::content::parse_entry(v).0 == crate::types::content::MODE_FILE
             })
             .map(|(k, _)| k.clone())
@@ -958,8 +993,7 @@ impl SealedManifest {
             self.inner.video_outputs.remove(key);
             self.inner.notebook_outputs.remove(key);
             self.blocking_keys.remove(key);
-            self.staged_oids.remove(key);
-            self.ship_fingerprints.remove(key);
+            self.ship_sources.remove(key);
         }
         self.generation_id = compute_manifest_generation_id(&self.inner.files);
     }

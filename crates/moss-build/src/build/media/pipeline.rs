@@ -956,8 +956,8 @@ pub(crate) fn copy_deferred_assets(
     // (assets) or the `.moss/theme` mirror. Threaded onto the re-emitted
     // `EmitMessage::File` at the end of this function so `ship_phase` can
     // copy straight from the CAS instead of the mutable stage path — see
-    // `PendingManifest::staged_oids`. A symlink entry or a direct-copy
-    // fallback never gets one, and ships exactly as before.
+    // `PendingManifest::ship_sources` (`ShipSource::Cas`). A symlink entry or
+    // a direct-copy fallback never gets one, and ships exactly as before.
     let mut staged_oids: HashMap<String, String> = HashMap::new();
 
     // Symlinks preserved from source to output (also: Finder Aliases

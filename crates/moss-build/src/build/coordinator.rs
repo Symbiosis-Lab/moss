@@ -45,8 +45,9 @@ pub enum EmitMessage {
         /// The CAS object id already backing these exact bytes, when the
         /// sender knows one. `Some` only from `copy_deferred_assets`'s asset
         /// walk today — every other sender passes `None`. Threaded into
-        /// `PendingManifest::staged_oids` so `ship_phase` can copy the entry
-        /// from the immutable CAS blob instead of the mutable stage path.
+        /// `PendingManifest::ship_sources` as a `ShipSource::Cas` entry so
+        /// `ship_phase` can copy from the immutable CAS blob instead of the
+        /// mutable stage path.
         oid: Option<String>,
     },
     /// Bulk-replace `PendingManifest::inner.sources` with the change-detection
