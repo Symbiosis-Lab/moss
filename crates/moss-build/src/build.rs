@@ -1350,11 +1350,13 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                             publishable,
                             seal_freshness,
                             &folder_path_for_mat,
-                            // Detached: the app or a `--serve --watch` process
-                            // outlives this task, and may still be reading
-                            // `stage_dir`. Never reclaim here.
-                            None,
-                            cache_lease,
+                            SealGuards {
+                                // Detached: the app or a `--serve --watch`
+                                // process outlives this task, and may still
+                                // be reading `stage_dir`. Never reclaim here.
+                                final_sweep: None,
+                                cache_lease,
+                            },
                         )
                         .await;
                     }
@@ -1428,12 +1430,14 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                         publishable,
                         crate::build::feeds::search_lane::Freshness::Now,
                         &folder_path,
-                        // Inline arm: per the comment above, the caller drops
-                        // the tokio runtime as soon as this returns — nothing
-                        // reads `stage_dir` again in this process. Reclaim now
-                        // or never.
-                        Some(crate::build::lifecycle::final_build_permit(&mp)),
-                        cache_lease,
+                        SealGuards {
+                            // Inline arm: per the comment above, the caller
+                            // drops the tokio runtime as soon as this
+                            // returns — nothing reads `stage_dir` again in
+                            // this process. Reclaim now or never.
+                            final_sweep: Some(crate::build::lifecycle::final_build_permit(&mp)),
+                            cache_lease,
+                        },
                     )
                     .await;
                 }
@@ -1689,6 +1693,34 @@ pub(crate) struct SealPorts {
     pub server_diff: Option<crate::build::ports::host::ServerDiff>,
 }
 
+/// The seal tail's one-off RAII permits, bundled by value so the next one
+/// joins as a field rather than growing `advertise_sealed`'s parameter list
+/// again — the same move `SealPorts` already makes for the host ports above.
+/// Bundling changes neither field's lifetime: each is still read or dropped
+/// at its own point inside `advertise_sealed`, on its own schedule.
+pub(crate) struct SealGuards {
+    /// `Some` only from the `exits_after_build` call site (CLI / `build_sync` /
+    /// the snapshot-test harness), whose caller drops the runtime as soon as
+    /// this returns: no later build will sweep what this one orphaned, so the
+    /// tail reclaims it now (`ship::reclaim_staging_now`).
+    pub final_sweep: Option<crate::build::lifecycle::SweepPermit>,
+    /// The build's `lifecycle::CacheWriteLease`, handed back by
+    /// `BackgroundHandle::await_completion` instead of being dropped there.
+    /// Held across `materialize_and_promote` (`ship_phase`) in
+    /// `advertise_sealed`, so a concurrent `collect_build_store` cannot GC a
+    /// CAS blob this generation's own ship still needs to read — the bug
+    /// this field exists to close. Dropped explicitly right after, before
+    /// that same tail's own `collect_build_store` call can trigger cache GC
+    /// (see the `drop(guards.cache_lease)` there).
+    ///
+    /// `advertise_sealed` has zero early-return (`return`/`?`) statements
+    /// between entry and that `drop` — load-bearing, not incidental:
+    /// introducing one would let RAII release `cache_lease` before
+    /// `materialize_and_promote` runs, silently reopening the GC race this
+    /// field exists to close, with no compiler error to catch it.
+    pub cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
+}
+
 /// `publishable` is `pipeline::should_publish`'s verdict for the build that
 /// produced `sealed`. `false` makes the promotion below a no-op
 /// (`ship::Promotion::Withheld`) and, through `tail_owns_shared_state`, keeps
@@ -1758,7 +1790,7 @@ fn record_promise_gate(
 // than a plain static so concurrent tests (and any thread hop mid-`.await`)
 // never cross-talk — same reasoning as `phase::ASYNC_PHASE_COLLECTOR`. Scoped
 // by that test around its call to `advertise_sealed` and sampled once below,
-// right after `materialize_and_promote` and before `drop(cache_lease)`: the
+// right after `materialize_and_promote` and before `drop(guards.cache_lease)`: the
 // one window a guard-based probe can't see, because `_stage_write_guard` is
 // held uniformly across the whole tail. Unset (the `try_with` miss) on every
 // other call path, which the sampler below treats as "nothing to record".
@@ -1786,24 +1818,9 @@ async fn advertise_sealed(
     // so a `MossPaths` normalization can never drift the two apart. See the
     // step-7b call into `trigger_media_settle_rerender` below.
     folder_path: &str,
-    // `Some` only from the `exits_after_build` call site (CLI / `build_sync` /
-    // the snapshot-test harness), whose caller drops the runtime as soon as
-    // this returns: no later build will sweep what this one orphaned, so the
-    // tail reclaims it now (`ship::reclaim_staging_now`).
-    final_sweep: Option<crate::build::lifecycle::SweepPermit>,
-    // The build's `lifecycle::CacheWriteLease`, handed back by
-    // `BackgroundHandle::await_completion` instead of being dropped there.
-    // Held across `materialize_and_promote` (`ship_phase`) below, so a
-    // concurrent `collect_build_store` cannot GC a CAS blob this generation's
-    // own ship still needs to read — the bug this parameter exists to close.
-    // Dropped explicitly right after, before this same tail's own
-    // `collect_build_store` call can trigger cache GC (see the `drop` below).
-    // This function has zero early-return (`return`/`?`) statements between
-    // entry and that `drop` — load-bearing, not incidental: introducing one
-    // would let RAII release `cache_lease` before `materialize_and_promote`
-    // runs, silently reopening the GC race this parameter exists to close,
-    // with no compiler error to catch it.
-    cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
+    // The seal tail's two one-off RAII permits — see `SealGuards` for what
+    // each field is and when it is read or dropped.
+    guards: SealGuards,
 ) {
     let reporter = ports.events.as_ref();
     let announcer = ports.announcer.as_ref();
@@ -1877,7 +1894,7 @@ async fn advertise_sealed(
 
     // `sealed` is now final — every pass that can drop a manifest entry has
     // run, so a one-shot build reclaims its orphans against it.
-    if let Some(permit) = &final_sweep {
+    if let Some(permit) = &guards.final_sweep {
         crate::build::ship::reclaim_staging_now(stage_dir, &sealed, permit);
     }
 
@@ -1945,7 +1962,7 @@ async fn advertise_sealed(
     let _ = SHIP_PHASE_LEASE_SAMPLE.try_with(|sample| {
         sample.store(crate::build::lifecycle::snapshot(mp).2, std::sync::atomic::Ordering::SeqCst);
     });
-    drop(cache_lease);
+    drop(guards.cache_lease);
 
     // Say it out loud, and only for a real swap: this instant — not
     // `BuildComplete`, which fired back when `await_completion` returned — is

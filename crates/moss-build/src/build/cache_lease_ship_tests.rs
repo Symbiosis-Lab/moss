@@ -118,8 +118,10 @@ async fn advertise_sealed_drops_the_cache_lease_before_collect_build_store() {
             true,
             crate::build::feeds::search_lane::Freshness::Now,
             &folder_path,
-            None,
-            Some(lease),
+            SealGuards {
+                final_sweep: None,
+                cache_lease: Some(lease),
+            },
         ),
     );
 
