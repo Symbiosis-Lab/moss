@@ -146,6 +146,14 @@ fn every_file_picker_field_declares_file_kinds() {
                 f.name
             );
         }
+        if f.name == "cover" {
+            assert!(
+                f.file_kinds.unwrap().contains(&ExtKind::Iframe),
+                "cover's file_kinds must include Iframe — moss-build has rendered \
+                 .html/.htm covers as CoverType::Iframe since 2026-03-09 \
+                 (crates/moss-build/src/build/media/cover.rs, detect_cover_type)"
+            );
+        }
     }
 }
 

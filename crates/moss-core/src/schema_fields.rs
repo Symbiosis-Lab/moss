@@ -103,10 +103,10 @@ pub struct BuiltinField {
     /// One of: "This Page", "Child Pages", "Child Styles", "Whole Site".
     /// The "Other" group is handled entirely on the TS side for unknown fields.
     pub group: &'static str,
-    /// For `Widget::FilePicker` fields, the extension kinds the picker should
-    /// restrict search results to (e.g. `cover` → image or video; `logo` →
-    /// image only). `None` means unrestricted. This is the schema-side SSOT
-    /// the chip bar reads instead of hardcoding a `key -> ExtKind[]` switch.
+    /// For `Widget::FilePicker` fields, the extension kinds the picker should restrict
+    /// search results to (e.g. `cover` → image, video, or iframe; `logo` → image only).
+    /// `None` means unrestricted. This is the schema-side SSOT the chip bar reads instead
+    /// of hardcoding a `key -> ExtKind[]` switch.
     pub file_kinds: Option<&'static [ExtKind]>,
 }
 
@@ -366,7 +366,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "Cover image path",
         label_key: "chip.cover.label",
         group: "This Page",
-        file_kinds: Some(&[ExtKind::Image, ExtKind::Video]),
+        file_kinds: Some(&[ExtKind::Image, ExtKind::Video, ExtKind::Iframe]),
         ..FIELD_DEFAULTS
     },
     BuiltinField {

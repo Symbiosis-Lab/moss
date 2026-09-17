@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`sort::cmp_labels`** — the one comparator for ordering user-visible listing labels by title. Case is a tiebreak, not a primary key, so `mao` now sorts between `Kayla` and `Scarly` instead of after every capitalised name. All title-axis and dateless-tiebreak label sorts now route through it.
 
+### Fixed
+
+- **`cover` picker offers `.html`/`.htm`.** `cover`'s `file_kinds` now includes `Iframe`, so the chip-bar search dropdown and the OS Browse dialog stop excluding files the build has rendered as iframe covers since 2026-03-09 — an author no longer has to hand-type `cover: "[[page.html]]"` to get what the picker wouldn't offer.
+
 ## [0.15.0] - 2026-09-06
 
 ### Fixed
