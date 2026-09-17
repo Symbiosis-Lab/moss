@@ -4049,8 +4049,6 @@ hr::before {
 .moss-cards-minimal-year-group.minimal .moss-card .title {
   flex: 1;
   color: var(--moss-color-text);
-  font-size: var(--moss-size-md);
-  font-weight: var(--moss-font-heading-weight);
   transition: color 0.2s ease;
 }
 
@@ -5980,10 +5978,13 @@ article a:where(:not(.moss-btn)):focus {
   gap: clamp(var(--moss-space-sm), 1.25lh, var(--moss-space-lg))
        var(--moss-space-md);
   align-items: flex-start;
-  /* --moss-space-md (24px), NOT lg. See "Block rhythm" below .moss-gallery.
-     Logical: the rhythm is against the prose before and after the grid, which
-     a vertical page reads along its own block axis. */
-  margin-block: var(--moss-space-md);
+  /* Asymmetric: top stays --moss-space-md (24px, NOT lg — see "Block rhythm"
+     below .moss-gallery, which stays symmetric md/md), bottom is
+     --moss-space-lg (32px) — the grid's trailing edge is still a real
+     section break, even though its leading edge reads as inside the
+     section it follows. Logical: the rhythm is against the prose before and
+     after the grid, which a vertical page reads along its own block axis. */
+  margin-block: var(--moss-space-md) var(--moss-space-lg);
   margin-inline: 0;
   /* An author ratio applies whatever the column count is — the per-count rules
      below only enumerate 1–4. `initial` (= none) keeps a ratio-less grid on the
@@ -5992,15 +5993,17 @@ article a:where(:not(.moss-btn)):focus {
 }
 
 /* Ma 間: a heading BINDS to the grid it owns at `sm` (16px) — tighter than the
-   `lg` (32px) that separates the grid from ordinary prose peers. The symmetric
-   `margin: lg 0` above puts 32px into the heading-bind slot, which is exactly
-   the inter-card gap, so the grouping signal is lost: the heading reads as
-   floating between two sections rather than owning the grid beneath it.
+   `lg` (32px) that separates the grid from ordinary prose peers. The grid's
+   own base top margin is `md` (24px, see above): still too loose to read as
+   owned by the heading directly above it, so this rule overrides just the
+   top to `sm` when a heading precedes. It touches only margin-block-START —
+   the grid's own `lg` bottom margin (the section-break edge) is untouched by
+   this rule either way.
    See docs/reference/design/spacing.md — the documented 16:32:64 cadence, and
    its warning that separation-space must never be baked symmetrically into an
    element. `.moss-cards-container` already binds at 16px (site.css ~1757);
    the shortcode grid never got the same treatment. Scoped to heading adjacency
-   so a grid following prose keeps its full 32px peer gap. */
+   so a grid following prose keeps its full 24px peer top gap. */
 :is(h1, h2, h3, h4, h5, h6) + .moss-grid {
   margin-block-start: var(--moss-space-sm);
 }
@@ -6204,6 +6207,13 @@ a.moss-grid-card:hover {
    next, so it read as its own section and detached from the heading that owns
    it, and the page lost its strongest structural signal. `md` puts them back
    inside their section, level with the paragraph rhythm they interrupt.
+
+   The two are no longer twins: `.moss-gallery` stays symmetric md/md (24px
+   both sides) exactly as above, but `.moss-grid`'s BOTTOM margin moved back
+   to lg (32px, its own `margin-block` declaration above) — its trailing edge
+   is still a real section break, so only the edge that reads as "inside the
+   section" (the top, against the paragraph or heading introducing it) stays
+   compressed to md/sm.
 
    The alternative — leave blocks at 32 and raise the section break to
    --moss-space-xl (48) — reads well on media-heavy landing pages but changes

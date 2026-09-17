@@ -331,6 +331,13 @@ body[data-typesetting="vertical"] .moss-collection-cover-body {
 }
 [data-typesetting="vertical"] .moss-cards[data-layout="minimal"] .moss-prefix-link-title {
   line-height: 1.9;
+  /* Vertical-only: the 年表 title outweighs the date beside it (ef68272ab0).
+     Relocated from site.css, which applied this unconditionally to every
+     site regardless of typesetting mode — a horizontal simple title listing
+     (e.g. 刘果's homepage) has no such distinction and should just inherit
+     body's size/weight like its sibling .date does. */
+  font-size: var(--moss-size-md);
+  font-weight: var(--moss-font-heading-weight);
 }
 
 /* ── Subscribe form (vertical mode) ── */
