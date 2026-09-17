@@ -503,6 +503,34 @@ pub struct SiteHashes {
     ///   same fall-through behavior.
     #[serde(default)]
     pub source_to_output: HashMap<String, String>,
+    /// Source-path → title/date index for markdown pages, keyed identically
+    /// to `source_to_output`.
+    ///
+    /// Exists for one consumer: `PendingManifest::carry_forward_deferred_page`
+    /// reinstates a deferred page's OUTPUT (the previous build's HTML survives
+    /// on disk), but had nothing to give the nav/listing pass, which reads a
+    /// page's title and date from `ParsedDocument` — and a page this build
+    /// could not read never produces one. Without this, a carried-forward
+    /// page's URL kept resolving while it silently dropped out of every nav
+    /// menu and listing page. Populated alongside `source_to_output` at every
+    /// registration site (the HTML write loop, the homepage, and the carried
+    /// set); read back by `carry_forward_deferred_page`.
+    ///
+    /// `#[serde(default)]` — old `hashes.json` files without this field
+    /// deserialize to an empty map, so a deferred page carried forward under
+    /// an old manifest simply has no nav/listing entry until the next build
+    /// that can read it, same as before this field existed.
+    #[serde(default)]
+    pub page_meta: HashMap<String, PageMeta>,
+}
+
+/// A page's nav/listing-relevant metadata, carried alongside
+/// `SiteHashes::source_to_output` so a carried-forward page keeps its title
+/// and date. See `SiteHashes::page_meta`.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct PageMeta {
+    pub title: String,
+    pub date: Option<String>,
 }
 
 impl SiteHashes {
@@ -519,6 +547,7 @@ impl SiteHashes {
             notebook_outputs: HashSet::new(),
             builder_fingerprint: None,
             source_to_output: HashMap::new(),
+            page_meta: HashMap::new(),
         }
     }
 

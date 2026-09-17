@@ -362,6 +362,16 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 /// promise, not something broken. Distinct wording, `in_flight_refusal_text`:
 /// "fix this" would be the wrong thing to tell an author about a video moss
 /// itself hasn't finished encoding yet.
+///
+/// A third rule joined 2026-09-17, alongside the ADR-056 revision that deleted
+/// `pipeline::should_publish`: a structural source (a page, `config.toml`, the
+/// user stylesheet) this build could not read now has somewhere real to fall
+/// back to, so a build built without one is no longer refused the SCREEN — see
+/// `PipelineRunOutput::stale_sources`. The publish it might go on to make is
+/// still built on last-arrived content for whatever it carried forward, and
+/// that is what THIS rule refuses: not because the site is wrong, but because
+/// shipping it without saying so would let a source stay stale indefinitely
+/// with no signal that anything needed attention.
 pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
     let records = crate::system::build_records::records();
     if let Some(missing) = records.missing_media(folder_path) {
@@ -372,6 +382,11 @@ pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
     if let Some(unfulfilled) = records.promised_dead_links(folder_path) {
         if !unfulfilled.is_empty() {
             return Err(in_flight_refusal_text(unfulfilled.len()));
+        }
+    }
+    if let Some(stale) = records.stale_sources(folder_path) {
+        if !stale.is_empty() {
+            return Err(stale_source_refusal_text(&stale));
         }
     }
     Ok(())
@@ -406,6 +421,24 @@ pub(crate) fn in_flight_refusal_text(count: usize) -> String {
         "Nothing published — {subject}. moss is still finishing a video in the background. \
          Publish again in a moment."
     )
+}
+
+/// The refusal for the third rule on [`refuse_publish`]: a structural source
+/// this build carried forward rather than read. Names the sources rather than
+/// only counting them — unlike missing media, there is no separate "list
+/// what's wrong" call a driver makes first, so this message is the only place
+/// an author learns which file.
+pub(crate) fn stale_source_refusal_text(stale: &[String]) -> String {
+    let subject = if stale.len() == 1 {
+        format!("{} could not be read for this build", stale[0])
+    } else {
+        format!(
+            "{} sources could not be read for this build: {}",
+            stale.len(),
+            stale.join(", ")
+        )
+    };
+    format!("Nothing published — {subject}, so moss is still showing what it built last time. Publish again once it's readable.")
 }
 
 /// What every publish needs before it can start: the site it publishes to, and
@@ -858,3 +891,7 @@ mod missing_media_gate_tests;
 #[cfg(test)]
 #[path = "deploy/promised_dead_links_gate_tests.rs"]
 mod promised_dead_links_gate_tests;
+
+#[cfg(test)]
+#[path = "deploy/stale_sources_gate_tests.rs"]
+mod stale_sources_gate_tests;

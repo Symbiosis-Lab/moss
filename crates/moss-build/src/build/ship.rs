@@ -475,9 +475,12 @@ pub enum Promotion {
     /// swap was refused (moss#968 §5d). Not an error — the newer generation is
     /// the right one.
     Superseded,
-    /// Not frozen at all: the build could not read its own structural sources,
-    /// so its output is a rendering of what happened to be local rather than of
-    /// the site (moss#1042, `pipeline::should_publish`).
+    /// Not frozen at all: either the folder closed before this build finished
+    /// (`PipelineRunOutput::publishable` was already `false`, moss#1042 —
+    /// structural-source incompleteness stopped being a reason as of the
+    /// 2026-09-17 ADR-056 revision) or the presence pass could not stand
+    /// behind what it registered (`WithholdReason::Unverified` /
+    /// `ImplausibleLoss`).
     ///
     /// Nothing is copied and `current` is untouched, which keeps `current` and
     /// `hashes.json` describing the same, last-complete build. Freezing the
@@ -500,8 +503,12 @@ pub enum ShipVerdict {
 /// Why a generation was not promoted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WithholdReason {
-    /// The build could not read its own structural sources (moss#1042,
-    /// `pipeline::should_publish`).
+    /// The folder closed before this build finished
+    /// (`PipelineRunOutput::publishable == false`). Named for its original
+    /// cause (moss#1042: a build whose structural sources were still
+    /// downloading) — structural incompleteness stopped constructing this
+    /// variant in the 2026-09-17 ADR-056 revision, and cancellation is now
+    /// the only path that does.
     SourcesDownloading,
     /// The presence pass or a producer met an I/O error that was not a positive
     /// `NotFound` on `entries` outputs. An unreadable output is not a missing
@@ -593,8 +600,8 @@ pub fn tail_owns_shared_state(promotion: &Result<Promotion, String>) -> bool {
 /// swap goes through `lifecycle::promote`, which refuses it when a newer build
 /// has already promoted.
 ///
-/// `verdict` combines `pipeline::should_publish` (carried through
-/// `PipelineRunOutput`) with the presence pass's own
+/// `verdict` combines `PipelineRunOutput::publishable` (`false` only for a
+/// folder-closed cancellation) with the presence pass's own
 /// ([`ShipVerdict::after_presence_pass`]). A `Withhold` returns
 /// [`Promotion::Withheld`] before anything is copied.
 pub fn materialize_and_promote(

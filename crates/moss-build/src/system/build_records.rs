@@ -44,7 +44,7 @@ use crate::types::content::SiteHashes;
 /// produced). `content_hashes`, `missing_media` and `promised_dead_links`
 /// used to hand-write this insert/clone pair three times over; collapsed
 /// 2026-09-16 (thermo review of the publish promise gate) since the three
-/// differ only in `V`.
+/// differ only in `V`. `stale_sources` (2026-09-17) reuses the same shape.
 struct FolderSlot<V>(Mutex<HashMap<String, V>>);
 
 impl<V> Default for FolderSlot<V> {
@@ -75,6 +75,10 @@ pub struct BuildRecords {
     /// This seal's own still-pending promises the link audit caught dead —
     /// see `link_audit::dead_links_among_promises` and `refuse_publish`.
     promised_dead_links: FolderSlot<Vec<DeadLink>>,
+    /// Structural sources (a page, `config.toml`, the user stylesheet) the
+    /// last build of this folder had to carry forward rather than read — see
+    /// `cloud_ledger::structural_stale_paths` and `refuse_publish`.
+    stale_sources: FolderSlot<Vec<String>>,
 }
 
 impl BuildRecords {
@@ -129,6 +133,20 @@ impl BuildRecords {
     /// the same distinction `missing_media` draws.
     pub fn promised_dead_links(&self, folder_path: &str) -> Option<Vec<DeadLink>> {
         self.promised_dead_links.get(&Self::key(folder_path))
+    }
+
+    /// Always called, including with an empty `Vec` — the same reasoning as
+    /// `record_missing_media`: a source that arrives must clear the refusal,
+    /// and only an unconditional write does that.
+    pub fn record_stale_sources(&self, folder_path: &str, stale: Vec<String>) {
+        self.stale_sources.record(Self::key(folder_path), stale);
+    }
+
+    /// What the last build of `folder_path` carried forward rather than read.
+    /// `None` means no build has finished in this process — which is NOT
+    /// "clean", the same distinction `missing_media` draws.
+    pub fn stale_sources(&self, folder_path: &str) -> Option<Vec<String>> {
+        self.stale_sources.get(&Self::key(folder_path))
     }
 
     /// Drop the content-hash baseline for a folder moss is no longer

@@ -1632,6 +1632,10 @@ pub fn generate_blocking_content(
             html_bytes: Vec<u8>,
             og_cards: Vec<crate::build::page::og_card::CardOutput>,
             source_mapping: Option<(String, ServedPath)>,
+            /// This page's title/date, registered into `SiteHashes::page_meta`
+            /// alongside `source_mapping` (same `Some` condition — both come
+            /// from `doc.source_path.is_some()`). See that field's doc for why.
+            page_meta: Option<crate::types::content::PageMeta>,
             /// `(url_path, previous build's final bytes)` — populated only
             /// under `MOSS_INCREMENTAL_VERIFY=1`, for pages this build would
             /// have carried. Read before the re-render overwrites the file.
@@ -1780,6 +1784,10 @@ pub fn generate_blocking_content(
                     }
                     None => None,
                 };
+                let page_meta = doc.source_path.as_ref().map(|_| crate::types::content::PageMeta {
+                    title: doc.title.clone(),
+                    date: doc.date.clone(),
+                });
 
                 // Emit BackgroundProgress so the deploy panel shows what
                 // `wait_for_in_flight_work` is actually waiting on. Monotonic
@@ -1803,6 +1811,7 @@ pub fn generate_blocking_content(
                     html_bytes: html_page.into_bytes(),
                     og_cards: og_outputs.into_cards(),
                     source_mapping,
+                    page_meta,
                     carried_previous,
                 })
             })
@@ -1845,6 +1854,9 @@ pub fn generate_blocking_content(
                 if let Some((src, url_sp2)) = page.source_mapping {
                     pending.register_source_mapping(src.clone(), &url_sp2);
                     register_page_source(pending, &page_source_hashes, &src);
+                    if let Some(meta) = page.page_meta {
+                        pending.register_page_meta(src.clone(), meta);
+                    }
                 }
                 *count += 1;
             }
@@ -1871,6 +1883,10 @@ pub fn generate_blocking_content(
                 if let Some(src) = doc.source_path.as_ref() {
                     pending.register_source_mapping(src.clone(), &url_sp);
                     register_page_source(pending, &page_source_hashes, src);
+                    pending.register_page_meta(
+                        src.clone(),
+                        crate::types::content::PageMeta { title: doc.title.clone(), date: doc.date.clone() },
+                    );
                 }
                 *count += 1;
             }
@@ -2696,6 +2712,12 @@ pub fn generate_blocking_content(
         if let Some(src) = homepage_source {
             pending.register_source_mapping(src.clone(), &homepage_index_sp);
             register_page_source(pending, &page_source_hashes, &src);
+            if let Some(doc) = homepage_doc {
+                pending.register_page_meta(
+                    src.clone(),
+                    crate::types::content::PageMeta { title: doc.title.clone(), date: doc.date.clone() },
+                );
+            }
         }
         page_count += 1;
     }

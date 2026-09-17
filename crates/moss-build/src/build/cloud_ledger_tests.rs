@@ -149,6 +149,35 @@ fn either_half_alone_reports_a_structural_gap_and_says_how_many() {
     assert_eq!(structural_missing_count(&mixed, 1), 2);
 }
 
+/// The path-returning twin of `structural_missing_count`, scan-half only:
+/// the ledger half needs `is_still_in_the_cloud`, which is `false` off macOS
+/// for a path that was never really evicted — see
+/// `structural_outstanding_ignores_media` above for the same constraint.
+#[test]
+fn structural_stale_paths_keeps_only_structural_sources_from_the_scan_half() {
+    let r = root("stale-scan");
+    let scan = [
+        r.join("index.md"),
+        r.join("cover.jpg"),
+        r.join(".moss/theme/style.css"),
+    ];
+    assert_eq!(
+        structural_stale_paths(&scan, &r),
+        vec![r.join(".moss/theme/style.css"), r.join("index.md")],
+        "sorted, and the media reference dropped"
+    );
+}
+
+/// A source appearing twice in the scan's own list — possible when the walk
+/// records both the placeholder and the path it stands for — must not appear
+/// twice in the refusal a person reads.
+#[test]
+fn structural_stale_paths_deduplicates_within_the_scan_half() {
+    let r = root("stale-dedup");
+    let scan = [r.join("index.md"), r.join("index.md")];
+    assert_eq!(structural_stale_paths(&scan, &r), vec![r.join("index.md")]);
+}
+
 /// `structural_outstanding` is `outstanding` restricted to that list. Both
 /// apply the `is_still_in_the_cloud` filter, which is `false` on CI for a
 /// path that does not exist — so this asserts the *classification*, via

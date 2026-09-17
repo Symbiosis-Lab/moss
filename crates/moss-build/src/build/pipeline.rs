@@ -231,8 +231,10 @@ fn is_home_candidate_path(p: &std::path::Path) -> bool {
 /// **This is not the publish decision.** `has_sealed_generation` short-circuits
 /// here because a sealed generation means there is something to *look at*, which
 /// is all a full-window screen needs to know. It says nothing about whether this
-/// build's output is fit to replace it — see [`should_publish`], which is the
-/// question the same fact was silently answering before moss#1042.
+/// build's output is fit to replace it — publishing stopped asking
+/// `structural_incomplete` at all in the 2026-09-17 ADR-056 revision (see the
+/// deleted `should_publish`), which is the question the same fact was silently
+/// answering before moss#1042.
 fn cloud_gate_should_hold(
     home_ready: bool,
     has_sealed_generation: bool,
@@ -244,34 +246,28 @@ fn cloud_gate_should_hold(
     !servable && cloud_outstanding > 0
 }
 
-/// May this build's output replace what the preview is already serving?
-///
-/// The bug this exists to answer (moss#1042): a client opened a Google Drive
-/// vault whose sources had been dehydrated but whose `.moss/build` was still
-/// local. The preview showed their real site — the sealed generation, correctly
-/// served by the zero-flicker switch — and then a few seconds later replaced it
-/// with a build rendered from files that were not there: every title a directory
-/// name, every date `Unknown`, no stylesheet. Both halves came from the single
-/// fact that a sealed generation existed, used to mean two different things:
-/// "there is something to show" (true, and why the good site appeared) and "we
-/// need not wait" (false, and why the bad one overwrote it).
-///
-/// So the publish decision asks only about this build's own inputs. A build that
-/// could read every structural source is a true rendering of the site and may
-/// publish, however much media is still arriving — media degrades to a
-/// placeholder and the site is still the user's site (ADR-013). A build that
-/// could not is a rendering of whatever happened to be local, and publishing it
-/// is a regression whether or not there is something better underneath.
-///
-/// **Withholding is safe on a cold vault too.** With nothing sealed, nothing is
-/// rolled back by declining to publish, and `cloud_gate_should_hold` above puts
-/// the waiting screen up over the same condition. With something sealed, the
-/// user keeps reading their real site while the corner counter tells them what
-/// is still arriving. Neither state is terminal: the supervisor requests every
-/// recorded source and the watcher rebuilds on arrival.
-fn should_publish(structural_incomplete: bool) -> bool {
-    !structural_incomplete
-}
+// `should_publish` (deleted 2026-09-17, ADR-056 revision) used to withhold
+// publishing whenever `structural_incomplete` was true — the same rule
+// `cloud_gate_should_hold` still uses for the SHOWING question. It existed to
+// answer moss#1042: a build whose page sources were still downloading
+// rendered directory names and `Unknown` dates in place of real titles, and
+// that placeholder used to be allowed to overwrite a real sealed generation.
+// Withholding fixed the regression, but every call site read the SAME
+// `publishable` flag it produced, so a single structural-source eviction
+// anywhere on the site — one image-heavy page still syncing, `config.toml`
+// mid-write, `footer.md` unreadable — froze the site's published output at
+// its last-arrived state for as long as the eviction lasted, silently.
+//
+// The fix is upstream of this decision, not in it: every structural source
+// now has somewhere real to fall back to when a build cannot read it — a
+// page carries forward its last output (`carry_forward_deferred_page`),
+// `config.toml` already defaulted, the stylesheet already defaulted
+// (`read_optional_build_input`), and a slot-only source falls back to its own
+// last-known-good (`footer::apply_last_known_good_fallback`). A build built
+// this way is no longer a *wrong* rendering of the site, only a possibly
+// stale one — and staleness is a publish-time gate on its own
+// (`BuildRecords::stale_sources` / `deploy::refuse_publish`), not a reason to
+// stop showing the user their own site. See ADR-056.
 
 fn emit_initial_build_complete(services: Option<&BuildServices>, site_path: Option<&Path>) {
     let (Some(svc), Some(site_path)) = (services, site_path) else {
@@ -906,23 +902,30 @@ pub struct PipelineRunOutput {
     pub home_ready: bool,
     /// Whether this build's output may replace the site already published.
     ///
-    /// `false` when a structural source — a page, the config, the user
-    /// stylesheet — was still in the cloud, so what the build rendered is a
-    /// picture of what happened to be local rather than of the site. The
-    /// pipeline has already declined to switch the preview onto it; this
-    /// carries the same verdict out to the seal tail, which must also decline
-    /// to repoint `current` at it (`ship::Promotion::Withheld`). See
-    /// `should_publish`.
-    ///
-    /// Threaded rather than re-asked of the ledger at seal time on purpose: the
-    /// tail runs after the build, and by then the missing sources may have
-    /// arrived — which would license promoting a generation that was still
-    /// built without them.
+    /// `false` only when the folder closed mid-build (`cancelled`) — this
+    /// build's own preview switch was already declined, and the seal tail
+    /// must decline to repoint `current` at it too
+    /// (`ship::Promotion::Withheld`). Until 2026-09-17 this was also `false`
+    /// whenever a structural source — a page, the config, the user
+    /// stylesheet — was still in the cloud; see the deleted `should_publish`
+    /// for why that stopped being this flag's job. Staleness from an
+    /// unreadable structural source is now a publish-time gate of its own
+    /// (`BuildRecords::stale_sources` / `deploy::refuse_publish`), not a
+    /// reason to withhold the build the user is looking at.
     pub publishable: bool,
     /// The render number `lifecycle::show_render` minted for this build, which
     /// the seal tail hands to `lifecycle::promote`. `None` for a build that
     /// stopped before it rendered.
     pub render_seq: Option<u64>,
+    /// Structural sources (a page, `config.toml`, the user stylesheet) this
+    /// build could not read, relative to `folder_path` — empty when this
+    /// build read everything it needed. Recorded unconditionally into
+    /// `BuildRecords::stale_sources` and read back by
+    /// `deploy::refuse_publish`: a page carrying forward its last output is a
+    /// real page, but a stranger reading it is reading last build's content,
+    /// and a publish landing while that is true should say so rather than
+    /// ship silently. See `cloud_ledger::structural_stale_paths`.
+    pub stale_sources: Vec<String>,
 }
 
 /// Resolves all native/plugin slot content after marked HTML and article-map
@@ -1432,6 +1435,27 @@ fn build_inner(
     // eviction count. The build that finally succeeds is usually the one where
     // nothing is evicted any more, so a symmetric condition would leave the
     // waiting screen up over a finished site forever.
+    //
+    // Computed here, ahead of the cancellation check below, so a cancelled
+    // build reports it too — `BuildRecords::stale_sources` describes what THIS
+    // build learned about the folder, on the same "always record real data"
+    // footing as `missing_media` (`build.rs`'s `record_missing_media`), not a
+    // verdict scoped to builds that went on to publish. The render pass that
+    // populates the ledger has already run by this point either way.
+    let still_in_the_cloud_at_scan: Vec<std::path::PathBuf> = project_structure
+        .evicted_paths
+        .iter()
+        .filter(|p| super::icloud::is_still_in_the_cloud(p))
+        .cloned()
+        .collect();
+    let stale_sources: Vec<String> = super::cloud_ledger::structural_stale_paths(
+        &still_in_the_cloud_at_scan,
+        Path::new(folder_path),
+    )
+    .iter()
+    .filter_map(|p| p.strip_prefix(folder_path).ok())
+    .map(|rel| moss_core::slug::normalize_separators(&rel.to_string_lossy()))
+    .collect();
     // The last cancellation check before this build touches app-global state.
     //
     // `SiteDirectoryState` is shared across folders, so `switch_to` below
@@ -1460,6 +1484,7 @@ fn build_inner(
             // build's generation over whatever the user opens next.
             publishable: false,
             render_seq: None,
+            stale_sources,
         });
     }
 
@@ -1477,13 +1502,9 @@ fn build_inner(
 
     // Did this build render without sources it needed — a page, the config, the
     // user stylesheet — because they are still downloading? See
-    // `cloud_ledger::structural_missing_count` for why both halves are consulted.
-    let still_in_the_cloud_at_scan: Vec<std::path::PathBuf> = project_structure
-        .evicted_paths
-        .iter()
-        .filter(|p| super::icloud::is_still_in_the_cloud(p))
-        .cloned()
-        .collect();
+    // `cloud_ledger::structural_missing_count` for why both halves are
+    // consulted (`still_in_the_cloud_at_scan` computed above, ahead of the
+    // cancellation check).
     let structural_missing = super::cloud_ledger::structural_missing_count(
         &still_in_the_cloud_at_scan,
         super::cloud_ledger::structural_outstanding(Path::new(folder_path)),
@@ -1494,10 +1515,14 @@ fn build_inner(
     // — lives in `cloud_gate_should_hold`, next to its own reasoning and tests.
     let waiting =
         cloud_gate_should_hold(home_ready, current_ptr_exists, cloud_outstanding, structural_incomplete);
-    // And whether this build's output may replace what is already served, which
-    // is a different question from whether to cover the window — see
-    // `should_publish`. Carried out to the seal tail in `PipelineRunOutput`.
-    let publishable = should_publish(structural_incomplete);
+    // Whether this build's output may replace what is already served — a
+    // different question from whether to cover the window with the waiting
+    // screen (`waiting`, above). Always true here: the only remaining reason
+    // to withhold is the folder-closed cancellation, which already returned
+    // above before this line runs. See the deleted `should_publish` for why
+    // structural completeness no longer decides this. Carried out to the seal
+    // tail in `PipelineRunOutput`.
+    let publishable = true;
     if waiting {
         super::cloud_readiness::mark_gated(folder_path);
         emit_cloud_gate(true, &project_structure.evicted_paths, cloud_outstanding);
@@ -1531,18 +1556,6 @@ fn build_inner(
         let (seq, announced) = crate::build::lifecycle::show_render(&paths, publishable);
         render_seq = Some(seq);
         announce = announced;
-        if !publishable {
-            // The count the decision was made from, not a fresh read of the
-            // ledger: this line explains a choice already taken, and asking
-            // again here is how it came to report zero of the thing it was
-            // withholding for (moss#1061).
-            log::info!(
-                "[cloud] not switching the preview to this build — {} structural source(s) are \
-                 still downloading, so it would replace the served site with one rendered without \
-                 them. The arrival of any of them rebuilds.",
-                structural_missing
-            );
-        }
 
         log::debug!(target: "timing", "[build] staging: switch_to_stage: {:?}", build_start.elapsed());
 
@@ -1856,6 +1869,7 @@ fn build_inner(
         home_ready,
         publishable,
         render_seq,
+        stale_sources,
     })
 }
 

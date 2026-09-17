@@ -123,7 +123,7 @@ pub enum HashBucket {
 /// Their cross-build consistency is out of scope for `PendingManifest`; a
 /// followup will split `SiteHashes` into a proper cache vs. manifest pair.
 ///
-/// `source_to_output` is fully cleared on construction (see `new`).
+/// `source_to_output` and `page_meta` are fully cleared on construction (see `new`).
 ///
 /// Not [`Clone`] — exclusive ownership enforces that only one writer accumulates
 /// into the manifest at a time. Call [`seal`][PendingManifest::seal] to finalize.
@@ -147,6 +147,14 @@ pub struct PendingManifest {
     ///
     /// [`carry_forward_deferred_page`]: PendingManifest::carry_forward_deferred_page
     carried_source_to_output: HashMap<String, String>,
+    /// The PREVIOUS build's `page_meta`, kept for the same reason as
+    /// `carried_source_to_output` (which `new` also clears the live copy of):
+    /// [`carry_forward_deferred_page`] needs a deferred page's title/date from
+    /// somewhere, and this build never parsed the file that would normally
+    /// provide them.
+    ///
+    /// [`carry_forward_deferred_page`]: PendingManifest::carry_forward_deferred_page
+    carried_page_meta: HashMap<String, crate::types::content::PageMeta>,
     /// The PREVIOUS build's page-source hashes — every markdown entry in
     /// `inner.sources`. Read by [`carry_forward_page_source`] for pages this
     /// build never read.
@@ -225,6 +233,7 @@ impl PendingManifest {
             .ok()
             .map(|d| d.as_secs());
         let carried_source_to_output = std::mem::take(&mut inner.source_to_output);
+        let carried_page_meta = std::mem::take(&mut inner.page_meta);
         // The page half of `sources` is NOT `source_to_output`'s key set — a
         // slot-only source is a page source with no output. Select on the
         // extension, the property that does separate the halves: the deferred
@@ -244,6 +253,7 @@ impl PendingManifest {
             blocking_keys: HashSet::new(),
             touched: HashSet::new(),
             carried_source_to_output,
+            carried_page_meta,
             carried_page_sources,
             page_sources: HashSet::new(),
             unverified: std::collections::BTreeMap::new(),
@@ -287,6 +297,15 @@ impl PendingManifest {
         self.register_with_hash(key.clone(), &entry, HashBucket::Files, None);
         // The mapping describes what is being served, and this page still is.
         self.inner.source_to_output.insert(source_rel.to_string(), key.clone());
+        // Carry the title/date too, or the page keeps its URL but drops out of
+        // every nav menu and listing page that reads `page_meta` — the exact
+        // gap this build's own failure to read the source would otherwise
+        // leave. Best-effort: an old manifest sealed before this field existed
+        // has nothing to carry, and the page simply has no nav/listing entry
+        // until a build that can read it runs — no worse than before this field.
+        if let Some(meta) = self.carried_page_meta.get(source_rel) {
+            self.inner.page_meta.insert(source_rel.to_string(), meta.clone());
+        }
         Some(key)
     }
 
@@ -377,6 +396,16 @@ impl PendingManifest {
     /// a multimap and the pairing loop in `watch.rs` must change in lockstep.
     pub fn register_source_mapping(&mut self, source_path: String, served_path: &crate::build::served_path::ServedPath) {
         self.inner.source_to_output.insert(source_path, served_path.as_str().to_string());
+    }
+
+    /// Register a page's title/date, keyed identically to
+    /// [`register_source_mapping`][PendingManifest::register_source_mapping].
+    ///
+    /// Call this everywhere `register_source_mapping` is called for a real
+    /// (non-synthetic) page — see `SiteHashes::page_meta` for why it exists
+    /// and `carry_forward_deferred_page` for the other writer.
+    pub fn register_page_meta(&mut self, source_path: String, meta: crate::types::content::PageMeta) {
+        self.inner.page_meta.insert(source_path, meta);
     }
 
     /// Record a page's raw-source-byte hash, keyed identically to
@@ -636,8 +665,9 @@ impl PendingManifest {
     /// `apply_message` during this build (the `touched` mark set). Carry-forward
     /// entries from the previous build that this build did not re-emit are
     /// dropped here, so the sealed manifest reflects only this build's
-    /// emissions. The fingerprint cache fields and `source_to_output` (cleared
-    /// at construction and re-populated on every live document) are not pruned.
+    /// emissions. The fingerprint cache fields and `source_to_output` /
+    /// `page_meta` (both cleared at construction and re-populated on every
+    /// live document) are not pruned.
     /// `sources` is pruned only of its **page** half — see the loop below; its
     /// asset half is change-detection cache with its own prune in the asset walk.
     pub fn seal(self) -> SealedManifest {

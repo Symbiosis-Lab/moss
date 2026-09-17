@@ -357,6 +357,51 @@ pub fn is_page_source(extension: &str) -> bool {
     matches!(extension, "md" | "markdown" | "mdown" | "mkd")
 }
 
+/// Which bucket of `ProjectStructure` a file extension belongs to — the pure,
+/// I/O-free half of `scan_folder`'s per-file classification (`scan.rs`).
+/// Frontmatter parsing, ffprobe dimensions, and cache lookups all happen
+/// *after* a file has already been placed in a bucket; none of that decides
+/// which bucket it goes in, and none of it belongs here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanBucket {
+    /// Markdown-family page sources — see [`is_page_source`].
+    Page,
+    Html,
+    /// Raster images the scan extracts placeholder metadata for.
+    Image,
+    /// Video files the scan probes via ffmpeg for dimensions.
+    Video,
+    /// Jupyter notebooks.
+    Notebook,
+    /// Word-processor documents (`.pages`, `.docx`, `.doc`).
+    Document,
+    /// Everything else. Still scanned — the build copies it through as an
+    /// asset — just not one of the categories above.
+    Other,
+}
+
+/// Classify a lowercased file extension the way `scan_folder` does.
+///
+/// `scan.rs` calls this directly, so the scan cannot drift from its own
+/// classifier. It is `pub` for the same reason [`is_page_source`] is: a
+/// caller outside this crate that needs to know whether a path is one the
+/// scan would treat as site content — rather than re-deriving its own
+/// extension list and drifting from the scan the way the file-watch sweep's
+/// hand-maintained mirror did (moss#1087) — calls this one instead.
+pub fn classify_extension(extension: &str) -> ScanBucket {
+    if is_page_source(extension) {
+        return ScanBucket::Page;
+    }
+    match extension {
+        "html" | "htm" => ScanBucket::Html,
+        "jpg" | "jpeg" | "png" | "gif" | "svg" | "webp" | "avif" => ScanBucket::Image,
+        "mov" | "mp4" | "webm" | "avi" | "mkv" | "m4v" => ScanBucket::Video,
+        "ipynb" => ScanBucket::Notebook,
+        "pages" | "docx" | "doc" => ScanBucket::Document,
+        _ => ScanBucket::Other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,5 +583,35 @@ mod tests {
         assert!(!is_page_source("mdx"));
         assert!(!is_page_source("html"));
         assert!(!is_page_source("txt"));
+    }
+
+    /// Pins `classify_extension` against every extension `scan.rs`'s own
+    /// match block recognizes, so a bucket added there and forgotten here (or
+    /// the reverse) fails immediately rather than silently drifting the way
+    /// the sweep's hand-maintained mirror did (moss#1087). An extension
+    /// outside all of these is `Other` — the scan still consumes it, just
+    /// uncategorized — which is why the fallback cases below assert `Other`
+    /// rather than being left unchecked.
+    #[test]
+    fn classify_extension_pins_every_bucket_the_scan_recognizes() {
+        for ext in ["md", "markdown", "mdown", "mkd"] {
+            assert_eq!(classify_extension(ext), ScanBucket::Page, "{ext}");
+        }
+        for ext in ["html", "htm"] {
+            assert_eq!(classify_extension(ext), ScanBucket::Html, "{ext}");
+        }
+        for ext in ["jpg", "jpeg", "png", "gif", "svg", "webp", "avif"] {
+            assert_eq!(classify_extension(ext), ScanBucket::Image, "{ext}");
+        }
+        for ext in ["mov", "mp4", "webm", "avi", "mkv", "m4v"] {
+            assert_eq!(classify_extension(ext), ScanBucket::Video, "{ext}");
+        }
+        assert_eq!(classify_extension("ipynb"), ScanBucket::Notebook);
+        for ext in ["pages", "docx", "doc"] {
+            assert_eq!(classify_extension(ext), ScanBucket::Document, "{ext}");
+        }
+        for ext in ["css", "js", "woff2", "pdf", "mp3", "unknownext", ""] {
+            assert_eq!(classify_extension(ext), ScanBucket::Other, "{ext}");
+        }
     }
 }

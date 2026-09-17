@@ -15,7 +15,7 @@
 
 use crate::types::content::{FileInfo, MediaMetadata, ProjectStructure};
 use crate::build::cache::{CachedMediaMeta, HashIndex, ObjectStore, TransformCache, TransformEntry, TransformRecord};
-use super::classify::{is_excluded_dir_name, is_page_source, skip_root_agent_config};
+use super::classify::{classify_extension, is_excluded_dir_name, skip_root_agent_config, ScanBucket};
 use crate::build::media::ffmpeg::FFmpegManager;
 use walkdir::WalkDir;
 use std::cell::OnceCell;
@@ -1096,10 +1096,13 @@ pub fn scan_folder_with_dedup_emit(
             .unwrap_or("")
             .to_lowercase();
 
-        // Categorize files by extension
+        // Categorize files by extension. `classify_extension` is the single
+        // definition of this match (moss#1087) — a caller outside this crate
+        // that needs the same verdict calls it directly instead of
+        // hand-maintaining its own extension list that can drift from this one.
         // ADR-006: Images and videos use MediaMetadata for dimensions and dominant color
-        match extension.as_str() {
-            e if is_page_source(e) => {
+        match classify_extension(&extension) {
+            ScanBucket::Page => {
                 markdown_files.push(FileInfo {
                     path: relative_path,
                     file_type: extension.clone(),
@@ -1107,7 +1110,7 @@ pub fn scan_folder_with_dedup_emit(
                     modified,
                 });
             }
-            "html" | "htm" => {
+            ScanBucket::Html => {
                 html_files.push(FileInfo {
                     path: relative_path,
                     file_type: extension.clone(),
@@ -1115,7 +1118,7 @@ pub fn scan_folder_with_dedup_emit(
                     modified,
                 });
             }
-            "jpg" | "jpeg" | "png" | "gif" | "svg" | "webp" | "avif" => {
+            ScanBucket::Image => {
                 // ADR-006 metadata (dimensions + dominant color/LQIP or stat-key
                 // cache I/O) is the dominant cold-scan cost; defer it to the
                 // parallel phase 2 below and just record the entry here (walk
@@ -1131,7 +1134,7 @@ pub fn scan_folder_with_dedup_emit(
                     modified,
                 });
             }
-            "mov" | "mp4" | "webm" | "avi" | "mkv" | "m4v" => {
+            ScanBucket::Video => {
                 // ADR-006: Videos use FFmpeg for dimensions and dominant color, with caching.
                 // Lazy resolution (Task 4): FFmpeg is only downloaded/detected when
                 // the first video file is encountered during the directory walk.
@@ -1165,7 +1168,7 @@ pub fn scan_folder_with_dedup_emit(
             // No download or processing during scan — just categorization.
             // JupyterLite assets are lazy-downloaded during build's background
             // phase when notebook_files is non-empty (see build.rs).
-            "ipynb" => {
+            ScanBucket::Notebook => {
                 notebook_files.push(FileInfo {
                     path: relative_path,
                     file_type: extension.clone(),
@@ -1173,15 +1176,7 @@ pub fn scan_folder_with_dedup_emit(
                     modified,
                 });
             }
-            "pages" | "docx" | "doc" => {
-                other_files.push(FileInfo {
-                    path: relative_path,
-                    file_type: extension.clone(),
-                    size,
-                    modified,
-                });
-            }
-            _ => {
+            ScanBucket::Document | ScanBucket::Other => {
                 other_files.push(FileInfo {
                     path: relative_path,
                     file_type: extension.clone(),

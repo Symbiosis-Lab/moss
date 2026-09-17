@@ -156,6 +156,7 @@ fn build_test_full(
             home_ready: _home_ready,
             publishable: _publishable,
             render_seq: _render_seq,
+            stale_sources: _stale_sources,
         } = run(
             &root,
             site_dir_state,
@@ -4786,6 +4787,81 @@ fn build_test_shipped(
     })
 }
 
+/// `build_test_shipped`, but the promotion verdict follows THIS build's own
+/// `publishable` the way `build.rs::advertise_sealed` does, instead of always
+/// shipping. `build_test_shipped` hardcodes `ShipVerdict::Ship` because none
+/// of its callers care about the withhold branch; the tests that care about
+/// `publishable` (moss#1042 / the 2026-09-17 ADR-056 revision) need exactly
+/// the branch it skips.
+///
+/// Deliberately does not call `degrade::repair_staged_html` — the presence
+/// pass is a separate, already-tested concern (`ship_tests.rs`), and folding
+/// it in here would make a test that only cares about `publishable` also
+/// depend on presence-pass behavior it isn't exercising.
+///
+/// Returns `(Promotion, sealed file keys, stale_sources)`. The third element
+/// is this build's own `PipelineRunOutput::stale_sources` — the value
+/// `build.rs`'s seal tail hands to `BuildRecords::record_stale_sources` — for
+/// tests that check the publish-time staleness gate rather than promotion
+/// itself.
+fn build_test_promoted_or_withheld(
+    folder_path: &str,
+) -> Result<(crate::build::ship::Promotion, Vec<String>, Vec<String>), String> {
+    let ps = scan_folder(folder_path)?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .map_err(|e| format!("test runtime build failed: {}", e))?;
+    let root = crate::vault::paths::VaultRoot::resolve(folder_path);
+    let preview_port = crate::build::ports::port_of_this_build(None, None);
+    let services = BuildServices::headless();
+    rt.block_on(async move {
+        let PipelineRunOutput { bg_handle, publishable, stale_sources, .. } = run(
+            &root,
+            None,
+            None,
+            &preview_port,
+            Some(&services),
+            Some(Box::new(move |_, _, _| Ok(ResolvedSlots::empty()))),
+            &ps,
+            None,
+            crate::build::render::IncrementalGates::default(),
+            crate::build::feeds::search_lane::Freshness::Now,
+            &test_cache_keys(),
+        )
+        .map_err(crate::build::outcome::BuildStopped::into_message)?;
+        let Some(handle) = bg_handle else {
+            return Err("build produced no background handle to seal".to_string());
+        };
+        let (sealed, _cache_lease) = handle
+            .await_completion()
+            .await
+            .map_err(|e| format!("test seal+persist failed: {}", e))?;
+        let mp = crate::moss_paths::MossPaths::new(root.path());
+        let stage_dir = mp.staging_dir();
+        crate::build::ship::reclaim_staging_now(&stage_dir, &sealed, &crate::build::lifecycle::permit_for_test());
+        let _ = sealed.write_to_disk(&mp.hashes());
+        let mut keys: Vec<String> = sealed.files().keys().cloned().collect();
+        keys.sort();
+        let verdict = if publishable {
+            crate::build::ship::ShipVerdict::Ship
+        } else {
+            crate::build::ship::ShipVerdict::Withhold(crate::build::ship::WithholdReason::SourcesDownloading)
+        };
+        let promotion = crate::build::ship::materialize_and_promote(
+            &sealed,
+            &mp,
+            &stage_dir,
+            None,
+            crate::build::ship::next_promotion_epoch(),
+            None,
+            verdict,
+        )?;
+        Ok((promotion, keys, stale_sources))
+    })
+}
+
 /// Every file under `dir`, as relative path → content hash. The instrument a
 /// null-build assertion needs: "did anything move" over a whole tree, in a
 /// form whose failure message names the file.
@@ -5302,73 +5378,68 @@ fn a_fully_local_build_leaves_the_gate_exactly_where_it_was() {
 }
 
 // ----- moss#1042: the publish decision is not the screen decision -----
+//
+// `should_publish` — which used to withhold promotion whenever
+// `structural_incomplete` was true — was deleted in the 2026-09-17 ADR-056
+// revision (see `pipeline.rs`'s comment where it stood). The showing
+// question below is unchanged; the publish question now lives in full-build
+// tests instead of a pure function of `structural_incomplete` — see
+// `a_page_that_could_not_be_read_no_longer_withholds_the_rest_of_the_site`,
+// `an_unreadable_stylesheet_no_longer_withholds_the_rest_of_the_site`,
+// `an_unreadable_config_toml_still_lets_the_build_publish`, and
+// `a_cold_vault_with_unreadable_pages_still_shows_the_waiting_screen` further
+// down this file.
 
-/// The bug, stated as the smallest possible assertion. A sealed generation is
-/// what made `cloud_gate_should_hold` return `false` — correctly, there was
-/// something to look at — and the same fact was then used to justify replacing
-/// it with a build rendered from files that were not there. `should_publish`
-/// does not take that fact at all, which is the whole fix.
+/// A sealed generation is what makes `cloud_gate_should_hold` return `false`
+/// — correctly, there is something to look at — even when this build's own
+/// read was incomplete. The screen decision does not need this build to be
+/// perfect; it needs there to be something worth showing.
 #[test]
-fn a_sealed_generation_does_not_license_publishing_over_it() {
+fn a_sealed_generation_keeps_the_screen_down_even_when_this_build_is_incomplete() {
     assert!(
         !cloud_gate_should_hold(true, true, 553, true),
         "the screen stays down — the sealed generation is worth serving"
     );
-    assert!(
-        !should_publish(true),
-        "and the build that could not read its sources still may not replace it"
-    );
 }
 
-/// Media is decoration: a site whose images are still arriving is still the
-/// user's site, and publishing it is right (the placeholders are ADR-013's
-/// job). Only a structural absence withholds.
+/// Withholding the SCREEN on a cold vault rolls nothing back — there is
+/// nothing sealed to roll back to. This is the moss#1042 case at the
+/// `cloud_gate_should_hold` level; the full-pipeline version lives in
+/// `a_cold_vault_with_unreadable_pages_still_shows_the_waiting_screen`.
 #[test]
-fn media_still_downloading_does_not_withhold_a_publish() {
-    assert!(should_publish(false), "553 images outstanding is not a reason to withhold");
-}
-
-/// Withholding on a cold vault rolls nothing back — there is nothing sealed to
-/// roll back to — and the screen covers the same condition. Asserted together
-/// because the pair is the safety argument: the user is never left with neither
-/// a site nor an explanation.
-#[test]
-fn a_cold_vault_withholds_and_shows_the_screen() {
-    assert!(!should_publish(true));
+fn a_cold_vault_shows_the_screen() {
     assert!(cloud_gate_should_hold(false, false, 553, true));
 }
 
-/// The gate must stay clearable. Vaults hold files moss never opens, so the
-/// provider never downloads them and their eviction is permanent — if one
-/// withheld the publish, the user would never see their site again.
+/// `structural_missing_count` must stay clearable by construction, not by
+/// policy: vaults hold files moss never opens (`.zip`, `.psd`), the provider
+/// never downloads them, and their eviction is permanent — the positive
+/// extension list in `is_structural_source` is what keeps them from ever
+/// counting here at all.
 #[test]
-fn an_evicted_file_moss_never_reads_does_not_withhold_forever() {
+fn an_evicted_file_moss_never_reads_does_not_count_as_structural() {
     let junk = vec![
         std::path::PathBuf::from("/v/archive.zip"),
         std::path::PathBuf::from("/v/art.psd"),
     ];
     assert_eq!(super::super::cloud_ledger::structural_missing_count(&junk, 0), 0);
-    assert!(should_publish(false));
 }
 
-/// The invariant that keeps the two decisions in step: a build moss withholds
-/// is always one the gate can explain. `cloud_ledger::structural_missing_count` only ever
-/// sees paths still in the cloud (the caller filters), and each of its two
-/// inputs is a subset of what `cloud_outstanding` counts — so `!should_publish`
-/// implies `cloud_outstanding > 0`, which is exactly what
-/// `cloud_gate_should_hold` needs to raise the screen when nothing is sealed.
-/// Without it the user gets neither a site nor an explanation.
+/// The invariant `cloud_gate_should_hold` leans on: whenever
+/// `structural_missing_count` reports something missing, `cloud_outstanding`
+/// (the caller's `icloud_count.max(ledger)`) is also non-zero — so a
+/// structural absence never raises the screen without a cloud count to show
+/// alongside it. `structural_missing_count` only ever sees paths still in the
+/// cloud (the caller filters), and each of its two inputs is a subset of what
+/// `cloud_outstanding` counts.
 #[test]
-fn a_withheld_build_can_always_raise_the_screen() {
+fn structural_absence_always_implies_a_nonzero_cloud_count() {
     for (evicted, ledger) in [
         (vec![std::path::PathBuf::from("/v/index.md")], 0usize),
         (vec![], 1usize),
     ] {
         let missing = super::super::cloud_ledger::structural_missing_count(&evicted, ledger) > 0;
         assert!(missing, "precondition of this case");
-        assert!(!should_publish(missing));
-        // The caller's `cloud_outstanding` is `icloud_count.max(ledger)`, and
-        // both inputs above contribute to it — so it is at least 1 here.
         let cloud_outstanding = evicted.len().max(ledger);
         assert!(cloud_outstanding > 0);
         assert!(
@@ -5376,6 +5447,267 @@ fn a_withheld_build_can_always_raise_the_screen() {
             "nothing sealed and nothing servable — the screen must be available"
         );
     }
+}
+
+/// The publish half of the 2026-09-17 ADR-056 revision. Before it, a page still
+/// in the cloud made `structural_incomplete` true, and `should_publish` used
+/// that to withhold the WHOLE generation — so editing `index.md` while
+/// `keeper.md` sat offline meant neither page reached a reader. Ablate by
+/// changing `pipeline.rs`'s `let publishable = true;` back to
+/// `!structural_incomplete`: this goes red with `Promotion::Withheld`.
+///
+/// The second build's `stale_sources` assertion is the other half of that
+/// same revision — the staleness gate that replaced the withhold. It is the
+/// full-pipeline wiring `deploy/stale_sources_gate_tests.rs` points back to:
+/// this confirms `PipelineRunOutput::stale_sources` actually names the
+/// carried-forward page, and `stale_sources_gate_tests.rs` confirms
+/// `refuse_publish` acts on it once `BuildRecords` holds it.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_page_that_could_not_be_read_no_longer_withholds_the_rest_of_the_site() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nOriginal.\n").unwrap();
+    fs::write(
+        test_dir.join("keeper.md"),
+        "---\ntitle: Keeper\n---\n\n# Keeper\n\nOriginal wording.\n",
+    )
+    .unwrap();
+
+    let (promotion, _keys, _stale) = build_test_promoted_or_withheld(folder_path).expect("first build");
+    assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
+    let keeper_html = test_dir.join(".moss/build/staging/keeper/index.html");
+    assert!(keeper_html.is_file(), "first build must publish the page");
+    assert_eq!(
+        load_previous_hashes(folder_path).page_meta.get("keeper.md").map(|m| m.title.as_str()),
+        Some("Keeper")
+    );
+
+    // Pre-Sonoma eviction: keeper.md's real name vanishes from the walk.
+    fs::remove_file(test_dir.join("keeper.md")).unwrap();
+    fs::write(test_dir.join(".keeper.md.icloud"), "").unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nUpdated.\n").unwrap();
+
+    let (promotion, keys, stale_sources) =
+        build_test_promoted_or_withheld(folder_path).expect("second build, keeper evicted");
+    assert_eq!(
+        promotion,
+        crate::build::ship::Promotion::Promoted,
+        "an unreadable page must not withhold the rest of the site"
+    );
+    assert!(
+        keys.iter().any(|k| k == "keeper/index.html"),
+        "keeper must stay in the deploy manifest: {keys:?}"
+    );
+    assert_eq!(
+        stale_sources,
+        vec!["keeper.md".to_string()],
+        "the carried-forward page must be named in PipelineRunOutput::stale_sources"
+    );
+    assert!(keeper_html.is_file(), "keeper's last-known HTML must still serve");
+    assert_eq!(
+        load_previous_hashes(folder_path).page_meta.get("keeper.md").map(|m| m.title.as_str()),
+        Some("Keeper"),
+        "keeper's old title must survive the carry-forward for nav/listing"
+    );
+
+    let home_html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    assert!(home_html.contains("Updated"), "the rest of the site must update normally");
+}
+
+/// The stylesheet is structural too (`cloud_ledger::is_structural_source`) and
+/// — unlike `config.toml` — its eviction IS tracked through the ledger, via
+/// `read_optional_build_input`'s call to `note_unavailable`. But that call
+/// only runs once `render::blocking` has already decided there is a user
+/// stylesheet to read at all (`theme_css.exists()`), and the only eviction a
+/// test can simulate — the pre-Sonoma `.icloud` sibling — works by making the
+/// real name disappear from the walk, which reads as "no stylesheet" at that
+/// gate rather than "an evicted one". So, like `config.toml`, this never
+/// reached `structural_incomplete` and `should_publish`'s deletion changes
+/// nothing for it (the ledger path exists for the `SF_DATALESS` form, which
+/// nothing but the real file-provider extension can set — see
+/// `deploy::history::record`'s note on the same limit). This pins the
+/// `.exists()` boundary rather than the deletion.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_unreadable_stylesheet_no_longer_withholds_the_rest_of_the_site() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nOriginal.\n").unwrap();
+    let theme_dir = test_dir.join(".moss/theme");
+    fs::create_dir_all(&theme_dir).unwrap();
+    fs::write(theme_dir.join("style.css"), "body { color: red; }").unwrap();
+
+    let (promotion, _, _) = build_test_promoted_or_withheld(folder_path).expect("first build");
+    assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
+
+    // Pre-Sonoma eviction of the stylesheet, plus an ordinary page edit.
+    fs::remove_file(theme_dir.join("style.css")).unwrap();
+    fs::write(theme_dir.join(".style.css.icloud"), "").unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nUpdated.\n").unwrap();
+
+    let (promotion, _, _) =
+        build_test_promoted_or_withheld(folder_path).expect("second build, stylesheet evicted");
+    assert_eq!(
+        promotion,
+        crate::build::ship::Promotion::Promoted,
+        "an unreadable stylesheet must not withhold the rest of the site"
+    );
+    let home_html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    assert!(home_html.contains("Updated"), "the rest of the site must update normally");
+}
+
+/// `config.toml` is the odd one of the three: `.moss` sits outside the scan's
+/// walk, and `read_project_config`'s own read error is swallowed by
+/// `pipeline.rs`'s `.ok()` before `cloud_ledger::note_unavailable` ever runs.
+/// So an unreadable `config.toml` was never counted as `structural_incomplete`
+/// to begin with, and `should_publish`'s deletion changes nothing for it — this
+/// pins the boundary rather than the deletion. Ablate by changing that `.ok()`
+/// to `.expect(...)`: the build then errors before it ever seals.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_config_toml_still_lets_the_build_publish() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nHello.\n").unwrap();
+    let moss_dir = test_dir.join(".moss");
+    fs::create_dir_all(&moss_dir).unwrap();
+    let config_path = moss_dir.join("config.toml");
+    fs::write(&config_path, "[site]\ntitle = \"Test Site\"\n").unwrap();
+
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert!(
+        fs::read(&config_path).is_err(),
+        "mode 0o000 must genuinely block the read — as root it would not, \
+         and this test would prove nothing"
+    );
+
+    let result = build_test_promoted_or_withheld(folder_path);
+    // Restore before any assertion can panic and leave an unreadable file
+    // behind for `create_test_dir`'s cleanup.
+    fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let (promotion, _, _) =
+        result.expect("a build with an unreadable config.toml must still complete and seal");
+    assert_eq!(
+        promotion,
+        crate::build::ship::Promotion::Promoted,
+        "an unreadable config.toml must not withhold the build"
+    );
+}
+
+/// `footer.md` is the fourth structural source, and the odd one of this
+/// group: it owns no page output of its own (`footer.rs`'s own
+/// last-known-good cache is what keeps the chrome from vanishing off every
+/// OTHER page while this is true — see `apply_last_known_good_fallback`), but
+/// it is still an `.md` file the scan walks, so `is_structural_source` counts
+/// it and the same pre-Sonoma eviction technique the page test above uses
+/// reaches it too. Ablate by removing the `is_structural_source` filter from
+/// either half of `cloud_ledger::structural_stale_paths` (or its
+/// `evicted_at_scan` term) and the `stale_sources` assertion below goes red.
+///
+/// `build_test_promoted_or_withheld` calls `pipeline::run` directly rather
+/// than `build.rs`'s seal tail, so unlike production this build's
+/// `stale_sources` never reaches `BuildRecords` on its own — this test wires
+/// it in the same way `build.rs` does before checking `deploy::refuse_publish`,
+/// which is the other half of the moss#1042 revision this pins: showing
+/// forgives a carried-forward footer, publish must not.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_carried_forward_footer_reaches_the_staleness_gate() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nOriginal.\n").unwrap();
+    fs::write(test_dir.join("footer.md"), "Original footer.\n").unwrap();
+
+    let (promotion, _keys, stale_sources) =
+        build_test_promoted_or_withheld(folder_path).expect("first build");
+    assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
+    assert!(
+        stale_sources.is_empty(),
+        "a clean first build carries nothing forward: {stale_sources:?}"
+    );
+
+    // Pre-Sonoma eviction: footer.md's real name vanishes from the walk.
+    fs::remove_file(test_dir.join("footer.md")).unwrap();
+    fs::write(test_dir.join(".footer.md.icloud"), "").unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nUpdated.\n").unwrap();
+
+    let (promotion, _keys, stale_sources) =
+        build_test_promoted_or_withheld(folder_path).expect("second build, footer evicted");
+    assert_eq!(
+        promotion,
+        crate::build::ship::Promotion::Promoted,
+        "an unreadable footer must not withhold the rest of the site"
+    );
+    assert_eq!(
+        stale_sources,
+        vec!["footer.md".to_string()],
+        "the carried-forward footer must be named in PipelineRunOutput::stale_sources"
+    );
+    let home_html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    assert!(home_html.contains("Updated"), "the rest of the site must update normally");
+
+    // What `build.rs`'s seal tail does with that value in production —
+    // exercised here because this harness bypasses `build.rs` entirely.
+    crate::system::build_records::records().record_stale_sources(folder_path, stale_sources);
+    let err = crate::deploy::refuse_publish(folder_path)
+        .expect_err("publish must refuse a folder that carried footer.md forward");
+    assert!(err.contains("footer.md"), "{err}");
+}
+
+/// The moss#1042 regression this whole revision must not reopen: a cold vault
+/// — nothing sealed yet — whose only page source is unreadable must still show
+/// the waiting screen, never a placeholder home. This is a property of
+/// `cloud_gate_should_hold`/`home_ready`, which sit upstream of and are
+/// untouched by the deleted `should_publish`; this test is the full-pipeline
+/// guard that the two stayed decoupled through the refactor.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_cold_vault_with_unreadable_pages_still_shows_the_waiting_screen() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    // A vault that has never built: index.md exists but is offline from the
+    // very first scan, exactly like a folder just cloned from a cloud drive
+    // before sync catches up.
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n\nHello.\n").unwrap();
+    fs::remove_file(test_dir.join("index.md")).unwrap();
+    fs::write(test_dir.join(".index.md.icloud"), "").unwrap();
+
+    let ps = scan_folder(folder_path).expect("scan");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let root = crate::vault::paths::VaultRoot::resolve(folder_path);
+    let preview_port = crate::build::ports::port_of_this_build(None, None);
+    let output = rt.block_on(async move {
+        run(
+            &root,
+            None,
+            None,
+            &preview_port,
+            None,
+            Some(Box::new(move |_, _, _| Ok(ResolvedSlots::empty()))),
+            &ps,
+            None,
+            crate::build::render::IncrementalGates::default(),
+            crate::build::feeds::search_lane::Freshness::Now,
+            &test_cache_keys(),
+        )
+        .map_err(crate::build::outcome::BuildStopped::into_message)
+    });
+    let output = output.expect("a build with no readable home must still complete, not error");
+    assert!(
+        !output.home_ready,
+        "no readable page source means no real home page was written"
+    );
+    assert!(
+        crate::build::cloud_readiness::take_gate(folder_path),
+        "a cold vault with nothing readable must raise the waiting screen"
+    );
 }
 
 /// Priority 3 of the home election is `index.pages` / `index.docx` — first-class

@@ -672,7 +672,21 @@ pub fn generate_native_slots(
     // a site has only the default (single-language) footer this collapses to a
     // `Static` entry — byte-identical to the pre-i18n behavior — and only emits
     // `PerLanguage` when language-specific footers actually exist.
-    let footer_by_lang = crate::build::footer::collect_footer_slots_by_language(pages);
+    let mut footer_by_lang = crate::build::footer::collect_footer_slots_by_language(pages);
+    // A footer/slot source this build could not read (most often still
+    // downloading from the cloud) has no `ParsedDocument` to contribute above,
+    // so without this the chrome it fills would vanish from every page on the
+    // site rather than just staying stale on this one build. See
+    // `apply_last_known_good_fallback` for the tradeoffs and `refuse_publish`
+    // for the backstop that keeps a build built this way from shipping quietly.
+    let stale_footer_buckets =
+        crate::build::footer::apply_last_known_good_fallback(project_path, &mut footer_by_lang);
+    if !stale_footer_buckets.is_empty() {
+        log::warn!(
+            "[footer] falling back to last-known-good content for {} — this build could not read it",
+            stale_footer_buckets.join(", ")
+        );
+    }
     for (slot_name, footer) in &footer_by_lang {
         let content = if footer.by_lang.is_empty() {
             match &footer.default {

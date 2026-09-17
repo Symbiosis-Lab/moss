@@ -1148,7 +1148,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
         })
     };
 
-    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_media, cancelled, home_ready: _home_ready, publishable, render_seq } = {
+    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_media, cancelled, home_ready: _home_ready, publishable, render_seq, stale_sources } = {
         // moss's own generator, always. A plugin could replace it wholesale
         // through the `generate` capability until ADR-055 retired it: three
         // months, no implementation, and the branch had already decayed into
@@ -1230,6 +1230,12 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // list is the answer that UNBLOCKS a publish, so skipping the write on a
     // clean build would leave an earlier failure standing forever.
     crate::system::build_records::records().record_missing_media(&folder_path, missing_media);
+
+    // And which structural sources this build had to carry forward rather
+    // than read. Same unconditional-write reasoning as `missing_media` above:
+    // a source that arrives fixes nothing if the CLEAN verdict never lands
+    // because only failures were ever recorded.
+    crate::system::build_records::records().record_stale_sources(&folder_path, stale_sources);
 
     // This build's promotion epoch (moss#968 §5d). The rebuild worker mints
     // it at ADMISSION and passes it in (see `PipelineConfig::admission_epoch`
@@ -1721,10 +1727,11 @@ pub(crate) struct SealGuards {
     pub cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
 }
 
-/// `publishable` is `pipeline::should_publish`'s verdict for the build that
-/// produced `sealed`. `false` makes the promotion below a no-op
-/// (`ship::Promotion::Withheld`) and, through `tail_owns_shared_state`, keeps
-/// this tail off `hashes.json` and the staging sweep as well.
+/// `publishable` is `false` only for a build the folder-closed cancellation
+/// caught (see `PipelineRunOutput::publishable`). That makes the promotion
+/// below a no-op (`ship::Promotion::Withheld`) and, through
+/// `tail_owns_shared_state`, keeps this tail off `hashes.json` and the
+/// staging sweep as well.
 /// Run the whole-site link audit, then record which of its dead links are
 /// THIS build's own still-pending promise: a video, or its poster, that
 /// `blocking.rs`'s synchronous render already referenced but whose background

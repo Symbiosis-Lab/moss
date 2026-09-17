@@ -129,10 +129,13 @@ fn a_generation_that_was_not_promoted_refuses_rather_than_shipping_the_old_one()
 /// through `site_dir_for_plugin`, because the bug was that the body returned
 /// early before reaching the check.
 ///
-/// `structural_incomplete` — a dehydrated cloud folder whose sources could not
-/// be read (moss#1042) — is how a real build lands here: `should_publish`
-/// withholds promotion, the seal tail skips `adopt_sealed`, and the slot the
-/// driver captured stays empty.
+/// A folder that closes mid-build (`PipelineRunOutput::publishable == false`)
+/// is how a real build lands here: promotion is withheld
+/// (`ship::Promotion::Withheld`), the seal tail skips `adopt_sealed`, and the
+/// slot the driver captured stays empty. Originally (moss#1042) a dehydrated
+/// cloud folder whose sources could not be read reached the same withhold;
+/// that path was removed in the 2026-09-17 ADR-056 revision, leaving
+/// cancellation as the only cause.
 #[tokio::test]
 async fn a_publish_with_no_promoted_generation_refuses() {
     struct NoSink;

@@ -202,6 +202,41 @@ pub fn structural_missing_count(
     ledger_structural.max(at_scan)
 }
 
+/// Every structural source under `root` this build had to do without, as of
+/// now.
+///
+/// The path-returning twin of [`structural_missing_count`]: that function
+/// answers "is the build's own decision required" with a count meant to
+/// explain itself in a log line (moss#1061); this answers the different
+/// question a publish-time refusal has to — which files, so a person can act
+/// on the list rather than a number. Same two sources, **unioned** rather than
+/// `max`'d, because a name is either on the list or not — there is no double
+/// counting to avoid the way there is with two counts of possibly the same set.
+///
+/// `evicted_at_scan` carries the same contract as
+/// [`structural_missing_count`]'s: already filtered to what is still in the
+/// cloud, because that filtering needs `icloud::is_still_in_the_cloud`, which
+/// stays out of this module so the policy here is testable off macOS.
+pub fn structural_stale_paths(evicted_at_scan: &[std::path::PathBuf], root: &Path) -> Vec<PathBuf> {
+    let mut stale: HashSet<PathBuf> = evicted_at_scan
+        .iter()
+        .filter(|p| is_structural_source(p))
+        .cloned()
+        .collect();
+    with(&UNAVAILABLE, |set| {
+        stale.extend(
+            set.iter()
+                .filter(|p| p.starts_with(root))
+                .filter(|p| is_structural_source(p))
+                .filter(|p| crate::build::icloud::is_still_in_the_cloud(p))
+                .cloned(),
+        );
+    });
+    let mut v: Vec<PathBuf> = stale.into_iter().collect();
+    v.sort();
+    v
+}
+
 /// Every path this build recorded under `root`, materialized or not.
 ///
 /// Unfiltered, unlike [`outstanding`] — for diagnostics and tests that want to

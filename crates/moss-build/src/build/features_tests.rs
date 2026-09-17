@@ -2299,3 +2299,68 @@ fn test_footer_slot_emitted_when_reserved_file_present() {
         .contains("Symbiosis Lab"));
     assert!(footer.by_lang.is_empty());
 }
+
+/// The regression this whole fallback mechanism exists for: a `footer.md`
+/// still downloading from the cloud must not take the footer off every page
+/// on the site. `generate_native_slots` is exercised directly (not through
+/// `collect_footer_slots_by_language` alone) because the fallback is wired in
+/// at that call site, keyed on `project_path`.
+#[test]
+fn footer_survives_a_build_that_could_not_read_footer_md() {
+    use crate::build::types::ParsedDocument;
+    use crate::i18n::Language;
+
+    let project_path = format!("/tmp/moss-footer-fallback-integ-{}", uuid::Uuid::new_v4());
+    let config = ServicesConfig::default();
+
+    let footer_page = ParsedDocument {
+        source_path: Some("footer.md".to_string()),
+        html_content: "<p>real footer</p>".to_string(),
+        lang: Language::En,
+        ..Default::default()
+    };
+
+    // Build 1: footer.md reads fine.
+    let slots = generate_native_slots(
+        &config,
+        &project_path,
+        false,
+        crate::build::features::comment::MATTERS_DOMAIN_FALLBACK,
+        &HashMap::new(),
+        &[footer_page],
+        "en",
+        None,
+        Some(DomainDeploymentConfig::default()),
+        false,
+        None,
+        None,
+    );
+    assert_eq!(
+        slots.get_html("footer-left", "index.html").as_deref(),
+        Some("<p>real footer</p>"),
+        "sanity: footer.md must inject on the build that can read it"
+    );
+
+    // Build 2: footer.md is unreadable this time (still in the cloud) — its
+    // `ParsedDocument` never enters `pages` at all, exactly like
+    // `read_page_source`'s deferred branch.
+    let slots = generate_native_slots(
+        &config,
+        &project_path,
+        false,
+        crate::build::features::comment::MATTERS_DOMAIN_FALLBACK,
+        &HashMap::new(),
+        &[],
+        "en",
+        None,
+        Some(DomainDeploymentConfig::default()),
+        false,
+        None,
+        None,
+    );
+    assert_eq!(
+        slots.get_html("footer-left", "index.html").as_deref(),
+        Some("<p>real footer</p>"),
+        "the footer must not go blank site-wide just because this build could not read footer.md"
+    );
+}
