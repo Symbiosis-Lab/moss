@@ -194,7 +194,8 @@ pub use crate::types::event_payloads::{
     host_from_url, ActionPanelOpened, CredentialRequest, LoginFailureReason, NestedRootInfo,
     NestedRootsReport, NetworkFailureClass, PageVerdict, PublishReceipt, PublishReceiptDomain,
     PublishReceiptLive, PublishReceiptNewsletter, PublishReceiptPage, PublishReceiptPageKind,
-    PublishReceiptUploaded, PublishTarget, PublishVerdict, PublishVerdictState, RootClass,
+    PublishReceiptUploaded, PublishTarget, PublishVerdict, PublishVerdictOrigin,
+    PublishVerdictState, RootClass,
     SuggestedSite, ThresholdPrompt, ThresholdPromptKind, UpdateAvailable, UpdateCheckResult,
     UpdateDownloadProgress,
 };

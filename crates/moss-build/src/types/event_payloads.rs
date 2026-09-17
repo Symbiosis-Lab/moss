@@ -169,7 +169,21 @@ pub struct PublishVerdict {
     /// target at all until this field, so a moss-hosted `live`/`checking`
     /// fell into OnionPress's branches by default).
     pub target: PublishTarget,
+    /// The folder (site root) this verdict is about. A verification burst is
+    /// fire-and-forget and can land after the author has switched to a
+    /// different folder, so every listener that applies a verdict to visible
+    /// state must first check this against whatever folder it is currently
+    /// showing and ignore a mismatch — otherwise a stray verdict for the
+    /// folder just left behind is indistinguishable from one about the
+    /// folder now open.
+    pub folder: String,
     pub state: PublishVerdictState,
+    /// What produced this verdict: a publish that just landed, or moss
+    /// re-checking an already-published folder on open. A resume is not news
+    /// — the folder was already published, and this only reconfirms it — so
+    /// a listener may update state from it silently but must never toast or
+    /// otherwise interrupt on it; only a `Publish`-origin verdict may.
+    pub origin: PublishVerdictOrigin,
     pub generation: String,
     pub url: String,
     /// The receiver's last effective reachability code (`"200"`, `"takeover"`,
@@ -234,6 +248,20 @@ pub enum PublishVerdictState {
     /// The control probe reports moss's backend is still serving an older
     /// generation — the publish did not complete.
     Incomplete,
+}
+
+/// What armed the verification session a [`PublishVerdict`] reports on: a
+/// publish that just landed, or moss re-checking a folder that was already
+/// published, done on open so a hosted site's status survives a relaunch or
+/// a folder switch. Every transition announced while one arming stands
+/// carries that same origin — a `Live`/`Unreachable` that follows a `Resume`
+/// arm is itself a `Resume`, because it is answering the same "is this still
+/// true" question the resume asked, not a fresh publish event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum PublishVerdictOrigin {
+    Publish,
+    Resume,
 }
 
 // ── The threshold screen's wire vocabulary ───────────────────────────────────
