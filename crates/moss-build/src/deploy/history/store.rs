@@ -52,7 +52,7 @@ pub(crate) fn history_enabled(vault_root: &Path) -> bool {
 /// is not absent, but nothing to show either" posture as the rest of history.
 pub(crate) fn load_record(root: &Path, id: &str) -> Option<PublishRecord> {
     let path = publishes_dir(root).join(format!("{id}.json"));
-    // allow:raw_read the per-computer history store under app data (ADR-083) — never a vault input, never cloud-synced
+    // allow:raw_read .moss/history/ (ADR-083) — cloud-synced now, but content-addressed and write-once: a missing/evicted blob already reads as "not kept," never silently as fresh
     let bytes = std::fs::read(&path).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
@@ -71,7 +71,7 @@ pub(crate) fn list_records(root: &Path) -> Vec<(String, PublishRecord)> {
                 return None;
             }
             let id = path.file_stem()?.to_string_lossy().into_owned();
-            // allow:raw_read the per-computer history store under app data (ADR-083) — never a vault input, never cloud-synced
+            // allow:raw_read .moss/history/ (ADR-083) — cloud-synced now, but content-addressed and write-once: a missing/evicted blob already reads as "not kept," never silently as fresh
             let bytes = std::fs::read(&path).ok()?;
             let record: PublishRecord = serde_json::from_slice(&bytes).ok()?;
             Some((id, record))
@@ -104,7 +104,7 @@ pub(crate) fn read_version(root: &Path, id: &str, path: &str) -> Result<Vec<u8>,
     let blob = store
         .get_path(&entry.hash)
         .ok_or_else(|| format!("the content of {path} at this version was not kept"))?;
-    // allow:raw_read the per-computer history store under app data (ADR-083) — never a vault input, never cloud-synced
+    // allow:raw_read .moss/history/ (ADR-083) — cloud-synced now, but content-addressed and write-once: a missing/evicted blob already reads as "not kept," never silently as fresh
     std::fs::read(&blob).map_err(|e| format!("could not read {}: {e}", blob.display()))
 }
 

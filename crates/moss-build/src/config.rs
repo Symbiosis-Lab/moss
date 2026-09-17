@@ -184,8 +184,8 @@ impl ConfigFile {
     }
 
     /// `[history].enabled` — whether a landed publish snapshots into the
-    /// app-local publish-history store
-    /// ([ADR-083](../../../../docs/decisions/ADR-083-publish-history-lives-outside-the-vault.md)).
+    /// vault's own publish-history store, at `.moss/history/`
+    /// ([ADR-083](../../../../docs/decisions/ADR-083-publish-history-lives-in-the-vault.md)).
     /// `None` when unset; the caller's default is on.
     pub fn history_enabled(&self) -> Option<bool> {
         self.root

@@ -371,7 +371,7 @@ async fn record_landing(
     // its URL on every publish would orphan the record it just wrote.
     if let Some(target) = deployment::slot_for(&deployment.method, None) {
         let history = crate::deploy::history::HistoryStore::in_vault(cx.folder);
-        crate::deploy::landed::record_landed(cx.folder, sealed, &target, cx.ports, Some(&history)).await;
+        crate::deploy::landed::record_landed(cx.folder, sealed, &target, cx.ports, &history).await;
     }
 
     // The bytes are live; what is left is redirects/analytics/DNS.

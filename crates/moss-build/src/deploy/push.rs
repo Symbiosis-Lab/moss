@@ -489,7 +489,7 @@ async fn push_site_inner_impl(
     // in, when nothing downstream needed the summary yet).
     let page_summary = if let Some(target) = crate::config::deployment::slot_for("moss", Some(&site_id)) {
         let history = crate::deploy::history::HistoryStore::in_vault(folder_path);
-        landed::record_landed(folder_path, sealed, &target, ports, Some(&history)).await
+        landed::record_landed(folder_path, sealed, &target, ports, &history).await
     } else {
         crate::deploy::change_record::PageChangeSummary::default()
     };

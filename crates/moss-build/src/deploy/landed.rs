@@ -53,10 +53,10 @@ use crate::moss_paths::MossPaths;
 /// having nothing to tell, which is an implementation rather than an absence —
 /// so the guard that used to return early is gone.
 ///
-/// `history` stays `Option<&HistoryStore>` for a caller with none to give,
-/// but `HistoryStore::in_vault` is infallible — a fixed join against the
-/// vault, not an app-data lookup — so every production caller now has one:
-/// they construct it once, right beside `ports`, and a test passes a
+/// `history` is a plain `&HistoryStore`, not an `Option` — `HistoryStore::
+/// in_vault` is infallible, a fixed join against the vault rather than an
+/// app-data lookup, so every caller already has one to give: production
+/// constructs it once, right beside `ports`, and a test passes a
 /// `HistoryStore::at(tempdir)`. There is no second, test-only entry point:
 /// whichever store a caller has is the one this function uses.
 ///
@@ -70,7 +70,7 @@ pub async fn record_landed(
     sealed: &SealedManifest,
     target: &str,
     ports: &dyn crate::build::ports::deploy::DeployPorts,
-    history: Option<&HistoryStore>,
+    history: &HistoryStore,
 ) -> PageChangeSummary {
     let mp = MossPaths::new(folder);
 
@@ -100,7 +100,7 @@ pub async fn record_landed(
 ///
 /// Best-effort throughout: a failed write costs the next build's rename
 /// detection, never the publish. See [`record_landed`]'s doc for why
-/// `history` is `Option` at all now that its construction cannot fail.
+/// `history` is a plain `&HistoryStore` rather than an `Option`.
 ///
 /// Returns the completion-scoped Added/Moved/Removed page summary a publish
 /// receipt renders (publish-receipt design, step 4). It has to be computed
@@ -113,7 +113,7 @@ async fn record_what_is_live(
     mp: &MossPaths,
     sealed: &SealedManifest,
     target: &str,
-    history: Option<&HistoryStore>,
+    history: &HistoryStore,
 ) -> PageChangeSummary {
     let now = chrono::Utc::now().to_rfc3339();
     let live = read_live_article_mapping(mp).await;
@@ -175,17 +175,13 @@ async fn record_what_is_live(
     let root = mp.project_root().to_path_buf();
     let sealed_for_history = sealed.clone();
     let target_owned = target.to_string();
-    let history_owned = history.cloned();
+    let history_owned = history.clone();
     let written = tokio::task::spawn_blocking(move || {
         let outcome = published_record::save(&MossPaths::new(&root), &record);
         // Best-effort and independent of the write above: a publish-history
         // failure must never suppress the rename baseline, and vice versa.
-        // `None` (no app-data directory on this platform) is not a failure
-        // to warn about — there is nowhere history could have lived.
-        if let Some(store) = &history_owned {
-            if let Err(e) = store.snapshot(&root, &sealed_for_history, &target_owned, &now) {
-                log::warn!("deploy: could not snapshot publish history: {e}");
-            }
+        if let Err(e) = history_owned.snapshot(&root, &sealed_for_history, &target_owned, &now) {
+            log::warn!("deploy: could not snapshot publish history: {e}");
         }
         outcome
     })

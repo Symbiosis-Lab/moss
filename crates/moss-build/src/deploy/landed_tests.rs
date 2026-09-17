@@ -59,7 +59,7 @@ async fn a_landed_publish_records_what_went_live() {
     let history_dir = tempfile::tempdir().unwrap();
     let manifest = sealed(&[("posts/hello.md", "posts/hello/index.html", "h-a", b"A")]);
     let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
-    super::record_what_is_live(&mp, &manifest, TARGET, Some(&history)).await;
+    super::record_what_is_live(&mp, &manifest, TARGET, &history).await;
 
     let Baseline::Present(live) = live_baseline::load(&mp) else {
         panic!("a landed publish must leave a readable record")
@@ -97,7 +97,7 @@ async fn an_unreadable_article_map_does_not_erase_the_note_ids() {
 
     let history_dir = tempfile::tempdir().unwrap();
     let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
-    super::record_what_is_live(&mp, &manifest, TARGET, Some(&history)).await;
+    super::record_what_is_live(&mp, &manifest, TARGET, &history).await;
 
     let Baseline::Present(live) = live_baseline::load(&mp) else {
         panic!("the standing note IDs must survive")
@@ -127,7 +127,7 @@ async fn a_publish_summarizes_a_rename_and_a_new_page_since_the_last_one() {
     let manifest_1 = sealed(&[("a.md", "a/index.html", "h-a", b"A")]);
     let history_dir = tempfile::tempdir().unwrap();
     let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
-    let first = super::record_what_is_live(&mp, &manifest_1, TARGET, Some(&history)).await;
+    let first = super::record_what_is_live(&mp, &manifest_1, TARGET, &history).await;
     assert!(first.records.is_empty(), "a first publish has nothing to have moved or added yet");
 
     // "a/" renames to "a-new/" (same uid, same source, content unchanged);
@@ -141,7 +141,7 @@ async fn a_publish_summarizes_a_rename_and_a_new_page_since_the_last_one() {
         ("a.md", "a-new/index.html", "h-a", b"A"),
         ("b.md", "b/index.html", "h-b", b"B"),
     ]);
-    let second = super::record_what_is_live(&mp, &manifest_2, TARGET, Some(&history)).await;
+    let second = super::record_what_is_live(&mp, &manifest_2, TARGET, &history).await;
 
     assert_eq!(second.pages_moved, 1);
     assert_eq!(second.pages_added, 1);
@@ -173,7 +173,7 @@ async fn a_landed_publish_snapshots_into_publish_history() {
     let manifest = sealed(&[("hello.md", "hello/index.html", "h-hello", b"H")]);
     let ports = crate::deploy::one_shot::HeadlessDeployPorts;
     let history = crate::deploy::history::HistoryStore::at(history_root.path().to_path_buf());
-    super::record_landed(vault.path(), &manifest, TARGET, &ports, Some(&history)).await;
+    super::record_landed(vault.path(), &manifest, TARGET, &ports, &history).await;
 
     // `HistoryStore::at` is the explicit-directory test seam, so this vault's
     // data lands directly under `history_root` rather than the real
