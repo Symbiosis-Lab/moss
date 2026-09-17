@@ -4384,6 +4384,253 @@ fn self_heal_before_registration_does_not_fabricate_without_a_cas_blob() {
     );
 }
 
+// ----- Phase 1b: thread the just-encoded CAS oid through to the manifest -----
+
+/// Inline no-op `Spawner`, shared shape with the other full-`dispatch_image_
+/// conversions` tests in this file: it puts `dispatch_image_conversions` on
+/// the GUI (fingerprint-skip) path but runs the encode honestly, so the whole
+/// call finishes synchronously and the test needs no extra wait.
+struct OidTestInlineSpawner;
+impl crate::build::ports::spawner::Spawner for OidTestInlineSpawner {
+    fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+        task();
+    }
+    fn spawn(
+        &self,
+        _task: crate::build::ports::spawner::Task,
+    ) -> crate::build::ports::spawner::Joining {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// Mirrors `ship_phase_ships_correct_bytes_from_cas_despite_stage_dir_being_
+/// overwritten` (`ship.rs`) for the image worker's own encode path:
+/// `run_image_conversion` now records the just-encoded webp's CAS oid instead
+/// of throwing it away (the mechanical `oid: None` this whole change closes
+/// the gap on), so `ship_phase` can read the immutable blob instead of the
+/// mutable stage path a concurrent build can rewrite between seal and ship.
+/// Driven through the real `dispatch_image_conversions` producer end to end —
+/// a hand-built manifest never acquires a `staged_oid` in the first place and
+/// would prove nothing about this fix.
+#[tokio::test]
+async fn ship_phase_ships_a_freshly_encoded_webp_from_cas_despite_stage_overwrite() {
+    use crate::build::coordinator::test_utils;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_big_jpeg(&root.join("photo.jpg"), 400, 300);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+
+    let item = ImageConversionItem {
+        source_path: PathBuf::from("photo.jpg"),
+        source_oid: crate::build::cache::ObjectStore::hash_file(&root.join("photo.jpg")).unwrap(),
+        ext: "jpg".to_string(),
+        dimensions: None,
+        skip: None,
+    };
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![item],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+    let services = BuildServices {
+        spawner: Some(std::sync::Arc::new(OidTestInlineSpawner)),
+        ..BuildServices::headless()
+    };
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    })
+    .await
+    .unwrap();
+    let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+    let oid = sealed
+        .staged_oid("photo.webp")
+        .expect("a freshly encoded webp must carry a live staged_oid")
+        .to_string();
+
+    let object_store = crate::build::cache::ObjectStore::new(
+        MossPaths::from_moss_dir(moss_dir.clone()).cache_objects(),
+    );
+    let cas_bytes = fs::read(object_store.get_path(&oid).expect("the oid must name a live CAS blob")).unwrap();
+
+    // A concurrent build rewrites the mutable stage copy after this
+    // manifest's oid was sealed.
+    fs::write(staging.join("photo.webp"), b"CONCURRENT-OVERWRITE").unwrap();
+
+    let site = root.join("site");
+    crate::build::ship::ship_phase(&staging, &site, &sealed, Some(&object_store), None)
+        .expect("ship_phase should succeed");
+
+    let shipped = fs::read(site.join("photo.webp")).unwrap();
+    assert_eq!(
+        shipped, cas_bytes,
+        "ship_phase must ship the CAS blob's bytes, not the concurrently \
+         overwritten mutable stage copy"
+    );
+    assert_ne!(
+        shipped,
+        b"CONCURRENT-OVERWRITE".to_vec(),
+        "premise: the overwrite really changed the stage bytes"
+    );
+}
+
+/// Regression guard: if a future refactor drops the oid on `delivered`'s way
+/// into `emit_image_outputs_via_channel`, this must fail loudly rather than
+/// quietly reverting every image entry to the pre-fix, fingerprint-only ship.
+/// Covers both the base variant and a ladder rung, since both `ensure_staged`
+/// call sites in the main encode path carry their own oid.
+#[tokio::test]
+async fn run_image_conversion_always_records_a_staged_oid_for_base_and_rungs() {
+    use crate::build::coordinator::test_utils;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    // 1000×750 lands one ladder rung (w800): deployed_width(1000,750) = 1000,
+    // and LADDER = [800, 1600] keeps only 800 below that.
+    make_big_jpeg(&root.join("wide.jpg"), 1000, 750);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+
+    let item = ImageConversionItem {
+        source_path: PathBuf::from("wide.jpg"),
+        source_oid: crate::build::cache::ObjectStore::hash_file(&root.join("wide.jpg")).unwrap(),
+        ext: "jpg".to_string(),
+        dimensions: Some((1000, 750)),
+        skip: None,
+    };
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![item],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+    let services = BuildServices {
+        spawner: Some(std::sync::Arc::new(OidTestInlineSpawner)),
+        ..BuildServices::headless()
+    };
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    })
+    .await
+    .unwrap();
+    let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+    assert!(
+        sealed.files().contains_key("wide.webp"),
+        "premise: the base variant was registered at all"
+    );
+    assert!(
+        sealed.files().contains_key("wide.w800.webp"),
+        "premise: the rung variant was registered at all"
+    );
+    assert!(
+        sealed.staged_oid("wide.webp").is_some(),
+        "the main encode path must record a staged_oid for the base variant"
+    );
+    assert!(
+        sealed.staged_oid("wide.w800.webp").is_some(),
+        "the main encode path must record a staged_oid for each ladder rung too"
+    );
+}
+
+/// The carry-forward skip path's other half: `dispatch_image_conversions`'s
+/// per-item fingerprint match never calls `convert_single_image` at all, so
+/// it has no fresh oid to offer — self-heal relinks a cached blob without
+/// surfacing which one. It must register with `oid: None` and lean on
+/// `ship_phase`'s fingerprint fallback, never fabricate or resurrect a stale
+/// one.
+#[tokio::test]
+async fn skip_path_carry_forward_registers_with_no_oid_not_a_stale_one() {
+    let _guard = image_fingerprint_test_lock().lock();
+    use crate::build::coordinator::test_utils;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_big_jpeg(&root.join("kept.jpg"), 400, 300);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+    fs::write(staging.join("kept.webp"), b"kept-bytes").unwrap();
+
+    let item = ImageConversionItem {
+        source_path: PathBuf::from("kept.jpg"),
+        source_oid: crate::build::cache::ObjectStore::hash_file(&root.join("kept.jpg")).unwrap(),
+        ext: "jpg".to_string(),
+        dimensions: None,
+        skip: None,
+    };
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![item.clone()],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+    let services = BuildServices {
+        spawner: Some(std::sync::Arc::new(OidTestInlineSpawner)),
+        ..BuildServices::headless()
+    };
+
+    // Prime the fingerprint so dispatch takes the self-heal/skip path instead
+    // of a real encode — the branch that has no fresh oid at hand.
+    let cfg = ImageCompressionConfig::default();
+    let fp = compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &cfg)
+        .expect("source exists and is stat-able");
+    check_and_update_image_item_fingerprint(&item.source_path.to_string_lossy(), &fp);
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    })
+    .await
+    .unwrap();
+    let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+    assert_eq!(
+        fs::read(staging.join("kept.webp")).unwrap(),
+        b"kept-bytes",
+        "premise: this took the skip path, not a real re-encode"
+    );
+    assert!(
+        sealed.files().contains_key("kept.webp"),
+        "premise: still registered despite taking the skip path"
+    );
+    assert!(
+        sealed.staged_oid("kept.webp").is_none(),
+        "the carry-forward skip path has no fresh oid at hand and must fall \
+         back to fingerprint protection, not a fabricated or stale oid"
+    );
+}
+
 /// Per-item skip/dispatch, exercised through two siblings with the SAME
 /// recorded (matching) fingerprint but different on-disk state. `kept.jpg`'s
 /// variant is already staged, so it takes the cheap skip path: self-heal
