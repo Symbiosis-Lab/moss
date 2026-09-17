@@ -5620,7 +5620,7 @@ fn the_presence_pass_drops_only_the_outputs_that_are_really_gone() {
     let mut sealed = pending.seal();
     let id_before = sealed.generation_id().to_string();
 
-    crate::build::ship::drop_absent_outputs(&stage, &mut sealed);
+    crate::build::ship::drop_absent_outputs(&stage, &mut sealed, None);
 
     assert!(sealed.files().contains_key(real.as_str()), "a real output stays");
     assert!(
@@ -5656,7 +5656,7 @@ fn the_presence_pass_drops_only_the_outputs_that_are_really_gone() {
     // Err, and `current` is never repointed — the stale preview this change
     // exists to end.
     let site = tmp.path().join("gen");
-    crate::build::ship::ship_phase(&stage, &site, &sealed, None)
+    crate::build::ship::ship_phase(&stage, &site, &sealed, None, None)
         .expect("an entry the presence pass kept unreadable must not fail the generation");
     assert!(
         !math.to_disk(&site).exists(),

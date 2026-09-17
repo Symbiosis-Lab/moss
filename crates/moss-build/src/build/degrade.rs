@@ -63,7 +63,13 @@ pub(crate) fn repair_staged_html(
     let scan = crate::build::media::orphan_prune::extract_referenced_tails(stage_dir);
     unshippable.extend(crate::build::ship::prune_orphaned_webp_before_ship(mp, sealed, &scan));
     let entries = sealed.files().len();
-    let lost = crate::build::ship::drop_absent_outputs(stage_dir, sealed);
+    // Same object store `ship_phase` will read from, so a `staged_oid` entry
+    // whose stage copy is transiently absent (evicted, mid-write, deleted by
+    // something other than moss) is asked of its live CAS blob here too,
+    // rather than being dropped from the manifest on the strength of a stage
+    // path this generation was never going to read from anyway.
+    let object_store = crate::build::cache::ObjectStore::new(mp.cache_objects());
+    let lost = crate::build::ship::drop_absent_outputs(stage_dir, sealed, Some(&object_store));
     let verdict = crate::build::ship::ShipVerdict::after_presence_pass(sealed, entries, lost.len());
     unshippable.extend(lost);
     unshippable.extend(crate::build::ship::unregistered_referenced_variants(

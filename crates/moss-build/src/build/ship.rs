@@ -18,7 +18,7 @@
 //! entry names — a sync client's conflicted copy, a stale output from an
 //! earlier build — is not shipped and cannot reach the published site.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use crate::build::manifest::SealedManifest;
@@ -146,10 +146,98 @@ pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
 // construction and the helper had no callers left. See ADR-043.
 
 // ---------------------------------------------------------------------------
+// Ship-by-OID: read from an immutable CAS blob instead of the mutable stage
+// path, when one is known to back this entry's exact bytes.
+// ---------------------------------------------------------------------------
+
+/// The one file [`ship_phase`] and [`drop_absent_outputs`] read `rel_path`'s
+/// bytes from: the CAS blob backing a live `staged_oid`, or `stage_path`
+/// itself when there is none (or its CAS blob has since been collected).
+///
+/// Both callers MUST route every presence check and every subsequent read
+/// through this SAME resolved path, and neither may recompute it separately.
+/// A presence check that asks the CAS while the read that follows targets the
+/// stage path (or vice versa) can answer "present" from one and then read the
+/// other, genuinely-absent, one — moving the failure a few lines down instead
+/// of preventing it, which is exactly the bug a bolted-on presence-only
+/// helper would reintroduce. See the module docs for the race this exists to
+/// close: between a build sealing a path's hash and shipping its bytes, a
+/// second concurrent build can rewrite the mutable stage copy.
+fn resolve_ship_source(
+    rel_path: &str,
+    stage_path: &Path,
+    sealed: &SealedManifest,
+    object_store: Option<&crate::build::cache::ObjectStore>,
+) -> PathBuf {
+    if let Some(store) = object_store {
+        if let Some(oid) = sealed.staged_oid(rel_path) {
+            if let Some(cas_path) = store.get_path(oid) {
+                return cas_path;
+            }
+        }
+    }
+    stage_path.to_path_buf()
+}
+
+/// Compare `rel_path`'s CURRENT stage bytes against what this manifest sealed,
+/// for an entry [`ship_phase`] is about to read from the mutable stage path
+/// (i.e. one with no live `staged_oid` — [`resolve_ship_source`] fell back).
+///
+/// A cheap stat match is the common case: no read, no hash, `None`. A stat
+/// disagreement demotes to a real hash — computed against the file's current
+/// bytes, same discipline `SourceMetadata`'s racy-mtime fast path uses
+/// (`build/types.rs`) — because a stat change since seal is exactly what a
+/// concurrent build's overwrite produces. Returns the real hash ONLY when it
+/// genuinely disagrees with the sealed entry; a stat change that still hashes
+/// to the same content (a touch, a benign re-save) is not a race and returns
+/// `None` too. The caller never withholds on this — it only logs — so a
+/// routine, non-concurrent rewrite (`degrade::apply_to_staging`) re-stamps the
+/// fingerprint at write time and never reaches this branch at all.
+fn verify_ship_integrity(
+    rel_path: &str,
+    stage_path: &Path,
+    sealed_entry: &str,
+    sealed: &SealedManifest,
+) -> Option<String> {
+    let expected_fp = sealed.ship_fingerprint(rel_path)?;
+    let meta = std::fs::metadata(stage_path).ok()?;
+    let actual_fp = crate::build::manifest::ShipFingerprint::of(&meta)?;
+    if actual_fp == *expected_fp {
+        return None;
+    }
+    let bytes = std::fs::read(stage_path).ok()?;
+    // Hash what `ship_phase` would actually SHIP, not the raw stage bytes:
+    // the manifest's registered hash is of the bytes after `apply_transform`
+    // (staging keeps preview annotations an HTML page's shipped copy does
+    // not — same reason `apply_post_seal_rewrites`'s callers hash the
+    // transformed bytes, never the staged ones). Comparing raw stage bytes
+    // here would report a "mismatch" for every ordinary annotated page.
+    let shipped = apply_transform(transform_for(rel_path), &bytes);
+    let real_hash = crate::build::assets::paths::compute_binary_hash(&shipped);
+    let expected_hash = crate::types::content::parse_entry(sealed_entry).1;
+    if real_hash == expected_hash {
+        None
+    } else {
+        Some(real_hash)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ship_phase  (batched, end-of-blocking)
 // ---------------------------------------------------------------------------
 
 /// Ship one generation: copy exactly what the sealed manifest lists.
+///
+/// Each entry ships from its immutable CAS blob when the manifest recorded
+/// one (`sealed.staged_oid`, still live) — see [`resolve_ship_source`] — and
+/// from the mutable `stage_dir` copy otherwise, exactly as before. The CAS
+/// path is what closes a real race: `stage_dir` is shared and mutable across
+/// concurrent builds of the same folder, so a second build can rewrite a path
+/// between this build sealing its hash and this call reading its bytes, and
+/// the generation would then receive the wrong bytes under a frozen hash. An
+/// entry with no live `staged_oid` still gets a best-effort audit —
+/// [`verify_ship_integrity`] — that can only log the disagreement, never
+/// withhold on it.
 ///
 /// The manifest is the single owner of what a generation contains. This used
 /// to walk `stage_dir` and ship whatever was there, which made the disk a
@@ -191,6 +279,7 @@ pub fn ship_phase(
     stage_dir: &Path,
     site_dir: &Path,
     sealed: &SealedManifest,
+    object_store: Option<&crate::build::cache::ObjectStore>,
     cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> std::io::Result<()> {
     // Count per-file faults so a PARTIAL materialize reports failure (Err),
@@ -207,6 +296,12 @@ pub fn ship_phase(
         }
 
         let stage_path = stage_dir.join(rel_path);
+        // The ONE path every check and read below uses. A live `staged_oid`
+        // resolves to its immutable CAS blob; everything else resolves to
+        // `stage_path` unchanged. See `resolve_ship_source`'s doc comment for
+        // why a second, independently-computed path here would reopen the
+        // exact race this function exists to close.
+        let source_path = resolve_ship_source(rel_path, &stage_path, sealed, object_store);
         let site_path = site_dir.join(rel_path);
         let (mode, _) = crate::types::content::parse_entry(entry);
 
@@ -220,17 +315,33 @@ pub fn ship_phase(
         // verdict: anything else that is absent vanished between them, and
         // promoting a generation short of a file its own manifest names only
         // moves the failure to the next publish. That stays a counted failure.
-        if !crate::build::io_utils::entry_output_present(&stage_path, mode) {
+        if !crate::build::io_utils::entry_output_present(&source_path, mode) {
             if rel_path.starts_with(crate::build::served_path::MATH_PNG_PREFIX) {
                 continue;
             }
             log::warn!(
                 "[ship_phase] {:?} is named by the manifest but is not an output; \
                  it went absent after the presence pass",
-                stage_path
+                source_path
             );
             failures += 1;
             continue;
+        }
+
+        // Only meaningful when `source_path` fell back to the mutable stage
+        // copy: a CAS-backed entry is immutable by construction and a
+        // symlink/no-fingerprint entry returns `None` immediately — see
+        // `verify_ship_integrity`. Never gates shipping; it only makes a
+        // seal-to-ship race audible.
+        if source_path == stage_path {
+            if let Some(real_hash) = verify_ship_integrity(rel_path, &stage_path, entry, sealed) {
+                log::warn!(
+                    "[ship_phase] {:?} changed after this manifest sealed (now hashes to {}, \
+                     manifest says {}) — shipping the current bytes rather than withholding the \
+                     page; a concurrent build most likely rewrote this path",
+                    stage_path, real_hash, entry
+                );
+            }
         }
 
         if let Some(parent) = site_path.parent() {
@@ -241,7 +352,7 @@ pub fn ship_phase(
             }
         }
         if mode == crate::types::content::MODE_SYMLINK {
-            match std::fs::read_link(&stage_path) {
+            match std::fs::read_link(&source_path) {
                 Ok(target) => {
                     #[cfg(unix)]
                     {
@@ -262,7 +373,7 @@ pub fn ship_phase(
                         let target_abs = if target.is_absolute() {
                             target.clone()
                         } else {
-                            stage_path.parent().map(|p| p.join(&target)).unwrap_or(target.clone())
+                            source_path.parent().map(|p| p.join(&target)).unwrap_or(target.clone())
                         };
                         // Unlike unix, this arm READS the target, so presence
                         // has to be asked of the object being read.
@@ -288,7 +399,7 @@ pub fn ship_phase(
                     }
                 }
                 Err(e) => {
-                    log::warn!("[ship_phase] read_link failed for {:?}: {}", stage_path, e);
+                    log::warn!("[ship_phase] read_link failed for {:?}: {}", source_path, e);
                     failures += 1;
                 }
             }
@@ -297,11 +408,11 @@ pub fn ship_phase(
 
         match transform_for(rel_path) {
             ShipTransform::StripPreviewAttrs => {
-                match std::fs::read(&stage_path) {
+                match std::fs::read(&source_path) {
                     Ok(bytes) => {
                         let stripped = apply_transform(ShipTransform::StripPreviewAttrs, &bytes);
                         // `write_output` renames a fresh inode into place, so it
-                        // can neither truncate an inode shared with `stage_path`
+                        // can neither truncate an inode shared with `source_path`
                         // nor materialize a dataless destination (ADR-043).
                         if let Err(e) = crate::build::io_utils::write_output(&site_path, &stripped) {
                             log::warn!("[ship_phase] write failed for {:?}: {}", site_path, e);
@@ -309,7 +420,7 @@ pub fn ship_phase(
                         }
                     }
                     Err(e) => {
-                        log::warn!("[ship_phase] read failed for {:?}: {}", stage_path, e);
+                        log::warn!("[ship_phase] read failed for {:?}: {}", source_path, e);
                         failures += 1;
                     }
                 }
@@ -323,8 +434,8 @@ pub fn ship_phase(
                 // renames, so the destination is never opened with `O_TRUNC`
                 // and a cloud-evicted `site_path` cannot force materialization
                 // (ADR-043).
-                if let Err(e) = crate::build::io_utils::copy_output(&stage_path, &site_path) {
-                    log::warn!("[ship_phase] copy failed for {:?}: {}", stage_path, e);
+                if let Err(e) = crate::build::io_utils::copy_output(&source_path, &site_path) {
+                    log::warn!("[ship_phase] copy failed for {:?}: {}", source_path, e);
                     failures += 1;
                 }
             }
@@ -526,7 +637,12 @@ pub fn materialize_and_promote(
     let gen_dir = mp.generation_dir(sealed.generation_id());
     crate::build::io_utils::create_output_dir_all(&gen_dir)
         .map_err(|e| format!("Failed to create generation dir: {}", e))?;
-    ship_phase(stage_dir, &gen_dir, sealed, cancel)
+    // Ship-by-OID (moss#867-adjacent): read a `staged_oid` entry from its
+    // immutable CAS blob instead of the mutable `stage_dir` copy. Depends on
+    // the entry's CAS blob surviving a concurrent build's GC across this
+    // whole call — see `CacheWriteLease` at this function's own call sites.
+    let object_store = crate::build::cache::ObjectStore::new(mp.cache_objects());
+    ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), cancel)
         .map_err(|e| format!("Failed to materialize generation {}: {}", sealed.generation_id(), e))?;
     let promoted = crate::build::lifecycle::promote(mp, epoch, render, sealed.generation_id())
         .map_err(|e| format!("Failed to set current_ptr: {}", e))?;
@@ -698,13 +814,20 @@ pub(crate) fn reclaim_staging_now(
 pub(crate) fn drop_absent_outputs(
     stage_dir: &std::path::Path,
     sealed: &mut crate::build::manifest::SealedManifest,
+    object_store: Option<&crate::build::cache::ObjectStore>,
 ) -> std::collections::HashSet<String> {
     use crate::build::io_utils::Presence;
     use crate::build::served_path::MATH_PNG_PREFIX;
     let mut absent: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut unverified: Vec<(String, String)> = Vec::new();
     for (rel, entry) in sealed.files() {
-        let path = stage_dir.join(rel);
+        let stage_path = stage_dir.join(rel);
+        // Same resolution `ship_phase` uses (`resolve_ship_source`): a
+        // CAS-backed entry's presence is asked of its CAS blob, never of the
+        // mutable stage copy — otherwise this pass can answer "present" from
+        // one path while `ship_phase` reads the other, genuinely-absent, one,
+        // moving the failure a few lines down instead of preventing it.
+        let path = resolve_ship_source(rel, &stage_path, sealed, object_store);
         let (mode, _) = crate::types::content::parse_entry(entry);
         let presence = crate::build::io_utils::probe_output(&path, mode);
         if presence.is_present() {
@@ -975,7 +1098,7 @@ mod tests {
         cancel.cancel();
         let names: Vec<String> = (0..5).map(|i| format!("f{}.txt", i)).collect();
         let sealed = manifest_of(&names.iter().map(|n| (n.as_str(), &b"x"[..])).collect::<Vec<_>>());
-        ship_phase(&src, &dst, &sealed, Some(&cancel)).unwrap();
+        ship_phase(&src, &dst, &sealed, None, Some(&cancel)).unwrap();
         assert!(
             !dst.exists() || std::fs::read_dir(&dst).unwrap().next().is_none(),
             "no files should be copied when cancel is pre-set"
@@ -1072,7 +1195,7 @@ mod tests {
         std::fs::write(stage.path().join("page (Conflicted Copy).html"), b"<h1>twin</h1>").unwrap();
 
         let sealed = manifest_of(&[("registered.css", b"x")]);
-        ship_phase(stage.path(), site.path(), &sealed, None).unwrap();
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
 
         assert!(site.path().join("registered.css").exists());
         assert!(!site.path().join("orphan.txt").exists());
@@ -1109,7 +1232,7 @@ mod tests {
         );
         let sealed = pending.seal();
 
-        ship_phase(stage.path(), site.path(), &sealed, None).unwrap();
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
 
         let meta = std::fs::symlink_metadata(site.path().join("myapp")).unwrap();
         assert!(meta.file_type().is_symlink(), "the entry says symlink; the generation must hold one");
@@ -1136,7 +1259,7 @@ mod tests {
         std::fs::write(site.path().join("sub"), b"blocker").unwrap();
 
         let sealed = manifest_of(&[("sub/page.html", b"<html/>")]);
-        let result = ship_phase(stage.path(), site.path(), &sealed, None);
+        let result = ship_phase(stage.path(), site.path(), &sealed, None, None);
         assert!(
             result.is_err(),
             "ship_phase must return Err when a file fails to materialize"
@@ -1156,12 +1279,12 @@ mod tests {
         let mut pending = PendingManifest::new(SiteHashes::default());
         pending.register_hashed(&math, &crate::types::content::file_entry("cccc"), HashBucket::Files);
         // Neither file is written: both are absent for the same reason.
-        ship_phase(stage.path(), site.path(), &pending.seal(), None)
+        ship_phase(stage.path(), site.path(), &pending.seal(), None, None)
             .expect("an absent math PNG is skipped, not counted");
 
         let sealed = manifest_of(&[("page/index.html", b"<h1>hi</h1>")]);
         assert!(
-            ship_phase(stage.path(), site.path(), &sealed, None).is_err(),
+            ship_phase(stage.path(), site.path(), &sealed, None, None).is_err(),
             "an ordinary entry that has no output must not be promoted away quietly"
         );
     }
@@ -1182,7 +1305,7 @@ mod tests {
             ("index.html", preview_html.as_bytes()),
             ("style.css", css),
         ]);
-        ship_phase(stage.path(), site.path(), &sealed, None).unwrap();
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
 
         // HTML in site/ must have annotations stripped
         let shipped_html = std::fs::read_to_string(site.path().join("index.html")).unwrap();
@@ -1206,7 +1329,7 @@ mod tests {
         std::fs::write(stage.path().join("articles/foo/bar.html"), b"<x/>").unwrap();
 
         let sealed = manifest_of(&[("articles/foo/bar.html", b"<x/>")]);
-        ship_phase(stage.path(), site.path(), &sealed, None).unwrap();
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
 
         assert!(site.path().join("articles/foo/bar.html").exists());
     }
@@ -1227,7 +1350,7 @@ mod tests {
         std::fs::write(stage.path().join("clip.mp4"), b"video bytes").unwrap();
 
         let sealed = manifest_of(&[("clip.mp4", b"video bytes")]);
-        ship_phase(stage.path(), site.path(), &sealed, None).unwrap();
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
 
         let stage_meta = std::fs::metadata(stage.path().join("clip.mp4")).unwrap();
         let site_meta = std::fs::metadata(site.path().join("clip.mp4")).unwrap();
@@ -1280,7 +1403,7 @@ mod tests {
         );
 
         let sealed = manifest_of(&[("clip.mp4", b"video bytes")]);
-        ship_phase(stage.path(), site.path(), &sealed, None).unwrap();
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
 
         // Stage must STILL have the bytes (the bug zeroed it during fs::copy).
         let stage_bytes = std::fs::read(stage.path().join("clip.mp4")).unwrap();
@@ -1313,7 +1436,7 @@ mod tests {
         std::fs::write(site.path().join("clip.mp4"), b"").unwrap();
 
         let sealed = manifest_of(&[("clip.mp4", b"recovered bytes")]);
-        ship_phase(stage.path(), site.path(), &sealed, None).unwrap();
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
 
         assert_eq!(
             std::fs::read(site.path().join("clip.mp4")).unwrap(),

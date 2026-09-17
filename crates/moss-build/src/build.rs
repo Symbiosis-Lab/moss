@@ -1812,6 +1812,13 @@ async fn advertise_sealed(
     // HTML and re-derives it — the promote line names both, so a sealed id
     // and a promoted id that differ read as one generation, not two.
     let sealed_as = sealed.generation_id().to_string();
+    // Right after seal, before any repair pass can rewrite `stage_dir`: the
+    // reference point `ship_phase`'s integrity check compares against, for
+    // every entry it will read from the mutable stage path rather than an
+    // immutable CAS blob. This is what makes "seal to ship" a real window —
+    // a concurrent build's rewrite anywhere between here and `ship_phase`
+    // below is exactly what the check exists to catch.
+    sealed.stamp_all_ship_fingerprints(stage_dir);
     // 0. Read the PREVIOUS on-disk manifest BEFORE step 2 overwrites it, so the
     //    post-seal asset diff (step 7) compares the freshly-sealed view against
     //    the prior build. Missing/corrupt → default (empty), so a first build

@@ -76,7 +76,7 @@ fn a_manifest_entry_hashes_the_shipped_page_not_the_staged_one() {
     pending.register(&served, &shipped, HashBucket::Files);
     let sealed = pending.seal();
 
-    ship_phase(&stage_dir, &mp.generation_dir("gen-shipped"), &sealed, None)
+    ship_phase(&stage_dir, &mp.generation_dir("gen-shipped"), &sealed, None, None)
         .expect("ship_phase must materialize the generation");
     let files = published_files(&mp).expect("generation on disk must reconstruct");
 

@@ -149,7 +149,7 @@ fn copy_deferred_assets_preserves_directory_symlink() {
         "the copy must register the alias it preserved; it named: {:?}",
         sealed.files().keys().collect::<Vec<_>>()
     );
-    crate::build::ship::ship_phase(&staging, &site, &sealed, None).expect("ship_phase should succeed");
+    crate::build::ship::ship_phase(&staging, &site, &sealed, None, None).expect("ship_phase should succeed");
 
     // 1. staging/myapp is a symlink with target "resources/app"
     let staging_alias = staging.join("myapp");
@@ -322,7 +322,7 @@ fn copy_deferred_assets_resolves_finder_alias() {
     let (tx, rx) = crate::build::coordinator::test_utils::build_test_coordinator();
     let _ = copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
     let sealed = drained_sealed(rx);
-    let _ = crate::build::ship::ship_phase(&staging, &site, &sealed, None);
+    let _ = crate::build::ship::ship_phase(&staging, &site, &sealed, None, None);
 
     // The alias should be a POSIX symlink in BOTH staging and site
     for dir in [&staging, &site] {
