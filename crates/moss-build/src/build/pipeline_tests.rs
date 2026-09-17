@@ -172,7 +172,7 @@ fn build_test_full(
         .map_err(crate::build::outcome::BuildStopped::into_message)?;
         if let Some(handle) = bg_handle {
             match handle.await_completion().await {
-                Ok(sealed) => {
+                Ok((sealed, _cache_lease)) => {
                     let hashes_path = crate::moss_paths::MossPaths::new(root.path()).hashes();
                     if let Err(e) = sealed.write_to_disk(&hashes_path) {
                         log::warn!("test seal+persist: failed to write hashes.json: {}", e);
@@ -4628,7 +4628,7 @@ async fn text_only_build_returns_bg_handle_for_deploy_seal() {
     );
 
     // Also verify the handle actually seals cleanly (zero workers → immediate drain).
-    let sealed = bg_handle
+    let (sealed, _cache_lease) = bg_handle
         .unwrap()
         .await_completion()
         .await
@@ -4679,7 +4679,7 @@ fn build_test_sealed(folder_path: &str) -> Result<Vec<String>, String> {
         )
         .map_err(crate::build::outcome::BuildStopped::into_message)?;
         let Some(handle) = bg_handle else { return Ok(Vec::new()) };
-        let sealed = handle
+        let (sealed, _cache_lease) = handle
             .await_completion()
             .await
             .map_err(|e| format!("test seal+persist failed: {}", e))?;
@@ -4750,7 +4750,7 @@ fn build_test_shipped(
         let Some(handle) = bg_handle else {
             return Ok(std::collections::HashSet::new());
         };
-        let mut sealed = handle
+        let (mut sealed, _cache_lease) = handle
             .await_completion()
             .await
             .map_err(|e| format!("test seal+persist failed: {}", e))?;

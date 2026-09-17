@@ -1326,7 +1326,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                 });
                 let wait = SealWait::start();
                 match handle.await_completion().await {
-                    Ok(sealed) => {
+                    Ok((sealed, cache_lease)) => {
                         log::info!(
                             "seal+persist: generation {} sealed ({} files), {}",
                             sealed.generation_id(),
@@ -1354,6 +1354,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                             // outlives this task, and may still be reading
                             // `stage_dir`. Never reclaim here.
                             None,
+                            cache_lease,
                         )
                         .await;
                     }
@@ -1400,7 +1401,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
             // price of one tail rather than a second code path.
             let wait = SealWait::start();
             match handle.await_completion().await {
-                Ok(sealed) => {
+                Ok((sealed, cache_lease)) => {
                     log::info!(
                         "seal+persist (sync): generation {} sealed ({} files), {}",
                         sealed.generation_id(),
@@ -1432,6 +1433,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                         // reads `stage_dir` again in this process. Reclaim now
                         // or never.
                         Some(crate::build::lifecycle::final_build_permit(&mp)),
+                        cache_lease,
                     )
                     .await;
                 }
@@ -1776,6 +1778,14 @@ async fn advertise_sealed(
     // this returns: no later build will sweep what this one orphaned, so the
     // tail reclaims it now (`ship::reclaim_staging_now`).
     final_sweep: Option<crate::build::lifecycle::SweepPermit>,
+    // The build's `lifecycle::CacheWriteLease`, handed back by
+    // `BackgroundHandle::await_completion` instead of being dropped there.
+    // Held across `materialize_and_promote` (`ship_phase`) below, so a
+    // concurrent `collect_build_store` cannot GC a CAS blob this generation's
+    // own ship still needs to read — the bug this parameter exists to close.
+    // Dropped explicitly right after, before this same tail's own
+    // `collect_build_store` call can trigger cache GC (see the `drop` below).
+    cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
 ) {
     let reporter = ports.events.as_ref();
     let announcer = ports.announcer.as_ref();
@@ -1891,6 +1901,18 @@ async fn advertise_sealed(
     }
     let mat_ok = matches!(promotion, Ok(Promotion::Promoted));
     let owns_shared = crate::build::ship::tail_owns_shared_state(&promotion);
+
+    // `materialize_and_promote` (ship_phase) was the last thing above that
+    // could still read a CAS blob a concurrent GC might collect, so the lease
+    // has done its job — drop it now, before step 3 below can reach this same
+    // tail's own `collect_build_store` and trigger cache GC: held any longer
+    // and every promoted build would defer its own GC pass against its own
+    // still-open lease. Residual accepted here: on a vault rebuilt
+    // continuously this still shrinks each build's GC-eligible window
+    // relative to the old (too-early) drop point, so cache GC can end up
+    // deferred for a whole active-editing session — fine, a skipped GC is
+    // already non-fatal and retried next build.
+    drop(cache_lease);
 
     // Say it out loud, and only for a real swap: this instant — not
     // `BuildComplete`, which fired back when `await_completion` returned — is
@@ -2323,4 +2345,8 @@ mod epoch_ordering_tests;
 #[cfg(test)]
 #[path = "build/promise_gate_tests.rs"]
 mod promise_gate_tests;
+
+#[cfg(test)]
+#[path = "build/cache_lease_ship_tests.rs"]
+mod cache_lease_ship_tests;
 

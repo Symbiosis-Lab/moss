@@ -39,7 +39,7 @@ struct FolderLifecycle {
     /// Highest promotion epoch that reached `current`.
     promoted_epoch: u64,
     /// Open [`CacheWriteLease`]s: builds between `run_pipeline` entry and the
-    /// end of their workers.
+    /// end of the seal tail's `materialize_and_promote`.
     build_writers: usize,
     /// Open [`EncodeLease`]s: detached encodes, which outlive their build.
     encode_writers: usize,
@@ -302,7 +302,14 @@ pub(crate) fn withdraw_render(mp: &MossPaths, render: Option<u64>) {
 }
 
 /// A build that may still write the object store or staging: held from
-/// `run_pipeline` entry until its background workers have joined.
+/// `run_pipeline` entry through the seal tail's `materialize_and_promote`
+/// (`ship_phase`) — `BackgroundHandle::await_completion` hands it back
+/// instead of dropping it once the background workers have joined, and
+/// `build::advertise_sealed` drops it explicitly right after, before that
+/// same tail's own `collect_build_store` can trigger cache GC. Widened from
+/// stopping at `await_completion`, which dropped it before the seal tail had
+/// even started — letting a concurrent `collect_build_store` GC a CAS blob
+/// the seal tail's own `ship_phase` still needed to read.
 pub(crate) struct CacheWriteLease {
     record: Arc<LifecycleCell>,
 }
