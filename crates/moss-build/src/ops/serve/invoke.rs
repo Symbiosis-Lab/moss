@@ -550,6 +550,124 @@ async fn arm_resolve_url_for_file(ctx: &Session, args: Value) -> ArmResult {
     to_value(r)
 }
 
+// ── Versions arms (publish history) ───────────────────────────────────────────
+//
+// The five commands of the Versions surface, each calling the SAME
+// `deploy::history::panel` body its `#[tauri::command]` calls — never a
+// reimplementation, exactly like the editor arms above.
+//
+// The one thing that differs between the carriers is where "the tree as it
+// stands right now" comes from. The app hands its body the sealed manifest
+// `AppState` holds; these hand it `one_shot::build_sealed_now`, which builds,
+// because a headless process has no live manifest — the same answer
+// `moss history --save` has made since slice 2. The provider is a future the
+// body awaits only when it needs one, so `list_versions` builds on the
+// site-version drill-down and never on the timeline an open panel asks for.
+//
+// `projectPath` is IGNORED on all five, for the reason `list_directory`
+// ignores it: the carrier's own vault is authoritative, and honouring a
+// caller-supplied root would let the request name the folder it acts on.
+// `id` is caller-supplied here in a way it never is over IPC, and the body
+// checks it against the records the store lists before the store joins it into
+// a filename (`panel::known_id`).
+
+/// `list_versions(project_path, scope, path, state)` — the Versions list for
+/// either scope, and the site-version drill-down. Only the drill-down awaits
+/// the manifest provider, so an opened panel costs no build.
+async fn arm_list_versions(ctx: &Session, args: Value) -> ArmResult {
+    #[derive(serde::Deserialize)]
+    struct A {
+        scope: String,
+        path: Option<String>,
+    }
+    let a: A = parse_args(args)?;
+    let vault = ctx.vault();
+    let r = crate::deploy::history::panel::list_versions(
+        vault.path(),
+        &a.scope,
+        a.path,
+        crate::deploy::one_shot::build_sealed_now(vault),
+    )
+    .await
+    .map_err(ArmError::Command)?;
+    to_value(r)
+}
+
+/// `read_version(project_path, id, path)` — pure-args (no `State`); one
+/// version's bytes at one path, as text or as "not kept".
+async fn arm_read_version(ctx: &Session, args: Value) -> ArmResult {
+    #[derive(serde::Deserialize)]
+    struct A {
+        id: String,
+        path: String,
+    }
+    let a: A = parse_args(args)?;
+    // `path` needs no `confine`: it is a key into the record's own entry map,
+    // never joined onto anything, and a key the record does not carry is
+    // refused by name before the object store is touched.
+    let r = crate::deploy::history::panel::read_version(ctx.vault().path(), &a.id, &a.path)
+        .map_err(ArmError::Command)?;
+    to_value(r)
+}
+
+/// `reveal_history_store(project_path)` — "Show in Finder" on this vault's
+/// history store. The carrier is loopback-only, so the file manager this opens
+/// is on the same machine as the caller, exactly as on the desktop path; the
+/// path itself is moss's own fixed subpath of the vault, with nothing
+/// caller-supplied in it.
+async fn arm_reveal_history_store(ctx: &Session, _args: Value) -> ArmResult {
+    crate::deploy::history::panel::reveal_history_store(ctx.vault().path())
+        .map_err(ArmError::Command)?;
+    to_value(())
+}
+
+/// `restore_version(project_path, id, path, mode, state)` — restore one page
+/// or the whole site, after saving the present as a version first. The site
+/// form moves pages added since the version to the OS Trash (recoverable,
+/// never an unlink) through the same delete core `delete_entry` uses.
+async fn arm_restore_version(ctx: &Session, args: Value) -> ArmResult {
+    #[derive(serde::Deserialize)]
+    struct A {
+        id: String,
+        path: Option<String>,
+        mode: String,
+    }
+    let a: A = parse_args(args)?;
+    let vault = ctx.vault();
+    let r = crate::deploy::history::panel::restore_version(
+        vault.path(),
+        &a.id,
+        a.path,
+        &a.mode,
+        crate::deploy::one_shot::build_sealed_now(vault),
+    )
+    .await
+    .map_err(ArmError::Command)?;
+    to_value(r)
+}
+
+/// `save_version(project_path, label, app, state)` — save a version now.
+///
+/// The desktop command waits for an in-flight watch rebuild before reading
+/// `AppState`'s manifest; this arm's provider IS a build, which takes the
+/// per-folder stage-write lock and so is already ordered against the watcher's.
+async fn arm_save_version(ctx: &Session, args: Value) -> ArmResult {
+    #[derive(serde::Deserialize)]
+    struct A {
+        label: Option<String>,
+    }
+    let a: A = parse_args(args)?;
+    let vault = ctx.vault();
+    let r = crate::deploy::history::panel::save_version(
+        vault.path(),
+        a.label,
+        crate::deploy::one_shot::build_sealed_now(vault),
+    )
+    .await
+    .map_err(ArmError::Command)?;
+    to_value(r)
+}
+
 // ── The one manual surface: allowlist + generated dispatch ────────────────────
 
 /// Generates BOTH a carrier allowlist (`$list`) and its dispatch fn (`$dispatch`)
@@ -617,12 +735,16 @@ carrier! {
     /// /__moss/mutate/<cmd>`. Token-GATED (`X-Moss-Token`). A strict subset of
     /// the registry, validated by the SAME subset test as the read-only list.
     /// Kept minimal: exactly the commands the acceptance flow needs — create a
-    /// file, and persist edited page bytes to disk.
+    /// file, persist edited page bytes to disk, and the two Versions actions
+    /// that write into the vault (a restore overwrites and trashes; a save
+    /// writes a record and its blobs).
     MUTATION_HTTP_COMMANDS, dispatch_mutation {
         create_files => arm_create_files,
         create_folder => arm_create_folder,
         delete_entry => arm_delete_entry,
         save_editor_content => arm_save_editor_content,
+        restore_version => arm_restore_version,
+        save_version => arm_save_version,
     }
 }
 
@@ -632,7 +754,11 @@ carrier! {
     /// mutation tier — booting the editor exposes the whole vault, so it is a
     /// session-scoped capability, not a public read like `parse_frontmatter`.
     /// A strict subset of the registry, validated by the SAME subset test as the
-    /// other two lists. These are exactly the editor's boot + open reads.
+    /// other two lists. These are the editor's boot + open reads, plus the
+    /// Versions surface's three non-writing commands. `list_versions` can build
+    /// the site to answer a site-version drill-down (that is how a headless
+    /// process gets a sealed manifest at all) — it writes moss's own output
+    /// tree, never the author's files, which is what keeps it a read.
     AUTHED_READ_HTTP_COMMANDS, dispatch_authed_read {
         editor_bootstrap => arm_editor_bootstrap,
         list_directory => arm_list_directory,
@@ -642,6 +768,9 @@ carrier! {
         describe_source_role => arm_describe_source_role,
         resolve_url_for_file => arm_resolve_url_for_file,
         validate_content => arm_validate_content,
+        list_versions => arm_list_versions,
+        read_version => arm_read_version,
+        reveal_history_store => arm_reveal_history_store,
     }
 }
 

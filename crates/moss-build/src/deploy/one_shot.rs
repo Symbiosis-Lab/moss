@@ -144,6 +144,32 @@ pub(crate) async fn build_and_seal(
     Ok(taken)
 }
 
+/// A sealed manifest of the tree as it stands right now, built on the spot —
+/// what a process with no `AppState` has instead of the live one the app keeps.
+///
+/// Two callers, both headless and neither publishing: [`super::history::cli`]'s
+/// `--save`/`--restore`, and the HTTP command carrier's Versions arms. It is
+/// async, and that is the whole reason it is a function rather than a line
+/// inside the CLI: the carrier runs inside a request handler on a live tokio
+/// runtime, where `Runtime::block_on` panics.
+///
+/// It sets up **nothing** about the process — no headless logger, no plugin
+/// admission verdict, and in particular no `folder_session::register_session`,
+/// which DRAINS the folder's existing session and would shut down a running
+/// `moss build --serve --watch` from under itself. A fresh CLI process does all
+/// three at its entry point; a serving process did them at startup.
+///
+/// `PluginMode::Blocking` matches `moss history --save`: plugin-contributed
+/// content is part of the tree a version records, so it waits for it. A serving
+/// process started with `--no-plugins` is a known gap — the flag is a decision
+/// `run_headless_build` makes once and keeps nowhere this can read.
+pub async fn build_sealed_now(
+    root: &crate::vault::paths::VaultRoot,
+) -> Result<SealedManifest, String> {
+    let host = crate::cli::host::cli_host_ports(root.as_str());
+    require_sealed(build_and_seal(root, host, crate::build::PluginMode::Blocking).await?)
+}
+
 /// The one sentence every publish driver refuses a sealless publish with.
 ///
 /// An empty slot is never "no manifest, carry on". In a one-shot `capture_seal`

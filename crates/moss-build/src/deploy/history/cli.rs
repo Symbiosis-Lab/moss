@@ -210,12 +210,17 @@ fn resolve_id<'a>(records: &'a [(String, PublishRecord)], needle: &str) -> Resul
     }
 }
 
-/// Run a real headless build of `root` and hand back the manifest it sealed —
-/// [`crate::deploy::one_shot::build_and_seal`], the same build
-/// `deploy::push::run_hosted_deploy` and `deploy::plugin_push::run_plugin_deploy`
-/// use, minus the publish. `--save` and `--restore` both need this: neither is
-/// running inside the app, which keeps a sealed manifest live in `AppState`
-/// as files change, so a terminal process has to make its own.
+/// This process's setup, then a real headless build of `root`, and the
+/// manifest it sealed — [`crate::deploy::one_shot::build_sealed_now`], the
+/// same build `deploy::push::run_hosted_deploy` and
+/// `deploy::plugin_push::run_plugin_deploy` use, minus the publish. `--save`
+/// and `--restore` both need this: neither is running inside the app, which
+/// keeps a sealed manifest live in `AppState` as files change, so a terminal
+/// process has to make its own.
+///
+/// The three setup lines and the runtime are what a fresh CLI process owes and
+/// the shared build does not do — a serving process has already done them, and
+/// `register_session` in particular DRAINS the folder's existing session.
 ///
 /// No `--allow-plugins` here — this command has no such flag — so a
 /// sideloaded plugin is refused exactly as a plain `moss build` refuses one
@@ -230,13 +235,7 @@ fn headless_build_sealed(root: &VaultRoot) -> Result<SealedManifest, String> {
         .build()
         .map_err(|e| format!("failed to start runtime: {e}"))?;
 
-    runtime.block_on(async {
-        let host = crate::cli::host::cli_host_ports(root.as_str());
-        let taken =
-            crate::deploy::one_shot::build_and_seal(root, host, crate::build::PluginMode::Blocking)
-                .await?;
-        crate::deploy::one_shot::require_sealed(taken)
-    })
+    runtime.block_on(crate::deploy::one_shot::build_sealed_now(root))
 }
 
 /// The site's currently configured publish target, or moss's own target for

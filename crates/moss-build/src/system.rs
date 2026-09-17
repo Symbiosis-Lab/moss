@@ -2,15 +2,17 @@
 //! and the plugin runtime reach: per-folder session state, system-proxy
 //! resolution, the resumable verified download, the single-shot `fetch_text`/
 //! `fetch_bytes` pair `moss desktop install` uses for the updater manifest and
-//! the release tarball, and the outbound `User-Agent`. The rest of the family
-//! (windows, menus, dialogs, commands) stays app-side; the reqwest adapter
-//! over [`proxy`] stays there too, so this crate carries no reqwest.
+//! the release tarball, the outbound `User-Agent`, and "Show in Finder"
+//! ([`reveal`], which two carriers ask for). The rest of the family (windows,
+//! menus, dialogs, commands) stays app-side; the reqwest adapter over
+//! [`proxy`] stays there too, so this crate carries no reqwest.
 pub mod bounded_command;
 pub mod build_records;
 pub mod folder_session;
 pub mod large_download;
 pub mod proxy;
 pub mod proxy_reqwest;
+pub mod reveal;
 pub mod stack_exec;
 pub mod tar_safe;
 

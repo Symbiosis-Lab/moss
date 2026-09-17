@@ -12,9 +12,9 @@
 //! item 1: the store ([`store`]), the record and its three writers
 //! ([`record`]), page and site restore ([`restore`]), and the page/site
 //! timeline folds ([`timeline`]). Slice 2 adds the `moss history` CLI verb
-//! ([`cli`]) over the same facade; the UI (slice 3) has not landed —
-//! everything here is reached by `deploy::landed::record_landed`, by
-//! [`cli::run`], and by this module's own tests.
+//! ([`cli`]) over the same facade, and slice 3 the Versions surface's five
+//! command bodies ([`panel`]) — which the desktop app and the HTTP command
+//! carrier both wrap, one line each.
 //!
 //! [`HistoryStore::in_vault`] resolves the store for a vault — infallible,
 //! since the path is just a join, no app-data lookup and no site-key
@@ -22,6 +22,7 @@
 //! outside any vault.
 
 pub mod cli;
+pub mod panel;
 pub(crate) mod record;
 pub(crate) mod restore;
 pub(crate) mod store;
