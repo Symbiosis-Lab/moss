@@ -189,43 +189,45 @@ pub fn delete_entry_inner(project_root: &Path, path: &str) -> Result<(), String>
     // not offer "Put Back" for items trashed this way; drag-out recovery
     // still works.
     //
-    // NsFileManager stays first for exactly that reason. But it has its own
-    // failure mode: on a client's Mac, trashing a file inside iCloud Drive
-    // failed with Apple's "the volume doesn't have one" — that container's
-    // own `.Trash` was missing, and `trashItemAtURL` has no fallback for
-    // that. Finder's AppleScript route was the crate's default before
-    // 2026-09-05 and does not hit this failure, so [`trash_with_finder_fallback`]
-    // retries through it once NsFileManager has already failed.
+    // NsFileManager stays FIRST for exactly that reason, but it is not the
+    // more capable route — only the faster one. It reaches Apple's
+    // `trashItemAtURL` directly, and that call has no answer when the
+    // container holding the file has no Trash of its own: on a client's Mac
+    // a file inside iCloud Drive failed with Apple's "the volume doesn't
+    // have one". Finder does not hit that, because asking Finder to delete
+    // something is asking the one process whose job is knowing where a given
+    // item's Trash lives. So the order is fast-route-first, correct-route-
+    // second, and [`trash_with_finder_fallback`] owns the handoff.
     //
-    // The retry fires on ANY NsFileManager failure, not just the "no trash"
-    // one, and that is deliberate, not the wide-net version this used to
-    // warn against. The trash crate hands back only a formatted string, and
-    // the one locale-stable part of it is the crate's own preamble
-    // (`` `trashItemAtURL` failed ``) — the rest is `NSError.localizedDescription`,
-    // which macOS translates. moss's affected users are Chinese-language
-    // clients, so gating on the English "doesn't have one" text would make
-    // the fallback a no-op for exactly the people who hit this bug. Matching
-    // the preamble alone is really "the NsFileManager attempt itself failed"
-    // (a pre-flight canonicalization error inside the `trash` crate carries
-    // no such preamble and is left alone — Finder would hit the identical
-    // failure). So yes, Finder's known costs — up to the ~60s busy-Finder
-    // AppleEvent wait, the Automation-permission prompt (moss#1171) — can now
-    // be paid on any failed delete. That's acceptable here: it only runs
-    // after the fast route has already failed, the frontend already shows a
-    // slow-trash toast for exactly this wait (`ops.ts`'s
-    // `SLOW_TRASH_TOAST_MS`, added for the 2026-09-05 incident), and a
-    // bounded slow retry beats a delete that cannot otherwise succeed.
+    // Deliberately NOT conditional on what the first failure was. An earlier
+    // version classified the error and only handed off for failures it
+    // recognized, which is the wrong shape twice over: the `trash` crate
+    // folds every `trashItemAtURL` failure into one untyped string whose
+    // only locale-stable part is the crate's own English preamble (the rest
+    // is `NSError.localizedDescription`, which macOS translates — so the
+    // first cut of that classifier never fired for the Chinese-locale
+    // clients who hit this), and the one case it usefully excluded does not
+    // exist: `trash::TrashContext::delete_all` canonicalizes paths BEFORE
+    // dispatching to either route, so a pre-flight path error fails the
+    // Finder route identically and immediately. Inferring nothing is both
+    // simpler and more correct than inferring from a string.
+    //
+    // The cost is Finder's known ones — up to the ~60s busy-Finder AppleEvent
+    // wait, the Automation-permission prompt (moss#1171) — now reachable on
+    // any failed delete. Accepted: it only runs once the fast route has
+    // already failed, the frontend raises a slow-trash toast for exactly
+    // this wait (`ops.ts`'s `SLOW_TRASH_TOAST_MS`, added for the 2026-09-05
+    // incident), and a slow delete beats one that cannot succeed.
     match trash_with_finder_fallback(&target) {
         Ok(()) => Ok(()),
         // Vanished mid-flight (the pre-check's race window): goal state
         // reached, same as the pre-check.
         Err(_) if target.symlink_metadata().is_err() => Ok(()),
         Err(e) => {
-            // The raw `trash::Error` is a nested Rust Debug dump (see
-            // `is_ns_file_manager_trash_failure`'s doc) — not something to
-            // hand a user through a toast that is otherwise in their own language.
-            // Keep it in the log for support/telemetry; give the user one
-            // sentence that tells them what to do next.
+            // The raw `trash::Error` is a nested Rust Debug dump — not
+            // something to hand a user through a toast that is otherwise in
+            // their own language. Keep it in the log for support; give the
+            // user one sentence that tells them what to do next.
             log::error!("delete_entry: couldn't move '{}' to the Trash: {}", path, e);
             Err(format!(
                 "Couldn't move '{}' to the Trash. Try again, or delete it in Finder.",
@@ -235,58 +237,34 @@ pub fn delete_entry_inner(project_root: &Path, path: &str) -> Result<(), String>
     }
 }
 
-/// Trash `target`, retrying through Finder when [`is_ns_file_manager_trash_failure`]
-/// says the failure came from the NsFileManager attempt itself. See the
-/// comment on [`delete_entry_inner`] for why NsFileManager goes first and
-/// why this retry is allowed to fire on essentially any such failure.
+/// Trash `target` via `NSFileManager`, handing off to Finder if that fails
+/// for any reason. See [`delete_entry_inner`]'s comment for why the order is
+/// this way round and why the handoff is unconditional.
+#[cfg(target_os = "macos")]
 fn trash_with_finder_fallback(target: &Path) -> Result<(), trash::Error> {
-    #[allow(unused_mut)]
     let mut ctx = trash::TrashContext::default();
-    #[cfg(target_os = "macos")]
     ctx.set_delete_method(DeleteMethod::NsFileManager);
-    let err = match ctx.delete(target) {
-        Ok(()) => return Ok(()),
-        Err(e) => e,
-    };
-
-    #[cfg(target_os = "macos")]
-    if is_ns_file_manager_trash_failure(&err) {
-        // `{err}` still carries Apple's (possibly localized) description —
-        // logged in full here for diagnosis, even though it plays no part
-        // in the decision to retry.
-        log::warn!(
-            "delete_entry: NsFileManager failed to trash '{}' ({err}); retrying via Finder",
-            target.display()
-        );
-        let mut finder_ctx = trash::TrashContext::default();
-        finder_ctx.set_delete_method(DeleteMethod::Finder);
-        return finder_ctx.delete(target);
+    match ctx.delete(target) {
+        Ok(()) => Ok(()),
+        Err(fast_err) => {
+            // Logged rather than inspected: this carries Apple's own
+            // (possibly localized) description, which is worth having in a
+            // support log and worth nothing as a branch condition.
+            log::warn!(
+                "delete_entry: NsFileManager failed to trash '{}' ({fast_err}); handing off to Finder",
+                target.display()
+            );
+            let mut finder_ctx = trash::TrashContext::default();
+            finder_ctx.set_delete_method(DeleteMethod::Finder);
+            finder_ctx.delete(target)
+        }
     }
-
-    Err(err)
 }
 
-/// Did `e` come from the `NSFileManager.trashItemAtURL` call itself, rather
-/// than from something before it (e.g. the `trash` crate's own path
-/// canonicalization)?
-///
-/// `trash` v5.2.9 folds every `trashItemAtURL` failure into `Error::Unknown`
-/// with no error code — just the crate's own fixed English preamble
-/// (`` `trashItemAtURL` failed: ``, hardcoded in `macos/mod.rs`) followed by
-/// `NSError.localizedDescription`. The preamble is a Rust format string, so
-/// it is the ONLY locale-stable part; matching on it is deliberately all
-/// this function does. It used to also require Apple's English "doesn't
-/// have one" phrase, which made the fallback fire only on an English-locale
-/// Mac — moss's affected users are Chinese-language clients, so that
-/// version never fired for the people who hit this bug (`localizedDescription`
-/// is translated by macOS; see `objc2-foundation`'s `Display for NSError`).
-/// Matching the preamble alone means this returns `true` for essentially
-/// any `trashItemAtURL` failure, not just the "no Trash" one — see the
-/// comment on [`delete_entry_inner`] for why that widened scope is
-/// accepted rather than guarded against.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn is_ns_file_manager_trash_failure(e: &trash::Error) -> bool {
-    e.to_string().contains("trashItemAtURL")
+/// Every other platform has one route, so there is nothing to fall back to.
+#[cfg(not(target_os = "macos"))]
+fn trash_with_finder_fallback(target: &Path) -> Result<(), trash::Error> {
+    trash::TrashContext::default().delete(target)
 }
 
 /// Rename an entry: path-traversal guard + project-root boundary check +
