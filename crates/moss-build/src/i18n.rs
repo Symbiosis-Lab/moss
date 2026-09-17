@@ -856,23 +856,16 @@ mod tests {
     }
 }
 
-/// The last-resort default language for a SITE build (issue #545: a non-English
-/// user's empty/ambiguous site defaults to their language, not `en`).
-///
-/// Seeded once at process start by the app (`init_app_language` calls
-/// [`seed_build_default_language`]) and immutable after — a build's content
-/// default must stay tied to the session, not the live UI language toggle.
-/// Unseeded (unit tests) it falls back to `En`.
+/// Was the last-resort default language for a SITE build's no-signal case
+/// (issue #545); that rung was the OS locale, and it is gone
+/// (`i18n::detect::resolve_site_default_lang` now returns the constant `En`
+/// instead). Nothing in this crate reads this any more — it is kept only so
+/// `moss-desktop`'s startup seeding keeps compiling; do not add a new reader.
 static BUILD_DEFAULT_LANGUAGE: std::sync::OnceLock<Language> = std::sync::OnceLock::new();
 
 /// Seed the build-default language. First call wins; later calls are no-ops.
 pub fn seed_build_default_language(lang: Language) {
     let _ = BUILD_DEFAULT_LANGUAGE.set(lang);
-}
-
-/// See [`BUILD_DEFAULT_LANGUAGE`]. `En` when never seeded.
-pub fn build_default_language() -> Language {
-    BUILD_DEFAULT_LANGUAGE.get().copied().unwrap_or(Language::En)
 }
 
 // ── App-shell language (crossed from `infra::app_config` at M6a) ──────────

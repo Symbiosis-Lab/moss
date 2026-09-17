@@ -651,7 +651,6 @@ impl ProjectInfo {
                 ps.homepage_file.as_deref(),
                 &ps.markdown_files,
                 &ps.root_path,
-                crate::i18n::build_default_language(),
             ),
         }
     }

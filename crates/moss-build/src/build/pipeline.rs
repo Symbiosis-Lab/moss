@@ -1278,7 +1278,6 @@ fn build_inner(
         project_structure.homepage_file.as_deref(),
         &project_structure.markdown_files,
         &project_structure.root_path,
-        crate::i18n::build_default_language(),
     );
     let site_comments = site_bool("comments");
     // Read site-level config from .moss/config.toml [site] section
