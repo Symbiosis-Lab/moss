@@ -1846,3 +1846,239 @@ async fn copy_deferred_assets_reuses_the_persisted_manifest_hash_memo_across_bui
         "build 2 must reuse the persisted memo and return the real hash, not re-read the corrupted blob"
     );
 }
+
+// ─── Ship-by-OID: the CAS object recorded alongside a staged entry ─────────
+
+/// The bug Step 1 fixes: `maybe_inject_spa_cached` rewrites `target` AFTER
+/// `link_to` placed the PRE-injection CAS bytes there, minting a fresh CAS
+/// object for the injected content — the caller must record THAT object as
+/// the entry's `staged_oid`, not the pre-injection `link_oid` it started
+/// with. Assert the CAS blob's bytes hash to the same xxh3 as the manifest's
+/// recorded hash for a page injection actually changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn copy_deferred_assets_records_the_post_injection_oid_for_a_rewritten_spa_index() {
+    use crate::build::cache::ObjectStore;
+    use crate::build::coordinator::test_utils;
+    use crate::build::site_meta::spa_inject::SpaDefaultsOwned;
+    use crate::types::content::SiteHashes;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    fs::create_dir_all(&base).expect("create target/test-tmp");
+    let tmp = TempDir::new_in(&base).unwrap();
+    let source = tmp.path().join("source");
+    let moss_dir = tmp.path().join(".moss");
+    let staging = moss_dir.join("build/site-stage");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache/objects")).unwrap();
+
+    // A bundled-SPA index.html with none of the tags `defaults` would inject
+    // already present, so injection actually changes the bytes.
+    let html = "<html><head><title>App</title></head><body></body></html>";
+    let index = source.join("app/index.html");
+    fs::create_dir_all(index.parent().unwrap()).unwrap();
+    fs::write(&index, html).unwrap();
+
+    let ctx = crate::types::services::BackgroundContext {
+        source_path: source.clone().to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        blocking_keys: Default::default(),
+        dir_overrides: Default::default(),
+        spa_defaults: Some(SpaDefaultsOwned {
+            description: Some("A bundled SPA".to_string()),
+            ..Default::default()
+        }),
+        ..crate::types::services::BackgroundContext::for_test()
+    };
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+    })
+    .await
+    .unwrap();
+
+    let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+    let staged_bytes = fs::read(staging.join("app/index.html")).unwrap();
+    assert!(
+        String::from_utf8_lossy(&staged_bytes).contains("A bundled SPA"),
+        "premise: injection actually ran"
+    );
+
+    let entry = sealed.files().get("app/index.html").expect("asset must be registered");
+    let (_, manifest_hash) = crate::types::content::parse_entry(entry);
+
+    let oid = sealed
+        .staged_oid("app/index.html")
+        .expect("an injected SPA index must carry the POST-injection CAS oid, not none");
+
+    let object_store = ObjectStore::new(crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone()).cache_objects());
+    let cas_path = object_store.get_path(oid).expect("the staged_oid must name a live CAS blob");
+    let cas_bytes = fs::read(&cas_path).unwrap();
+    assert_eq!(
+        cas_bytes, staged_bytes,
+        "the staged_oid must back exactly the post-injection bytes on disk"
+    );
+    let cas_hash = crate::build::assets::paths::compute_binary_hash(&cas_bytes);
+    assert_eq!(
+        cas_hash, manifest_hash,
+        "the CAS blob's bytes must hash to the same xxh3 as the manifest's recorded hash"
+    );
+}
+
+/// Regression guard: if a future refactor drops the `staged_oids.insert(...)`
+/// call in `copy_deferred_assets`, this must fail loudly rather than quietly
+/// reverting every asset back to the pre-fix, race-prone stage-path-only ship.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn copy_deferred_assets_always_records_a_staged_oid_for_its_own_entries() {
+    use crate::build::cache::ObjectStore;
+    use crate::build::coordinator::test_utils;
+    use crate::types::content::SiteHashes;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    fs::create_dir_all(&base).expect("create target/test-tmp");
+    let tmp = TempDir::new_in(&base).unwrap();
+    let source = tmp.path().join("source");
+    let moss_dir = tmp.path().join(".moss");
+    let staging = moss_dir.join("build/site-stage");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache/objects")).unwrap();
+
+    let asset_bytes = b"a plain deferred asset, nothing SPA about it";
+    let asset_file = source.join("assets/data.bin");
+    fs::create_dir_all(asset_file.parent().unwrap()).unwrap();
+    fs::write(&asset_file, asset_bytes).unwrap();
+
+    let ctx = crate::types::services::BackgroundContext {
+        source_path: source.clone().to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        blocking_keys: Default::default(),
+        dir_overrides: Default::default(),
+        ..crate::types::services::BackgroundContext::for_test()
+    };
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+    })
+    .await
+    .unwrap();
+
+    let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+    assert!(
+        sealed.files().contains_key("assets/data.bin"),
+        "premise: the asset was registered at all"
+    );
+    let oid = sealed
+        .staged_oid("assets/data.bin")
+        .expect("every entry copy_deferred_assets's Ok(oid) arm registers must carry a staged_oid");
+
+    let object_store = ObjectStore::new(crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone()).cache_objects());
+    let cas_bytes = fs::read(object_store.get_path(oid).expect("the oid must name a live CAS blob")).unwrap();
+    assert_eq!(cas_bytes, asset_bytes.as_slice(), "the staged_oid must back exactly these bytes");
+}
+
+/// Step 3's whole reason to exist: `degrade::apply_to_staging` rewrites a
+/// `copy_deferred_assets`-produced HTML page directly to `stage_dir` post-seal
+/// (no CAS write), so the OID this build already recorded for it before the
+/// repair now names the PRE-repair bytes. Ship-by-OID must not resurrect
+/// them. Driven through the real `copy_deferred_assets` producer end to end —
+/// a hand-built manifest (`degrade_tests.rs`'s pattern) never acquires a
+/// `staged_oid` in the first place and would prove nothing about this fix.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ship_phase_reflects_a_post_seal_repair_not_a_stale_cas_entry() {
+    use crate::build::cache::ObjectStore;
+    use crate::build::coordinator::test_utils;
+    use crate::types::content::SiteHashes;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    fs::create_dir_all(&base).expect("create target/test-tmp");
+    let tmp = TempDir::new_in(&base).unwrap();
+    let source = tmp.path().join("source");
+    let moss_dir = tmp.path().join(".moss");
+    let staging = moss_dir.join("build/site-stage");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache/objects")).unwrap();
+
+    // A source HTML asset (interactive embed), not markdown-rendered —
+    // `copy_deferred_assets` copies it straight through — referencing a webp
+    // variant that will be declared failed.
+    let html = concat!(
+        r#"<picture><source srcset="photo.webp" type="image/webp">"#,
+        r#"<img src="photo.jpg"></picture>"#
+    );
+    let widget = source.join("widget/index.html");
+    fs::create_dir_all(widget.parent().unwrap()).unwrap();
+    fs::write(&widget, html).unwrap();
+
+    let ctx = crate::types::services::BackgroundContext {
+        source_path: source.clone().to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        blocking_keys: Default::default(),
+        dir_overrides: Default::default(),
+        ..crate::types::services::BackgroundContext::for_test()
+    };
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+    })
+    .await
+    .unwrap();
+
+    let mut sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+    let oid_before_repair = sealed
+        .staged_oid("widget/index.html")
+        .expect("copy_deferred_assets must record a staged_oid for its own entry")
+        .to_string();
+
+    let mp = crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone());
+    let object_store = ObjectStore::new(mp.cache_objects());
+    let cas_bytes_before =
+        fs::read(object_store.get_path(&oid_before_repair).expect("the pre-repair CAS blob must be live")).unwrap();
+    assert!(
+        String::from_utf8_lossy(&cas_bytes_before).contains("photo.webp"),
+        "premise: the CAS blob still holds the un-repaired reference"
+    );
+
+    // The repair: `widget/photo.webp` is a terminally-failed variant.
+    let mut failed = std::collections::HashSet::new();
+    failed.insert("widget/photo.webp".to_string());
+    crate::build::degrade::repair_staged_html(&mp, &staging, &mut sealed, failed);
+
+    let repaired_on_disk = fs::read_to_string(staging.join("widget/index.html")).unwrap();
+    assert!(
+        !repaired_on_disk.contains("photo.webp"),
+        "premise: the repair actually rewrote the page: {repaired_on_disk}"
+    );
+    assert!(
+        sealed.staged_oid("widget/index.html").is_none(),
+        "a post-seal repair must clear the staged OID it just invalidated"
+    );
+
+    let site = tmp.path().join("site");
+    crate::build::ship::ship_phase(&staging, &site, &sealed, Some(&object_store), None)
+        .expect("ship_phase should succeed");
+
+    let shipped = fs::read_to_string(site.join("widget/index.html")).unwrap();
+    assert!(
+        !shipped.contains("photo.webp"),
+        "ship_phase must ship the REPAIRED bytes, not the stale CAS object recorded before \
+         the repair — shipping it would resurrect the failed variant reference moss#867 \
+         exists to strip: {shipped}"
+    );
+}

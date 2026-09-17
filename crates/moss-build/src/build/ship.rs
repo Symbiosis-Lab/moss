@@ -1680,4 +1680,151 @@ mod tests {
              nothing — widening this scope must be a visible edit: {strip:?}"
         );
     }
+
+    // ─── Ship-by-OID (moss#867-adjacent) ────────────────────────────────────
+
+    /// The property ship-by-OID exists for: between this build sealing a
+    /// path's hash and shipping its bytes, a second concurrent build can
+    /// rewrite the mutable stage copy. An entry with a live `staged_oid` must
+    /// ship the immutable CAS bytes it was sealed against, not whatever the
+    /// stage path happens to hold by the time `ship_phase` gets to it.
+    #[test]
+    fn ship_phase_ships_correct_bytes_from_cas_despite_stage_dir_being_overwritten() {
+        let stage = tempdir().unwrap();
+        let site = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+
+        let object_store = crate::build::cache::ObjectStore::new(cache.path().to_path_buf());
+        let oid = object_store.store_bytes(b"X").unwrap();
+
+        std::fs::write(stage.path().join("style.css"), b"placeholder").unwrap();
+
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let sp = crate::build::served_path::ServedPath::from_source("style.css").unwrap();
+        pending.register_with_oid_for_test(&sp, "deadbeefdeadbeef", HashBucket::Files, oid);
+        let sealed = pending.seal();
+
+        // A concurrent build rewrites the mutable stage copy after this
+        // manifest's hash was sealed against "X".
+        std::fs::write(stage.path().join("style.css"), b"Y").unwrap();
+
+        ship_phase(stage.path(), site.path(), &sealed, Some(&object_store), None).unwrap();
+
+        assert_eq!(
+            std::fs::read(site.path().join("style.css")).unwrap(),
+            b"X",
+            "the generation must get the bytes the CAS blob was sealed against, not \
+             whatever a concurrent build left in the mutable stage path"
+        );
+    }
+
+    /// Today a false absence here calls `sealed.remove_entries` and the file
+    /// silently vanishes from the promoted generation — a real 404 on the
+    /// live site. An entry with a live `staged_oid` must be judged present by
+    /// its CAS blob, not by a stage copy this generation was never going to
+    /// read from anyway.
+    #[test]
+    fn drop_absent_outputs_keeps_a_cas_backed_entry_whose_stage_copy_is_transiently_absent() {
+        let stage = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+
+        let object_store = crate::build::cache::ObjectStore::new(cache.path().to_path_buf());
+        let oid = object_store.store_bytes(b"stable bytes").unwrap();
+
+        // The stage copy existed once but is transiently gone — an eviction,
+        // a mid-write, anything short of moss deciding the file is gone.
+        std::fs::write(stage.path().join("asset.bin"), b"placeholder").unwrap();
+        std::fs::remove_file(stage.path().join("asset.bin")).unwrap();
+
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let sp = crate::build::served_path::ServedPath::from_source("asset.bin").unwrap();
+        pending.register_with_oid_for_test(&sp, "cafefacecafeface", HashBucket::Files, oid);
+        let mut sealed = pending.seal();
+
+        let dropped = drop_absent_outputs(stage.path(), &mut sealed, Some(&object_store));
+
+        assert!(dropped.is_empty(), "nothing should be dropped: {dropped:?}");
+        assert!(
+            sealed.files().contains_key("asset.bin"),
+            "a CAS-backed entry must survive a transiently-absent stage copy"
+        );
+    }
+
+    /// One test that a genuine post-seal byte change is caught...
+    #[test]
+    fn ship_phase_integrity_check_catches_a_genuine_post_seal_byte_change() {
+        let stage = tempdir().unwrap();
+        std::fs::write(stage.path().join("page.html"), b"<h1>original</h1>").unwrap();
+
+        let mut sealed = manifest_of(&[("page.html", b"<h1>original</h1>")]);
+        sealed.stamp_all_ship_fingerprints(stage.path());
+
+        // A concurrent build rewrites the path after the fingerprint was
+        // taken — the exact race this whole change exists to make audible.
+        std::fs::write(stage.path().join("page.html"), b"<h1>RACED</h1>").unwrap();
+
+        let entry = sealed.files().get("page.html").unwrap().clone();
+        let detected =
+            verify_ship_integrity("page.html", &stage.path().join("page.html"), &entry, &sealed);
+        assert!(
+            detected.is_some(),
+            "a genuine post-seal byte change must be caught, not silently shipped unexamined"
+        );
+    }
+
+    /// ...and one that a routine `repair_staged_html` rewrite is NOT wrongly
+    /// flagged: `degrade::apply_to_staging`'s discipline (rewrite, then
+    /// re-stamp the fingerprint for exactly that key) must leave the check
+    /// quiet on an ordinary, non-concurrent build.
+    #[test]
+    fn ship_phase_integrity_check_does_not_flag_a_routine_repair_rewrite() {
+        // A real page carries preview annotations in staging that its shipped
+        // copy does not (`apply_transform`/`StripPreviewAttrs`). The manifest
+        // hash is always of the SHIPPED (transformed) bytes, never the staged
+        // ones verbatim — comparing the current bytes' RAW hash against it
+        // would flag every ordinary rewrite of an annotated page as a race.
+        // That is the specific wrong turn a previous revision took.
+        //
+        // The fingerprint is deliberately left STALE (never re-stamped) here:
+        // this test is about `verify_ship_integrity`'s own fail-open
+        // discipline resolving a stat mismatch correctly on its own, not
+        // about `degrade::apply_to_staging`'s separate re-stamp call (which
+        // `ship_phase_reflects_a_post_seal_repair_not_a_stale_cas_entry`
+        // exercises for real). Re-stamping here would make the stat check
+        // return `None` before ever reaching the hash comparison this test
+        // means to exercise.
+        let stage = tempdir().unwrap();
+        let original = r#"<body data-moss-preview><h1>original</h1></body>"#;
+        std::fs::write(stage.path().join("page.html"), original).unwrap();
+
+        let shipped_original = apply_transform(transform_for("page.html"), original.as_bytes());
+        let hash_original = crate::build::assets::paths::compute_binary_hash(&shipped_original);
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let sp = crate::build::served_path::ServedPath::from_source("page.html").unwrap();
+        pending.register_hashed(&sp, &hash_original, HashBucket::Files);
+        let mut sealed = pending.seal();
+        sealed.stamp_all_ship_fingerprints(stage.path());
+
+        // A routine, non-concurrent rewrite — what `degrade::apply_to_staging`
+        // does: new (still-annotated) bytes written straight to stage, and
+        // the manifest hash updated to match the new SHIPPED bytes. A
+        // deliberately different length so the fingerprint's `size` field
+        // disagrees regardless of filesystem timestamp resolution.
+        let repaired = r#"<body data-moss-preview><h1>this page was repaired</h1></body>"#;
+        std::fs::write(stage.path().join("page.html"), repaired).unwrap();
+        let shipped_repaired = apply_transform(transform_for("page.html"), repaired.as_bytes());
+        let new_hash = crate::build::assets::paths::compute_binary_hash(&shipped_repaired);
+        let mut rewrites = std::collections::HashMap::new();
+        rewrites.insert("page.html".to_string(), new_hash);
+        sealed.apply_post_seal_rewrites(rewrites);
+
+        let entry = sealed.files().get("page.html").unwrap().clone();
+        let detected =
+            verify_ship_integrity("page.html", &stage.path().join("page.html"), &entry, &sealed);
+        assert!(
+            detected.is_none(),
+            "a routine, annotated-HTML rewrite whose registered hash was kept in sync must \
+             not be flagged as a race, even with a stale (un-re-stamped) fingerprint"
+        );
+    }
 }
