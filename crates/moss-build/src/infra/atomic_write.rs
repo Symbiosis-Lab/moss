@@ -47,8 +47,12 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| format!("{} has no usable file name", path.display()))?;
+    // No `.tmp` suffix: a caller can live inside a synced vault folder now,
+    // and iCloud Drive excludes `.tmp`-suffixed files from sync — fileproviderd
+    // may remove or interfere with them before the rename lands (see
+    // `build::cache::ObjectStore::store_file`, which hit this first).
     let tmp = parent.join(format!(
-        ".{name}.{}.{}.tmp",
+        ".{name}.pending.{}.{}",
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));
@@ -109,7 +113,7 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|n| n.ends_with(".tmp"))
+            .filter(|n| n != "a.json")
             .collect();
         assert!(leftovers.is_empty(), "temp files left behind: {leftovers:?}");
     }

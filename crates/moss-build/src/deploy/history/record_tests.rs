@@ -317,7 +317,7 @@ fn history_disabled_writes_nothing() {
 }
 
 #[test]
-fn snapshot_writes_site_json_once_and_a_well_formed_record() {
+fn snapshot_writes_a_well_formed_record() {
     let dir = tempfile::tempdir().unwrap();
     let vault = dir.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
@@ -328,15 +328,8 @@ fn snapshot_writes_site_json_once_and_a_well_formed_record() {
     snapshot(&history_root, &vault, &sealed, "moss:test", "2026-01-01T08:12:33Z").unwrap();
 
     // `snapshot` takes `history_root` as the site's own resolved directory
-    // directly — no site-key subfolder to join, unlike
-    // `HistoryStore::in_app_data`, which does that join once at construction.
-    let site_dir = &history_root;
-    let site_json: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(site_dir.join("site.json")).unwrap()).unwrap();
-    assert_eq!(site_json["key_source"], "path");
-    let first_created_at = site_json["created_at"].as_str().unwrap().to_string();
-
-    let record_path = site_dir
+    // directly — a fixed vault-relative path, with no key to derive.
+    let record_path = history_root
         .join("publishes")
         .join(format!("2026-01-01T08-12-33Z-{}.json", sealed.generation_id()));
     let record: PublishRecord = serde_json::from_str(&fs::read_to_string(&record_path).unwrap()).unwrap();
@@ -345,13 +338,6 @@ fn snapshot_writes_site_json_once_and_a_well_formed_record() {
     assert_eq!(record.trigger, Trigger::Publish, "an ordinary landed publish defaults to Publish");
     assert_eq!(record.label, None);
     assert_eq!(record.entries["hello.md"].mode, MODE_FILE);
-
-    // A second publish must not rewrite site.json's first-seen metadata.
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    snapshot(&history_root, &vault, &sealed, "moss:test", "2026-01-02T00:00:00Z").unwrap();
-    let site_json_again: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(site_dir.join("site.json")).unwrap()).unwrap();
-    assert_eq!(site_json_again["created_at"].as_str().unwrap(), first_created_at);
 }
 
 /// A v1 record on disk predates `trigger`/`label` and must still parse, with

@@ -370,8 +370,8 @@ async fn record_landing(
     // Keyed by `slot_for`, never the deployment URL: a target that re-mints
     // its URL on every publish would orphan the record it just wrote.
     if let Some(target) = deployment::slot_for(&deployment.method, None) {
-        let history = crate::deploy::history::HistoryStore::in_app_data(cx.folder);
-        crate::deploy::landed::record_landed(cx.folder, sealed, &target, cx.ports, history.as_ref()).await;
+        let history = crate::deploy::history::HistoryStore::in_vault(cx.folder);
+        crate::deploy::landed::record_landed(cx.folder, sealed, &target, cx.ports, Some(&history)).await;
     }
 
     // The bytes are live; what is left is redirects/analytics/DNS.

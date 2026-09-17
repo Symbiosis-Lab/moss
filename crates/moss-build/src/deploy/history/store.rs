@@ -1,21 +1,19 @@
-//! Where a site's history lives: the site key, `site.json`, the record
-//! directory, and the `ObjectStore` blobs sit under.
+//! Where a site's history lives: the record directory and the `ObjectStore`
+//! blobs sit under.
 //!
 //! Nothing here knows what a [`super::record::PublishRecord`] means — it only
 //! knows how to find one, by id or by listing, and where its blobs are. That
 //! split is what lets [`super::record`], [`super::restore`] and
 //! [`super::timeline`] all read the same store without importing each other.
 //!
-//! Every function below takes the resolved site directory directly (what
-//! [`super::HistoryStore`] wraps) — never an app-data root plus a vault to
-//! derive one from. [`site_key`]/[`site_dir`] are the one join that turns a
-//! vault into that resolved directory, done exactly once, at
-//! `HistoryStore::in_app_data` construction time.
+//! One vault, one store: every function below takes the resolved
+//! `.moss/history/` directory directly (what [`super::HistoryStore`] wraps),
+//! already fixed relative to the vault it belongs to. There is no site key and
+//! no orphan recovery — those existed only because many vaults once shared one
+//! app-data root and had to be told apart; a store that lives inside its own
+//! vault needs neither.
 
 use std::path::{Path, PathBuf};
-
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::record::PublishRecord;
 use crate::build::cache::ObjectStore;
@@ -30,56 +28,6 @@ use crate::build::cache::ObjectStore;
 /// settled on as "one notion of a large file", beside
 /// `crate::build::store_gc::KEEP_GENERATIONS_DEFAULT`.
 pub(crate) const HISTORY_MEDIA_CEILING: u64 = 20 * 1024 * 1024;
-
-/// Where a site's key came from — carried in `site.json` so a regenerated
-/// identity's orphaned history directory can be explained by `vault_path`
-/// rather than mistaken for a second site's.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum KeySource {
-    Identity,
-    Path,
-}
-
-impl KeySource {
-    fn as_str(self) -> &'static str {
-        match self {
-            KeySource::Identity => "identity",
-            KeySource::Path => "path",
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SiteMeta {
-    vault_path: String,
-    key_source: String,
-    created_at: String,
-}
-
-/// The site's key and how it was found. Prefers the vault's identity
-/// (`Identity.pubkey`, which syncs with the vault, so a folder that moves
-/// keeps its history); falls back to a hash of the canonical vault path
-/// before any identity exists.
-pub(crate) fn site_key(vault_root: &Path) -> (String, KeySource) {
-    if crate::identity::Identity::exists(vault_root) {
-        if let Ok(identity) = crate::identity::Identity::load(vault_root) {
-            if identity.pubkey.len() >= 16 {
-                return (identity.pubkey[..16].to_string(), KeySource::Identity);
-            }
-        }
-    }
-    let canonical = vault_root.canonicalize().unwrap_or_else(|_| vault_root.to_path_buf());
-    let digest = format!("{:x}", Sha256::digest(canonical.to_string_lossy().as_bytes()));
-    (digest[..16].to_string(), KeySource::Path)
-}
-
-/// `<history_root>/<site-key>/` — the one join `HistoryStore::in_app_data`
-/// goes through; nothing else in this module re-derives a site's directory
-/// from an app-data root, because everything else already has the resolved
-/// directory in hand.
-pub(crate) fn site_dir(history_root: &Path, vault_root: &Path) -> PathBuf {
-    history_root.join(site_key(vault_root).0)
-}
 
 fn publishes_dir(root: &Path) -> PathBuf {
     root.join("publishes")
@@ -97,22 +45,6 @@ pub(crate) fn object_store(root: &Path) -> ObjectStore {
 /// default on.
 pub(crate) fn history_enabled(vault_root: &Path) -> bool {
     crate::build::site_config::get_history_enabled(&vault_root.to_string_lossy()).unwrap_or(true)
-}
-
-/// Write `site.json` once, the first time this site's key is seen. Never
-/// overwritten afterward — `key_source`/`created_at` describe the site's
-/// first publish, not its latest.
-pub(crate) fn ensure_site_json(root: &Path, vault_root: &Path, key_source: KeySource) -> Result<(), String> {
-    let path = root.join("site.json");
-    if path.exists() {
-        return Ok(());
-    }
-    let meta = SiteMeta {
-        vault_path: vault_root.to_string_lossy().into_owned(),
-        key_source: key_source.as_str().to_string(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-    };
-    crate::infra::atomic_write::write_json_atomic(&path, &meta)
 }
 
 /// One record, by the id its filename gave it ([`super::record`]'s writer

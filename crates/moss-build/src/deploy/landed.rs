@@ -53,11 +53,12 @@ use crate::moss_paths::MossPaths;
 /// having nothing to tell, which is an implementation rather than an absence —
 /// so the guard that used to return early is gone.
 ///
-/// `history` is `None` only when this platform has no application data
-/// directory at all (`HistoryStore::in_app_data` already tried and failed) —
-/// production callers construct it once, right beside `ports`, and a test
-/// passes a `HistoryStore::at(tempdir)`. There is no second, test-only entry
-/// point: whichever store a caller has is the one this function uses.
+/// `history` stays `Option<&HistoryStore>` for a caller with none to give,
+/// but `HistoryStore::in_vault` is infallible — a fixed join against the
+/// vault, not an app-data lookup — so every production caller now has one:
+/// they construct it once, right beside `ports`, and a test passes a
+/// `HistoryStore::at(tempdir)`. There is no second, test-only entry point:
+/// whichever store a caller has is the one this function uses.
 ///
 /// Returns the same [`PageChangeSummary`] it hands [`DeployPorts::
 /// after_landing`](crate::build::ports::deploy::DeployPorts::after_landing) —
@@ -98,8 +99,8 @@ pub async fn record_landed(
 /// reported it running.
 ///
 /// Best-effort throughout: a failed write costs the next build's rename
-/// detection, never the publish. `history` is `None` only when this
-/// platform has no application data directory — see [`record_landed`]'s doc.
+/// detection, never the publish. See [`record_landed`]'s doc for why
+/// `history` is `Option` at all now that its construction cannot fail.
 ///
 /// Returns the completion-scoped Added/Moved/Removed page summary a publish
 /// receipt renders (publish-receipt design, step 4). It has to be computed

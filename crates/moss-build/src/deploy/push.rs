@@ -488,8 +488,8 @@ async fn push_site_inner_impl(
     // the burst rather than after it (the order task 4-3 originally landed
     // in, when nothing downstream needed the summary yet).
     let page_summary = if let Some(target) = crate::config::deployment::slot_for("moss", Some(&site_id)) {
-        let history = crate::deploy::history::HistoryStore::in_app_data(folder_path);
-        landed::record_landed(folder_path, sealed, &target, ports, history.as_ref()).await
+        let history = crate::deploy::history::HistoryStore::in_vault(folder_path);
+        landed::record_landed(folder_path, sealed, &target, ports, Some(&history)).await
     } else {
         crate::deploy::change_record::PageChangeSummary::default()
     };

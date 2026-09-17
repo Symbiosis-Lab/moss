@@ -756,6 +756,14 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // project's `.moss/.gitignore` as a side effect (#960).
     r(".moss/build/generations/", false, CloudPolicy::ExcludedRegenerable, false, false),
     r(".moss/agents/", true, CloudPolicy::Synced, false, false),
+    // Gitignored: a git user already has git's own history, and moss must never
+    // turn a version store into commits nobody made. `CloudPolicy::Synced`
+    // because traveling with the vault via whatever cloud provider it already
+    // uses is the whole point. Not watched: a write here must never trigger a
+    // rebuild. Not materialized: an evicted blob already reads as "not kept" —
+    // the store's existing honest-about-missing-bytes posture — so nothing here
+    // needs to be force-downloaded.
+    r(".moss/history/", true, CloudPolicy::Synced, false, false),
     // — regenerable output, kept out of cloud sync —
     r(".moss/build/", false, CloudPolicy::ExcludedRegenerable, false, false),
     // — moss-written, neither gitignored nor cloud-excluded —
@@ -1117,7 +1125,7 @@ mod tests {
     fn gitignore_matches_the_shipped_contents() {
         assert_eq!(
             moss_gitignore(),
-            "identity/\nkeys/\ndata/*\nbuild/cache/\nbuild/staging/\nagents/\n",
+            "identity/\nkeys/\ndata/*\nbuild/cache/\nbuild/staging/\nagents/\nhistory/\n",
             "the generated .moss/.gitignore changed — if that is intended, note \
              that it lands in every existing project on its next build"
         );
@@ -1714,6 +1722,7 @@ build/cache/
 build/staging/
 keys/
 agents/
+history/
 ";
 
     /// The regression. A build must not touch the user's rule, and must not
@@ -1775,6 +1784,7 @@ agents/
 deploy/
 data/
 !data/
+history/
 ";
         let tmp = make_tmp();
         let moss_root = tmp.path().join(".moss");
@@ -1803,7 +1813,7 @@ data/
         let moss_root = tmp.path().join(".moss");
         std::fs::create_dir_all(&moss_root).unwrap();
         let path = moss_root.join(".gitignore");
-        let old = "identity/\nkeys/\ndata/\ndeploy/\nbuild/cache/\nbuild/staging/\nagents/\n";
+        let old = "identity/\nkeys/\ndata/\ndeploy/\nbuild/cache/\nbuild/staging/\nagents/\nhistory/\n";
         std::fs::write(&path, old).unwrap();
 
         ensure_moss_gitignore(&moss_root).unwrap();

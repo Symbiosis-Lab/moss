@@ -175,9 +175,9 @@ async fn a_landed_publish_snapshots_into_publish_history() {
     let history = crate::deploy::history::HistoryStore::at(history_root.path().to_path_buf());
     super::record_landed(vault.path(), &manifest, TARGET, &ports, Some(&history)).await;
 
-    // `HistoryStore::at` bypasses site-key derivation, so this vault's data
-    // lands directly under `history_root`, with no nested site-key directory
-    // the way `HistoryStore::in_app_data` would produce.
+    // `HistoryStore::at` is the explicit-directory test seam, so this vault's
+    // data lands directly under `history_root` rather than the real
+    // `.moss/history/` a `HistoryStore::in_vault` call would resolve to.
     let publishes: Vec<_> = std::fs::read_dir(history_root.path().join("publishes")).unwrap().flatten().collect();
     assert_eq!(publishes.len(), 1, "one landed publish must write exactly one record");
 

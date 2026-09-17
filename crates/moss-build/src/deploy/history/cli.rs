@@ -161,13 +161,11 @@ moss history always operates on the site containing the current directory.
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/// `HistoryStore::in_app_data` fails only when this platform has no
-/// application data directory at all — every other command that touches the
-/// store hits this same one check, so it lives here rather than at each call
-/// site.
-fn open_store(root: &VaultRoot) -> Result<HistoryStore, String> {
-    HistoryStore::in_app_data(root.path())
-        .ok_or_else(|| "no application data directory on this platform".to_string())
+/// The vault's own history store. Infallible now that it is just a join
+/// against `root` — kept as its own function so every command that touches
+/// the store goes through one name rather than repeating the join.
+fn open_store(root: &VaultRoot) -> HistoryStore {
+    HistoryStore::in_vault(root.path())
 }
 
 /// Turn a CLI path argument into the manifest-relative SOURCE path
@@ -260,13 +258,7 @@ fn run_save(root: &VaultRoot, name: Option<String>) -> i32 {
         eprintln!("error: {msg}");
         return 1;
     }
-    let store = match open_store(root) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
-    };
+    let store = open_store(root);
     let label = name.filter(|s| !s.trim().is_empty());
 
     let sealed = match headless_build_sealed(root) {
@@ -319,7 +311,7 @@ struct RestorePrep {
 /// rather than living at either call site.
 fn prepare_restore(root: &VaultRoot, at: &str) -> Result<RestorePrep, String> {
     crate::cli::site_guard::guard_cli_open(root.as_str(), "history")?;
-    let store = open_store(root)?;
+    let store = open_store(root);
     let records = store.list_records();
     let id = resolve_id(&records, at)?.to_string();
     let target = records
@@ -513,13 +505,7 @@ fn decorate(
 }
 
 fn run_site_timeline(root: &VaultRoot, json: bool) -> i32 {
-    let store = match open_store(root) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
-    };
+    let store = open_store(root);
     let records = store.list_records();
     if records.is_empty() {
         if json {
@@ -554,13 +540,7 @@ fn run_page_timeline(root: &VaultRoot, path_arg: &str, json: bool) -> i32 {
             return 1;
         }
     };
-    let store = match open_store(root) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
-    };
+    let store = open_store(root);
     let records = store.list_records();
     if records.is_empty() {
         if json {

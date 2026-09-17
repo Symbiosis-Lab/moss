@@ -202,8 +202,6 @@ fn write_snapshot(
     if !store::history_enabled(vault_root) {
         return Ok(());
     }
-    let (_, key_source) = store::site_key(vault_root);
-    store::ensure_site_json(root, vault_root, key_source)?;
 
     let object_store = store::object_store(root);
     let entries = build_entries(vault_root, sealed, &object_store, &crate::build::icloud::is_evicted);

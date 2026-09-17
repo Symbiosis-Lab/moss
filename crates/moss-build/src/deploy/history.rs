@@ -1,10 +1,12 @@
 //! Publish history: a content-addressed copy of every source file a vault
-//! published, kept per computer, outside the vault
-//! ([ADR-083](../../../../../docs/decisions/ADR-083-publish-history-lives-outside-the-vault.md)),
-//! under `<app-data>/history/<site-key>/` — never `.moss/`, so a synced vault
-//! never uploads a version store a sync client can tear mid-write. `<site-key>`
-//! is the vault's identity public key, or a path-hash fallback (see
-//! [`store::site_key`]).
+//! published, kept inside the vault itself at `.moss/history/`
+//! ([ADR-083](../../../../../docs/decisions/ADR-083-publish-history-lives-in-the-vault.md),
+//! revised) — gitignored, so a git user's own history is never turned into
+//! commits nobody made, and left to whatever cloud sync (iCloud, Dropbox,
+//! Google Drive) the vault's folder already has, the same way `.moss/config.toml`
+//! and `.moss/identity/` already travel with it. There is no site key: one
+//! vault has exactly one history store, at a fixed path, so nothing needs
+//! disambiguating.
 //!
 //! Slice 1 — the design's ["How it lands"](../../../../../docs/archive/2026-09-11-publish-history-design.md)
 //! item 1: the store ([`store`]), the record and its three writers
@@ -14,13 +16,10 @@
 //! everything here is reached by `deploy::landed::record_landed`, by
 //! [`cli::run`], and by this module's own tests.
 //!
-//! [`HistoryStore::in_app_data`] resolves the real per-computer directory for
-//! a vault (`None` only with no app-data directory — the one fallible step,
-//! done once); [`HistoryStore::at`] is the test seam, an explicit directory
-//! with no site-key derivation. Every other method then takes only its own
-//! domain parameters — the same shape as `SecretStore::in_app_data`
-//! (`identity/secrets.rs`): resolve the fallible root once, and nothing
-//! downstream repeats that resolution or needs a parallel test-rooted twin.
+//! [`HistoryStore::in_vault`] resolves the store for a vault — infallible,
+//! since the path is just a join, no app-data lookup and no site-key
+//! derivation; [`HistoryStore::at`] is the test seam, an explicit directory
+//! outside any vault.
 
 pub mod cli;
 pub(crate) mod record;
@@ -50,19 +49,11 @@ impl HistoryStore {
         Self { root }
     }
 
-    /// The real, per-computer store for `vault_root`'s site. `None` only
-    /// when this platform has no application data directory — the same
-    /// absence `record_landed`'s `history: Option<&HistoryStore>` models.
-    ///
-    /// `MOSS_HISTORY_DIR` replaces that root: it is the test suites' isolation
-    /// seam (CLI e2e and the Linux app e2e), read here and nowhere else, so it
-    /// reaches the history store and no other subsystem.
-    pub fn in_app_data(vault_root: &Path) -> Option<Self> {
-        let history_root = match std::env::var_os("MOSS_HISTORY_DIR") {
-            Some(dir) => PathBuf::from(dir),
-            None => crate::infra::app_data::app_data_dir_early()?.join("history"),
-        };
-        Some(Self::at(store::site_dir(&history_root, vault_root)))
+    /// The real store for `vault_root`'s own site: `.moss/history/` inside
+    /// the vault. Infallible — it is a plain join, not a lookup, so there is
+    /// no absence for a caller to handle.
+    pub fn in_vault(vault_root: &Path) -> Self {
+        Self::at(vault_root.join(".moss").join("history"))
     }
 
     /// "Show in Finder" target. No UI here; this only resolves the path.
@@ -163,6 +154,15 @@ mod tests {
             },
         );
         pending.seal()
+    }
+
+    #[test]
+    fn in_vault_resolves_to_dot_moss_history_inside_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+
+        assert_eq!(HistoryStore::in_vault(&vault).store_dir(), vault.join(".moss").join("history"));
     }
 
     #[test]
