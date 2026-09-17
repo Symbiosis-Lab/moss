@@ -19,7 +19,7 @@ unicode-normalization = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
-specta = { version = "=2.0.0-rc.20", features = ["derive"], optional = true }
+specta = { version = "=2.0.0-rc.25", features = ["derive"], optional = true }
 # Pulldown-cmark drives the body AST parser. Zero I/O, zero async,
 # zero-copy &str events — fits moss-core's "pure Rust" constraint.
 # Same version as src-tauri to avoid duplicate compilation.
