@@ -1508,6 +1508,14 @@ pub(crate) fn copy_deferred_assets(
                 // hash is ever actually used, the deploy's verify_file_bytes
                 // surfaces it loudly per-asset rather than silently dropping a
                 // published file.
+                //
+                // This hashes the staged, PRE-`apply_transform` bytes — for an
+                // HTML entry, `ship::verify_ship_integrity` later compares
+                // against the POST-transform bytes instead, a different
+                // byte-view of the same file. Benign today: an entry
+                // registered here normally carries a live `staged_oid` and
+                // ship-by-OID skips that check entirely, and the check is
+                // fail-open and log-only on the rare entry that does reach it.
                 let recorded_hash = match spa_post_hash {
                     Some(h) => h,
                     None => recall_or_hash_output(&manifest_hash_memo, &link_oid, &target, &oid, "output"),

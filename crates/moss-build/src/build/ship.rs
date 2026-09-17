@@ -1772,12 +1772,18 @@ mod tests {
         );
     }
 
-    /// ...and one that a routine `repair_staged_html` rewrite is NOT wrongly
-    /// flagged: `degrade::apply_to_staging`'s discipline (rewrite, then
-    /// re-stamp the fingerprint for exactly that key) must leave the check
-    /// quiet on an ordinary, non-concurrent build.
+    /// ...and one that isolates `verify_ship_integrity`'s hash-fallback branch
+    /// on its own: a stale, un-re-stamped fingerprint must not be reported as
+    /// a race once the real hash comparison agrees. (The post-seal repair
+    /// path that keeps a fingerprint fresh in practice —
+    /// `degrade::apply_to_staging`'s rewrite-then-re-stamp discipline — is a
+    /// different scenario, owned by
+    /// `ship_phase_reflects_a_post_seal_repair_not_a_stale_cas_entry`
+    /// (`media/pipeline_tests.rs`); after c0a7d05 that path can never leave a
+    /// stale fingerprint, so it is not reachable via repair and this test
+    /// exercises the fallback directly instead.)
     #[test]
-    fn ship_phase_integrity_check_does_not_flag_a_routine_repair_rewrite() {
+    fn verify_ship_integrity_hash_fallback_ignores_a_stale_fingerprint() {
         // A real page carries preview annotations in staging that its shipped
         // copy does not (`apply_transform`/`StripPreviewAttrs`). The manifest
         // hash is always of the SHIPPED (transformed) bytes, never the staged
