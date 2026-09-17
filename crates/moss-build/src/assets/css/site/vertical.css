@@ -27,9 +27,24 @@
    a flex column on html. `width: 100%` restores what that same
    orthogonal-item bug takes away on the cross axis (no default stretch).
    `min-height: 100svh` matches body's own `100svh` term. */
+/* `max-width: 100vw` + `overflow-x: hidden` stop a second orthogonal-flow
+   bug: with html's own overflow-x left at the default `visible`, the CSS
+   Overflow spec's propagation rule hands the viewport's horizontal
+   scrolling to body, so html's own box is left unconstrained and grows to
+   body's full unclipped scrollable width (thousands of px on a real
+   article). Chromium fails to paint the visible slice of a root box that
+   oversized -- WebKit happens to paint it correctly, which is why this
+   only ever showed up in one engine. Declaring html's own overflow-x here
+   (not visible) turns propagation off by spec, so body's own
+   `overflow-x: auto` a few lines down goes back to doing what its own
+   comment already says: body is its own scroll container, with the
+   visible scrollbar forced below -- not the whole viewport scrolling on a
+   phantom multi-thousand-px page. */
 html:has(body[data-typesetting="vertical"]) {
   background: var(--moss-color-bg);
   min-height: 100svh;
+  max-width: 100vw;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
 }
