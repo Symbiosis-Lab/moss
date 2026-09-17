@@ -158,7 +158,20 @@ pub fn apply_to_staging(
             "degrade_failed_variants: rewrote {} page(s) to drop failed image variant(s)",
             rewrites.len()
         );
+        let rewritten_keys: HashSet<String> = rewrites.keys().cloned().collect();
         sealed.apply_post_seal_rewrites(rewrites);
+        // This just wrote NEW bytes straight to `stage_dir`, bypassing the CAS
+        // entirely — any `staged_oid` recorded before now names the
+        // PRE-rewrite bytes and must not survive to ship-by-OID (moss#867: a
+        // page repaired to drop a failed image variant must not have that
+        // variant resurrected by shipping the object that predates the
+        // repair).
+        sealed.clear_staged_oids(&rewritten_keys);
+        // Re-stamp immediately, with the bytes THIS rewrite just wrote — or
+        // `ship_phase`'s integrity check would compare against a fingerprint
+        // from before this ordinary, non-concurrent rewrite and flag every
+        // repaired page as if a race had touched it.
+        sealed.stamp_ship_fingerprints(stage_dir, rewritten_keys.iter().map(|s| s.as_str()));
     }
 }
 
