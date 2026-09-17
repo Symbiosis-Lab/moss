@@ -1907,6 +1907,9 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
                 error: None,
                 hls_rungs: 0,
                 poster: false,
+                mp4_oid: None,
+                thumb_oid: None,
+                hls_entries: Vec::new(),
             });
     assert!(result.is_some());
     assert!(result.unwrap().error.is_none(), "First call should succeed");
@@ -1919,6 +1922,9 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
                 error: None,
                 hls_rungs: 0,
                 poster: false,
+                mp4_oid: None,
+                thumb_oid: None,
+                hls_entries: Vec::new(),
             });
     assert!(result2.is_some());
     assert!(

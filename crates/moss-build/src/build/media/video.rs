@@ -107,9 +107,17 @@ const MP4_ANALYSIS_SHARE: f64 = 0.3;
 /// concurrent callers sharing a single conversion receive the full result —
 /// including any error — without needing an out-of-band side channel.
 ///
-/// Convention: `error.is_some()` means the conversion failed. Success carries
-/// nothing — the outputs are on disk and in the transform record by the time
-/// this returns, and the OIDs this once also carried were read by no one.
+/// Convention: `error.is_some()` means the conversion failed and the caller
+/// (`run_video_conversion`) discards the whole outcome for the
+/// `shipped_original` fallback, so `mp4_oid`/`thumb_oid`/`hls_entries` are
+/// never read on that path and every early-return leaves them at their
+/// zero value rather than bothering to thread a real one through.
+///
+/// Success carries the just-staged outputs' CAS oids: they were once on this
+/// struct and removed because nothing read them (see git history) — ship-by-
+/// OID (moss#867-adjacent) is the real reader this reintroduces them for, so
+/// `run_video_conversion` can hand `ship_phase` an immutable blob instead of
+/// the mutable stage path a concurrent build can rewrite.
 #[derive(Clone, Debug)]
 pub struct VideoConversionOutcome {
     /// Set when conversion failed. Carried inside the outcome so singleflight
@@ -122,6 +130,22 @@ pub struct VideoConversionOutcome {
     /// The poster frame reached staging. Absent, it is not delivered: a poster
     /// is optional, a promised URL is not.
     pub(crate) poster: bool,
+    /// The CAS oid backing the exact bytes just linked to the `.mp4`'s
+    /// staging path — set on both the cache-hit and the freshly-encoded
+    /// success path, `None` everywhere else (including every early-return,
+    /// where it is never read).
+    pub(crate) mp4_oid: Option<String>,
+    /// The CAS oid backing the poster's staged bytes, `Some` only when
+    /// `poster` is true — a store that succeeded but whose `link_to` failed
+    /// leaves both `false`/`None`, since no bytes actually reached staging.
+    pub(crate) thumb_oid: Option<String>,
+    /// `(member filename, CAS oid)` for every file the HLS ladder staged this
+    /// call, filename bare (e.g. `"v0.m3u8"`, no `video/hls/` prefix) so it
+    /// matches `asset_paths::hls_members`' own naming. Populated whenever
+    /// `produce_ladder` returns entries — cache hit or fresh encode alike,
+    /// since that function's own cache check runs independently of the
+    /// mp4/thumb one above it.
+    pub(crate) hls_entries: Vec<(String, String)>,
 }
 
 /// The whole pipeline for one video: cache lookup, thumbnail, MP4, CAS store.
@@ -174,6 +198,11 @@ pub(crate) fn convert_single_video(
     // staging. A failure here is not a failed conversion — the MP4 is still the
     // page's video and the emitter simply has no ladder to offer.
     let mut hls_rungs = 0usize;
+    // (bare member filename, CAS oid) for every ladder file `produce_ladder`
+    // just linked — same census `entries` carries, minus the `video/hls/`
+    // transform-cache prefix, so it lines up with `asset_paths::hls_members`'
+    // own naming for the caller that builds `Delivery`s from it.
+    let mut hls_entries: Vec<(String, String)> = Vec::new();
     match crate::build::media::hls::produce_ladder(
         ffmpeg,
         source_file,
@@ -192,6 +221,12 @@ pub(crate) fn convert_single_video(
                 .iter()
                 .filter(|(n, _)| n.starts_with("video/hls/v") && n.ends_with(".m3u8"))
                 .count();
+            hls_entries = entries
+                .iter()
+                .filter_map(|(name, entry)| {
+                    name.strip_prefix("video/hls/").map(|bare| (bare.to_string(), entry.oid.clone()))
+                })
+                .collect();
             // Recorded here rather than with the MP4's own outputs: four
             // early returns sit between this point and that write, and a
             // ladder that reached the object store without reaching the record
@@ -204,6 +239,9 @@ pub(crate) fn convert_single_video(
                 error: Some("Cancelled".to_string()),
                 hls_rungs: 0,
                 poster: false,
+                mp4_oid: None,
+                thumb_oid: None,
+                hls_entries: Vec::new(),
             };
         }
         Err(e) => log::warn!("HLS ladder failed for {} (MP4 still served): {}", filename, e),
@@ -252,12 +290,21 @@ pub(crate) fn convert_single_video(
                     error: Some(format!("could not stage {}: {}", filename, e)),
                     hls_rungs,
                     poster: false,
+                    mp4_oid: None,
+                    thumb_oid: None,
+                    hls_entries: Vec::new(),
                 };
             }
             return VideoConversionOutcome {
                 error: None,
                 hls_rungs,
                 poster: thumb_linked,
+                mp4_oid: Some(mp4_oid.clone()),
+                // Only when the bytes actually reached staging — a store hit
+                // whose link failed ships nothing at this URL, so no oid
+                // should claim to back it either.
+                thumb_oid: thumb_linked.then(|| thumb_oid.clone()),
+                hls_entries,
             };
         }
     }
@@ -310,6 +357,9 @@ pub(crate) fn convert_single_video(
                 error: Some("Cancelled".to_string()),
                 hls_rungs,
                 poster: false,
+                mp4_oid: None,
+                thumb_oid: None,
+                hls_entries: Vec::new(),
             };
         }
         Err(e) => log::warn!("Thumbnail generation failed for {}: {}", filename, e),
@@ -344,6 +394,9 @@ pub(crate) fn convert_single_video(
                 error: Some("Cancelled".to_string()),
                 hls_rungs,
                 poster: false,
+                mp4_oid: None,
+                thumb_oid: None,
+                hls_entries: Vec::new(),
             };
         }
         Err(e) => {
@@ -353,6 +406,9 @@ pub(crate) fn convert_single_video(
                 error: Some(e),
                 hls_rungs,
                 poster: false,
+                mp4_oid: None,
+                thumb_oid: None,
+                hls_entries: Vec::new(),
             };
         }
     }
@@ -373,6 +429,9 @@ pub(crate) fn convert_single_video(
                 error: Some(format!("Validation failed for {}", filename)),
                 hls_rungs,
                 poster: false,
+                mp4_oid: None,
+                thumb_oid: None,
+                hls_entries: Vec::new(),
             };
         }
 
@@ -387,6 +446,9 @@ pub(crate) fn convert_single_video(
                 error: Some(format!("could not stage {}: {}", filename, e)),
                 hls_rungs,
                 poster: false,
+                mp4_oid: None,
+                thumb_oid: None,
+                hls_entries: Vec::new(),
             }
         }
     };
@@ -420,6 +482,11 @@ pub(crate) fn convert_single_video(
         error: None,
         hls_rungs,
         poster: thumb_linked,
+        mp4_oid: mp4_oid_result,
+        // As above: a stored-but-unlinked thumbnail has no bytes at the URL
+        // `poster`/`thumb_linked` says nothing shipped for, so it gets no oid.
+        thumb_oid: if thumb_linked { thumb_oid_result } else { None },
+        hls_entries,
     }
 }
 
@@ -490,6 +557,12 @@ impl DeliveryKind {
 struct Delivery {
     url: String,
     kind: DeliveryKind,
+    /// The CAS oid backing these exact bytes, when the caller already knows
+    /// one — `None` for the raw fallback copy (`shipped_original`, no CAS
+    /// interaction at all) and for a `Delivery` this file cannot yet name an
+    /// oid for. Threaded through to `EmitMessage::File.oid` so `ship_phase`
+    /// can read the immutable blob instead of the mutable stage path.
+    oid: Option<String>,
 }
 
 /// What the conversion loop decided about one video.
@@ -556,7 +629,8 @@ impl ItemStep {
             source_file,
             &staging_dir.join(&url),
         ) {
-            Ok(()) => vec![Delivery { url, kind: DeliveryKind::Video }],
+            // A raw fs copy of the source, not a CAS write — no oid to offer.
+            Ok(()) => vec![Delivery { url, kind: DeliveryKind::Video, oid: None }],
             Err(e) => {
                 log::warn!("Fallback copy failed for {}: {}", mapped_source, e);
                 // The caller's advisory says why moss could not OPTIMIZE the
@@ -607,11 +681,11 @@ fn abandonment(cancelled: bool) -> ItemStep {
 /// deletes anything in the output tree that no bucket claims.
 fn record_deliveries(
     services: &BuildServices,
-    produced: &mut Vec<String>,
+    produced: &mut Vec<(String, Option<String>)>,
     delivered: Vec<Delivery>,
 ) {
-    for Delivery { url, kind } in delivered {
-        produced.push(url.clone());
+    for Delivery { url, kind, oid } in delivered {
+        produced.push((url.clone(), oid));
         services.reporter.report(&PipelineEvent::AssetReady {
             path: url.clone(),
             asset_type: kind.asset_type().to_string(),
@@ -638,7 +712,7 @@ fn finish_run(
     services: &BuildServices,
     ctx: &BackgroundContext,
     tx: &Option<mpsc::Sender<EmitMessage>>,
-    produced_video_paths: &[String],
+    produced_video_paths: &[(String, Option<String>)],
     advisories: Vec<Advisory>,
     converted_count: u32,
     videos_processed: u32,
@@ -756,9 +830,10 @@ pub(crate) fn run_video_conversion(
     // on a video site ends with `converted_count == 0`, which (with zero advisories)
     // gates out the media child + parent Jobs (FIX 1b, invariant #6).
     let mut converted_count: u32 = 0;
-    // Every output path this run put on disk — the census `video_outputs` is
-    // built from. Written only by `record_deliveries`.
-    let mut produced_video_paths: Vec<String> = Vec::new();
+    // Every output path this run put on disk, paired with the CAS oid backing
+    // it when known — the census `video_outputs` is built from. Written only
+    // by `record_deliveries`.
+    let mut produced_video_paths: Vec<(String, Option<String>)> = Vec::new();
 
     // Bridged from `FolderSession::cancel` to an AtomicBool, the signature the
     // ffmpeg progress callback takes. Headless (no session): false forever.
@@ -1136,19 +1211,33 @@ pub(crate) fn run_video_conversion(
             // is final (incident 8690101ac), so the emitter learns about a rung
             // on the build AFTER the one that encoded it. The master playlist
             // marks the stem as laddered; the rest are registered to resolve.
-            let mut delivered = vec![Delivery { url: relative_mp4.clone(), kind: DeliveryKind::Video }];
+            let mut delivered = vec![Delivery {
+                url: relative_mp4.clone(),
+                kind: DeliveryKind::Video,
+                oid: outcome.mp4_oid.clone(),
+            }];
             if outcome.poster {
                 delivered.push(Delivery {
                     url: asset_paths::to_thumb(&mapped_source),
                     kind: DeliveryKind::Poster,
+                    oid: outcome.thumb_oid.clone(),
                 });
             }
             if let Some(rungs) = asset_paths::video_ladder_rungs_by_count(outcome.hls_rungs) {
-                delivered.extend(
-                    asset_paths::hls_outputs(&mapped_source, rungs)
-                        .into_iter()
-                        .map(|url| Delivery { url, kind: DeliveryKind::Video }),
-                );
+                // `hls_outputs` derives its URLs by prefixing `hls_members`'
+                // bare names with the ladder dir — the SAME `hls_members` call
+                // `outcome.hls_entries` was keyed by inside `convert_single_
+                // video`, so a name found there always names one of these URLs.
+                let names = asset_paths::hls_members(rungs);
+                let urls = asset_paths::hls_outputs(&mapped_source, rungs);
+                delivered.extend(names.into_iter().zip(urls).map(|(name, url)| {
+                    let oid = outcome
+                        .hls_entries
+                        .iter()
+                        .find(|(n, _)| *n == name)
+                        .map(|(_, o)| o.clone());
+                    Delivery { url, kind: DeliveryKind::Video, oid }
+                }));
             }
 
             if !was_shared && is_headless {
@@ -1258,7 +1347,7 @@ pub(crate) fn run_video_conversion(
 /// inside `Spawner::spawn_blocking`. No-op when `paths` is empty.
 fn emit_video_outputs_via_channel(
     tx: &Option<mpsc::Sender<EmitMessage>>,
-    paths: &[String],
+    paths: &[(String, Option<String>)],
     staging_dir: &Path,
 ) {
     let Some(tx) = tx else { return };
@@ -1279,7 +1368,7 @@ fn emit_video_outputs_via_channel(
     // its new bytes are never uploaded.
     let mut missing: Vec<String> = Vec::new();
     let mut read_failures: Vec<(String, String)> = Vec::new();
-    for path in paths {
+    for (path, oid) in paths {
         let abs = staging_dir.join(path);
         if !abs.exists() {
             missing.push(abs.display().to_string());
@@ -1301,7 +1390,10 @@ fn emit_video_outputs_via_channel(
             rel_path: path.clone(),
             hash,
             bucket: HashBucket::VideoOutputs,
-            oid: None,
+            // `Some` only from the just-encoded main path's own delivered
+            // set — the carry-forward skip/carry-forward paths in
+            // `dispatch_video_conversions` pass `None` for every entry.
+            oid: oid.clone(),
         };
         // blocking_send: safe because run_video_conversion runs inside spawn_blocking.
         // A send failure means the coordinator was dropped; log and continue.
@@ -1529,7 +1621,13 @@ pub(crate) fn dispatch_video_conversions(
             // stale sweep deletes a physically-present file (the same class of
             // bug 71ee43bc1c fixed for the whole set, now enforced per item).
             // `to_dispatch` is the subset that actually needs the encoder.
-            let mut skip_paths: Vec<String> = Vec::new();
+            //
+            // Neither of these two carries a fresh oid: `store.stage`'s
+            // self-heal (below) relinks a cached blob without surfacing which
+            // one, and a video that is simply unchanged never calls
+            // `convert_single_video` at all this round. Every push pairs its
+            // path with `None`; ship-by-OID's fingerprint fallback covers it.
+            let mut skip_paths: Vec<(String, Option<String>)> = Vec::new();
             // Outputs of a video that IS being re-dispatched below, but whose
             // previous mp4/poster are still sitting at that same path (the
             // encode hasn't reached its atomic `link_to` swap yet). Registered
@@ -1537,7 +1635,7 @@ pub(crate) fn dispatch_video_conversions(
             // core seal — which no longer waits for the encode, see below —
             // does not read "not re-emitted this round" as "gone" and let the
             // stale sweep delete a video that is still serving fine.
-            let mut carry_forward_paths: Vec<String> = Vec::new();
+            let mut carry_forward_paths: Vec<(String, Option<String>)> = Vec::new();
             // (path, fingerprint): what a new run would own if one is spawned.
             let mut to_dispatch: Vec<(String, Option<String>)> = Vec::new();
             // Items a run already spawned is converting from these same bytes.
@@ -1578,8 +1676,8 @@ pub(crate) fn dispatch_video_conversions(
                         crate::build::io_utils::output_present(&background_ctx.staging_dir.join(key))
                     };
                     if staged(&mp4) && staged(&thumb) {
-                        carry_forward_paths.push(mp4);
-                        carry_forward_paths.push(thumb);
+                        carry_forward_paths.push((mp4, None));
+                        carry_forward_paths.push((thumb, None));
                     }
                     joined.push((item.clone(), fingerprint));
                     continue;
@@ -1623,7 +1721,7 @@ pub(crate) fn dispatch_video_conversions(
                     // existence check drops the keys whose staging file is
                     // absent (the HLS ladder's excess candidates, normally)
                     // rather than registering a lie.
-                    skip_paths.extend(video_output_keys(&mapped));
+                    skip_paths.extend(video_output_keys(&mapped).into_iter().map(|key| (key, None)));
                 } else {
                     let why = if fingerprint_matched {
                         "no cached output"
@@ -1641,8 +1739,8 @@ pub(crate) fn dispatch_video_conversions(
                     // follow-up rebuild (triggered below) registers it for
                     // real — never a half-written or stale entry.
                     if outputs_present {
-                        carry_forward_paths.push(mp4);
-                        carry_forward_paths.push(thumb);
+                        carry_forward_paths.push((mp4, None));
+                        carry_forward_paths.push((thumb, None));
                     }
                     to_dispatch.push((item.clone(), fingerprint));
                 }
@@ -1660,7 +1758,9 @@ pub(crate) fn dispatch_video_conversions(
             if !carry_forward_paths.is_empty() {
                 emit_video_outputs_via_channel(&tx, &carry_forward_paths, &background_ctx.staging_dir);
             }
-            svc.cancellation.forget_landed(skip_paths.iter().chain(&carry_forward_paths));
+            svc.cancellation.forget_landed(
+                skip_paths.iter().map(|(p, _)| p).chain(carry_forward_paths.iter().map(|(p, _)| p)),
+            );
 
             log::info!(
                 "video dispatch: {} items — {} carried, {} healed from CAS, {} joined running encode, \
@@ -2773,7 +2873,7 @@ pub(crate) mod tests {
         // Deliberately do NOT create the staging files.
 
         let (tx, rx) = test_utils::build_test_coordinator();
-        let paths = vec![mp4_key.clone(), thumb_key.clone()];
+        let paths = vec![(mp4_key.clone(), None), (thumb_key.clone(), None)];
         // blocking_send requires a non-async thread.
         tokio::task::spawn_blocking(move || {
             emit_video_outputs_via_channel(&Some(tx), &paths, &staging);
@@ -2824,7 +2924,7 @@ pub(crate) mod tests {
         std::fs::write(&thumb_abs, b"AAAA").unwrap();
 
         let (tx_a, rx_a) = test_utils::build_test_coordinator();
-        let paths = vec![mp4_key.clone(), thumb_key.clone()];
+        let paths = vec![(mp4_key.clone(), None), (thumb_key.clone(), None)];
         let staging_a_clone = staging_a.clone();
         tokio::task::spawn_blocking(move || {
             emit_video_outputs_via_channel(&Some(tx_a), &paths, &staging_a_clone);
@@ -2865,7 +2965,7 @@ pub(crate) mod tests {
         std::fs::write(&thumb_abs_b, b"BBBB").unwrap();
 
         let (tx_b, rx_b) = test_utils::build_test_coordinator();
-        let paths_b = vec![mp4_key.clone(), thumb_key.clone()];
+        let paths_b = vec![(mp4_key.clone(), None), (thumb_key.clone(), None)];
         let staging_b_clone = staging_b.clone();
         tokio::task::spawn_blocking(move || {
             emit_video_outputs_via_channel(&Some(tx_b), &paths_b, &staging_b_clone);

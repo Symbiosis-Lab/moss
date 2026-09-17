@@ -1595,11 +1595,16 @@ fn suppressed_variants_for(
 /// paints a warning. Collapsing them either hides a broken image or warns over
 /// bytes that are still on their way.
 enum ItemStep {
-    /// `delivered` names every `.webp` URL now in staging, `failed` every
-    /// promised URL that will never be produced, `advisories` what to tell the
-    /// user. `encoded` gates the media child Job on real work.
+    /// `delivered` names every `.webp` URL now in staging paired with the CAS
+    /// oid backing those exact bytes (`ensure_staged`'s own argument, so it is
+    /// always `Some` on this path — ship-by-OID's fingerprint fallback covers
+    /// every OTHER registration route, e.g. the carry-forward skip path in
+    /// `dispatch_image_conversions`, which never populates `delivered` at
+    /// all), `failed` every promised URL that will never be produced,
+    /// `advisories` what to tell the user. `encoded` gates the media child Job
+    /// on real work.
     Handled {
-        delivered: Vec<String>,
+        delivered: Vec<(String, Option<String>)>,
         failed: Vec<(String, String)>,
         advisories: Vec<Advisory>,
         encoded: bool,
@@ -1685,14 +1690,14 @@ fn ensure_staged(objects: &cache::ObjectStore, oid: &str, out: &Path, url: &str)
 /// spell the triplet out separately.
 fn record_deliveries(
     services: &BuildServices,
-    produced: &std::sync::Mutex<Vec<String>>,
-    delivered: Vec<String>,
+    produced: &std::sync::Mutex<Vec<(String, Option<String>)>>,
+    delivered: Vec<(String, Option<String>)>,
 ) {
     if delivered.is_empty() {
         return;
     }
     produced.lock().unwrap().extend(delivered.iter().cloned());
-    for url in delivered {
+    for (url, _oid) in delivered {
         services.reporter.report(&PipelineEvent::AssetReady {
             path: url.clone(),
             asset_type: "image".to_string(),
@@ -1744,9 +1749,10 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     // (FIX 1b, invariant #6) — though in practice an images-only build that reaches
     // here had a non-empty item set, so it normally does real work.
     let converted_count = AtomicU32::new(0);
-    // Track .webp paths actually produced during this run (for coordinator registration).
+    // Track .webp paths actually produced during this run (for coordinator
+    // registration), paired with the CAS oid backing each one's exact bytes.
     // Only paths that were successfully produced are sent; failed items are omitted.
-    let produced_webp_paths: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let produced_webp_paths: Mutex<Vec<(String, Option<String>)>> = Mutex::new(Vec::new());
     // Monotonic count of finished items (they complete out of order in parallel)
     // for the progress bar, and a flag observed if any item hits cancellation.
     let completed = AtomicU32::new(0);
@@ -2076,7 +2082,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     );
                 };
 
-                let mut delivered: Vec<String> = Vec::new();
+                let mut delivered: Vec<(String, Option<String>)> = Vec::new();
                 let mut failed: Vec<(String, String)> = Vec::new();
                 let mut item_advisories: Vec<Advisory> = Vec::new();
                 {
@@ -2089,7 +2095,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                             "link_to staging failed".to_string(),
                         );
                     }
-                    delivered.push(relative_webp.clone());
+                    delivered.push((relative_webp.clone(), Some(base_oid.clone())));
 
                     // Collision membership is re-tested per ITEM: a
                     // singleflight-shared outcome spans duplicate-content items
@@ -2109,7 +2115,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                             (Some(oid), None) => {
                                 let out = ctx.staging_dir.join(&rung_rel);
                                 if ensure_staged(&objects, oid, &out, &rung_rel) {
-                                    delivered.push(rung_rel.clone());
+                                    delivered.push((rung_rel.clone(), Some(oid.clone())));
                                     None
                                 } else {
                                     Some("link_to staging failed".to_string())
@@ -2379,7 +2385,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
 /// Returns the violation lines logged, for tests (no log-capture harness here).
 fn emit_image_outputs_via_channel(
     tx: &Option<mpsc::Sender<EmitMessage>>,
-    paths: &[String],
+    paths: &[(String, Option<String>)],
     staging_dir: &Path,
     suppressed: &std::collections::HashSet<String>,
     registry: Option<&crate::types::assets::AssetRegistry>,
@@ -2416,7 +2422,7 @@ fn emit_image_outputs_via_channel(
     let unverified = |path: &String, err: &std::io::Error| {
         let _ = tx.blocking_send(EmitMessage::Unverified { rel_path: path.clone(), detail: err.to_string() });
     };
-    for path in paths {
+    for (path, oid) in paths {
         let abs = staging_dir.join(path);
         match crate::build::io_utils::probe_path(&abs) {
             crate::build::io_utils::Presence::Present => {}
@@ -2453,7 +2459,13 @@ fn emit_image_outputs_via_channel(
             rel_path: path.clone(),
             hash,
             bucket: HashBucket::ImageVariants,
-            oid: None,
+            // `Some` only when the caller already knows the CAS oid backing
+            // these exact bytes (the just-encoded main path's own
+            // `produced_webp_paths`) — the carry-forward skip path below
+            // passes `None` for every entry, since self-heal never surfaces
+            // the oid it relinked from. `ship_phase`'s fingerprint fallback
+            // covers a `None` entry just as it always has.
+            oid: oid.clone(),
         };
         // blocking_send: safe because run_image_conversion runs inside spawn_blocking
         // (dispatched via Spawner::spawn_blocking, not an async spawn).
@@ -2668,7 +2680,12 @@ pub(crate) fn dispatch_image_conversions(
         let heal_suppressed = suppressed_variants_for(&heal_paths, &ctx.staging_dir);
 
         let total_items = ctx.image_items.len();
-        let mut skip_paths: Vec<String> = Vec::new();
+        // No `Option<String>` is ever a fresh oid here — this is the
+        // carry-forward skip path (`rematerialize` relinks a cached blob but
+        // does not surface which one), never the just-encoded main path — so
+        // every push below pairs its path with `None`, ship-by-OID's
+        // fingerprint fallback covers it.
+        let mut skip_paths: Vec<(String, Option<String>)> = Vec::new();
         let mut to_dispatch: Vec<ImageConversionItem> = Vec::new();
         let mut current_paths: HashSet<String> = HashSet::new();
         let mut healed_count: usize = 0;
@@ -2729,7 +2746,7 @@ pub(crate) fn dispatch_image_conversions(
                 // image so seal() keeps them. `emit_image_outputs_via_channel`'s
                 // existence check drops any key whose staging file is absent
                 // rather than registering a lie.
-                skip_paths.push(relative_webp.clone());
+                skip_paths.push((relative_webp.clone(), None));
                 if let Some(ref asset_reg) = svc.assets {
                     // Relay an AssetReady swap ONLY when set_ready actually
                     // flips the asset Pending→Ready — e.g. a just-re-dropped
@@ -2779,7 +2796,7 @@ pub(crate) fn dispatch_image_conversions(
                                     HealOutcome::Healed
                                 ));
                             }
-                            skip_paths.push(rung_rel.clone());
+                            skip_paths.push((rung_rel.clone(), None));
                             if rung_staging.exists() {
                                 if let Some(ref asset_reg) = svc.assets {
                                     if asset_reg.set_ready(rung_rel.clone()) {

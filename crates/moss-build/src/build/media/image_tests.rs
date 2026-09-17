@@ -3052,7 +3052,7 @@ async fn emit_image_outputs_skips_missing_staged_files() {
     std::fs::write(staging.path().join("present.webp"), b"present-bytes").unwrap();
 
     let (tx, rx) = test_utils::build_test_coordinator();
-    let paths = vec!["present.webp".to_string(), "missing.webp".to_string()];
+    let paths = vec![("present.webp".to_string(), None), ("missing.webp".to_string(), None)];
     let staging_path = staging.path().to_path_buf();
     // `emit_image_outputs_via_channel` uses `blocking_send` and must run
     // on a non-async thread (matching production, which dispatches it via
@@ -3116,7 +3116,7 @@ async fn emit_image_outputs_skips_missing_staged_files() {
 async fn emit_image_outputs_suppressed_absent_produces_no_violation() {
     let staging = tempfile::tempdir().unwrap();
     let (tx, _rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-    let paths = vec!["pruned.webp".to_string()];
+    let paths = vec![("pruned.webp".to_string(), None)];
     let mut suppressed = std::collections::HashSet::new();
     suppressed.insert("pruned.webp".to_string());
     let staging_path = staging.path().to_path_buf();
@@ -3142,7 +3142,7 @@ async fn emit_image_outputs_suppressed_absent_produces_no_violation() {
 async fn emit_image_outputs_unsuppressed_absent_still_violates() {
     let staging = tempfile::tempdir().unwrap();
     let (tx, _rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-    let paths = vec!["pruned.webp".to_string(), "genuinely-missing.webp".to_string()];
+    let paths = vec![("pruned.webp".to_string(), None), ("genuinely-missing.webp".to_string(), None)];
     let mut suppressed = std::collections::HashSet::new();
     suppressed.insert("pruned.webp".to_string());
     let staging_path = staging.path().to_path_buf();
@@ -3181,7 +3181,7 @@ async fn emit_image_outputs_registers_suppressed_path_that_exists() {
     std::fs::write(staging.path().join("referenced-later.webp"), b"real-bytes").unwrap();
 
     let (tx, rx) = test_utils::build_test_coordinator();
-    let paths = vec!["referenced-later.webp".to_string()];
+    let paths = vec![("referenced-later.webp".to_string(), None)];
     let mut suppressed = std::collections::HashSet::new();
     suppressed.insert("referenced-later.webp".to_string());
     let staging_path = staging.path().to_path_buf();
@@ -4132,7 +4132,7 @@ fn self_heal_then_emit_registers_relinked_webp() {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
         emit_image_outputs_via_channel(
             &Some(tx),
-            &["photo.webp".to_string()],
+            &[("photo.webp".to_string(), None)],
             &h.staging,
             &std::collections::HashSet::new(),
             None,
@@ -4162,7 +4162,7 @@ fn self_heal_then_emit_registers_relinked_webp() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
     emit_image_outputs_via_channel(
         &Some(tx),
-        &["photo.webp".to_string()],
+        &[("photo.webp".to_string(), None)],
         &h.staging,
         &std::collections::HashSet::new(),
         None,
@@ -4273,7 +4273,7 @@ fn an_evicted_batch_output_is_healed_before_registration_not_silently_dropped() 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
         emit_image_outputs_via_channel(
             &Some(tx),
-            &["photo.webp".to_string()],
+            &[("photo.webp".to_string(), None)],
             &h.staging,
             &std::collections::HashSet::new(),
             None,
@@ -4316,7 +4316,7 @@ fn an_evicted_batch_output_is_healed_before_registration_not_silently_dropped() 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
     emit_image_outputs_via_channel(
         &Some(tx),
-        &["photo.webp".to_string()],
+        &[("photo.webp".to_string(), None)],
         &h.staging,
         &std::collections::HashSet::new(),
         None,
@@ -4677,7 +4677,7 @@ fn registration_over_an_unreadable_variant_reports_it_and_never_fails_it() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
     emit_image_outputs_via_channel(
         &Some(tx),
-        &["locked/photo.webp".to_string()],
+        &[("locked/photo.webp".to_string(), None)],
         &h.staging,
         &std::collections::HashSet::new(),
         Some(&registry),

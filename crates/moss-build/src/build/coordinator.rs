@@ -43,8 +43,13 @@ pub enum EmitMessage {
         hash: String,
         bucket: HashBucket,
         /// The CAS object id already backing these exact bytes, when the
-        /// sender knows one. `Some` only from `copy_deferred_assets`'s asset
-        /// walk today — every other sender passes `None`. Threaded into
+        /// sender knows one: `copy_deferred_assets`'s asset walk, the image
+        /// worker's main encode path (`emit_image_outputs_via_channel`), and
+        /// the video worker's (`emit_video_outputs_via_channel`) all pass
+        /// `Some` for their own freshly-produced entries. A carry-forward or
+        /// self-heal registration on any of those three paths still passes
+        /// `None` — it relinks a cached blob without surfacing which one —
+        /// and falls back to the fingerprint check below. Threaded into
         /// `PendingManifest::ship_sources` as a `ShipSource::Cas` entry so
         /// `ship_phase` can copy from the immutable CAS blob instead of the
         /// mutable stage path.
