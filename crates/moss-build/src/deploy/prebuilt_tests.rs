@@ -204,3 +204,197 @@ async fn a_version_ahead_config_refuses_before_hashing_the_directory() {
         .expect_err("a version-ahead config must refuse");
     assert!(err.contains("schema_version") && err.contains("newer"), "got: {err}");
 }
+
+// ── Self-heal wiring: this call site, not the shared function ───────────────
+//
+// `upload_regular_file` (deploy/upload.rs) is proven to self-heal and to
+// return the actually-shipped hash by upload_tests.rs's own tests, called
+// directly with a stale hash handed in as a literal. None of that proves
+// `push_prebuilt_inner` (this file) does the right thing with what comes
+// back: `commit_sync` sends `manifest` verbatim as the server's new source of
+// truth, so a healed hash that never reaches `manifest` commits a permanently
+// wrong record for a file that was, in fact, uploaded correctly.
+// `push.rs`'s `a_self_healed_file_corrects_its_manifest_entry_before_commit`
+// proves this for the moss-format publish path; this is prebuilt's own,
+// independent fold-in loop (the `self_heal_corrections` block above
+// `push_prebuilt_inner`'s commit_sync call) and needs its own proof.
+//
+// Unlike `push.rs`, there is no separately-sealed manifest to hand a stale
+// hash to — `build_manifest_from_dir` hashes the file at call time, so the
+// drift has to be a real one: the mock server withholds its `sync_manifest`
+// response until the file has been rewritten on disk, which deterministically
+// places the rewrite between the manifest hash (already computed by then) and
+// the upload's own re-read (which only happens once that response arrives).
+
+/// Drain one raw HTTP/1.1 request off `stream`, without answering it —
+/// `crate::test_mock_http_conn` drains-then-responds as one unit, which
+/// cannot fit a caller that needs to do work (here: rewrite a file)
+/// in between receiving a request and answering it.
+async fn drain_request(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut raw = Vec::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = stream.read(&mut buf).await.unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        raw.extend_from_slice(&buf[..n]);
+        if let Some(hdr_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+            let hdr_str = String::from_utf8_lossy(&raw[..hdr_end]);
+            let body_len = hdr_str
+                .lines()
+                .find_map(|l| {
+                    l.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            let expected_total = hdr_end + 4 + body_len;
+            while raw.len() < expected_total {
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                raw.extend_from_slice(&buf[..n]);
+            }
+            break;
+        }
+    }
+    raw
+}
+
+/// Write a response and close — the second half of what
+/// `crate::test_mock_http_conn` does in one call; split out so a caller can
+/// act between [`drain_request`] and this.
+async fn respond(stream: &mut tokio::net::TcpStream, resp: &[u8]) {
+    use tokio::io::AsyncWriteExt;
+    stream.write_all(resp).await.ok();
+    stream.shutdown().await.ok();
+}
+
+#[tokio::test]
+async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit() {
+    use sha2::{Digest, Sha256};
+    use tokio::net::TcpListener;
+
+    let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let prev_url = std::env::var("MOSS_SETA_URL").ok();
+
+    let old_bytes = b"<html>content the manifest hash was computed from</html>";
+    let new_bytes: &[u8] =
+        b"<html>content actually on disk by upload time - a racing rebuild</html>";
+    let hash_of = |b: &[u8]| -> String {
+        let mut h = Sha256::new();
+        h.update(b);
+        hex::encode(h.finalize())
+    };
+    let old_hash = hash_of(old_bytes);
+    let new_hash = hash_of(new_bytes);
+    assert_ne!(old_hash, new_hash, "fixture sanity: the drift must be real");
+
+    let project = tmp_dir();
+    let prebuilt = tmp_dir();
+    let target = prebuilt.path().join("index.html");
+    std::fs::write(&target, old_bytes).expect("seed prebuilt file");
+
+    let listener = TcpListener::bind::<std::net::SocketAddr>("127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (commit_tx, commit_rx) = tokio::sync::oneshot::channel();
+    let rewrite_target = target.clone();
+    let new_bytes_owned = new_bytes.to_vec();
+
+    tokio::spawn(async move {
+        // conn 0: GET /api/sites/:id/generation -> 404 (get_live_generation
+        // short-circuit: no live generation known, proceed normally).
+        {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            drain_request(&mut stream).await;
+            respond(
+                &mut stream,
+                b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            )
+            .await;
+        }
+        // conn 1: POST /api/sites/:id/sync — drain the request (built from
+        // OLD bytes), THEN rewrite the file on disk, THEN answer. Everything
+        // downstream of this response (the file-size stat, the upload's own
+        // read) happens only after the rewrite has landed.
+        {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            drain_request(&mut stream).await;
+            tokio::fs::write(&rewrite_target, &new_bytes_owned)
+                .await
+                .expect("rewrite mid-deploy");
+            respond(
+                &mut stream,
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"need\":[\"index.html\"],\"remove\":[]}",
+            )
+            .await;
+        }
+        // conn 2: PUT /api/sites/:id/files/index.html — the upload itself.
+        {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            drain_request(&mut stream).await;
+            respond(
+                &mut stream,
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            )
+            .await;
+        }
+        // conn 3: POST /api/sites/:id/commit — capture the body so the test
+        // can inspect which hash actually got committed.
+        {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let raw = drain_request(&mut stream).await;
+            respond(
+                &mut stream,
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 104\r\n\r\n{\"url\":\"https://healed-prebuilt.mosspub.com\",\"files_updated\":1,\"files_removed\":0,\"timestamp\":1700000000}",
+            )
+            .await;
+            commit_tx.send(raw).ok();
+        }
+    });
+
+    std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+    let identity = Identity::generate().expect("generate identity");
+
+    let result = push_prebuilt(
+        project.path(),
+        prebuilt.path(),
+        "healed-prebuilt",
+        &identity,
+        &silent(),
+    )
+    .await;
+
+    match prev_url {
+        Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+        None => std::env::remove_var("MOSS_SETA_URL"),
+    }
+
+    assert!(
+        result.is_ok(),
+        "a hash drift stable across the settle pause must self-heal a prebuilt deploy too: {result:?}"
+    );
+
+    let commit_request = commit_rx
+        .await
+        .expect("commit_sync must have been called for the publish to succeed");
+    let request_str = String::from_utf8_lossy(&commit_request);
+    let body = request_str
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .unwrap_or(&request_str);
+    assert!(
+        body.contains(&new_hash),
+        "commit_sync's manifest must carry the hash actually shipped for the self-healed file, \
+         not the one the manifest was built with before the drift: {body}"
+    );
+    assert!(
+        !body.contains(&old_hash),
+        "the stale pre-drift hash must not survive into the committed manifest: {body}"
+    );
+}
