@@ -480,44 +480,32 @@ fn parse_ffmpeg_time(line: &str) -> f64 {
     }
 }
 
-/// Parses FFmpeg's `speed=` field from a stderr progress line.
-///
-/// FFmpeg outputs speed as a multiplier (e.g., "1.51x", "0.832x", "N/A").
-///
-/// # Returns
-/// * `Some(String)` — parsed speed value (e.g., "1.51x")
-/// * `None` — no `speed=` field found
-fn parse_ffmpeg_speed(line: &str) -> Option<String> {
-    let (_, after) = line.split_once("speed=")?;
-    let value = after
-        .split_once(|c: char| c == ' ' || c == '\r' || c == '\n')
-        .map_or(after, |(v, _)| v)
-        .trim();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
-    }
-}
+/// Maximum lines [`strip_ffmpeg_progress`] keeps, as a defensive bound
+/// independent of the progress filter — insurance against some other chatty
+/// line a future ffmpeg build adds that the `frame=`/`fps=` heuristic doesn't
+/// recognise.
+const MAX_STDERR_ERROR_LINES: usize = 200;
 
-/// Parses FFmpeg's `bitrate=` field from a stderr progress line.
+/// Strip ffmpeg's `\r`-delimited progress spam (`frame=… fps=… …`) out of a
+/// captured stderr blob, keeping every other line.
 ///
-/// FFmpeg outputs bitrate as e.g., "1048.6kbits/s" or "N/A".
-///
-/// # Returns
-/// * `Some(String)` — parsed bitrate value (e.g., "1048.6kbits/s")
-/// * `None` — no `bitrate=` field found
-fn parse_ffmpeg_bitrate(line: &str) -> Option<String> {
-    let (_, after) = line.split_once("bitrate=")?;
-    let trimmed = after.trim_start();
-    let value = trimmed
-        .split_once(|c: char| c == ' ' || c == '\r' || c == '\n')
-        .map_or(trimmed, |(v, _)| v);
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
-    }
+/// ffmpeg overwrites its progress report in place with `\r`, not `\n`, so a
+/// blob captured whole (see [`spawn_ffmpeg_streaming`]) carries hundreds of
+/// `frame=…` updates run together on what looks like one enormous line. That
+/// blob is embedded verbatim into the `Err(String)` a failed two-pass returns
+/// — which is what a real failure showed eating the log-tail budget: the
+/// actual diagnostic (`[mp4 @ …] Unable to re-open …`, `Error writing
+/// trailer`, `Conversion failed!`, the libx264 stats block) was almost
+/// entirely crowded out by the last encode's progress ticks.
+pub(crate) fn strip_ffmpeg_progress(stderr: &str) -> String {
+    let is_progress = |line: &str| line.contains("frame=") && line.contains("fps=");
+    let kept: Vec<&str> = stderr
+        .split(['\r', '\n'])
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !is_progress(line))
+        .collect();
+    let start = kept.len().saturating_sub(MAX_STDERR_ERROR_LINES);
+    kept[start..].join("\n")
 }
 
 /// Niceness applied to all ffmpeg/ffprobe children (Unix). 10 ≈ "background
@@ -702,16 +690,6 @@ pub(crate) fn spawn_ffmpeg_streaming(
                 if now.duration_since(last_callback) >= Duration::from_millis(100) {
                     on_progress(fraction);
                     last_callback = now;
-
-                    // Log additional FFmpeg metrics for diagnostics
-                    let speed = parse_ffmpeg_speed(&line).unwrap_or_default();
-                    let bitrate = parse_ffmpeg_bitrate(&line).unwrap_or_default();
-                    if !speed.is_empty() || !bitrate.is_empty() {
-                        log::trace!(
-                            "FFmpeg: time={:.1}s speed={} bitrate={}",
-                            time_secs, speed, bitrate
-                        );
-                    }
                 }
             }
         }
@@ -902,6 +880,53 @@ pub(crate) fn build_two_pass_second_args(
         output.into(),
     ]);
     args
+}
+
+/// Outcome of one [`FFmpegManager::convert_to_mp4_with_config`] call, for the
+/// encode-end log line. Narrower than `Result<EncodingResult, String>` on
+/// purpose: this line is only ever logged once the source is known to need
+/// encoding — the `KeepOriginal` branch returns before it, carrying its own
+/// dedicated `log::info!` already — so the only success shape worth naming
+/// here is the size shipped, with whether a lower-rung retry was needed
+/// folded in as context rather than a fourth outcome variant.
+pub(crate) enum EncodeOutcome<'a> {
+    Success { size_bytes: u64, retried: bool },
+    Failed(&'a str),
+}
+
+/// One INFO line naming the source and the rung it is about to be encoded
+/// at — the "start" half of a start/end pair a shared, interleaved log can
+/// correlate against wall-clock time.
+pub(crate) fn encode_start_line(source: &Path, rung: VideoRung) -> String {
+    format!(
+        "Encoding {} at {}x{}@{}fps ({} kbps)",
+        source.display(),
+        rung.width,
+        rung.height,
+        rung.fps,
+        rung.video_kbps,
+    )
+}
+
+/// The "end" half of the pair: elapsed wall time and how it went. `elapsed`
+/// covers the whole attempt, including a retry at a lower rung when one
+/// happened.
+pub(crate) fn encode_end_line(source: &Path, elapsed: Duration, outcome: &EncodeOutcome) -> String {
+    match outcome {
+        EncodeOutcome::Success { size_bytes, retried } => format!(
+            "Encoded {} in {:.1}s: {} bytes{}",
+            source.display(),
+            elapsed.as_secs_f64(),
+            size_bytes,
+            if *retried { " (after a retry at a lower rung)" } else { "" },
+        ),
+        EncodeOutcome::Failed(reason) => format!(
+            "Encode failed for {} after {:.1}s: {}",
+            source.display(),
+            elapsed.as_secs_f64(),
+            reason,
+        ),
+    }
 }
 
 /// Manager for FFmpeg operations.
@@ -1102,91 +1127,115 @@ impl FFmpegManager {
             None => &noop,
         };
 
-        // Create unique temp directory for pass logs to avoid conflicts
-        let temp_dir = output.parent()
-            .ok_or_else(|| "Output path has no parent directory".to_string())?
-            .join(format!("temp-{}", uuid::Uuid::new_v4()));
+        // One INFO line naming what's about to happen, one naming how it
+        // went — a start/end pair a shared, interleaved log can correlate
+        // against wall-clock time, independent of whatever the error text
+        // itself says (that's `strip_ffmpeg_progress`'s job, above). The body
+        // is an IIFE so every exit — the happy path and every early
+        // `Err`/`?` below — reports through the ONE end-of-encode log call
+        // rather than needing one hand-placed at each of the half-dozen
+        // return sites.
+        let encode_started_at = std::time::Instant::now();
+        log::info!("{}", encode_start_line(source, rung));
 
-        std::fs::create_dir_all(&temp_dir)
-            .map_err(|e| format!("Failed to create temp dir: {}", e))?;
-
-        // Run two-pass encoding
-        let encode_result = self.run_two_pass_encode(
-            source,
-            output,
-            rung,
-            probe.fps,
-            config,
-            &temp_dir,
-            probe.duration_secs,
-            on_progress,
-            registry,
-            cancel_flag,
-        );
-
-        // Clean up temp directory
-        let _ = std::fs::remove_dir_all(&temp_dir);
-
-        encode_result?;
-
-        // Validate output
-        if !self.validate_encoded_video(output)? {
-            // Retry one rung down, not at 90% of this one. A rung is a
-            // resolution/frame-rate/bitrate triple that clears the quality floor
-            // together; shaving 10% off the bitrate alone leaves the other two
-            // where they were and lands between rungs, below the floor. If there
-            // is no rung below, there is nothing left to try.
-            let Some(lower) = asset_paths::VIDEO_LADDER
-                .iter()
-                .rev()
-                .find(|r| r.video_kbps < rung.video_kbps)
-                .copied()
-            else {
-                return Err(format!(
-                    "Failed to encode valid video at the lowest rung: {}",
-                    source.display()
-                ));
-            };
-            log::warn!(
-                "Validation failed at {}x{}; retrying at {}x{}: {}",
-                rung.width, rung.height, lower.width, lower.height, source.display()
-            );
-
-            let temp_dir_retry = output.parent()
+        let outcome = (|| -> Result<(u64, bool), String> {
+            // Create unique temp directory for pass logs to avoid conflicts
+            let temp_dir = output.parent()
                 .ok_or_else(|| "Output path has no parent directory".to_string())?
-                .join(format!("temp-retry-{}", uuid::Uuid::new_v4()));
+                .join(format!("temp-{}", uuid::Uuid::new_v4()));
 
-            std::fs::create_dir_all(&temp_dir_retry)
-                .map_err(|e| format!("Failed to create retry temp dir: {}", e))?;
+            std::fs::create_dir_all(&temp_dir)
+                .map_err(|e| format!("Failed to create temp dir: {}", e))?;
 
-            let retry_result = self.run_two_pass_encode(
+            // Run two-pass encoding
+            let encode_result = self.run_two_pass_encode(
                 source,
                 output,
-                lower,
+                rung,
                 probe.fps,
                 config,
-                &temp_dir_retry,
+                &temp_dir,
                 probe.duration_secs,
                 on_progress,
                 registry,
                 cancel_flag,
             );
 
-            let _ = std::fs::remove_dir_all(&temp_dir_retry);
-            retry_result?;
+            // Clean up temp directory
+            let _ = std::fs::remove_dir_all(&temp_dir);
 
+            encode_result?;
+
+            let mut retried = false;
+
+            // Validate output
             if !self.validate_encoded_video(output)? {
-                return Err(format!("Failed to encode valid video after retry: {}", source.display()));
+                // Retry one rung down, not at 90% of this one. A rung is a
+                // resolution/frame-rate/bitrate triple that clears the quality floor
+                // together; shaving 10% off the bitrate alone leaves the other two
+                // where they were and lands between rungs, below the floor. If there
+                // is no rung below, there is nothing left to try.
+                let Some(lower) = asset_paths::VIDEO_LADDER
+                    .iter()
+                    .rev()
+                    .find(|r| r.video_kbps < rung.video_kbps)
+                    .copied()
+                else {
+                    return Err(format!(
+                        "Failed to encode valid video at the lowest rung: {}",
+                        source.display()
+                    ));
+                };
+                log::warn!(
+                    "Validation failed at {}x{}; retrying at {}x{}: {}",
+                    rung.width, rung.height, lower.width, lower.height, source.display()
+                );
+                retried = true;
+
+                let temp_dir_retry = output.parent()
+                    .ok_or_else(|| "Output path has no parent directory".to_string())?
+                    .join(format!("temp-retry-{}", uuid::Uuid::new_v4()));
+
+                std::fs::create_dir_all(&temp_dir_retry)
+                    .map_err(|e| format!("Failed to create retry temp dir: {}", e))?;
+
+                let retry_result = self.run_two_pass_encode(
+                    source,
+                    output,
+                    lower,
+                    probe.fps,
+                    config,
+                    &temp_dir_retry,
+                    probe.duration_secs,
+                    on_progress,
+                    registry,
+                    cancel_flag,
+                );
+
+                let _ = std::fs::remove_dir_all(&temp_dir_retry);
+                retry_result?;
+
+                if !self.validate_encoded_video(output)? {
+                    return Err(format!("Failed to encode valid video after retry: {}", source.display()));
+                }
             }
-        }
 
-        let final_size = std::fs::metadata(output)
-            .map_err(|e| format!("Failed to read output file size: {}", e))?
-            .len();
+            let final_size = std::fs::metadata(output)
+                .map_err(|e| format!("Failed to read output file size: {}", e))?
+                .len();
 
-        Ok(EncodingResult::TwoPassSuccess {
-            size_bytes: final_size,
-        })
+            Ok((final_size, retried))
+        })();
+
+        let log_outcome = match &outcome {
+            Ok((size_bytes, retried)) => {
+                EncodeOutcome::Success { size_bytes: *size_bytes, retried: *retried }
+            }
+            Err(e) => EncodeOutcome::Failed(e),
+        };
+        log::info!("{}", encode_end_line(source, encode_started_at.elapsed(), &log_outcome));
+
+        outcome.map(|(size_bytes, _retried)| EncodingResult::TwoPassSuccess { size_bytes })
     }
 
     /// Run two-pass encoding with specified bitrate.
@@ -1290,7 +1339,7 @@ impl FFmpegManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Two-pass first pass failed: {}", stderr));
+            return Err(format!("Two-pass first pass failed: {}", strip_ffmpeg_progress(&stderr)));
         }
 
         Ok(())
@@ -1334,7 +1383,7 @@ impl FFmpegManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Two-pass second pass failed: {}", stderr));
+            return Err(format!("Two-pass second pass failed: {}", strip_ffmpeg_progress(&stderr)));
         }
 
         Ok(())

@@ -732,6 +732,97 @@ fn test_parse_ffmpeg_time_three_digit_milliseconds() {
 }
 
 // ===========================================
+// strip_ffmpeg_progress (log-tail-budget guard)
+// ===========================================
+
+/// A trimmed-down but real capture: two `\r`-joined progress ticks (ffmpeg's
+/// actual overwrite-in-place framing) followed by the substantive failure
+/// lines a real two-pass mux failure produced on a live vault — a moov-atom
+/// reopen failure mid-mux, reproduced verbatim from a captured `moss.log`.
+fn captured_stderr_fixture() -> String {
+    [
+        "frame= 4163 fps= 85 q=25.0 size=   37120KiB time=00:02:18.83 bitrate=2190.2kbits/s speed=2.84x elapsed=0:00:48.91    ",
+        "\rframe= 4200 fps= 85 q=25.0 size=   37376KiB time=00:02:20.07 bitrate=2185.9kbits/s speed=2.83x elapsed=0:00:49.41    ",
+        "\r[mp4 @ 0xa00c14780] Starting second pass: moving the moov atom to the beginning of the file\n",
+        "[mp4 @ 0xa00c14780] Unable to re-open output file for shifting data\n",
+        "[out#0/mp4 @ 0xa010743c0] Error writing trailer: No such file or directory\n",
+        "frame= 4647 fps= 85 q=-1.0 Lsize=   41489KiB time=00:02:34.98 bitrate=2192.9kbits/s speed=2.84x elapsed=0:00:54.59    \n",
+        "[libx264 @ 0xa01071880] kb/s:1999.04\n",
+        "Conversion failed!\n",
+    ]
+    .concat()
+}
+
+#[test]
+fn strip_ffmpeg_progress_drops_every_progress_tick() {
+    let cleaned = strip_ffmpeg_progress(&captured_stderr_fixture());
+    assert!(
+        !cleaned.contains("frame="),
+        "a progress tick survived filtering: {cleaned}"
+    );
+}
+
+#[test]
+fn strip_ffmpeg_progress_keeps_the_actual_diagnostics() {
+    let cleaned = strip_ffmpeg_progress(&captured_stderr_fixture());
+    assert!(cleaned.contains("Conversion failed!"), "{cleaned}");
+    assert!(cleaned.contains("Unable to re-open"), "{cleaned}");
+    assert!(cleaned.contains("Error writing trailer"), "{cleaned}");
+    assert!(cleaned.contains("kb/s:1999.04"), "{cleaned}");
+}
+
+#[test]
+fn strip_ffmpeg_progress_caps_the_kept_line_count() {
+    let mut blob = String::new();
+    for i in 0..(MAX_STDERR_ERROR_LINES + 50) {
+        blob.push_str(&format!("[warn] non-progress line {i}\n"));
+    }
+    let cleaned = strip_ffmpeg_progress(&blob);
+    assert_eq!(cleaned.lines().count(), MAX_STDERR_ERROR_LINES);
+    // The cap keeps the MOST RECENT lines — the ones nearest the failure.
+    assert!(cleaned.contains(&format!("non-progress line {}", MAX_STDERR_ERROR_LINES + 49)));
+    assert!(!cleaned.contains("non-progress line 0\n"));
+}
+
+// ===========================================
+// Encode start/end log lines (session-diagnosability)
+// ===========================================
+
+#[test]
+fn encode_start_line_names_source_and_rung() {
+    let rung = moss_core::asset_paths::VIDEO_LADDER[2];
+    let line = encode_start_line(Path::new("videos/clip.mov"), rung);
+    assert!(line.contains("videos/clip.mov"), "{line}");
+    assert!(line.contains(&rung.width.to_string()), "{line}");
+    assert!(line.contains(&rung.height.to_string()), "{line}");
+}
+
+#[test]
+fn encode_end_line_success_names_size_and_elapsed() {
+    let outcome = EncodeOutcome::Success { size_bytes: 12_345, retried: false };
+    let line = encode_end_line(Path::new("videos/clip.mov"), Duration::from_millis(2500), &outcome);
+    assert!(line.contains("videos/clip.mov"), "{line}");
+    assert!(line.contains("12345"), "{line}");
+    assert!(line.contains("2.5"), "{line}");
+    assert!(!line.contains("retry"), "{line}");
+}
+
+#[test]
+fn encode_end_line_success_names_a_retry() {
+    let outcome = EncodeOutcome::Success { size_bytes: 999, retried: true };
+    let line = encode_end_line(Path::new("videos/clip.mov"), Duration::from_secs(1), &outcome);
+    assert!(line.contains("retry"), "{line}");
+}
+
+#[test]
+fn encode_end_line_failure_names_the_reason() {
+    let outcome = EncodeOutcome::Failed("Conversion failed!");
+    let line = encode_end_line(Path::new("videos/clip.mov"), Duration::from_secs(3), &outcome);
+    assert!(line.contains("videos/clip.mov"), "{line}");
+    assert!(line.contains("Conversion failed!"), "{line}");
+}
+
+// ===========================================
 // VideoCompressionConfig::to_params() Tests
 // ===========================================
 
@@ -784,77 +875,12 @@ fn to_params_carries_the_ladder_so_editing_a_rung_invalidates_the_cache() {
     }
 }
 
-// ===========================================
-// FFmpeg stderr speed parsing tests
-// ===========================================
-
-#[test]
-fn test_parse_ffmpeg_speed_basic() {
-    assert_eq!(parse_ffmpeg_speed("speed=1.51x"), Some("1.51x".to_string()));
-}
-
-#[test]
-fn test_parse_ffmpeg_speed_embedded_in_line() {
-    let line = "frame=  120 fps= 30 q=28.0 size=    1024kB time=00:00:04.00 bitrate= 2097.2kbits/s speed=1.5x";
-    assert_eq!(parse_ffmpeg_speed(line), Some("1.5x".to_string()));
-}
-
-#[test]
-fn test_parse_ffmpeg_speed_slow() {
-    assert_eq!(
-        parse_ffmpeg_speed("speed=0.832x"),
-        Some("0.832x".to_string())
-    );
-}
-
-#[test]
-fn test_parse_ffmpeg_speed_na() {
-    assert_eq!(parse_ffmpeg_speed("speed=N/A"), Some("N/A".to_string()));
-}
-
-#[test]
-fn test_parse_ffmpeg_speed_missing() {
-    assert_eq!(parse_ffmpeg_speed("frame=120 fps=30"), None);
-}
-
-// ===========================================
-// FFmpeg stderr bitrate parsing tests
-// ===========================================
-
-#[test]
-fn test_parse_ffmpeg_bitrate_basic() {
-    assert_eq!(
-        parse_ffmpeg_bitrate("bitrate=1048.6kbits/s"),
-        Some("1048.6kbits/s".to_string())
-    );
-}
-
-#[test]
-fn test_parse_ffmpeg_bitrate_with_leading_space() {
-    assert_eq!(
-        parse_ffmpeg_bitrate("bitrate= 2097.2kbits/s"),
-        Some("2097.2kbits/s".to_string())
-    );
-}
-
-#[test]
-fn test_parse_ffmpeg_bitrate_embedded_in_line() {
-    let line = "frame=  120 fps= 30 q=28.0 size=    1024kB time=00:00:04.00 bitrate= 2097.2kbits/s speed=1.5x";
-    assert_eq!(
-        parse_ffmpeg_bitrate(line),
-        Some("2097.2kbits/s".to_string())
-    );
-}
-
-#[test]
-fn test_parse_ffmpeg_bitrate_na() {
-    assert_eq!(parse_ffmpeg_bitrate("bitrate=N/A"), Some("N/A".to_string()));
-}
-
-#[test]
-fn test_parse_ffmpeg_bitrate_missing() {
-    assert_eq!(parse_ffmpeg_bitrate("frame=120 fps=30"), None);
-}
+// FFmpeg stderr speed/bitrate parsing (parse_ffmpeg_speed/parse_ffmpeg_bitrate)
+// and their tests were removed here: their only production call site was the
+// per-tick `log::trace!` in spawn_ffmpeg_streaming, itself deleted as the
+// deletion candidate for encode start/end lines superseding it at INFO (see
+// EncodeOutcome/encode_start_line/encode_end_line) — two overlapping
+// progress-visibility mechanisms at different levels is not worth keeping.
 
 // ===========================================
 // Background QoS tests (priority + thread cap)

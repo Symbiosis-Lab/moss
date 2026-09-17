@@ -162,6 +162,69 @@ pub(crate) fn is_site_relative(path: &str) -> bool {
     !p.is_absolute() && !p.components().any(|c| matches!(c, std::path::Component::ParentDir))
 }
 
+/// One line describing a raised advisory, for the production log.
+///
+/// Pure and unit-tested directly — the `log::warn!` call site in
+/// [`Advisory::for_source`] routes through the global `tauri_plugin_log`
+/// logger, which a `cargo test` cannot construct (see this crate's advisory
+/// log line design note). `item` is the already-resolved, site-relative path
+/// (or `None` for a build-wide advisory); `<build>` names that case so the
+/// line always carries an `item=` token to grep on.
+pub(crate) fn advisory_log_line(
+    scope: &Scope,
+    severity: &Severity,
+    item: Option<&str>,
+    what: &str,
+) -> String {
+    format!(
+        "scope={:?} severity={:?} item={} : {}",
+        scope,
+        severity,
+        item.unwrap_or("<build>"),
+        what
+    )
+}
+
+/// `(source_path, what)` pairs already warned about, this process's
+/// lifetime — the advisory analogue of `moss_paths::warned_dirs`.
+///
+/// Several `for_source` callers are STAT-BASED and re-derive the identical
+/// advisory on every rebuild regardless of whether anything changed
+/// (`video_exceeds_size_target`'s own comment: "cache-hit rebuilds report it
+/// too"), so a persistent, author-facing condition — an oversized video
+/// nobody has fixed, a still-broken reference — would otherwise log one WARN
+/// line per rebuild for as long as it lasts. `Send Logs`' `LOG TAIL` is the
+/// literal last 768 KiB of the raw log FILE (`log_report.rs`'s
+/// `read_log_content`/`MAX_LOG_TAIL_BYTES`), a section the in-memory
+/// `DiagRing` dedup never touches (it only ever feeds Sentry breadcrumbs and
+/// the separate `RECENT ERRORS` section) — so unbounded repeats here crowd
+/// out real signal from that tail exactly the way raw ffmpeg progress output
+/// used to (`ffmpeg::strip_ffmpeg_progress`).
+fn warned_advisories() -> &'static std::sync::Mutex<std::collections::HashSet<(String, String)>> {
+    static WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<(String, String)>>> =
+        std::sync::OnceLock::new();
+    WARNED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Pure gate: `true` the first time `(source_path, what)` is seen, `false`
+/// on every later call with the same pair. Keyed on the caller-supplied
+/// `source_path` rather than the derived, possibly-`None` `item`, so two
+/// different rejected/malformed paths never collide under one shared `None`
+/// key; keyed on `what` alongside it so a change in the advisory's own
+/// content (a video that grew past a new cap, a different error) still logs
+/// once more. Takes `seen` explicitly, same shape as
+/// `moss_paths::should_warn_once`, so a test drives a local set instead of
+/// the process-wide one.
+pub(crate) fn should_warn_advisory_once(
+    source_path: &str,
+    what: &str,
+    seen: &std::sync::Mutex<std::collections::HashSet<(String, String)>>,
+) -> bool {
+    seen.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert((source_path.to_string(), what.to_string()))
+}
+
 impl Advisory {
     /// Build an advisory about one source file. `source_path` becomes `item`
     /// when it is site-relative — see the field doc on [`Advisory::item`]. A
@@ -181,6 +244,20 @@ impl Advisory {
         action: Action,
     ) -> Self {
         let item = is_site_relative(source_path).then(|| source_path.to_string());
+        // Every File-scoped, source-path-bearing advisory funnels through
+        // here, so one gate at the choke point covers all of them (including
+        // "shipped without optimizing") instead of a hand-written log::warn!
+        // at each of the dozen call sites in video.rs/image.rs. Gated by
+        // `should_warn_advisory_once` — see its doc for why: this is the
+        // same shape as `moss_paths::should_warn_once`, applied to the
+        // constructor that has far more call sites and fires far more often.
+        if should_warn_advisory_once(source_path, &what, warned_advisories()) {
+            log::warn!(
+                target: "advisory",
+                "{}",
+                advisory_log_line(&scope, &severity, item.as_deref(), &what)
+            );
+        }
         Self { scope, severity, item, what, action }
     }
 
@@ -232,5 +309,55 @@ mod tests {
             Action::None,
         );
         assert_eq!(advisory.item, None);
+    }
+
+    #[test]
+    fn advisory_log_line_carries_item_and_what() {
+        let line = advisory_log_line(
+            &Scope::File,
+            &Severity::ShippedDegraded,
+            Some("videos/clip.mov"),
+            "shipped without optimizing",
+        );
+        assert!(line.contains("File"));
+        assert!(line.contains("ShippedDegraded"));
+        assert!(line.contains("videos/clip.mov"));
+        assert!(line.contains("shipped without optimizing"));
+    }
+
+    #[test]
+    fn advisory_log_line_names_a_build_wide_item() {
+        let line = advisory_log_line(
+            &Scope::Environment,
+            &Severity::NeedsAction,
+            None,
+            "FFmpeg not available",
+        );
+        assert!(line.contains("<build>"), "line was: {line}");
+        assert!(line.contains("FFmpeg not available"));
+    }
+
+    // ─── advisory warn-once gate (re-raise spam in a long `watch` session) ──
+
+    #[test]
+    fn should_warn_advisory_once_fires_only_on_first_sighting_of_a_pair() {
+        let seen = std::sync::Mutex::new(std::collections::HashSet::new());
+
+        assert!(
+            should_warn_advisory_once("videos/clip.mov", "shipped without optimizing", &seen),
+            "first sighting of this (path, what) must warn"
+        );
+        assert!(
+            !should_warn_advisory_once("videos/clip.mov", "shipped without optimizing", &seen),
+            "a stat-based rebuild re-raising the identical advisory must stay quiet"
+        );
+        assert!(
+            should_warn_advisory_once("videos/other.mov", "shipped without optimizing", &seen),
+            "a different source path must still warn"
+        );
+        assert!(
+            should_warn_advisory_once("videos/clip.mov", "size grew past a new cap", &seen),
+            "a changed `what` on the same path must still warn"
+        );
     }
 }
