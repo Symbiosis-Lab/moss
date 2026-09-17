@@ -2824,23 +2824,25 @@ fn test_template_main_has_id_for_skip_link_target() {
 
 #[test]
 fn test_css_colophon_label_is_hidden_by_opacity_not_display_none() {
-    // The wording is invisible at rest and fades in on hover/focus. It must
-    // hide by going transparent, which keeps the text in the accessibility
-    // tree; `display: none` or `visibility: hidden` would remove it and take
-    // the link's accessible name with it.
+    // Hover-capable devices hide the wording until it's reached for, inside
+    // `@media (any-hover: hover)`. It must hide by going transparent, which
+    // keeps the text in the accessibility tree; `display: none` or
+    // `visibility: hidden` would remove it and take the link's accessible
+    // name with it.
     let css = site_css_with_partials();
-    let rest = get_css_rule(&css, ".moss-colophon-label").expect("Colophon label CSS rule should exist");
+    let hidden = get_css_rule_in_media(&css, "@media (any-hover: hover)", ".moss-colophon-label")
+        .expect("A (any-hover: hover) rule hiding the colophon label should exist");
     assert!(
-        rest.contains("opacity: 0"),
-        "Label should hide by going transparent, got: {rest}"
+        hidden.contains("opacity: 0"),
+        "Label should hide by going transparent, got: {hidden}"
     );
     assert!(
-        !rest.contains("display: none") && !rest.contains("visibility: hidden"),
-        "Label must stay in the accessibility tree, got: {rest}"
+        !hidden.contains("display: none") && !hidden.contains("visibility: hidden"),
+        "Label must stay in the accessibility tree, got: {hidden}"
     );
     // Keyboard users get the reveal too, not just pointer users — and because
-    // the pointer's rules are gated behind `@media (hover: hover)`, focus has
-    // to be written outside that gate or a touch device with a keyboard
+    // the pointer's rules are gated behind `@media (any-hover: hover)`, focus
+    // has to be written outside that gate or a touch device with a keyboard
     // attached loses the reveal entirely.
     assert!(
         css.contains(".moss-colophon a:focus-visible .moss-colophon-label"),
@@ -2849,16 +2851,62 @@ fn test_css_colophon_label_is_hidden_by_opacity_not_display_none() {
 }
 
 #[test]
-fn test_css_colophon_label_stays_visible_with_no_hover_to_arrive_from() {
-    // The label's hover reveal lives inside `@media (hover: hover)`, which is
-    // false on a touchscreen — a device that can never satisfy the gate must
-    // not be left with a hidden label it has no gesture to reveal.
+fn test_css_colophon_label_visible_by_default_and_hiding_rule_wins_by_order() {
+    // The label's settled state must be the VISIBLE one: a device that can't
+    // hover -- or a UA old enough not to recognise `any-hover` at all -- has
+    // no gesture to reveal a hidden label with, so the direction that fails
+    // safe is showing it, not hiding it. Hiding is the exception, gated
+    // behind hover capability.
+    //
+    // A substring check that the hiding rule merely exists can't see the
+    // cascade: the base rule and the hiding rule target the same selector at
+    // equal specificity, so which one wins is decided entirely by SOURCE
+    // ORDER. Move the `@media (any-hover: hover)` block above the base rule
+    // -- e.g. while relocating partials or during a merge -- and every
+    // string this test's predecessor checked is still present, but the
+    // label is permanently hidden on touch again. So this asserts the order
+    // directly, not just presence.
     let css = site_css_with_partials();
-    let rule = get_css_rule_in_media(&css, "@media (hover: none)", ".moss-colophon-label")
-        .expect("A (hover: none) rule for the colophon label should exist");
+
+    let base_index = css
+        .find(".moss-colophon-label {")
+        .expect("Colophon label CSS rule should exist");
+    let hiding_media_index = css
+        .find("@media (any-hover: hover)")
+        .expect("The colophon label's hiding rule should be gated on any-hover, not hover");
     assert!(
-        rule.contains("opacity: 1"),
-        "No-hover devices should see the wording at rest, got: {rule}"
+        hiding_media_index > base_index,
+        "The (any-hover: hover) hiding rule must appear AFTER the unconditional base rule -- \
+         same specificity means source order decides, and the base rule is only a real \
+         fallback if it loses that tie on hover-capable devices and wins it everywhere else"
+    );
+
+    let base_rule =
+        get_css_rule(&css, ".moss-colophon-label").expect("Colophon label CSS rule should exist");
+    assert!(
+        base_rule.contains("opacity: 1") && !base_rule.contains("opacity: 0"),
+        "The unconditional base rule must be the visible/settled state, got: {base_rule}"
+    );
+
+    let hidden_rule = get_css_rule_in_media(&css, "@media (any-hover: hover)", ".moss-colophon-label")
+        .expect("A (any-hover: hover) rule hiding the colophon label should exist");
+    assert!(
+        hidden_rule.contains("opacity: 0"),
+        "Hover-capable devices should hide the label until reached for, got: {hidden_rule}"
+    );
+
+    // `hover` (primary pointer only) is the wrong gate: a touchscreen laptop
+    // or an Android tablet with a mouse attached reports `hover: none` even
+    // though a real hover-capable pointer is attached, so a narrower query
+    // would leave that device at the visible default and never offer it the
+    // quiet reveal it is perfectly able to perform -- the same
+    // misclassification this file documents for the hint pill's tooltip
+    // query. And the superseded `(hover: none)` special case must not come
+    // back alongside it: two hand-maintained mirror queries are what this
+    // inversion deleted.
+    assert!(
+        get_css_rule_in_media(&css, "@media (hover: none)", ".moss-colophon-label").is_none(),
+        "The (hover: none) special case should stay deleted, not reappear alongside any-hover"
     );
 }
 
