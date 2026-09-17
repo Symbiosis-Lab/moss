@@ -189,36 +189,43 @@ pub fn delete_entry_inner(project_root: &Path, path: &str) -> Result<(), String>
     // not offer "Put Back" for items trashed this way; drag-out recovery
     // still works.
     //
-    // NsFileManager stays FIRST for exactly that reason, but it is not the
-    // more capable route — only the faster one. It reaches Apple's
-    // `trashItemAtURL` directly, and that call has no answer when the
-    // container holding the file has no Trash of its own: on a client's Mac
-    // a file inside iCloud Drive failed with Apple's "the volume doesn't
-    // have one". Finder does not hit that, because asking Finder to delete
-    // something is asking the one process whose job is knowing where a given
-    // item's Trash lives. So the order is fast-route-first, correct-route-
-    // second, and [`trash_with_finder_fallback`] owns the handoff.
+    // And with NO fallback route when it fails, though 31101e8 briefly added
+    // one. A client's delete inside iCloud Drive failed with Apple's "the
+    // volume doesn't have one", so the obvious repair was to hand the file to
+    // Finder — the one process whose job is knowing where a given item's
+    // Trash lives, and the route that had worked for that client by hand.
+    // Measured 2026-09-17 on a scratch APFS volume whose `.Trashes` was
+    // deliberately blocked by a regular file, which reproduces that class of
+    // failure:
     //
-    // Deliberately NOT conditional on what the first failure was. An earlier
-    // version classified the error and only handed off for failures it
-    // recognized, which is the wrong shape twice over: the `trash` crate
-    // folds every `trashItemAtURL` failure into one untyped string whose
-    // only locale-stable part is the crate's own English preamble (the rest
-    // is `NSError.localizedDescription`, which macOS translates — so the
-    // first cut of that classifier never fired for the Chinese-locale
-    // clients who hit this), and the one case it usefully excluded does not
-    // exist: `trash::TrashContext::delete_all` canonicalizes paths BEFORE
-    // dispatching to either route, so a pre-flight path error fails the
-    // Finder route identically and immediately. Inferring nothing is both
-    // simpler and more correct than inferring from a string.
+    //   - `FileManager.trashItem`   fails: NSCocoaErrorDomain 512, underlying
+    //                               -1407 errFSNotAFolder.
+    //   - `NSWorkspace.recycle`     fails, wrapping the SAME -1407. AppKit's
+    //                               route is not a second door, it is this
+    //                               door with another handle — so there is no
+    //                               sanctioned API left to fall back to.
+    //   - Finder via `osascript`    "succeeds", and the file is GONE: absent
+    //                               from `~/.Trash`, absent from the volume,
+    //                               nowhere on disk.
     //
-    // The cost is Finder's known ones — up to the ~60s busy-Finder AppleEvent
-    // wait, the Automation-permission prompt (moss#1171) — now reachable on
-    // any failed delete. Accepted: it only runs once the fast route has
-    // already failed, the frontend raises a slow-trash toast for exactly
-    // this wait (`ops.ts`'s `SLOW_TRASH_TOAST_MS`, added for the 2026-09-05
-    // incident), and a slow delete beats one that cannot succeed.
-    match trash_with_finder_fallback(&target) {
+    // That last line is why there is no fallback. Asked to delete something
+    // whose volume has no usable Trash, Finder deletes it permanently — the
+    // exact opposite of what this function promises three paragraphs up, and
+    // on a synced vault that destruction propagates to every other device
+    // with no undo. A delete door that silently becomes a shredder in its
+    // degraded case is worse than one that refuses, so it refuses.
+    //
+    // Trashing an item really can be impossible (a File Provider item whose
+    // provider does not advertise `allowsTrashing`, a volume with no Trash),
+    // and destroying it anyway is a decision only the person can make. Making
+    // it available needs a typed error this returns instead of a string, and a
+    // confirmation the frontend owns — see the desktop repo's delete-error
+    // surface work for that contract. Until then: say so, and stop.
+    #[allow(unused_mut)]
+    let mut ctx = trash::TrashContext::default();
+    #[cfg(target_os = "macos")]
+    ctx.set_delete_method(DeleteMethod::NsFileManager);
+    match ctx.delete(&target) {
         Ok(()) => Ok(()),
         // Vanished mid-flight (the pre-check's race window): goal state
         // reached, same as the pre-check.
@@ -227,44 +234,17 @@ pub fn delete_entry_inner(project_root: &Path, path: &str) -> Result<(), String>
             // The raw `trash::Error` is a nested Rust Debug dump — not
             // something to hand a user through a toast that is otherwise in
             // their own language. Keep it in the log for support; give the
-            // user one sentence that tells them what to do next.
+            // user one sentence that tells them what to do next, including
+            // the part they need to weigh: Finder can remove it, but where
+            // there is no Trash to move it to, Finder removes it for good.
             log::error!("delete_entry: couldn't move '{}' to the Trash: {}", path, e);
             Err(format!(
-                "Couldn't move '{}' to the Trash. Try again, or delete it in Finder.",
+                "Couldn't move '{}' to the Trash. Deleting it in Finder will work, \
+                 but may remove it permanently.",
                 path
             ))
         }
     }
-}
-
-/// Trash `target` via `NSFileManager`, handing off to Finder if that fails
-/// for any reason. See [`delete_entry_inner`]'s comment for why the order is
-/// this way round and why the handoff is unconditional.
-#[cfg(target_os = "macos")]
-fn trash_with_finder_fallback(target: &Path) -> Result<(), trash::Error> {
-    let mut ctx = trash::TrashContext::default();
-    ctx.set_delete_method(DeleteMethod::NsFileManager);
-    match ctx.delete(target) {
-        Ok(()) => Ok(()),
-        Err(fast_err) => {
-            // Logged rather than inspected: this carries Apple's own
-            // (possibly localized) description, which is worth having in a
-            // support log and worth nothing as a branch condition.
-            log::warn!(
-                "delete_entry: NsFileManager failed to trash '{}' ({fast_err}); handing off to Finder",
-                target.display()
-            );
-            let mut finder_ctx = trash::TrashContext::default();
-            finder_ctx.set_delete_method(DeleteMethod::Finder);
-            finder_ctx.delete(target)
-        }
-    }
-}
-
-/// Every other platform has one route, so there is nothing to fall back to.
-#[cfg(not(target_os = "macos"))]
-fn trash_with_finder_fallback(target: &Path) -> Result<(), trash::Error> {
-    trash::TrashContext::default().delete(target)
 }
 
 /// Rename an entry: path-traversal guard + project-root boundary check +
