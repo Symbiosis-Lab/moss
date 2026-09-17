@@ -411,6 +411,7 @@ mod tests {
                     rel_path: "a.html".to_string(),
                     hash: "aaa".to_string(),
                     bucket: HashBucket::Files,
+                    oid: None,
                 })
                 .await
                 .unwrap();
@@ -418,6 +419,7 @@ mod tests {
                     rel_path: "b.html".to_string(),
                     hash: "bbb".to_string(),
                     bucket: HashBucket::Files,
+                    oid: None,
                 })
                 .await
                 .unwrap();
@@ -429,6 +431,7 @@ mod tests {
                     rel_path: "c.html".to_string(),
                     hash: "ccc".to_string(),
                     bucket: HashBucket::Files,
+                    oid: None,
                 })
                 .await
                 .unwrap();

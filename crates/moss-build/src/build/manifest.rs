@@ -176,6 +176,19 @@ pub struct PendingManifest {
     /// generation carrying any of these is withheld — see
     /// `ship::ShipVerdict`.
     unverified: std::collections::BTreeMap<String, String>,
+    /// Output path → the CAS object id whose bytes are already staged there,
+    /// for entries where the producer knows one (currently only
+    /// `copy_deferred_assets`, via `EmitMessage::File`'s `oid` field).
+    ///
+    /// In-memory only — deliberately not a field of `SiteHashes`/`hashes.json`.
+    /// `ship_phase` reads it (through `SealedManifest::staged_oid`) to copy an
+    /// entry straight from the immutable CAS blob instead of the mutable
+    /// `stage_dir` path, closing the race where a concurrent build rewrites a
+    /// path between this build sealing its hash and shipping its bytes. An
+    /// entry with no OID here (or one cleared by
+    /// [`SealedManifest::clear_staged_oids`]) ships from `stage_dir` exactly as
+    /// before.
+    staged_oids: HashMap<String, String>,
 }
 
 impl PendingManifest {
@@ -231,6 +244,7 @@ impl PendingManifest {
             carried_page_sources,
             page_sources: HashSet::new(),
             unverified: std::collections::BTreeMap::new(),
+            staged_oids: HashMap::new(),
         }
     }
 
@@ -267,7 +281,7 @@ impl PendingManifest {
     pub fn carry_forward_deferred_page(&mut self, source_rel: &str) -> Option<String> {
         let key = self.carried_source_to_output.get(source_rel)?.clone();
         let entry = self.inner.files.get(&key)?.clone();
-        self.register_with_hash(key.clone(), &entry, HashBucket::Files);
+        self.register_with_hash(key.clone(), &entry, HashBucket::Files, None);
         // The mapping describes what is being served, and this page still is.
         self.inner.source_to_output.insert(source_rel.to_string(), key.clone());
         Some(key)
@@ -286,7 +300,7 @@ impl PendingManifest {
     /// of source case. See `build::served_path` for design.
     pub fn register(&mut self, rel_path: &crate::build::served_path::ServedPath, bytes: &[u8], bucket: HashBucket) {
         let hash = compute_binary_hash(bytes);
-        self.register_with_hash(rel_path.as_str().to_string(), &hash, bucket);
+        self.register_with_hash(rel_path.as_str().to_string(), &hash, bucket, None);
     }
 
     /// Apply a manifest registration from a pre-computed xxHash3 hex digest.
@@ -296,8 +310,12 @@ impl PendingManifest {
     /// carry a pre-computed hash (the background worker computed it before
     /// sending). This method is NOT part of the public API — use
     /// [`register`][PendingManifest::register] everywhere else.
-    pub(crate) fn apply_message(&mut self, rel_path: String, hash: &str, bucket: HashBucket) {
-        self.register_with_hash(rel_path, hash, bucket);
+    ///
+    /// `oid` is `Some` only when the sender already knows the CAS object
+    /// backing these exact staged bytes (currently just `copy_deferred_assets`'
+    /// asset walk); see `staged_oids`.
+    pub(crate) fn apply_message(&mut self, rel_path: String, hash: &str, bucket: HashBucket, oid: Option<String>) {
+        self.register_with_hash(rel_path, hash, bucket, oid);
     }
 
     /// Bulk-replace the change-detection cache (`SiteHashes::sources`) with
@@ -517,10 +535,25 @@ impl PendingManifest {
         hash: &str,
         bucket: HashBucket,
     ) {
-        self.register_with_hash(rel_path.as_str().to_string(), hash, bucket);
+        self.register_with_hash(rel_path.as_str().to_string(), hash, bucket, None);
     }
 
-    fn register_with_hash(&mut self, rel_path: String, hash: &str, bucket: HashBucket) {
+    /// Test-only escape hatch mirroring the coordinator's `oid`-carrying path
+    /// (`EmitMessage::File` → `apply_message`), for ship/manifest tests that
+    /// need a `staged_oid` on an entry without driving the full background
+    /// pipeline.
+    #[cfg(test)]
+    pub(crate) fn register_with_oid_for_test(
+        &mut self,
+        rel_path: &crate::build::served_path::ServedPath,
+        hash: &str,
+        bucket: HashBucket,
+        oid: String,
+    ) {
+        self.register_with_hash(rel_path.as_str().to_string(), hash, bucket, Some(oid));
+    }
+
+    fn register_with_hash(&mut self, rel_path: String, hash: &str, bucket: HashBucket, oid: Option<String>) {
         // Mark-and-sweep mark step: record that this build owns `rel_path`.
         // Every output-bucket entry must pass through this chokepoint
         // (`register`, `apply_message`, and the bucket arms below all call
@@ -530,6 +563,16 @@ impl PendingManifest {
         // is dropped. See module docs and
         // `docs/archive/2026-05-18-manifest-integrity.md`.
         self.touched.insert(rel_path.clone());
+
+        // Record the staged CAS object backing these exact bytes, when the
+        // caller already knows one. Never cleared here on a `None` — the only
+        // producer that ever passes `Some` (the asset walk) registers each
+        // path once per build, so there is nothing for a later `None` to race
+        // against; `SealedManifest::clear_staged_oids` is the one place an
+        // entry loses its OID after the fact (a post-seal repair).
+        if let Some(oid) = oid {
+            self.staged_oids.insert(rel_path.clone(), oid);
+        }
 
         // Unconditional: every artifact must reach the deploy wire manifest.
         // `inner.files` is the single source `deploy.rs` reads via `sealed.files()`.
@@ -616,12 +659,21 @@ impl PendingManifest {
         inner.image_outputs.retain(|k| touched.contains(k));
         inner.video_outputs.retain(|k| touched.contains(k));
         inner.notebook_outputs.retain(|k| touched.contains(k));
+        // Mirrors the output-bucket prune above: an OID registered for a path
+        // this build ultimately did not keep must not survive into the sealed
+        // manifest either — `register_with_hash` unconditionally marks the
+        // path `touched` in the same call that records an OID, so this can
+        // only drop entries the output-bucket prune above also dropped.
+        let mut staged_oids = self.staged_oids;
+        staged_oids.retain(|k, _| touched.contains(k));
         let generation_id = compute_manifest_generation_id(&inner.files);
         SealedManifest {
             inner,
             blocking_keys: self.blocking_keys,
             generation_id,
             unverified: self.unverified,
+            staged_oids,
+            ship_fingerprints: HashMap::new(),
         }
     }
 }
@@ -646,6 +698,48 @@ pub struct SealedManifest {
     /// Every output a producer or the presence pass could not verify, with the
     /// error — never persisted; it exists to withhold this generation.
     unverified: std::collections::BTreeMap<String, String>,
+    /// See [`PendingManifest::staged_oids`] — carried through `seal()` unchanged
+    /// apart from the mark-and-sweep prune every other bucket also gets.
+    staged_oids: HashMap<String, String>,
+    /// Stat-identity snapshot of `stage_dir.join(rel_path)`, for every
+    /// `100644:` entry with no `staged_oid`, taken once right after this
+    /// manifest sealed (`stamp_all_ship_fingerprints`) and re-taken for any
+    /// key a post-seal rewrite touches (`stamp_ship_fingerprints`). `ship_phase`
+    /// re-stats immediately before copying and demotes to a real hash
+    /// comparison on any disagreement — see `ship::verify_ship_integrity`.
+    /// Never persisted; exists only to make a seal-to-ship race audible.
+    ship_fingerprints: HashMap<String, ShipFingerprint>,
+}
+
+/// The forgery-resistant stat snapshot `ship_phase`'s integrity check compares
+/// against, for one manifest entry. Same fields `SourceMetadata`/`stat_identity`
+/// already model for the identical reason (`build/types.rs`): `mtime` alone
+/// cannot distinguish the hashed bytes from a same-second, same-size rewrite,
+/// and a replace-via-rename changes the inode even when size and mtime survive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ShipFingerprint {
+    size: u64,
+    mtime_secs: u64,
+    mtime_nanos: Option<u32>,
+    ctime: Option<i64>,
+    inode: Option<u64>,
+}
+
+impl ShipFingerprint {
+    pub(crate) fn of(meta: &std::fs::Metadata) -> Option<Self> {
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+        let (ctime, inode) = crate::build::types::stat_identity(meta);
+        Some(Self {
+            size: meta.len(),
+            mtime_secs: mtime.map(|d| d.as_secs()).unwrap_or(0),
+            mtime_nanos: mtime.map(|d| d.subsec_nanos()),
+            ctime,
+            inode,
+        })
+    }
 }
 
 impl SealedManifest {
@@ -778,6 +872,77 @@ impl SealedManifest {
         self.inner.pruned_image_outputs = keys;
     }
 
+    /// The CAS object id already backing `rel_path`'s staged bytes, if
+    /// [`copy_deferred_assets`] recorded one and it has not since been cleared
+    /// (a post-seal repair rewrote it directly — see
+    /// [`clear_staged_oids`][Self::clear_staged_oids]).
+    ///
+    /// [`copy_deferred_assets`]: crate::build::media::pipeline::copy_deferred_assets
+    pub(crate) fn staged_oid(&self, rel_path: &str) -> Option<&str> {
+        self.staged_oids.get(rel_path).map(|s| s.as_str())
+    }
+
+    /// Drop the staged CAS OID for `keys`: something rewrote `stage_dir`'s
+    /// bytes for these paths directly (bypassing the CAS entirely), so any OID
+    /// recorded before that write now names the PRE-rewrite bytes. Ship-by-OID
+    /// must not resurrect them — see `degrade::apply_to_staging`, the one
+    /// caller.
+    pub(crate) fn clear_staged_oids(&mut self, keys: &HashSet<String>) {
+        for key in keys {
+            self.staged_oids.remove(key);
+        }
+    }
+
+    /// The fingerprint recorded for `rel_path`, if any — `None` for a
+    /// CAS-backed entry (never stamped), a symlink entry (never stamped), or
+    /// one whose stage file could not be stat'd when stamping ran.
+    pub(crate) fn ship_fingerprint(&self, rel_path: &str) -> Option<&ShipFingerprint> {
+        self.ship_fingerprints.get(rel_path)
+    }
+
+    /// Snapshot `stage_dir.join(key)`'s stat identity for each of `keys`,
+    /// replacing any fingerprint already recorded for that key. A key whose
+    /// file cannot be stat'd is left unfingerprinted (removed if it had one)
+    /// rather than erroring — `ship_phase`'s check fails open on a missing
+    /// fingerprint exactly as it does on a stat match: nothing to compare
+    /// against is not evidence of a race.
+    pub(crate) fn stamp_ship_fingerprints<'a>(
+        &mut self,
+        stage_dir: &Path,
+        keys: impl IntoIterator<Item = &'a str>,
+    ) {
+        for key in keys {
+            match std::fs::metadata(stage_dir.join(key)).ok().and_then(|m| ShipFingerprint::of(&m)) {
+                Some(fp) => {
+                    self.ship_fingerprints.insert(key.to_string(), fp);
+                }
+                None => {
+                    self.ship_fingerprints.remove(key);
+                }
+            }
+        }
+    }
+
+    /// Stamp every `100644:` entry that has no live `staged_oid` — the whole
+    /// set `ship_phase` will read from the mutable `stage_dir` rather than an
+    /// immutable CAS blob. Called once, right after this manifest seals and
+    /// before the post-seal repair passes run, so the window it protects is
+    /// exactly "seal to ship": a concurrent build's rewrite anywhere in that
+    /// window is what the fingerprint is meant to catch.
+    pub(crate) fn stamp_all_ship_fingerprints(&mut self, stage_dir: &Path) {
+        let keys: Vec<String> = self
+            .inner
+            .files
+            .iter()
+            .filter(|(k, v)| {
+                !self.staged_oids.contains_key(k.as_str())
+                    && crate::types::content::parse_entry(v).0 == crate::types::content::MODE_FILE
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+        self.stamp_ship_fingerprints(stage_dir, keys.iter().map(|s| s.as_str()));
+    }
+
     /// Drop `keys` from the generation, from every bucket — an entry left in
     /// one the caller did not think of names a path the generation does not
     /// contain, and deploy refuses the whole upload on one of those. The
@@ -793,6 +958,8 @@ impl SealedManifest {
             self.inner.video_outputs.remove(key);
             self.inner.notebook_outputs.remove(key);
             self.blocking_keys.remove(key);
+            self.staged_oids.remove(key);
+            self.ship_fingerprints.remove(key);
         }
         self.generation_id = compute_manifest_generation_id(&self.inner.files);
     }

@@ -2442,6 +2442,7 @@ async fn test_image_outputs_emitted_via_coordinator() {
         rel_path: "images/hero.webp".to_string(),
         hash: "deadbeef00000001".to_string(),
         bucket: HashBucket::ImageVariants,
+        oid: None,
     })
     .await
     .unwrap();
@@ -2483,6 +2484,7 @@ async fn test_image_outputs_emitted_via_coordinator_mapped_path() {
         rel_path: "images/hero.webp".to_string(),
         hash: String::new(),
         bucket: HashBucket::ImageVariants,
+        oid: None,
     })
     .await
     .unwrap();
@@ -4170,6 +4172,7 @@ fn self_heal_then_emit_registers_relinked_webp() {
             rel_path,
             hash,
             bucket,
+            ..
         }) => {
             assert_eq!(rel_path, "photo.webp");
             assert!(
@@ -4323,6 +4326,7 @@ fn an_evicted_batch_output_is_healed_before_registration_not_silently_dropped() 
             rel_path,
             hash,
             bucket,
+            ..
         }) => {
             assert_eq!(rel_path, "photo.webp");
             assert!(

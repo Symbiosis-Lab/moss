@@ -22,6 +22,7 @@
 
 use crate::moss_paths::MossPaths;
 use crate::types::{content::SiteHashes, services::BackgroundContext};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use tokio::sync::mpsc;
@@ -418,6 +419,15 @@ fn write_spa_inject_record(
 /// `defaults` hit the fast path — including a second call for the
 /// canonical-dir mirror in the same build, which becomes a cache hit
 /// instead of a second independent read+inject+write.
+///
+/// Returns the injected content's `(xxh3, content_oid)` together. The caller
+/// used to receive only the hash and reuse the PRE-injection `link_oid` it
+/// already had for the manifest's `staged_oid` — the two silently diverged the
+/// moment injection actually changed the bytes, since `link_to` above places
+/// the pre-injection blob and this function then REPLACES `target`'s bytes
+/// with a freshly-minted post-injection object. Returning the pair is what
+/// lets the caller thread the object that's actually on disk into the
+/// manifest instead of the one that used to be there.
 fn maybe_inject_spa_cached(
     target: &Path,
     defaults: &crate::build::site_meta::spa_inject::SpaDefaults<'_>,
@@ -425,7 +435,7 @@ fn maybe_inject_spa_cached(
     source_size: u64,
     object_store: &crate::build::cache::ObjectStore,
     transform_cache: &crate::build::cache::TransformCache,
-) -> Result<Option<String>, String> {
+) -> Result<Option<(String, String)>, String> {
     let params = spa_inject_params(defaults);
 
     if let Some(record_oid) =
@@ -435,7 +445,14 @@ fn maybe_inject_spa_cached(
             match record.content_oid {
                 Some(content_oid) if object_store.get_path(&content_oid).is_some() => {
                     object_store.link_to(&content_oid, target)?;
-                    return Ok(record.xxh3);
+                    // Constructed as both-Some or both-None (see below and the
+                    // miss arm) — a `None` here means the record was corrupted
+                    // by something other than this function, which no amount
+                    // of a silent fallback would make correct to ship under.
+                    let xxh3 = record.xxh3.expect(
+                        "SpaInjectRecord invariant: content_oid and xxh3 are both Some or both None",
+                    );
+                    return Ok(Some((xxh3, content_oid)));
                 }
                 None => return Ok(None),
                 Some(_) => {} // inner blob GC'd — fall through to a live re-run
@@ -445,24 +462,30 @@ fn maybe_inject_spa_cached(
     }
 
     let result = maybe_inject_spa(target, defaults)?;
-    let record = match &result {
+    let (returned, record) = match &result {
         Some(new_hash) => {
             let injected_bytes = std::fs::read(target)
                 .map_err(|e| format!("read back {} after inject: {}", target.display(), e))?;
             let content_oid = object_store.store_bytes(&injected_bytes)?;
-            SpaInjectRecord {
-                content_oid: Some(content_oid),
-                xxh3: Some(new_hash.clone()),
-            }
+            (
+                Some((new_hash.clone(), content_oid.clone())),
+                SpaInjectRecord {
+                    content_oid: Some(content_oid),
+                    xxh3: Some(new_hash.clone()),
+                },
+            )
         }
-        None => SpaInjectRecord {
-            content_oid: None,
-            xxh3: None,
-        },
+        None => (
+            None,
+            SpaInjectRecord {
+                content_oid: None,
+                xxh3: None,
+            },
+        ),
     };
     write_spa_inject_record(object_store, transform_cache, source_oid, source_size, &params, &record);
 
-    Ok(result)
+    Ok(returned)
 }
 
 /// Remove generated HTML pages (index*.html) not produced by the current build.
@@ -928,6 +951,14 @@ pub(crate) fn copy_deferred_assets(
     // / renamed source files leave entries in the metadata cache forever
     // and `hashes.json` grows unbounded over the project's lifetime.
     let mut live_source_keys = std::collections::HashSet::<String>::new();
+    // Output path → the CAS object id already backing those exact staged
+    // bytes, for every entry this walk registers via the `Ok(oid)` arm below
+    // (assets) or the `.moss/theme` mirror. Threaded onto the re-emitted
+    // `EmitMessage::File` at the end of this function so `ship_phase` can
+    // copy straight from the CAS instead of the mutable stage path — see
+    // `PendingManifest::staged_oids`. A symlink entry or a direct-copy
+    // fallback never gets one, and ships exactly as before.
+    let mut staged_oids: HashMap<String, String> = HashMap::new();
 
     // Symlinks preserved from source to output (also: Finder Aliases
     // resolved to symlinks on macOS). Tracked separately so
@@ -1368,6 +1399,14 @@ pub(crate) fn copy_deferred_assets(
                     &ctx.passthrough_roots,
                 );
                 let mut spa_post_hash: Option<String> = None;
+                // The CAS object actually backing `target`'s bytes AFTER SPA
+                // injection, when injection changed them. `link_oid` (below)
+                // names the PRE-injection object `link_to` placed at `target`
+                // moments ago; injection then overwrites those bytes in place
+                // with a freshly-minted object, so `link_oid` alone would name
+                // the wrong blob for `staged_oids` — see
+                // `maybe_inject_spa_cached`'s doc comment.
+                let mut spa_post_oid: Option<String> = None;
                 if !in_passthrough
                     && html_exts.contains(&ext.as_str())
                     && is_bundled_spa_index_path(&mapped_path)
@@ -1383,8 +1422,9 @@ pub(crate) fn copy_deferred_assets(
                             &object_store,
                             &transforms,
                         ) {
-                            Ok(Some(new_hash)) => {
+                            Ok(Some((new_hash, new_oid))) => {
                                 spa_post_hash = Some(new_hash);
+                                spa_post_oid = Some(new_oid);
                             }
                             Ok(None) => {} // no-op (nothing to inject)
                             Err(e) => {
@@ -1475,6 +1515,14 @@ pub(crate) fn copy_deferred_assets(
                 match crate::build::served_path::ServedPath::from_source(&mapped_path) {
                     Ok(out_path) => {
                         site_hashes.insert_file_hash(&out_path, crate::types::content::file_entry(&recorded_hash));
+                        // The CAS object actually backing `target`'s bytes: the
+                        // post-injection object when SPA injection changed
+                        // them, otherwise the object `link_to` placed there
+                        // (`link_oid`) — `apply_transform`/`transform_for` are
+                        // pure and path-only, so a later CAS read reproduces
+                        // exactly what reading `target` now would.
+                        let staged_oid = spa_post_oid.clone().unwrap_or_else(|| link_oid.clone());
+                        staged_oids.insert(out_path.as_str().to_string(), staged_oid);
                         copied += 1;
                     }
                     Err(e) => {
@@ -1606,6 +1654,7 @@ pub(crate) fn copy_deferred_assets(
                     let manifest_hash =
                         recall_or_hash_output(&manifest_hash_memo, &oid, &target, &oid, ".moss/theme output");
                     site_hashes.insert_file_hash(&out_path, crate::types::content::file_entry(&manifest_hash));
+                    staged_oids.insert(out_path.as_str().to_string(), oid.clone());
                     copied += 1;
                 }
                 Err(e) => {
@@ -1711,6 +1760,7 @@ pub(crate) fn copy_deferred_assets(
             rel_path: rel_path.clone(),
             hash: hash_entry.strip_prefix("100644:").unwrap_or(hash_entry).to_string(),
             bucket: HashBucket::Files,
+            oid: staged_oids.get(rel_path).cloned(),
         };
         if let Err(e) = tx.blocking_send(msg) {
             log::warn!("[background-assets] Failed to send {} to coordinator: {}", rel_path, e);

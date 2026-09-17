@@ -2453,6 +2453,7 @@ fn emit_image_outputs_via_channel(
             rel_path: path.clone(),
             hash,
             bucket: HashBucket::ImageVariants,
+            oid: None,
         };
         // blocking_send: safe because run_image_conversion runs inside spawn_blocking
         // (dispatched via Spawner::spawn_blocking, not an async spawn).

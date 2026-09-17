@@ -336,7 +336,7 @@ pub fn generate_blocking_content(
             }
             Err(e) => {
                 log::warn!("could not read favicon for manifest registration {}: {}", rel, e);
-                pending.apply_message(rel, &favicon.content_hash, HashBucket::Files);
+                pending.apply_message(rel, &favicon.content_hash, HashBucket::Files, None);
             }
         }
     }
@@ -358,7 +358,7 @@ pub fn generate_blocking_content(
                 }
                 Err(e) => {
                     log::warn!("could not hash {}: {}", rel, e);
-                    pending.apply_message(rel, "favicon-png", HashBucket::Files);
+                    pending.apply_message(rel, "favicon-png", HashBucket::Files, None);
                 }
             }
         }

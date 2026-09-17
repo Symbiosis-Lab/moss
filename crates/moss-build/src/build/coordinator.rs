@@ -42,6 +42,12 @@ pub enum EmitMessage {
         rel_path: String,
         hash: String,
         bucket: HashBucket,
+        /// The CAS object id already backing these exact bytes, when the
+        /// sender knows one. `Some` only from `copy_deferred_assets`'s asset
+        /// walk today — every other sender passes `None`. Threaded into
+        /// `PendingManifest::staged_oids` so `ship_phase` can copy the entry
+        /// from the immutable CAS blob instead of the mutable stage path.
+        oid: Option<String>,
     },
     /// Bulk-replace `PendingManifest::inner.sources` with the change-detection
     /// cache produced by `copy_deferred_assets`. Sent once at the end of the
@@ -102,8 +108,8 @@ impl ManifestCoordinator {
     pub async fn run_until_drained(mut self) -> SealedManifest {
         while let Some(msg) = self.rx.recv().await {
             match msg {
-                EmitMessage::File { rel_path, hash, bucket } => {
-                    self.pending.apply_message(rel_path, &hash, bucket);
+                EmitMessage::File { rel_path, hash, bucket, oid } => {
+                    self.pending.apply_message(rel_path, &hash, bucket, oid);
                 }
                 EmitMessage::SourcesReplace(sources) => {
                     self.pending.replace_sources(sources);
@@ -155,8 +161,8 @@ pub mod test_utils {
     ) -> SealedManifest {
         while let Some(msg) = rx.recv().await {
             match msg {
-                EmitMessage::File { rel_path, hash, bucket } => {
-                    pending.apply_message(rel_path, &hash, bucket);
+                EmitMessage::File { rel_path, hash, bucket, oid } => {
+                    pending.apply_message(rel_path, &hash, bucket, oid);
                 }
                 EmitMessage::SourcesReplace(sources) => {
                     pending.replace_sources(sources);
@@ -185,6 +191,7 @@ mod tests {
                 rel_path: "a.html".to_string(),
                 hash: "aaa".to_string(),
                 bucket: HashBucket::Files,
+                oid: None,
             })
             .await
             .unwrap();
@@ -195,6 +202,7 @@ mod tests {
                 rel_path: "b.html".to_string(),
                 hash: "bbb".to_string(),
                 bucket: HashBucket::Files,
+                oid: None,
             })
             .await
             .unwrap();
@@ -231,6 +239,7 @@ mod tests {
             rel_path: "og/home.png".to_string(),
             hash: "ddd".to_string(),
             bucket: HashBucket::ImageOutputs,
+            oid: None,
         })
         .await
         .unwrap();
@@ -308,6 +317,7 @@ mod tests {
             rel_path: "projects/new-slug/index.html".to_string(),
             hash: "fresh".to_string(),
             bucket: HashBucket::Files,
+            oid: None,
         })
         .await
         .unwrap();

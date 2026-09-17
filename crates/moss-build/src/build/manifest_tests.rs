@@ -152,7 +152,7 @@ fn seal_with_empty_manifest_succeeds() {
 fn apply_message_routes_to_correct_bucket() {
     // Files bucket: files + blocking_keys
     let mut m = empty_manifest();
-    m.apply_message("a.html".to_string(), "aaa", HashBucket::Files);
+    m.apply_message("a.html".to_string(), "aaa", HashBucket::Files, None);
     assert!(
         m.inner.files.contains_key("a.html"),
         "Files: must be in files"
@@ -167,7 +167,7 @@ fn apply_message_routes_to_correct_bucket() {
     // ImageOutputs bucket: image_outputs + blocking_keys + files
     // (2026-05-15: added files — see register_with_hash comment for why)
     let mut m = empty_manifest();
-    m.apply_message("og/card.png".to_string(), "bbb", HashBucket::ImageOutputs);
+    m.apply_message("og/card.png".to_string(), "bbb", HashBucket::ImageOutputs, None);
     assert!(
         m.inner.image_outputs.contains("og/card.png"),
         "ImageOutputs: must be in image_outputs"
@@ -188,6 +188,7 @@ fn apply_message_routes_to_correct_bucket() {
         "videos/talk.mp4".to_string(),
         "ccc",
         HashBucket::VideoOutputs,
+        None,
     );
     assert!(
         m.inner.video_outputs.contains("videos/talk.mp4"),
@@ -206,6 +207,7 @@ fn apply_message_routes_to_correct_bucket() {
         "notebooks/chart.html".to_string(),
         &hash,
         HashBucket::NotebookOutputs,
+        None,
     );
     assert!(
         m.inner.files.contains_key("notebooks/chart.html"),
@@ -233,7 +235,7 @@ fn apply_message_routes_to_correct_bucket() {
 fn register_with_hash_preserves_mode_prefix() {
     // Case 1: bare hash — `register_with_hash` must prepend `100644:`.
     let mut m = empty_manifest();
-    m.apply_message("page.html".to_string(), "abc123", HashBucket::Files);
+    m.apply_message("page.html".to_string(), "abc123", HashBucket::Files, None);
     assert_eq!(
         m.inner.files.get("page.html").unwrap(),
         "100644:abc123",
@@ -242,7 +244,7 @@ fn register_with_hash_preserves_mode_prefix() {
 
     // Case 2: already-prefixed `100644:` — must NOT double-prefix.
     let mut m = empty_manifest();
-    m.apply_message("style.css".to_string(), "100644:def456", HashBucket::Files);
+    m.apply_message("style.css".to_string(), "100644:def456", HashBucket::Files, None);
     assert_eq!(
         m.inner.files.get("style.css").unwrap(),
         "100644:def456",
@@ -255,6 +257,7 @@ fn register_with_hash_preserves_mode_prefix() {
         "link-target".to_string(),
         "120000:ghi789",
         HashBucket::Files,
+        None,
     );
     assert_eq!(
         m.inner.files.get("link-target").unwrap(),

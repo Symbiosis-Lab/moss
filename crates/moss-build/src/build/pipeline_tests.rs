@@ -2590,7 +2590,7 @@ async fn test_copy_deferred_assets_preserves_notebook_hash_entries_for_deploy() 
     // What `run_notebook_processing` does in `build_inner`: register the
     // output into the live pending manifest, NOT into anything the walk holds.
     let mut pending = PendingManifest::new(SiteHashes::default());
-    pending.apply_message(nb_path.clone(), &nb_hash, HashBucket::NotebookOutputs);
+    pending.apply_message(nb_path.clone(), &nb_hash, HashBucket::NotebookOutputs, None);
 
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
@@ -3351,6 +3351,7 @@ async fn test_video_outputs_emitted_via_coordinator() {
             rel_path: path.to_string(),
             hash: String::new(),
             bucket: HashBucket::VideoOutputs,
+            oid: None,
         })
         .await
         .unwrap();
@@ -3395,6 +3396,7 @@ async fn test_video_outputs_emitted_via_coordinator_no_overrides() {
             rel_path: path.to_string(),
             hash: String::new(),
             bucket: HashBucket::VideoOutputs,
+            oid: None,
         })
         .await
         .unwrap();

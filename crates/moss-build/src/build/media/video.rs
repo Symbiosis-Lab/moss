@@ -1301,6 +1301,7 @@ fn emit_video_outputs_via_channel(
             rel_path: path.clone(),
             hash,
             bucket: HashBucket::VideoOutputs,
+            oid: None,
         };
         // blocking_send: safe because run_video_conversion runs inside spawn_blocking.
         // A send failure means the coordinator was dropped; log and continue.
