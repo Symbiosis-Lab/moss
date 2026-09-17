@@ -24,14 +24,18 @@
      right-anchored on desktop. The footer becomes a flex row via
      `footer.container:has(> .moss-subscribe)` in site.css; `margin-inline-start:
      auto` (declared HERE so it wins the @layer cascade over the base
-     `.moss-subscribe` margin) pushes the form to the inline-end edge. The full
-     `margin` shorthand sets block-end 0 (so it doesn't inherit the base
+     `.moss-subscribe` margin) pushes the form to the inline-end edge — which is
+     why it and the block margin below are the two logical `margin-inline`/
+     `margin-block` shorthands, not a physical `margin` shorthand: physical
+     `margin-left: auto` only coincides with `margin-inline-start: auto` under
+     horizontal-tb, and sets block-end 0 (so it doesn't inherit the base
      `space-lg` block margin) and `min-width: 0` lets the form shrink below its
      content width beside a verbose link list instead of wrapping early. */
   footer .moss-subscribe {
     max-width: 24rem;
     min-width: 0;
-    margin: var(--moss-space-sm) 0 0 auto;
+    margin-block: var(--moss-space-sm) 0;
+    margin-inline: auto 0;
     padding: 0;
     border: none;
     border-radius: 0;
