@@ -180,6 +180,11 @@ fn looks_like_zeroed_stub(bytes: &[u8]) -> bool {
 /// whether it looks like a zeroed stub.
 async fn read_leading_bytes(path: &Path, n: usize) -> Result<Vec<u8>, String> {
     use tokio::io::AsyncReadExt;
+    // `path` is always the sealed generation's `canonical` file under
+    // `.moss/build/generations/`, not a vault input; the bytes only feed
+    // looks_like_zeroed_stub below, so a torn or corrupted read is caught by
+    // content rather than trusted as the file's real state.
+    // allow:raw_read built output — dataless is absent (ADR-043)
     let mut file = tokio::fs::File::open(path)
         .await
         .map_err(|e| format!("Failed to open {}: {}", path.display(), e))?;
@@ -348,6 +353,10 @@ pub async fn upload_regular_file(
             // re-read from disk — `body` alone is only one sample and cannot
             // tell a finished rebuild from a torn read mid-write.
             tokio::time::sleep(DRIFT_SETTLE_DELAY).await;
+            // Same `canonical` sealed-generation file as the first read above.
+            // This is the re-read looks_like_zeroed_stub below checks before
+            // trusting the drift as a real, finished rebuild.
+            // allow:raw_read built output — dataless is absent (ADR-043)
             let resettled = tokio::fs::read(canonical)
                 .await
                 .map_err(|e| format!("Failed to re-read {}: {}", file_path, e))?;
