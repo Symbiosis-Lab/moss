@@ -9,14 +9,23 @@
 //! Drives the REAL `advertise_sealed` with a REAL `cache_write_lease`, rather
 //! than hand-rolling the lease/drop sequence: that would only exercise
 //! `CacheWriteLease`'s pre-existing (and already well-tested) counter
-//! mechanics, not the wiring this fix changed. The synchronization below
-//! (`FolderSession::try_lock_stage_write`) is production machinery too — the
-//! rebuild worker's own try-admission probe — reused here only as a
-//! deterministic "has `collect_build_store` already run?" signal: the real
-//! `_stage_write_guard` `advertise_sealed` holds is acquired before
-//! `materialize_and_promote` and dropped only AFTER its `collect_build_store`
-//! call (see `build.rs`), so observing the guard go held-then-free is proof
-//! of that ordering, not a timing guess.
+//! mechanics, not the wiring this fix changed. Two independent probes cover
+//! the two ends of the held span:
+//!
+//! - `SHIP_PHASE_LEASE_SAMPLE` (a `build.rs` task-local, scoped here via
+//!   `.scope()`) is sampled by `advertise_sealed` itself immediately after
+//!   `materialize_and_promote` returns and before `drop(cache_lease)` — proof
+//!   the lease is still open at the one moment that actually distinguishes
+//!   this fix from the bug it closed. A guard-based probe can't see this
+//!   moment: `_stage_write_guard` is held uniformly across the whole tail, so
+//!   a poll against it can't tell "before ship" from "after ship".
+//! - `FolderSession::try_lock_stage_write` — production machinery too, the
+//!   rebuild worker's own try-admission probe — is reused as a deterministic
+//!   "has `collect_build_store` already run?" signal: the real
+//!   `_stage_write_guard` `advertise_sealed` holds is acquired before
+//!   `materialize_and_promote` and dropped only AFTER its `collect_build_store`
+//!   call (see `build.rs`), so observing the guard go held-then-free is proof
+//!   of that ordering, not a timing guess.
 
 use super::*;
 use crate::build::manifest::{HashBucket, PendingManifest};
@@ -53,14 +62,20 @@ fn seal_ports() -> SealPorts {
     }
 }
 
-/// The fix's core invariant: `advertise_sealed` must drop the build's
-/// `CacheWriteLease` before its own step-3 `collect_build_store` call runs —
-/// held any longer and this build's own cache GC would always find its own
-/// lease open and skip, deferring cleanup for no reason. A regression that
-/// drops the explicit `drop(cache_lease)` in `advertise_sealed` (falling
-/// back to Rust's implicit end-of-function drop, which runs AFTER
-/// `collect_build_store`, `backfill::for_seal`, and the announcer calls)
-/// must make this fail.
+/// The fix's core invariant, in two halves. First, the lease must still be
+/// open right after `materialize_and_promote` (`ship_phase`) — a regression
+/// that drops `cache_lease` any earlier, e.g. right after
+/// `_stage_write_guard` is acquired and before `repair_staged_html` /
+/// `materialize_and_promote` run at all, reopens the exact GC race this fix
+/// closed, and `lease_sample` below must catch it even though the
+/// guard-based probe (held uniformly across the whole tail) cannot. Second,
+/// `advertise_sealed` must drop the lease before its own step-3
+/// `collect_build_store` call runs — held any longer and this build's own
+/// cache GC would always find its own lease open and skip, deferring cleanup
+/// for no reason. A regression that drops the explicit `drop(cache_lease)`
+/// in `advertise_sealed` entirely (falling back to Rust's implicit
+/// end-of-function drop, which runs AFTER `collect_build_store`,
+/// `backfill::for_seal`, and the announcer calls) must make this fail too.
 ///
 /// It also incidentally depends on `await_completion`-style plumbing: the
 /// lease has to actually reach `advertise_sealed` still open for this to be
@@ -80,22 +95,32 @@ async fn advertise_sealed_drops_the_cache_lease_before_collect_build_store() {
     let epoch = crate::build::ship::next_promotion_epoch();
     let folder_path = format!("/cache-lease-ship-test-{}", uuid::Uuid::new_v4());
 
-    let seal_fut = advertise_sealed(
-        &ports,
-        &mp,
-        &hashes_path,
-        &stage,
-        sealed,
-        None,
-        |_| false,
-        Some(&session),
-        epoch,
-        Some(1),
-        true,
-        crate::build::feeds::search_lane::Freshness::Now,
-        &folder_path,
-        None,
-        Some(lease),
+    // Sampled by `advertise_sealed` itself (`SHIP_PHASE_LEASE_SAMPLE`, see
+    // `build.rs`) immediately after `materialize_and_promote` returns and
+    // before `drop(cache_lease)` — the window that actually distinguishes
+    // this fix from the bug it closed. `usize::MAX` is a sentinel meaning
+    // "never sampled", which would itself be a failure below.
+    let lease_sample = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+
+    let seal_fut = super::SHIP_PHASE_LEASE_SAMPLE.scope(
+        lease_sample.clone(),
+        advertise_sealed(
+            &ports,
+            &mp,
+            &hashes_path,
+            &stage,
+            sealed,
+            None,
+            |_| false,
+            Some(&session),
+            epoch,
+            Some(1),
+            true,
+            crate::build::feeds::search_lane::Freshness::Now,
+            &folder_path,
+            None,
+            Some(lease),
+        ),
     );
 
     // Two-phase probe of the seal tail's OWN stage-write guard, which is
@@ -135,6 +160,12 @@ async fn advertise_sealed_drops_the_cache_lease_before_collect_build_store() {
     .await
     .expect("advertise_sealed (and the probe) must finish well within 10s");
 
+    assert_eq!(
+        lease_sample.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the cache lease must still be open right after materialize_and_promote \
+         (ship_phase) — dropping it any earlier reopens the GC race this fix closed"
+    );
     assert_eq!(
         writers_when_guard_freed, 0,
         "the cache lease must already be dropped by the time collect_build_store has run \

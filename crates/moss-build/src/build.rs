@@ -1754,6 +1754,19 @@ fn record_promise_gate(
     unfulfilled
 }
 
+// Test-only rendezvous for `cache_lease_ship_tests.rs`. A task-local rather
+// than a plain static so concurrent tests (and any thread hop mid-`.await`)
+// never cross-talk — same reasoning as `phase::ASYNC_PHASE_COLLECTOR`. Scoped
+// by that test around its call to `advertise_sealed` and sampled once below,
+// right after `materialize_and_promote` and before `drop(cache_lease)`: the
+// one window a guard-based probe can't see, because `_stage_write_guard` is
+// held uniformly across the whole tail. Unset (the `try_with` miss) on every
+// other call path, which the sampler below treats as "nothing to record".
+#[cfg(test)]
+tokio::task_local! {
+    static SHIP_PHASE_LEASE_SAMPLE: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
 async fn advertise_sealed(
     ports: &SealPorts,
     mp: &crate::moss_paths::MossPaths,
@@ -1785,6 +1798,11 @@ async fn advertise_sealed(
     // own ship still needs to read — the bug this parameter exists to close.
     // Dropped explicitly right after, before this same tail's own
     // `collect_build_store` call can trigger cache GC (see the `drop` below).
+    // This function has zero early-return (`return`/`?`) statements between
+    // entry and that `drop` — load-bearing, not incidental: introducing one
+    // would let RAII release `cache_lease` before `materialize_and_promote`
+    // runs, silently reopening the GC race this parameter exists to close,
+    // with no compiler error to catch it.
     cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
 ) {
     let reporter = ports.events.as_ref();
@@ -1912,6 +1930,14 @@ async fn advertise_sealed(
     // relative to the old (too-early) drop point, so cache GC can end up
     // deferred for a whole active-editing session — fine, a skipped GC is
     // already non-fatal and retried next build.
+    //
+    // Test-only: hand `cache_lease_ship_tests.rs` the writer count exactly
+    // here, still inside the window the fix's whole point is to hold open.
+    // A no-op outside that test's `SHIP_PHASE_LEASE_SAMPLE` scope.
+    #[cfg(test)]
+    let _ = SHIP_PHASE_LEASE_SAMPLE.try_with(|sample| {
+        sample.store(crate::build::lifecycle::snapshot(mp).2, std::sync::atomic::Ordering::SeqCst);
+    });
     drop(cache_lease);
 
     // Say it out loud, and only for a real swap: this instant — not
