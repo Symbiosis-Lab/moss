@@ -2309,8 +2309,8 @@ header:has(+ .moss-hero) .main-nav {
   /* Date row sits BELOW the title block (H1 + optional blockquote-deck)
      and ABOVE the article body. Compact spacing — the date reads as
      subtle metadata under the title, not a heavy section break. */
-  margin-top: var(--moss-space-xs);
-  margin-bottom: var(--moss-space-md);
+  margin-block-start: var(--moss-space-xs);
+  margin-block-end: var(--moss-space-md);
 }
 
 /*
@@ -2345,13 +2345,13 @@ header:has(+ .moss-hero) .main-nav {
   /* No top margin — whatever sits above owns the gap: the date row on an
      article, the .moss-folder-title h1 on a folder index (both end in
      --moss-space-md, so the two page kinds match). */
-  margin: 0 0 var(--moss-space-md);
+  margin-block: 0 var(--moss-space-md);
 }
 
 /* Date and byline are one masthead unit: when both are present the date row
    stops holding the body's worth of space between them. */
 .date-line:has(+ .moss-byline) {
-  margin-bottom: var(--moss-space-xs);
+  margin-block-end: var(--moss-space-xs);
 }
 
 /* Links carry the row's colour; a hairline is enough to mark them as links
