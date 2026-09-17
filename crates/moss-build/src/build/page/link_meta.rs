@@ -256,7 +256,7 @@ fn read_fresh_cache(moss_dir: &Path, url: &str) -> Option<LinkMeta> {
 /// rename is atomic on POSIX, which is enough here.
 fn write_cache(moss_dir: &Path, meta: &LinkMeta) {
     let dir = cache_dir(moss_dir);
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = crate::build::io_utils::create_output_dir_all(&dir);
     let path = cache_path(moss_dir, &meta.url);
     let Ok(json) = serde_json::to_string_pretty(meta) else { return };
     // Tempfile name must collide-avoid across parallel workers writing
@@ -267,9 +267,11 @@ fn write_cache(moss_dir: &Path, meta: &LinkMeta) {
     tmp_name.push(format!(".tmp.{}", std::process::id()));
     tmp.set_file_name(tmp_name);
     if std::fs::write(&tmp, &json).is_err() {  // allow:raw_write the temp for this cache's own atomic save, not the output tree
+        // allow:unlink the link-meta cache under .moss, not staging
         let _ = std::fs::remove_file(&tmp);
         return;
     }
+    // allow:unlink the link-meta cache under .moss, not staging
     if std::fs::rename(&tmp, &path).is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -561,8 +563,8 @@ fn write_url_list_atomic(moss_dir: &Path, urls: &[String]) {
         Some(p) => p,
         None => return,
     };
-    if let Err(e) = std::fs::create_dir_all(parent) {
-        log::warn!(target: "link-meta", "create_dir_all({:?}) failed: {}", parent, e);
+    if let Err(e) = crate::build::io_utils::create_output_dir_all(parent) {
+        log::warn!(target: "link-meta", "could not create {:?}: {}", parent, e);
         return;
     }
     let json = match serde_json::to_string_pretty(urls) {
@@ -578,8 +580,10 @@ fn write_url_list_atomic(moss_dir: &Path, urls: &[String]) {
         log::warn!(target: "link-meta", "write tempfile failed: {}", e);
         return;
     }
+    // allow:unlink the link-meta URL list under .moss, not staging
     if let Err(e) = std::fs::rename(&tmp, &path) {
         log::warn!(target: "link-meta", "rename tempfile failed: {}", e);
+        // allow:unlink the link-meta URL list under .moss, not staging
         let _ = std::fs::remove_file(&tmp);
     }
 }

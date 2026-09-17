@@ -87,7 +87,7 @@ fn ensure_parent(path: &Path) -> io::Result<()> {
 /// unchanged: nothing there is regenerable, so "unreadable is not absent" is
 /// still the rule.
 pub fn create_output_dir_all(dir: &Path) -> io::Result<()> {
-    match fs::create_dir_all(dir) {
+    match refused(dir, Refusal::Chain).map_or_else(|| fs::create_dir_all(dir), Err) {
         Ok(()) => return Ok(()),
         Err(e) if !crate::build::icloud::is_dataless_unavailable(&e) => return Err(e),
         Err(e) if !is_regenerable_output(dir) => return Err(e),
@@ -101,7 +101,7 @@ pub fn create_output_dir_all(dir: &Path) -> io::Result<()> {
     let mut built = PathBuf::new();
     for component in dir.components() {
         built.push(component);
-        match fs::create_dir(&built) {
+        match refused(&built, Refusal::Entry).map_or_else(|| fs::create_dir(&built), Err) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
             Err(e)
@@ -127,6 +127,60 @@ pub fn create_output_dir_all(dir: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Refusal {
+    /// A `create_dir_all` reaching through the refused directory.
+    Chain,
+    /// A `create_dir` of the refused directory itself.
+    Entry,
+}
+
+/// The `EDEADLK` a cloud provider answers for a directory it will not
+/// materialize, when a test has asked for one ([`fault::refuse_dataless`]); no
+/// CI moss runs on has a File Provider vault to produce the real one.
+#[cfg(test)]
+fn refused(dir: &Path, how: Refusal) -> Option<io::Error> {
+    fault::refuses(dir, how).then(|| io::Error::from_raw_os_error(libc::EDEADLK))
+}
+
+#[cfg(not(test))]
+fn refused(_dir: &Path, _how: Refusal) -> Option<io::Error> {
+    None
+}
+
+#[cfg(test)]
+pub(crate) mod fault {
+    use super::Refusal;
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
+
+    thread_local! {
+        static REFUSED: RefCell<Option<(PathBuf, bool)>> = const { RefCell::new(None) };
+    }
+
+    /// On this thread, refuse `dir` the way a provider refuses a dataless
+    /// directory: every `create_dir_all` through it, and the first
+    /// `create_dir` of it.
+    pub(crate) fn refuse_dataless(dir: &Path) {
+        REFUSED.with(|r| *r.borrow_mut() = Some((dir.to_path_buf(), true)));
+    }
+
+    pub(super) fn refuses(path: &Path, how: Refusal) -> bool {
+        REFUSED.with(|r| {
+            let mut r = r.borrow_mut();
+            let Some((dir, entry_left)) = r.as_mut() else { return false };
+            match how {
+                Refusal::Chain => path.starts_with(&*dir) && *entry_left,
+                Refusal::Entry if path == dir && *entry_left => {
+                    *entry_left = false;
+                    true
+                }
+                Refusal::Entry => false,
+            }
+        })
+    }
 }
 
 /// Is `dir` at or below some `.moss/build/`?
@@ -219,48 +273,151 @@ pub fn write_output_if_changed(path: &Path, bytes: &[u8]) -> io::Result<bool> {
     Ok(true)
 }
 
-/// Is there an output at `path` that moss can ship without reading it back?
+/// `remove_dir_all` for the output tree, with an absent directory as success.
 ///
-/// The read half of ADR-043's "dataless is absent": every presence check on
-/// regenerable output asks this, so "already built" cannot mean a cloud-only
-/// placeholder that the next `copy_output` will fail on. The checks this
-/// replaces predate the 0-byte-stub era and none consulted the evicted bit,
-/// so each was a latent form of the same incident — the check says present,
-/// the later copy fails, and the failure is fatal.
-///
-/// A symlink is present when the link itself is (`120000:` manifest entries
-/// are shipped with `read_link`, never by reading the target). Both the
-/// regular-file test and `is_evicted` are false for a link, so a predicate
-/// that forgot this arm would unlink every preserved symlink.
-pub fn output_present(path: &Path) -> bool {
-    match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => true,
-        Ok(meta) => meta.is_file() && meta.len() > 0 && !crate::build::icloud::is_evicted(path),
-        Err(_) => false,
+/// The one door for removing a directory under `.moss/build/`, beside
+/// [`create_output_dir_all`] for making one. Unlinking does not touch data
+/// extents, so it cannot materialize a dataless child.
+pub fn remove_output_dir_all(dir: &Path) -> io::Result<()> {
+    match fs::remove_dir_all(dir) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        other => other,
     }
 }
 
-/// [`output_present`] for a path a manifest entry names, where `mode` is that
-/// entry's octal mode.
+/// A scratch directory under `cache/tmp` that one encode run or image batch
+/// owns, removed when the owner drops it. Runs used to share `cache/tmp`, and
+/// each new video run wiped it on entry — taking the temps and two-pass logs of
+/// an image batch, or of the run it had just joined, mid-write.
+pub struct ScratchDir(PathBuf);
+
+impl ScratchDir {
+    /// `<tmp_root>/<name>-<uuid>`. A directory that cannot be made is logged;
+    /// the writes into it then fail on their own and are reported there.
+    pub fn new(tmp_root: &Path, name: &str) -> Self {
+        let dir = tmp_root.join(format!("{name}-{}", uuid::Uuid::new_v4()));
+        if let Err(e) = create_output_dir_all(&dir) {
+            log::warn!("[scratch] could not create {}: {}", dir.display(), e);
+        }
+        Self(dir)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = remove_output_dir_all(&self.0);
+    }
+}
+
+/// Remove every scratch directory under `tmp_root`: what a dead process left.
+/// Only safe before anything in this process can be writing there.
+pub fn clear_scratch(tmp_root: &Path) {
+    if let Err(e) = remove_output_dir_all(tmp_root) {
+        log::debug!("[scratch] could not clear {}: {}", tmp_root.display(), e);
+    }
+}
+
+/// Put a symlink to `target` at `dest`, replacing a file or link already there
+/// without a moment where `dest` is absent: the link is made at a pending
+/// sibling and renamed over `dest`. A directory standing at `dest` fails the
+/// rename and is left alone for the staging sweep.
+#[cfg(unix)]
+pub fn replace_with_symlink(target: &Path, dest: &Path) -> io::Result<()> {
+    let pending = pending_sibling(dest);
+    std::os::unix::fs::symlink(target, &pending)?;
+    fs::rename(&pending, dest).inspect_err(|_| {
+        let _ = fs::remove_file(&pending);
+    })
+}
+
+/// What a presence check on regenerable output could actually learn.
 ///
-/// The plain predicate answers by the link, which is right for a `120000:`
-/// entry and wrong for a `100644:` one: a dangling symlink standing where a
-/// file entry expects bytes would be called present, skipped by the presence
-/// pass, and then fail the copy in `ship_phase`. Asking through the link for a
-/// file entry keeps the manifest and the disk agreeing on the same object.
-pub fn entry_output_present(path: &Path, mode: &str) -> bool {
+/// `Absent` and `Evicted` are answers; `Unverified` is the absence of one. The
+/// distinction is the whole point: under `.moss/build/` a dataless or 0-byte
+/// output is regenerable and counts as gone (ADR-043), but an I/O error other
+/// than a positive `NotFound` says nothing about whether the bytes are there.
+/// On a cloud-managed build tree `EDEADLK`, `EACCES` and a `NotFound` with a
+/// `.name.icloud` stub beside it are ordinary inputs, and a caller that reads
+/// any of them as absence drops, strips or deletes a healthy output — one
+/// presence pass that could read none of 822 entries dropped all 822.
+/// Destructive callers match on this; only non-destructive ones may collapse
+/// it to [`output_present`].
+#[derive(Debug)]
+pub enum Presence {
+    Present,
+    /// Positively gone: `NotFound` with no cloud placeholder standing in, or a
+    /// non-file where a file output belongs.
+    Absent,
+    /// Stat succeeded and the output is a 0-byte stub or dataless.
+    Evicted,
+    /// The check itself failed, so nothing is known.
+    Unverified(io::Error),
+}
+
+impl Presence {
+    pub fn is_present(&self) -> bool {
+        matches!(self, Presence::Present)
+    }
+}
+
+/// Classify a failed stat or resolve of `path`.
+fn probe_error(path: &Path, err: io::Error) -> Presence {
+    if crate::build::icloud::is_definitely_absent(path, &err) {
+        Presence::Absent
+    } else {
+        Presence::Unverified(err)
+    }
+}
+
+/// Probe `path` itself, never through a final symlink: a link is present when
+/// the link is (`120000:` manifest entries ship with `read_link`). Both the
+/// regular-file test and `is_evicted` are false for a link, so a probe that
+/// forgot this arm would unlink every preserved symlink.
+pub fn probe_path(path: &Path) -> Presence {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Presence::Present,
+        Ok(meta) if !meta.is_file() => Presence::Absent,
+        Ok(meta) if meta.len() == 0 || crate::build::icloud::is_evicted(path) => Presence::Evicted,
+        Ok(_) => Presence::Present,
+        Err(e) => probe_error(path, e),
+    }
+}
+
+/// [`Presence`] of the output a manifest entry with octal `mode` names at `path`.
+///
+/// A `120000:` entry is asked by the link. Any other entry is asked of the
+/// object ship will actually read, through the link: a dangling symlink
+/// standing where a file entry expects bytes would otherwise be called present
+/// and then fail the copy in `ship_phase`.
+pub fn probe_output(path: &Path, mode: &str) -> Presence {
     if mode == crate::types::content::MODE_SYMLINK {
-        return output_present(path);
+        return probe_path(path);
     }
-    // Resolve first, then ask of the object ship will actually read. Asking
-    // `is_file()` (which follows) beside `output_present` (which does not)
-    // answered yes for a link onto an evicted or 0-byte target — the same
-    // class this predicate exists to remove, one indirection down.
-    // `canonicalize` fails on a dangling link, which is the absent answer.
     match fs::canonicalize(path) {
-        Ok(real) => output_present(&real),
-        Err(_) => false,
+        Ok(real) => probe_path(&real),
+        Err(e) => probe_error(path, e),
     }
+}
+
+/// Is there an output at `path` that moss can ship without reading it back?
+///
+/// The read half of ADR-043's "dataless is absent", for callers whose "not
+/// present" arm only produces a replacement through temp-and-rename and
+/// removes nothing. A caller that drops, strips, fails or deletes on the
+/// answer must use [`probe_output`] instead, because this collapses
+/// `Unverified` into "not present".
+pub fn output_present(path: &Path) -> bool {
+    probe_path(path).is_present()
+}
+
+/// [`output_present`] for a path a manifest entry names, where `mode` is that
+/// entry's octal mode. Same non-destructive restriction.
+pub fn entry_output_present(path: &Path, mode: &str) -> bool {
+    probe_output(path, mode).is_present()
 }
 
 #[cfg(test)]

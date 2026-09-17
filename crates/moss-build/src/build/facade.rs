@@ -526,7 +526,7 @@ impl FacadeCache {
     /// that method's doc comment for the iCloud-exclusion rationale).
     pub fn save(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
+            crate::build::io_utils::create_output_dir_all(parent)
                 .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
         }
         let json = serde_json::to_string_pretty(self)
@@ -534,6 +534,7 @@ impl FacadeCache {
         let tmp = path.with_extension(format!("json.pending.{}", uuid::Uuid::new_v4()));
         fs::write(&tmp, json.as_bytes())  // allow:raw_write the temp for this cache's own atomic save under .moss/cache
             .map_err(|e| format!("Failed to write {}: {}", tmp.display(), e))?;
+        // allow:unlink rename into place outside staging
         fs::rename(&tmp, path)
             .map_err(|e| format!("Failed to rename {} -> {}: {}", tmp.display(), path.display(), e))
     }

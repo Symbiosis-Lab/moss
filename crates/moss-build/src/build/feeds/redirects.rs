@@ -310,6 +310,7 @@ pub fn save_redirects(data_dir: &Path, redirects: &BTreeMap<String, String>) -> 
         return Ok(()); // unchanged — don't churn the mtime
     }
     if let Some(parent) = path.parent() {
+        // allow:raw_write .moss/data, not the build tree
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create {}: {}", parent.display(), e))?;
     }

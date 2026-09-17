@@ -286,6 +286,7 @@ fn publish_bundle(
         .map_err(|e| format!("failed to write search receipt: {}", e))?;
     // The staged marker names a bundle that is no longer the receipt's, so the
     // next adoption must re-lay every file rather than trust its stats.
+    // allow:unlink the search index under .moss/build/index, not staging
     let _ = std::fs::remove_file(staged_fp_path(index_dir));
     gc_holding(index_dir, fp);
     Ok(receipt)
@@ -303,7 +304,8 @@ fn gc_holding(index_dir: &Path, keep: PageSetFp) {
         if name == keep || !entry.path().is_dir() {
             continue;
         }
-        let _ = std::fs::remove_dir_all(entry.path());
+        // allow:unlink the search index under .moss/build/index, not staging
+        let _ = crate::build::io_utils::remove_output_dir_all(&entry.path());
     }
 }
 
@@ -462,6 +464,7 @@ pub fn adopt_into(
 /// deleting by path alone would destroy a receipt this build never read.
 fn drop_receipt_if_still(_holding: &Holding, index_dir: &Path, diverged: &BundleReceipt) {
     if read_receipt(index_dir).map(|r| r.fp) == Some(diverged.fp.clone()) {
+        // allow:unlink the search index under .moss/build/index, not staging
         let _ = std::fs::remove_file(index_dir.join("receipt.json"));
     }
 }

@@ -263,32 +263,6 @@ fn should_publish(structural_incomplete: bool) -> bool {
     !structural_incomplete
 }
 
-/// Which directory the preview server should be left on, if any.
-///
-/// Staging when this build published, the previous sealed generation when it was
-/// withheld — the same branch the `switch_to` calls above take, kept in one
-/// place because `initial-build-complete` does not merely *report* this. Its
-/// listener in `lib.rs` calls `switch_to` with the payload path, so naming
-/// staging here would undo the withholding and serve the build moss just
-/// declined to show.
-///
-/// `None` is the withheld-first-build case: nothing was published and nothing is
-/// sealed, so there is no directory to name. The gate is necessarily up in that
-/// state (see `cloud_ledger::structural_missing_count`), so the waiting screen owns the
-/// window and there is nothing for the server to serve underneath it.
-fn served_dir<'a>(
-    publishable: bool,
-    has_sealed_generation: bool,
-    stage_dir: &'a Path,
-    current_ptr: &'a Path,
-) -> Option<&'a Path> {
-    match (publishable, has_sealed_generation) {
-        (true, _) => Some(stage_dir),
-        (false, true) => Some(current_ptr),
-        (false, false) => None,
-    }
-}
-
 fn emit_initial_build_complete(services: Option<&BuildServices>, site_path: Option<&Path>) {
     let (Some(svc), Some(site_path)) = (services, site_path) else {
         return;
@@ -531,7 +505,7 @@ fn run_notebook_processing(
     // 1. Their natural path in the output (e.g., /resources/analysis.ipynb) — for direct access
     // 2. /jupyter/files/<filename> — where JupyterLite looks for notebook files
     let jupyter_files_dir = staging_dir.join("jupyter").join("files");
-    let _ = fs::create_dir_all(&jupyter_files_dir);
+    let _ = crate::build::io_utils::create_output_dir_all(&jupyter_files_dir);
 
     // The manifest lists what moss wrote, and only that. Every entry here is a
     // receipt from a write this build performed — never a walk of the
@@ -935,6 +909,10 @@ pub struct PipelineRunOutput {
     /// arrived — which would license promoting a generation that was still
     /// built without them.
     pub publishable: bool,
+    /// The render number `lifecycle::show_render` minted for this build, which
+    /// the seal tail hands to `lifecycle::promote`. `None` for a build that
+    /// stopped before it rendered.
+    pub render_seq: Option<u64>,
 }
 
 /// Resolves all native/plugin slot content after marked HTML and article-map
@@ -948,7 +926,28 @@ pub type SlotResolver = Box<
     dyn FnOnce(&[ParsedDocument], &str, Option<bool>) -> Result<ResolvedSlots, String> + Send + 'static,
 >;
 
+/// [`run_leased`] for a caller that holds no cache-write lease — tests and
+/// hosts driving the pipeline directly. `build::run_pipeline` takes one and
+/// calls [`run_leased`].
+#[allow(clippy::too_many_arguments)]
 pub fn run(
+    root: &crate::vault::paths::VaultRoot,
+    site_dir_state: Option<&SiteDirectoryState>,
+    progress_sender: Option<&dyn crate::build::ports::reporter::BuildReporter>,
+    preview_port: &crate::build::ports::LivePortResolver,
+    services: Option<&BuildServices>,
+    slot_resolver: Option<SlotResolver>,
+    project_structure: &ProjectStructure,
+    site_url_override: Option<String>,
+    incremental: crate::build::render::IncrementalGates,
+    search_freshness: crate::build::feeds::search_lane::Freshness,
+    cache_keys: &crate::build::ports::CacheKeyInputs,
+) -> Result<PipelineRunOutput, BuildStopped> {
+    run_leased(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_leased(
     root: &crate::vault::paths::VaultRoot,
     site_dir_state: Option<&SiteDirectoryState>,
     progress_sender: Option<&dyn crate::build::ports::reporter::BuildReporter>,
@@ -964,6 +963,9 @@ pub fn run(
     incremental: crate::build::render::IncrementalGates,
     search_freshness: crate::build::feeds::search_lane::Freshness, // ADR-045
     cache_keys: &crate::build::ports::CacheKeyInputs,
+    // The caller's `lifecycle::CacheWriteLease`, carried into the background
+    // handle so it drops when the workers have joined.
+    cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
 ) -> Result<PipelineRunOutput, BuildStopped> {
     // Track build state in the FolderSession's UiBound counter for window
     // close / CLI-wait decisions. begin_ui_bound is a no-op in headless mode.
@@ -972,7 +974,7 @@ pub fn run(
     }
 
     // Use inner function pattern to ensure build state is cleared on ALL exit paths
-    let result = build_inner(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys);
+    let result = build_inner(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, cache_lease);
 
     // Clear build state after build completes (success or error)
     if let Some(svc) = services {
@@ -1025,6 +1027,7 @@ fn build_inner(
     incremental: crate::build::render::IncrementalGates,
     search_freshness: crate::build::feeds::search_lane::Freshness,
     cache_keys: &crate::build::ports::CacheKeyInputs,
+    cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
     // `BuildStopped`, not `String`: the gate verdict is emitted from inside this
     // function, so the error type must be able to say "not yet" for the caller
     // to raise the gate instead of reporting. See `build::outcome` (moss#964).
@@ -1119,38 +1122,25 @@ fn build_inner(
     // Send generating progress
     send_progress(progress_sender, "generating", &crate::infra::app_advisory::t("generating_site"), 50, false, None, None);
 
-    // Zero-flicker staging pattern: build to staging, switch pointer, copy, switch back
     let stage_dir = paths.staging_dir();
 
     // One-time migration: remove legacy path-based video cache.
     cleanup_legacy_video_cache(&moss_dir);
 
-    // Staging pattern: build into site-stage/ (with scroll-sync annotations), then
-    // materialize a frozen generation dir for deploy.
-    //
-    // First build:
-    //   1. generate_blocking_content → site-stage/ (annotated)
-    //   2. inject_slots (enhance) → site-stage/
-    //   3. switch server to site-stage/ (preview rests here)
-    //   4. materialize_and_promote: copy staging/ → generations/<gen-id>/
-    //
-    // Rebuild:
-    //   0. switch server to current_ptr (previous frozen gen, zero-flicker)
-    //   1-4. same as first build
-    //
-    // Server rests on site-stage/ (annotated) for editor↔preview scroll sync.
-    // current_ptr always points to the latest deploy-ready frozen generation.
-
-    // For rebuilds: switch server to the previous frozen generation before
-    // overwriting staging/. This provides zero-flicker preview during rebuild.
-    // On first build current_ptr doesn't exist yet — skip silently.
-    let current_ptr = paths.current_ptr();
-    let current_ptr_exists = current_ptr.exists();
-    if current_ptr_exists {
-        if let Some(state) = site_dir_state {
-            state.switch_to(current_ptr.clone());
-        }
+    // Step 0: where the preview rests while this build rewrites staging, and
+    // whether this build may unlink from it. Both are `lifecycle`'s to decide:
+    // it parks the preview on `current` only when that is no step back from
+    // the render on screen, and a permit is the only licence to unlink below.
+    if let Some(state) = site_dir_state {
+        crate::build::lifecycle::adopt_server(&paths, &state.current_dir);
     }
+    let sweep_permit = crate::build::lifecycle::park_for_rebuild(
+        &paths,
+        cache_lease.is_some(),
+        services.map(|s| s.cancellation.protected_outputs()).unwrap_or_default(),
+    );
+    crate::build::phase::record_count("parked_current", usize::from(sweep_permit.is_some()));
+    let current_ptr_exists = paths.current_ptr().exists();
 
     // Step 1: Load previous hashes BEFORE building
     // CRITICAL: Must read hashes before generate_blocking_content() runs, because
@@ -1230,9 +1220,8 @@ fn build_inner(
     crate::build::io_utils::create_output_dir_all(&stage_dir)
         .map_err(|e| format!("Failed to create staging directory: {}", e))?;
 
-    // Step 2b: sweep the previous build's residue out of staging — here,
-    // because here is the one moment nobody is reading it.
-    sweep_staging(&stage_dir, &previous_hashes, current_ptr_exists);
+    // Step 2b: sweep the previous build's residue out of staging.
+    sweep_staging(&stage_dir, &previous_hashes, sweep_permit.as_ref());
 
     // Step 3: Build to staging directory using internal generator
     //
@@ -1460,6 +1449,7 @@ fn build_inner(
             // The folder is closed; nothing downstream should promote this
             // build's generation over whatever the user opens next.
             publishable: false,
+            render_seq: None,
         });
     }
 
@@ -1505,55 +1495,33 @@ fn build_inner(
         emit_cloud_gate(false, &project_structure.evicted_paths, cloud_outstanding);
     }
 
+    let render_seq: Option<u64>;
+    let announce: Option<std::path::PathBuf>;
+    crate::build::phase::record_count("served_staging", usize::from(publishable));
     if has_output_changes {
-        // Changes detected (or first build) — switch preview to enhanced site-stage/,
-        // then copy to site/.
 
         // Step 4b: Remove stale HTML pages from deleted source folders.
-        //
-        // Runs HERE, before Step 5 switches the server onto `stage_dir`, not
-        // after like this call used to. The server is off `stage_dir` at this
-        // point — parked on `current_ptr` since the top of this function, or
-        // not yet redirected on a first build — so unlinking here cannot take
-        // a page out from under a live reader. Running it after the switch
-        // was the same "switch, then unlink" ordering the seal-tail fix
-        // (`sweep_staging`) declared unsafe for the seal tail's own passes;
-        // this call isn't in the seal tail, but it shared the ordering bug.
-        // `blocking_keys` and the carried-forward `notebook_outputs()` are
-        // both already final by this point (set by `generate_blocking_content`
-        // and slot injection above), so moving the call earlier costs nothing.
         //
         // Runs unconditionally, including when this build deferred a page.
         // Each deferred page's published output is reinstated in `blocking_keys`
         // by `PendingManifest::carry_forward_deferred_page` (see the render
         // pass), so it is protected by name rather than by skipping the sweep.
-        //
-        // The wholesale skip this replaces was both too weak and too strong: too
-        // weak because three LATER passes — `stale_carried_forward`, `seal`, and
-        // `remove_stale_files` — deleted the page anyway, and too strong because
-        // one wedged file suspended stale cleanup for the entire vault
-        // indefinitely.
         // `pending.notebook_outputs()` carries background-phase JupyterLite
         // assets (jupyter/**/index.html) forward from the previous build, so
         // stale-html cleanup here doesn't delete them before
         // `run_notebook_processing` below re-registers them.
-        remove_stale_html(&stage_dir, &background_ctx.blocking_keys, pending.notebook_outputs());
+        if let Some(permit) = sweep_permit.as_ref() {
+            remove_stale_html(&stage_dir, &background_ctx.blocking_keys, pending.notebook_outputs(), permit);
+        }
         // gen_dir is immutable post-materialize — stale-html cleanup runs on staging only.
 
-        // Step 5: Switch server pointer to staging (instant - preview shows enhanced content)
-        //
-        // Unless this build could not read its own sources. The switch is the
-        // moment the user sees this build's output, so an unpublishable build
-        // must not make it — that flip is precisely the reported "the preview
-        // showed the site and then showed a broken one" (moss#1042). Declining
-        // leaves the server where the zero-flicker switch put it at the top of
-        // this function: the last sealed generation, or (first build) staging
-        // from a build that had nothing better to offer.
-        if publishable {
-            if let Some(state) = site_dir_state {
-                state.switch_to(stage_dir.clone());
-            }
-        } else {
+        // Step 5: show this render — unless this build could not read its own
+        // sources. Showing it is the moment the user sees this build's output,
+        // so an unpublishable build must not (moss#1042).
+        let (seq, announced) = crate::build::lifecycle::show_render(&paths, publishable);
+        render_seq = Some(seq);
+        announce = announced;
+        if !publishable {
             // The count the decision was made from, not a fresh read of the
             // ledger: this line explains a choice already taken, and asking
             // again here is how it came to report zero of the thing it was
@@ -1582,23 +1550,15 @@ fn build_inner(
 
         // Emit 'initial-build-complete' with the directory actually being
         // served — staging normally, the sealed generation when this build was
-        // withheld. Naming staging there would tell the rest of the app to read
-        // a tree the preview is deliberately not showing.
-        emit_initial_build_complete(services, served_dir(publishable, current_ptr_exists, &stage_dir, &current_ptr));
+        // withheld.
+        emit_initial_build_complete(services, announce.as_deref());
 
     } else {
-        // No output changes — switch server back to site-stage/ (was switched to
-        // site/ at rebuild start for zero-flicker). Preview needs site-stage/ for
-        // scroll sync annotations.
-        //
-        // Same guard as the changed branch: staging holds THIS build's render
-        // either way, so an unpublishable one must not be switched onto just
-        // because its hashes happened to match.
-        if publishable {
-            if let Some(state) = site_dir_state {
-                state.switch_to(stage_dir.clone());
-            }
-        }
+        // No output changes — staging still holds this render; show it the same
+        // way, under the same publishable guard.
+        let (seq, announced) = crate::build::lifecycle::show_render(&paths, publishable);
+        render_seq = Some(seq);
+        announce = announced;
 
         // Asked HERE, not carried in. A build that started no server of its own
         // may have had one come up while it ran — on the incident vault, fourteen
@@ -1606,7 +1566,10 @@ fn build_inner(
         // reached this line. See `ports::LivePortResolver` (moss#1061).
         send_progress(progress_sender, "complete", &crate::infra::app_advisory::t("build_complete"), 100, true, preview_port(), Some(is_empty));
 
-        emit_initial_build_complete(services, served_dir(publishable, current_ptr_exists, &stage_dir, &current_ptr));
+        emit_initial_build_complete(services, announce.as_deref());
+    }
+    if let Some(seq) = render_seq {
+        crate::build::phase::record_count("render", seq as usize);
     }
 
     // Step 6c: no search worker. Pagefind is generation-free (ADR-045) — cost
@@ -1861,6 +1824,7 @@ fn build_inner(
         let handle = BackgroundHandle::spawn_with_pending_and_terminal(
             pending,
             terminal_barrier,
+            cache_lease,
             register_workers,
         );
         Some(handle)
@@ -1881,6 +1845,7 @@ fn build_inner(
         cancelled: false,
         home_ready,
         publishable,
+        render_seq,
     })
 }
 
@@ -1913,35 +1878,28 @@ pub(crate) fn send_progress(
 /// orphan prune condemned, entries the presence pass dropped, outputs of pages
 /// that no longer exist, `.pending.*` litter from an interrupted write.
 ///
-/// This is the whole of staging's garbage collection, and it lives at the start
-/// of a build for one reason: staging is the tree the preview server reads
-/// between builds. `pipeline::run` points the server at it when the render
-/// finishes, and only the `switch_to(current_ptr)` a few dozen lines above this
-/// call moves it off — so this is the first instant since then at which
-/// unlinking a staged file cannot 404 a live reader. Sweeping from the seal
-/// tail instead is the bug this call exists to close: the tail is detached and
-/// runs *while* the frontend is refetching the page it just rebuilt.
+/// Staging is the tree the preview reads, so this needs a
+/// `lifecycle::SweepPermit`. Without one it does nothing: the leftovers cost
+/// local disk until the next caught-up build, never a generation, because
+/// `ship_phase` copies `sealed.files()` and nothing else. A one-shot build
+/// never gets a next build, so `ship::reclaim_staging_now` is its last chance.
 ///
-/// Waiting a build costs nothing but local disk **when there is a next
-/// build to do the waiting for** — `ship_phase` copies `sealed.files()` and
-/// nothing else, so an unswept staged file can never reach a generation, a
-/// deploy, or a published site. A one-shot invocation (`moss build`,
-/// `build_sync`, a snapshot test) never gets a next build in the same
-/// process, so this function alone leaves its orphaned bytes in `stage_dir`
-/// forever; `ship::reclaim_staging_now` is that build's own last chance and
-/// runs from `advertise_sealed` instead of here, once the caller has proven
-/// nothing else will read `stage_dir` again (see that function's doc).
-///
-/// `served_from_current` is the precondition, not a preference: without a
-/// promoted generation the server may still be resting on staging itself
-/// (`MossPaths::initial_serve_dir`), and an empty manifest would authorize
-/// deleting every file in it.
-fn sweep_staging(stage_dir: &Path, previous: &SiteHashes, served_from_current: bool) {
-    if !served_from_current || previous.files.is_empty() {
+/// An empty previous manifest (first build, or one that could not be read)
+/// authorizes nothing either.
+fn sweep_staging(
+    stage_dir: &Path,
+    previous: &SiteHashes,
+    permit: Option<&crate::build::lifecycle::SweepPermit>,
+) {
+    let Some(permit) = permit.filter(|_| !previous.files.is_empty()) else {
         return;
+    };
+    let files = remove_stale_files(stage_dir, previous, "staging", permit);
+    let dirs = remove_stale_dirs(stage_dir, &compute_expected_dirs(previous), permit);
+    crate::build::phase::record_count("swept", files.removed());
+    if files.removed() > 0 || dirs > 0 {
+        log::info!("staging sweep: {}, {} dir(s)", files.describe(), dirs);
     }
-    remove_stale_files(stage_dir, previous, "staging");
-    remove_stale_dirs(stage_dir, &compute_expected_dirs(previous));
 }
 
 /// Load previous hashes from .moss/build/hashes.json.

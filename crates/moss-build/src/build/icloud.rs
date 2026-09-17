@@ -109,6 +109,22 @@ pub fn is_evicted(_path: &Path) -> bool {
     false
 }
 
+/// Whether a DIRECTORY carries the dataless flag. [`is_evicted`] answers only
+/// for regular files; this exists for forensics on a vanished CAS shard, where
+/// a dataless shard directory and a deleted one are two different culprits.
+#[cfg(target_os = "macos")]
+pub fn is_dataless_dir(path: &Path) -> bool {
+    use std::os::darwin::fs::MetadataExt;
+    std::fs::symlink_metadata(path)
+        .map(|meta| meta.is_dir() && (meta.st_flags() & SF_DATALESS) != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn is_dataless_dir(_path: &Path) -> bool {
+    false
+}
+
 /// True when `err` is the dataless-fail-fast policy refusing to materialize a
 /// cloud file — NOT evidence the file is missing or genuinely broken. See the
 /// module doc's "unreadable is not absent" section.

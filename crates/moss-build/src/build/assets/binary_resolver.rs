@@ -420,6 +420,7 @@ fn download_and_extract(
         }
         Some(ArchiveFormat::Raw) | None => {
             // Raw binary — write directly
+            // allow:raw_write the downloaded binary cache, not the build tree
             std::fs::create_dir_all(cache_parent).map_err(|e| {
                 format!(
                     "Failed to create cache directory {}: {}",
@@ -727,11 +728,13 @@ fn delete_cached_binary(config: &BinaryConfig, cached_path: &Path) {
         if let Ok(bin_dir) = get_moss_bin_dir() {
             let dir = bin_dir.join(cache_dir);
             if dir.exists() {
+                // allow:unlink the downloaded binary cache, not the build tree
                 let _ = std::fs::remove_dir_all(&dir);
                 log::info!("Removed corrupt cache directory: {}", dir.display());
             }
         }
     } else if cached_path.exists() {
+        // allow:unlink the downloaded binary cache, not the build tree
         let _ = std::fs::remove_file(cached_path);
         log::info!("Removed corrupt cached binary: {}", cached_path.display());
     }
@@ -820,10 +823,12 @@ fn extract_tar_gz_to_cache(
 
     // Clean up any previous failed extraction
     if tmp_dir.exists() {
+        // allow:unlink the downloaded binary cache, not the build tree
         std::fs::remove_dir_all(&tmp_dir)
             .map_err(|e| format!("Failed to clean up temp dir {}: {}", tmp_dir.display(), e))?;
     }
 
+    // allow:raw_write the downloaded binary cache, not the build tree
     std::fs::create_dir_all(&tmp_dir)
         .map_err(|e| format!("Failed to create temp dir {}: {}", tmp_dir.display(), e))?;
 
@@ -850,6 +855,7 @@ fn extract_tar_gz_to_cache(
 
     // Atomic rename: remove old, rename tmp to final
     if final_dir.exists() {
+        // allow:unlink the downloaded binary cache, not the build tree
         std::fs::remove_dir_all(&final_dir).map_err(|e| {
             format!(
                 "Failed to remove old cache dir {}: {}",
@@ -861,6 +867,7 @@ fn extract_tar_gz_to_cache(
 
     // Ensure parent directory exists
     if let Some(parent) = final_dir.parent() {
+        // allow:raw_write the downloaded binary cache, not the build tree
         std::fs::create_dir_all(parent).map_err(|e| {
             format!(
                 "Failed to create parent directory {}: {}",
@@ -870,6 +877,7 @@ fn extract_tar_gz_to_cache(
         })?;
     }
 
+    // allow:unlink the downloaded binary cache, not the build tree
     std::fs::rename(&tmp_dir, &final_dir).map_err(|e| {
         format!(
             "Failed to rename {} -> {}: {}",
@@ -899,6 +907,7 @@ fn extract_zip_to_cache(
     let mut archive = zip::ZipArchive::new(reader)
         .map_err(|e| format!("Failed to open zip archive for {}: {}", config.name, e))?;
 
+    // allow:raw_write the downloaded binary cache, not the build tree
     std::fs::create_dir_all(cache_parent).map_err(|e| {
         format!(
             "Failed to create cache directory {}: {}",

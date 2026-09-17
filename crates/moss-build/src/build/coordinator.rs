@@ -53,6 +53,10 @@ pub enum EmitMessage {
     /// `sources` map was always one build stale and `prev_sources` two builds
     /// stale.
     SourcesReplace(HashMap<String, SourceMetadata>),
+    /// A producer could not verify `rel_path`'s output: an I/O error other than
+    /// a positive `NotFound`. Nothing is registered, failed or deleted for it,
+    /// and the generation that carries the mark is withheld.
+    Unverified { rel_path: String, detail: String },
 }
 
 /// Single-owner coordinator that drains the emit channel into a `PendingManifest`
@@ -104,6 +108,9 @@ impl ManifestCoordinator {
                 EmitMessage::SourcesReplace(sources) => {
                     self.pending.replace_sources(sources);
                 }
+                EmitMessage::Unverified { rel_path, detail } => {
+                    self.pending.mark_unverified(rel_path, detail);
+                }
             }
         }
         self.pending.seal()
@@ -153,6 +160,9 @@ pub mod test_utils {
                 }
                 EmitMessage::SourcesReplace(sources) => {
                     pending.replace_sources(sources);
+                }
+                EmitMessage::Unverified { rel_path, detail } => {
+                    pending.mark_unverified(rel_path, detail);
                 }
             }
         }

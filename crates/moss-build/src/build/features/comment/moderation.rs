@@ -159,10 +159,12 @@ pub fn next_seq(project_path: &str) -> std::io::Result<u64> {
         .unwrap_or(0);
     let next = cur + 1;
     if let Some(parent) = path.parent() {
+        // allow:raw_write .moss/data, not the build tree
         std::fs::create_dir_all(parent)?;
     }
     let tmp = path.with_extension("seq-tmp");
     std::fs::write(&tmp, next.to_string())?;  // allow:raw_write the temp for this file's own atomic save under .moss/data
+    // allow:unlink rename into place in the moderation store, not staging
     std::fs::rename(&tmp, &path)?;
     Ok(next)
 }

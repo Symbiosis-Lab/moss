@@ -460,9 +460,9 @@ impl MossPaths {
     /// Uses write-then-rename so no reader ever sees an absent `current` pointer.
     /// Symlink target is absolute to avoid cwd ambiguity.
     ///
-    /// **Unordered.** Production seal tails must go through `build::ship`'s
-    /// `try_promote`, which refuses a promotion from a build older than the one
-    /// already on `current` (moss#968 §5d).
+    /// **Unordered.** Production seal tails must go through
+    /// `build::lifecycle::promote`, which refuses a promotion from a build older
+    /// than the one already on `current` (moss#968 §5d).
     pub fn set_current_ptr(&self, gen_id: &str) -> std::io::Result<()> {
         let gen_dir = self.generation_dir(gen_id);
         let current = self.current_ptr();
@@ -472,8 +472,10 @@ impl MossPaths {
             // Atomic repoint: write-then-rename so no reader ever sees an absent
             // `current` pointer. Symlink target is absolute to avoid cwd ambiguity.
             let tmp = current.with_extension("tmp");
+            // allow:unlink the pointer's own temp; the rename below swaps `current` atomically
             let _ = std::fs::remove_file(&tmp);
             std::os::unix::fs::symlink(&gen_dir, &tmp)?;
+            // allow:unlink the pointer's own temp; the rename below swaps `current` atomically
             std::fs::rename(&tmp, &current)?;
         }
         #[cfg(windows)]
@@ -492,7 +494,8 @@ impl MossPaths {
             // generation's files behind, making `current` a union of two
             // builds. Failing the seal is recoverable; a silently blended site
             // is not.
-            match std::fs::remove_dir_all(&current) {
+            // allow:unlink Windows only: `current` is a copied directory there and is the served tree, so a promote can show a reader a torn tree (a named residual; the fix is a junction swap)
+            match crate::build::io_utils::remove_output_dir_all(&current) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e),
@@ -606,6 +609,7 @@ impl MossPaths {
             self.generations_dir(),
         ];
         for dir in &dirs {
+            // allow:raw_write a test fixture; no production build compiles it
             std::fs::create_dir_all(dir)?;
         }
         // No cloud-sync marking here: this is a fixture, and marking temp dirs
@@ -613,6 +617,7 @@ impl MossPaths {
         // at the real `.moss` creation, covered end-to-end in
         // `pipeline_correctness::build_excludes_regenerable_dirs_from_cloud_sync`.
         // Remove any stale current.tmp left by a killed process.
+        // allow:unlink a test fixture; no production build compiles it
         let _ = std::fs::remove_file(self.current_ptr().with_extension("tmp"));
         Ok(())
     }
@@ -885,7 +890,8 @@ pub fn is_materialized_rel(rel: &str) -> bool {
 /// Windows is a real directory by design.
 pub fn retire_legacy_roots(moss_root: &std::path::Path) {
     for legacy in [moss_root.join("cache"), moss_root.join("site"), moss_root.join("build/site")] {
-        let _ = std::fs::remove_dir_all(&legacy);
+        // allow:unlink retired output roots that no build writes or serves
+        let _ = crate::build::io_utils::remove_output_dir_all(&legacy);
     }
     #[cfg(unix)]
     {
@@ -895,7 +901,8 @@ pub fn retire_legacy_roots(moss_root: &std::path::Path) {
         if matches!(std::fs::symlink_metadata(&current), Ok(m) if m.is_dir()) {
             // Logged, unlike the three above: a failure here reproduces the
             // exact undiagnosable state the pass exists to end.
-            if let Err(e) = std::fs::remove_dir_all(&current) {
+            // allow:unlink retired output roots that no build writes or serves
+            if let Err(e) = crate::build::io_utils::remove_output_dir_all(&current) {
                 log::warn!("[retire-legacy] {} is a directory and could not be removed ({e}); \
                             promotion will keep failing until it is deleted by hand", current.display());
             }
@@ -925,7 +932,7 @@ pub fn exclude_dirs_from_cloud_sync(moss_root: &std::path::Path) {
         // three candidate causes #965 is trying to tell apart. It was silent
         // before; a cloud provider refusing to materialize the entry
         // (`EDEADLK`) looks identical to a permissions error without this line.
-        match std::fs::create_dir_all(&dir) {
+        match crate::build::io_utils::create_output_dir_all(&dir) {
             Ok(()) => exclude_from_cloud_sync(&dir),
             // Regenerable, so the cost of syncing it is noise and conflict
             // copies rather than anything lost — hence `debug`. A path whose
@@ -1093,13 +1100,42 @@ fn exclude_from_cloud_sync(dir: &std::path::Path) {
     // cross-machine round trip, or it was applied only after the directory had
     // already synced is unresolved, and this log line is what the next
     // investigation starts from.
-    if rc != 0 && should_warn_once(dir, warned_dirs()) {
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        if should_warn_once(dir, warned_dirs()) {
+            log::warn!(
+                "[cloud-exclude] setxattr(com.apple.fileprovider.ignore#P) failed on {}: {}",
+                dir.display(),
+                err
+            );
+        }
+        return;
+    }
+    // Verify after set: a call that returned 0 is not the same as a marker on
+    // the directory, and which of the two failed is the question moss#965
+    // could not answer from the return code alone.
+    if !has_cloud_sync_marker(dir) && should_warn_once(dir, warned_dirs()) {
         log::warn!(
-            "[cloud-exclude] setxattr(com.apple.fileprovider.ignore#P) failed on {}: {}",
-            dir.display(),
-            std::io::Error::last_os_error()
+            "[cloud-exclude] com.apple.fileprovider.ignore#P is absent on {} right after it was set — \
+             the provider may still sync it",
+            dir.display()
         );
     }
+}
+
+/// Whether `dir` carries the File Provider exclusion marker.
+#[cfg(target_os = "macos")]
+fn has_cloud_sync_marker(dir: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let (Ok(path), Ok(name)) = (
+        std::ffi::CString::new(dir.as_os_str().as_bytes()),
+        std::ffi::CString::new("com.apple.fileprovider.ignore#P"),
+    ) else {
+        return false;
+    };
+    // SAFETY: both pointers are NUL-terminated and outlive the call; a null
+    // value buffer of size 0 asks only for the attribute's length.
+    unsafe { libc::getxattr(path.as_ptr(), name.as_ptr(), std::ptr::null_mut(), 0, 0, 0) >= 0 }
 }
 
 /// No-op off macOS — File Provider is an Apple subsystem.
@@ -1615,6 +1651,19 @@ mod tests {
     }
 
     // ─── setxattr-failure warn-once gate (#964 §4 visibility) ───────────────
+
+    /// What the verify-after-set warning reads: absent before the marker is
+    /// set, present after.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_cloud_sync_marker_reads_back_once_set() {
+        let tmp = make_tmp();
+        let dir = tmp.path().join("build");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!has_cloud_sync_marker(&dir), "an unmarked directory reads back unmarked");
+        exclude_from_cloud_sync(&dir);
+        assert!(has_cloud_sync_marker(&dir), "and a marked one reads back marked");
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

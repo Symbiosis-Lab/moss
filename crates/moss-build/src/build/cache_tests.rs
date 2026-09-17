@@ -245,34 +245,6 @@ fn test_link_to_overwrites_existing_zero_byte_target() {
 }
 
 #[test]
-fn test_link_to_sweeps_stale_tmp_siblings_on_entry() {
-    // Killed prior link_to calls leak `.tmp.<uuid>` siblings. The next
-    // link_to to the same target sweeps them so iCloud Drive doesn't
-    // accumulate visible orphans.
-    let dir = make_test_dir("link_sweep_stale");
-    let store = ObjectStore::new(dir.join("objects"));
-
-    let src = write_temp_file(&dir, "data.bin", b"payload");
-    let oid = store.store_file(&src).expect("store_file");
-
-    let target_dir = dir.join("out");
-    fs::create_dir_all(&target_dir).expect("mkdir target dir");
-    let target = target_dir.join("video.mp4");
-
-    // Two leaked tmps from prior killed link_to calls.
-    let stale1 = target_dir.join("video.mp4.tmp.deadbeef-1234-5678-9abc-def012345678");
-    let stale2 = target_dir.join("video.mp4.tmp.cafebabe-9876-5432-10fe-dcba98765432");
-    fs::write(&stale1, b"junk1").expect("write stale1");
-    fs::write(&stale2, b"junk2").expect("write stale2");
-
-    store.link_to(&oid, &target).expect("link_to");
-
-    assert_eq!(fs::read(&target).expect("read target"), b"payload");
-    assert!(!stale1.exists(), "stale1 should be swept");
-    assert!(!stale2.exists(), "stale2 should be swept");
-}
-
-#[test]
 fn test_blob_path_sharding() {
     let base = PathBuf::from("/cache/objects");
     let store = ObjectStore::new(base.clone());
@@ -1855,7 +1827,7 @@ fn put_transform(transforms_dir: &Path, record: &TransformRecord) {
 fn test_gc_empty_cache() {
     // GC on an empty cache should succeed with zero removals.
     let (build_dir, _, _) = make_gc_test_dir("gc_empty");
-    let result = gc(&build_dir);
+    let result = gc(&build_dir, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
     assert_eq!(result.transforms_removed, 0);
     assert_eq!(result.objects_removed, 0);
     assert_eq!(result.bytes_freed, 0);
@@ -1867,7 +1839,7 @@ fn test_gc_nonexistent_dirs() {
     let dir = make_test_dir("gc_nonexistent");
     let build_dir = dir.join("build");
     fs::create_dir_all(&build_dir).expect("create build dir");
-    let result = gc(&build_dir);
+    let result = gc(&build_dir, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
     assert_eq!(result.transforms_removed, 0);
     assert_eq!(result.objects_removed, 0);
     assert_eq!(result.bytes_freed, 0);
@@ -1947,7 +1919,7 @@ fn test_gc_removes_orphaned_transform() {
     put_object(&objects_dir, &orphan_oid, b"orphan source");
     put_object(&objects_dir, &orphan_output, b"orphan output");
 
-    let result = gc(&build_dir);
+    let result = gc(&build_dir, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
 
     // Should have removed 1 transform record (the orphaned one)
     assert_eq!(
@@ -2030,7 +2002,7 @@ fn test_gc_preserves_objects_referenced_by_site_hashes() {
     )
     .expect("write hashes.json");
 
-    let result = gc(&build_dir);
+    let result = gc(&build_dir, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
 
     // Should remove only the orphan, not the site-hashes-referenced blob
     assert_eq!(result.objects_removed, 1, "should remove 1 orphaned object");
@@ -2096,7 +2068,7 @@ fn test_gc_preserves_objects_referenced_by_transforms() {
     put_object(&objects_dir, &output_oid, b"converted webp");
     put_object(&objects_dir, &orphan_oid, b"orphaned blob");
 
-    let result = gc(&build_dir);
+    let result = gc(&build_dir, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
 
     assert_eq!(
         result.transforms_removed, 0,
@@ -2117,4 +2089,82 @@ fn test_gc_preserves_objects_referenced_by_transforms() {
         !store.blob_path(&orphan_oid).exists(),
         "orphan should be removed"
     );
+}
+
+/// A GC mark input that exists but cannot be read marks less, and marking less
+/// deletes more. Three inputs, one rig: the sweep must abort with nothing
+/// deleted when any of them is unreadable (moss 404c: an unreadable build tree
+/// is an ordinary input on a cloud-managed vault, not a corner case).
+#[cfg(unix)]
+#[test]
+fn gc_deletes_nothing_when_a_mark_input_is_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let source_oid = "5555".repeat(16);
+    let output_oid = "6666".repeat(16);
+    let site_oid = "7777".repeat(16);
+    let orphan_oid = "8888".repeat(16);
+
+    let rig = |name: &str| {
+        let (build_dir, objects_dir, transforms_dir) = make_gc_test_dir(name);
+        let mut entries = HashMap::new();
+        entries.insert(
+            "file.jpg".to_string(),
+            HashIndexEntry { size: 500, mtime: 2000, content_hash: source_oid.clone() },
+        );
+        HashIndex { entries }
+            .save(&build_dir.join("cache").join("hash-index.json"))
+            .expect("save index");
+        let mut transforms = HashMap::new();
+        transforms.insert(
+            "webp".to_string(),
+            TransformEntry { oid: output_oid.clone(), size: 3, params: serde_json::json!({}) },
+        );
+        put_transform(
+            &transforms_dir,
+            &TransformRecord { source_oid: source_oid.clone(), source_size: 500, transforms },
+        );
+        fs::write(
+            build_dir.join("hashes.json"),
+            format!(r#"{{"files": {{"page/index.html": "{site_oid}"}}}}"#),
+        )
+        .unwrap();
+        for oid in [&source_oid, &output_oid, &site_oid, &orphan_oid] {
+            put_object(&objects_dir, oid, oid.as_bytes());
+        }
+        (build_dir, objects_dir, transforms_dir)
+    };
+    let record_of = |transforms_dir: &Path| {
+        transforms_dir.join(&source_oid[..2]).join(&source_oid[2..4]).join(format!("{source_oid}.json"))
+    };
+
+    let cases: [(&str, fn(&Path, &Path) -> PathBuf); 3] = [
+        ("gc_unreadable_index", |build, _| build.join("cache").join("hash-index.json")),
+        ("gc_unreadable_record", |_, record| record.to_path_buf()),
+        ("gc_unreadable_hashes", |build, _| build.join("hashes.json")),
+    ];
+    for (name, locked_input) in cases {
+        let (build_dir, objects_dir, transforms_dir) = rig(name);
+        let record = record_of(&transforms_dir);
+        let locked = locked_input(&build_dir, &record);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&locked).is_ok() {
+            eprintln!("skipped: this process can read a 0o000 file (running as root?)");
+            return;
+        }
+
+        let result = gc(&build_dir, &crate::build::lifecycle::gc_token_for_test());
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let store = ObjectStore::new(objects_dir.clone());
+        for oid in [&source_oid, &output_oid, &site_oid, &orphan_oid] {
+            assert!(
+                store.blob_path(oid).exists(),
+                "{name}: blob {oid} was deleted by a sweep that could not read {}",
+                locked.display()
+            );
+        }
+        assert!(record.exists(), "{name}: the live transform record was deleted");
+        assert!(result.is_err(), "{name}: an unreadable mark input must abort the sweep, got {result:?}");
+    }
 }

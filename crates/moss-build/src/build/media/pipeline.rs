@@ -209,7 +209,7 @@ fn copy_tree(
     prefix: &str,
     receipts: &mut Vec<(String, String)>,
 ) -> Result<(), String> {
-    fs::create_dir_all(dst).map_err(|e| format!("Failed to create {}: {}", dst.display(), e))?;
+    crate::build::io_utils::create_output_dir_all(dst).map_err(|e| format!("Failed to create {}: {}", dst.display(), e))?;
 
     for entry in fs::read_dir(src)
         .map_err(|e| format!("Failed to read {}: {}", src.display(), e))?
@@ -471,11 +471,12 @@ fn maybe_inject_spa_cached(
 /// pages are gone before enhance slot injection. Source HTML assets (interactive embeds
 /// like `sketch.html`) are preserved — generated pages always use `index*.html`.
 ///
-/// Asset and directory cleanup is handled by background `copy_deferred_assets`.
+/// Staging is served, so this needs a `lifecycle::SweepPermit`.
 pub(crate) fn remove_stale_html(
     dir: &Path,
     blocking_keys: &std::collections::HashSet<String>,
     notebook_outputs: &std::collections::HashSet<String>,
+    _permit: &crate::build::lifecycle::SweepPermit,
 ) {
     use walkdir::WalkDir;
     let mut removed = 0u32;
@@ -513,23 +514,86 @@ pub(crate) fn remove_stale_html(
     }
 }
 
-/// Remove files from `dir` that are not in `site_hashes` (and not derived
-/// video/image outputs).
-pub(crate) fn remove_stale_files(dir: &Path, site_hashes: &SiteHashes, label: &str) {
+/// What one stale-file pass removed, counted by kind for the one INFO line a
+/// sweep writes — never one line per file, so it stays readable in a storm.
+#[derive(Debug, Default)]
+pub(crate) struct SweepReport {
+    pub html: usize,
+    pub webp: usize,
+    pub video: usize,
+    pub symlink: usize,
+    pub other: usize,
+    /// The first few keys removed, so a log names what went, not just how many.
+    pub sample: Vec<String>,
+}
+
+impl SweepReport {
+    fn record(&mut self, key: &str, is_symlink: bool) {
+        let ext = key.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+        match ext.as_str() {
+            _ if is_symlink => self.symlink += 1,
+            "html" => self.html += 1,
+            "webp" => self.webp += 1,
+            "mp4" | "m3u8" | "ts" | "m4s" => self.video += 1,
+            _ if key.ends_with(".thumb.jpg") => self.video += 1,
+            _ => self.other += 1,
+        }
+        if self.sample.len() < 3 {
+            self.sample.push(key.to_string());
+        }
+    }
+
+    pub fn removed(&self) -> usize {
+        self.html + self.webp + self.video + self.symlink + self.other
+    }
+
+    /// `removed <n> file(s) (<h> html, <w> webp, <v> video, <l> symlink, <o> other; e.g. <keys>)`
+    pub fn describe(&self) -> String {
+        format!(
+            "removed {} file(s) ({} html, {} webp, {} video, {} symlink, {} other; e.g. {})",
+            self.removed(),
+            self.html,
+            self.webp,
+            self.video,
+            self.symlink,
+            self.other,
+            self.sample.join(", ")
+        )
+    }
+}
+
+/// Remove files and symlinks from `dir` that `site_hashes` does not name.
+///
+/// Staging is served, so this needs a `lifecycle::SweepPermit`. A symlink is
+/// unlinked as a link and never descended into (`WalkDir` does not follow
+/// links), so an alias to a kept directory cannot take its contents with it.
+pub(crate) fn remove_stale_files(
+    dir: &Path,
+    site_hashes: &SiteHashes,
+    label: &str,
+    permit: &crate::build::lifecycle::SweepPermit,
+) -> SweepReport {
     use walkdir::WalkDir;
-    let mut removed = 0u32;
+    let mut report = SweepReport::default();
     for entry in WalkDir::new(dir).into_iter() {
         let entry = match entry {
             Ok(e) => e,
             Err(_) => continue,
         };
-        if !entry.file_type().is_file() {
+        let is_symlink = entry.path_is_symlink();
+        if !entry.file_type().is_file() && !is_symlink {
             continue;
         }
         if let Ok(rel) = entry.path().strip_prefix(dir) {
             // Normalize `\`→`/`: key is compared against the `/`-form
             // `site_hashes` maps/sets (video/image/notebook outputs + files).
             let key = moss_core::slug::normalize_separators(&rel.to_string_lossy());
+
+            // A running or finished encode's output, or a temp it is writing
+            // through, until a build registers it.
+            if permit.keeps(&key) {
+                continue;
+            }
 
             // Always unlink orphan *.placeholder.svg. PR #615 removed Pattern
             // E (per-video .placeholder.svg generation), but pre-#615 vaults
@@ -547,7 +611,7 @@ pub(crate) fn remove_stale_files(dir: &Path, site_hashes: &SiteHashes, label: &s
                     "[background-assets] Removed orphan placeholder svg from {}: {}",
                     label, key
                 );
-                removed += 1;
+                report.record(&key, false);
                 continue;
             }
 
@@ -555,7 +619,12 @@ pub(crate) fn remove_stale_files(dir: &Path, site_hashes: &SiteHashes, label: &s
             // are baked into already-sent emails and cached forever by
             // Gmail's proxy / Apple MPP, so a PNG whose equation was edited
             // or deleted must keep serving its original bytes. Never stale.
+            // Only the `.pending.` temp a crashed write left there is.
             if key.starts_with(crate::build::emit::math_png::MATH_PNG_PREFIX) {
+                if key.contains(".pending.") {
+                    let _ = fs::remove_file(entry.path());
+                    report.record(&key, false);
+                }
                 continue;
             }
             if site_hashes.video_outputs.contains(&key) {
@@ -575,18 +644,23 @@ pub(crate) fn remove_stale_files(dir: &Path, site_hashes: &SiteHashes, label: &s
             if !site_hashes.files.contains_key(&key) {
                 let _ = fs::remove_file(entry.path());
                 log::trace!("[background-assets] Removed stale from {}: {}", label, key);
-                removed += 1;
+                report.record(&key, is_symlink);
             }
         }
     }
-    if removed > 0 {
-        log::debug!("[background-assets] Stale cleanup {}: {} total removed", label, removed);
-    }
+    report
 }
 
 /// Remove directories from `dir` not in `expected_dirs`, deepest-first.
-pub(crate) fn remove_stale_dirs(dir: &Path, expected_dirs: &std::collections::HashSet<std::path::PathBuf>) {
+/// Returns how many it removed. Staging is served, so this needs a
+/// `lifecycle::SweepPermit`.
+pub(crate) fn remove_stale_dirs(
+    dir: &Path,
+    expected_dirs: &std::collections::HashSet<std::path::PathBuf>,
+    permit: &crate::build::lifecycle::SweepPermit,
+) -> usize {
     use walkdir::WalkDir;
+    let mut removed = 0usize;
     let mut actual_dirs: Vec<std::path::PathBuf> = Vec::new();
     for entry in WalkDir::new(dir).into_iter() {
         let entry = match entry {
@@ -611,14 +685,17 @@ pub(crate) fn remove_stale_dirs(dir: &Path, expected_dirs: &std::collections::Ha
         if d.starts_with("_moss/math") {
             continue;
         }
-        if !expected_dirs.contains(d) {
+        if !expected_dirs.contains(d) && !permit.keeps_dir(d) {
             let abs = dir.join(d);
-            match fs::remove_dir_all(&abs) {
-                Ok(_) => log::debug!(
-                    "[stale-cleanup] Removed stale directory from {}: {}",
-                    dir.display(),
-                    d.display()
-                ),
+            match crate::build::io_utils::remove_output_dir_all(&abs) {
+                Ok(_) => {
+                    removed += 1;
+                    log::debug!(
+                        "[stale-cleanup] Removed stale directory from {}: {}",
+                        dir.display(),
+                        d.display()
+                    )
+                }
                 Err(e) => log::debug!(
                     "[stale-cleanup] Could not remove {} from {}: {}",
                     d.display(),
@@ -628,6 +705,7 @@ pub(crate) fn remove_stale_dirs(dir: &Path, expected_dirs: &std::collections::Ha
             }
         }
     }
+    removed
 }
 
 /// Compute expected directories from site_hashes keys (file parents + video_output parents + image_output parents).
@@ -1598,18 +1676,8 @@ pub(crate) fn copy_deferred_assets(
     // coordinator's PendingManifest — not on disk. The pre-#620 Item 2
     // `tx.is_none()` legacy on-disk merge has been removed.
 
-    // Stale-file + stale-dir cleanup moved to the seal+persist side task in
-    // build.rs to fix #621 (deferred-phase race). Calling `remove_stale_files`
-    // here against a snapshot clone of `site_hashes` could delete an in-flight
-    // `.webp` written by a background image worker before the coordinator
-    // observed its `EmitMessage`. Cleanup now runs AFTER the seal so it sees
-    // the merged manifest view.
-    //
-    // Symlink stale-cleanup stays here because `live_symlinks` is local to
-    // this walk (not in the manifest) and is not subject to the deferred-phase
-    // race — symlinks are produced inline during the walk, not by concurrent
-    // workers.
-    crate::build::media::symlink::remove_stale_symlinks(output_dir, &live_symlinks);
+    // Stale files, dirs and symlinks leave staging only through the build's
+    // permitted sweep (`pipeline::sweep_staging`), never from this worker.
 
     // Send all accumulated file entries to the coordinator (or write to disk
     // in legacy mode). The coordinator merges these with image/video/notebook

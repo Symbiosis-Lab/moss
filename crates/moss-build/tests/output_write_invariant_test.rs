@@ -35,6 +35,9 @@ use std::path::{Path, PathBuf};
 #[path = "support/scanned_roots_nonempty.rs"]
 mod support;
 use support::scanned_roots_nonempty;
+#[path = "support/rust_scan.rs"]
+mod rust_scan;
+use rust_scan::{cfg_test_lines, walk_rust_files};
 
 /// What gets scanned: this crate's own build tree.
 const SOURCE_ROOTS: &[&str] = &["src"];
@@ -55,6 +58,19 @@ const WRITE_CALL_PATTERNS: &[&str] = &[
 
 const MARKER: &str = "allow:raw_write";
 
+/// Directory creates and removes, checked only in the modules that write the
+/// build tree. `create_dir_all` against a dataless directory fails `EDEADLK`
+/// exactly as a truncating write does, and a raw one has no repair path:
+/// `cache/tmp` made that way failed every video run on a cloud-managed vault
+/// until it was routed through `io_utils::create_output_dir_all`. The rest of
+/// the crate never writes `.moss/build/`, so it is not asked to explain its
+/// directories.
+const DIR_CALL_PATTERNS: &[&str] = &["create_dir_all(", "remove_dir_all("];
+const BUILD_ROOTS: &[&str] = &["build.rs", "build/", "moss_paths.rs", "ops/"];
+
+/// A removal routed elsewhere already explains itself for the unlink scan.
+const DIR_MARKERS: &[&str] = &[MARKER, "allow:unlink"];
+
 fn is_call_site_line(line: &str) -> bool {
     let trimmed = line.trim_start();
     if trimmed.starts_with("//") || trimmed.starts_with("*") {
@@ -63,44 +79,15 @@ fn is_call_site_line(line: &str) -> bool {
     WRITE_CALL_PATTERNS.iter().any(|p| line.contains(p))
 }
 
-/// Line numbers (0-indexed) that sit inside a `#[cfg(test)]` item.
-fn cfg_test_lines(lines: &[&str]) -> Vec<bool> {
-    let mut skipped = vec![false; lines.len()];
-    let mut idx = 0;
-    while idx < lines.len() {
-        if !lines[idx].contains("#[cfg(test)]") {
-            idx += 1;
-            continue;
-        }
-        let mut depth = 0usize;
-        let mut opened = false;
-        let mut j = idx;
-        while j < lines.len() {
-            skipped[j] = true;
-            let mut ended = false;
-            for ch in lines[j].chars() {
-                match ch {
-                    '{' => {
-                        depth += 1;
-                        opened = true;
-                    }
-                    '}' => depth = depth.saturating_sub(1),
-                    ';' if !opened => ended = true,
-                    _ => {}
-                }
-            }
-            if ended || (opened && depth == 0) {
-                break;
-            }
-            j += 1;
-        }
-        idx = j + 1;
-    }
-    skipped
+fn is_dir_call_site_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    !(trimmed.starts_with("//") || trimmed.starts_with("*")) && DIR_CALL_PATTERNS.iter().any(|p| line.contains(p))
 }
 
-/// Every unmarked raw-write call site under `SOURCE_ROOTS`, as
-/// `(path, 1-indexed line, source)`.
+
+/// Every unmarked raw-write call site under `root`, as
+/// `(path, 1-indexed line, source)`. `root`'s own path relative to the scan
+/// root decides whether directory calls are checked (see [`BUILD_ROOTS`]).
 fn scan(root: &Path, crate_root: &Path) -> Vec<(PathBuf, usize, String)> {
     let mut violations = Vec::new();
     walk_rust_files(root, &mut |path| {
@@ -111,16 +98,20 @@ fn scan(root: &Path, crate_root: &Path) -> Vec<(PathBuf, usize, String)> {
         let Ok(content) = fs::read_to_string(path) else {
             return;
         };
+        let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+        let builds_output = BUILD_ROOTS.iter().any(|r| rel == r.trim_end_matches('/') || (r.ends_with('/') && rel.starts_with(r)));
         let lines: Vec<&str> = content.lines().collect();
         let in_test = cfg_test_lines(&lines);
+        let marked_by = |idx: usize, markers: &[&str]| {
+            (idx.saturating_sub(2)..=idx).any(|i| markers.iter().any(|m| lines[i].contains(m)))
+        };
         for (idx, line) in lines.iter().enumerate() {
-            if in_test[idx] || !is_call_site_line(line) {
+            if in_test[idx] {
                 continue;
             }
-            let marked = line.contains(MARKER)
-                || (idx > 0 && lines[idx - 1].contains(MARKER))
-                || (idx > 1 && lines[idx - 2].contains(MARKER));
-            if !marked {
+            let unmarked_write = is_call_site_line(line) && !marked_by(idx, &[MARKER]);
+            let unmarked_dir = builds_output && is_dir_call_site_line(line) && !marked_by(idx, DIR_MARKERS);
+            if unmarked_write || unmarked_dir {
                 violations.push((path.to_path_buf(), idx + 1, line.trim().to_string()));
             }
         }
@@ -152,7 +143,8 @@ fn raw_writes_in_the_build_tree_carry_allow_marker() {
          requires materialization and fails EDEADLK against a cloud-evicted file (moss#964, ADR-043).\n\n\
          Recovery:\n  \
          1. If the destination is under `.moss/build/`: use `crate::build::io_utils`\n     \
-            (`write_output`, `write_output_if_changed`, `copy_output`).\n  \
+            (`write_output`, `write_output_if_changed`, `copy_output`, and for directories\n     \
+            `create_output_dir_all` / `remove_output_dir_all`).\n  \
          2. If it is NOT regenerable output — a temp file you just minted, `.moss/cache`,\n     \
             user state under `.moss/data` or in the vault — add a same-line or preceding-line\n     \
             `// allow:raw_write <reason>` saying which.\n\n\
@@ -235,27 +227,17 @@ fn scanner_catches_an_unmarked_write_and_accepts_a_marked_one() {
     )
     .unwrap();
     assert_eq!(scan(root, root).len(), 1, "a truncating OpenOptions open must be caught");
-}
+    fs::remove_file(root.join("open_options.rs")).unwrap();
 
-/// Walks a directory, or visits a single `.rs` file.
-fn walk_rust_files(dir: &Path, visit: &mut dyn FnMut(&Path)) {
-    if dir.is_file() {
-        visit(dir);
-        return;
-    }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name == "target" || name.starts_with('.') {
-                continue;
-            }
-            walk_rust_files(&path, visit);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-            visit(&path);
-        }
-    }
+    fs::create_dir_all(root.join("build")).unwrap();
+    fs::write(root.join("build/dirs.rs"), "fn f(p: &Path) {\n    std::fs::create_dir_all(p).unwrap();\n}\n").unwrap();
+    fs::write(root.join("elsewhere.rs"), "fn f(p: &Path) {\n    std::fs::create_dir_all(p).unwrap();\n}\n").unwrap();
+    let hits = scan(root, root);
+    assert_eq!(hits.len(), 1, "a raw directory create is caught in the build tree, and only there: {hits:?}");
+    fs::write(
+        root.join("build/dirs.rs"),
+        "fn f(p: &Path) {\n    // allow:unlink a scratch dir this call made\n    std::fs::remove_dir_all(p).unwrap();\n}\n",
+    )
+    .unwrap();
+    assert!(scan(root, root).is_empty(), "a removal the unlink scan already has a reason for passes");
 }

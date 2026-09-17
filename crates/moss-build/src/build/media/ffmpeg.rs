@@ -246,6 +246,7 @@ pub fn get_moss_bin_dir() -> Result<PathBuf, String> {
 
     let bin_dir = home.join(".moss").join("bin");
 
+    // allow:raw_write ~/.moss/bin, not the build tree
     std::fs::create_dir_all(&bin_dir)
         .map_err(|e| format!("Failed to create ~/.moss/bin: {}", e))?;
 
@@ -1094,7 +1095,7 @@ impl FFmpegManager {
 
         // Create output directory if needed
         if let Some(parent) = output.parent() {
-            std::fs::create_dir_all(parent)
+            crate::build::io_utils::create_output_dir_all(parent)
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
         }
 
@@ -1144,7 +1145,7 @@ impl FFmpegManager {
                 .ok_or_else(|| "Output path has no parent directory".to_string())?
                 .join(format!("temp-{}", uuid::Uuid::new_v4()));
 
-            std::fs::create_dir_all(&temp_dir)
+            crate::build::io_utils::create_output_dir_all(&temp_dir)
                 .map_err(|e| format!("Failed to create temp dir: {}", e))?;
 
             // Run two-pass encoding
@@ -1162,7 +1163,8 @@ impl FFmpegManager {
             );
 
             // Clean up temp directory
-            let _ = std::fs::remove_dir_all(&temp_dir);
+            // allow:unlink two-pass scratch this encode created under cache/tmp
+            let _ = crate::build::io_utils::remove_output_dir_all(&temp_dir);
 
             encode_result?;
 
@@ -1196,7 +1198,7 @@ impl FFmpegManager {
                     .ok_or_else(|| "Output path has no parent directory".to_string())?
                     .join(format!("temp-retry-{}", uuid::Uuid::new_v4()));
 
-                std::fs::create_dir_all(&temp_dir_retry)
+                crate::build::io_utils::create_output_dir_all(&temp_dir_retry)
                     .map_err(|e| format!("Failed to create retry temp dir: {}", e))?;
 
                 let retry_result = self.run_two_pass_encode(
@@ -1212,7 +1214,8 @@ impl FFmpegManager {
                     cancel_flag,
                 );
 
-                let _ = std::fs::remove_dir_all(&temp_dir_retry);
+                // allow:unlink two-pass scratch this encode created under cache/tmp
+                let _ = crate::build::io_utils::remove_output_dir_all(&temp_dir_retry);
                 retry_result?;
 
                 if !self.validate_encoded_video(output)? {
@@ -1613,7 +1616,7 @@ impl FFmpegManager {
 
         // Create output directory if needed
         if let Some(parent) = output.parent() {
-            std::fs::create_dir_all(parent).ok();
+            crate::build::io_utils::create_output_dir_all(parent).ok();
         }
 
         let video_str = video.to_str().ok_or("Invalid video path")?;

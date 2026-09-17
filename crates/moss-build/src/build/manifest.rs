@@ -171,6 +171,11 @@ pub struct PendingManifest {
     /// 2. `seal` drops the previous build's page entries that are NOT in here,
     ///    which is exactly the set of deleted pages.
     page_sources: HashSet<String>,
+    /// Outputs a producer could not verify (an I/O error that was not a
+    /// positive `NotFound`), keyed by path with the error that stopped it. A
+    /// generation carrying any of these is withheld — see
+    /// `ship::ShipVerdict`.
+    unverified: std::collections::BTreeMap<String, String>,
 }
 
 impl PendingManifest {
@@ -225,7 +230,13 @@ impl PendingManifest {
             carried_source_to_output,
             carried_page_sources,
             page_sources: HashSet::new(),
+            unverified: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Record that `rel_path`'s output could not be verified this build.
+    pub(crate) fn mark_unverified(&mut self, rel_path: String, detail: String) {
+        self.unverified.insert(rel_path, detail);
     }
 
     /// Keep a page's already-published HTML alive when this build could not read
@@ -610,6 +621,7 @@ impl PendingManifest {
             inner,
             blocking_keys: self.blocking_keys,
             generation_id,
+            unverified: self.unverified,
         }
     }
 }
@@ -631,9 +643,24 @@ pub struct SealedManifest {
     /// (xxh3_64 over BTreeMap-sorted `"{path}\x00{entry_value}\n"` pairs).
     /// Same `files()` content → same id across sessions and build modes.
     generation_id: String,
+    /// Every output a producer or the presence pass could not verify, with the
+    /// error — never persisted; it exists to withhold this generation.
+    unverified: std::collections::BTreeMap<String, String>,
 }
 
 impl SealedManifest {
+    /// Outputs this generation could not verify, path → error. Non-empty means
+    /// the generation must not be promoted (`ship::ShipVerdict`).
+    pub fn unverified(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.unverified
+    }
+
+    /// Record an output the presence pass could not verify. Its entry is kept:
+    /// an unreadable output is not a missing one.
+    pub(crate) fn mark_unverified(&mut self, rel_path: String, detail: String) {
+        self.unverified.insert(rel_path, detail);
+    }
+
     /// All output-path → mode-tagged-hash entries in the deploy manifest.
     pub fn files(&self) -> &HashMap<String, String> {
         &self.inner.files

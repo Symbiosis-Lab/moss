@@ -599,6 +599,7 @@ fn retire_legacy_snapshot(paths: &MossPaths) {
 
 /// The delete that is safe because something else holds the same information.
 fn remove_superseded(legacy: &Path) {
+    // allow:unlink a retired record under .moss/data, not staging
     match std::fs::remove_file(legacy) {
         Ok(()) => log::info!(
             "removed the superseded record at {} — the publish record has the live one",

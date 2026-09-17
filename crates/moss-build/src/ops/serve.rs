@@ -97,8 +97,8 @@ use std::sync::Arc;
 /// # Arguments
 /// * `moss_path` — the project's `.moss` directory.
 /// * `cli_site_dir` — the directory cell this server serves from. **The caller
-///   must pass the same `Arc` the build switches**, or the server never sees
-///   `switch_to(staging)` and serves the pre-build seed for the life of the
+///   must pass the same `Arc` the build moves**, or the server never sees a
+///   render move it to staging and serves the pre-build seed for the life of the
 ///   process — a 404 on every page for `moss build --serve`. `None` means
 ///   "nobody is switching this", which is only true when no build shares the
 ///   process; the fallback cell is seeded to the initial serve dir
@@ -149,6 +149,54 @@ pub async fn start_server_headless(
 pub fn serve_dir_for_site_path(moss_path: &str) -> std::path::PathBuf {
     crate::moss_paths::MossPaths::from_moss_dir(std::path::PathBuf::from(moss_path))
         .initial_serve_dir()
+}
+
+/// One WARN per 10 s per served root for preview 404s, with the count it held
+/// back — so a pointer move that 404s a whole page load names itself once
+/// instead of once per asset.
+const PREVIEW_404_LOG_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
+static PREVIEW_404_LOG: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, (Option<std::time::Instant>, usize)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Which tree a 404 came from: `staging`, `current→gen <id>`, or `other`.
+fn served_tree_label(current_dir: &std::path::Path) -> String {
+    match current_dir.file_name().and_then(|n| n.to_str()) {
+        Some("staging") => "staging".to_string(),
+        Some("current") => {
+            let id = current_dir
+                .parent()
+                .map(|build| build.join("current.generation"))
+                .and_then(|marker| std::fs::read_to_string(marker).ok())
+                .map(|id| id.trim().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            format!("current→gen {id}")
+        }
+        _ => "other".to_string(),
+    }
+}
+
+pub(crate) fn log_preview_404(current_dir: &std::path::Path, path: &str) {
+    let root = match current_dir.file_name().and_then(|n| n.to_str()) {
+        Some("staging" | "current") => current_dir.parent().unwrap_or(current_dir),
+        _ => current_dir,
+    };
+    let Ok(mut windows) = PREVIEW_404_LOG.lock() else { return };
+    let now = std::time::Instant::now();
+    let entry = windows.entry(root.to_path_buf()).or_insert((None, 0));
+    if entry.0.is_some_and(|last| now.duration_since(last) < PREVIEW_404_LOG_WINDOW) {
+        entry.1 += 1;
+        return;
+    }
+    let suppressed = std::mem::take(&mut entry.1);
+    entry.0 = Some(now);
+    log::warn!(
+        "preview 404 {} from {} ({} more suppressed)",
+        path,
+        served_tree_label(current_dir),
+        suppressed
+    );
 }
 
 #[cfg(test)]

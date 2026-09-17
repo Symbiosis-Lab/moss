@@ -311,6 +311,7 @@ pub fn generate_blocking_content(
 
     // Create .moss directory if it doesn't exist
     if !moss_dir.exists() {
+        // allow:raw_write `.moss` itself; the regenerable tree starts below it
         fs::create_dir_all(&moss_dir)
             .map_err(|e| format!("Failed to create .moss directory: {}", e))?;
     }
@@ -1715,7 +1716,7 @@ pub fn generate_blocking_content(
             .map(|doc| {
                 let output_file_path = output_dir.join(&doc.url_path);
                 if let Some(parent) = output_file_path.parent() {
-                    fs::create_dir_all(parent)
+                    crate::build::io_utils::create_output_dir_all(parent)
                         .map_err(|e| format!("Failed to create directory: {}", e))?;
                 }
                 let mut og_outputs =
@@ -1741,6 +1742,7 @@ pub fn generate_blocking_content(
                     show_rss_in_footer,
                     emit_source_lines,
                     &favicon_filename,
+                    favicon_has_raster_pngs,
                     Some(output_dir),
                     &mut og_outputs,
                     source_path_buf,
@@ -2527,7 +2529,7 @@ pub fn generate_blocking_content(
 
         // Generate QR codes for article pages
         let qr_dir = output_dir.join("qr");
-        fs::create_dir_all(&qr_dir)
+        crate::build::io_utils::create_output_dir_all(&qr_dir)
             .map_err(|e| format!("Failed to create qr directory: {}", e))?;
 
         // Which pages get a code, and where it lives, is decided in ONE place —
@@ -2635,6 +2637,7 @@ pub fn generate_blocking_content(
                     show_rss_in_footer,
                     emit_source_lines,
                     &favicon_filename,
+                    favicon_has_raster_pngs,
                     Some(output_dir),
                     &mut homepage_og_outputs,
                     source_path_buf,
@@ -2666,6 +2669,7 @@ pub fn generate_blocking_content(
                     show_rss_in_footer,
                     emit_source_lines,
                     &favicon_filename,
+                    favicon_has_raster_pngs,
                     Some(output_dir),
                     &mut homepage_og_outputs,
                     source_path_buf,
@@ -3014,7 +3018,7 @@ pub fn generate_blocking_content(
 
             // Create directory and write page
             let page_dir = output_dir.join(page_slug);
-            fs::create_dir_all(&page_dir)
+            crate::build::io_utils::create_output_dir_all(&page_dir)
                 .map_err(|e| format!("Failed to create {} directory: {}", page_slug, e))?;
 
             // Site 14d (Pattern A): emit {page_slug}/index.html (media pages loop).
@@ -3482,7 +3486,7 @@ pub(super) fn resolve_favicon(
 ) -> Result<ResolvedFavicon, String> {
     let assets_dir = source_path.join("assets");
     let favicon_dest_dir = output_dir.join("assets");
-    fs::create_dir_all(&favicon_dest_dir)
+    crate::build::io_utils::create_output_dir_all(&favicon_dest_dir)
         .map_err(|e| format!("Failed to create assets directory: {}", e))?;
 
     let candidates = ["favicon.svg", "favicon.png", "favicon.ico"];
@@ -3571,21 +3575,10 @@ pub(super) fn resolve_favicon(
         false
     };
 
-    // html.rs's `PathResolver` infers raster PNGs exist by probing this dir
-    // for `favicon-180.png`, not by reading `has_raster_pngs`. A stale trio
-    // left by an earlier default-SVG build made that probe lie once a vault
-    // grew its own favicon.png, shipping <link> tags to files this build
-    // never wrote (zhu-da, 2026-09-14).
-    if !has_raster_pngs {
-        for stale in ["favicon-16.png", "favicon-32.png", "favicon-180.png"] {
-            let path = favicon_dest_dir.join(stale);
-            if path.exists() {
-                if let Err(e) = fs::remove_file(&path) {
-                    log::warn!("Failed to remove stale favicon raster {}: {}", stale, e);
-                }
-            }
-        }
-    }
+    // A raster trio left by an earlier default-SVG build is not removed here:
+    // the pages read `has_raster_pngs`, never the directory, so a leftover
+    // file ships no `<link>` tag (zhu-da, 2026-09-14), and the permitted
+    // staging sweep removes it once no manifest names it.
 
     Ok(ResolvedFavicon {
         filename,
@@ -3667,41 +3660,4 @@ mod favicon_tests {
         assert!(!result.used_default);
         assert_eq!(result.filename, "favicon.png");
     }
-
-    /// A prior build with no user favicon rasterized `favicon-{16,32,180}.png`
-    /// from the moss default SVG. The vault then grows its own
-    /// `assets/favicon.png`, which is copied through as-is (no rasterization —
-    /// see `has_raster_pngs` above). The old raster trio must not survive:
-    /// html.rs's `PathResolver` infers "raster PNGs exist" by probing this
-    /// same output directory for `favicon-180.png` rather than reading
-    /// `has_raster_pngs` directly, so a leftover file there ships a
-    /// `<link rel="apple-touch-icon">` and sized `<link rel="icon">` tags
-    /// pointing at PNGs this build never wrote (zhu-da, 2026-09-14).
-    #[test]
-    fn switching_to_user_png_removes_stale_svg_raster_set() {
-        let source = TempDir::new().expect("source tempdir");
-        let output = TempDir::new().expect("output tempdir");
-        let assets = source.path().join("assets");
-        fs::create_dir_all(&assets).unwrap();
-        let output_assets = output.path().join("assets");
-        fs::create_dir_all(&output_assets).unwrap();
-        for stale in ["favicon-16.png", "favicon-32.png", "favicon-180.png"] {
-            fs::write(output_assets.join(stale), b"stale raster from a prior default-SVG build").unwrap();
-        }
-
-        let user_png = b"\x89PNG\r\n\x1a\nfake-png-bytes";
-        fs::write(assets.join("favicon.png"), user_png).unwrap();
-
-        let result = resolve_favicon(source.path(), output.path()).expect("resolve");
-
-        assert_eq!(result.filename, "favicon.png");
-        assert!(!result.has_raster_pngs);
-        for stale in ["favicon-16.png", "favicon-32.png", "favicon-180.png"] {
-            assert!(
-                !output_assets.join(stale).exists(),
-                "{stale} from the previous SVG-favicon build must be removed, not just orphaned"
-            );
-        }
-    }
 }
-

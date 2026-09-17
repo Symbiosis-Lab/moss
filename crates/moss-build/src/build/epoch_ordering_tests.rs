@@ -6,14 +6,14 @@
 //! `None` for that call's post-hoc fallback — because once a worker exists
 //! from folder-open onward (part 1 of the same fix), a worker-admitted
 //! rebuild for the SAME folder can mint an admission-time epoch before the
-//! open build's own post-hoc mint would have run. `try_promote`'s epoch
-//! guard (`ship.rs`) is unchanged and already thoroughly tested, but with
+//! open build's own post-hoc mint would have run. `lifecycle::promote`'s epoch
+//! guard is unchanged and already thoroughly tested, but with
 //! HAND-PICKED epoch values (`try_promote_refuses_a_repeat_of_the_epoch_
 //! already_on_current` and neighbors) — what those cannot catch is whether
 //! the open build's REAL epoch ends up lower than a concurrently-admitted
 //! worker build's, regardless of which one's pipeline work finishes first.
 //! This test drives that through the real `run_pipeline` ->
-//! `materialize_and_promote` path, not a hand-picked `try_promote` call,
+//! `materialize_and_promote` path, not a hand-picked `lifecycle::promote` call,
 //! mirroring the two callers' actual mint-order, and reads the answer off
 //! `current` — the generation the preview serves and deploy publishes.
 //!
@@ -89,6 +89,11 @@ fn any_output_path_contains(dir: &std::path::Path, needle: &str) -> bool {
 /// deploy publishes, and that is what this asks.
 async fn worker_page_survives_a_later_open_seal(open_epoch_is_lower: bool) -> bool {
     let (_tmp, folder) = fixture();
+    // In production the open build's lease holds this folder's lifecycle
+    // record (and its promotion epoch) from before the worker build promotes;
+    // run back to back here, the test holds it instead, or a parallel test's
+    // folder lookup could evict it between the two builds.
+    let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
 
     // Mint order matches production: whichever call happens first gets the
     // lower epoch from the SAME monotonic counter `next_promotion_epoch` —
@@ -150,7 +155,7 @@ async fn open_builds_lower_epoch_is_refused_and_current_keeps_the_workers_page()
 /// admission's own early mint — its later, stale seal wrongly promotes, and
 /// `current` becomes a generation rendered from a scan that never saw the
 /// worker's page. A canary: if this ever starts passing the OTHER way
-/// (survives), something in `try_promote`'s epoch comparison changed, not
+/// (survives), something in `lifecycle::promote`'s epoch comparison changed, not
 /// just this ordering.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_higher_open_epoch_would_wrongly_promote_over_the_workers_generation() {

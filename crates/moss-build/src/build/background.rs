@@ -250,6 +250,10 @@ pub struct BackgroundHandle {
     /// seals in `await_completion`; its `Drop` guard cancels a leaked `Running`
     /// parent on any non-await path.
     terminal_barrier: Option<BuildTerminalBarrier>,
+    /// The build's `lifecycle::CacheWriteLease`: while it is open, no other
+    /// build may unlink from staging. Dropped with the handle, which
+    /// `await_completion` consumes once every worker has joined.
+    _cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
 }
 
 impl BackgroundHandle {
@@ -268,7 +272,7 @@ impl BackgroundHandle {
         F: FnOnce(mpsc::Sender<EmitMessage>, &mut JoinSet<Result<(), BuildError>>),
     {
         let (coordinator, tx) = ManifestCoordinator::new(carry_forward);
-        Self::spawn_inner(coordinator, tx, None, f)
+        Self::spawn_inner(coordinator, tx, None, None, f)
     }
 
     /// Like `spawn` but seeds the coordinator from an already-populated
@@ -286,7 +290,7 @@ impl BackgroundHandle {
         F: FnOnce(mpsc::Sender<EmitMessage>, &mut JoinSet<Result<(), BuildError>>),
     {
         let (coordinator, tx) = ManifestCoordinator::from_pending(pending);
-        Self::spawn_inner(coordinator, tx, None, f)
+        Self::spawn_inner(coordinator, tx, None, None, f)
     }
 
     /// Like `spawn_with_pending` but also attaches the build's terminal barrier
@@ -298,22 +302,24 @@ impl BackgroundHandle {
     /// **Every build path that can finish should use this variant**, including
     /// the zero-worker one: a text-only build still owes its listeners a
     /// "finished" receipt.
-    pub fn spawn_with_pending_and_terminal<F>(
+    pub(crate) fn spawn_with_pending_and_terminal<F>(
         pending: PendingManifest,
         terminal_barrier: Option<BuildTerminalBarrier>,
+        cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
         f: F,
     ) -> Self
     where
         F: FnOnce(mpsc::Sender<EmitMessage>, &mut JoinSet<Result<(), BuildError>>),
     {
         let (coordinator, tx) = ManifestCoordinator::from_pending(pending);
-        Self::spawn_inner(coordinator, tx, terminal_barrier, f)
+        Self::spawn_inner(coordinator, tx, terminal_barrier, cache_lease, f)
     }
 
     fn spawn_inner<F>(
         coordinator: ManifestCoordinator,
         tx: mpsc::Sender<EmitMessage>,
         terminal_barrier: Option<BuildTerminalBarrier>,
+        cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
         f: F,
     ) -> Self
     where
@@ -332,6 +338,7 @@ impl BackgroundHandle {
             coordinator_join,
             workers,
             terminal_barrier,
+            _cache_lease: cache_lease,
         }
     }
 
@@ -580,6 +587,7 @@ mod tests {
         let handle = BackgroundHandle::spawn_with_pending_and_terminal(
             PendingManifest::new(SiteHashes::default()),
             Some(barrier),
+            None,
             |tx, workers| {
                 let svc_worker = svc_arc.clone();
                 workers.spawn(async move {
@@ -645,6 +653,7 @@ mod tests {
         let handle = BackgroundHandle::spawn_with_pending_and_terminal(
             PendingManifest::new(SiteHashes::default()),
             Some(barrier),
+            None,
             |_tx, _workers| {
                 // Zero workers — the media-less build shape.
             },

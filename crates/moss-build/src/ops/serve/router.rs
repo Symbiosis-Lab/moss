@@ -633,6 +633,7 @@ pub async fn start_server(
                     match service.oneshot(request).await {
                         Ok(response) => {
                             if response.status() == http::StatusCode::NOT_FOUND {
+                                super::log_preview_404(&current_dir, &path);
                                 // Return a proper HTML 404 page so the iframe-bridge
                                 // middleware can inject its script and keep navigation alive.
                                 // Without this, the iframe gets a bare 404 with no body,

@@ -473,15 +473,11 @@ async fn the_seal_tail_leaves_the_served_staging_tree_alone() {
         "it must still be dropped from the manifest, or ship_phase copies it into the generation"
     );
 
-    // Finding 1 (thermo review of this same fix): `remove_stale_html` shares
-    // the "switch, then unlink" shape the tail's passes above had — the
-    // pipeline used to call it AFTER pointing the server at `stage_dir`, so
-    // a page whose source was deleted could sit reachable for a moment past
-    // the switch. The fix (`pipeline::build_inner`) moved the call to before
-    // the switch. Driven here with the same two steps, in that order,
-    // against a second real server whose pointer this block flips with the
-    // same `Arc<RwLock<PathBuf>>` cell `SiteDirectoryState::switch_to`
-    // mutates in production — not one function call in isolation.
+    // `remove_stale_html` unlinks from staging, so it needs a permit, and the
+    // permit comes from a lifecycle that has caught up: the render on screen
+    // is on `current`, so the park moves the server there first. Driven
+    // against a second real server whose cell the lifecycle moves.
+    use crate::build::lifecycle;
     use crate::build::media::pipeline::remove_stale_html;
 
     std::fs::create_dir_all(stage.join("old-page")).unwrap();
@@ -489,9 +485,12 @@ async fn the_seal_tail_leaves_the_served_staging_tree_alone() {
     let blocking_keys: std::collections::HashSet<String> =
         std::iter::once("index.html".to_string()).collect();
 
-    let prev_gen = vault.path().join(".moss/build/current");
-    std::fs::create_dir_all(&prev_gen).unwrap();
-    let site_dir_cell = Arc::new(std::sync::RwLock::new(prev_gen));
+    let _record = lifecycle::lock_for(&mp);
+    std::fs::create_dir_all(mp.generation_dir("g1")).unwrap();
+    let site_dir_cell = Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
+    lifecycle::adopt_server(&mp, &site_dir_cell);
+    let (shown, _) = lifecycle::show_render(&mp, true);
+    assert!(lifecycle::promote(&mp, crate::build::ship::next_promotion_epoch(), Some(shown), "g1").unwrap());
     let (port2, shutdown_tx2) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_cell.clone(), 59750)
     })
@@ -506,15 +505,12 @@ async fn the_seal_tail_leaves_the_served_staging_tree_alone() {
         }
     };
 
-    // The server starts parked on the stand-in for `current_ptr` — where
-    // `build_inner`'s own switch at the top of the function leaves it before
-    // this build's cleanup runs. `stage` is not reachable through it yet, so
-    // unlinking `old-page/index.html` here cannot 404 a live reader.
-    remove_stale_html(&stage, &blocking_keys, &std::collections::HashSet::new());
+    let permit = lifecycle::park_for_rebuild(&mp, false, Default::default()).expect("a caught-up lifecycle permits the sweep");
+    assert_eq!(*site_dir_cell.read().unwrap(), mp.current_ptr(), "and parks the server off staging first");
+    remove_stale_html(&stage, &blocking_keys, &std::collections::HashSet::new(), &permit);
 
-    // Only now does the server move onto `stage` — mirroring the Step 5
-    // `switch_to` in `build_inner`, which runs after the cleanup above.
-    *site_dir_cell.write().unwrap() = stage.clone();
+    // Only the next render moves the server back onto `stage`.
+    lifecycle::show_render(&mp, true);
 
     assert_eq!(
         get2("old-page/index.html"),
@@ -528,6 +524,74 @@ async fn the_seal_tail_leaves_the_served_staging_tree_alone() {
     );
 
     let _ = shutdown_tx2.send(());
+    let _ = shutdown_tx.send(());
+}
+
+/// A rebuild that starts before the last render's generation is promoted
+/// must not move the preview to `current`: `current` is older than what the
+/// author is looking at, so every page that render added would 404 for the
+/// length of the rebuild. It stays on staging and that build sweeps nothing.
+/// Once the render's generation is promoted, the next rebuild parks on it and
+/// may sweep, because `current` now holds everything staging showed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rebuild_never_parks_the_preview_on_a_generation_older_than_the_render_on_screen() {
+    use crate::build::lifecycle;
+    use crate::build::manifest::{HashBucket, PendingManifest};
+    use crate::build::served_path::ServedPath;
+    use crate::build::ship::{materialize_and_promote, next_promotion_epoch, Promotion, ShipVerdict};
+    use crate::moss_paths::MossPaths;
+    use crate::types::content::SiteHashes;
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    let vault = tempfile::TempDir::new_in(&base).expect("temp vault");
+    let mp = MossPaths::new(vault.path());
+    let _record = lifecycle::lock_for(&mp);
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(&stage).unwrap();
+    std::fs::create_dir_all(mp.generation_dir("g1")).unwrap();
+    std::fs::write(mp.generation_dir("g1").join("index.html"), "<html>g1</html>").unwrap();
+
+    // Render 1 is shown and promoted as g1, which has no `fresh/`.
+    let cell = Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
+    lifecycle::adopt_server(&mp, &cell);
+    let (r1, _) = lifecycle::show_render(&mp, true);
+    assert!(lifecycle::promote(&mp, next_promotion_epoch(), Some(r1), "g1").unwrap());
+
+    // Render 2 adds `fresh/` and is on screen; its seal tail has not run.
+    let pages = [("index.html", "<html>home</html>"), ("fresh/index.html", "<html>fresh</html>")];
+    for (rel, html) in pages {
+        std::fs::create_dir_all(stage.join(rel).parent().unwrap()).unwrap();
+        std::fs::write(stage.join(rel), html).unwrap();
+    }
+    let (r2, _) = lifecycle::show_render(&mp, true);
+
+    let (port, shutdown_tx) = start_server(ServeConfig::new(cell.clone(), 59800)).await.expect("server");
+    let get = |rel: &str| {
+        let url = format!("http://localhost:{}/{}", port, rel);
+        match ureq::get(&url).timeout(std::time::Duration::from_secs(5)).call() {
+            Ok(r) => r.status(),
+            Err(ureq::Error::Status(code, _)) => code,
+            Err(e) => panic!("transport error fetching {rel}: {e}"),
+        }
+    };
+
+    assert!(lifecycle::park_for_rebuild(&mp, false, Default::default()).is_none(), "a rebuild ahead of the promotion may not sweep");
+    assert_eq!(get("fresh/"), 200, "the page render 2 added must stay served through the rebuild");
+
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    for (rel, html) in pages {
+        pending.register(&ServedPath::from_source(rel).unwrap(), html.as_bytes(), HashBucket::Files);
+    }
+    let sealed = pending.seal();
+    let promotion =
+        materialize_and_promote(&sealed, &mp, &stage, None, next_promotion_epoch(), Some(r2), ShipVerdict::Ship);
+    assert_eq!(promotion, Ok(Promotion::Promoted));
+
+    assert!(lifecycle::park_for_rebuild(&mp, false, Default::default()).is_some(), "caught up, the next rebuild may sweep");
+    assert_eq!(*cell.read().unwrap(), mp.current_ptr(), "and it parks on current");
+    assert_eq!(get("fresh/"), 200, "which now holds render 2's pages");
+
     let _ = shutdown_tx.send(());
 }
 

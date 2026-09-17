@@ -252,72 +252,6 @@ async fn copy_deferred_assets_registers_symlink_in_manifest() {
     assert_eq!(mode, crate::types::content::MODE_SYMLINK);
 }
 
-/// Integration test: verify that a symlink removed between builds is cleaned
-/// from both staging and site, while the canonical target files survive.
-///
-/// Build A: symlink present → assert preserved in both dirs.
-/// Build B: symlink removed from source → assert gone, canonical still exists.
-#[cfg(unix)]
-#[test]
-fn copy_deferred_assets_cleans_up_removed_symlink() {
-    use std::fs;
-    use tempfile::TempDir;
-
-    let tmp = TempDir::new().unwrap();
-    let source = tmp.path().join("source");
-    let moss = tmp.path().join(".moss");
-    let staging = moss.join("build/site-stage");
-    fs::create_dir_all(&source).unwrap();
-    fs::create_dir_all(&staging).unwrap();
-    fs::create_dir_all(moss.join("cache/objects")).unwrap();
-
-    fs::create_dir_all(source.join("resources/app")).unwrap();
-    fs::write(source.join("resources/app/index.html"), b"<h1>app</h1>").unwrap();
-
-    // ── Build A: symlink present ──────────────────────────────────────────
-    std::os::unix::fs::symlink("resources/app", source.join("myapp")).unwrap();
-    let ctx_a = crate::types::services::BackgroundContext {
-        source_path: source.clone().to_string_lossy().to_string(),
-        staging_dir: staging.clone(),
-        moss_dir: moss.clone(),
-        ..crate::types::services::BackgroundContext::for_test()
-    };
-    let (tx_a, _rx_a) = crate::build::coordinator::test_utils::build_test_coordinator();
-    let _ = copy_deferred_assets(&ctx_a, crate::build::ports::reporter::discarding(), tx_a, None);
-
-    assert!(
-        fs::symlink_metadata(staging.join("myapp"))
-            .unwrap()
-            .file_type()
-            .is_symlink(),
-        "build A: staging/myapp should be a symlink"
-    );
-
-    // ── Build B: symlink removed from source ──────────────────────────────
-    fs::remove_file(source.join("myapp")).unwrap();
-    let ctx_b = crate::types::services::BackgroundContext {
-        source_path: source.clone().to_string_lossy().to_string(),
-        staging_dir: staging.clone(),
-        moss_dir: moss.clone(),
-        ..crate::types::services::BackgroundContext::for_test()
-    };
-    let (tx_b, _rx_b) = crate::build::coordinator::test_utils::build_test_coordinator();
-    let _ = copy_deferred_assets(&ctx_b, crate::build::ports::reporter::discarding(), tx_b, None);
-
-    // Stale symlink must be gone.
-    assert!(
-        !staging.join("myapp").exists(),
-        "build B: staging/myapp stale symlink should be removed"
-    );
-
-    // The file the alias pointed at MUST survive — stale cleanup must NOT
-    // descend into the alias and delete real content.
-    assert!(
-        staging.join("resources/app/index.html").exists(),
-        "resources/app/index.html MUST survive stale symlink cleanup"
-    );
-}
-
 #[cfg(target_os = "macos")]
 #[test]
 fn copy_deferred_assets_resolves_finder_alias() {
@@ -649,7 +583,7 @@ fn remove_stale_files_always_unlinks_placeholder_svg_orphans() {
         .files
         .insert("assets/photo.jpg".to_string(), "100644:123".to_string());
 
-    remove_stale_files(dir, &site_hashes, "test-site");
+    remove_stale_files(dir, &site_hashes, "test-site", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         !orphan_a.exists(),
@@ -767,11 +701,11 @@ fn remove_stale_files_idempotent_with_no_placeholders() {
         .files
         .insert("assets/photo.jpg".to_string(), "100644:123".to_string());
 
-    remove_stale_files(dir, &site_hashes, "test-site");
+    remove_stale_files(dir, &site_hashes, "test-site", &crate::build::lifecycle::permit_for_test());
     assert!(legit.exists(), "legit must survive first cleanup");
 
     // Run it again; legit must still survive.
-    remove_stale_files(dir, &site_hashes, "test-site");
+    remove_stale_files(dir, &site_hashes, "test-site", &crate::build::lifecycle::permit_for_test());
     assert!(
         legit.exists(),
         "legit must survive second cleanup (idempotent)"

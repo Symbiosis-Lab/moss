@@ -2589,7 +2589,7 @@ async fn test_webp_survives_stale_cleanup_after_dispatch() {
         // .unwrap(): keys from sealed manifest are already-normalized, known valid.
         hashes.insert_image_output(&crate::build::served_path::ServedPath::from_source(k).unwrap());
     }
-    remove_stale_files(&staging, &hashes, "test");
+    remove_stale_files(&staging, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         webp_output.exists(),
@@ -2715,8 +2715,8 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
 
     let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
     let view = sealed.site_hashes_view();
-    remove_stale_files(&staging, view, "test");
-    remove_stale_dirs(&staging, &compute_expected_dirs(view));
+    remove_stale_files(&staging, view, "test", &crate::build::lifecycle::permit_for_test());
+    remove_stale_dirs(&staging, &compute_expected_dirs(view), &crate::build::lifecycle::permit_for_test());
 
     for (i, webp_path) in untouched_webps.iter().enumerate() {
         assert!(
@@ -3878,7 +3878,7 @@ fn sized_raster_oid_png_stores_transparent_png() {
 
 /// Encode `photo.jpg` through the real pipeline, then DELETE the staged
 /// `.webp` to simulate a staging swap / stale-cleanup orphaning an in-flight
-/// encode's output. `rematerialize_webp_from_cas` must re-link the surviving
+/// encode's output. `lifecycle::cas_heal::rematerialize` must re-link the surviving
 /// CAS blob back into staging (the bytes are recoverable; only the staging
 /// LINK was lost), self-healing the coherence violation.
 #[test]
@@ -3929,7 +3929,7 @@ fn rematerialize_relinks_orphaned_staged_webp() {
     // recovers the same oid, find_cached_output hits, link_to restores it.
     let params = cfg.to_params();
     let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    rematerialize_webp_from_cas(
+    rematerialize(
         &h.objects,
         &h.transforms,
         &params,
@@ -3938,6 +3938,7 @@ fn rematerialize_relinks_orphaned_staged_webp() {
         "photo.jpg",
         &staged,
         "image/webp",
+        HashPolicy::HashOnMiss,
     );
 
     assert!(
@@ -4006,7 +4007,7 @@ fn rematerialize_recovers_rung_via_rung_kind() {
 
     let params = cfg.to_params();
     let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    rematerialize_webp_from_cas(
+    rematerialize(
         &h.objects,
         &h.transforms,
         &params,
@@ -4015,6 +4016,7 @@ fn rematerialize_recovers_rung_via_rung_kind() {
         "photo.jpg",
         &staged_rung,
         "image/webp-w800",
+        HashPolicy::HashOnMiss,
     );
 
     assert!(
@@ -4041,7 +4043,7 @@ fn rematerialize_noop_without_cas_blob() {
 
     let params = ImageCompressionConfig::default().to_params();
     let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    rematerialize_webp_from_cas(
+    rematerialize(
         &h.objects,
         &h.transforms,
         &params,
@@ -4050,6 +4052,7 @@ fn rematerialize_noop_without_cas_blob() {
         "photo.jpg",
         &staged,
         "image/webp",
+        HashPolicy::HashOnMiss,
     );
 
     assert!(
@@ -4070,7 +4073,7 @@ fn rematerialize_leaves_present_file_untouched() {
 
     let params = ImageCompressionConfig::default().to_params();
     let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    rematerialize_webp_from_cas(
+    rematerialize(
         &h.objects,
         &h.transforms,
         &params,
@@ -4079,6 +4082,7 @@ fn rematerialize_leaves_present_file_untouched() {
         "photo.jpg",
         &staged,
         "image/webp",
+        HashPolicy::HashOnMiss,
     );
 
     assert_eq!(
@@ -4140,7 +4144,7 @@ fn self_heal_then_emit_registers_relinked_webp() {
     // Self-heal, then emit ⇒ REGISTERS the variant with a real content hash.
     let params = cfg.to_params();
     let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    rematerialize_webp_from_cas(
+    rematerialize(
         &h.objects,
         &h.transforms,
         &params,
@@ -4149,6 +4153,7 @@ fn self_heal_then_emit_registers_relinked_webp() {
         "photo.jpg",
         &staged,
         "image/webp",
+        HashPolicy::HashOnMiss,
     );
     assert!(staged.exists(), "self-heal must restore the staged webp");
 
@@ -4641,4 +4646,46 @@ fn a_readable_non_image_is_still_cached() {
         h.transforms.get(oid).is_some(),
         "a verdict read from real bytes is still worth keeping"
     );
+}
+
+/// An unreadable staged variant is neither present nor missing. Settling it
+/// `Failed` would have `degrade` strip its `<source>` from a page whose bytes
+/// may be fine; registration reports it `Unverified` instead, and the
+/// generation that carries the mark is withheld.
+#[cfg(unix)]
+#[test]
+fn registration_over_an_unreadable_variant_reports_it_and_never_fails_it() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let h = harness();
+    let locked_dir = h.staging.join("locked");
+    fs::create_dir_all(&locked_dir).unwrap();
+    fs::write(locked_dir.join("photo.webp"), b"webp bytes").unwrap();
+    fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&locked_dir).is_ok() {
+        fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        eprintln!("skipped: this process can read a 0o000 directory (running as root?)");
+        return;
+    }
+
+    let registry = AssetRegistry::new();
+    registry.set_pending("locked/photo.webp".to_string(), None, None);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
+    emit_image_outputs_via_channel(
+        &Some(tx),
+        &["locked/photo.webp".to_string()],
+        &h.staging,
+        &std::collections::HashSet::new(),
+        Some(&registry),
+    );
+    fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(
+        !matches!(registry.get("locked/photo.webp"), Some(AssetState::Failed(_))),
+        "an unreadable variant must not settle Failed — degrade would strip a healthy <source>"
+    );
+    match rx.try_recv() {
+        Ok(EmitMessage::Unverified { rel_path, .. }) => assert_eq!(rel_path, "locked/photo.webp"),
+        other => panic!("expected an Unverified report, got {other:?}"),
+    }
 }

@@ -155,6 +155,7 @@ fn build_test_full(
             cancelled: _cancelled,
             home_ready: _home_ready,
             publishable: _publishable,
+            render_seq: _render_seq,
         } = run(
             &root,
             site_dir_state,
@@ -1497,6 +1498,384 @@ async fn superseded_mid_encode_abandons_instead_of_shipping_a_fallback() {
     );
 }
 
+/// The storm, end to end: a vault of eleven videos where ten are already in the
+/// object store and one (listed first, as aimeili was) needs a real encode that
+/// takes longer than the rebuilds do. Eight rebuild rounds run while that encode
+/// is blocked inside the encoder, each round a staging sweep, a dispatch, a
+/// seal of what the dispatch registered and the seal tail's media-settle check;
+/// rounds 3 and 6 persist nothing, standing for superseded seal tails.
+///
+/// What ended the loop, each edge on its own: the ten cached videos are relinked
+/// by dispatch (so they are never "missing" again), the one encode is joined by
+/// every later round (so it is entered once), and only its delivery asks for a
+/// rebuild (so the rounds in between ask for nothing). The only other rebuild is
+/// the settle for the ten posters the first round relinked, and the one for the
+/// encode's own poster once it lands.
+///
+/// Every permitted sweep meets the running encode's files in staging: its
+/// poster, linked before the mp4 pass, and temps mid-rename beside its outputs.
+/// Deleting any of them fails the item and requeues it — the loop by another
+/// door — so each round drops fresh temps and checks they survive, beside an
+/// unrelated temp that must not. Once the encode lands, what it delivered
+/// survives the next sweep too, until that build registers it.
+#[cfg(unix)] // the fake encoder is a /bin/sh script
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rebuild_storm_enters_the_encoder_once_and_stops_on_its_own() {
+    use crate::build::coordinator::test_utils;
+    use crate::build::manifest::SealedManifest;
+    use crate::ops::watch::worker;
+    use moss_core::asset_paths;
+    use std::os::unix::fs::PermissionsExt;
+
+    let slow = "videos/aimeili.mov";
+    let cached: Vec<String> = (0..10).map(|i| format!("videos/cached-{i}.mov")).collect();
+    let mut names = vec![slow];
+    names.extend(cached.iter().map(String::as_str));
+    // The encoder: a poster frame is written at once; the mp4 encode's first
+    // pass marks its entry and blocks until the test releases it, and the
+    // second pass writes the mp4.
+    let (temp, ctx) = vault_with_videos(
+        &names,
+        "#!/bin/sh\n\
+         out=''; thumb=''; pass=''; prev=''\n\
+         for a in \"$@\"; do out=\"$a\"; [ \"$a\" = -vframes ] && thumb=1; [ \"$prev\" = -pass ] && pass=\"$a\"; prev=\"$a\"; done\n\
+         if [ -n \"$thumb\" ]; then printf poster > \"$out\"; exit 0; fi\n\
+         if [ \"$pass\" = 1 ]; then\n\
+           echo entered >> '{temp}/entered'\n\
+           n=0; while [ ! -f '{temp}/release' ] && [ -d '{temp}' ] && [ $n -lt 1500 ]; do sleep 0.02; n=$((n+1)); done\n\
+           exit 0\n\
+         fi\n\
+         printf 'encoded mp4' > \"$out\"\n",
+    );
+    // A 320-wide ProRes source: one ladder rung (no HLS), and not web-playable,
+    // so the mp4 plan is a real encode. A duration query gets a bare number.
+    let ffprobe = temp.path().join("ffprobe");
+    std::fs::write(
+        &ffprobe,
+        "#!/bin/sh\ncase \"$*\" in *nokey=1*) echo 10; exit 0;; esac\nprintf '[STREAM]\\ncodec_type=video\\ncodec_name=prores\\nwidth=320\\nr_frame_rate=30/1\\n[/STREAM]\\n[FORMAT]\\nduration=10\\nbit_rate=90000000\\n[/FORMAT]\\n'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&ffprobe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // A failing assertion must not leave the encode blocked: the runtime waits
+    // for its blocking threads on the way out.
+    struct Release(std::path::PathBuf);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.0, b"go");
+        }
+    }
+    let _release = Release(temp.path().join("release"));
+    let vault = std::path::PathBuf::from(&ctx.source_path);
+    for name in &names {
+        std::fs::write(vault.join(name), format!("bytes of {name}")).unwrap();
+    }
+    for name in &cached {
+        crate::build::media::video::tests::seed_cached_video(
+            &vault,
+            &ctx.moss_dir,
+            name,
+            format!("mp4 of {name}").as_bytes(),
+            format!("poster of {name}").as_bytes(),
+        );
+    }
+
+    let mut services = BuildServices::headless();
+    services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+    let services = std::sync::Arc::new(services);
+    let folder = ctx.source_path.clone();
+    let handle = worker::register(&folder);
+    let entered = temp.path().join("entered");
+    let entries = || std::fs::read_to_string(&entered).map(|s| s.lines().count()).unwrap_or(0);
+
+    // One rebuild round; returns what it sealed and whether it asked for a rebuild.
+    let staged = |key: &str| ctx.staging_dir.join(key);
+    let running_files = [
+        format!("{}.tmp.x", asset_paths::to_mp4(slow)),
+        format!("{}.pending.x", asset_paths::to_thumb(slow)),
+    ];
+    let litter = "videos/other.mp4.tmp.x";
+    let round = |previous: SiteHashes| {
+        let (services, ctx, folder, handle) = (services.clone(), ctx.clone(), folder.clone(), handle.clone());
+        let drop_temps = running_files.iter().map(String::as_str).chain([litter]).map(|k| ctx.staging_dir.join(k)).collect::<Vec<_>>();
+        async move {
+            for temp in &drop_temps {
+                std::fs::create_dir_all(temp.parent().unwrap()).unwrap();
+                std::fs::write(temp, b"mid-write").unwrap();
+            }
+            let mp = crate::moss_paths::MossPaths::from_moss_dir(ctx.moss_dir.clone());
+            super::sweep_staging(&ctx.staging_dir, &previous, crate::build::lifecycle::park_for_rebuild(&mp, false, services.cancellation.protected_outputs()).as_ref());
+            let (tx, rx) = test_utils::build_test_coordinator();
+            tokio::task::spawn_blocking(move || {
+                crate::build::media::video::dispatch_video_conversions(Some(&services), ctx, Some(tx))
+            })
+            .await
+            .unwrap();
+            let sealed: SealedManifest = test_utils::drain_into_sealed(rx, previous.clone()).await;
+            let settled = crate::build::diff_settled_assets(&previous, sealed.site_hashes_view());
+            crate::build::trigger_media_settle_rerender(&folder, &settled, Some(&previous));
+            (sealed.site_hashes_view().clone(), handle.take().is_some())
+        }
+    };
+
+    let mut previous = SiteHashes::default();
+    let mut asked = Vec::new();
+    for n in 1..=8 {
+        let (view, rebuild) = round(previous.clone()).await;
+        asked.push(rebuild);
+        if n == 1 {
+            // Every later round must meet the encode already running.
+            for _ in 0..500 {
+                if entries() > 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            assert_eq!(entries(), 1, "the uncached video never reached the encoder");
+        }
+        for name in &cached {
+            for key in [asset_paths::to_mp4(name), asset_paths::to_thumb(name)] {
+                assert!(ctx.staging_dir.join(&key).exists(), "round {n}: cached output {key} is missing");
+            }
+        }
+        if n > 1 {
+            assert!(staged(&asset_paths::to_thumb(slow)).exists(), "round {n}: the running encode's poster was swept");
+            for temp in &running_files {
+                assert!(staged(temp).exists(), "round {n}: the running encode's temp {temp} was swept");
+            }
+            assert!(!staged(litter).exists(), "round {n}: a temp no encode owns must still be swept");
+        }
+        if n != 3 && n != 6 {
+            previous = view;
+        }
+    }
+    // Long enough for a superseding run to take the second encode permit.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(entries(), 1, "a rebuild must join the running encode, never restart it");
+    assert_eq!(
+        asked,
+        [true, false, false, false, false, false, false, false],
+        "only round 1's settle (ten relinked posters) may ask for a rebuild while the encode runs"
+    );
+
+    std::fs::write(temp.path().join("release"), b"go").unwrap();
+    let mut requested = false;
+    for _ in 0..500 {
+        if handle.take().is_some() {
+            requested = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(requested, "the encode's delivery must ask for exactly the rebuild that registers it");
+    let mp = crate::moss_paths::MossPaths::from_moss_dir(ctx.moss_dir.clone());
+    super::sweep_staging(
+        &ctx.staging_dir,
+        &previous,
+        crate::build::lifecycle::park_for_rebuild(&mp, false, services.cancellation.protected_outputs()).as_ref(),
+    );
+    assert!(
+        staged(&asset_paths::to_mp4(slow)).exists(),
+        "a delivered mp4 no build has registered yet survives the sweep of the build that will register it"
+    );
+    let (view, settle) = round(previous.clone()).await;
+    assert!(settle, "that rebuild registers the new poster, which settles once");
+    let (_, again) = round(view).await;
+    assert!(!again, "and then the folder is quiet");
+    assert!(!handle.slot_occupied());
+    worker::deregister(&folder, &handle);
+}
+
+/// The rebuild sweep, through two real builds of one folder: it unlinks from
+/// staging only once the render the preview shows has been promoted, and it
+/// never parks the preview on an older `current` to do it.
+///
+/// Build 2 starts after build 1's seal tail promoted build 1's render, so it
+/// parks on `current` and sweeps an orphan out of staging. Then a render is put
+/// on screen that nothing has promoted — what a rebuild meets when it starts
+/// before the last tail lands — and build 3 must leave both the orphan and the
+/// preview alone for its whole length.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rebuild_sweeps_staging_only_when_the_render_on_screen_is_promoted() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::TempDir::new_in(&base).unwrap();
+    // Canonical, so this test's `MossPaths` names the same lifecycle record
+    // the build's resolved `VaultRoot` does.
+    let folder = tmp.path().canonicalize().unwrap();
+    fs::write(folder.join("index.md"), "# Home\n\nbody\n").unwrap();
+    let folder_key = folder.to_string_lossy().to_string();
+    let session = crate::system::folder_session::FolderSession::new(folder.clone());
+    crate::system::folder_session::registry().insert(folder_key.clone(), session.clone());
+    let mp = crate::moss_paths::MossPaths::new(&folder);
+    let _record = crate::build::lifecycle::lock_for(&mp);
+    let cell = std::sync::Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
+
+    let build = || {
+        let mut services = BuildServices::headless();
+        services.session = Some(session.clone());
+        run_pipeline(PipelineConfig {
+            root: crate::vault::paths::VaultRoot::resolve(&folder),
+            progress: crate::build::null_sink(),
+            plugins: PluginMode::Skip,
+            watch: false,
+            start_server: false,
+            host: crate::build::ports::host::HostPorts {
+                site_dir: Some(cell.clone()),
+                spawner: std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner),
+                services,
+                ..crate::build::ports::host::test_host_ports()
+            },
+            trigger: BuildTrigger::Full,
+            // A long-lived process: the seal tail runs detached, as in the app.
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: None,
+            live_port: None,
+        })
+    };
+    let drained = || async {
+        for _ in 0..1500 {
+            if !session.has_ui_bound() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the seal tail never finished");
+    };
+
+    build().await.expect("build 1");
+    drained().await;
+    assert!(mp.current_ptr().exists(), "build 1's tail promoted its render");
+
+    let orphan = mp.staging_dir().join("orphan.txt");
+    fs::write(&orphan, "left behind").unwrap();
+    build().await.expect("build 2");
+    assert!(!orphan.exists(), "a caught-up rebuild sweeps what no manifest names");
+    assert_eq!(*cell.read().unwrap(), mp.staging_dir(), "and ends showing its own render");
+    drained().await;
+
+    crate::build::lifecycle::show_render(&mp, true);
+    let orphan = mp.staging_dir().join("orphan-2.txt");
+    fs::write(&orphan, "left behind").unwrap();
+    let watching = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let watcher = {
+        let (cell, watching, current) = (cell.clone(), watching.clone(), mp.current_ptr());
+        std::thread::spawn(move || {
+            let mut moved = false;
+            while watching.load(std::sync::atomic::Ordering::Relaxed) {
+                moved |= *cell.read().unwrap() == current;
+                std::thread::sleep(std::time::Duration::from_micros(200));
+            }
+            moved
+        })
+    };
+    build().await.expect("build 3");
+    watching.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert!(!watcher.join().unwrap(), "the preview must never move to an older current");
+    assert!(orphan.exists(), "and a rebuild ahead of the promotion unlinks nothing");
+    drained().await;
+    crate::system::folder_session::registry().remove(&folder_key);
+}
+
+/// A detached encode stores each finished video's blobs and transform record
+/// as it goes, but saves the hash index that marks them live only when the
+/// whole run ends. A cache sweep from a seal tail that lands in between —
+/// while the run is blocked on its next video — would read those records as
+/// orphans and delete the encode it just paid for. The run's own lease keeps
+/// the sweep off until it is done.
+#[cfg(unix)] // the fake encoder is a /bin/sh script
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cache_sweep_during_a_detached_encode_keeps_what_it_already_stored() {
+    use crate::build::coordinator::test_utils;
+    use crate::ops::watch::worker;
+    use std::os::unix::fs::PermissionsExt;
+
+    // The first video encodes at once; the second blocks in its first pass.
+    let (temp, ctx) = vault_with_videos(
+        &["videos/first.mov", "videos/second.mov"],
+        "#!/bin/sh\n\
+         out=''; thumb=''; pass=''; prev=''; input=''\n\
+         for a in \"$@\"; do out=\"$a\"; [ \"$a\" = -vframes ] && thumb=1; [ \"$prev\" = -pass ] && pass=\"$a\"; [ \"$prev\" = -i ] && input=\"$a\"; prev=\"$a\"; done\n\
+         if [ -n \"$thumb\" ]; then printf poster > \"$out\"; exit 0; fi\n\
+         case \"$input\" in *second*) if [ \"$pass\" = 1 ]; then\n\
+           echo entered >> '{temp}/entered'\n\
+           n=0; while [ ! -f '{temp}/release' ] && [ -d '{temp}' ] && [ $n -lt 1500 ]; do sleep 0.02; n=$((n+1)); done\n\
+         fi;; esac\n\
+         [ \"$pass\" = 1 ] && exit 0\n\
+         printf 'encoded mp4' > \"$out\"\n",
+    );
+    let ffprobe = temp.path().join("ffprobe");
+    std::fs::write(
+        &ffprobe,
+        "#!/bin/sh\ncase \"$*\" in *nokey=1*) echo 10; exit 0;; esac\nprintf '[STREAM]\\ncodec_type=video\\ncodec_name=prores\\nwidth=320\\nr_frame_rate=30/1\\n[/STREAM]\\n[FORMAT]\\nduration=10\\nbit_rate=90000000\\n[/FORMAT]\\n'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&ffprobe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    struct Release(std::path::PathBuf);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.0, b"go");
+        }
+    }
+    let _release = Release(temp.path().join("release"));
+    let vault = std::path::PathBuf::from(&ctx.source_path);
+    for name in ["videos/first.mov", "videos/second.mov"] {
+        std::fs::write(vault.join(name), format!("bytes of {name}")).unwrap();
+    }
+
+    let mp = crate::moss_paths::MossPaths::from_moss_dir(ctx.moss_dir.clone());
+    let _record = crate::build::lifecycle::lock_for(&mp);
+    let mut services = BuildServices::headless();
+    services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+    let folder = ctx.source_path.clone();
+    let handle = worker::register(&folder);
+    let (tx, rx) = test_utils::build_test_coordinator();
+    let dispatch_ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::build::media::video::dispatch_video_conversions(Some(&services), dispatch_ctx, Some(tx))
+    })
+    .await
+    .unwrap();
+    let _ = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+    let entered = temp.path().join("entered");
+    for _ in 0..500 {
+        if entered.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(entered.exists(), "the second video never reached the encoder");
+
+    let objects = crate::build::cache::ObjectStore::new(mp.cache_objects());
+    let transforms = crate::build::cache::TransformCache::new(
+        mp.cache_transforms(),
+        crate::build::cache::ObjectStore::new(mp.cache_objects()),
+    );
+    let first_source = crate::build::cache::ObjectStore::hash_file(&vault.join("videos/first.mov")).unwrap();
+    let first = transforms.get(&first_source).expect("the first video's encode was recorded");
+    let mp4 = first.transforms["video/mp4"].oid.clone();
+    // Big enough to be worth sweeping.
+    for i in 0..2_048 {
+        std::fs::create_dir_all(mp.cache_objects().join("zz").join(format!("{i:04}"))).unwrap();
+    }
+
+    crate::build::collect_build_store(&mp, "none", &std::collections::HashSet::new());
+
+    assert!(transforms.get(&first_source).is_some(), "the finished video's transform record survives the sweep");
+    assert!(objects.blob_path(&mp4).exists(), "and so does its mp4 blob");
+    std::fs::write(temp.path().join("release"), b"go").unwrap();
+    for _ in 0..500 {
+        if handle.take().is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    worker::deregister(&folder, &handle);
+}
+
 #[test]
 fn test_run_video_conversion_headless_has_no_shell() {
     let services = BuildServices::headless();
@@ -1882,7 +2261,7 @@ fn test_stale_directory_removed_after_article_deletion() {
     // the new flow by calling cleanup explicitly with the same site_hashes
     // the in-band call would have used.
     let expected_dirs = compute_expected_dirs(&site_hashes);
-    remove_stale_dirs(&output, &expected_dirs);
+    remove_stale_dirs(&output, &expected_dirs, &crate::build::lifecycle::permit_for_test());
 
     assert!(
         !stale_dir.exists(),
@@ -1935,9 +2314,9 @@ fn test_stale_directory_with_stale_files_removed() {
     // Stale-file + stale-dir cleanup moved to seal+persist side task (#621);
     // simulate that step here so this test continues to exercise the
     // cleanup logic.
-    remove_stale_files(&output, &site_hashes, "test");
+    remove_stale_files(&output, &site_hashes, "test", &crate::build::lifecycle::permit_for_test());
     let expected_dirs = compute_expected_dirs(&site_hashes);
-    remove_stale_dirs(&output, &expected_dirs);
+    remove_stale_dirs(&output, &expected_dirs, &crate::build::lifecycle::permit_for_test());
 
     assert!(
         !output.join("old-section").exists(),
@@ -1995,6 +2374,47 @@ fn test_video_output_directories_preserved() {
 // Stale Staging Cleanup Tests
 // =========================================================================
 
+/// A symlink the manifest does not name is unlinked as a link, one it names is
+/// kept, and the sweep never descends into either: an alias to a kept
+/// directory must not take the directory's contents with it.
+#[cfg(unix)]
+#[test]
+fn remove_stale_files_unlinks_unkept_symlinks_without_descending_into_them() {
+    let temp = TempDir::new().unwrap();
+    let dir = temp.path().join("output");
+    fs::create_dir_all(dir.join("resources/app")).unwrap();
+    fs::write(dir.join("resources/app/index.html"), "<h1>app</h1>").unwrap();
+    std::os::unix::fs::symlink("resources/app", dir.join("live-alias")).unwrap();
+    std::os::unix::fs::symlink("resources/app", dir.join("stale-alias")).unwrap();
+    let mut hashes = SiteHashes::new();
+    hashes.insert("resources/app/index.html".to_string(), "hash1".to_string());
+    hashes.insert("live-alias".to_string(), "120000:resources/app".to_string());
+
+    let report = remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
+
+    assert!(fs::symlink_metadata(dir.join("live-alias")).is_ok(), "a named alias is kept");
+    assert!(fs::symlink_metadata(dir.join("stale-alias")).is_err(), "an unnamed alias is unlinked");
+    assert!(dir.join("resources/app/index.html").exists(), "the sweep never descends into an alias");
+    assert_eq!(report.symlink, 1);
+}
+
+/// `_moss/math/` is append-only (ADR-030 §3.4): no `<hash>.png` there is ever
+/// stale. The `.pending.` temp a crashed write left beside one is.
+#[test]
+fn remove_stale_files_takes_math_png_temps_but_keeps_every_png() {
+    let temp = TempDir::new().unwrap();
+    let dir = temp.path().join("output");
+    let math = dir.join("_moss/math");
+    fs::create_dir_all(&math).unwrap();
+    fs::write(math.join("aaaaaaaaaaaaaaaa.png"), b"real png").unwrap();
+    fs::write(math.join("aaaaaaaaaaaaaaaa.pending.dead-uuid"), b"crash leftover").unwrap();
+
+    remove_stale_files(&dir, &SiteHashes::new(), "test", &crate::build::lifecycle::permit_for_test());
+
+    assert!(math.join("aaaaaaaaaaaaaaaa.png").exists(), "an unregistered PNG is still append-only");
+    assert!(!math.join("aaaaaaaaaaaaaaaa.pending.dead-uuid").exists(), "a crashed temp is not");
+}
+
 #[test]
 fn test_remove_stale_files_deletes_unlisted_files() {
     let temp = TempDir::new().unwrap();
@@ -2007,7 +2427,7 @@ fn test_remove_stale_files_deletes_unlisted_files() {
     let mut hashes = SiteHashes::new();
     hashes.insert("index.html".to_string(), "hash1".to_string());
 
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(dir.join("index.html").exists(), "index.html should be kept");
     assert!(
@@ -2028,7 +2448,7 @@ fn test_remove_stale_files_preserves_video_outputs() {
     let mut hashes = SiteHashes::new();
     hashes.video_outputs.insert("videos/clip.mp4".to_string());
 
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         videos.join("clip.mp4").exists(),
@@ -2053,7 +2473,7 @@ fn test_remove_stale_files_preserves_image_outputs() {
     let mut hashes = SiteHashes::new();
     hashes.image_outputs.insert("images/hero.webp".to_string());
 
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         images.join("hero.webp").exists(),
@@ -2078,7 +2498,7 @@ fn test_remove_stale_files_deletes_untracked_webp() {
         .image_outputs
         .insert("images/tracked.webp".to_string());
 
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         images.join("tracked.webp").exists(),
@@ -2105,7 +2525,7 @@ fn remove_stale_files_never_deletes_math_pngs() {
     fs::write(math.join("aaaaaaaaaaaaaaaa.png"), "png bytes").unwrap();
 
     let hashes = SiteHashes::new();
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         math.join("aaaaaaaaaaaaaaaa.png").exists(),
@@ -2126,7 +2546,7 @@ fn remove_stale_dirs_never_deletes_math_dir() {
     // Expected dirs cover _moss (other artifacts) but NOT _moss/math.
     let mut expected = std::collections::HashSet::new();
     expected.insert(std::path::PathBuf::from("_moss"));
-    remove_stale_dirs(&dir, &expected);
+    remove_stale_dirs(&dir, &expected, &crate::build::lifecycle::permit_for_test());
 
     assert!(
         math.join("aaaaaaaaaaaaaaaa.png").exists(),
@@ -2242,7 +2662,7 @@ fn test_remove_stale_files_preserves_notebook_outputs() {
         .notebook_outputs
         .insert("resources/habitable-zone.ipynb".to_string());
 
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         resources.join("habitable-zone.html").exists(),
@@ -2296,7 +2716,7 @@ fn test_remove_stale_html_preserves_notebook_outputs() {
     notebook_outputs.insert("jupyter/lab/index.html".to_string());
     notebook_outputs.insert("jupyter/tree/index.html".to_string());
 
-    remove_stale_html(&dir, &blocking_keys, &notebook_outputs);
+    remove_stale_html(&dir, &blocking_keys, &notebook_outputs, &crate::build::lifecycle::permit_for_test());
 
     assert!(dir.join("index.html").exists(), "home kept");
     assert!(
@@ -2325,7 +2745,7 @@ fn test_remove_stale_dirs_removes_empty_stale_directories() {
     let mut expected_dirs = std::collections::HashSet::new();
     expected_dirs.insert(std::path::PathBuf::from("js"));
 
-    remove_stale_dirs(&dir, &expected_dirs);
+    remove_stale_dirs(&dir, &expected_dirs, &crate::build::lifecycle::permit_for_test());
 
     assert!(keep_dir.exists(), "js/ should be preserved");
     assert!(!stale_dir.exists(), "old-section/ should be removed");
@@ -2409,8 +2829,8 @@ fn test_copy_deferred_assets_cleans_staging_dir() {
     // Stale-file cleanup moved to the seal+persist side task in build.rs
     // (#621). Simulate that step here so this test continues to exercise
     // the staging+site cleanup logic.
-    remove_stale_files(&site, &site_hashes, "site");
-    remove_stale_files(&staging, &site_hashes, "staging");
+    remove_stale_files(&site, &site_hashes, "site", &crate::build::lifecycle::permit_for_test());
+    remove_stale_files(&staging, &site_hashes, "staging", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         !site.join("custom.css").exists(),
@@ -2440,7 +2860,7 @@ fn test_remove_stale_html_deletes_orphaned_index_pages() {
     blocking_keys.insert("index.html".to_string());
     blocking_keys.insert("文字/article/index.html".to_string());
 
-    remove_stale_html(&dir, &blocking_keys, &HashSet::new());
+    remove_stale_html(&dir, &blocking_keys, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
 
     assert!(dir.join("index.html").exists(), "current index.html kept");
     assert!(
@@ -2475,7 +2895,7 @@ fn test_remove_stale_html_preserves_non_html_files() {
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("index.html".to_string());
 
-    remove_stale_html(&dir, &blocking_keys, &HashSet::new());
+    remove_stale_html(&dir, &blocking_keys, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
 
     assert!(dir.join("index.html").exists());
     assert!(dir.join("style.css").exists(), "CSS preserved");
@@ -3313,7 +3733,7 @@ fn test_stale_cleanup_preserves_registered_notebook_outputs() {
     );
     hashes.insert("resources/analysis.html".to_string(), hash_of(b"viewer"));
 
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     // Registered notebook outputs survive
     assert!(
@@ -3346,7 +3766,7 @@ fn test_stale_cleanup_removes_unregistered_jupyter_files() {
     fs::write(dir.join("jupyter/stale-old-file.js"), "old").unwrap();
 
     let hashes = SiteHashes::default();
-    remove_stale_files(&dir, &hashes, "test");
+    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
         !dir.join("jupyter/stale-old-file.js").exists(),
@@ -4269,7 +4689,7 @@ fn build_test_sealed(folder_path: &str) -> Result<Vec<String>, String> {
         let view = sealed.site_hashes_view();
         let mut keys: Vec<String> = view.files.keys().cloned().collect();
         keys.sort();
-        crate::build::media::pipeline::remove_stale_files(&stage_dir, view, "staging");
+        crate::build::media::pipeline::remove_stale_files(&stage_dir, view, "staging", &crate::build::lifecycle::permit_for_test());
         Ok(keys)
     })
 }
@@ -4343,7 +4763,7 @@ fn build_test_shipped(
         // arm: this harness never has a next build in the same process
         // either, so without this call staging would hold orphaned bytes no
         // test here could ever observe going away.
-        crate::build::ship::reclaim_staging_now(&stage_dir, &sealed);
+        crate::build::ship::reclaim_staging_now(&stage_dir, &sealed, &crate::build::lifecycle::permit_for_test());
         let _ = sealed.write_to_disk(&mp.hashes());
         crate::build::ship::materialize_and_promote(
             &sealed,
@@ -4351,7 +4771,8 @@ fn build_test_shipped(
             &stage_dir,
             None,
             crate::build::ship::next_promotion_epoch(),
-            true,
+            None,
+            crate::build::ship::ShipVerdict::Ship,
         )?;
         Ok(pruned)
     })
@@ -4922,29 +5343,6 @@ fn an_evicted_file_moss_never_reads_does_not_withhold_forever() {
     assert!(should_publish(false));
 }
 
-/// `initial-build-complete` does not report the serving directory, it *sets*
-/// it — its listener in `lib.rs` calls `switch_to` with the payload path. So
-/// naming staging on a withheld build would undo the withholding through the
-/// back door, and this is the assertion that says it does not.
-#[test]
-fn a_withheld_build_never_names_staging_as_the_serving_directory() {
-    let stage = std::path::Path::new("/v/.moss/build/staging");
-    let current = std::path::Path::new("/v/.moss/build/current");
-
-    assert_eq!(served_dir(true, true, stage, current), Some(stage), "published: staging");
-    assert_eq!(served_dir(true, false, stage, current), Some(stage), "first build, published");
-    assert_eq!(
-        served_dir(false, true, stage, current),
-        Some(current),
-        "withheld with something sealed — the user keeps their real site"
-    );
-    assert_eq!(
-        served_dir(false, false, stage, current),
-        None,
-        "withheld with nothing sealed — no directory to name; the screen owns the window"
-    );
-}
-
 /// The invariant that keeps the two decisions in step: a build moss withholds
 /// is always one the gate can explain. `cloud_ledger::structural_missing_count` only ever
 /// sees paths still in the cloud (the caller filters), and each of its two
@@ -5263,6 +5661,111 @@ fn the_presence_pass_drops_only_the_outputs_that_are_really_gone() {
         "the entry is kept for the live site; the local generation simply lacks it"
     );
     assert!(real.to_disk(&site).exists(), "the real output still ships");
+}
+
+/// The same pass over a tree it cannot read. 404c's build read none of 822
+/// staged entries, dropped all 822, stripped the pages that referenced them and
+/// promoted an empty generation. An I/O error that is not a positive `NotFound`
+/// is no answer: the entries stay, the staged HTML is not rewritten from a
+/// blind strip set, and the generation is withheld while `current` keeps
+/// serving the last good one.
+#[cfg(unix)]
+#[test]
+fn a_presence_pass_that_cannot_read_its_tree_drops_nothing_and_ships_nothing() {
+    use crate::build::manifest::{HashBucket, PendingManifest};
+    use crate::build::served_path::ServedPath;
+    use crate::build::ship::{Promotion, ShipVerdict, WithholdReason};
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(tmp.path());
+    fs::create_dir_all(mp.generation_dir("g1")).unwrap();
+    fs::write(mp.generation_dir("g1").join("index.html"), "<html>g1</html>").unwrap();
+    mp.set_current_ptr("g1").unwrap();
+
+    let stage = mp.staging_dir();
+    fs::create_dir_all(stage.join("assets")).unwrap();
+    fs::create_dir_all(stage.join("locked")).unwrap();
+    // The preview shows this render on staging; `current` is g1.
+    let _record = crate::build::lifecycle::lock_for(&mp);
+    let cell = std::sync::Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
+    crate::build::lifecycle::adopt_server(&mp, &cell);
+    let (render, _) = crate::build::lifecycle::show_render(&mp, true);
+    assert_eq!(*cell.read().unwrap(), stage);
+    let html = concat!(
+        "<html><body>",
+        r#"<picture><source srcset="assets/deleted.webp" type="image/webp">"#,
+        r#"<img src="assets/deleted.jpg"></picture>"#,
+        "</body></html>\n",
+    );
+    let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
+    let mut put = |rel: &str, bytes: &[u8], bucket: HashBucket, write: bool| {
+        if write {
+            fs::write(stage.join(rel), bytes).unwrap();
+        }
+        pending.register(&ServedPath::from_source(rel).unwrap(), bytes, bucket);
+    };
+    put("index.html", html.as_bytes(), HashBucket::Files, true);
+    put("assets/deleted.webp", b"gone", HashBucket::ImageVariants, false);
+    for i in 0..8 {
+        put(&format!("assets/kept{i}.css"), b"css", HashBucket::Files, true);
+    }
+    let locked: Vec<String> = (0..30).map(|i| format!("locked/f{i}.css")).collect();
+    for rel in &locked {
+        put(rel, b"css", HashBucket::Files, true);
+    }
+    let mut sealed = pending.seal();
+    assert_eq!(sealed.files().len(), 40);
+
+    let locked_dir = stage.join("locked");
+    fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&locked_dir).is_ok() {
+        fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        eprintln!("skipped: this process can read a 0o000 directory (running as root?)");
+        return;
+    }
+
+    let verdict = crate::build::degrade::repair_staged_html(&mp, &stage, &mut sealed, Default::default());
+    let promotion = crate::build::ship::materialize_and_promote(
+        &sealed,
+        &mp,
+        &stage,
+        None,
+        crate::build::ship::next_promotion_epoch(),
+        Some(render),
+        verdict.clone(),
+    );
+    fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+    for rel in &locked {
+        assert!(sealed.files().contains_key(rel), "{rel} could not be read, so it must not be dropped");
+    }
+    assert!(
+        !sealed.files().contains_key("assets/deleted.webp"),
+        "a really deleted entry is still dropped"
+    );
+    assert!(
+        matches!(&verdict, ShipVerdict::Withhold(WithholdReason::Unverified { entries: 30, .. })),
+        "got {:?}",
+        verdict
+    );
+    assert_eq!(
+        fs::read_to_string(stage.join("index.html")).unwrap(),
+        html,
+        "a withheld generation must not also rewrite the HTML the preview is serving"
+    );
+    assert!(
+        matches!(promotion, Ok(Promotion::Withheld(WithholdReason::Unverified { .. }))),
+        "got {promotion:?}"
+    );
+    assert_eq!(mp.current_generation_id().unwrap(), "g1", "`current` stays on the last good generation");
+    let generations: Vec<_> = fs::read_dir(mp.generations_dir()).unwrap().collect();
+    assert_eq!(generations.len(), 1, "no partial generation was frozen");
+    assert_eq!(
+        *cell.read().unwrap(),
+        mp.current_ptr(),
+        "the unreadable render is withdrawn: the preview goes back to the last good generation"
+    );
 }
 
 #[test]

@@ -215,6 +215,25 @@ fn a_non_cloud_error_is_reported_not_worked_around() {
     );
 }
 
+/// A `cache/tmp` the provider will not materialize answered `EDEADLK` to every
+/// video run in the field, because each run made its scratch with a raw
+/// `create_dir_all`, which has no way out. Made through `io_utils`, the refused
+/// directory is replaced and the run gets its scratch.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_scratch_dir_under_a_cache_tmp_the_provider_refuses_is_made_by_replacing_it() {
+    let dir = tempdir().unwrap();
+    let tmp_root = dir.path().join(".moss/build/cache/tmp");
+    fs::create_dir_all(&tmp_root).unwrap();
+    fs::write(tmp_root.join("left-dataless"), b"x").unwrap();
+    fault::refuse_dataless(&tmp_root);
+
+    let scratch = ScratchDir::new(&tmp_root, "video-1");
+
+    assert!(scratch.path().is_dir(), "the run must get its scratch directory");
+    assert!(!tmp_root.join("left-dataless").exists(), "by replacing the refused directory, not waiting on it");
+}
+
 // ----- is_regenerable_output: what may be deleted -----
 //
 // The predicate that stands between a scratch directory and the user's site.

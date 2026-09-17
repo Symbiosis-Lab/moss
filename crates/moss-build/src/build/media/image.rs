@@ -51,6 +51,7 @@ use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
 
 use crate::build::coordinator::EmitMessage;
+use crate::build::lifecycle::cas_heal::{rematerialize, HashPolicy, HealOutcome};
 use crate::build::manifest::HashBucket;
 use crate::advisory::{Action, Advisory, Scope, Severity};
 use crate::build::progress::{format_progress_message, PipelineEvent};
@@ -1231,7 +1232,7 @@ pub(crate) fn convert_single_image(
         .unwrap_or("image");
     let temp_path = temp_dir.join(format!("{}-{}.webp", stem, uuid::Uuid::new_v4()));
     if let Some(parent) = temp_path.parent() {
-        let _ = fs::create_dir_all(parent);
+        let _ = crate::build::io_utils::create_output_dir_all(parent);
     }
     if let Err(e) = fs::write(&temp_path, &webp_bytes) {  // allow:raw_write the temp this fn just minted, before the encode result is placed
         return ImageConversionOutcome {
@@ -1246,6 +1247,7 @@ pub(crate) fn convert_single_image(
     let oid = match objects.store_file(&temp_path) {
         Ok(o) => o,
         Err(e) => {
+            // allow:unlink the encode temp this call wrote under cache/tmp
             let _ = fs::remove_file(&temp_path);
             return ImageConversionOutcome {
                 webp_oid: None,
@@ -1256,6 +1258,7 @@ pub(crate) fn convert_single_image(
             };
         }
     };
+    // allow:unlink the encode temp this call wrote under cache/tmp
     let _ = fs::remove_file(&temp_path);
 
     // ---- Step 8: link to staging + canonical ----
@@ -1795,9 +1798,9 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     // most items stat-match (microseconds under lock); only cold misses hash.
     let bg_hash_index = Mutex::new(crate::build::cache::HashIndex::load(&hash_index_path));
 
-    // Temp dir is cleaned by video's run; reuse it (create_dir_all is idempotent).
-    let temp_dir = moss_paths.cache_tmp();
-    let _ = fs::create_dir_all(&temp_dir);
+    // This batch's own scratch, removed when the batch returns.
+    let scratch = crate::build::io_utils::ScratchDir::new(&moss_paths.cache_tmp(), "image");
+    let temp_dir = scratch.path().to_path_buf();
 
     // dir_overrides for page-tree mapping. Mirrors `run_video_conversion`
     // (video.rs:374): scan/render populate `item.source_path` with the
@@ -2406,23 +2409,41 @@ fn emit_image_outputs_via_channel(
             registry.set_failed(path.clone(), why);
         }
     };
+    // An I/O error that is not a positive `NotFound` settles nothing: `Failed`
+    // strips the `<source>` from the page, and an unreadable variant is not a
+    // missing one. The coordinator records it instead, which withholds the
+    // generation rather than shipping a page repaired from a blind read.
+    let unverified = |path: &String, err: &std::io::Error| {
+        let _ = tx.blocking_send(EmitMessage::Unverified { rel_path: path.clone(), detail: err.to_string() });
+    };
     for path in paths {
         let abs = staging_dir.join(path);
-        if !crate::build::io_utils::output_present(&abs) {
-            if suppressed.contains(path) {
-                suppressed_absent_count += 1;
-            } else {
-                settle_failed(path, "missing at manifest registration".to_string());
-                missing.push(abs.display().to_string());
+        match crate::build::io_utils::probe_path(&abs) {
+            crate::build::io_utils::Presence::Present => {}
+            crate::build::io_utils::Presence::Unverified(e) => {
+                unverified(path, &e);
+                continue;
             }
-            continue;
+            crate::build::io_utils::Presence::Absent | crate::build::io_utils::Presence::Evicted => {
+                if suppressed.contains(path) {
+                    suppressed_absent_count += 1;
+                } else {
+                    settle_failed(path, "missing at manifest registration".to_string());
+                    missing.push(abs.display().to_string());
+                }
+                continue;
+            }
         }
         let hash = match std::fs::read(&abs) {
             Ok(bytes) => crate::build::assets::paths::compute_binary_hash(&bytes),
+            Err(e) if !crate::build::icloud::is_definitely_absent(&abs, &e) => {
+                unverified(path, &e);
+                continue;
+            }
             Err(e) => {
-                // Race: existed at the pre-flight check, gone (or unreadable)
-                // now. Treat as the same coherence violation as the missing
-                // case and skip — never register without a hash.
+                // Race: existed at the pre-flight check, gone now. Treat as the
+                // same coherence violation as the missing case and skip —
+                // never register without a hash.
                 settle_failed(path, format!("unreadable at manifest registration: {}", e));
                 read_failures.push((abs.display().to_string(), e.to_string()));
                 continue;
@@ -2489,84 +2510,6 @@ fn summarize_coherence_violations(
     lines
 }
 
-/// Re-materialize one image variant's `.webp` from the content-addressed blob
-/// store into `staging_path`, self-healing a staged output that a concurrent
-/// staging swap / stale-cleanup orphaned.
-///
-/// **Why this exists.** A rapid burst of rebuilds (e.g. an image drop firing an
-/// asset-copy rebuild immediately followed by the embed-save rebuild) can orphan
-/// an in-flight background encode's staged `.webp`: the persistent-staging
-/// preview pipeline's seal + stale-cleanup removes a variant not yet registered
-/// in *that* generation's manifest, and the plugin path wipes staging outright.
-/// The dispatch-level fingerprint-skip (`Image set unchanged … skipping
-/// re-dispatch`) then optimizes away the *encode* — but the encode's on-disk
-/// presence went with it, so `emit_image_outputs_via_channel`'s producer-side
-/// coherence guard logs a permanent `staged .webp missing` and never registers
-/// the path. Unregistered → never in `sealed.files` → `AssetsSettled` is never
-/// advertised and the live `moss-asset-ready` swap never fires (blank slot).
-///
-/// The CAS blob (`webp_oid`) is content-addressed and survives every staging
-/// swap, so we re-link it back into the CURRENT staging generation. The skip
-/// optimizes the ENCODE, not the filesystem presence.
-///
-/// **Scope of action.** Acts only when the staged file is missing or a 0-byte
-/// stub (the iCloud-eviction symptom); a present, non-empty variant is left
-/// untouched, so the common steady-state text-edit rebuild (staging is
-/// persistent) pays nothing. Returns without effect when the source can't be
-/// hashed or no cached webp blob exists — those are genuine "never encoded"
-/// misses the coherence guard must still catch, NOT phantoms to fabricate. The
-/// re-link uses [`ObjectStore::link_to`], the canonical iCloud-safe COW copy
-/// (`fclonefileat` reflink, atomic tmp+rename) — NEVER `fs::hard_link`.
-fn rematerialize_webp_from_cas(
-    objects: &crate::build::cache::ObjectStore,
-    transforms: &crate::build::cache::TransformCache,
-    params: &serde_json::Value,
-    hash_index: &mut crate::build::cache::HashIndex,
-    source_file: &Path,
-    rel_source: &str,
-    staging_path: &Path,
-    // Transform kind to recover: `"image/webp"` for the base variant,
-    // `"image/webp-w{N}"` for a ladder rung (Task 5).
-    transform: &str,
-) -> bool {
-    // Present → already coherent, nothing to heal. A dataless placeholder is
-    // absent (ADR-043), so it heals rather than being trusted as an output.
-    if crate::build::io_utils::output_present(staging_path) {
-        return false;
-    }
-    // Resolve the source content hash. Cheap stat-match against the warm index
-    // — on the unchanged-fingerprint path (size+mtime identical) this hits
-    // without re-hashing the bytes.
-    let source_oid = match crate::build::video::resolve_source_hash(
-        source_file,
-        rel_source,
-        hash_index,
-    ) {
-        Ok(oid) => oid,
-        Err(_) => return false,
-    };
-    // Look up the cached webp blob. `find_cached_output` also verifies the blob
-    // still exists on disk in the object store, so a hit means the bytes are
-    // genuinely recoverable.
-    let Some(webp_oid) = transforms.find_cached_output(&source_oid, transform, params) else {
-        return false;
-    };
-    // Re-link the CAS blob into the CURRENT staging generation. iCloud-safe COW
-    // copy; atomic replace makes this idempotent even under a concurrent writer.
-    match objects.link_to(&webp_oid, staging_path) {
-        // Routine per-file success is DEBUG; the caller emits the INFO count.
-        Ok(()) => {
-            log::debug!("[image] self-heal: re-materialized {} from CAS ({})", staging_path.display(), webp_oid);
-            true
-        }
-        // Failures are rare and each one matters — loud, and per-file.
-        Err(e) => {
-            log::warn!("[image] self-heal re-link failed for {}: {}", staging_path.display(), e);
-            false
-        }
-    }
-}
-
 /// Self-heal every base + rung output `items` are expected to have
 /// produced, immediately before `run_image_conversion` registers them.
 ///
@@ -2611,15 +2554,19 @@ fn self_heal_before_registration(
         let mapped = crate::build::scan::page_map::resolve_path_with_overrides(&rel_source, dir_overrides);
         let relative_webp = moss_core::asset_paths::to_webp(&mapped);
         if !suppressed.contains(&relative_webp) {
-            healed += usize::from(rematerialize_webp_from_cas(
-                objects,
-                transforms,
-                params,
-                hash_index,
-                &source_root.join(&item.source_path),
-                &rel_source,
-                &staging_dir.join(&relative_webp),
-                "image/webp",
+            healed += usize::from(matches!(
+                rematerialize(
+                    objects,
+                    transforms,
+                    params,
+                    hash_index,
+                    &source_root.join(&item.source_path),
+                    &rel_source,
+                    &staging_dir.join(&relative_webp),
+                    "image/webp",
+                    HashPolicy::HashOnMiss,
+                ),
+                HealOutcome::Healed
             ));
         }
         if moss_core::asset_paths::is_ladder_source_ext(&item.ext) {
@@ -2630,15 +2577,19 @@ fn self_heal_before_registration(
                         continue;
                     }
                     if !suppressed.contains(&rung_rel) {
-                        healed += usize::from(rematerialize_webp_from_cas(
-                            objects,
-                            transforms,
-                            params,
-                            hash_index,
-                            &source_root.join(&item.source_path),
-                            &rel_source,
-                            &staging_dir.join(&rung_rel),
-                            &format!("image/webp-w{}", rung),
+                        healed += usize::from(matches!(
+                            rematerialize(
+                                objects,
+                                transforms,
+                                params,
+                                hash_index,
+                                &source_root.join(&item.source_path),
+                                &rel_source,
+                                &staging_dir.join(&rung_rel),
+                                &format!("image/webp-w{}", rung),
+                                HashPolicy::HashOnMiss,
+                            ),
+                            HealOutcome::Healed
                         ));
                     }
                 }
@@ -2746,21 +2697,25 @@ pub(crate) fn dispatch_image_conversions(
 
             // Self-heal is only attempted for a skip CANDIDATE: resolving the
             // source hash can require a real read+hash on a cache miss (see
-            // `rematerialize_webp_from_cas`), and a genuinely changed image
+            // `lifecycle::cas_heal::rematerialize`), and a genuinely changed image
             // is about to be dispatched (and re-hashed) anyway — attempting
             // it here first would pay that cost twice on the hot path this
             // runs on every rebuild.
             let outputs_present = if fingerprint_matched {
                 if !heal_suppressed.contains(&relative_webp) {
-                    healed_count += usize::from(rematerialize_webp_from_cas(
-                        &heal_objects,
-                        &heal_transforms,
-                        &heal_params,
-                        &mut heal_index,
-                        &heal_root.join(&item.source_path),
-                        &rel_source,
-                        &staging_path,
-                        "image/webp",
+                    healed_count += usize::from(matches!(
+                        rematerialize(
+                            &heal_objects,
+                            &heal_transforms,
+                            &heal_params,
+                            &mut heal_index,
+                            &heal_root.join(&item.source_path),
+                            &rel_source,
+                            &staging_path,
+                            "image/webp",
+                            HashPolicy::HashOnMiss,
+                        ),
+                        HealOutcome::Healed
                     ));
                 }
                 std::fs::metadata(&staging_path).is_ok_and(|m| m.len() > 0)
@@ -2808,15 +2763,19 @@ pub(crate) fn dispatch_image_conversions(
                             }
                             let rung_staging = ctx.staging_dir.join(&rung_rel);
                             if !heal_suppressed.contains(&rung_rel) {
-                                healed_count += usize::from(rematerialize_webp_from_cas(
-                                    &heal_objects,
-                                    &heal_transforms,
-                                    &heal_params,
-                                    &mut heal_index,
-                                    &heal_root.join(&item.source_path),
-                                    &rel_source,
-                                    &rung_staging,
-                                    &format!("image/webp-w{}", rung),
+                                healed_count += usize::from(matches!(
+                                    rematerialize(
+                                        &heal_objects,
+                                        &heal_transforms,
+                                        &heal_params,
+                                        &mut heal_index,
+                                        &heal_root.join(&item.source_path),
+                                        &rel_source,
+                                        &rung_staging,
+                                        &format!("image/webp-w{}", rung),
+                                        HashPolicy::HashOnMiss,
+                                    ),
+                                    HealOutcome::Healed
                                 ));
                             }
                             skip_paths.push(rung_rel.clone());

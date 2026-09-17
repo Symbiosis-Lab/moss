@@ -205,6 +205,7 @@ impl ArticleMap {
         let tmp_path = map_path.with_extension("json.tmp");
         std::fs::write(&tmp_path, json)  // allow:raw_write the temp for this file's own atomic save; the rename below places it
             .map_err(|e| format!("Failed to write article map: {}", e))?;
+        // allow:unlink rename into place for the article map, not staging
         std::fs::rename(&tmp_path, &map_path)
             .map_err(|e| format!("Failed to commit article map: {}", e))?;
         Ok(())

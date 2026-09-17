@@ -443,6 +443,7 @@ pub(in crate::build::features) fn process_comments(
     }
 
     let social_dir = MossPaths::new(std::path::Path::new(project_path)).social_dir();
+    // allow:raw_write .moss/data/social, not the build tree
     std::fs::create_dir_all(&social_dir)
         .map_err(|e| format!("cannot create {}: {e}", social_dir.display()))?;
     let path = social_dir.join("comment.json");

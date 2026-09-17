@@ -111,6 +111,7 @@ fn store_comment_sync_state(folder_path: &str, state: &CommentSyncState) {
     let path = comment_sync_state_path(Path::new(folder_path));
     let write = || -> Result<(), String> {
         let parent = path.parent().expect("state path always has a parent");
+        // allow:raw_write .moss/data, not the build tree
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         let json = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
         std::fs::write(&path, json).map_err(|e| e.to_string())  // allow:raw_write user state under .moss/data, not regenerable output

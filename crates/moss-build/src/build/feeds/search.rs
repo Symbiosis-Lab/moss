@@ -371,6 +371,7 @@ fn segmented_copy(site_dir: &Path) -> Result<(tempfile::TempDir, usize, usize), 
             if let Some(parent) = dest.parent() {
                 // Concurrent create_dir_all on the same ancestor is fine —
                 // it treats AlreadyExists as success.
+                // allow:raw_write a tempfile scratch dir, not the build tree
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("failed to write search-index scratch dir: {}", e))?;
             }

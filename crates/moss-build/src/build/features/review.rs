@@ -419,6 +419,7 @@ pub fn load_review_data(project_path: &str) -> Option<ReviewData> {
 pub fn save_review_data(project_path: &str, data: &ReviewData) -> Result<(), String> {
     let social_dir = MossPaths::new(std::path::Path::new(project_path)).social_dir();
 
+    // allow:raw_write .moss/data/social, not the build tree
     std::fs::create_dir_all(&social_dir)
         .map_err(|e| format!("Failed to create social dir: {}", e))?;
 

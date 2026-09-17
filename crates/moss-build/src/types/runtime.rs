@@ -387,6 +387,32 @@ pub struct VideoConversionState {
     /// `compute_video_item_fingerprint` and
     /// `dispatch_video_conversions` in `build/media/video.rs`.
     last_video_fingerprints: std::sync::Mutex<HashMap<String, String>>,
+    /// What detached runs are converting and what they delivered, under one
+    /// lock so every output key is in one set or the other at each instant.
+    runs: std::sync::Mutex<RunLedger>,
+}
+
+#[derive(Debug, Default)]
+struct RunLedger {
+    /// Videos a spawned run has not finished, keyed by source path. A rebuild
+    /// that finds a video here with the same fingerprint joins that run
+    /// instead of superseding it — see `dispatch_video_conversions`.
+    running: HashMap<String, RunningItem>,
+    /// Output keys a detached run put in staging that no build has registered
+    /// yet. The staging sweep keeps them until a dispatch registers them.
+    landed: HashSet<String>,
+}
+
+/// One video a spawned conversion run still owns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunningItem {
+    /// `compute_video_item_fingerprint` of the source when it was dispatched.
+    pub fingerprint: String,
+    /// The run that owns it. Only that run may take the entry out, so a
+    /// superseded run winding down cannot clear its successor's items.
+    pub epoch: u64,
+    /// Every staging key the run may write for it: mp4, poster, HLS ladder.
+    pub outputs: Vec<String>,
 }
 
 impl VideoConversionState {
@@ -396,6 +422,7 @@ impl VideoConversionState {
         Self {
             conversion_id: AtomicU64::new(0),
             last_video_fingerprints: std::sync::Mutex::new(HashMap::new()),
+            runs: std::sync::Mutex::new(RunLedger::default()),
         }
     }
 
@@ -437,6 +464,13 @@ impl VideoConversionState {
         matches
     }
 
+    /// Whether a fingerprint has ever been recorded for `path` in this process —
+    /// the difference between a video dispatched because it is new and one
+    /// dispatched because it changed, which only the dispatch log line needs.
+    pub fn has_item_fingerprint(&self, path: &str) -> bool {
+        self.last_video_fingerprints.lock().unwrap().contains_key(path)
+    }
+
     /// Drop stored fingerprints for paths not in `keep` — called once per
     /// dispatch with the current video set, so a removed video's entry
     /// doesn't linger forever, and a removed-then-re-added video is treated
@@ -445,6 +479,53 @@ impl VideoConversionState {
     pub fn retain_item_fingerprints(&self, keep: &HashSet<String>) {
         let mut map = self.last_video_fingerprints.lock().unwrap();
         map.retain(|k, _| keep.contains(k));
+    }
+
+    /// Whether a spawned run is still converting `path` from a source with
+    /// this `fingerprint`.
+    pub fn is_running(&self, path: &str, fingerprint: &str) -> bool {
+        self.runs.lock().unwrap().running.get(path).is_some_and(|r| r.fingerprint == fingerprint)
+    }
+
+    /// Hand `items` (path, fingerprint, output keys) to the run `epoch`. It
+    /// supersedes every earlier run, so their entries go.
+    pub fn begin_run(&self, epoch: u64, items: impl IntoIterator<Item = (String, String, Vec<String>)>) {
+        let mut runs = self.runs.lock().unwrap();
+        runs.running.clear();
+        runs.running.extend(
+            items
+                .into_iter()
+                .map(|(path, fingerprint, outputs)| (path, RunningItem { fingerprint, epoch, outputs })),
+        );
+    }
+
+    /// `path` ended in run `epoch`; `landed` names what it put in staging that
+    /// no build has registered (empty when the run registers its own).
+    pub fn end_item(&self, path: &str, epoch: u64, landed: impl IntoIterator<Item = String>) {
+        let mut runs = self.runs.lock().unwrap();
+        runs.landed.extend(landed);
+        if runs.running.get(path).is_some_and(|r| r.epoch == epoch) {
+            runs.running.remove(path);
+        }
+    }
+
+    /// Run `epoch` returned: whatever it still owned is no longer running.
+    pub fn end_run(&self, epoch: u64) {
+        self.runs.lock().unwrap().running.retain(|_, r| r.epoch != epoch);
+    }
+
+    /// A build registered these keys, so they need no protection any more.
+    pub fn forget_landed<'a>(&self, keys: impl IntoIterator<Item = &'a String>) {
+        let mut runs = self.runs.lock().unwrap();
+        for key in keys {
+            runs.landed.remove(key);
+        }
+    }
+
+    /// Every staging key a running or finished-but-unregistered encode owns.
+    pub fn protected_outputs(&self) -> HashSet<String> {
+        let runs = self.runs.lock().unwrap();
+        runs.running.values().flat_map(|r| r.outputs.iter().cloned()).chain(runs.landed.iter().cloned()).collect()
     }
 }
 
@@ -851,6 +932,23 @@ mod tests {
         // Registry should be fully drained
         let pids = registry.pids.lock().unwrap();
         assert!(pids.is_empty(), "Registry should be empty after kill_all");
+    }
+
+    /// A superseded run winds down after its successor took its videos over;
+    /// its exit must not take the successor's items out of `running`, or the
+    /// next rebuild supersedes a run it should have joined.
+    #[test]
+    fn a_superseded_run_ending_leaves_its_successors_items_running() {
+        let state = VideoConversionState::default();
+        state.begin_run(1, [("a.mov".to_string(), "fp".to_string(), vec![])]);
+        state.begin_run(2, [("a.mov".to_string(), "fp".to_string(), vec![])]);
+
+        state.end_item("a.mov", 1, []);
+        state.end_run(1);
+        assert!(state.is_running("a.mov", "fp"));
+
+        state.end_item("a.mov", 2, []);
+        assert!(!state.is_running("a.mov", "fp"));
     }
 
     /// Test that VideoConversionState's `start_new_conversion` increments

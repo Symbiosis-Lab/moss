@@ -8,7 +8,6 @@
 //!
 //! Design: docs/archive/2026-04-27-preserve-source-symlinks-design.md
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Returns true if the file at `path` looks like a macOS Finder Bookmark
@@ -374,15 +373,9 @@ fn handle_symlink_unix(
     // Step 7: compute disk destination path.
     let dest_path = output_root.join(rel_path);
 
-    // Step 8: remove any existing entry at the disk destination.
-    if let Err(e) = remove_existing(&dest_path) {
-        log::warn!("[copy] failed to clear output path {}: {}", dest_path.display(), e);
-        return SymlinkOutcome::SkippedBroken { rel_path: rel_path.to_string() };
-    }
-
     // Ensure parent directory exists.
     if let Some(parent) = dest_path.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
+        if let Err(e) = crate::build::io_utils::create_output_dir_all(parent) {
             log::warn!("[copy] failed to create parent dir for {}: {}", dest_path.display(), e);
             return SymlinkOutcome::SkippedBroken { rel_path: rel_path.to_string() };
         }
@@ -395,8 +388,9 @@ fn handle_symlink_unix(
     // deployed (case-sensitive) filesystem.
     let slugified_target = slugify_symlink_target(&target, canonical_target.is_dir());
 
-    // Step 10: recreate the symlink.
-    if let Err(e) = std::os::unix::fs::symlink(&slugified_target, &dest_path) {
+    // Step 10: recreate the symlink, replacing whatever stands there without a
+    // moment where the served alias is absent.
+    if let Err(e) = crate::build::io_utils::replace_with_symlink(&slugified_target, &dest_path) {
         log::warn!("[copy] failed to create symlink {} -> {}: {}", dest_path.display(), slugified_target.display(), e);
         return SymlinkOutcome::SkippedBroken { rel_path: rel_path.to_string() };
     }
@@ -521,17 +515,13 @@ pub fn handle_alias_entry(
     let relative_target = slugify_symlink_target(&relative_target, canonical_target.is_dir());
 
     let dest_path = output_root.join(&rel_path);
-    if let Err(e) = remove_existing(&dest_path) {
-        log::warn!("[copy] failed to clear output path {}: {}", dest_path.display(), e);
-        return Some(SymlinkOutcome::SkippedBroken { rel_path });
-    }
     if let Some(parent) = dest_path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
+        if let Err(e) = crate::build::io_utils::create_output_dir_all(parent) {
             log::warn!("[copy] failed to create parent dir for {}: {}", dest_path.display(), e);
             return Some(SymlinkOutcome::SkippedBroken { rel_path });
         }
     }
-    if let Err(e) = std::os::unix::fs::symlink(&relative_target, &dest_path) {
+    if let Err(e) = crate::build::io_utils::replace_with_symlink(&relative_target, &dest_path) {
         log::warn!("[copy] failed to create symlink for alias {}: {}", rel_path, e);
         return Some(SymlinkOutcome::SkippedBroken { rel_path });
     }
@@ -571,69 +561,6 @@ pub fn handle_alias_entry(
         rel_path
     );
     Some(SymlinkOutcome::SkippedUnsupportedPlatform { rel_path })
-}
-
-/// Clear any existing entry at `path` so the caller can write a fresh
-/// symlink there. Distinguishes directories (need `remove_dir_all`) from
-/// files/symlinks (`remove_file`). NotFound is a no-op.
-///
-/// Used by both `handle_symlink_entry` and `sync_dir`'s symlink branch.
-/// Centralizing the logic ensures consistent error semantics — in particular,
-/// a `remove_dir_all` failure surfaces as an `Err` rather than being
-/// silently swallowed.
-#[cfg(unix)]
-pub(crate) fn remove_existing(path: &Path) -> std::io::Result<()> {
-    use std::fs;
-    match fs::symlink_metadata(path) {
-        Ok(meta) => {
-            if meta.file_type().is_dir() {
-                fs::remove_dir_all(path)
-            } else {
-                // file, symlink, or other — remove_file handles all of these
-                fs::remove_file(path)
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
-    }
-}
-
-/// Walk the output tree and remove symlinks not in `live_symlinks`.
-/// Must use `follow_links(false)` to avoid descending into the symlinks
-/// (which would recurse into the canonical content and risk deleting it).
-pub fn remove_stale_symlinks(output_root: &Path, live_symlinks: &HashSet<String>) {
-    use walkdir::WalkDir;
-    let mut removed = 0u32;
-    for entry in WalkDir::new(output_root).into_iter() {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        // Critical: filter on path_is_symlink (file_type().is_symlink())
-        // BEFORE descending. Default follow_links(false) already enforces
-        // no descent into the symlink, but we double-check.
-        if !entry.path_is_symlink() {
-            continue;
-        }
-        let rel = match entry.path().strip_prefix(output_root) {
-            Ok(r) => r.to_string_lossy().to_string(),
-            Err(_) => continue,
-        };
-        if !live_symlinks.contains(&rel) {
-            match std::fs::remove_file(entry.path()) {
-                Ok(_) => {
-                    log::debug!("[stale-symlinks] Removed: {}", rel);
-                    removed += 1;
-                }
-                Err(e) => {
-                    log::debug!("[stale-symlinks] Could not remove {}: {}", rel, e);
-                }
-            }
-        }
-    }
-    if removed > 0 {
-        log::debug!("[stale-symlinks] Removed {} stale symlink(s)", removed);
-    }
 }
 
 #[cfg(test)]
@@ -785,7 +712,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn replaces_existing_directory_at_dest_path() {
+    fn a_directory_at_the_alias_path_is_left_for_the_sweep() {
         let (_tmp, source, output) = make_fixture(&[
             ("resources/app", FileSpec::Dir),
             ("resources/app/file.txt", FileSpec::File("hi")),
@@ -800,9 +727,10 @@ mod tests {
         let entry = source.join("alias");
         let outcome = handle_symlink_entry(&entry, &source, &canonical_root, &output);
 
-        assert!(matches!(outcome, SymlinkOutcome::Preserved { .. }), "got {:?}", outcome);
-        let meta = fs::symlink_metadata(&stale_dir).unwrap();
-        assert!(meta.file_type().is_symlink(), "stale dir should have been replaced with a symlink");
+        // Replacing a directory would unlink its contents from the served
+        // tree; the rename refuses, and the permitted sweep removes it.
+        assert!(matches!(outcome, SymlinkOutcome::SkippedBroken { .. }), "got {:?}", outcome);
+        assert!(stale_dir.join("stale.txt").exists(), "the directory is not removed from under a reader");
     }
 
     #[cfg(unix)]
@@ -866,46 +794,6 @@ mod tests {
         assert!(matches!(outcome, SymlinkOutcome::Preserved { .. }), "got {:?}", outcome);
         let read_target = fs::read_link(output.join("alias")).unwrap();
         assert_eq!(read_target, std::path::PathBuf::from("./resources/app"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn stale_cleanup_removes_symlink_not_in_live_set() {
-        let (_tmp, _source, output) = make_fixture(&[]);
-        // Create two symlinks in output: one live, one stale.
-        fs::write(output.join("real.txt"), "x").unwrap();
-        std::os::unix::fs::symlink("real.txt", output.join("live.link")).unwrap();
-        std::os::unix::fs::symlink("real.txt", output.join("stale.link")).unwrap();
-
-        let mut live = HashSet::new();
-        live.insert("live.link".to_string());
-
-        remove_stale_symlinks(&output, &live);
-
-        assert!(output.join("live.link").exists(), "live symlink should remain");
-        assert!(!output.join("stale.link").exists(), "stale symlink should be removed");
-        assert!(output.join("real.txt").exists(), "regular file must NOT be touched");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn stale_cleanup_does_not_descend_into_symlink() {
-        // Critical regression guard: if we descend into the symlink, we'd
-        // visit the canonical target's files and risk deleting them.
-        let (_tmp, _source, output) = make_fixture(&[]);
-        // Real directory with a real file inside.
-        fs::create_dir_all(output.join("canonical")).unwrap();
-        fs::write(output.join("canonical/keep.txt"), "keep").unwrap();
-        // Symlink pointing at the canonical dir, registered as live.
-        std::os::unix::fs::symlink("canonical", output.join("alias")).unwrap();
-
-        let mut live = HashSet::new();
-        live.insert("alias".to_string());
-
-        remove_stale_symlinks(&output, &live);
-
-        assert!(output.join("alias").exists(), "live symlink kept");
-        assert!(output.join("canonical/keep.txt").exists(), "canonical file MUST survive");
     }
 
     #[cfg(target_os = "macos")]
@@ -1042,25 +930,6 @@ mod tests {
         assert!(!is_bookmark_alias_file(&source.join("two.bin")));
         assert!(!is_bookmark_alias_file(&source.join("three.bin")));
         assert!(!is_bookmark_alias_file(&source.join("zero.bin")));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn stale_cleanup_skips_when_live_set_contains_all() {
-        let (_tmp, _source, output) = make_fixture(&[]);
-        std::os::unix::fs::symlink("nowhere", output.join("a.link")).unwrap();
-        std::os::unix::fs::symlink("nowhere", output.join("b.link")).unwrap();
-
-        let mut live = HashSet::new();
-        live.insert("a.link".to_string());
-        live.insert("b.link".to_string());
-
-        remove_stale_symlinks(&output, &live);
-
-        // Use symlink_metadata (not exists) because the targets are broken/non-existent;
-        // exists() follows symlinks and returns false for broken ones.
-        assert!(fs::symlink_metadata(output.join("a.link")).is_ok(), "a.link should still exist");
-        assert!(fs::symlink_metadata(output.join("b.link")).is_ok(), "b.link should still exist");
     }
 
     // ---- Regression: case-sensitivity drift between symlink target and

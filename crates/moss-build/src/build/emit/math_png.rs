@@ -252,10 +252,11 @@ impl EmailMathImg {
 /// inputs render identical bytes, so whichever writer wins is immaterial.
 fn write_atomic(disk_path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = disk_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+        crate::build::io_utils::create_output_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
     let tmp = disk_path.with_extension(format!("pending.{}", uuid::Uuid::new_v4()));
     std::fs::write(&tmp, bytes).map_err(|e| format!("write {}: {e}", tmp.display()))?;  // allow:raw_write the temp this fn just minted; the rename below is the output write
+    // allow:unlink rename into place: the PNG is replaced, never absent
     std::fs::rename(&tmp, disk_path).map_err(|e| format!("rename {}: {e}", disk_path.display()))
 }
 
@@ -344,11 +345,10 @@ pub fn emit_math_pngs(
             let name = entry.file_name();
             let name = name.to_string_lossy();
             // A crash between temp-write and rename leaves `*.pending.<uuid>`
-            // behind, and the stale-cleanup exemption on _moss/math/ means
-            // nothing else will ever remove it — sweep it here. Only real
-            // `<hash>.png` files are append-only.
+            // behind. It is never registered; the permitted staging sweep
+            // removes it. Removing it here could take a concurrent
+            // `write_atomic`'s temp mid-rename.
             if name.contains(".pending.") {
-                let _ = std::fs::remove_file(entry.path());
                 continue;
             }
             let Some(stem) = name.strip_suffix(".png") else { continue };
@@ -764,22 +764,6 @@ mod tests {
             pending2.files().contains_key(&key),
             "append-only: the PNG is still promised by the new generation"
         );
-    }
-
-    #[test]
-    fn retention_sweeps_crashed_pending_temps_but_keeps_pngs() {
-        let dir = tempfile::tempdir().unwrap();
-        let math = dir.path().join("_moss").join("math");
-        std::fs::create_dir_all(&math).unwrap();
-        std::fs::write(math.join("aaaaaaaaaaaaaaaa.png"), b"real png").unwrap();
-        let stub = math.join("aaaaaaaaaaaaaaaa.pending.dead-uuid");
-        std::fs::write(&stub, b"crash leftover").unwrap();
-
-        let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
-        emit_math_pngs(&[], true, dir.path(), &mut pending).unwrap();
-
-        assert!(!stub.exists(), "crashed temp must be swept (stale cleanup skips this dir)");
-        assert!(math.join("aaaaaaaaaaaaaaaa.png").exists(), "real PNGs stay");
     }
 
     #[test]

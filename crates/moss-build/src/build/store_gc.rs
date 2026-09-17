@@ -187,14 +187,22 @@ pub fn gc_old_generations(
     // Sort newest first.
     entries.sort_by(|a, b| b.0.cmp(&a.0));
 
+    let mut removed: Vec<&str> = Vec::new();
     for (_, path) in entries.iter().skip(n) {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if roots.contains(name) {
             continue; // pinned: current, in-flight deploy, or last-deployed
         }
-        if let Err(e) = std::fs::remove_dir_all(path) {
-            log::warn!("generation GC: failed to remove {:?}: {}", path, e);
+        // allow:unlink an old generation that is neither current, pinned by a deploy, nor being indexed
+        match crate::build::io_utils::remove_output_dir_all(path) {
+            Ok(()) => removed.push(name),
+            Err(e) => log::warn!("generation GC: failed to remove {:?}: {}", path, e),
         }
+    }
+    if !removed.is_empty() {
+        let mut kept: Vec<&str> = roots.iter().map(String::as_str).collect();
+        kept.sort_unstable();
+        log::info!("generation GC: removed [{}], kept roots [{}]", removed.join(", "), kept.join(", "));
     }
     Ok(())
 }
@@ -272,23 +280,35 @@ fn should_gc_cache(objects_on_disk: usize, watermark: Option<usize>) -> bool {
     }
 }
 
-/// Run `cache::gc` if the object store has grown past its watermark.
+/// Run `cache::gc` if the object store has grown past its watermark and no
+/// build or detached encode of the folder is writing it.
 ///
-/// Returns the result when a sweep ran, `None` when the threshold was not met.
-///
-/// **The caller must hold the per-folder `stage_write_lock`** (or be on a path
-/// where no concurrent build is possible). `cache::gc` assumes a quiescent
-/// cache; a concurrent build could be about to reference a blob this sweep is
-/// deleting.
+/// Returns the result when a sweep ran, `None` when the threshold was not met
+/// or a writer holds a lease. A skipped sweep is never waited for: the next
+/// seal tries again.
 ///
 /// Blocking — walks and unlinks. Async callers wrap it in `spawn_blocking`.
-pub fn maybe_gc_cache(build_dir: &Path) -> Option<cache::GcResult> {
+pub fn maybe_gc_cache(mp: &crate::moss_paths::MossPaths) -> Option<cache::GcResult> {
+    let build_dir = &mp.build_dir();
     let before = count_objects(build_dir);
     if !should_gc_cache(before, load_watermark(build_dir)) {
         return None;
     }
+    let token = match crate::build::lifecycle::try_begin_cache_gc(mp) {
+        Ok(token) => token,
+        Err((builds, encodes)) => {
+            log::info!("cache GC skipped: {} build and {} encode lease(s) open", builds, encodes);
+            return None;
+        }
+    };
 
-    let result = cache::gc(build_dir);
+    let result = match cache::gc(build_dir, &token) {
+        Ok(result) => result,
+        Err(input) => {
+            log::warn!("cache GC aborted: {} — nothing deleted", input);
+            return None;
+        }
+    };
     let after = before.saturating_sub(result.objects_removed);
     save_watermark(build_dir, after);
     log::info!(
@@ -336,7 +356,7 @@ fn probe_cow(dir: &Path) -> Option<bool> {
     // EOPNOTSUPP (EINVAL on some stacks) when the filesystem has no reflink.
     const FICLONE: libc::c_ulong = 0x4009_4409;
 
-    std::fs::create_dir_all(dir).ok()?;
+    crate::build::io_utils::create_output_dir_all(dir).ok()?;
     let src = dir.join(".moss-cow-probe-src");
     let dst = dir.join(".moss-cow-probe-dst");
     // allow:raw_write probe scratch, not an output artifact — deleted below
@@ -347,6 +367,7 @@ fn probe_cow(dir: &Path) -> Option<bool> {
     let rc = unsafe { libc::ioctl(dst_f.as_raw_fd(), FICLONE, src_f.as_raw_fd()) };
     drop(src_f);
     drop(dst_f);
+    // allow:unlink probe files this call created
     let _ = std::fs::remove_file(&src);
     let _ = std::fs::remove_file(&dst);
     Some(rc == 0)
@@ -357,7 +378,7 @@ fn probe_cow(dir: &Path) -> Option<bool> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
-    std::fs::create_dir_all(dir).ok()?;
+    crate::build::io_utils::create_output_dir_all(dir).ok()?;
     let c = CString::new(dir.as_os_str().as_bytes()).ok()?;
     let mut st: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {

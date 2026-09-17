@@ -124,6 +124,7 @@ pub fn save(paths: &MossPaths, snap: &PublishedSnapshot) -> Result<(), String> {
     // The single slot has been migrated off — see `legacy_path`.
     // Leaving it would let a baseline from before the keyed layout outlive the
     // record that replaced it, and answer for a target it no longer describes.
+    // allow:unlink the legacy publish-record path under .moss, not staging
     let _ = std::fs::remove_file(legacy_path(paths));
     Ok(())
 }

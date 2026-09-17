@@ -18,6 +18,7 @@ use serde::Serialize;
 /// absent. The newline terminator makes a torn final line detectable.
 pub fn append_jsonl<T: Serialize>(path: &Path, event: &T) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
+        // allow:raw_write .moss/data, not the build tree
         std::fs::create_dir_all(parent)?;
     }
     let line = serde_json::to_string(event).map_err(std::io::Error::other)?;

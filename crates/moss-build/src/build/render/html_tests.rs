@@ -6143,7 +6143,7 @@ mod og_url_tests {
                 Language::En, None, false, false, None, false, None, None,
                 &std::collections::HashMap::new(),
                 &SiteUrl::parse("https://example.com").unwrap(),
-                true, false, "favicon.svg", Some(dir.path()), &mut og_outputs,
+                true, false, "favicon.svg", false, Some(dir.path()), &mut og_outputs,
                 source_root,
                 &crate::build::emit::scripts::ScriptAssets::resolve(),
             )
@@ -6176,6 +6176,40 @@ mod og_url_tests {
                 && wide.contains(r#"og:image:height" content="1145""#),
             "a passed-through cover should carry the dimensions moss scanned: {wide}"
         );
+    }
+
+    /// A favicon raster trio an earlier default-SVG build left in the output
+    /// tree is not this build's: once a vault grows its own `favicon.png`, no
+    /// PNG sizes are rasterized, and pages must not link the leftovers
+    /// (zhu-da, 2026-09-14). The page reads the build's answer, never the
+    /// directory, so the trio can wait for the permitted staging sweep.
+    #[test]
+    fn a_leftover_favicon_raster_trio_links_nothing() {
+        use super::super::generate_html_collect_og;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let assets = dir.path().join("assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        for stale in ["favicon-16.png", "favicon-32.png", "favicon-180.png"] {
+            std::fs::write(assets.join(stale), b"from an earlier build").unwrap();
+        }
+        let homepage = make_doc("Home", "index.html");
+        let all_docs = vec![homepage.clone()];
+        let no_previous = std::collections::HashMap::new();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+        let html = generate_html_collect_og(
+            Some(&homepage), &all_docs, &make_project(), &make_layout(), true, None, None,
+            Language::En, None, false, false, None, false, None, None,
+            &std::collections::HashMap::new(),
+            &SiteUrl::parse("https://example.com").unwrap(),
+            true, false, "favicon.png", false, Some(dir.path()), &mut og_outputs,
+            std::path::Path::new(""),
+            &crate::build::emit::scripts::ScriptAssets::resolve(),
+        )
+        .expect("render");
+
+        assert!(!html.contains("apple-touch-icon"), "no link to a PNG this build did not write: {html}");
+        assert!(!html.contains("favicon-180.png"), "no link to a PNG this build did not write");
     }
 
     #[test]
@@ -6218,6 +6252,7 @@ mod og_url_tests {
             true,
             false,
             "favicon.svg",
+            false,
             Some(output_root),
             &mut og_outputs,
             std::path::Path::new(""), // source_root
@@ -6297,6 +6332,7 @@ mod og_url_tests {
             true,
             false,
             "favicon.svg",
+            false,
             Some(output_root),
             &mut og_outputs,
             std::path::Path::new(""), // source_root
@@ -6362,6 +6398,7 @@ mod og_url_tests {
             true,
             false,
             "favicon.svg",
+            false,
             Some(output_root),
             &mut og_outputs,
             std::path::Path::new(""), // source_root
@@ -6421,6 +6458,7 @@ mod og_url_tests {
                 true,
                 false,
                 "favicon.svg",
+                false,
                 Some(dir.path()),
                 &mut og_outputs,
                 std::path::Path::new(""), // source_root
@@ -6480,6 +6518,7 @@ mod og_url_tests {
             true,
             false,
             "favicon.svg",
+            false,
             Some(output_root),
             &mut og_outputs,
             std::path::Path::new(""), // source_root
@@ -6551,6 +6590,7 @@ mod og_url_tests {
             true,
             false,
             "favicon.svg",
+            false,
             Some(tmp.path()),
             &mut og_outputs,
             std::path::Path::new(""),
@@ -6708,6 +6748,7 @@ mod listable_page_card_tests {
             true,
             false,
             "favicon.svg",
+            false,
             Some(output_root),
             &mut og_outputs,
             std::path::Path::new(""),

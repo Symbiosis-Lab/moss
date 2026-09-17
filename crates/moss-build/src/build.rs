@@ -24,10 +24,9 @@
 //!
 //! - `generations/<gen-id>/` — immutable frozen deploy output. Written once by
 //!   `materialize_and_promote` after sealing. The `current` symlink points to
-//!   the active generation; deploy reads from it. During a rebuild, the preview
-//!   server temporarily switches to `current` (the previous frozen gen) to avoid
-//!   flicker. After the rebuild's blocking phase completes, preview switches
-//!   back to stage.
+//!   the active generation; deploy reads from it. A rebuild parks the preview
+//!   on `current` only when `current` already holds the render on screen, and
+//!   the render moves it back to stage (`build::lifecycle`).
 //!
 //! The bridge between them is the **ship** operation:
 //!
@@ -41,21 +40,13 @@
 //! future transform (minification, sourcemap removal, etc.) is a one-line
 //! addition to `transform_for`.
 //!
-//! ## Reader/writer state machine
+//! ## Who moves the preview
 //!
-//! ```text
-//! state                  | preview reads | stage state | site state
-//! -----------------------+---------------+-------------+----------
-//! idle (no rebuild)      | stage         | last build  | last build (frozen)
-//! rebuild blocking phase | site          | overwriting | last build (frozen)
-//! after blocking ship    | stage         | new build   | new build (frozen)
-//! deferred phase         | stage         | new build + | new build +
-//!                        |               | bg outputs  | bg outputs (live)
-//! ```
-//!
-//! `SiteDirectoryState::switch_to` calls in `build/pipeline.rs` implement
-//! these transitions. Do not remove without first reading
-//! `docs/archive/2026-05-04-stage-vs-site-audit.md`.
+//! `build::lifecycle` is the one writer of the served pointer. A rebuild parks
+//! on `current` when `current` holds the render on screen (and may then sweep
+//! staging); otherwise it leaves the preview on staging and unlinks nothing. A
+//! render shows staging when it may be published. A generation withheld as
+//! unreadable withdraws its render back to `current`.
 //!
 //! ## Lifecycle types
 //!
@@ -121,6 +112,7 @@ pub mod feeds;
 pub mod footer;
 pub mod highlight;
 pub mod io_utils;
+pub(crate) mod lifecycle;
 pub mod media_collection;
 pub mod notebook;
 pub mod outcome;
@@ -328,7 +320,7 @@ pub struct PipelineConfig {
     /// (`build_shell::watch::worker`), `None` for every other caller.
     ///
     /// The epoch is what orders this build against other builds of the same
-    /// folder at promotion time (`ship::try_promote`). Minting it when the
+    /// folder at promotion time (`lifecycle::promote`). Minting it when the
     /// worker dequeues the request — rather than when the build finishes —
     /// means a build that wedges and un-wedges after its successor can never
     /// mint a newer epoch and promote stale output over it (phase 1a of
@@ -662,10 +654,10 @@ pub fn sample_cache_keys() -> crate::build::ports::CacheKeyInputs {
 /// Should this build's in-memory content hashes become the watcher's refresh
 /// baseline? Only when the build actually became what the preview shows.
 ///
-/// The stash must describe what the screen shows. The pipeline switches the
-/// preview to this build's staging output only when `publishable` is true
-/// (`pipeline::run`, the two `if publishable { state.switch_to(..) }` arms),
-/// and a cancelled build early-returns before either switch (with
+/// The stash must describe what the screen shows. The pipeline shows this
+/// build's staging output only when `publishable` is true
+/// (`lifecycle::show_render`), and a cancelled build early-returns before it
+/// (with
 /// `publishable: false, cancelled: true`). Stashing a non-switched build's
 /// hashes poisons the baseline: the next publishable build's
 /// `changed_output_files` diff (via `peek_content_hashes`) then compares
@@ -703,6 +695,17 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
         return Err("Empty folder path provided".to_string());
     }
 
+    // This build may write the object store and staging from here until its
+    // background workers join: scan stores blobs, render and the media workers
+    // write staging. While the lease is open no other build of this folder may
+    // unlink from staging (`lifecycle::park_for_rebuild`). It rides into the
+    // pipeline's background handle, and a retried attempt takes a fresh one if
+    // the first attempt's handle took it down with it.
+    let lifecycle_paths = crate::moss_paths::MossPaths::new(config.source());
+    let cache_lease = std::sync::Arc::new(std::sync::Mutex::new(Some(
+        crate::build::lifecycle::cache_write_lease(&lifecycle_paths),
+    )));
+
     // Bring `.moss/` up to date before ANYTHING reads it. This used to sit
     // inside `pipeline::run`, which put it after the `[services]` read that
     // feeds the native-process sync — so a site still on the pre-v2 schema
@@ -712,6 +715,18 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // ("migration persistence becomes a precondition the entry point
     // satisfies"), and it closes that ordering hole on the way.
     config.host.store.run_vault_migrations(&config.root);
+
+    // Derive the .moss dir — always present, used as the preview-server dedup key.
+    let moss_dir_path = config.source().join(".moss");
+    let moss_dir_str = moss_dir_path.to_string_lossy().to_string();
+
+    // Ensure .moss/ exists and mark the regenerable tree out of cloud sync
+    // BEFORE anything below writes into it: the CLI's link-meta prewarm writes
+    // `.moss/build/cache/link-meta/`, and a marker cannot un-sync bytes a
+    // provider already took.
+    // allow:raw_write `.moss` itself; the regenerable tree starts below it
+    std::fs::create_dir_all(&moss_dir_path).map_err(|e| format!("Failed to create .moss directory: {}", e))?;
+    crate::infra::moss_paths::exclude_dirs_from_cloud_sync(&moss_dir_path); // regenerable output: keep it out of iCloud, and out of the set moss waits for
 
     // Begin a fresh link-meta URL session for this build. Render fills the
     // session via `record_urls_for_prewarm`; we flush it just before spawning
@@ -766,14 +781,6 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
         }
     }
 
-    // Derive the .moss dir — always present, used as the preview-server dedup key.
-    let moss_dir_path = config.source().join(".moss");
-    let moss_dir_str = moss_dir_path.to_string_lossy().to_string();
-
-    // Ensure .moss/ itself exists (the staging/generations subdirs are created
-    // by the pipeline; we just need the parent for .gitignore).
-    std::fs::create_dir_all(&moss_dir_path).map_err(|e| format!("Failed to create .moss directory: {}", e))?;
-    crate::infra::moss_paths::exclude_dirs_from_cloud_sync(&moss_dir_path); // regenerable output: keep it out of iCloud, and out of the set moss waits for
 
     crate::infra::moss_paths::ensure_moss_gitignore(&moss_dir_path)?;
 
@@ -795,33 +802,25 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // What to serve from the moment the server is ready, before this rebuild
     // produces annotated /staging: the last frozen generation (current → gen)
     // if it exists, else /staging — see initial_serve_dir().
-    //
-    // NOTE: this seed also runs on the start_server=false GUI rebuild paths
-    // (deploy pre-build, plugin-install) against the LIVE managed Arc. There it
-    // flips the live server to the frozen `current` at rebuild start — safe (and
-    // safer than the old switch_to(/site)): the pipeline re-points to /staging at
-    // completion (pipeline.rs) and `current` is a clean frozen generation, never
-    // a half-written in-place rebuild target.
     let initial_serve_dir = crate::moss_paths::MossPaths::new(config.source()).initial_serve_dir();
 
-    // Create SiteDirectoryState. CRITICAL (C3 / regression cce38aa0fc): in GUI mode
-    // the preview SERVER reads the app-MANAGED SiteDirectoryState, so the build must
-    // run against that SAME Arc — otherwise the zero-flicker dance's switch_to(stage)
-    // at build completion (pipeline.rs) writes a disconnected Arc the server never
-    // sees, leaving the preview stuck on the seed dir all session → click-to-source
-    // dead. Share the managed Arc (GUI) or a fresh one (CLI). The CLI case is NOT "no
-    // live server" — `moss build --serve` runs one here, so the fresh Arc is handed to
-    // `start_preview_server` below. See docs/reference/editor-preview-sync.md 1 + 2.
+    // CRITICAL (C3 / regression cce38aa0fc): in GUI mode the preview SERVER
+    // reads the app-MANAGED cell, so the build must run against that SAME Arc —
+    // otherwise showing staging at build completion writes a disconnected Arc
+    // the server never sees. Share the managed Arc (GUI) or a fresh one (CLI).
+    // The CLI case is NOT "no live server" — `moss build --serve` runs one here,
+    // so the fresh Arc is handed to `start_preview_server` below. See
+    // docs/reference/editor-preview-sync.md 1 + 2.
     let shared_dir = config
         .host
         .site_dir
         .clone()
         .unwrap_or_else(|| std::sync::Arc::new(std::sync::RwLock::new(initial_serve_dir.clone())));
     let standalone_state = SiteDirectoryState { current_dir: shared_dir };
-    // Rest on the frozen previous build initially: during a rebuild the dance
-    // serves this clean, deploy-ready generation; it flips to /stage at
-    // completion (annotated, for scroll sync).
-    standalone_state.switch_to(initial_serve_dir.clone());
+    // Points the cell here only if it names nothing or another folder: every
+    // later move belongs to `lifecycle`, which never steps the preview back to
+    // a generation older than the render on screen.
+    crate::build::lifecycle::adopt_server(&lifecycle_paths, &standalone_state.current_dir);
 
     // Start preview server FIRST — before scan, before anything. The shared Arc
     // already rests on initial_serve_dir (the frozen `current` generation when the
@@ -829,7 +828,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // while we rebuild in the background.
     let port = if config.start_server {
         // Hand the server THIS build's cell — in CLI mode that is the only way it
-        // learns about `switch_to(staging)` below.
+        // learns that the render moved it to staging.
         let cell = Some(standalone_state.current_dir.clone());
         let launched = match config.host.launch_server.as_ref() {
             Some(launch) => launch(moss_dir_str.clone(), cell).await,
@@ -1149,7 +1148,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
         })
     };
 
-    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_media, cancelled, home_ready: _home_ready, publishable } = {
+    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_media, cancelled, home_ready: _home_ready, publishable, render_seq } = {
         // moss's own generator, always. A plugin could replace it wholesale
         // through the `generate` capability until ADR-055 retired it: three
         // months, no implementation, and the branch had already decayed into
@@ -1159,10 +1158,13 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
         let attempt = || {
             let root_owned = config.root.clone();
             // Share the Arc (C3) — NOT SiteDirectoryState::new (a fresh Arc) — so the
-            // pipeline's zero-flicker switch_to(current_ptr)/switch_to(stage) drives the
-            // SAME state the preview server reads. ::new severed it, so the GUI markdown
-            // cold start served the empty /site until the initial-build-complete event.
+            // pipeline's pointer moves drive the SAME state the preview server reads.
             let state_owned = SiteDirectoryState { current_dir: standalone_state.current_dir.clone() };
+            let lease = cache_lease
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+                .unwrap_or_else(|| crate::build::lifecycle::cache_write_lease(&lifecycle_paths));
             let reporter_owned = tier1_reporter(&config.progress);
             let ps = project_structure.clone();
             let site_url_override = config.site_url_override.clone();
@@ -1183,7 +1185,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
             async move {
                 tokio::task::spawn_blocking(move || {
                     let _blocking_scope = crate::build::phase::enter_blocking_scope(phase_collector_for_blocking);
-                    pipeline::run(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned)
+                    pipeline::run_leased(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned, Some(lease))
                 }).await.map_err(|e| BuildStopped::from(format!("Build task panicked: {}", e)))?
             }
         };
@@ -1305,11 +1307,15 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
             let assets_for_seal = assets_for_advertise.clone();
             let seal_freshness =
                 crate::build::feeds::search_lane::Freshness::of(config.exits_after_build);
+            // Held for the tail's life so a folder switch cannot evict this
+            // folder's lifecycle record (and its promotion epoch) under it.
+            let lifecycle_record = crate::build::lifecycle::lock_for(&mp);
 
             // Dropping the returned Joining DETACHES the task (the runtime
             // aborts only via an explicit `.abort()`), which is exactly what
             // a detached seal wants.
             let _detached = config.host.spawner.spawn(Box::pin(async move {
+                let _lifecycle_record = lifecycle_record;
                 seal_ports.events.report(&crate::build::progress::PipelineEvent::BackgroundProgress {
                     task: "sealing".to_string(),
                     current: 0,
@@ -1318,12 +1324,14 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                     completed: false,
                     advisories: vec![],
                 });
+                let wait = SealWait::start();
                 match handle.await_completion().await {
                     Ok(sealed) => {
                         log::info!(
-                            "seal+persist: generation {} sealed ({} files)",
+                            "seal+persist: generation {} sealed ({} files), {}",
                             sealed.generation_id(),
-                            sealed.files().len()
+                            sealed.files().len(),
+                            wait.finish()
                         );
                         let mp_for_mat = crate::moss_paths::MossPaths::new(
                             std::path::Path::new(&folder_path_for_mat),
@@ -1338,13 +1346,14 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                             |g| store.is_pinned(g),
                             session_opt.as_ref(),
                             promotion_epoch,
+                            render_seq,
                             publishable,
                             seal_freshness,
                             &folder_path_for_mat,
                             // Detached: the app or a `--serve --watch` process
                             // outlives this task, and may still be reading
                             // `stage_dir`. Never reclaim here.
-                            false,
+                            None,
                         )
                         .await;
                     }
@@ -1389,12 +1398,14 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
             // stage-write guard the build's own span took — uncontended here
             // (this arm exists because nothing else will run), and that is the
             // price of one tail rather than a second code path.
+            let wait = SealWait::start();
             match handle.await_completion().await {
                 Ok(sealed) => {
                     log::info!(
-                        "seal+persist (sync): generation {} sealed ({} files)",
+                        "seal+persist (sync): generation {} sealed ({} files), {}",
                         sealed.generation_id(),
-                        sealed.files().len()
+                        sealed.files().len(),
+                        wait.finish()
                     );
                     let mp = crate::moss_paths::MossPaths::new(std::path::Path::new(&folder_path));
                     let session = crate::system::folder_session::registry().get(&folder_path);
@@ -1412,6 +1423,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                         |_| false,
                         session.as_ref(),
                         promotion_epoch,
+                        render_seq,
                         publishable,
                         crate::build::feeds::search_lane::Freshness::Now,
                         &folder_path,
@@ -1419,7 +1431,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                         // the tokio runtime as soon as this returns — nothing
                         // reads `stage_dir` again in this process. Reclaim now
                         // or never.
-                        true,
+                        Some(crate::build::lifecycle::final_build_permit(&mp)),
                     )
                     .await;
                 }
@@ -1630,6 +1642,41 @@ pub fn diff_settled_assets(
     changed
 }
 
+/// How long a seal tail waited for its workers, on both clocks.
+///
+/// `Instant` does not advance while the process is suspended (App Nap, a
+/// sleeping lid) and `SystemTime` does, so the gap between the two is a
+/// direct reading of suspension — the inference `stuck.md` had to make from
+/// two log timestamps becomes one line.
+struct SealWait {
+    mono: std::time::Instant,
+    wall: std::time::SystemTime,
+}
+
+/// A wall-minus-monotonic gap above this is reported as a suspension rather
+/// than scheduler noise.
+const SEAL_WAIT_SUSPENSION_WARN: std::time::Duration = std::time::Duration::from_secs(5);
+
+impl SealWait {
+    fn start() -> Self {
+        Self { mono: std::time::Instant::now(), wall: std::time::SystemTime::now() }
+    }
+
+    /// `workers awaited <mono> s (wall <wall> s)`, with a WARN beside it when
+    /// the two clocks disagree by more than [`SEAL_WAIT_SUSPENSION_WARN`].
+    fn finish(&self) -> String {
+        let mono = self.mono.elapsed();
+        let wall = self.wall.elapsed().unwrap_or(mono);
+        if wall.saturating_sub(mono) > SEAL_WAIT_SUSPENSION_WARN {
+            log::warn!(
+                "process was suspended ~{} s during the seal wait",
+                wall.saturating_sub(mono).as_secs()
+            );
+        }
+        format!("workers awaited {:.1} s (wall {:.1} s)", mono.as_secs_f64(), wall.as_secs_f64())
+    }
+}
+
 /// The subset of [`HostPorts`](crate::build::HostPorts) a seal tail needs,
 /// cloned ONCE where the tail is launched instead of field-by-field at every
 /// call site — the next port a tail needs joins here instead of growing
@@ -1715,6 +1762,8 @@ async fn advertise_sealed(
     is_pinned: impl Fn(&str) -> bool,
     session: Option<&std::sync::Arc<crate::system::folder_session::FolderSession>>,
     promotion_epoch: u64,
+    // The render `lifecycle::show_render` minted for this build.
+    render_seq: Option<u64>,
     publishable: bool,
     freshness: crate::build::feeds::search_lane::Freshness,
     // The exact key `folder_session::registry()` and `ops::watch::worker`
@@ -1722,28 +1771,32 @@ async fn advertise_sealed(
     // so a `MossPaths` normalization can never drift the two apart. See the
     // step-7b call into `trigger_media_settle_rerender` below.
     folder_path: &str,
-    // True only from the `exits_after_build` call site (CLI / `build_sync` /
-    // the snapshot-test harness), where the caller drops the tokio runtime as
-    // soon as this returns — no server, no watcher, nothing reads `stage_dir`
-    // again in this process. `pipeline::sweep_staging` reclaims what a build
-    // orphans, but only at the START of a FUTURE build in this same folder;
-    // a one-shot invocation never has one, so without this flag its orphaned
-    // `.webp` bytes sit in staging forever and ship in anything that reads
-    // that tree directly (a raw copy of staging, a snapshot test). See
-    // `ship::reclaim_staging_now`.
-    reclaim_stage_dir_when_done: bool,
+    // `Some` only from the `exits_after_build` call site (CLI / `build_sync` /
+    // the snapshot-test harness), whose caller drops the runtime as soon as
+    // this returns: no later build will sweep what this one orphaned, so the
+    // tail reclaims it now (`ship::reclaim_staging_now`).
+    final_sweep: Option<crate::build::lifecycle::SweepPermit>,
 ) {
     let reporter = ports.events.as_ref();
     let announcer = ports.announcer.as_ref();
+    let sealed_at = std::time::Instant::now();
+    // The id the coordinator sealed, before the repair pass below rewrites
+    // HTML and re-derives it — the promote line names both, so a sealed id
+    // and a promoted id that differ read as one generation, not two.
+    let sealed_as = sealed.generation_id().to_string();
     // 0. Read the PREVIOUS on-disk manifest BEFORE step 2 overwrites it, so the
     //    post-seal asset diff (step 7) compares the freshly-sealed view against
     //    the prior build. Missing/corrupt → default (empty), so a first build
     //    treats every materialized variant as new. write_to_disk below clobbers
     //    this file, hence the read must happen here.
-    let previous_hashes: crate::types::content::SiteHashes = std::fs::read_to_string(hashes_path)
-        .ok()
-        .and_then(|c| serde_json::from_str(&c).ok())
-        .unwrap_or_default();
+    //    `None` when the file exists but could not be read or parsed: an
+    //    unreadable manifest is not an empty one, and diffing against empty
+    //    reads every variant as newly settled.
+    let previous_hashes: Option<crate::types::content::SiteHashes> = match std::fs::read_to_string(hashes_path) {
+        Ok(c) => serde_json::from_str(&c).ok(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(Default::default()),
+        Err(_) => None,
+    };
 
     // Seal-persist-race-404 fix: acquire the SAME per-folder stage-write
     // guard that `build_inner` (pipeline.rs) holds across its own
@@ -1775,23 +1828,22 @@ async fn advertise_sealed(
     // registry is read here because it is the only thing in this tail that
     // needs one — see `degrade::repair_staged_html` for the four sources and
     // why their order is what it is.
-    crate::build::degrade::repair_staged_html(
+    let presence_verdict = crate::build::degrade::repair_staged_html(
         mp,
         stage_dir,
         &mut sealed,
         assets.as_ref().map(|r| r.failed_keys()).unwrap_or_default(),
     );
+    let verdict = if publishable {
+        presence_verdict
+    } else {
+        crate::build::ship::ShipVerdict::Withhold(crate::build::ship::WithholdReason::SourcesDownloading)
+    };
 
     // `sealed` is now final — every pass that can drop a manifest entry has
-    // run. On the one-shot path (`reclaim_stage_dir_when_done`), this is also
-    // the only chance this process gets to reclaim what it orphaned:
-    // `pipeline::sweep_staging` would otherwise defer that to a next build
-    // that never comes (see the parameter doc). Safe here specifically
-    // because that caller has no server and is about to drop the runtime —
-    // the live-preview hazard `reclaim_stage_dir_when_done` is false for
-    // (a detached seal, server still on `stage_dir`) does not apply.
-    if reclaim_stage_dir_when_done {
-        crate::build::ship::reclaim_staging_now(stage_dir, &sealed);
+    // run, so a one-shot build reclaims its orphans against it.
+    if let Some(permit) = &final_sweep {
+        crate::build::ship::reclaim_staging_now(stage_dir, &sealed, permit);
     }
 
     // Last moment the manifest and the stage agree on what shipped — the one
@@ -1816,19 +1868,25 @@ async fn advertise_sealed(
         stage_dir,
         None,
         promotion_epoch,
-        publishable,
+        render_seq,
+        verdict,
     );
     match &promotion {
-        Ok(Promotion::Promoted) => {}
+        Ok(Promotion::Promoted) => log::info!(
+            "promoted gen {} (sealed as {}, epoch {}, render #{}, {} files) {} ms after seal",
+            sealed.generation_id(),
+            sealed_as,
+            promotion_epoch,
+            render_seq.map_or("none".to_string(), |r| r.to_string()),
+            sealed.files().len(),
+            sealed_at.elapsed().as_millis()
+        ),
         Ok(Promotion::Superseded) => log::info!(
             "advertise_sealed: generation {} was superseded before promotion",
             sealed.generation_id()
         ),
-        Ok(Promotion::Withheld) => log::info!(
-            "advertise_sealed: generation {} was withheld — built without sources that are \
-             still downloading",
-            sealed.generation_id()
-        ),
+        // Said once, with its reason, by `materialize_and_promote`.
+        Ok(Promotion::Withheld(_)) => {}
         Err(_) => log::error!("advertise_sealed: materialize failed — current_ptr stays put"),
     }
     let mat_ok = matches!(promotion, Ok(Promotion::Promoted));
@@ -1854,13 +1912,11 @@ async fn advertise_sealed(
         }
     }
 
-    // 3. Retain generations + sweep the cache. Non-fatal, and deliberately
-    //    inside the `_stage_write_guard` span below: `cache::gc` requires a
-    //    quiescent cache, and this guard is what serializes us against the
-    //    next rebuild's stage-writing span. Blocking work, so it goes to the
-    //    blocking pool rather than stalling this executor thread — we still
-    //    await it, because releasing the guard early is the thing the
-    //    quiescence requirement forbids.
+    // 3. Retain generations + sweep the cache. Non-fatal. Generation GC stays
+    //    inside the `_stage_write_guard` span, which serializes it against the
+    //    next rebuild's promotion; the cache sweep runs only when no build or
+    //    encode holds a cache lease (`store_gc::maybe_gc_cache`). Blocking
+    //    work, so it goes to the blocking pool.
     if mat_ok {
         // `project_root()`, not `root()`: `MossPaths::new` appends `.moss`, so
         // handing it the `.moss` dir builds paths under `.moss/.moss/` and the
@@ -1924,7 +1980,10 @@ async fn advertise_sealed(
     // Compute the post-seal asset diff HERE (step 7 emits it) while `view` still
     // borrows `sealed` — step 5 below MOVES `sealed` into the deploy slot. The
     // result is an owned Vec, so the borrow ends here.
-    let settled_changed = diff_settled_assets(&previous_hashes, view);
+    let settled_changed = match &previous_hashes {
+        Some(previous) => diff_settled_assets(previous, view),
+        None => diff_settled_assets(&Default::default(), view),
+    };
 
     // 4b. Classify what publishing this generation would change on the live
     //     site, against the record of the last publish that landed — or, with
@@ -2010,7 +2069,7 @@ async fn advertise_sealed(
         // `trigger_media_settle_rerender`'s doc for the full case-by-case
         // reasoning. Reuses the render's own existing trigger path rather
         // than growing a second one here.
-        trigger_media_settle_rerender(folder_path, &settled_changed, &previous_hashes);
+        trigger_media_settle_rerender(folder_path, &settled_changed, previous_hashes.as_ref());
         reporter.report(&crate::build::progress::PipelineEvent::AssetsSettled {
             changed: settled_changed,
         });
@@ -2059,11 +2118,18 @@ async fn advertise_sealed(
 /// (`ops::watch::worker`), and that build's own `diff_settled_assets`
 /// compares against the manifest THIS build just sealed — an unchanged
 /// re-encode reports nothing new, so it triggers no further rebuild.
+///
+/// `previous` is `None` when the last manifest could not be read: every variant
+/// then diffs as settled, and a rebuild enqueued on that is a rebuild for
+/// nothing — under active cloud management, one per seal.
 fn trigger_media_settle_rerender(
     folder_path: &str,
     settled: &[crate::build::progress::SettledAsset],
-    previous: &crate::types::content::SiteHashes,
+    previous: Option<&crate::types::content::SiteHashes>,
 ) {
+    let Some(previous) = previous else {
+        return;
+    };
     let needs_rerender = settled.iter().any(|a| {
         a.asset_type == "thumbnail"
             || (a.asset_type == "image" && !previous.files.contains_key(&a.path))
@@ -2090,11 +2156,8 @@ fn trigger_media_settle_rerender(
 /// Both collectors are non-fatal: a GC failure never invalidates a build that
 /// already succeeded.
 ///
-/// **Callers must hold the per-folder `stage_write_lock`.** Every path does:
-/// both CLI entry points register a `FolderSession` (since 2026-08-24), so the
-/// "no concurrent build is possible on the CLI" exemption this doc used to
-/// claim is gone — and it was never true of `--serve --watch` anyway.
-/// `cache::gc` requires a quiescent cache.
+/// **Callers must hold the per-folder `stage_write_lock`** for generation GC;
+/// the cache sweep gates itself on the folder's cache leases.
 fn collect_build_store(
     mp: &crate::moss_paths::MossPaths,
     current_gen_id: &str,
@@ -2118,7 +2181,7 @@ fn collect_build_store(
     if let Err(e) = store_gc::gc_old_generations(&mp.generations_dir(), &roots, keep) {
         log::warn!("generation GC failed (non-fatal): {}", e);
     }
-    store_gc::maybe_gc_cache(&mp.build_dir());
+    store_gc::maybe_gc_cache(mp);
 }
 
 #[cfg(test)]
@@ -2164,7 +2227,7 @@ mod media_settle_rerender_tests {
         trigger_media_settle_rerender(
             folder,
             &[thumbnail("videos/clip.thumb.jpg")],
-            &SiteHashes::default(),
+            Some(&SiteHashes::default()),
         );
 
         assert!(
@@ -2188,7 +2251,7 @@ mod media_settle_rerender_tests {
         trigger_media_settle_rerender(
             folder,
             &[image("assets/pic.webp"), video("videos/clip.mp4")],
-            &previous_knowing(&["assets/pic.webp"]),
+            Some(&previous_knowing(&["assets/pic.webp"])),
         );
 
         assert!(
@@ -2210,12 +2273,29 @@ mod media_settle_rerender_tests {
         trigger_media_settle_rerender(
             folder,
             &[image("assets/new-cover.webp")],
-            &SiteHashes::default(), // previous manifest has never seen this path
+            Some(&SiteHashes::default()), // previous manifest has never seen this path
         );
 
         assert!(
             handle.slot_occupied(),
             "a brand-new image settle must enqueue a follow-up rebuild"
+        );
+        worker::deregister(folder, &handle);
+    }
+
+    /// An unreadable previous manifest is not an empty one. Diffed against
+    /// empty, every poster reads as newly settled, and a rebuild enqueued on
+    /// that is one rebuild per seal for as long as the file stays unreadable.
+    #[test]
+    fn an_unreadable_previous_manifest_enqueues_nothing() {
+        let folder = "/tmp/media-settle-rerender-test-unreadable-previous";
+        let handle = worker::register(folder);
+
+        trigger_media_settle_rerender(folder, &[thumbnail("videos/clip.thumb.jpg")], None);
+
+        assert!(
+            !handle.slot_occupied(),
+            "a settle diffed against a manifest nobody could read must not enqueue"
         );
         worker::deregister(folder, &handle);
     }
@@ -2230,7 +2310,7 @@ mod media_settle_rerender_tests {
         trigger_media_settle_rerender(
             folder,
             &[thumbnail("videos/clip.thumb.jpg")],
-            &SiteHashes::default(),
+            Some(&SiteHashes::default()),
         );
         assert!(worker::get(folder).is_none(), "still nothing registered");
     }

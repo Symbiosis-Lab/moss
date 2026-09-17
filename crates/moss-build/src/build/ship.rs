@@ -234,7 +234,7 @@ pub fn ship_phase(
         }
 
         if let Some(parent) = site_path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
+            if let Err(e) = crate::build::io_utils::create_output_dir_all(parent) {
                 log::warn!("[ship_phase] create_dir_all for parent {:?}: {}", parent, e);
                 failures += 1;
                 continue;
@@ -245,14 +245,7 @@ pub fn ship_phase(
                 Ok(target) => {
                     #[cfg(unix)]
                     {
-                        // remove_existing is unix-only (clears a file/symlink).
-                        use crate::build::media::symlink::remove_existing;
-                        if let Err(e) = remove_existing(&site_path) {
-                            log::warn!("[ship_phase] Could not clear {:?} before recreating symlink: {}", site_path, e);
-                            failures += 1;
-                            continue;
-                        }
-                        if let Err(e) = std::os::unix::fs::symlink(&target, &site_path) {
+                        if let Err(e) = crate::build::io_utils::replace_with_symlink(&target, &site_path) {
                             log::warn!("[ship_phase] Failed to recreate symlink at {:?}: {}", site_path, e);
                             failures += 1;
                         }
@@ -260,8 +253,10 @@ pub fn ship_phase(
                     #[cfg(windows)]
                     {
                         let _ = if site_path.is_dir() {
-                            std::fs::remove_dir_all(&site_path)
+                            // allow:unlink the generation being materialized, which nothing serves before promote
+                            crate::build::io_utils::remove_output_dir_all(&site_path)
                         } else {
+                            // allow:unlink the generation being materialized, which nothing serves before promote
                             std::fs::remove_file(&site_path)
                         };
                         let target_abs = if target.is_absolute() {
@@ -352,56 +347,8 @@ pub fn ship_phase(
 /// Monotonic source of promotion epochs (see [`next_promotion_epoch`]).
 static PROMOTION_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Highest promotion epoch that has reached `current`, per `.moss` directory.
-static PROMOTED: LazyLock<std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, u64>>> =
-    LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-
-/// Mint the next promotion epoch. **Call in build order**, at a point still
-/// serialized against other builds of the same folder — but "still
-/// serialized" is caller-specific, and callers now mint at three different
-/// such points, each sound for a different reason: `build.rs`'s own
-/// post-build fallback mints just before spawning the detached seal task,
-/// the last moment IT is still ordered against its successor; the rebuild
-/// worker mints at admission, before the build runs
-/// (`ops/watch.rs::attempt_admitted_rebuild`); `build_shell::build_folder`
-/// mints immediately, before the pipeline starts at all, because a worker
-/// can exist from folder-open onward and would otherwise be free to mint
-/// first (`docs/archive/2026-09-15-open-double-build-race.md`). See each
-/// call site for why its own point is still ordered against what it must be.
-///
-/// A plain process-global counter: the comparison in `try_promote` is
-/// per-folder, so sharing the sequence across folders costs a few skipped
-/// integers and nothing else.
 pub fn next_promotion_epoch() -> u64 {
     PROMOTION_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
-}
-
-/// Repoint `current` at `gen_id` unless a **newer** build already has.
-/// `Ok(false)` means refused-as-stale, which is not an error.
-///
-/// moss#968 §5d: `generation_id` is a *content* hash, so it carries no order,
-/// and seal tails run detached — build N's can outlive build N+1's whenever N
-/// had the slower background phase. `MossPaths::set_current_ptr` is an
-/// unconditional swap, so N's late tail silently rolled `current` back and the
-/// preview served stale pages until the next save. Only the accidental FIFO of
-/// the stage-write lock hid it, and that queue is ordered by worker completion,
-/// not by build.
-fn try_promote(
-    mp: &crate::moss_paths::MossPaths,
-    epoch: u64,
-    gen_id: &str,
-) -> std::io::Result<bool> {
-    // Held across the symlink swap so two tails cannot both pass the
-    // comparison and then race on `rename(2)`.
-    let mut promoted = PROMOTED
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if promoted.get(mp.root()).is_some_and(|latest| *latest >= epoch) {
-        return Ok(false);
-    }
-    mp.set_current_ptr(gen_id)?;
-    promoted.insert(mp.root().to_path_buf(), epoch);
-    Ok(true)
 }
 
 /// What [`materialize_and_promote`] did with the generation it was handed.
@@ -409,7 +356,7 @@ fn try_promote(
 /// The question every caller downstream is really asking is whether `current`
 /// points at this generation, because advertising a manifest whose generation is
 /// not the served one is a rollback in a different guise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Promotion {
     /// Frozen on disk, and `current` was repointed at it.
     Promoted,
@@ -427,7 +374,75 @@ pub enum Promotion {
     /// mismatch `tail_owns_shared_state` exists to prevent — and there is
     /// nothing to keep anyway: the rebuild that the missing sources' arrival
     /// triggers renders the site properly from scratch.
-    Withheld,
+    ///
+    /// The reason says which input failed — see [`WithholdReason`].
+    Withheld(WithholdReason),
+}
+
+/// Whether a sealed generation may replace what `current` serves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShipVerdict {
+    Ship,
+    Withhold(WithholdReason),
+}
+
+/// Why a generation was not promoted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WithholdReason {
+    /// The build could not read its own structural sources (moss#1042,
+    /// `pipeline::should_publish`).
+    SourcesDownloading,
+    /// The presence pass or a producer met an I/O error that was not a positive
+    /// `NotFound` on `entries` outputs. An unreadable output is not a missing
+    /// one, so nothing was dropped for them — and a generation that could not
+    /// read what it checked is not one to ship. `sample` names up to three,
+    /// each with its error.
+    Unverified { entries: usize, sample: Vec<String> },
+    /// The presence pass dropped more of the manifest than a healthy build ever
+    /// loses between registration and seal — see [`PRESENCE_LOSS_FLOOR`].
+    ImplausibleLoss { lost: usize, of: usize },
+}
+
+/// The presence pass may drop up to `max(PRESENCE_LOSS_FLOOR, entries / 20)`
+/// entries before the generation is withheld. Policy, not physics: a healthy
+/// pass drops only what vanished between registration and seal, which the
+/// field log put at zero, and the incident pass that could read nothing dropped
+/// 822 of 822.
+pub const PRESENCE_LOSS_FLOOR: usize = 16;
+
+impl ShipVerdict {
+    /// The verdict a presence pass over a manifest of `entries` reaches, having
+    /// dropped `lost` of them and left `sealed.unverified()` behind.
+    pub fn after_presence_pass(
+        sealed: &crate::build::manifest::SealedManifest,
+        entries: usize,
+        lost: usize,
+    ) -> Self {
+        if !sealed.unverified().is_empty() {
+            return ShipVerdict::Withhold(WithholdReason::Unverified {
+                entries: sealed.unverified().len(),
+                sample: sealed
+                    .unverified()
+                    .iter()
+                    .take(3)
+                    .map(|(key, err)| format!("{key} ({err})"))
+                    .collect(),
+            });
+        }
+        if lost > PRESENCE_LOSS_FLOOR.max(entries / 20) {
+            return ShipVerdict::Withhold(WithholdReason::ImplausibleLoss { lost, of: entries });
+        }
+        ShipVerdict::Ship
+    }
+
+    /// Whether the served HTML may still be repaired in place: not when the
+    /// generation is about to be withheld for reading its own tree badly.
+    pub fn repairs_staging(&self) -> bool {
+        !matches!(
+            self,
+            ShipVerdict::Withhold(WithholdReason::Unverified { .. } | WithholdReason::ImplausibleLoss { .. })
+        )
+    }
 }
 
 /// Whether a seal tail with this outcome still owns the folder's **shared**
@@ -454,7 +469,7 @@ pub enum Promotion {
 /// contain — the same disagreement, reached by declining rather than by losing a
 /// race.
 pub fn tail_owns_shared_state(promotion: &Result<Promotion, String>) -> bool {
-    !matches!(promotion, Ok(Promotion::Superseded) | Ok(Promotion::Withheld))
+    !matches!(promotion, Ok(Promotion::Superseded) | Ok(Promotion::Withheld(_)))
 }
 
 /// Copy `staging/` → `generations/<gen-id>/` (stripping dev annotations) and
@@ -464,34 +479,56 @@ pub fn tail_owns_shared_state(promotion: &Result<Promotion, String>) -> bool {
 /// generation dir is created inside this function via `create_dir_all`.
 ///
 /// `epoch` orders this build against every other build of the same folder; the
-/// swap goes through [`try_promote`], which refuses it when a newer build has
-/// already promoted.
+/// swap goes through `lifecycle::promote`, which refuses it when a newer build
+/// has already promoted.
 ///
-/// `publishable` is `pipeline::should_publish`'s verdict, carried through
-/// `PipelineRunOutput`. `false` returns [`Promotion::Withheld`] before anything
-/// is copied.
+/// `verdict` combines `pipeline::should_publish` (carried through
+/// `PipelineRunOutput`) with the presence pass's own
+/// ([`ShipVerdict::after_presence_pass`]). A `Withhold` returns
+/// [`Promotion::Withheld`] before anything is copied.
 pub fn materialize_and_promote(
     sealed: &crate::build::manifest::SealedManifest,
     mp: &crate::moss_paths::MossPaths,
     stage_dir: &std::path::Path,
     cancel: Option<&tokio_util::sync::CancellationToken>,
     epoch: u64,
-    publishable: bool,
+    render: Option<u64>,
+    verdict: ShipVerdict,
 ) -> Result<Promotion, String> {
-    if !publishable {
-        log::info!(
-            "[cloud] withholding generation {} — the build could not read every structural \
-             source, so `current` stays on the last complete one",
-            sealed.generation_id()
-        );
-        return Ok(Promotion::Withheld);
+    if let ShipVerdict::Withhold(reason) = verdict {
+        match &reason {
+            WithholdReason::SourcesDownloading => log::info!(
+                "[cloud] withholding generation {} — the build could not read every structural \
+                 source, so `current` stays on the last complete one",
+                sealed.generation_id()
+            ),
+            WithholdReason::Unverified { entries, sample } => log::warn!(
+                "generation {} withheld: {} of {} entries unverifiable ({})",
+                sealed.generation_id(),
+                entries,
+                sealed.files().len(),
+                sample.join(", ")
+            ),
+            WithholdReason::ImplausibleLoss { lost, of } => log::warn!(
+                "generation {} withheld: presence pass lost {} of {} entries (limit {})",
+                sealed.generation_id(),
+                lost,
+                of,
+                PRESENCE_LOSS_FLOOR.max(of / 20)
+            ),
+        }
+        if reason != WithholdReason::SourcesDownloading {
+            // The tree on screen is the one that could not be read.
+            crate::build::lifecycle::withdraw_render(mp, render);
+        }
+        return Ok(Promotion::Withheld(reason));
     }
     let gen_dir = mp.generation_dir(sealed.generation_id());
-    std::fs::create_dir_all(&gen_dir)
+    crate::build::io_utils::create_output_dir_all(&gen_dir)
         .map_err(|e| format!("Failed to create generation dir: {}", e))?;
     ship_phase(stage_dir, &gen_dir, sealed, cancel)
         .map_err(|e| format!("Failed to materialize generation {}: {}", sealed.generation_id(), e))?;
-    let promoted = try_promote(mp, epoch, sealed.generation_id())
+    let promoted = crate::build::lifecycle::promote(mp, epoch, render, sealed.generation_id())
         .map_err(|e| format!("Failed to set current_ptr: {}", e))?;
     Ok(if promoted { Promotion::Promoted } else { Promotion::Superseded })
 }
@@ -617,18 +654,20 @@ pub(crate) fn prune_orphaned_webp_before_ship(
 /// byte-for-byte. moss#976 B2 measured exactly that shape on a real site.
 ///
 /// `sealed` must be the FINAL manifest — call this after every pass that can
-/// drop an entry (`degrade::repair_staged_html`), never before. The caller is
-/// responsible for proving nobody else reads `stage_dir` past this point; see
-/// the call site in `advertise_sealed`.
+/// drop an entry (`degrade::repair_staged_html`), never before. The permit is
+/// `lifecycle::final_build_permit`, minted where the caller proves nothing
+/// reads `stage_dir` again.
 pub(crate) fn reclaim_staging_now(
     stage_dir: &std::path::Path,
     sealed: &crate::build::manifest::SealedManifest,
+    permit: &crate::build::lifecycle::SweepPermit,
 ) {
     let hashes = sealed.site_hashes_view();
-    crate::build::media::pipeline::remove_stale_files(stage_dir, hashes, "staging (final build)");
+    crate::build::media::pipeline::remove_stale_files(stage_dir, hashes, "staging (final build)", permit);
     crate::build::media::pipeline::remove_stale_dirs(
         stage_dir,
         &crate::build::media::pipeline::compute_expected_dirs(hashes),
+        permit,
     );
 }
 
@@ -660,19 +699,32 @@ pub(crate) fn drop_absent_outputs(
     stage_dir: &std::path::Path,
     sealed: &mut crate::build::manifest::SealedManifest,
 ) -> std::collections::HashSet<String> {
+    use crate::build::io_utils::Presence;
     use crate::build::served_path::MATH_PNG_PREFIX;
     let mut absent: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut unverified: Vec<(String, String)> = Vec::new();
     for (rel, entry) in sealed.files() {
         let path = stage_dir.join(rel);
         let (mode, _) = crate::types::content::parse_entry(entry);
-        if crate::build::io_utils::entry_output_present(&path, mode) {
+        let presence = crate::build::io_utils::probe_output(&path, mode);
+        if presence.is_present() {
             continue;
         }
         if rel.starts_with(MATH_PNG_PREFIX) {
             crate::build::cloud_readiness::request_download(&path);
             continue;
         }
-        absent.insert(rel.clone());
+        match presence {
+            // An error that is not a positive `NotFound` is no answer: the
+            // entry stays, and the generation that carries it is withheld.
+            Presence::Unverified(err) => unverified.push((rel.clone(), err.to_string())),
+            _ => {
+                absent.insert(rel.clone());
+            }
+        }
+    }
+    for (rel, err) in unverified {
+        sealed.mark_unverified(rel, err);
     }
     if !absent.is_empty() {
         log::info!(
@@ -740,7 +792,12 @@ pub(crate) fn unregistered_referenced_variants(
         .iter()
         .filter(|key| key.ends_with(".webp"))
         .filter(|key| !sealed.files().contains_key(key.as_str()))
-        .filter(|key| std::fs::symlink_metadata(stage_dir.join(key.as_str())).is_err())
+        .filter(|key| {
+            // Positively gone only: an unreadable path strips nothing.
+            let path = stage_dir.join(key.as_str());
+            std::fs::symlink_metadata(&path)
+                .is_err_and(|e| crate::build::icloud::is_definitely_absent(&path, &e))
+        })
         .cloned()
         .collect();
     if !unregistered.is_empty() {
@@ -756,51 +813,6 @@ pub(crate) fn unregistered_referenced_variants(
 // ---------------------------------------------------------------------------
 // Generation GC
 // ---------------------------------------------------------------------------
-
-/// Remove old generation dirs, keeping the `n` most-recently-modified plus
-/// pinning `current_gen_id` regardless of mtime.
-///
-/// Errors are logged but non-fatal — the caller (seal+persist arm) logs them
-/// as warnings so a GC failure never aborts a successful build.
-pub fn gc_old_generations(
-    mp: &crate::moss_paths::MossPaths,
-    current_gen_id: &str,
-    n: usize,
-    is_pinned: impl Fn(&str) -> bool,
-) -> std::io::Result<()> {
-    let gen_root = mp.generations_dir();
-    let mut entries: Vec<(std::time::SystemTime, std::path::PathBuf)> =
-        std::fs::read_dir(&gen_root)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_dir())
-            .filter_map(|e| {
-                let mtime = e.metadata().ok()?.modified().ok()?;
-                Some((mtime, e.path()))
-            })
-            .collect();
-
-    // Sort newest first.
-    entries.sort_by(|a, b| b.0.cmp(&a.0));
-
-    // Evict everything past position n, except the pinned current gen and any
-    // generation that is currently being uploaded by an in-flight deploy.
-    for (_, path) in entries.iter().skip(n) {
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name == current_gen_id {
-            continue; // pin current even if it somehow falls outside the top-n
-        }
-        if is_pinned(name) {
-            continue; // a deploy is reading this dir — do not remove it
-        }
-        if crate::build::feeds::search_lane::is_indexing(mp, name) {
-            continue; // the search lane was handed this dir and is not done
-        }
-        if let Err(e) = std::fs::remove_dir_all(path) {
-            log::warn!("generation GC: failed to remove {:?}: {}", path, e);
-        }
-    }
-    Ok(())
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1320,95 +1332,6 @@ mod tests {
         assert!(!out.contains("moss:no-preview"), "marker comments must be stripped on ship");
     }
 
-    #[test]
-    fn generation_gc_keeps_last_n_plus_current() {
-        let test_tmp = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
-            .parent()
-            .unwrap()
-            .join("target")
-            .join("test-tmp");
-        std::fs::create_dir_all(&test_tmp).unwrap();
-        let tmp = tempfile::TempDir::new_in(&test_tmp).unwrap();
-        let mp = crate::moss_paths::MossPaths::new(tmp.path());
-        mp.ensure_dirs().unwrap();
-
-        // Create 7 generation dirs with distinct mtimes.
-        for i in 0..7u32 {
-            let dir = mp.generation_dir(&format!("gen{:03}", i));
-            std::fs::create_dir_all(&dir).unwrap();
-            // Sleep to ensure distinct mtime ordering (APFS has ns resolution but
-            // rapid create_dir_all calls can share the same ns on a loaded machine).
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-
-        // "current" points to gen006 (the newest).
-        mp.set_current_ptr("gen006").unwrap();
-
-        // Run GC with N=5 — keep gen002..gen006, remove gen000 and gen001.
-        gc_old_generations(&mp, "gen006", 5, |_| false).unwrap();
-
-        let remaining: Vec<_> = std::fs::read_dir(mp.generations_dir())
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .collect();
-
-        // Keep 5 newest (gen002..gen006); gen006 is current (already in top-5).
-        // gen000 and gen001 should be gone.
-        assert_eq!(
-            remaining.len(),
-            5,
-            "expected 5 remaining, got {}",
-            remaining.len()
-        );
-        assert!(!mp.generation_dir("gen000").exists());
-        assert!(!mp.generation_dir("gen001").exists());
-        assert!(mp.generation_dir("gen006").exists());
-    }
-
-    /// A deploy-pinned generation must survive GC even when it falls outside the
-    /// top-N newest. Simulates a GC storm that would otherwise evict the dir
-    /// that a concurrent deploy is reading.
-    #[test]
-    fn generation_gc_keeps_pinned_generation() {
-        let test_tmp = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
-            .parent()
-            .unwrap()
-            .join("target")
-            .join("test-tmp");
-        std::fs::create_dir_all(&test_tmp).unwrap();
-        let tmp = tempfile::TempDir::new_in(&test_tmp).unwrap();
-        let mp = crate::moss_paths::MossPaths::new(tmp.path());
-        mp.ensure_dirs().unwrap();
-
-        // Create 7 generation dirs with distinct mtimes.
-        for i in 0..7u32 {
-            let dir = mp.generation_dir(&format!("gen{:03}", i));
-            std::fs::create_dir_all(&dir).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-
-        // "current" points to gen006 (newest).
-        mp.set_current_ptr("gen006").unwrap();
-
-        // Run GC with N=5 keeping gen001 pinned.
-        // Without pin: gen000 and gen001 would be evicted.
-        // With pin:    gen001 must survive; gen000 is still removed.
-        gc_old_generations(&mp, "gen006", 5, |g| g == "gen001").unwrap();
-
-        assert!(
-            mp.generation_dir("gen001").exists(),
-            "gen001 was pinned and must survive GC"
-        );
-        assert!(
-            !mp.generation_dir("gen000").exists(),
-            "gen000 was not pinned and must be removed"
-        );
-        assert!(
-            mp.generation_dir("gen006").exists(),
-            "current gen006 must always survive"
-        );
-    }
-
     // ─── Promotion ordering (#968 §5d) ──────────────────────────────────────
 
     fn promo_paths(tmp: &tempfile::TempDir, gens: &[&str]) -> crate::moss_paths::MossPaths {
@@ -1424,61 +1347,6 @@ mod tests {
     /// `which.txt` planted in each generation dir just for this test.
     fn served_generation(mp: &crate::moss_paths::MossPaths) -> String {
         mp.current_generation_id().unwrap()
-    }
-
-    /// Seal tails are detached and finish in *worker-completion* order, so build
-    /// N's tail can land after build N+1's. `set_current_ptr` is an unconditional
-    /// swap, and `generation_id` is a content hash carrying no order, so the late
-    /// tail silently rolled `current` back to an older generation — the preview
-    /// served stale pages until the next save.
-    ///
-    /// The first half reproduces that rollback against the raw primitive; the
-    /// second proves `try_promote` refuses it.
-    #[test]
-    fn a_late_seal_tail_cannot_roll_current_back_to_an_older_generation() {
-        let tmp = tempdir().unwrap();
-        let mp = promo_paths(&tmp, &["genN", "genN1"]);
-
-        // Epochs are minted in build order even though the tails complete in
-        // the other one.
-        let epoch_n = next_promotion_epoch();
-        let epoch_n1 = next_promotion_epoch();
-
-        // N+1's tail wins the race (N's background phase was slower).
-        assert!(try_promote(&mp, epoch_n1, "genN1").unwrap());
-        assert_eq!(served_generation(&mp), "genN1");
-
-        // The bug, reproduced: the un-guarded primitive happily rolls back.
-        mp.set_current_ptr("genN").unwrap();
-        assert_eq!(
-            served_generation(&mp),
-            "genN",
-            "precondition: the raw swap is what rolls current back"
-        );
-
-        // The guard: N's late tail is refused, and `current` stays on the newest
-        // generation.
-        mp.set_current_ptr("genN1").unwrap();
-        assert!(
-            !try_promote(&mp, epoch_n, "genN").unwrap(),
-            "a tail from an older build must not promote"
-        );
-        assert_eq!(
-            served_generation(&mp),
-            "genN1",
-            "current regressed to the older generation"
-        );
-    }
-
-    /// The same epoch twice — a retried tail — is also refused, so a duplicate
-    /// promotion cannot undo a newer one that slipped in between.
-    #[test]
-    fn try_promote_refuses_a_repeat_of_the_epoch_already_on_current() {
-        let tmp = tempdir().unwrap();
-        let mp = promo_paths(&tmp, &["gen001"]);
-        let epoch = next_promotion_epoch();
-        assert!(try_promote(&mp, epoch, "gen001").unwrap());
-        assert!(!try_promote(&mp, epoch, "gen001").unwrap());
     }
 
     /// `hashes.json` and `staging/` are shared across a folder's builds, unlike
@@ -1497,7 +1365,7 @@ mod tests {
             "a failed materialize still leaves staging as THIS build's to persist and sweep"
         );
         assert!(
-            !tail_owns_shared_state(&Ok(Promotion::Withheld)),
+            !tail_owns_shared_state(&Ok(Promotion::Withheld(WithholdReason::SourcesDownloading))),
             "a withheld tail leaves `current` on an older generation on purpose, so writing \
              its manifest would produce the same lying pair by a different route"
         );
@@ -1522,10 +1390,17 @@ mod tests {
             HashBucket::Files,
         );
         let sealed = pending.seal();
-        let outcome =
-            materialize_and_promote(&sealed, &mp, &stage, None, next_promotion_epoch(), false);
+        let outcome = materialize_and_promote(
+            &sealed,
+            &mp,
+            &stage,
+            None,
+            next_promotion_epoch(),
+            None,
+            ShipVerdict::Withhold(WithholdReason::SourcesDownloading),
+        );
 
-        assert_eq!(outcome.unwrap(), Promotion::Withheld);
+        assert_eq!(outcome.unwrap(), Promotion::Withheld(WithholdReason::SourcesDownloading));
         assert!(
             !mp.generation_dir(sealed.generation_id()).exists(),
             "nothing was frozen"
@@ -1533,22 +1408,71 @@ mod tests {
         assert!(!mp.current_ptr().exists(), "and `current` was never created");
     }
 
-    /// Epochs are per-folder in effect: two folders promoting from one process
-    /// must not starve each other just because the counter is shared.
-    #[test]
-    fn promotion_epochs_do_not_leak_between_folders() {
-        let a_tmp = tempdir().unwrap();
-        let b_tmp = tempdir().unwrap();
-        let a = promo_paths(&a_tmp, &["ga"]);
-        let b = promo_paths(&b_tmp, &["gb"]);
-
-        let ea = next_promotion_epoch();
-        let eb = next_promotion_epoch();
-        assert!(try_promote(&b, eb, "gb").unwrap());
-        assert!(
-            try_promote(&a, ea, "ga").unwrap(),
-            "folder A's promotion must not be refused by folder B's newer epoch"
+    /// The presence pass over a manifest of `names`, with only `on_disk` of them
+    /// staged, then the promotion the seal tail would attempt with its verdict.
+    fn presence_then_promote(
+        tmp: &tempfile::TempDir,
+        names: &[String],
+        on_disk: &[String],
+    ) -> (crate::moss_paths::MossPaths, SealedManifest, Promotion) {
+        let mp = promo_paths(tmp, &["g1"]);
+        mp.set_current_ptr("g1").unwrap();
+        let stage = mp.staging_dir();
+        std::fs::create_dir_all(stage.join("assets")).unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        for name in names {
+            let bytes = format!("bytes of {name}");
+            if on_disk.contains(name) {
+                std::fs::write(stage.join(name), &bytes).unwrap();
+            }
+            pending.register(
+                &crate::build::served_path::ServedPath::from_source(name).unwrap(),
+                bytes.as_bytes(),
+                HashBucket::Files,
+            );
+        }
+        let mut sealed = pending.seal();
+        let verdict = crate::build::degrade::repair_staged_html(
+            &mp,
+            &stage,
+            &mut sealed,
+            std::collections::HashSet::new(),
         );
+        let promotion =
+            materialize_and_promote(&sealed, &mp, &stage, None, next_promotion_epoch(), None, verdict)
+                .unwrap();
+        (mp, sealed, promotion)
+    }
+
+    /// A presence pass that finds nothing it was told exists has not found a
+    /// site with no files; it has failed to look. 404c promoted exactly that —
+    /// 822 of 822 entries dropped and an empty generation served.
+    #[test]
+    fn a_presence_pass_that_loses_the_whole_manifest_withholds_the_generation() {
+        let tmp = tempdir().unwrap();
+        let names: Vec<String> = (0..20).map(|i| format!("assets/f{i}.css")).collect();
+
+        let (mp, _, promotion) = presence_then_promote(&tmp, &names, &[]);
+
+        assert_eq!(
+            promotion,
+            Promotion::Withheld(WithholdReason::ImplausibleLoss { lost: 20, of: 20 })
+        );
+        assert_eq!(served_generation(&mp), "g1", "`current` stays on the last good generation");
+    }
+
+    /// The other side of the line: what vanishes between registration and seal
+    /// in a healthy build is dropped as always, and the generation ships.
+    #[test]
+    fn a_presence_pass_that_loses_one_entry_still_promotes() {
+        let tmp = tempdir().unwrap();
+        let names: Vec<String> = (0..40).map(|i| format!("assets/f{i}.css")).collect();
+
+        let (mp, sealed, promotion) = presence_then_promote(&tmp, &names, &names[1..]);
+
+        assert_eq!(promotion, Promotion::Promoted);
+        assert_eq!(sealed.files().len(), 39);
+        assert_eq!(served_generation(&mp), sealed.generation_id());
     }
 
     /// One row per way a referenced `.webp` can fail to be gone, over a single

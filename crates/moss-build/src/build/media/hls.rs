@@ -336,7 +336,7 @@ pub fn encode_ladder(
     }
 
     let dir_str = out_dir.to_str().ok_or("Invalid output directory")?;
-    std::fs::create_dir_all(out_dir)
+    crate::build::io_utils::create_output_dir_all(out_dir)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
 
     let args = build_hls_args(
@@ -470,7 +470,8 @@ pub(crate) fn produce_ladder(
                     .map(|name| objects.store_file(&scratch.join(name)))
                     .collect()
             });
-            let _ = std::fs::remove_dir_all(&scratch);
+            // allow:unlink ladder scratch this call created under cache/tmp
+            let _ = crate::build::io_utils::remove_output_dir_all(&scratch);
             (members, stored?)
         }
     };

@@ -21,9 +21,8 @@ use std::path::Path;
 ///
 /// `failed` is every variant URL the AssetRegistry already knows will not
 /// exist (a terminally-failed encode, moss#867); the caller owns registry
-/// access, so this function needs no `BuildServices`. Returned is the full
-/// unshippable set — every URL the four sources between them condemned — for
-/// logging and assertions.
+/// access, so this function needs no `BuildServices`. Returned is whether the
+/// generation may ship at all.
 ///
 /// The four sources that can leave a `<source>` pointing at nothing: a failed
 /// encode (moss#867), the orphan prune (moss#976 B2), the presence pass, and a
@@ -49,21 +48,31 @@ use std::path::Path;
 /// through `io_utils::write_output` and is therefore a rename, never a window
 /// where the page is absent. The staged bytes of an unshipped variant are
 /// unlinked by `build::pipeline`'s pre-render sweep instead.
+///
+/// The ship verdict is decided after the presence pass and BEFORE the repair:
+/// a generation withheld because its tree could not be read must not also
+/// rewrite the HTML the preview is serving, from a strip set that unreadable
+/// tree produced.
 pub(crate) fn repair_staged_html(
     mp: &crate::moss_paths::MossPaths,
     stage_dir: &Path,
     sealed: &mut SealedManifest,
     failed: HashSet<String>,
-) -> HashSet<String> {
+) -> crate::build::ship::ShipVerdict {
     let mut unshippable = failed;
     let scan = crate::build::media::orphan_prune::extract_referenced_tails(stage_dir);
     unshippable.extend(crate::build::ship::prune_orphaned_webp_before_ship(mp, sealed, &scan));
-    unshippable.extend(crate::build::ship::drop_absent_outputs(stage_dir, sealed));
+    let entries = sealed.files().len();
+    let lost = crate::build::ship::drop_absent_outputs(stage_dir, sealed);
+    let verdict = crate::build::ship::ShipVerdict::after_presence_pass(sealed, entries, lost.len());
+    unshippable.extend(lost);
     unshippable.extend(crate::build::ship::unregistered_referenced_variants(
         &scan, sealed, stage_dir,
     ));
-    apply_to_staging(stage_dir, sealed, &unshippable);
-    unshippable
+    if verdict.repairs_staging() {
+        apply_to_staging(stage_dir, sealed, &unshippable);
+    }
+    verdict
 }
 
 /// Rewrite every sealed HTML page in `stage_dir` to drop references to image

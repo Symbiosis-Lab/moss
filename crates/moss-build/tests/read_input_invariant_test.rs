@@ -31,6 +31,9 @@ use std::path::{Path, PathBuf};
 #[path = "support/scanned_roots_nonempty.rs"]
 mod support;
 use support::scanned_roots_nonempty;
+#[path = "support/rust_scan.rs"]
+mod rust_scan;
+use rust_scan::{cfg_test_lines, walk_rust_files};
 
 /// What gets scanned: the modules that read vault inputs outside the build,
 /// scoped to this crate's own root.
@@ -51,40 +54,6 @@ fn is_call_site_line(line: &str) -> bool {
     READ_CALL_PATTERNS.iter().any(|p| line.contains(p))
 }
 
-fn cfg_test_lines(lines: &[&str]) -> Vec<bool> {
-    let mut skipped = vec![false; lines.len()];
-    let mut idx = 0;
-    while idx < lines.len() {
-        if !lines[idx].contains("#[cfg(test)]") {
-            idx += 1;
-            continue;
-        }
-        let mut depth = 0usize;
-        let mut opened = false;
-        let mut j = idx;
-        while j < lines.len() {
-            skipped[j] = true;
-            let mut ended = false;
-            for ch in lines[j].chars() {
-                match ch {
-                    '{' => {
-                        depth += 1;
-                        opened = true;
-                    }
-                    '}' => depth = depth.saturating_sub(1),
-                    ';' if !opened => ended = true,
-                    _ => {}
-                }
-            }
-            if ended || (opened && depth == 0) {
-                break;
-            }
-            j += 1;
-        }
-        idx = j + 1;
-    }
-    skipped
-}
 
 fn scan(root: &Path) -> Vec<(PathBuf, usize, String)> {
     let mut violations = Vec::new();
@@ -218,27 +187,4 @@ fn scanner_catches_an_unmarked_read_and_accepts_a_marked_one() {
     )
     .unwrap();
     assert_eq!(scan(root).len(), 1, "a File::open must be caught");
-}
-
-/// Walks a directory, or visits a single `.rs` file — `SOURCE_ROOTS` holds both.
-fn walk_rust_files(dir: &Path, visit: &mut dyn FnMut(&Path)) {
-    if dir.is_file() {
-        visit(dir);
-        return;
-    }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name == "target" || name.starts_with('.') {
-                continue;
-            }
-            walk_rust_files(&path, visit);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-            visit(&path);
-        }
-    }
 }

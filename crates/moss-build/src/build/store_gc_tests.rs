@@ -170,11 +170,52 @@ fn corrupt_watermark_reads_as_never_swept() {
     );
 }
 
+/// A writer stores blobs and transform records before the hash index that
+/// marks them live is saved, so a cache sweep beside it deletes what it just
+/// wrote. While any build of the folder holds its cache lease the sweep does
+/// not run — it is skipped, not waited for — and once none does, it runs.
+#[test]
+fn the_object_store_is_swept_only_when_no_build_holds_a_cache_lease() {
+    use crate::build::cache::{ObjectStore, TransformCache, TransformEntry, TransformRecord};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(tmp.path());
+    let _record = crate::build::lifecycle::lock_for(&mp);
+    let cache = mp.build_dir().join("cache");
+    // Big enough to be worth sweeping.
+    for i in 0..CACHE_GC_MIN_OBJECTS {
+        std::fs::create_dir_all(cache.join("objects").join("zz").join(format!("{i:04}"))).unwrap();
+    }
+    let objects = ObjectStore::new(cache.join("objects"));
+    let transforms = TransformCache::new(cache.join("transforms"), ObjectStore::new(cache.join("objects")));
+    let blob = objects.store_bytes(b"just encoded").unwrap();
+    // Its source is not in hash-index.json yet: the writer saves the index last.
+    let source = "5".repeat(64);
+    transforms
+        .put(&TransformRecord {
+            source_oid: source.clone(),
+            source_size: 1,
+            transforms: [("video/mp4".to_string(), TransformEntry { oid: blob.clone(), size: 12, params: serde_json::json!({}) })]
+                .into_iter()
+                .collect(),
+        })
+        .unwrap();
+
+    let lease = crate::build::lifecycle::cache_write_lease(&mp);
+    assert!(maybe_gc_cache(&mp).is_none(), "no sweep while a build holds its lease");
+    assert!(objects.blob_path(&blob).exists(), "the blob the writer just stored survives");
+    assert!(transforms.get(&source).is_some(), "and so does its transform record");
+
+    drop(lease);
+    assert!(maybe_gc_cache(&mp).is_some(), "with no lease open the sweep runs");
+    assert!(!objects.blob_path(&blob).exists(), "and collects what nothing marks live");
+}
+
 #[test]
 fn counting_an_absent_object_store_is_zero_not_an_error() {
     let tmp = tempfile::tempdir().unwrap();
     assert_eq!(count_objects(tmp.path()), 0);
-    assert!(maybe_gc_cache(tmp.path()).is_none());
+    assert!(maybe_gc_cache(&crate::moss_paths::MossPaths::new(tmp.path())).is_none());
 }
 
 #[test]

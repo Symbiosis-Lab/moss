@@ -108,7 +108,7 @@ pub fn generate_html(
         analytics_script, site_lang, css_version, has_user_css,
         has_sidebar_layout, user_css_version, has_user_js, user_js_version,
         content_graph, dir_overrides, site_url, show_rss_in_footer,
-        emit_source_lines, favicon_filename, output_dir,
+        emit_source_lines, favicon_filename, false, output_dir,
         None,
         source_root, &scripts,
     )
@@ -139,6 +139,10 @@ pub fn generate_html_collect_og(
     show_rss_in_footer: bool,
     emit_source_lines: bool,
     favicon_filename: &str,
+    // Whether this build rasterized `favicon-{16,32,180}.png` — the build's
+    // answer, never a probe of `output_dir`, where a stale trio can outlive
+    // the build that wrote it.
+    favicon_has_raster_pngs: bool,
     output_dir: Option<&std::path::Path>,
     og_outputs: &mut crate::build::page::og_card::OgSink<'_>,
     source_root: &std::path::Path,
@@ -152,7 +156,7 @@ pub fn generate_html_collect_og(
         analytics_script, site_lang, css_version, has_user_css,
         has_sidebar_layout, user_css_version, has_user_js, user_js_version,
         content_graph, dir_overrides, site_url, show_rss_in_footer,
-        emit_source_lines, favicon_filename, output_dir,
+        emit_source_lines, favicon_filename, favicon_has_raster_pngs, output_dir,
         Some(og_outputs),
         source_root, scripts,
     )
@@ -259,6 +263,7 @@ fn generate_html_inner(
     show_rss_in_footer: bool,
     emit_source_lines: bool,
     favicon_filename: &str,
+    favicon_has_raster_pngs: bool,
     output_dir: Option<&std::path::Path>,
     mut og_outputs: Option<&mut crate::build::page::og_card::OgSink<'_>>,
     source_root: &std::path::Path,
@@ -346,15 +351,8 @@ fn generate_html_inner(
             None => pr,
         };
         let pr = pr.with_js_version(scripts.hash("theme"));
-        // Detect rasterized favicon PNGs by probing the output dir. This
-        // avoids threading a new boolean through all call sites — the
-        // blocking phase always writes `assets/favicon-180.png` alongside
-        // 16/32 when the favicon is SVG.
-        let has_raster_pngs = output_dir
-            .map(|d| d.join("assets").join("favicon-180.png").exists())
-            .unwrap_or(false);
         pr.with_favicon_filename(favicon_filename)
-            .with_favicon_has_raster_pngs(has_raster_pngs)
+            .with_favicon_has_raster_pngs(favicon_has_raster_pngs)
             .with_dir_overrides(dir_overrides.clone())
     };
 
@@ -1471,7 +1469,7 @@ fn generate_html_inner(
             None
         },
         // Populated when the blocking phase rasterized PNG favicon sizes
-        // (detected by `with_favicon_has_raster_pngs` in path_resolver).
+        // (`favicon_has_raster_pngs`).
         // None when no SVG was available to rasterize from — emitting an
         // SVG-pointing tag would be worse than no tag (Apple Link Presentation
         // can't use SVG and would fail more loudly than just falling back).

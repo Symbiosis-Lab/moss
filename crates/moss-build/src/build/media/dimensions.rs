@@ -453,6 +453,7 @@ pub fn extract_video_dominant_color(
     let color = crate::build::components::color_extract::extract_dominant_color(&frame_path);
 
     // Clean up temp file
+    // allow:unlink a frame temp this call extracted
     let _ = fs::remove_file(&frame_path);
 
     color
