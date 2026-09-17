@@ -6,3 +6,4 @@ site/.moss/cache/
 site/.moss/*.bak-*
 target/
 .DS_Store
+.worktrees/
