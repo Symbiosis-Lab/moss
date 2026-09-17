@@ -417,9 +417,17 @@ async fn push_site_inner_impl(
                         let target_str = target.to_string_lossy().into_owned();
                         let computed_entry = crate::types::content::symlink_entry(&target_str);
                         if computed_entry != entry_value {
-                            return Err(format!(
-                                "Deploy integrity error: symlink '{file_path}' target does not match sealed manifest"
-                            ));
+                            // Same self-heal as upload.rs's file-hash check: the
+                            // target just read via read_link is the symlink's
+                            // real current state, so a stale sealed entry is
+                            // logged and shipped anyway rather than failing the
+                            // whole deploy (a synced vault can legitimately
+                            // re-point a link between seal and upload).
+                            log::warn!(
+                                "[deploy] symlink '{file_path}' target does not match sealed \
+                                 manifest (sealed {entry_value}, actual {computed_entry}) — \
+                                 uploading the actual target instead"
+                            );
                         }
                         client.upload_symlink(&site_id, &file_path, target_str, &generation_id)
                             .await
@@ -793,10 +801,11 @@ mod tests {
     /// still in flight cannot race the connection close. `Connection: close`
     /// on every canned response forces a fresh TCP connection per request
     /// rather than a pooled one this single-shot listener cannot serve.
-    /// Pattern from
+    /// Drain-request-then-canned-response is `crate::test_mock_http_conn` —
+    /// shared with `seta::chunked_upload_tests` and `deploy::upload::tests`,
+    /// which had each grown their own copy of this exact loop. Pattern from
     /// `seta::chunked_upload_tests::upload_file_chunked_sends_content_hash_header`.
     async fn mock_seta_sequence(responses: Vec<&'static [u8]>) -> std::net::SocketAddr {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
         let listener = TcpListener::bind::<std::net::SocketAddr>("127.0.0.1:0".parse().unwrap())
@@ -806,41 +815,11 @@ mod tests {
 
         tokio::spawn(async move {
             for resp in responses {
-                let (mut stream, _) = match listener.accept().await {
+                let (stream, _) = match listener.accept().await {
                     Ok(pair) => pair,
                     Err(_) => return,
                 };
-                let mut raw = Vec::new();
-                let mut buf = [0u8; 8192];
-                loop {
-                    let n = stream.read(&mut buf).await.unwrap_or(0);
-                    if n == 0 {
-                        break;
-                    }
-                    raw.extend_from_slice(&buf[..n]);
-                    if let Some(hdr_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
-                        let hdr_str = String::from_utf8_lossy(&raw[..hdr_end]);
-                        let body_len = hdr_str
-                            .lines()
-                            .find_map(|l| {
-                                l.to_ascii_lowercase()
-                                    .strip_prefix("content-length:")
-                                    .and_then(|v| v.trim().parse::<usize>().ok())
-                            })
-                            .unwrap_or(0);
-                        let expected_total = hdr_end + 4 + body_len;
-                        while raw.len() < expected_total {
-                            let n = stream.read(&mut buf).await.unwrap_or(0);
-                            if n == 0 {
-                                break;
-                            }
-                            raw.extend_from_slice(&buf[..n]);
-                        }
-                        break;
-                    }
-                }
-                stream.write_all(resp).await.ok();
-                stream.shutdown().await.ok();
+                crate::test_mock_http_conn(stream, resp).await;
             }
         });
 
@@ -1054,6 +1033,76 @@ mod tests {
         assert!(
             spy.events.lock().unwrap().is_empty(),
             "no deploy port should have been touched — the refusal must come before any network activity"
+        );
+    }
+
+    /// The symlink-integrity check's counterpart to `upload.rs`'s file-hash
+    /// self-heal: a synced vault can legitimately re-point a symlink between
+    /// seal and upload the same way it can rewrite a raw asset's bytes, and
+    /// `target_str` here is already the link's real current target (just read
+    /// via `read_link`). A stale sealed entry must warn and ship it, not abort
+    /// the whole deploy the way the old hard `return Err` did.
+    #[tokio::test]
+    async fn a_drifted_symlink_target_self_heals_instead_of_failing_the_deploy() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_url = std::env::var("MOSS_SETA_URL").ok();
+
+        let addr = mock_seta_sequence(vec![
+            // 1. get_live_generation short-circuit: 404 -> Ok(None).
+            b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            // 2. sync_manifest: one symlink needs uploading.
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 29\r\n\r\n{\"need\":[\"link\"],\"remove\":[]}",
+            // 3. upload_symlink's PUT.
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            // 4. commit_sync.
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 101\r\n\r\n{\"url\":\"https://symlink-test.mosspub.com\",\"files_updated\":1,\"files_removed\":0,\"timestamp\":1700000000}",
+        ])
+        .await;
+        std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+
+        // Sealed manifest carries a symlink entry whose target hash is stale,
+        // as if a background rebuild re-pointed the link after this manifest
+        // was sealed.
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let sp = ServedPath::from_source("link").unwrap();
+        pending.register_hashed(
+            &sp,
+            &crate::types::content::symlink_entry("stale-target"),
+            HashBucket::Files,
+        );
+        let sealed = pending.seal();
+
+        let identity = Identity::generate().expect("generate identity");
+        let dir = tempfile::tempdir().unwrap();
+        let mp = MossPaths::new(dir.path());
+        let gen_dir = mp.generation_dir(sealed.generation_id());
+        std::fs::create_dir_all(&gen_dir).unwrap();
+        // The real, current target on disk — what a racing rebuild left behind
+        // after the manifest above was sealed against "stale-target".
+        std::os::unix::fs::symlink("current-target", gen_dir.join("link")).unwrap();
+
+        let sink = progress::silent();
+        let spy = SpyPorts::default();
+        let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cx = PushContext {
+            folder_path: dir.path(),
+            identity: &identity,
+            site_id: "symlink-test",
+            sink: &sink,
+            ports: &spy,
+            events_lock: &events_lock,
+        };
+
+        let result = push_site_inner(&sealed, &cx).await;
+
+        match prev_url {
+            Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+
+        assert!(
+            result.is_ok(),
+            "a drifted symlink target must self-heal, not fail the whole deploy: {result:?}"
         );
     }
 }

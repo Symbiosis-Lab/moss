@@ -95,6 +95,158 @@ fn a_zeroed_icloud_stub_is_rejected_before_it_is_uploaded() {
     assert!(verify_bytes("assets/photo.jpg", &evicted, &expected, HashAlgo::Xxh3).is_err());
 }
 
+// ── Self-heal on a drifted hash ──────────────────────────────────────────────
+
+/// The bug this module was fixed for: a raw/background asset on a
+/// Google-Drive-synced vault can legitimately change on disk in the window
+/// between the deploy manifest being sealed and this upload running (a
+/// second build racing the first, not corruption). Before this fix, a
+/// mismatch here made `compare()` return `Err`, which `upload_regular_file`
+/// propagated straight up and `UploadWindow` turned into a whole-deploy abort
+/// over one file. The file's current bytes are always available by the time
+/// this runs, so they are what gets shipped; the drift is only logged.
+///
+/// Exercises the single-PUT (buffered) branch of `upload_regular_file`
+/// against a real HTTP mock, so the assertion is the actual return value of
+/// the function under test, not just `compare()`'s.
+#[tokio::test]
+async fn a_drifted_hash_self_heals_on_the_single_put_path() {
+    let mut server = mockito::Server::new_async().await;
+    let bytes = b"the bytes actually on disk right now";
+    let mock = server
+        .mock("PUT", mockito::Matcher::Any)
+        .match_body(mockito::Matcher::Exact(
+            String::from_utf8_lossy(bytes).into_owned(),
+        ))
+        .with_status(200)
+        .create_async()
+        .await;
+
+    let path = tmp_file("drift-single-put.bin", bytes);
+    let identity = crate::identity::Identity::generate().expect("generate identity");
+    let client = crate::seta::client::MossSetaClient::with_identity_and_url(&identity, &server.url());
+    let throughput = upload_policy::Throughput::new();
+
+    // A manifest hash that cannot possibly match `bytes` — standing in for a
+    // sealed hash the file has since drifted away from.
+    let stale_hash = "0000000000000000";
+
+    let result = upload_regular_file(
+        &client,
+        "her-blog",
+        "assets/raw/index.html",
+        &path,
+        bytes.len() as u64,
+        "abc123def456abcd",
+        stale_hash,
+        HashAlgo::Xxh3,
+        &throughput,
+        None,
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "a hash drift must self-heal by shipping the current bytes, not fail the deploy: {result:?}"
+    );
+    mock.assert_async().await;
+}
+
+/// Same self-heal, exercised on the streaming/chunked branch — the other call
+/// site inside `upload_regular_file`, which has its own `compare()` call
+/// (`hash_file` rather than `verify_bytes`) and its own upload call
+/// (`upload_file_chunked` rather than `upload_file`).
+///
+/// The file is sized one byte over a fresh `Throughput`'s `plan_request_size()`
+/// (seeded at [`upload_policy::INITIAL_REQUEST_SIZE`] — see that constant's
+/// doc comment) so `needs_chunking` is true with no throughput manipulation,
+/// on a real, unmodified deploy-time estimate. The mock server accepts any
+/// number of chunk PATCHes before the completing POST, so the test does not
+/// depend on exactly how the chunk loop divides the file.
+#[tokio::test]
+async fn a_drifted_hash_self_heals_on_the_chunked_path() {
+    use tokio::net::TcpListener;
+
+    // `crate::test_mock_http_conn` (shared with `seta::chunked_upload_tests`
+    // and `deploy::push::tests::mock_seta_sequence`) does the drain +
+    // respond + shutdown; only the "which request was this" decision is
+    // specific to this test.
+    const OK_EMPTY: &[u8] = b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+
+    let listener = TcpListener::bind::<std::net::SocketAddr>("127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        // conn 0: GET /uploads -> 200 [] (nothing staged; upload from zero).
+        {
+            let (stream, _) = listener.accept().await.unwrap();
+            crate::test_mock_http_conn(
+                stream,
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n[]",
+            )
+            .await;
+        }
+        // conn 1: POST /upload -> {"uploadId":"t"}.
+        {
+            let (stream, _) = listener.accept().await.unwrap();
+            crate::test_mock_http_conn(
+                stream,
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 16\r\n\r\n{\"uploadId\":\"t\"}",
+            )
+            .await;
+        }
+        // conn 2..N: one or more PATCH chunks, then the completing POST —
+        // whichever request line names ".../complete" ends the loop.
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            let raw = crate::test_mock_http_conn(stream, OK_EMPTY).await;
+            let is_complete = String::from_utf8_lossy(&raw)
+                .lines()
+                .next()
+                .is_some_and(|line| line.contains("/complete"));
+            if is_complete {
+                break;
+            }
+        }
+    });
+
+    // One byte over a fresh Throughput's plan_request_size() so needs_chunking
+    // is true without touching the throughput estimate at all.
+    let throughput = upload_policy::Throughput::new();
+    let file_size = throughput.plan_request_size() + 4096;
+    let bytes = vec![0xABu8; file_size];
+    let path = tmp_file("drift-chunked.bin", &bytes);
+
+    let identity = crate::identity::Identity::generate().expect("generate identity");
+    let client = crate::seta::client::MossSetaClient::with_identity_and_url(
+        &identity,
+        &format!("http://{}", addr),
+    );
+
+    let stale_hash = "0000000000000000";
+
+    let result = upload_regular_file(
+        &client,
+        "her-blog",
+        "assets/raw/video-poster.bin",
+        &path,
+        file_size as u64,
+        "abc123def456abcd",
+        stale_hash,
+        HashAlgo::Xxh3,
+        &throughput,
+        None,
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "a hash drift must self-heal on the chunked path too, not fail the deploy: {result:?}"
+    );
+}
+
 // ── Routing ──────────────────────────────────────────────────────────────────
 
 /// Routing is by `upload_policy::needs_chunking` against the window's live

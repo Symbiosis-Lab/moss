@@ -74,6 +74,60 @@ pub mod vault;
 #[cfg(test)]
 pub(crate) static ENV_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Drain one raw HTTP/1.1 request off `stream` — headers through the blank
+/// line, then exactly `Content-Length` more body bytes (0 if absent or
+/// unparsable) — write back `resp`, then close the connection. Returns the
+/// raw request bytes read, for a caller that needs to inspect what was sent
+/// (e.g. a header value).
+///
+/// Shared because three independent copies of this exact drain loop had
+/// accumulated — `seta::chunked_upload_tests`,
+/// `deploy::push::tests::mock_seta_sequence`, and `deploy::upload::tests` —
+/// before this landed; a Content-Length parsing drift between them would
+/// have been silent. Crate-wide like [`ENV_TEST_MUTEX`] above, for the same
+/// reason: the raw-TCP mock pattern is used from test modules in different
+/// top-level families (`seta`, `deploy`) with no natural single owner among
+/// them.
+#[cfg(test)]
+pub(crate) async fn test_mock_http_conn(
+    mut stream: tokio::net::TcpStream,
+    resp: &[u8],
+) -> Vec<u8> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut raw = Vec::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = stream.read(&mut buf).await.unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        raw.extend_from_slice(&buf[..n]);
+        if let Some(hdr_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+            let hdr_str = String::from_utf8_lossy(&raw[..hdr_end]);
+            let body_len = hdr_str
+                .lines()
+                .find_map(|l| {
+                    l.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            let expected_total = hdr_end + 4 + body_len;
+            while raw.len() < expected_total {
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                raw.extend_from_slice(&buf[..n]);
+            }
+            break;
+        }
+    }
+    stream.write_all(resp).await.ok();
+    stream.shutdown().await.ok();
+    raw
+}
+
 /// Wine skip guard (ADR-033 amendment): a test may skip under Wine ONLY via
 /// this self-detection — the `HKLM\Software\Wine` registry key exists in every
 /// Wine prefix and is structurally absent on real Windows, so a skip taken
