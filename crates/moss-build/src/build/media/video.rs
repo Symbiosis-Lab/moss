@@ -3175,4 +3175,230 @@ pub(crate) mod tests {
         assert!(outcome.error.is_none());
         assert!(!outcome.poster);
     }
+
+    // ------------------------------------------------------------------
+    // Phase 1b: thread the just-staged CAS oid through to the manifest
+    // ------------------------------------------------------------------
+
+    /// Mirrors `ship_phase_ships_correct_bytes_from_cas_despite_stage_dir_
+    /// being_overwritten` (`ship.rs`) for the video worker's own encode path:
+    /// `convert_single_video` now carries its mp4's CAS oid out to the
+    /// manifest instead of discarding it (the mechanical `oid: None` this
+    /// whole change closes the gap on), so `ship_phase` can read the
+    /// immutable blob instead of the mutable stage path a concurrent build
+    /// can rewrite between seal and ship. Driven through the real
+    /// `dispatch_video_conversions` producer end to end, with a real ffmpeg
+    /// encode — a hand-built manifest never acquires a `staged_oid` in the
+    /// first place and would prove nothing about this fix.
+    ///
+    /// Deliberately does NOT register a rebuild worker (unlike
+    /// `dispatch_and_seal`): with one registered, `dispatch_video_
+    /// conversions` takes the seal/video split and returns before the encode
+    /// finishes, and this test needs the sealed manifest to already carry the
+    /// real output's oid.
+    #[tokio::test]
+    async fn ship_phase_ships_a_freshly_encoded_mp4_from_cas_despite_stage_overwrite() {
+        use crate::build::coordinator::test_utils;
+        use crate::build::media::ffmpeg::{real_ffmpeg, synthesise};
+        use crate::types::content::SiteHashes;
+        use crate::types::services::BackgroundContext;
+        use moss_core::asset_paths;
+
+        let Some(bin) = real_ffmpeg() else {
+            eprintln!("skipping: ffmpeg unavailable");
+            return;
+        };
+
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+        let item = "videos/clip.mov".to_string();
+        std::fs::create_dir_all(vault.join(&item).parent().unwrap()).unwrap();
+        if !synthesise(&bin, &vault.join(&item), "320x240") {
+            eprintln!("skipping: ffmpeg synthesis failed");
+            return;
+        }
+
+        let mut svc = BuildServices::headless();
+        svc.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+
+        let folder = vault.display().to_string();
+        assert!(
+            crate::ops::watch::worker::get(&folder).is_none(),
+            "precondition: no worker registered, so the seal waits for the real encode"
+        );
+
+        let ctx = BackgroundContext {
+            video_items: vec![item.clone()],
+            source_path: folder.clone(),
+            staging_dir: staging.clone(),
+            moss_dir: moss_dir.clone(),
+            ffmpeg_bin_path: Some(bin.clone()),
+            ..BackgroundContext::for_test()
+        };
+        let (tx, rx) = test_utils::build_test_coordinator();
+        let svc_for_dispatch = svc.clone();
+        tokio::task::spawn_blocking(move || {
+            dispatch_video_conversions(Some(&svc_for_dispatch), ctx, Some(tx));
+        })
+        .await
+        .unwrap();
+        let sealed = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            test_utils::drain_into_sealed(rx, SiteHashes::default()),
+        )
+        .await
+        .expect("the real encode must finish within the timeout");
+
+        let mp4_key = asset_paths::to_mp4(&item);
+        let oid = sealed
+            .staged_oid(&mp4_key)
+            .expect("a freshly encoded mp4 must carry a live staged_oid")
+            .to_string();
+
+        let object_store = crate::build::cache::ObjectStore::new(
+            MossPaths::from_moss_dir(moss_dir.clone()).cache_objects(),
+        );
+        let cas_bytes =
+            std::fs::read(object_store.get_path(&oid).expect("the oid must name a live CAS blob")).unwrap();
+
+        // A concurrent build rewrites the mutable stage copy after this
+        // manifest's oid was sealed.
+        std::fs::write(staging.join(&mp4_key), b"CONCURRENT-OVERWRITE").unwrap();
+
+        let site = tmp.path().join("site");
+        crate::build::ship::ship_phase(&staging, &site, &sealed, Some(&object_store), None)
+            .expect("ship_phase should succeed");
+
+        let shipped = std::fs::read(site.join(&mp4_key)).unwrap();
+        assert_eq!(
+            shipped, cas_bytes,
+            "ship_phase must ship the CAS blob's bytes, not the concurrently \
+             overwritten mutable stage copy"
+        );
+        assert_ne!(
+            shipped,
+            b"CONCURRENT-OVERWRITE".to_vec(),
+            "premise: the overwrite really changed the stage bytes"
+        );
+    }
+
+    /// Regression guard: if a future refactor drops the oid on `Delivery`'s
+    /// way into `emit_video_outputs_via_channel`, this must fail loudly
+    /// rather than quietly reverting every video entry to the pre-fix,
+    /// fingerprint-only ship. Covers both the mp4 (`stage_mp4`'s
+    /// `objects.link_to`) and the poster (`objects.store_file` + `link_to`),
+    /// the two link_to call sites a fresh (non-cached) encode drives.
+    #[tokio::test]
+    async fn run_video_conversion_always_records_a_staged_oid_for_mp4_and_poster() {
+        use crate::build::coordinator::test_utils;
+        use crate::build::media::ffmpeg::{real_ffmpeg, synthesise};
+        use crate::types::content::SiteHashes;
+        use crate::types::services::BackgroundContext;
+        use moss_core::asset_paths;
+
+        let Some(bin) = real_ffmpeg() else {
+            eprintln!("skipping: ffmpeg unavailable");
+            return;
+        };
+
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+        let item = "videos/clip.mov".to_string();
+        std::fs::create_dir_all(vault.join(&item).parent().unwrap()).unwrap();
+        if !synthesise(&bin, &vault.join(&item), "320x240") {
+            eprintln!("skipping: ffmpeg synthesis failed");
+            return;
+        }
+
+        let mut svc = BuildServices::headless();
+        svc.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+
+        let folder = vault.display().to_string();
+        let ctx = BackgroundContext {
+            video_items: vec![item.clone()],
+            source_path: folder,
+            staging_dir: staging.clone(),
+            moss_dir: moss_dir.clone(),
+            ffmpeg_bin_path: Some(bin),
+            ..BackgroundContext::for_test()
+        };
+        let (tx, rx) = test_utils::build_test_coordinator();
+        let svc_for_dispatch = svc.clone();
+        tokio::task::spawn_blocking(move || {
+            dispatch_video_conversions(Some(&svc_for_dispatch), ctx, Some(tx));
+        })
+        .await
+        .unwrap();
+        let sealed = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            test_utils::drain_into_sealed(rx, SiteHashes::default()),
+        )
+        .await
+        .expect("the real encode must finish within the timeout");
+
+        let mp4_key = asset_paths::to_mp4(&item);
+        let thumb_key = asset_paths::to_thumb(&item);
+        assert!(sealed.files().contains_key(&mp4_key), "premise: mp4 registered at all");
+        assert!(sealed.files().contains_key(&thumb_key), "premise: poster registered at all");
+
+        let object_store = crate::build::cache::ObjectStore::new(
+            MossPaths::from_moss_dir(moss_dir.clone()).cache_objects(),
+        );
+        for key in [&mp4_key, &thumb_key] {
+            let oid = sealed
+                .staged_oid(key)
+                .unwrap_or_else(|| panic!("the main encode path must record a staged_oid for '{key}'"))
+                .to_string();
+            let cas_bytes =
+                std::fs::read(object_store.get_path(&oid).expect("the oid must name a live CAS blob")).unwrap();
+            assert_eq!(
+                cas_bytes,
+                std::fs::read(staging.join(key)).unwrap(),
+                "the staged_oid for '{key}' must back exactly the bytes on disk"
+            );
+        }
+    }
+
+    /// The carry-forward skip path's other half: the fingerprint-matched
+    /// `skip_paths` branch in `dispatch_video_conversions` never calls
+    /// `convert_single_video`, so it has no fresh oid to offer — it must
+    /// register with `oid: None` and lean on `ship_phase`'s fingerprint
+    /// fallback, not fabricate or resurrect a stale oid. No real ffmpeg
+    /// needed: a matched fingerprint plus present staged outputs never reach
+    /// the encoder at all.
+    #[tokio::test]
+    async fn skip_path_carry_forward_registers_with_no_oid_not_a_stale_one() {
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        let mut svc = BuildServices::headless();
+        svc.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+
+        let item = "videos/clip.mov".to_string();
+        let staged = stage_and_prime_video(&svc, &vault, &staging, &item, b"clip-bytes", false);
+
+        let sealed = dispatch_and_seal(&svc, &vault, &staging, &moss_dir, vec![item.clone()]).await;
+
+        assert!(!staged.is_empty(), "premise: the rig staged at least mp4 + poster");
+        for key in &staged {
+            assert!(
+                sealed.files().contains_key(key),
+                "the carry-forward key '{}' must still be registered",
+                key
+            );
+            assert!(
+                sealed.staged_oid(key).is_none(),
+                "'{}' took the skip path with no fresh oid at hand — it must register \
+                 with no oid rather than a stale or fabricated one",
+                key
+            );
+        }
+    }
 }
