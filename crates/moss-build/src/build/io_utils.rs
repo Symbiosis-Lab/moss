@@ -24,10 +24,14 @@
 //! `.tmp` from sync, which is the wrong signal for a file about to become a
 //! real output. Same convention as `emit/math_png.rs` and `og_card.rs`.
 //!
-//! This module is the seed of M6b's StageWriter: pure I/O, no `tauri`, so it
-//! moves into `crates/moss-build` unchanged. `output_write_invariant_test`
-//! keeps raw writes out of `src/build/` unless they carry an
-//! `// allow:raw_write <reason>` marker.
+//! This module owns atomic site-output writes today. ADR-052 sketched folding
+//! it into a future `StageWriter` with a per-build path-claim registry (M6b);
+//! that registry was never built, and the correctness gap it was later
+//! invoked for — a concurrent build racing the shared staging tree between
+//! seal and ship — shipped instead as content-addressed manifest entries. See
+//! ADR-052's 2026-09-17 update for what, if anything, a registry still owns.
+//! `output_write_invariant_test` keeps raw writes out of `src/build/` unless
+//! they carry an `// allow:raw_write <reason>` marker.
 
 use std::fs;
 use std::io;

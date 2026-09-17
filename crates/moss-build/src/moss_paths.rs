@@ -574,12 +574,16 @@ impl MossPaths {
     /// Safe to call multiple times — uses `create_dir_all` internally.
     ///
     /// Deliberately `cfg(test)`: production never called it. The build creates
-    /// what it needs where it needs it, and per the target architecture the
-    /// owner of site-output writes is M6b's `StageWriter` (atomic temp+rename +
-    /// a per-build path-claim registry), enforced by the raw-`fs::write` ratchet
-    /// row armed after that milestone. Wiring this up instead would install a
-    /// second, weaker writer for a concern that already has a designated owner —
-    /// and it failed the three-question gate outright at zero production callers.
+    /// what it needs where it needs it, and the owner of site-output writes is
+    /// `build::io_utils` (atomic temp+rename). A per-build path-claim registry
+    /// (`StageWriter`, M6b) was proposed alongside it in ADR-052 but was never
+    /// built; the correctness gap it was later invoked for (a concurrent
+    /// build racing the shared staging tree between seal and ship) shipped
+    /// instead as content-addressed manifest entries — see ADR-052's
+    /// 2026-09-17 update for what a registry would and would not still cover.
+    /// Wiring this up instead would install a second, weaker writer for a
+    /// concern that already has a designated owner — and it failed the
+    /// three-question gate outright at zero production callers.
     ///
     /// Ten tests across four modules use it to stand up a `.moss` skeleton
     /// before creating generations, so it earns its keep as a fixture; it just

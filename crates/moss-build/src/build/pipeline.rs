@@ -26,7 +26,11 @@
 //! 3. Seal + materialize to `generations/`   (`ship_phase` strips the
 //!    `data-source-*` annotations from `.html` during this copy)
 //! 4. Atomically swap the `current` symlink  (deployment-ready, zero-flicker)
-//! 5. Delete `staging/`                      (RAII guard)
+//! 5. Sweep `staging/` of entries the sealed manifest no longer names
+//!    (`sweep_staging`) — `staging/` itself is deliberately never deleted; it
+//!    persists between rebuilds so mtime+size checks can skip unchanged
+//!    bytes. A one-shot CLI build gets no next build to sweep on, so its exit
+//!    path runs the same removal once, immediately (`ship::reclaim_staging_now`).
 //!
 //! The server rests on `staging/` (annotated) while a preview session is live;
 //! `current` is always clean production HTML. Background workers write their
@@ -94,8 +98,14 @@ const NOTEBOOK_IO_TIMEOUT_SECS: u64 = 30;
 
 /// Above this, a stage-write lock wait is reported at `warn`, not `debug` — a
 /// release preview build is where a user feels it and it was invisible there.
-/// Well above the uncontended cost (microseconds), well below the ~2s moss#968
-/// measured, so it fires on the real condition only.
+/// Well above the lock's own measured cost — moss#968's Stage 0 clocked the
+/// wait at 57µs–288µs on the issue's vault and 57µs–12ms in a later run
+/// (moss-desktop `9d52b0716`) — so this is a tripwire for an unexplained
+/// stall, not a fraction of a known worst case. moss#968 raised the lock as
+/// one hypothesis (H-lock) for a separate, unexplained 1–3s foreground gap;
+/// measurement rejected it (the wait above is nowhere near 1–3s) along with
+/// the other hypothesis (twelve config re-parses), and that gap is still
+/// unexplained.
 const STAGE_WRITE_LOCK_WARN: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// Heuristic detection: does this absolute path live under a known cloud-sync

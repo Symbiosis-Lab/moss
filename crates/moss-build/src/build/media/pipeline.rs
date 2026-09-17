@@ -15,10 +15,13 @@
 //!
 //! ## Stale Cleanup
 //!
-//! After all assets are placed, `copy_deferred_assets()` runs stale cleanup:
-//! 1. Remove files not in `site_hashes` (preserving video outputs tracked in `video_outputs`)
-//! 2. Remove empty directories not expected by the current build
-//! 3. Write the final `hashes.json`
+//! `copy_deferred_assets()` does NOT delete anything from disk. It prunes its
+//! own in-memory bookkeeping — stale `site_hashes.files`/`sources` entries for
+//! keys the walk did not (re)claim — and sends the survivors to the
+//! coordinator, which seals them into the manifest. Removing files and empty
+//! directories that the sealed manifest no longer names, and writing the
+//! final `hashes.json`, both happen later, only through the build's permitted
+//! sweep (`pipeline::sweep_staging`), never from this worker.
 
 use crate::moss_paths::MossPaths;
 use crate::types::{content::SiteHashes, services::BackgroundContext};
