@@ -1,7 +1,7 @@
 schema_version = 4
 
 [build]
-passthrough = ["index.html", "illustrations", "assets/animations", "assets/brand", "assets/guides", "assets/platforms", "blake", "scene3", "scene4", "scene5-loop", "ui", "vendor", "zhuda"]
+passthrough = ["index.html", "illustrations", "assets/brand", "assets/platforms", "blake", "scene3", "scene4", "scene5-loop", "ui", "vendor", "zhuda"]
 
 [channels.email]
 

@@ -13,6 +13,11 @@ const routes = ['/', ...contract.required];
 const failures = [];
 const assets = new Map();
 const attr = (tag, name) => tag.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'i'))?.[1];
+const localAsset = (path, pageUrl) => {
+  if (!path || path.startsWith('data:')) return null;
+  const url = new URL(path.replaceAll('&amp;', '&'), pageUrl);
+  return url.origin === base.origin ? url : null;
+};
 async function read(url, expected) {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
@@ -40,14 +45,19 @@ for (const route of routes) {
     const path = isStyle ? attr(tag, 'href') : /^<script\b/i.test(tag) ? attr(tag, 'src') : null;
     if (!path) continue;
     if (isStyle) styles++;
-    const asset = new URL(path.replaceAll('&amp;', '&'), url);
-    if (asset.origin === base.origin) assets.set(asset.href, isStyle ? 'css' : 'js');
+    const asset = localAsset(path, url);
+    if (asset) assets.set(asset.href, isStyle ? 'css' : 'js');
+  }
+  for (const [tag] of html.matchAll(/<img\b[^>]*>/gi)) {
+    const asset = localAsset(attr(tag, 'src'), url);
+    if (asset) assets.set(asset.href, 'image');
   }
   if (route !== '/' && !styles) failures.push({ url: String(url), problem: 'Documentation has no linked stylesheet' });
 }
 for (const [url, kind] of assets) {
-  const text = await read(url, kind === 'css' ? /text\/css/i : /(?:javascript|ecmascript)/i);
-  if (text !== null && /^\s*</.test(text)) failures.push({ url, problem: 'HTML returned in place of a stylesheet or script' });
+  const expected = kind === 'css' ? /text\/css/i : kind === 'js' ? /(?:javascript|ecmascript)/i : /^image\//i;
+  const text = await read(url, expected);
+  if (kind !== 'image' && text !== null && /^\s*</.test(text)) failures.push({ url, problem: 'HTML returned in place of a stylesheet or script' });
 }
 console.log(JSON.stringify({ baseUrl: base.href, pagesChecked: routes.length, assetsChecked: assets.size, failures }, null, 2));
 process.exitCode = failures.length ? 1 : 0;
