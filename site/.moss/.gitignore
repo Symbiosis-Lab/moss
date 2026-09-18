@@ -1,4 +1,6 @@
 identity/
 data/
-build/cache/
-build/staging/
+build/
+keys/
+agents/
+history/

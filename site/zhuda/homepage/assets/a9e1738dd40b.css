@@ -1,0 +1,56 @@
+:root {
+  --moss-color-bg: #f8f5f0;
+  --moss-color-text: #1a1a1a;
+  --moss-color-accent: #c04020;
+  --moss-color-surface: #f0ebe3;
+  --moss-color-muted: #7a7570;
+  --moss-font-body: "Noto Serif TC", "Source Han Serif TC", "Songti TC", "Noto Serif SC", serif;
+  --moss-font-heading: "Noto Serif TC", "Source Han Serif TC", "Songti TC", "Noto Serif SC", serif;
+  --moss-content-width: 50ch;
+  --moss-space-xl: 4rem;
+  --moss-space-2xl: 6rem;
+  --moss-font-size-base: 1.2rem;
+}
+
+/* 留白: generous line height for classical Chinese */
+.moss-article-body {
+  line-height: 2;
+}
+
+/* More breathing room between collection items */
+.moss-child-summary {
+  margin-bottom: var(--moss-space-xl);
+}
+
+/* ── Painting/calligraphy display: full-width, image only ── */
+
+.moss-hero.plate {
+  max-height: none;
+}
+
+.moss-hero.plate img {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+.moss-hero.plate::before {
+  display: none;
+}
+
+body:has(.moss-hero.plate) main .container {
+  display: none;
+}
+
+@media (max-width: 48rem) {
+  .moss-hero.plate {
+    aspect-ratio: auto;
+  }
+
+  .moss-hero.plate img {
+    position: static;
+    width: 100%;
+    height: auto;
+    object-fit: contain;
+  }
+}

@@ -1,24 +1,20 @@
 # Docs tooling
 
-## Build the docs with the custom landing page
+## Build the public site
 
-`build-site-with-landing.mjs` runs the real moss compiler in a temporary copy
-of `site/`, then installs the landing page and its asset trees at the compiled
-site root. The source vault stays clean and the route contract in
-`landing-routes.json` is checked before the build succeeds.
+The landing page and its runtime assets live directly under `site/`. `site/index.html` owns its complete document head and body; `site/index.md` remains the moss homepage metadata source. The explicit `index.html` entry under `[build].passthrough` in `site/.moss/config.toml` makes the HTML source win the root output while moss generates every documentation route normally. Edit these sources directly, never `site/.moss/build/` or the retired overlay script.
 
 ```bash
 cargo build -p moss-cli
-node scripts/build-site-with-landing.mjs \
-  --landing /path/to/moss-landing-lab \
-  --moss-bin target/debug/moss-cli \
-  --out dist/site
+target/debug/moss-cli build site
+target/debug/moss-cli build site --serve --watch
+# Use the URL printed by moss; do not assume port 8080.
+node scripts/check-site-preview.mjs http://localhost:<printed-port>/
 ```
 
-The result serves the custom home at `/`, the compiled documentation at
-`/get-started/` and `/docs/`, and the landing's nested scene assets from their
-root-relative paths. The script also verifies the English and Chinese editor,
-media, design, and extension routes consumed by the landing page.
+The checker validates the landing, all linked English and Chinese documentation routes, and same-origin CSS and JavaScript response types. A route returning HTTP 200 is insufficient evidence: an HTML fallback at a stylesheet URL also returns 200 while leaving the page unstyled.
+
+`--strict` currently turns the unpublished-site diagnostic (“no usable record of what is live yet”) into exit 1 even when the local output is complete. Keep the diagnostic visible and use the ordinary build/preview command for this repository until the site has a live deployment record; do not suppress it in a wrapper.
 
 `release-channels.json` records the release assets and install commands that
 were verified for the landing's download controls. Keep unavailable targets

@@ -1,5 +1,8 @@
 schema_version = 4
 
+[build]
+passthrough = ["index.html", "assets/platforms", "blake", "scene3", "scene4", "scene5-loop", "ui", "vendor", "zhuda"]
+
 [channels.email]
 
 [site]

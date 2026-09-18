@@ -1,0 +1,3 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Native canvas study</title>
+<style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#090b10}canvas{display:block;width:100%;height:100%;touch-action:none}</style><canvas></canvas>
+<script type="module">import{mount,works}from'./native-canvas.js';const id=new URLSearchParams(location.search).get('id')||'processing-03';if(!works.some(x=>x[0]===id))document.body.textContent='Unknown study';else mount(document.querySelector('canvas'),id);</script>

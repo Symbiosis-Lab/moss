@@ -1,0 +1,13 @@
+{
+  "homepage": "https://www.zhudasnotebook.com/",
+  "assets": {
+    "https://www.zhudasnotebook.com/_moss/style.5867380e2e2bc164.css": "assets/2e6b9b26a853.css",
+    "https://www.zhudasnotebook.com/_moss/theme/style.cee8a6e1a1599758.css": "assets/a9e1738dd40b.css",
+    "https://www.zhudasnotebook.com/%E6%9B%B8/%E8%98%AD%E4%BA%AD%E5%BA%8F.jpg": "assets/126dcb71c0b9.jpg",
+    "https://www.zhudasnotebook.com/%E7%95%AB/%E9%AD%9A.jpg": "assets/faf23b452e8a.jpg"
+  },
+  "images": [
+    "assets/126dcb71c0b9.jpg",
+    "assets/faf23b452e8a.jpg"
+  ]
+}

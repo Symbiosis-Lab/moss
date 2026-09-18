@@ -1,0 +1,35 @@
+{
+  "source_package": "simple-icons@16.31.0",
+  "package_url": "https://www.npmjs.com/package/simple-icons/v/16.31.0",
+  "package_license": "CC0-1.0",
+  "retrieved": "2026-09-18",
+  "assets": [
+    {
+      "file": "apple.svg",
+      "label": "macOS",
+      "upstream": "https://cdn.jsdelivr.net/npm/simple-icons@16.31.0/icons/apple.svg",
+      "sha256": "2a1509dccd25e6d2bc7a11a8e52941077e1a48555e192ce638699b9f083c2a7c"
+    },
+    {
+      "file": "windows.svg",
+      "label": "Windows",
+      "upstream": "https://cdn.jsdelivr.net/npm/simple-icons@16.31.0/icons/windows.svg",
+      "sha256": "d35703096661a3f7590178d1c6872f2c9ffa15b537f250b4470150d349b30b37"
+    },
+    {
+      "file": "linux.svg",
+      "label": "Linux",
+      "upstream": "https://cdn.jsdelivr.net/npm/simple-icons@16.31.0/icons/linux.svg",
+      "sha256": "7e55f2779ae11a83c9dad2d0414a65d8ca7867d0716ce58bfe41ed299ae1447f"
+    },
+    {
+      "file": "github.svg",
+      "label": "GitHub",
+      "upstream": "https://github.com/primer/octicons/blob/main/icons/mark-github-24.svg",
+      "sha256": "bce494189797623c34e39a41c2c38a132bdca23ce4e6ac06b70116ed7e91ce26",
+      "license": "MIT",
+      "note": "Reused byte-for-byte from scene4/logos/github.svg; GitHub permits its mark to describe an integration."
+    }
+  ],
+  "note": "SVG paths are unmodified. Simple Icons' CC0 license covers its contributions; brand rights remain with their owners. Labels describe target platforms and do not imply endorsement."
+}
