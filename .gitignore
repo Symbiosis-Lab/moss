@@ -1,5 +1,9 @@
 node_modules/
 dist/
+!packages/moss-api/dist/
+!packages/moss-api/dist/**
+!packages/moss-syntax/dist/
+!packages/moss-syntax/dist/**
 .superpowers/
 site/.moss/build/
 site/.moss/cache/

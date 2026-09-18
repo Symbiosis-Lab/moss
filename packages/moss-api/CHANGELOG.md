@@ -41,6 +41,7 @@ release heading.
 
 ### Fixed
 
+- Git installs now include the built JavaScript and declaration files in the repository, so a package-manager cache cannot leave `@symbiosis-lab/moss-api` without its exported types.
 - `setSecret(key, "")` now erases the key instead of storing an empty string. Signing a user out is how plugins have always spelled this, but moss stored the empty value and every stored-ness check reads `is_some()`, so the account stayed listed as connected on the settings page and moss's publish gate believed it still held a credential nothing could authenticate with. Empty files written by earlier releases also read as absent now, so an account already signed out reports correctly without the user doing anything.
 
 ## [0.12.0] - 2026-08-20

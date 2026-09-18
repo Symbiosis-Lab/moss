@@ -275,8 +275,14 @@ jobs:
       - name: Typecheck moss-syntax (source + tests)
         run: cd packages/moss-syntax && pnpm run typecheck
 
-      - name: Build moss-syntax
-        run: cd packages/moss-syntax && pnpm run build
+      - name: Package artifacts are up to date
+        run: |
+          pnpm --filter @symbiosis-lab/moss-api run build
+          pnpm --filter @symbiosis-lab/moss-syntax run build
+          if ! git diff --exit-code -- packages/moss-api/dist packages/moss-syntax/dist; then
+            echo "::error::Package artifacts are stale. Run the moss-api and moss-syntax builds and commit dist/."
+            exit 1
+          fi
 
       - name: Test moss-syntax
         run: cd packages/moss-syntax && npx vitest run
