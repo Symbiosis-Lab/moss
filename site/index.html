@@ -272,7 +272,7 @@
   #five .moss-btn[data-role="primary"]:hover { background: #e7ede5; }
   /* Reduced motion is the poster and nothing else: no video element is ever
      given a source, so there is nothing playing and nothing to pause. */
-  @media (prefers-reduced-motion: reduce) { #loop-toggle { display: none; } }
+  @media (prefers-reduced-motion: reduce) { #loop-toggle { display: none; } #intro h1 { opacity: 1; -webkit-mask-image: none !important; mask-image: none !important; } }
 
   /* The document still has a useful close if JavaScript is unavailable: the
      scripts add .js before body paint, while the static section keeps its own
@@ -291,8 +291,9 @@
   /* Layout pass: the intro owns the first beat, while the stage remains tied
      to the measured desktop composition. The script supplies these variables
      after it knows the viewport and copy heights. */
-  #intro { display: grid; place-items: center; min-height: 68svh; padding: 18svh 32px 7svh; text-align: center; }
-  #intro h1 { margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; text-wrap: balance; }
+  #intro { display: grid; place-items: start center; min-height: 108svh; padding: 0 32px; text-align: center; }
+  #intro h1 { position: sticky; top: 38svh; margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; text-wrap: balance; opacity: clamp(0, calc((var(--intro-p, 1) - .04) * 1.2), 1); }
+  .page { margin-top: -42svh; }
   .page { grid-template-columns: calc(var(--vis-w) * var(--layout-s, var(--s)) - 88px) minmax(0, 1fr); }
   #stage { transform: translate(calc((var(--layout-s, 1) - var(--s, 1)) * 400px), calc(var(--intro-visible, 0px) * -.56)); }
   #cell { transform: scale(var(--s)); }
@@ -309,7 +310,7 @@
   #downloads button:disabled img { filter: invert(1); opacity: .72; }
   #downloads a[data-availability] { background: transparent; color: #fff; border-color: #a4a8a2; }
   #downloads a[data-availability] img { filter: invert(1); }
-  #loop { object-fit: cover; transform: scale(1.34); }
+  #loop { width: 100vw; height: 100dvh; object-fit: cover; }
   #closing-film { overflow: hidden; }
   #downloads svg, #downloads img { width: 19px; height: 19px; margin-right: 8px; }
   .form-status { min-height: 1.5em; font-size: 13px; }
@@ -325,18 +326,20 @@
   .command code { min-width: 0; overflow-wrap: anywhere; color: #fff; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .command button { min-height: 40px; padding: 8px 12px; color: #fff; background: transparent; border: 1px solid rgba(255,255,255,.52); border-radius: 4px; cursor: pointer; }
   #beta, #footer { width: min(1000px, 100%); margin: 56px auto 0; padding-top: 32px; text-align: left; }
-  #beta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 1fr); gap: 48px; align-items: start; }
+  #beta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 1fr); gap: 48px; align-items: end; }
   #beta h3 { margin: 0 0 8px; font: 400 28px/1.15 var(--heading); }
   #beta p, #footer { color: rgba(255,255,255,.75); }
-  .signup { display: grid; gap: 8px; }
+  .signup { position: relative; display: grid; gap: 8px; align-self: end; }
+  .signup .form-status { position: absolute; inset: calc(100% + 8px) 0 auto; }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
   .input-row { display: flex; gap: 8px; }
   .input-row input { min-width: 0; flex: 1; min-height: 44px; padding: 10px 2px; color: #fff; background: transparent; border: 0; border-bottom: 1px solid rgba(255,255,255,.62); border-radius: 0; }
   .input-row input::placeholder { color: rgba(255,255,255,.7); opacity: 1; }
   .input-row button { min-height: 44px; padding: 10px 16px; color: #151515; background: #fff; border: 1px solid #fff; border-radius: 4px; cursor: pointer; }
-  #footer { display: flex; justify-content: center; align-items: center; border-top: 1px solid rgba(255,255,255,.25); font-size: 13px; }
+  #footer { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,.25); font-size: 13px; }
   #footer a { color: inherit; }
-  #footer nav { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 9px; }
+  #footer nav { display: flex; width: 100%; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 9px; }
+  #footer .github-link { margin-left: auto; }
   #footer .github-link { display: inline-flex; align-items: center; }
   #footer .github-link img { width: 17px; height: 17px; filter: invert(1); }
 
@@ -344,7 +347,8 @@
     body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; opacity: calc(1 - var(--xf)); background: linear-gradient(to bottom, var(--bg) 0 34px, color-mix(in srgb, var(--bg) 72%, transparent) 52px, transparent); }
     html[data-mobile-snap] { scroll-snap-type: y proximity; }
     html[data-mobile-snap] #intro, html[data-mobile-snap] .scene, html[data-mobile-snap] #five { scroll-snap-align: start; }
-    #intro { min-height: 0; padding: 88px 20px 24px; }
+    #intro { min-height: 100svh; padding: 0 20px; }
+    #intro h1 { top: 34svh; }
     #intro h1 { font-size: clamp(40px, 11vw, 58px); }
     .page { position: relative; display: block; width: 100%; padding: 0 16px; }
     #col { position: absolute; inset: 0; height: auto; padding-top: var(--mobile-col-pad, 70svh); z-index: 0; pointer-events: none; }
@@ -493,23 +497,11 @@ children: false
 ---
 
 `;
-const SEED = window.__LANG === 'zh'
-  ? '生在曹洞臨濟有，穿過臨濟曹洞有。\n'
-  : '';
+const SEED = '';
 const TYPED = window.__LANG === 'zh'
-  ? '洞曹臨濟兩俱非，羸羸然若喪家之狗。\n還識得此人麼？'
+  ? '生在曹洞臨濟有，穿過臨濟曹洞有。\n洞曹臨濟兩俱非，羸羸然若喪家之狗。'
   : `I must Create a System, or be enslav'd by another Man's.${'  '}
-I will not Reason & Compare: my business is to Create.
-
-:::grid 3
-[[Illuminated Books]]
-+++
-[[Paintings & Prints]]
-+++
-[[Writings]]
-:::
-
-![[/|depth:all,covers:only,limit:6,style:summary,sort:date,more:Archive]]`;
+I will not Reason & Compare: my business is to Create.`;
 const FINAL = SEED + TYPED;
 const FULL_SOURCE = window.__LANG === 'zh' ? FINAL : BLAKE_FRONTMATTER + FINAL;
 window.__editorSource = () => FULL_SOURCE;
@@ -717,12 +709,37 @@ plateEls.forEach((pl) => { const im = pl.querySelector('img'); im.addEventListen
 let SCALE = 1, baseScale = 1;
 const mobileLayout = () => innerWidth <= 900;
 const opening = document.getElementById('intro');
+const openingTitle = opening.querySelector('h1');
+let introMaskStep = -1;
+function introWatercolor(progress) {
+  if (reduce || progress > .94) {
+    introMaskStep = -1;
+    openingTitle.style.webkitMaskImage = openingTitle.style.maskImage = 'none';
+    return;
+  }
+  const step = Math.round((1 - progress) * 24);
+  if (step === introMaskStep) return;
+  introMaskStep = step;
+  const c = document.createElement('canvas'); c.width = 192; c.height = 64;
+  const x = c.getContext('2d'), im = x.createImageData(c.width, c.height);
+  for (let py = 0; py < c.height; py++) for (let px = 0; px < c.width; px++) {
+    const n = (Math.sin(px * .173 + py * .097) + Math.sin(px * .047 - py * .211) + Math.sin((px + py) * .031)) / 3;
+    const edge = (px / c.width) * .42 + Math.abs(py / c.height - .5) * .12;
+    const a = n + edge > step / 24 * 1.18 - .72 ? 255 : 0;
+    im.data[(py * c.width + px) * 4 + 3] = a;
+  }
+  x.putImageData(im, 0, 0);
+  const url = `url(${c.toDataURL()})`;
+  openingTitle.style.webkitMaskImage = openingTitle.style.maskImage = url;
+  openingTitle.style.webkitMaskSize = openingTitle.style.maskSize = '100% 100%';
+}
 function updateOpening() {
   const visible = Math.max(0, opening.getBoundingClientRect().bottom);
   const introP = Math.min(1, visible / Math.max(1, opening.offsetHeight));
   SCALE = baseScale * (mobileLayout() ? 1 : 1 - .4 * introP);
   document.documentElement.style.setProperty('--s', String(SCALE));
   document.documentElement.style.setProperty('--intro-p', String(introP));
+  introWatercolor(introP);
   document.documentElement.style.setProperty('--intro-visible', mobileLayout() ? '0px' : visible + 'px');
   if (mobileLayout()) {
     const firstCopy = document.querySelector('#c1 .scene-text').offsetHeight + 28;
@@ -1766,7 +1783,15 @@ const setCross = (q) => { xf = q; document.documentElement.style.setProperty('--
 // has two sides and the page is the other one: where the close is settled the
 // page is faded to nothing, and a control faded to nothing is still a tab stop
 // until the element it sits in is inert.
-const fiveOn = (on) => { five.classList.toggle('on', on); five.inert = !on; page.inert = on; };
+const fiveOn = (on) => {
+  const entering = on && !five.classList.contains('on');
+  five.classList.toggle('on', on); five.inert = !on; page.inert = on;
+  if (entering) requestAnimationFrame(() => {
+    const bottom = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+    if (reduce) scrollTo(0, bottom);
+    else settleTo(bottom, Math.max(0, scrollV * innerHeight), SETTLE_SECS);
+  });
+};
 // The canvas takes over the scene: the prints it shows are the pixels on
 // screen, so the DOM under it can change without a visible frame.
 // The sim keeps the boundary's two prints in SCENE order and `fwd` says which
@@ -2626,6 +2651,7 @@ function onScroll(dy) {
 {
   let held = null;
   stage.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
     const pl = e.target.closest('.plate'); if (!pl || running() || shown !== 0) return;
     held = { pl, x: e.clientX, y: e.clientY, left: pl.offsetLeft, top: pl.offsetTop };
     pl.classList.add('held'); pl.setPointerCapture(e.pointerId); e.preventDefault();
@@ -2676,7 +2702,7 @@ let lastWatchT = performance.now();
 // forward as the one named constant a real design intent would need — there
 // is nothing here worth a second geometry for.
 const restY = (scene) => {
-  if (scene === SHARE) return five.offsetTop;
+  if (scene === SHARE) return Math.max(0, document.documentElement.scrollHeight - innerHeight);
   if (scene === 0) return scrollY > opening.offsetHeight * .45 ? opening.offsetHeight : 0;
   if (mobileLayout()) return Math.round(scrollY + textTop(scenesEl[scene]) - Math.min(innerHeight * .55, Math.min(innerHeight * .48, 390) + 104));
   const top = textTop(scenesEl[scene]), bot = textBottom(scenesEl[scene]);

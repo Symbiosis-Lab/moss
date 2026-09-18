@@ -147,5 +147,23 @@
       }),
       () => window.__landingI18n?.t('success') || 'Thanks for applying. Confirm the email we just sent; we’ll email you when your turn comes.'
     );
+
+    document.querySelectorAll('a[href="#beta"]').forEach((link) => {
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        const beta = document.querySelector('#beta');
+        const email = document.querySelector('#beta-email');
+        beta?.scrollIntoView({ behavior: 'auto', block: 'center' });
+        if (typeof fiveOn === 'function') fiveOn(true);
+        if (typeof setTarget === 'function') setTarget(SHARE);
+        const started = performance.now();
+        const focusEmail = () => {
+          if (email && !email.closest('[inert]')) email.focus({ preventScroll: true });
+          else if (performance.now() - started < 5000) setTimeout(focusEmail, 50);
+        };
+        focusEmail();
+        if ('onscrollend' in window) addEventListener('scrollend', focusEmail, { once: true });
+      });
+    });
   });
 })();
