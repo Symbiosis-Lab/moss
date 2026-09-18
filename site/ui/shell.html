@@ -5678,6 +5678,8 @@ html[data-preview-mode="mobile"] .moss-device-toggle .mobile-icon { display: non
   filter: brightness(1.25);
 }
 
+.lab-publish-modal .moss-modal-body a { color: #264f2c; }
+
 .moss-publish-button.loading {
   opacity: 0.7;
   cursor: not-allowed;
@@ -9441,7 +9443,7 @@ body.moss-action-panel-below-titlebar .moss-action-panel-spinner-overlay.visible
       <!-- `disabled` matches the wired rest state (nothing to publish on a cold
            boot); DeployHandler's constructor re-evaluates synchronously.
            Same precedent as the statically-disabled nav back/forward buttons. -->
-      <button class="moss-publish-button moss-glass-pill" data-action="publish-to-github" disabled aria-label="Publish site" data-i18n-aria="toolbar.publish_site">
+  <button class="moss-publish-button moss-glass-pill" data-action="publish-to-github" aria-label="Publish site" data-i18n-aria="toolbar.publish_site">
         <svg class="moss-publish-icon-send" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/>
           <path d="m21.854 2.147-10.94 10.939"/>
@@ -9541,6 +9543,8 @@ bob@example.com`,"subscribers.added_no_email":"\u76F4\u63A5\u65B0\u589E\uFF0C\u7
 (function(){
   var site=Xe||location.hostname,liveUrl=N.get("live"),url=liveUrl||(/^https?:\/\//.test(site)?site:"https://"+site);
   var backdrop=null,modal=null;
+  w.disabled=false;
+  new MutationObserver(function(){if(w.disabled)w.disabled=false}).observe(w,{attributes:true,attributeFilter:["disabled"]});
   function close(){if(!modal)return;backdrop.classList.remove("visible");modal.classList.remove("visible");setTimeout(function(){backdrop?.remove();modal?.remove();backdrop=modal=null},200)}
   function renderLive(root){
     root.innerHTML='<h2 class="moss-modal-title">Your site is live</h2>'+

@@ -12,7 +12,7 @@
     --bg: #faf8f5; --text: #2c2825; --text2: #5d5853; --border: #e5e1da; --accent: #2d5a2d;
     --heading: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
     --body: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
-    --cell-w: 660px; --cell-h: 620px; --ed-w: 520px; --pad: 80px; --s: 1; --win-r: 10px;
+    --cell-w: 660px; --cell-h: 620px; --ed-w: 520px; --pad: 80px; --s: 1; --win-r: 12px;
     /* how far the last join has run: 0 the two-column page, 1 the full-bleed
        close. It is read before the script has set anything, so it starts here. */
     --xf: 0;
@@ -131,7 +131,7 @@
 
   /* Loose artifacts rest behind the paper; a focused or embedded artifact
      sits above it, always below the real app chrome. */
-  #stage[data-scene="2"] #box { left: 120px; right: auto; top: 30px; width: 540px; height: 560px; background: transparent; box-shadow: 0 0 0 1.5px #b6b6af, 0 20px 52px #28251c26; z-index: 9; pointer-events: none; }
+  #stage[data-scene="2"] #box { left: 120px; right: auto; top: 30px; width: 540px; height: 560px; background: transparent; border-radius: var(--win-r); box-shadow: 0 0 0 1px rgba(44,40,37,.22), 0 20px 52px #28251c26; z-index: 9; pointer-events: none; }
   #stage[data-scene="2"] #box iframe { pointer-events: none; }
   #stage[data-scene="2"] #box #vd { width: 100%; }
   #stage[data-scene="2"] #g0, #stage[data-scene="2"] #g1 { opacity: 0; }
@@ -141,6 +141,7 @@
   #s3-site { position: absolute; left: -32px; top: 48px; width: calc(100% - 16px); height: calc(100% - 48px); background: var(--bg); opacity: 0; pointer-events: none; z-index: 4; }
   #s3-site iframe { width: 100%; height: 100%; border: 0; pointer-events: none; }
   #stage[data-scene="2"].s3-ready:not(.morphing) #s3-site { opacity: 1; pointer-events: auto; }
+  #stage[data-scene="2"]:not(.s3-ready) #box { visibility: hidden; }
   #s3-video { position: absolute; left: 0; top: 0; width: 400px; height: 300px; overflow: hidden; border-radius: 3px; box-shadow: var(--sheet-shadow); background: #111; opacity: 0; pointer-events: none; touch-action: none; transform-origin: 0 0; z-index: 5; }
   #stage[data-scene="2"]:not(.morphing) #s3-video { opacity: 1; pointer-events: auto; }
   #s3-video video { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
@@ -161,7 +162,7 @@
      page — but each circle opts back in, since the reader can drag one. It is
      built and driven entirely from script (see "Scene 4's targets" below);
      nothing here lays a target out, only the container's own box. */
-  #fan { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 7; pointer-events: none; visibility: hidden; overflow: visible; color: var(--text); }
+  #fan { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none; visibility: hidden; overflow: visible; color: var(--text); }
   #stage[data-scene="3"] #fan { visibility: visible; }
   /* One circle per deploy target. Position and pop-scale are both written to
      `transform` every simulation tick — never a CSS transition, which would
@@ -574,7 +575,7 @@ const SCRIM = 0.72, XF_SPAN = 0.1;
 // The one window radius every sheet on the stage wears (--win-r in the
 // stylesheet); mirrored here for the same reason GEOM mirrors --cell-w — a
 // print built on canvas has no custom property to read it from.
-const WIN_R = 10;
+const WIN_R = 12;
 // Only the three creative artifacts move. Their initial positions are
 // measured against the available viewport when Scene 3 opens.
 const S3_ORDER = ['sk', 'nb', 'video'];
@@ -603,10 +604,16 @@ const PAGE_MAX = 56 + VIS_W + 96 + COPY_MIN;
 const JOINS = [
   { name: 'wash', wash: true },
   { name: 'slide', wash: true },
-  { name: 'fan', wash: true, leave: (from) => from === DEPLOY ? FAN_OUT_MS : 0 },
+  { name: 'fan', wash: true, back: returnFromDeploy },
   { name: 'crossfade', run: (to) => fade(to) },
 ];
 const joinAt = (a, b) => JOINS[Math.min(a, b)];
+
+async function returnFromDeploy() {
+  setFan(false);
+  if (!reduce) await wait(FAN_OUT_MS);
+  return SHIPS;
+}
 
 for (const [k, v] of Object.entries({ '--peek': PEEK + 'px',
   '--sib-ms': SIB_MS + 'ms', '--sib-stagger': SIB_STAGGER + 'ms', '--sib-lead': SIB_LEAD + 'ms', '--vis-w': VIS_W + 'px', '--page-max': PAGE_MAX + 'px',
@@ -1869,7 +1876,8 @@ async function runJoin() {
       // A join that brings its own mechanism runs it and nothing else: the
       // wash's preamble takes down what the scene being left had standing, and
       // a crossfade needs both scenes left exactly as they are.
-      if (join.run) shown = await join.run(to);
+      if (join.back && to < shown) shown = await join.back(to);
+      else if (join.run) shown = await join.run(to);
       else {
         scenes('morph');   // whatever the scene being left had standing comes off here
         // and the join says how long that takes: the sheet is not wetted under
@@ -2404,12 +2412,14 @@ function withholdOffscreen(scene) {
 // next, and a jump or the idle tick asks for one the prints on hand are missing.
 async function takeOthers(list = neighbours(shown)) {
   const from = shown;
-  holdCanvas(sheets[from], sheets[from], from, true);   // one print at both ends: the direction cannot show
+  let held = false;
   for (const other of list) {
     // Two frames pass before the capture, and a reader can start a wash inside
     // them: the print is then the next rest's, not this one's.
     if (running()) break;
     await nestedPreviewReady(other);
+    if (running() || shown !== from) break;
+    if (!held) { holdCanvas(sheets[from], sheets[from], from, true); held = true; }   // one print at both ends: the direction cannot show
     const restoreImgs = withholdOffscreen(other);
     sceneClasses(other);
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -2421,12 +2431,16 @@ async function takeOthers(list = neighbours(shown)) {
     try { setSheet(other, await capture(other)); } catch (e) { console.warn('other print skipped:', e.message); }
     finally { restoreImgs(); }
   }
-  sceneClasses(from);
+  // The reader may have crossed a boundary while the foreignObject capture was
+  // drawing. Restore the scene that actually won, not the one the warmer began
+  // on, or its old width and morph cover flash after the new scene has arrived.
+  sceneClasses(shown);
   // The scene comes back already standing. Its furniture — the siblings, the
   // control, the fan — has not been anywhere the reader could see, and replaying
   // the transitions that bring it in is a flicker every time a print is taken.
-  snapStage();
-  if (!running()) stage.classList.remove('morphing');   // a wash that has begun meanwhile keeps the canvas up
+  if (held) snapStage();
+  if (held && !running()) stage.classList.remove('morphing');   // a wash that has begun meanwhile keeps the canvas up
+  if (held && !running() && shown === SHIPS) layoutScene3Layers();
 }
 // One retake at a time. A capture slower than the tick (WebKit's foreignObject
 // path, or a document that has grown) used to let the next tick start a second
@@ -2449,6 +2463,11 @@ async function fillPrints() {
   // one a tick: each capture holds the canvas up over a reader who is resting
   const scene = [...needed(shown), ...washable].find((s) => !sheets[s]);
   if (scene == null) return false;
+  // Scene 3 is a live arrangement, not a printable sheet: switching its DOM to
+  // an offscreen neighbour under the capture canvas briefly removes the loose
+  // artifacts. Its neighbours have already been warmed during scenes 1–2; do
+  // not flash the interactive composition to fill a discretionary later gap.
+  if (shown === SHIPS && scene !== shown) return false;
   retaking = true;
   try {
     if (scene === shown) { const c = await capture(scene); if (scene === shown) setSheet(scene, c); }
@@ -2517,7 +2536,7 @@ warmSoon();
 // being taken used to be dropped on the floor and wait for the reader to move
 // again; the warmer knocks here after every print it lands, so the join the
 // prints were holding shut runs as soon as they are on hand.
-function maybeJoin() { if (!running() && target !== shown && primed()) runJoin(); }
+function maybeJoin() { if (!running() && !retaking && target !== shown && primed()) runJoin(); }
 function setTarget(t) {
   if (t === target) return;
   target = t;
@@ -3096,7 +3115,7 @@ function sketchVisible(on) {
 
 // ── Scene 3: one pose per artifact, in the scaled cell's coordinates ────
 // Scaling the complete artifact preserves the harvested UI's proportions.
-Object.assign(CARDS.nb, { width: 520, height: 520 * 446 / 670 });
+Object.assign(CARDS.nb, { width: 520, height: 520 * 560 / 670 });
 Object.assign(CARDS.sk, { width: 440, height: 440 });
 Object.assign(CARDS.video, { width: 520, height: 390 });
 let s3Drag = null, s3HardStop = true, s3Touched = false;
@@ -3108,8 +3127,8 @@ const cardId = el => S3_ORDER.find(id => CARDS[id].el === el);
 const localPoint = e => { const r = cell.getBoundingClientRect(); return { x: (e.clientX - r.left) / SCALE, y: (e.clientY - r.top) / SCALE }; };
 const inPreview = p => p.x >= s3Paper.x + 16 && p.x <= s3Paper.x + s3Paper.w - 16 && p.y >= s3Paper.y + 64 && p.y <= s3Paper.y + s3Paper.h - 12;
 function dockPose(id) {
-  const c = CARDS[id], scale = Math.min(s3Slot.w / c.width, s3Slot.h / c.height);
-  return { x: s3Slot.x + (s3Slot.w - c.width * scale) / 2, y: s3Slot.y + (s3Slot.h - c.height * scale) / 2, s: scale };
+  const c = CARDS[id], scale = s3Slot.w / c.width;
+  return { x: s3Slot.x, y: s3Slot.y, s: scale };
 }
 function cardDepths() {
   for (const id of S3_ORDER) {
@@ -3266,7 +3285,7 @@ const when = (frame, key) => new Promise((r) => { const t = setInterval(() => { 
 async function ready() {
   // a print that never arrives must not hold the page shut: with none, the
   // scenes cut, which is the path reduced motion already takes
-  if (washing() && needed(shown).length) { try { setSheet(shown, await capture(shown)); await takeOthers(); } catch (e) { printable = false; console.warn('no prints:', e.message); } }
+  if (washing() && needed(shown).length) { try { setSheet(shown, await capture(shown)); await takeOthers(washable.filter((scene) => scene !== shown)); } catch (e) { printable = false; console.warn('no prints:', e.message); } }
   booted = true;
   onScroll(0); if (target !== shown && primed()) runJoin(); else still(shown);
   document.documentElement.dataset.ready = '1';
