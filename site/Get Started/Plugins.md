@@ -7,34 +7,10 @@ weight: 70
 url: extend
 ---
 
-A plugin is just a JavaScript package in `.moss/plugins/<name>/`. moss discovers it automatically, reads its manifest, and calls the hooks it declares at the right stage of every build.
+Use a plugin when the site needs behavior that content, Markdown, and a theme cannot provide: process data, add generated page content, publish through another service, or syndicate work elsewhere. If you only need a different look, use [Design & themes](/get-started/design/) instead.
 
-```
-.moss/plugins/my-plugin/
-├── manifest.json     ← describes what the plugin can do and how it's configured
-├── main.bundle.js    ← the plugin code
-└── icon.svg
-```
+Plugins run as part of the build and publish pipeline. They can change what moss reads, contribute to generated pages, connect a deployment target, or send published work to another platform. A plugin may request privileged host capabilities, which moss presents for explicit approval.
 
-## Hooks
+Start from an existing registry plugin when one matches the job. Write your own when you need a service or transformation that is specific to your site, and test it against a copy of the folder before publishing.
 
-Plugins tap into each stage of the build pipeline through **hooks**: transforming content, injecting content into templates, deploying, and syndicating outward. Declare the hooks you use in the manifest, and moss calls your code at the matching stage.
-
-```json
-{
-  "name": "my-plugin",
-  "hooks": ["transform"]
-}
-```
-
-## Slots
-
-**Slots** are reserved spots in the templates — the header, footer, sidebar, and so on. A plugin can inject HTML into a slot, adding custom elements to your pages without changing the theme.
-
-## moss-api
-
-At runtime, a plugin can call **moss-api** to read site content, access configuration, and register deploy channels. It's the interface between your plugin and moss.
-
-## Going deeper
-
-For a minimal working plugin, the full hook list, slots, the manifest format and the CLI, see [Write a plugin](/docs/extend/) and the reference pages for [Hooks](/docs/reference/hooks/), [Slots](/docs/reference/slots/), [Manifest](/docs/reference/manifest/) and [CLI](/docs/reference/cli/).
+The detailed [Write a plugin](/docs/extend/) guide covers the bundle and manifest contract. The [Hooks](/docs/reference/hooks/), [Slots](/docs/reference/slots/), [Manifest](/docs/reference/manifest/), and [CLI](/docs/reference/cli/) references define the exact interfaces.

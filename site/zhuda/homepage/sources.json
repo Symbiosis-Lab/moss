@@ -1,13 +1,25 @@
 {
   "homepage": "https://www.zhudasnotebook.com/",
+  "source_commit": "fbd899f",
   "assets": {
-    "https://www.zhudasnotebook.com/_moss/style.5867380e2e2bc164.css": "assets/2e6b9b26a853.css",
-    "https://www.zhudasnotebook.com/_moss/theme/style.cee8a6e1a1599758.css": "assets/a9e1738dd40b.css",
-    "https://www.zhudasnotebook.com/%E6%9B%B8/%E8%98%AD%E4%BA%AD%E5%BA%8F.jpg": "assets/126dcb71c0b9.jpg",
-    "https://www.zhudasnotebook.com/%E7%95%AB/%E9%AD%9A.jpg": "assets/faf23b452e8a.jpg"
+    "https://www.zhudasnotebook.com/_moss/style.ff438207075642dc.css": "assets/4fc93a057257.css",
+    "https://www.zhudasnotebook.com/_moss/theme/style.e4d2bbb9aec84f81.css": "assets/c58c91e0f64b.css",
+    "https://www.zhudasnotebook.com/_moss/css/email.d8314af063e33337.css": "assets/bf4d7cbc40f8.css",
+    "https://www.zhudasnotebook.com/%E6%9B%B8/%E8%98%AD%E4%BA%AD%E5%BA%8F_cover.jpg": "assets/e265c76d268f.jpg",
+    "https://www.zhudasnotebook.com/%E7%95%AB/%E5%AE%89%E6%99%9A%E5%86%8A.jpg": "assets/3926a51d36d5.jpg",
+    "https://www.zhudasnotebook.com/%E6%96%87/%E5%80%8B%E5%B1%B1%E5%B0%8F%E5%83%8F_cover.jpg": "assets/e65a0ba027e5.jpg",
+    "https://www.zhudasnotebook.com/%E7%95%AB/%E5%AD%A4%E7%A6%BD%E5%9C%96.jpg": "assets/e4772754b3b1.jpg",
+    "https://www.zhudasnotebook.com/%E7%95%AB/%E9%AD%9A.jpg": "assets/376d25daf9aa.jpg",
+    "https://www.zhudasnotebook.com/%E7%95%AB/%E8%8D%B7%E8%8A%B1%E7%BF%A0%E9%B3%A5%E5%9C%96.jpg": "assets/eab0bc5785fa.jpg",
+    "https://www.zhudasnotebook.com/%E7%95%AB/%E6%B2%B3%E4%B8%8A%E8%8A%B1%E5%9C%96.jpg": "assets/9e4725e1101e.jpg"
   },
   "images": [
-    "assets/126dcb71c0b9.jpg",
-    "assets/faf23b452e8a.jpg"
+    "assets/376d25daf9aa.jpg",
+    "assets/3926a51d36d5.jpg",
+    "assets/9e4725e1101e.jpg",
+    "assets/e265c76d268f.jpg",
+    "assets/e4772754b3b1.jpg",
+    "assets/e65a0ba027e5.jpg",
+    "assets/eab0bc5785fa.jpg"
   ]
 }

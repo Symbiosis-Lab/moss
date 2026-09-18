@@ -1,0 +1,25 @@
+{
+  "captured_on": "2026-09-18",
+  "behavior_verified_against": {
+    "repository": "Symbiosis-Lab/moss-desktop",
+    "commit": "f69321699c245f43cac405b5199a88ea71e740de",
+    "paths": [
+      "frontend/app/editor/editor.html",
+      "frontend/app/editor/editor.css",
+      "frontend/app/editor/tree/controller.ts",
+      "frontend/app/editor/chip-bar.ts",
+      "frontend/app/editor/cm-editor.ts"
+    ]
+  },
+  "harvest_commit": "2604e46c3dbda4e83c52523f4611f9398b7fbe6d",
+  "states": {
+    "editor-ui-source.png": "760x420 Playwright capture; William Blake index.md selected; tree collapsed; Date chip visible; filename-derived title; two-line Blake excerpt focused in the editor; bottom toolbar visible",
+    "choose-page-source.png": "520x520 Playwright capture; William Blake/Songs of Experience/The Tyger.md selected; breadcrumb clicked through the fixture's native summary control; expanded tree, Date chip, and filename-derived title visible",
+    "editor@2x.png": "Landing editor fixture at 2x fallback resolution",
+    "shell@2x.png": "Matching landing preview fixture at 2x fallback resolution"
+  },
+  "derivation": {
+    "editor-ui-source.png": "scripts/capture-editor-guide-assets.mjs sets the document through window.__editor.setDoc(), focuses through window.__editor.focus(), and captures at 760x420",
+    "choose-page-source.png": "The same script clicks summary.nav-bc-strip, waits for details.lab-tree-root[open] and the active row, then captures at 520x520"
+  }
+}

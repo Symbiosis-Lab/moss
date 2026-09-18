@@ -154,8 +154,7 @@
         const beta = document.querySelector('#beta');
         const email = document.querySelector('#beta-email');
         beta?.scrollIntoView({ behavior: 'auto', block: 'center' });
-        if (typeof fiveOn === 'function') fiveOn(true);
-        if (typeof setTarget === 'function') setTarget(SHARE);
+        window.mossLanding?.openSignup();
         const started = performance.now();
         const focusEmail = () => {
           const state = window.__state?.();

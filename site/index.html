@@ -26,6 +26,9 @@
   /* The lockup follows mark.css: inline, mark and name as peers, the mark's
      visible ink as tall as the name's letter band, the gap the height of its
      drop. 13px/600 in the UI sans gives a 10px band; a 16px box shows 11.5px. */
+  @font-face { font-family: MossLongCang; src: url("/assets/brand/LongCang-colophon.woff2") format("woff2"); font-weight: 400; font-display: swap; unicode-range: U+9752,U+82D4; }
+  html:lang(zh) .brand .moss-wordmark { font-family: MossLongCang, var(--body); font-size: 16px; font-weight: 400; }
+  html:lang(zh) .brand svg { width: 18px; height: 18px; }
   .brand { position: fixed; top: 16px; left: 28px; z-index: 50; display: flex; align-items: center; gap: 5px; font: 600 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #000; }
   .brand { color: rgb(calc(255 * var(--xf)), calc(255 * var(--xf)), calc(255 * var(--xf))); }
   .brand svg { filter: grayscale(var(--xf)) brightness(calc(1 + var(--xf) * 99)); width: 16px; height: 16px; display: block; transform: translateY(1px); }
@@ -293,13 +296,12 @@
      to the measured desktop composition. The script supplies these variables
      after it knows the viewport and copy heights. */
   #intro { display: grid; place-items: start center; min-height: 108svh; padding: 0 32px; text-align: center; }
-  #intro h1 { position: sticky; top: 38svh; margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; text-wrap: balance; opacity: clamp(0, calc((var(--intro-p, 1) - .04) * 1.2), 1); }
+  #intro h1 { position: sticky; top: 38svh; margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; text-wrap: balance; opacity: clamp(0, calc((var(--intro-title-p, 1) - .04) * 1.2), 1); }
   .page { margin-top: -42svh; }
   .page { grid-template-columns: calc(var(--vis-w) * var(--layout-s, var(--s)) - 88px) minmax(0, 1fr); }
-  #stage { transform: translate(calc((var(--layout-s, 1) - var(--s, 1)) * 400px), calc(var(--intro-visible, 0px) * -.33)); }
+  #stage { transform: translate(calc((var(--layout-s, 1) - var(--s, 1)) * 400px), calc(var(--intro-visible, 0px) * -.33 - var(--vis-top, 0px))); }
   #cell { transform: scale(var(--s)); }
-  #c1 { min-height: calc(100svh - var(--intro-h, 0px)); }
-  #c1 .scene-text { transform: translateY(calc((var(--intro-h, 0px) - var(--intro-visible, 0px)) * .5)); }
+  #c1 { min-height: 100svh; justify-content: flex-start; }
   #c1 h2 { font-size: calc(34px + 6px * (1 - var(--intro-p, 0))); transition: font-size .12s linear; }
   #five { position: relative; inset: auto; min-height: 100svh; overflow: visible; background: transparent; color: #fff; }
   #c5 { height: 0; min-height: 0; padding: 0; }
@@ -388,7 +390,7 @@
 <body>
 <div class="brand"><span class="moss-mark" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 288 288"><path fill="currentColor" d="m127 67-5 3q-3 5-4 2l-12 4c-10 3-10 4-10 6l-1 3-2 3-1 3q-2 0-4 5-4 11-12-1-4-6-6-4-4 0 1 5c2 2 2 2 2 10q-1 11 6 18v2l3 8 4 8 2 3c3 3 6 12 4 12l-12-5-4-1c-3 0-11-4-15-8q-4-5-6-2t-7-1l-5-2q-2 0-3-3-1-6-5 0-2 3 3 7c7 7 9 17 4 18l4 4q14 8 3 21-4 6-8 5-4 1 0 2h8q7-2 11 4 3 3 0 7-4 9 2 14l3 4q-1 1 1 1 3-2 8 5c6 6 3 15-5 17q-9 3-9 5c1 1 8 0 13-2l11-2 9-1h8l8-1 2-1 1 1 1 2 2 3 2 1q4-1-5 12c-2 3-3 14-1 14l4-4q5-6 9-7l6-1 4-2 4-1c2-2 9-3 9-1v5q-1 9 3 6l2-4 2-8q5-10 8-4l8 5c10 4 12 6 17 12q6 8 8 6 3-1-3-8-9-11-9-14c1-2 12-5 17-5 4 0 11-5 13-10l3-4 1-2v-2c3-1 11-8 11-10q3-8 16-5l8 1c2-1-8-4-14-5-4 0-12-3-16-6s2-13 7-13l3-2 4-2 6-5 4-5c7-5 16-15 15-17q-1-3-2 0c-3 3-18 6-19 4-1-3 4-23 7-27q5-9-1-5l-4 1-5 3q-2 3-3 1h-5l-12 6q-10 4-13 7l-11 5 3-4c6-6 18-27 19-34l6-13q6-9 2-11c-1-2-35-17-52-24l-3 2-3 5-2 4-2 6-2 5-1 6-2 7-2 3-3 4-1 5-1 2-1 2q-2-1-3-7l-2-5-1-3-1-13-2-12-2-1q-2 0-1-3l-3-8-1-3q-1-3-5-1"/><path fill="#4f7031" d="m199 4-7 19-2 6-2 6-5 10-5 10-2 5-3 6-4 6 40 16c14 6 14 6 16 3q3-3 3-16l1-11q2-8-3 1-3 8-10 9-4 0 0-4l2-7q1-7-2-2-2 6-8 5t-4-3l1-3 2-4q4-5 1-6-3 1-4 5c0 2-5 7-8 7q-12 0-2-24 5-9 5-16l2-11c2-10 2-11 0-11q-2 0-2 4M39 41l1 3 9 9 4 7 2 7 4 9 3 4 3 7q2 7 5 4 5-2 0-5c-3-2-9-11-9-13l-6-13-2-4-2-4q-3-2-4-6c-2-6-9-10-8-5M23 23l3 6c3 5 4 6 4 12q0 13 8 21l4 5 5 7-4-15-3-3q-3-2-4-8l-1-3q-2 0-2-7 1-6-3-8l-4-5zM0 114l7 5q5 0 11 5l8 5q7 4 7 7t3-1 0-6l-4-3q-4-3-12-5l-5-2c-2-2-15-7-15-5m277-1-3 2-3 3q-4 4-6 3-3-2-7 2l-6 6q-5 3-4 5 1 3 3 1l5-3q7-2 7-6l3-2c7-4 15-9 15-11q1-4-4 0M108 41l1 5c3 14 0 27-7 28q-7 2-6 5c1 1 20-7 21-9l-1-8-2-12q-3-10-6-9M51 81l7 13c0 2 5 7 6 7q1-4-8-14zm178-59-5 15c-1 6 2 0 5-9l2-10zM49 249c-6 0-6 7-1 7 3 0 10-5 10-6q-3-2-9-1m75-199v9c0 9 0 9 3 8q4 0 1-6l-2-5-1-5zm140 109q-6 2-3 5c2 2 9-2 9-5q1-3-6 0"/></svg></span><span class="moss-wordmark">moss</span></div>
 
-<nav class="language-picker nav-lang-toggle" aria-label="Language"><span class="nav-lang-current">English</span><span aria-hidden="true">/</span><a class="nav-lang-link" data-landing-locale="zh-hans" hreflang="zh-Hans" href="/zh-hans/">简体中文</a><span aria-hidden="true">/</span><a class="nav-lang-link" data-landing-locale="zh-hant" hreflang="zh-Hant" href="/zh-hant/">繁體中文</a></nav>
+<nav class="language-picker nav-lang-toggle" aria-label="Language"><span class="nav-lang-current" lang="en" aria-label="English">EN</span><span aria-hidden="true">/</span><a class="nav-lang-link" data-landing-locale="zh-hant" hreflang="zh-Hant" lang="zh-Hant" aria-label="繁體中文" href="/zh-hant/">繁</a><span aria-hidden="true">/</span><a class="nav-lang-link" data-landing-locale="zh-hans" hreflang="zh-Hans" lang="zh-Hans" aria-label="简体中文" href="/zh-hans/">简</a></nav>
 
 <header id="intro"><h1>Publish your site<br>from your folder.</h1></header>
 <div class="page">
@@ -436,22 +438,22 @@
     <section class="scene" id="c1"><div class="scene-text">
       <h2>Write anywhere.<br>Publish everywhere.</h2>
       <p class="lede">Write in your folder with Markdown files. Collaborate through any cloud drive. One click to preview, another to publish anywhere.</p>
-      <div class="btns"><a class="moss-btn" data-role="primary" href="#beta">Request beta access</a><a class="moss-btn" data-role="secondary" href="/get-started/">Get started</a></div>
+      <div class="btns"><a class="moss-btn" data-role="primary" href="#beta">Request beta access</a><a class="moss-btn" data-role="secondary" href="/get-started/">Get started →</a></div>
     </div></section>
     <section class="scene" id="c2"><div class="scene-text">
       <h2>Friendly for humans.<br>Powerful for AI.</h2>
       <p class="lede">Everything lives in local files, ready for your favorite editor or coding agent. Instant previews and an intuitive interface make your site pleasant to use and effortless to maintain.</p>
-      <div class="btns"><a class="moss-btn" data-role="secondary" href="/get-started/editor/">moss editor</a><a class="moss-btn" data-role="secondary" href="/get-started/design/">Writing a theme</a></div>
+      <div class="btns"><a class="moss-btn" data-role="secondary" href="/get-started/editor/">moss editor →</a><a class="moss-btn" data-role="secondary" href="/get-started/design/">Writing a theme →</a></div>
     </div></section>
     <section class="scene" id="c3"><div class="scene-text">
       <h2 id="c3-h2">As light as your folder.<br>As vast as the internet.</h2>
       <p class="lede">moss optimizes and packages your files into a website, from prose and video to JavaScript sketches and Jupyter notebooks.</p>
-      <div class="btns"><a class="moss-btn" data-role="secondary" href="/get-started/links/">Media file types</a><a class="moss-btn" data-role="secondary" href="https://github.com/Symbiosis-Lab/moss/issues/new?title=Media%20type%20request%3A%20&amp;labels=enhancement">Request a new type</a></div>
+      <div class="btns"><a class="moss-btn" data-role="secondary" href="/get-started/links/">Media file types →</a><a class="moss-btn" data-role="secondary" href="https://github.com/Symbiosis-Lab/moss/issues/new?title=Media%20type%20request%3A%20&amp;labels=enhancement">Request a new type</a></div>
     </div></section>
     <section class="scene" id="c4"><div class="scene-text">
       <h2>Publish to your internet,<br>your way.</h2>
       <p class="lede">Choose your host and sync the same content to multiple channels. Write your own plugin or install one from the registry, from email newsletters to IPFS and Nostr.</p>
-      <div class="btns"><a class="moss-btn" data-role="secondary" href="/get-started/extend/">Writing a plugin</a><a class="moss-btn" data-role="secondary" href="https://github.com/Symbiosis-Lab/moss-registry">moss registry</a></div>
+      <div class="btns"><a class="moss-btn" data-role="secondary" href="/get-started/extend/">Writing a plugin →</a><a class="moss-btn" data-role="secondary" href="https://github.com/Symbiosis-Lab/moss-registry">moss registry</a></div>
     </div></section>
     <section class="scene" id="c5" aria-hidden="true"><div class="edge"></div></section>
   </div>
@@ -479,7 +481,7 @@
       <p class="copy-status" id="copy-status" role="status" aria-live="polite"></p>
     </div>
     <section id="beta" aria-labelledby="beta-title" tabindex="-1">
-      <div><h3 id="beta-title">Help shape moss.</h3><p>Request beta access. We’ll email you when a build is ready for you.</p></div>
+      <div><h3 id="beta-title">Help shape moss.</h3><p>Receive occasional updates and try moss’s default hosting service for free.</p></div>
       <form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">Your email</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="Your email" required><button type="submit">Request access</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
     </section>
     <footer id="footer">
@@ -638,7 +640,7 @@ const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 // is fetched below. blake/w/ and zhuda/w/ are untouched — movie4.html/
 // movie5.html still read them.
 const PLATE_SET = window.__LANG === 'zh'
-  ? {"dir": "zhuda/homepage", "images": ["assets/126dcb71c0b9.jpg", "assets/faf23b452e8a.jpg"]}
+  ? {"dir": "zhuda/homepage", "images": ["assets/376d25daf9aa.jpg", "assets/3926a51d36d5.jpg", "assets/9e4725e1101e.jpg", "assets/e265c76d268f.jpg", "assets/e4772754b3b1.jpg", "assets/e65a0ba027e5.jpg", "assets/eab0bc5785fa.jpg"]}
   : {"dir": "blake/homepage", "images": ["assets/3b119ebffab3.jpg", "assets/b8dcbfe35cbd.jpg", "assets/38211f928ad5.jpg", "assets/171a382c9cc2.jpg", "assets/771aaf08cedb.jpg", "assets/f34b78575d36.jpg", "assets/50e62b346c5f.jpg", "assets/5ac4f7fb652f.jpg", "assets/0bb22b56b263.jpg"]};
 // Where a plate may live, in #cell's own coordinates. The viewport-aware
 // bounds let a reader drag beyond the resting sheet while the print rectangle
@@ -746,11 +748,20 @@ function introWatercolor(progress) {
 function updateOpening() {
   const visible = Math.max(0, opening.getBoundingClientRect().bottom);
   const introP = Math.min(1, visible / Math.max(1, opening.offsetHeight));
-  SCALE = baseScale * (mobileLayout() ? 1 : 1 - .4 * introP);
+  const first = document.querySelector('#c1 .scene-text').getBoundingClientRect();
+  const firstRest = Math.max(1, scrollY + (mobileLayout() ? first.top - 88 : (first.top + first.bottom) / 2 - innerHeight * .5));
+  const titleP = clamp01(1 - scrollY / firstRest);
+  // The opening's scale and lift end with its title, so scene 1 arrives at the
+  // same stage pose scene 2 morphs from. The copy can still occupy the opening
+  // beat; it must not leave the live paper smaller or lower than its print.
+  const stageIntroP = introP * titleP;
+  SCALE = baseScale * (mobileLayout() ? 1 : 1 - .4 * stageIntroP);
   document.documentElement.style.setProperty('--s', String(SCALE));
   document.documentElement.style.setProperty('--intro-p', String(introP));
-  introWatercolor(introP);
-  document.documentElement.style.setProperty('--intro-visible', mobileLayout() ? '0px' : visible + 'px');
+  document.documentElement.style.setProperty('--intro-title-p', String(titleP));
+  introWatercolor(titleP);
+  document.documentElement.style.setProperty('--intro-visible', mobileLayout() ? '0px' : (visible * titleP) + 'px');
+  document.documentElement.style.setProperty('--vis-top', mobileLayout() ? '0px' : (document.getElementById('vis').getBoundingClientRect().top * (1 - titleP)) + 'px');
   if (mobileLayout()) {
     const firstCopy = document.querySelector('#c1 .scene-text').offsetHeight + 28;
     const introPad = Math.max(firstCopy + 64, innerHeight * .72 + 64);
@@ -1416,7 +1427,7 @@ const popScale = (n, now) => { if (!n.popAt) return 0; const t = clamp01((now - 
 // A released drag returns without a snap or exaggerated overshoot.
 const easeOutCubic = (t) => 1 - (1 - t) ** 3;
 
-let d3fPromise = null;
+let d3fPromise = null, orbitStartPromise = null, orbitStartToken = 0, orbitExitFrame = 0;
 function loadVendorScript(src) {
   return new Promise((resolve, reject) => {
     const script = document.createElement('script');
@@ -1656,9 +1667,14 @@ function ensureOrbitNodes() {
   });
 }
 async function startOrbit() {
+  if (orbitSim) return;
+  if (orbitStartPromise) return orbitStartPromise;
+  cancelAnimationFrame(orbitExitFrame); orbitExitFrame = 0;
+  const startToken = ++orbitStartToken;
+  const run = (async () => {
   const g = gen;
   TARGETS = TARGETS.length ? TARGETS : await loadTargets();
-  if (gen !== g) return;   // the reader left before the target list resolved
+  if (gen !== g || startToken !== orbitStartToken) return;   // the reader left before the target list resolved
   ensureOrbitNodes();
   if (reduce) {
     // The static pack an unwilling-to-move reader gets, standing the instant
@@ -1684,7 +1700,7 @@ async function startOrbit() {
   let mod;
   try { [mod] = await Promise.all([loadD3Force(), reduce ? null : wait(PUB_MS + PUB_BEAT)]); }
   catch (e) { console.warn('scene 4: d3-force failed to load, targets stay' + (reduce ? ' static' : ' unpopped'), e && e.message); return; }
-  if (gen !== g) return;   // the reader left before this resolved
+  if (gen !== g || startToken !== orbitStartToken) return;   // the reader left before this resolved
   const { forceSimulation, forceCollide, forceRadial } = mod;
   buttonNode = buttonNode || { id: 'button', x: orbitCx, y: orbitCy, vx: 0, vy: 0, fx: orbitCx, fy: orbitCy };
 
@@ -1719,6 +1735,9 @@ async function startOrbit() {
     .on('tick', render);
   if (reduce) orbitSim.alpha(0);
   else await popAll(g);
+  })();
+  orbitStartPromise = run;
+  try { await run; } finally { if (orbitStartPromise === run) orbitStartPromise = null; }
 }
 // The reverse of a pop: each target tweens, by its own current position and
 // pop-scale, straight back to the control over ORBIT_OUT_MS — a plain
@@ -1728,6 +1747,8 @@ async function startOrbit() {
 // whatever the cluster's alpha was still cooling down from — leaving the
 // scene ends the physics outright rather than waiting for it to settle.
 function stopOrbit() {
+  orbitStartToken++;
+  orbitStartPromise = null;
   if (!orbitNodes) return;
   if (dragging) { dragging.fx = null; dragging.fy = null; dragging = null; }
   if (orbitSim) { orbitSim.stop(); orbitSim = null; }
@@ -1737,10 +1758,10 @@ function stopOrbit() {
     const now = performance.now();
     render(now);
     const active = orbitNodes.some((n) => now - n.exitAt < ORBIT_OUT_MS);
-    if (active && gen === g) { requestAnimationFrame(step); return; }
+    if (active && gen === g) { orbitExitFrame = requestAnimationFrame(step); return; }
     for (const n of orbitNodes) n.exiting = false;
   };
-  requestAnimationFrame(step);
+  orbitExitFrame = requestAnimationFrame(step);
 }
 // The targets are scene 4's and no other scene's; leaving either way sends
 // them back into the control, and the simulation stops with them.
@@ -1808,6 +1829,10 @@ function holdCanvas(src, tgt, scene, fwd) { groundAt(scene); sim.setPrints(src, 
 let settledAt = 0;
 function still(scene) {
   settledAt = performance.now();
+  // Install the no-transition guard before changing data-scene. Otherwise a
+  // publish frame can paint once with the shell's lower-right source pose
+  // before the centred end-state transform is applied.
+  if (scene === DEPLOY) stage.classList.add('snap');
   sceneClasses(scene);
   groundAt(scene);
   fiveOn(scene === SHARE);
@@ -1818,6 +1843,14 @@ function still(scene) {
   if (scene === DEPLOY) snapStage();
   stage.classList.remove('morphing');
 }
+
+// The signup link is navigation: it skips the scene performance.
+window.mossLanding = { openSignup() {
+  cancelSettle();
+  if (running()) setTarget(SHARE);
+  else { shown = target = SHARE; still(SHARE); }
+  mountLoop(); setCross(1); fiveOn(true);
+} };
 
 // ── The last join: the page gives way to the full-bleed close ─────────────
 // The scrub is a position, not a clock: where the reader stands inside the last
@@ -1834,7 +1867,12 @@ function nativeScroll() {
 // The scene on the far side of this join arrives already standing rather than
 // drawing itself under the fade: the fan is scene 4's end state, not a
 // performance to replay each time the reader crosses back.
-function snapStage() { stage.classList.add('snap'); requestAnimationFrame(() => requestAnimationFrame(() => stage.classList.remove('snap'))); }
+let snapToken = 0;
+function snapStage() {
+  const token = ++snapToken;
+  stage.classList.add('snap');
+  requestAnimationFrame(() => requestAnimationFrame(() => { if (token === snapToken) stage.classList.remove('snap'); }));
+}
 async function fade(to) {
   // Both ends are on the page at once, so the scene being returned to is put
   // back before the scrub rather than after it.
@@ -2441,6 +2479,13 @@ function withholdOffscreen(scene) {
 // Which scenes is the caller's: a wash refreshes the neighbours it might run to
 // next, and a jump or the idle tick asks for one the prints on hand are missing.
 async function takeOthers(list = neighbours(shown)) {
+  // Neighbour prints are immutable handoff state once warmed. Re-entering a
+  // live scene to refresh an already-held print changes its measured shell
+  // width and data-scene for several frames; that mutation is visible even
+  // when the capture itself is hidden under the wash canvas. A stale neighbour
+  // can safely keep its existing print until the next real wash replaces it.
+  list = list.filter((other) => !sheets[other]);
+  if (!list.length) return;
   const from = shown;
   let held = false;
   for (const other of list) {
@@ -2699,16 +2744,9 @@ let lastWatchT = performance.now();
 // plateau it reads as this scene — textTop() to textBottom(), the identical
 // pair it names the scene from — so a settle and the function judging where
 // it landed can never disagree by construction, not just by measurement.
-// Scene 1's plateau runs open below the document's own top, nothing to centre
-// against, so it rests at the literal top instead. A heading-centred rest (the
-// prior `designed()`) was tried against this: on every scene and viewport
-// checked it landed inside the plateau anyway (2026-09-15), and the offset
-// varies with each scene's own heading height, so it cannot be carried
-// forward as the one named constant a real design intent would need — there
-// is nothing here worth a second geometry for.
 const restY = (scene) => {
+  if (scene === 0 && mobileLayout()) return Math.max(0, Math.round(scrollY + textTop(scenesEl[0]) - 88));
   if (scene === SHARE) return Math.max(0, document.documentElement.scrollHeight - innerHeight);
-  if (scene === 0) return scrollY > opening.offsetHeight * .45 ? opening.offsetHeight : 0;
   if (mobileLayout()) return Math.round(scrollY + textTop(scenesEl[scene]) - Math.min(innerHeight * .55, Math.min(innerHeight * .48, 390) + 104));
   const top = textTop(scenesEl[scene]), bot = textBottom(scenesEl[scene]);
   return Math.round(scrollY + (top + bot) / 2 - innerHeight * LINE);
@@ -2720,6 +2758,10 @@ const restY = (scene) => {
 const spanLeft = (a, b, t) => Math.max(0, b - Math.max(a, t));
 const cureLeft = (t) => spanLeft(0, T_TAKE, t) / ARRIVE + spanLeft(T_TAKE, T_WET, t) / ARRIVE_SMEAR + spanLeft(T_WET, T_TOTAL, t) / ARRIVE;
 let restSince = performance.now(), travel = 0, settleArmed = false, settleRun = null;
+// The opening is a held first frame. A rest target is allowed to move the page
+// only after a real gesture has armed the carry, so a loaded page never pages
+// itself into scene 1 while the reader is still looking at the title.
+let inputArmed = false;
 // ?carry=intent's own state: the position and velocity the integrator owns, kept separate
 // from the real scrollY it writes every frame so a foreign write (CARRY_EPS above) can be
 // told apart from its own last write. carryX starts null and is seeded from scrollY on the
@@ -2799,6 +2841,7 @@ function settleTo(y, v0, secs) {
 // against the end of the document — would otherwise leave the copy standing
 // wherever the spring had got to.
 const cancelSettle = () => {
+  inputArmed = true;
   if (settleRun) { settleRun.cancel = true; settleRun = null; }
   settleArmed = true; restSince = performance.now();
 };
@@ -2818,7 +2861,7 @@ for (const ev of ['wheel', 'touchstart', 'pointerdown', 'keydown']) addEventList
 // rest is just the nearest scene.
 const sceneForRest = (p, dir) => (dir === 0 ? Math.round(p) : dir < 0 ? Math.floor(p + DEAD) : Math.ceil(p - DEAD));
 function settleAtRest(now) {
-  if (!settleArmed || settleRun || now - restSince < REST_MS) return;
+  if (!inputArmed || !settleArmed || settleRun || now - restSince < REST_MS) return;
   settleArmed = false;
   const scene = sceneForRest(progressAt(), travel);
   // A wash owed or already running lends its clock; with none, the spring
@@ -2899,6 +2942,7 @@ if (CARRY === 'intent') {
 function watchScrollIntent(now) {
   const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
   if (carryX == null) carryX = scrollY;
+  if (!inputArmed) { carryX = scrollY; carryV = 0; return; }
   // A trackpad's own contact has no release event, only a pause: past HOLD_GAP since the last
   // tick with nothing new arriving, wheelHeld's own last value has gone stale, and this is the
   // one place with a per-frame clock to notice it — touchHeld needs no such check, it already
@@ -2950,7 +2994,7 @@ function watchScrollCss(now) {
   onScroll(dy);
   // The closing section shares the release spring, while upward reading and
   // form input retain native control. A fresh gesture cancels settleTo().
-  if (xf > 0 && travel > 0 && settleArmed && !settleRun && !touchHeld && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
+  if (xfAt() > 0 && travel > 0 && settleArmed && !settleRun && !touchHeld && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
     settleArmed = false;
     const bottom = Math.max(0, document.documentElement.scrollHeight - innerHeight);
     if (reduce) scrollTo(0, bottom);

@@ -17,7 +17,7 @@ function localize(sourceHtml, locale) {
   let result = sourceHtml.replace('<html lang="en">', `<html lang="${locale}">`);
   const target = catalogs[locale];
   const replacements = Object.keys(en)
-    .filter(key => typeof en[key] === 'string' && en[key] !== target[key])
+    .filter(key => key !== 'product' && typeof en[key] === 'string' && en[key] !== target[key])
     .map(key => [en[key], target[key]])
     .sort((a, b) => b[0].length - a[0].length);
   const protectedParts = result.split(/(<(?:script|style)\b[\s\S]*?<\/(?:script|style)>)/gi);
@@ -27,14 +27,24 @@ function localize(sourceHtml, locale) {
     for (const key of Object.keys(en.docs)) part = part.replaceAll(en.docs[key], target.docs[key]);
     return part;
   }).join('');
-  const nav = locale === 'zh-hans'
-    ? '<nav class="language-picker nav-lang-toggle" aria-label="语言"><a class="nav-lang-link" data-landing-locale="en" hreflang="en" href="/">English</a><span aria-hidden="true">/</span><span class="nav-lang-current">简体中文</span><span aria-hidden="true">/</span><a class="nav-lang-link" data-landing-locale="zh-hant" hreflang="zh-Hant" href="/zh-hant/">繁體中文</a></nav>'
-    : '<nav class="language-picker nav-lang-toggle" aria-label="語言"><a class="nav-lang-link" data-landing-locale="en" hreflang="en" href="/">English</a><span aria-hidden="true">/</span><a class="nav-lang-link" data-landing-locale="zh-hans" hreflang="zh-Hans" href="/zh-hans/">简体中文</a><span aria-hidden="true">/</span><span class="nav-lang-current">繁體中文</span></nav>';
+  result = result.replace(/(<span class="moss-wordmark">)[^<]+/, `$1${target.product}`);
+  const languages = [ ['en', 'EN', 'English', '/'], ['zh-hant', '繁', '繁體中文', '/zh-hant/'], ['zh-hans', '简', '简体中文', '/zh-hans/'] ];
+  const nav = `<nav class="language-picker nav-lang-toggle" aria-label="${locale === 'zh-hans' ? '语言' : '語言'}">` + languages.map(([code, label, name, href]) => code === locale
+    ? `<span class="nav-lang-current" lang="${code}" aria-label="${name}">${label}</span>`
+    : `<a class="nav-lang-link" data-landing-locale="${code}" hreflang="${code}" lang="${code}" aria-label="${name}" href="${href}">${label}</a>`).join('<span aria-hidden="true">/</span>') + '</nav>';
   result = result.replace(/<nav class="language-picker nav-lang-toggle"[\s\S]*?<\/nav>/, nav);
   const required = ['title', 'description', 'intro', 'h1', 'b1', 'h2', 'b2', 'h3', 'b3', 'h4', 'b4', 'betaCta', 'start', 'editor', 'theme', 'media', 'requestType', 'plugin', 'registry', 'closeH', 'closeB', 'download', 'macNote', 'soon', 'install', 'copy', 'betaH', 'betaB', 'email', 'request', 'privacy'];
   for (const key of required) {
     if (!result.includes(target[key]) && !result.includes(escaped(target[key]))) throw new Error(`${locale} static copy missing ${key}`);
   }
+  // Translations may change text and localized doc URLs, never app selectors,
+  // install commands, or external destinations.
+  const selectors = value => [...value.matchAll(/\b(?:class|id)="[^"]*"/g)].map(match => match[0]).sort();
+  if (JSON.stringify(selectors(result)) !== JSON.stringify(selectors(sourceHtml))) throw new Error(`${locale} altered HTML selectors`);
+  const externals = value => [...value.matchAll(/(?:href|src)="https?:[^" ]+"/g)].map(match => match[0]).sort();
+  if (JSON.stringify(externals(result)) !== JSON.stringify(externals(sourceHtml))) throw new Error(`${locale} altered external URLs`);
+  const commands = value => [...value.matchAll(/<code>[^<]+<\/code>/g)].map(match => match[0]);
+  if (JSON.stringify(commands(result)) !== JSON.stringify(commands(sourceHtml))) throw new Error(`${locale} altered install commands`);
   return result;
 }
 
