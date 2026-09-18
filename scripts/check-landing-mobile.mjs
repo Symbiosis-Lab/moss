@@ -1,0 +1,156 @@
+#!/usr/bin/env node
+
+import { readFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
+
+const input = process.argv[2];
+if (!input) {
+  console.error('Usage: node scripts/check-landing-mobile.mjs <preview-url>');
+  process.exit(2);
+}
+const base = new URL(input);
+const requestedModule = process.env.PLAYWRIGHT_MODULE || 'playwright';
+const moduleSpecifier = requestedModule.startsWith('/') ? pathToFileURL(requestedModule).href : requestedModule;
+let playwright;
+try {
+  playwright = await import(moduleSpecifier);
+} catch (error) {
+  throw new Error(`Could not load Playwright from ${requestedModule}. Set PLAYWRIGHT_MODULE to playwright/index.mjs in an existing install.\n${error}`);
+}
+
+const overrideHtml = process.env.LANDING_HTML_STDIN
+  ? await new Promise((resolve, reject) => {
+      let text = '';
+      process.stdin.setEncoding('utf8');
+      process.stdin.on('data', (chunk) => { text += chunk; });
+      process.stdin.on('end', () => resolve(text));
+      process.stdin.on('error', reject);
+    })
+  : process.env.LANDING_HTML_OVERRIDE
+    ? await readFile(process.env.LANDING_HTML_OVERRIDE, 'utf8')
+    : null;
+
+const browser = await playwright.chromium.launch({ headless: true });
+const results = {};
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const installOverride = async (page) => {
+  if (!overrideHtml) return;
+  await page.route(base.href, (route) => route.fulfill({ status: 200, contentType: 'text/html', body: overrideHtml }));
+};
+const instrumentScroll = () => {
+  window.__landingScrollWrites = [];
+  const nativeScrollTo = window.scrollTo.bind(window);
+  window.scrollTo = (...args) => { window.__landingScrollWrites.push(args); return nativeScrollTo(...args); };
+};
+const ready = (page) => page.waitForFunction(() => window.__state && window.__restY, null, { timeout: 20000 });
+
+async function mobilePage(search = '') {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await installOverride(page);
+  await page.addInitScript(instrumentScroll);
+  const url = new URL(base.href); url.search = search;
+  await page.goto(url.href, { waitUntil: 'domcontentloaded' });
+  await ready(page);
+  return page;
+}
+async function swipe(page, fromY, toY, steps = 6) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 190, y: fromY }] });
+  for (let i = 1; i <= steps; i++) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 190, y: fromY + (toY - fromY) * i / steps }] });
+    await page.waitForTimeout(30);
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+}
+const mobileState = (page) => page.evaluate(() => ({
+  y: scrollY,
+  max: document.documentElement.scrollHeight - innerHeight,
+  progress: __state().progress,
+  xf: __state().xf,
+  target: __state().target,
+  snap: getComputedStyle(document.documentElement).scrollSnapType,
+  mobileSnap: document.documentElement.hasAttribute('data-mobile-snap'),
+  writes: window.__landingScrollWrites.length,
+}));
+
+try {
+  const page = await mobilePage();
+  let state = await mobileState(page);
+  assert(state.snap === 'none' && !state.mobileSnap, `mobile starts with snap enabled: ${JSON.stringify(state)}`);
+  const affordance = await page.evaluate(() => {
+    const visual = document.getElementById('vis');
+    const link = document.querySelector('#c1 .btns a');
+    window.__copyClicked = false;
+    document.addEventListener('click', (event) => {
+      if (event.target.closest('#c1 .btns a')) window.__copyClicked = true;
+      event.preventDefault(); event.stopImmediatePropagation();
+    }, { capture: true, once: true });
+    return { visualInert: visual.inert, stagePointer: getComputedStyle(document.getElementById('stage')).pointerEvents,
+      linkPointer: getComputedStyle(link).pointerEvents };
+  });
+  assert(affordance.visualInert && affordance.stagePointer === 'none', `mobile stage remains interactive: ${JSON.stringify(affordance)}`);
+  assert(affordance.linkPointer !== 'none', 'mobile copy link is not hit-testable');
+  await page.locator('#c1 .btns a').first().click();
+  assert(await page.evaluate(() => window.__copyClicked), 'mobile copy link did not receive a click');
+
+  await swipe(page, 720, 650, 10);
+  await page.waitForTimeout(250);
+  state = await mobileState(page);
+  const releasedY = state.y;
+  await page.waitForTimeout(700);
+  const held = await mobileState(page);
+  assert(held.snap === 'none' && !held.mobileSnap, `touch armed mobile snapping: ${JSON.stringify(held)}`);
+  assert(held.writes === 0, `mobile code called scrollTo ${held.writes} time(s)`);
+  assert(Math.abs(held.y - releasedY) < 2, `page moved after native release: ${releasedY} -> ${held.y}`);
+
+  for (let i = 0; i < 50 && state.xf === 0; i++) {
+    await swipe(page, 650, 520);
+    await page.waitForTimeout(35);
+    state = await mobileState(page);
+  }
+  for (let i = 0; i < 12 && state.xf >= .9; i++) {
+    await swipe(page, 450, 560);
+    await page.waitForTimeout(50);
+    state = await mobileState(page);
+  }
+  assert(state.xf > .1 && state.xf < .9, `did not reach a partial closing scrub: ${JSON.stringify(state)}`);
+  const partial = state;
+  const partialHeld = await mobileState(page);
+  assert(partialHeld.writes === 0, `closing issued scrollTo: ${JSON.stringify(partialHeld)}`);
+  await swipe(page, 590, 450);
+  await page.waitForTimeout(180);
+  const forward = await mobileState(page);
+  assert(forward.y > partialHeld.y && forward.xf > partialHeld.xf, `closing did not advance with touch scroll: ${JSON.stringify({ partialHeld, forward })}`);
+  await swipe(page, 450, 590);
+  await page.waitForTimeout(180);
+  const reverse = await mobileState(page);
+  assert(reverse.y < forward.y && reverse.xf < forward.xf, `closing did not reverse with touch scroll: ${JSON.stringify({ forward, reverse })}`);
+  await page.waitForTimeout(500);
+  const reverseHeld = await mobileState(page);
+  assert(reverseHeld.writes === 0, `reverse release issued scrollTo: ${JSON.stringify({ reverse, reverseHeld })}`);
+  results.mobile = { releasedY, partial, forward, reverse, writes: reverseHeld.writes };
+  await page.close();
+
+  const cssPage = await mobilePage('?carry=css');
+  await swipe(cssPage, 720, 400);
+  await cssPage.waitForTimeout(200);
+  const cssState = await mobileState(cssPage);
+  assert(cssState.snap === 'none' && !cssState.mobileSnap, `carry=css enabled mobile snapping: ${JSON.stringify(cssState)}`);
+  await cssPage.close();
+  results.mobileCss = cssState;
+
+  const desktop = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await installOverride(desktop);
+  await desktop.goto(base.href, { waitUntil: 'domcontentloaded' });
+  await ready(desktop);
+  await desktop.mouse.wheel(0, 120);
+  await desktop.waitForTimeout(1200);
+  const desktopState = await desktop.evaluate(() => ({ y: scrollY, rest: __restY(0), carry: __state().carry }));
+  assert(desktopState.carry === 'intent' && Math.abs(desktopState.y - desktopState.rest) < 3, `desktop carry regressed: ${JSON.stringify(desktopState)}`);
+  results.desktop = desktopState;
+  await desktop.close();
+} finally {
+  await browser.close();
+}
+
+console.log(JSON.stringify({ baseUrl: base.href, ...results }, null, 2));

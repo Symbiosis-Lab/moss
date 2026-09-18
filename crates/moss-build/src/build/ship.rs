@@ -38,7 +38,7 @@ use crate::build::manifest::SealedManifest;
 /// longer produces, and deploy, which byte-verifies each upload against the
 /// manifest hash, refuses the whole publish. This constant is part of the cache
 /// key, so bumping it invalidates those records instead.
-pub const SHIP_TRANSFORM_REV: u32 = 1;
+pub const SHIP_TRANSFORM_REV: u32 = 2;
 
 /// Strips preview-only `data-source-*` attributes from HTML.
 /// Matches: data-source-line="N", data-source-range="N-M", data-source-fm="field", data-source-none.
@@ -48,7 +48,8 @@ static STRIP_SOURCE_LINE: LazyLock<regex::Regex> = LazyLock::new(|| {
 
 /// Strips the preview-only `data-moss-preview` attribute from `<body>`.
 static STRIP_PREVIEW_ATTR: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r#"\s+data-moss-preview"#).unwrap()
+    regex::Regex::new(r#"\s+data-moss-preview(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*))?(\s|>)"#)
+        .unwrap()
 });
 
 /// Strips `<!--moss:no-preview-->` and `<!--/moss:no-preview-->` comment
@@ -131,7 +132,7 @@ pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
                 return bytes.to_vec();
             };
             let after_source = STRIP_SOURCE_LINE.replace_all(s, "");
-            let after_preview = STRIP_PREVIEW_ATTR.replace_all(&after_source, "");
+            let after_preview = STRIP_PREVIEW_ATTR.replace_all(&after_source, "$1");
             let after_markers = STRIP_NO_PREVIEW_MARKER.replace_all(&after_preview, "");
             after_markers.into_owned().into_bytes()
         }
@@ -1007,13 +1008,30 @@ mod tests {
 
     #[test]
     fn apply_strip_removes_data_moss_preview() {
-        // data-moss-preview is used as a bare attribute (no ="..."); the regex
-        // matches the leading whitespace + the attribute name.
-        let html = r#"<body data-moss-preview>content</body>"#;
+        for attr in [
+            "data-moss-preview",
+            "data-moss-preview=\"\"",
+            "data-moss-preview='yes'",
+            "data-moss-preview=true",
+            "data-moss-preview = \"true\"",
+        ] {
+            let html = format!("<body {attr} data-page=\"home\">content</body>");
+            let stripped = apply_transform(ShipTransform::StripPreviewAttrs, html.as_bytes());
+            assert_eq!(
+                std::str::from_utf8(&stripped).unwrap(),
+                r#"<body data-page="home">content</body>"#,
+                "{attr}"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_strip_preserves_preview_attribute_prefixes() {
+        let html = r#"<body data-moss-preview-extra="keep" data-moss-preview="x">content</body>"#;
         let stripped = apply_transform(ShipTransform::StripPreviewAttrs, html.as_bytes());
         assert_eq!(
             std::str::from_utf8(&stripped).unwrap(),
-            r#"<body>content</body>"#
+            r#"<body data-moss-preview-extra="keep">content</body>"#
         );
     }
 

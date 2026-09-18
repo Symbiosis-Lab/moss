@@ -144,3 +144,15 @@ jobs:
 
 Pre-commit consistency check for the shortcode demo blocks under
 `site/docs/writing/shortcodes/`. See [../CONTRIBUTING-DOCS.md](../CONTRIBUTING-DOCS.md).
+
+## Landing animation checks
+
+For publication, test the compiled generation through a plain static server as well as moss's native preview. The preview bridge can change harvested HTML; in September 2026 it masked a shipping transform that corrupted a quoted `data-moss-preview` attribute and broke the watercolor renderer only after deployment. Use an explicit compiled directory, then repeat the animation check against the scratch deployment:
+
+```bash
+python3 -m http.server 8088 --directory site/.moss/build/current
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node scripts/check-landing-transitions.mjs http://localhost:8088/
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node scripts/check-landing-mobile.mjs http://localhost:8088/
+```
+
+The scripts reuse an installed Playwright package (`playwright` by default); no new browser dependency is required. The transition check runs Chromium and WebKit; `ENGINE=chromium` or `ENGINE=webkit` narrows a diagnosis. Native preview remains the editing workflow; the plain artifact check verifies exactly what gets published.

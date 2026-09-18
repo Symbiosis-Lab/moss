@@ -296,8 +296,10 @@
      hand-rolled settle; setupCssSnap() (movie6.html script, beside watchScrollCss) computes
      each scene's scroll-margin-top so the snap point lands on restY(), the same position the
      other two paths carry the reader onto. */
-  html[data-carry="css"] { scroll-snap-type: y proximity; }
-  html[data-carry="css"] .scene, html[data-carry="css"] #five { scroll-snap-align: start; }
+  @media (min-width: 901px) {
+    html[data-carry="css"] { scroll-snap-type: y proximity; }
+    html[data-carry="css"] .scene, html[data-carry="css"] #five { scroll-snap-align: start; }
+  }
 
   /* Layout pass: the intro owns the first beat, while the stage remains tied
      to the measured desktop composition. The script supplies these variables
@@ -355,9 +357,6 @@
 
   @media (max-width: 900px) {
     body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; opacity: calc(1 - var(--xf)); background: linear-gradient(to bottom, var(--bg) 0 34px, color-mix(in srgb, var(--bg) 72%, transparent) 52px, transparent); }
-    html[data-mobile-snap] { scroll-snap-type: y proximity; }
-    html[data-mobile-snap] #intro, html[data-mobile-snap] .scene { scroll-snap-align: start; }
-    html[data-mobile-snap] #five { scroll-snap-align: end; }
     #intro { min-height: 100svh; padding: 0 20px; }
     #intro h1 { top: 88px; }
     .page { margin-top: -72svh; }
@@ -371,7 +370,10 @@
     #vis, #vis * { pointer-events: none !important; touch-action: pan-y; }
     .scene { width: 100%; min-height: auto; margin: 0; padding: 0 0 calc(var(--mobile-vis-h, 42vh) + 72px); justify-content: flex-start; }
     #c1 { min-height: auto; padding-top: 0; }
-    #c1 .scene-text { transform: none; }
+    /* During the opening beat, keep the first action at the phone viewport's
+       lower edge. The offset is entirely paid back with --intro-copy-p, so settled
+       scene 1 returns to the same copy and stage geometry as every later scene. */
+    #c1 .scene-text { transform: none; margin-top: calc(65px + clamp(0px, calc(var(--intro-copy-p, 0) * 20.3svh), 171px)); }
     .scene-text { width: min(100%, 520px); margin-inline: auto; padding: 24px 18px 26px; background: linear-gradient(to bottom, transparent, var(--bg) 18px, var(--bg) calc(100% - 18px), transparent); }
     #c1 .scene-text { background: var(--bg); }
     #c1 h2 { font-size: calc(29px + 11px * (1 - var(--intro-p, 0))); }
@@ -764,6 +766,10 @@ function updateOpening() {
   SCALE = baseScale * (mobileLayout() ? 1 : 1 - .4 * stageIntroP);
   document.documentElement.style.setProperty('--s', String(SCALE));
   document.documentElement.style.setProperty('--intro-p', String(introP));
+  // The phone copy's opening offset ends before scene 1's own rest. Derive it
+  // from scroll travel, not the shifted copy rect, so the margin cannot extend
+  // its own lifetime through a geometry feedback loop.
+  document.documentElement.style.setProperty('--intro-copy-p', String(mobileLayout() ? clamp01(1 - scrollY / (innerHeight * .18)) : 0));
   document.documentElement.style.setProperty('--intro-title-p', String(titleP));
   introWatercolor(titleP);
   document.documentElement.style.setProperty('--intro-visible', mobileLayout() ? '0px' : (visible * titleP) + 'px');
@@ -771,8 +777,8 @@ function updateOpening() {
   if (mobileLayout()) {
     const firstCopy = document.querySelector('#c1 .scene-text').offsetHeight + 28;
     const introPad = Math.max(firstCopy + 64, innerHeight * .72 + 64);
-    const scenePad = Math.min(430, Math.max(350, innerHeight * .46));
-    document.documentElement.style.setProperty('--mobile-col-pad', (scenePad + (introPad - scenePad) * introP) + 'px');
+    const scenePad = Math.min(462, Math.max(382, innerHeight * .46 + 32));
+    document.documentElement.style.setProperty('--mobile-col-pad', (scenePad + (introPad - scenePad) * titleP) + 'px');
   }
 }
 function fit() {
@@ -790,8 +796,6 @@ function fit() {
 }
 addEventListener('resize', fit); fit();
   document.fonts.ready.then(fit);
-const armMobileSnap = () => { if (mobileLayout()) document.documentElement.dataset.mobileSnap = ''; };
-addEventListener('touchstart', armMobileSnap, { once: true, passive: true });
 scatterPlates(plateEls);
 
 // ── The morph: the sheet is flooded, the print dissolves, the next print takes ─
@@ -1821,7 +1825,7 @@ const fiveOn = (on) => {
   if (entering) requestAnimationFrame(() => {
     settleArmed = true;
     restSince = performance.now();
-    if (reduce) scrollTo(0, Math.max(0, document.documentElement.scrollHeight - innerHeight));
+    if (reduce && !mobileLayout()) scrollTo(0, Math.max(0, document.documentElement.scrollHeight - innerHeight));
   });
 };
 // The canvas takes over the scene: the prints it shows are the pixels on
@@ -2056,7 +2060,7 @@ async function pour(to) {
       // moves it — including the settle's own travel, which the clock reads as
       // the scroll it is, and which ends inside the scene's text: a rest needs
       // no rate of its own, because being carried to a scene is an arrival.
-      const own = jump ? ARRIVE_JUMP : (arrived || (mobileLayout() && performance.now() - restSince > 180)) ? (t >= T_TAKE && t < T_WET ? ARRIVE_SMEAR : ARRIVE) : 0;
+      const own = jump ? ARRIVE_JUMP : arrived ? (t >= T_TAKE && t < T_WET ? ARRIVE_SMEAR : ARRIVE) : 0;
       if (!stepClock) acc += dtReal * own + K(t) * moved;
       washDbg = { acc: +acc.toFixed(3), arrived, own, dtReal: +dtReal.toFixed(3), fps: Math.round(1 / Math.max(dtReal, 1e-3)) };
       let budget = stepClock ? SPF : STEPS_PER_FRAME;
@@ -2509,11 +2513,11 @@ async function takeOthers(list = neighbours(shown)) {
     sceneClasses(other);
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     if (running()) { restoreImgs(); break; }
-    // This capture is inside the wash: a rejection here used to escape through
-    // `wash()`, so `still()` never ran, `phase` stayed 'morph', and `running()`
-    // was true for the rest of the session — no later wash, no retake. Late is
-    // not impossible: keep the print on hand and let the wash finish.
-    try { setSheet(other, await capture(other)); } catch (e) { console.warn('other print skipped:', e.message); }
+    // An unprintable neighbour must not lock every transition behind primed()
+    // and repeatedly switch the live stage while retrying. Use the existing
+    // cut fallback for this visit, then restore the visible scene below.
+    try { setSheet(other, await capture(other)); }
+    catch (e) { printable = false; console.warn('Watercolor unavailable:', e.message); break; }
     finally { restoreImgs(); }
   }
   // The reader may have crossed a boundary while the foreignObject capture was
@@ -3001,16 +3005,17 @@ function setupCssSnap() {
   for (const [i, el] of scenesEl.entries()) el.style.scrollMarginTop = (el.getBoundingClientRect().top + scrollY - restY(i)) + 'px';
 }
 if (CARRY === 'css') { addEventListener('resize', setupCssSnap); setupCssSnap(); }
-// The browser owns the resting motion here; settleAtRest is never called. The wash and copy
-// still react every frame, but to wherever the browser's own snap put scrollY.
+// The browser owns motion here; settleAtRest is never called. On mobile this is a strictly
+// observational path: native scrolling supplies scrollY, which drives the scenes and closing
+// scrub continuously, and no release may move the page after the reader lets go.
 function watchScrollCss(now) {
   const dy = lastScrollY == null ? 0 : scrollY - lastScrollY;
   lastScrollY = scrollY;
   if (dy) { travel = Math.sign(dy); restSince = now; }
   onScroll(dy);
-  // The closing section shares the release spring, while upward reading and
-  // form input retain native control. A fresh gesture cancels settleTo().
-  if (xfAt() > 0 && travel > 0 && settleArmed && !settleRun && !touchHeld && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
+  // Desktop's closing section shares the release spring. Mobile remains on the
+  // observational path above through the whole close.
+  if (!mobileLayout() && xfAt() > 0 && travel > 0 && settleArmed && !settleRun && !touchHeld && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
     settleArmed = false;
     const bottom = Math.max(0, document.documentElement.scrollHeight - innerHeight);
     if (reduce) scrollTo(0, bottom);
@@ -3059,11 +3064,13 @@ async function writeLoop(afterWash) {
   if (afterWash) await new Promise((r) => setTimeout(r, 1800));   // the poem the wash returned stays to be read
   while (gen === g) {
     ed.setDoc(SEED);
-    const focusY = scrollY;
-    ed.focus();
-    // WebKit scrolls the parent document to reveal a focused control inside
-    // an offscreen iframe. Typing owns the editor caret, not the page position.
-    requestAnimationFrame(() => { if (shown === 0 && Math.abs(scrollY - focusY) > 1) scrollTo(0, focusY); });
+    if (!mobileLayout()) {
+      const focusY = scrollY;
+      ed.focus();
+      // WebKit scrolls the parent document to reveal a focused control inside
+      // an offscreen iframe. Typing owns the editor caret, not the page position.
+      requestAnimationFrame(() => { if (shown === 0 && Math.abs(scrollY - focusY) > 1) scrollTo(0, focusY); });
+    }
     await new Promise((r) => setTimeout(r, 700));
     if (gen !== g) break;
     const done = await ed.type(TYPED, { seed: 11, median: window.__LANG === 'zh' ? 95 : 18, slipAt: 47 });
