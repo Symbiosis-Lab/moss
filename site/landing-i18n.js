@@ -1,8 +1,9 @@
 (() => {
   const supported = new Set(['en', 'zh-hans', 'zh-hant']);
   const requested = new URLSearchParams(location.search).get('lang');
+  const routeLocale = location.pathname.match(/^\/(zh-hans|zh-hant)(?:\/|$)/)?.[1] || (location.pathname === '/' ? 'en' : null);
   let stored = null; try { stored = localStorage.getItem('moss-landing-locale'); } catch {}
-  const initial = requested === 'zh' ? 'zh-hans' : supported.has(requested) ? requested : supported.has(stored) ? stored : 'en';
+  const initial = requested === 'zh' ? 'zh-hans' : supported.has(requested) ? requested : routeLocale || (supported.has(stored) ? stored : 'en');
   window.__LANDING_LOCALE = initial;
   window.__LANG = initial === 'en' ? 'en' : 'zh';
   document.documentElement.lang = initial;
@@ -64,5 +65,5 @@
   const snap=()=>({y:scrollY,email:document.querySelector('#beta-email')?.value||'',status:document.querySelector('#beta-form .form-status')?.textContent||'',state:document.querySelector('#beta-form .form-status')?.dataset.state||'',messageKey:document.querySelector('#beta-form .form-status')?.dataset.messageKey||''});
   const save=(url,state)=>{try{sessionStorage.setItem(key(url),JSON.stringify(state))}catch{}};
   const restore=()=>{try{const s=JSON.parse(sessionStorage.getItem(key(location.href))||'null');if(!s)return;const applyState=()=>{const input=document.querySelector('#beta-email');if(input)input.value=s.email;const status=document.querySelector('#beta-form .form-status');if(status){status.textContent=s.messageKey?t(s.messageKey):s.status;if(s.state)status.dataset.state=s.state;if(s.messageKey)status.dataset.messageKey=s.messageKey}scrollTo(0,s.y)};requestAnimationFrame(applyState);setTimeout(applyState,250)}catch{}};
-  document.addEventListener('DOMContentLoaded',()=>{apply(initial);restore();document.querySelector('#language-select')?.addEventListener('change',event=>{const next=event.target.value;if(!supported.has(next)||next===window.__LANDING_LOCALE)return;const state=snap(),url=new URL(location.href);save(location.href,state);url.searchParams.set('lang',next);save(url.href,state);try{localStorage.setItem('moss-landing-locale',next)}catch{}location.assign(url)})});
+  document.addEventListener('DOMContentLoaded',()=>{apply(initial);restore();document.querySelector('#language-select')?.addEventListener('change',event=>{const next=event.target.value;if(!supported.has(next)||next===window.__LANDING_LOCALE)return;const state=snap(),url=new URL(location.href);save(location.href,state);url.pathname=next==='en'?'/':`/${next}/`;url.searchParams.delete('lang');save(url.href,state);try{localStorage.setItem('moss-landing-locale',next)}catch{}location.assign(url)})});
 })();

@@ -1780,12 +1780,28 @@ header:has(+ .moss-hero) .main-nav {
 }
 
 .site-logo {
-  height: 1em;
+  height: 1.15em;
   width: auto;
   vertical-align: middle;
   margin: 0 0.3em 0 0;
   position: relative;
   top: -0.1em;
+}
+
+footer.container a[href="https://github.com/Symbiosis-Lab/moss"] {
+  display: inline-flex;
+  vertical-align: text-bottom;
+}
+
+.footer-github::before {
+  content: "";
+  display: block;
+  width: 1em;
+  height: 1em;
+  opacity: 0.72;
+  background: currentColor;
+  -webkit-mask: url("/assets/platforms/github.svg") center / contain no-repeat;
+  mask: url("/assets/platforms/github.svg") center / contain no-repeat;
 }
 
 .site-name:hover {
