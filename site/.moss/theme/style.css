@@ -30,6 +30,8 @@ article img[src$=".gif"] { max-width: min(600px, 100%); margin-inline: auto; }
 footer.container::before { margin-bottom: .25rem; }
 footer.container > * { font-size: .8em; }
 footer.container > p { font-size: var(--moss-reading-size); }
+footer.container .footer-github { display: inline-flex; vertical-align: text-bottom; }
+footer.container .footer-github::before { content: ""; display: block; width: 1em; height: 1em; opacity: .72; background: currentColor; -webkit-mask: url("/assets/platforms/github.svg") center / contain no-repeat; mask: url("/assets/platforms/github.svg") center / contain no-repeat; }
 
 .moss-grid.sc-demo { margin-block: 0; overflow: hidden; border: 1px solid var(--moss-border-light); border-radius: 6px; gap: 0; }
 .moss-grid.sc-demo > .moss-grid-card { padding: 1.25rem; }

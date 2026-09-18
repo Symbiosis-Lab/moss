@@ -20,10 +20,21 @@ function localize(sourceHtml, locale) {
     .filter(key => typeof en[key] === 'string' && en[key] !== target[key])
     .map(key => [en[key], target[key]])
     .sort((a, b) => b[0].length - a[0].length);
-  for (const [from, to] of replacements) {
-    result = result.replaceAll(from, to).replaceAll(escaped(from), escaped(to));
+  const protectedParts = result.split(/(<(?:script|style)\b[\s\S]*?<\/(?:script|style)>)/gi);
+  result = protectedParts.map(part => {
+    if (/^<(?:script|style)\b/i.test(part)) return part;
+    for (const [from, to] of replacements) part = part.replaceAll(from, to).replaceAll(escaped(from), escaped(to));
+    for (const key of Object.keys(en.docs)) part = part.replaceAll(en.docs[key], target.docs[key]);
+    return part;
+  }).join('');
+  const nav = locale === 'zh-hans'
+    ? '<nav class="language-picker nav-lang-toggle" aria-label="语言"><a class="nav-lang-link" data-landing-locale="en" hreflang="en" href="/">English</a><span aria-hidden="true">/</span><span class="nav-lang-current">简体中文</span><span aria-hidden="true">/</span><a class="nav-lang-link" data-landing-locale="zh-hant" hreflang="zh-Hant" href="/zh-hant/">繁體中文</a></nav>'
+    : '<nav class="language-picker nav-lang-toggle" aria-label="語言"><a class="nav-lang-link" data-landing-locale="en" hreflang="en" href="/">English</a><span aria-hidden="true">/</span><a class="nav-lang-link" data-landing-locale="zh-hans" hreflang="zh-Hans" href="/zh-hans/">简体中文</a><span aria-hidden="true">/</span><span class="nav-lang-current">繁體中文</span></nav>';
+  result = result.replace(/<nav class="language-picker nav-lang-toggle"[\s\S]*?<\/nav>/, nav);
+  const required = ['title', 'description', 'intro', 'h1', 'b1', 'h2', 'b2', 'h3', 'b3', 'h4', 'b4', 'betaCta', 'start', 'editor', 'theme', 'media', 'requestType', 'plugin', 'registry', 'closeH', 'closeB', 'download', 'macNote', 'soon', 'install', 'copy', 'betaH', 'betaB', 'email', 'request', 'privacy'];
+  for (const key of required) {
+    if (!result.includes(target[key]) && !result.includes(escaped(target[key]))) throw new Error(`${locale} static copy missing ${key}`);
   }
-  for (const key of Object.keys(en.docs)) result = result.replaceAll(en.docs[key], target.docs[key]);
   return result;
 }
 

@@ -14,6 +14,13 @@ node scripts/check-site-preview.mjs http://localhost:<printed-port>/
 
 The checker validates the landing, all linked English and Chinese documentation routes, and same-origin CSS, JavaScript, and generated image response types. A route returning HTTP 200 is insufficient evidence: an HTML fallback at an asset URL also returns 200 while leaving the page unstyled or an image broken.
 
+The two localized landing entry points are generated from `site/index.html` and the catalogs in `site/landing-i18n.js`. Regenerate them after changing either source; native watch rebuilds files but does not run this generator.
+
+```bash
+node scripts/generate-landing-locales.mjs
+node scripts/generate-landing-locales.mjs --check
+```
+
 Keep images referenced by Markdown out of `[build].passthrough`. Passthrough subtrees are copied verbatim and excluded from moss's media index, so bare wikilinks, root-relative images, localized relative paths, and page covers cannot resolve files inside them even though the copied source URL itself returns 200.
 
 `--strict` currently turns the unpublished-site diagnostic (“no usable record of what is live yet”) into exit 1 even when the local output is complete. Keep the diagnostic visible and use the ordinary build/preview command for this repository until the site has a live deployment record; do not suppress it in a wrapper.
