@@ -9,7 +9,8 @@ if (!input) {
 }
 const base = new URL(input);
 const contract = JSON.parse(await readFile(new URL('./landing-routes.json', import.meta.url), 'utf8'));
-const routes = ['/', ...contract.required];
+const landingRoutes = new Set(['/', '/zh-hans/', '/zh-hant/']);
+const routes = [...landingRoutes, ...contract.required];
 const failures = [];
 const assets = new Map();
 const attr = (tag, name) => tag.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'i'))?.[1];
@@ -38,21 +39,24 @@ for (const route of routes) {
   const html = await read(url, /text\/html/i);
   if (html === null) continue;
   if (/Directory listing for/i.test(html)) failures.push({ url: String(url), problem: 'Serving a directory listing instead of the site' });
-  if (route === '/' && !html.includes('id="intro"')) failures.push({ url: String(url), problem: 'Custom landing homepage is missing' });
+  if (landingRoutes.has(route) && !html.includes('id="intro"')) failures.push({ url: String(url), problem: 'Custom landing homepage is missing' });
+  const baseTag = html.match(/<base\b[^>]*>/i)?.[0];
+  const assetBase = baseTag ? new URL(attr(baseTag, 'href') || '.', url) : url;
   let styles = 0;
   for (const [tag] of html.matchAll(/<(?:link|script)\b[^>]*>/gi)) {
     const isStyle = /\bstylesheet\b/i.test(attr(tag, 'rel') || '');
-    const path = isStyle ? attr(tag, 'href') : /^<script\b/i.test(tag) ? attr(tag, 'src') : null;
+    const isIcon = /(?:^|\s)icon(?:\s|$)/i.test(attr(tag, 'rel') || '');
+    const path = isStyle || isIcon ? attr(tag, 'href') : /^<script\b/i.test(tag) ? attr(tag, 'src') : null;
     if (!path) continue;
     if (isStyle) styles++;
-    const asset = localAsset(path, url);
-    if (asset) assets.set(asset.href, isStyle ? 'css' : 'js');
+    const asset = localAsset(path, assetBase);
+    if (asset) assets.set(asset.href, isStyle ? 'css' : isIcon ? 'image' : 'js');
   }
   for (const [tag] of html.matchAll(/<img\b[^>]*>/gi)) {
-    const asset = localAsset(attr(tag, 'src'), url);
+    const asset = localAsset(attr(tag, 'src'), assetBase);
     if (asset) assets.set(asset.href, 'image');
   }
-  if (route !== '/' && !styles) failures.push({ url: String(url), problem: 'Documentation has no linked stylesheet' });
+  if (!landingRoutes.has(route) && !styles) failures.push({ url: String(url), problem: 'Documentation has no linked stylesheet' });
 }
 for (const [url, kind] of assets) {
   const expected = kind === 'css' ? /text\/css/i : kind === 'js' ? /(?:javascript|ecmascript)/i : /^image\//i;
