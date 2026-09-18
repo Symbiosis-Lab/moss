@@ -66,6 +66,7 @@ Click the "+" on the right of the preview and add the email channel, and a subsc
 The moss editor is meant to be intuitive — just play around, there are no rules to learn first. But if you want to go deeper on building a site with moss, these docs will help.
 
 ### Writing & editing
+* [[Meet the editor|Meet the editor and preview]]
 * [[Write with Markdown|Write with Markdown syntax]]
 * [[Define pages with frontmatter|Set page and site properties with frontmatter]]
 * [[Reference files & media|Reference other pages and media with wikilinks]]

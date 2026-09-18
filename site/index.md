@@ -15,7 +15,7 @@ Right-click → your site is live.
 
 :::buttons
 [Request beta access](#moss-is-in-closed-beta)
-[Get started](get-started/)
+[[Get Started|Get started]]
 :::
 
 :::grid 3

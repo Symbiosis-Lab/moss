@@ -133,20 +133,20 @@ A cell whose only content is an internal link to a known folder is automatically
 :::grid 2 {.sc-demo}
 ```markdown
 :::grid 3
-[[work]]
+[[Get Started]]
 +++
-[[essays]]
+[Writing](/docs/writing/)
 +++
-[[archive]]
+[Reference](/docs/reference/)
 :::
 ```
 +++
 ::::grid 3
-[[work]]
+[[Get Started]]
 +++
-[[essays]]
+[Writing](/docs/writing/)
 +++
-[[archive]]
+[Reference](/docs/reference/)
 ::::
 :::
 
@@ -155,20 +155,20 @@ A cell whose only content is an internal link to a known folder is automatically
 :::grid 2 {.sc-demo}
 ```markdown
 :::grid 3 {.no-cards}
-[[work]]
+[[Get Started]]
 +++
-[[essays]]
+[Writing](/docs/writing/)
 +++
-[[archive]]
+[Reference](/docs/reference/)
 :::
 ```
 +++
 ::::grid 3 {.no-cards}
-[[work]]
+[[Get Started]]
 +++
-[[essays]]
+[Writing](/docs/writing/)
 +++
-[[archive]]
+[Reference](/docs/reference/)
 ::::
 :::
 

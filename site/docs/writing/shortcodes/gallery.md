@@ -13,16 +13,16 @@ translationKey: docs-author-shortcodes-gallery
 :::grid 2 {.sc-demo}
 ```markdown
 :::gallery
-![](assets/portrait1.png)
-![](assets/portrait2.jpg)
-![](assets/portrait3.jpeg)
+![](/assets/animations/new folder.gif)
+![](/assets/animations/editing.gif)
+![](/assets/animations/first time publish.gif)
 :::
 ```
 +++
 ::::gallery
-![](assets/portrait1.png)
-![](assets/portrait2.jpg)
-![](assets/portrait3.jpeg)
+![](/assets/animations/new folder.gif)
+![](/assets/animations/editing.gif)
+![](/assets/animations/first time publish.gif)
 ::::
 :::
 
@@ -33,15 +33,15 @@ Pass a number after `gallery` to set the column count.
 :::grid 2 {.sc-demo}
 ```markdown
 :::gallery 3
-![](assets/portrait1.png)
-![](assets/portrait2.jpg)
-![](assets/portrait3.jpeg)
+![](/assets/animations/new folder.gif)
+![](/assets/animations/editing.gif)
+![](/assets/animations/first time publish.gif)
 :::
 ```
 +++
 ::::gallery 3
-![](assets/portrait1.png)
-![](assets/portrait2.jpg)
-![](assets/portrait3.jpeg)
+![](/assets/animations/new folder.gif)
+![](/assets/animations/editing.gif)
+![](/assets/animations/first time publish.gif)
 ::::
 :::

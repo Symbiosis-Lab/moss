@@ -30,13 +30,13 @@ Pass a wikilink, markdown image, or bare filename as the first line to set a bac
 
 :::grid 2 {.sc-demo}
 ```markdown
-:::hero {image=assets/portrait1.png}
+:::hero {image=/assets/animations/editing.gif}
 # Welcome to my site
 A personal corner of the web.
 :::
 ```
 +++
-::::hero {image=assets/portrait1.png}
+::::hero {image=/assets/animations/editing.gif}
 # Welcome to my site
 A personal corner of the web.
 ::::
@@ -49,12 +49,12 @@ Use pipe syntax on the image reference to control how the image fills the hero a
 :::grid 2 {.sc-demo}
 ```markdown
 :::hero
-![[mountains.jpg|contain top]]
+![[/assets/animations/new folder.gif|contain top]]
 :::
 ```
 +++
 ::::hero
-![[mountains.jpg|contain top]]
+![[/assets/animations/new folder.gif|contain top]]
 ::::
 :::
 
@@ -65,14 +65,14 @@ Any content after the first line becomes overlay text rendered on top of the bac
 :::grid 2 {.sc-demo}
 ```markdown
 :::hero
-![[panorama.jpg]]
+![[/assets/animations/first time publish.gif]]
 # Our work
 Community theatre rooted in lived experience.
 :::
 ```
 +++
 ::::hero
-![[panorama.jpg]]
+![[/assets/animations/first time publish.gif]]
 # Our work
 Community theatre rooted in lived experience.
 ::::

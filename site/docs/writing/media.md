@@ -84,7 +84,7 @@ An image in its own paragraph — an empty line above it, nothing else on the li
 
 ```html
 <figure>
-  <img src="…/light.jpg" alt="Morning light, Yangshuo">
+  &lt;img src="…/light.jpg" alt="Morning light, Yangshuo">
   <figcaption>Morning light, Yangshuo</figcaption>
 </figure>
 ```
@@ -103,7 +103,7 @@ The third form is best for accessibility: the alt describes the image for screen
 
 For the wikilink form, the alias becomes a caption only when it isn't a [size or fit/position keyword](#display-control) — those are read first.
 
-**No figure is emitted when** the alt is empty (`![[photo.jpg]]` or `![](photo.jpg)`) — moss keeps a plain `<img>` rather than caption an undescribed image — or when the image shares its line with other text (a trailing `*italic*` caption is the one exception, above).
+**No figure is emitted when** the alt is empty (`![[photo.jpg]]` or `![](photo.jpg)`) — moss keeps a plain `&lt;img>` rather than caption an undescribed image — or when the image shares its line with other text (a trailing `*italic*` caption is the one exception, above).
 
 For richer caption markup, hand-write a `<figure>`; raw HTML passes through untouched. Turn the behavior off site-wide with `implicit_figure = false` under `[site]` in `.moss/config.toml`.
 

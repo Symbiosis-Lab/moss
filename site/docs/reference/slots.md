@@ -52,7 +52,7 @@ async enhance(ctx) {
       "after-article": `<section class="comments">
         <script src="https://comments.example/embed.js"></script>
       </section>`,
-      "head-end": `<link rel="stylesheet" href="/comments.css">`
+      "head-end": `<link rel="stylesheet" href="https://comments.example/comments.css">`
     }
   };
 }

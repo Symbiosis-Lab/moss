@@ -1,0 +1,18 @@
+{
+  "required": [
+    "/docs/",
+    "/docs/design/",
+    "/docs/extend/",
+    "/docs/writing/media/",
+    "/get-started/",
+    "/get-started/editor/",
+    "/get-started/design/",
+    "/get-started/extend/",
+    "/get-started/links/",
+    "/zh-hans/开始使用/",
+    "/zh-hans/开始使用/editor/",
+    "/zh-hant/開始使用/",
+    "/zh-hant/開始使用/editor/"
+  ],
+  "pending_docs_merge": []
+}

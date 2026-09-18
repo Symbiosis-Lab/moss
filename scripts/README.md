@@ -1,5 +1,30 @@
 # Docs tooling
 
+## Build the docs with the custom landing page
+
+`build-site-with-landing.mjs` runs the real moss compiler in a temporary copy
+of `site/`, then installs the landing page and its asset trees at the compiled
+site root. The source vault stays clean and the route contract in
+`landing-routes.json` is checked before the build succeeds.
+
+```bash
+cargo build -p moss-cli
+node scripts/build-site-with-landing.mjs \
+  --landing /path/to/moss-landing-lab \
+  --moss-bin target/debug/moss-cli \
+  --out dist/site
+```
+
+The result serves the custom home at `/`, the compiled documentation at
+`/get-started/` and `/docs/`, and the landing's nested scene assets from their
+root-relative paths. The script also verifies the English and Chinese editor,
+media, design, and extension routes consumed by the landing page.
+
+`release-channels.json` records the release assets and install commands that
+were verified for the landing's download controls. Keep unavailable targets
+explicitly unavailable; update the record from the public GitHub release, npm,
+and Homebrew metadata whenever a new release changes platform coverage.
+
 ## sync-reference.mjs — keep the reference docs in sync with moss
 
 The pages under `site/docs/reference/` (CSS tokens, component classes, HTML

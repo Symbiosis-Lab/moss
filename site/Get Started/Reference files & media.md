@@ -50,6 +50,8 @@ Supported media types:
 
 - **Images** — `.jpg`, `.png`, `.gif`, `.svg`, `.webp`, `.avif`
 - **Video** — `.mov` is transcoded to `.mp4` automatically; reference it by its original filename
+- **Audio** — `.mp3`, `.wav`, `.ogg`, `.flac`, `.aac`, `.m4a`, `.opus` become browser audio players
+- **Documents** — files such as `.pdf` remain available to open or download
 - **Notebooks** — `.ipynb` runs right in the browser via JupyterLite, no server needed
 - **HTML** — `.html` files are served as-is, for interactive content
 

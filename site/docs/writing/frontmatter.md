@@ -25,7 +25,7 @@ Frontmatter is optional. A file without it still becomes a page; moss uses the f
 
 Frontmatter uses a **fixed schema**: moss only recognizes the fields listed on this page. Arbitrary custom fields are silently ignored. For custom per-page metadata, store it in body content: a markdown paragraph, a `::: {.meta}` fenced div, or a data table.
 
-Every recognized field is discoverable via `moss describe --json`, which prints the full schema as machine-readable JSON. The human-readable version is at [[reference|Reference]].
+Every recognized field is discoverable via `moss describe --json`, which prints the full schema as machine-readable JSON. The human-readable version is at [Reference](/docs/reference/).
 
 `description:` feeds SEO meta tags, Open Graph previews, and sitemap summaries. It is **not** rendered as a visible deck. For a visible subtitle, use a `> blockquote` immediately after the `# H1` — the default theme styles `h1 + blockquote` as a deck.
 

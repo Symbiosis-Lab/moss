@@ -10,10 +10,10 @@ New to moss? Start with [[Get Started]] — it covers publishing your first site
 
 [[How moss works]] explains what moss does with your folder. Then explore by what you want to do:
 
-- [[writing|Writing]] — pages, structure, links, callouts, media, and shortcodes.
+- [Writing](/docs/writing/) — pages, structure, links, callouts, media, and shortcodes.
 - [[Write a theme|Write a theme]] — colors, fonts, and CSS.
 - [[Write a plugin|Write a plugin]] — hooks, slots, and the moss-api.
-- [[reference|Reference]] — frontmatter fields, CSS tokens, components, the manifest, and the CLI.
+- [Reference](/docs/reference/) — frontmatter fields, CSS tokens, components, the manifest, and the CLI.
 
 How-tos:
 

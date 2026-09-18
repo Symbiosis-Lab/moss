@@ -1,0 +1,42 @@
+{
+  "audited_at": "2026-09-18",
+  "release": {
+    "version": "0.14.1",
+    "published_at": "2026-09-06T17:03:25Z",
+    "page": "https://github.com/Symbiosis-Lab/moss/releases/tag/v0.14.1",
+    "latest": "https://github.com/Symbiosis-Lab/moss/releases/latest"
+  },
+  "desktop": {
+    "macos": {
+      "ready": true,
+      "architectures": ["arm64", "x86_64"],
+      "url": "https://github.com/Symbiosis-Lab/moss/releases/download/v0.14.1/moss_0.14.1_universal.dmg",
+      "brew": "brew install --cask symbiosis-lab/tap/moss"
+    },
+    "windows": {
+      "ready": false,
+      "reason": "The v0.14.1 release has no Windows installer or executable asset."
+    },
+    "linux": {
+      "ready": false,
+      "reason": "The v0.14.1 release has a Linux x86_64 CLI but no desktop package."
+    }
+  },
+  "cli": {
+    "npm": {
+      "command": "npm install -g @symbiosis-lab/moss",
+      "version": "0.14.1",
+      "ready_targets": ["darwin-arm64", "darwin-x86_64", "linux-x86_64"],
+      "missing_targets": ["win32-x86_64", "linux-arm64"]
+    },
+    "homebrew_linux": {
+      "command": "brew install symbiosis-lab/tap/moss",
+      "ready_targets": ["linux-x86_64"],
+      "runtime_requirement": "libwebkit2gtk-4.1-0"
+    },
+    "direct": {
+      "darwin_universal": "https://github.com/Symbiosis-Lab/moss/releases/download/v0.14.1/moss-darwin-universal",
+      "linux_x86_64": "https://github.com/Symbiosis-Lab/moss/releases/download/v0.14.1/moss-linux-x86_64"
+    }
+  }
+}
