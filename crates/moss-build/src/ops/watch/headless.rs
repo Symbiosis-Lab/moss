@@ -33,6 +33,31 @@ use crate::build::{run_pipeline, BuildTrigger, HostPorts, PipelineConfig, Plugin
 use crate::ops::serve::events::CarrierReporter;
 use crate::ops::watch::{worker, EventRelay, RebuildAttempt, RebuildDispatch, WatchConfig};
 
+pub(crate) fn absolute_watch_root(folder_path: &str) -> String {
+    let path = std::path::Path::new(folder_path);
+    let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join(path)
+        }
+    });
+    absolute.to_string_lossy().into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::absolute_watch_root;
+
+    #[test]
+    fn relative_watch_root_is_canonicalized_for_absolute_notify_paths() {
+        let expected = std::fs::canonicalize(".").expect("current directory is readable");
+        assert_eq!(std::path::Path::new(&absolute_watch_root(".")), expected);
+    }
+}
+
 /// Resolve the [`HostPorts`] a build of `folder` runs with. A factory rather
 /// than a value because every watch rebuild constructs a fresh set (ports are
 /// not `Clone`), exactly as the app's `host_ports(app, folder)` is called per
@@ -60,11 +85,15 @@ pub struct HeadlessWatchConfig {
 /// immediately.
 #[must_use = "dropping the shutdown sender stops the watcher immediately"]
 pub async fn start(config: HeadlessWatchConfig) -> tokio::sync::oneshot::Sender<()> {
+    // notify reports absolute paths. Keep the root in the same coordinate
+    // system so vault-relative filtering does not judge the checkout's parent
+    // directories or discard every event from a relative CLI argument.
+    let folder_path = absolute_watch_root(&config.folder_path);
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     let emit: EventRelay = Arc::new(|event| crate::ops::serve::events::publish(&event));
     let dispatch: RebuildDispatch = {
-        let folder = config.folder_path.clone();
+        let folder = folder_path.clone();
         let host_ports = config.host_ports.clone();
         let plugins = config.plugins.clone();
         Arc::new(move |req| {
@@ -77,7 +106,7 @@ pub async fn start(config: HeadlessWatchConfig) -> tokio::sync::oneshot::Sender<
         })
     };
     let attempt: RebuildAttempt = {
-        let folder = config.folder_path.clone();
+        let folder = folder_path.clone();
         let host_ports = config.host_ports.clone();
         let plugins = config.plugins.clone();
         Arc::new(move |req, handle| {
@@ -91,7 +120,7 @@ pub async fn start(config: HeadlessWatchConfig) -> tokio::sync::oneshot::Sender<
     };
 
     super::start(WatchConfig {
-        folder_path: config.folder_path.clone(),
+        folder_path,
         spawner: Arc::new(crate::build::ports::spawner::TokioSpawner),
         shutdown_rx,
         emit,
@@ -283,4 +312,3 @@ async fn do_rebuild_and_notify(
     }
     true
 }
-

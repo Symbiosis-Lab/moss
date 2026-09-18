@@ -8,9 +8,7 @@
 | Windows  | `%LOCALAPPDATA%\host.moss.publisher\logs\` |
 | Linux    | `~/.local/share/host.moss.publisher/logs/` |
 
-Raise verbosity: `MOSS_LOG_LEVEL=debug moss build <folder>`. Lower it to only
-problems: `MOSS_LOG_LEVEL=warn moss build <folder>`. Accepted levels are
-`error`, `warn`, `info` and `debug`; a release build defaults to `info`.
+Raise verbosity: `MOSS_LOG_LEVEL=debug moss build <folder>`. The CLI defaults to `warn`; accepted levels are `error`, `warn`, `info` and `debug` (`trace` maps to `debug`). Use `MOSS_LOG_LEVEL`, not `RUST_LOG`, when tracing a stalled build or watch session.
 
 ## Isolating plugin vs. core failures
 
@@ -35,6 +33,14 @@ may be inspecting a different moss instance's site. Inspect the built HTML under
 `.moss/build/current/` (the active frozen generation). Useful for headless or automated checks without
 opening the GUI preview. The `.css` files under its `_moss/` are minified build
 output — don't read or edit them; use `moss describe --css <selector>` instead.
+
+## Verify a preview before handing it off
+
+For an editing session, start with `moss build <folder> --serve --watch` and use the URL printed by that process. Verify the exact URL the reader will open. A successful build or HTTP 200 for the page does not prove its styles loaded: check the linked CSS and JavaScript responses, their content types, and the rendered page. An HTML fallback can return 200 at a stylesheet URL while leaving the page unstyled.
+
+Test watching with a reversible edit to the actual source, observe the changed page or asset through the running server, then restore it and verify restoration. Checking only the initial build cannot reveal a watcher that ignores source events. Edit source files, not the generated output under `.moss/build/`.
+
+If you separately serve an exported build, set the server root explicitly to that output and preserve its `/_moss/` asset paths. A prototype-specific rewrite can break an otherwise valid documentation build.
 
 ## Shortcode appears as literal text
 

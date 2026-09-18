@@ -917,6 +917,20 @@ pub fn pump_gate(kind: notify::EventKind, folder_path: &str, paths: &[PathBuf]) 
     if !should_gate_modify_event(kind) {
         return PumpGate::Proceed;
     }
+    // Only markdown source metadata is final when `run_pipeline` records the
+    // in-memory gate baseline. Passthrough and media files are copied by the
+    // background coordinator after that stash, so their entries can still
+    // describe the previous build. Gating one of those modifies can therefore
+    // discard an edit or undo while staging serves different bytes.
+    let all_markdown = !paths.is_empty()
+        && paths.iter().all(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "md" | "markdown"))
+        });
+    if !all_markdown {
+        return PumpGate::Proceed;
+    }
     PumpGate::DeferHashCheck
 }
 

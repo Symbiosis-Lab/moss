@@ -117,6 +117,7 @@ inside `themes` and changes precedence unpredictably. Write plain CSS.
 ## The `.moss/theme/` packaging API
 
 `.moss/theme/` is mirrored **verbatim** to `/_moss/theme/` in the built site.
+
 Consequences you can rely on:
 
 - `.moss/theme/style.css` is served at `/_moss/theme/style.css` (content-hashed)
@@ -129,6 +130,17 @@ Consequences you can rely on:
 - For JS that needs theme assets, moss injects `window.mossTheme.base` (the
   `/_moss/theme/` URL) before your `.moss/theme/script.js` runs. Resolve assets
   with `new URL("asset.woff2", mossTheme.base)`.
+
+## A source-owned HTML homepage
+
+For a homepage that must own its complete HTML document, keep `index.md` for site metadata, put the authored document at `index.html`, and declare the exact file in `.moss/config.toml`:
+
+```toml
+[build]
+passthrough = ["index.html"]
+```
+
+The explicit entry makes the source HTML win only the root `index.html` output collision. moss still generates every Markdown page, and `--watch` rebuilds when either source changes. The HTML document owns its own head, styles, scripts, accessibility, and asset links. A root `index.html` without this explicit entry remains an ordinary source asset and does not replace moss's generated homepage.
 
 ## Embedding media
 

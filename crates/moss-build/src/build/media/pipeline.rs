@@ -1147,14 +1147,20 @@ pub(crate) fn copy_deferred_assets(
             continue;
         }
 
-        // Videos are the video worker's alone — every one of them, whether it
-        // is re-encoded or passed through unchanged. This used to be a size
+        // Videos outside passthrough roots are the video worker's alone. A
+        // passthrough subtree deliberately opts out of that worker, so this
+        // loop must copy its video verbatim or the asset disappears. This used
+        // to be a size
         // test that had to agree with a differently-spelled size test in
         // `collect_videos_for_conversion`, and on a sub-threshold .mov the two
         // disagreed: the worker transcoded it AND this loop copied the
         // original, so the site shipped both. One owner cannot disagree with
         // itself.
-        if video_exts.contains(&ext.as_str()) {
+        let configured_passthrough = crate::build::scan::classify::is_in_passthrough(
+            &relative_path,
+            &ctx.passthrough_roots,
+        );
+        if video_exts.contains(&ext.as_str()) && !configured_passthrough {
             continue;
         }
 
@@ -1168,7 +1174,8 @@ pub(crate) fn copy_deferred_assets(
         // files will be incorrectly skipped here, causing 404s on iframe covers.
         // See render/blocking.rs blocking_keys declaration for the full explanation.
         if html_exts.contains(&ext.as_str()) {
-            if ctx.blocking_keys.contains(&relative_path) {
+            let exact_file_passthrough = ctx.passthrough_roots.contains(&relative_path);
+            if ctx.blocking_keys.contains(&relative_path) && !exact_file_passthrough {
                 continue;
             }
             // Fall through — copy as asset
