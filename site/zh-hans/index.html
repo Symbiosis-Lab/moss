@@ -12,7 +12,7 @@
     --bg: #faf8f5; --text: #2c2825; --text2: #5d5853; --border: #e5e1da; --accent: #2d5a2d;
     --heading: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
     --body: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
-    --cell-w: 660px; --cell-h: 620px; --ed-w: 520px; --pad: 80px; --s: 1; --win-r: 10px;
+    --cell-w: 660px; --cell-h: 620px; --ed-w: 520px; --pad: 80px; --s: 1; --win-r: 12px;
     /* how far the last join has run: 0 the two-column page, 1 the full-bleed
        close. It is read before the script has set anything, so it starts here. */
     --xf: 0;
@@ -131,7 +131,7 @@
 
   /* Loose artifacts rest behind the paper; a focused or embedded artifact
      sits above it, always below the real app chrome. */
-  #stage[data-scene="2"] #box { left: 120px; right: auto; top: 30px; width: 540px; height: 560px; background: transparent; box-shadow: 0 0 0 1.5px #b6b6af, 0 20px 52px #28251c26; z-index: 9; pointer-events: none; }
+  #stage[data-scene="2"] #box { left: 120px; right: auto; top: 30px; width: 540px; height: 560px; background: transparent; border-radius: var(--win-r); box-shadow: 0 0 0 1px rgba(44,40,37,.22), 0 20px 52px #28251c26; z-index: 9; pointer-events: none; }
   #stage[data-scene="2"] #box iframe { pointer-events: none; }
   #stage[data-scene="2"] #box #vd { width: 100%; }
   #stage[data-scene="2"] #g0, #stage[data-scene="2"] #g1 { opacity: 0; }
@@ -141,6 +141,7 @@
   #s3-site { position: absolute; left: -32px; top: 48px; width: calc(100% - 16px); height: calc(100% - 48px); background: var(--bg); opacity: 0; pointer-events: none; z-index: 4; }
   #s3-site iframe { width: 100%; height: 100%; border: 0; pointer-events: none; }
   #stage[data-scene="2"].s3-ready:not(.morphing) #s3-site { opacity: 1; pointer-events: auto; }
+  #stage[data-scene="2"]:not(.s3-ready) #box { visibility: hidden; }
   #s3-video { position: absolute; left: 0; top: 0; width: 400px; height: 300px; overflow: hidden; border-radius: 3px; box-shadow: var(--sheet-shadow); background: #111; opacity: 0; pointer-events: none; touch-action: none; transform-origin: 0 0; z-index: 5; }
   #stage[data-scene="2"]:not(.morphing) #s3-video { opacity: 1; pointer-events: auto; }
   #s3-video video { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
@@ -161,7 +162,7 @@
      page — but each circle opts back in, since the reader can drag one. It is
      built and driven entirely from script (see "Scene 4's targets" below);
      nothing here lays a target out, only the container's own box. */
-  #fan { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 7; pointer-events: none; visibility: hidden; overflow: visible; color: var(--text); }
+  #fan { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none; visibility: hidden; overflow: visible; color: var(--text); }
   #stage[data-scene="3"] #fan { visibility: visible; }
   /* One circle per deploy target. Position and pop-scale are both written to
      `transform` every simulation tick — never a CSS transition, which would
@@ -271,7 +272,7 @@
   #five .moss-btn[data-role="primary"]:hover { background: #e7ede5; }
   /* Reduced motion is the poster and nothing else: no video element is ever
      given a source, so there is nothing playing and nothing to pause. */
-  @media (prefers-reduced-motion: reduce) { #loop-toggle { display: none; } }
+  @media (prefers-reduced-motion: reduce) { #loop-toggle { display: none; } #intro h1 { opacity: 1; -webkit-mask-image: none !important; mask-image: none !important; } }
 
   /* The document still has a useful close if JavaScript is unavailable: the
      scripts add .js before body paint, while the static section keeps its own
@@ -290,10 +291,11 @@
   /* Layout pass: the intro owns the first beat, while the stage remains tied
      to the measured desktop composition. The script supplies these variables
      after it knows the viewport and copy heights. */
-  #intro { display: grid; place-items: center; min-height: 68svh; padding: 18svh 32px 7svh; text-align: center; }
-  #intro h1 { margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; text-wrap: balance; }
+  #intro { display: grid; place-items: start center; min-height: 108svh; padding: 0 32px; text-align: center; }
+  #intro h1 { position: sticky; top: 38svh; margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; text-wrap: balance; opacity: clamp(0, calc((var(--intro-p, 1) - .04) * 1.2), 1); }
+  .page { margin-top: -42svh; }
   .page { grid-template-columns: calc(var(--vis-w) * var(--layout-s, var(--s)) - 88px) minmax(0, 1fr); }
-  #stage { transform: translate(calc((var(--layout-s, 1) - var(--s, 1)) * 400px), calc(var(--intro-visible, 0px) * -.56)); }
+  #stage { transform: translate(calc((var(--layout-s, 1) - var(--s, 1)) * 400px), calc(var(--intro-visible, 0px) * -.33)); }
   #cell { transform: scale(var(--s)); }
   #c1 { min-height: calc(100svh - var(--intro-h, 0px)); }
   #c1 .scene-text { transform: translateY(calc((var(--intro-h, 0px) - var(--intro-visible, 0px)) * .5)); }
@@ -308,7 +310,7 @@
   #downloads button:disabled img { filter: invert(1); opacity: .72; }
   #downloads a[data-availability] { background: transparent; color: #fff; border-color: #a4a8a2; }
   #downloads a[data-availability] img { filter: invert(1); }
-  #loop { object-fit: cover; transform: scale(1.34); }
+  #loop { width: 100vw; height: 100dvh; object-fit: cover; }
   #closing-film { overflow: hidden; }
   #downloads svg, #downloads img { width: 19px; height: 19px; margin-right: 8px; }
   .form-status { min-height: 1.5em; font-size: 13px; }
@@ -324,26 +326,31 @@
   .command code { min-width: 0; overflow-wrap: anywhere; color: #fff; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .command button { min-height: 40px; padding: 8px 12px; color: #fff; background: transparent; border: 1px solid rgba(255,255,255,.52); border-radius: 4px; cursor: pointer; }
   #beta, #footer { width: min(1000px, 100%); margin: 56px auto 0; padding-top: 32px; text-align: left; }
-  #beta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 1fr); gap: 48px; align-items: start; }
+  #beta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 1fr); gap: 48px; align-items: end; }
   #beta h3 { margin: 0 0 8px; font: 400 28px/1.15 var(--heading); }
   #beta p, #footer { color: rgba(255,255,255,.75); }
-  .signup { display: grid; gap: 8px; }
+  .signup { position: relative; display: grid; gap: 8px; align-self: end; }
+  .signup .form-status { position: absolute; inset: calc(100% + 8px) 0 auto; }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
   .input-row { display: flex; gap: 8px; }
   .input-row input { min-width: 0; flex: 1; min-height: 44px; padding: 10px 2px; color: #fff; background: transparent; border: 0; border-bottom: 1px solid rgba(255,255,255,.62); border-radius: 0; }
   .input-row input::placeholder { color: rgba(255,255,255,.7); opacity: 1; }
   .input-row button { min-height: 44px; padding: 10px 16px; color: #151515; background: #fff; border: 1px solid #fff; border-radius: 4px; cursor: pointer; }
-  #footer { display: flex; justify-content: center; align-items: center; border-top: 1px solid rgba(255,255,255,.25); font-size: 13px; }
+  #footer { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,.25); font-size: 13px; }
   #footer a { color: inherit; }
-  #footer nav { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 9px; }
+  #footer nav { display: flex; width: 100%; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 9px; }
+  #footer .github-link { margin-left: auto; }
   #footer .github-link { display: inline-flex; align-items: center; }
   #footer .github-link img { width: 17px; height: 17px; filter: invert(1); }
 
   @media (max-width: 900px) {
     body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; opacity: calc(1 - var(--xf)); background: linear-gradient(to bottom, var(--bg) 0 34px, color-mix(in srgb, var(--bg) 72%, transparent) 52px, transparent); }
     html[data-mobile-snap] { scroll-snap-type: y proximity; }
-    html[data-mobile-snap] #intro, html[data-mobile-snap] .scene, html[data-mobile-snap] #five { scroll-snap-align: start; }
-    #intro { min-height: 0; padding: 88px 20px 24px; }
+    html[data-mobile-snap] #intro, html[data-mobile-snap] .scene { scroll-snap-align: start; }
+    html[data-mobile-snap] #five { scroll-snap-align: end; }
+    #intro { min-height: 100svh; padding: 0 20px; }
+    #intro h1 { top: 88px; }
+    .page { margin-top: -72svh; }
     #intro h1 { font-size: clamp(40px, 11vw, 58px); }
     .page { position: relative; display: block; width: 100%; padding: 0 16px; }
     #col { position: absolute; inset: 0; height: auto; padding-top: var(--mobile-col-pad, 70svh); z-index: 0; pointer-events: none; }
@@ -357,7 +364,7 @@
     #c1 .scene-text { transform: none; }
     .scene-text { width: min(100%, 520px); margin-inline: auto; padding: 24px 18px 26px; background: linear-gradient(to bottom, transparent, var(--bg) 18px, var(--bg) calc(100% - 18px), transparent); }
     #c1 .scene-text { background: var(--bg); }
-    #c1 h2 { font-size: calc(31px + 9px * (1 - var(--intro-p, 0))); }
+    #c1 h2 { font-size: calc(29px + 11px * (1 - var(--intro-p, 0))); }
     .btns { flex-wrap: nowrap; gap: 8px; }
     .moss-btn { padding-inline: clamp(12px, 4vw, 20px); }
     #c2, #c3, #c4, #c5 { margin-top: 0; }
@@ -477,7 +484,6 @@
     <footer id="footer">
       <nav aria-label="页脚"><a href="https://mosspub.com/privacy">隐私</a><span aria-hidden="true">·</span><a href="https://symbiosis-lab.org/">Symbiosis Lab</a><span aria-hidden="true">·</span><span>2026</span><a class="github-link" href="https://github.com/Symbiosis-Lab/moss" aria-label="在 GitHub 查看 moss"><img src="assets/platforms/github.svg" alt=""></a></nav>
     </footer>
-    <button id="loop-toggle" type="button"></button>
   </div>
 </section>
 
@@ -492,23 +498,11 @@ children: false
 ---
 
 `;
-const SEED = window.__LANG === 'zh'
-  ? '生在曹洞臨濟有，穿過臨濟曹洞有。\n'
-  : '';
+const SEED = '';
 const TYPED = window.__LANG === 'zh'
-  ? '洞曹臨濟兩俱非，羸羸然若喪家之狗。\n還識得此人麼？'
+  ? '生在曹洞臨濟有，穿過臨濟曹洞有。\n洞曹臨濟兩俱非，羸羸然若喪家之狗。'
   : `I must Create a System, or be enslav'd by another Man's.${'  '}
-I will not Reason & Compare: my business is to Create.
-
-:::grid 3
-[[Illuminated Books]]
-+++
-[[Paintings & Prints]]
-+++
-[[Writings]]
-:::
-
-![[/|depth:all,covers:only,limit:6,style:summary,sort:date,more:Archive]]`;
+I will not Reason & Compare: my business is to Create.`;
 const FINAL = SEED + TYPED;
 const FULL_SOURCE = window.__LANG === 'zh' ? FINAL : BLAKE_FRONTMATTER + FINAL;
 window.__editorSource = () => FULL_SOURCE;
@@ -574,7 +568,7 @@ const SCRIM = 0.72, XF_SPAN = 0.1;
 // The one window radius every sheet on the stage wears (--win-r in the
 // stylesheet); mirrored here for the same reason GEOM mirrors --cell-w — a
 // print built on canvas has no custom property to read it from.
-const WIN_R = 10;
+const WIN_R = 12;
 // Only the three creative artifacts move. Their initial positions are
 // measured against the available viewport when Scene 3 opens.
 const S3_ORDER = ['sk', 'nb', 'video'];
@@ -603,10 +597,16 @@ const PAGE_MAX = 56 + VIS_W + 96 + COPY_MIN;
 const JOINS = [
   { name: 'wash', wash: true },
   { name: 'slide', wash: true },
-  { name: 'fan', wash: true, leave: (from) => from === DEPLOY ? FAN_OUT_MS : 0 },
+  { name: 'fan', wash: true, back: returnFromDeploy },
   { name: 'crossfade', run: (to) => fade(to) },
 ];
 const joinAt = (a, b) => JOINS[Math.min(a, b)];
+
+async function returnFromDeploy() {
+  setFan(false);
+  if (!reduce) await wait(FAN_OUT_MS);
+  return SHIPS;
+}
 
 for (const [k, v] of Object.entries({ '--peek': PEEK + 'px',
   '--sib-ms': SIB_MS + 'ms', '--sib-stagger': SIB_STAGGER + 'ms', '--sib-lead': SIB_LEAD + 'ms', '--vis-w': VIS_W + 'px', '--page-max': PAGE_MAX + 'px',
@@ -616,7 +616,7 @@ for (const [k, v] of Object.entries({ '--peek': PEEK + 'px',
 const $ = (id) => document.getElementById(id);
 const stage = $('stage'), box = $('box'), canvas = $('gl'), cell = $('cell');
 const edFrame = $('ed'), shFrame = $('sh'), vdFrame = $('vd');
-const five = $('five'), loopVid = $('loop'), loopBtn = $('loop-toggle');
+const five = $('five'), loopVid = $('loop');
 const page = document.querySelector('.page');
 // one frame per scene; scenes 2 and 3 are both moss's shell, around a different
 // page, and scene 4 is that same frame cut down to the publish control. Scene 5
@@ -710,16 +710,49 @@ plateEls.forEach((pl) => { const im = pl.querySelector('img'); im.addEventListen
 let SCALE = 1, baseScale = 1;
 const mobileLayout = () => innerWidth <= 900;
 const opening = document.getElementById('intro');
+const openingTitle = opening.querySelector('h1');
+let introMaskStep = -1;
+const introMaskCache = new Map();
+function introWatercolor(progress) {
+  if (reduce || progress > .94) {
+    introMaskStep = -1;
+    openingTitle.style.webkitMaskImage = openingTitle.style.maskImage = 'none';
+    return;
+  }
+  const step = Math.round((1 - progress) * 24);
+  if (step === introMaskStep) return;
+  introMaskStep = step;
+  let data = introMaskCache.get(step);
+  if (!data) {
+    const c = document.createElement('canvas'); c.width = 192; c.height = 64;
+    const x = c.getContext('2d'), im = x.createImageData(c.width, c.height);
+    const hash = (ix, iy) => { let v = Math.imul(ix + 37, 374761393) ^ Math.imul(iy + 71, 668265263) ^ 0x5f3759df; v = Math.imul(v ^ v >>> 13, 1274126177); return ((v ^ v >>> 16) >>> 0) / 4294967295; };
+    const noise = (px, py) => { const ix = Math.floor(px), iy = Math.floor(py), fx = px - ix, fy = py - iy, sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy); return (hash(ix, iy) * (1 - sx) + hash(ix + 1, iy) * sx) * (1 - sy) + (hash(ix, iy + 1) * (1 - sx) + hash(ix + 1, iy + 1) * sx) * sy; };
+    const fbm = (px, py) => .57 * noise(px / 22, py / 22) + .29 * noise(px / 10 + 19, py / 10 + 7) + .14 * noise(px / 4 + 43, py / 4 + 29);
+    const threshold = .18 + step / 24 * .72;
+    for (let py = 0; py < c.height; py++) for (let px = 0; px < c.width; px++) {
+      const value = fbm(px, py) + px / c.width * .18;
+      const t = Math.max(0, Math.min(1, (value - (threshold - .06)) / .12));
+      const a = Math.round((t * t * (3 - 2 * t)) * 255);
+      im.data[(py * c.width + px) * 4 + 3] = a;
+    }
+    x.putImageData(im, 0, 0); data = c.toDataURL(); introMaskCache.set(step, data);
+  }
+  const url = `url(${data})`;
+  openingTitle.style.webkitMaskImage = openingTitle.style.maskImage = url;
+  openingTitle.style.webkitMaskSize = openingTitle.style.maskSize = '100% 100%';
+}
 function updateOpening() {
   const visible = Math.max(0, opening.getBoundingClientRect().bottom);
   const introP = Math.min(1, visible / Math.max(1, opening.offsetHeight));
   SCALE = baseScale * (mobileLayout() ? 1 : 1 - .4 * introP);
   document.documentElement.style.setProperty('--s', String(SCALE));
   document.documentElement.style.setProperty('--intro-p', String(introP));
+  introWatercolor(introP);
   document.documentElement.style.setProperty('--intro-visible', mobileLayout() ? '0px' : visible + 'px');
   if (mobileLayout()) {
     const firstCopy = document.querySelector('#c1 .scene-text').offsetHeight + 28;
-    const introPad = firstCopy + Math.max(0, innerHeight - opening.offsetHeight - firstCopy) + 64;
+    const introPad = Math.max(firstCopy + 64, innerHeight * .72 + 64);
     const scenePad = Math.min(430, Math.max(350, innerHeight * .46));
     document.documentElement.style.setProperty('--mobile-col-pad', (scenePad + (introPad - scenePad) * introP) + 'px');
   }
@@ -1747,11 +1780,6 @@ function syncLoop() {
   loopOn = want;
   if (want) loopVid.play().catch(() => {}); else loopVid.pause();
 }
-// The control says what it will do, in a word that changes with the state; the
-// page draws no second glyph over the footage for it.
-function setLoopBtn() { const i18n = window.__landingI18n; loopBtn.textContent = loopWanted ? (i18n?.t('pause') || 'Pause') : (i18n?.t('play') || 'Play'); loopBtn.setAttribute('aria-label', loopWanted ? (i18n?.t('pauseAria') || 'Pause the loop') : (i18n?.t('playAria') || 'Play the loop')); }
-loopBtn.addEventListener('click', () => { loopWanted = !loopWanted; setLoopBtn(); syncLoop(); });
-setLoopBtn();
 // How far the last join has run, and the only thing it moves.
 const setCross = (q) => { xf = q; document.documentElement.style.setProperty('--xf', q.toFixed(3)); syncLoop(); };
 // The close takes the pointer and the tab order only where it is settled: during
@@ -1759,7 +1787,15 @@ const setCross = (q) => { xf = q; document.documentElement.style.setProperty('--
 // has two sides and the page is the other one: where the close is settled the
 // page is faded to nothing, and a control faded to nothing is still a tab stop
 // until the element it sits in is inert.
-const fiveOn = (on) => { five.classList.toggle('on', on); five.inert = !on; page.inert = on; };
+const fiveOn = (on) => {
+  const entering = on && !five.classList.contains('on');
+  five.classList.toggle('on', on); five.inert = !on; page.inert = on;
+  if (entering) requestAnimationFrame(() => {
+    settleArmed = true;
+    restSince = performance.now();
+    if (reduce) scrollTo(0, Math.max(0, document.documentElement.scrollHeight - innerHeight));
+  });
+};
 // The canvas takes over the scene: the prints it shows are the pixels on
 // screen, so the DOM under it can change without a visible frame.
 // The sim keeps the boundary's two prints in SCENE order and `fwd` says which
@@ -1869,7 +1905,8 @@ async function runJoin() {
       // A join that brings its own mechanism runs it and nothing else: the
       // wash's preamble takes down what the scene being left had standing, and
       // a crossfade needs both scenes left exactly as they are.
-      if (join.run) shown = await join.run(to);
+      if (join.back && to < shown) shown = await join.back(to);
+      else if (join.run) shown = await join.run(to);
       else {
         scenes('morph');   // whatever the scene being left had standing comes off here
         // and the join says how long that takes: the sheet is not wetted under
@@ -2404,12 +2441,14 @@ function withholdOffscreen(scene) {
 // next, and a jump or the idle tick asks for one the prints on hand are missing.
 async function takeOthers(list = neighbours(shown)) {
   const from = shown;
-  holdCanvas(sheets[from], sheets[from], from, true);   // one print at both ends: the direction cannot show
+  let held = false;
   for (const other of list) {
     // Two frames pass before the capture, and a reader can start a wash inside
     // them: the print is then the next rest's, not this one's.
     if (running()) break;
     await nestedPreviewReady(other);
+    if (running() || shown !== from) break;
+    if (!held) { holdCanvas(sheets[from], sheets[from], from, true); held = true; }   // one print at both ends: the direction cannot show
     const restoreImgs = withholdOffscreen(other);
     sceneClasses(other);
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -2421,12 +2460,16 @@ async function takeOthers(list = neighbours(shown)) {
     try { setSheet(other, await capture(other)); } catch (e) { console.warn('other print skipped:', e.message); }
     finally { restoreImgs(); }
   }
-  sceneClasses(from);
+  // The reader may have crossed a boundary while the foreignObject capture was
+  // drawing. Restore the scene that actually won, not the one the warmer began
+  // on, or its old width and morph cover flash after the new scene has arrived.
+  sceneClasses(shown);
   // The scene comes back already standing. Its furniture — the siblings, the
   // control, the fan — has not been anywhere the reader could see, and replaying
   // the transitions that bring it in is a flicker every time a print is taken.
-  snapStage();
-  if (!running()) stage.classList.remove('morphing');   // a wash that has begun meanwhile keeps the canvas up
+  if (held) snapStage();
+  if (held && !running()) stage.classList.remove('morphing');   // a wash that has begun meanwhile keeps the canvas up
+  if (held && !running() && shown === SHIPS) layoutScene3Layers();
 }
 // One retake at a time. A capture slower than the tick (WebKit's foreignObject
 // path, or a document that has grown) used to let the next tick start a second
@@ -2449,6 +2492,11 @@ async function fillPrints() {
   // one a tick: each capture holds the canvas up over a reader who is resting
   const scene = [...needed(shown), ...washable].find((s) => !sheets[s]);
   if (scene == null) return false;
+  // Scene 3 is a live arrangement, not a printable sheet: switching its DOM to
+  // an offscreen neighbour under the capture canvas briefly removes the loose
+  // artifacts. Its neighbours have already been warmed during scenes 1–2; do
+  // not flash the interactive composition to fill a discretionary later gap.
+  if (shown === SHIPS && scene !== shown) return false;
   retaking = true;
   try {
     if (scene === shown) { const c = await capture(scene); if (scene === shown) setSheet(scene, c); }
@@ -2517,7 +2565,7 @@ warmSoon();
 // being taken used to be dropped on the floor and wait for the reader to move
 // again; the warmer knocks here after every print it lands, so the join the
 // prints were holding shut runs as soon as they are on hand.
-function maybeJoin() { if (!running() && target !== shown && primed()) runJoin(); }
+function maybeJoin() { if (!running() && !retaking && target !== shown && primed()) runJoin(); }
 function setTarget(t) {
   if (t === target) return;
   target = t;
@@ -2607,6 +2655,7 @@ function onScroll(dy) {
 {
   let held = null;
   stage.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
     const pl = e.target.closest('.plate'); if (!pl || running() || shown !== 0) return;
     held = { pl, x: e.clientX, y: e.clientY, left: pl.offsetLeft, top: pl.offsetTop };
     pl.classList.add('held'); pl.setPointerCapture(e.pointerId); e.preventDefault();
@@ -2657,7 +2706,7 @@ let lastWatchT = performance.now();
 // forward as the one named constant a real design intent would need — there
 // is nothing here worth a second geometry for.
 const restY = (scene) => {
-  if (scene === SHARE) return five.offsetTop;
+  if (scene === SHARE) return Math.max(0, document.documentElement.scrollHeight - innerHeight);
   if (scene === 0) return scrollY > opening.offsetHeight * .45 ? opening.offsetHeight : 0;
   if (mobileLayout()) return Math.round(scrollY + textTop(scenesEl[scene]) - Math.min(innerHeight * .55, Math.min(innerHeight * .48, 390) + 104));
   const top = textTop(scenesEl[scene]), bot = textBottom(scenesEl[scene]);
@@ -2898,6 +2947,14 @@ function watchScrollCss(now) {
   lastScrollY = scrollY;
   if (dy) { travel = Math.sign(dy); restSince = now; }
   onScroll(dy);
+  // The closing section shares the release spring, while upward reading and
+  // form input retain native control. A fresh gesture cancels settleTo().
+  if (xf > 0 && travel > 0 && settleArmed && !settleRun && !touchHeld && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
+    settleArmed = false;
+    const bottom = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+    if (reduce) scrollTo(0, bottom);
+    else settleTo(bottom, Math.max(0, scrollV * innerHeight), SETTLE_SECS);
+  }
   const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
   scrollV *= Math.exp(-dt / V_TAU);
 }
@@ -3096,7 +3153,7 @@ function sketchVisible(on) {
 
 // ── Scene 3: one pose per artifact, in the scaled cell's coordinates ────
 // Scaling the complete artifact preserves the harvested UI's proportions.
-Object.assign(CARDS.nb, { width: 520, height: 520 * 446 / 670 });
+Object.assign(CARDS.nb, { width: 520, height: 520 * 560 / 670 });
 Object.assign(CARDS.sk, { width: 440, height: 440 });
 Object.assign(CARDS.video, { width: 520, height: 390 });
 let s3Drag = null, s3HardStop = true, s3Touched = false;
@@ -3108,8 +3165,8 @@ const cardId = el => S3_ORDER.find(id => CARDS[id].el === el);
 const localPoint = e => { const r = cell.getBoundingClientRect(); return { x: (e.clientX - r.left) / SCALE, y: (e.clientY - r.top) / SCALE }; };
 const inPreview = p => p.x >= s3Paper.x + 16 && p.x <= s3Paper.x + s3Paper.w - 16 && p.y >= s3Paper.y + 64 && p.y <= s3Paper.y + s3Paper.h - 12;
 function dockPose(id) {
-  const c = CARDS[id], scale = Math.min(s3Slot.w / c.width, s3Slot.h / c.height);
-  return { x: s3Slot.x + (s3Slot.w - c.width * scale) / 2, y: s3Slot.y + (s3Slot.h - c.height * scale) / 2, s: scale };
+  const c = CARDS[id], scale = s3Slot.w / c.width;
+  return { x: s3Slot.x, y: s3Slot.y, s: scale };
 }
 function cardDepths() {
   for (const id of S3_ORDER) {
@@ -3266,7 +3323,7 @@ const when = (frame, key) => new Promise((r) => { const t = setInterval(() => { 
 async function ready() {
   // a print that never arrives must not hold the page shut: with none, the
   // scenes cut, which is the path reduced motion already takes
-  if (washing() && needed(shown).length) { try { setSheet(shown, await capture(shown)); await takeOthers(); } catch (e) { printable = false; console.warn('no prints:', e.message); } }
+  if (washing() && needed(shown).length) { try { setSheet(shown, await capture(shown)); await takeOthers(washable.filter((scene) => scene !== shown)); } catch (e) { printable = false; console.warn('no prints:', e.message); } }
   booted = true;
   onScroll(0); if (target !== shown && primed()) runJoin(); else still(shown);
   document.documentElement.dataset.ready = '1';

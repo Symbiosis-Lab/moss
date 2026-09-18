@@ -295,7 +295,7 @@
   #intro h1 { position: sticky; top: 38svh; margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; text-wrap: balance; opacity: clamp(0, calc((var(--intro-p, 1) - .04) * 1.2), 1); }
   .page { margin-top: -42svh; }
   .page { grid-template-columns: calc(var(--vis-w) * var(--layout-s, var(--s)) - 88px) minmax(0, 1fr); }
-  #stage { transform: translateX(calc((var(--layout-s, 1) - var(--s, 1)) * 400px)); }
+  #stage { transform: translate(calc((var(--layout-s, 1) - var(--s, 1)) * 400px), calc(var(--intro-visible, 0px) * -.33)); }
   #cell { transform: scale(var(--s)); }
   #c1 { min-height: calc(100svh - var(--intro-h, 0px)); }
   #c1 .scene-text { transform: translateY(calc((var(--intro-h, 0px) - var(--intro-visible, 0px)) * .5)); }
@@ -346,7 +346,8 @@
   @media (max-width: 900px) {
     body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; opacity: calc(1 - var(--xf)); background: linear-gradient(to bottom, var(--bg) 0 34px, color-mix(in srgb, var(--bg) 72%, transparent) 52px, transparent); }
     html[data-mobile-snap] { scroll-snap-type: y proximity; }
-    html[data-mobile-snap] #intro, html[data-mobile-snap] .scene, html[data-mobile-snap] #five { scroll-snap-align: start; }
+    html[data-mobile-snap] #intro, html[data-mobile-snap] .scene { scroll-snap-align: start; }
+    html[data-mobile-snap] #five { scroll-snap-align: end; }
     #intro { min-height: 100svh; padding: 0 20px; }
     #intro h1 { top: 88px; }
     .page { margin-top: -72svh; }
@@ -483,7 +484,6 @@
     <footer id="footer">
       <nav aria-label="Footer"><a href="https://mosspub.com/privacy">Privacy</a><span aria-hidden="true">·</span><a href="https://symbiosis-lab.org/">Symbiosis Lab</a><span aria-hidden="true">·</span><span>2026</span><a class="github-link" href="https://github.com/Symbiosis-Lab/moss" aria-label="moss on GitHub"><img src="assets/platforms/github.svg" alt=""></a></nav>
     </footer>
-    <button id="loop-toggle" type="button"></button>
   </div>
 </section>
 
@@ -616,7 +616,7 @@ for (const [k, v] of Object.entries({ '--peek': PEEK + 'px',
 const $ = (id) => document.getElementById(id);
 const stage = $('stage'), box = $('box'), canvas = $('gl'), cell = $('cell');
 const edFrame = $('ed'), shFrame = $('sh'), vdFrame = $('vd');
-const five = $('five'), loopVid = $('loop'), loopBtn = $('loop-toggle');
+const five = $('five'), loopVid = $('loop');
 const page = document.querySelector('.page');
 // one frame per scene; scenes 2 and 3 are both moss's shell, around a different
 // page, and scene 4 is that same frame cut down to the publish control. Scene 5
@@ -752,7 +752,7 @@ function updateOpening() {
   document.documentElement.style.setProperty('--intro-visible', mobileLayout() ? '0px' : visible + 'px');
   if (mobileLayout()) {
     const firstCopy = document.querySelector('#c1 .scene-text').offsetHeight + 28;
-    const introPad = firstCopy + Math.max(0, innerHeight - opening.offsetHeight - firstCopy) + 64;
+    const introPad = Math.max(firstCopy + 64, innerHeight * .72 + 64);
     const scenePad = Math.min(430, Math.max(350, innerHeight * .46));
     document.documentElement.style.setProperty('--mobile-col-pad', (scenePad + (introPad - scenePad) * introP) + 'px');
   }
@@ -1780,11 +1780,6 @@ function syncLoop() {
   loopOn = want;
   if (want) loopVid.play().catch(() => {}); else loopVid.pause();
 }
-// The control says what it will do, in a word that changes with the state; the
-// page draws no second glyph over the footage for it.
-function setLoopBtn() { const i18n = window.__landingI18n; loopBtn.textContent = loopWanted ? (i18n?.t('pause') || 'Pause') : (i18n?.t('play') || 'Play'); loopBtn.setAttribute('aria-label', loopWanted ? (i18n?.t('pauseAria') || 'Pause the loop') : (i18n?.t('playAria') || 'Play the loop')); }
-loopBtn.addEventListener('click', () => { loopWanted = !loopWanted; setLoopBtn(); syncLoop(); });
-setLoopBtn();
 // How far the last join has run, and the only thing it moves.
 const setCross = (q) => { xf = q; document.documentElement.style.setProperty('--xf', q.toFixed(3)); syncLoop(); };
 // The close takes the pointer and the tab order only where it is settled: during
@@ -2952,6 +2947,14 @@ function watchScrollCss(now) {
   lastScrollY = scrollY;
   if (dy) { travel = Math.sign(dy); restSince = now; }
   onScroll(dy);
+  // The closing section shares the release spring, while upward reading and
+  // form input retain native control. A fresh gesture cancels settleTo().
+  if (xf > 0 && travel > 0 && settleArmed && !settleRun && !touchHeld && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
+    settleArmed = false;
+    const bottom = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+    if (reduce) scrollTo(0, bottom);
+    else settleTo(bottom, Math.max(0, scrollV * innerHeight), SETTLE_SECS);
+  }
   const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
   scrollV *= Math.exp(-dt / V_TAU);
 }

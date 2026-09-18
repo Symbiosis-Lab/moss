@@ -158,8 +158,9 @@
         if (typeof setTarget === 'function') setTarget(SHARE);
         const started = performance.now();
         const focusEmail = () => {
-          if (email && !email.closest('[inert]')) email.focus({ preventScroll: true });
-          else if (performance.now() - started < 5000) setTimeout(focusEmail, 50);
+          const state = window.__state?.();
+          if (email && !email.closest('[inert]') && state?.shown === 4 && !state.running) email.focus({ preventScroll: true });
+          else if (performance.now() - started < 10000) setTimeout(focusEmail, 50);
         };
         focusEmail();
         if ('onscrollend' in window) addEventListener('scrollend', focusEmail, { once: true });
