@@ -9542,19 +9542,9 @@ bob@example.com`,"subscribers.added_no_email":"\u76F4\u63A5\u65B0\u589E\uFF0C\u7
   var site=Xe||location.hostname,liveUrl=N.get("live"),url=liveUrl||(/^https?:\/\//.test(site)?site:"https://"+site);
   var backdrop=null,modal=null;
   function close(){if(!modal)return;backdrop.classList.remove("visible");modal.classList.remove("visible");setTimeout(function(){backdrop?.remove();modal?.remove();backdrop=modal=null},200)}
-  function renderConfirm(root){
-    root.innerHTML='<h2 class="moss-modal-title">Publish '+site+'?</h2>'+
-      '<p class="moss-modal-body">This rebuilds the site from every change since the last publish and uploads it live.</p>'+
-      '<div class="moss-modal-actions">'+
-      '<button type="button" class="moss-btn moss-btn-secondary" data-action="cancel">Cancel</button>'+
-      '<button type="button" class="moss-btn moss-btn-primary" data-action="confirm">Publish</button>'+
-      '</div>';
-    root.querySelector('[data-action="cancel"]').addEventListener("click",close);
-    root.querySelector('[data-action="confirm"]').addEventListener("click",function(){T.publishFlash();renderLive(root)});
-  }
   function renderLive(root){
-    root.innerHTML='<h2 class="moss-modal-title">Published</h2>'+
-      '<p class="moss-modal-body">Your site is live at <strong>'+site+'</strong>.</p>'+
+    root.innerHTML='<h2 class="moss-modal-title">Your site is live</h2>'+
+      '<p class="moss-modal-body"><a href="'+url+'" target="_blank" rel="noopener">'+site+'</a></p>'+
       '<div class="moss-modal-actions">'+
       '<button type="button" class="moss-btn moss-btn-secondary" data-action="close">Close</button>'+
       '<a class="moss-btn moss-btn-primary" href="'+url+'" target="_blank" rel="noopener">Visit site</a>'+
@@ -9572,7 +9562,7 @@ bob@example.com`,"subscribers.added_no_email":"\u76F4\u63A5\u65B0\u589E\uFF0C\u7
     modal.appendChild(root);
     document.body.appendChild(backdrop);document.body.appendChild(modal);
     requestAnimationFrame(function(){backdrop.classList.add("visible");modal.classList.add("visible")});
-    renderConfirm(root);
+    T.publishFlash();renderLive(root);
     document.addEventListener("keydown",function onKey(e){if(e.key==="Escape"){close();document.removeEventListener("keydown",onKey)}});
   }
   w.addEventListener("click",open);

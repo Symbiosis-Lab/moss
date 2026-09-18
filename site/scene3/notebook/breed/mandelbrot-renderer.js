@@ -1,7 +1,7 @@
 (() => {
   const canvas=document.getElementById('field'),status=document.getElementById('status'),depth=document.getElementById('depth');
   const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches, gl=canvas.getContext('webgl2',{alpha:false,antialias:false}), fallback=gl?null:canvas.getContext('2d',{alpha:false});
-  const MAX=4096, RATE=.18, HORIZON=9; // fast inward start, asymptotically bounded inside the tested float-delta horizon
+  const MAX=4096, RATE=2.2, HORIZON=13; // an immediately legible dive, asymptotically bounded inside the tested float-delta horizon
   let logZoom=reduce?7.5:0,parentVisible=true,intersecting=true,raf=0,last=performance.now(),lastDraw=0;
   const vertex=`#version 300 es
   in vec2 p;out vec2 uv;void main(){uv=p*.5+.5;gl_Position=vec4(p,0,1);}`;

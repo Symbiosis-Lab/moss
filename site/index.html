@@ -20,13 +20,16 @@
     --sheet-shadow: 0 0 0 1px rgba(0,0,0,.10), 0 1px 3px rgba(0,0,0,.10), 0 22px 64px rgba(40,35,28,.30);
   }
   * { box-sizing: border-box; }
-  html, body { overflow-x: clip; margin: 0; background: var(--bg); color: var(--text); font-family: var(--body); }
+  html, body { overflow-x: clip; margin: 0; background: var(--bg); color: var(--text); font-family: var(--body); overflow-anchor: none; }
   /* The lockup follows mark.css: inline, mark and name as peers, the mark's
      visible ink as tall as the name's letter band, the gap the height of its
      drop. 13px/600 in the UI sans gives a 10px band; a 16px box shows 11.5px. */
   .brand { position: fixed; top: 16px; left: 28px; z-index: 50; display: flex; align-items: center; gap: 5px; font: 600 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #000; }
   .brand { color: rgb(calc(255 * var(--xf)), calc(255 * var(--xf)), calc(255 * var(--xf))); }
   .brand svg { filter: grayscale(var(--xf)) brightness(calc(1 + var(--xf) * 99)); width: 16px; height: 16px; display: block; transform: translateY(1px); }
+  .language-picker { position: fixed; top: 12px; right: 24px; z-index: 50; }
+  .language-picker select { min-height: 34px; padding: 5px 28px 5px 10px; color: rgb(calc(44 + 211 * var(--xf)), calc(40 + 215 * var(--xf)), calc(37 + 218 * var(--xf))); background: rgba(calc(250 - 218 * var(--xf)), calc(248 - 216 * var(--xf)), calc(245 - 213 * var(--xf)), .9); border: 1px solid rgba(calc(44 + 211 * var(--xf)), calc(40 + 215 * var(--xf)), calc(37 + 218 * var(--xf)), .3); border-radius: 5px; font: 500 12px/1 var(--body); }
+  .language-picker option { color: #2c2825; background: #faf8f5; }
 
   /* ── two columns: the visual is pinned, the copy scrolls past it ─────── */
   /* The copy column owns all remaining width and centres its block in it, so
@@ -133,7 +136,7 @@
   #stage[data-scene="2"] [data-asset].s3-drag { outline: none; cursor: grabbing; transition: none; box-shadow: var(--sheet-shadow); }
   #s3-site { position: absolute; left: -32px; top: 48px; width: calc(100% - 16px); height: calc(100% - 48px); background: var(--bg); opacity: 0; pointer-events: none; z-index: 4; }
   #s3-site iframe { width: 100%; height: 100%; border: 0; pointer-events: none; }
-  #stage[data-scene="2"]:not(.morphing) #s3-site { opacity: 1; pointer-events: auto; }
+  #stage[data-scene="2"].s3-ready:not(.morphing) #s3-site { opacity: 1; pointer-events: auto; }
   #s3-video { position: absolute; left: 0; top: 0; width: 400px; height: 300px; overflow: hidden; border-radius: 3px; box-shadow: var(--sheet-shadow); background: #111; opacity: 0; pointer-events: none; touch-action: none; transform-origin: 0 0; z-index: 5; }
   #stage[data-scene="2"]:not(.morphing) #s3-video { opacity: 1; pointer-events: auto; }
   #s3-video video { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
@@ -197,6 +200,10 @@
      sheets would return as their placeholder colour and fade in */
   #stage.morphing .plate img { visibility: hidden; }
   #stage.morphing #gl { display: block; }
+  /* The fan sits above the wash while it is interactive. On departure its
+     return animation starts before data-scene changes, so without this shared
+     lifecycle guard the circles cross the watercolor for several frames. */
+  #stage.morphing #fan { visibility: hidden; }
   #stage.live .plate { visibility: hidden; }
   /* an explicit visible on a child beats a hidden parent, so the morph hides the frames themselves */
   #stage.morphing #box iframe { visibility: hidden; }
@@ -273,27 +280,28 @@
      hand-rolled settle; setupCssSnap() (movie6.html script, beside watchScrollCss) computes
      each scene's scroll-margin-top so the snap point lands on restY(), the same position the
      other two paths carry the reader onto. */
-  html[data-carry="css"] { scroll-snap-type: y mandatory; }
-  html[data-carry="css"] .scene { scroll-snap-align: start; scroll-snap-stop: always; }
+  html[data-carry="css"] { scroll-snap-type: y proximity; }
+  html[data-carry="css"] .scene, html[data-carry="css"] #five { scroll-snap-align: start; }
 
   /* Layout pass: the intro owns the first beat, while the stage remains tied
      to the measured desktop composition. The script supplies these variables
      after it knows the viewport and copy heights. */
-  #intro { display: grid; place-items: center; padding: 92px 32px 32px; text-align: center; }
+  #intro { display: grid; place-items: center; min-height: 68svh; padding: 18svh 32px 7svh; text-align: center; }
   #intro h1 { margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; text-wrap: balance; }
-  .page { grid-template-columns: calc(var(--vis-w) * var(--layout-s, var(--s))) minmax(0, 1fr); }
-  #stage { transform: translate(calc((var(--layout-s, 1) - var(--s, 1)) * 400px), calc(var(--intro-visible, 0px) * -.5)); }
+  .page { grid-template-columns: calc(var(--vis-w) * var(--layout-s, var(--s)) - 88px) minmax(0, 1fr); }
+  #stage { transform: translate(calc((var(--layout-s, 1) - var(--s, 1)) * 400px), calc(var(--intro-visible, 0px) * -.56)); }
   #cell { transform: scale(var(--s)); }
   #c1 { min-height: calc(100svh - var(--intro-h, 0px)); }
   #c1 .scene-text { transform: translateY(calc((var(--intro-h, 0px) - var(--intro-visible, 0px)) * .5)); }
+  #c1 h2 { font-size: calc(34px + 6px * (1 - var(--intro-p, 0))); transition: font-size .12s linear; }
   #five { position: relative; inset: auto; min-height: 100svh; overflow: visible; background: transparent; color: #fff; }
   #c5 { height: 0; min-height: 0; padding: 0; }
   #loop-toggle { position: static; margin-top: 28px; }
-  .scene-note { font-size: 12px; line-height: 1.5; opacity: .7; }
   .moss-btn { min-height: 44px; }
-  #downloads .availability { margin-left: 8px; font-size: 11px; opacity: .65; }
-  #downloads a[data-platform="github"] { color: #fff; }
-  #downloads a[data-platform="github"] img { filter: invert(1); }
+  #downloads .download-choice { display: grid; justify-items: center; gap: 7px; min-width: 136px; }
+  #downloads .availability { font-size: 11px; opacity: .68; }
+  #downloads button:disabled { opacity: 1; color: rgba(255,255,255,.68); border-color: rgba(255,255,255,.48); cursor: not-allowed; }
+  #downloads button:disabled img { filter: invert(1); opacity: .72; }
   #downloads a[data-availability] { background: transparent; color: #fff; border-color: #a4a8a2; }
   #downloads a[data-availability] img { filter: invert(1); }
   #loop { object-fit: cover; transform: scale(1.34); }
@@ -307,39 +315,47 @@
   .closing-lede { max-width: 48ch; margin: 0 auto 30px; color: rgba(255,255,255,.82); font-size: 17px; line-height: 1.55; }
   #downloads, #routes { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
   #downloads .moss-btn, #routes a { min-width: 44px; min-height: 44px; justify-content: center; }
-  #commands { display: grid; gap: 8px; width: min(680px, 100%); margin: 22px auto 0; }
-  .command { display: grid; grid-template-columns: 100px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid rgba(255,255,255,.28); border-radius: 6px; text-align: left; }
-  .command > span { color: rgba(255,255,255,.72); font-size: 12px; }
+  #commands { display: grid; gap: 10px; width: min(600px, 100%); margin: 28px auto 0; }
+  .command { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 2px 0 9px; border-bottom: 1px solid rgba(255,255,255,.3); text-align: left; }
   .command code { min-width: 0; overflow-wrap: anywhere; color: #fff; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .command button { min-height: 40px; padding: 8px 12px; color: #fff; background: transparent; border: 1px solid rgba(255,255,255,.52); border-radius: 4px; cursor: pointer; }
-  #beta, #footer { width: min(1000px, 100%); margin: 56px auto 0; padding-top: 32px; border-top: 1px solid rgba(255,255,255,.25); text-align: left; }
+  #beta, #footer { width: min(1000px, 100%); margin: 56px auto 0; padding-top: 32px; text-align: left; }
   #beta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 1fr); gap: 48px; align-items: start; }
   #beta h3 { margin: 0 0 8px; font: 400 28px/1.15 var(--heading); }
   #beta p, #footer { color: rgba(255,255,255,.75); }
   .signup { display: grid; gap: 8px; }
-  .signup label { font-size: 13px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
   .input-row { display: flex; gap: 8px; }
-  .input-row input { min-width: 0; flex: 1; min-height: 44px; padding: 10px 12px; color: #fff; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.42); border-radius: 4px; }
+  .input-row input { min-width: 0; flex: 1; min-height: 44px; padding: 10px 2px; color: #fff; background: transparent; border: 0; border-bottom: 1px solid rgba(255,255,255,.62); border-radius: 0; }
+  .input-row input::placeholder { color: rgba(255,255,255,.7); opacity: 1; }
   .input-row button { min-height: 44px; padding: 10px 16px; color: #151515; background: #fff; border: 1px solid #fff; border-radius: 4px; cursor: pointer; }
-  #footer { display: flex; justify-content: space-between; gap: 32px; align-items: start; }
+  #footer { display: flex; justify-content: center; align-items: center; border-top: 1px solid rgba(255,255,255,.25); font-size: 13px; }
   #footer a { color: inherit; }
-  #footer .signup { max-width: 380px; }
+  #footer nav { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 9px; }
+  #footer .github-link { display: inline-flex; align-items: center; }
+  #footer .github-link img { width: 17px; height: 17px; filter: invert(1); }
 
   @media (max-width: 900px) {
-    html[data-carry="css"] { scroll-snap-type: none; }
-    #intro { min-height: 0; padding: 104px 20px 38px; }
-    #intro h1 { font-size: clamp(42px, 12vw, 64px); }
+    body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; opacity: calc(1 - var(--xf)); background: linear-gradient(to bottom, var(--bg) 0 34px, color-mix(in srgb, var(--bg) 72%, transparent) 52px, transparent); }
+    html[data-mobile-snap] { scroll-snap-type: y proximity; }
+    html[data-mobile-snap] #intro, html[data-mobile-snap] .scene, html[data-mobile-snap] #five { scroll-snap-align: start; }
+    #intro { min-height: 0; padding: 88px 20px 24px; }
+    #intro h1 { font-size: clamp(40px, 11vw, 58px); }
     .page { position: relative; display: block; width: 100%; padding: 0 16px; }
-    #col { position: absolute; inset: 0; height: auto; padding-top: var(--first-copy-h, 0px); z-index: 0; pointer-events: none; }
+    #col { position: absolute; inset: 0; height: auto; padding-top: var(--mobile-col-pad, 70svh); z-index: 0; pointer-events: none; }
     #copy { position: relative; z-index: 1; min-width: 0; }
     #vis { margin-left: 0; position: sticky; top: 76px; width: 100%; height: var(--mobile-vis-h, 42vh); min-height: 260px; padding-left: 0; transform: none; align-items: flex-start; justify-content: flex-start; overflow: visible; }
-    #stage { transform: none; width: calc(var(--cell-w) * var(--s)); height: calc(var(--cell-h) * var(--s)); flex: none; margin-left: calc(16px + 160px * var(--s)); }
+    #stage { transform: none; width: calc(var(--cell-w) * var(--s)); height: calc(var(--cell-h) * var(--s)); flex: none; margin-inline: auto; }
     #cell { transform: scale(var(--s)); transform-origin: left top; }
     #vis, #vis * { pointer-events: none !important; touch-action: pan-y; }
     .scene { width: 100%; min-height: auto; margin: 0; padding: 0 0 calc(var(--mobile-vis-h, 42vh) + 72px); justify-content: flex-start; }
     #c1 { min-height: auto; padding-top: 0; }
     #c1 .scene-text { transform: none; }
-    .scene-text { padding: 24px 18px 26px; background: var(--bg); box-shadow: 0 -18px 22px var(--bg), 0 18px 22px var(--bg); }
+    .scene-text { width: min(100%, 520px); margin-inline: auto; padding: 24px 18px 26px; background: linear-gradient(to bottom, transparent, var(--bg) 18px, var(--bg) calc(100% - 18px), transparent); }
+    #c1 .scene-text { background: var(--bg); }
+    #c1 h2 { font-size: calc(31px + 9px * (1 - var(--intro-p, 0))); }
+    .btns { flex-wrap: nowrap; gap: 8px; }
+    .moss-btn { padding-inline: clamp(12px, 4vw, 20px); }
     #c2, #c3, #c4, #c5 { margin-top: 0; }
     #c5 { height: 0; min-height: 0; padding: 0; overflow: hidden; }
     #five { position: relative; min-height: 100svh; overflow: visible; }
@@ -348,18 +364,19 @@
     #five h2 { font-size: clamp(34px, 10vw, 54px); }
     #beta { display: block; margin-top: 48px; }
     #beta .signup { margin-top: 26px; }
-    #footer { display: flex; flex-direction: column; margin-top: 48px; }
-    #footer .signup { width: 100%; max-width: none; }
+    #footer { margin-top: 48px; }
     .command { grid-template-columns: 1fr auto; }
-    .command > span { grid-column: 1 / -1; }
     .command code { grid-column: 1; }
-    .command button { grid-column: 2; grid-row: 2; }
+    .command button { grid-column: 2; }
   }
 </style>
-<script>document.documentElement.classList.add('js');</script>
+<script>document.documentElement.classList.add('js'); history.scrollRestoration = 'manual';</script>
+<script src="landing-i18n.js"></script>
 </head>
 <body>
-<div class="brand"><span class="moss-mark" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 288 288"><path fill="currentColor" d="m156 42-3 8-1 5-3 2q-8 15-21 8l-4-3-1-5q-2-8-2 1l-2 7-3 4q-3 6-13 2l-5-2-1-3-5-8-3-7-1-2q-4-1 0 6c3 4-1 10-7 10-4 0-4 6 0 7 4 2 5 12 0 14l-3 4-2 2-2 1c0 2-8-2-13-7l-10-8q-3 1 2 6l6 7 7 10 3 5 11 16q6 10-9 5-3-3-6 0l-6 2-3 1H45l-6-2-5-1q-8-1 10 6 19 6 19 10v7q-2 0-2 3-4 8-11 12-6 3 1 1 8-1 10 6 2 8-4 9-4-1 1 6 4 4 7 4 7 1 8 4c0 2-5 6-7 6q-2 0 1 5 2 5 6 0l6-3 5-1q5-2 9 4 1 3-2 5l-3 5-1 2-2 3q-2 6 4-4 2-4 4 0 5 5 0 9l-1 2q2 4 7-2 5-7 9-2l5 3 2 3q3 4 8 1c2 0 3-4 1-4l-2-1 2-1q3 0 3 2v2l1 1 1 3q3 1 1 10l1 8q1 1 1-2c0-9 6-21 10-20q4 0 3 7c-1 8 1 16 2 16l1-5q1-14 13-15 5 1 5 9l1 2v-4c-3-9 9-21 15-14l3 2 10 9 13 13c7 4 16 12 19 16 5 5 11 7 8 2l-16-12q-8-5-8-11l-6-6-5-9-2-4q-3-5 1-4 5 0 5-4l1-1 3-2q1-7 5-3 8 5 3-1t-2-11l1-2 3-1q3 1 5-2 1-3 7-1h8q2-2 9-2 14 1 4-2-11-3-1-7l4-3 2-1v-3c-3-1-11-1-11 1q0 4-3-2-1-4-6-3-4 1-5-2c0-4 7-18 9-18h3c2-1-3-7-8-10l-1-1c2 0 12-9 10-9l-4 2q-6 2-6-5 0-5 3-7 7-9-3-5h-3l-2-3q-3-2-1-5l3-5q1-3 5-5 8-5 4-8-1-3-6 1-3 3-2 5 1 4-2 2l-2-1h-1q-4 3-11 0c-3-2-3-2-3-10l-2-8c0-2-5-1-5 0q0 3-6 2-4-1-3-3l-3-4-4-6-4-4q-3-1-1-10v-6q-3-6-5 3-1 9-6 8-4 0-3-3 0-9-4-4l-2 4-2 2-2 3-3 1c-3-1-3 0 0-13q3-15-2-7m16 204q0 5-3 3-3 0 4 7t7 4q0-5-4-11l-3-4q-1-3-1 1m73-11q5 4 5 6 5 4 6 1c0-1-12-11-14-11zm-4 44q5 8 9 9v-5c-2-4-7-9-7-7h-2q-4-4 0 3M3 118q-2 6 16 4c4 0-1-3-7-3l-6-2zm159-92q-3 2-1 4 2 5 5 1c4-4 1-9-4-5M69 46c-1 2 2 7 4 7l1-3q-2-9-5-4m50-8v2q3 3 5-2-2-4-5 0M29 170q1 3 5 1 3-3-2-3-3 0-3 2m229-20q0 3 2 3t2-3l-2-2q-2 0-2 2m-150 97q1 3 5 1 2-3-3-3zm7-12v2l3-3q-1-2-3 1m-38-2q-2 3 1 2l1-3q-1-2-2 1M243 84h1q4-2 1-2zm-12 140 2 2 1-2-1-1zm-4-4 2 1q1-1-2-2zM16 24l1 2 1-2-1-1zm58 33 1 2h1l-1-3zm93-12v1l2-1-1-1zM76 63h1v-1q0-2-1 1m40-28h1l1-1h-1zM83 217v1l1-1v-1z"/><path fill="#6b8e4e" d="M221 20q-1 4-5 3-5 0-6 2 0 3-3 2-6 0-2 6 6 7-2 9l-3 1-3 1-3 1-1 1h-2l4 1h5v6q-3 1 2 3l2 4 2 3q3 4 4 1l1-1 1 3q-3 7 6 4h6q4 3 10-1l5-4h3l2 1 1-3 1-9c2-8 2-9 1-12l-1-4-1-4q-3-3 2-6 5-5 2-7-3-1-4 3-1 5-6 4c-17-4-17-5-16-8q1-4-2 0m-23-4q1 6 4 4 1-4-2-6zm24-5 1 3 1-2-1-3zm12 6q-1 2 0 0l1-2z"/></svg></span><span class="moss-wordmark">moss</span></div>
+<div class="brand"><span class="moss-mark" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 288 288"><path fill="currentColor" d="m127 67-5 3q-3 5-4 2l-12 4c-10 3-10 4-10 6l-1 3-2 3-1 3q-2 0-4 5-4 11-12-1-4-6-6-4-4 0 1 5c2 2 2 2 2 10q-1 11 6 18v2l3 8 4 8 2 3c3 3 6 12 4 12l-12-5-4-1c-3 0-11-4-15-8q-4-5-6-2t-7-1l-5-2q-2 0-3-3-1-6-5 0-2 3 3 7c7 7 9 17 4 18l4 4q14 8 3 21-4 6-8 5-4 1 0 2h8q7-2 11 4 3 3 0 7-4 9 2 14l3 4q-1 1 1 1 3-2 8 5c6 6 3 15-5 17q-9 3-9 5c1 1 8 0 13-2l11-2 9-1h8l8-1 2-1 1 1 1 2 2 3 2 1q4-1-5 12c-2 3-3 14-1 14l4-4q5-6 9-7l6-1 4-2 4-1c2-2 9-3 9-1v5q-1 9 3 6l2-4 2-8q5-10 8-4l8 5c10 4 12 6 17 12q6 8 8 6 3-1-3-8-9-11-9-14c1-2 12-5 17-5 4 0 11-5 13-10l3-4 1-2v-2c3-1 11-8 11-10q3-8 16-5l8 1c2-1-8-4-14-5-4 0-12-3-16-6s2-13 7-13l3-2 4-2 6-5 4-5c7-5 16-15 15-17q-1-3-2 0c-3 3-18 6-19 4-1-3 4-23 7-27q5-9-1-5l-4 1-5 3q-2 3-3 1h-5l-12 6q-10 4-13 7l-11 5 3-4c6-6 18-27 19-34l6-13q6-9 2-11c-1-2-35-17-52-24l-3 2-3 5-2 4-2 6-2 5-1 6-2 7-2 3-3 4-1 5-1 2-1 2q-2-1-3-7l-2-5-1-3-1-13-2-12-2-1q-2 0-1-3l-3-8-1-3q-1-3-5-1"/><path fill="#4f7031" d="m199 4-7 19-2 6-2 6-5 10-5 10-2 5-3 6-4 6 40 16c14 6 14 6 16 3q3-3 3-16l1-11q2-8-3 1-3 8-10 9-4 0 0-4l2-7q1-7-2-2-2 6-8 5t-4-3l1-3 2-4q4-5 1-6-3 1-4 5c0 2-5 7-8 7q-12 0-2-24 5-9 5-16l2-11c2-10 2-11 0-11q-2 0-2 4M39 41l1 3 9 9 4 7 2 7 4 9 3 4 3 7q2 7 5 4 5-2 0-5c-3-2-9-11-9-13l-6-13-2-4-2-4q-3-2-4-6c-2-6-9-10-8-5M23 23l3 6c3 5 4 6 4 12q0 13 8 21l4 5 5 7-4-15-3-3q-3-2-4-8l-1-3q-2 0-2-7 1-6-3-8l-4-5zM0 114l7 5q5 0 11 5l8 5q7 4 7 7t3-1 0-6l-4-3q-4-3-12-5l-5-2c-2-2-15-7-15-5m277-1-3 2-3 3q-4 4-6 3-3-2-7 2l-6 6q-5 3-4 5 1 3 3 1l5-3q7-2 7-6l3-2c7-4 15-9 15-11q1-4-4 0M108 41l1 5c3 14 0 27-7 28q-7 2-6 5c1 1 20-7 21-9l-1-8-2-12q-3-10-6-9M51 81l7 13c0 2 5 7 6 7q1-4-8-14zm178-59-5 15c-1 6 2 0 5-9l2-10zM49 249c-6 0-6 7-1 7 3 0 10-5 10-6q-3-2-9-1m75-199v9c0 9 0 9 3 8q4 0 1-6l-2-5-1-5zm140 109q-6 2-3 5c2 2 9-2 9-5q1-3-6 0"/></svg></span><span class="moss-wordmark">moss</span></div>
+
+<label class="language-picker"><span class="sr-only">Language</span><select id="language-select" aria-label="Language"><option value="en">English</option><option value="zh-hans">简体中文</option><option value="zh-hant">繁體中文</option></select></label>
 
 <header id="intro"><h1>Publish your site<br>from your folder.</h1></header>
 <div class="page">
@@ -369,7 +386,7 @@
          uses — the count differs (9 English, 2 Chinese) so there is no
          fixed markup to write here. -->
     <div class="sib" id="sib-nb" data-asset="nb"><iframe id="nb" title="Jupyter notebook: a continuous Mandelbrot zoom"></iframe></div>
-    <div class="sib" id="sib-sk" data-asset="sk"><iframe id="sk" src="scene3/sketch/native.html?id=processing-03" title="an HTML sketch"></iframe></div>
+    <div class="sib" id="sib-sk" data-asset="sk"><iframe id="sk" src="scene3/sketch/native.html?id=living-garden" title="an HTML sketch"></iframe></div>
     <div class="s3-site" id="s3-site"><iframe id="s3-site-frame" title="the published video article"></iframe></div>
     <div id="s3-video" data-asset="video"><video id="s3-video-el" muted loop playsinline preload="metadata" poster="scene3/movie/pool/posters/general-railroad-ties.jpg"></video></div>
     <div class="ground" id="g0"></div><div class="ground" id="g1"></div>
@@ -384,13 +401,13 @@
     // their (English) default src, so there is no double-fetch.
     // moss-landing-lab/HANDOFF.md Task A.
     (function () {
-      window.__LANG = new URLSearchParams(location.search).get('lang') === 'zh' ? 'zh' : 'en';
+      window.__LANG = window.__LANG || 'en';
       var ed = document.getElementById('ed'), sh = document.getElementById('sh');
       if (window.__LANG === 'zh') {
-        ed.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('八大山人') + '&file=' + encodeURIComponent('index.md') + '&date=1659-12-01';
+        ed.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('八大山人') + '&file=' + encodeURIComponent('八大山人.md') + '&date=1659-12-01&home=1';
         sh.src = 'ui/shell.html?preview=' + encodeURIComponent('/zhuda/homepage/') + '&title=' + encodeURIComponent('八大山人') + '&target=zhudasnotebook.com&live=' + encodeURIComponent('https://www.zhudasnotebook.com/');
       } else {
-        ed.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('William Blake') + '&file=' + encodeURIComponent('index.md') + '&date=1790-06-01';
+        ed.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('William Blake') + '&file=' + encodeURIComponent('William Blake.md') + '&date=1790-06-01&home=1&blakeMeta=1';
         sh.src = 'ui/shell.html?preview=' + encodeURIComponent('/blake/homepage/') + '&title=' + encodeURIComponent('William Blake') + '&target=blakesnotebook.com&live=' + encodeURIComponent('https://www.blakesnotebook.com/');
       }
     })();
@@ -421,9 +438,8 @@
     </div></section>
     <section class="scene" id="c4"><div class="scene-text">
       <h2>Publish to your internet,<br>your way.</h2>
-      <p class="lede">Choose your host and publish the same content to multiple channels, from email newsletters to IPFS, Nostr, and ActivityPub. Write your own plugin or install one from the registry.</p>
+      <p class="lede">Choose your host and sync the same content to multiple channels. Write your own plugin or install one from the registry, from email newsletters to IPFS and Nostr.</p>
       <div class="btns"><a class="moss-btn" data-role="secondary" href="/get-started/extend/">Writing a plugin</a><a class="moss-btn" data-role="secondary" href="https://github.com/Symbiosis-Lab/moss-registry">moss registry</a></div>
-      <p class="scene-note">Some channels are experimental or planned. Availability varies by plugin.</p>
     </div></section>
     <section class="scene" id="c5" aria-hidden="true"><div class="edge"></div></section>
   </div>
@@ -435,30 +451,27 @@
 <section id="five" aria-labelledby="five-headline">
   <div id="closing-film" aria-hidden="true"><video id="loop" muted playsinline loop preload="none" tabindex="-1"></video><div id="scrim"></div></div>
   <div id="five-in">
-    <noscript><style>.signup, [data-copy] { display: none; }</style><p>To request beta access or subscribe, enable JavaScript. Downloads and installation commands work without it.</p></noscript>
+    <noscript><style>.signup, [data-copy] { display: none; }</style><p>To request beta access, enable JavaScript. Downloads and installation commands work without it.</p></noscript>
     <h2 id="five-headline">Your internet publisher is here.</h2>
-    <p class="closing-lede">The internet is for creating as well as consuming. You’ve tried browsers. Now meet your publisher.</p>
+    <p class="closing-lede">The internet is not only for browsing; it's also for creating. Now meet your internet publisher.</p>
     <div id="install">
       <div id="downloads" aria-label="Download moss">
-        <a class="moss-btn" data-role="primary" data-platform="macos" href="https://github.com/Symbiosis-Lab/moss/releases/download/v0.14.1/moss_0.14.1_universal.dmg">macOS</a>
-        <a class="moss-btn" data-role="secondary" data-platform="windows" href="#beta" title="Desktop app coming soon — request beta access">Windows <span class="availability">Coming soon</span></a>
-        <a class="moss-btn" data-role="secondary" data-platform="linux" href="#beta" title="Desktop app coming soon — request beta access">Linux <span class="availability">Coming soon</span></a>
-        <a class="moss-btn" data-role="secondary" data-platform="github" href="https://github.com/Symbiosis-Lab/moss">GitHub</a>
+        <div class="download-choice"><a class="moss-btn" data-role="primary" data-platform="macos" href="https://github.com/Symbiosis-Lab/moss/releases/download/v0.14.1/moss_0.14.1_universal.dmg">macOS</a><small class="availability">macOS 12 or later</small></div>
+        <div class="download-choice"><button class="moss-btn" data-role="secondary" data-platform="windows" type="button" disabled>Windows</button><small class="availability">Coming soon</small></div>
+        <div class="download-choice"><button class="moss-btn" data-role="secondary" data-platform="linux" type="button" disabled>Linux</button><small class="availability">Coming soon</small></div>
       </div>
-      <p id="download-note"></p>
       <div id="commands" aria-label="Install from your terminal">
-        <div class="command"><span>npm · CLI</span><code>npm install -g @symbiosis-lab/moss</code><button type="button" data-copy="npm install -g @symbiosis-lab/moss" aria-label="Copy npm install command">Copy</button></div>
-        <div class="command"><span>Homebrew</span><code>brew install --cask symbiosis-lab/tap/moss</code><button type="button" data-copy="brew install --cask symbiosis-lab/tap/moss" aria-label="Copy Homebrew install command">Copy</button></div>
+        <div class="command"><code>npm install -g @symbiosis-lab/moss</code><button type="button" data-copy="npm install -g @symbiosis-lab/moss" aria-label="Copy npm install command">Copy</button></div>
+        <div class="command"><code>brew install --cask symbiosis-lab/tap/moss</code><button type="button" data-copy="brew install --cask symbiosis-lab/tap/moss" aria-label="Copy Homebrew install command">Copy</button></div>
       </div>
       <p class="copy-status" id="copy-status" role="status" aria-live="polite"></p>
     </div>
     <section id="beta" aria-labelledby="beta-title" tabindex="-1">
       <div><h3 id="beta-title">Help shape moss.</h3><p>Request beta access. We’ll email you when a build is ready for you.</p></div>
-      <form id="beta-form" class="signup" data-subscription="beta"><label for="beta-email">Your email</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required><button type="submit">Request access</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
+      <form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">Your email</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="Your email" required><button type="submit">Request access</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
     </section>
     <footer id="footer">
-      <div class="footer-meta"><span>moss</span><nav aria-label="Footer"><a href="https://mosspub.com/privacy">Privacy</a> · <a href="https://symbiosis-lab.org/">Symbiosis Lab</a> · 2026</nav></div>
-      <form id="newsletter-form" class="signup" data-subscription="newsletter"><label for="newsletter-email">Occasional notes from moss.</label><div class="input-row"><input id="newsletter-email" name="email" type="email" autocomplete="email" placeholder="Your email" required><button type="submit">Subscribe</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
+      <nav aria-label="Footer"><a href="https://mosspub.com/privacy">Privacy</a><span aria-hidden="true">·</span><a href="https://symbiosis-lab.org/">Symbiosis Lab</a><span aria-hidden="true">·</span><span>2026</span><a class="github-link" href="https://github.com/Symbiosis-Lab/moss" aria-label="moss on GitHub"><img src="assets/platforms/github.svg" alt=""></a></nav>
     </footer>
     <button id="loop-toggle" type="button"></button>
   </div>
@@ -468,13 +481,33 @@
 // The composition (the box width is --ed-w, in the stylesheet).
 const GEOM = { cellW: 660, cellH: 620, pad: 80 };
 // The real homepages' opening text, edited as the vault's index.md.
+const BLAKE_FRONTMATTER = `---
+uid: 8f508658
+description: "I must Create a System, or be enslav'd by another Man's. I will not Reason & Compare: my business is to Create."
+children: false
+---
+
+`;
 const SEED = window.__LANG === 'zh'
   ? '生在曹洞臨濟有，穿過臨濟曹洞有。\n'
-  : "I must Create a System, or be enslav'd by another Man's.\n";
+  : '';
 const TYPED = window.__LANG === 'zh'
   ? '洞曹臨濟兩俱非，羸羸然若喪家之狗。\n還識得此人麼？'
-  : 'I will not Reason & Compare: my business is to Create.';
+  : `I must Create a System, or be enslav'd by another Man's.${'  '}
+I will not Reason & Compare: my business is to Create.
+
+:::grid 3
+[[Illuminated Books]]
++++
+[[Paintings & Prints]]
++++
+[[Writings]]
+:::
+
+![[/|depth:all,covers:only,limit:6,style:summary,sort:date,more:Archive]]`;
 const FINAL = SEED + TYPED;
+const FULL_SOURCE = window.__LANG === 'zh' ? FINAL : BLAKE_FRONTMATTER + FINAL;
+window.__editorSource = () => FULL_SOURCE;
 const BASE_TEX_W = GEOM.cellW + 2 * GEOM.pad, BASE_TEX_H = GEOM.cellH + 2 * GEOM.pad;
 const MAX_PRINT_EDGE = 2048;
 let printRect = { x: -GEOM.pad, y: -GEOM.pad, w: BASE_TEX_W, h: BASE_TEX_H };
@@ -675,9 +708,17 @@ const mobileLayout = () => innerWidth <= 900;
 const opening = document.getElementById('intro');
 function updateOpening() {
   const visible = Math.max(0, opening.getBoundingClientRect().bottom);
-  SCALE = baseScale * (mobileLayout() ? 1 : 1 - .28 * Math.min(1, visible / Math.max(1, opening.offsetHeight)));
+  const introP = Math.min(1, visible / Math.max(1, opening.offsetHeight));
+  SCALE = baseScale * (mobileLayout() ? 1 : 1 - .4 * introP);
   document.documentElement.style.setProperty('--s', String(SCALE));
+  document.documentElement.style.setProperty('--intro-p', String(introP));
   document.documentElement.style.setProperty('--intro-visible', mobileLayout() ? '0px' : visible + 'px');
+  if (mobileLayout()) {
+    const firstCopy = document.querySelector('#c1 .scene-text').offsetHeight + 28;
+    const introPad = firstCopy + Math.max(0, innerHeight - opening.offsetHeight - firstCopy) + 64;
+    const scenePad = Math.min(430, Math.max(350, innerHeight * .46));
+    document.documentElement.style.setProperty('--mobile-col-pad', (scenePad + (introPad - scenePad) * introP) + 'px');
+  }
 }
 function fit() {
   const sw = (Math.min(innerWidth, PAGE_MAX) - 56 - 96 - COPY_MIN) / VIS_W;
@@ -694,6 +735,8 @@ function fit() {
 }
 addEventListener('resize', fit); fit();
   document.fonts.ready.then(fit);
+const armMobileSnap = () => { if (mobileLayout()) document.documentElement.dataset.mobileSnap = ''; };
+addEventListener('touchstart', armMobileSnap, { once: true, passive: true });
 scatterPlates(plateEls);
 
 // ── The morph: the sheet is flooded, the print dissolves, the next print takes ─
@@ -1702,7 +1745,7 @@ function syncLoop() {
 }
 // The control says what it will do, in a word that changes with the state; the
 // page draws no second glyph over the footage for it.
-function setLoopBtn() { loopBtn.textContent = loopWanted ? 'Pause' : 'Play'; loopBtn.setAttribute('aria-label', loopWanted ? 'Pause the loop' : 'Play the loop'); }
+function setLoopBtn() { const i18n = window.__landingI18n; loopBtn.textContent = loopWanted ? (i18n?.t('pause') || 'Pause') : (i18n?.t('play') || 'Play'); loopBtn.setAttribute('aria-label', loopWanted ? (i18n?.t('pauseAria') || 'Pause the loop') : (i18n?.t('playAria') || 'Play the loop')); }
 loopBtn.addEventListener('click', () => { loopWanted = !loopWanted; setLoopBtn(); syncLoop(); });
 setLoopBtn();
 // How far the last join has run, and the only thing it moves.
@@ -2611,7 +2654,7 @@ let lastWatchT = performance.now();
 // is nothing here worth a second geometry for.
 const restY = (scene) => {
   if (scene === SHARE) return five.offsetTop;
-  if (scene === 0) return mobileLayout() ? 0 : (scrollY > opening.offsetHeight * .45 ? opening.offsetHeight : 0);
+  if (scene === 0) return scrollY > opening.offsetHeight * .45 ? opening.offsetHeight : 0;
   if (mobileLayout()) return Math.round(scrollY + textTop(scenesEl[scene]) - Math.min(innerHeight * .55, Math.min(innerHeight * .48, 390) + 104));
   const top = textTop(scenesEl[scene]), bot = textBottom(scenesEl[scene]);
   return Math.round(scrollY + (top + bot) / 2 - innerHeight * LINE);
@@ -2893,10 +2936,15 @@ async function writeLoop(afterWash) {
   const g = gen;
   if (afterWash) await new Promise((r) => setTimeout(r, 1800));   // the poem the wash returned stays to be read
   while (gen === g) {
-    ed.setDoc(SEED); ed.focus();
+    ed.setDoc(SEED);
+    const focusY = scrollY;
+    ed.focus();
+    // WebKit scrolls the parent document to reveal a focused control inside
+    // an offscreen iframe. Typing owns the editor caret, not the page position.
+    requestAnimationFrame(() => { if (shown === 0 && Math.abs(scrollY - focusY) > 1) scrollTo(0, focusY); });
     await new Promise((r) => setTimeout(r, 700));
     if (gen !== g) break;
-    const done = await ed.type(TYPED, { seed: 11, median: 95, slipAt: 47 });
+    const done = await ed.type(TYPED, { seed: 11, median: window.__LANG === 'zh' ? 95 : 18, slipAt: 47 });
     if (!done) break;
     await new Promise((r) => setTimeout(r, 2600));   // the poet reads it back
   }
@@ -3008,15 +3056,17 @@ function layoutScene3Layers() {
     let aperture = shellDoc.getElementById('s3-aperture');
     if (!aperture) {
       aperture = shellDoc.createElement('style'); aperture.id = 's3-aperture';
-      aperture.textContent = 'html.s3-aperture,html.s3-aperture body,html.s3-aperture .moss-app,html.s3-aperture .moss-preview-container{background:transparent!important}html.s3-aperture .moss-ambient-band{visibility:hidden}';
+      aperture.textContent = 'html.s3-aperture,html.s3-aperture body,html.s3-aperture .moss-app,html.s3-aperture .moss-preview-container{background:transparent!important}html.s3-aperture .moss-ambient-band{visibility:hidden}html.s3-aperture .moss-titlebar{border-bottom:0!important}';
       shellDoc.head.appendChild(aperture);
     }
     shellDoc.documentElement.classList.add('s3-aperture');
     nested.style.visibility = 'hidden';
+    stage.classList.add('s3-ready');
     return true;
   } catch (e) { return false; }
 }
 function showAssembledPreview() {
+  stage.classList.remove('s3-ready');
   try { const d = vdFrame.contentDocument; d.documentElement.classList.remove('s3-aperture'); d.getElementById('moss-preview-iframe').style.visibility = ''; } catch (e) {}
 }
 function armScene3Layers() {
@@ -3042,7 +3092,7 @@ function sketchVisible(on) {
 
 // ── Scene 3: one pose per artifact, in the scaled cell's coordinates ────
 // Scaling the complete artifact preserves the harvested UI's proportions.
-Object.assign(CARDS.nb, { width: 520, height: 520 * 2 / 3 });
+Object.assign(CARDS.nb, { width: 520, height: 520 * 446 / 670 });
 Object.assign(CARDS.sk, { width: 440, height: 440 });
 Object.assign(CARDS.video, { width: 520, height: 390 });
 let s3Drag = null, s3HardStop = true, s3Touched = false;
@@ -3069,6 +3119,12 @@ function paintCard(id) {
   c.el.style.left = c.el.style.top = '0px';
   c.el.style.width = c.width + 'px'; c.el.style.height = c.height + 'px';
   c.el.style.transform = `translate(${p.x.toFixed(2)}px,${p.y.toFixed(2)}px) scale(${p.s.toFixed(5)})`;
+  if (c.docked && !s3Drag) {
+    const left = Math.max(0, (s3Paper.x - p.x) / p.s), top = Math.max(0, (s3Paper.y - p.y) / p.s);
+    const right = Math.max(0, (p.x + c.width * p.s - s3Paper.x - s3Paper.w) / p.s);
+    const bottom = Math.max(0, (p.y + c.height * p.s - s3Paper.y - s3Paper.h) / p.s);
+    c.el.style.clipPath = `inset(${top}px ${right}px ${bottom}px ${left}px round 3px)`;
+  } else c.el.style.clipPath = '';
 }
 function stopCard(id) { cancelAnimationFrame(CARDS[id].raf); CARDS[id].raf = 0; }
 function settleCard(id, target) {
@@ -3144,6 +3200,7 @@ addEventListener('resize', () => {
   layoutScene3Layers(); if (!s3Touched && !s3Drag) placeScene3Artifacts();
 });
 for (const id of ['nb', 'sk']) $(id).addEventListener('load', () => sketchVisible(shown === SHIPS));
+$('s3-site-frame').addEventListener('load', () => { if (shown === SHIPS) armScene3Layers(); });
 function enterScene3() {
   s3HardStop = false; s3Touched = false; s3Stack = ['video']; warmScene3Media();
   for (const id of S3_ORDER) {

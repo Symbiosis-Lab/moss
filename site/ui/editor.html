@@ -8125,7 +8125,41 @@ function renderLabTree(container,tree,activeFile){
 q.listTree=async()=>({status:"ok",data:{name:uS,path:yr,is_dir:!0,children:[]}});zp&&(q.editorResolveAsset=async i=>({status:"ok",data:{absolute_path:`${yr}/assets/${i}`,request_url:"/assets/"+i,mime_type:"image/jpeg",width:800,height:1080}}));document.documentElement.style.setProperty("--moss-traffic-light-inset","8px");var OI=Zs("#moss-editor-root"),aS=vr.get("measure");if(aS){OI.style.setProperty("--moss-editor-measure",`${aS}px`);let i=document.createElement("style");i.textContent=".moss-editor-cm .cm-scroller > .chip-bar { padding-inline: var(--moss-editor-spine); }",document.head.appendChild(i)}document.getElementById("moss-nav-skeleton")?.remove();var bI=Promise.resolve().then(()=>{renderLabTree(Zs("#nav-grid"),LAB_TREES[uS]||LAB_TREES.Blake,zl)}),yI=new Ql({initial:hS,requestSave:async()=>{}}),vI=new Tl(ja,yI,{getActivePath:()=>zl,getProjectRoot:()=>yr,afterVaultImport:async()=>{},slotRole:null}),Yp=Zs("#chip-bar");Yp.style.display="";vI.render(Yp);var Up=Zs("#editor-heading");Up.textContent=mI;Up.dataset.empty="false";var pS=Zs("#moss-editor-cm");pS.innerHTML="";var qp=new Cl({content:vr.get("doc")??"",container:pS,onChange:()=>{},getFromFile:()=>zl,insertBar:{pickMedia:async()=>null,afterMediaInsert:async()=>{}}}),qe=qp.getView();qe.scrollDOM.prepend(Yp,Up);rS();function _I(i){let e=i>>>0;return()=>{e=e+1831565813|0;let t=Math.imul(e^e>>>15,1|e);return t=t+Math.imul(t^t>>>7,61|t)^t,((t^t>>>14)>>>0)/4294967296}}var lS={a:"s",s:"d",d:"f",f:"g",g:"h",h:"j",j:"k",k:"l",l:"k",q:"w",w:"e",e:"r",r:"t",t:"y",y:"u",u:"i",i:"o",o:"p",p:"o",z:"x",x:"c",c:"v",v:"b",b:"n",n:"m",m:"n"},br=0,jl=i=>new Promise(e=>setTimeout(e,i));function cS(i){let e=qe.state.doc.length;qe.dispatch({changes:{from:e,insert:i},selection:{anchor:e+i.length},scrollIntoView:!0})}function wI(){let i=qe.state.doc.length;i!==0&&qe.dispatch({changes:{from:i-1,to:i},selection:{anchor:i-1},scrollIntoView:!0})}function dS(i,e,t,n){let r=Math.max(i(),1e-9),s=i(),o=Math.sqrt(-2*Math.log(r))*Math.cos(2*Math.PI*s),a=n*Math.exp(.35*o);return(/[A-Z]/.test(e)||/[^\w\s]/.test(e))&&(a*=1.3),t===" "&&(a+=180+240*i()),/[,;:]/.test(t)&&(a+=500+400*i()),/[.?!]/.test(t)&&(a+=800+600*i()),t===`
 `&&(a+=e===`
 `?300:900+900*i()),Math.max(60,a)}var kI={view:qe,editor:qp,tree:null,registry:null,get text(){return qe.state.doc.toString()},setDoc(i){br++,qp.setContent(i),qe.dispatch({selection:{anchor:qe.state.doc.length}})},focus(){qe.focus()},blur(){qe.contentDOM.blur()},stop(){br++},async type(i,e={}){let t=++br,n=_I(e.seed??7),r=e.median??95,s=e.rate??1,o=e.slipAt??-1,a=qe.state.doc.length?qe.state.doc.sliceString(qe.state.doc.length-1):`
-`;for(let l=0;l<i.length;l++){if(br!==t)return!1;let c=i[l];if(l===o&&lS[c]&&(cS(lS[c]),await jl(dS(n,c,a,r)*s),await jl(220*s),wI(),await jl(140*s),br!==t))return!1;cS(c),await jl(dS(n,c,a,r)*s),a=c}return br===t}};window.__editor=kI;bI.then(()=>{document.documentElement.dataset.ready="1"});})();
+`;for(let l=0;l<i.length;l++){if(br!==t)return!1;let c=i[l];if(l===o&&lS[c]&&(cS(lS[c]),await jl(dS(n,c,a,r)*s),await jl(220*s),wI(),await jl(140*s),br!==t))return!1;cS(c),await jl(dS(n,c,a,r)*s),a=c}return br===t}};if(vr.get("home")==="1"){Up.textContent="";Up.dataset.empty="true"}Yp.style.justifyContent="flex-start";window.__editor=kI;bI.then(()=>{document.documentElement.dataset.ready="1"});})();
+</script>
+<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  if (params.get('home') === '1') {
+    document.getElementById('editor-heading').style.display = 'none';
+    const style = document.createElement('style');
+    style.textContent = '.nav-bc-strip { padding-left: 17px; }';
+    document.head.appendChild(style);
+  }
+  if (params.get('blakeMeta') === '1') {
+    const track = document.querySelector('#chip-bar .chip-track');
+    const addChip = (key, label, value, tooltip) => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.dataset.key = key;
+      chip.dataset.tooltip = tooltip;
+      chip.dataset.tooltipStyle = 'muted';
+      chip.dataset.tooltipPosition = 'bottom';
+      const keyNode = document.createElement('span');
+      keyNode.className = 'chip-key';
+      keyNode.textContent = label;
+      const separator = document.createElement('span');
+      separator.className = 'chip-sep';
+      const valueNode = document.createElement('span');
+      valueNode.className = 'chip-value';
+      valueNode.textContent = value;
+      chip.append(keyNode, separator, valueNode);
+      track?.appendChild(chip);
+    };
+    addChip('description', 'Description', "I must Create a System, or be enslav'd by another Man's. I will not Reason & Compare: my business is to Create.", 'Short excerpt for SEO and link previews');
+    addChip('children', 'Children', 'Off', 'Show child pages below this content');
+  }
+})();
 </script>
 </body>
 </html>

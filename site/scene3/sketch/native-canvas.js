@@ -11,6 +11,7 @@ export const works = [
   ['processing-05', 'Tidal rosette', 'Faithful port 05'],
   ['processing-06', 'Civic weather', 'Faithful port 06'],
   ['processing-07', 'Mandelbrot relief', 'Faithful P3D port 07'],
+  ['living-garden', 'Living garden', 'Composition from faithful ports 01, 02, and 04'],
   ['silk-orbit', 'Silk orbit', 'Derivative'],
   ['ink-coral', 'Ink coral', 'Derivative'],
   ['glass-pollen', 'Glass pollen', 'Derivative'],
@@ -41,6 +42,26 @@ function plotOriginal(ctx, id, t, w, h, budget) {
   ctx.restore();
 }
 
+function livingGarden(ctx,t,w,h,budget){
+  const scale=Math.min(w,h)/400,count=18,samples=Math.max(180,Math.floor(budget/count));
+  ctx.save();ctx.translate(w/2,h/2);ctx.scale(scale,scale);
+  for(let organism=0;organism<count;organism++){
+    const family=organism%3,seed=organism*37.19,ring=Math.floor(organism/6),angle=organism/6*TAU+ring*.38;
+    const ox=Math.cos(angle)*(26+ring*42),oy=Math.sin(angle)*(22+ring*35),size=.46+ring*.085+(organism%2)*.035;
+    ctx.fillStyle=['#78472d','#2d6556','#65507d'][family];
+    ctx.save();ctx.translate(ox,oy);ctx.rotate(angle*.22+Math.sin(t*.18+seed)*.12);ctx.scale(size,size);
+    for(let j=0;j<samples;j++){
+      const i=j*(10000/samples),phase=t*(family===1?.7:.42)+seed,x0=i/235;let x,y,a;
+      if(family===0){const k=(4+Math.cos(i/9-phase*2))*Math.cos(i/35),e=x0/7-13,d=Math.hypot(k,e)+Math.sin(e/9+phase/2)-4,c=d-phase,q=2*Math.sin(k*3)-x0/35*k*(9+k*Math.sin(Math.cos(e)*9-d*2+phase));x=q+40*Math.cos(c);y=q*Math.sin(c)+d*35;a=.68;}
+      else if(family===1){const m=(i%4)*5,k=2*Math.cos(i*342+seed),e=Math.sin(i*271+seed)*2,d=Math.max(.08,Math.hypot(k,e)/1.6),c=d*d/9-phase/8+m,p=5+2*Math.sin(d*8-phase*3+m);x=k*p+9/d*Math.sin(k*2)+89*Math.sin(c);y=79*Math.sin(c*2)+9/d*Math.sin(e*2)+e*p;a=.72;}
+      else{const m=i%19,k=9*Math.cos(i*5)*Math.sin(i),e=Math.cos(i*7)*Math.cos(i)*9;if(e<=0)continue;const d=Math.pow(Math.hypot(k,e),3)/999+4.6-Math.pow(Math.cos(phase/4+m),3)/3,c=d/8-phase/32+m,o=Math.sin(d*d-phase+m);x=99*Math.sin(c)+k/Math.pow(3,o);y=99*Math.cos(c/3)+d*39+Math.pow(e,o)-200;a=.62;}
+      point(ctx,x,y,a,organism%5===0?2.4:1.45);
+    }
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
 function mandelbrot(ctx, t, w, h, variant=false) {
   const step = Math.max(2, Math.floor(Math.min(w,h)/180));
   // processing-07 keeps the original fixed diagonal camera and lets the
@@ -67,7 +88,7 @@ export function mount(canvas, id, {interactive=true,animate=true}={}) {
   const active=()=>animate&&!reduce&&parentVisible&&intersecting&&!document.hidden;
   const schedule=()=>{if(active()&&!raf)raf=requestAnimationFrame(draw)};
   function resize(){const r=canvas.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);canvas.width=Math.max(1,Math.round(r.width*d));canvas.height=Math.max(1,Math.round(r.height*d));ctx.setTransform(d,0,0,d,0,0);draw(performance.now(),true);}
-  function draw(now,once=false){if(!once)raf=0;const w=canvas.clientWidth,h=canvas.clientHeight,sec=(now-start)/1000,rate={"processing-01":Math.PI*3/4,"processing-02":Math.PI,"processing-03":Math.PI/4,"processing-04":Math.PI*2,"processing-05":Math.PI*2,"processing-06":Math.PI*2/3}[id],t=rate?sec*rate:sec;ctx.globalAlpha=1;ctx.fillStyle=id==='processing-07'?'#fff':id==='processing-06'?'rgba(6,6,6,.376)':'#090b10';ctx.fillRect(0,0,w,h);ctx.globalCompositeOperation=(id==='processing-07'||id==='mandelbrot-moon')?'source-over':'lighter';const budget=Math.round(clamp(w*h/42,3500,10000));if(id==='processing-07'||id==='mandelbrot-moon')mandelbrot(ctx,t,w,h,id==='mandelbrot-moon');else if(id.startsWith('processing-'))plotOriginal(ctx,id,t,w,h,budget);else derivative(ctx,id,t,w,h,budget);ctx.globalCompositeOperation='source-over';if(!once)schedule();}
+  function draw(now,once=false){if(!once)raf=0;const w=canvas.clientWidth,h=canvas.clientHeight,sec=(now-start)/1000,rate={"processing-01":Math.PI*3/4,"processing-02":Math.PI,"processing-03":Math.PI/4,"processing-04":Math.PI*2,"processing-05":Math.PI*2,"processing-06":Math.PI*2/3,"living-garden":Math.PI/2}[id],t=rate?sec*rate:sec;ctx.globalAlpha=1;ctx.fillStyle=id==='living-garden'?'#f4efe5':id==='processing-07'?'#fff':id==='processing-06'?'rgba(6,6,6,.376)':'#090b10';ctx.fillRect(0,0,w,h);ctx.globalCompositeOperation=(id==='processing-07'||id==='mandelbrot-moon'||id==='living-garden')?'source-over':'lighter';const budget=id==='living-garden'?45000:Math.round(clamp(w*h/42,3500,12000));if(id==='processing-07'||id==='mandelbrot-moon')mandelbrot(ctx,t,w,h,id==='mandelbrot-moon');else if(id==='living-garden')livingGarden(ctx,t,w,h,budget);else if(id.startsWith('processing-'))plotOriginal(ctx,id,t,w,h,budget);else derivative(ctx,id,t,w,h,budget);ctx.globalCompositeOperation='source-over';if(!once)schedule();}
   const stop=()=>{cancelAnimationFrame(raf);raf=0};
   const ro=new ResizeObserver(resize);ro.observe(canvas);const io=new IntersectionObserver(([e])=>{intersecting=e.isIntersecting;if(active())schedule();else stop()},{rootMargin:'80px'});io.observe(canvas);
   const visibility=()=>active()?schedule():stop();document.addEventListener('visibilitychange',visibility);

@@ -7,13 +7,11 @@
     if (document.documentElement.dataset.closingWired === 'true') return;
     document.documentElement.dataset.closingWired = 'true';
     const downloads = document.querySelector('#downloads');
-    const beta = document.querySelector('#beta');
     const release = {
       macos: 'https://github.com/Symbiosis-Lab/moss/releases/download/v0.14.1/moss_0.14.1_universal.dmg',
-      github: 'https://github.com/Symbiosis-Lab/moss',
     };
-    const icon = { macos: 'apple.svg', windows: 'windows.svg', linux: 'linux.svg', github: 'github.svg' };
-    const platformLabel = { macos: 'macOS', windows: 'Windows', linux: 'Linux', github: 'GitHub' };
+    const icon = { macos: 'apple.svg', windows: 'windows.svg', linux: 'linux.svg' };
+    const platformLabel = { macos: 'macOS', windows: 'Windows', linux: 'Linux' };
 
     if (downloads) {
       for (const link of downloads.querySelectorAll('[data-platform]')) {
@@ -27,26 +25,12 @@
 
         if (platform === 'macos') {
           link.href = release.macos;
-          link.title = 'Download moss 0.14.1 for macOS (universal DMG)';
-        } else if (platform === 'github') {
-          link.href = release.github;
-          link.title = 'View moss on GitHub';
+          link.title = window.__landingI18n?.t('macTitle') || 'Download moss 0.14.1 for macOS (universal DMG)';
         } else {
-          const availability = document.createElement('span');
-          availability.className = 'availability';
-          availability.textContent = 'Coming soon';
-          link.append(availability);
-          link.href = '#beta';
-          link.title = `${label} desktop app — Coming soon`;
-          link.setAttribute('aria-label', `${label} desktop app, Coming soon. Request beta access.`);
-          link.dataset.availability = 'coming-soon';
-          link.addEventListener('click', () => {
-            requestAnimationFrame(() => beta?.focus({ preventScroll: true }));
-          });
+          link.title = window.__landingI18n?.t(platform === 'windows' ? 'windowsAria' : 'linuxAria') || `${label} desktop app — Coming soon`;
+          link.setAttribute('aria-label', window.__landingI18n?.t(platform === 'windows' ? 'windowsAria' : 'linuxAria') || `${label} desktop app, Coming soon`);
         }
       }
-      const note = document.querySelector('#download-note');
-      if (note) note.textContent = 'macOS 11 or later · Universal build for Apple silicon and Intel';
     }
 
     const commands = document.querySelector('#commands');
@@ -57,12 +41,10 @@
     if (commands) {
       const rows = [...commands.querySelectorAll('.command')];
       if (rows[0]) {
-        rows[0].querySelector('span').textContent = 'npm · CLI';
         rows[0].querySelector('code').textContent = commandValues.npm;
         rows[0].querySelector('[data-copy]').dataset.copy = commandValues.npm;
       }
       if (rows[1]) {
-        rows[1].querySelector('span').textContent = 'Homebrew · desktop';
         rows[1].querySelector('code').textContent = commandValues.brew;
         rows[1].querySelector('[data-copy]').dataset.copy = commandValues.brew;
         rows[1].querySelector('[data-copy]').setAttribute('aria-label', 'Copy Homebrew desktop install command');
@@ -95,11 +77,14 @@
       }
       if (copied) {
         button.dataset.copied = 'true';
-        copyStatus && (copyStatus.textContent = 'Copied to clipboard.');
-        setTimeout(() => { delete button.dataset.copied; }, 1600);
+        copyStatus && (copyStatus.textContent = window.__landingI18n?.t('copied') || 'Copied to clipboard.');
+        setTimeout(() => {
+          delete button.dataset.copied;
+          if (copyStatus) copyStatus.textContent = '';
+        }, 1600);
       } else {
         selectCommand(button);
-        copyStatus && (copyStatus.textContent = 'Command selected. Press Command-C or Ctrl-C to copy.');
+        copyStatus && (copyStatus.textContent = window.__landingI18n?.t('selected') || 'Command selected. Press Command-C or Ctrl-C to copy.');
       }
     };
     commands?.addEventListener('click', (event) => {
@@ -117,8 +102,10 @@
         event.preventDefault();
         if (!form.reportValidity() || button.disabled) return;
         button.disabled = true;
+        const languageSelect = document.querySelector('#language-select');
+        if (languageSelect) languageSelect.disabled = true;
         button.setAttribute('aria-busy', 'true');
-        button.textContent = 'Sending…';
+        button.textContent = window.__landingI18n?.t('sending') || 'Sending…';
         status.textContent = '';
         delete status.dataset.state;
         try {
@@ -134,16 +121,19 @@
           form.reset();
           status.textContent = typeof successMessage === 'function' ? successMessage(payload) : successMessage;
           status.dataset.state = 'success';
+          status.dataset.messageKey = 'success';
         } catch (error) {
           status.textContent = error instanceof TypeError
-            ? 'Could not connect. Check your connection and try again.'
-            : 'Something went wrong. Please try again.';
+            ? (window.__landingI18n?.t('offline') || 'Could not connect. Check your connection and try again.')
+            : (window.__landingI18n?.t('error') || 'Something went wrong. Please try again.');
           status.dataset.state = 'error';
+          status.dataset.messageKey = error instanceof TypeError ? 'offline' : 'error';
           input.focus();
         } finally {
           button.disabled = false;
+          if (languageSelect) languageSelect.disabled = false;
           button.removeAttribute('aria-busy');
-          button.textContent = initialLabel;
+          button.textContent = window.__landingI18n?.t('request') || initialLabel;
         }
       });
     };
@@ -155,18 +145,7 @@
         headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
         body: new URLSearchParams({ email, website: '', scope: '' }),
       }),
-      'Thanks for applying. Confirm the email we just sent; we’ll email you when your turn comes.'
-    );
-    submit(
-      document.querySelector('#newsletter-form'),
-      (email) => fetch('https://api.mosspub.com/api/sites/landing/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ email }),
-      }),
-      ({ alreadySubscribed }) => alreadySubscribed
-        ? 'You’re already subscribed.'
-        : 'Check your email to confirm your subscription.'
+      () => window.__landingI18n?.t('success') || 'Thanks for applying. Confirm the email we just sent; we’ll email you when your turn comes.'
     );
   });
 })();
