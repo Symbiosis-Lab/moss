@@ -9,6 +9,8 @@ These files preserve real moss interface states for the landing page and documen
 | `shell.html` | Self-contained harvested preview/publish shell | Live preview and publish scenes |
 | `shell@2x.png` | Static preview capture, 1760 × 1120 | Static preview fallback |
 | `mark.svg` | moss mark used by the harvested shell | Interface chrome only |
+| `moss-ui-demo.js` + `moss-ui-demo.css` | Reusable `<moss-ui-demo>` controller and frame | User-started documentation demos around a harvested fixture |
+| `editor-demo.html` | Standalone editor-writing demo in three locales (`?lang=zh-hant` / `zh-hans`) | No-script fallback and direct test surface |
 
 The editor guide uses `../assets/guides/editor-ui-source.png` and `../assets/guides/choose-page-source.png` directly. `capture-manifest.json` records the desktop source commit, source paths, visible states, and derivation. The older `editor-map.svg` documentation montage remains in the bank but is not used by the guide.
 
@@ -25,6 +27,8 @@ The editor guide uses `../assets/guides/editor-ui-source.png` and `../assets/gui
 - Shell fixture: the matching generated site in its preview and publish chrome.
 - Locale: interface chrome is English. The localized landing scene supplies separate Chinese content; these banked files are not translated screenshots.
 - Interaction boundary: `editor.html` is a deterministic mock of the captured editor, suitable for the interactions it exposes. It is not the desktop application and must not be used as proof of filesystem, Git, deploy, or operating-system behavior.
+- Demo contract: `<moss-ui-demo>` never autoplays. It cancels its scripted typing when the reader interacts with the real harvested iframe, supports pause/resume/reset, and shows a static completed state under reduced motion.
+- Guide loading: authored `<moss-ui-demo>` markup survives Markdown rendering. `.moss/theme/script.js` loads this banked module through `window.mossTheme.base`; the module resolves its stylesheet and harvested iframe from `import.meta.url`, so all three URLs retain a deployment subpath.
 - Source of truth for behavior: current desktop code and release documentation. When either disagrees with a capture, refresh the capture or use text instead.
 
 The source manifest distinguishes the captured fixture's commit from the desktop commit used to verify the written instructions.

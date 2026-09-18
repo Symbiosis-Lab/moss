@@ -7,6 +7,13 @@
 <link rel="icon" type="image/svg+xml" href="/assets/brand/favicon.svg">
 <title>moss — Publish your site from your folder</title>
 <meta name="description" content="Write in your folder and publish to your internet. moss turns Markdown, media, and creative code into a website you own.">
+<!-- landing-discovery:start -->
+<link rel="canonical" href="https://mosspub.com/">
+<link rel="alternate" hreflang="en" href="https://mosspub.com/">
+<link rel="alternate" hreflang="zh-Hant" href="https://mosspub.com/zh-hant/">
+<link rel="alternate" hreflang="zh-Hans" href="https://mosspub.com/zh-hans/">
+<link rel="alternate" hreflang="x-default" href="https://mosspub.com/">
+<!-- landing-discovery:end -->
 <style>
   :root {
     --bg: #faf8f5; --text: #2c2825; --text2: #5d5853; --border: #e5e1da; --accent: #2d5a2d;
@@ -240,7 +247,7 @@
   .moss-btn[data-role="primary"]:hover { background: var(--accent); border-color: var(--accent); }
   .moss-btn[data-role="secondary"] { background: transparent; color: var(--text); border: 1px solid #d1cdc4; }
   .moss-btn[data-role="secondary"]:hover { border-color: var(--accent); }
-  .btns a[href*="github.com/Symbiosis-Lab/moss/issues"]::before { content: ""; width: 1em; height: 1em; margin-right: 7px; background: currentColor; -webkit-mask: url('/assets/platforms/github.svg') center / contain no-repeat; mask: url('/assets/platforms/github.svg') center / contain no-repeat; }
+  .btns a[href^="https://github.com/"]::before { content: ""; width: 1em; height: 1em; margin-right: 7px; background: currentColor; -webkit-mask: url('/assets/platforms/github.svg') center / contain no-repeat; mask: url('/assets/platforms/github.svg') center / contain no-repeat; }
 
   /* ── Scene 5: the page gives way to one full-bleed frame ───────────────── */
   /* The last join is a crossfade, not a wash: the two-column page above and this
@@ -400,9 +407,9 @@
          uses — the count differs (9 English, 2 Chinese) so there is no
          fixed markup to write here. -->
     <div class="sib" id="sib-nb" data-asset="nb"><iframe id="nb" title="Jupyter notebook: a continuous Mandelbrot zoom"></iframe></div>
-    <div class="sib" id="sib-sk" data-asset="sk"><iframe id="sk" src="scene3/sketch/native.html?id=living-garden" title="an HTML sketch"></iframe></div>
+    <div class="sib" id="sib-sk" data-asset="sk"><iframe id="sk" data-src="scene3/sketch/native.html?id=living-garden" title="an HTML sketch"></iframe></div>
     <div class="s3-site" id="s3-site"><iframe id="s3-site-frame" title="the published video article"></iframe></div>
-    <div id="s3-video" data-asset="video"><video id="s3-video-el" muted loop playsinline preload="metadata" poster="scene3/movie/pool/posters/general-railroad-ties.jpg"></video></div>
+    <div id="s3-video" data-asset="video"><video id="s3-video-el" muted loop playsinline preload="none" data-poster="scene3/movie/pool/posters/general-railroad-ties.jpg"></video></div>
     <div class="ground" id="g0"></div><div class="ground" id="g1"></div>
     <div id="box">
       <iframe id="ed" title="moss editor"></iframe>
@@ -421,7 +428,7 @@
         ed.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('八大山人') + '&file=' + encodeURIComponent('八大山人.md') + '&date=1659-12-01&home=1';
         sh.src = 'ui/shell.html?preview=' + encodeURIComponent('/zhuda/homepage/') + '&title=' + encodeURIComponent('八大山人') + '&target=zhudasnotebook.com&live=' + encodeURIComponent('https://www.zhudasnotebook.com/');
       } else {
-        ed.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('William Blake') + '&file=' + encodeURIComponent('William Blake.md') + '&date=1790-06-01&home=1&blakeMeta=1';
+        ed.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('William Blake') + '&file=' + encodeURIComponent('William Blake.md') + '&date=1790-06-01&home=1';
         sh.src = 'ui/shell.html?preview=' + encodeURIComponent('/blake/homepage/') + '&title=' + encodeURIComponent('William Blake') + '&target=blakesnotebook.com&live=' + encodeURIComponent('https://www.blakesnotebook.com/');
       }
     })();
@@ -634,14 +641,13 @@ const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 // Scene 1's plates (director's call, 2026-09-18): every image the real home
 // page uses — blakesnotebook.com's own 9, zhudasnotebook.com's own 7 (two of
 // its <img>s repeat a collection cover, so 7 distinct files) — not a crop of
-// the article scene 2 shows. blake/home/ and zhuda/home/ are `sips -Z 640`
-// crops of the live home page's own images, one file per key; each
-// directory's own lqip.json (same tiny-JPEG-placeholder shape as blake/w's)
-// is fetched below. blake/w/ and zhuda/w/ are untouched — movie4.html/
-// movie5.html still read them.
+// the article scene 2 shows. The plate directories are 640px, quality-70
+// derivatives of those live images, sized for loose sheets that render at
+// 160–260 CSS px without making the hidden preview frames use lower-resolution
+// article assets.
 const PLATE_SET = window.__LANG === 'zh'
-  ? {"dir": "zhuda/homepage", "images": ["assets/376d25daf9aa.jpg", "assets/3926a51d36d5.jpg", "assets/9e4725e1101e.jpg", "assets/e265c76d268f.jpg", "assets/e4772754b3b1.jpg", "assets/e65a0ba027e5.jpg", "assets/eab0bc5785fa.jpg"]}
-  : {"dir": "blake/homepage", "images": ["assets/3b119ebffab3.jpg", "assets/b8dcbfe35cbd.jpg", "assets/38211f928ad5.jpg", "assets/171a382c9cc2.jpg", "assets/771aaf08cedb.jpg", "assets/f34b78575d36.jpg", "assets/50e62b346c5f.jpg", "assets/5ac4f7fb652f.jpg", "assets/0bb22b56b263.jpg"]};
+  ? {"dir": "zhuda/plates", "images": ["376d25daf9aa.jpg", "3926a51d36d5.jpg", "9e4725e1101e.jpg", "e265c76d268f.jpg", "e4772754b3b1.jpg", "e65a0ba027e5.jpg", "eab0bc5785fa.jpg"]}
+  : {"dir": "blake/plates", "images": ["3b119ebffab3.jpg", "b8dcbfe35cbd.jpg", "38211f928ad5.jpg", "171a382c9cc2.jpg", "771aaf08cedb.jpg", "f34b78575d36.jpg", "50e62b346c5f.jpg", "5ac4f7fb652f.jpg", "0bb22b56b263.jpg"]};
 // Where a plate may live, in #cell's own coordinates. The viewport-aware
 // bounds let a reader drag beyond the resting sheet while the print rectangle
 // grows to include the visible domain; the state textures remain bounded.
@@ -1862,7 +1868,11 @@ function xfAt() {
   return clamp01((scrollY - (top - innerHeight * .8)) / (innerHeight * .6));
 }
 function nativeScroll() {
-  return mobileLayout() || scrollY >= five.offsetTop - innerHeight * .8;
+  // At the exact first crossfade pixel xfAt() is still zero. Keep the carry
+  // integrator for that boundary frame so its release velocity moves into the
+  // join; handing off there would clear carryV while watchScrollCss still has
+  // no positive crossfade to finish, leaving the page parked on the seam.
+  return mobileLayout() || xfAt() > 0;
 }
 // The scene on the far side of this join arrives already standing rather than
 // drawing itself under the fade: the fan is scene 4's end state, not a
@@ -2745,6 +2755,7 @@ let lastWatchT = performance.now();
 // pair it names the scene from — so a settle and the function judging where
 // it landed can never disagree by construction, not just by measurement.
 const restY = (scene) => {
+  if (scene < 0) return 0;
   if (scene === 0 && mobileLayout()) return Math.max(0, Math.round(scrollY + textTop(scenesEl[0]) - 88));
   if (scene === SHARE) return Math.max(0, document.documentElement.scrollHeight - innerHeight);
   if (mobileLayout()) return Math.round(scrollY + textTop(scenesEl[scene]) - Math.min(innerHeight * .55, Math.min(innerHeight * .48, 390) + 104));
@@ -2860,21 +2871,26 @@ for (const ev of ['wheel', 'touchstart', 'pointerdown', 'keydown']) addEventList
 // first gesture of the session, so there is nothing to carry forward and the
 // rest is just the nearest scene.
 const sceneForRest = (p, dir) => (dir === 0 ? Math.round(p) : dir < 0 ? Math.floor(p + DEAD) : Math.ceil(p - DEAD));
+// The opening is a real rest well even though it has no separate film scene.
+// Once an upward gesture passes scene 1's rest, keep carrying to the document
+// top; a downward gesture at the same position still selects scene 1.
+const restSceneAt = (p, dir) => dir < 0 && scrollY < restY(0) ? -1 : sceneForRest(p, dir);
 function settleAtRest(now) {
   if (!inputArmed || !settleArmed || settleRun || now - restSince < REST_MS) return;
   settleArmed = false;
-  const scene = sceneForRest(progressAt(), travel);
+  const scene = restSceneAt(progressAt(), travel);
+  const visualScene = Math.max(0, scene);
   // A wash owed or already running lends its clock; with none, the spring
   // keeps its own half second. cureLeft(washT) and the branch choice
   // (`expected`) are each kept on their own line, unconditionally, so they
   // stand as values independent of whatever secs itself is actually wired to.
   const washCureLeft = cureLeft(phase === 'morph' ? washT : 0);
-  const expected = scene === shown && !running() ? SETTLE_SECS : washCureLeft;
+  const expected = visualScene === shown && !running() ? SETTLE_SECS : washCureLeft;
   const secs = expected;
   settleSecs = secs; settleCureLeft = washCureLeft; settleShown = shown; settleRunning = running();
   const v = scrollV * innerHeight;          // the reader's own speed, in pixels a second
   const y = restY(scene);
-  setTarget(scene);   // the wash is re-pointed here, and the settle below works it the rest of the way
+  setTarget(visualScene);   // the intro shares scene 1's film but owns scroll rest 0
   if (reduce) return scrollTo(0, y);   // reduced motion arrives rather than travels
   // The seed is the reader's motion carried forward, so it is taken only where
   // it points at the rest the page picked: a speed pointing away from it is
@@ -2957,10 +2973,10 @@ function watchScrollIntent(now) {
     carryX = scrollY;
     carryV = dt > 0 ? (carryX - prevX) / dt : carryV;
   } else if (Math.abs(scrollY - carryX) > CARRY_EPS) { carryX = scrollY; carryV = 0; }   // a foreign write hands control back
-  const scene = sceneForRest(progressAt(), travel);
+  const scene = restSceneAt(progressAt(), travel);
   const y = restY(scene);
   if (Math.abs(carryV) > 4 || Math.abs(carryX - y) > 0.5) restSince = now;   // bookkeeping for NB_DWELL elsewhere, not a branch in the physics below
-  setTarget(scene);
+  setTarget(Math.max(0, scene));
   scrollV = carryV / innerHeight;
   // Substepped at 240Hz, the same stability margin settleTo() uses for this exact K/C pair:
   // a plain once-a-frame Euler step here overshot the well by a full scene and oscillated
@@ -3107,9 +3123,11 @@ function warmScene3Media() {
   // after that Promise has settled and retries for real.
   if (s3MediaWarmed || !vd) return;
   s3MediaWarmed = true;
+  $('sk').src = $('sk').dataset.src;
   $('nb').src = NB_SRC;
   vd.setPreview(S3_ARTICLE);
   $('s3-site-frame').src = S3_ARTICLE;
+  $('s3-video-el').poster = $('s3-video-el').dataset.poster;
   $('s3-video-el').src = S3_VIDEO;
 }
 // The detached video and the copy inside the assembled preview share playback

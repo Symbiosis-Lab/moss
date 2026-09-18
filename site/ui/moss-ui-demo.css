@@ -1,0 +1,26 @@
+body.moss-ui-demo-page { margin: 0; padding: clamp(12px, 3vw, 28px); color-scheme: light dark; font-family: system-ui, sans-serif; background: #faf8f5; color: #2c2825; }
+moss-ui-demo { font: 400 14px/1.5 system-ui, sans-serif; color: #2c2825; display: block; max-width: 920px; margin: auto; border: 1px solid #d1cdc4; border-radius: 12px; overflow: hidden; background: #f4f0ea; box-shadow: 0 16px 48px rgb(44 40 37 / 10%); }
+.moss-ui-demo__stage { height: min(72vh, 680px); min-height: 420px; background: #f6f7f9; }
+.moss-ui-demo__stage iframe { display: block; width: 100%; height: 100%; border: 0; }
+.moss-ui-demo__bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 42px; padding: 9px 12px 9px 16px; border-top: 1px solid #d1cdc4; }
+.moss-ui-demo__status { margin: 0; color: #716b65; font-size: 13px; }
+.moss-ui-demo__controls { display: flex; gap: 7px; flex: none; }
+moss-ui-demo button { min-width: 68px; padding: 7px 12px; border: 1px solid #c5c0b9; border-radius: 8px; background: #faf8f5; color: #2c2825; font: inherit; cursor: pointer; }
+moss-ui-demo button:hover:not(:disabled) { background: #fff; border-color: #9f9991; }
+moss-ui-demo button:focus-visible { outline: 2px solid #2d5a2d; outline-offset: 2px; }
+moss-ui-demo button:disabled { cursor: default; opacity: .5; }
+@media (max-width: 560px) {
+  body.moss-ui-demo-page { padding: 0; }
+  moss-ui-demo { border-inline: 0; border-radius: 0; }
+  .moss-ui-demo__stage { height: 72vh; min-height: 380px; }
+  .moss-ui-demo__bar { align-items: flex-start; flex-direction: column; gap: 8px; }
+}
+@media (prefers-color-scheme: dark) {
+  body.moss-ui-demo-page { background: #171816; color: #e8e5df; }
+  moss-ui-demo { border-color: #4a4e45; background: #20221f; }
+  .moss-ui-demo__bar { border-color: #4a4e45; }
+  .moss-ui-demo__status { color: #aaa59d; }
+  moss-ui-demo button { border-color: #555951; background: #292b27; color: #e8e5df; }
+  moss-ui-demo button:hover:not(:disabled) { background: #33362f; border-color: #777b72; }
+}
+@media (prefers-reduced-motion: reduce) { moss-ui-demo *, moss-ui-demo *::before, moss-ui-demo *::after { scroll-behavior: auto !important; transition: none !important; } }

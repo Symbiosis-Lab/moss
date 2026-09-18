@@ -29,3 +29,15 @@ Background print refreshes reuse existing neighbour prints instead of switching 
 The linked editor, theme, media, and plugin introductions are task-focused in all three languages. The editor instructions are checked against the desktop implementation, including saved templates, scoped Versions, and filename versus title-property editing. The reusable harvested-interface bank is documented in `site/ui/README.md` and `site/ui/capture-manifest.json`; `scripts/capture-editor-guide-assets.mjs` refreshes its documented static views. Workflows absent from the harvested fixture are described in text rather than simulated.
 
 The Zhuda snapshot comes from its restored canonical source, with all seven distinct homepage images. Never rebuild the live artist site from the older recording fixture.
+
+## Scratch release review
+
+The first remote review target is the standing disposable `scratch-pad.mosspub.com` site on seta. Production and Git pushes remain on hold until the scratch version has been reviewed. Its server already supplies `X-Robots-Tag: noindex, nofollow` and gzip; use those existing deployment features rather than rewriting the published HTML after a build.
+
+The later scroll correction gives the intro its own resting position at zero while retaining scene 1 as the visible animation. The closing handoff now preserves carry velocity until the crossfade is strictly positive, eliminating a zero-progress seam that stalled on large screens. Real wheel checks covered 1440×900 and 1920×1200, including upward return and arrival at the final bottom.
+
+Scene 1 uses separate 640px-long-edge, quality-70 JPEG derivatives in `site/blake/plates` and `site/zhuda/plates`; the captured homepages retain their original assets. With scene-3 sketch/poster/video deferred, a cold local 1440px startup measurement fell from 55 requests / 8,508,566 response bytes to 46 / 6,476,939. These are local uncompressed response-body measurements, not a claim about mobile or remote delivery time. Measure compressed wire transfer on the scratch site as well.
+
+The three static landing documents include absolute production canonical and reciprocal language links, meaningful headings/copy, and ordinary links without requiring JavaScript. The no-script presentation remains readable. The docs demo is a site-level Web Component wrapping the harvested editor with a cancellable player, reader-controlled exploration, localized controls, and a static reduced-motion state. Component CSS is scoped so loading it cannot change the surrounding documentation layout.
+
+Thermo review of this diff found no new structural blocker. Existing neighbour prints are reused, invariant art geometry is cached, and the component shares one implementation between its inline and standalone entry points. The inherited large landing lifecycle module remains a future refactoring concern; splitting it during this visual correction pass would relocate its shared state rather than simplify it.

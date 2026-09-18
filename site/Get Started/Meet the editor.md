@@ -36,6 +36,10 @@ The large title uses the filename by default, so editing it renames the file and
 
 Write ordinary Markdown in the main editor. Select text for the floating formatting toolbar, type `/` at the start of a line for the insert menu, or use the toolbar at the bottom. The source stays a normal `.md` file; [[Write with Markdown|the Markdown guide]] covers headings, lists, links, and other basics.
 
+<moss-ui-demo lang="en"></moss-ui-demo>
+
+<noscript><a href="/ui/editor-demo.html"><img width="760" height="420" loading="lazy" src="../assets/guides/editor-ui-source.png" alt="Open the moss editor demo"></a></noscript>
+
 moss layouts and components are fenced with `:::`. Insert one from the `/` menu or write it directly; see [[Lay out with shortcodes|Shortcodes]] for examples.
 
 Drag local files from Finder into the editor to copy and insert them. Images, audio, video, PDFs, notebooks, HTML, and other supported media can also be linked or embedded with wikilinks. Type `[[` to search the site, use `[[page]]` for a link, and add `!` as in `![[image.jpg]]` to embed. See [[Reference files & media|Links and media]] for the full syntax and supported file types.

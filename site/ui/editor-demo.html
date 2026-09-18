@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>moss editor demo</title>
+  <link rel="stylesheet" href="moss-ui-demo.css">
+  <script type="module" src="moss-ui-demo.js"></script>
+</head>
+<body class="moss-ui-demo-page">
+  <moss-ui-demo></moss-ui-demo>
+  <script>
+    const lang = new URLSearchParams(location.search).get('lang');
+    if (lang === 'zh-hant' || lang === 'zh-hans') {
+      document.documentElement.lang = lang;
+      document.querySelector('moss-ui-demo').setAttribute('lang', lang);
+    }
+  </script>
+</body>
+</html>

@@ -33,6 +33,14 @@ function localize(sourceHtml, locale) {
     ? `<span class="nav-lang-current" lang="${code}" aria-label="${name}">${label}</span>`
     : `<a class="nav-lang-link" data-landing-locale="${code}" hreflang="${code}" lang="${code}" aria-label="${name}" href="${href}">${label}</a>`).join('<span aria-hidden="true">/</span>') + '</nav>';
   result = result.replace(/<nav class="language-picker nav-lang-toggle"[\s\S]*?<\/nav>/, nav);
+  const discovery = `<!-- landing-discovery:start -->
+<link rel="canonical" href="https://mosspub.com/${locale}/">
+<link rel="alternate" hreflang="en" href="https://mosspub.com/">
+<link rel="alternate" hreflang="zh-Hant" href="https://mosspub.com/zh-hant/">
+<link rel="alternate" hreflang="zh-Hans" href="https://mosspub.com/zh-hans/">
+<link rel="alternate" hreflang="x-default" href="https://mosspub.com/">
+<!-- landing-discovery:end -->`;
+  result = result.replace(/<!-- landing-discovery:start -->[\s\S]*?<!-- landing-discovery:end -->/, discovery);
   const required = ['title', 'description', 'intro', 'h1', 'b1', 'h2', 'b2', 'h3', 'b3', 'h4', 'b4', 'betaCta', 'start', 'editor', 'theme', 'media', 'requestType', 'plugin', 'registry', 'closeH', 'closeB', 'download', 'macNote', 'soon', 'install', 'copy', 'betaH', 'betaB', 'email', 'request', 'privacy'];
   for (const key of required) {
     if (!result.includes(target[key]) && !result.includes(escaped(target[key]))) throw new Error(`${locale} static copy missing ${key}`);
@@ -41,7 +49,7 @@ function localize(sourceHtml, locale) {
   // install commands, or external destinations.
   const selectors = value => [...value.matchAll(/\b(?:class|id)="[^"]*"/g)].map(match => match[0]).sort();
   if (JSON.stringify(selectors(result)) !== JSON.stringify(selectors(sourceHtml))) throw new Error(`${locale} altered HTML selectors`);
-  const externals = value => [...value.matchAll(/(?:href|src)="https?:[^" ]+"/g)].map(match => match[0]).sort();
+  const externals = value => [...value.replace(/<!-- landing-discovery:start -->[\s\S]*?<!-- landing-discovery:end -->/, '').matchAll(/(?:href|src)="https?:[^" ]+"/g)].map(match => match[0]).sort();
   if (JSON.stringify(externals(result)) !== JSON.stringify(externals(sourceHtml))) throw new Error(`${locale} altered external URLs`);
   const commands = value => [...value.matchAll(/<code>[^<]+<\/code>/g)].map(match => match[0]);
   if (JSON.stringify(commands(result)) !== JSON.stringify(commands(sourceHtml))) throw new Error(`${locale} altered install commands`);

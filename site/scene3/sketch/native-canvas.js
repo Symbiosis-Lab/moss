@@ -2,6 +2,10 @@ const TAU = Math.PI * 2;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const fract = (v) => v - Math.floor(v);
 const noise = (n) => fract(Math.sin(n * 91.3458) * 47453.5453);
+// Port 04's field is time-invariant except for its phase. Keep that geometry
+// outside the animation loop so each frame spends its budget on motion and
+// density, rather than rebuilding the same aperture coordinates.
+const APERTURE = Array.from({length:1800},(_,j)=>{const i=j*(10000/1800),k=9*Math.cos(i*5)*Math.sin(i),e=9*Math.cos(i*7)*Math.cos(i);return {i,k,e};});
 
 export const works = [
   ['processing-01', 'Orbital veil', 'Faithful port 01'],
@@ -42,23 +46,26 @@ function plotOriginal(ctx, id, t, w, h, budget) {
   ctx.restore();
 }
 
+// One species: a moth-like aperture whose body and wing edge come from port
+// 04. Port 01 contributes the slow orbital drift of each individual, while
+// port 02 contributes the restrained radial pulse in the wing filaments. These
+// are variations of one organism's construction, rather than three studies
+// layered into a collage.
 function livingGarden(ctx,t,w,h,budget){
-  const scale=Math.min(w,h)/400,count=24,samples=Math.max(220,Math.floor(budget/count));
-  ctx.save();ctx.translate(w/2,h/2);ctx.scale(scale,scale);
+  const scale=Math.min(w,h)/400,count=10,samples=Math.min(APERTURE.length,Math.max(1000,Math.floor(budget/count)));
+  const positions=[[-145,-92],[-48,-96],[52,-92],[150,-88],[-108,94],[-8,100],[92,94],[178,88],[-174,4],[166,8]];
+  ctx.save();ctx.translate(w/2,h/2);ctx.scale(scale,scale);ctx.fillStyle='#f7f7f4';
   for(let organism=0;organism<count;organism++){
-    const seed=organism*37.19,ring=Math.floor(organism/8),angle=organism/8*TAU+ring*.31;
-    const ox=Math.cos(angle)*(24+ring*49),oy=Math.sin(angle)*(20+ring*40),size=.40+ring*.10+(organism%3)*.025;
-    ctx.fillStyle='#f7f7f4';
-    ctx.save();ctx.translate(ox,oy);ctx.rotate(angle*.18+Math.sin(t*.16+seed)*.10);ctx.scale(size,size);
+    const seed=organism*37.19,m=organism*.43,base=positions[organism],drift=t*.075+seed*.013;
+    const ox=base[0]+Math.cos(drift)*7,oy=base[1]+Math.sin(drift*.8)*5,size=1+.08*(organism%3),turn=Math.sin(t*.12+seed)*.08;
+    ctx.save();ctx.translate(ox,oy);ctx.rotate(turn);ctx.scale(size,size);
     for(let j=0;j<samples;j++){
-      const i=j*(10000/samples),phase=t*.48+seed,m=i%19;
-      const k=8*Math.cos(i*5+seed*.01)*Math.sin(i),e=Math.cos(i*7)*Math.cos(i)*8;
-      if(e<=-.7)continue;
-      const d=Math.pow(Math.hypot(k,e),3)/1100+4.2-Math.pow(Math.cos(phase/4+m),3)/3;
-      const c=d/8-phase/32+m,o=Math.sin(d*d-phase+m),veil=Math.sin(i/235/7-phase*.35)*10;
-      const x=92*Math.sin(c)+k/Math.pow(3,o)+veil;
-      const y=86*Math.cos(c/3)+d*36+Math.pow(Math.max(.08,e+1),o)-188;
-      point(ctx,x,y,.58+(j%11===0?.34:0),j%29===0?2.8:1.55);
+      const sample=APERTURE[Math.floor(j*APERTURE.length/samples)],i=sample.i,phase=t*.48+seed,k=sample.k,e=sample.e;
+      if(e<=0)continue;
+      const d0=4.6,c0=d0/8-phase/32+m,d=d0-Math.pow(Math.cos(phase/4+m),3)/3+Math.pow(Math.hypot(k,e),3)/999;
+      const c=d/8-phase/32+m,o=Math.sin(d*d-phase+m),pulse=.5+.5*Math.sin(d*8-phase*3+seed);
+      const x=99*(Math.sin(c)-Math.sin(c0))+k/Math.pow(3,o),y=99*(Math.cos(c/3)-Math.cos(c0/3))+(d-d0)*39+Math.pow(e,o);
+      point(ctx,x,y,.28+.20*pulse+(j%17===0?.10:0),1);
     }
     ctx.restore();
   }
