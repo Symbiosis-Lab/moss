@@ -47,7 +47,7 @@
       if (rows[1]) {
         rows[1].querySelector('code').textContent = commandValues.brew;
         rows[1].querySelector('[data-copy]').dataset.copy = commandValues.brew;
-        rows[1].querySelector('[data-copy]').setAttribute('aria-label', 'Copy Homebrew desktop install command');
+        rows[1].querySelector('[data-copy]').setAttribute('aria-label', window.__landingI18n?.t('copyBrew') || 'Copy Homebrew desktop install command');
       }
     }
 
