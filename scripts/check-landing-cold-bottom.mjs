@@ -43,7 +43,10 @@ try {
     assert(!cold.ready && cold.y === cold.max, `${test.name}: fixture delay did not hold cold load at bottom: ${JSON.stringify(cold)}`);
     assert(cold.shown === 4 && cold.xf === 1 && cold.closing, `${test.name}: closing missing before capture readiness`);
 
+    await page.mouse.move(10, 100);
+    await page.mouse.down();
     await page.evaluate(() => scrollTo(0, scrollY - 900));
+    await page.mouse.up();
     await page.waitForTimeout(200);
     const coldReverse = await state(page);
     assert(coldReverse.xf < cold.xf && !coldReverse.closing, `${test.name}: cold reverse did not uncover scene 4: ${JSON.stringify(coldReverse)}`);
