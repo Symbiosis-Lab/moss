@@ -122,21 +122,38 @@ async function checkSceneTiming() {
     return read();
   };
   const band = await page.evaluate(() => mobileVisualBand());
+  const entryTop = await page.evaluate(() => innerHeight - mobileVisualBand().height);
+  const moveVisualTo = async top => {
+    const delta = await page.evaluate(top => document.getElementById('vis').getBoundingClientRect().top - top, top);
+    await page.mouse.wheel(0, delta);
+    await page.waitForTimeout(300);
+    return read();
+  };
+  const entering = await moveVisualTo(entryTop + 8);
+  assert(entering.progress === 0, `first morph began before full visibility: ${JSON.stringify(entering)}`);
+  const entryHalf = await moveVisualTo((entryTop + band.top) / 2);
+  assert(entryHalf.progress > .4 && entryHalf.progress < .6 && entryHalf.state.washT > 0, `first morph did not follow entry: ${JSON.stringify(entryHalf)}`);
+  await moveVisualTo(band.top - 2);
+  await page.waitForFunction(() => __state().shown === 1 && !__state().running, null, { timeout: 5000 });
+  const pinned = await read();
+  assert(pinned.progress === 1, `scene 2 was not ready at the pin: ${JSON.stringify(pinned)}`);
   const before = await wheelTextTopTo(band.bottom + 32);
-  assert(before.progress === 0 && before.state.shown === 0, `scene 2 advanced before approaching the visual: ${JSON.stringify(before)}`);
-  const contact = await wheelTextTopTo(band.bottom + 8);
-  assert(contact.progress > 0 && contact.state.washT > 0 && contact.state.washT <= 1.2, `scene 2 did not begin dissolving at visual contact: ${JSON.stringify(contact)}`);
+  assert(before.progress === 1 && before.state.shown === 1, `scene 2 advanced before approaching the visual: ${JSON.stringify(before)}`);
+  await wheelTextTopTo(band.bottom + 8);
+  await page.waitForFunction(() => __state().washT > 0 && __state().washT <= 1.2, null, { timeout: 5000 });
+  const contact = await read();
+  assert(contact.progress > 1 && contact.state.washT > 0 && contact.state.washT <= 1.2, `scene 2 did not begin dissolving at visual contact: ${JSON.stringify(contact)}`);
   const trailingAtBottomDelta = await page.evaluate(() => document.querySelector('#c2 .scene-text').getBoundingClientRect().bottom - mobileVisualBand().bottom);
   await page.mouse.wheel(0, trailingAtBottomDelta);
   await page.waitForTimeout(250);
   const covered = await read();
-  assert(Math.abs(covered.text.bottom - covered.band.bottom) < 2 && covered.state.washT <= 1.21 && covered.state.shown === 0,
+  assert(Math.abs(covered.text.bottom - covered.band.bottom) < 2 && covered.state.washT <= 1.21 && covered.state.shown === 1,
     `scene 2 replaced the image before its trailing edge uncovered the visual: ${JSON.stringify(covered)}`);
   const halfDelta = await page.evaluate(() => document.querySelector('#c2 .scene-text').getBoundingClientRect().bottom - (mobileVisualBand().top + mobileVisualBand().height / 2));
   await page.mouse.wheel(0, halfDelta);
   await page.waitForTimeout(300);
   const half = await read();
-  assert(half.progress > covered.progress && half.state.washT > 1.2 && half.state.shown === 0, `scene 2 reveal did not follow trailing-edge exposure: ${JSON.stringify({ covered, half })}`);
+  assert(half.progress > covered.progress && half.state.washT > 1.2 && half.state.shown === 1, `scene 2 reveal did not follow trailing-edge exposure: ${JSON.stringify({ covered, half })}`);
   await page.waitForTimeout(600);
   const paused = await read();
   assert(Math.abs(paused.state.washT - half.state.washT) < .01 && Math.abs(paused.state.progress - half.state.progress) < .001 && paused.writes === 0,
@@ -148,11 +165,11 @@ async function checkSceneTiming() {
     `scene 2 wash did not reverse with upward scroll: ${JSON.stringify({ paused, reversed })}`);
   const clearDelta = await page.evaluate(() => document.querySelector('#c2 .scene-text').getBoundingClientRect().bottom - mobileVisualBand().top + 4);
   await page.mouse.wheel(0, clearDelta);
-  await page.waitForFunction(() => __state().shown === 1 && !__state().running, null, { timeout: 5000 });
+  await page.waitForFunction(() => __state().shown === 2 && !__state().running, null, { timeout: 5000 });
   const cleared = await read();
-  assert(cleared.progress >= 1 && cleared.writes === 0, `scene 2 did not finish when its text cleared the visual: ${JSON.stringify(cleared)}`);
+  assert(cleared.progress >= 2 && cleared.writes === 0, `scene 2 did not finish when its text cleared the visual: ${JSON.stringify(cleared)}`);
   await page.close();
-  return { before: +before.progress.toFixed(3), contact: +contact.progress.toFixed(3), coveredWashT: covered.state.washT,
+  return { entryHalf: entryHalf.progress, pinned: pinned.progress, before: +before.progress.toFixed(3), contact: +contact.progress.toFixed(3), coveredWashT: covered.state.washT,
     half: +half.progress.toFixed(3), halfWashT: half.state.washT, pausedWashT: paused.state.washT,
     reversed: +reversed.progress.toFixed(3), reversedWashT: reversed.state.washT, clearedShown: cleared.state.shown };
 }
