@@ -2,7 +2,7 @@
 import { pathToFileURL } from 'node:url';
 
 const modulePath = process.env.PLAYWRIGHT_MODULE || 'playwright';
-const { chromium } = await import(modulePath.startsWith('/') ? pathToFileURL(modulePath).href : modulePath);
+const engines = await import(modulePath.startsWith('/') ? pathToFileURL(modulePath).href : modulePath);
 const base = new URL(process.argv[2] || 'http://localhost:8080/');
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 
@@ -15,7 +15,7 @@ async function state(page) {
   }));
 }
 
-const browser = await chromium.launch({ headless: true });
+const browser = await engines[process.env.ENGINE || 'chromium'].launch({ headless: true });
 try {
   const results = [];
   for (const test of [
@@ -30,8 +30,14 @@ try {
     const url = new URL(base);
     await page.goto(url.href, { waitUntil: 'commit' });
     await page.waitForSelector('#five');
-    await page.mouse.wheel(0, 10000);
-    await page.mouse.wheel(0, 10000);
+    if (test.mobile && process.env.ENGINE === 'webkit') {
+      // Playwright cannot synthesize a wheel in mobile WebKit; test native
+      // document arrival directly. Chromium covers actual wheel input above.
+      await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+    } else {
+      await page.mouse.wheel(0, 10000);
+      await page.mouse.wheel(0, 10000);
+    }
     await page.waitForTimeout(250);
     const cold = await state(page);
     assert(!cold.ready && cold.y === cold.max, `${test.name}: fixture delay did not hold cold load at bottom: ${JSON.stringify(cold)}`);
