@@ -73,7 +73,7 @@
     background: #d9d2c4 center / cover no-repeat; transform: rotate(var(--r)); will-change: opacity; cursor: grab; touch-action: none; }
   .plate.held { cursor: grabbing; }
   #stage.morphing .plate { cursor: default; }
-  .plate img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: var(--pos, 50% 50%); opacity: 0; transition: opacity .6s ease; }
+  .plate img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; object-position: var(--pos, 50% 50%); opacity: 0; transition: opacity .6s ease; }
   .plate img.in { opacity: 1; }
 
   /* The editor sits on the cell's right edge, where the preview's edge will be,
@@ -96,7 +96,7 @@
   /* A macOS window's edge: a hairline ring that draws the corner crisply, a
      tight contact shadow, and the deep soft shadow of the active window. */
   .ground { position: absolute; top: 0; height: 100%; right: 0; width: var(--ed-w); z-index: 5; pointer-events: none; background: var(--bg); border-radius: var(--win-r); box-shadow: var(--sheet-shadow); }
-  #stage { --g0: 1; --g1: 0; }
+  #stage { position: relative; --g0: 1; --g1: 0; }
   #g0 { opacity: var(--g0); }
   #g1 { left: -32px; width: calc(100% + 32px); opacity: var(--g1); }
   /* Instant frame: moss's strip is 48px with a hairline under it; draw that
@@ -110,6 +110,10 @@
      editor's width, then the live page relaid at its own). */
   #box #ed { left: auto; right: 0; width: var(--ed-w); }
   #box #sh, #box #vd { left: auto; right: 0; width: calc(var(--cell-w) + 32px); }
+  /* Scene 2 leaves the shell's Publish control usable. The nested published
+     page remains a readable preview, with its own links made inert below. */
+  #stage[data-scene="1"] #box,
+  #stage[data-scene="1"] #box iframe { pointer-events: auto; }
   /* One frame is shown per scene; the others keep their layout and wait. */
   #box iframe { visibility: hidden; }
   #stage[data-scene="0"] #ed, #stage[data-scene="1"] #sh, #stage[data-scene="2"] #vd, #stage[data-scene="3"] #vd { visibility: visible; }
@@ -139,8 +143,7 @@
   #stage[data-scene="2"]:not(.morphing) #sib-sk { transition-delay: calc(var(--sib-lead) + var(--sib-stagger)); }
   @media (prefers-reduced-motion: reduce) { .sib { transition: none; transition-delay: 0s; } }
 
-  /* Loose artifacts rest behind the paper; a focused or embedded artifact
-     sits above it, always below the real app chrome. */
+  /* One preview layer; every movable artifact sits above the whole window. */
   #stage[data-scene="2"] #box { left: 120px; right: auto; top: 30px; width: 540px; height: 560px; background: transparent; border-radius: var(--win-r); box-shadow: 0 0 0 1px rgba(44,40,37,.22), 0 20px 52px #28251c26; z-index: 9; pointer-events: none; }
   #stage[data-scene="2"] #box iframe { pointer-events: none; }
   #stage[data-scene="2"] #box #vd { width: 100%; }
@@ -148,9 +151,6 @@
   #stage[data-scene="2"] [data-asset] { cursor: grab; transition-property: opacity; }
   #stage[data-scene="2"] [data-asset]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   #stage[data-scene="2"] [data-asset].s3-drag { outline: none; cursor: grabbing; transition: none; box-shadow: var(--sheet-shadow); }
-  #s3-site { position: absolute; left: -32px; top: 48px; width: calc(100% - 16px); height: calc(100% - 48px); background: var(--bg); opacity: 0; pointer-events: none; z-index: 4; }
-  #s3-site iframe { width: 100%; height: 100%; border: 0; pointer-events: none; }
-  #stage[data-scene="2"].s3-ready:not(.morphing) #s3-site { opacity: 1; pointer-events: auto; }
   #stage[data-scene="2"]:not(.s3-ready) #box { visibility: hidden; }
   #s3-video { position: absolute; left: 0; top: 0; width: 400px; height: 300px; overflow: hidden; border-radius: 3px; box-shadow: var(--sheet-shadow); background: #111; opacity: 0; pointer-events: none; touch-action: none; transform-origin: 0 0; z-index: 5; }
   #stage[data-scene="2"]:not(.morphing) #s3-video { opacity: 1; pointer-events: auto; }
@@ -310,8 +310,8 @@
   /* Layout pass: the intro owns the first beat, while the stage remains tied
      to the measured desktop composition. The script supplies these variables
      after it knows the viewport and copy heights. */
-  #intro { display: grid; place-items: start center; min-height: 108svh; padding: 0 32px; text-align: center; }
-  #intro h1 { position: sticky; top: 34svh; margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; text-wrap: balance; opacity: clamp(0, calc((var(--intro-title-p, 1) - .04) * 1.2), 1); }
+  #intro { pointer-events: none; display: grid; place-items: start center; min-height: 108svh; padding: 0 32px; text-align: center; }
+  #intro h1 { position: sticky; top: 34svh; margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; text-wrap: balance; opacity: 1; filter: blur(var(--intro-bleed, 0px)); }
   .page { margin-top: -42svh; }
   .page { grid-template-columns: calc(var(--vis-w) * var(--layout-s, var(--s)) - clamp(168px, calc(23vw - 126px), 238px)) minmax(0, 1fr); }
   #col { margin-top: calc(-1 * var(--page-start, 0px)); }
@@ -428,7 +428,6 @@
          fixed markup to write here. -->
     <div class="sib" id="sib-nb" data-asset="nb"><iframe id="nb" title="Jupyter notebook: a continuous Mandelbrot zoom"></iframe></div>
     <div class="sib" id="sib-sk" data-asset="sk"><iframe id="sk" data-src="scene3/sketch/native.html?id=living-garden" title="an HTML sketch"></iframe></div>
-    <div class="s3-site" id="s3-site"><iframe id="s3-site-frame" title="the published video article"></iframe></div>
     <div id="s3-video" data-asset="video"><video id="s3-video-el" muted loop playsinline preload="none" data-poster="scene3/movie/pool/posters/general-railroad-ties.jpg"></video></div>
     <div class="ground" id="g0"></div><div class="ground" id="g1"></div>
     <div id="box">
@@ -468,7 +467,7 @@
       <div class="btns"><a class="moss-btn" data-role="primary" href="#beta">Request beta access</a><a class="moss-btn" data-role="secondary" href="/get-started/">Get started →</a></div>
     </div></section>
     <section class="scene" id="c2"><div class="scene-text">
-      <h2>Friendly for humans.<br>Powerful for AI.</h2>
+      <h2>Friendly for human.<br>Powerful for AI.</h2>
       <p class="lede">Everything lives in local files, ready for your favorite editor or coding agent. Instant previews and an intuitive interface make your site pleasant to use and effortless to maintain.</p>
       <div class="btns"><a class="moss-btn" data-role="secondary" href="/get-started/editor/">moss editor →</a><a class="moss-btn" data-role="secondary" href="/get-started/design/">Writing a theme →</a></div>
     </div></section>
@@ -530,7 +529,7 @@ children: false
 `;
 const SEED = '';
 const TYPED = window.__LANG === 'zh'
-  ? '生在曹洞臨濟有，穿過臨濟曹洞有。\n洞曹臨濟兩俱非，羸羸然若喪家之狗。'
+  ? '生在曹洞臨濟有，穿過臨濟曹洞有。\n洞曹臨濟兩俱非，羸羸然若喪家之狗。\n還識得此人麼？\n羅漢道底。'
   : `I must Create a System, or be enslav'd by another Man's.${'  '}
 I will not Reason & Compare: my business is to Create.`;
 const FINAL = SEED + TYPED;
@@ -618,16 +617,11 @@ const PAGE_MAX = 56 + VIS_W + 96 + COPY_MIN;
 const JOINS = [
   { name: 'wash', wash: true },
   { name: 'slide', wash: true },
-  { name: 'fan', wash: true, back: returnFromDeploy },
+  { name: 'fan', wash: true },
   { name: 'crossfade', run: (to) => fade(to) },
 ];
 const joinAt = (a, b) => JOINS[Math.min(a, b)];
 
-async function returnFromDeploy() {
-  setFan(false);
-  if (!reduce) await wait(FAN_OUT_MS);
-  return SHIPS;
-}
 
 for (const [k, v] of Object.entries({ '--peek': PEEK + 'px',
   '--sib-ms': SIB_MS + 'ms', '--sib-stagger': SIB_STAGGER + 'ms', '--sib-lead': SIB_LEAD + 'ms', '--vis-w': VIS_W + 'px', '--page-max': PAGE_MAX + 'px',
@@ -659,6 +653,7 @@ const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const PLATE_SET = window.__LANG === 'zh'
   ? {"dir": "zhuda/plates", "images": ["376d25daf9aa.jpg", "3926a51d36d5.jpg", "9e4725e1101e.jpg", "e265c76d268f.jpg", "e4772754b3b1.jpg", "e65a0ba027e5.jpg", "eab0bc5785fa.jpg"]}
   : {"dir": "blake/plates", "images": ["3b119ebffab3.jpg", "b8dcbfe35cbd.jpg", "38211f928ad5.jpg", "171a382c9cc2.jpg", "771aaf08cedb.jpg", "f34b78575d36.jpg", "50e62b346c5f.jpg", "5ac4f7fb652f.jpg", "0bb22b56b263.jpg"]};
+const PLATE_ASPECT = window.__LANG === 'zh' ? {'376d25daf9aa.jpg': 280 / 640, '3926a51d36d5.jpg': 640 / 622, '9e4725e1101e.jpg': 640 / 472, 'e265c76d268f.jpg': 426 / 640, 'e4772754b3b1.jpg': 337 / 640, 'e65a0ba027e5.jpg': 426 / 640, 'eab0bc5785fa.jpg': 318 / 640} : {};
 // Where a plate may live, in #cell's own coordinates. The viewport-aware
 // bounds let a reader drag beyond the resting sheet while the print rectangle
 // grows to include the visible domain; the state textures remain bounded.
@@ -674,12 +669,16 @@ function plateBounds() {
   return { xMin: Math.max(-limit, visible.xMin - margin), xMax: Math.min(limit, Math.max(GEOM.cellW + GEOM.pad, visible.xMax + margin)), yMin: Math.max(-limit, visible.yMin - margin), yMax: Math.min(limit, Math.max(GEOM.cellH + GEOM.pad, visible.yMax + margin)) };
 }
 function currentPrintRect() {
-  const b = plateBounds();
-  let xMin = Math.min(-GEOM.pad, b.xMin), yMin = Math.min(-GEOM.pad, b.yMin), xMax = Math.max(GEOM.cellW + GEOM.pad, b.xMax), yMax = Math.max(GEOM.cellH + GEOM.pad, b.yMax);
+  let xMin = -GEOM.pad, yMin = -GEOM.pad, xMax = GEOM.cellW + GEOM.pad, yMax = GEOM.cellH + GEOM.pad;
   for (const pl of document.querySelectorAll('.plate')) { xMin = Math.min(xMin, pl.offsetLeft - GEOM.pad); yMin = Math.min(yMin, pl.offsetTop - GEOM.pad); xMax = Math.max(xMax, pl.offsetLeft + pl.offsetWidth + GEOM.pad); yMax = Math.max(yMax, pl.offsetTop + pl.offsetHeight + GEOM.pad); }
+  if (typeof CARDS !== 'undefined') for (const c of Object.values(CARDS)) {
+    if (!c.pose) continue;
+    xMin = Math.min(xMin, c.pose.x - GEOM.pad); yMin = Math.min(yMin, c.pose.y - GEOM.pad);
+    xMax = Math.max(xMax, c.pose.x + c.width * c.pose.s + GEOM.pad); yMax = Math.max(yMax, c.pose.y + c.height * c.pose.s + GEOM.pad);
+  }
   xMin = Math.max(-MAX_PRINT_EDGE, xMin); yMin = Math.max(-MAX_PRINT_EDGE, yMin);
   xMax = Math.min(MAX_PRINT_EDGE, xMax); yMax = Math.min(MAX_PRINT_EDGE, yMax);
-  return { x: xMin, y: yMin, w: Math.min(MAX_PRINT_EDGE, xMax - xMin), h: Math.min(MAX_PRINT_EDGE, yMax - yMin) };
+  return { x: xMin, y: yMin, w: xMax - xMin, h: yMax - yMin };
 }
 // Random per load (director's call #1); the only requirement is that it reads
 // as a scatter and not a grid, and that nothing clips off-viewport (the
@@ -694,7 +693,10 @@ function scatterPlates(plates) {
   const rand = (lo, hi) => lo + Math.random() * (hi - lo);
   const rects = [];
   for (const pl of plates) {
-    const w = Math.round(rand(160, 260)), h = Math.round(rand(150, 290));
+    const aspect = PLATE_ASPECT[pl.dataset.lqip] || 1;
+    const long = Math.round(rand(190, 280));
+    const w = aspect >= 1 ? long : Math.max(96, Math.round(long * aspect));
+    const h = aspect >= 1 ? Math.max(96, Math.round(long / aspect)) : long;
     const xHi = Math.max(b.xMin, b.xMax - w), yHi = Math.max(b.yMin, b.yMax - h);
     let bx = b.xMin, by = b.yMin, best = Infinity;
     for (let t = 0; t < 40 && best > 0; t++) {
@@ -780,6 +782,7 @@ function updateOpening() {
   document.documentElement.style.setProperty('--s', String(SCALE));
   document.documentElement.style.setProperty('--intro-title-p', String(titleP));
   introWatercolor(titleP);
+  openingTitle.style.setProperty('--intro-bleed', ((1 - titleP) * 2.5).toFixed(2) + 'px');
   // CSS pins the visual from the document opening. Only the intro moves it;
   // once titleP is zero there is no scroll-position compensation to chase.
   const pageStart = parseFloat(document.documentElement.style.getPropertyValue('--page-start')) || 0;
@@ -1238,6 +1241,74 @@ const sim = (() => {
     // the preview itself stays a real page: it scrolls under the wheel, and
     // hands the wheel up to this page only when it has no further to go
     const fe = doc.defaultView && doc.defaultView.frameElement;
+    if (window.__LANG === 'zh' && (fe?.id === 'ed' || fe?.id === 'sh')) {
+      const hant = window.__LANDING_LOCALE === 'zh-hant';
+      const strings = hant ? {
+        'New page':'新增頁面', 'Toggle full width':'切換全寬', 'Edit page':'編輯頁面',
+        'Go back':'返回', 'Go forward':'前進', 'Toggle desktop/mobile preview':'切換桌面／行動版預覽',
+        'Settings':'設定', 'Website':'網站', 'Add channel':'新增管道', 'Publish site':'發布網站',
+        'Open editor':'開啟編輯器', 'Import from URL':'從 URL 匯入',
+        'Publish':'發布', 'Publish site':'發布網站', 'Cancel':'取消', 'Confirm':'確認', 'Later':'稍後',
+        'Close':'關閉', 'Visit site':'造訪網站', 'Your site is live':'你的網站已上線', 'Settings':'設定',
+        'This Page':'此頁面', 'Child Pages':'子頁面', 'Live preview':'即時預覽', 'Source':'原始碼',
+        'Writing mode':'寫作模式', 'Untitled':'未命名', 'New Page':'新增頁面', 'New Folder':'新增資料夾',
+      } : {
+        'New page':'新建页面', 'Toggle full width':'切换全宽', 'Edit page':'编辑页面',
+        'Go back':'后退', 'Go forward':'前进', 'Toggle desktop/mobile preview':'切换桌面／移动版预览',
+        'Settings':'设置', 'Website':'网站', 'Add channel':'添加渠道', 'Publish site':'发布网站',
+        'Open editor':'打开编辑器', 'Import from URL':'从 URL 导入',
+        'Publish':'发布', 'Publish site':'发布网站', 'Cancel':'取消', 'Confirm':'确认', 'Later':'稍后',
+        'Close':'关闭', 'Visit site':'访问网站', 'Your site is live':'你的网站已上线', 'Settings':'设置',
+        'This Page':'此页面', 'Child Pages':'子页面', 'Live preview':'实时预览', 'Source':'源代码',
+        'Writing mode':'写作模式', 'Untitled':'未命名', 'New Page':'新建页面', 'New Folder':'新建文件夹',
+      };
+      const translateTree = (root) => {
+        if (!root) return;
+        if (root.nodeType === 3) { const value = strings[root.nodeValue.trim()]; if (value) root.nodeValue = root.nodeValue.replace(root.nodeValue.trim(), value); return; }
+        const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
+        nodes.forEach((node) => { const value = strings[node.nodeValue.trim()]; if (value) node.nodeValue = node.nodeValue.replace(node.nodeValue.trim(), value); });
+      };
+      translateTree(doc.body);
+      for (const el of doc.querySelectorAll('[data-tooltip]')) {
+        const value = strings[el.getAttribute('data-tooltip')];
+        if (value) el.setAttribute('data-tooltip', value);
+      }
+      for (const el of doc.querySelectorAll('[aria-label]')) {
+        const value = strings[el.getAttribute('aria-label')];
+        if (value) el.setAttribute('aria-label', value);
+      }
+      const translateAttrs = (el) => {
+        if (!el || el.nodeType !== 1) return;
+        for (const attr of ['data-tooltip', 'aria-label', 'placeholder', 'title']) {
+          const value = strings[el.getAttribute(attr)];
+          if (value) el.setAttribute(attr, value);
+        }
+      };
+      new MutationObserver((records) => records.forEach((record) => { translateAttrs(record.target); if (record.type === 'childList') record.addedNodes.forEach(translateTree); })).observe(doc, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-tooltip', 'aria-label', 'placeholder'] });
+
+      doc.documentElement.lang = hant ? 'zh-Hant' : 'zh-Hans';
+    }
+    if (fe && fe.id === 'ed') {
+      const style = doc.createElement('style');
+      style.textContent = '.landing-playback .insert-bar, .landing-playback .editor-band { opacity: .42; pointer-events: none; transition: none !important; } .landing-playback .insert-bar *, .landing-playback .editor-band * { transition: none !important; }';
+      doc.head.appendChild(style);
+    }
+    if (fe && fe.id === 'sh') {
+      const style = doc.createElement('style');
+      style.textContent = '.moss-publish-button:not(:disabled)::after { content: ""; position: absolute; inset: -5px; border: 1px solid currentColor; border-radius: 999px; opacity: 0; pointer-events: none; animation: landing-publish-cue 5.6s ease-out infinite; } @keyframes landing-publish-cue { 0%, 62% { opacity: 0; transform: scale(.96); } 68% { opacity: .42; transform: scale(1); } 78%, 100% { opacity: 0; transform: scale(1.05); } } @media (prefers-reduced-motion: reduce) { .moss-publish-button:not(:disabled)::after { animation: none; opacity: .28; } }';
+      doc.head.appendChild(style);
+      const preview = doc.getElementById('moss-preview-iframe');
+      const suppressPreviewLinks = () => {
+        const previewDoc = preview && preview.contentDocument;
+        if (!previewDoc || previewDoc.__landingLinksInert) return;
+        previewDoc.__landingLinksInert = true;
+        previewDoc.addEventListener('click', (event) => {
+          if (event.target.closest?.('a')) { event.preventDefault(); event.stopImmediatePropagation(); }
+        }, true);
+      };
+      if (preview) { preview.addEventListener('load', suppressPreviewLinks); suppressPreviewLinks(); }
+    }
     // and it is always the light theme: the scene is a light page, whatever the OS prefers
     // and it shows no scrollbar: a classic scrollbar (a mouse plugged into a
     // Mac shows one) narrows the live page by 15px against its print, which is
@@ -1370,6 +1441,10 @@ const CARRY_EPS = 2;
 const HOLD_GAP = 100, WHEEL_GESTURE_GAP = 280;
 
 function sceneClasses(scene) { stage.classList.toggle('live', scene >= 1); stage.dataset.scene = String(scene); }
+function editorPlayback(active) {
+  const doc = edFrame.contentDocument;
+  if (doc) { doc.documentElement.classList.toggle('landing-playback', active); if (active) doc.querySelector('.insert-bar')?.classList.add('dim', 'visible'); }
+}
 // The grounds' opacity: the shadow of the scene being shown, faded as its
 // sheet wets and returned as the next one dries. The approach is eased so a
 // late turnaround does not snap the destination ground to nothing.
@@ -1903,12 +1978,14 @@ function still(scene) {
   // keeps the clipped Publish control from flashing once in its source
   // position at the shell's lower-right before its centred transform lands.
   if (scene === DEPLOY) snapStage();
-  releasePigmentCover();
+  // A final wash owns the pixels while the reader turns around. Keep its
+  // cached source covered until the next frame can set the reverse direction;
+  // otherwise the live Publish control flashes in its shell corner.
+  if (!(finalWash?.covered && scene === DEPLOY)) releasePigmentCover();
   if (mobileLayout() && scene === SHIPS) { sketchVisible(true); videoActive(true); }
-  if (mobileLayout()) {
-    mobileWatchKey = '';
-    if (scene !== DEPLOY && finalWash) { cancelAnimationFrame(finalWash.raf); finalWash = null; canvas.style.filter = ''; }
-  }
+  if (mobileLayout()) mobileWatchKey = '';
+  if (scene !== DEPLOY && finalWash) { cancelAnimationFrame(finalWash.raf); finalWash = null; canvas.style.filter = ''; }
+  if (scene < DEPLOY) finalPrints = null;
 }
 
 // The signup link is navigation: it skips the scene performance.
@@ -1966,30 +2043,26 @@ function snapStage() {
   requestAnimationFrame(() => requestAnimationFrame(() => { if (token === snapToken) stage.classList.remove('snap'); }));
 }
 async function fade(to) {
-  // Both ends are on the page at once, so the scene being returned to is put
-  // back before the scrub rather than after it.
-  if (shown === SHARE) { snapStage(); still(DEPLOY); }
+  // Restore the centred composition under pigment, never replay its entrance.
+  if (shown === SHARE) {
+    snapStage(); sceneClasses(DEPLOY); groundAt(DEPLOY);
+    stage.classList.add('fanned');
+  }
   mountLoop();
-  // Reduced motion lands on the end state: no scrub, nothing playing.
-  if (reduce) { setCross(to === SHARE ? 1 : 0); snapStage(); return to; }
-  // The join settles where the scrub arrives, but never back where it began
-  // before it has moved: the trigger fires at the top of the gap, a long way
-  // above the window the crossfade is scrubbed over, so a fade that resolved
-  // on q === 0 would settle on the scene it is already showing and the
-  // trigger would start it again on the next frame, for as long as the reader
-  // stood there. What says the reader has turned around is the target, the
-  // same thing a wash reads for its own turnaround.
-  const settled = await new Promise((done) => {
-    const f = () => { const q = xfAt(); setCross(q);
+  if (reduce) { setCross(to === SHARE ? 1 : 0); return to; }
+  const settled = await new Promise(done => {
+    const frame = () => {
+      const q = xfAt(); setCross(q); updateFinalDissolve();
       if (q >= 1 && target !== DEPLOY) done(SHARE);
       else if (q <= 0 && target !== SHARE) done(DEPLOY);
-      else requestAnimationFrame(f); };
-    requestAnimationFrame(f);
+      else requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
   });
-  setCross(settled === SHARE ? 1 : 0);
-  snapStage();
+  setCross(settled === SHARE ? 1 : 0); snapStage();
   return settled;
 }
+
 const stepToward = (from, t) => t === from ? from : from + Math.sign(t - from);
 const isJump = (a, b) => Math.abs(a - b) > 1;
 // How far one mechanism carries the sheet toward `want`. A wash swallows every
@@ -2038,7 +2111,6 @@ async function runJoin() {
       if (join.back && to < shown && !mobileLayout()) shown = await join.back(to);
       else if (join.run) shown = await join.run(to);
       else {
-        if (!mobileLayout()) scenes('morph'); // mobile keeps the live source through the first cover frames
         // A jump can ask for a scene no print was ever taken for: the prints on
         // hand are the neighbours', and two boundaries away is not a neighbour.
         // Stopping to take one costs 14 to 54ms of clone-and-serialize on the
@@ -2070,7 +2142,7 @@ function advanceMobilePigment(state, goal, fwd, stir, tilt, relift, paint) {
   return { caughtUp: state.t >= goal - DT, count };
 }
 function publishBridge(from, to, prints) {
-  if (!mobileLayout() || Math.min(from, to) !== SHIPS || Math.max(from, to) !== DEPLOY) return null;
+  if (Math.min(from, to) !== SHIPS || Math.max(from, to) !== DEPLOY) return null;
   const button = vdFrame.contentDocument.querySelector('.moss-publish-button');
   if (!button) return null;
   const r = button.getBoundingClientRect(), size = r.width;
@@ -2102,10 +2174,10 @@ function publishBridge(from, to, prints) {
   }
   return {
     draw(t) {
-      const q = smooth(.2, T_TOTAL, t), p = from === SHIPS ? q : 1 - q;
+      const q = smooth(0, T_TOTAL, t), p = from === SHIPS ? q : 1 - q;
       const cx = (x + (GEOM.cellW / 2 - x) * p) * SCALE;
-      const cy = (y + (GEOM.cellH / 2 - y) * p) * SCALE;
-      const scale = SCALE * (1 + (PUB_SCALE * 1.4 - 1) * p);
+      const cy = (y + (GEOM.cellH / 2 - y) * p) * SCALE + (mobileLayout() ? 0 : (1 - SCALE) * GEOM.cellH / 2);
+      const scale = SCALE * (1 + (PUB_SCALE * (mobileLayout() ? 1.4 : 1) - 1) * p);
       clone.style.left = (cx - size / 2) + 'px'; clone.style.top = (cy - size / 2) + 'px';
       clone.style.transform = `scale(${scale})`;
     },
@@ -2122,11 +2194,18 @@ async function pour(to) {
   // and what it is to become. Nothing is ever taken up toward a stand-in. A
   // fresh capture of the scene on screen replaces its print under the splash,
   // so the poem is the poem being typed.
+  // Freeze a reader's arrangement before taking its ink. No spring or teardown
+  // may move an artifact back while its outgoing print is being captured.
+  if (from === SHIPS && s3Touched) {
+    for (const id of S3_ORDER) stopCard(id);
+    try { setSheet(SHIPS, await capture(SHIPS)); }
+    catch (error) { console.warn('scene 3 outgoing print:', error.message); }
+  }
   const pr = { [from]: sheets[from], [to]: sheets[to] };
   const bridge = publishBridge(from, to, pr);
   bridge?.draw(0);
   const inOrder = () => [pr[Math.min(from, to)], pr[Math.max(from, to)]];
-  const mobileHandoff = mobileLayout();
+  const mobileHandoff = mobileLayout() || !!bridge;
   holdCanvas(...inOrder(), from, fwd, mobileHandoff);
   if (mobileHandoff && from === SHIPS) { sketchVisible(false); videoActive(false); }
   let liveScene = from, lastCover = -1, drawnT = -1;
@@ -2146,7 +2225,7 @@ async function pour(to) {
   // typed — 35 to 54ms of capture inside the frames of a running wash, measured
   // 2026-09-14, to buy at most one warm tick of typing. The rest's own retake
   // keeps that print no older than that, and the splash reads it.
-  if (!mobileHandoff) { passThrough(from, to); sceneClasses(to); }
+  if (!mobileHandoff) { scenes('morph'); passThrough(from, to); sceneClasses(to); }
   // sim seconds per window height of scroll: the wash completes as the reading
   // line travels from one text to the other, whatever the speed of the hand
   // the two texts the wash runs between, which a turnaround swaps and a jump
@@ -2193,7 +2272,7 @@ async function pour(to) {
         if (!pr[to]) pr[to] = sheets[to] || pr[from];
         if (back) { t = 0; acc = 0; relift = 1; }
         gapVh = gapOf(from, to); sim.setPrints(...inOrder());
-        if (!mobileHandoff) { passThrough(from, to); sceneClasses(to); }
+        if (!mobileHandoff) { scenes('morph'); passThrough(from, to); sceneClasses(to); }
       }
       const v = stepClock ? (window.__scrollV || 0) : scrollV;   // the harness can hold a scroll speed
       // a jump has left the text it started from far behind: it is arrived by
@@ -2238,10 +2317,10 @@ async function pour(to) {
         bridge?.draw(t);
         const sizeProgress = smooth(.35, T_TOTAL, t);
         const size = (from === DEPLOY ? 1.4 : 1) + ((to === DEPLOY ? 1.4 : 1) - (from === DEPLOY ? 1.4 : 1)) * sizeProgress;
-        cell.style.transform = `scale(${SCALE}) translate(${(1 - size) * GEOM.cellW / 2}px, ${(1 - size) * GEOM.cellH / 2}px) scale(${size})`;
+        if (mobileLayout()) cell.style.transform = `scale(${SCALE}) translate(${(1 - size) * GEOM.cellW / 2}px, ${(1 - size) * GEOM.cellH / 2}px) scale(${size})`;
       }
       if (!mobileHandoff || (caughtUp && t !== drawnT)) {
-        sim.draw(fwd, smooth(T_CURE, T_TOTAL, t), mobileHandoff ? -.2 + 1.4 * smooth(.35, T_TAKE, t) * (1 - smooth(1.3, 1.72, t)) : -.2);
+        sim.draw(fwd, smooth(T_CURE, T_TOTAL, t), mobileLayout() ? -.2 + 1.4 * smooth(.35, T_TAKE, t) * (1 - smooth(1.3, 1.72, t)) : -.2);
         drawnT = t;
       }
       if (!mobileHandoff) groundToward(to, smooth(T_DRY, T_TOTAL, t), stepClock ? DT * SPF : dtReal);
@@ -2496,7 +2575,7 @@ function drawPlates(g, k) {
     const im = pl.querySelector('img');
     if (im && im.complete && im.naturalWidth) {
       const pos = (cs.getPropertyValue('--pos') || '50% 50%').trim().split(/\s+/).map((v) => parseFloat(v) / 100);
-      const sc = Math.max(w / im.naturalWidth, h / im.naturalHeight), sw = w / sc, sh = h / sc;
+      const sc = Math.min(w / im.naturalWidth, h / im.naturalHeight), sw = w / sc, sh = h / sc;
       const sx = (im.naturalWidth - sw) * (pos[0] ?? 0.5), sy = (im.naturalHeight - sh) * (pos[1] ?? 0.5);
       g.drawImage(im, sx, sy, sw, sh, 0, 0, w * k, h * k);
     }
@@ -2538,12 +2617,12 @@ async function rasterScene3Artifact(id) {
   try { return await rasterDoc(doc, Math.round(c.width), Math.round(c.height), { snapshotCanvases: true }); }
   catch (e) { console.warn(`Artifact ${id}: ${e.message}`); return null; }
 }
-function drawScene3Artifacts(g, k, images, docked) {
+function drawScene3Artifacts(g, k, images) {
   const ids = [...S3_ORDER].sort((a, b) => (+(CARDS[a].el.style.zIndex || 0)) - (+(CARDS[b].el.style.zIndex || 0)));
   const ox = -printRect.x, oy = -printRect.y;
   for (const id of ids) {
     const im = images[id], c = CARDS[id], p = c.pose;
-    if (!im || !p || c.docked !== docked) continue;
+    if (!im || !p) continue;
     const w = c.width * p.s, h = c.height * p.s;
     g.save();
     // Docked artifacts are clipped by the article's measured paper aperture;
@@ -2564,16 +2643,15 @@ async function prepareScene3Capture() {
     if (frame.contentDocument?.readyState === 'complete' && frame.contentDocument.location.href !== 'about:blank') return Promise.resolve();
     return new Promise((resolve) => frame.addEventListener('load', resolve, { once: true }));
   };
-  await capped(Promise.all([waitFrame($('sk')), waitFrame($('nb')), waitFrame($('s3-site-frame'))]), FETCH_MS, 'scene 3 media timed out').catch(() => {});
+  await capped(Promise.all([waitFrame($('sk')), waitFrame($('nb'))]), FETCH_MS, 'scene 3 media timed out').catch(() => {});
   await nestedPreviewReady(SHIPS);
   const video = $('s3-video-el');
   // A paused, preload-none video uses its existing poster until playback starts.
   // Capture can warm scene 3 while another scene is shown. Establish the same
   // deterministic poses enterScene3() would have supplied before measuring or
   // rasterizing any artifact.
-  s3HardStop = false; s3Touched = false; s3Stack = ['video'];
-  for (const id of S3_ORDER) { const c = CARDS[id]; c.docked = id === 'video'; c.el.tabIndex = -1; }
-  placeScene3Artifacts(); cardDepths();
+  if (!s3Initialized) { placeScene3Artifacts(); s3Initialized = true; }
+  cardDepths();
   let ready = false;
   for (let i = 0; i < 8 && !ready; i++) {
     ready = layoutScene3Layers();
@@ -2606,9 +2684,9 @@ async function capture(scene) {
 }
 async function takePrint(scene) {
   const t0 = performance.now();
-  const artifactIds = mobileLayout() && scene === SHIPS ? [...S3_ORDER] : [];
+  const artifactIds = scene === SHIPS ? [...S3_ORDER] : [];
   if (artifactIds.length) await prepareScene3Capture();
-  const k = Math.min(mobileLayout() ? 1 : 2, devicePixelRatio || 1);
+  const k = Math.min(mobileLayout() ? 1 : 2, devicePixelRatio || 1, MAX_PRINT_EDGE / Math.max(printW(), printH()));
   const c = document.createElement('canvas'); c.width = printW() * k; c.height = printH() * k;
   const g = c.getContext('2d');
   // the stage: plates, the box's shadow and ground, frames as holes
@@ -2625,7 +2703,7 @@ async function takePrint(scene) {
   // image, and a tiled plate dissolves into a grid.
   // The siblings are not in the print at all: the wash dissolves the centre
   // sheet, and they are page furniture around it, the same as its shadow.
-  const noPlates = document.createElement('style'); noPlates.textContent = '.plate, .sib, #s3-site, #s3-video { display: none !important; }'; styles.push(noPlates, flatStyle(document));
+  const noPlates = document.createElement('style'); noPlates.textContent = '.plate, .sib, #s3-video { display: none !important; }'; styles.push(noPlates, flatStyle(document));
   const at = document.createElement('div'); at.setAttribute('style', `position:absolute;left:${-printRect.x}px;top:${-printRect.y}px;width:${GEOM.cellW}px;height:${GEOM.cellH}px;--s:1;`);
   at.appendChild(stageC);
   // the box's own layout box, not its rect: in scene 4 the grown control has a
@@ -2653,7 +2731,6 @@ async function takePrint(scene) {
   const innerR = shell.innerR && { x: boxR.x + shell.innerR.x, y: boxR.y + shell.innerR.y, w: shell.innerR.w, h: shell.innerR.h };
   g.drawImage(stageImg, 0, 0, c.width, c.height);
   if (scene === 0) drawPlates(g, k);
-  if (artifactIds.length) drawScene3Artifacts(g, k, Object.fromEntries(artifactIds.map((id, i) => [id, artifactImages[i]])), false);
   g.save();
   // Scene 4's sheet is the shell cut to the control's own circle, the same cut
   // the stylesheet makes on the live box: the print carries the real pixels of
@@ -2664,7 +2741,7 @@ async function takePrint(scene) {
   } else roundClip(g, boxR, k, radius);
   g.drawImage(frameImg, boxR.x * k, boxR.y * k, boxR.w * k, frameImg.height * k); g.restore();
   if (innerImg) { g.save(); roundClip(g, boxR, k, radius); roundClip(g, innerR, k, innerRadius); g.drawImage(innerImg, innerR.x * k, innerR.y * k, innerR.w * k, innerImg.height * k); g.restore(); }
-  if (artifactIds.length) drawScene3Artifacts(g, k, Object.fromEntries(artifactIds.map((id, i) => [id, artifactImages[i]])), true);
+  if (artifactIds.length) drawScene3Artifacts(g, k, Object.fromEntries(artifactIds.map((id, i) => [id, artifactImages[i]])));
   captureMs = Math.round(performance.now() - t0);
   return c;
 }
@@ -2989,7 +3066,8 @@ const progressAt = () => {
 // ceil branch below must not stand in for "no direction yet".
 const targetAt = (dir) => {
   const p = progressAt();
-  if (Number.isInteger(p)) return p;
+  // Pixel rounding at a rest must not start a reverse wash by a fraction.
+  if (Math.abs(p - Math.round(p)) < .002) return Math.round(p);
   // Keep the same pair of prints while a finger reverses within their wash.
   if (mobileLayout()) return p < shown ? Math.floor(p) : Math.ceil(p);
   return dir === 0 ? Math.round(p) : dir < 0 ? Math.floor(p) : Math.ceil(p);
@@ -3019,9 +3097,8 @@ function onScroll(dy) {
     fiveOn(q >= 1);
     return;
   }
-  if (!booted && t === SHARE && xfAt() >= 1) {
-    asked = t;
-    if (shown !== SHARE) standAtTerminalClose();
+  if (t === SHARE && xfAt() >= 1) {
+    asked = t; setTarget(SHARE);
     return;
   }
   // Scene 3's own heavy media (warmScene3Media, defined below) starts here:
@@ -3385,7 +3462,7 @@ if (CARRY === 'css') { addEventListener('resize', setupCssSnap); setupCssSnap();
 // The browser owns motion here; settleAtRest is never called. On mobile this is a strictly
 // observational path: native scrolling supplies scrollY, which drives the scenes and closing
 // scrub continuously, and no release may move the page after the reader lets go.
-let mobileWatchKey = '', finalDissolve = 0, finalWash = null;
+let mobileWatchKey = '', finalDissolve = 0, finalWash = null, finalPrints = null;
 function deployPrint() {
   const copy = document.createElement('canvas'); copy.width = printW(); copy.height = printH();
   const g = copy.getContext('2d'), ox = -printRect.x, oy = -printRect.y;
@@ -3426,51 +3503,57 @@ function closingPigmentPrint() {
   g.fillStyle = gradient; g.fillRect(0, 0, sheet.width, sheet.height);
   return sheet;
 }
-function updateMobileFinalDissolve() {
-  const q = stage.dataset.scene === String(DEPLOY) ? mobileClosingProgress() : 0;
-  finalDissolve = q;
+function updateFinalDissolve() {
   if (!sim || reduce || !sheets[DEPLOY]) return;
+  const active = shown >= DEPLOY && +stage.dataset.scene === DEPLOY;
+  const q = active ? (mobileLayout() ? mobileClosingProgress() : xfAt()) : 0;
+  finalDissolve = q;
   if (!q) {
     if (finalWash) {
       cancelAnimationFrame(finalWash.raf); finalWash = null;
-      releasePigmentCover();
-      if (orbitSim && !reduce && shown === DEPLOY) orbitSim.restart();
+      releasePigmentCover(); canvas.style.filter = '';
+      if (shown === DEPLOY) orbitSim?.restart();
     }
     return;
   }
   if (!finalWash) {
-    if (shown !== DEPLOY) return;
+    if (!active) return;
     orbitSim?.stop();
-    const source = deployPrint(), film = closingPigmentPrint();
-    holdCanvas(source, film, DEPLOY, true, true);
-    finalWash = { t: 0, drawn: -1, goal: q * T_TOTAL, raf: 0 };
+    // Retain these exact pixels through the final scene and the return trip.
+    if (!finalPrints) finalPrints = { source: deployPrint(), film: closingPigmentPrint() };
+    holdCanvas(finalPrints.source, finalPrints.film, DEPLOY, true, true);
+    finalWash = { t: 0, drawn: -1, goal: q * T_TOTAL, raf: 0, covered: true };
   }
   const wash = finalWash; wash.goal = q * T_TOTAL;
   if (wash.raf) return;
   const frame = () => {
     if (finalWash !== wash) return;
     wash.raf = 0;
-    const advanced = advanceMobilePigment(wash, wash.goal, true, 0, 0, 0, t => {
+    // Reverse scroll reconstructs the same forward field at the earlier
+    // position. One clock owns both directions, without competing fade loops.
+    const result = advanceMobilePigment(wash, wash.goal, true, 0, 0, 0, t => {
       const p = wash.goal / T_TOTAL;
       stage.style.setProperty('--wash-cover', String(smooth(0, .18, p)));
       canvas.style.filter = `grayscale(${smooth(.1, .65, p)})`;
       sim.draw(true, smooth(T_CURE, T_TOTAL, t), -.2 + 1.4 * smooth(.94, 1, p));
     });
-    if (!advanced.caughtUp) wash.raf = requestAnimationFrame(frame);
+    if (!result.caughtUp) wash.raf = requestAnimationFrame(frame);
   };
   wash.raf = requestAnimationFrame(frame);
 }
+
 function watchScrollCss(now) {
   if (mobileLayout()) {
     const key = `${scrollY}:${innerWidth}:${innerHeight}`;
     if (key === mobileWatchKey) return;
     mobileWatchKey = key;
-    updateMobileFinalDissolve();
+
   }
   const dy = lastScrollY == null ? 0 : scrollY - lastScrollY;
   lastScrollY = scrollY;
   if (dy) { travel = Math.sign(dy); restSince = now; }
   onScroll(dy);
+  updateFinalDissolve();
   // Desktop's closing section shares the release spring. Mobile remains on the
   // observational path above through the whole close.
   if (!mobileLayout() && xfAt() > 0 && travel > 0 && settleArmed && !settleRun && !touchHeld && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
@@ -3521,6 +3604,7 @@ async function writeLoop(afterWash) {
   const g = gen;
   if (afterWash) await new Promise((r) => setTimeout(r, 1800));   // the poem the wash returned stays to be read
   while (gen === g) {
+    editorPlayback(true);
     ed.setDoc(SEED);
     if (!mobileLayout()) {
       const focusY = scrollY;
@@ -3532,6 +3616,7 @@ async function writeLoop(afterWash) {
     await new Promise((r) => setTimeout(r, 700));
     if (gen !== g) break;
     const done = await ed.type(TYPED, { seed: 11, median: window.__LANG === 'zh' ? 95 : 18, slipAt: 47 });
+    editorPlayback(false);
     if (!done) break;
     await new Promise((r) => setTimeout(r, 2600));   // the poet reads it back
   }
@@ -3591,7 +3676,6 @@ function warmScene3Media() {
   $('sk').src = $('sk').dataset.src;
   $('nb').src = NB_SRC;
   vd.setPreview(S3_ARTICLE);
-  $('s3-site-frame').src = S3_ARTICLE;
   $('s3-video-el').poster = $('s3-video-el').dataset.poster;
   $('s3-video-el').src = S3_VIDEO;
 }
@@ -3611,24 +3695,15 @@ document.addEventListener('visibilitychange', () => {
   sketchVisible(!document.hidden && shown === SHIPS);
 });
 
-// Assemble the scene from the live documents themselves. #box retains the
-// real moss shell but its nested website is hidden during Scene 3; the direct
-// same-origin site iframe occupies that exact preview rect with its video
-// hidden; the real video element is placed over the hole at the nested page's
-// measured rect. Pulling any one layer therefore exposes the genuine layer
-// below it rather than a hand-drawn facsimile.
+// Measure docking inside the real preview; the window remains a single layer.
 function layoutScene3Layers() {
   try {
     const shellDoc = vdFrame.contentDocument;
     const nested = shellDoc.getElementById('moss-preview-iframe');
-    const siteDoc = $('s3-site-frame').contentDocument;
-    if (!nested || !siteDoc) return false;
+    if (!nested || !nested.contentDocument) return false;
     const sourceVideo = nested.contentDocument && nested.contentDocument.querySelector('video');
     if (!sourceVideo) return false;
     const nr = nested.getBoundingClientRect(), vr = sourceVideo.getBoundingClientRect();
-    const site = $('s3-site');
-    site.style.left = (box.offsetLeft + nr.left) + 'px'; site.style.top = (box.offsetTop + nr.top) + 'px';
-    site.style.width = nr.width + 'px'; site.style.height = nr.height + 'px';
     s3Paper = { x: box.offsetLeft + nr.left, y: box.offsetTop + nr.top, w: nr.width, h: nr.height };
     s3Slot = { x: s3Paper.x + vr.left, y: s3Paper.y + vr.top, w: vr.width, h: vr.height };
     CARDS.video.height = CARDS.video.width * vr.height / vr.width;
@@ -3636,20 +3711,16 @@ function layoutScene3Layers() {
       const c = CARDS[id];
       if (c.pose && c.docked && s3Drag?.id !== id) { stopCard(id); c.pose = dockPose(id); paintCard(id); }
     }
-    let hide = siteDoc.getElementById('s3-hide-video');
+    // The shell and article remain one intact preview. Only its original
+    // media is hidden: the movable artifacts paint above the whole window.
+    const article = nested.contentDocument;
+    let hide = article.getElementById('s3-hide-video');
     if (!hide) {
-      hide = siteDoc.createElement('style'); hide.id = 's3-hide-video';
+      hide = article.createElement('style'); hide.id = 's3-hide-video';
       hide.textContent = '.moss-ambient-video{visibility:hidden!important}';
-      siteDoc.head.appendChild(hide);
+      article.head.appendChild(hide);
     }
-    let aperture = shellDoc.getElementById('s3-aperture');
-    if (!aperture) {
-      aperture = shellDoc.createElement('style'); aperture.id = 's3-aperture';
-      aperture.textContent = 'html.s3-aperture,html.s3-aperture body,html.s3-aperture .moss-app,html.s3-aperture .moss-preview-container{background:transparent!important}html.s3-aperture .moss-ambient-band{visibility:hidden}html.s3-aperture .moss-titlebar{border-bottom:0!important}';
-      shellDoc.head.appendChild(aperture);
-    }
-    shellDoc.documentElement.classList.add('s3-aperture');
-    nested.style.visibility = 'hidden';
+    nested.style.visibility = '';
     stage.classList.add('s3-ready');
     return true;
   } catch (e) { return false; }
@@ -3687,7 +3758,7 @@ Object.assign(CARDS.video, { width: 520, height: 390 });
 let s3Drag = null, s3HardStop = true, s3Touched = false;
 let s3Paper = { x: 120, y: 78, w: 540, h: 512 };
 let s3Slot = { x: 180, y: 290, w: 380, h: 285 };
-let s3Stack = ['video'];
+let s3Stack = ['video'], s3Initialized = false;
 const s3Jitter = [Math.random() - .5, Math.random() - .5, Math.random() - .5, Math.random() - .5];
 const cardId = el => S3_ORDER.find(id => CARDS[id].el === el);
 const localPoint = e => { const r = cell.getBoundingClientRect(); return { x: (e.clientX - r.left) / SCALE, y: (e.clientY - r.top) / SCALE }; };
@@ -3699,7 +3770,7 @@ function dockPose(id) {
 function cardDepths() {
   for (const id of S3_ORDER) {
     const c = CARDS[id], focused = s3Drag?.id === id || c.el.matches(':focus-visible');
-    c.el.style.zIndex = String(focused ? 8 : c.docked ? 5 + Math.max(0, s3Stack.indexOf(id)) : 1);
+    c.el.style.zIndex = String(focused ? 20 : c.docked ? 12 + Math.max(0, s3Stack.indexOf(id)) : 10 + S3_ORDER.indexOf(id));
     c.el.dataset.placement = c.docked ? 'preview' : 'outside';
   }
 }
@@ -3763,6 +3834,9 @@ function endDrag(cancelled = false) {
   else if (c.docked) target = dockPose(d.id);
   else { target = { x: d.point.x - d.grab.x, y: d.point.y - d.grab.y, s: 1 }; c.outside = { ...target }; }
   cardDepths(); settleCard(d.id, target);
+  if (target.x < printRect.x || target.y < printRect.y || target.x + c.width * target.s > printRect.x + printRect.w || target.y + c.height * target.s > printRect.y + printRect.h) {
+    printExpanded = true; setPrintRect(currentPrintRect()); warmSoon(0);
+  }
 }
 stage.addEventListener('pointerup', e => { if (s3Drag) { s3Drag.point = localPoint(e); s3Drag.inside = inPreview(s3Drag.point); endDrag(); } });
 stage.addEventListener('pointercancel', () => endDrag(true));
@@ -3789,20 +3863,20 @@ addEventListener('resize', () => {
   layoutScene3Layers(); if (!s3Touched && !s3Drag) placeScene3Artifacts();
 });
 for (const id of ['nb', 'sk']) $(id).addEventListener('load', () => sketchVisible(shown === SHIPS));
-$('s3-site-frame').addEventListener('load', () => { if (shown === SHIPS) armScene3Layers(); });
 function enterScene3() {
-  s3HardStop = false; s3Touched = false; s3Stack = ['video']; warmScene3Media();
+  s3HardStop = false; warmScene3Media();
   for (const id of S3_ORDER) {
-    const c = CARDS[id]; c.docked = id === 'video'; c.el.tabIndex = 0;
+    const c = CARDS[id]; c.el.tabIndex = 0;
     c.el.setAttribute('role', 'button'); c.el.setAttribute('aria-label', c.label + '; Enter moves it into or out of the article');
     c.el.setAttribute('aria-keyshortcuts', 'Enter Space');
   }
-  placeScene3Artifacts(); cardDepths(); armScene3Layers(); sketchVisible(true); videoActive(true);
+  if (!s3Initialized) { placeScene3Artifacts(); s3Initialized = true; }
+  cardDepths(); armScene3Layers(); sketchVisible(true); videoActive(true);
 }
 function leaveScene3() {
   if (s3Drag) endDrag(true); s3HardStop = true;
   for (const id of S3_ORDER) {
-    const el = CARDS[id].el; stopCard(id); el.style.transform = ''; el.style.removeProperty('z-index');
+    const el = CARDS[id].el; stopCard(id);
     el.tabIndex = -1; el.removeAttribute('role'); el.removeAttribute('aria-label'); el.removeAttribute('aria-keyshortcuts');
   }
   showAssembledPreview(); videoActive(false); sketchVisible(false);
@@ -3814,6 +3888,7 @@ function scenes(next) {
   if (next === phase) return;
   const from = phase; phase = next; gen++;
   if (from === 'write') { ed.stop(); ed.setDoc(FINAL); ed.blur(); }   // the poem is finished; the brush arrives
+  if (next !== 'write') editorPlayback(false);
   if (next !== 'live') { sh.hold(); sh.setPending({}); }
   if (from === 'ships' && next !== 'ships') leaveScene3();
   setFan(next === 'deploy');
@@ -3849,6 +3924,10 @@ window.__prints = () => ({ captures, inFlight, peakInFlight, shownSeq, shownAge:
 
 const when = (frame, key) => new Promise((r) => { const t = setInterval(() => { const w = frame.contentWindow; if (w && w[key]) { clearInterval(t); r(w[key]); } }, 50); });
 async function ready() {
+  // Images and creative artifacts share one complete printable domain before
+  // any scene is captured, including untouched initial arrangements.
+  placeScene3Artifacts(); s3Initialized = true;
+  printExpanded = true; setPrintRect(currentPrintRect());
   // a print that never arrives must not hold the page shut: with none, the
   // scenes cut, which is the path reduced motion already takes
   if (washing() && needed(shown).length) { try { setSheet(shown, await capture(shown)); await takeOthers(mobileLayout() ? neighbours(shown) : washable.filter((scene) => scene !== shown)); } catch (e) { printable = false; console.warn('no prints:', e.message); } }

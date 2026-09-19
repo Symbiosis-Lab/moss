@@ -112,9 +112,9 @@
           const response = await request(input.value.trim());
           if (!response.ok) throw new Error(`Request failed (${response.status})`);
           let payload;
-          if (form.id === 'newsletter-form') {
+          if (form.dataset.subscription) {
             payload = await response.json();
-            if (!payload || typeof payload !== 'object' || Array.isArray(payload) || typeof payload.alreadySubscribed !== 'boolean') {
+            if (!payload || typeof payload !== 'object' || Array.isArray(payload) || payload.subscribed !== true || (payload.alreadySubscribed !== true && payload.confirmationSent !== true)) {
               throw new Error('The subscription service returned an unexpected response.');
             }
           }
@@ -140,12 +140,14 @@
 
     submit(
       document.querySelector('#beta-form'),
-      (email) => fetch('https://api.mosspub.com/apply?lang=en', {
+      (email) => fetch('https://api.mosspub.com/api/sites/landing/subscribe', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-        body: new URLSearchParams({ email, website: '', scope: '' }),
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ email, scope: '' }),
       }),
-      () => window.__landingI18n?.t('success') || 'Thanks for applying. Confirm the email we just sent; we’ll email you when your turn comes.'
+      (payload) => payload.alreadySubscribed
+        ? (window.__landingI18n?.t('alreadySubscribed') || 'You’re already subscribed.')
+        : (window.__landingI18n?.t('success') || 'Check your email to confirm your subscription.')
     );
 
     document.querySelectorAll('a[href="#beta"]').forEach((link) => {

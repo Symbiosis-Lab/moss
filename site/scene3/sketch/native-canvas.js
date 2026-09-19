@@ -52,15 +52,19 @@ function plotOriginal(ctx, id, t, w, h, budget) {
 // are variations of one organism's construction, rather than three studies
 // layered into a collage.
 function livingGarden(ctx,t,w,h,budget){
-  const scale=Math.min(w,h)/400,count=10,samples=Math.min(APERTURE.length,Math.max(1000,Math.floor(budget/count)));
-  const positions=[[-145,-92],[-48,-96],[52,-92],[150,-88],[-108,94],[-8,100],[92,94],[178,88],[-174,4],[166,8]];
+  const scale=Math.min(w,h)/400,count=5,samples=Math.min(APERTURE.length,Math.max(1000,Math.floor(budget/count)));
+  const positions=[[-145,-92],[52,-92],[-108,94],[92,94],[166,8]];
+  const flock=positions.map((base,organism)=>{const seed=organism*37.19,drift=t*.1125+seed*.013;return {x:base[0]+Math.cos(drift)*7,y:base[1]+Math.sin(drift*.8)*5,fx:0,fy:0};});
+  for(let a=0;a<count;a++)for(let b=a+1;b<count;b++){
+    const one=flock[a],two=flock[b],dx=two.x-one.x,dy=two.y-one.y,d=Math.max(1,Math.hypot(dx,dy)),force=clamp((d-118)*.0018,-.16,.16),nx=dx/d,ny=dy/d;
+    one.fx+=nx*force;one.fy+=ny*force;two.fx-=nx*force;two.fy-=ny*force;
+  }
   ctx.save();ctx.translate(w/2,h/2);ctx.scale(scale,scale);ctx.fillStyle='#f7f7f4';
   for(let organism=0;organism<count;organism++){
-    const seed=organism*37.19,m=organism*.43,base=positions[organism],drift=t*.075+seed*.013;
-    const ox=base[0]+Math.cos(drift)*7,oy=base[1]+Math.sin(drift*.8)*5,size=1+.08*(organism%3),turn=Math.sin(t*.12+seed)*.08;
+    const seed=organism*37.19,m=organism*.43,base=flock[organism],ox=base.x+base.fx*18,oy=base.y+base.fy*18,size=1.4*(1+.08*(organism%3)),turn=Math.sin(t*.18+seed)*.08;
     ctx.save();ctx.translate(ox,oy);ctx.rotate(turn);ctx.scale(size,size);
     for(let j=0;j<samples;j++){
-      const sample=APERTURE[Math.floor(j*APERTURE.length/samples)],i=sample.i,phase=t*.48+seed,k=sample.k,e=sample.e;
+      const sample=APERTURE[Math.floor(j*APERTURE.length/samples)],i=sample.i,phase=t*.72+seed,k=sample.k,e=sample.e;
       if(e<=0)continue;
       const d0=4.6,c0=d0/8-phase/32+m,d=d0-Math.pow(Math.cos(phase/4+m),3)/3+Math.pow(Math.hypot(k,e),3)/999;
       const c=d/8-phase/32+m,o=Math.sin(d*d-phase+m),pulse=.5+.5*Math.sin(d*8-phase*3+seed);

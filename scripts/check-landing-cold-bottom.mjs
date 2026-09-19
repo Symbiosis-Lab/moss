@@ -45,7 +45,8 @@ try {
 
     await page.mouse.move(10, 100);
     await page.mouse.down();
-    await page.evaluate(() => scrollTo(0, scrollY - 900));
+    // Return to the actual scene 4 rest; footer height differs by viewport and locale.
+    await page.evaluate(() => scrollTo(0, window.__restY(3)));
     await page.mouse.up();
     await page.waitForTimeout(200);
     const coldReverse = await state(page);
