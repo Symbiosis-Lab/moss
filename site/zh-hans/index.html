@@ -1074,7 +1074,7 @@ void main(){
   // pixel so the canvas is truly clear where nothing is inked or wet: alpha is
   // the deepest channel's absorption and the colour carries the rest.
   // Clear the pigment along the paper grain, without a coloured overlay.
-  A *= smoothstep(uClearance - .12, uClearance + .12, pap.g);
+  A *= mix(.22, 1.0, smoothstep(uClearance - .12, uClearance + .12, pap.g));
   vec3 T = clamp(exp(-A), 0.0, 1.0); float a = 1.0 - min(T.r, min(T.g, T.b));
   o = vec4(uTint * (T - (1.0 - a)), a);
 }`;
@@ -1375,7 +1375,7 @@ const running = () => phase === 'morph' || driving;
 // fourth rate for standing still between two texts, because a rest is no longer
 // left there: it settles onto a scene, and the wash runs out to it.
 const DT = 1 / 120, SPF = 2, STEPS_PER_FRAME = 36, V_TAU = 0.4, SPLIT = 0.4,
-  T_SPLASH = 0.2, T_TAKE = 1.2, T_DRY = 1.2, T_CURE = 1.5, T_WET = 1.6, T_TOTAL = 2.1,
+  T_SPLASH = 0.2, T_TAKE = 1.2, T_DRY = 1.2, T_CURE = .9, T_WET = 1.6, T_TOTAL = 2.1,
   ARRIVE = 6, ARRIVE_SMEAR = 1, ARRIVE_JUMP = ARRIVE;
 // The rest. REST_MS is how long the scroll must have been still to count as a
 // stop. A wheel is nudges rather than a stream — a reader turning it slowly
@@ -2001,16 +2001,13 @@ window.mossLanding = { openSignup() {
 // XF_SPAN of the distance scene 4 owns. So it reverses for free — a turnaround
 // needs nothing said about it — and the join settles on whichever end the
 // reader carried it to. Only opacity changes per frame.
-function mobileTransitionGeometry() {
-  const band = mobileVisualBand(), col = document.getElementById('col');
-  return { ...band, hold: Math.min(84, band.height * .24), tail: Math.min(100, band.height * .28),
-    naturalTop: col.getBoundingClientRect().top + parseFloat(getComputedStyle(col).paddingTop) };
+// The incoming text owns contact. No dissolve begins in the gap before it.
+function mobileInkProgress(text) {
+  const band = mobileVisualBand();
+  const rect = text.getBoundingClientRect();
+  return clamp01((band.bottom - rect.top) / (band.height + rect.height));
 }
-function mobileClosingProgress() {
-  const text = scenesEl[DEPLOY].firstElementChild.getBoundingClientRect(), band = mobileVisualBand();
-  return .65 * clamp01((band.bottom + 24 - text.top) / (band.height + 24))
-    + .35 * clamp01((band.bottom - text.bottom) / band.height);
-}
+function mobileClosingProgress() { return mobileInkProgress(five.querySelector('h2')); }
 function mobileVisualBand() {
   const visual = document.getElementById('vis');
   const top = parseFloat(getComputedStyle(visual).top);
@@ -2018,11 +2015,7 @@ function mobileVisualBand() {
   return { top, bottom: top + height, height };
 }
 function xfAt() {
-  if (mobileLayout()) {
-    const band = mobileVisualBand();
-    const outgoing = scenesEl[DEPLOY].firstElementChild.getBoundingClientRect();
-    return clamp01((band.top + 48 - outgoing.bottom) / (band.height * .6));
-  }
+  if (mobileLayout()) return smooth(.45, 1, mobileClosingProgress());
   const top = five.offsetTop;
   return clamp01((scrollY - (top - innerHeight * .8)) / (innerHeight * .6));
 }
@@ -2180,8 +2173,13 @@ function publishBridge(from, to, prints) {
       const scale = SCALE * (1 + (PUB_SCALE * (mobileLayout() ? 1.4 : 1) - 1) * p);
       clone.style.left = (cx - size / 2) + 'px'; clone.style.top = (cy - size / 2) + 'px';
       clone.style.transform = `scale(${scale})`;
+      if (mobileLayout()) {
+        const expansion = (from === DEPLOY ? 1.4 : 1) + (to === DEPLOY ? .4 : -.4) * smooth(.35, T_TOTAL, t);
+        fanEl.style.transformOrigin = `${orbitCx}px ${orbitCy}px`;
+        fanEl.style.transform = `translate(${(x - orbitCx) * (1 - p) / expansion}px, ${(y - orbitCy) * (1 - p) / expansion}px) scale(${scale / (SCALE * expansion * PUB_SCALE)})`;
+      }
     },
-    remove() { button.style.visibility = priorVisibility; clone.remove(); }
+    remove() { button.style.visibility = priorVisibility; clone.remove(); fanEl.style.transform = ''; fanEl.style.transformOrigin = ''; }
   };
 }
 async function pour(to) {
@@ -2315,6 +2313,13 @@ async function pour(to) {
         }
         showUnderCover(t < .35 ? from : to);
         bridge?.draw(t);
+        if (bridge && mobileLayout() && to === DEPLOY && t > .35 &&
+            textBottom(scenesEl[SHIPS]) <= stage.getBoundingClientRect().top + GEOM.cellH * SCALE / 2) {
+          scenes(PHASE[DEPLOY]);
+          // The logo group stays solid while the remaining article ink settles.
+          fanEl.style.filter = 'none';
+          fanEl.style.zIndex = '101';
+        }
         const sizeProgress = smooth(.35, T_TOTAL, t);
         const size = (from === DEPLOY ? 1.4 : 1) + ((to === DEPLOY ? 1.4 : 1) - (from === DEPLOY ? 1.4 : 1)) * sizeProgress;
         if (mobileLayout()) cell.style.transform = `scale(${SCALE}) translate(${(1 - size) * GEOM.cellW / 2}px, ${(1 - size) * GEOM.cellH / 2}px) scale(${size})`;
@@ -2330,6 +2335,8 @@ async function pour(to) {
   });
   if (mobileHandoff) releasePigmentCover();
   bridge?.remove();
+  fanEl.style.filter = '';
+  fanEl.style.zIndex = '';
   if (terminal) return SHARE;
   if (!bridge) setSheet(to, pr[to]);   // the scene now on screen, at rest
   return to;
@@ -2462,6 +2469,7 @@ async function fold(doc, liveRoot, options = {}) {
       C.replaceWith(im); continue;
     }
     if (tag === 'IMG') { C.removeAttribute('srcset'); C.removeAttribute('loading'); const src = L.currentSrc || L.src;
+      if (doc !== document && L.complete && L.naturalWidth) C.style.opacity = '1';
       // the plates are drawn onto the print from their loaded images, not through the raster (capture): no need to read them again.
       // `[data-lqip]` (not bare .plate): moss's own site CSS gives a hero image the
       // class "plate" too (its fit-mode, unrelated to this page's decorative sheets),
@@ -2493,7 +2501,11 @@ async function fold(doc, liveRoot, options = {}) {
       // fetches it for real, which is the same network cost `toData` would
       // have paid. Only an on-screen image is worth reading at all.
       if (!onScreen) { C.removeAttribute('src'); continue; }
-      if (src && !L.closest('.plate[data-lqip]')) work.push(toData(src).then((d) => {
+      // A LQIP plate is drawn manually for the landing editor, but the same
+      // class is used by the harvested preview article. Its visible image is
+      // part of that document's print and must be inlined there; otherwise the
+      // wash captures only the placeholder and the article image pops in live.
+      if (src) work.push(toData(src).then((d) => {
         if (typeof d === 'string' && d.startsWith('data:')) maxPrintImgBytes = Math.max(maxPrintImgBytes, d.length);
         C.setAttribute('src', d);
       })); continue; }
@@ -2539,7 +2551,32 @@ async function rasterDoc(doc, w, h, options = {}) {
   html.appendChild(flatStyle(doc));
   const shift = document.createElement('div'); shift.setAttribute('style', `position:absolute;left:${-se.scrollLeft}px;top:${-se.scrollTop}px;width:${w}px;height:${h}px;`);
   shift.appendChild(html);
-  return raster([shift], w, h + se.scrollTop, doc);   // this document's faces, not the host page's
+  const base = await raster([shift], w, h + se.scrollTop, doc);
+  // WebKit can paint an image's LQIP background but omit its decoded <img>
+  // inside SVG foreignObject. Composite those same live pixels directly,
+  // with their real fit and clipping, so photos share the pigment surface.
+  const images = [...doc.images].filter(im => im.complete && im.naturalWidth && rectInFrame(w, h, im.getBoundingClientRect()));
+  if (!images.length) return base;
+  const result = document.createElement('canvas'); result.width = base.width; result.height = base.height;
+  const g = result.getContext('2d'); g.drawImage(base, 0, 0);
+  for (const im of images) {
+    const r = im.getBoundingClientRect(), css = doc.defaultView.getComputedStyle(im);
+    if (css.visibility === 'hidden' || css.display === 'none' || !r.width || !r.height) continue;
+    g.save(); g.beginPath(); g.rect(0, 0, w, h); g.clip();
+    for (let el = im; el && el !== doc.body; el = el.parentElement) {
+      const style = doc.defaultView.getComputedStyle(el);
+      if (el === im || /hidden|clip|auto|scroll/.test(style.overflow)) {
+        const rect = el.getBoundingClientRect();
+        g.beginPath(); g.roundRect(rect.x, rect.y, rect.width, rect.height, parseFloat(style.borderRadius) || 0); g.clip();
+      }
+    }
+    const fit = css.objectFit, scale = fit === 'contain' ? Math.min(r.width / im.naturalWidth, r.height / im.naturalHeight) : Math.max(r.width / im.naturalWidth, r.height / im.naturalHeight);
+    const dw = fit === 'fill' ? r.width : im.naturalWidth * scale, dh = fit === 'fill' ? r.height : im.naturalHeight * scale;
+    const pos = css.objectPosition.split(/\s+/).map(v => v.endsWith('%') ? parseFloat(v) / 100 : .5);
+    g.drawImage(im, r.x + (r.width - dw) * (pos[0] ?? .5), r.y + (r.height - dh) * (pos[1] ?? .5), dw, dh);
+    g.restore();
+  }
+  return result;
 }
 // A shell frame's own chrome and, when it wraps a moss preview page, that
 // page too — the two-layer print every scene from 'live' on needs for its
@@ -2617,16 +2654,20 @@ async function rasterScene3Artifact(id) {
   try { return await rasterDoc(doc, Math.round(c.width), Math.round(c.height), { snapshotCanvases: true }); }
   catch (e) { console.warn(`Artifact ${id}: ${e.message}`); return null; }
 }
-function drawScene3Artifacts(g, k, images) {
+function drawScene3Artifacts(g, k, images, raised = null) {
   const ids = [...S3_ORDER].sort((a, b) => (+(CARDS[a].el.style.zIndex || 0)) - (+(CARDS[b].el.style.zIndex || 0)));
   const ox = -printRect.x, oy = -printRect.y;
   for (const id of ids) {
     const im = images[id], c = CARDS[id], p = c.pose;
     if (!im || !p) continue;
+    const isRaised = !!(c.docked || s3Drag?.id === id || c.el.matches(':focus-visible'));
+    if (raised !== null && isRaised !== raised) continue;
     const w = c.width * p.s, h = c.height * p.s;
     g.save();
     // Docked artifacts are clipped by the article's measured paper aperture;
-    // outside artifacts retain their full current pose.
+    // outside artifacts retain their full current pose. Normal outside cards
+    // are drawn before the preview window; held/focused and docked cards are
+    // drawn after it, matching cardDepths() and the live z-order.
     if (c.docked) {
       const x = Math.max(p.x, s3Paper.x), y = Math.max(p.y, s3Paper.y);
       const r = Math.min(p.x + w, s3Paper.x + s3Paper.w), b = Math.min(p.y + h, s3Paper.y + s3Paper.h);
@@ -2684,6 +2725,15 @@ async function capture(scene) {
 }
 async function takePrint(scene) {
   const t0 = performance.now();
+  if (scene === 1) {
+    await nestedPreviewReady(scene);
+    const doc = shFrame.contentDocument?.getElementById('moss-preview-iframe')?.contentDocument;
+    if (doc) {
+      const [width, height] = docViewport(doc);
+      const images = [...doc.querySelectorAll('img[src]')].filter(im => rectInFrame(width, height, im.getBoundingClientRect()));
+      await capped(Promise.all(images.map(im => { im.loading = 'eager'; return im.decode().catch(() => {}); })), FETCH_MS, 'preview image decode timed out').catch(() => {});
+    }
+  }
   const artifactIds = scene === SHIPS ? [...S3_ORDER] : [];
   if (artifactIds.length) await prepareScene3Capture();
   const k = Math.min(mobileLayout() ? 1 : 2, devicePixelRatio || 1, MAX_PRINT_EDGE / Math.max(printW(), printH()));
@@ -2731,6 +2781,7 @@ async function takePrint(scene) {
   const innerR = shell.innerR && { x: boxR.x + shell.innerR.x, y: boxR.y + shell.innerR.y, w: shell.innerR.w, h: shell.innerR.h };
   g.drawImage(stageImg, 0, 0, c.width, c.height);
   if (scene === 0) drawPlates(g, k);
+  if (artifactIds.length) drawScene3Artifacts(g, k, Object.fromEntries(artifactIds.map((id, i) => [id, artifactImages[i]])), false);
   g.save();
   // Scene 4's sheet is the shell cut to the control's own circle, the same cut
   // the stylesheet makes on the live box: the print carries the real pixels of
@@ -2741,7 +2792,7 @@ async function takePrint(scene) {
   } else roundClip(g, boxR, k, radius);
   g.drawImage(frameImg, boxR.x * k, boxR.y * k, boxR.w * k, frameImg.height * k); g.restore();
   if (innerImg) { g.save(); roundClip(g, boxR, k, radius); roundClip(g, innerR, k, innerRadius); g.drawImage(innerImg, innerR.x * k, innerR.y * k, innerR.w * k, innerImg.height * k); g.restore(); }
-  if (artifactIds.length) drawScene3Artifacts(g, k, Object.fromEntries(artifactIds.map((id, i) => [id, artifactImages[i]])));
+  if (artifactIds.length) drawScene3Artifacts(g, k, Object.fromEntries(artifactIds.map((id, i) => [id, artifactImages[i]])), true);
   captureMs = Math.round(performance.now() - t0);
   return c;
 }
@@ -2824,7 +2875,10 @@ function offscreenImgs(scene) {
 // native lazy loading re-evaluate them correctly, which is what the
 // resource-stall-free steady state already does for the shown scene.
 function withholdOffscreen(scene) {
-  const imgs = offscreenImgs(scene);
+  // A decoded image is already safe from the reveal burst and is valid print
+  // input. Keep its source in place so a warm capture cannot serialize a blank
+  // hole or leave the live preview waiting on restoration.
+  const imgs = offscreenImgs(scene).filter((im) => !(im.complete && im.naturalWidth));
   if (!imgs.length) return () => {};
   const saved = imgs.map((im) => {
     const pic = im.parentElement && im.parentElement.tagName === 'PICTURE' ? im.parentElement : null;
@@ -3028,25 +3082,9 @@ const textBottom = (sec) => sec.lastElementChild.getBoundingClientRect().bottom;
 // disagree as either scene's markup changes.
 const progressAt = () => {
   if (mobileLayout()) {
-    const band = mobileTransitionGeometry();
-    // Hold the fully visible first composition before wetting it. Use its
-    // normal-flow position: the transition can finish after the visual pins.
-    const { naturalTop, hold, tail } = band;
-    const entryTop = innerHeight - band.height - hold;
-    const entrance = clamp01((entryTop - naturalTop) / Math.max(1, entryTop - band.top + tail));
-    if (entrance < 1) return entrance;
-    // Thereafter the outgoing text uncovers the next image, so the following
-    // scene's copy arrives beneath an illustration that is already ready.
-    for (let i = 2; i <= DEPLOY; i++) {
-      const text = scenesEl[i - 1].firstElementChild.getBoundingClientRect();
-      if (text.top >= band.bottom + 24) return i - 1;
-      if (text.bottom > band.top - tail) {
-        // Wet the old image just before contact. The next image can set only
-        // as the trailing edge of the text uncovers the pinned visual.
-        const dissolve = clamp01((band.bottom + 24 - text.top) / (band.height + 24));
-        const reveal = clamp01((band.bottom - text.bottom) / (band.height + tail));
-        return i - 1 + (T_TAKE * dissolve + (T_TOTAL - T_TAKE) * reveal) / T_TOTAL;
-      }
+    for (let scene = 1; scene <= DEPLOY; scene++) {
+      const q = mobileInkProgress(scenesEl[scene].firstElementChild);
+      if (q < 1) return scene - 1 + q;
     }
     return DEPLOY + mobileClosingProgress();
   }
@@ -3179,11 +3217,8 @@ const restY = (scene) => {
   if (scene === 0 && mobileLayout()) return Math.max(0, Math.round(scrollY + textTop(scenesEl[0]) - 88));
   if (scene === SHARE) return closingRestY();
   if (mobileLayout()) {
-    const band = mobileTransitionGeometry();
-    if (scene === 1) {
-      return Math.round(scrollY + band.naturalTop - band.top + band.tail);
-    }
-    return Math.round(scrollY + textBottom(scenesEl[scene - 1]) - band.top + band.tail);
+    const band = mobileVisualBand();
+    return Math.round(scrollY + textBottom(scenesEl[scene]) - band.top);
   }
   const top = textTop(scenesEl[scene]), bot = textBottom(scenesEl[scene]);
   return Math.round(scrollY + (top + bot) / 2 - innerHeight * LINE);
@@ -3660,9 +3695,9 @@ const NB_SRC = 'scene3/notebook/breed/mandelbrot-live.html';
 const S3_ARTICLE = '/scene3/article/';
 const S3_VIDEO = '/scene3/movie/pool/clips/general-railroad-ties.mp4';
 const CARDS = {
-  sk: { el: $('sib-sk'), label: 'the algorithmic artwork — drag anywhere' },
-  nb: { el: $('sib-nb'), label: 'the notebook, an IPython zoom — drag to move' },
-  video: { el: $('s3-video'), label: 'the video itself — drag to move' },
+  sk: { docked: false, el: $('sib-sk'), label: 'the algorithmic artwork — drag anywhere' },
+  nb: { docked: false, el: $('sib-nb'), label: 'the notebook, an IPython zoom — drag to move' },
+  video: { el: $('s3-video'), label: 'the video itself — drag to move', docked: true },
 };
 // Warm the local documents only as Scene 3 approaches.
 function warmScene3Media() {
@@ -3770,7 +3805,9 @@ function dockPose(id) {
 function cardDepths() {
   for (const id of S3_ORDER) {
     const c = CARDS[id], focused = s3Drag?.id === id || c.el.matches(':focus-visible');
-    c.el.style.zIndex = String(focused ? 20 : c.docked ? 12 + Math.max(0, s3Stack.indexOf(id)) : 10 + S3_ORDER.indexOf(id));
+    // Outside creations sit behind the preview window. A held or focused card
+    // rises above it, while docked cards use the same stack order as the paper.
+    c.el.style.zIndex = String(focused ? 20 : c.docked ? 12 + Math.max(0, s3Stack.indexOf(id)) : 1 + S3_ORDER.indexOf(id));
     c.el.dataset.placement = c.docked ? 'preview' : 'outside';
   }
 }
