@@ -2960,7 +2960,7 @@ const sceneForRest = (p, dir) => (dir === 0 ? Math.round(p) : dir < 0 ? Math.flo
 // The opening is a real rest well even though it has no separate film scene.
 // Once an upward gesture passes scene 1's rest, keep carrying to the document
 // top; a downward gesture at the same position still selects scene 1.
-const restSceneAt = (p, dir) => dir < 0 && scrollY < restY(0) ? -1 : sceneForRest(p, dir);
+const restSceneAt = (p, dir) => dir <= 0 && scrollY < restY(0) ? -1 : sceneForRest(p, dir);
 function settleAtRest(now) {
   if (!inputArmed || !settleArmed || settleRun || now - restSince < REST_MS) return;
   settleArmed = false;
