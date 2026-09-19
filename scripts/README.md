@@ -156,3 +156,5 @@ PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node scripts/check-land
 ```
 
 The scripts reuse an installed Playwright package (`playwright` by default); no new browser dependency is required. The transition check runs Chromium and WebKit; `ENGINE=chromium` or `ENGINE=webkit` narrows a diagnosis. Native preview remains the editing workflow; the plain artifact check verifies exactly what gets published.
+
+`check-landing-cold-bottom.mjs <site-url>` delays the harvested UI and verifies immediate closing-scene display, reversal, and a jump during an active join on desktop and mobile. `check-landing-intent.mjs <site-url>` checks light wheel gestures and stable intro returns at compact and large desktop sizes. Both accept `PLAYWRIGHT_MODULE` like the other browser harnesses. Run them against plain compiled files or the scratch deployment as well as the native preview.

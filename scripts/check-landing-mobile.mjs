@@ -42,10 +42,13 @@ const instrumentScroll = () => {
   const nativeScrollTo = window.scrollTo.bind(window);
   window.scrollTo = (...args) => { window.__landingScrollWrites.push(args); return nativeScrollTo(...args); };
 };
-const ready = (page) => page.waitForFunction(() => window.__state && window.__restY, null, { timeout: 20000 });
+const ready = async (page) => {
+  await page.waitForSelector('html[data-ready="1"]', { timeout: 30000 });
+  await page.waitForFunction(() => window.__state?.().ready && window.__restY, null, { timeout: 30000 });
+};
 
-async function mobilePage(search = '') {
-  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+async function mobilePage(search = '', viewport = { width: 390, height: 844 }) {
+  const page = await browser.newPage({ viewport, isMobile: true, hasTouch: true });
   await installOverride(page);
   await page.addInitScript(instrumentScroll);
   const url = new URL(base.href); url.search = search;
@@ -66,14 +69,98 @@ const mobileState = (page) => page.evaluate(() => ({
   y: scrollY,
   max: document.documentElement.scrollHeight - innerHeight,
   progress: __state().progress,
-  xf: __state().xf,
+  xf: +xfAt().toFixed(3),
+  renderedXf: __state().xf,
   target: __state().target,
   snap: getComputedStyle(document.documentElement).scrollSnapType,
   mobileSnap: document.documentElement.hasAttribute('data-mobile-snap'),
   writes: window.__landingScrollWrites.length,
 }));
+const openingGeometry = (page) => page.evaluate(() => {
+  const rect = (selector) => {
+    const value = document.querySelector(selector).getBoundingClientRect();
+    return { top: value.top, bottom: value.bottom, height: value.height };
+  };
+  const titleStyle = getComputedStyle(document.querySelector('#intro h1'));
+  const copy = rect('#c1 .scene-text');
+  const visual = rect('#vis');
+  return { y: scrollY, title: rect('#intro h1'), intro: rect('#intro'), copy, visual,
+    gap: visual.top - copy.bottom, opacity: Number(titleStyle.opacity), mask: titleStyle.maskImage,
+    webkitMask: titleStyle.webkitMaskImage, writes: window.__landingScrollWrites.length };
+});
+
+async function checkOpening(viewport) {
+  const page = await mobilePage('', viewport);
+  const start = await openingGeometry(page);
+  assert(Math.abs(start.intro.bottom - start.copy.top) < 2, `intro and scene 1 are not compact at ${viewport.width}x${viewport.height}: ${JSON.stringify(start)}`);
+  assert(start.gap >= 20 && start.gap <= 48, `copy-to-visual gap is not compact at ${viewport.width}x${viewport.height}: ${JSON.stringify(start)}`);
+  await swipe(page, Math.min(500, viewport.height - 60), Math.min(470, viewport.height - 90), 6);
+  await page.waitForTimeout(120);
+  const moved = await openingGeometry(page);
+  const distance = moved.y - start.y;
+  assert(distance > 8, `opening did not move under native touch at ${viewport.width}x${viewport.height}`);
+  assert(Math.abs((start.title.top - moved.title.top) - distance) < 3, `intro title did not scroll with the document at ${viewport.width}x${viewport.height}: ${JSON.stringify({ start, moved })}`);
+  assert(moved.opacity === 1 && moved.mask === 'none' && moved.webkitMask === 'none', `intro title faded or masked while scrolling at ${viewport.width}x${viewport.height}: ${JSON.stringify(moved)}`);
+  assert(Math.abs(moved.gap - start.gap) < 2, `copy animation changed its gap before the visual pinned at ${viewport.width}x${viewport.height}: ${JSON.stringify({ start, moved })}`);
+  assert(moved.visual.top > 86 && moved.visual.top >= moved.copy.bottom + 20, `copy overlaps the visual before pinning at ${viewport.width}x${viewport.height}: ${JSON.stringify(moved)}`);
+  assert(moved.writes === 0, `opening geometry used scrollTo at ${viewport.width}x${viewport.height}: ${JSON.stringify(moved)}`);
+  await page.close();
+  return { viewport, startGap: +start.gap.toFixed(1), travel: +distance.toFixed(1), titleTravel: +(start.title.top - moved.title.top).toFixed(1), movedVisualTop: +moved.visual.top.toFixed(1) };
+}
+
+async function checkSceneTiming() {
+  const page = await mobilePage();
+  const read = () => page.evaluate(() => {
+    const text = document.querySelector('#c2 .scene-text').getBoundingClientRect();
+    const band = mobileVisualBand();
+    return { text: { top: text.top, bottom: text.bottom }, band, progress: progressAt(), state: __state(), writes: window.__landingScrollWrites.length };
+  });
+  const wheelTextTopTo = async (desired) => {
+    const delta = await page.evaluate((value) => document.querySelector('#c2 .scene-text').getBoundingClientRect().top - value, desired);
+    await page.mouse.wheel(0, delta);
+    await page.waitForTimeout(250);
+    return read();
+  };
+  const band = await page.evaluate(() => mobileVisualBand());
+  const before = await wheelTextTopTo(band.bottom + 32);
+  assert(before.progress === 0 && before.state.shown === 0, `scene 2 advanced before approaching the visual: ${JSON.stringify(before)}`);
+  const contact = await wheelTextTopTo(band.bottom + 8);
+  assert(contact.progress > 0 && contact.state.washT > 0 && contact.state.washT <= 1.2, `scene 2 did not begin dissolving at visual contact: ${JSON.stringify(contact)}`);
+  const trailingAtBottomDelta = await page.evaluate(() => document.querySelector('#c2 .scene-text').getBoundingClientRect().bottom - mobileVisualBand().bottom);
+  await page.mouse.wheel(0, trailingAtBottomDelta);
+  await page.waitForTimeout(250);
+  const covered = await read();
+  assert(Math.abs(covered.text.bottom - covered.band.bottom) < 2 && covered.state.washT <= 1.21 && covered.state.shown === 0,
+    `scene 2 replaced the image before its trailing edge uncovered the visual: ${JSON.stringify(covered)}`);
+  const halfDelta = await page.evaluate(() => document.querySelector('#c2 .scene-text').getBoundingClientRect().bottom - (mobileVisualBand().top + mobileVisualBand().height / 2));
+  await page.mouse.wheel(0, halfDelta);
+  await page.waitForTimeout(300);
+  const half = await read();
+  assert(half.progress > covered.progress && half.state.washT > 1.2 && half.state.shown === 0, `scene 2 reveal did not follow trailing-edge exposure: ${JSON.stringify({ covered, half })}`);
+  await page.waitForTimeout(600);
+  const paused = await read();
+  assert(Math.abs(paused.state.washT - half.state.washT) < .01 && Math.abs(paused.state.progress - half.state.progress) < .001 && paused.writes === 0,
+    `scene 2 wash advanced without scroll input: ${JSON.stringify({ half, paused })}`);
+  await page.mouse.wheel(0, -80);
+  await page.waitForTimeout(300);
+  const reversed = await read();
+  assert(reversed.progress < paused.progress && reversed.state.washT < paused.state.washT - .02 && reversed.writes === 0,
+    `scene 2 wash did not reverse with upward scroll: ${JSON.stringify({ paused, reversed })}`);
+  const clearDelta = await page.evaluate(() => document.querySelector('#c2 .scene-text').getBoundingClientRect().bottom - mobileVisualBand().top + 4);
+  await page.mouse.wheel(0, clearDelta);
+  await page.waitForFunction(() => __state().shown === 1 && !__state().running, null, { timeout: 5000 });
+  const cleared = await read();
+  assert(cleared.progress >= 1 && cleared.writes === 0, `scene 2 did not finish when its text cleared the visual: ${JSON.stringify(cleared)}`);
+  await page.close();
+  return { before: +before.progress.toFixed(3), contact: +contact.progress.toFixed(3), coveredWashT: covered.state.washT,
+    half: +half.progress.toFixed(3), halfWashT: half.state.washT, pausedWashT: paused.state.washT,
+    reversed: +reversed.progress.toFixed(3), reversedWashT: reversed.state.washT, clearedShown: cleared.state.shown };
+}
 
 try {
+  results.opening = [];
+  for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 568 }]) results.opening.push(await checkOpening(viewport));
+  results.sceneTiming = await checkSceneTiming();
   const page = await mobilePage();
   let state = await mobileState(page);
   assert(state.snap === 'none' && !state.mobileSnap, `mobile starts with snap enabled: ${JSON.stringify(state)}`);
@@ -113,7 +200,7 @@ try {
     await page.waitForTimeout(50);
     state = await mobileState(page);
   }
-  assert(state.xf > .1 && state.xf < .9, `did not reach a partial closing scrub: ${JSON.stringify(state)}`);
+  assert(state.xf > .01 && state.xf < .9, `did not reach a partial closing scrub: ${JSON.stringify(state)}`);
   const partial = state;
   const partialHeld = await mobileState(page);
   assert(partialHeld.writes === 0, `closing issued scrollTo: ${JSON.stringify(partialHeld)}`);

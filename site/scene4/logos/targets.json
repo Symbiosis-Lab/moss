@@ -6,7 +6,7 @@
     "source_url": "https://github.com/Symbiosis-Lab/moss",
     "guideline_url": "https://github.com/Symbiosis-Lab/moss",
     "allowed_on_circle": true,
-    "color_rule": "Black ink, #4f7031 green accents (dark-mode aware); respects prefers-color-scheme",
+    "color_rule": "Black ink with #4f7031 green accents; fixed light-surface variant matching the landing header",
     "quote": "One ink splash; reads as a palmately lobed leaf. The colour is distance, not identity."
   },
   {

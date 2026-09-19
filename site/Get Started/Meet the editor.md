@@ -36,7 +36,7 @@ The large title uses the filename by default, so editing it renames the file and
 
 Write ordinary Markdown in the main editor. Select text for the floating formatting toolbar, type `/` at the start of a line for the insert menu, or use the toolbar at the bottom. The source stays a normal `.md` file; [[Write with Markdown|the Markdown guide]] covers headings, lists, links, and other basics.
 
-<moss-ui-demo lang="en"></moss-ui-demo>
+<moss-ui-demo lang="en" static></moss-ui-demo>
 
 <noscript><a href="/ui/editor-demo.html"><img width="760" height="420" loading="lazy" src="../assets/guides/editor-ui-source.png" alt="Open the moss editor demo"></a></noscript>
 

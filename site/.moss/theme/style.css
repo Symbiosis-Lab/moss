@@ -11,6 +11,14 @@
   --moss-content-width: 72ch;
 }
 
+@font-face {
+  font-family: "Moss Long Cang";
+  src: url("/assets/brand/LongCang-colophon.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+9752, U+82D4;
+}
+
 [data-theme="dark"] {
   --moss-color-bg: #171816;
   --moss-color-surface: #20221f;
@@ -24,6 +32,8 @@
 body { background: var(--moss-color-bg); color: var(--moss-color-text); }
 h1, h2, h3, .article-title { font-family: var(--moss-font-serif); font-weight: 400; letter-spacing: -.01em; }
 .nav-content { border-bottom: 1px solid var(--moss-border-light); }
+.site-name { font-weight: 600; letter-spacing: -.01em; }
+html:lang(zh-Hans) .site-name, html:lang(zh-Hant) .site-name { font-family: "Moss Long Cang", var(--moss-font-body); font-size: 1.08em; font-weight: 400; letter-spacing: .02em; }
 header { padding-bottom: var(--moss-space-lg); }
 article img[src$=".gif"] { max-width: min(600px, 100%); margin-inline: auto; }
 .moss-buttons + p { margin-top: .5rem; color: var(--moss-color-muted); font-size: .8rem; }

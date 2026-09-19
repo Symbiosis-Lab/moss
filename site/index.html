@@ -305,9 +305,9 @@
      to the measured desktop composition. The script supplies these variables
      after it knows the viewport and copy heights. */
   #intro { display: grid; place-items: start center; min-height: 108svh; padding: 0 32px; text-align: center; }
-  #intro h1 { position: sticky; top: 38svh; margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; text-wrap: balance; opacity: clamp(0, calc((var(--intro-title-p, 1) - .04) * 1.2), 1); }
+  #intro h1 { position: sticky; top: 34svh; margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; text-wrap: balance; opacity: clamp(0, calc((var(--intro-title-p, 1) - .04) * 1.2), 1); }
   .page { margin-top: -42svh; }
-  .page { grid-template-columns: calc(var(--vis-w) * var(--layout-s, var(--s)) - 88px) minmax(0, 1fr); }
+  .page { grid-template-columns: calc(var(--vis-w) * var(--layout-s, var(--s)) - clamp(168px, calc(23vw - 126px), 238px)) minmax(0, 1fr); }
   #stage { transform: translate(calc((var(--layout-s, 1) - var(--s, 1)) * 400px), calc(var(--intro-visible, 0px) * -.33 - var(--vis-top, 0px))); }
   #cell { transform: scale(var(--s)); }
   #c1 { min-height: 100svh; justify-content: flex-start; }
@@ -357,26 +357,22 @@
 
   @media (max-width: 900px) {
     body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; opacity: calc(1 - var(--xf)); background: linear-gradient(to bottom, var(--bg) 0 34px, color-mix(in srgb, var(--bg) 72%, transparent) 52px, transparent); }
-    #intro { min-height: 100svh; padding: 0 20px; }
-    #intro h1 { top: 88px; }
-    .page { margin-top: -72svh; }
-    #intro h1 { font-size: clamp(40px, 11vw, 58px); }
+    #intro { min-height: 0; padding: 88px 20px 32px; }
+    #intro h1 { position: static; font-size: clamp(40px, 11vw, 58px); opacity: 1; -webkit-mask-image: none !important; mask-image: none !important; }
+    .page { margin-top: 0; }
     .page { position: relative; display: block; width: 100%; padding: 0 16px; }
     #col { position: absolute; inset: 0; height: auto; padding-top: var(--mobile-col-pad, 70svh); z-index: 0; pointer-events: none; }
     #copy { position: relative; z-index: 1; min-width: 0; }
     #vis { margin-left: 0; position: sticky; top: 76px; width: 100%; height: var(--mobile-vis-h, 42vh); min-height: 260px; padding-left: 0; transform: none; align-items: flex-start; justify-content: flex-start; overflow: visible; }
-    #stage { transform: none; width: calc(var(--cell-w) * var(--s)); height: calc(var(--cell-h) * var(--s)); flex: none; margin-inline: auto; }
+    #stage { transform: none; width: calc(var(--cell-w) * var(--s)); height: calc(var(--cell-h) * var(--s)); flex: none; margin: var(--mobile-stage-overhang, 0px) auto 0; }
     #cell { transform: scale(var(--s)); transform-origin: left top; }
     #vis, #vis * { pointer-events: none !important; touch-action: pan-y; }
     .scene { width: 100%; min-height: auto; margin: 0; padding: 0 0 calc(var(--mobile-vis-h, 42vh) + 72px); justify-content: flex-start; }
     #c1 { min-height: auto; padding-top: 0; }
-    /* During the opening beat, keep the first action at the phone viewport's
-       lower edge. The offset is entirely paid back with --intro-copy-p, so settled
-       scene 1 returns to the same copy and stage geometry as every later scene. */
-    #c1 .scene-text { transform: none; margin-top: calc(65px + clamp(0px, calc(var(--intro-copy-p, 0) * 20.3svh), 171px)); }
+    #c1 .scene-text { transform: none; margin-top: 0; }
     .scene-text { width: min(100%, 520px); margin-inline: auto; padding: 24px 18px 26px; background: linear-gradient(to bottom, transparent, var(--bg) 18px, var(--bg) calc(100% - 18px), transparent); }
     #c1 .scene-text { background: var(--bg); }
-    #c1 h2 { font-size: calc(29px + 11px * (1 - var(--intro-p, 0))); }
+    #c1 h2 { font-size: clamp(29px, 9vw, 40px); }
     .btns { flex-wrap: nowrap; gap: 8px; }
     .moss-btn { padding-inline: clamp(12px, 4vw, 20px); }
     #c2, #c3, #c4, #c5 { margin-top: 0; }
@@ -557,13 +553,12 @@ const SPILL = 32;
 // change to these.
 const PEEK = 150, SIB_MS = 320, SIB_STAGGER = 170, SIB_LEAD = 140;
 // Scene 4's control. PUB_SCALE/PUB_MS grow it, alone, before anything else
-// happens; PUB_PAD is the sheet left around it so its composition ring is not
-// cut away with the rest. PUB_BEAT is the pause after growth before the
+// happens. PUB_BEAT is the pause after growth before the
 // targets start popping (below). Going back, the control drops last, after
 // PUB_OUT_DELAY — FAN_OUT_MS, which the join out of scene 4 waits on before
 // the sheet may be wetted again, gives the targets' own (much shorter) retreat
 // room inside that budget rather than timing against it directly.
-const PUB_SCALE = 2.6, PUB_MS = 420, PUB_PAD = 4, PUB_BEAT = 120, PUB_OUT_DELAY = 450;
+const PUB_SCALE = 2.6, PUB_MS = 420, PUB_BEAT = 120, PUB_OUT_DELAY = 450;
 const FAN_OUT_MS = PUB_OUT_DELAY + PUB_MS;
 // Scene 5's close. The loop, its poster and the headline are the page's own
 // arguments, so another cut of the footage or another line can be put in front
@@ -754,42 +749,48 @@ function introWatercolor(progress) {
   openingTitle.style.webkitMaskSize = openingTitle.style.maskSize = '100% 100%';
 }
 function updateOpening() {
+  // On phones the opening and first scene are ordinary document flow. Their
+  // geometry is established once in fit(); scrolling only moves that flow.
+  if (mobileLayout()) return;
   const visible = Math.max(0, opening.getBoundingClientRect().bottom);
   const introP = Math.min(1, visible / Math.max(1, opening.offsetHeight));
   const first = document.querySelector('#c1 .scene-text').getBoundingClientRect();
-  const firstRest = Math.max(1, scrollY + (mobileLayout() ? first.top - 88 : (first.top + first.bottom) / 2 - innerHeight * .5));
+  const firstRest = Math.max(1, scrollY + (first.top + first.bottom) / 2 - innerHeight * .5);
   const titleP = clamp01(1 - scrollY / firstRest);
   // The opening's scale and lift end with its title, so scene 1 arrives at the
   // same stage pose scene 2 morphs from. The copy can still occupy the opening
   // beat; it must not leave the live paper smaller or lower than its print.
   const stageIntroP = introP * titleP;
-  SCALE = baseScale * (mobileLayout() ? 1 : 1 - .4 * stageIntroP);
+  const introScale = .4 + .1 * clamp01((innerHeight - 720) / 480);
+  SCALE = baseScale * (1 - (1 - introScale) * stageIntroP);
   document.documentElement.style.setProperty('--s', String(SCALE));
   document.documentElement.style.setProperty('--intro-p', String(introP));
-  // The phone copy's opening offset ends before scene 1's own rest. Derive it
-  // from scroll travel, not the shifted copy rect, so the margin cannot extend
-  // its own lifetime through a geometry feedback loop.
-  document.documentElement.style.setProperty('--intro-copy-p', String(mobileLayout() ? clamp01(1 - scrollY / (innerHeight * .18)) : 0));
   document.documentElement.style.setProperty('--intro-title-p', String(titleP));
   introWatercolor(titleP);
-  document.documentElement.style.setProperty('--intro-visible', mobileLayout() ? '0px' : (visible * titleP) + 'px');
-  document.documentElement.style.setProperty('--vis-top', mobileLayout() ? '0px' : (document.getElementById('vis').getBoundingClientRect().top * (1 - titleP)) + 'px');
-  if (mobileLayout()) {
-    const firstCopy = document.querySelector('#c1 .scene-text').offsetHeight + 28;
-    const introPad = Math.max(firstCopy + 64, innerHeight * .72 + 64);
-    const scenePad = Math.min(462, Math.max(382, innerHeight * .46 + 32));
-    document.documentElement.style.setProperty('--mobile-col-pad', (scenePad + (introPad - scenePad) * titleP) + 'px');
-  }
+  document.documentElement.style.setProperty('--intro-visible', (visible * titleP) + 'px');
+  document.documentElement.style.setProperty('--vis-top', (document.getElementById('vis').getBoundingClientRect().top * (1 - titleP)) + 'px');
 }
 function fit() {
   const sw = (Math.min(innerWidth, PAGE_MAX) - 56 - 96 - COPY_MIN) / VIS_W;
-  const visualHeight = Math.min(innerHeight * .48, 390);
-  baseScale = mobileLayout() ? Math.min((innerWidth - 32) / 820, (visualHeight - 24) / 750) : Math.max(.5, Math.min(1, sw, (innerHeight - 96) / GEOM.cellH));
+  const mobileScale = Math.min((innerWidth - 32) / 820, 366 / 750);
+  // Mobile browser chrome changes innerHeight while the reader scrolls. Size
+  // the visual from width so that an address-bar resize cannot move the band.
+  const visualHeight = mobileLayout() ? Math.min(390, Math.max(260, mobileScale * 750 + 24)) : Math.min(innerHeight * .48, 390);
+  baseScale = mobileLayout() ? mobileScale : Math.max(.5, Math.min(1, sw, (innerHeight - 96) / GEOM.cellH));
   const root = document.documentElement.style;
   root.setProperty('--layout-s', String(baseScale));
+  if (mobileLayout()) { SCALE = baseScale; root.setProperty('--s', String(SCALE)); }
   root.setProperty('--intro-h', opening.offsetHeight + 'px');
   root.setProperty('--mobile-vis-h', visualHeight + 'px');
-  root.setProperty('--first-copy-h', (document.querySelector('#c1 .scene-text').offsetHeight + 28) + 'px');
+  const firstCopyHeight = document.querySelector('#c1 .scene-text').offsetHeight;
+  root.setProperty('--first-copy-h', (firstCopyHeight + 28) + 'px');
+  if (mobileLayout()) {
+    // Scene 1's scattered plates extend about 70 composition pixels above #stage.
+    // Keep that paint inside #vis so its sticky top is the visible top, then
+    // place the whole visual band one fixed reading gap after the copy.
+    root.setProperty('--mobile-stage-overhang', (70 * baseScale) + 'px');
+    root.setProperty('--mobile-col-pad', (firstCopyHeight + 32) + 'px');
+  }
   document.getElementById('vis').inert = mobileLayout();
   updateOpening();
   if (printExpanded) setPrintRect(currentPrintRect());
@@ -1219,7 +1220,23 @@ const sim = (() => {
     // and it shows no scrollbar: a classic scrollbar (a mouse plugged into a
     // Mac shows one) narrows the live page by 15px against its print, which is
     // laid out with none, and the picture shifted as the sheet cured
-    if (fe && fe.id === 'moss-preview-iframe') { doc.documentElement.dataset.theme = 'light'; const st = doc.createElement('style'); st.textContent = 'html { scrollbar-width: none; } html::-webkit-scrollbar { display: none; }'; doc.head.appendChild(st); return; }
+    if (fe && fe.id === 'moss-preview-iframe') {
+      doc.documentElement.dataset.theme = 'light';
+      const st = doc.createElement('style');
+      st.textContent = 'html, body[data-typesetting="vertical"] { scrollbar-width: none; } html::-webkit-scrollbar, body[data-typesetting="vertical"]::-webkit-scrollbar { display: none; }';
+      doc.head.appendChild(st);
+      // The harvested vertical page keeps native horizontal trackpad scrolling.
+      // A conventional mouse wheel moves its columns, without a visible bar.
+      if (doc.body?.dataset.typesetting === 'vertical') doc.addEventListener('wheel', (event) => {
+        if (event.ctrlKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+        const body = doc.body, before = body.scrollLeft;
+        const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? body.clientWidth : 1);
+        body.scrollLeft -= delta;
+        event.stopImmediatePropagation();
+        if (body.scrollLeft !== before) event.preventDefault();
+      }, { passive: false, capture: true });
+      return;
+    }
     doc.documentElement.style.overflow = 'hidden'; if (doc.body) doc.body.style.overflow = 'hidden';
     doc.querySelectorAll('iframe').forEach((f) => { const go = () => inert(f.contentDocument); f.addEventListener('load', go); if (f.contentDocument && f.contentDocument.readyState === 'complete') go(); });
   };
@@ -1363,7 +1380,7 @@ function measurePub() {
   const r = btn && btn.getBoundingClientRect();
   if (!r || !r.width) return false;
   const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-  pubR = r.width / 2 + PUB_PAD;
+  pubR = r.width / 2;
   for (const [k, v] of Object.entries({ '--pub-cx': cx + 'px', '--pub-cy': cy + 'px', '--pub-r': pubR + 'px',
     '--pub-dx': (GEOM.cellW / 2 + SPILL - cx) + 'px', '--pub-dy': (GEOM.cellH / 2 - cy) + 'px' }))
     stage.style.setProperty(k, v);
@@ -1867,7 +1884,17 @@ window.mossLanding = { openSignup() {
 // XF_SPAN of the distance scene 4 owns. So it reverses for free — a turnaround
 // needs nothing said about it — and the join settles on whichever end the
 // reader carried it to. Only opacity changes per frame.
+function mobileVisualBand() {
+  const visual = document.getElementById('vis');
+  const top = parseFloat(getComputedStyle(visual).top);
+  const height = visual.offsetHeight;
+  return { top, bottom: top + height, height };
+}
 function xfAt() {
+  if (mobileLayout()) {
+    const band = mobileVisualBand();
+    return clamp01((band.bottom + 24 - five.getBoundingClientRect().top) / (band.height + 24));
+  }
   const top = five.offsetTop;
   return clamp01((scrollY - (top - innerHeight * .8)) / (innerHeight * .6));
 }
@@ -1958,7 +1985,7 @@ async function runJoin() {
       // A join that brings its own mechanism runs it and nothing else: the
       // wash's preamble takes down what the scene being left had standing, and
       // a crossfade needs both scenes left exactly as they are.
-      if (join.back && to < shown) shown = await join.back(to);
+      if (join.back && to < shown && !mobileLayout()) shown = await join.back(to);
       else if (join.run) shown = await join.run(to);
       else {
         scenes('morph');   // whatever the scene being left had standing comes off here
@@ -1966,7 +1993,7 @@ async function runJoin() {
         // a fan still retracting, or the reader never sees it go. A jump is not
         // being watched, so there it is taken off inside the frame instead.
         const leave = join.leave ? join.leave(shown) : 0;
-        if (leave && !reduce) { if (jump) snapStage(); else await wait(leave); }
+        if (leave && !reduce) { if (jump || mobileLayout()) snapStage(); else await wait(leave); }
         // A jump can ask for a scene no print was ever taken for: the prints on
         // hand are the neighbours', and two boundaries away is not a neighbour.
         // Stopping to take one costs 14 to 54ms of clone-and-serialize on the
@@ -1980,12 +2007,14 @@ async function runJoin() {
         if (reach !== shown) { shown = await pour(reach); wentStale(); }
         else { passThrough(shown, to); shown = to; }
       }
+      if (target === SHARE && xfAt() >= 1) { standAtTerminalClose(); break; }
       still(shown);
     }
   } finally { driving = false; flushPrintRect(); }
 }
 async function pour(to) {
   const from = shown;
+  let terminal = false;
   let fwd = to > from;
   washesRun++;
   // The prints are on hand (below), so the first drops land on the frame the
@@ -2031,6 +2060,7 @@ async function pour(to) {
   steps = 0;
   await new Promise((finish) => {
     const f = (now) => {
+      if (target === SHARE && xfAt() >= 1) { terminal = true; finish(); return; }
       const stepClock = window.__stepClock;
       if (stepClock && window.__stepLimit != null && steps >= window.__stepLimit) { requestAnimationFrame(f); return; }
       const dtReal = Math.min(0.1, (now - last) / 1000); last = now;
@@ -2038,6 +2068,7 @@ async function pour(to) {
       // The newest target, however far off it is: this wash is re-pointed at
       // it rather than finishing and handing on to a second one.
       const turn = legToward(from, target, true);
+      if (mobileLayout() && turn === from) { to = from; finish(); return; }
       if (turn !== to) {
         // Back across the scene it began on is the turnaround it always was:
         // the water is poured again and what it laid down lifts. Anything else
@@ -2060,18 +2091,26 @@ async function pour(to) {
       // moves it — including the settle's own travel, which the clock reads as
       // the scroll it is, and which ends inside the scene's text: a rest needs
       // no rate of its own, because being carried to a scene is an arrival.
-      const own = jump ? ARRIVE_JUMP : arrived ? (t >= T_TAKE && t < T_WET ? ARRIVE_SMEAR : ARRIVE) : 0;
-      if (!stepClock) acc += dtReal * own + K(t) * moved;
+      const own = mobileLayout() ? 0 : jump ? ARRIVE_JUMP : arrived ? (t >= T_TAKE && t < T_WET ? ARRIVE_SMEAR : ARRIVE) : 0;
+      if (!stepClock) {
+        if (mobileLayout()) {
+          acc = T_TOTAL * clamp01((progressAt() - from) / (to - from));
+          // The fluid simulation runs forward. On reversal rebuild its bounded
+          // state, keeping the previous canvas visible until it catches up.
+          if (t > acc + DT) { sim.reset(); t = 0; }
+        } else acc += dtReal * own + K(t) * moved;
+      }
       washDbg = { acc: +acc.toFixed(3), arrived, own, dtReal: +dtReal.toFixed(3), fps: Math.round(1 / Math.max(dtReal, 1e-3)) };
       let budget = stepClock ? SPF : STEPS_PER_FRAME;
       while (t < T_TOTAL && budget-- > 0 && (stepClock || t < acc) && !(HOLD && t >= HOLD)) { sim.step(fwd, t, smooth(T_CURE, T_TOTAL, t), stir, tilt, relift); t += DT; steps++; }
       washT = t;
-      sim.draw(fwd, smooth(T_CURE, T_TOTAL, t));
+      if (!mobileLayout() || t >= acc - DT) sim.draw(fwd, smooth(T_CURE, T_TOTAL, t));
       groundToward(to, smooth(T_DRY, T_TOTAL, t), stepClock ? DT * SPF : dtReal);
       if (t >= T_TOTAL - 1e-6) finish(); else requestAnimationFrame(f);
     };
     requestAnimationFrame(f);
   });
+  if (terminal) return SHARE;
   setSheet(to, pr[to]);   // the scene now on screen, at rest
   return to;
 }
@@ -2627,9 +2666,28 @@ warmSoon();
 // prints were holding shut runs as soon as they are on hand.
 function maybeJoin() { if (!running() && !retaking && target !== shown && primed()) runJoin(); }
 function setTarget(t) {
+  if (t === SHARE && xfAt() >= 1) {
+    target = t;
+    // Closing copy and its poster are independent of the active join.
+    mountLoop(); setCross(1); fiveOn(true);
+    if (!running() && shown !== SHARE) standAtTerminalClose();
+    return;
+  }
   if (t === target) return;
   target = t;
   maybeJoin();
+}
+// The closing scene has no captured print or embedded app dependency. A cold
+// load can reach the document bottom while those earlier scenes are still
+// loading; let the terminal position stand immediately instead of queuing it
+// behind prints the reader has already passed. If they reverse before boot,
+// onScroll keeps the new target and ready() drives the ordinary joins back.
+function standAtTerminalClose() {
+  shown = target = SHARE;
+  still(SHARE);
+  mountLoop();
+  setCross(1);
+  fiveOn(true);
 }
 // Scroll: the reading line is mid-window, and where it stands is what names the
 // scene. A wash then runs at its own pace and sets where it is; the scroll only
@@ -2654,15 +2712,21 @@ const textBottom = (sec) => sec.lastElementChild.getBoundingClientRect().bottom;
 // disagree as either scene's markup changes.
 const progressAt = () => {
   if (mobileLayout()) {
-    const line = Math.min(innerHeight * .55, Math.min(innerHeight * .48, 390) + 104);
-    const band = Math.min(innerHeight * .48, 390) * .65;
-    for (let i = 1; i < scenesEl.length; i++) {
-      const top = i === SHARE ? five.getBoundingClientRect().top : textTop(scenesEl[i]);
-      if (top > line + band) return i - 1;
-      if (top > line) return i - (top - line) / band;
+    const band = mobileVisualBand();
+    for (let i = 1; i <= DEPLOY; i++) {
+      const text = scenesEl[i].firstElementChild.getBoundingClientRect();
+      if (text.top >= band.bottom + 24) return i - 1;
+      if (text.bottom > band.top) {
+        // Wet the old image just before contact. The next image can set only
+        // as the trailing edge of the text uncovers the pinned visual.
+        const dissolve = clamp01((band.bottom + 24 - text.top) / (band.height + 24));
+        const reveal = clamp01((band.bottom - text.bottom) / band.height);
+        return i - 1 + (T_TAKE * dissolve + (T_TOTAL - T_TAKE) * reveal) / T_TOTAL;
+      }
     }
-    return SHARE;
+    return DEPLOY + xfAt();
   }
+
   const line = innerHeight * LINE;
   for (let i = 0; i < JOINS.length; i++) {
     if (textBottom(scenesEl[i]) >= line) return i;   // the line is still inside this text
@@ -2676,7 +2740,13 @@ const progressAt = () => {
 // sceneForRest: dir is 0 before the reader's first gesture, which a
 // scroll-restored reload reaches with the position already mid-gap, so the
 // ceil branch below must not stand in for "no direction yet".
-const targetAt = (dir) => { const p = progressAt(); return Number.isInteger(p) ? p : dir === 0 ? Math.round(p) : dir < 0 ? Math.floor(p) : Math.ceil(p); };
+const targetAt = (dir) => {
+  const p = progressAt();
+  if (Number.isInteger(p)) return p;
+  // Keep the same pair of prints while a finger reverses within their wash.
+  if (mobileLayout()) return p < shown ? Math.floor(p) : Math.ceil(p);
+  return dir === 0 ? Math.round(p) : dir < 0 ? Math.floor(p) : Math.ceil(p);
+};
 let scrollV = 0, asked = null;
 // warmScene3Media (defined with the rest of scene 3's own script, below)
 // needs this declared up here, ahead of watchScroll's own IIFE (further
@@ -2695,6 +2765,18 @@ function onScroll(dy) {
   // and tilts the film
   scrollV += dy / innerHeight / V_TAU;
   const t = targetAt(travel);
+  if (!booted && shown === SHARE) {
+    const q = xfAt();
+    asked = target = t;
+    setCross(q);
+    fiveOn(q >= 1);
+    return;
+  }
+  if (!booted && t === SHARE && xfAt() >= 1) {
+    asked = t;
+    if (shown !== SHARE) standAtTerminalClose();
+    return;
+  }
   // Scene 3's own heavy media (warmScene3Media, defined below) starts here:
   // `t` is read off the real scroll position every frame no matter how the
   // reader got here, so this is the earliest the page ever knows they are
@@ -2762,7 +2844,7 @@ const restY = (scene) => {
   if (scene < 0) return 0;
   if (scene === 0 && mobileLayout()) return Math.max(0, Math.round(scrollY + textTop(scenesEl[0]) - 88));
   if (scene === SHARE) return Math.max(0, document.documentElement.scrollHeight - innerHeight);
-  if (mobileLayout()) return Math.round(scrollY + textTop(scenesEl[scene]) - Math.min(innerHeight * .55, Math.min(innerHeight * .48, 390) + 104));
+  if (mobileLayout()) return Math.round(scrollY + textBottom(scenesEl[scene]) - mobileVisualBand().top);
   const top = textTop(scenesEl[scene]), bot = textBottom(scenesEl[scene]);
   return Math.round(scrollY + (top + bot) / 2 - innerHeight * LINE);
 };
@@ -2781,7 +2863,7 @@ let inputArmed = false;
 // from the real scrollY it writes every frame so a foreign write (CARRY_EPS above) can be
 // told apart from its own last write. carryX starts null and is seeded from scrollY on the
 // first tick, so a reload that restores mid-gap is picked up wherever the browser left it.
-let carryX = null, carryV = 0;
+let carryX = null, carryV = 0, carryGoal = null;
 // Direct manipulation (WWDC 2018 "Designing Fluid Interfaces", UIScrollView): while the reader
 // is in contact — a touch, a scrollbar drag, or an unreleased trackpad gesture — the pull is
 // off and the page follows their input one-to-one; release hands the integrator the speed that
@@ -2922,14 +3004,14 @@ if (CARRY === 'intent') {
   addEventListener('touchcancel', holdOff);
 
   addEventListener('wheel', (e) => {
-    if (reduce || e.ctrlKey || nativeScroll()) return;
+    if (reduce || e.ctrlKey || nativeScroll() || !e.deltaY) return;
     e.preventDefault();
     // travel is set from the tick itself, not from carryV's own sign inside the integrator
     // below: the spring's restoring force can drive carryV through zero and even negative
     // purely from its own reaction while the reader is still pushing forward (measured
     // directly, 2026-09-16 — a modest push fell straight back to scene 0), which would read as
     // a reversal that never happened. The wheel tick is the one place a reversal is real.
-    travel = Math.sign(e.deltaY);
+    const direction = Math.sign(e.deltaY);
     // A trackpad has no pointerdown/up of its own, so its contact is read off the ticks
     // themselves: WheelEvent.momentum, where a browser exposes it, says outright whether this
     // tick is the reader's own push (false) or the coast after release (true). Elsewhere, a
@@ -2937,6 +3019,19 @@ if (CARRY === 'intent') {
     // reads as the same contact; watchScrollIntent below is what notices a pause, since there's
     // no event for it here — only a decaying run is caught at tick time.
     const now = performance.now();
+    const newGesture = now - lastWheelT > HOLD_GAP;
+    const atGoal = carryGoal != null && Math.abs(scrollY - restY(carryGoal)) <= CARRY_EPS;
+    if (direction !== travel || (newGesture && (carryGoal == null || atGoal))) {
+      let anchor = carryGoal;
+      if (anchor == null || newGesture) {
+        anchor = -1;
+        for (let scene = 0; scene <= SHARE; scene++) {
+          if (Math.abs(scrollY - restY(scene)) < Math.abs(scrollY - restY(anchor))) anchor = scene;
+        }
+      }
+      carryGoal = Math.max(-1, Math.min(SHARE, anchor + direction));
+    }
+    travel = direction;
     if ('momentum' in e) wheelHeld = !e.momentum;
     else {
       const mag = Math.abs(e.deltaY), gap = now - lastWheelT;
@@ -2948,7 +3043,14 @@ if (CARRY === 'intent') {
     if (wheelHeld) {
       // 1:1, no pull: the tick moves the page by its own delta and nothing more.
       const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight);
-      scrollTo(0, Math.round(Math.min(maxY, Math.max(0, scrollY + e.deltaY))));
+      const requested = Math.min(maxY, Math.max(0, scrollY + e.deltaY));
+      // Advance only when the reader's own direct tick crosses the goal. The
+      // spring's motion between ticks must never promote a three-tick nudge.
+      if (carryGoal != null) {
+        while (direction > 0 && carryGoal < SHARE && requested > restY(carryGoal)) carryGoal++;
+        while (direction < 0 && carryGoal > -1 && requested < restY(carryGoal)) carryGoal--;
+      }
+      scrollTo(0, Math.round(requested));
     } else carryV += e.deltaY * PUSH_GAIN;
   }, { passive: false });
 }
@@ -2976,8 +3078,10 @@ function watchScrollIntent(now) {
     const prevX = carryX;
     carryX = scrollY;
     carryV = dt > 0 ? (carryX - prevX) / dt : carryV;
-  } else if (Math.abs(scrollY - carryX) > CARRY_EPS) { carryX = scrollY; carryV = 0; }   // a foreign write hands control back
-  const scene = restSceneAt(progressAt(), travel);
+    if (carryV) travel = Math.sign(carryV);
+    if (touchHeld) carryGoal = null;
+  } else if (Math.abs(scrollY - carryX) > CARRY_EPS) { carryX = scrollY; carryV = 0; carryGoal = null; }   // a foreign write hands control back
+  const scene = carryGoal == null ? restSceneAt(progressAt(), travel) : carryGoal;
   const y = restY(scene);
   if (Math.abs(carryV) > 4 || Math.abs(carryX - y) > 0.5) restSince = now;   // bookkeeping for NB_DWELL elsewhere, not a branch in the physics below
   setTarget(Math.max(0, scene));
@@ -3046,7 +3150,7 @@ function watchScrollWait(now) {
   // reduced-motion behaviour is already that path's own instant arrival (settleAtRest's own
   // `if (reduce)`), so there is nothing for intent or css to do differently under it.
   updateOpening();
-  if (nativeScroll()) { carryX = null; carryV = 0; watchScrollCss(now); }
+  if (nativeScroll()) { carryX = null; carryV = 0; carryGoal = null; watchScrollCss(now); }
   else if (reduce || CARRY === 'wait') watchScrollWait(now);
   else if (CARRY === 'intent') watchScrollIntent(now);
   else watchScrollCss(now);
@@ -3380,7 +3484,7 @@ window.__targetAt = targetAt;   // what a rested position names, read the same w
 window.__sceneForRest = sceneForRest;   // which scene a rest carries to, the same formula settleAtRest uses
 window.__DEAD = DEAD;   // the dead zone in that formula, read-only, so the harness can recompute sceneForRest's answer from primitives instead of asking the page's own function for it
 window.__plateBounds = plateBounds;   // the region a scattered/dragged plate must stay inside, the same formula the drag clamp and the initial scatter both read
-window.__state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, settle: !!settleRun, settleSecs, settleCureLeft, settleShown, settleRunning, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, carry: CARRY });
+window.__state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: !!settleRun, settleSecs, settleCureLeft, settleShown, settleRunning, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, carry: CARRY });
 // window.__s3 is defined with the rest of scene 3's own script, above.
 // How the print pipeline is doing: captures started, how many are drawing now,
 // the most that ever drew at once, and how old the print on hand is.

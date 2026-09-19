@@ -7,11 +7,12 @@ const base = new URL(process.argv[2]);
 const moduleName = process.env.PLAYWRIGHT_MODULE || 'playwright';
 const engines = await import(moduleName.startsWith('/') ? pathToFileURL(moduleName).href : moduleName);
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const locales = process.env.LOCALES === 'en' ? [''] : ['', 'zh-hant/', 'zh-hans/'];
 
 for (const name of (process.env.ENGINE || 'chromium,webkit').split(',')) {
   const browser = await engines[name].launch();
   try {
-    for (const locale of ['', 'zh-hant/', 'zh-hans/']) {
+    for (const locale of locales) {
       const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: 'no-preference' });
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
@@ -28,11 +29,16 @@ for (const name of (process.env.ENGINE || 'chromium,webkit').split(',')) {
       await page.waitForTimeout(2400);
       assert(await page.evaluate(() => __stageChanges.length === 0), `${name}/${locale}: idle capture switched the visible scene`);
 
+      // Arm the carry without supplying a direction. A wheel delta is scene
+      // intent now, even at one pixel, so using one here would move the exact
+      // rest below toward the following scene instead of merely enabling it.
+      await page.mouse.move(720, 20);
+      await page.mouse.down();
+      await page.mouse.up();
       for (const scene of [1, 2, 3, 2, 0]) {
         const previous = await page.evaluate(() => __state());
         const prior = previous.washes;
         await page.evaluate(scene => scrollTo(0, __restY(scene)), scene);
-        await page.mouse.wheel(0, 1);
         // Returning from the orbit intentionally shrinks the surviving Publish
         // control into the preview instead of dissolving it.
         if (!(previous.shown === 3 && scene === 2)) {

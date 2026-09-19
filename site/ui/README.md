@@ -27,7 +27,7 @@ The editor guide uses `../assets/guides/editor-ui-source.png` and `../assets/gui
 - Shell fixture: the matching generated site in its preview and publish chrome.
 - Locale: interface chrome is English. The localized landing scene supplies separate Chinese content; these banked files are not translated screenshots.
 - Interaction boundary: `editor.html` is a deterministic mock of the captured editor, suitable for the interactions it exposes. It is not the desktop application and must not be used as proof of filesystem, Git, deploy, or operating-system behavior.
-- Demo contract: `<moss-ui-demo>` never autoplays. It cancels its scripted typing when the reader interacts with the real harvested iframe, supports pause/resume/reset, and shows a static completed state under reduced motion.
+- Demo contract: `<moss-ui-demo>` never autoplays. Its quiet play/stop control sits above the harvested editor, and reader interaction pauses scripted typing. The `static` attribute prefills the real editable fixture without playback controls; reduced motion also shows completed content without animation.
 - Guide loading: authored `<moss-ui-demo>` markup survives Markdown rendering. `.moss/theme/script.js` loads this banked module through `window.mossTheme.base`; the module resolves its stylesheet and harvested iframe from `import.meta.url`, so all three URLs retain a deployment subpath.
 - Source of truth for behavior: current desktop code and release documentation. When either disagrees with a capture, refresh the capture or use text instead.
 
