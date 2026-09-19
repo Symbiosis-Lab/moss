@@ -1,0 +1,15 @@
+# Landing motion
+
+The landing page has two tracks. The text remains in document flow. The visual stays pinned and reads its position from the text; it never advances merely because time passes while a reader pauses. Mobile uses native scrolling. Desktop may settle to a reading position, but that changes the input scroll position rather than creating another visual timeline.
+
+`mobileTransitionGeometry()` and `mobileClosingProgress()` own mobile boundary measurements. `progressAt()` turns them into a scene and a fractional transition. `advanceMobilePigment()` owns bounded forward simulation, replay on reversal, and redraw suppression at rest. The ordinary joins and final film join use that same pigment clock. The final join also blends the viewport background into the movie as outgoing copy clears the visual.
+
+A transition first covers the unchanged source with its cached pigment print. The target print must include the complete visible composition: notebook and sketch canvases, video poster or decoded frame, article and shell. The pigment clears enough for passing text, then gathers into the target before the live composition takes over. A short final handoff avoids a browser-rendered frame replacing the print abruptly. Do not move or resize a live source before it is covered.
+
+The only solid carryover is the Publish control during scene 3 → 4. `publishBridge()` copies the real control's rendered styling once, removes its ink from the source and target prints, and moves it continuously between measured composition positions. It remains below the scrolling text and above the pigment. Logo arrival starts after this transfer finishes. Collision diameter and displayed circle diameter both come from `ORBIT_D`.
+
+Scene 4 → 5 captures the current logo positions from already-loaded images. The pigment desaturates and takes up the existing monochrome film poster while the full-screen film appears. It uses no separate SVG dissolve mask or white text panel. Orbital motion pauses while that captured composition is dissolving.
+
+Phone cost is bounded: first-load captures include only scenes 1 and 2; later media loads as scene 2 approaches. Each mobile scene print is cached once. Canvas renderers expose `canvas.mossCaptureFrame()` to draw and capture in the same turn, avoiding a cleared WebGL drawing buffer. The pigment grid uses one quarter of the desktop pixels. Neither cached prints nor paused pigment frames are periodically rendered again.
+
+Useful checks: `scripts/check-landing-mobile.mjs` covers native scrolling, dwell and reversal; `scripts/check-landing-mobile-handoff.mjs` covers unchanged sources and gradual target handoff. Set `PLAYWRIGHT_MODULE` to an existing installation and pass the exact served URL. Inspect the real moss-built output as well as the watcher preview, particularly when testing SVG and iframe capture in WebKit.

@@ -32,6 +32,7 @@
   function visibility(){if(active()){last=performance.now();draw(last);schedule()}else stop()}
   addEventListener('message',e=>{if(e.origin!==location.origin||!['moss-visible','moss-notebook-visible'].includes(e.data?.type))return;parentVisible=e.data.visible!==false;visibility()});
   document.addEventListener('visibilitychange',visibility);addEventListener('resize',()=>draw(performance.now()));new IntersectionObserver(([e])=>{intersecting=e.isIntersecting;visibility()},{threshold:.01}).observe(canvas);new ResizeObserver(()=>draw(performance.now())).observe(canvas);
+  canvas.mossCaptureFrame=()=>{draw(performance.now());return canvas.toDataURL('image/png')};
   draw(performance.now());schedule();
   window.__notebook={pause:()=>{parentVisible=false;visibility()},resume:()=>{parentVisible=true;visibility()},setLogZoom:v=>{logZoom=Math.max(0,Number(v)||0);draw(performance.now())},state:()=>({visible:active(),logZoom,reduced:reduce,referenceOrbit:MAX,precision:'Q160 fixed-point reference + float perturbation',testedHorizon:HORIZON,initialRate:RATE,trajectory:'asymptotic inward zoom'})};
 })();

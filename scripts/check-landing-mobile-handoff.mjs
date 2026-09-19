@@ -10,7 +10,9 @@ for (const engine of [chromium, webkit]) {
     for (const scene of [1, 2]) {
       const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true });
       await page.goto(url);
-      await page.waitForFunction(() => window.__state?.().ready && [0, 1, 2, 3].every(i => __onHand[i]), null, { timeout: 60000 });
+      await page.waitForFunction(() => window.__state?.().ready, null, { timeout: 60000 });
+      await page.evaluate(() => scrollTo(0, __restY(1) + 24));
+      await page.waitForFunction(() => [0, 1, 2, 3].every(i => __onHand[i]), null, { timeout: 30000 });
       await page.evaluate(s => scrollTo(0, __restY(s) + 24), scene);
       await page.waitForFunction(s => __state().shown === s && !__state().running, scene, { timeout: 15000 });
       const read = () => page.evaluate(() => ({
@@ -26,14 +28,19 @@ for (const engine of [chromium, webkit]) {
       await page.waitForTimeout(100);
       const zero = await read();
       if (JSON.stringify(before) !== JSON.stringify(zero)) throw Error(`source changed at zero progress: ${JSON.stringify({ scene, before, zero })}`);
+      const buttonStart = scene === 2 ? await page.locator('#publish-bridge').boundingBox() : null;
       await page.evaluate(() => { window.__stepLimit = 12; });
       await page.waitForFunction(() => __state().steps >= 12);
       const start = await read();
       if (!(start.cover > 0 && start.cover < 1 && Number(start.scene) === scene)) throw Error('source was replaced before the wash covered it');
-      await page.evaluate(() => { window.__stepLimit = 216; });
-      await page.waitForFunction(() => __state().steps >= 216, null, { timeout: 15000 });
+      await page.evaluate(() => { window.__stepLimit = 240; });
+      await page.waitForFunction(() => __state().steps >= 240, null, { timeout: 15000 });
       const end = await read();
       if (!(end.cover > 0 && end.cover < 1 && Number(end.scene) === scene + 1)) throw Error(`target did not reveal gradually: ${JSON.stringify(end)}`);
+      if (scene === 2) {
+        const buttonEnd = await page.locator('#publish-bridge').boundingBox();
+        if (!buttonStart || !buttonEnd || buttonEnd.width < buttonStart.width * 2) throw Error('solid Publish control did not grow through the wash');
+      }
       await page.evaluate(() => { window.__stepClock = false; });
       console.log(`${engine.name()}: scene ${scene + 1} source preserved; target revealed gradually`);
       await page.close();

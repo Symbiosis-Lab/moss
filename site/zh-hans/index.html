@@ -220,6 +220,7 @@
      has been initialized under the canvas. */
   #stage.mobile-handoff #gl { display: block; z-index: 100; opacity: var(--wash-cover, 0); }
   #stage.mobile-handoff #cell > :not(#gl) { filter: opacity(calc(1 - var(--wash-cover, 0))); }
+  #publish-bridge { position: absolute; z-index: 110; pointer-events: none; transform-origin: center; }
   /* The fan sits above the wash while it is interactive. On departure its
      return animation starts before data-scene changes, so without this shared
      lifecycle guard the circles cross the watercolor for several frames. */
@@ -381,7 +382,7 @@
     #col { margin-top: 0; position: absolute; inset: 0; height: auto; padding-top: var(--mobile-col-pad, 70svh); z-index: 0; pointer-events: none; }
     #copy { position: relative; z-index: 1; min-width: 0; }
     #vis { margin-left: 0; position: sticky; top: 76px; width: 100%; height: var(--mobile-vis-h, 42vh); min-height: 260px; padding-left: 0; transform: none; align-items: flex-start; justify-content: flex-start; overflow: visible; }
-    #stage { transform: none; width: calc(var(--cell-w) * var(--s)); height: calc(var(--cell-h) * var(--s)); flex: none; margin: var(--mobile-stage-overhang, 0px) auto 0; }
+    #stage { position: relative; transform: none; width: calc(var(--cell-w) * var(--s)); height: calc(var(--cell-h) * var(--s)); flex: none; margin: var(--mobile-stage-overhang, 0px) auto 0; }
     #cell { transform: scale(var(--s)); transform-origin: left top; }
     #stage[data-scene="3"] #cell { transform: scale(var(--s)) translate(-132px, -124px) scale(1.4); }
     #vis, #vis * { pointer-events: none !important; touch-action: pan-y; }
@@ -413,7 +414,7 @@
 <script src="landing-i18n.js"></script>
 </head>
 <body>
-<svg width="0" height="0" aria-hidden="true" style="position:absolute;pointer-events:none"><defs><filter id="mobile-final-dissolve" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency=".025" numOctaves="2" seed="8"/><feColorMatrix type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  1 0 0 0 0"/><feComponentTransfer><feFuncA id="mobile-final-alpha" type="linear" slope="5" intercept="1"/></feComponentTransfer><feComposite in="SourceGraphic" operator="in"/></filter></defs></svg>
+
 <div class="brand"><span class="moss-mark" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 288 288"><path fill="currentColor" d="m127 67-5 3q-3 5-4 2l-12 4c-10 3-10 4-10 6l-1 3-2 3-1 3q-2 0-4 5-4 11-12-1-4-6-6-4-4 0 1 5c2 2 2 2 2 10q-1 11 6 18v2l3 8 4 8 2 3c3 3 6 12 4 12l-12-5-4-1c-3 0-11-4-15-8q-4-5-6-2t-7-1l-5-2q-2 0-3-3-1-6-5 0-2 3 3 7c7 7 9 17 4 18l4 4q14 8 3 21-4 6-8 5-4 1 0 2h8q7-2 11 4 3 3 0 7-4 9 2 14l3 4q-1 1 1 1 3-2 8 5c6 6 3 15-5 17q-9 3-9 5c1 1 8 0 13-2l11-2 9-1h8l8-1 2-1 1 1 1 2 2 3 2 1q4-1-5 12c-2 3-3 14-1 14l4-4q5-6 9-7l6-1 4-2 4-1c2-2 9-3 9-1v5q-1 9 3 6l2-4 2-8q5-10 8-4l8 5c10 4 12 6 17 12q6 8 8 6 3-1-3-8-9-11-9-14c1-2 12-5 17-5 4 0 11-5 13-10l3-4 1-2v-2c3-1 11-8 11-10q3-8 16-5l8 1c2-1-8-4-14-5-4 0-12-3-16-6s2-13 7-13l3-2 4-2 6-5 4-5c7-5 16-15 15-17q-1-3-2 0c-3 3-18 6-19 4-1-3 4-23 7-27q5-9-1-5l-4 1-5 3q-2 3-3 1h-5l-12 6q-10 4-13 7l-11 5 3-4c6-6 18-27 19-34l6-13q6-9 2-11c-1-2-35-17-52-24l-3 2-3 5-2 4-2 6-2 5-1 6-2 7-2 3-3 4-1 5-1 2-1 2q-2-1-3-7l-2-5-1-3-1-13-2-12-2-1q-2 0-1-3l-3-8-1-3q-1-3-5-1"/><path fill="#4f7031" d="m199 4-7 19-2 6-2 6-5 10-5 10-2 5-3 6-4 6 40 16c14 6 14 6 16 3q3-3 3-16l1-11q2-8-3 1-3 8-10 9-4 0 0-4l2-7q1-7-2-2-2 6-8 5t-4-3l1-3 2-4q4-5 1-6-3 1-4 5c0 2-5 7-8 7q-12 0-2-24 5-9 5-16l2-11c2-10 2-11 0-11q-2 0-2 4M39 41l1 3 9 9 4 7 2 7 4 9 3 4 3 7q2 7 5 4 5-2 0-5c-3-2-9-11-9-13l-6-13-2-4-2-4q-3-2-4-6c-2-6-9-10-8-5M23 23l3 6c3 5 4 6 4 12q0 13 8 21l4 5 5 7-4-15-3-3q-3-2-4-8l-1-3q-2 0-2-7 1-6-3-8l-4-5zM0 114l7 5q5 0 11 5l8 5q7 4 7 7t3-1 0-6l-4-3q-4-3-12-5l-5-2c-2-2-15-7-15-5m277-1-3 2-3 3q-4 4-6 3-3-2-7 2l-6 6q-5 3-4 5 1 3 3 1l5-3q7-2 7-6l3-2c7-4 15-9 15-11q1-4-4 0M108 41l1 5c3 14 0 27-7 28q-7 2-6 5c1 1 20-7 21-9l-1-8-2-12q-3-10-6-9M51 81l7 13c0 2 5 7 6 7q1-4-8-14zm178-59-5 15c-1 6 2 0 5-9l2-10zM49 249c-6 0-6 7-1 7 3 0 10-5 10-6q-3-2-9-1m75-199v9c0 9 0 9 3 8q4 0 1-6l-2-5-1-5zm140 109q-6 2-3 5c2 2 9-2 9-5q1-3-6 0"/></svg></span><span class="moss-wordmark">青苔</span></div>
 
 <nav class="language-picker nav-lang-toggle" aria-label="语言"><a class="nav-lang-link" data-landing-locale="en" hreflang="en" lang="en" aria-label="English" href="/">EN</a><span aria-hidden="true">/</span><a class="nav-lang-link" data-landing-locale="zh-hant" hreflang="zh-hant" lang="zh-hant" aria-label="繁體中文" href="/zh-hant/">繁</a><span aria-hidden="true">/</span><span class="nav-lang-current" lang="zh-hans" aria-label="简体中文">简</span></nav>
@@ -610,18 +611,10 @@ const COPY_MIN = 440;
 // does not pull the sheets and the copy apart — the cap movie5 wrote as 1440,
 // now that three sheets and a full measure decide the number.
 const PAGE_MAX = 56 + VIS_W + 96 + COPY_MIN;
-// Each boundary carries the sheet across it by its own mechanism, and the
-// mechanisms are named rather than shared. `wash` re-wets the sheet and does
-// nothing else (1 to 2). `slide` re-wets it while the two siblings arrive from
-// behind its edges, on the stylesheet's own end-state rule (2 to 3). `fan`
-// re-wets it down to the publish control alone, which then grows and draws its
-// arcs (3 to 4) — the only mechanism that leaves something standing on the
-// page, so the only one with `leave`: what it put there is taken back, and how
-// long that takes, before the sheet may be wetted again. `crossfade` is the
-// last join and the only one that is not a wash at all: nothing is re-wetted
-// and no print is shown, the page and the full-bleed close are simply both on
-// screen for the length of it, so it brings its own mechanism as `run` and the
-// wash's preamble is not run for it (4 to 5).
+// Text geometry chooses a boundary and progress; the visual track renders it.
+// The first three boundaries share liquid pigment. The third also carries a
+// solid Publish control. The last mobile boundary turns the full logo group
+// into gray film pigment while the full-screen movie takes over.
 const JOINS = [
   { name: 'wash', wash: true },
   { name: 'slide', wash: true },
@@ -1456,7 +1449,7 @@ loadTargets();
 // velocity, ORBIT_SPEED_MAX bounds collision energy without friction below
 // that ceiling, and ORBIT_RETURN_MS is the gentle path home after a drag.
 // A pacing complaint here is a change to these numbers.
-const ORBIT_D = 44, ORBIT_STAGGER = 1250, ORBIT_STAGGER_SWING = 150, ORBIT_POP_MS = 480;
+const ORBIT_D = mobileLayout() ? 60 : 44, ORBIT_STAGGER = 1250, ORBIT_STAGGER_SWING = 150, ORBIT_POP_MS = 480;
 const ORBIT_ATTRACT = 0.1, ORBIT_HUDDLE = 0.35, ORBIT_ALPHA_DRAG = 0.4, ORBIT_OUT_MS = 380;
 const ORBIT_TANGENT = 0.42, ORBIT_SPEED_MAX = 0.65, ORBIT_RETURN_MS = 1100, ORBIT_ALPHA_IDLE = 0.025;
 document.documentElement.style.setProperty('--orbit-d', ORBIT_D + 'px');
@@ -1836,6 +1829,7 @@ window.__orbit = () => ({ running: !!orbitSim, r: restR(), d: ORBIT_D, cx: orbit
 // the loop runs is then the reader's: the control below is a real button, and a
 // hand that stops it keeps it stopped through every crossing after.
 loopVid.poster = LOOP_POSTER;
+const closingPoster = new Image(); closingPoster.src = LOOP_POSTER;
 $('five-headline').textContent = HEADLINE;
 // loopOn starts unknown rather than false, so the first call after the source
 // is mounted always says something to the element. It has to: the tag carries
@@ -1886,6 +1880,12 @@ function holdCanvas(src, tgt, scene, fwd, mobileTransition = false) {
     stage.style.setProperty('--wash-cover', '0');
   } else stage.classList.add('morphing');
 }
+function releasePigmentCover() {
+  stage.classList.remove('morphing', 'mobile-handoff');
+  stage.style.removeProperty('--wash-cover');
+  canvas.style.filter = '';
+  cell.style.transform = '';
+}
 // When the scene last came to a stand, for the work that may only run at a
 // rest: a dwell counts from here, not from the frame the target changed.
 let settledAt = 0;
@@ -1903,10 +1903,12 @@ function still(scene) {
   // keeps the clipped Publish control from flashing once in its source
   // position at the shell's lower-right before its centred transform lands.
   if (scene === DEPLOY) snapStage();
-  stage.classList.remove('morphing', 'mobile-handoff');
-  stage.style.removeProperty('--wash-cover');
+  releasePigmentCover();
   if (mobileLayout() && scene === SHIPS) { sketchVisible(true); videoActive(true); }
-  if (mobileLayout()) { mobileWatchKey = ''; }
+  if (mobileLayout()) {
+    mobileWatchKey = '';
+    if (scene !== DEPLOY && finalWash) { cancelAnimationFrame(finalWash.raf); finalWash = null; canvas.style.filter = ''; }
+  }
 }
 
 // The signup link is navigation: it skips the scene performance.
@@ -1922,6 +1924,16 @@ window.mossLanding = { openSignup() {
 // XF_SPAN of the distance scene 4 owns. So it reverses for free — a turnaround
 // needs nothing said about it — and the join settles on whichever end the
 // reader carried it to. Only opacity changes per frame.
+function mobileTransitionGeometry() {
+  const band = mobileVisualBand(), col = document.getElementById('col');
+  return { ...band, hold: Math.min(84, band.height * .24), tail: Math.min(100, band.height * .28),
+    naturalTop: col.getBoundingClientRect().top + parseFloat(getComputedStyle(col).paddingTop) };
+}
+function mobileClosingProgress() {
+  const text = scenesEl[DEPLOY].firstElementChild.getBoundingClientRect(), band = mobileVisualBand();
+  return .65 * clamp01((band.bottom + 24 - text.top) / (band.height + 24))
+    + .35 * clamp01((band.bottom - text.bottom) / band.height);
+}
 function mobileVisualBand() {
   const visual = document.getElementById('vis');
   const top = parseFloat(getComputedStyle(visual).top);
@@ -1931,7 +1943,8 @@ function mobileVisualBand() {
 function xfAt() {
   if (mobileLayout()) {
     const band = mobileVisualBand();
-    return clamp01((band.bottom + 24 - five.getBoundingClientRect().top) / (band.height + 24));
+    const outgoing = scenesEl[DEPLOY].firstElementChild.getBoundingClientRect();
+    return clamp01((band.top + 48 - outgoing.bottom) / (band.height * .6));
   }
   const top = five.offsetTop;
   return clamp01((scrollY - (top - innerHeight * .8)) / (innerHeight * .6));
@@ -2015,7 +2028,6 @@ async function runJoin() {
   try {
     while (target !== shown) {
       const to = legToward(shown, target);
-      const jump = isJump(to, shown);
       joinsRun++;
       // The mechanism is the first boundary's: it is the one whose scene is
       // being left, and the only one with anything standing to take back.
@@ -2027,11 +2039,6 @@ async function runJoin() {
       else if (join.run) shown = await join.run(to);
       else {
         if (!mobileLayout()) scenes('morph'); // mobile keeps the live source through the first cover frames
-        // and the join says how long that takes: the sheet is not wetted under
-        // a fan still retracting, or the reader never sees it go. A jump is not
-        // being watched, so there it is taken off inside the frame instead.
-        const leave = join.leave ? join.leave(shown) : 0;
-        if (leave && !reduce) { if (jump || mobileLayout()) snapStage(); else await wait(leave); }
         // A jump can ask for a scene no print was ever taken for: the prints on
         // hand are the neighbours', and two boundaries away is not a neighbour.
         // Stopping to take one costs 14 to 54ms of clone-and-serialize on the
@@ -2050,6 +2057,61 @@ async function runJoin() {
     }
   } finally { driving = false; flushPrintRect(); }
 }
+// One mobile pigment clock. The text track supplies a position; this advances
+// or rewinds the same liquid surface, and does no GPU draw at an unchanged rest.
+function advanceMobilePigment(state, goal, fwd, stir, tilt, relift, paint) {
+  if (state.t > goal + DT) { sim.reset(); state.t = 0; state.drawn = -1; }
+  let budget = STEPS_PER_FRAME, count = 0;
+  while (state.t < goal && state.t < T_TOTAL && budget-- > 0) {
+    sim.step(fwd, state.t, smooth(T_CURE, T_TOTAL, state.t), stir, tilt, relift);
+    state.t += DT; count++;
+  }
+  if (state.t >= goal - DT && state.t !== state.drawn) { paint(state.t); state.drawn = state.t; }
+  return { caughtUp: state.t >= goal - DT, count };
+}
+function publishBridge(from, to, prints) {
+  if (!mobileLayout() || Math.min(from, to) !== SHIPS || Math.max(from, to) !== DEPLOY) return null;
+  const button = vdFrame.contentDocument.querySelector('.moss-publish-button');
+  if (!button) return null;
+  const r = button.getBoundingClientRect(), size = r.width;
+  const clone = button.cloneNode(true);
+  const originals = [button, ...button.querySelectorAll('*')], copies = [clone, ...clone.querySelectorAll('*')];
+  originals.forEach((el, i) => {
+    const style = el.ownerDocument.defaultView.getComputedStyle(el);
+    for (const property of style) copies[i].style.setProperty(property, style.getPropertyValue(property));
+  });
+  clone.id = 'publish-bridge'; clone.setAttribute('aria-hidden', 'true'); clone.tabIndex = -1;
+  Object.assign(clone.style, { position: 'absolute', right: 'auto', bottom: 'auto', margin: '0', zIndex: '110', pointerEvents: 'none', visibility: 'visible', transformOrigin: 'center' });
+  stage.appendChild(clone);
+  const priorVisibility = button.style.visibility;
+  button.style.visibility = 'hidden';
+  const cs = button.ownerDocument.defaultView.getComputedStyle(button);
+  const x = 120 + 540 - (parseFloat(cs.right) || 6) - size / 2;
+  const y = 30 + 560 - (parseFloat(cs.bottom) || 6) - size / 2;
+  // The live control survives independently; remove its ink from both sheets.
+  for (const scene of [SHIPS, DEPLOY]) {
+    const source = prints[scene], copy = document.createElement('canvas');
+    copy.width = source.width; copy.height = source.height;
+    const context = copy.getContext('2d');
+    if (scene === SHIPS) {
+      context.drawImage(source, 0, 0);
+      const k = copy.width / printW();
+      context.clearRect((x - size / 2 - 2 - printRect.x) * k, (y - size / 2 - 2 - printRect.y) * k, (size + 4) * k, (size + 4) * k);
+    }
+    prints[scene] = copy;
+  }
+  return {
+    draw(t) {
+      const q = smooth(.2, T_TOTAL, t), p = from === SHIPS ? q : 1 - q;
+      const cx = (x + (GEOM.cellW / 2 - x) * p) * SCALE;
+      const cy = (y + (GEOM.cellH / 2 - y) * p) * SCALE;
+      const scale = SCALE * (1 + (PUB_SCALE * 1.4 - 1) * p);
+      clone.style.left = (cx - size / 2) + 'px'; clone.style.top = (cy - size / 2) + 'px';
+      clone.style.transform = `scale(${scale})`;
+    },
+    remove() { button.style.visibility = priorVisibility; clone.remove(); }
+  };
+}
 async function pour(to) {
   const from = shown;
   let terminal = false;
@@ -2061,17 +2123,20 @@ async function pour(to) {
   // fresh capture of the scene on screen replaces its print under the splash,
   // so the poem is the poem being typed.
   const pr = { [from]: sheets[from], [to]: sheets[to] };
+  const bridge = publishBridge(from, to, pr);
+  bridge?.draw(0);
   const inOrder = () => [pr[Math.min(from, to)], pr[Math.max(from, to)]];
   const mobileHandoff = mobileLayout();
   holdCanvas(...inOrder(), from, fwd, mobileHandoff);
   if (mobileHandoff && from === SHIPS) { sketchVisible(false); videoActive(false); }
   let liveScene = from, lastCover = -1, drawnT = -1;
+  const pigment = { t: 0, drawn: -1 };
   const showUnderCover = (scene) => {
     if (scene === liveScene) return;
     snapStage();
     sceneClasses(scene);
     groundAt(scene);
-    scenes(PHASE[scene]);
+    if (!(bridge && scene === DEPLOY)) scenes(PHASE[scene]);
     if (scene === SHIPS) { sketchVisible(false); videoActive(false); }
     liveScene = scene;
   };
@@ -2106,7 +2171,7 @@ async function pour(to) {
   // poured again, what it laid down lifts, and it sets on the scene the reader
   // went back to. Every input shows on the next frame.
   let t = 0, acc = 0, relift = 0, last = performance.now(), lastY = scrollY;
-  steps = 0;
+  steps = 0; washT = 0;
   await new Promise((finish) => {
     const f = (now) => {
       if (target === SHARE && xfAt() >= 1) { terminal = true; finish(); return; }
@@ -2147,26 +2212,36 @@ async function pour(to) {
           acc = T_TOTAL * clamp01((progressAt() - from) / (to - from));
           // The fluid simulation runs forward. On reversal rebuild its bounded
           // state, keeping the previous canvas visible until it catches up.
-          if (t > acc + DT) { sim.reset(); t = 0; }
+          // Reverse/replay is owned by advanceMobilePigment below.
         } else acc += dtReal * own + K(t) * moved;
       }
       washDbg = { acc: +acc.toFixed(3), arrived, own, dtReal: +dtReal.toFixed(3), fps: Math.round(1 / Math.max(dtReal, 1e-3)) };
-      let budget = stepClock ? SPF : STEPS_PER_FRAME;
-      while (t < T_TOTAL && budget-- > 0 && (stepClock || t < acc) && !(HOLD && t >= HOLD)) { sim.step(fwd, t, smooth(T_CURE, T_TOTAL, t), stir, tilt, relift); t += DT; steps++; }
+      if (mobileHandoff && !stepClock) {
+        pigment.t = t;
+        const advanced = advanceMobilePigment(pigment, acc, fwd, stir, tilt, relift, () => {});
+        t = pigment.t; steps += advanced.count;
+      } else {
+        let budget = stepClock ? SPF : STEPS_PER_FRAME;
+        while (t < T_TOTAL && budget-- > 0 && (stepClock || t < acc) && !(HOLD && t >= HOLD)) { sim.step(fwd, t, smooth(T_CURE, T_TOTAL, t), stir, tilt, relift); t += DT; steps++; }
+      }
       washT = t;
       const caughtUp = t >= acc - DT;
       if (mobileHandoff && caughtUp) {
         // All source furniture stays put while the cover rises. Both live
         // compositions switch only under opaque pigment, including reversal.
-        const cover = Math.min(smooth(0, .35, t), 1 - smooth(T_CURE, T_TOTAL, t));
+        const cover = Math.min(smooth(0, .35, t), 1 - smooth(1.92, T_TOTAL, t));
         if (cover !== lastCover) {
           stage.style.setProperty('--wash-cover', cover.toFixed(3));
           lastCover = cover;
         }
         showUnderCover(t < .35 ? from : to);
+        bridge?.draw(t);
+        const sizeProgress = smooth(.35, T_TOTAL, t);
+        const size = (from === DEPLOY ? 1.4 : 1) + ((to === DEPLOY ? 1.4 : 1) - (from === DEPLOY ? 1.4 : 1)) * sizeProgress;
+        cell.style.transform = `scale(${SCALE}) translate(${(1 - size) * GEOM.cellW / 2}px, ${(1 - size) * GEOM.cellH / 2}px) scale(${size})`;
       }
       if (!mobileHandoff || (caughtUp && t !== drawnT)) {
-        sim.draw(fwd, smooth(T_CURE, T_TOTAL, t), mobileHandoff ? -.2 + 1.4 * smooth(.35, T_TAKE, t) * (1 - smooth(T_WET, T_TOTAL, t)) : -.2);
+        sim.draw(fwd, smooth(T_CURE, T_TOTAL, t), mobileHandoff ? -.2 + 1.4 * smooth(.35, T_TAKE, t) * (1 - smooth(1.3, 1.72, t)) : -.2);
         drawnT = t;
       }
       if (!mobileHandoff) groundToward(to, smooth(T_DRY, T_TOTAL, t), stepClock ? DT * SPF : dtReal);
@@ -2174,12 +2249,10 @@ async function pour(to) {
     };
     requestAnimationFrame(f);
   });
-  if (mobileHandoff) {
-    stage.classList.remove('mobile-handoff', 'morphing');
-    stage.style.removeProperty('--wash-cover');
-  }
+  if (mobileHandoff) releasePigmentCover();
+  bridge?.remove();
   if (terminal) return SHARE;
-  setSheet(to, pr[to]);   // the scene now on screen, at rest
+  if (!bridge) setSheet(to, pr[to]);   // the scene now on screen, at rest
   return to;
 }
 // The wash needs the scene as pixels, and a browser will not hand over its own
@@ -2257,7 +2330,7 @@ const rectInFrame = (vw, vh, r) => r.bottom > 0 && r.top < vh && r.right > 0 && 
 // need just the size (not `rasterDoc`'s scroll offsets too), so this is the
 // one place either reads `scrollingElement` for it.
 const docViewport = (doc) => { const vp = doc.scrollingElement || doc.documentElement; return [vp.clientWidth, vp.clientHeight]; };
-async function fold(doc, liveRoot) {
+async function fold(doc, liveRoot, options = {}) {
   const root = liveRoot.cloneNode(true);
   const live = [liveRoot, ...liveRoot.querySelectorAll('*')], copy = [root, ...root.querySelectorAll('*')];
   const drop = [], work = [];   // the inlining runs in parallel: one slow resource must not hold the rest
@@ -2282,7 +2355,17 @@ async function fold(doc, liveRoot) {
     // carries the browser's own picked resource via currentSrc, srcset and
     // all, so the source is redundant for a print and safe to drop.
     if (tag === 'SOURCE') { drop.push(C); continue; }
-    if (tag === 'IFRAME' || tag === 'CANVAS') { const hole = doc.createElement('div'); hole.setAttribute('style', `display:block;width:${L.clientWidth}px;height:${L.clientHeight}px;` + (L.getAttribute('style') || '')); if (L.id) hole.id = L.id; hole.className = L.className; C.replaceWith(hole); continue; }
+    if (tag === 'IFRAME' || tag === 'CANVAS') {
+      if (tag === 'CANVAS' && options.snapshotCanvases && L.width && L.height) {
+        try {
+          const im = doc.createElement('img');
+          im.setAttribute('style', `display:block;width:${L.clientWidth || L.width}px;height:${L.clientHeight || L.height}px;`);
+          im.id = L.id; im.className = L.className;
+          im.src = L.mossCaptureFrame ? L.mossCaptureFrame() : L.toDataURL('image/png'); C.replaceWith(im); continue;
+        } catch (e) { /* a tainted sketch canvas falls back to its sized hole */ }
+      }
+      const hole = doc.createElement('div'); hole.setAttribute('style', `display:block;width:${L.clientWidth}px;height:${L.clientHeight}px;` + (L.getAttribute('style') || '')); if (L.id) hole.id = L.id; hole.className = L.className; C.replaceWith(hole); continue;
+    }
     // A video draws nothing inside a foreignObject image, so the print takes the
     // frame that is on screen: the element the sheet actually shows, frozen, the
     // same as every other pixel of a print. Its poster if no frame has decoded
@@ -2360,9 +2443,9 @@ async function raster(nodes, w, h, srcDoc = document) {
   return img;
 }
 // A whole document, laid out at w x h, scrolled as it is on screen.
-async function rasterDoc(doc, w, h) {
+async function rasterDoc(doc, w, h, options = {}) {
   const se = doc.scrollingElement || doc.documentElement;
-  const html = await fold(doc, doc.documentElement);
+  const html = await fold(doc, doc.documentElement, options);
   // inside the SVG image `:root` is the <svg>, so a document's `:root` rules
   // (and its `prefers-color-scheme: dark` guard on `:root:not([data-theme=light])`)
   // would land on the wrong element and inherit down as the OS theme
@@ -2421,6 +2504,86 @@ function drawPlates(g, k) {
   }
 }
 function roundClip(g, r, k, radius) { g.beginPath(); g.roundRect(r.x * k, r.y * k, r.w * k, r.h * k, radius * k); g.clip(); }
+// Scene 3's three artifacts are live layers rather than part of the shell
+// print. Mobile needs their current pixels in the wash target, so rasterize
+// the two same-origin documents (including a live sketch canvas) and freeze
+// the detached video's already-decoded frame without asking for new assets.
+async function rasterScene3Artifact(id) {
+  const c = CARDS[id], el = c && c.el;
+  if (!c || !el) return null;
+  if (id === 'video') {
+    const v = el.querySelector('video');
+    if (!v) return null;
+    if (v.readyState < 2 || !v.videoWidth) {
+      const poster = new Image(); poster.src = v.poster || v.dataset.poster;
+      try { await capped(poster.decode(), FETCH_MS, 'video poster timed out'); return poster; } catch (e) { return null; }
+    }
+    try {
+      const cv = document.createElement('canvas'); cv.width = v.videoWidth; cv.height = v.videoHeight;
+      cv.getContext('2d').drawImage(v, 0, 0);
+      const im = new Image(); im.src = cv.toDataURL('image/jpeg', .9); await im.decode();
+      return im;
+    } catch (e) { return null; }
+  }
+  const frame = el.querySelector('iframe');
+  const doc = frame && frame.contentDocument;
+  if (!doc) return null;
+  if (id === 'sk') {
+    const canvas = doc.querySelector('canvas');
+    if (!canvas) return null;
+    const image = new Image(); image.src = canvas.mossCaptureFrame ? canvas.mossCaptureFrame() : canvas.toDataURL();
+    await capped(image.decode(), FETCH_MS, 'sketch frame timed out');
+    return image;
+  }
+  try { return await rasterDoc(doc, Math.round(c.width), Math.round(c.height), { snapshotCanvases: true }); }
+  catch (e) { console.warn(`Artifact ${id}: ${e.message}`); return null; }
+}
+function drawScene3Artifacts(g, k, images, docked) {
+  const ids = [...S3_ORDER].sort((a, b) => (+(CARDS[a].el.style.zIndex || 0)) - (+(CARDS[b].el.style.zIndex || 0)));
+  const ox = -printRect.x, oy = -printRect.y;
+  for (const id of ids) {
+    const im = images[id], c = CARDS[id], p = c.pose;
+    if (!im || !p || c.docked !== docked) continue;
+    const w = c.width * p.s, h = c.height * p.s;
+    g.save();
+    // Docked artifacts are clipped by the article's measured paper aperture;
+    // outside artifacts retain their full current pose.
+    if (c.docked) {
+      const x = Math.max(p.x, s3Paper.x), y = Math.max(p.y, s3Paper.y);
+      const r = Math.min(p.x + w, s3Paper.x + s3Paper.w), b = Math.min(p.y + h, s3Paper.y + s3Paper.h);
+      if (r <= x || b <= y) { g.restore(); continue; }
+      g.beginPath(); g.rect((x + ox) * k, (y + oy) * k, (r - x) * k, (b - y) * k); g.clip();
+    }
+    g.drawImage(im, (p.x + ox) * k, (p.y + oy) * k, w * k, h * k);
+    g.restore();
+  }
+}
+async function prepareScene3Capture() {
+  warmScene3Media();
+  const waitFrame = (frame) => {
+    if (frame.contentDocument?.readyState === 'complete' && frame.contentDocument.location.href !== 'about:blank') return Promise.resolve();
+    return new Promise((resolve) => frame.addEventListener('load', resolve, { once: true }));
+  };
+  await capped(Promise.all([waitFrame($('sk')), waitFrame($('nb')), waitFrame($('s3-site-frame'))]), FETCH_MS, 'scene 3 media timed out').catch(() => {});
+  await nestedPreviewReady(SHIPS);
+  const video = $('s3-video-el');
+  // A paused, preload-none video uses its existing poster until playback starts.
+  // Capture can warm scene 3 while another scene is shown. Establish the same
+  // deterministic poses enterScene3() would have supplied before measuring or
+  // rasterizing any artifact.
+  s3HardStop = false; s3Touched = false; s3Stack = ['video'];
+  for (const id of S3_ORDER) { const c = CARDS[id]; c.docked = id === 'video'; c.el.tabIndex = -1; }
+  placeScene3Artifacts(); cardDepths();
+  let ready = false;
+  for (let i = 0; i < 8 && !ready; i++) {
+    ready = layoutScene3Layers();
+    if (!ready) await new Promise((resolve) => requestAnimationFrame(resolve));
+  }
+  sketchVisible(true);
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  sketchVisible(false);
+  if (!ready) throw new Error('scene 3 layers not ready');
+}
 // The print of the scene the DOM is showing now (the wash switches the DOM
 // under its own canvas before asking for the target's print).
 let captureMs = 0, washT = 0, washDbg = null;
@@ -2443,6 +2606,8 @@ async function capture(scene) {
 }
 async function takePrint(scene) {
   const t0 = performance.now();
+  const artifactIds = mobileLayout() && scene === SHIPS ? [...S3_ORDER] : [];
+  if (artifactIds.length) await prepareScene3Capture();
   const k = Math.min(mobileLayout() ? 1 : 2, devicePixelRatio || 1);
   const c = document.createElement('canvas'); c.width = printW() * k; c.height = printH() * k;
   const g = c.getContext('2d');
@@ -2470,10 +2635,13 @@ async function takePrint(scene) {
   const radius = parseFloat(getComputedStyle(box).borderRadius) || 0;
   const frame = FRAMES[scene];
   // every scene but the editor is the shell around a page of its own; scene 4 keeps none of the page
-  const [stageImg, shell] = await Promise.all([
+  const jobs = [
     raster([...styles, at], printW(), printH()),
     rasterFrame(frame, Math.round(boxR.w), Math.round(boxR.h), scene >= 1 && scene !== DEPLOY),
-  ]);
+  ];
+  const artifactJobs = artifactIds.map((id) => rasterScene3Artifact(id));
+  const [stageImg, shell, ...artifactImages] = await Promise.all([...jobs, ...artifactJobs]);
+  if (artifactIds.some((_, i) => !artifactImages[i])) throw new Error('scene 3 artifact raster failed: ' + artifactIds.filter((_, i) => !artifactImages[i]).join(', '));
   const { frameImg, innerImg, innerRadius } = shell;
   // The inner frame's own rect (rasterFrame's, local to the shell) is
   // shifted onto the box's, in the cell's coordinates: the shell's viewport
@@ -2485,6 +2653,7 @@ async function takePrint(scene) {
   const innerR = shell.innerR && { x: boxR.x + shell.innerR.x, y: boxR.y + shell.innerR.y, w: shell.innerR.w, h: shell.innerR.h };
   g.drawImage(stageImg, 0, 0, c.width, c.height);
   if (scene === 0) drawPlates(g, k);
+  if (artifactIds.length) drawScene3Artifacts(g, k, Object.fromEntries(artifactIds.map((id, i) => [id, artifactImages[i]])), false);
   g.save();
   // Scene 4's sheet is the shell cut to the control's own circle, the same cut
   // the stylesheet makes on the live box: the print carries the real pixels of
@@ -2495,6 +2664,7 @@ async function takePrint(scene) {
   } else roundClip(g, boxR, k, radius);
   g.drawImage(frameImg, boxR.x * k, boxR.y * k, boxR.w * k, frameImg.height * k); g.restore();
   if (innerImg) { g.save(); roundClip(g, boxR, k, radius); roundClip(g, innerR, k, innerRadius); g.drawImage(innerImg, innerR.x * k, innerR.y * k, innerR.w * k, innerImg.height * k); g.restore(); }
+  if (artifactIds.length) drawScene3Artifacts(g, k, Object.fromEntries(artifactIds.map((id, i) => [id, artifactImages[i]])), true);
   captureMs = Math.round(performance.now() - t0);
   return c;
 }
@@ -2659,6 +2829,7 @@ async function fillPrints() {
   // one a tick: each capture holds the canvas up over a reader who is resting
   const scene = [...needed(shown), ...washable].find((s) => !sheets[s]);
   if (scene == null) return false;
+  if (mobileLayout() && scene >= SHIPS && shown < 1 && target < 1) return false;
   // Scene 3 is a live arrangement, not a printable sheet: switching its DOM to
   // an offscreen neighbour under the capture canvas briefly removes the loose
   // artifacts. Its neighbours have already been warmed during scenes 1–2; do
@@ -2780,13 +2951,10 @@ const textBottom = (sec) => sec.lastElementChild.getBoundingClientRect().bottom;
 // disagree as either scene's markup changes.
 const progressAt = () => {
   if (mobileLayout()) {
-    const band = mobileVisualBand();
+    const band = mobileTransitionGeometry();
     // Hold the fully visible first composition before wetting it. Use its
     // normal-flow position: the transition can finish after the visual pins.
-    const col = document.getElementById('col');
-    const naturalTop = col.getBoundingClientRect().top + parseFloat(getComputedStyle(col).paddingTop);
-    const hold = Math.min(84, band.height * .24);
-    const tail = Math.min(100, band.height * .28);
+    const { naturalTop, hold, tail } = band;
     const entryTop = innerHeight - band.height - hold;
     const entrance = clamp01((entryTop - naturalTop) / Math.max(1, entryTop - band.top + tail));
     if (entrance < 1) return entrance;
@@ -2803,7 +2971,7 @@ const progressAt = () => {
         return i - 1 + (T_TAKE * dissolve + (T_TOTAL - T_TAKE) * reveal) / T_TOTAL;
       }
     }
-    return DEPLOY + xfAt();
+    return DEPLOY + mobileClosingProgress();
   }
 
   const line = innerHeight * LINE;
@@ -2934,12 +3102,11 @@ const restY = (scene) => {
   if (scene === 0 && mobileLayout()) return Math.max(0, Math.round(scrollY + textTop(scenesEl[0]) - 88));
   if (scene === SHARE) return closingRestY();
   if (mobileLayout()) {
-    const band = mobileVisualBand();
+    const band = mobileTransitionGeometry();
     if (scene === 1) {
-      const col = document.getElementById('col');
-      return Math.round(scrollY + col.getBoundingClientRect().top + parseFloat(getComputedStyle(col).paddingTop) - band.top + Math.min(100, band.height * .28));
+      return Math.round(scrollY + band.naturalTop - band.top + band.tail);
     }
-    return Math.round(scrollY + textBottom(scenesEl[scene - 1]) - band.top + Math.min(100, band.height * .28));
+    return Math.round(scrollY + textBottom(scenesEl[scene - 1]) - band.top + band.tail);
   }
   const top = textTop(scenesEl[scene]), bot = textBottom(scenesEl[scene]);
   return Math.round(scrollY + (top + bot) / 2 - innerHeight * LINE);
@@ -3218,23 +3385,80 @@ if (CARRY === 'css') { addEventListener('resize', setupCssSnap); setupCssSnap();
 // The browser owns motion here; settleAtRest is never called. On mobile this is a strictly
 // observational path: native scrolling supplies scrollY, which drives the scenes and closing
 // scrub continuously, and no release may move the page after the reader lets go.
-let mobileWatchKey = '', finalDissolve = -1;
-function updateMobileFinalDissolve() {
-  const text = scenesEl[DEPLOY].firstElementChild.getBoundingClientRect();
-  const band = mobileVisualBand();
-  const p = stage.dataset.scene === String(DEPLOY)
-    ? clamp01((band.bottom + 24 - text.top) / (band.height * .85)) : 0;
-  const rounded = Math.round(p * 1000) / 1000;
-  if (rounded === finalDissolve) return;
-  if (orbitSim) {
-    if (rounded > 0) orbitSim.stop();
-    else if (finalDissolve > 0 && !reduce) orbitSim.restart();
+let mobileWatchKey = '', finalDissolve = 0, finalWash = null;
+function deployPrint() {
+  const copy = document.createElement('canvas'); copy.width = printW(); copy.height = printH();
+  const g = copy.getContext('2d'), ox = -printRect.x, oy = -printRect.y;
+  // Use loaded logo images at their exact current physics positions.
+  for (let i = 0; i < (orbitNodes?.length || 0); i++) {
+    const n = orbitNodes[i], el = orbitEls[i], im = el.querySelector('img');
+    const radius = ORBIT_D * Math.max(0, popScale(n, performance.now())) / 2;
+    if (!n.popAt || !radius) continue;
+    g.save(); g.beginPath(); g.arc(n.x + ox, n.y + oy, radius, 0, Math.PI * 2); g.clip();
+    g.fillStyle = getComputedStyle(el).backgroundColor; g.fillRect(n.x + ox - radius, n.y + oy - radius, radius * 2, radius * 2);
+    if (im?.complete && im.naturalWidth) {
+      const k = Math.min(radius * 1.24 / im.naturalWidth, radius * 1.24 / im.naturalHeight);
+      g.drawImage(im, n.x + ox - im.naturalWidth * k / 2, n.y + oy - im.naturalHeight * k / 2, im.naturalWidth * k, im.naturalHeight * k);
+    }
+    g.restore();
   }
-  finalDissolve = rounded;
-  // Filter the live group together: no capture and no missing orbit logos.
-  stage.style.filter = rounded > 0 && rounded < 1 ? 'url(#mobile-final-dissolve)' : '';
-  stage.style.opacity = rounded === 1 ? '0' : '';
-  document.getElementById('mobile-final-alpha').setAttribute('intercept', String(1 - rounded * 6));
+  const source = sheets[DEPLOY];
+  if (source) {
+    const cs = getComputedStyle(stage), cx = parseFloat(cs.getPropertyValue('--pub-cx')), cy = parseFloat(cs.getPropertyValue('--pub-cy'));
+    const k = source.width / printW(), r = pubR, diameter = r * 2 * PUB_SCALE;
+    g.drawImage(source, (-32 + cx - r + ox) * k, (cy - r + oy) * k, r * 2 * k, r * 2 * k,
+      GEOM.cellW / 2 + ox - diameter / 2, GEOM.cellH / 2 + oy - diameter / 2, diameter, diameter);
+  }
+  return copy;
+}
+function closingPigmentPrint() {
+  const sheet = document.createElement('canvas'); sheet.width = printW(); sheet.height = printH();
+  const g = sheet.getContext('2d');
+  if (closingPoster.complete && closingPoster.naturalWidth) {
+    const k = Math.max(sheet.width / closingPoster.naturalWidth, sheet.height / closingPoster.naturalHeight);
+    g.globalAlpha = .45;
+    g.drawImage(closingPoster, (sheet.width - closingPoster.naturalWidth * k) / 2, (sheet.height - closingPoster.naturalHeight * k) / 2, closingPoster.naturalWidth * k, closingPoster.naturalHeight * k);
+    g.globalAlpha = 1;
+  } else { g.fillStyle = '#777777'; g.fillRect(0, 0, sheet.width, sheet.height); }
+  g.globalCompositeOperation = 'destination-in';
+  const gradient = g.createRadialGradient(sheet.width / 2, sheet.height / 2, 35, sheet.width / 2, sheet.height / 2, sheet.width * .5);
+  gradient.addColorStop(0, '#000'); gradient.addColorStop(.55, '#000b'); gradient.addColorStop(1, '#0000');
+  g.fillStyle = gradient; g.fillRect(0, 0, sheet.width, sheet.height);
+  return sheet;
+}
+function updateMobileFinalDissolve() {
+  const q = stage.dataset.scene === String(DEPLOY) ? mobileClosingProgress() : 0;
+  finalDissolve = q;
+  if (!sim || reduce || !sheets[DEPLOY]) return;
+  if (!q) {
+    if (finalWash) {
+      cancelAnimationFrame(finalWash.raf); finalWash = null;
+      releasePigmentCover();
+      if (orbitSim && !reduce && shown === DEPLOY) orbitSim.restart();
+    }
+    return;
+  }
+  if (!finalWash) {
+    if (shown !== DEPLOY) return;
+    orbitSim?.stop();
+    const source = deployPrint(), film = closingPigmentPrint();
+    holdCanvas(source, film, DEPLOY, true, true);
+    finalWash = { t: 0, drawn: -1, goal: q * T_TOTAL, raf: 0 };
+  }
+  const wash = finalWash; wash.goal = q * T_TOTAL;
+  if (wash.raf) return;
+  const frame = () => {
+    if (finalWash !== wash) return;
+    wash.raf = 0;
+    const advanced = advanceMobilePigment(wash, wash.goal, true, 0, 0, 0, t => {
+      const p = wash.goal / T_TOTAL;
+      stage.style.setProperty('--wash-cover', String(smooth(0, .18, p)));
+      canvas.style.filter = `grayscale(${smooth(.1, .65, p)})`;
+      sim.draw(true, smooth(T_CURE, T_TOTAL, t), -.2 + 1.4 * smooth(.94, 1, p));
+    });
+    if (!advanced.caughtUp) wash.raf = requestAnimationFrame(frame);
+  };
+  wash.raf = requestAnimationFrame(frame);
 }
 function watchScrollCss(now) {
   if (mobileLayout()) {
@@ -3627,7 +3851,7 @@ const when = (frame, key) => new Promise((r) => { const t = setInterval(() => { 
 async function ready() {
   // a print that never arrives must not hold the page shut: with none, the
   // scenes cut, which is the path reduced motion already takes
-  if (washing() && needed(shown).length) { try { setSheet(shown, await capture(shown)); await takeOthers(washable.filter((scene) => scene !== shown)); } catch (e) { printable = false; console.warn('no prints:', e.message); } }
+  if (washing() && needed(shown).length) { try { setSheet(shown, await capture(shown)); await takeOthers(mobileLayout() ? neighbours(shown) : washable.filter((scene) => scene !== shown)); } catch (e) { printable = false; console.warn('no prints:', e.message); } }
   booted = true;
   onScroll(0); if (target !== shown && primed()) runJoin(); else still(shown);
   document.documentElement.dataset.ready = '1';

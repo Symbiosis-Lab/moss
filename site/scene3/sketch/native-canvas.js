@@ -104,5 +104,6 @@ export function mount(canvas, id, {interactive=true,animate=true}={}) {
   const visibility=()=>active()?schedule():stop();document.addEventListener('visibilitychange',visibility);
   const message=e=>{if(e.origin!==location.origin||e.data?.type!=='moss-visible')return;parentVisible=!!e.data.visible;visibility()};addEventListener('message',message);
   if(interactive) canvas.addEventListener('pointerdown',()=>{start=performance.now();draw(start,true)});
+  canvas.mossCaptureFrame=()=>{draw(Math.max(performance.now(),start+2500),true);return canvas.toDataURL('image/png')};
   resize(); schedule(); return()=>{ro.disconnect();io.disconnect();document.removeEventListener('visibilitychange',visibility);removeEventListener('message',message);stop()};
 }
