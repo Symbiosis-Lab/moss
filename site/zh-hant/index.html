@@ -361,6 +361,17 @@
   #footer .github-link { display: inline-flex; align-items: center; }
   #footer .github-link img { width: 17px; height: 17px; filter: invert(1); }
 
+  @media (min-width: 901px) {
+    #beta p { margin: 0; line-height: 1.5; }
+    #beta .signup { margin-bottom: 3px; }
+  }
+  @media (min-width: 901px) and (max-height: 800px) {
+    #beta { margin-top: 40px; padding-top: 0; }
+    #five h2 { margin-bottom: 28px; }
+    .closing-lede { margin-bottom: 24px; }
+    #commands { margin-top: 22px; }
+  }
+
   @media (max-width: 900px) {
     body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; opacity: calc(1 - var(--xf)); background: linear-gradient(to bottom, var(--bg) 0 34px, color-mix(in srgb, var(--bg) 72%, transparent) 52px, transparent); }
     #intro { min-height: 0; justify-items: start; padding: 88px 34px 32px; }
@@ -371,7 +382,6 @@
     #copy { position: relative; z-index: 1; min-width: 0; }
     #vis { margin-left: 0; position: sticky; top: 76px; width: 100%; height: var(--mobile-vis-h, 42vh); min-height: 260px; padding-left: 0; transform: none; align-items: flex-start; justify-content: flex-start; overflow: visible; }
     #stage { transform: none; width: calc(var(--cell-w) * var(--s)); height: calc(var(--cell-h) * var(--s)); flex: none; margin: var(--mobile-stage-overhang, 0px) auto 0; }
-    #stage { filter: blur(calc(var(--mobile-overlap, 0) * 6px)); opacity: calc(1 - var(--mobile-overlap, 0) * .55); }
     #cell { transform: scale(var(--s)); transform-origin: left top; }
     #vis, #vis * { pointer-events: none !important; touch-action: pan-y; }
     .scene { width: 100%; min-height: auto; margin: 0; padding: 0 0 calc(var(--mobile-vis-h, 42vh) + 72px + var(--mobile-dwell, 280px)); justify-content: flex-start; }
@@ -1040,7 +1050,7 @@ const DIAG_VIEW = {
 
 // Display: the light the sheet takes out of the page, as a multiply layer.
 const SHOW = HEAD + `
-uniform sampler2D uW, uS, uD; uniform float uCure;
+uniform sampler2D uW, uS, uD; uniform float uCure, uClearance;
 out vec4 o;
 void main(){
   vec2 uv = vUv; vec2 px = 1.0 / uSize;
@@ -1064,6 +1074,8 @@ void main(){
   // The darkening P*T over the known page colour P, written as a premultiplied
   // pixel so the canvas is truly clear where nothing is inked or wet: alpha is
   // the deepest channel's absorption and the colour carries the rest.
+  // Clear the pigment along the paper grain, without a coloured overlay.
+  A *= smoothstep(uClearance - .12, uClearance + .12, pap.g);
   vec3 T = clamp(exp(-A), 0.0, 1.0); float a = 1.0 - min(T.r, min(T.g, T.b));
   o = vec4(uTint * (T - (1.0 - a)), a);
 }`;
@@ -1200,7 +1212,7 @@ const sim = (() => {
       return out;
     },
     // the display pass onto the canvas
-    draw(fwd, cure) {
+    draw(fwd, cure, clearance = -.2) {
       const dpr = Math.min(2, devicePixelRatio || 1);
       const cw = Math.round(printW() * dpr), chh = Math.round(printH() * dpr);
       if (canvas.width !== cw || canvas.height !== chh) { canvas.width = cw; canvas.height = chh; }
@@ -1210,6 +1222,7 @@ const sim = (() => {
       common(show, fwd);
       bind(0, wT[wi]); bind(1, pT[pi][0]); bind(2, pT[pi][1]);
       gl.uniform1f(show.u.uCure, cure);
+      gl.uniform1f(show.u.uClearance, clearance);
       draw();
     },
   };
@@ -1855,7 +1868,7 @@ const fiveOn = (on) => {
   if (entering) requestAnimationFrame(() => {
     settleArmed = true;
     restSince = performance.now();
-    if (reduce && !mobileLayout()) scrollTo(0, Math.max(0, document.documentElement.scrollHeight - innerHeight));
+    if (reduce && !mobileLayout()) scrollTo(0, closingRestY());
   });
 };
 // The canvas takes over the scene: the prints it shows are the pixels on
@@ -2149,7 +2162,7 @@ async function pour(to) {
         showUnderCover(t < .35 ? from : to);
       }
       if (!mobileHandoff || (caughtUp && t !== drawnT)) {
-        sim.draw(fwd, smooth(T_CURE, T_TOTAL, t));
+        sim.draw(fwd, smooth(T_CURE, T_TOTAL, t), mobileHandoff ? -.2 + 1.4 * smooth(.35, T_TAKE, t) * (1 - smooth(T_WET, T_TOTAL, t)) : -.2);
         drawnT = t;
       }
       if (!mobileHandoff) groundToward(to, smooth(T_DRY, T_TOTAL, t), stepClock ? DT * SPF : dtReal);
@@ -2902,10 +2915,20 @@ let lastWatchT = performance.now();
 // plateau it reads as this scene — textTop() to textBottom(), the identical
 // pair it names the scene from — so a settle and the function judging where
 // it landed can never disagree by construction, not just by measurement.
+// Frame the title and signup together; the footer remains a natural scroll away.
+function closingRestY() {
+  const max = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+  if (mobileLayout()) return max;
+  const top = scrollY + document.querySelector('#five h2').getBoundingClientRect().top;
+  const bottom = scrollY + document.querySelector('#beta .input-row').getBoundingClientRect().bottom;
+  const centered = (top + bottom - innerHeight) / 2;
+  const withFormVisible = Math.max(centered, bottom - innerHeight + 56);
+  return Math.round(Math.max(0, Math.min(max, withFormVisible)));
+}
 const restY = (scene) => {
   if (scene < 0) return 0;
   if (scene === 0 && mobileLayout()) return Math.max(0, Math.round(scrollY + textTop(scenesEl[0]) - 88));
-  if (scene === SHARE) return Math.max(0, document.documentElement.scrollHeight - innerHeight);
+  if (scene === SHARE) return closingRestY();
   if (mobileLayout()) {
     const band = mobileVisualBand();
     if (scene === 1) {
@@ -3197,13 +3220,7 @@ function watchScrollCss(now) {
     const key = `${scrollY}:${innerWidth}:${innerHeight}`;
     if (key === mobileWatchKey) return;
     mobileWatchKey = key;
-    const band = mobileVisualBand();
-    let overlap = 0;
-    for (let i = 1; i <= DEPLOY; i++) {
-      const rect = scenesEl[i].firstElementChild.getBoundingClientRect();
-      overlap = Math.max(overlap, clamp01(Math.min((band.bottom - rect.top) / 48, (rect.bottom - band.top) / 48)));
-    }
-    document.documentElement.style.setProperty('--mobile-overlap', overlap.toFixed(3));
+
   }
   const dy = lastScrollY == null ? 0 : scrollY - lastScrollY;
   lastScrollY = scrollY;
@@ -3213,9 +3230,9 @@ function watchScrollCss(now) {
   // observational path above through the whole close.
   if (!mobileLayout() && xfAt() > 0 && travel > 0 && settleArmed && !settleRun && !touchHeld && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
     settleArmed = false;
-    const bottom = Math.max(0, document.documentElement.scrollHeight - innerHeight);
-    if (reduce) scrollTo(0, bottom);
-    else settleTo(bottom, Math.max(0, scrollV * innerHeight), SETTLE_SECS);
+    const destination = Math.max(scrollY, closingRestY());
+    if (reduce) scrollTo(0, destination);
+    else settleTo(destination, Math.max(0, scrollV * innerHeight), SETTLE_SECS);
   }
   const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
   scrollV *= Math.exp(-dt / V_TAU);
