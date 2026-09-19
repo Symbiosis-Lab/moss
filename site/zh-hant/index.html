@@ -215,6 +215,11 @@
      sheets would return as their placeholder colour and fade in */
   #stage.morphing .plate img { visibility: hidden; }
   #stage.morphing #gl { display: block; }
+  /* Mobile keeps the live source under the first wash frames. The cover rises
+     over it before the scene classes change, then falls only after the target
+     has been initialized under the canvas. */
+  #stage.mobile-handoff #gl { display: block; z-index: 100; opacity: var(--wash-cover, 0); }
+  #stage.mobile-handoff #cell > :not(#gl) { filter: opacity(calc(1 - var(--wash-cover, 0))); }
   /* The fan sits above the wash while it is interactive. On departure its
      return animation starts before data-scene changes, so without this shared
      lifecycle guard the circles cross the watercolor for several frames. */
@@ -358,8 +363,8 @@
 
   @media (max-width: 900px) {
     body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; opacity: calc(1 - var(--xf)); background: linear-gradient(to bottom, var(--bg) 0 34px, color-mix(in srgb, var(--bg) 72%, transparent) 52px, transparent); }
-    #intro { min-height: 0; padding: 88px 20px 32px; }
-    #intro h1 { position: static; font-size: clamp(40px, 11vw, 58px); opacity: 1; -webkit-mask-image: none !important; mask-image: none !important; }
+    #intro { min-height: 0; justify-items: start; padding: 88px 34px 32px; }
+    #intro h1 { position: static; text-align: left; font-size: clamp(40px, 11vw, 58px); opacity: 1; -webkit-mask-image: none !important; mask-image: none !important; }
     .page { margin-top: 0; }
     .page { position: relative; display: block; width: 100%; padding: 0 16px; }
     #col { margin-top: 0; position: absolute; inset: 0; height: auto; padding-top: var(--mobile-col-pad, 70svh); z-index: 0; pointer-events: none; }
@@ -369,7 +374,7 @@
     #stage { filter: blur(calc(var(--mobile-overlap, 0) * 6px)); opacity: calc(1 - var(--mobile-overlap, 0) * .55); }
     #cell { transform: scale(var(--s)); transform-origin: left top; }
     #vis, #vis * { pointer-events: none !important; touch-action: pan-y; }
-    .scene { width: 100%; min-height: auto; margin: 0; padding: 0 0 calc(var(--mobile-vis-h, 42vh) + 72px); justify-content: flex-start; }
+    .scene { width: 100%; min-height: auto; margin: 0; padding: 0 0 calc(var(--mobile-vis-h, 42vh) + 72px + var(--mobile-dwell, 280px)); justify-content: flex-start; }
     #c1 { min-height: auto; padding-top: 0; }
     #c1 .scene-text { transform: none; margin-top: 0; }
     .scene-text { width: min(100%, 520px); margin-inline: auto; padding: 24px 18px 26px; background: none; }
@@ -794,6 +799,7 @@ function fit() {
     // Keep that paint inside #vis so its sticky top is the visible top, then
     // place the whole visual band one fixed reading gap after the copy.
     root.setProperty('--mobile-stage-overhang', (70 * baseScale) + 'px');
+    root.setProperty('--mobile-dwell', Math.min(340, Math.max(220, visualHeight * .9)) + 'px');
     root.setProperty('--mobile-col-pad', (firstCopyHeight + 32) + 'px');
   }
   document.getElementById('vis').inert = mobileLayout();
@@ -1066,7 +1072,9 @@ const sim = (() => {
   const gl = canvas.getContext('webgl2', { alpha: true, antialias: false, premultipliedAlpha: true, preserveDrawingBuffer: true });
   if (!gl || !gl.getExtension('EXT_color_buffer_float')) return null;
   const compile = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
-  const W = Math.round(BASE_TEX_W / 2), H = Math.round(BASE_TEX_H / 2);
+  // Phones display the wash at less than half its design size.
+  const gridDivisor = mobileLayout() ? 4 : 2;
+  const W = Math.round(BASE_TEX_W / gridDivisor), H = Math.round(BASE_TEX_H / gridDivisor);
   const tint = (() => { const c = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(); const n = parseInt(c.slice(1), 16); return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; })();
   // the texture units and constants every pass shares are set once, at link;
   // per step only the framebuffers, the state textures and the prints change
@@ -1855,7 +1863,13 @@ const fiveOn = (on) => {
 // The sim keeps the boundary's two prints in SCENE order and `fwd` says which
 // end the wash runs from, so the pair is keyed by scene and never by direction;
 // handing it (from, to) would swap the source and the target on every wash back.
-function holdCanvas(src, tgt, scene, fwd) { groundAt(scene); sim.setPrints(src, tgt); sim.reset(); sim.draw(fwd, 0); stage.classList.add('morphing'); }
+function holdCanvas(src, tgt, scene, fwd, mobileTransition = false) {
+  groundAt(scene); sim.setPrints(src, tgt); sim.reset(); sim.draw(fwd, 0);
+  if (mobileTransition) {
+    stage.classList.add('mobile-handoff');
+    stage.style.setProperty('--wash-cover', '0');
+  } else stage.classList.add('morphing');
+}
 // When the scene last came to a stand, for the work that may only run at a
 // rest: a dwell counts from here, not from the frame the target changed.
 let settledAt = 0;
@@ -1873,7 +1887,9 @@ function still(scene) {
   // keeps the clipped Publish control from flashing once in its source
   // position at the shell's lower-right before its centred transform lands.
   if (scene === DEPLOY) snapStage();
-  stage.classList.remove('morphing');
+  stage.classList.remove('morphing', 'mobile-handoff');
+  stage.style.removeProperty('--wash-cover');
+  if (mobileLayout() && scene === SHIPS) { sketchVisible(true); videoActive(true); }
 }
 
 // The signup link is navigation: it skips the scene performance.
@@ -1993,7 +2009,7 @@ async function runJoin() {
       if (join.back && to < shown && !mobileLayout()) shown = await join.back(to);
       else if (join.run) shown = await join.run(to);
       else {
-        scenes('morph');   // whatever the scene being left had standing comes off here
+        if (!mobileLayout()) scenes('morph'); // mobile keeps the live source through the first cover frames
         // and the join says how long that takes: the sheet is not wetted under
         // a fan still retracting, or the reader never sees it go. A jump is not
         // being watched, so there it is taken off inside the frame instead.
@@ -2029,15 +2045,26 @@ async function pour(to) {
   // so the poem is the poem being typed.
   const pr = { [from]: sheets[from], [to]: sheets[to] };
   const inOrder = () => [pr[Math.min(from, to)], pr[Math.max(from, to)]];
-  holdCanvas(...inOrder(), from, fwd);
+  const mobileHandoff = mobileLayout();
+  holdCanvas(...inOrder(), from, fwd, mobileHandoff);
+  if (mobileHandoff && from === SHIPS) { sketchVisible(false); videoActive(false); }
+  let liveScene = from, lastCover = -1, drawnT = -1;
+  const showUnderCover = (scene) => {
+    if (scene === liveScene) return;
+    snapStage();
+    sceneClasses(scene);
+    groundAt(scene);
+    scenes(PHASE[scene]);
+    if (scene === SHIPS) { sketchVisible(false); videoActive(false); }
+    liveScene = scene;
+  };
   // The scenes' classes all land in this frame, under the canvas: the ones a
   // jump passes over, and the target's. The wash used to take a fresh print of
   // the scene it was leaving first, so the poem under the splash was the poem as
   // typed — 35 to 54ms of capture inside the frames of a running wash, measured
   // 2026-09-14, to buy at most one warm tick of typing. The rest's own retake
   // keeps that print no older than that, and the splash reads it.
-  passThrough(from, to);
-  sceneClasses(to);
+  if (!mobileHandoff) { passThrough(from, to); sceneClasses(to); }
   // sim seconds per window height of scroll: the wash completes as the reading
   // line travels from one text to the other, whatever the speed of the hand
   // the two texts the wash runs between, which a turnaround swaps and a jump
@@ -2083,7 +2110,8 @@ async function pour(to) {
         to = turn; fwd = to > from;
         if (!pr[to]) pr[to] = sheets[to] || pr[from];
         if (back) { t = 0; acc = 0; relift = 1; }
-        gapVh = gapOf(from, to); sim.setPrints(...inOrder()); passThrough(from, to); sceneClasses(to);
+        gapVh = gapOf(from, to); sim.setPrints(...inOrder());
+        if (!mobileHandoff) { passThrough(from, to); sceneClasses(to); }
       }
       const v = stepClock ? (window.__scrollV || 0) : scrollV;   // the harness can hold a scroll speed
       // a jump has left the text it started from far behind: it is arrived by
@@ -2109,12 +2137,30 @@ async function pour(to) {
       let budget = stepClock ? SPF : STEPS_PER_FRAME;
       while (t < T_TOTAL && budget-- > 0 && (stepClock || t < acc) && !(HOLD && t >= HOLD)) { sim.step(fwd, t, smooth(T_CURE, T_TOTAL, t), stir, tilt, relift); t += DT; steps++; }
       washT = t;
-      if (!mobileLayout() || t >= acc - DT) sim.draw(fwd, smooth(T_CURE, T_TOTAL, t));
-      groundToward(to, smooth(T_DRY, T_TOTAL, t), stepClock ? DT * SPF : dtReal);
+      const caughtUp = t >= acc - DT;
+      if (mobileHandoff && caughtUp) {
+        // All source furniture stays put while the cover rises. Both live
+        // compositions switch only under opaque pigment, including reversal.
+        const cover = Math.min(smooth(0, .35, t), 1 - smooth(T_CURE, T_TOTAL, t));
+        if (cover !== lastCover) {
+          stage.style.setProperty('--wash-cover', cover.toFixed(3));
+          lastCover = cover;
+        }
+        showUnderCover(t < .35 ? from : to);
+      }
+      if (!mobileHandoff || (caughtUp && t !== drawnT)) {
+        sim.draw(fwd, smooth(T_CURE, T_TOTAL, t));
+        drawnT = t;
+      }
+      if (!mobileHandoff) groundToward(to, smooth(T_DRY, T_TOTAL, t), stepClock ? DT * SPF : dtReal);
       if (t >= T_TOTAL - 1e-6) finish(); else requestAnimationFrame(f);
     };
     requestAnimationFrame(f);
   });
+  if (mobileHandoff) {
+    stage.classList.remove('mobile-handoff', 'morphing');
+    stage.style.removeProperty('--wash-cover');
+  }
   if (terminal) return SHARE;
   setSheet(to, pr[to]);   // the scene now on screen, at rest
   return to;
@@ -2380,7 +2426,7 @@ async function capture(scene) {
 }
 async function takePrint(scene) {
   const t0 = performance.now();
-  const k = Math.min(2, devicePixelRatio || 1);
+  const k = Math.min(mobileLayout() ? 1 : 2, devicePixelRatio || 1);
   const c = document.createElement('canvas'); c.width = printW() * k; c.height = printH() * k;
   const g = c.getContext('2d');
   // the stage: plates, the box's shadow and ground, frames as holes
@@ -2610,7 +2656,7 @@ async function fillPrints() {
   return true;
 }
 async function retakeShown() {
-  if (retaking || running() || !washing() || !needed(shown).length) return;
+  if (mobileLayout() || retaking || running() || !washing() || !needed(shown).length) return;
   retaking = true;
   const scene = shown, seq = shownSeq;
   try {
@@ -2718,21 +2764,25 @@ const textBottom = (sec) => sec.lastElementChild.getBoundingClientRect().bottom;
 const progressAt = () => {
   if (mobileLayout()) {
     const band = mobileVisualBand();
-    // The first morph rides the artwork into its pinned position: begin once
-    // its bottom is visible, finish when its top reaches the sticky inset.
-    const entryTop = innerHeight - band.height;
-    const entrance = clamp01((entryTop - document.getElementById('vis').getBoundingClientRect().top) / Math.max(1, entryTop - band.top));
+    // Hold the fully visible first composition before wetting it. Use its
+    // normal-flow position: the transition can finish after the visual pins.
+    const col = document.getElementById('col');
+    const naturalTop = col.getBoundingClientRect().top + parseFloat(getComputedStyle(col).paddingTop);
+    const hold = Math.min(84, band.height * .24);
+    const tail = Math.min(100, band.height * .28);
+    const entryTop = innerHeight - band.height - hold;
+    const entrance = clamp01((entryTop - naturalTop) / Math.max(1, entryTop - band.top + tail));
     if (entrance < 1) return entrance;
     // Thereafter the outgoing text uncovers the next image, so the following
     // scene's copy arrives beneath an illustration that is already ready.
     for (let i = 2; i <= DEPLOY; i++) {
       const text = scenesEl[i - 1].firstElementChild.getBoundingClientRect();
       if (text.top >= band.bottom + 24) return i - 1;
-      if (text.bottom > band.top) {
+      if (text.bottom > band.top - tail) {
         // Wet the old image just before contact. The next image can set only
         // as the trailing edge of the text uncovers the pinned visual.
         const dissolve = clamp01((band.bottom + 24 - text.top) / (band.height + 24));
-        const reveal = clamp01((band.bottom - text.bottom) / band.height);
+        const reveal = clamp01((band.bottom - text.bottom) / (band.height + tail));
         return i - 1 + (T_TAKE * dissolve + (T_TOTAL - T_TAKE) * reveal) / T_TOTAL;
       }
     }
@@ -2860,9 +2910,9 @@ const restY = (scene) => {
     const band = mobileVisualBand();
     if (scene === 1) {
       const col = document.getElementById('col');
-      return Math.round(scrollY + col.getBoundingClientRect().top + parseFloat(getComputedStyle(col).paddingTop) - band.top);
+      return Math.round(scrollY + col.getBoundingClientRect().top + parseFloat(getComputedStyle(col).paddingTop) - band.top + Math.min(100, band.height * .28));
     }
-    return Math.round(scrollY + textBottom(scenesEl[scene - 1]) - band.top);
+    return Math.round(scrollY + textBottom(scenesEl[scene - 1]) - band.top + Math.min(100, band.height * .28));
   }
   const top = textTop(scenesEl[scene]), bot = textBottom(scenesEl[scene]);
   return Math.round(scrollY + (top + bot) / 2 - innerHeight * LINE);
@@ -3141,8 +3191,12 @@ if (CARRY === 'css') { addEventListener('resize', setupCssSnap); setupCssSnap();
 // The browser owns motion here; settleAtRest is never called. On mobile this is a strictly
 // observational path: native scrolling supplies scrollY, which drives the scenes and closing
 // scrub continuously, and no release may move the page after the reader lets go.
+let mobileWatchKey = '';
 function watchScrollCss(now) {
   if (mobileLayout()) {
+    const key = `${scrollY}:${innerWidth}:${innerHeight}`;
+    if (key === mobileWatchKey) return;
+    mobileWatchKey = key;
     const band = mobileVisualBand();
     let overlap = 0;
     for (let i = 1; i <= DEPLOY; i++) {

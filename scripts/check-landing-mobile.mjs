@@ -124,20 +124,26 @@ async function checkSceneTiming() {
   const band = await page.evaluate(() => mobileVisualBand());
   const entryTop = await page.evaluate(() => innerHeight - mobileVisualBand().height);
   const moveVisualTo = async top => {
-    const delta = await page.evaluate(top => document.getElementById('vis').getBoundingClientRect().top - top, top);
+    const delta = await page.evaluate(top => document.getElementById('col').getBoundingClientRect().top + parseFloat(getComputedStyle(document.getElementById('col')).paddingTop) - top, top);
     await page.mouse.wheel(0, delta);
     await page.waitForTimeout(300);
     return read();
   };
   const entering = await moveVisualTo(entryTop + 8);
   assert(entering.progress === 0, `first morph began before full visibility: ${JSON.stringify(entering)}`);
-  const entryHalf = await moveVisualTo((entryTop + band.top) / 2);
+  const hold = Math.min(84, band.height * .24), tail = Math.min(100, band.height * .28);
+  const solid = await moveVisualTo(entryTop - hold + 4);
+  assert(solid.progress === 0, 'first illustration has no fully visible solid interval');
+  const entryHalf = await moveVisualTo((entryTop - hold + band.top - tail) / 2);
   assert(entryHalf.progress > .4 && entryHalf.progress < .6 && entryHalf.state.washT > 0, `first morph did not follow entry: ${JSON.stringify(entryHalf)}`);
-  await moveVisualTo(band.top - 2);
+  await moveVisualTo(band.top - tail - 2);
   await page.waitForFunction(() => __state().shown === 1 && !__state().running, null, { timeout: 5000 });
   const pinned = await read();
-  assert(pinned.progress === 1, `scene 2 was not ready at the pin: ${JSON.stringify(pinned)}`);
+  assert(pinned.progress === 1, `scene 2 did not finish its entrance: ${JSON.stringify(pinned)}`);
+  const plateauStart = await page.evaluate(() => scrollY);
   const before = await wheelTextTopTo(band.bottom + 32);
+  const plateau = await page.evaluate(() => scrollY) - plateauStart;
+  assert(plateau >= 180, `scene 2 solid interval too short: ${plateau}px`);
   assert(before.progress === 1 && before.state.shown === 1, `scene 2 advanced before approaching the visual: ${JSON.stringify(before)}`);
   await wheelTextTopTo(band.bottom + 8);
   await page.waitForFunction(() => __state().washT > 0 && __state().washT <= 1.2, null, { timeout: 5000 });
@@ -163,7 +169,7 @@ async function checkSceneTiming() {
   const reversed = await read();
   assert(reversed.progress < paused.progress && reversed.state.washT < paused.state.washT - .02 && reversed.writes === 0,
     `scene 2 wash did not reverse with upward scroll: ${JSON.stringify({ paused, reversed })}`);
-  const clearDelta = await page.evaluate(() => document.querySelector('#c2 .scene-text').getBoundingClientRect().bottom - mobileVisualBand().top + 4);
+  const clearDelta = await page.evaluate(() => document.querySelector('#c2 .scene-text').getBoundingClientRect().bottom - mobileVisualBand().top + Math.min(100, mobileVisualBand().height * .28) + 4);
   await page.mouse.wheel(0, clearDelta);
   await page.waitForFunction(() => __state().shown === 2 && !__state().running, null, { timeout: 5000 });
   const cleared = await read();
