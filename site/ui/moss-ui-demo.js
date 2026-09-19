@@ -5,7 +5,7 @@ const COPY = {
     done: 'Done · the page is still yours to explore', explored: 'Your edits are preserved · Replay starts over', reduced: 'Static example · motion is reduced',
     error: 'The interactive editor could not load',
     frame: 'Interactive moss editor demonstration',
-    sample: '## A small heading\n\nA plain paragraph, with **bold** or *italic* text.\n\n- A list item\n- Another item\n\n> A quote.\n\n[A link](https://example.com)',
+    sample: "## After the rain\n\nThe garden was quiet this morning. **Moss covered the old stone wall**, and the path smelled of wet leaves.\n\nA few things to remember:\n\n- Sketch the fern beside the gate.\n- Photograph the wall in softer light.\n- Come back without a plan.\n\n> A notebook is a place to notice things.\n\nNext time, I want to learn more about [mosses](https://en.wikipedia.org/wiki/Moss). For now, *looking is enough*.",
   },
   'zh-hant': {
     play: '播放', pause: '停止', replay: '重播',
@@ -13,7 +13,7 @@ const COPY = {
     done: '完成 · 仍可自由操作編輯器', explored: '已保留你的改動 · 重播會重新開始', reduced: '靜態範例 · 已減少動態效果',
     error: '無法載入互動編輯器',
     frame: '青苔編輯器互動示範',
-    sample: '## 小標題\n\n一段普通文字，可以**加粗**或*傾斜*。\n\n- 列表的一項\n- 另一項\n\n> 一段引用。\n\n[一個連結](https://example.com)',
+    sample: "## 雨後\n\n今早的花園很安靜。**老石牆上長滿青苔**，小徑散發著溼潤落葉的氣味。\n\n記下幾件小事：\n\n- 畫下門邊的蕨類。\n- 等光線柔和時，再拍一次石牆。\n- 下次來，不必帶著計畫。\n\n> 筆記本，是練習留心的地方。\n\n下次想多認識一點[苔蘚](https://zh.wikipedia.org/wiki/苔蘚植物)。現在，*先好好看看就夠了*。",
   },
   'zh-hans': {
     play: '播放', pause: '停止', replay: '重播',
@@ -21,7 +21,7 @@ const COPY = {
     done: '完成 · 仍可自由操作编辑器', explored: '已保留你的改动 · 重播会重新开始', reduced: '静态示例 · 已减少动态效果',
     error: '无法加载交互编辑器',
     frame: '青苔编辑器交互演示',
-    sample: '## 小标题\n\n一段普通文字，可以**加粗**或*倾斜*。\n\n- 列表的一项\n- 另一项\n\n> 一段引用。\n\n[一个链接](https://example.com)',
+    sample: "## 雨后\n\n今早的花园很安静。**老石墙上长满青苔**，小径散发着湿润落叶的气味。\n\n记下几件小事：\n\n- 画下门边的蕨类。\n- 等光线柔和时，再拍一次石墙。\n- 下次来，不必带着计划。\n\n> 笔记本，是练习留心的地方。\n\n下次想多认识一点[苔藓](https://zh.wikipedia.org/wiki/苔藓植物)。现在，*先好好看看就够了*。",
   },
 };
 
