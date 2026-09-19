@@ -70,6 +70,25 @@ fn find_homepage_doc<'a>(
     all_docs.iter().find(|d| d.url_path == "index.html")
 }
 
+/// Resolve the site name visible on a page in `page_lang` from that edition's
+/// authored root. A missing or filename-derived localized title falls back to
+/// the canonical site name, so English and single-language sites are unchanged.
+pub(crate) fn localized_site_title(
+    all_docs: &[ParsedDocument],
+    page_lang: crate::i18n::Language,
+    site_lang: crate::i18n::Language,
+    fallback: &str,
+) -> String {
+    if page_lang == site_lang {
+        return fallback.to_string();
+    }
+    find_homepage_doc(all_docs, page_lang, site_lang)
+        .filter(|d| d.url_path != "index.html")
+        .map(|d| d.title.clone())
+        .filter(|t| !t.is_empty() && !moss_core::home::is_index_stem(t))
+        .unwrap_or_else(|| fallback.to_string())
+}
+
 pub fn generate_html(
     doc: Option<&ParsedDocument>,
     all_docs: &[ParsedDocument],
@@ -310,20 +329,9 @@ fn generate_html_inner(
     // Per-language site name: if the current page is non-default language,
     // look for the translated homepage and use its title as site_name.
     // e.g., Chinese pages use "青苔" instead of "moss".
-    let site_title = if let Some(d) = doc {
-        if d.lang != site_lang {
-            let lang_homepage = format!("{}/index.html", d.lang.code());
-            all_docs.iter()
-                .find(|dd| dd.url_path == lang_homepage)
-                .map(|dd| dd.title.clone())
-                .filter(|t| !t.is_empty() && !moss_core::home::is_index_stem(t))
-                .unwrap_or(site_title)
-        } else {
-            site_title
-        }
-    } else {
-        site_title
-    };
+    let site_title = doc.map_or(site_title.clone(), |d| {
+        localized_site_title(all_docs, d.lang, site_lang, &site_title)
+    });
 
     // Generate analytics script tag from homepage frontmatter
     let analytics_script = homepage_doc

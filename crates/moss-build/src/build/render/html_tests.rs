@@ -7688,6 +7688,52 @@ mod homepage_translation_tests {
         }
     }
 
+    #[test]
+    fn localized_root_title_names_authored_and_synthetic_pages() {
+        let (test_dir, _cleanup) = create_test_dir();
+        let output_dir = test_dir.join(".moss/build/staging");
+        fs::create_dir_all(test_dir.join("zh-hant/guide")).unwrap();
+        fs::write(
+            test_dir.join("index.md"),
+            "---\ntitle: moss\nlang: en\n---\n# Home\n",
+        )
+        .unwrap();
+        fs::write(
+            test_dir.join("zh-hant/index.md"),
+            "---\ntitle: 青苔\nlang: zh-hant\n---\n# 首頁\n",
+        )
+        .unwrap();
+        fs::write(
+            test_dir.join("zh-hant/guide/page.md"),
+            "---\ntitle: 寫作\nlang: zh-hant\n---\n# 寫作\n",
+        )
+        .unwrap();
+
+        let project_structure = scan_folder(test_dir.to_str().unwrap()).unwrap();
+        generate_blocking_content(
+            &crate::vault::paths::VaultRoot::resolve(test_dir.to_str().unwrap()),
+            &project_structure,
+            &output_dir,
+            None,
+            None,
+            true,
+            SiteConfig::default(),
+            &mut PendingManifest::new(SiteHashes::default()),
+        )
+        .expect("multilingual site should build");
+
+        let authored = fs::read_to_string(output_dir.join("zh-hant/guide/page/index.html"))
+            .expect("authored Traditional Chinese page");
+        assert!(authored.contains(r#"<meta property="og:site_name" content="青苔">"#));
+        assert!(authored.contains(r#"class="site-name"#) && authored.contains(">青苔</a>"));
+
+        let synthetic = fs::read_to_string(output_dir.join("zh-hant/guide/index.html"))
+            .expect("synthetic Traditional Chinese folder page");
+        assert!(synthetic.contains(" - 青苔</title>"));
+        assert!(synthetic.contains(r#"class="site-name"#) && synthetic.contains(">青苔</a>"));
+        assert!(!synthetic.contains(" - moss</title>"));
+    }
+
     /// Same as the .mov case but for `[[scale-family-tree.html]]` —
     /// the second variant the plan reported failing, where the article's
     /// own markdown source had the same stem as a sibling .html asset.
