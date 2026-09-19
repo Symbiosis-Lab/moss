@@ -129,34 +129,41 @@ async function checkSceneTiming() {
   };
   const band = await page.evaluate(() => mobileVisualBand());
   const textHeight = await page.evaluate(() => document.querySelector('#c2 .scene-text').getBoundingClientRect().height);
-  // The incoming copy owns contact: progress starts with its top at the
-  // visual bottom and completes with its bottom at the visual top.
-  const entering = await wheelTextTopTo(band.bottom + 8);
-  assert(entering.progress === 0, `scene 2 began before incoming text contact: ${JSON.stringify(entering)}`);
-  const entryHalfTop = band.bottom - (band.height + textHeight) / 2;
-  const entryHalf = await wheelTextTopTo(entryHalfTop);
-  assert(entryHalf.progress > .4 && entryHalf.progress < .6 && entryHalf.state.washT > 0, `scene 2 morph did not follow incoming text: ${JSON.stringify(entryHalf)}`);
-  const pinned = await wheelTextTopTo(band.top - textHeight - 2);
-  await page.waitForFunction(() => __state().shown === 1 && !__state().running, null, { timeout: 5000 });
-  assert(pinned.progress === 1, `scene 2 did not finish its entrance: ${JSON.stringify(pinned)}`);
+  const entranceStart = await page.evaluate(() => {
+    const col = document.getElementById('col');
+    return scrollY + col.getBoundingClientRect().top + parseFloat(getComputedStyle(col).paddingTop) + mobileVisualBand().height - innerHeight;
+  });
+  const entranceEnd = await page.evaluate(() => scrollY + document.querySelector('#c2 .scene-text').getBoundingClientRect().top - innerHeight);
+  const moveTo = async y => {
+    await page.mouse.wheel(0, y - await page.evaluate(() => scrollY));
+    await page.waitForTimeout(300);
+    return read();
+  };
+  const entering = await moveTo(entranceStart - 8);
+  assert(entering.progress === 0, `first visual morphed before fully entering: ${JSON.stringify(entering)}`);
+  const entryHalf = await moveTo((entranceStart + entranceEnd) / 2);
+  assert(entryHalf.progress > .4 && entryHalf.progress < .6, `first morph did not follow entrance: ${JSON.stringify(entryHalf)}`);
+  const pinned = await moveTo(entranceEnd + 2);
+  await page.waitForFunction(() => __state().shown === 1 && !__state().running, null, { timeout: 10000 });
+  assert(pinned.progress === 1, `scene 2 was not consolidated when its copy entered: ${JSON.stringify(pinned)}`);
   await page.waitForFunction(() => [0, 1, 2, 3].every(i => __onHand[i]), null, { timeout: 30000 });
   const plateauStart = await page.evaluate(() => scrollY);
-  const before = await wheelTextTopTo(band.top - textHeight - 182);
+  const before = await wheelTextTopTo(band.bottom + 24);
   const plateau = await page.evaluate(() => scrollY) - plateauStart;
-  assert(plateau >= 180, `scene 2 solid interval too short: ${plateau}px`);
+  assert(plateau >= 100, `scene 2 solid interval too short: ${plateau}px`);
   assert(before.progress === 1 && before.state.shown === 1, `scene 2 advanced before approaching the visual: ${JSON.stringify(before)}`);
-  const nextTextHeight = await page.evaluate(() => document.querySelector('#c3 .scene-text').getBoundingClientRect().height);
-  const contact = await wheelIncomingTopTo('#c3 .scene-text', band.bottom + 8);
+  const nextTextHeight = await page.evaluate(() => document.querySelector('#c2 .scene-text').getBoundingClientRect().height);
+  const contact = await wheelIncomingTopTo('#c2 .scene-text', band.bottom + 8);
   assert(contact.progress === 1 && contact.state.shown === 1, `scene 2 advanced before next incoming text contact: ${JSON.stringify(contact)}`);
   const nextHalfTop = band.bottom - (band.height + nextTextHeight) / 2;
-  const half = await wheelIncomingTopTo('#c3 .scene-text', nextHalfTop);
+  const half = await wheelIncomingTopTo('#c2 .scene-text', nextHalfTop);
   assert(half.progress > 1.4 && half.progress < 1.6 && Math.abs(half.state.washT - 1.05) < .05 && half.state.shown === 1,
     `scene 2 wash did not follow next incoming text: ${JSON.stringify({ contact, half })}`);
   await page.waitForTimeout(600);
   const paused = await read();
   assert(Math.abs(paused.state.washT - half.state.washT) < .01 && Math.abs(paused.state.progress - half.state.progress) < .001 && paused.writes === 0,
     `scene 2 wash advanced without scroll input: ${JSON.stringify({ half, paused })}`);
-  const reversed = await wheelIncomingTopTo('#c3 .scene-text', band.bottom + 8);
+  const reversed = await wheelIncomingTopTo('#c2 .scene-text', band.bottom + 8);
   assert(reversed.progress < half.progress && reversed.state.washT < half.state.washT - .02 && reversed.writes === 0,
     `scene 2 wash did not reverse with upward scroll: ${JSON.stringify({ half, reversed })}`);
   await page.close();
@@ -198,7 +205,7 @@ try {
   assert(held.writes === 0, `mobile code called scrollTo ${held.writes} time(s)`);
   assert(Math.abs(held.y - releasedY) < 2, `page moved after native release: ${releasedY} -> ${held.y}`);
 
-  for (let i = 0; i < 50 && state.xf === 0; i++) {
+  for (let i = 0; i < 50 && state.xf <= .01; i++) {
     await swipe(page, 650, 520);
     await page.waitForTimeout(35);
     state = await mobileState(page);

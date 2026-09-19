@@ -294,9 +294,13 @@
   /* The document still has a useful close if JavaScript is unavailable: the
      scripts add .js before body paint, while the static section keeps its own
      headline and links when they cannot run. */
-  html:not(.js) .page { display: none; }
-  html:not(.js) #five { position: relative; min-height: 100vh; opacity: 1; pointer-events: auto; }
-  html:not(.js) #five-in { width: min(900px, calc(100% - 40px)); }
+  :is(html:not(.js), html[data-static]) #col { display: none; }
+  :is(html:not(.js), html[data-static]) #intro { min-height: 0; padding-block: 100px 32px; }
+  :is(html:not(.js), html[data-static]) #intro h1 { position: static; }
+  :is(html:not(.js), html[data-static]) .page { display: block; margin-top: 0; }
+  :is(html:not(.js), html[data-static]) .scene { min-height: 0; padding: 32px 0; }
+  :is(html:not(.js), html[data-static]) #five { position: relative; min-height: 100vh; opacity: 1; pointer-events: auto; background: #101110; }
+  :is(html:not(.js), html[data-static]) #five-in { width: min(900px, calc(100% - 40px)); }
 
   /* ?carry=css: the browser's own scroll-snap owns the resting position instead of the
      hand-rolled settle; setupCssSnap() (movie6.html script, beside watchScrollCss) computes
@@ -377,7 +381,10 @@
     body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; opacity: calc(1 - var(--xf)); background: linear-gradient(to bottom, var(--bg) 0 34px, color-mix(in srgb, var(--bg) 72%, transparent) 52px, transparent); }
     #intro { min-height: 0; justify-items: start; padding: 88px 34px 32px; }
     #intro h1 { position: static; text-align: left; font-size: clamp(40px, 11vw, 58px); opacity: 1; -webkit-mask-image: none !important; mask-image: none !important; }
-    .page { margin-top: 0; }
+    .page { margin-top: 0; opacity: 1; }
+    #col { opacity: calc(1 - var(--xf)); }
+    #c4 .scene-text { color: color-mix(in srgb, var(--text), white calc(var(--xf) * 100%)); }
+    #c4 .lede { color: inherit; }
     .page { position: relative; display: block; width: 100%; padding: 0 16px; }
     #col { margin-top: 0; position: absolute; inset: 0; height: auto; padding-top: var(--mobile-col-pad, 70svh); z-index: 0; pointer-events: none; }
     #copy { position: relative; z-index: 1; min-width: 0; }
@@ -2007,7 +2014,15 @@ function mobileInkProgress(text) {
   const rect = text.getBoundingClientRect();
   return clamp01((band.bottom - rect.top) / (band.height + rect.height));
 }
-function mobileClosingProgress() { return mobileInkProgress(five.querySelector('h2')); }
+// The first visual enters with its own copy. Morph once fully visible,
+// finishing before the second scene's text arrives at the viewport edge.
+function mobileEntranceProgress() {
+  const col = document.getElementById('col'), band = mobileVisualBand();
+  const top = col.getBoundingClientRect().top + parseFloat(getComputedStyle(col).paddingTop);
+  const span = textTop(scenesEl[1]) - top - band.height;
+  return clamp01((innerHeight - band.height - top) / Math.max(1, span));
+}
+function mobileClosingProgress() { return mobileInkProgress(scenesEl[DEPLOY].firstElementChild); }
 function mobileVisualBand() {
   const visual = document.getElementById('vis');
   const top = parseFloat(getComputedStyle(visual).top);
@@ -2961,11 +2976,6 @@ async function fillPrints() {
   const scene = [...needed(shown), ...washable].find((s) => !sheets[s]);
   if (scene == null) return false;
   if (mobileLayout() && scene >= SHIPS && shown < 1 && target < 1) return false;
-  // Scene 3 is a live arrangement, not a printable sheet: switching its DOM to
-  // an offscreen neighbour under the capture canvas briefly removes the loose
-  // artifacts. Its neighbours have already been warmed during scenes 1–2; do
-  // not flash the interactive composition to fill a discretionary later gap.
-  if (shown === SHIPS && scene !== shown) return false;
   retaking = true;
   try {
     if (scene === shown) { const c = await capture(scene); if (scene === shown) setSheet(scene, c); }
@@ -3020,8 +3030,9 @@ async function refreshStale() {
 let warmTimer = null;
 function warmSoon(ms = WARM_MS) { if (warmTimer != null) return; warmTimer = setTimeout(() => { warmTimer = null; whenIdle(warm); }, ms); }
 async function warm() {
+  if (document.documentElement.dataset.static) return;
   warmSoon();            // the next tick is a second from this one's start, not from its end
-  if (!atRest()) return;
+  if (!atRest() && !(target !== shown && !primed())) return;
   stale.delete(shown);   // the scene on screen has its own retake
   // One thing a tick, in this order: a print a jump may ask for that nobody has
   // taken, then one a wash has just left behind, then the scene on screen, whose
@@ -3082,9 +3093,11 @@ const textBottom = (sec) => sec.lastElementChild.getBoundingClientRect().bottom;
 // disagree as either scene's markup changes.
 const progressAt = () => {
   if (mobileLayout()) {
-    for (let scene = 1; scene <= DEPLOY; scene++) {
+    const entrance = mobileEntranceProgress();
+    if (entrance < 1) return entrance;
+    for (let scene = 1; scene < DEPLOY; scene++) {
       const q = mobileInkProgress(scenesEl[scene].firstElementChild);
-      if (q < 1) return scene - 1 + q;
+      if (q < 1) return scene + q;
     }
     return DEPLOY + mobileClosingProgress();
   }
@@ -3218,7 +3231,7 @@ const restY = (scene) => {
   if (scene === SHARE) return closingRestY();
   if (mobileLayout()) {
     const band = mobileVisualBand();
-    return Math.round(scrollY + textBottom(scenesEl[scene]) - band.top);
+    return Math.round(scrollY + (scene === 1 ? textTop(scenesEl[1]) - band.bottom - 24 : textBottom(scenesEl[scene - 1]) - band.top));
   }
   const top = textTop(scenesEl[scene]), bot = textBottom(scenesEl[scene]);
   return Math.round(scrollY + (top + bot) / 2 - innerHeight * LINE);
@@ -3618,6 +3631,7 @@ function watchScrollWait(now) {
   scrollV *= Math.exp(-dt / V_TAU);
 }
 (function watchScroll(now = performance.now()) {
+  if (document.documentElement.dataset.static) return;
   // Reduced motion always takes the wait path, whatever ?carry= says: every mode's
   // reduced-motion behaviour is already that path's own instant arrival (settleAtRest's own
   // `if (reduce)`), so there is nothing for intent or css to do differently under it.
@@ -3959,7 +3973,13 @@ window.__state = () => ({ shown, target, running: running(), phase, steps, joins
 window.__joins = () => joinsRun;
 window.__prints = () => ({ captures, inFlight, peakInFlight, shownSeq, shownAge: shownAt ? Math.round(performance.now() - shownAt) : null, captureMs, maxPrintImgBytes });
 
-const when = (frame, key) => new Promise((r) => { const t = setInterval(() => { const w = frame.contentWindow; if (w && w[key]) { clearInterval(t); r(w[key]); } }, 50); });
+const when = (frame, key) => new Promise((resolve, reject) => {
+  const deadline = setTimeout(() => { clearInterval(poll); reject(new Error(`Demo ${frame.id} did not initialize`)); }, 10000);
+  const poll = setInterval(() => {
+    const api = frame.contentWindow?.[key];
+    if (api) { clearInterval(poll); clearTimeout(deadline); resolve(api); }
+  }, 50);
+});
 async function ready() {
   // Images and creative artifacts share one complete printable domain before
   // any scene is captured, including untouched initial arrangements.
@@ -3984,7 +4004,11 @@ Promise.all([when(edFrame, '__editor'), when(shFrame, '__shell'), when(vdFrame, 
     // the composition ring stays clear, so the only colour in the scene is ink.
     vd.setPending({ flatUpload: 1 });
     measurePub();
-    ready();
+    return ready();
+  }).catch(error => {
+    console.warn('Showing the readable landing page:', error.message);
+    document.documentElement.dataset.static = '1';
+    page.inert = false; five.inert = false;
   });
 </script>
 <script src="closing.js" defer></script>
