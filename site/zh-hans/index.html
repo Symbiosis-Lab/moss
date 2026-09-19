@@ -308,10 +308,11 @@
   #intro h1 { position: sticky; top: 34svh; margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; text-wrap: balance; opacity: clamp(0, calc((var(--intro-title-p, 1) - .04) * 1.2), 1); }
   .page { margin-top: -42svh; }
   .page { grid-template-columns: calc(var(--vis-w) * var(--layout-s, var(--s)) - clamp(168px, calc(23vw - 126px), 238px)) minmax(0, 1fr); }
-  #stage { transform: translate(calc((var(--layout-s, 1) - var(--s, 1)) * 400px), calc(var(--intro-visible, 0px) * -.33 - var(--vis-top, 0px))); }
+  #col { margin-top: calc(-1 * var(--page-start, 0px)); }
+  #stage { transform: translate(calc((var(--layout-s, 1) - var(--s, 1)) * 400px), var(--opening-lift, 0px)); }
   #cell { transform: scale(var(--s)); }
   #c1 { min-height: 100svh; justify-content: flex-start; }
-  #c1 h2 { font-size: calc(34px + 6px * (1 - var(--intro-p, 0))); transition: font-size .12s linear; }
+  #c1 h2 { font-size: 40px; }
   #five { position: relative; inset: auto; min-height: 100svh; overflow: visible; background: transparent; color: #fff; }
   #c5 { height: 0; min-height: 0; padding: 0; }
   #loop-toggle { position: static; margin-top: 28px; }
@@ -361,7 +362,7 @@
     #intro h1 { position: static; font-size: clamp(40px, 11vw, 58px); opacity: 1; -webkit-mask-image: none !important; mask-image: none !important; }
     .page { margin-top: 0; }
     .page { position: relative; display: block; width: 100%; padding: 0 16px; }
-    #col { position: absolute; inset: 0; height: auto; padding-top: var(--mobile-col-pad, 70svh); z-index: 0; pointer-events: none; }
+    #col { margin-top: 0; position: absolute; inset: 0; height: auto; padding-top: var(--mobile-col-pad, 70svh); z-index: 0; pointer-events: none; }
     #copy { position: relative; z-index: 1; min-width: 0; }
     #vis { margin-left: 0; position: sticky; top: 76px; width: 100%; height: var(--mobile-vis-h, 42vh); min-height: 260px; padding-left: 0; transform: none; align-items: flex-start; justify-content: flex-start; overflow: visible; }
     #stage { transform: none; width: calc(var(--cell-w) * var(--s)); height: calc(var(--cell-h) * var(--s)); flex: none; margin: var(--mobile-stage-overhang, 0px) auto 0; }
@@ -764,11 +765,12 @@ function updateOpening() {
   const introScale = .4 + .1 * clamp01((innerHeight - 720) / 480);
   SCALE = baseScale * (1 - (1 - introScale) * stageIntroP);
   document.documentElement.style.setProperty('--s', String(SCALE));
-  document.documentElement.style.setProperty('--intro-p', String(introP));
   document.documentElement.style.setProperty('--intro-title-p', String(titleP));
   introWatercolor(titleP);
-  document.documentElement.style.setProperty('--intro-visible', (visible * titleP) + 'px');
-  document.documentElement.style.setProperty('--vis-top', (document.getElementById('vis').getBoundingClientRect().top * (1 - titleP)) + 'px');
+  // CSS pins the visual from the document opening. Only the intro moves it;
+  // once titleP is zero there is no scroll-position compensation to chase.
+  const pageStart = parseFloat(document.documentElement.style.getPropertyValue('--page-start')) || 0;
+  document.documentElement.style.setProperty('--opening-lift', (titleP * (Math.max(0, pageStart - scrollY) - visible * .33)) + 'px');
 }
 function fit() {
   const sw = (Math.min(innerWidth, PAGE_MAX) - 56 - 96 - COPY_MIN) / VIS_W;
@@ -779,6 +781,7 @@ function fit() {
   baseScale = mobileLayout() ? mobileScale : Math.max(.5, Math.min(1, sw, (innerHeight - 96) / GEOM.cellH));
   const root = document.documentElement.style;
   root.setProperty('--layout-s', String(baseScale));
+  root.setProperty('--page-start', (document.querySelector('.page').getBoundingClientRect().top + scrollY) + 'px');
   if (mobileLayout()) { SCALE = baseScale; root.setProperty('--s', String(SCALE)); }
   root.setProperty('--intro-h', opening.offsetHeight + 'px');
   root.setProperty('--mobile-vis-h', visualHeight + 'px');
