@@ -13,7 +13,7 @@
         "crates/moss-build/src/build/markdown/html_post.rs": 977,
         "crates/moss-build/src/build/markdown/pipeline.rs": 2143,
         "crates/moss-build/src/build/media/ffmpeg.rs": 1672,
-        "crates/moss-build/src/build/media/image.rs": 3004,
+        "crates/moss-build/src/build/media/image.rs": 3008,
         "crates/moss-build/src/build/media/pipeline.rs": 1804,
         "crates/moss-build/src/build/media/video.rs": 1810,
         "crates/moss-build/src/build/page/meta.rs": 1366,
@@ -497,6 +497,17 @@
         "crates/moss-build/src/build/cache.rs": 1606
       },
       "reason": "cache.rs +33 (1573 to 1606): HashIndex::resolve_from and the miss tail hash_and_record become the one owner of 'no read of a file in the cloud, else hash and record at the stat taken before'; the scan's resolve_content_hash (-17 in scan.rs) and the parse cache's compute_with (unratcheted) each carried a hand-rolled copy of it without the cloud guard",
+      "date": "2026-09-20"
+    },
+    {
+      "row": "prod_lines_per_file",
+      "from": {
+        "crates/moss-build/src/build/media/image.rs": 3004
+      },
+      "to": {
+        "crates/moss-build/src/build/media/image.rs": 3008
+      },
+      "reason": "media/image.rs +4 (3004 to 3008): the worker's hash-failure exit gains one arm that answers a source gone back to the cloud the way the gate does (deferred, Pending) instead of as a failed image",
       "date": "2026-09-20"
     }
   ]

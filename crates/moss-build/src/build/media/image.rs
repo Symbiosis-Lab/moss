@@ -1985,12 +1985,16 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         // `bg_hash_index` and hashes only on a miss; the index is persisted after
         // the loop so the next build's collect stat-matches cheaply.
         //
-        // A failure here is a source moss cannot read at all — the cloud gate
-        // above already took the one transient reason for that — so it gets the
-        // same answer as a failed decode, not the silent `return` it used to be.
+        // A failure here is a source moss cannot read at all, so it gets the same
+        // answer as a failed decode, not the silent `return` it used to be — except
+        // the one transient reason for it: the gate above took the source while it was
+        // local, and `resolve` refuses one that has gone back to the cloud since.
         let source_oid = if item.source_oid.is_empty() {
             match bg_hash_index.lock().unwrap().resolve(&source_file, &rel_source_str) {
                 Ok(oid) => oid,
+                Err(_) if crate::build::icloud::is_still_in_the_cloud(&source_file) => {
+                    return ItemStep::deferred_to_cloud(&source_file, &rel_source_str);
+                }
                 Err(e) => {
                     log::warn!("Failed to hash image {}: {}", rel_source_str, e);
                     return ItemStep::base_failed(&rel_source_str, &relative_webp, registered_rungs(), e);

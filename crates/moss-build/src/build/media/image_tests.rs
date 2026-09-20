@@ -865,9 +865,10 @@ async fn base_failed_advisory_names_the_full_nested_source_path() {
 /// it, and the published site referenced a `.webp` that was never staged —
 /// a `<source>` 404 `<picture>` cannot recover from (ADR-013).
 ///
-/// The cloud gate above this arm already claims the one transient reason a
-/// readable file fails to hash, so what is left is a real I/O failure and
-/// gets a real failure's answer. Driven through `run_image_conversion` with
+/// The cloud gate above this arm, and the arm before it for a source that
+/// went back to the cloud since, claim the one transient reason a readable
+/// file fails to hash, so what is left is a real I/O failure and gets a real
+/// failure's answer. Driven through `run_image_conversion` with
 /// an empty `source_oid` (forcing the deferred hash) over a path that is a
 /// DIRECTORY: it exists, it is not in the cloud, and reading it fails.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -5517,6 +5518,35 @@ async fn a_source_changed_under_a_worker_whose_hash_failed_is_encoded_by_the_nex
     vault.rebuild(true).await;
 
     assert_ne!(vault.webp(), first, "pic.png is blue on disk but its variant is still the red encode: the gate skipped it");
+}
+
+/// The cloud gate ahead of the hash asks whether the source is in the cloud, and the
+/// provider can evict it between that question and the read. The hash's own guard then
+/// refuses, and that refusal is the cloud and not a broken image: it is answered the way
+/// the gate answers (still Pending, nothing shipped, the bytes asked for) and not as a
+/// failed decode (Failed, and a warning image where the picture should be), or a race
+/// decides whether the author sees a broken image.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_that_went_back_to_the_cloud_before_its_hash_was_read_is_deferred_not_failed() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let registry = std::sync::Arc::new(AssetRegistry::new());
+    registry.set_pending("pic.webp".to_string(), Some((24, 24)), None);
+    let items = vault.collect();
+    assert!(items[0].source_oid.is_empty(), "premise: the blocking phase left the hash to the worker");
+    let services = BuildServices { assets: Some(registry.clone()), ..RewriteVault::app_services() };
+
+    // The gate is the first question asked about the file, the hash's guard the second.
+    let _cloud = crate::build::icloud::pretend::evicted_after(&vault.pic(), 1);
+    vault.dispatch(items, services).await;
+
+    assert!(
+        matches!(registry.get("pic.webp"), Some(AssetState::Pending(_))),
+        "a source that went back to the cloud was answered as a failed image: {:?}",
+        registry.get("pic.webp")
+    );
+    assert!(!vault.moss_dir.join("build/staging/pic.webp").exists(), "premise: nothing was encoded");
 }
 
 /// The blocking phase leaves the oid of an image it has not seen to the worker, and the
