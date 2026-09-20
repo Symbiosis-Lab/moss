@@ -1065,9 +1065,10 @@ impl HashIndex {
         self.resolve_with(file, relative_path, ObjectStore::hash_file, crate::build::icloud::is_still_in_the_cloud)
     }
 
-    /// [`resolve`](Self::resolve) with its two effects passed in, so a test can
-    /// hash without a real file and put one in the cloud.
-    fn resolve_with(
+    /// [`resolve`](Self::resolve) with its two effects passed in: a test can hash
+    /// without a real file and put one in the cloud, and a caller that reads the bytes
+    /// itself (the parse cache) still gets the lookup, the guard and the record.
+    pub(crate) fn resolve_with(
         &mut self,
         file: &Path,
         relative_path: &str,
@@ -1081,11 +1082,43 @@ impl HashIndex {
         if let Some(hash) = self.lookup(relative_path, &stat) {
             return Ok(hash.to_string());
         }
+        self.hash_and_record(&stat, file, relative_path, hash_file, in_the_cloud)
+    }
+
+    /// [`resolve`](Self::resolve) for a scan that builds a new index beside the last
+    /// one, at the stat its walk took: what `previous` still vouches for is carried
+    /// across as recorded (see [`carry_forward`](Self::carry_forward)), the rest is
+    /// hashed and recorded here.
+    pub(crate) fn resolve_from(
+        &mut self,
+        previous: &HashIndex,
+        stat: &FileStat,
+        file: &Path,
+        relative_path: &str,
+    ) -> Result<String, String> {
+        if let Some(hash) = previous.lookup(relative_path, stat) {
+            let hash = hash.to_string();
+            self.carry_forward(previous, relative_path);
+            return Ok(hash);
+        }
+        self.hash_and_record(stat, file, relative_path, ObjectStore::hash_file, crate::build::icloud::is_still_in_the_cloud)
+    }
+
+    /// What a miss comes to: no read of a file in the cloud, else its hash, recorded at
+    /// the stat taken before the read.
+    fn hash_and_record(
+        &mut self,
+        stat: &FileStat,
+        file: &Path,
+        relative_path: &str,
+        hash_file: impl FnOnce(&Path) -> Result<String, String>,
+        in_the_cloud: impl FnOnce(&Path) -> bool,
+    ) -> Result<String, String> {
         if in_the_cloud(file) {
             return Err(format!("{} is still in the cloud; not reading it to hash it", file.display()));
         }
         let hash = hash_file(file)?;
-        self.update(relative_path.to_string(), &stat, hash.clone());
+        self.update(relative_path.to_string(), stat, hash.clone());
         Ok(hash)
     }
 }

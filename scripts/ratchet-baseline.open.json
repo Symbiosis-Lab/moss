@@ -8,7 +8,7 @@
       "armed": true,
       "value": {
         "crates/moss-build/src/build/assets/binary_resolver.rs": 1016,
-        "crates/moss-build/src/build/cache.rs": 1573,
+        "crates/moss-build/src/build/cache.rs": 1606,
         "crates/moss-build/src/build/folder_embed.rs": 1460,
         "crates/moss-build/src/build/markdown/html_post.rs": 977,
         "crates/moss-build/src/build/markdown/pipeline.rs": 2143,
@@ -20,7 +20,7 @@
         "crates/moss-build/src/build/pipeline.rs": 2018,
         "crates/moss-build/src/build/render/blocking.rs": 3591,
         "crates/moss-build/src/build/render/html.rs": 1617,
-        "crates/moss-build/src/build/scan/scan.rs": 1521,
+        "crates/moss-build/src/build/scan/scan.rs": 1504,
         "crates/moss-build/src/build/ship.rs": 820,
         "crates/moss-build/src/build/types.rs": 832,
         "crates/moss-build/src/build/watch.rs": 1126,
@@ -486,6 +486,17 @@
         "crates/moss-build/src/build/media/image.rs": 3004
       },
       "reason": "media/image.rs +15 (2989 to 3004): ImageConversionItem carries the fingerprint its dispatch took (a field and an ended() method that ends the dispatch's marker and records the delivery) so the worker no longer stats the source itself; the worker's stat call, its comment and the dispatch's separate queued vec are gone, and ending a marker is now compare-and-clear, which is the ownership rule the join needs",
+      "date": "2026-09-20"
+    },
+    {
+      "row": "prod_lines_per_file",
+      "from": {
+        "crates/moss-build/src/build/cache.rs": 1573
+      },
+      "to": {
+        "crates/moss-build/src/build/cache.rs": 1606
+      },
+      "reason": "cache.rs +33 (1573 to 1606): HashIndex::resolve_from and the miss tail hash_and_record become the one owner of 'no read of a file in the cloud, else hash and record at the stat taken before'; the scan's resolve_content_hash (-17 in scan.rs) and the parse cache's compute_with (unratcheted) each carried a hand-rolled copy of it without the cloud guard",
       "date": "2026-09-20"
     }
   ]

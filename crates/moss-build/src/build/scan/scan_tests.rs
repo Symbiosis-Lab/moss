@@ -1708,6 +1708,22 @@ fn a_preview_scan_caches_nothing_under_the_stat_key_of_an_evicted_image() {
     );
 }
 
+/// A build-mode scan hashes an image the last index does not vouch for, after it has
+/// asked whether the image is in the cloud — and the provider can evict it in between.
+/// The scan's own hash read is guarded like every other, so the image is left unhashed
+/// (its worker defers it) instead of blocking the scan on a download.
+#[test]
+fn a_build_scan_does_not_hash_an_image_that_went_to_the_cloud_after_it_was_checked() {
+    let fx = ScanFixture::new("evicted_after_check");
+    let stat = FileStat::of(&fs::metadata(&fx.png).unwrap());
+    let mut new_index = HashIndex::new();
+
+    let _cloud = crate::build::icloud::pretend::evicted_after(&fx.png, 1);
+    fx.scan(&stat, &HashIndex::new(), &mut new_index, false);
+
+    assert!(new_index.entries.is_empty(), "the scan hashed an image that was in the cloud: {:?}", new_index.entries);
+}
+
 // =========================================================================
 // What the walk feeds the hash index: the file's whole stat record
 // =========================================================================

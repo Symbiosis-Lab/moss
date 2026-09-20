@@ -133,15 +133,31 @@ pub(crate) mod pretend {
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
-    static MARKED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    /// Each marked path with the number of questions about it still to answer "on disk".
+    static MARKED: Mutex<Vec<(PathBuf, usize)>> = Mutex::new(Vec::new());
 
     pub(crate) fn marked(path: &Path) -> bool {
-        MARKED.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|p| p == path)
+        let mut marked = MARKED.lock().unwrap_or_else(|e| e.into_inner());
+        match marked.iter_mut().find(|(p, _)| p == path) {
+            Some((_, on_disk_for)) if *on_disk_for > 0 => {
+                *on_disk_for -= 1;
+                false
+            }
+            Some(_) => true,
+            None => false,
+        }
     }
 
     /// Mark `path` as cloud-only for the life of the returned guard.
     pub(crate) fn evicted(path: &Path) -> Guard {
-        MARKED.lock().unwrap_or_else(|e| e.into_inner()).push(path.to_path_buf());
+        evicted_after(path, 0)
+    }
+
+    /// [`evicted`], except the first `questions` asked about `path` are answered as if
+    /// it were still on disk: the file goes to the cloud after a caller's first check and
+    /// before its read, which is the race every check after the first is for.
+    pub(crate) fn evicted_after(path: &Path, questions: usize) -> Guard {
+        MARKED.lock().unwrap_or_else(|e| e.into_inner()).push((path.to_path_buf(), questions));
         Guard(path.to_path_buf())
     }
 
@@ -149,7 +165,7 @@ pub(crate) mod pretend {
 
     impl Drop for Guard {
         fn drop(&mut self) {
-            MARKED.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| *p != self.0);
+            MARKED.lock().unwrap_or_else(|e| e.into_inner()).retain(|(p, _)| *p != self.0);
         }
     }
 }

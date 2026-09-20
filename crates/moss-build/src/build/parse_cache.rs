@@ -112,7 +112,7 @@
 //! against the freshly parsed document's facade so a stale reuse shows up as a
 //! logged error instead of a wrong page.
 
-use crate::build::cache::{FileStat, HashIndex};
+use crate::build::cache::HashIndex;
 use crate::build::types::ParsedDocument;
 use moss_core::dep_graph::DepGraph;
 use sha2::{Digest, Sha256};
@@ -235,25 +235,22 @@ impl FileHasher {
     }
 
     /// [`compute`](Self::compute) with the read passed in, so a test can change the
-    /// file between the read and the record.
+    /// file between the read and the record. The index does the rest — stat before the
+    /// read, no read of a page still in the cloud, the record — as it does for every
+    /// other reader of it. Rayon's Loop A calls this from many threads, and the index
+    /// lock is held across the read; a page is small and a hit (the usual answer)
+    /// costs a stat.
     fn compute_with(&self, relative_path: &str, read: impl FnOnce(&Path) -> Option<Vec<u8>>) -> Option<String> {
         let abs = self.root.join(relative_path);
-        // Stat BEFORE reading: see `HashIndex::update`.
-        let stat = FileStat::of(&std::fs::metadata(&abs).ok()?);
-        if let Some(hit) = self
-            .index
-            .lock()
+        let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+        index
+            .resolve_with(
+                &abs,
+                relative_path,
+                |path| read(path).map(|bytes| format!("{:x}", Sha256::digest(&bytes))).ok_or_else(|| "unreadable".to_string()),
+                crate::build::icloud::is_still_in_the_cloud,
+            )
             .ok()
-            .and_then(|i| i.lookup(relative_path, &stat).map(str::to_string))
-        {
-            return Some(hit);
-        }
-        let bytes = read(&abs)?;
-        let hash = format!("{:x}", Sha256::digest(&bytes));
-        if let Ok(mut index) = self.index.lock() {
-            index.update(relative_path.to_string(), &stat, hash.clone());
-        }
-        Some(hash)
     }
 
     /// Memoize the hash of bytes the caller has ALREADY read, without touching
@@ -591,6 +588,7 @@ pub fn inputs_fingerprint(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build::cache::FileStat;
 
     /// The store is process-global, and cargo runs these tests in parallel
     /// threads. Every test that touches it takes this lock.
@@ -862,6 +860,33 @@ mod tests {
             hasher.into_index().lookup("a.md", &now).is_none(),
             "the index vouches for the rewritten file with the hash of the old bytes"
         );
+    }
+
+    /// A page still in the cloud is not read to learn its hash. The desktop app's
+    /// fail-fast policy turns that read into an error and a miss, but the headless CLI's
+    /// watch rebuild would block on the download. A provider re-materialising a page
+    /// changes its ctime and inode, so the index no longer vouches for it and a hasher
+    /// that reads on a miss would read exactly the pages the provider just evicted. The
+    /// entry here was recorded before that; the file is marked evicted once it is on disk.
+    #[test]
+    fn the_hasher_does_not_read_a_page_that_is_still_in_the_cloud() {
+        let dir = tempfile::tempdir().unwrap();
+        let page = dir.path().join("a.md");
+        std::fs::write(&page, "hello").unwrap();
+        let real = FileStat::of(&std::fs::metadata(&page).unwrap());
+        let mut index = HashIndex::new();
+        index.update("a.md".to_string(), &FileStat { ctime: Some(1), inode: Some(1), ..real }, "old".to_string());
+        let hasher = FileHasher::new(dir.path(), index);
+        let _cloud = crate::build::icloud::pretend::evicted(&page);
+
+        let mut read_called = false;
+        let hash = hasher.compute_with("a.md", |abs| {
+            read_called = true;
+            std::fs::read(abs).ok()
+        });
+
+        assert!(!read_called, "the hasher read a page that is still in the cloud");
+        assert_eq!(hash, None, "a page that cannot be read cannot be proven unchanged");
     }
 
     #[test]

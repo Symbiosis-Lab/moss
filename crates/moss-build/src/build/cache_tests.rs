@@ -1088,6 +1088,49 @@ fn resolve_asks_whether_the_file_is_in_the_cloud() {
     assert_eq!(idx.resolve(&file, "pic.png").unwrap(), ObjectStore::hash_file(&file).unwrap());
 }
 
+/// A scan builds a new index beside the last one. An entry the last one still vouches
+/// for, at the stat the walk took, is answered without a read and carried across exactly
+/// as recorded — re-stamped with today's stat it would become an entry `lookup` trusts
+/// that nobody vouched for. On a miss the file is hashed and recorded in the NEW index
+/// at the walk's stat, and the old one is left as it was.
+#[test]
+fn resolve_from_carries_a_hit_as_recorded_and_records_a_miss_in_the_new_index() {
+    let dir = make_test_dir("hash_idx_resolve_from");
+    let file = write_temp_file(&dir, "pic.png", b"on disk");
+    let here = FileStat::of(&fs::metadata(&file).unwrap());
+    // Recorded by a version that kept no ctime or inode: still a hit (an absent field
+    // agrees with anything), and what a re-stamp would fill in.
+    let mut previous = HashIndex::new();
+    previous.update("pic.png".to_string(), &FileStat { ctime: None, inode: None, ..here }, "recorded".to_string());
+
+    let mut new = HashIndex::new();
+    assert_eq!(new.resolve_from(&previous, &here, &file, "pic.png").as_deref(), Ok("recorded"));
+    assert_eq!(new.entries, previous.entries, "the hit was not carried as recorded");
+
+    let elsewhere = FileStat { mtime: here.mtime + 1, ..here };
+    let mut new = HashIndex::new();
+    let hash = new.resolve_from(&previous, &elsewhere, &file, "pic.png").unwrap();
+    assert_eq!(hash, ObjectStore::hash_file(&file).unwrap(), "a stat the last index does not vouch for is hashed");
+    assert_eq!(new.lookup("pic.png", &elsewhere), Some(hash.as_str()), "recorded at the walk's stat, not a later one");
+    assert_eq!(previous.lookup("pic.png", &here), Some("recorded"), "the last index is read, never written");
+}
+
+/// A scan's hash read is guarded the way `resolve`'s is: a file in the cloud is not
+/// read to learn what an index that does not vouch for it cannot say.
+#[test]
+fn resolve_from_never_reads_a_cloud_only_file_the_last_index_does_not_vouch_for() {
+    let dir = make_test_dir("hash_idx_resolve_from_cloud");
+    let file = write_temp_file(&dir, "pic.png", b"in the cloud");
+    let here = FileStat::of(&fs::metadata(&file).unwrap());
+    let mut new = HashIndex::new();
+
+    let _cloud = crate::build::icloud::pretend::evicted(&file);
+    let outcome = new.resolve_from(&HashIndex::new(), &here, &file, "pic.png");
+
+    assert!(outcome.is_err(), "answered {outcome:?} for a file in the cloud");
+    assert!(new.entries.is_empty(), "recorded something for a hash it did not get");
+}
+
 /// Simulate the iCloud eviction scenario: parent directory disappears
 /// between create_dir_all() and rename(). The save() method should
 /// retry after re-creating the parent.

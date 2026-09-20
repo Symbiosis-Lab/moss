@@ -339,12 +339,9 @@ pub(crate) fn image_meta_stat_key(relative_path: &str, size: u64, mtime: u64) ->
     format!("stat:{}:{}:{}", relative_path, size, mtime)
 }
 
-/// Resolve the content hash for a file, using the hash index for speed.
-///
-/// If the hash index has an entry that still matches the file's full stat record
-/// (`HashIndex::lookup`), that entry is carried into the new index and its hash
-/// returned without reading the file.  Otherwise, the file is hashed via
-/// `ObjectStore::hash_file` and the *new* index is updated.
+/// Resolve the content hash for a file, using the hash index for speed: the last
+/// scan's entry while it still matches the file's full stat record, else the file
+/// hashed (never while it is in the cloud) and recorded in the new index.
 fn resolve_content_hash(
     abs_path: &Path,
     relative_path: &str,
@@ -352,24 +349,10 @@ fn resolve_content_hash(
     old_index: &HashIndex,
     new_index: &mut HashIndex,
 ) -> Option<String> {
-    // Check old index for a stat-matching entry.
-    if let Some(cached_hash) = old_index.lookup(relative_path, stat) {
-        let hash = cached_hash.to_string();
-        new_index.carry_forward(old_index, relative_path);
-        return Some(hash);
-    }
-
-    // Stat miss — re-hash the file.
-    match ObjectStore::hash_file(abs_path) {
-        Ok(hash) => {
-            new_index.update(relative_path.to_string(), stat, hash.clone());
-            Some(hash)
-        }
-        Err(e) => {
-            log::warn!("Failed to hash {}: {}", relative_path, e);
-            None
-        }
-    }
+    new_index
+        .resolve_from(old_index, stat, abs_path, relative_path)
+        .map_err(|e| log::warn!("Failed to hash {}: {}", relative_path, e))
+        .ok()
 }
 
 /// Try to read cached media metadata from the TransformCache.
