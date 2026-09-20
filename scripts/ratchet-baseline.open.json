@@ -44,7 +44,7 @@
         "crates/moss-core/src/resolve/wikilink_dispatch.rs": 1044,
         "crates/moss-core/src/schema_fields.rs": 873,
         "packages/moss-api/src/testing/mock-tauri.ts": 1140,
-        "crates/moss-build/src/build/manifest.rs": 818,
+        "crates/moss-build/src/build/manifest.rs": 966,
         "crates/moss-build/src/build/feeds/search_lane.rs": 801
       }
     },
@@ -392,6 +392,17 @@
         "crates/moss-build/src/build/media/pipeline.rs": 1804
       },
       "reason": "the file stood at 1821 prod lines on develop against this row's 1760 baseline before this change touched it - growth from unrelated commits that nobody accepted (ten other files in this row are in the same unaccepted-growth state and are NOT touched by this entry). copy_deferred_assets' place-blob/record-blob/preserve-link dedup lowers it to 1804, still above 1760 but below where it started; the entry is set to 1804, the final count, so the file cannot regrow past it unnoticed. Scoped to this one path deliberately — `ratchet.mjs accept` has no per-path filter.",
+      "date": "2026-09-20"
+    },
+    {
+      "row": "prod_lines_per_file",
+      "from": {
+        "crates/moss-build/src/build/manifest.rs": 818
+      },
+      "to": {
+        "crates/moss-build/src/build/manifest.rs": 966
+      },
+      "reason": "the file stood at 1090 prod lines on develop against this row baseline of 818 - growth nobody accepted (nine other files in this row are in the same state and are NOT touched by this entry). Moving the ship-source seam (ShipSource, ShipFingerprint, the staged_oid/ship_fingerprint/stamp_* accessors) into manifest/ship_source.rs lowers it to 966, still above 818 but 124 below where it started; the entry is set to 966, the final count, so the file cannot regrow past it unnoticed. Scoped to this one path by hand because `ratchet.mjs accept` has no per-path filter.",
       "date": "2026-09-20"
     }
   ]
