@@ -61,10 +61,10 @@ pub mod link_audit;
 /// Durable record of what the last confirmed publish shipped, one per target
 /// under `.moss/deploy/records/`. The other half of `change_set`'s diff.
 pub mod published_record;
-/// How `ship_phase` reads one entry's staged bytes — [`ShipSource`], the
-/// accessors and the one fingerprint-stamping transition on `SealedManifest`.
+/// How `ship_phase` reads one entry's staged bytes: [`ShipSource`] and its accessors.
 mod ship_source;
-pub(crate) use ship_source::{ShipFingerprint, ShipSource};
+pub(crate) use ship_source::ShipFingerprint;
+use ship_source::ShipSource;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

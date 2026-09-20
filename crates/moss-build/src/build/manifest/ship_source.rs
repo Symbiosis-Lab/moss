@@ -45,15 +45,9 @@ pub(crate) const HELD_BYTES_BUDGET: usize = 32 * 1024 * 1024;
 #[derive(Clone, PartialEq)]
 pub(crate) struct HeldBytes(Arc<Vec<u8>>);
 
-impl HeldBytes {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-}
-
 impl std::fmt::Debug for HeldBytes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "HeldBytes({} bytes)", self.len())
+        write!(f, "HeldBytes({} bytes)", self.0.len())
     }
 }
 
@@ -127,7 +121,7 @@ impl ShipSource {
     /// Bytes this source keeps alive: only `Held` keeps any.
     fn held_len(&self) -> usize {
         match self {
-            ShipSource::Held(bytes) => bytes.len(),
+            ShipSource::Held(bytes) => bytes.0.len(),
             _ => 0,
         }
     }
@@ -183,7 +177,8 @@ impl PendingManifest {
         let held: usize = self.ship_sources.values().map(ShipSource::held_len).sum();
         if held + bytes.len() > HELD_BYTES_BUDGET {
             log::info!(
-                "[manifest] {} ({} bytes) not held: {} of {} bytes already are; it ships from the stage",
+                "[manifest] {} ({} bytes) is not held: {} of {} bytes already are. It ships from the stage, \
+                 so a concurrent build rewriting it can change what this generation publishes",
                 rel_path.as_str(),
                 bytes.len(),
                 held,
