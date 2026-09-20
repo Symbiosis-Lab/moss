@@ -7,13 +7,17 @@
 //           scene))` call site deleted -- no scroll ever picks a target
 //           scene again, so every boundary times out instead of committing.
 //           RED/GREEN recorded below each function.
-// I-rect    (R2) fault: the scene-3 card-drop rect-expansion call site
-//           (`printExpanded = true; setPrintRect(currentPrintRect());` in
-//           endDrag()) deleted -- a dragged-outside card leaves the print
-//           rectangle. (The scene-1 plate's own equivalent call site is a
-//           second, independent one; deleting only the plate's still passed,
-//           because the card drop's own currentPrintRect() call unions the
-//           plates too -- recorded as a finding, not silently dropped.)
+// I-rect    (R2) checked after EACH drag now, not only once at the end --
+//           plates first, before any card is ever touched, then again after
+//           the card. Two independent faults, each proven on its own: the
+//           plate drop's own `printExpanded = true;
+//           setPrintRect(currentPrintRect());` (site/index.html, the
+//           outsideBase branch) deleted -- red on the very next plate check,
+//           restored -- green. The same two lines deleted from endDrag()'s
+//           card-drop branch instead -- red on the card check, restored --
+//           green. (Checking only once at the end, as the first version of
+//           this file did, let the *other* site's later call rescue a
+//           broken one retroactively and stay green -- that gap is closed.)
 // I-scene3  (R6) fault: CARDS.video's `docked: true` flipped to false -- the
 //           video is no longer inside the preview on cold load.
 // I-reduced (R7) fault: the `if (reduce) return scrollTo(0, y);` call site in
@@ -22,18 +26,42 @@
 //           (Needed a deliberately short wheel delta to expose: an exact one
 //           already lands settleAtRest at x=0, which returns before ever
 //           choosing between the two paths.)
-// I-fuzz    (R7) no fault turned this one red. Tried, in order: deleting
-//           fillPrints()'s call site in warm() with one print nulled mid-fuzz
-//           (check-landing-readiness.mjs's own fault); the same with every
-//           print nulled; deleting maybeJoin()'s runJoin() call outright;
-//           and forcing every fresh capture to hang via the existing
-//           faults.captureHang. Every one still reached rest, because the
-//           boot sequence (ready()) has already captured every scene's print
-//           before any fuzzing starts, so nothing here ever needs a fresh
-//           one -- a real, reported finding about the page's own robustness,
-//           not a weakened check. The assertions (rest, rendered, zero
-//           errors, the Chromium time bound) are real and passing; this one
-//           invariant ships without ablation evidence.
+// I-fuzz    (R7) shown === target was too weak: with maybeJoin()'s own
+//           `runJoin()` call site deleted (site/index.html), shown never
+//           moves again, yet that check still passed every time -- not
+//           because of print pre-capture (the first theory here), but
+//           because this file's own ready(page) helper waited on
+//           state().ready, which can go true *while boot's own ready() is
+//           still deciding whether to fire its own, separate runJoin() call
+//           (site/index.html, the very end of that function, independent of
+//           maybeJoin() entirely)* -- so the fuzz's early jumps raced that
+//           decision and a real join sometimes ran anyway, settling shown
+//           for reasons that had nothing to do with the call site under
+//           test. Fixed by waiting on document.documentElement.dataset.ready
+//           instead, the flag boot's ready() sets only after that decision
+//           is made (matches check-landing-transitions.mjs's own wait).
+//           With the race closed, the end condition was also strengthened
+//           to demand shown === landing.sceneForRest(progress, travel) (the
+//           formula settleAtRest itself uses) plus the DOM actually showing
+//           that scene, not covered by the canvas. Under the same
+//           maybeJoin() deletion this now times out for real: state() at
+//           the 30s timeout reports shown stuck at 0, target and
+//           sceneForRest both moved to 2, joins:0, washes:0 -- restored --
+//           green. A second seeded variant, iFuzzInvalidated, drags a
+//           scene-1 plate far enough to expand the print rectangle first
+//           (the one path that actually clears every held print mid-visit,
+//           the historical deadlock's real precondition -- boot pre-capture
+//           is why nulling prints or hanging every capture, tried earlier,
+//           never got there); it still reaches rest on the right scene with
+//           no fault, both engines. faults.captureHang against that same
+//           invalidated state is a real, reported finding, not a bug fixed
+//           here: shown/target freeze and never move, but the loose
+//           shown === target shape would call that "settled" -- state().
+//           primed and state().ready both go false and stay false, which is
+//           the tell. Left OUT of this suite and saved as
+//           scratchpad/phase2c/fuzz-capturehang.mjs with its captured
+//           output, for phase 7 (bounded print acquisition) to pick up as
+//           an exit test.
 // I-default (checks, not the page) fault: a scratch script with
 //           `page.goto(base + '?carry=intent')` -- the static scan catches it.
 //
@@ -53,7 +81,16 @@ const SCENES = [-1, 0, 1, 2, 3, 4];
 
 async function ready(page) {
   await page.goto(baseURL);
-  await page.waitForFunction(() => window.__landing.state?.().ready, null, { timeout: 30000 });
+  // state().ready (!!(ed && sh) && primed()) goes true while the page's own
+  // boot ready() is still running -- ed/sh are assigned in the promise
+  // callback just before ready() is called, but ready() itself still has to
+  // decide whether to fire its own runJoin() (site/index.html, the one at
+  // the end of boot's ready(), independent of maybeJoin()) before finishing.
+  // Waiting on that alone raced I-fuzz's ablation test: the fuzz loop's own
+  // jumps could land while boot's decision was still pending, so boot's own
+  // runJoin() fired for real and the ablated maybeJoin() call site was never
+  // the one on trial. dataset.ready='1' is the last line of that function.
+  await page.waitForFunction(() => document.documentElement.dataset.ready === '1', null, { timeout: 30000 });
 }
 // The mouse position a wheel event is dispatched at changes what it does --
 // measured directly: WebKit only registers scroll input at all over the
@@ -173,7 +210,51 @@ async function iCommit(browsers) {
 }
 
 // I-rect (R2): seeded drags of two scene-1 plates and one scene-3 card must
-// all stay inside the print rectangle #gl reports in its own inline style.
+// all stay inside the print rectangle #gl reports in its own inline style --
+// checked right after EACH drag, not only once at the end. A plate's own
+// expansion call site and the card's are two independent sites (both listed
+// in currentPrintRect()'s own callers); deleting only one used to still pass,
+// because the *other* site's later currentPrintRect() call unions in
+// whatever the first drag left stranded and rescues it retroactively. Fault:
+// deleting the plate drop handler's `printExpanded = true;
+// setPrintRect(currentPrintRect());` (site/index.html, the outsideBase
+// branch) -- red on the plate check, before any card is ever touched, then
+// restored -- green. Fault: deleting the same two lines from endDrag()'s
+// card-drop branch -- red on the card check, then restored -- green. Each
+// proven independently, in that order, with the other site left intact.
+async function readPrintRect(page) {
+  return page.evaluate(() => {
+    const gl = document.getElementById('gl');
+    return { x: parseFloat(gl.style.left), y: parseFloat(gl.style.top), w: parseFloat(gl.style.width), h: parseFloat(gl.style.height) };
+  });
+}
+async function readPlateRects(page) {
+  return page.evaluate(() => [...document.querySelectorAll('.plate')].map((el) => ({ id: el.id, x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight })));
+}
+async function readCardRects(page, ids) {
+  return page.evaluate((ids) => ids.map((id) => {
+    const el = document.getElementById(id);
+    const m = /translate\(([-\d.]+)px,\s*([-\d.]+)px\) scale\(([-\d.]+)\)/.exec(el.style.transform);
+    const [, x, y, s] = m.map(Number);
+    return { id, x, y, w: parseFloat(el.style.width) * s, h: parseFloat(el.style.height) * s };
+  }), ids);
+}
+function assertContained(rect, rects, engineName, label) {
+  const outside = rects.filter((r) =>
+    r.x < rect.x - 0.5 || r.y < rect.y - 0.5 || r.x + r.w > rect.x + rect.w + 0.5 || r.y + r.h > rect.y + rect.h + 0.5);
+  assert(outside.length === 0, `I-rect ${engineName}: ${label}: outside the print rect ${JSON.stringify(rect)}: ${JSON.stringify(outside)}`);
+}
+async function dragBy(page, sx, sy, dx, dy, steps = 4) {
+  await page.mouse.move(sx, sy);
+  await page.mouse.down();
+  await page.waitForTimeout(30);
+  await page.mouse.move(sx + dx / 2, sy + dy / 2, { steps });
+  await page.waitForTimeout(30);
+  await page.mouse.move(sx + dx, sy + dy, { steps });
+  await page.waitForTimeout(30);
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+}
 async function iRect(browsers) {
   for (const [engineName, browser] of Object.entries(browsers)) {
     const page = await browser.newPage(PRESETS.desktop);
@@ -184,46 +265,23 @@ async function iRect(browsers) {
     const plateIds = await page.evaluate(() => [...document.querySelectorAll('.plate')].slice(0, 2).map((el) => el.id));
     for (const id of plateIds) {
       const box = await page.locator(`[id="${id}"]`).boundingBox(); // plate ids embed a filename (a literal dot), so #id would read as a class selector
-      const sx = box.x + box.width / 2, sy = box.y + box.height / 2;
       const dx = (rand() - 0.5) * 1600, dy = (rand() - 0.5) * 1200;
-      await page.mouse.move(sx, sy);
-      await page.mouse.down();
-      await page.mouse.move(sx + dx / 2, sy + dy / 2, { steps: 4 });
-      await page.mouse.move(sx + dx, sy + dy, { steps: 4 });
-      await page.mouse.up();
+      await dragBy(page, box.x + box.width / 2, box.y + box.height / 2, dx, dy);
+      // Checked here, before the scene-3 card is ever touched: the card
+      // drop's own call site is a second, later chance to union this plate
+      // back in, which would hide a broken plate call site entirely.
+      assertContained(await readPrintRect(page), await readPlateRects(page), engineName, `after dragging plate ${id}`);
     }
     await gotoScene(page, 2);
     await page.waitForFunction(() => document.getElementById('stage').classList.contains('s3-ready'), null, { timeout: 15000 });
     const cardBox = await page.locator('#sib-nb').boundingBox();
-    const cx = cardBox.x + cardBox.width / 2, cy = cardBox.y + cardBox.height / 2;
     const cdx = (rand() - 0.5) * 1800, cdy = (rand() - 0.5) * 1400;
-    await page.mouse.move(cx, cy);
-    await page.mouse.down();
-    await page.waitForTimeout(30);
-    await page.mouse.move(cx + cdx / 2, cy + cdy / 2, { steps: 8 });
-    await page.waitForTimeout(30);
-    await page.mouse.move(cx + cdx, cy + cdy, { steps: 8 });
-    await page.waitForTimeout(30);
-    await page.mouse.up();
-    await page.waitForTimeout(500);
-
-    const data = await page.evaluate(() => {
-      const gl = document.getElementById('gl');
-      const rect = { x: parseFloat(gl.style.left), y: parseFloat(gl.style.top), w: parseFloat(gl.style.width), h: parseFloat(gl.style.height) };
-      const plates = [...document.querySelectorAll('.plate')].map((el) => ({ id: el.id, x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight }));
-      const cardRect = (id) => {
-        const el = document.getElementById(id);
-        const m = /translate\(([-\d.]+)px,\s*([-\d.]+)px\) scale\(([-\d.]+)\)/.exec(el.style.transform);
-        const [, x, y, s] = m.map(Number);
-        return { id, x, y, w: parseFloat(el.style.width) * s, h: parseFloat(el.style.height) * s };
-      };
-      const cards = ['s3-video', 'sib-nb', 'sib-sk'].map(cardRect);
-      return { rect, plates, cards };
-    });
-    const outside = [...data.plates, ...data.cards].filter((r) =>
-      r.x < data.rect.x - 0.5 || r.y < data.rect.y - 0.5 || r.x + r.w > data.rect.x + data.rect.w + 0.5 || r.y + r.h > data.rect.y + data.rect.h + 0.5);
-    assert(outside.length === 0, `I-rect ${engineName}: outside the print rect ${JSON.stringify(data.rect)}: ${JSON.stringify(outside)}`);
-    console.log(`${engineName}: I-rect the print rectangle contains every dragged plate and card`);
+    await dragBy(page, cardBox.x + cardBox.width / 2, cardBox.y + cardBox.height / 2, cdx, cdy, 8);
+    await page.waitForTimeout(350);
+    const rect = await readPrintRect(page);
+    assertContained(rect, await readPlateRects(page), engineName, 'after dragging the card (plates)');
+    assertContained(rect, await readCardRects(page, ['s3-video', 'sib-nb', 'sib-sk']), engineName, 'after dragging the card (cards)');
+    console.log(`${engineName}: I-rect the print rectangle contains every dragged plate and card, checked after each drag`);
     await page.close();
   }
 }
@@ -315,8 +373,58 @@ async function iReduced(browsers) {
 }
 
 // I-fuzz (R7): a seeded run of fast, unwaited jumps must still end at rest on
-// a rendered scene with no page errors. The time bound is asserted in
-// Chromium only.
+// the RIGHT rendered scene with no page errors, not merely "some scene,
+// whatever shown last happened to hold". shown === target was too weak: with
+// runJoin()'s call site deleted from maybeJoin() (site/index.html), shown
+// never moves again, yet that check still passed on every run, both engines
+// -- because watchScrollIntent keeps computing target from the live scroll
+// position every frame regardless of whether a join ever ran, and this
+// codebase's rest formula (sceneForRest) is defined purely on that position,
+// not on shown, so target kept landing back on whatever scene the reader's
+// last motion implied. shown was simply never being asked to prove it
+// tracked anything. Now it is: the end condition also demands shown equal
+// landing.sceneForRest(progress, travel) itself -- the same formula
+// settleAtRest uses -- plus the DOM actually showing that scene (stage's own
+// data-scene attribute) with the canvas not covering it (stage not
+// .morphing). Under the same runJoin() deletion this new condition times out
+// for real: state() at the 30s timeout reports shown stuck at its pre-fuzz
+// value while target (and sceneForRest of the final position) has moved on,
+// confirmed red then the deletion was restored and confirmed green -- see
+// the commit this landed in for the captured state().
+async function fuzzToRest(page, engineName, rand, minY, maxY, label) {
+  const start = Date.now();
+  for (let i = 0; i < 20; i++) {
+    const y = Math.round(minY + rand() * (maxY - minY));
+    await page.evaluate((y) => scrollTo(0, y), y);
+  }
+  await page.waitForFunction(() => {
+    const s = window.__landing.state();
+    if (s.running || s.shown !== s.target) return false;
+    return s.shown === window.__landing.sceneForRest(s.progress, s.travel);
+  }, null, { timeout: 30000 }).catch(async (error) => {
+    const diag = await page.evaluate(() => ({ state: window.__landing.state(), sceneForRest: window.__landing.sceneForRest(window.__landing.state().progress, window.__landing.state().travel) }));
+    throw new Error(`${label} ${engineName}: never settled on the right scene: ${JSON.stringify(diag)}`, { cause: error });
+  });
+  const elapsed = Date.now() - start;
+  // The morphing class comes off on its own held/!running rAF check (still()'s
+  // caller elsewhere in site/index.html), not synchronously with shown/target
+  // settling -- a frame or two of lag here is real and not itself a fault.
+  await page.waitForTimeout(300);
+  const info = await page.evaluate(() => {
+    const stage = document.getElementById('stage');
+    const state = window.__landing.state();
+    return {
+      shown: state.shown,
+      sceneAttr: stage.dataset.scene,
+      morphing: stage.classList.contains('morphing'),
+      rendered: stage.dataset.scene != null && getComputedStyle(document.querySelector('.page')).display !== 'none',
+    };
+  });
+  assert(info.rendered, `${label} ${engineName}: not left on a rendered scene`);
+  assert(!info.morphing, `${label} ${engineName}: canvas still covering the stage at rest`);
+  assert(info.sceneAttr === String(info.shown), `${label} ${engineName}: stage shows scene ${info.sceneAttr}, shown says ${info.shown}`);
+  return elapsed;
+}
 async function iFuzz(browsers) {
   const seed = 20260920;
   console.log(`I-fuzz seed: ${seed}`);
@@ -326,28 +434,57 @@ async function iFuzz(browsers) {
     await ready(page);
     await arm(page, gesturePos(engineName));
     const rand = mulberry32(seed);
+    const minY = await page.evaluate(() => window.__landing.restY(0));
     const maxY = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
-    const start = Date.now();
-    for (let i = 0; i < 20; i++) {
-      const y = Math.round(rand() * maxY);
-      await page.evaluate((y) => scrollTo(0, y), y);
-    }
-    // Not just !running: a page that never starts the join it owes is also
-    // never running, so that alone can't tell "arrived" from "stuck before
-    // it ever tried" -- shown === target is what actually says it got there.
-    await page.waitForFunction(() => { const s = window.__landing.state(); return s.shown === s.target && !s.running; }, null, { timeout: 30000 }).catch(async (error) => {
-      const info = await page.evaluate(() => window.__landing.state());
-      throw new Error(`I-fuzz ${engineName}: never settled: ${JSON.stringify(info)}`, { cause: error });
-    });
-    const elapsed = Date.now() - start;
-    const rendered = await page.evaluate(() => {
-      const stage = document.getElementById('stage');
-      return stage.dataset.scene != null && getComputedStyle(document.querySelector('.page')).display !== 'none';
-    });
-    assert(rendered, `I-fuzz ${engineName}: not left on a rendered scene`);
+    const elapsed = await fuzzToRest(page, engineName, rand, minY, maxY, 'I-fuzz');
     assert(errors.length === 0, `I-fuzz ${engineName}: page errors: ${errors.join('; ')}`);
     if (engineName === 'chromium') assert(elapsed < 20000, `I-fuzz chromium: took ${elapsed}ms to settle after the fuzz, over the 20s budget`);
-    console.log(`${engineName}: I-fuzz seed ${seed}, ${elapsed}ms, ended at rest on a rendered scene with no page errors`);
+    console.log(`${engineName}: I-fuzz seed ${seed}, ${elapsed}ms, ended at rest on the right rendered scene with no page errors`);
+    await page.close();
+  }
+}
+
+// I-fuzz, invalidated-print variant: the historical deadlock this guards
+// against needed a print actually missing mid-visit, not merely never taken
+// -- boot's ready() pre-captures every scene before any fuzzing starts,
+// which is why nulling one print or all of them (site/index.html's own
+// fillPrints() path) and forcing every fresh capture to hang
+// (faults.captureHang) both did nothing to the plain I-fuzz above. Dragging
+// a plate or card far enough to expand the print rectangle is the one path
+// that actually clears every held print (setPrintRect -> sheets.fill(null)),
+// mid-session, the same way the incident this rule traces to happened. Run
+// with no fault: must still reach rest on the right scene, same as I-fuzz.
+async function iFuzzInvalidated(browsers) {
+  const seed = 20260921;
+  console.log(`I-fuzz (invalidated prints) seed: ${seed}`);
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const page = await browser.newPage(PRESETS.desktop);
+    const errors = trackErrors(page);
+    await ready(page);
+    await arm(page, gesturePos(engineName));
+    await gotoScene(page, 0);
+    const glRect = () => page.evaluate(() => { const g = document.getElementById('gl'); return `${g.style.left}/${g.style.top}/${g.style.width}/${g.style.height}`; });
+    const before = await glRect();
+    const box = await page.locator('.plate').first().boundingBox();
+    await dragBy(page, box.x + box.width / 2, box.y + box.height / 2, 1400, 900);
+    const after = await glRect();
+    // setPrintRect nulls every held print the instant the rect actually
+    // changes (sheets.fill(null)), but retakeShown() -- called unconditionally
+    // after every plate drop, not only an outside-base one -- recaptures the
+    // scene on screen right behind it, so by the time this check runs the
+    // currently shown scene's own print is legitimately back. The rect
+    // itself changing is the real signal this path fired at all; the other
+    // four scenes' prints (not the one just recaptured) still prove the
+    // invalidation reached them.
+    assert(before !== after, `I-fuzz-invalidated ${engineName}: the drag did not expand the print rect (${before}), so this variant tests nothing beyond I-fuzz`);
+    const stillCleared = await page.evaluate(() => { const shown = window.__landing.state().shown; return window.__landing.prints.every((p, i) => i === shown || p == null); });
+    assert(stillCleared, `I-fuzz-invalidated ${engineName}: a print for a scene not on screen survived the rect change`);
+    const rand = mulberry32(seed);
+    const minY = await page.evaluate(() => window.__landing.restY(0));
+    const maxY = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
+    const elapsed = await fuzzToRest(page, engineName, rand, minY, maxY, 'I-fuzz-invalidated');
+    assert(errors.length === 0, `I-fuzz-invalidated ${engineName}: page errors: ${errors.join('; ')}`);
+    console.log(`${engineName}: I-fuzz-invalidated seed ${seed}, ${elapsed}ms, reached rest on the right scene after every print was cleared mid-visit`);
     await page.close();
   }
 }
@@ -382,6 +519,7 @@ try {
   await iScene3(browsers);
   await iReduced(browsers);
   await iFuzz(browsers);
+  await iFuzzInvalidated(browsers);
   await iDefault();
 } finally {
   await Promise.all(Object.values(browsers).map((b) => b.close()));
