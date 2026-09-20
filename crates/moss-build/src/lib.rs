@@ -74,26 +74,26 @@ pub mod vault;
 #[cfg(test)]
 pub(crate) static ENV_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Drain one raw HTTP/1.1 request off `stream` — headers through the blank
+/// Read one raw HTTP/1.1 request off `stream` — headers through the blank
 /// line, then exactly `Content-Length` more body bytes (0 if absent or
-/// unparsable) — write back `resp`, then close the connection. Returns the
-/// raw request bytes read, for a caller that needs to inspect what was sent
-/// (e.g. a header value).
+/// unparsable) — without answering it. Returns the raw request bytes read,
+/// for a caller that needs to inspect what was sent (e.g. a header value).
 ///
-/// Shared because three independent copies of this exact drain loop had
-/// accumulated — `seta::chunked_upload_tests`,
-/// `deploy::push::tests::mock_seta_sequence`, and `deploy::upload::tests` —
-/// before this landed; a Content-Length parsing drift between them would
-/// have been silent. Crate-wide like [`ENV_TEST_MUTEX`] above, for the same
-/// reason: the raw-TCP mock pattern is used from test modules in different
-/// top-level families (`seta`, `deploy`) with no natural single owner among
-/// them.
+/// Split from the answer ([`test_respond_and_close`]) so a mock that must act
+/// *between* receiving a request and answering it — rewrite a file mid-deploy,
+/// stall the first attempt — can. A mock that has nothing to do in between
+/// calls [`test_mock_http_conn`], which is just the two in a row.
+///
+/// Shared because independent copies of this exact drain loop kept
+/// accumulating — `seta::chunked_upload_tests`, `deploy::push::tests`,
+/// `deploy::upload::tests`, `deploy::prebuilt_tests`, `seta::sites_tests` —
+/// and a Content-Length parsing drift between them would have been silent.
+/// Crate-wide like [`ENV_TEST_MUTEX`] above, for the same reason: the raw-TCP
+/// mock pattern is used from test modules in different top-level families
+/// (`seta`, `deploy`) with no natural single owner among them.
 #[cfg(test)]
-pub(crate) async fn test_mock_http_conn(
-    mut stream: tokio::net::TcpStream,
-    resp: &[u8],
-) -> Vec<u8> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+pub(crate) async fn test_drain_http_request(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
     let mut raw = Vec::new();
     let mut buf = [0u8; 8192];
     loop {
@@ -123,10 +123,62 @@ pub(crate) async fn test_mock_http_conn(
             break;
         }
     }
-    stream.write_all(resp).await.ok();
-    stream.shutdown().await.ok();
     raw
 }
+
+/// Write `resp` and close the connection, telling the client it is closing.
+///
+/// A canned response that does not say `Connection: close` is sent with that
+/// header added. The mock closes the socket right after one response, but a
+/// response without the header tells the client's connection pool the socket
+/// is reusable: the pool then sends the *next* request on a socket that is
+/// already dead, and hyper reports the failed write as `IncompleteMessage`.
+/// Whether it does depends on whether the FIN has reached the client yet,
+/// which is kernel timing: about 1 run in 200 of a four-request mock with 16
+/// test threads at once, almost never alone. So the header is added here, once,
+/// rather than left to each caller's byte string to remember.
+#[cfg(test)]
+pub(crate) async fn test_respond_and_close(stream: &mut tokio::net::TcpStream, resp: &[u8]) {
+    use tokio::io::AsyncWriteExt;
+    stream.write_all(&announcing_close(resp)).await.ok();
+    stream.shutdown().await.ok();
+}
+
+/// `resp` with `Connection: close` inserted after the status line, unless its
+/// head already carries a `Connection` header (the caller's word stands).
+#[cfg(test)]
+fn announcing_close(resp: &[u8]) -> Vec<u8> {
+    let head_end = resp
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap_or(resp.len());
+    let says_connection = String::from_utf8_lossy(&resp[..head_end])
+        .lines()
+        .any(|l| l.to_ascii_lowercase().starts_with("connection:"));
+    match resp.windows(2).position(|w| w == b"\r\n") {
+        Some(status_end) if !says_connection => {
+            let (status_line, rest) = resp.split_at(status_end + 2);
+            [status_line, b"Connection: close\r\n", rest].concat()
+        }
+        _ => resp.to_vec(),
+    }
+}
+
+/// Drain one request off `stream` ([`test_drain_http_request`]), answer it
+/// with `resp` and close ([`test_respond_and_close`]). Returns the raw request
+/// bytes read.
+#[cfg(test)]
+pub(crate) async fn test_mock_http_conn(
+    mut stream: tokio::net::TcpStream,
+    resp: &[u8],
+) -> Vec<u8> {
+    let raw = test_drain_http_request(&mut stream).await;
+    test_respond_and_close(&mut stream, resp).await;
+    raw
+}
+
+#[cfg(test)]
+mod mock_http_tests;
 
 /// Wine skip guard (ADR-033 amendment): a test may skip under Wine ONLY via
 /// this self-detection — the `HKLM\Software\Wine` registry key exists in every
