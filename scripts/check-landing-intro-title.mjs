@@ -201,6 +201,9 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         // outside the mask, and what is left there did not move) -- it is
         // not a reliable red/green signal for those locales, so this does
         // not assert on them rather than assert something that cannot fail.
+        // Re-checked after the phase1e paper-scale fix (uPaperScale): still
+        // an exact match between builds on zh-hans/zh-hant on both engines,
+        // so still English-only.
         // BOUND=40 sits with real margin either side of what was measured
         // driving this same check against the pre-fix commit (92d17f0):
         // chromium 55.1, webkit 50.5, vs. this build's chromium 29.1,
