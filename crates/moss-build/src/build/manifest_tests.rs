@@ -1113,3 +1113,140 @@ fn a_later_registration_with_an_oid_replaces_the_earlier_one() {
 
     assert_eq!(m.seal().staged_oid("a.html"), Some("second"));
 }
+
+// -----------------------------------------------------------------------
+// Held bytes: a derived output that ships from memory
+// -----------------------------------------------------------------------
+
+mod held {
+    use super::*;
+    use crate::build::served_path::ServedPath;
+    use super::super::ship_source::HELD_BYTES_BUDGET;
+
+    fn served(rel: &str) -> ServedPath {
+        ServedPath::from_source(rel).unwrap()
+    }
+
+    #[test]
+    fn a_held_output_keeps_its_bytes_and_registers_their_hash() {
+        let mut m = empty_manifest();
+        m.register_held(&served("sitemap.xml"), b"<urlset/>".to_vec(), HashBucket::Files).unwrap();
+
+        let sealed = m.seal();
+        // Also the proof that `register` ran BEFORE the pin was inserted: a
+        // registration with no oid removes whatever source is on record, so the
+        // reverse order would leave this entry with none.
+        assert_eq!(sealed.held_bytes("sitemap.xml"), Some(&b"<urlset/>"[..]));
+        assert_eq!(
+            sealed.files().get("sitemap.xml"),
+            Some(&file_entry(&compute_binary_hash(b"<urlset/>"))),
+            "the hash must be of exactly the bytes that are held"
+        );
+    }
+
+    #[test]
+    fn a_later_registration_replaces_the_held_bytes_with_its_own_hash() {
+        let mut m = empty_manifest();
+        m.register_held(&served("rss.xml"), b"old feed".to_vec(), HashBucket::Files).unwrap();
+        // The deferred asset walk re-registering a vault's own `rss.xml`, or any
+        // producer that later learns better: last registration wins, source included.
+        m.register(&served("rss.xml"), b"new feed", HashBucket::Files);
+
+        let sealed = m.seal();
+        assert_eq!(sealed.held_bytes("rss.xml"), None, "held bytes for the OLD hash must not outlive a re-registration");
+        assert_eq!(sealed.files().get("rss.xml"), Some(&file_entry(&compute_binary_hash(b"new feed"))));
+    }
+
+    #[test]
+    fn held_bytes_replace_an_earlier_cas_source() {
+        let mut m = empty_manifest();
+        m.apply_message("llms.txt".to_string(), "aaaaaaaaaaaaaaaa", HashBucket::Files, Some("blob".to_string()));
+        m.register_held(&served("llms.txt"), b"llms".to_vec(), HashBucket::Files).unwrap();
+
+        let sealed = m.seal();
+        assert_eq!(sealed.staged_oid("llms.txt"), None);
+        assert_eq!(sealed.held_bytes("llms.txt"), Some(&b"llms"[..]));
+    }
+
+    /// `.html` is stripped of preview attributes on the way to the generation, so
+    /// its manifest hash is of bytes that differ from the registered ones. Held
+    /// bytes are shipped as they are: the pair would agree with each other and
+    /// publish `data-source-*` annotations. Refused loudly, in release too.
+    #[test]
+    fn an_output_ship_transforms_cannot_be_held() {
+        for rel in ["index.html", "legacy.htm"] {
+            let mut m = empty_manifest();
+            let err = m
+                .register_held(&served(rel), b"<p data-source-line=\"1\">x</p>".to_vec(), HashBucket::Files)
+                .unwrap_err();
+
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{rel}");
+            assert!(m.seal().files().is_empty(), "{rel}: a refused registration must record nothing");
+        }
+    }
+
+    #[test]
+    fn stamping_fingerprints_leaves_a_held_entry_alone() {
+        let stage = tempdir().unwrap();
+        // Both files exist, so a stamp COULD succeed on either.
+        std::fs::write(stage.path().join("sitemap.xml"), b"<urlset/>").unwrap();
+        std::fs::write(stage.path().join("plain.css"), b"a{}").unwrap();
+        let mut m = empty_manifest();
+        m.register_held(&served("sitemap.xml"), b"<urlset/>".to_vec(), HashBucket::Files).unwrap();
+        m.register(&served("plain.css"), b"a{}", HashBucket::Files);
+        let mut sealed = m.seal();
+
+        sealed.stamp_all_ship_fingerprints(stage.path());
+
+        assert_eq!(sealed.held_bytes("sitemap.xml"), Some(&b"<urlset/>"[..]), "a pin must not be replaced by a fingerprint");
+        assert!(sealed.ship_fingerprint("sitemap.xml").is_none());
+        assert!(sealed.ship_fingerprint("plain.css").is_some(), "an entry with no source still gets one");
+    }
+
+    #[test]
+    fn release_drops_the_bytes_and_nothing_else() {
+        let mut m = empty_manifest();
+        m.register_held(&served("sitemap.xml"), b"<urlset/>".to_vec(), HashBucket::Files).unwrap();
+        m.apply_message("img.webp".to_string(), "bbbbbbbbbbbbbbbb", HashBucket::ImageVariants, Some("blob".to_string()));
+        let mut sealed = m.seal();
+        let hash_before = sealed.files().get("sitemap.xml").cloned();
+
+        sealed.release_held();
+
+        assert_eq!(sealed.held_bytes("sitemap.xml"), None);
+        assert_eq!(sealed.files().get("sitemap.xml"), hash_before.as_ref(), "the entry keeps its place and its hash");
+        assert_eq!(sealed.staged_oid("img.webp"), Some("blob"), "only held bytes are released");
+    }
+
+    /// The whole point of the byte budget: a manifest never pins more than
+    /// `HELD_BYTES_BUDGET`, and what does not fit is registered as an ordinary
+    /// stage-read entry rather than refused.
+    #[test]
+    fn bytes_past_the_budget_ship_from_the_stage_instead_of_being_held() {
+        let half_and_a_bit = vec![b'a'; HELD_BYTES_BUDGET / 2 + 1];
+        let mut m = empty_manifest();
+        m.register_held(&served("rss.xml"), half_and_a_bit.clone(), HashBucket::Files).unwrap();
+        m.register_held(&served("llms.txt"), half_and_a_bit.clone(), HashBucket::Files).unwrap();
+
+        let sealed = m.seal();
+        assert!(sealed.held_bytes("rss.xml").is_some(), "the first fits");
+        assert_eq!(sealed.held_bytes("llms.txt"), None, "the second would take the manifest past the budget");
+        assert_eq!(
+            sealed.files().get("llms.txt"),
+            Some(&file_entry(&compute_binary_hash(&half_and_a_bit))),
+            "not holding it must not un-register it"
+        );
+    }
+
+    /// Replacing a held payload frees it first: re-registering one path with a
+    /// payload that alone fits must not be judged against the payload it replaces.
+    #[test]
+    fn re_holding_one_path_does_not_count_the_payload_it_replaces() {
+        let three_fifths = vec![b'a'; HELD_BYTES_BUDGET / 5 * 3];
+        let mut m = empty_manifest();
+        m.register_held(&served("llms.txt"), three_fifths.clone(), HashBucket::Files).unwrap();
+        m.register_held(&served("llms.txt"), three_fifths, HashBucket::Files).unwrap();
+
+        assert!(m.seal().held_bytes("llms.txt").is_some());
+    }
+}

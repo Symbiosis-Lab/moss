@@ -62,6 +62,26 @@ impl<'a> BuildContext<'a> {
 
         Ok(())
     }
+
+    /// [`emit`][Self::emit] for a derived output whose generation must ship
+    /// THESE bytes: the manifest keeps them until the seal tail has shipped
+    /// (`PendingManifest::register_held`), instead of leaving the generation to
+    /// copy whatever a later build has since written to the same stage path.
+    ///
+    /// Takes the buffer by value so the manifest can keep it without a copy.
+    /// Errors, without registering, for a path `ship_phase` transforms (HTML) —
+    /// see `register_held`. Use it for a file that every build rewrites under
+    /// one name and no CAS object backs; a content-named or config-only output
+    /// cannot diverge and gains nothing from being held.
+    pub fn emit_held(
+        &mut self,
+        rel_path: &crate::build::served_path::ServedPath,
+        bytes: Vec<u8>,
+        bucket: HashBucket,
+    ) -> std::io::Result<()> {
+        write_at(self.output_dir, rel_path.as_str(), &bytes)?;
+        self.manifest.register_held(rel_path, bytes, bucket)
+    }
 }
 
 // ---------------------------------------------------------------------------

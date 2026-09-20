@@ -192,26 +192,26 @@ pub struct PendingManifest {
     unverified: std::collections::BTreeMap<String, String>,
     /// Output path → how `ship_phase` should resolve these staged bytes, for
     /// entries where a producer already knows more than "read `stage_dir`".
-    /// Every entry inserted here (via `register_with_hash`'s `oid` arg) is a
-    /// [`ShipSource::Cas`] — `Fingerprint` is stamped only after seal — but
+    /// Every entry inserted here is immutable, a [`ShipSource::Cas`] or a
+    /// [`ShipSource::Held`] — `Fingerprint` is stamped only after seal — but
     /// the field lives on `PendingManifest` rather than only on
     /// `SealedManifest` because [`seal`][PendingManifest::seal] carries it
     /// straight into the sealed manifest's own map of the same name.
     ///
-    /// Two kinds of producer fill it: the background workers, through
+    /// Three producers fill it: the background workers, through
     /// [`apply_message`][PendingManifest::apply_message] (the deferred-asset
-    /// walk, image and video encodes), and the slot pass, through
-    /// [`attach_final_bytes`][PendingManifest::attach_final_bytes], for the
-    /// rendered HTML pages of THIS build. The last registration of a path wins,
-    /// its oid included — see `register_with_hash`.
+    /// walk, image and video encodes), the slot pass, through
+    /// [`attach_final_bytes`][PendingManifest::attach_final_bytes] (this
+    /// build's HTML pages), and the derived outputs (sitemap, feed, `llms.txt`,
+    /// previews), through `register_held`. The last registration of a path
+    /// wins, its source included — see `register_with_hash`.
     ///
     /// In-memory only — deliberately not a field of `SiteHashes`/`hashes.json`.
-    /// `ship_phase` reads a `Cas` entry (through `SealedManifest::staged_oid`)
-    /// to copy straight from the immutable CAS blob instead of the mutable
+    /// `ship_phase` reads a `Cas` or `Held` entry (`SealedManifest::staged_oid`
+    /// / `held_bytes`) from its immutable source instead of the mutable
     /// `stage_dir` path, closing the race where a concurrent build rewrites a
     /// path between this build sealing its hash and shipping its bytes. An
-    /// entry with no `Cas` source here ships from `stage_dir` exactly as
-    /// before.
+    /// entry with no source here ships from `stage_dir` exactly as before.
     ship_sources: HashMap<String, ShipSource>,
 }
 
@@ -650,10 +650,10 @@ impl PendingManifest {
         // rewrites viewer pages (`notebooks/x.html`) after the slot pass has
         // seen the previous build's copy of them; and a page the render phase
         // registered can be re-registered by anything that later learns better.
-        // `ship_sources` holds only `Cas` here (`Fingerprint` is stamped after
-        // seal, on `SealedManifest`), so removing is dropping the `Cas`.
-        // `SealedManifest::stamp_ship_fingerprints` remains the one place a
-        // `Cas` entry is replaced after seal.
+        // `ship_sources` holds only `Cas`/`Held` here (`Fingerprint` is stamped
+        // after seal, on `SealedManifest`), so removing is dropping one of them.
+        // `SealedManifest::stamp_ship_fingerprints` remains the one place an
+        // immutable entry is replaced after seal.
         match oid {
             Some(oid) => {
                 self.ship_sources.insert(rel_path.clone(), ShipSource::Cas(oid));

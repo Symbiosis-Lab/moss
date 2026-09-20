@@ -1971,6 +1971,12 @@ async fn advertise_sealed(
     });
     drop(guards.cache_lease);
 
+    // Nothing reads the held bytes past `materialize_and_promote`, and `sealed`
+    // is about to be adopted as the manifest deploy keeps for the folder's
+    // lifetime. A plain statement, not a branch: whatever the promotion was
+    // (`Promoted`, `Superseded`, `Withheld`, `Err`), the tail is done with them.
+    sealed.release_held();
+
     // Say it out loud, and only for a real swap: this instant — not
     // `BuildComplete`, which fired back when `await_completion` returned — is
     // when the user's change became what the preview loads. `Superseded`,

@@ -179,3 +179,58 @@ async fn advertise_sealed_drops_the_cache_lease_before_collect_build_store() {
         "and the lease must not leak past advertise_sealed's return either"
     );
 }
+
+/// Held bytes must be dropped once the tail has shipped them, or the manifest
+/// deploy keeps for the life of the app carries every derived output's bytes
+/// (megabytes on a real vault) per open folder. Drives the REAL
+/// `advertise_sealed` and reads the manifest it hands to `adopt_sealed`, which
+/// is the only place the leak would be visible: the tail itself drops `sealed`
+/// on every other path.
+///
+/// Also ships from a stage a later build has overwritten, so it proves the
+/// bytes were read before they were released.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn advertise_sealed_ships_held_bytes_then_hands_deploy_a_manifest_without_them() {
+    let (_tmp, mp, _) = fixture();
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    let page: &[u8] = b"<html><body>hi</body></html>";
+    pending.register(&ServedPath::from_source("index.html").unwrap(), page, HashBucket::Files);
+    pending
+        .register_held(&ServedPath::from_source("sitemap.xml").unwrap(), b"<urlset>A</urlset>".to_vec(), HashBucket::Files)
+        .unwrap();
+    let sealed = pending.seal();
+    // The later build's rewrite of the derived file this build sealed.
+    std::fs::write(mp.staging_dir().join("sitemap.xml"), b"<urlset>B</urlset>").unwrap();
+
+    let mut host = crate::build::ports::host::test_host_ports();
+    let adopted = crate::deploy::one_shot::capture_seal(&mut host);
+    let ports = SealPorts { events: crate::build::null_sink(), announcer: host.announcer.clone(), server_diff: None };
+    let session = FolderSession::new(mp.project_root().to_path_buf());
+
+    advertise_sealed(
+        &ports,
+        &mp,
+        &mp.hashes(),
+        &mp.staging_dir(),
+        sealed,
+        None,
+        |_| false,
+        Some(&session),
+        crate::build::ship::next_promotion_epoch(),
+        Some(1),
+        true,
+        crate::build::feeds::search_lane::Freshness::Now,
+        &format!("/held-release-test-{}", uuid::Uuid::new_v4()),
+        SealGuards { final_sweep: None, cache_lease: None },
+    )
+    .await;
+
+    let adopted = adopted.lock().unwrap().take().expect("the tail must have adopted its manifest");
+    assert_eq!(
+        std::fs::read(mp.generation_dir(adopted.generation_id()).join("sitemap.xml")).unwrap(),
+        b"<urlset>A</urlset>",
+        "the generation must carry the bytes the manifest held, not the stage's"
+    );
+    assert_eq!(adopted.held_bytes("sitemap.xml"), None, "the adopted manifest must not keep the bytes it just shipped");
+    assert!(adopted.files().contains_key("sitemap.xml"), "releasing bytes must not drop the entry");
+}

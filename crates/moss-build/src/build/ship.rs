@@ -150,12 +150,22 @@ pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
 // path, when one is known to back this entry's exact bytes.
 // ---------------------------------------------------------------------------
 
-/// The one file [`ship_phase`] and [`drop_absent_outputs`] read `rel_path`'s
-/// bytes from: the CAS blob backing a live `staged_oid`, or `stage_path`
-/// itself when there is none (or its CAS blob has since been collected).
+/// Where [`ship_phase`] and [`drop_absent_outputs`] read one entry's bytes from.
+enum ShipRead<'a> {
+    /// A file: the CAS blob backing a live `staged_oid`, or `stage_path` itself
+    /// when there is none (or its CAS blob has since been collected).
+    Path(PathBuf),
+    /// The bytes the build kept on the manifest. Present by construction, and
+    /// nothing on disk to probe, audit or copy.
+    Held(&'a [u8]),
+}
+
+/// The one place [`ship_phase`] and [`drop_absent_outputs`] read `rel_path`'s
+/// bytes from: held bytes, else the CAS blob backing a live `staged_oid`, else
+/// `stage_path` itself.
 ///
 /// Both callers MUST route every presence check and every subsequent read
-/// through this SAME resolved path, and neither may recompute it separately.
+/// through this SAME resolved value, and neither may recompute it separately.
 /// A presence check that asks the CAS while the read that follows targets the
 /// stage path (or vice versa) can answer "present" from one and then read the
 /// other, genuinely-absent, one — moving the failure a few lines down instead
@@ -163,20 +173,23 @@ pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
 /// helper would reintroduce. See the module docs for the race this exists to
 /// close: between a build sealing a path's hash and shipping its bytes, a
 /// second concurrent build can rewrite the mutable stage copy.
-fn resolve_ship_source(
+fn resolve_ship_source<'a>(
     rel_path: &str,
     stage_path: &Path,
-    sealed: &SealedManifest,
+    sealed: &'a SealedManifest,
     object_store: Option<&crate::build::cache::ObjectStore>,
-) -> PathBuf {
+) -> ShipRead<'a> {
+    if let Some(bytes) = sealed.held_bytes(rel_path) {
+        return ShipRead::Held(bytes);
+    }
     if let Some(store) = object_store {
         if let Some(oid) = sealed.staged_oid(rel_path) {
             if let Some(cas_path) = store.get_path(oid) {
-                return cas_path;
+                return ShipRead::Path(cas_path);
             }
         }
     }
-    stage_path.to_path_buf()
+    ShipRead::Path(stage_path.to_path_buf())
 }
 
 /// Compare `rel_path`'s CURRENT stage bytes against what this manifest sealed,
@@ -228,10 +241,11 @@ fn verify_ship_integrity(
 
 /// Ship one generation: copy exactly what the sealed manifest lists.
 ///
-/// Each entry ships from its immutable CAS blob when the manifest recorded
-/// one (`sealed.staged_oid`, still live) — see [`resolve_ship_source`] — and
-/// from the mutable `stage_dir` copy otherwise, exactly as before. The CAS
-/// path is what closes a real race: `stage_dir` is shared and mutable across
+/// Each entry ships from the bytes the manifest holds (`sealed.held_bytes`) or
+/// from its immutable CAS blob when the manifest recorded one
+/// (`sealed.staged_oid`, still live) — see [`resolve_ship_source`] — and
+/// from the mutable `stage_dir` copy otherwise, exactly as before. The
+/// immutable sources are what close a real race: `stage_dir` is shared and mutable across
 /// concurrent builds of the same folder, so a second build can rewrite a path
 /// between this build sealing its hash and this call reading its bytes, and
 /// the generation would then receive the wrong bytes under a frozen hash. An
@@ -296,13 +310,26 @@ pub fn ship_phase(
         }
 
         let stage_path = stage_dir.join(rel_path);
-        // The ONE path every check and read below uses. A live `staged_oid`
-        // resolves to its immutable CAS blob; everything else resolves to
-        // `stage_path` unchanged. See `resolve_ship_source`'s doc comment for
-        // why a second, independently-computed path here would reopen the
-        // exact race this function exists to close.
-        let source_path = resolve_ship_source(rel_path, &stage_path, sealed, object_store);
         let site_path = site_dir.join(rel_path);
+        // The ONE source every check and read below uses. Held bytes are
+        // themselves; a live `staged_oid` resolves to its immutable CAS blob;
+        // everything else resolves to `stage_path` unchanged. See
+        // `resolve_ship_source`'s doc comment for why a second,
+        // independently-computed path here would reopen the exact race this
+        // function exists to close.
+        let source_path = match resolve_ship_source(rel_path, &stage_path, sealed, object_store) {
+            ShipRead::Path(path) => path,
+            // Already in memory, and always a plain file (`register_held` takes
+            // nothing else): write it and skip the presence probe and audit,
+            // both of which are about a stage file this entry does not read.
+            ShipRead::Held(bytes) => {
+                if let Err(e) = crate::build::io_utils::write_output(&site_path, bytes) {
+                    log::warn!("[ship_phase] write failed for {:?}: {}", site_path, e);
+                    failures += 1;
+                }
+                continue;
+            }
+        };
         let (mode, _) = crate::types::content::parse_entry(entry);
 
         // `drop_absent_outputs` has already removed every entry with no output
@@ -834,7 +861,9 @@ pub(crate) fn drop_absent_outputs(
         // mutable stage copy — otherwise this pass can answer "present" from
         // one path while `ship_phase` reads the other, genuinely-absent, one,
         // moving the failure a few lines down instead of preventing it.
-        let path = resolve_ship_source(rel, &stage_path, sealed, object_store);
+        let ShipRead::Path(path) = resolve_ship_source(rel, &stage_path, sealed, object_store) else {
+            continue; // held bytes are present by construction
+        };
         let (mode, _) = crate::types::content::parse_entry(entry);
         let presence = crate::build::io_utils::probe_output(&path, mode);
         if presence.is_present() {
@@ -1755,6 +1784,50 @@ mod tests {
             sealed.files().contains_key("asset.bin"),
             "a CAS-backed entry must survive a transiently-absent stage copy"
         );
+    }
+
+    /// The property `Held` exists for: a derived output has no CAS blob, so
+    /// before it existed a rewrite of its stage path by a later build reached
+    /// this generation under this manifest's frozen hash.
+    #[test]
+    fn ship_phase_ships_held_bytes_despite_stage_dir_being_overwritten() {
+        let stage = tempdir().unwrap();
+        let site = tempdir().unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let sp = crate::build::served_path::ServedPath::from_source("sitemap.xml").unwrap();
+        pending.register_held(&sp, b"<urlset>A</urlset>".to_vec(), HashBucket::Files).unwrap();
+        let sealed = pending.seal();
+
+        // A concurrent build rewrites the mutable stage copy after this
+        // manifest's hash was sealed.
+        std::fs::write(stage.path().join("sitemap.xml"), b"<urlset>B</urlset>").unwrap();
+
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
+
+        assert_eq!(
+            std::fs::read(site.path().join("sitemap.xml")).unwrap(),
+            b"<urlset>A</urlset>",
+            "the generation must get the bytes this manifest hashed, not the stage's"
+        );
+    }
+
+    /// A held entry has no stage file to read, so its absence is neither a
+    /// dropped entry nor a failed ship.
+    #[test]
+    fn a_held_entry_ships_and_survives_the_presence_pass_with_no_stage_file() {
+        let stage = tempdir().unwrap();
+        let site = tempdir().unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let sp = crate::build::served_path::ServedPath::from_source("llms.txt").unwrap();
+        pending.register_held(&sp, b"everything".to_vec(), HashBucket::Files).unwrap();
+        let mut sealed = pending.seal();
+
+        let dropped = drop_absent_outputs(stage.path(), &mut sealed, None);
+        assert!(dropped.is_empty(), "held bytes are present by construction: {dropped:?}");
+        assert!(sealed.files().contains_key("llms.txt"));
+
+        ship_phase(stage.path(), site.path(), &sealed, None, None).unwrap();
+        assert_eq!(std::fs::read(site.path().join("llms.txt")).unwrap(), b"everything");
     }
 
     /// One test that a genuine post-seal byte change is caught...
