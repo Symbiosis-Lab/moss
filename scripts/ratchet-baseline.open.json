@@ -8,7 +8,7 @@
       "armed": true,
       "value": {
         "crates/moss-build/src/build/assets/binary_resolver.rs": 1016,
-        "crates/moss-build/src/build/cache.rs": 1546,
+        "crates/moss-build/src/build/cache.rs": 1573,
         "crates/moss-build/src/build/folder_embed.rs": 1460,
         "crates/moss-build/src/build/markdown/html_post.rs": 977,
         "crates/moss-build/src/build/markdown/pipeline.rs": 2143,
@@ -442,6 +442,17 @@
         "crates/moss-build/src/build/media/image.rs": 2952
       },
       "reason": "cache.rs +2: the carry_forward doc now says why the guard is load-bearing for images (the scan's evicted branch). image.rs +15 (2937 to 2952; the file already stood at 2944 on develop, 7 over, unaccepted): compute_image_item_fingerprint is split into a stat-taking half and image_item_fingerprint, which takes a stat record already in hand, so a test can hand the fingerprint a record that differs in one field (ctime cannot be set from userland). The split goes away when the fingerprint becomes a (FileStat, params) value.",
+      "date": "2026-09-20"
+    },
+    {
+      "row": "prod_lines_per_file",
+      "from": {
+        "crates/moss-build/src/build/cache.rs": 1546
+      },
+      "to": {
+        "crates/moss-build/src/build/cache.rs": 1573
+      },
+      "reason": "cache.rs +27: HashIndex counts its own answers so a build can say what the index did (one info line, [cache] hash-index: N hits, M rehashed, printed once at the post-join point in await_completion). Two process-wide atomics, a count_hit wrapper on lookup and lookup_whole_second, one increment in update (every path that hashes for want of a hit records through it, so there is no per-caller increment to forget), and the report function; the reviewer of a930263 had to build probe binaries to count index hits. Not split out: moving HashIndex to its own module adds a 70th child to build/ (baseline 69), a relocation to do on its own.",
       "date": "2026-09-20"
     }
   ]

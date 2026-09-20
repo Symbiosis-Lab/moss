@@ -32,6 +32,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Size of the read buffer used by [`ObjectStore::hash_file`].
 ///
@@ -987,12 +988,14 @@ impl HashIndex {
     pub fn lookup(&self, relative_path: &str, stat: &FileStat) -> Option<&str> {
         let entry = self.entries.get(relative_path)?;
         let same_instant = stat.mtime_nanos.is_some() && entry.mtime_nanos == stat.mtime_nanos;
-        (entry.size == stat.size
-            && entry.mtime == stat.mtime
-            && same_instant
-            && !identity_disagrees(entry.ctime, stat.ctime)
-            && !identity_disagrees(entry.inode, stat.inode))
-        .then_some(entry.content_hash.as_str())
+        count_hit(
+            (entry.size == stat.size
+                && entry.mtime == stat.mtime
+                && same_instant
+                && !identity_disagrees(entry.ctime, stat.ctime)
+                && !identity_disagrees(entry.inode, stat.inode))
+            .then_some(entry.content_hash.as_str()),
+        )
     }
 
     /// [`lookup`](Self::lookup)'s older rule: size and whole-second mtime only,
@@ -1006,7 +1009,7 @@ impl HashIndex {
     /// leave in the index is never mistaken for a full stat record.
     pub fn lookup_whole_second(&self, relative_path: &str, size: u64, mtime: u64) -> Option<&str> {
         let entry = self.entries.get(relative_path)?;
-        (entry.size == size && entry.mtime == mtime).then_some(entry.content_hash.as_str())
+        count_hit((entry.size == size && entry.mtime == mtime).then_some(entry.content_hash.as_str()))
     }
 
     /// Record `content_hash` for a file as it stood at `stat`.
@@ -1015,6 +1018,7 @@ impl HashIndex {
     /// hash then leaves an entry the file no longer matches, where the other order
     /// would pair the new stat with the old bytes' hash and vouch for it.
     pub fn update(&mut self, relative_path: String, stat: &FileStat, content_hash: String) {
+        REHASHED.fetch_add(1, Ordering::Relaxed);
         self.entries.insert(
             relative_path,
             HashIndexEntry {
@@ -1084,6 +1088,35 @@ impl HashIndex {
         self.update(relative_path.to_string(), &stat, hash.clone());
         Ok(hash)
     }
+}
+
+// The index's answers, process-wide, for the one line a build prints about it: a build
+// is served by a dozen short-lived indexes and what they saved spans all of them. Every
+// path that hashes for want of a hit records the result through `update`, so that is
+// what a rehash is.
+static HITS: AtomicU64 = AtomicU64::new(0);
+static REHASHED: AtomicU64 = AtomicU64::new(0);
+
+fn count_hit<T>(hit: Option<T>) -> Option<T> {
+    if hit.is_some() {
+        HITS.fetch_add(1, Ordering::Relaxed);
+    }
+    hit
+}
+
+/// Print, at `info`, what the index did since the last call, and start over.
+pub fn report_hash_index_activity() {
+    let (hits, rehashed) = (HITS.swap(0, Ordering::Relaxed), REHASHED.swap(0, Ordering::Relaxed));
+    let line = format!("[cache] hash-index: {hits} hits, {rehashed} rehashed");
+    #[cfg(test)]
+    LAST_LINE.with(|last| *last.borrow_mut() = Some(line.clone()));
+    log::info!("{line}");
+}
+
+// The line the last `report_hash_index_activity` on this thread printed.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static LAST_LINE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
 // ---------------------------------------------------------------------------

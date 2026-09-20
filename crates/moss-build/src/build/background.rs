@@ -389,6 +389,9 @@ impl BackgroundHandle {
         if let Some(barrier) = self.terminal_barrier.as_mut() {
             barrier.terminate_succeeded();
         }
+        // The same point says what the hash index saved: every user of it has
+        // finished, the image and video workers included.
+        crate::build::cache::report_hash_index_activity();
         Ok((sealed, self.cache_lease.take()))
     }
 }
@@ -446,6 +449,22 @@ mod tests {
         assert!(sealed.files().contains_key("a.html"));
         assert!(sealed.files().contains_key("b.html"));
         assert!(sealed.files().contains_key("c.html"));
+    }
+
+    /// The post-join point is where a build says what its hash index did: every user of
+    /// it, the detached image and video workers included, has finished by then.
+    #[tokio::test]
+    async fn await_completion_reports_what_the_hash_index_did() {
+        crate::build::cache::LAST_LINE.with(|last| *last.borrow_mut() = None);
+        let handle = BackgroundHandle::spawn(SiteHashes::default(), |_tx, _workers| {});
+
+        handle.await_completion().await.expect("await_completion failed");
+
+        let line = crate::build::cache::LAST_LINE.with(|last| last.borrow().clone());
+        assert!(
+            line.as_deref().is_some_and(|l| l.starts_with("[cache] hash-index: ")),
+            "the build printed no hash-index line: {line:?}"
+        );
     }
 
     #[tokio::test]

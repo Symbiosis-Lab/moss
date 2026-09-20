@@ -182,7 +182,8 @@ const OPTION_LINES: &str = "    -h, --help                     Show this help me
 const ENVIRONMENT_LINES: &str = "    MOSS_LOG_LEVEL=<level>         Log verbosity on stderr: error, warn
                                    (default), info or debug. `info` adds
                                    the per-phase timing lines ([render],
-                                   [slots]). RUST_LOG is not read.";
+                                   [slots]) and what the hash index saved
+                                   ([cache]). RUST_LOG is not read.";
 
 /// The first sentence of a description — what a command is, without the
 /// paragraph of consequences `<cmd> --help` and `moss describe` print in full.
