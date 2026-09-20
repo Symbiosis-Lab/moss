@@ -266,6 +266,9 @@ jobs:
       - name: Ratchet (architecture size/marker budget)
         run: node scripts/ratchet.mjs check
 
+      - name: Ratchet tool tests (accept/tighten --path)
+        run: node --test scripts/__tests__/ratchet.test.mjs
+
       - name: Typecheck moss-api (source + tests)
         run: cd packages/moss-api && pnpm run typecheck
 

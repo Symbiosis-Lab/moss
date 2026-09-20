@@ -31,9 +31,20 @@
 //
 // Commands (same shape as desktop's):
 //   node scripts/ratchet.mjs check           exit 0 green / 1 red
-//   node scripts/ratchet.mjs tighten         lower baseline; NEVER raises
-//   node scripts/ratchet.mjs accept <row> <reason>   the ONLY way a baseline
-//                                             grows; logs {row,from,to,reason,date}
+//   node scripts/ratchet.mjs tighten [--path <file>]...   lower baseline; NEVER raises
+//   node scripts/ratchet.mjs accept <row> <reason> [--path <file>]...
+//                                             the ONLY way a baseline grows;
+//                                             logs {row,from,to,reason,date}
+//
+// `--path` (repeatable) limits accept/tighten to the named entries. Without it
+// `accept` raises EVERY over-baseline entry of the row to its current count, so
+// accepting one file's growth silently accepts the unreviewed growth of every
+// other over-baseline file in the row — the reason on the log entry then covers
+// changes it never described. Two landings (d16e5ff, 4fdb3cb) hand-wrote their
+// accepts[] entries to avoid exactly that; use `--path` instead of editing the
+// baseline. A named path that is not over its baseline is an error, and
+// nothing is written. Paths are spelled as in the baseline (root-relative,
+// `/`-separated); `./` and absolute spellings under --root are folded to it.
 //
 // Baseline: scripts/ratchet-baseline.open.json, next to this script.
 //
@@ -517,16 +528,34 @@ function cmdCheck(root) {
   console.log('\nGREEN — all armed rows within baseline; self-checks passed.');
 }
 
-function cmdTighten(root) {
+/** A `--path` value in the baseline's own spelling: root-relative, `/`-separated. */
+function repoPath(root, p) {
+  return rel(root, path.resolve(root, p));
+}
+
+function cmdTighten(root, only = []) {
   const baseline = loadBaseline();
   const current = collectCurrent(root);
   const lowered = [];
   const refused = [];
+  const wanted = only.length ? new Set(only.map((p) => repoPath(root, p))) : null;
+
+  // Checked before anything is touched, so a typo never half-applies.
+  for (const p of wanted ?? []) {
+    const baselined = Object.values(baseline.rows ?? {}).some(
+      (r) => r.armed && typeof r.value === 'object' && r.value !== null && p in r.value,
+    );
+    if (!baselined) {
+      console.error(`'${p}' is in no baseline row — nothing to tighten for it`);
+      process.exit(1);
+    }
+  }
 
   for (const [key, row] of Object.entries(baseline.rows ?? {})) {
     if (!row.armed || !collectors[key]) continue;
     const cur = current[key];
     if (cur.kind === 'scalar') {
+      if (wanted) continue; // a scalar row has no path to name
       if (cur.total < row.value) {
         lowered.push(`${key}: ${row.value} -> ${cur.total}`);
         row.value = cur.total;
@@ -536,6 +565,7 @@ function cmdTighten(root) {
     } else {
       const base = row.value ?? {};
       for (const [p, b] of Object.entries(base)) {
+        if (wanted && !wanted.has(p)) continue;
         const n = cur.map[p];
         const abs = path.join(root, ...p.split('/'));
         if (!fs.existsSync(abs)) {
@@ -570,9 +600,23 @@ function cmdTighten(root) {
   }
 }
 
-function cmdAccept(root, rowKey, reason) {
+/**
+ * What accepting `p` would record for a per-path row: `{from, to}` if its
+ * current count is over its baseline (or it is a new entry over the row's new
+ * threshold/budget), else null.
+ */
+function raiseOf(cur, base, p) {
+  const n = cur.map[p];
+  const b = base[p];
+  if (n === undefined) return null;
+  if (b !== undefined) return n > b ? { from: b, to: n } : null;
+  const overNew = cur.threshold !== undefined || (cur.newBudget !== undefined && n > cur.newBudget);
+  return overNew ? { from: null, to: n } : null;
+}
+
+function cmdAccept(root, rowKey, reason, only = []) {
   if (!rowKey || !reason) {
-    console.error('usage: ratchet.mjs accept <row-key> <reason> [--root <path>]');
+    console.error('usage: ratchet.mjs accept <row-key> <reason> [--path <file>]... [--root <path>]');
     process.exit(1);
   }
   const baseline = loadBaseline();
@@ -586,6 +630,10 @@ function cmdAccept(root, rowKey, reason) {
   let entry;
 
   if (cur.kind === 'scalar') {
+    if (only.length) {
+      console.error(`row '${rowKey}' is one number, not per-path — --path does not apply to it`);
+      process.exit(1);
+    }
     if (cur.total <= row.value) {
       console.error(`nothing to accept: current ${cur.total} <= baseline ${row.value}`);
       process.exit(1);
@@ -595,18 +643,24 @@ function cmdAccept(root, rowKey, reason) {
   } else {
     const base = row.value ?? {};
     row.value = base;
+    const named = only.map((p) => repoPath(root, p));
+    // Validated before anything is raised: one named path that is not over its
+    // baseline fails the whole call, so a typo cannot quietly accept the rest.
+    for (const p of named) {
+      if (!raiseOf(cur, base, p)) {
+        const n = cur.map[p];
+        console.error(
+          `'${p}' is not over its '${rowKey}' baseline (current ${n ?? 'absent'}, baseline ${base[p] ?? 'none'}) — nothing to accept for it`,
+        );
+        process.exit(1);
+      }
+    }
     const from = {};
     const to = {};
-    for (const [p, n] of Object.entries(cur.map)) {
-      const b = base[p];
-      const overNew =
-        b === undefined &&
-        ((cur.threshold !== undefined) || (cur.newBudget !== undefined && n > cur.newBudget));
-      if (b !== undefined && n > b) {
-        from[p] = b; to[p] = n; base[p] = n;
-      } else if (overNew) {
-        from[p] = null; to[p] = n; base[p] = n;
-      }
+    for (const p of named.length ? named : Object.keys(cur.map)) {
+      const raise = raiseOf(cur, base, p);
+      if (!raise) continue;
+      from[p] = raise.from; to[p] = raise.to; base[p] = raise.to;
     }
     if (Object.keys(to).length === 0) {
       console.error(`nothing to accept: no entry of '${rowKey}' exceeds its baseline`);
@@ -629,17 +683,24 @@ function cmdAccept(root, rowKey, reason) {
 function main(argv) {
   const args = argv.slice(2);
   const positional = [];
+  const only = [];
   let root = process.cwd();
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--root') root = path.resolve(args[++i]);
-    else positional.push(args[i]);
+    else if (args[i] === '--path') {
+      if (!args[i + 1]) {
+        console.error('--path needs a file');
+        process.exit(1);
+      }
+      only.push(args[++i]);
+    } else positional.push(args[i]);
   }
   const cmd = positional[0];
   if (cmd === 'check') cmdCheck(root);
-  else if (cmd === 'tighten') cmdTighten(root);
-  else if (cmd === 'accept') cmdAccept(root, positional[1], positional.slice(2).join(' '));
+  else if (cmd === 'tighten') cmdTighten(root, only);
+  else if (cmd === 'accept') cmdAccept(root, positional[1], positional.slice(2).join(' '), only);
   else {
-    console.error('usage: ratchet.mjs <check|tighten|accept> [args] [--root <path>]');
+    console.error('usage: ratchet.mjs <check|tighten|accept> [args] [--path <file>]... [--root <path>]');
     process.exit(1);
   }
 }
