@@ -2057,6 +2057,13 @@ fn test_fingerprint(tag: u64) -> ImageFingerprint {
     }
 }
 
+/// Record that a worker delivered `path`'s variant for the source `fingerprint` describes,
+/// the way a dispatch queues it and the worker's end reports it.
+fn prime_delivered(path: &str, fingerprint: ImageFingerprint) {
+    mark_image_items_pending([(path.to_string(), fingerprint.clone())]);
+    end_image_item(path, Some(fingerprint));
+}
+
 #[test]
 fn fingerprint_cache_matches_only_what_was_recorded() {
     let _guard = image_fingerprint_test_lock().lock();
@@ -2065,7 +2072,7 @@ fn fingerprint_cache_matches_only_what_was_recorded() {
     let (a, b) = (test_fingerprint(1), test_fingerprint(2));
     // Nothing recorded for this path → not unchanged.
     assert!(!image_item_fingerprint_matches(&path, &a));
-    record_image_item_fingerprint(&path, a.clone());
+    prime_delivered(&path, a.clone());
     assert!(image_item_fingerprint_matches(&path, &a));
     // A different value is not unchanged, and asking about it records nothing: the
     // dispatch that asks has not yet had its worker deliver the change.
@@ -2085,8 +2092,8 @@ fn fingerprint_cache_is_independent_per_path() {
     let path_a = format!("a-{}.jpg", uuid::Uuid::new_v4());
     let path_b = format!("b-{}.jpg", uuid::Uuid::new_v4());
     let (a, b) = (test_fingerprint(1), test_fingerprint(2));
-    record_image_item_fingerprint(&path_a, a.clone());
-    record_image_item_fingerprint(&path_b, b.clone());
+    prime_delivered(&path_a, a.clone());
+    prime_delivered(&path_b, b.clone());
     // Both still match their own last-recorded fingerprint.
     assert!(image_item_fingerprint_matches(&path_a, &a));
     assert!(image_item_fingerprint_matches(&path_b, &b));
@@ -2755,7 +2762,7 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
         fs::write(&webp_path, format!("SENTINEL-{}", i)).unwrap();
         let fp = compute_image_item_fingerprint(&root.to_string_lossy(), &item.source_path, &cfg)
             .expect("source exists and is stat-able");
-        record_image_item_fingerprint(&item.source_path.to_string_lossy(), fp);
+        prime_delivered(&item.source_path.to_string_lossy(), fp);
         untouched_webps.push(webp_path);
         items.push(item);
     }
@@ -4691,7 +4698,7 @@ async fn skip_path_carry_forward_registers_with_no_oid_not_a_stale_one() {
     let cfg = ImageCompressionConfig::default();
     let fp = compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &cfg)
         .expect("source exists and is stat-able");
-    record_image_item_fingerprint(&item.source_path.to_string_lossy(), fp);
+    prime_delivered(&item.source_path.to_string_lossy(), fp);
 
     let (tx, rx) = test_utils::build_test_coordinator();
     tokio::task::spawn_blocking(move || {
@@ -4809,7 +4816,7 @@ fn a_missing_output_is_dispatched_while_its_unaffected_sibling_takes_the_skip_pa
         let rel = item.source_path.to_string_lossy().to_string();
         let fp = compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &cfg)
             .expect("source exists and is stat-able");
-        record_image_item_fingerprint(&rel, fp);
+        prime_delivered(&rel, fp);
     }
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
@@ -5024,6 +5031,46 @@ fn registration_over_an_unreadable_variant_reports_it_and_never_fails_it() {
     match rx.try_recv() {
         Ok(EmitMessage::Unverified { rel_path, .. }) => assert_eq!(rel_path, "locked/photo.webp"),
         other => panic!("expected an Unverified report, got {other:?}"),
+    }
+}
+
+/// A spawner that holds each worker it is handed instead of running it, so a test decides
+/// when a worker reaches its images, and counts how many were spawned.
+#[derive(Default)]
+struct HeldSpawner {
+    held: std::sync::Mutex<Vec<Box<dyn FnOnce() + Send>>>,
+    spawned: std::sync::atomic::AtomicUsize,
+}
+
+impl crate::build::ports::spawner::Spawner for HeldSpawner {
+    fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+        self.spawned.fetch_add(1, Ordering::SeqCst);
+        self.held.lock().unwrap().push(task);
+    }
+    fn spawn(&self, _task: crate::build::ports::spawner::Task) -> crate::build::ports::spawner::Joining {
+        unimplemented!("the image dispatch never uses the async half")
+    }
+}
+
+impl HeldSpawner {
+    fn spawned(&self) -> usize {
+        self.spawned.load(Ordering::SeqCst)
+    }
+
+    /// The desktop app's services, with this spawner.
+    fn services(self: &std::sync::Arc<Self>) -> BuildServices {
+        BuildServices { spawner: Some(self.clone()), ..BuildServices::headless() }
+    }
+
+    /// Run every worker held so far, in order, on a blocking thread as a real one would be.
+    async fn run_held(self: &std::sync::Arc<Self>) {
+        let me = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let workers: Vec<_> = std::mem::take(&mut *me.held.lock().unwrap());
+            workers.into_iter().for_each(|worker| worker());
+        })
+        .await
+        .unwrap();
     }
 }
 
@@ -5277,6 +5324,83 @@ async fn a_source_changed_under_a_worker_that_deferred_it_to_the_cloud_is_encode
         (RewriteVault::app_services(), Some(crate::build::icloud::pretend::evicted(&vault.pic())))
     })
     .await;
+}
+
+// ----- a worker already converting a source is joined, not raced -----
+
+/// A burst of saves rebuilds before the last build's worker has reached its images. The
+/// source is the same bytes in both, so the second dispatch joins the worker that is
+/// already queued: a second one would encode the same image again, with a thread pool and
+/// a megapixel budget of its own, and nothing has yet vouched for the change that would
+/// tell the dispatch to leave it alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_dispatch_before_the_worker_ran_joins_it_instead_of_spawning_another() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.rebuild(true).await;
+    let first = vault.webp();
+    vault.rewrite_in_the_same_second([30, 30, 200]);
+
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect(), workers.services()).await;
+    vault.dispatch(vault.collect(), workers.services()).await;
+    assert_eq!(workers.spawned(), 1, "the second dispatch found the source unchanged since the first and spawned its own worker");
+
+    workers.run_held().await;
+    assert_ne!(vault.webp(), first, "premise: the one worker delivered the change");
+    vault.dispatch(vault.collect(), workers.services()).await;
+    assert_eq!(workers.spawned(), 1, "the joined worker delivered this source: nothing to queue");
+}
+
+/// The join is for the same source. One rewritten again after the worker was queued is a
+/// source that worker's dispatch never saw, and nothing that is queued for the old one is
+/// for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dispatch_over_a_source_changed_again_since_the_worker_was_queued_spawns_its_own() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.rebuild(true).await;
+    let first = vault.webp();
+
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.rewrite_in_the_same_second([30, 30, 200]);
+    vault.dispatch(vault.collect(), workers.services()).await;
+    // Stamped by the write itself: `rewrite_in_the_same_second` alternates between two instants
+    // and would put this one back at the mtime the first build recorded.
+    vault.write_pic([30, 200, 30]);
+    vault.dispatch(vault.collect(), workers.services()).await;
+    assert_eq!(workers.spawned(), 2, "the second dispatch joined a worker queued for bytes the source no longer has");
+
+    workers.run_held().await;
+    assert_ne!(vault.webp(), first, "premise: the workers delivered the change");
+}
+
+/// An image that leaves the site while its worker is queued has been dropped from the
+/// records by the dispatch that no longer lists it, and the worker that reaches it later
+/// must not put it back: it would vouch for a path the site no longer holds, the very
+/// record the dispatch pruned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_worker_finishing_an_image_that_has_left_the_site_does_not_vouch_for_it() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.write_named("other.png", [30, 200, 30]);
+    let vouched = |name: &str| {
+        let fingerprint = compute_image_item_fingerprint(&vault.root.to_string_lossy(), Path::new(name), &ImageCompressionConfig::default()).unwrap();
+        image_item_fingerprint_matches(name, &fingerprint)
+    };
+
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect_of(&["pic.png", "other.png"]), workers.services()).await;
+    vault.dispatch(vault.collect_of(&["other.png"]), workers.services()).await;
+    assert_eq!(workers.spawned(), 1, "premise: the second dispatch joined the worker for the image that stayed");
+
+    workers.run_held().await;
+
+    assert!(vouched("other.png"), "premise: the worker delivered the image that stayed");
+    assert!(!vouched("pic.png"), "the worker vouched for an image the site no longer lists");
 }
 
 /// The third exit that leaves the old variant: the worker gets to the image and cannot

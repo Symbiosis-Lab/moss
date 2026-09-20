@@ -13,7 +13,7 @@
         "crates/moss-build/src/build/markdown/html_post.rs": 977,
         "crates/moss-build/src/build/markdown/pipeline.rs": 2143,
         "crates/moss-build/src/build/media/ffmpeg.rs": 1672,
-        "crates/moss-build/src/build/media/image.rs": 2937,
+        "crates/moss-build/src/build/media/image.rs": 2989,
         "crates/moss-build/src/build/media/pipeline.rs": 1804,
         "crates/moss-build/src/build/media/video.rs": 1810,
         "crates/moss-build/src/build/page/meta.rs": 1366,
@@ -464,6 +464,17 @@
         "crates/moss-build/src/build/media/image.rs": 2958
       },
       "reason": "image.rs +6 (2952 to 2958): the image worker takes the item's fingerprint before it reads the source and records it in its teardown for an item that delivered, where the dispatch used to record it before any worker had run (the desktop gate then vouched for sources a cancelled or cloud-deferred worker never encoded). Two small fns (matches / record) replace the one check-and-update. Expected to come back down when the fingerprint becomes a (FileStat, params) value.",
+      "date": "2026-09-20"
+    },
+    {
+      "row": "prod_lines_per_file",
+      "from": {
+        "crates/moss-build/src/build/media/image.rs": 2937
+      },
+      "to": {
+        "crates/moss-build/src/build/media/image.rs": 2989
+      },
+      "reason": "media/image.rs: the dispatch's delivered-fingerprint map gains a pending marker beside it (ImageLedger, one lock, ~35 prod lines with docs) and a join branch, so a second dispatch before the worker ran joins it instead of spawning another; the three copies of the rung-URL derivation (worker, heal, dispatch) collapse into promised_rungs, which pays back about 30 of it",
       "date": "2026-09-20"
     }
   ]

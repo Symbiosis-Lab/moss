@@ -1379,39 +1379,76 @@ pub(crate) fn compute_image_item_fingerprint(
     Some(ImageFingerprint { stat, params: config.to_params() })
 }
 
-/// Module-local fingerprint cache for image conversion (independent of
-/// `VideoConversionState`, which owns the video fingerprint), keyed by each
-/// image's relative source path. Per-item, not per-set — mirrors
-/// `VideoConversionState::last_video_fingerprints`.
-fn image_fingerprint_cell() -> &'static Mutex<HashMap<String, ImageFingerprint>> {
-    static IMAGE_FINGERPRINTS: OnceLock<Mutex<HashMap<String, ImageFingerprint>>> = OnceLock::new();
-    IMAGE_FINGERPRINTS.get_or_init(|| Mutex::new(HashMap::new()))
+/// What the dispatch gate remembers about each image, process-wide (independent of
+/// `VideoConversionState`, which owns the video's), keyed by the image's relative source
+/// path. Per item, not per set — mirrors `VideoConversionState`'s fingerprint map and
+/// `RunLedger`, and like `RunLedger` under one lock, so an image is in exactly one of the
+/// two maps at each instant: a dispatch that looks between a worker's end and its record
+/// must not find the image in neither and spawn a worker for what was just delivered.
+///
+/// Not shared with the video store, on purpose. Video runs supersede one another under an
+/// epoch, so its ledger is cleared and owned per run; image workers are independent (a
+/// dispatch never cancels an earlier one), and the two maps here need only be looked at
+/// and moved together.
+#[derive(Default)]
+struct ImageLedger {
+    /// The source each image's variant was last delivered for.
+    delivered: HashMap<String, ImageFingerprint>,
+    /// The source each image was queued under, until the worker that has it is done.
+    pending: HashMap<String, ImageFingerprint>,
+}
+
+fn image_ledger() -> std::sync::MutexGuard<'static, ImageLedger> {
+    static IMAGE_LEDGER: OnceLock<Mutex<ImageLedger>> = OnceLock::new();
+    IMAGE_LEDGER.get_or_init(Mutex::default).lock().expect("image ledger mutex")
 }
 
 /// Whether `path`'s fingerprint is the one recorded when a worker last delivered its
-/// variant (`record_image_item_fingerprint`): this one image is unchanged since. Read
-/// only — a dispatch that finds a change must not vouch for the change, because the
-/// worker it spawns may leave (the user cancelled, the source went back to the cloud,
-/// the hash failed) without encoding it, and the old variant it leaves in staging is
-/// exactly what the next dispatch's skip check finds present. Independent per path.
+/// variant (`end_image_item`): this one image is unchanged since. Read only — a dispatch
+/// that finds a change must not vouch for the change, because the worker it spawns may
+/// leave (the user cancelled, the source went back to the cloud, the hash failed) without
+/// encoding it, and the old variant it leaves in staging is exactly what the next
+/// dispatch's skip check finds present. Independent per path.
 pub(crate) fn image_item_fingerprint_matches(path: &str, fingerprint: &ImageFingerprint) -> bool {
-    image_fingerprint_cell().lock().expect("image fp mutex").get(path) == Some(fingerprint)
+    image_ledger().delivered.get(path) == Some(fingerprint)
 }
 
-/// Record that `path`'s variant was delivered for the source this fingerprint
-/// describes.
-pub(crate) fn record_image_item_fingerprint(path: &str, fingerprint: ImageFingerprint) {
-    image_fingerprint_cell().lock().expect("image fp mutex").insert(path.to_string(), fingerprint);
+/// Whether a worker a dispatch spawned has yet to finish `path`, from a source with
+/// this fingerprint. A later dispatch that finds the same source joins that worker
+/// instead of spawning another to encode the same bytes.
+pub(crate) fn image_item_is_pending(path: &str, fingerprint: &ImageFingerprint) -> bool {
+    image_ledger().pending.get(path) == Some(fingerprint)
+}
+
+/// A dispatch is about to hand these (path, fingerprint) to a worker. Before the
+/// worker is spawned, or it could finish first and leave the marker behind for good.
+pub(crate) fn mark_image_items_pending(items: impl IntoIterator<Item = (String, ImageFingerprint)>) {
+    image_ledger().pending.extend(items);
+}
+
+/// The worker is done with `path`: nothing is pending for it any more. When it
+/// delivered, `delivered_as` is the fingerprint of the source it delivered for — and it
+/// is recorded only while the path is still pending, since a dispatch that dropped the
+/// path (`retain_image_item_fingerprints`) has already said the image left.
+pub(crate) fn end_image_item(path: &str, delivered_as: Option<ImageFingerprint>) {
+    let mut ledger = image_ledger();
+    let was_pending = ledger.pending.remove(path).is_some();
+    if let Some(fingerprint) = delivered_as.filter(|_| was_pending) {
+        ledger.delivered.insert(path.to_string(), fingerprint);
+    }
 }
 
 /// Drop stored fingerprints for paths not in `keep` — called once per
 /// dispatch with the current image set, so a removed image's entry doesn't
 /// linger forever, and a removed-then-re-added image is treated as new
 /// rather than replaying a stale match against bytes that may since have
-/// changed. Mirrors `VideoConversionState::retain_item_fingerprints`.
+/// changed. Mirrors `VideoConversionState::retain_item_fingerprints`. A path
+/// whose worker is still to finish loses its pending marker too, so that worker
+/// ends without vouching for an image that has left.
 pub(crate) fn retain_image_item_fingerprints(keep: &std::collections::HashSet<String>) {
-    let mut map = image_fingerprint_cell().lock().expect("image fp mutex");
-    map.retain(|k, _| keep.contains(k));
+    let mut ledger = image_ledger();
+    ledger.delivered.retain(|path, _| keep.contains(path));
+    ledger.pending.retain(|path, _| keep.contains(path));
 }
 
 // ---------------------------------------------------------------------------
@@ -1556,6 +1593,29 @@ fn suppressed_variants_for(
         staging_dir,
         &previous.pruned_image_outputs,
     )
+}
+
+/// The rung variants registration promised for `item`, as (width, url): derived from the
+/// SAME inputs `blocking.rs` used (the scan's dimensions and the ladder gate, png/jpg/jpeg
+/// AND webp per Phase B), less the URLs a user's own file holds. The one place they are
+/// derived, for the worker that must settle every one of them, the dispatch that carries
+/// them forward and the heal that re-materializes them. `source` is any spelling of the
+/// image's page-tree path; the rung URL is built from its `.webp` form. The `false`
+/// literal and the dims-agreement rationale live on `asset_paths::ladder_rungs`.
+fn promised_rungs(
+    item: &ImageConversionItem,
+    source: &str,
+    rung_collisions: &HashMap<String, PathBuf>,
+) -> Vec<(u32, String)> {
+    if !moss_core::asset_paths::is_ladder_source_ext(&item.ext) {
+        return Vec::new();
+    }
+    let Some((w, h)) = item.dimensions else { return Vec::new() };
+    moss_core::asset_paths::ladder_rungs(w, h, false)
+        .iter()
+        .map(|&rung| (rung, moss_core::asset_paths::to_webp_rung(source, rung)))
+        .filter(|(_, rel)| !rung_collisions.contains_key(rel))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1897,24 +1957,11 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         let mapped_source = resolve_path_with_overrides(&rel_source_str, dir_overrides);
         let relative_webp = asset_paths::to_webp(&mapped_source);
 
-        // Rung URLs registration promised for THIS item — derived from the SAME
-        // inputs blocking.rs used (SCAN dims + the ladder gate, png/jpg/jpeg AND
-        // webp per Phase B + collision-map skip). A base failure retracts them;
+        // A base failure retracts the rung promises registration made for THIS item;
         // the success arm sweeps any the encode did not resolve, so a registered
         // rung never sits Pending forever behind its LQIP/passthrough
-        // placeholder (honest-mirror Layer 5B stuck-Pending class). The `false`
-        // literal + dims-agreement rationale live on asset_paths::ladder_rungs.
-        let registered_rungs = || -> Vec<(u32, String)> {
-            if !moss_core::asset_paths::is_ladder_source_ext(&item.ext) {
-                return Vec::new();
-            }
-            let Some((sw, sh)) = item.dimensions else { return Vec::new() };
-            asset_paths::ladder_rungs(sw, sh, false)
-                .iter()
-                .map(|&rw| (rw, asset_paths::to_webp_rung(&relative_webp, rw)))
-                .filter(|(_, rel)| !ctx.rung_collisions.contains_key(rel))
-                .collect()
-        };
+        // placeholder (honest-mirror Layer 5B stuck-Pending class).
+        let registered_rungs = || promised_rungs(item, &relative_webp, &ctx.rung_collisions);
 
         // Resolve the content hash. The blocking collect deferred it (stat-match
         // only), so first paint wasn't gated on hashing hundreds of MB of images;
@@ -2192,9 +2239,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     // The one teardown.
                     match step {
                         ItemStep::Handled { delivered, failed, advisories: item_advisories, encoded } => {
-                            if let Some(fingerprint) = fingerprint.filter(|_| !delivered.is_empty()) {
-                                record_image_item_fingerprint(&item.source_path.to_string_lossy(), fingerprint);
-                            }
+                            end_image_item(&item.source_path.to_string_lossy(), fingerprint.filter(|_| !delivered.is_empty()));
                             record_deliveries(services, &produced_webp_paths, delivered);
                             if let Some(ref registry) = services.assets {
                                 for (url, err) in failed {
@@ -2221,6 +2266,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                             });
                         }
                         ItemStep::Cancelled => {
+                            end_image_item(&item.source_path.to_string_lossy(), None);
                             any_cancelled.store(true, Ordering::SeqCst);
                             services.end_ui_bound();
                         }
@@ -2569,30 +2615,22 @@ fn self_heal_before_registration(
                 HealOutcome::Healed
             ));
         }
-        if moss_core::asset_paths::is_ladder_source_ext(&item.ext) {
-            if let Some((w, h)) = item.dimensions {
-                for &rung in moss_core::asset_paths::ladder_rungs(w, h, false) {
-                    let rung_rel = moss_core::asset_paths::to_webp_rung(&mapped, rung);
-                    if rung_collisions.contains_key(&rung_rel) {
-                        continue;
-                    }
-                    if !suppressed.contains(&rung_rel) {
-                        healed += usize::from(matches!(
-                            rematerialize(
-                                objects,
-                                transforms,
-                                params,
-                                hash_index,
-                                &source_root.join(&item.source_path),
-                                &rel_source,
-                                &staging_dir.join(&rung_rel),
-                                &format!("image/webp-w{}", rung),
-                                HashPolicy::HashOnMiss,
-                            ),
-                            HealOutcome::Healed
-                        ));
-                    }
-                }
+        for (rung, rung_rel) in promised_rungs(item, &mapped, rung_collisions) {
+            if !suppressed.contains(&rung_rel) {
+                healed += usize::from(matches!(
+                    rematerialize(
+                        objects,
+                        transforms,
+                        params,
+                        hash_index,
+                        &source_root.join(&item.source_path),
+                        &rel_source,
+                        &staging_dir.join(&rung_rel),
+                        &format!("image/webp-w{}", rung),
+                        HashPolicy::HashOnMiss,
+                    ),
+                    HealOutcome::Healed
+                ));
             }
         }
     }
@@ -2674,6 +2712,9 @@ pub(crate) fn dispatch_image_conversions(
         // fingerprint fallback covers it.
         let mut skip_paths: Vec<(String, Option<String>)> = Vec::new();
         let mut to_dispatch: Vec<ImageConversionItem> = Vec::new();
+        // What a new worker would own if one is spawned: (path, fingerprint).
+        let mut queued: Vec<(String, ImageFingerprint)> = Vec::new();
+        let mut joined: usize = 0;
         let mut current_paths: HashSet<String> = HashSet::new();
         let mut healed_count: usize = 0;
 
@@ -2691,9 +2732,24 @@ pub(crate) fn dispatch_image_conversions(
             // A fingerprint that can't be computed (source unreadable) can't
             // be proven unchanged either — dispatch it rather than risk
             // carrying forward a stale skip.
+            let fingerprint = compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &config);
+
+            // Join before anything else: a worker already has these exact bytes, so
+            // another would encode them twice — each with a thread pool and a
+            // megapixel budget of its own — and a heal here would put this dispatch's
+            // link on a target that worker is about to link. Whatever an earlier build
+            // left staged is still carried forward.
+            if fingerprint.as_ref().is_some_and(|fp| image_item_is_pending(&rel_source, fp)) {
+                joined += 1;
+                let keys = std::iter::once(relative_webp).chain(promised_rungs(item, &mapped, &ctx.rung_collisions).into_iter().map(|(_, key)| key));
+                skip_paths.extend(
+                    keys.filter(|key| crate::build::io_utils::output_present(&ctx.staging_dir.join(key)))
+                        .map(|key| (key, None)),
+                );
+                continue;
+            }
             let fingerprint_matched =
-                compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &config)
-                    .is_some_and(|fp| image_item_fingerprint_matches(&rel_source, &fp));
+                fingerprint.as_ref().is_some_and(|fp| image_item_fingerprint_matches(&rel_source, fp));
 
             // Self-heal is only attempted for a skip CANDIDATE: resolving the
             // source hash can require a real read+hash on a cache miss (see
@@ -2754,40 +2810,32 @@ pub(crate) fn dispatch_image_conversions(
                 // they'd be absent from the manifest. Collided paths belong
                 // to the user's own file and are skipped with the same
                 // membership test as everywhere else.
-                if moss_core::asset_paths::is_ladder_source_ext(&item.ext) {
-                    if let Some((w, h)) = item.dimensions {
-                        for &rung in moss_core::asset_paths::ladder_rungs(w, h, false) {
-                            let rung_rel = moss_core::asset_paths::to_webp_rung(&mapped, rung);
-                            if ctx.rung_collisions.contains_key(&rung_rel) {
-                                continue;
-                            }
-                            let rung_staging = ctx.staging_dir.join(&rung_rel);
-                            if !heal_suppressed.contains(&rung_rel) {
-                                healed_count += usize::from(matches!(
-                                    rematerialize(
-                                        &heal_objects,
-                                        &heal_transforms,
-                                        &heal_params,
-                                        &mut heal_index,
-                                        &heal_root.join(&item.source_path),
-                                        &rel_source,
-                                        &rung_staging,
-                                        &format!("image/webp-w{}", rung),
-                                        HashPolicy::HashOnMiss,
-                                    ),
-                                    HealOutcome::Healed
-                                ));
-                            }
-                            skip_paths.push((rung_rel.clone(), None));
-                            if rung_staging.exists() {
-                                if let Some(ref asset_reg) = svc.assets {
-                                    if asset_reg.set_ready(rung_rel.clone()) {
-                                        svc.reporter.report(&PipelineEvent::AssetReady {
-                                            path: rung_rel,
-                                            asset_type: "image".to_string(),
-                                        });
-                                    }
-                                }
+                for (rung, rung_rel) in promised_rungs(item, &mapped, &ctx.rung_collisions) {
+                    let rung_staging = ctx.staging_dir.join(&rung_rel);
+                    if !heal_suppressed.contains(&rung_rel) {
+                        healed_count += usize::from(matches!(
+                            rematerialize(
+                                &heal_objects,
+                                &heal_transforms,
+                                &heal_params,
+                                &mut heal_index,
+                                &heal_root.join(&item.source_path),
+                                &rel_source,
+                                &rung_staging,
+                                &format!("image/webp-w{}", rung),
+                                HashPolicy::HashOnMiss,
+                            ),
+                            HealOutcome::Healed
+                        ));
+                    }
+                    skip_paths.push((rung_rel.clone(), None));
+                    if rung_staging.exists() {
+                        if let Some(ref asset_reg) = svc.assets {
+                            if asset_reg.set_ready(rung_rel.clone()) {
+                                svc.reporter.report(&PipelineEvent::AssetReady {
+                                    path: rung_rel,
+                                    asset_type: "image".to_string(),
+                                });
                             }
                         }
                     }
@@ -2800,6 +2848,7 @@ pub(crate) fn dispatch_image_conversions(
                         rel_source
                     );
                 }
+                queued.extend(fingerprint.map(|fp| (rel_source, fp)));
                 to_dispatch.push(item.clone());
             }
         }
@@ -2831,18 +2880,20 @@ pub(crate) fn dispatch_image_conversions(
             );
         }
 
+        let joined_note = if joined > 0 { format!(", {joined} joined a conversion already running") } else { String::new() };
         if to_dispatch.is_empty() {
             log::info!(
-                "Image set unchanged ({} images), skipping re-dispatch — re-registered carry-forward output keys",
-                total_items
+                "Image set unchanged ({} images{}), skipping re-dispatch — re-registered carry-forward output keys",
+                total_items, joined_note
             );
             return;
         }
         if to_dispatch.len() < total_items {
             log::info!(
-                "{} of {} images unchanged, carrying forward output keys; dispatching {} for conversion",
+                "{} of {} images unchanged{}, carrying forward output keys; dispatching {} for conversion",
                 total_items - to_dispatch.len(),
                 total_items,
+                joined_note,
                 to_dispatch.len()
             );
         }
@@ -2905,6 +2956,7 @@ pub(crate) fn dispatch_image_conversions(
         // re-reading `hashes.json` to merge `image_outputs` before running
         // stale cleanup — see `media/pipeline.rs::copy_deferred_assets`.
         // If that merge is ever removed, rebuilds will delete our `.webp`s.
+        mark_image_items_pending(queued);
         spawner.spawn_blocking(Box::new(move || {
             run_image_conversion(&services_arc, &run_ctx);
         }));
