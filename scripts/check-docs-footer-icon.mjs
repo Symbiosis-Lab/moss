@@ -4,8 +4,9 @@
 // (<=600px) it must also sit flush against the right edge of the footer's own
 // content row, with the text links left in place; and its hit area (icon box
 // plus the ::after inset pad) must clear the accessible 24x24 CSS px minimum.
-// Screenshots of the footer region are saved for desktop and mobile, en and
-// zh-hans, into SCREENSHOT_DIR (or CWD if unset) for visual review.
+// Screenshots of the footer region, desktop and mobile, en and zh-hans, are
+// opt-in: set SCREENSHOT_DIR to a directory to save them there for visual
+// review. Unset (the default), nothing is written.
 import { mkdir } from 'node:fs/promises';
 import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
 
@@ -13,8 +14,8 @@ const { baseURL, close } = await resolveBaseURL(process.argv[2]);
 const base = new URL(baseURL);
 const engines = await loadPlaywright();
 const engineNames = (process.env.ENGINE || 'chromium,webkit').split(',');
-const screenshotDir = process.env.SCREENSHOT_DIR || '.';
-await mkdir(screenshotDir, { recursive: true });
+const screenshotDir = process.env.SCREENSHOT_DIR || null;
+if (screenshotDir) await mkdir(screenshotDir, { recursive: true });
 
 const locales = [
   { path: 'get-started/', name: 'en' },
@@ -71,7 +72,7 @@ for (const engineName of engineNames) {
             if (data.icon.left <= data.textLeft) failures.push({ engine: engineName, width, locale: locale.name, problem: 'Icon is not to the right of the footer text' });
           }
           if (data.hitWidth < 24 || data.hitHeight < 24) failures.push({ engine: engineName, width, locale: locale.name, problem: `Hit area ${data.hitWidth.toFixed(1)}x${data.hitHeight.toFixed(1)} is under the 24x24 minimum` });
-          if ((engineName === 'chromium') && (locale.name === 'en' || locale.name === 'zh-hans')) {
+          if (screenshotDir && (engineName === 'chromium') && (locale.name === 'en' || locale.name === 'zh-hans')) {
             const footer = page.locator('footer.container');
             const file = `${screenshotDir}/footer-${locale.name}-${mobile ? 'mobile' : 'desktop'}.png`;
             await footer.screenshot({ path: file });

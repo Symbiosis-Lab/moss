@@ -19,7 +19,10 @@ const BASELINE = {
   windowAssignments: 1,
   topLevelLets: 90,
   sceneComparisons: 14,
-  byteSize: 282550,
+  // Raised from 282550 (phase 2a) after window.mossLanding gained atClosing():
+  // real product code check-landing-subscription.mjs's focus handler now
+  // reads instead of window.__landing, not debug-surface growth.
+  byteSize: 282842,
 };
 
 // Locates the runtime script: the one inline, non-`src` `<script>` block

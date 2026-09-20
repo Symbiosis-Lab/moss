@@ -2051,12 +2051,18 @@ function still(scene) {
 }
 
 // The signup link is navigation: it skips the scene performance.
-window.mossLanding = { openSignup() {
-  cancelSettle();
-  if (running()) setTarget(SHARE);
-  else { shown = target = SHARE; still(SHARE); }
-  mountLoop(); setCross(1); fiveOn(true);
-} };
+window.mossLanding = {
+  openSignup() {
+    cancelSettle();
+    if (running()) setTarget(SHARE);
+    else { shown = target = SHARE; still(SHARE); }
+    mountLoop(); setCross(1); fiveOn(true);
+  },
+  // Whether the page has actually arrived at the close, not just been asked
+  // to go there: closing.js polls this to know when it may safely focus the
+  // signup field, the same rest condition the wash itself already tracks.
+  atClosing: () => shown === SHARE && !running(),
+};
 
 // ── The last join: the page gives way to the full-bleed close ─────────────
 // The scrub is a position, not a clock: where the reader stands inside the last
