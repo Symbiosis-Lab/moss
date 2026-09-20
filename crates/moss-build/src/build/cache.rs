@@ -326,7 +326,7 @@ impl ObjectStore {
     /// Hardlinks share the same inode. When a cloud sync provider (iCloud,
     /// Dropbox, OneDrive, Google Drive) evicts a file to reclaim disk
     /// space, it zeroes out the data at the inode level. With hardlinks,
-    /// ALL copies (cache blob, site/, site-stage/) become 0 bytes
+    /// ALL copies (cache blob, staging/, the generation) become 0 bytes
     /// simultaneously — there is no independent copy to fall back on.
     ///
     /// COW clones (via `fclonefileat`) create an independent inode that

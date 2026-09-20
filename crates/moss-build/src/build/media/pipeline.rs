@@ -493,8 +493,8 @@ fn maybe_inject_spa_cached(
 
 /// Remove generated HTML pages (index*.html) not produced by the current build.
 ///
-/// Runs in the blocking phase before `ship_phase` mirrors stage → site, so stale
-/// pages are gone before enhance slot injection. Source HTML assets (interactive embeds
+/// Runs on staging in the blocking phase, just before the preview is pointed at this render,
+/// so it stops serving pages whose source was deleted. Source HTML assets (interactive embeds
 /// like `sketch.html`) are preserved — generated pages always use `index*.html`.
 ///
 /// Staging is served, so this needs a `lifecycle::SweepPermit`.

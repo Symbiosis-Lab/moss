@@ -1,7 +1,7 @@
 //! Ship: turn a sealed manifest into a generation directory.
 //!
-//! See the module-level architecture section in `src-tauri/src/build.rs` for
-//! the stage/site model. This file owns everything between "the manifest is
+//! See the module-level architecture section in `build.rs` for the staging /
+//! generations model. This file owns everything between "the manifest is
 //! sealed" and "`current` points at a new generation":
 //!
 //! - the two post-seal passes that make the manifest and the disk agree —
@@ -9,8 +9,8 @@
 //!   the MANIFEST only: staging is what the preview server is reading while
 //!   this runs, so nothing here unlinks from it (see `build::pipeline`'s
 //!   pre-render sweep);
-//! - [`ship_phase`], which walks the sealed entries and derives each site/
-//!   file from its stage/ file (apply transform, or recreate a symlink);
+//! - [`ship_phase`], which walks the sealed entries and derives each generation
+//!   file from its staged bytes (apply transform, or recreate a symlink);
 //! - [`materialize_and_promote`], which runs the above into a fresh
 //!   generation dir and repoints `current`, and [`gc_old_generations`].
 //!
@@ -205,7 +205,7 @@ fn verify_ship_integrity(
 }
 
 // ---------------------------------------------------------------------------
-// ship_phase  (batched, end-of-blocking)
+// ship_phase  (batched, once per build, after the seal)
 // ---------------------------------------------------------------------------
 
 /// Ship one generation: copy exactly what the sealed manifest lists.
@@ -245,7 +245,7 @@ fn verify_ship_integrity(
 /// - `100644:` — [`ShipTransform`], as before: strip preview attributes from
 ///   HTML, `fs::copy` everything else. The copy is COW on APFS/Btrfs and
 ///   gives independent inodes: a hardlink-based ship let one iCloud eviction
-///   zero both stage and site, leaving permanent 0-byte stubs.
+///   zero both stage and generation, leaving permanent 0-byte stubs.
 ///
 /// An entry whose stage file is not present is skipped, not counted: the
 /// presence pass leaves exactly one such class behind (`_moss/math/`, kept on
@@ -425,8 +425,8 @@ pub fn ship_phase(
                 // `fs::copy` (COW on APFS via `fclonefileat(2)`,
                 // `copy_file_range(2)` on Linux Btrfs/XFS) rather than
                 // `fs::hard_link`: hardlinks share an inode, and a cloud
-                // provider evicting that inode turns BOTH stage and site into
-                // 0-byte stubs. `copy_output` copies into a temp sibling and
+                // provider evicting that inode turns BOTH stage and generation
+                // into 0-byte stubs. `copy_output` copies into a temp sibling and
                 // renames, so the destination is never opened with `O_TRUNC`
                 // and a cloud-evicted `site_path` cannot force materialization
                 // (ADR-043).

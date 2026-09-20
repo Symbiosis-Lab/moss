@@ -1220,7 +1220,7 @@ fn build_inner(
     );
 
     // Step 2: Ensure staging directory exists (persistent across rebuilds)
-    // We keep site-stage/ between rebuilds so that mtime+size checks can skip
+    // We keep staging/ between rebuilds so that mtime+size checks can skip
     // unchanged binary assets (videos, images) — avoids re-reading/writing 1GB+.
     //
     // `create_output_dir_all`, not `fs::create_dir_all`: on a cloud-synced vault
@@ -1567,8 +1567,8 @@ fn build_inner(
         // reached this line. See `ports::LivePortResolver` (moss#1061).
         send_progress(progress_sender, "complete", &crate::infra::app_advisory::t("build_complete"), 100, true, preview_port(), Some(is_empty));
 
-        // Server stays on site-stage/ (step 5) — no switch back to site/.
-        // site-stage/ has data-source-line annotations for editor↔preview scroll sync.
+        // The preview rests on staging/ after step 5: its HTML has the data-source-line
+        // annotations scroll sync needs, which the clean HTML under `current` lacks.
 
         // Emit 'initial-build-complete' with the directory actually being
         // served — staging normally, the sealed generation when this build was

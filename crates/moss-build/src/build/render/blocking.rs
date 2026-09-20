@@ -279,8 +279,8 @@ pub fn generate_blocking_content(
     // `pending` is pre-seeded with previous_hashes by the caller (PendingManifest::new).
     // Pattern A artifact registrations route through:
     //   BuildContext::for_render(output_dir, pending).emit(&ServedPath::from_source(&rel_path), bytes, HashBucket::Files)
-    // Pattern D (OG cards, Sites 4/14b) use BuildContext::emit_existing (file written by
-    //   generate_html_collect_og; we read bytes from disk and register without re-writing).
+    // Pattern D (OG cards, Sites 4/14b) register from the receipt the render returns
+    //   (`CardOutput::register`): the file is already written, so nothing is re-written.
     //
     // Pattern E (SVG video placeholder) was removed in #615; in the PREVIEW the
     // blueprint placeholder (`frontend/bridge/asset-placeholder.ts`, injected by
@@ -2730,7 +2730,7 @@ pub fn generate_blocking_content(
     // separate lists per category.
     //
     // blocking_keys is now accumulated in `pending` incrementally (via ctx.emit and
-    // ctx.emit_existing). No separate tracking needed.
+    // `CardOutput::register`). No separate tracking needed.
     //
     // Carry-forward of previous_hashes.files is implicit: PendingManifest was seeded
     // with previous_hashes (via PendingManifest::new in the caller). Blocking-phase

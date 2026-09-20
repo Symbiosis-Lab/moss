@@ -50,8 +50,9 @@ pub struct BackgroundContext {
     /// Source folder path (for resolving relative video paths)
     pub source_path: String,
     /// Staging directory where blocking phase builds output.
-    /// During rebuilds: site-stage/ (temporary staging)
-    /// During first build: site/ (no staging needed)
+    /// In a real build, `.moss/build/staging/` (`MossPaths::staging_dir`); it
+    /// persists between rebuilds, and the generation is derived from it after
+    /// the seal.
     pub staging_dir: std::path::PathBuf,
     /// .moss directory for cache paths
     pub moss_dir: std::path::PathBuf,

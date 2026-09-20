@@ -92,25 +92,27 @@ impl std::fmt::Debug for ServerState {
 ///
 /// ## Zero-Flicker Preview Pattern
 ///
-/// The problem: During rebuilds, we need to swap the site directory. The naive
+/// The problem: During rebuilds, we need to swap the served directory. The naive
 /// approach of renaming directories has a gap where the directory doesn't exist:
 /// ```text
-/// fs::rename(site, site-old)  // site/ is GONE
-/// fs::rename(site-new, site)  // site/ is back
+/// fs::rename(dir, dir-old)  // dir/ is GONE
+/// fs::rename(dir-new, dir)  // dir/ is back
 /// // ^ During this gap, incoming requests get 404 → preview flickers
 /// ```
 ///
-/// The solution: Use a staging directory and dynamically switch the server's pointer:
+/// The solution: build into a persistent staging directory and switch the
+/// server's pointer between directories that always exist:
 /// ```text
-/// 1. Build to site-stage/           (server still serves site/)
-/// 2. Switch pointer to site-stage/  (instant, atomic - preview shows new content)
-/// 3. Copy site-stage/ → site/       (canonical directory updated for deployment)
-/// 4. Switch pointer back to site/   (instant, atomic)
-/// 5. Delete site-stage/             (cleanup)
+/// 1. Build to staging/              (the server keeps serving what it served)
+/// 2. Switch pointer to staging/     (instant, atomic - preview shows new content)
+/// 3. Seal, then materialize generations/<id>/ from the sealed manifest
+/// 4. Swap the `current` symlink     (deploy reads it; the pointer stays on staging/)
 /// ```
 ///
-/// This keeps `/site` as the single source of truth for deployment (git-tracked)
-/// while ensuring the preview never shows 404s or blank pages.
+/// Deploy reads `current`, an immutable generation, so it never sees a half-built
+/// tree, and the preview never shows 404s or blank pages. There is no `site/`
+/// directory. See the `build::pipeline` module doc for the full sequence and
+/// `build::lifecycle` for when the pointer returns to `current`.
 ///
 /// ## Why RwLock?
 ///
@@ -121,7 +123,7 @@ impl std::fmt::Debug for ServerState {
 #[derive(Debug)]
 pub struct SiteDirectoryState {
     /// Current directory the server should serve files from.
-    /// Updated atomically during rebuilds to switch between staging and site.
+    /// Updated atomically during rebuilds to switch between staging and `current`.
     pub current_dir: std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>,
 }
 

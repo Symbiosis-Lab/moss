@@ -476,12 +476,12 @@ impl AsRef<std::path::Path> for ServedPath {
 // module depends on neither. `ship` re-exports both names, and keeps
 // `apply_transform`, the byte rewrite the enum selects.
 
-/// How a file should be transformed during the stage→site ship pass.
+/// How a file should be transformed when the ship pass writes it into a generation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ShipTransform {
     /// Copy the file byte-for-byte. Used for all non-HTML artifacts.
     CopyAsIs,
-    /// Strip preview-only source-annotation attributes before writing to site.
+    /// Strip preview-only source-annotation attributes before writing to the generation.
     /// Used for `.html` / `.htm` files.
     StripPreviewAttrs,
 }

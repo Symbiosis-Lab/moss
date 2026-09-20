@@ -3,13 +3,14 @@
 //! [`BuildContext`] pairs the write destination with the manifest registration
 //! it implies, so an artifact cannot reach disk without reaching the manifest.
 //!
-//! # Stage and site directories
+//! # Staging and generations
 //!
-//! Every context writes to stage and only to stage; `ship_phase` mirrors
-//! stage→site once, at the end of the blocking phase. A dual-write constructor
-//! (`for_deferred`, per-emit inline `ship_one`) existed alongside these and was
-//! never called by anything but its own tests — deleted with `DeferredWork`
-//! (moss#618), along with the `site_dir` field that only it ever set.
+//! Every context writes to stage and only to stage; `ship_phase` derives the
+//! generation from the sealed manifest once, after the seal. A dual-write
+//! constructor (`for_deferred`, per-emit inline `ship_one`) existed alongside
+//! these and was never called by anything but its own tests — deleted with
+//! `DeferredWork` (moss#618), along with the `site_dir` field that only it ever
+//! set.
 //!
 //! There was a second sink — a `Channel` variant that sent registrations to the
 //! coordinator for the background phase. Its only constructor

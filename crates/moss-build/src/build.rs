@@ -12,9 +12,9 @@
 //! - `watch` - File watching for live development mode
 //! - `render` - Pure static site generation (no Tauri dependencies)
 //!
-//! # Build directory model: stage and site
+//! # Build directory model: staging and generations
 //!
-//! moss writes every build to two directories:
+//! There is no `site/` directory. Every build writes to two directories:
 //!
 //! - `stage_dir/` (`.moss/build/staging/`) — writer surface + at-rest reader.
 //!   All emits write here. HTML carries preview-only annotations
@@ -30,10 +30,10 @@
 //!
 //! The bridge between them is the **ship** operation:
 //!
-//! - **Phase ship** (`ship_phase` in `build/ship.rs`): once at the end of the
-//!   blocking phase, mirroring everything emitted so far from stage to site.
-//!   Produces the "frozen good build" that the next rebuild's preview-fallback
-//!   switch reads. Replaces the former `copy_dir_all + sync_dir` pair.
+//! - **Ship** (`ship_phase` in `build/ship.rs`): once per build, after the
+//!   manifest is sealed. Writes each sealed entry into a new generation (from
+//!   held bytes or the CAS blob, else the staged file) and repoints `current`
+//!   at it — the "frozen good build" the next rebuild's preview parks on.
 //!
 //! Ship is parameterized by extension-keyed transform (`ship::transform_for`):
 //! HTML gets `StripPreviewAttrs`; everything else gets `CopyAsIs`. Adding a
@@ -54,15 +54,15 @@
 //!   `seal()` enforces the `blocking_keys ⊆ (files ∪ image_outputs)` invariant
 //!   at one point (closes #552).
 //! - `manifest::HashBucket` — disambiguates registration buckets.
-//! - `context::BuildContext` — emit handle. `for_render` (blocking phase,
-//!   direct manifest) and `for_deferred_stage_only` (background phase,
-//!   coordinator channel). Both write to stage only; `ship_phase` mirrors at
-//!   the blocking-phase boundary.
+//! - `context::BuildContext` — the blocking phase's emit handle (`for_render`:
+//!   writes to stage, registers in the pending manifest). Background workers
+//!   register through the coordinator's channel (`coordinator::EmitMessage`)
+//!   instead. Neither writes to a generation.
 //! - `coordinator::ManifestCoordinator` — single-writer drain of background
 //!   emits. Channel close = materialization barrier → seal.
 //! - `background::BackgroundHandle` — JoinSet wrapper. `await_completion`
 //!   joins all workers, awaits coordinator, returns `SealedManifest`.
-//! - `ship::ship_phase` — produces the site/ derivative.
+//! - `ship::ship_phase` — writes the generation from the sealed manifest.
 //!
 //! See `docs/archive/2026-05-03-generated-artifact-plan.md` for the refactor's
 //! issue context (#524 single emit API, #552 seal invariant) and the audit
