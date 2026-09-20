@@ -1105,13 +1105,16 @@ void main(){
   o = vec4(uTint * (T - (1.0 - a)), a);
 }`;
 
-const sim = (() => {
+// One WebGL2 pigment engine per canvas: the page's main wash and the intro
+// title's own small wash are two instances of the same factory, sharing every
+// shader, constant and step. `rect` is a getter because the main instance's
+// print rectangle grows at runtime (dragged plates, scene 3 cards) while the
+// title's stays fixed to its own box.
+function makeSim({ canvas, texW, texH, rect }) {
   const gl = canvas.getContext('webgl2', { alpha: true, antialias: false, premultipliedAlpha: true, preserveDrawingBuffer: true });
   if (!gl || !gl.getExtension('EXT_color_buffer_float')) return null;
   const compile = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
-  // Phones display the wash at less than half its design size.
-  const gridDivisor = mobileLayout() ? 4 : 2;
-  const W = Math.round(BASE_TEX_W / gridDivisor), H = Math.round(BASE_TEX_H / gridDivisor);
+  const W = texW, H = texH;
   const tint = (() => { const c = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(); const n = parseInt(c.slice(1), 16); return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; })();
   // the texture units and constants every pass shares are set once, at link;
   // per step only the framebuffers, the state textures and the prints change
@@ -1238,11 +1241,12 @@ const sim = (() => {
     },
     // the display pass onto the canvas
     draw(fwd, cure, clearance = -.2) {
+      const r = rect();
       const dpr = Math.min(2, devicePixelRatio || 1);
-      const cw = Math.round(printW() * dpr), chh = Math.round(printH() * dpr);
+      const cw = Math.round(r.w * dpr), chh = Math.round(r.h * dpr);
       if (canvas.width !== cw || canvas.height !== chh) { canvas.width = cw; canvas.height = chh; }
-      canvas.style.left = printRect.x + 'px'; canvas.style.top = printRect.y + 'px'; canvas.style.right = 'auto'; canvas.style.bottom = 'auto';
-      canvas.style.width = printW() + 'px'; canvas.style.height = printH() + 'px';
+      canvas.style.left = r.x + 'px'; canvas.style.top = r.y + 'px'; canvas.style.right = 'auto'; canvas.style.bottom = 'auto';
+      canvas.style.width = r.w + 'px'; canvas.style.height = r.h + 'px';
       gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cw, chh);
       common(show, fwd);
       bind(0, wT[wi]); bind(1, pT[pi][0]); bind(2, pT[pi][1]);
@@ -1251,7 +1255,11 @@ const sim = (() => {
       draw();
     },
   };
-})();
+}
+// Phones display the wash at less than half its design size. The page's own
+// canvas and print rectangle are today's exact values; only the factory above
+// is new.
+const sim = makeSim({ canvas, texW: Math.round(BASE_TEX_W / (mobileLayout() ? 4 : 2)), texH: Math.round(BASE_TEX_H / (mobileLayout() ? 4 : 2)), rect: () => printRect });
 // Wherever the cursor is, a scroll gesture moves the page and nothing else. The
 // editor and the preview are live documents with their own scroll containers,
 // so each frame has its own scrolling switched off and the browser chains the
