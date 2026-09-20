@@ -515,6 +515,45 @@ fn a_cold_pass_caches_a_record_that_matches_the_receipt_it_returned() {
     }
 }
 
+/// The record the cold pass wrote is one the next pass actually answers from.
+/// Reading it back (the test above) shows its fields are right; this shows the
+/// next pass takes them. A record filed where the lookup does not look, or whose
+/// blob and hash sit in each other's field, is refused as a miss, the page is
+/// injected again, and the output is byte-identical to a hit's — so nothing about
+/// the result can tell the two apart.
+///
+/// The blob the record names is overwritten with a marker, which a hit links into
+/// the stage and a miss (re-injecting from the render) never would. The record
+/// itself stays the pass's own, unlike the sentinel tests.
+#[test]
+fn the_record_a_cold_pass_wrote_is_what_the_next_pass_ships() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let (objects, transforms) = slot_test_cache(cache_dir.path());
+    let render = "<html><head><!-- slot:head-end --></head><body></body></html>";
+    let page = dir.path().join("index.html");
+    std::fs::write(&page, render).unwrap();
+    let slots = head_end_slots("<style>h1{}</style>");
+    let run = || {
+        inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms).unwrap()
+    };
+
+    let cold = run();
+    let oid = cold[0].content_oid.clone().expect("an injected page gets a blob");
+    // The next build renders the page afresh: markers back in the stage.
+    std::fs::write(&page, render).unwrap();
+    std::fs::write(objects.get_path(&oid).unwrap(), "PLANTED IN THE BLOB").unwrap();
+
+    let warm = run();
+
+    assert_eq!(
+        std::fs::read_to_string(&page).unwrap(),
+        "PLANTED IN THE BLOB",
+        "a hit links the cached blob into the stage; a miss would have injected the render again"
+    );
+    assert_eq!(warm, cold, "and reports the receipt the cold pass returned");
+}
+
 /// Slot content with 8 keys in every map, nested ones included. `ResolvedSlots`
 /// is rebuilt from scratch each build and its `HashMap`s iterate in a per-instance
 /// random order; with 8 keys (40320 orderings) two constructions differ in order
