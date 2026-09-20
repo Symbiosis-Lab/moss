@@ -2456,6 +2456,39 @@ pub(crate) mod tests {
         assert_eq!(spawner.captured_count(), 0, "the run delivered this source: nothing to queue");
     }
 
+    /// A video that leaves the site loses the fingerprint a run recorded for it: every
+    /// dispatch prunes the records to the current set. Kept, it would vouch for the video
+    /// when it returns — its outputs are still in staging, its size and second still
+    /// match — though nothing watched the file while it was gone, and the store would
+    /// hold a record for every video any folder ever had. So a video that left and came
+    /// back is queued as the new video it is, and one that stayed is carried forward.
+    #[tokio::test]
+    async fn a_video_that_left_the_site_and_came_back_is_queued_again_and_one_that_stayed_is_not() {
+        use moss_core::asset_paths;
+
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+        let mut svc = BuildServices::headless();
+
+        let (clip, other) = ("videos/clip.mov".to_string(), "videos/other.mov".to_string());
+        stage_and_prime_video(&svc, &vault, &staging, &clip, b"clip bytes", false);
+        stage_and_prime_video(&svc, &vault, &staging, &other, b"other bytes", false);
+
+        let (_, spawner) =
+            dispatch_with_controlled_spawner(&mut svc, &vault, &staging, &moss_dir, vec![other.clone()]).await;
+        assert_eq!(spawner.captured_count(), 0, "premise: the video that stayed is unchanged, so nothing is queued");
+
+        let (_, spawner) =
+            dispatch_with_controlled_spawner(&mut svc, &vault, &staging, &moss_dir, vec![clip.clone(), other.clone()]).await;
+
+        assert_eq!(spawner.captured_count(), 1, "the video that came back was carried forward on its old record");
+        let queued = svc.cancellation.protected_outputs();
+        assert!(queued.contains(&asset_paths::to_mp4(&clip)), "the video that came back is what the run converts");
+        assert!(!queued.contains(&asset_paths::to_mp4(&other)), "the video that stayed was queued again");
+    }
+
     /// A staged output that cannot be checked is neither present nor missing.
     /// Dispatching it would re-encode a video whose bytes may be fine, and
     /// carrying it forward would register bytes nobody read — so the dispatch

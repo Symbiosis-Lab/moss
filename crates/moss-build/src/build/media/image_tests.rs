@@ -5073,20 +5073,33 @@ impl RewriteVault {
         crate::build::cache::FileStat::stamp_in_the_second_of(&self.pic(), before.modified().unwrap());
     }
 
+    /// A second (or third) image beside `pic.png`.
+    fn write_named(&self, name: &str, rgb: [u8; 3]) {
+        image::RgbImage::from_pixel(24, 24, Rgb(rgb)).save(self.root.join(name)).unwrap();
+    }
+
     /// What the blocking phase hands the worker: the images that need encoding, by the
     /// index the last worker persisted.
     fn collect(&self) -> Vec<ImageConversionItem> {
+        self.collect_of(&["pic.png"])
+    }
+
+    /// [`collect`](Self::collect) for a vault whose images are `names`.
+    fn collect_of(&self, names: &[&str]) -> Vec<ImageConversionItem> {
         let paths = MossPaths::from_moss_dir(self.moss_dir.clone());
         let structure = crate::types::content::ProjectStructure {
             root_path: self.root.to_string_lossy().to_string(),
             markdown_files: vec![],
             html_files: vec![],
-            image_files: vec![MediaMetadata {
-                path: "pic.png".to_string(),
-                file_type: "png".to_string(),
-                size: fs::metadata(self.pic()).unwrap().len(),
-                ..Default::default()
-            }],
+            image_files: names
+                .iter()
+                .map(|name| MediaMetadata {
+                    path: name.to_string(),
+                    file_type: "png".to_string(),
+                    size: fs::metadata(self.root.join(name)).unwrap().len(),
+                    ..Default::default()
+                })
+                .collect(),
             video_files: vec![],
             notebook_files: vec![],
             other_files: vec![],
@@ -5146,6 +5159,25 @@ impl RewriteVault {
     async fn rebuild(&self, with_fingerprint_gate: bool) {
         let services = if with_fingerprint_gate { Self::app_services() } else { BuildServices::headless() };
         self.dispatch(self.collect(), services).await;
+    }
+
+    /// One rebuild of the image side, as the desktop app runs it, with the manifest it
+    /// registered read back. A variant its worker delivered carries the oid of its bytes
+    /// (`staged_oid`); one the dispatch carried forward is registered without one.
+    async fn sealed_rebuild(&self, names: &[&str]) -> crate::build::manifest::SealedManifest {
+        use crate::build::coordinator::test_utils;
+
+        let (tx, rx) = test_utils::build_test_coordinator();
+        let ctx = BackgroundContext {
+            image_items: self.collect_of(names),
+            source_path: self.root.to_string_lossy().to_string(),
+            staging_dir: self.moss_dir.join("build/staging"),
+            moss_dir: self.moss_dir.clone(),
+            ..BackgroundContext::for_test()
+        };
+        let services = Self::app_services();
+        tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, Some(tx))).await.unwrap();
+        test_utils::drain_into_sealed(rx, SiteHashes::default()).await
     }
 }
 
@@ -5220,25 +5252,12 @@ async fn a_source_changed_under_a_worker_that_left_is_encoded_by_the_next_build(
 /// delivery has one) instead of dispatching it again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_image_a_worker_delivered_is_carried_forward_by_the_next_build() {
-    use crate::build::coordinator::test_utils;
-
     let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
     let mut oids = Vec::new();
     for _ in 0..2 {
-        let (tx, rx) = test_utils::build_test_coordinator();
-        let ctx = BackgroundContext {
-            image_items: vault.collect(),
-            source_path: vault.root.to_string_lossy().to_string(),
-            staging_dir: vault.moss_dir.join("build/staging"),
-            moss_dir: vault.moss_dir.clone(),
-            ..BackgroundContext::for_test()
-        };
-        let services = RewriteVault::app_services();
-        tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, Some(tx))).await.unwrap();
-        let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
-        oids.push(sealed.staged_oid("pic.webp").map(str::to_string));
+        oids.push(vault.sealed_rebuild(&["pic.png"]).await.staged_oid("pic.webp").map(str::to_string));
     }
 
     assert!(oids[0].is_some(), "premise: the first build's worker delivered the variant");
@@ -5258,6 +5277,98 @@ async fn a_source_changed_under_a_worker_that_deferred_it_to_the_cloud_is_encode
         (RewriteVault::app_services(), Some(crate::build::icloud::pretend::evicted(&vault.pic())))
     })
     .await;
+}
+
+/// The third exit that leaves the old variant: the worker gets to the image and cannot
+/// read it, so its hash fails. It ships nothing and retracts its promises, and has not
+/// vouched for the source either. Only a source this process cannot read reaches the
+/// exit, hence a `0o000` file, and nothing to test as root, which reads it anyway.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_changed_under_a_worker_whose_hash_failed_is_encoded_by_the_next_build() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.rebuild(true).await;
+    let first = vault.webp();
+
+    vault.rewrite_in_the_same_second([30, 30, 200]);
+    let items = vault.collect();
+    fs::set_permissions(vault.pic(), fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::File::open(vault.pic()).is_ok() {
+        fs::set_permissions(vault.pic(), fs::Permissions::from_mode(0o644)).unwrap();
+        eprintln!("skipped: this process can read a 0o000 file (running as root?)");
+        return;
+    }
+    vault.dispatch(items, RewriteVault::app_services()).await;
+    fs::set_permissions(vault.pic(), fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(vault.webp(), first, "premise: the worker that could not read the source encoded nothing");
+
+    vault.rebuild(true).await;
+
+    assert_ne!(vault.webp(), first, "pic.png is blue on disk but its variant is still the red encode: the gate skipped it");
+}
+
+/// The blocking phase leaves the oid of an image it has not seen to the worker, and the
+/// worker asks the persisted index before it reads the file: a source whose stat the index
+/// still holds costs no read. The index here holds a hash that is not the file's own, so a
+/// worker that hashes the file instead of asking is visible: the encode's record is keyed
+/// by the hash it used. A record for another instant of the file is not this file's, and
+/// is the control — that one is hashed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_worker_takes_the_hash_the_index_holds_for_an_unchanged_file_instead_of_reading_it() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let paths = MossPaths::from_moss_dir(vault.moss_dir.clone());
+    let transforms = crate::build::cache::TransformCache::new(
+        paths.cache_transforms(),
+        crate::build::cache::ObjectStore::new(paths.cache_objects()),
+    );
+    let real = crate::build::cache::ObjectStore::hash_file(&vault.pic()).unwrap();
+    let stat = crate::build::cache::FileStat::of(&fs::metadata(vault.pic()).unwrap());
+
+    let items = vault.collect();
+    assert!(items[0].source_oid.is_empty(), "premise: the blocking phase left the hash to the worker");
+    for (recorded_at, trusted) in [(stat, true), (crate::build::cache::FileStat { size: stat.size + 1, ..stat }, false)] {
+        let planted = if trusted { "ab".repeat(32) } else { "cd".repeat(32) };
+        let mut index = crate::build::cache::HashIndex::new();
+        index.update("pic.png".to_string(), &recorded_at, planted.clone());
+        index.save(&paths.cache_hash_index()).unwrap();
+
+        vault.dispatch(items.clone(), BuildServices::headless()).await;
+
+        assert_eq!(transforms.get(&planted).is_some(), trusted, "trusted={trusted}: the worker's hash came from the wrong place");
+        assert!(transforms.get(&real).is_some() != trusted, "trusted={trusted}: the file's own hash is used exactly when the index cannot vouch");
+    }
+}
+
+/// A path that leaves the image set loses the fingerprint a worker recorded for it: every
+/// dispatch prunes the record to the current set. Kept, it would vouch for the path when it
+/// returns on a stat record made while nothing was watching the file, and — being
+/// process-wide — grow with every path any folder ever held. So an image that left and came
+/// back byte for byte is encoded as the new image it is, while one that stayed is carried.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_that_left_the_site_and_came_back_is_encoded_again_and_one_that_stayed_is_not() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.write_named("other.png", [30, 200, 30]);
+
+    let first = vault.sealed_rebuild(&["pic.png", "other.png"]).await;
+    assert!(
+        first.staged_oid("pic.webp").is_some() && first.staged_oid("other.webp").is_some(),
+        "premise: the first build's worker delivered both"
+    );
+    let without = vault.sealed_rebuild(&["other.png"]).await;
+    assert_eq!(without.staged_oid("other.webp"), None, "premise: other.png is unchanged, so it is carried forward");
+
+    let back = vault.sealed_rebuild(&["pic.png", "other.png"]).await;
+
+    assert!(back.staged_oid("pic.webp").is_some(), "pic.png left the site and came back, and was vouched for by its old record");
+    assert_eq!(back.staged_oid("other.webp"), None, "other.png never left, and was dispatched again");
 }
 
 /// Self-heal relinks a cached output by the source's oid. A same-size rewrite in the

@@ -1681,6 +1681,33 @@ fn an_evicted_image_never_has_a_non_answer_cached_under_its_hash() {
     );
 }
 
+/// A preview scan reads an image's dimensions and caches them under a key made of its
+/// path, size and mtime. An evicted source cannot answer, its arrival preserves size and
+/// mtime, and so the key would serve a non-answer for as long as the file stays the
+/// same. The evicted image is read here (the seam marks it, it does not stop the read),
+/// so what the guard keeps out of the cache is a real answer and the control is the
+/// same scan of the image once it is on disk.
+#[test]
+fn a_preview_scan_caches_nothing_under_the_stat_key_of_an_evicted_image() {
+    let fx = ScanFixture::new("evicted_stat_key");
+    let stat = FileStat::of(&fs::metadata(&fx.png).unwrap());
+    let key = image_meta_stat_key("photo.png", stat.size, stat.mtime);
+
+    let cloud = crate::build::icloud::pretend::evicted(&fx.png);
+    fx.scan(&stat, &HashIndex::new(), &mut HashIndex::new(), true);
+    assert!(
+        read_cached_meta(&fx.transforms, &fx.objects, &key).is_none(),
+        "the scan cached what it read of an evicted image under its stat key"
+    );
+
+    drop(cloud);
+    fx.scan(&stat, &HashIndex::new(), &mut HashIndex::new(), true);
+    assert!(
+        read_cached_meta(&fx.transforms, &fx.objects, &key).is_some(),
+        "control: the same scan of an image on disk caches its dimensions under the stat key"
+    );
+}
+
 // =========================================================================
 // What the walk feeds the hash index: the file's whole stat record
 // =========================================================================
