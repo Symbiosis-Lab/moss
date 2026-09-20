@@ -947,7 +947,7 @@ void main(){
 const PIG = HEAD + `
 uniform sampler2D uW, uS, uD;
 uniform sampler2D uNear, uWhole;
-uniform float uTime, uCure, uLift, uAds, uMix, uMixG, uDrying, uStir, uRelift;
+uniform float uTime, uCure, uLift, uAds, uMix, uMixG, uDrying, uStir, uRelift, uLoad;
 layout(location=0) out vec4 oS; layout(location=1) out vec4 oD;
 vec4 S(vec2 t){ return texture(uS, t / uSize); }
 vec2 curlN(vec2 p){
@@ -1009,7 +1009,12 @@ void main(){
   vec3 Ao = absorb(texture(uSrcLo, vUv));
   // dissolution is faster where the film moves: flow thins the boundary layer
   float dl = wet * uLift * (1.0 + 2.0 * min(length(vel), 1.5) + uStir) * (1.0 - l) * (0.7 + 0.6 * pap.g);
-  dl = min(dl, 1.0 - l); l += dl; s += Ao * dl;
+  // uLoad is concentration released per unit dissolved, not the dissolving
+  // rate itself: 1.0 reproduces today's paint-strength ink exactly (the
+  // main wash never sets it), while a print with much less inked area than
+  // a paint wash (a title's bare strokes against a scene's own photos) can
+  // ask for a stronger dose from the same dl without dissolving any faster.
+  dl = min(dl, 1.0 - l); l += dl; s += Ao * dl * uLoad;
   // the sheet takes pigment where the next print is: uptake proportional to
   // what is in the liquid and to the capacity still free, per channel
   vec3 cap = absorb(texture(uTgtLo, vUv));
@@ -1097,7 +1102,7 @@ void main(){
 // shader, constant and step. `rect` is a getter because the main instance's
 // print rectangle grows at runtime (dragged plates, scene 3 cards) while the
 // title's stays fixed to its own box.
-function makeSim({ canvas, texW, texH, rect }) {
+function makeSim({ canvas, texW, texH, rect, load = 1 }) {
   const gl = canvas.getContext('webgl2', { alpha: true, antialias: false, premultipliedAlpha: true, preserveDrawingBuffer: true });
   if (!gl || !gl.getExtension('EXT_color_buffer_float')) return null;
   const compile = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
@@ -1217,6 +1222,7 @@ function makeSim({ canvas, texW, texH, rect }) {
       // the whole film is stirred by the drying current (and by the hand that scrolls), not before
       gl.uniform1f(pig.u.uMix, 0.06); gl.uniform1f(pig.u.uMixG, 0.005 + 0.025 * Math.max(drying, Math.min(1, stir)));
       gl.uniform1f(pig.u.uDrying, drying); gl.uniform1f(pig.u.uStir, stir); gl.uniform1f(pig.u.uRelift, relift);
+      gl.uniform1f(pig.u.uLoad, load);
       draw(); pi = 1 - pi;
     },
     // read one texel of the state, for the harness: [h,u,v,sat], s.rgb, [d.rgb,l]
@@ -2633,7 +2639,16 @@ async function raster(nodes, w, h, srcDoc = document) {
   titleCanvas.style.cssText = 'position:fixed; left:0; top:0; pointer-events:none; display:none;';
   document.body.appendChild(titleCanvas);
   const gridW = Math.round(box.w / 2), gridH = Math.round(box.h / 2);
-  const titleSim = makeSim({ canvas: titleCanvas, texW: gridW, texH: gridH, rect: () => box });
+  // A title's strokes cover a small fraction of its own box next to a
+  // scene's photos and screenshots, so the same paint-strength release
+  // (load 1, what the main wash always uses) reads as a thin stain rather
+  // than ink bleeding. TITLE_LOAD raises how much suspended pigment each
+  // step's dissolution releases (concentration, not rate — l still grows at
+  // the same pace, so "completely gone" keeps its own timing); tuned against
+  // the main wash's own scene 0→1 transition (scripts/check-landing-intro-
+  // title.mjs's K1/K2, measured via __wash/__stepClock).
+  const TITLE_LOAD = 12;
+  const titleSim = makeSim({ canvas: titleCanvas, texW: gridW, texH: gridH, rect: () => box, load: TITLE_LOAD });
   if (!titleSim) { titleCanvas.remove(); fallbackFade(); return; }
   let broken = false;
   const fallBack = () => { broken = true; titleCanvas.style.display = 'none'; fallbackFade(); };
@@ -2648,38 +2663,64 @@ async function raster(nodes, w, h, srcDoc = document) {
   // whose per-step rate is not bit-identical. drawImage's y-axis runs top
   // down; the print was uploaded with UNPACK_FLIP_Y_WEBGL, so the mask is
   // flipped to land in the same row order as the state grid's own readback.
-  let mask = null, maskTotal = 1;
+  let mask = null, maskTotal = 1, solidFrac = 0;
   const captureMask = (img) => {
     const c = document.createElement('canvas'); c.width = gridW; c.height = gridH;
     const g = c.getContext('2d'); g.translate(0, gridH); g.scale(1, -1); g.drawImage(img, 0, 0, gridW, gridH);
     const d = g.getImageData(0, 0, gridW, gridH).data;
     const m = new Float32Array(gridW * gridH);
-    let total = 0;
-    for (let i = 0, p = 0; i < d.length; i += 4, p++) { m[p] = d[i + 3] / 255; total += m[p]; }
-    mask = m; maskTotal = Math.max(1, total);
+    let total = 0, solid = 0;
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) { m[p] = d[i + 3] / 255; total += m[p]; if (m[p] > 0.5) solid++; }
+    mask = m; maskTotal = Math.max(1, total); solidFrac = solid / (gridW * gridH);
   };
   captureMask(print);
   window.__titleInk = () => {
     if (broken || getComputedStyle(titleCanvas).display === 'none') return Number(getComputedStyle(openingTitle).opacity);
     return titleSim.remaining(mask, maskTotal);
   };
+  // For the "reads as watercolor" check: how dark the darkest pixel is, and
+  // how far coverage (alpha > 0.1) has spread past the print's own solid
+  // glyph area — both read from the rendered canvas, not the sim's internal
+  // state, because this is specifically about what the reader sees.
+  window.__titleArea = () => {
+    if (broken || getComputedStyle(titleCanvas).display === 'none') return { peakAlpha: 0, coveredFrac: 0, solidFrac };
+    const c = document.createElement('canvas'); c.width = titleCanvas.width; c.height = titleCanvas.height;
+    const g = c.getContext('2d'); g.drawImage(titleCanvas, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    let peakAlpha = 0, covered = 0;
+    for (let i = 3; i < d.length; i += 4) { if (d[i] > peakAlpha) peakAlpha = d[i]; if (d[i] > 25.5) covered++; }
+    return { peakAlpha, coveredFrac: covered / (d.length / 4), solidFrac };
+  };
   const clock = { t: 0, drawn: -1 };
   let shownAs = 'solid';   // 'solid' | 'wash' | 'gone' — which of {h1, canvas} owns the pixels
-  const paint = (t) => titleSim.draw(true, smooth(T_CURE, T_TOTAL, t));
-  // A title is mostly bare page between thin strokes, so it carries far less
-  // ink than a scene's own photos and screenshots: measured against the same
-  // absorb() math, its rendered alpha is already most of the way to its own
-  // vanishing point by the time a photo-sized wash would still be arriving
-  // (T_TAKE, where pour() itself first lets the sheet start taking pigment).
-  // TITLE_SPLIT spends only this much of the scroll reaching T_TAKE — a
-  // fifth of pour()'s own SPLIT — so the rest of the scroll is spent where
-  // the ink is actually visibly leaving, not sitting nearly unchanged.
-  const TITLE_SPLIT = 0.15;
-  const titleGoal = (s) => s < TITLE_SPLIT ? T_TAKE * (s / TITLE_SPLIT) : T_TAKE + (T_TOTAL - T_TAKE) * ((s - TITLE_SPLIT) / (1 - TITLE_SPLIT));
+  // A later cure onset than the main wash's own T_CURE: only draw() reads
+  // this value (T_CURE/T_TOTAL/the step math stay the shared constants), so
+  // the bloom this releases stays suspended and visible longer before the
+  // display starts blending it toward the (blank) target.
+  const TITLE_CURE = T_CURE * 1.35;
+  const paint = (t) => titleSim.draw(true, smooth(TITLE_CURE, T_TOTAL, t));
+  // Three legs, so the bloom itself owns the middle half of the scroll
+  // rather than flashing in at the top: ONSET (0-20% of scroll) carries the
+  // clock only to TITLE_BLOOM_START — past the splash, T_SPLASH=0.2, but
+  // short of full saturation, so the reader sees ink arrive rather than pop
+  // in solid; HOLD (20-70%) barely advances the clock at all, so the bloom
+  // this releases (TITLE_LOAD, below) sits near its own peak for a long,
+  // legible stretch; LIFT (70-100%) carries T_CURE's own delayed stand-in
+  // (TITLE_CURE, above) through to T_TOTAL, where it is exactly gone.
+  const TITLE_ONSET_END = 0.2, TITLE_HOLD_END = 0.7;
+  const TITLE_BLOOM_START = 0.5, TITLE_BLOOM_END = TITLE_CURE;
+  const titleGoal = (s) => {
+    if (s < TITLE_ONSET_END) return TITLE_BLOOM_START * (s / TITLE_ONSET_END);
+    if (s < TITLE_HOLD_END) return TITLE_BLOOM_START + (TITLE_BLOOM_END - TITLE_BLOOM_START) * ((s - TITLE_ONSET_END) / (TITLE_HOLD_END - TITLE_ONSET_END));
+    return TITLE_BLOOM_END + (T_TOTAL - TITLE_BLOOM_END) * ((s - TITLE_HOLD_END) / (1 - TITLE_HOLD_END));
+  };
   titleDissolve = (titleP) => {
     if (broken) return;
     const goal = titleGoal(1 - clamp01(titleP));
-    const advanced = advanceMobilePigment(clock, goal, true, 0, 0, 0, paint, titleSim);
+    // A little agitation, the way a real hand's scroll stirs the main wash's
+    // own film — constant here because the title is a fixed clock, not a
+    // speed the reader sets — spreads the bloom past single stroke edges.
+    const advanced = advanceMobilePigment(clock, goal, true, 0.8, 0, 0, paint, titleSim);
     titleSteps += advanced.count;
     if (clock.t <= 0) {
       if (shownAs !== 'solid') { titleCanvas.style.display = 'none'; openingTitle.style.opacity = '1'; shownAs = 'solid'; }

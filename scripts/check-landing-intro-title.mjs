@@ -89,14 +89,34 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         // B: scrub to 25/50/75% of the way to scene 1's rest.
         const restY0 = await page.evaluate(() => window.__restY(0));
         const readings = [];
+        const areas = [];
         for (const frac of [0.25, 0.5, 0.75]) {
           await page.evaluate((y) => scrollTo(0, y), restY0 * frac);
           await waitTitleSettled(page);
           readings.push(await page.evaluate(measureTitle));
+          areas.push(await page.evaluate(() => window.__titleArea()));
         }
         assert(readings[0].ink < cold.ink, `${label}: B 25% did not dissolve at all: ${JSON.stringify(readings)}`);
         assert(readings[0].ink > readings[1].ink && readings[1].ink > readings[2].ink, `${label}: B ink did not strictly decrease: ${JSON.stringify(readings)}`);
         assert(readings[1].ink > 0 && readings[1].ink < 1, `${label}: B 50% is not strictly between solid and empty: ${JSON.stringify(readings[1])}`);
+
+        // G: reads as watercolor, not a faint stain, at 25% and 50%: peak
+        // alpha at least K1 and pigmented area (alpha > 0.1) at least K2x
+        // the print's own solid glyph area. K1=150 and K2=1.5 come from
+        // scripts/README.md-style measurement, not taste: driving the main
+        // wash scene 0->1 with __wash(1)/__stepClock and reading its own
+        // canvas found its darkest trough (the mid-transition smear, step
+        // ~160/252) at peak alpha 122-145 and area/source-inked-area ~0.31 —
+        // K1/K2 sit below that floor, and this title's own measured 25/50%
+        // values (chromium/webkit x en/zh-hans/zh-hant x both viewports)
+        // ranged peak alpha 254-255 and area/solid-glyph-area 2.27-18.
+        const K1 = 150, K2 = 1.5;
+        for (let i = 0; i < 2; i++) {
+          const a = areas[i];
+          const ratio = a.coveredFrac / a.solidFrac;
+          assert(a.peakAlpha >= K1, `${label}: G peak alpha ${a.peakAlpha} below K1=${K1} at ${[25, 50][i]}%: ${JSON.stringify(a)}`);
+          assert(ratio >= K2, `${label}: G pigmented area ${ratio.toFixed(2)}x solid glyph area, below K2=${K2} at ${[25, 50][i]}%: ${JSON.stringify(a)}`);
+        }
 
         // C: at rest on scene 1, completely gone.
         await page.evaluate((y) => scrollTo(0, y), restY0);
@@ -121,7 +141,7 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         const afterIdle = await page.evaluate(() => window.__state().titleSteps);
         assert(beforeIdle === afterIdle, `${label}: E steps increased at rest: ${beforeIdle} -> ${afterIdle}`);
 
-        console.log(`${label}: cold solid, scrub dissolves both ways, rest is completely gone, idle takes no steps`);
+        console.log(`${label}: cold solid, scrub dissolves both ways and reads as a bleed (not a stain), rest is completely gone, idle takes no steps`);
         await page.close();
       }
     }

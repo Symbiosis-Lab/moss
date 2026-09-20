@@ -35,5 +35,20 @@ for (const engine of [chromium, webkit]) {
       console.log(`${engine.name()}: ${javaScriptEnabled ? 'failed demo' : 'no JavaScript'} leaves copy and downloads readable`);
       await fallback.close();
     }
+    // A desktop failed boot never lets setupTitleDissolve past its own
+    // data-ready wait, so the title is never actually left mid-dissolve by
+    // it — but the ready().catch() reset exists as the sole safety net for
+    // that, so this pins the reset itself: force the h1 invisible (as a
+    // dissolve in flight would leave it) right as the boot is failing, and
+    // require the catch path to put it back.
+    const desktop = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await desktop.route('**/ui/editor.html*', route => route.abort());
+    await desktop.goto(url);
+    await desktop.evaluate(() => { const h1 = document.querySelector('#intro h1'); if (h1) h1.style.opacity = '0'; });
+    await desktop.waitForSelector('html[data-static="1"]', { timeout: 15000 });
+    const h1Opacity = await desktop.evaluate(() => getComputedStyle(document.querySelector('#intro h1')).opacity);
+    if (h1Opacity !== '1') throw Error(`Desktop failed boot left the title at opacity ${h1Opacity}`);
+    console.log(`${engine.name()}: desktop failed boot restores the title to visible`);
+    await desktop.close();
   } finally { await browser.close(); }
 }
