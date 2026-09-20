@@ -2017,6 +2017,14 @@ fn format_probe_cache_ignores_empty_source_oid() {
 
 /// The image fingerprint cell is one process-global, so a test that expects
 /// its own value back must not run beside another test that writes it.
+///
+/// That includes every test that runs `dispatch_image_conversions` with a
+/// spawner (the GUI branch), whether or not it reads a value back: the branch
+/// ends by pruning the cell to its own image set
+/// (`retain_image_item_fingerprints`), which drops the entries a concurrent
+/// test primed a moment ago. Two such tests took no lock, and
+/// `a_new_image_only_dispatches_the_new_one…` then found one.jpg and two.jpg
+/// re-dispatched in 3 of 12 runs of this module.
 fn image_fingerprint_test_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
@@ -4408,6 +4416,7 @@ impl crate::build::ports::spawner::Spawner for OidTestInlineSpawner {
 async fn ship_phase_ships_a_freshly_encoded_webp_from_cas_despite_stage_overwrite() {
     use crate::build::coordinator::test_utils;
 
+    let _guard = image_fingerprint_test_lock().lock();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     make_big_jpeg(&root.join("photo.jpg"), 400, 300);
@@ -4488,6 +4497,7 @@ async fn ship_phase_ships_a_freshly_encoded_webp_from_cas_despite_stage_overwrit
 async fn run_image_conversion_always_records_a_staged_oid_for_base_and_rungs() {
     use crate::build::coordinator::test_utils;
 
+    let _guard = image_fingerprint_test_lock().lock();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     // 1000×750 lands one ladder rung (w800): deployed_width(1000,750) = 1000,
