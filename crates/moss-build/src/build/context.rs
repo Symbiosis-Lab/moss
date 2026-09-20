@@ -69,16 +69,17 @@ impl<'a> BuildContext<'a> {
     /// copy whatever a later build has since written to the same stage path.
     ///
     /// Takes the buffer by value so the manifest can keep it without a copy.
-    /// Errors, without registering, for a path `ship_phase` transforms (HTML) —
-    /// see `register_held`. Use it for a file that every build rewrites under
-    /// one name and no CAS object backs; a content-named or config-only output
-    /// cannot diverge and gains nothing from being held.
+    /// Errors, without writing or registering, for a path `ship_phase`
+    /// transforms (HTML) — see `register_held`. Use it for a file that every
+    /// build rewrites under one name and no CAS object backs; a content-named
+    /// or config-only output cannot diverge and gains nothing from being held.
     pub fn emit_held(
         &mut self,
         rel_path: &crate::build::served_path::ServedPath,
         bytes: Vec<u8>,
         bucket: HashBucket,
     ) -> std::io::Result<()> {
+        PendingManifest::ensure_holdable(rel_path)?;
         write_at(self.output_dir, rel_path.as_str(), &bytes)?;
         self.manifest.register_held(rel_path, bytes, bucket)
     }
@@ -154,4 +155,59 @@ mod tests {
             .exists());
     }
 
+    /// A held output is written twice: the stage copy, which the live preview
+    /// serves from the moment it renders, and the manifest's own bytes, which
+    /// the generation ships. Losing the first 404s the preview on those files
+    /// until promotion; losing the second ships whatever the stage holds then.
+    #[test]
+    fn emit_held_writes_the_stage_copy_and_pins_the_bytes_the_manifest_hashed() {
+        use crate::build::served_path::ServedPath;
+        let outputs = [
+            (ServedPath::for_sitemap(), &b"<urlset/>"[..]),
+            (ServedPath::for_rss("").unwrap(), &b"<rss/>"[..]),
+            (ServedPath::for_llms_txt(), &b"everything"[..]),
+            // Two levels down: the stage directory does not exist yet.
+            (ServedPath::for_previews_manifest(), &b"{}"[..]),
+        ];
+        let dir = tempdir().unwrap();
+        let mut manifest = PendingManifest::new(SiteHashes::default());
+        let mut ctx = BuildContext::for_render(dir.path(), &mut manifest);
+        for (sp, bytes) in &outputs {
+            ctx.emit_held(sp, bytes.to_vec(), HashBucket::Files).unwrap();
+        }
+
+        let sealed = manifest.seal();
+        for (sp, bytes) in &outputs {
+            let key = sp.as_str();
+            let staged = std::fs::read(dir.path().join(key))
+                .unwrap_or_else(|e| panic!("{key}: no stage copy, so the live preview would 404 it: {e}"));
+            assert_eq!(staged, *bytes, "{key}: stage copy");
+            assert_eq!(sealed.held_bytes(key), Some(*bytes), "{key}: pinned bytes");
+            assert_eq!(
+                sealed.files().get(key),
+                Some(&crate::types::content::file_entry(&crate::build::assets::paths::compute_binary_hash(bytes))),
+                "{key}: the manifest hash is of exactly the pinned bytes"
+            );
+        }
+    }
+
+    /// `register_held` refuses a path `ship_phase` transforms, but by then the
+    /// stage file was already written: a refused path left a file no manifest
+    /// entry names. The refusal comes first.
+    #[test]
+    fn emit_held_refuses_a_transformed_path_before_writing_its_stage_file() {
+        for rel in ["index.html", "sub/legacy.htm"] {
+            let dir = tempdir().unwrap();
+            let mut manifest = PendingManifest::new(SiteHashes::default());
+            let sp = crate::build::served_path::ServedPath::from_source(rel).unwrap();
+
+            let err = BuildContext::for_render(dir.path(), &mut manifest)
+                .emit_held(&sp, b"<p data-source-line=\"1\">x</p>".to_vec(), HashBucket::Files)
+                .unwrap_err();
+
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{rel}");
+            assert!(!dir.path().join(rel).exists(), "{rel}: a refused path must leave no stage file");
+            assert!(manifest.seal().files().is_empty(), "{rel}: nor a manifest entry");
+        }
+    }
 }

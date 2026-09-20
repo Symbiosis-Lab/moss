@@ -135,6 +135,21 @@ impl ShipSource {
 }
 
 impl PendingManifest {
+    /// `Err(InvalidInput)` for a path `ship_phase` would transform, `Ok` for one
+    /// that can be held. Its own function so `BuildContext::emit_held` can refuse
+    /// BEFORE it writes the stage copy: a refusal after the write leaves a stage
+    /// file no manifest entry names. [`register_held`][Self::register_held]
+    /// asks it again, so registering directly cannot skip the guard.
+    pub(crate) fn ensure_holdable(rel_path: &ServedPath) -> std::io::Result<()> {
+        if transform_for(rel_path.as_str()) != ShipTransform::CopyAsIs {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{}: only a copied-as-is output can be held; ship rewrites this one", rel_path.as_str()),
+            ));
+        }
+        Ok(())
+    }
+
     /// [`register`][PendingManifest::register] `bytes` and keep them, so the
     /// generation ships THESE bytes rather than whatever the stage path holds
     /// when the seal tail gets to it. For the derived outputs a later build
@@ -164,12 +179,7 @@ impl PendingManifest {
         bytes: Vec<u8>,
         bucket: HashBucket,
     ) -> std::io::Result<()> {
-        if transform_for(rel_path.as_str()) != ShipTransform::CopyAsIs {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("{}: only a copied-as-is output can be held; ship rewrites this one", rel_path.as_str()),
-            ));
-        }
+        Self::ensure_holdable(rel_path)?;
         self.register(rel_path, &bytes, bucket);
         let held: usize = self.ship_sources.values().map(ShipSource::held_len).sum();
         if held + bytes.len() > HELD_BYTES_BUDGET {
