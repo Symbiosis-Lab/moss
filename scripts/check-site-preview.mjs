@@ -10,6 +10,7 @@ if (!input) {
 const base = new URL(input);
 const contract = JSON.parse(await readFile(new URL('./landing-routes.json', import.meta.url), 'utf8'));
 const landingRoutes = new Set(['/', '/zh-hans/', '/zh-hant/']);
+const landingLocale = { '/': 'en', '/zh-hans/': 'zh-hans', '/zh-hant/': 'zh-hant' };
 const routes = [...landingRoutes, ...contract.required];
 const failures = [];
 const assets = new Map();
@@ -40,6 +41,29 @@ for (const route of routes) {
   if (html === null) continue;
   if (/Directory listing for/i.test(html)) failures.push({ url: String(url), problem: 'Serving a directory listing instead of the site' });
   if (landingRoutes.has(route) && !html.includes('id="intro"')) failures.push({ url: String(url), problem: 'Custom landing homepage is missing' });
+  if (landingRoutes.has(route)) {
+    // The footer privacy link must be same-origin (so it works on any host, including staging)
+    // and must resolve to the page in the SAME language as the landing page it's linked from.
+    const footerNav = html.match(/<nav aria-label="[^"]*"[^>]*>[\s\S]*?<\/nav>/i)?.[0] ?? '';
+    const privacyHref = footerNav.match(/<a\b[^>]*\bhref="([^"]+)"/i)?.[1];
+    if (!privacyHref) {
+      failures.push({ url: String(url), problem: 'Footer privacy link not found' });
+    } else {
+      const privacyUrl = new URL(privacyHref.replaceAll('&amp;', '&'), url);
+      if (privacyUrl.origin !== base.origin) {
+        failures.push({ url: String(url), problem: `Footer privacy link is not same-origin: ${privacyHref}` });
+      } else {
+        const expectedLocale = landingLocale[route];
+        const privacyHtml = await read(privacyUrl, /text\/html/i);
+        if (privacyHtml !== null) {
+          const lang = privacyHtml.match(/<html\b[^>]*\blang="([^"]+)"/i)?.[1]?.toLowerCase();
+          if (lang !== expectedLocale) {
+            failures.push({ url: String(privacyUrl), problem: `Privacy page lang "${lang}" does not match the "${expectedLocale}" landing page linking to it (${url})` });
+          }
+        }
+      }
+    }
+  }
   const baseTag = html.match(/<base\b[^>]*>/i)?.[0];
   const assetBase = baseTag ? new URL(attr(baseTag, 'href') || '.', url) : url;
   let styles = 0;

@@ -49,6 +49,11 @@ function localize(sourceHtml, locale) {
   // install commands, or external destinations.
   const selectors = value => [...value.matchAll(/\b(?:class|id)="[^"]*"/g)].map(match => match[0]).sort();
   if (JSON.stringify(selectors(result)) !== JSON.stringify(selectors(sourceHtml))) throw new Error(`${locale} altered HTML selectors`);
+  // The footer privacy link is deliberately excluded from this invariant: it is same-origin
+  // (/privacy/, /zh-hans/privacy/, /zh-hant/privacy/ — see docs.privacy above) precisely so it
+  // resolves to the localized page on any host, so it must NOT stay byte-identical across
+  // locales. Its correctness is instead asserted by check-site-preview.mjs, which fetches the
+  // link from each landing route and checks the target page's <html lang> against the locale.
   const externals = value => [...value.replace(/<!-- landing-discovery:start -->[\s\S]*?<!-- landing-discovery:end -->/, '').matchAll(/(?:href|src)="https?:[^" ]+"/g)].map(match => match[0]).sort();
   if (JSON.stringify(externals(result)) !== JSON.stringify(externals(sourceHtml))) throw new Error(`${locale} altered external URLs`);
   const commands = value => [...value.matchAll(/<code>[^<]+<\/code>/g)].map(match => match[0]);

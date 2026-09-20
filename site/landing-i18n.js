@@ -16,7 +16,7 @@
     betaH:'Help shape moss.',betaB:'Receive occasional updates and try moss’s default hosting service for free.',email:'Your email',request:'Request access',footer:'Footer',privacy:'Privacy',github:'moss on GitHub',language:'Language',
     editorFrame:'moss editor',previewFrame:'moss preview',notebook:'Jupyter notebook: a continuous Mandelbrot zoom',sketch:'an HTML sketch',article:'the published video article',pause:'Pause',play:'Play',pauseAria:'Pause the loop',playAria:'Play the loop',
     copied:'Copied to clipboard.',selected:'Command selected. Press Command-C or Ctrl-C to copy.',sending:'Sending…',success:'Please confirm the email we just sent.',alreadySubscribed:"You're already subscribed.",offline:'Could not connect. Check your connection and try again.',error:'Something went wrong. Please try again.',
-    docs:{start:'/get-started/',editor:'/get-started/editor/',theme:'/get-started/design/',media:'/get-started/links/',plugin:'/get-started/extend/',privacy:'https://mosspub.com/privacy'}
+    docs:{start:'/get-started/',editor:'/get-started/editor/',theme:'/get-started/design/',media:'/get-started/links/',plugin:'/get-started/extend/',privacy:'/privacy/'}
   };
   const hans = {
     ...en,product:'青苔',title:'青苔 — 从你的文件夹，到你的网站',description:'青苔将你的文件夹发布为网站。在本地文件夹里写 Markdown，用任意云盘协作。',
@@ -26,7 +26,7 @@
     betaH:'一起打磨青苔',betaB:'接收偶尔一次的更新消息，以及免费试用青苔默认托管服务',email:'你的邮箱',request:'申请内测',footer:'页脚',privacy:'隐私',github:'在 GitHub 查看青苔',language:'语言',
     editorFrame:'青苔编辑器',previewFrame:'青苔预览',notebook:'Jupyter 笔记本：连续放大的曼德博集合',sketch:'HTML 作品',article:'已发布的视频文章',pause:'暂停',play:'播放',pauseAria:'暂停循环视频',playAria:'播放循环视频',
     copied:'已复制到剪贴板。',selected:'已选中命令。按 Command-C 或 Ctrl-C 复制。',sending:'正在发送…',success:'请确认刚刚收到的邮件。',alreadySubscribed:'你已订阅。',offline:'无法连接。请检查网络后重试。',error:'出现问题，请重试。',
-    docs:{start:'/zh-hans/开始使用/',editor:'/zh-hans/开始使用/editor/',theme:'/zh-hans/开始使用/design/',media:'/zh-hans/开始使用/links/',plugin:'/zh-hans/开始使用/extend/',privacy:'https://mosspub.com/privacy'}
+    docs:{start:'/zh-hans/开始使用/',editor:'/zh-hans/开始使用/editor/',theme:'/zh-hans/开始使用/design/',media:'/zh-hans/开始使用/links/',plugin:'/zh-hans/开始使用/extend/',privacy:'/zh-hans/privacy/'}
   };
   const hant = {
     ...en,product:'青苔',title:'青苔 — 從你的資料夾，到你的網站',description:'青苔將你的資料夾發布成網站。在本機資料夾裡寫 Markdown，用任何雲端硬碟協作。',
@@ -36,7 +36,7 @@
     betaH:'一起打磨青苔',betaB:'接收不定期的更新消息，並免費試用青苔的預設網站代管服務。',email:'你的電子郵件地址',request:'申請封閉測試',footer:'頁尾',privacy:'隱私權',github:'在 GitHub 查看青苔',language:'語言',
     editorFrame:'青苔編輯器',previewFrame:'青苔預覽',notebook:'Jupyter 筆記本：連續放大的曼德博集合',sketch:'HTML 作品',article:'已發布的影片文章',pause:'暫停',play:'播放',pauseAria:'暫停循環影片',playAria:'播放循環影片',
     copied:'已複製到剪貼簿。',selected:'已選取指令。按 Command-C 或 Ctrl-C 複製。',sending:'正在傳送…',success:'請確認剛寄出的信件。',alreadySubscribed:'你已訂閱。',offline:'無法連線。請檢查網路連線後再試一次。',error:'發生問題，請再試一次。',
-    docs:{start:'/zh-hant/開始使用/',editor:'/zh-hant/開始使用/editor/',theme:'/zh-hant/開始使用/design/',media:'/zh-hant/開始使用/links/',plugin:'/zh-hant/開始使用/extend/',privacy:'https://mosspub.com/privacy'}
+    docs:{start:'/zh-hant/開始使用/',editor:'/zh-hant/開始使用/editor/',theme:'/zh-hant/開始使用/design/',media:'/zh-hant/開始使用/links/',plugin:'/zh-hant/開始使用/extend/',privacy:'/zh-hant/privacy/'}
   };
   const catalogs={en,'zh-hans':hans,'zh-hant':hant};
   const t=(key)=>catalogs[window.__LANDING_LOCALE||initial]?.[key]??en[key]??key;
