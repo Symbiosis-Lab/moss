@@ -320,6 +320,34 @@ fn head_end_slots(html: &str) -> ResolvedSlots {
     slots
 }
 
+/// The two values the pass files a page's record under: the hash of the raw
+/// bytes the render left in the stage, and the params a hit is compared on.
+fn slot_cache_key(html: &str, page_path: &str, slots: &ResolvedSlots) -> (String, serde_json::Value) {
+    let source_oid = format!("xxh3:{}", crate::build::assets::paths::compute_binary_hash(html.as_bytes()));
+    let params = serde_json::json!({
+        "page_path": page_path,
+        "slots_hash": resolved_slots_hash(slots),
+        "ship_rev": crate::build::ship::SHIP_TRANSFORM_REV,
+    });
+    (source_oid, params)
+}
+
+/// The record a pass left in the cache for one page, found and read back the way
+/// the next pass finds it. `html` is the page as the render wrote it, before the
+/// pass touched it.
+fn cached_slot_record(
+    objects: &crate::build::cache::ObjectStore,
+    transforms: &crate::build::cache::TransformCache,
+    html: &str,
+    page_path: &str,
+    slots: &ResolvedSlots,
+) -> Option<SlotInjectRecord> {
+    let (source_oid, params) = slot_cache_key(html, page_path, slots);
+    transforms
+        .find_cached_output(&source_oid, SLOT_INJECT_TRANSFORM, &params)
+        .and_then(|record_oid| read_slot_inject_record(objects, &record_oid))
+}
+
 #[test]
 fn inject_slots_into_directory_cached_hit_matches_miss_output_byte_for_byte() {
     let src_dir_a = tempfile::tempdir().unwrap();
@@ -427,12 +455,7 @@ fn a_no_op_page_reports_its_receipt_cold_and_from_the_cache_warm() {
     );
     assert_eq!(std::fs::read_to_string(dir.path().join("index.html")).unwrap(), html, "and the page is untouched");
 
-    let source_oid = format!("xxh3:{}", crate::build::assets::paths::compute_binary_hash(html.as_bytes()));
-    let params = serde_json::json!({
-        "page_path": "index.html",
-        "slots_hash": resolved_slots_hash(&slots),
-        "ship_rev": crate::build::ship::SHIP_TRANSFORM_REV,
-    });
+    let (source_oid, params) = slot_cache_key(html, "index.html", &slots);
     write_slot_inject_record(
         &objects,
         &transforms,
@@ -451,6 +474,45 @@ fn a_no_op_page_reports_its_receipt_cold_and_from_the_cache_warm() {
     assert_eq!(warm.len(), 1);
     assert_eq!(warm[0].manifest_hash, "SENTINEL", "a hit must answer from the record, not rehash");
     assert_eq!(warm[0].content_oid.as_deref(), Some(oid.as_str()));
+}
+
+/// What a cold pass caches is what the next pass may answer from, so it has to
+/// say the same thing the pass just returned. Nothing else reads the record the
+/// pass itself wrote: the sentinel tests overwrite it before their warm run, and
+/// the byte-for-byte test gets the same output from a hit as from a miss. A pass
+/// that never wrote a record, or wrote its fields into the wrong slots (so every
+/// later hit is refused and the page silently re-injects), left them all green.
+///
+/// One page injection rewrites and one it leaves alone, since `rewritten` is the
+/// field that tells the arms apart.
+#[test]
+fn a_cold_pass_caches_a_record_that_matches_the_receipt_it_returned() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let (objects, transforms) = slot_test_cache(cache_dir.path());
+    let marked = "<html><head><!-- slot:head-end --></head><body></body></html>";
+    let plain = r#"<html><head></head><body><p data-source-line="2">no markers</p></body></html>"#;
+    std::fs::write(dir.path().join("marked.html"), marked).unwrap();
+    std::fs::write(dir.path().join("plain.html"), plain).unwrap();
+    let slots = head_end_slots("<style>h1{}</style>");
+
+    let receipts =
+        inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms).unwrap();
+
+    assert_eq!(receipts.len(), 2);
+    for (page, raw, injected) in [("marked.html", marked, true), ("plain.html", plain, false)] {
+        let receipt = receipts.iter().find(|r| r.page_path == page).expect("a receipt per page");
+        let record = cached_slot_record(&objects, &transforms, raw, page, &slots)
+            .unwrap_or_else(|| panic!("{page}: the pass returned a receipt but cached nothing to answer from"));
+        assert_eq!(
+            Some(&record.content_oid),
+            receipt.content_oid.as_ref(),
+            "{page}: the record must name the blob the receipt names"
+        );
+        assert_eq!(record.manifest_hash, receipt.manifest_hash, "{page}: and carry the hash the receipt carries");
+        assert_eq!(record.rewritten, injected, "{page}: `rewritten` says whether injection changed the bytes");
+        assert!(record.residual.is_empty(), "{page}: nothing was left unresolved");
+    }
 }
 
 /// Slot content with 8 keys in every map, nested ones included. `ResolvedSlots`
@@ -519,12 +581,7 @@ fn rebuilt_identical_slots_hit_the_injection_cache() {
     let cold =
         inject_slots_into_directory_cached(dir.path(), dir.path(), &first, &objects, &transforms).unwrap();
     let oid = cold[0].content_oid.clone().expect("a no-op page still gets a blob");
-    let source_oid = format!("xxh3:{}", crate::build::assets::paths::compute_binary_hash(html.as_bytes()));
-    let params = serde_json::json!({
-        "page_path": "index.html",
-        "slots_hash": resolved_slots_hash(&first),
-        "ship_rev": crate::build::ship::SHIP_TRANSFORM_REV,
-    });
+    let (source_oid, params) = slot_cache_key(html, "index.html", &first);
 
     for build in 1..=10 {
         write_slot_inject_record(
@@ -553,6 +610,11 @@ fn rebuilt_identical_slots_hit_the_injection_cache() {
 /// A record can outlive its blob (GC). A receipt naming a missing blob would
 /// hand `ship_phase` nothing to read, so the hit is refused and the page takes
 /// the miss path, which stores the bytes again.
+///
+/// The record is the one the pass wrote, and the test checks it is there and
+/// still readable once the blob is gone. Without a record the next pass misses
+/// and re-stores the blob whether or not the hit is refused, so the final
+/// assertions would hold for a pass that never cached anything.
 #[test]
 fn a_record_naming_a_collected_blob_is_a_miss_that_stores_it_again() {
     let dir = tempfile::tempdir().unwrap();
@@ -565,8 +627,15 @@ fn a_record_naming_a_collected_blob_is_a_miss_that_stores_it_again() {
     let cold =
         inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms).unwrap();
     let oid = cold[0].content_oid.clone().unwrap();
+    let cached = cached_slot_record(&objects, &transforms, html, "index.html", &slots)
+        .expect("fixture: the cold pass cached its page");
+    assert_eq!(cached.content_oid, oid, "fixture: the record names the blob about to be collected");
     std::fs::remove_file(objects.get_path(&oid).unwrap()).unwrap();
     assert!(objects.get_path(&oid).is_none(), "fixture: the blob is gone");
+    assert!(
+        cached_slot_record(&objects, &transforms, html, "index.html", &slots).is_some(),
+        "fixture: the record outlived it, so only the blob's absence can make the next pass miss"
+    );
 
     let warm =
         inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms).unwrap();
