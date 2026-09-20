@@ -6150,10 +6150,14 @@ article a:where(:not(.moss-btn)):focus {
 /* LINK-card inner text — cards are navigational, not inline text links, so
    strip the underline and use a subtle hover instead of the article link
    style. SCOPED to `[data-kind="link"]`: that attribute marks a cell whose
-   content IS a single link. It is emitted at exactly two sites — the post-pass
-   `render_link_card` (re-wraps the cell's original link, so a nested <a>
-   remains and this rule strips ITS underline) and the typed Block::LinkCard
-   (a clean anchor, no nested <a>). Both are card text, never prose.
+   content IS a single link, emitted at exactly one site — the typed
+   `Block::LinkCard` render arm. Its own body can still carry a descendant
+   <a>: a compound cell's caption can hold an ordinary link or a plain
+   wikilink reference (e.g. "Translated by [[Name]]"), and a wikilink embed
+   whose renderer falls back to a link, e.g. `![[file.pdf]]` →
+   `<object>…<a href="…">Download name</a></object>` — video/audio/3D embeds
+   resolve to a clean tag with no such fallback. This rule strips THEIR
+   underline too; it is card text, never prose.
    PROSE cells (`<div class="moss-grid-card">` with no data-kind — e.g. a bio
    paragraph with a `[CV](…)` link) are intentionally NOT matched, so their
    inline links keep the standard `article a` underline.

@@ -538,14 +538,12 @@ fn preview_markup(
         return None;
     }
     if !link.external() {
-        // Same reason, for the shape that reaches here carrying an image
-        // instead of a `Block::LinkCard`: the cell's own paragraph already
-        // links the image, so `render_link_card` would nest a second `<a>`
-        // around it.
-        if link.carries_image {
-            return None;
-        }
-        return Some(render_link_card(link.href, cell.inner()));
+        // Every cell that reaches here is non-whole-cell (a `leading_link`
+        // paragraph, never a `Block::LinkCard`), so its own `Inline::Link`
+        // already rendered an `<a>` around the cell's content. Wrapping that
+        // in a second one — what this branch used to do — nests anchors for
+        // any input it can receive, not just an image-carrying one.
+        return None;
     }
     let (title, favicon) = if link.wants_fetched_title() {
         // Auto mode: title and favicon come from cache. Missing metadata
@@ -581,19 +579,6 @@ fn grids_mut(plan: &mut BodyPlan) -> impl Iterator<Item = &mut GridEmission> {
         BodySegment::Grid(g) => Some(g),
         BodySegment::Html(_) => None,
     })
-}
-
-/// Wrap a cell's content in one big anchor.
-///
-/// The cell's own content goes inside verbatim; internal links get no metadata
-/// fetch.
-fn render_link_card(href: &str, cell_inner: &str) -> String {
-    use crate::build::media::cover::html_escape;
-    format!(
-        r#"<a href="{}" class="moss-grid-card" data-kind="link">{}</a>"#,
-        html_escape(href),
-        cell_inner,
-    )
 }
 
 // ── link → card resolution ─────────────────────────────────────────────

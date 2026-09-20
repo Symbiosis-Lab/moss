@@ -1508,10 +1508,11 @@ fn test_css_grid_card_link_no_underline() {
     // underline from their inner text: cards are navigational, not inline
     // text links. This is SCOPED to `[data-kind="link"]` so that PROSE
     // cells (`<div class="moss-grid-card">` with no data-kind, e.g. a bio
-    // paragraph containing a `[CV](…)` link) keep the standard `article a`
-    // underline. Internal link-cards (render_link_card) and Block::LinkCard
-    // both carry `data-kind="link"`, so their card affordance is preserved;
-    // external link-previews have no nested <a> and use `.link-preview`.
+    // paragraph containing a `[CV](…)` link, or a lone link cell with a
+    // separate caption) keep the standard `article a` underline. Only
+    // `Block::LinkCard` carries `data-kind="link"`, so its card affordance
+    // is preserved; external link-previews have no nested <a> and use
+    // `.link-preview`.
     let rule = get_css_rule(DEFAULT_CSS, ".moss-grid-card[data-kind=\"link\"] a")
         .expect(".moss-grid-card[data-kind=\"link\"] a CSS rule should exist");
     assert!(

@@ -657,14 +657,75 @@ fn a_cell_already_turned_into_a_card_is_not_reclassified() {
 }
 
 #[test]
-fn an_unresolved_internal_link_cell_becomes_a_link_card() {
+fn an_unresolved_internal_link_with_a_description_keeps_its_own_anchor() {
+    // Every cell that reaches `preview_markup`'s internal branch is a
+    // `leading_link` cell, whose own paragraph already rendered an `<a>` —
+    // wrapping it in a second one would nest anchors, so it is left exactly
+    // as the serializer rendered it.
     let docs: Vec<ParsedDocument> = vec![];
     let page = Page::new("index.html", &docs);
-    let html = both_passes(":::grid 1\n[Foo](/foo)\nA description.\n:::\n", &page, None);
-    assert!(html.contains(r#"data-kind="link""#), "got: {html}");
+    let md = ":::grid 1\n[Foo](/foo)\nA description.\n:::\n";
+    let html = both_passes(md, &page, None);
+    assert_eq!(
+        html,
+        plan_of(md).to_html(),
+        "left exactly as the serializer rendered it"
+    );
     assert!(!html.contains("link-preview"), "got: {html}");
-    // The cell's own content rides inside the anchor.
     assert!(html.contains("A description."), "got: {html}");
+    assert_eq!(
+        html.matches("<a ").count(),
+        1,
+        "exactly one anchor -- no nested wrapper: {html}"
+    );
+}
+
+#[test]
+fn an_unresolved_internal_text_link_with_a_caption_keeps_its_own_anchor() {
+    // The blank-line-separated-caption shape, unresolved: `cell.inner()`
+    // already has its own `<a>` from the link's own paragraph, so wrapping
+    // it again would nest anchors.
+    let docs: Vec<ParsedDocument> = vec![];
+    let page = Page::new("index.html", &docs);
+    let md =
+        ":::grid 1\n[Missing](missing.md)\n\nA caption paragraph under a text link.\n:::\n";
+    let html = both_passes(md, &page, None);
+    assert_eq!(
+        html,
+        plan_of(md).to_html(),
+        "left exactly as the serializer rendered it"
+    );
+    assert!(
+        html.contains("A caption paragraph under a text link."),
+        "got: {html}"
+    );
+    assert_eq!(
+        html.matches("<a ").count(),
+        1,
+        "exactly one anchor -- no nested wrapper: {html}"
+    );
+}
+
+#[test]
+fn no_cards_resolving_internal_text_link_with_a_caption_keeps_its_own_anchor() {
+    // `.no-cards` skips `apply_collection_cards`, but `apply_link_previews`
+    // runs unconditionally on every grid — it must not nest an anchor here
+    // either, whether or not the link resolves to a page in the build.
+    let docs = vec![make_doc("About", "about/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let md =
+        ":::grid 1 {.no-cards}\n[About](about/)\n\nA caption paragraph under a text link.\n:::\n";
+    let html = both_passes(md, &page, None);
+    assert_eq!(
+        html,
+        plan_of(md).to_html(),
+        "left exactly as the serializer rendered it"
+    );
+    assert_eq!(
+        html.matches("<a ").count(),
+        1,
+        "exactly one anchor -- no nested wrapper: {html}"
+    );
 }
 
 #[test]
