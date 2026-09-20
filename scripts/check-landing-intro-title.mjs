@@ -69,6 +69,31 @@ function correlation(a, b) {
   for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
   return dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
 }
+// H (phase1d): the "polka-dot brush" a judge saw was the splash drops' own
+// smoothstep(R, R*0.25, dist) falloff -- a clean circular ramp with a sharp
+// rim, painted eight times over bare glyph strokes. Proxy: outside the
+// glyph mask (where nothing should read as a deliberate shape at all), the
+// alpha>0.5 region's boundary pixels' own local gradient magnitude. A
+// disk's rim is one sharp step, so its boundary pixels average a high
+// gradient; a feathered, grain-broken edge is soft and ragged, so its
+// boundary pixels average a low one.
+function boundaryGradient(raw, mask) {
+  const { w, h, alpha } = raw;
+  const m = mask.mask;
+  const at = (x, y) => alpha[y * w + x];
+  const isFg = (x, y) => at(x, y) > 127.5;
+  let sum = 0, n = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      if (!isFg(x, y)) continue;
+      const boundary = !isFg(x + 1, y) || !isFg(x - 1, y) || !isFg(x, y + 1) || !isFg(x, y - 1);
+      if (!boundary || m[y * w + x] > 0.1) continue; // only outside the glyph mask - a disk rim shows there, not on the strokes themselves
+      const gx = at(x + 1, y) - at(x - 1, y), gy = at(x, y + 1) - at(x, y - 1);
+      sum += Math.sqrt(gx * gx + gy * gy) * 0.5; n++;
+    }
+  }
+  return n ? sum / n : 0;
+}
 
 // The step-clock harness (__stepClock/__stepLimit) belongs to the shared
 // pour() wash; the title's own driver runs off requestAnimationFrame, so
@@ -168,6 +193,23 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         const CORR_25 = 0.35; // measured 0.49-0.51 across engines/locales; margin below that floor
         assert(corr[0] >= CORR_25, `${label}: G not legible at 25% (correlation ${corr[0].toFixed(3)} below ${CORR_25})`);
         assert(corr[0] > corr[1] && corr[1] > corr[2], `${label}: G legibility did not strictly fall across 25/50/75%: ${JSON.stringify(corr.map((v) => +v.toFixed(4)))}`);
+
+        // H: no hard-edged disk anywhere outside the glyphs, at 50%.
+        // English only: the same measure taken on zh-hans/zh-hant read
+        // identically on the pre-fix (disk) build and the fixed one on both
+        // engines (the denser CJK strokes leave far fewer boundary pixels
+        // outside the mask, and what is left there did not move) -- it is
+        // not a reliable red/green signal for those locales, so this does
+        // not assert on them rather than assert something that cannot fail.
+        // BOUND=40 sits with real margin either side of what was measured
+        // driving this same check against the pre-fix commit (92d17f0):
+        // chromium 55.1, webkit 50.5, vs. this build's chromium 29.1,
+        // webkit 16.4.
+        if (!locale) {
+          const bg = boundaryGradient(pixels[1].raw, mask);
+          const BOUND = 40;
+          assert(bg < BOUND, `${label}: H a hard-edged disk shape remains outside the glyphs at 50% (boundary gradient ${bg.toFixed(1)}, bound ${BOUND})`);
+        }
 
         // C: at rest on scene 1, completely gone.
         await page.evaluate((y) => scrollTo(0, y), restY0);
