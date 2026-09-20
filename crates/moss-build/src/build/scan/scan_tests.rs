@@ -1525,11 +1525,30 @@ impl ScanFixture {
         }
     }
 
-    fn scan(&self, stat: &FileStat, old_index: &HashIndex, new_index: &mut HashIndex, defer_placeholders: bool) {
+    fn scan(
+        &self,
+        stat: &FileStat,
+        old_index: &HashIndex,
+        new_index: &mut HashIndex,
+        defer_placeholders: bool,
+    ) -> MediaMetadata {
         extract_media_metadata_cached(
             &self.png, "photo.png", "png", stat, None, None, old_index, new_index, &self.objects, &self.transforms, None,
             defer_placeholders,
-        );
+        )
+    }
+
+    /// The placeholder metadata an earlier scan of this image, hydrated, cached under
+    /// `hash`.
+    fn cache_placeholder_under(&self, hash: &str) -> CachedMediaMeta {
+        let meta = CachedMediaMeta {
+            dimensions: Some((8, 8)),
+            dominant_color: Some("#ff0000".to_string()),
+            lqip_data_uri: Some("data:image/webp;base64,AAAA".to_string()),
+            is_animated: false,
+        };
+        write_cached_meta(&self.objects, &self.transforms, hash, 1, &meta);
+        meta
     }
 }
 
@@ -1588,6 +1607,78 @@ fn a_build_mode_scan_records_the_hash_it_computed_with_the_files_full_stat() {
     fx.scan(&stat, &HashIndex::new(), &mut new_index, false);
 
     assert_eq!(new_index.lookup("photo.png", &stat), Some(ObjectStore::hash_file(&fx.png).unwrap().as_str()));
+}
+
+/// An entry the index recorded while the image was local, seen by a scan after the
+/// provider evicted it: the recorded ctime and inode no longer match, and nothing
+/// may read the file to find out whether the bytes still do.
+fn recorded_before_the_provider_touched_it(fx: &ScanFixture, hash: &str) -> (FileStat, HashIndex) {
+    let stat = FileStat::of(&fs::metadata(&fx.png).unwrap());
+    let recorded = FileStat { ctime: Some(1), inode: Some(1), ..stat };
+    let mut old_index = HashIndex::new();
+    old_index.update("photo.png".to_string(), &recorded, hash.to_string());
+    (stat, old_index)
+}
+
+/// An evicted image cannot be hashed, so its metadata is found by the hash the index
+/// recorded — under the whole-second rule, the only one it could be answered by
+/// before the index recorded more. The strict rule misses the moment the provider
+/// changes ctime or inode, and a build-mode scan (which bakes LQIP and dimensions
+/// into the page) would then find nothing and read an unreadable file for them.
+#[test]
+fn an_evicted_image_keeps_the_placeholder_metadata_cached_under_its_recorded_hash() {
+    let fx = ScanFixture::new("evicted_meta");
+    let cached = fx.cache_placeholder_under("hash-of-the-hydrated-bytes");
+    let (stat, old_index) = recorded_before_the_provider_touched_it(&fx, "hash-of-the-hydrated-bytes");
+    let _cloud = crate::build::icloud::pretend::evicted(&fx.png);
+
+    for defer_placeholders in [false, true] {
+        let mut new_index = HashIndex::new();
+        let meta = fx.scan(&stat, &old_index, &mut new_index, defer_placeholders);
+
+        assert_eq!(
+            (meta.dimensions, meta.dominant_color.clone(), meta.lqip_data_uri.clone()),
+            (cached.dimensions, cached.dominant_color.clone(), cached.lqip_data_uri.clone()),
+            "defer_placeholders={defer_placeholders}: the evicted image lost its placeholder"
+        );
+        // Carried as recorded: the strict lookup that names an encode must still miss.
+        assert_eq!(new_index.entries, old_index.entries, "defer_placeholders={defer_placeholders}");
+        assert!(new_index.lookup("photo.png", &stat).is_none());
+    }
+}
+
+/// The same answer is not given for an image that is on disk: a scan that defers its
+/// placeholder (preview) or hashes it (build) has no need of a hash it cannot vouch
+/// for, and a whole-second hit would carry it into an index the worker trusts.
+#[test]
+fn an_image_on_disk_is_not_matched_by_the_whole_second_rule() {
+    let fx = ScanFixture::new("hydrated_strict");
+    fx.cache_placeholder_under("hash-of-the-hydrated-bytes");
+    let (stat, old_index) = recorded_before_the_provider_touched_it(&fx, "hash-of-the-hydrated-bytes");
+
+    let mut preview = HashIndex::new();
+    let meta = fx.scan(&stat, &old_index, &mut preview, true);
+    assert!(preview.entries.is_empty(), "preview scan carried forward {:?}", preview.entries);
+    assert_ne!(meta.lqip_data_uri.as_deref(), Some("data:image/webp;base64,AAAA"), "used a hash the index does not vouch for");
+}
+
+/// What an evicted source yields is a non-answer, and cached under its hash — which
+/// its arrival does not change — it would be permanent. Reachable once an evicted
+/// file can hold a hash the index recorded while it was local, and the metadata was
+/// never cached under it (a preview scan hashes nothing).
+#[test]
+fn an_evicted_image_never_has_a_non_answer_cached_under_its_hash() {
+    let fx = ScanFixture::new("evicted_no_poison");
+    let (stat, old_index) = recorded_before_the_provider_touched_it(&fx, "hash-with-no-cached-metadata");
+    let _cloud = crate::build::icloud::pretend::evicted(&fx.png);
+
+    let meta = fx.scan(&stat, &old_index, &mut HashIndex::new(), false);
+
+    assert_eq!(meta.dimensions, None, "premise: an evicted image is read as nothing");
+    assert!(
+        read_cached_meta(&fx.transforms, &fx.objects, "hash-with-no-cached-metadata").is_none(),
+        "the scan cached dimensions: None under the hash of a file it could not read"
+    );
 }
 
 // =========================================================================

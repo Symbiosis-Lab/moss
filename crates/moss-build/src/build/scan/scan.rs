@@ -536,12 +536,15 @@ fn extract_media_metadata_cached(
     let skip_content_read = is_video || defer_this_image || source_is_evicted;
     let content_hash = if skip_content_read {
         // Videos / images / evicted files: only use a cached hash from the
-        // index; never read file content on the blocking scan. A video is matched
-        // by the whole-second rule its own worker records under (it can never
-        // fall back to hashing a multi-GB file); anything else by the full stat
-        // record, so a hit here is one `collect_images_for_conversion` will also
-        // take. The hit is carried forward as recorded, never re-stamped.
-        let hit = if is_video {
+        // index; never read file content on the blocking scan. A video and an
+        // evicted file cannot fall back to hashing (a multi-GB read; a download), so
+        // they keep the whole-second rule: a strict miss would lose the metadata
+        // cached under their hash. Safe because the hash only finds placeholder
+        // metadata here and the hit is carried forward as recorded, so the strict
+        // lookup that names an image's encode still does not trust it. A deferred
+        // image on disk uses the full stat record: a miss costs it nothing (its
+        // stat-key metadata below) and the background worker hashes it.
+        let hit = if is_video || source_is_evicted {
             old_index.lookup_whole_second(relative_path, size, mtime)
         } else {
             old_index.lookup(relative_path, stat)
@@ -693,7 +696,14 @@ fn extract_media_metadata_cached(
     // extraction so concurrent scans for the same file share the result.
     log::debug!("Media meta cache miss for {}", relative_path);
 
-    if let (Some(dedup), Some(ref hash)) = (metadata_dedup, &content_hash) {
+    // Only a source that could be read gets its result cached under its hash. An
+    // evicted one yields a non-answer (see `source_is_evicted` above), and the
+    // hash — which the file's arrival does not change — would make it permanent.
+    // Reachable now that an evicted file can hold a hash the index recorded for it
+    // while it was local.
+    let cache_hash = content_hash.as_ref().filter(|_| !source_is_evicted);
+
+    if let (Some(dedup), Some(hash)) = (metadata_dedup, cache_hash) {
         let dedup_key = format!("meta:{}", hash);
         // Clone data into owned values for the closure (FnOnce + Send).
         let abs_path_owned = abs_path.to_path_buf();
@@ -755,7 +765,7 @@ fn extract_media_metadata_cached(
     );
 
     // Step 4: Store the result in the transform cache for next time.
-    if let Some(ref hash) = content_hash {
+    if let Some(hash) = cache_hash {
         let cached = CachedMediaMeta {
             dimensions: meta.dimensions,
             dominant_color: meta.dominant_color.clone(),

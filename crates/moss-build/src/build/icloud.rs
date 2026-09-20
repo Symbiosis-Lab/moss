@@ -60,7 +60,7 @@ const SF_DATALESS: u32 = 0x40000000;
 ///
 /// Returns `false` for non-existent files, directories, or on non-macOS platforms.
 #[cfg(target_os = "macos")]
-pub fn is_evicted(path: &Path) -> bool {
+fn is_evicted_on_disk(path: &Path) -> bool {
     use std::os::darwin::fs::MetadataExt;
 
     match std::fs::symlink_metadata(path) {
@@ -87,7 +87,7 @@ const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x40_0000;
 /// Uses `symlink_metadata()` (lstat-equivalent) — reads directory-entry
 /// attributes without triggering a download.
 #[cfg(target_os = "windows")]
-pub fn is_evicted(path: &Path) -> bool {
+fn is_evicted_on_disk(path: &Path) -> bool {
     use std::os::windows::fs::MetadataExt;
 
     match std::fs::symlink_metadata(path) {
@@ -105,8 +105,53 @@ pub fn is_evicted(path: &Path) -> bool {
 
 /// Non-macOS, non-Windows stub: always returns false.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub fn is_evicted(_path: &Path) -> bool {
+fn is_evicted_on_disk(_path: &Path) -> bool {
     false
+}
+
+/// Is `path` a cloud-only placeholder right now? One `lstat`, never a read — the
+/// platform check is the three `is_evicted_on_disk` variants above.
+pub fn is_evicted(path: &Path) -> bool {
+    #[cfg(test)]
+    if pretend::marked(path) {
+        return true;
+    }
+    is_evicted_on_disk(path)
+}
+
+/// Test seam for everything that branches on a file being in the cloud.
+///
+/// Only the file provider can set `SF_DATALESS`, and off macOS the check is a
+/// compile-time `false`, so no test could put a file in the cloud: the code that
+/// must not read one (the hash index's `resolve`, the scan's evicted branch, the
+/// CAS heal) had nothing but a real dataless file to be tried against. A path
+/// marked here answers `is_evicted` (and so `is_still_in_the_cloud`) as true until
+/// the guard drops. Keyed by exact path, so tests on their own temp dirs never see
+/// each other's marks.
+#[cfg(test)]
+pub(crate) mod pretend {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    static MARKED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    pub(crate) fn marked(path: &Path) -> bool {
+        MARKED.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|p| p == path)
+    }
+
+    /// Mark `path` as cloud-only for the life of the returned guard.
+    pub(crate) fn evicted(path: &Path) -> Guard {
+        MARKED.lock().unwrap_or_else(|e| e.into_inner()).push(path.to_path_buf());
+        Guard(path.to_path_buf())
+    }
+
+    pub(crate) struct Guard(PathBuf);
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            MARKED.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| *p != self.0);
+        }
+    }
 }
 
 /// Whether a DIRECTORY carries the dataless flag. [`is_evicted`] answers only

@@ -8,7 +8,7 @@
       "armed": true,
       "value": {
         "crates/moss-build/src/build/assets/binary_resolver.rs": 1016,
-        "crates/moss-build/src/build/cache.rs": 1523,
+        "crates/moss-build/src/build/cache.rs": 1544,
         "crates/moss-build/src/build/folder_embed.rs": 1460,
         "crates/moss-build/src/build/markdown/html_post.rs": 977,
         "crates/moss-build/src/build/markdown/pipeline.rs": 2143,
@@ -20,7 +20,7 @@
         "crates/moss-build/src/build/pipeline.rs": 2018,
         "crates/moss-build/src/build/render/blocking.rs": 3591,
         "crates/moss-build/src/build/render/html.rs": 1617,
-        "crates/moss-build/src/build/scan/scan.rs": 1511,
+        "crates/moss-build/src/build/scan/scan.rs": 1521,
         "crates/moss-build/src/build/ship.rs": 820,
         "crates/moss-build/src/build/types.rs": 832,
         "crates/moss-build/src/build/watch.rs": 1126,
@@ -416,6 +416,19 @@
         "crates/moss-build/src/build/types.rs": 832
       },
       "reason": "both files stood exactly at their baselines on develop. The image hash index was keyed by (size, whole-second mtime), so a same-size rewrite in the same second reused the previous picture's variant; the fix gives HashIndexEntry the stat record SourceMetadata already carries (FileStat, the full-stat lookup/update/carry_forward/resolve, and the doc for why the video path keeps lookup_whole_second) = +133 in cache.rs, and moves identity_disagrees next to stat_identity in types.rs (+8) so the watcher, the frontmatter scan cache and the index share one definition (two hand copies deleted from watch.rs and frontmatter_cache.rs). The change also deletes four hand-copied (size, whole-second mtime) extractions from image.rs, cas_heal.rs, parse_cache.rs and scan.rs. Not split out: moving HashIndex to its own module adds a 70th child to build/ (baseline 69) and carries ~250 lines of its tests with it, which is a relocation to do on its own, not inside a correctness fix.",
+      "date": "2026-09-20"
+    },
+    {
+      "row": "prod_lines_per_file",
+      "from": {
+        "crates/moss-build/src/build/cache.rs": 1523,
+        "crates/moss-build/src/build/scan/scan.rs": 1511
+      },
+      "to": {
+        "crates/moss-build/src/build/cache.rs": 1544,
+        "crates/moss-build/src/build/scan/scan.rs": 1521
+      },
+      "reason": "cache.rs +21: HashIndex::resolve refuses to read a file that is still in the cloud (an Err before hash_file), split into resolve/resolve_with so a test can inject the hasher and the cloud predicate; the two-line guard is the fix, the rest is the seam signature and the doc saying why a provider re-materialisation makes the strict lookup miss. scan.rs +10: the evicted branch of extract_media_metadata_cached answers by the whole-second lookup again (it cannot hash) and never caches a non-answer under a hash; the growth is the comment that says why that is safe. Not split out: moving HashIndex to its own module adds a 70th child to build/ (baseline 69), a relocation to do on its own.",
       "date": "2026-09-20"
     }
   ]

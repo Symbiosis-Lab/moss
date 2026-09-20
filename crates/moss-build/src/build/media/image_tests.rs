@@ -5114,3 +5114,50 @@ fn rematerialize_does_not_relink_the_previous_versions_output_over_a_same_size_r
     assert!(matches!(outcome, HealOutcome::NotCached), "healed a rewritten source from the old one's output: {outcome:?}");
     assert!(!staged.exists(), "the previous version's variant was linked into staging");
 }
+
+// ----- a source still in the cloud is never read to learn its hash -----
+
+/// The heal runs over every item of a batch, including the ones the worker
+/// deferred to the cloud. A provider re-materialising a source changes its ctime
+/// and inode, so the index no longer vouches for it and `HashOnMiss` would hash
+/// it — a read that can block for the whole download or fail. Not reading is
+/// `NotCached`, whatever the store holds under the source's oid.
+#[test]
+fn rematerialize_never_reads_a_source_that_is_still_in_the_cloud() {
+    let h = harness();
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 400, 300);
+    let cfg = ImageCompressionConfig::default();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let outcome = convert_single_image(
+        &src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None,
+        &HashMap::new(),
+    );
+    assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
+    let staged = h.staging.join("photo.webp");
+
+    // The index knows the file — as it stood before the provider touched it.
+    let mut index = crate::build::cache::HashIndex::new();
+    index.update(
+        "photo.jpg".to_string(),
+        &crate::build::cache::FileStat { ctime: Some(1), inode: Some(1), ..crate::build::cache::FileStat::of(&fs::metadata(&src).unwrap()) },
+        source_oid,
+    );
+
+    fs::remove_file(&staged).unwrap();
+    let cloud = crate::build::icloud::pretend::evicted(&src);
+    let outcome = rematerialize(
+        &h.objects, &h.transforms, &cfg.to_params(), &mut index, &src, "photo.jpg", &staged, "image/webp",
+        HashPolicy::HashOnMiss,
+    );
+    assert!(matches!(outcome, HealOutcome::NotCached), "read a source that is in the cloud: {outcome:?}");
+    assert!(!staged.exists(), "linked an output for a source it could not identify");
+
+    // The same heal once the bytes are local: it hashes, and the store answers.
+    drop(cloud);
+    let outcome = rematerialize(
+        &h.objects, &h.transforms, &cfg.to_params(), &mut index, &src, "photo.jpg", &staged, "image/webp",
+        HashPolicy::HashOnMiss,
+    );
+    assert!(matches!(outcome, HealOutcome::Healed), "a local source must still heal: {outcome:?}");
+}

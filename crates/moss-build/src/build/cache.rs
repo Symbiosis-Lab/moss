@@ -1016,14 +1016,35 @@ impl HashIndex {
 
     /// The content hash of `file`: the recorded one while [`lookup`](Self::lookup)
     /// trusts it, otherwise hashed now and recorded.
+    ///
+    /// Never reads a file that is still in the cloud — that is an `Err`. The read
+    /// blocks for the provider's whole download or fails, and a re-materialised file
+    /// has a new ctime and inode, so the strict lookup misses on exactly the files
+    /// the old size-and-second key answered without one. A hit still answers.
     pub fn resolve(&mut self, file: &Path, relative_path: &str) -> Result<String, String> {
+        self.resolve_with(file, relative_path, ObjectStore::hash_file, crate::build::icloud::is_still_in_the_cloud)
+    }
+
+    /// [`resolve`](Self::resolve) with its two effects passed in, so a test can
+    /// hash without a real file and put one in the cloud.
+    fn resolve_with(
+        &mut self,
+        file: &Path,
+        relative_path: &str,
+        hash_file: impl FnOnce(&Path) -> Result<String, String>,
+        in_the_cloud: impl FnOnce(&Path) -> bool,
+    ) -> Result<String, String> {
+        // Stat before anything is read: see `update`.
         let stat = FileStat::of(
             &fs::metadata(file).map_err(|e| format!("Failed to stat {}: {}", file.display(), e))?,
         );
         if let Some(hash) = self.lookup(relative_path, &stat) {
             return Ok(hash.to_string());
         }
-        let hash = ObjectStore::hash_file(file)?;
+        if in_the_cloud(file) {
+            return Err(format!("{} is still in the cloud; not reading it to hash it", file.display()));
+        }
+        let hash = hash_file(file)?;
         self.update(relative_path.to_string(), &stat, hash.clone());
         Ok(hash)
     }

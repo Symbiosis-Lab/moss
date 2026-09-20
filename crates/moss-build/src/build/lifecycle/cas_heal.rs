@@ -21,7 +21,10 @@ pub(crate) enum HashPolicy {
     StatOnly,
     /// Hash the source on an index miss, trusting a hit only by the full stat
     /// record ([`HashIndex::resolve`]). Images take this: the file is small, and the
-    /// fingerprint gate has usually already said it is unchanged.
+    /// fingerprint gate has usually already said it is unchanged. A source still in
+    /// the cloud is not read: `resolve` refuses, and the heal is `NotCached` — this
+    /// runs over every item of a batch, including the ones the worker deferred to
+    /// the cloud.
     ///
     /// [`HashIndex::resolve`]: crate::build::cache::HashIndex::resolve
     HashOnMiss,

@@ -993,6 +993,72 @@ fn resolve_hashes_a_file_replaced_by_rename_even_when_size_and_mtime_survive() {
     assert_ne!(idx.resolve(&file, "pic.png").unwrap(), "planted", "a different inode must not reuse the hash");
 }
 
+/// A file still in the cloud is not read to learn its hash: reading a dehydrated
+/// file blocks for the provider's download or fails, and a provider re-materialising
+/// one changes its ctime and inode, so the strict lookup misses on exactly the files
+/// the old size-and-second key answered without a read.
+#[test]
+fn resolve_with_never_reads_a_cloud_only_file_the_index_does_not_vouch_for() {
+    let dir = make_test_dir("hash_idx_resolve_cloud_miss");
+    let file = write_temp_file(&dir, "pic.png", b"in the cloud");
+    let here = FileStat::of(&fs::metadata(&file).unwrap());
+
+    // Never recorded, and recorded before the provider changed ctime and inode.
+    let mut rematerialised = HashIndex::new();
+    rematerialised.update("pic.png".to_string(), &FileStat { ctime: Some(1), inode: Some(1), ..here }, "old".to_string());
+    for (what, mut idx) in [("never recorded", HashIndex::new()), ("ctime and inode moved", rematerialised)] {
+        let mut reads = 0;
+        let before = idx.entries.clone();
+        let outcome = idx.resolve_with(&file, "pic.png", |_| { reads += 1; Ok("read".to_string()) }, |_| true);
+        assert!(outcome.is_err(), "{what}: answered {outcome:?} for a file in the cloud");
+        assert_eq!(reads, 0, "{what}: read a file that is in the cloud");
+        assert_eq!(idx.entries, before, "{what}: recorded something for a hash it did not get");
+    }
+}
+
+/// A hit costs no read, so it answers whether or not the file is in the cloud: the
+/// guard is for the read, not for the file.
+#[test]
+fn resolve_with_still_answers_a_cloud_only_file_from_a_hit() {
+    let dir = make_test_dir("hash_idx_resolve_cloud_hit");
+    let file = write_temp_file(&dir, "pic.png", b"in the cloud");
+    let mut idx = HashIndex::new();
+    idx.update("pic.png".to_string(), &FileStat::of(&fs::metadata(&file).unwrap()), "recorded".to_string());
+
+    let outcome = idx.resolve_with(&file, "pic.png", |_| panic!("read on a hit"), |_| true);
+
+    assert_eq!(outcome.as_deref(), Ok("recorded"));
+}
+
+/// The other side of the guard: a file on disk is hashed and recorded on a miss.
+#[test]
+fn resolve_with_hashes_and_records_a_local_file_the_index_does_not_vouch_for() {
+    let dir = make_test_dir("hash_idx_resolve_local_miss");
+    let file = write_temp_file(&dir, "pic.png", b"on disk");
+    let mut idx = HashIndex::new();
+
+    let outcome = idx.resolve_with(&file, "pic.png", |_| Ok("hashed".to_string()), |_| false);
+
+    assert_eq!(outcome.as_deref(), Ok("hashed"));
+    assert_eq!(idx.lookup("pic.png", &FileStat::of(&fs::metadata(&file).unwrap())), Some("hashed"));
+}
+
+/// `resolve` is what every caller holds, and it must be wired to the real cloud
+/// check: the seam above proves the guard, this proves nothing swaps it out.
+#[test]
+fn resolve_asks_whether_the_file_is_in_the_cloud() {
+    let dir = make_test_dir("hash_idx_resolve_cloud_wired");
+    let file = write_temp_file(&dir, "pic.png", b"in the cloud");
+    let mut idx = HashIndex::new();
+
+    let cloud = crate::build::icloud::pretend::evicted(&file);
+    assert!(idx.resolve(&file, "pic.png").is_err(), "resolve read a file that is in the cloud");
+    assert!(idx.entries.is_empty());
+
+    drop(cloud);
+    assert_eq!(idx.resolve(&file, "pic.png").unwrap(), ObjectStore::hash_file(&file).unwrap());
+}
+
 /// Simulate the iCloud eviction scenario: parent directory disappears
 /// between create_dir_all() and rename(). The save() method should
 /// retry after re-creating the parent.
