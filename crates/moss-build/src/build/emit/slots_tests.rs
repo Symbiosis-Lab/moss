@@ -258,43 +258,13 @@ fn a_deleted_page_left_in_the_stage_is_not_registered_by_the_slot_pass() {
     }
 }
 
-/// The notebook step writes viewer pages after the slot pass, so on a second
-/// build the pass sees the PREVIOUS build's viewer. Whatever it does with it, the
-/// step's own registration must win: a `Cas` naming the old viewer under the new
-/// hash is a generation deploy refuses whole.
-///
-/// `run_notebook_processing` needs a JupyterLite bundle from the network, so the
-/// step's registration is made the way `build_inner` makes it — `register_hashed`
-/// on the same `pending` — around the real `apply_to_stage_and_manifest`.
-#[test]
-fn a_notebook_viewer_the_slot_pass_saw_never_keeps_a_stale_cas_source() {
-    use crate::build::manifest::{HashBucket, PendingManifest};
-    use crate::build::served_path::ServedPath;
-
-    let tmp = TempDir::new().unwrap();
-    let paths = MossPaths::new(tmp.path());
-    let stage = paths.staging_dir();
-    std::fs::create_dir_all(stage.join("notebooks")).unwrap();
-    // Last build's viewer, still in the stage.
-    std::fs::write(stage.join("notebooks/analysis.html"), "<html>previous viewer</html>").unwrap();
-
-    let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
-    let mut site_result = empty_site_result();
-    apply_to_stage_and_manifest(&paths, &stage, &ResolvedSlots::empty(), &mut pending, &mut site_result, None)
-        .expect("slot pass");
-
-    // What `build_inner` does once the step has rewritten the page.
-    let viewer = ServedPath::from_source("notebooks/analysis.html").unwrap();
-    pending.register_hashed(&viewer, "0123456789abcdef", HashBucket::NotebookOutputs);
-
-    let sealed = pending.seal();
-    assert_eq!(sealed.staged_oid("notebooks/analysis.html"), None);
-    assert_eq!(sealed.files().get("notebooks/analysis.html"), Some(&"100644:0123456789abcdef".to_string()));
-}
-
-/// A page a LATER step re-registers after the slot pass gave it an oid — the
-/// general form of the notebook case, for a page the render phase did own —
-/// must lose that oid: the oid names the bytes of the earlier registration.
+/// A page a LATER step re-registers after the slot pass gave it an oid must lose
+/// that oid: the oid names the bytes of the earlier registration. The notebook
+/// step does this to its viewer pages, which are written after the pass. Isolates
+/// the last registration winning: the render phase registered the page, so the
+/// pass's ownership check lets it through and only `register_with_hash` is left
+/// to drop the oid. `a_deleted_page_left_in_the_stage_is_not_registered_by_the_slot_pass`
+/// is the test for the ownership check itself.
 #[test]
 fn a_page_re_registered_after_the_slot_pass_loses_the_passes_oid() {
     use crate::build::manifest::{HashBucket, PendingManifest};
