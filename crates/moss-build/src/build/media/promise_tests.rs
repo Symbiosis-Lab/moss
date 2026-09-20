@@ -37,6 +37,7 @@ fn item(skip: Option<SkipReason>) -> ImageConversionItem {
         ext: "jpg".to_string(),
         dimensions: Some(DIMS),
         skip,
+        fingerprint: None,
     }
 }
 

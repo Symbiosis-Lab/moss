@@ -13,7 +13,7 @@
         "crates/moss-build/src/build/markdown/html_post.rs": 977,
         "crates/moss-build/src/build/markdown/pipeline.rs": 2143,
         "crates/moss-build/src/build/media/ffmpeg.rs": 1672,
-        "crates/moss-build/src/build/media/image.rs": 2989,
+        "crates/moss-build/src/build/media/image.rs": 3004,
         "crates/moss-build/src/build/media/pipeline.rs": 1804,
         "crates/moss-build/src/build/media/video.rs": 1810,
         "crates/moss-build/src/build/page/meta.rs": 1366,
@@ -475,6 +475,17 @@
         "crates/moss-build/src/build/media/image.rs": 2989
       },
       "reason": "media/image.rs: the dispatch's delivered-fingerprint map gains a pending marker beside it (ImageLedger, one lock, ~35 prod lines with docs) and a join branch, so a second dispatch before the worker ran joins it instead of spawning another; the three copies of the rung-URL derivation (worker, heal, dispatch) collapse into promised_rungs, which pays back about 30 of it",
+      "date": "2026-09-20"
+    },
+    {
+      "row": "prod_lines_per_file",
+      "from": {
+        "crates/moss-build/src/build/media/image.rs": 2989
+      },
+      "to": {
+        "crates/moss-build/src/build/media/image.rs": 3004
+      },
+      "reason": "media/image.rs +15 (2989 to 3004): ImageConversionItem carries the fingerprint its dispatch took (a field and an ended() method that ends the dispatch's marker and records the delivery) so the worker no longer stats the source itself; the worker's stat call, its comment and the dispatch's separate queued vec are gone, and ending a marker is now compare-and-clear, which is the ownership rule the join needs",
       "date": "2026-09-20"
     }
   ]

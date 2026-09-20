@@ -105,6 +105,21 @@ pub struct ImageConversionItem {
     /// Every other verdict is a bare `<img>` on the emission side and needs
     /// no registration; those items are dropped in the collector.
     pub skip: Option<SkipReason>,
+    /// What the dispatch that queued this item saw of its source, and so what its
+    /// worker vouches for if it delivers. The worker takes no stat of its own: a later
+    /// one pairs a rewrite's new stat with the old bytes' `source_oid`. `None` where no
+    /// dispatch queued the item (a headless run, a test): nothing is marked for it.
+    pub(crate) fingerprint: Option<ImageFingerprint>,
+}
+
+impl ImageConversionItem {
+    /// The worker is done with this image: its dispatch's marker ends and, when the
+    /// worker `delivered`, the source it was queued for is recorded as delivered.
+    fn ended(&self, delivered: bool) {
+        if let Some(fingerprint) = &self.fingerprint {
+            end_image_item(&self.source_path.to_string_lossy(), fingerprint, delivered);
+        }
+    }
 }
 
 /// Outcome of converting a single image to WebP.
@@ -722,6 +737,7 @@ pub(crate) fn collect_images_for_conversion(
                     ext: media_meta.file_type.clone(),
                     dimensions: media_meta.dimensions,
                     skip: Some(reason),
+                    fingerprint: None,
                 });
                 continue;
             }
@@ -745,6 +761,7 @@ pub(crate) fn collect_images_for_conversion(
             ext: media_meta.file_type.clone(),
             dimensions: media_meta.dimensions,
             skip: None,
+            fingerprint: None,
         });
     }
 
@@ -1426,15 +1443,18 @@ pub(crate) fn mark_image_items_pending(items: impl IntoIterator<Item = (String, 
     image_ledger().pending.extend(items);
 }
 
-/// The worker is done with `path`: nothing is pending for it any more. When it
-/// delivered, `delivered_as` is the fingerprint of the source it delivered for — and it
-/// is recorded only while the path is still pending, since a dispatch that dropped the
-/// path (`retain_image_item_fingerprints`) has already said the image left.
-pub(crate) fn end_image_item(path: &str, delivered_as: Option<ImageFingerprint>) {
+/// The worker queued for `path` under `queued_as` is done with it, and, if it
+/// `delivered`, has delivered that source. Only its own dispatch's mark ends: a newer
+/// dispatch over a rewritten source has marked the image for its own worker, and one
+/// that dropped the path (`retain_image_item_fingerprints`) has said the image left.
+pub(crate) fn end_image_item(path: &str, queued_as: &ImageFingerprint, delivered: bool) {
     let mut ledger = image_ledger();
-    let was_pending = ledger.pending.remove(path).is_some();
-    if let Some(fingerprint) = delivered_as.filter(|_| was_pending) {
-        ledger.delivered.insert(path.to_string(), fingerprint);
+    if ledger.pending.get(path) != Some(queued_as) {
+        return;
+    }
+    ledger.pending.remove(path);
+    if delivered {
+        ledger.delivered.insert(path.to_string(), queued_as.clone());
     }
 }
 
@@ -1898,10 +1918,6 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                         break;
                     }
                     let item = &ctx.items[index];
-                    // Before anything reads the source, so a write landing during the
-                    // encode leaves a fingerprint the file no longer has. Recorded in
-                    // the teardown below, and only for an item that delivered.
-                    let fingerprint = compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &ctx.config);
                     // The whole of one image's decision. Every exit is a value,
                     // never a `return` with teardown attached — see `ItemStep`.
                     // Nothing in here releases a UiBound permit, pushes to the
@@ -2239,7 +2255,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     // The one teardown.
                     match step {
                         ItemStep::Handled { delivered, failed, advisories: item_advisories, encoded } => {
-                            end_image_item(&item.source_path.to_string_lossy(), fingerprint.filter(|_| !delivered.is_empty()));
+                            item.ended(!delivered.is_empty());
                             record_deliveries(services, &produced_webp_paths, delivered);
                             if let Some(ref registry) = services.assets {
                                 for (url, err) in failed {
@@ -2266,7 +2282,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                             });
                         }
                         ItemStep::Cancelled => {
-                            end_image_item(&item.source_path.to_string_lossy(), None);
+                            item.ended(false);
                             any_cancelled.store(true, Ordering::SeqCst);
                             services.end_ui_bound();
                         }
@@ -2712,8 +2728,6 @@ pub(crate) fn dispatch_image_conversions(
         // fingerprint fallback covers it.
         let mut skip_paths: Vec<(String, Option<String>)> = Vec::new();
         let mut to_dispatch: Vec<ImageConversionItem> = Vec::new();
-        // What a new worker would own if one is spawned: (path, fingerprint).
-        let mut queued: Vec<(String, ImageFingerprint)> = Vec::new();
         let mut joined: usize = 0;
         let mut current_paths: HashSet<String> = HashSet::new();
         let mut healed_count: usize = 0;
@@ -2848,8 +2862,7 @@ pub(crate) fn dispatch_image_conversions(
                         rel_source
                     );
                 }
-                queued.extend(fingerprint.map(|fp| (rel_source, fp)));
-                to_dispatch.push(item.clone());
+                to_dispatch.push(ImageConversionItem { fingerprint, ..item.clone() });
             }
         }
 
@@ -2956,7 +2969,9 @@ pub(crate) fn dispatch_image_conversions(
         // re-reading `hashes.json` to merge `image_outputs` before running
         // stale cleanup — see `media/pipeline.rs::copy_deferred_assets`.
         // If that merge is ever removed, rebuilds will delete our `.webp`s.
-        mark_image_items_pending(queued);
+        mark_image_items_pending(
+            run_ctx.items.iter().filter_map(|item| Some((item.source_path.to_string_lossy().into_owned(), item.fingerprint.clone()?))),
+        );
         spawner.spawn_blocking(Box::new(move || {
             run_image_conversion(&services_arc, &run_ctx);
         }));

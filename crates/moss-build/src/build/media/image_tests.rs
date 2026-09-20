@@ -727,6 +727,7 @@ async fn base_failure_fails_registered_rung_promises() {
             ext: "jpg".to_string(),
             dimensions: Some((2000, 1200)),
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -805,6 +806,7 @@ async fn base_failed_advisory_names_the_full_nested_source_path() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -898,6 +900,7 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
             ext: "jpg".to_string(),
             dimensions: Some((2000, 1200)),
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -970,6 +973,7 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
             ext: "jpg".to_string(),
             dimensions: Some((2000, 1200)),
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -2061,7 +2065,7 @@ fn test_fingerprint(tag: u64) -> ImageFingerprint {
 /// the way a dispatch queues it and the worker's end reports it.
 fn prime_delivered(path: &str, fingerprint: ImageFingerprint) {
     mark_image_items_pending([(path.to_string(), fingerprint.clone())]);
-    end_image_item(path, Some(fingerprint));
+    end_image_item(path, &fingerprint, true);
 }
 
 #[test]
@@ -2409,6 +2413,7 @@ fn test_dispatch_image_conversions_with_items_produces_webp_headless() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -2479,6 +2484,7 @@ fn test_image_dispatch_applies_dir_overrides_to_served_path() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -2630,6 +2636,7 @@ async fn test_webp_survives_stale_cleanup_after_dispatch() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -2756,6 +2763,7 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
+            fingerprint: None,
         };
         let webp_rel = format!("{}.webp", name.trim_end_matches(".jpg"));
         let webp_path = staging.join(&webp_rel);
@@ -2778,6 +2786,7 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
+        fingerprint: None,
     });
 
     let ctx = BackgroundContext {
@@ -2906,6 +2915,7 @@ async fn test_image_cancel_aborts_image_runner() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
+            fingerprint: None,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -2989,6 +2999,7 @@ async fn test_image_hashes_updated_on_cancellation() {
                 ext: "jpg".to_string(),
                 dimensions: None,
                 skip: None,
+                fingerprint: None,
             },
             ImageConversionItem {
                 source_path: PathBuf::from(img2_rel),
@@ -2996,6 +3007,7 @@ async fn test_image_hashes_updated_on_cancellation() {
                 ext: "jpg".to_string(),
                 dimensions: None,
                 skip: None,
+                fingerprint: None,
             },
         ],
         source_path: root.to_string_lossy().to_string(),
@@ -4342,6 +4354,7 @@ fn an_evicted_batch_output_is_healed_before_registration_not_silently_dropped() 
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
+        fingerprint: None,
     };
 
     // Simulate the eviction race: the provider zeroes the staged file to a
@@ -4449,6 +4462,7 @@ fn self_heal_before_registration_does_not_fabricate_without_a_cas_blob() {
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
+        fingerprint: None,
     };
     let cfg = ImageCompressionConfig::default();
     let params = cfg.to_params();
@@ -4524,6 +4538,7 @@ async fn ship_phase_ships_a_freshly_encoded_webp_from_cas_despite_stage_overwrit
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
+        fingerprint: None,
     };
     let ctx = BackgroundContext {
         video_items: vec![],
@@ -4607,6 +4622,7 @@ async fn run_image_conversion_always_records_a_staged_oid_for_base_and_rungs() {
         ext: "jpg".to_string(),
         dimensions: Some((1000, 750)),
         skip: None,
+        fingerprint: None,
     };
     let ctx = BackgroundContext {
         video_items: vec![],
@@ -4677,6 +4693,7 @@ async fn skip_path_carry_forward_registers_with_no_oid_not_a_stale_one() {
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
+        fingerprint: None,
     };
     let ctx = BackgroundContext {
         video_items: vec![],
@@ -4784,6 +4801,7 @@ fn a_missing_output_is_dispatched_while_its_unaffected_sibling_takes_the_skip_pa
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
+            fingerprint: None,
         })
         .collect();
 
@@ -5068,6 +5086,20 @@ impl HeldSpawner {
         tokio::task::spawn_blocking(move || {
             let workers: Vec<_> = std::mem::take(&mut *me.held.lock().unwrap());
             workers.into_iter().for_each(|worker| worker());
+        })
+        .await
+        .unwrap();
+    }
+
+    /// Run only the oldest worker held.
+    async fn run_oldest(self: &std::sync::Arc<Self>) {
+        let me = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let oldest = {
+                let mut held = me.held.lock().unwrap();
+                (!held.is_empty()).then(|| held.remove(0))
+            };
+            oldest.into_iter().for_each(|worker| worker());
         })
         .await
         .unwrap();
@@ -5401,6 +5433,58 @@ async fn a_worker_finishing_an_image_that_has_left_the_site_does_not_vouch_for_i
 
     assert!(vouched("other.png"), "premise: the worker delivered the image that stayed");
     assert!(!vouched("pic.png"), "the worker vouched for an image the site no longer lists");
+}
+
+/// A worker vouches for the source its dispatch saw. One that read the file later has
+/// looked at bytes nobody fingerprinted, and when the blocking phase had already handed it
+/// the hash of the OLD bytes (a stat-matched index entry, so no read) it encoded nothing of
+/// what is on disk now: the cached variant of the old oid was delivered, and a fingerprint
+/// taken at the worker's start would vouch for the new stat with it. Here the source is
+/// rewritten after the dispatch and before the worker runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_rewritten_between_dispatch_and_worker_is_not_vouched_for_by_the_variant_of_the_old_bytes() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.rebuild(true).await;
+    let first = vault.webp();
+    // A new process: the index still knows the file, nothing remembers a worker delivered it.
+    retain_image_item_fingerprints(&std::collections::HashSet::new());
+
+    let items = vault.collect();
+    assert!(!items[0].source_oid.is_empty(), "premise: the blocking phase found the file in the index");
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(items, workers.services()).await;
+    vault.rewrite_in_the_same_second([30, 30, 200]);
+    workers.run_held().await;
+    assert_eq!(vault.webp(), first, "premise: the worker delivered the cached variant of the oid it was given");
+
+    vault.rebuild(true).await;
+
+    assert_ne!(vault.webp(), first, "pic.png is blue on disk but its variant is still the red encode: the worker vouched for the new stat");
+}
+
+/// The worker that finishes an image ends only the marker its own dispatch made. A newer
+/// dispatch over a rewritten source has queued a worker of its own and marked the image
+/// for it; the older worker reaching the image first must leave that mark alone, or the
+/// next dispatch spawns a third worker for bytes the second is about to encode.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_older_worker_finishing_an_image_leaves_a_newer_dispatchs_worker_to_be_joined() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect(), workers.services()).await;
+    vault.write_pic([30, 30, 200]);
+    vault.dispatch(vault.collect(), workers.services()).await;
+    assert_eq!(workers.spawned(), 2, "premise: the rewritten source is not the one the first worker was queued for");
+
+    workers.run_oldest().await;
+    vault.dispatch(vault.collect(), workers.services()).await;
+
+    assert_eq!(workers.spawned(), 2, "the older worker ended the newer dispatch's marker, and a third worker was spawned");
+    workers.run_held().await;
 }
 
 /// The third exit that leaves the old variant: the worker gets to the image and cannot
