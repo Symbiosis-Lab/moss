@@ -2674,27 +2674,40 @@ async function raster(nodes, w, h, srcDoc = document) {
     for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) { if (dx * dx + dy * dy <= r * r) g.drawImage(img, dx, dy); }
     return c;
   };
+  // The title's strokes are only 3-5 texels wide at 2 real px/texel — thin
+  // enough that WATER's own per-step diffusion, fixed in TEXELS by step
+  // count (not by anything this file can scale), reaches well past them
+  // before the wash finishes, on screen. Running the title's grid finer
+  // halves that spread's own on-screen reach without touching the shader:
+  // the same texel-count blur now covers half the real distance. Measured
+  // cost (commit body) stays inside a 60fps scroll at 1440x900 at 1; 0.75
+  // is available if a future viewport needs it and the cost still allows.
+  const TITLE_PX_PER_TEXEL = 1;
   let box = { x: liveRect.left - pad, y: liveRect.top - pad, w: Math.min(MAX_PRINT_EDGE, liveRect.width + 2 * pad), h: Math.min(MAX_PRINT_EDGE, liveRect.height + 2 * pad) };
   const clone = cloneTitle();
   clone.style.width = liveRect.width + 'px'; clone.style.height = liveRect.height + 'px';
+  // dilate's radius is real px on the rasterized print (box.w x box.h,
+  // independent of the sim's own grid): at the old 2 px/texel grid, 2 real
+  // px was 1 texel of anti-vanishing margin. Keeping that same 1-texel
+  // margin at the new resolution means the real-px radius scales with
+  // TITLE_PX_PER_TEXEL too, rather than doubling the margin along with it.
+  const TITLE_DILATE = Math.max(1, Math.round(TITLE_PX_PER_TEXEL));
   let print;
-  try { print = dilate(await raster([clone], box.w, box.h), box.w, box.h, 2); }
+  try { print = dilate(await raster([clone], box.w, box.h), box.w, box.h, TITLE_DILATE); }
   catch (e) { console.warn('title print unavailable, falling back to a fade:', e.message); fallbackFade(); return; }
   if (document.documentElement.dataset.static) { titleReady = true; return; }
   const titleCanvas = document.createElement('canvas');
   titleCanvas.id = 'gl-title';
   titleCanvas.style.cssText = 'position:fixed; left:0; top:0; pointer-events:none; display:none;';
   document.body.appendChild(titleCanvas);
-  const gridW = Math.round(box.w / 2), gridH = Math.round(box.h / 2);
+  const gridW = Math.round(box.w / TITLE_PX_PER_TEXEL), gridH = Math.round(box.h / TITLE_PX_PER_TEXEL);
   // A title's strokes cover a small fraction of its own box next to a
   // scene's photos and screenshots, so the same paint-strength release
   // (load 1, what the main wash always uses) reads as a thin stain rather
   // than ink bleeding. TITLE_LOAD raises how much suspended pigment each
   // step's dissolution releases (concentration, not rate — l still grows at
-  // the same pace, so "completely gone" keeps its own timing); tuned
-  // against this file's own G (grid coverage/legibility correlation) and H
-  // (hard-edge boundary gradient) assertions, below.
-  const TITLE_LOAD = 14;
+  // the same pace, so "completely gone" keeps its own timing).
+  const TITLE_LOAD = 20;
   // The shared splash is eight discrete drops with a circular falloff
   // (WATER, drops[]/dropR): on a photo it hides inside the print's own
   // texture, but on bare glyph strokes it is the whole picture — a judge
@@ -2702,20 +2715,27 @@ async function raster(nodes, w, h, srcDoc = document) {
   // the disk-shaped rise in h nor its outward vel kick exist. What is left
   // is the mist term alone (`uMist * f * paper-grain`), gated by the same
   // print footprint and shaped by the same paper texture every scene wash
-  // reads. Amplitude raised well above default so it alone can wet every
-  // stroke; hold shorter than default, because a longer one kept legibility
-  // (G's correlation) still rising from 25% to 50% instead of peaking by
-  // 25% as the main wash does — the already-deposited water keeps seeping
-  // in and sharpening the match to the glyphs for a while after the mist
-  // itself stops, so a short hold plus a higher LOAD (above) gets there
-  // faster instead.
-  const TITLE_SPLASH = 0, TITLE_MIST = 0.14, TITLE_MIST_HOLD = 0.08;
-  // Same class as the R fix: BLOCK=16 texels is a small, smooth neighbourhood
-  // for PIG's uNear mixing on the main wash's ~390-texel grid, close to one
-  // letter wide on the title's ~167-texel grid. Scaled the same way R was —
-  // measured to make no visible difference on its own, kept anyway as a
-  // real correctness fix the previous review already asked for.
-  const TITLE_BLOCK = Math.round((16 / 390) * Math.min(gridW, gridH));
+  // reads.
+  //
+  // MIST/MIST_HOLD are tuned against G (legibility must peak by 25%), not
+  // TITLE_LOAD: LOAD only scales how dark dissolved pigment reads, and
+  // measurably stopped moving G's own numbers well before it plateaued
+  // here (tried up to 55 with no material change) — it is not the timing
+  // lever. At the finer TITLE_PX_PER_TEXEL, the finer grid's own strokes
+  // take genuinely more wash-clock time to fully wet and darken (confirmed
+  // by sampling correlation across the whole 10-75% range, not just G's
+  // three points: at a gentler mist/hold the true peak sat around 35-50%
+  // scroll, not 25%), so the fix is a hard, short pulse — high amplitude,
+  // brief hold — that pushes as much concentration in as early as physics
+  // allows rather than a slower, longer soak. This is a narrow-margin
+  // value: G's peak-by-25% requirement and B's must-still-be-gradual-at-
+  // 50% requirement bound it on both sides, and the passing window on
+  // chromium was under 0.05 of TITLE_MIST wide against the tested step.
+  const TITLE_SPLASH = 0, TITLE_MIST = 0.48, TITLE_MIST_HOLD = 0.019;
+  // R (the splash radius) needs no rescaling for TITLE_PX_PER_TEXEL: with
+  // TITLE_SPLASH=0 it multiplies out to nothing in both the h and vel terms
+  // (WATER) regardless of its own value, so it is unaffected either way.
+  //
   // uPaper's 256-texel period reads at a different size on screen per
   // instance, because "texel" isn't a fixed screen size: the main wash's
   // grid is a fixed 820x780 design-px box (BASE_TEX_W x BASE_TEX_H) at
@@ -2723,16 +2743,26 @@ async function raster(nodes, w, h, srcDoc = document) {
   // `--s` (SCALE, this file's global) design-px-to-real-px factor, so its
   // on-screen px/texel is 2*SCALE. The title's box, by contrast, is
   // #intro's own live layout, not inside that transform, so its
-  // gridW = box.w/2 already IS 2 *real* px/texel, unscaled. One period is
-  // 256 texels either way, so on screen: main = 256*2*SCALE px, title (at
-  // uPaperScale=1) = 256*2 px — title's grain reads 1/SCALE times larger.
-  // Setting uPaperScale = 1/SCALE shrinks the title's period by exactly
-  // that factor (P() divides t*uPaperScale, so the period in texels is
-  // 256/uPaperScale), matching the main wash's on-screen grain size.
-  // SCALE moves during the intro's own zoom, so this reads it once, at
-  // setup — the same moment gridW/gridH themselves are fixed for this
-  // sim's lifetime (see onResize, below: uSize is never re-issued either).
-  const TITLE_PAPER_SCALE = 1 / Math.max(0.05, SCALE);
+  // gridW = box.w/TITLE_PX_PER_TEXEL already IS TITLE_PX_PER_TEXEL *real*
+  // px/texel, unscaled. One period is 256 texels either way, so on screen:
+  // main = 256*2*SCALE px, title (at uPaperScale=1) =
+  // 256*TITLE_PX_PER_TEXEL px. Setting uPaperScale =
+  // TITLE_PX_PER_TEXEL/(2*SCALE) shrinks the title's period by exactly the
+  // ratio needed (P() divides t*uPaperScale, so the period in texels is
+  // 256/uPaperScale) to match the main wash's on-screen grain size. Half
+  // its previous value now that TITLE_PX_PER_TEXEL is 1 instead of 2 — each
+  // texel is half the real screen size, so half as much scaling is needed
+  // to reach the same physical period. SCALE moves during the intro's own
+  // zoom, so this reads it once, at setup — the same moment gridW/gridH
+  // themselves are fixed for this sim's lifetime (see onResize, below:
+  // uSize is never re-issued either).
+  const TITLE_PAPER_SCALE = TITLE_PX_PER_TEXEL / (2 * Math.max(0.05, SCALE));
+  // BLOCK is the same on-screen-match problem as the paper period, with 16
+  // texels (PIG's uNear neighbourhood) standing in for uPaper's 256:
+  // TITLE_BLOCK*TITLE_PX_PER_TEXEL (title's on-screen block size) must
+  // equal 16*2*SCALE (main's), the same equality TITLE_PAPER_SCALE solves,
+  // so TITLE_BLOCK = 16/TITLE_PAPER_SCALE falls out of it directly.
+  const TITLE_BLOCK = Math.max(1, Math.round(16 / TITLE_PAPER_SCALE));
   // What is left, after the above (verified via ?diag=12, uPaper's own
   // fibre channel, and ?diag=6, the sim's actual water depth: the first is
   // now fine grain at this scale, the second still shows the same large
@@ -2745,6 +2775,16 @@ async function raster(nodes, w, h, srcDoc = document) {
   // equivalent) to become instance-aware too — a second shader change,
   // not the one this pass authorized.
   const titleSim = makeSim({ canvas: titleCanvas, texW: gridW, texH: gridH, rect: () => box, load: TITLE_LOAD, splashAmp: TITLE_SPLASH, mistAmp: TITLE_MIST, mistHold: TITLE_MIST_HOLD, blockSize: TITLE_BLOCK, paperScale: TITLE_PAPER_SCALE });
+  // Cost guard: the 4x-larger grid (TITLE_PX_PER_TEXEL halved from 2) costs
+  // real GPU time now — measured (real hardware, headless:false; headless
+  // Playwright's default SwiftShader answer is not this machine's own) a
+  // synced (gl.readPixels-forced) 36-step burst, STEPS_PER_FRAME's own
+  // default budget, at 17.5-20.2ms, over a 16.67ms/60fps frame. 24 steps
+  // measured a steady 13.0ms, with margin; a worse-case single-frame catch-
+  // up after a hard scroll jump now takes more frames instead of stalling
+  // one. Only this instance's budget changes — the shared default and the
+  // main wash's own call sites are untouched.
+  const TITLE_STEP_BUDGET = 24;
   if (!titleSim) { titleCanvas.remove(); fallbackFade(); return; }
   let broken = false;
   // No webglcontextrestored handler: the canvas is removed here, same as the
@@ -2829,7 +2869,7 @@ async function raster(nodes, w, h, srcDoc = document) {
     // A little agitation, the way a real hand's scroll stirs the main wash's
     // own film — constant here because the title is a fixed clock, not a
     // speed the reader sets — spreads the bloom past single stroke edges.
-    const advanced = advanceWash(titleSim, clock, { goal, fwd: true, stir: 0.8 }, paint);
+    const advanced = advanceWash(titleSim, clock, { goal, fwd: true, stir: 0.8, budget: TITLE_STEP_BUDGET }, paint);
     titleSteps += advanced.count;
     if (clock.t <= 0) {
       if (shownAs !== 'solid') { titleCanvas.style.display = 'none'; openingTitle.style.opacity = '1'; shownAs = 'solid'; }
@@ -2859,7 +2899,7 @@ async function raster(nodes, w, h, srcDoc = document) {
       const node = cloneTitle();
       node.style.width = r2.width + 'px'; node.style.height = r2.height + 'px';
       let print2;
-      try { print2 = dilate(await raster([node], w2, h2), w2, h2, 2); } catch (e) { return; }
+      try { print2 = dilate(await raster([node], w2, h2), w2, h2, TITLE_DILATE); } catch (e) { return; }
       box = { x: r2.left - pad, y: r2.top - pad, w: w2, h: h2 };
       titleSim.setPrints(print2, blank);
       titleSim.reset();
