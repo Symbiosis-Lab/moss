@@ -1281,16 +1281,14 @@ pub(crate) fn run_video_conversion(
 
         match step {
             ItemStep::Handled { delivered, advisories: item_advisories, encoded } => {
-                if !delivered.is_empty() {
-                    end.delivered += 1;
-                }
+                let delivered_any = !delivered.is_empty();
+                end.delivered += usize::from(delivered_any);
                 // A detached run registers nothing itself (its coordinator is
                 // gone), so what it put in staging is protected from the sweep
                 // until the rebuild it asks for registers it.
-                let landed: Vec<String> =
-                    if tx.is_none() { delivered.iter().map(|d| d.url.clone()).collect() } else { Vec::new() };
+                let landed: Vec<String> = if tx.is_none() { delivered.iter().map(|d| d.url.clone()).collect() } else { Vec::new() };
                 record_deliveries(services, &mut produced_video_paths, delivered);
-                services.cancellation.end_item(item, epoch, landed);
+                services.cancellation.end_item(item, epoch, landed, delivered_any);
                 advisories.extend(item_advisories);
                 if encoded {
                     converted_count += 1;
@@ -1575,7 +1573,7 @@ impl VideoStore {
 ///
 /// The skip/dispatch decision is made per video, not for the set as a whole:
 /// each video's own fingerprint (`compute_video_item_fingerprint`) is compared
-/// against the fingerprint recorded the last time THAT video was considered.
+/// against the fingerprint recorded when a run last delivered THAT video.
 /// A video whose fingerprint matches and whose canonical outputs (mp4 +
 /// poster) are still present on disk is carried forward — its output keys are
 /// re-registered so seal() doesn't prune them — without ever entering
@@ -1664,7 +1662,7 @@ pub(crate) fn dispatch_video_conversions(
                     compute_video_item_fingerprint(&background_ctx.source_path, item, &compression_config);
                 let fingerprint_matched = fingerprint
                     .as_deref()
-                    .is_some_and(|fp| svc.cancellation.check_and_update_item_fingerprint(item, fp));
+                    .is_some_and(|fp| svc.cancellation.item_fingerprint_matches(item, fp));
 
                 // Join before anything else: the running encode is converting
                 // these exact bytes, so superseding it restarts minutes of work
@@ -1713,6 +1711,8 @@ pub(crate) fn dispatch_video_conversions(
                 if outputs_present && (fingerprint_matched || healed_item) {
                     if healed_item {
                         healed += 1;
+                        // The dispatcher put this source's cached output back itself: no run will vouch for it.
+                        fingerprint.iter().for_each(|fp| svc.cancellation.record_item_fingerprint(item, fp));
                     } else {
                         carried += 1;
                     }
@@ -2030,7 +2030,7 @@ pub(crate) mod tests {
             &crate::build::media::ffmpeg::VideoCompressionConfig::default(),
         )
         .expect("source file exists and is stat-able");
-        assert!(!svc.cancellation.check_and_update_item_fingerprint(item, &fingerprint));
+        svc.cancellation.record_item_fingerprint(item, &fingerprint);
 
         staged
     }
@@ -2377,6 +2377,83 @@ pub(crate) mod tests {
 
         assert!(!worker.slot_occupied(), "a run that delivered nothing must not enqueue a rebuild");
         crate::ops::watch::worker::deregister(&folder, &worker);
+    }
+
+    /// A dispatch that records the video's fingerprint has vouched for a source its
+    /// run may never deliver. A run the user cancelled before it reached the video
+    /// leaves the previous version's mp4 and poster in staging, where the next
+    /// build's skip check finds them present under a fingerprint that matches — and
+    /// carries the old video forward over a source that changed. The fingerprint is
+    /// recorded when the run delivers, so that build queues the video again.
+    #[tokio::test]
+    async fn a_video_changed_under_a_cancelled_run_is_queued_again_by_the_next_build() {
+        use moss_core::asset_paths;
+
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+        let mut svc = BuildServices::headless();
+        svc.session = Some(crate::system::folder_session::FolderSession::new(vault.clone()));
+
+        let item = "videos/clip.mov".to_string();
+        stage_and_prime_video(&svc, &vault, &staging, &item, b"clip bytes", false);
+        std::fs::write(vault.join(&item), b"clip bytes, edited").unwrap();
+
+        let (_, spawner) =
+            dispatch_with_controlled_spawner(&mut svc, &vault, &staging, &moss_dir, vec![item.clone()]).await;
+        assert_eq!(spawner.captured_count(), 1, "premise: a video whose source changed is queued");
+
+        // The user cancels before the run reaches the video.
+        svc.session.as_ref().unwrap().cancel.cancel();
+        tokio::task::spawn_blocking(move || spawner.run_captured()).await.unwrap();
+        assert_eq!(
+            std::fs::read(staging.join(asset_paths::to_mp4(&item))).unwrap(),
+            b"STAGED-SENTINEL",
+            "premise: the run that left delivered nothing, so the old video is still staged"
+        );
+
+        let (_, spawner) =
+            dispatch_with_controlled_spawner(&mut svc, &vault, &staging, &moss_dir, vec![item.clone()]).await;
+        assert_eq!(spawner.captured_count(), 1, "the source changed and nothing ever delivered it: queue it again");
+    }
+
+    /// The other half: a run that delivers records the fingerprint it was dispatched under,
+    /// so the next build carries the video forward instead of encoding it again. Without an
+    /// ffmpeg the run ships the original as the mp4, which is a delivery.
+    #[tokio::test]
+    async fn a_video_a_run_delivered_is_carried_forward_by_the_next_build() {
+        use moss_core::asset_paths;
+
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+        let mut svc = BuildServices::headless();
+
+        let item = "videos/clip.mov".to_string();
+        // Staged and sourced as `stage_and_prime_video` leaves them, but no run has
+        // vouched for the source yet.
+        std::fs::create_dir_all(vault.join("videos")).unwrap();
+        std::fs::write(vault.join(&item), b"clip bytes").unwrap();
+        for key in [asset_paths::to_mp4(&item), asset_paths::to_thumb(&item)] {
+            std::fs::create_dir_all(staging.join(&key).parent().unwrap()).unwrap();
+            std::fs::write(staging.join(&key), b"STAGED-SENTINEL").unwrap();
+        }
+
+        let (_, spawner) =
+            dispatch_with_controlled_spawner(&mut svc, &vault, &staging, &moss_dir, vec![item.clone()]).await;
+        assert_eq!(spawner.captured_count(), 1, "premise: nothing has delivered this source, so it is queued");
+        tokio::task::spawn_blocking(move || spawner.run_captured()).await.unwrap();
+        assert_eq!(
+            std::fs::read(staging.join(asset_paths::to_mp4(&item))).unwrap(),
+            b"clip bytes",
+            "premise: the run delivered the source as the mp4"
+        );
+
+        let (_, spawner) =
+            dispatch_with_controlled_spawner(&mut svc, &vault, &staging, &moss_dir, vec![item.clone()]).await;
+        assert_eq!(spawner.captured_count(), 0, "the run delivered this source: nothing to queue");
     }
 
     /// A staged output that cannot be checked is neither present nor missing.

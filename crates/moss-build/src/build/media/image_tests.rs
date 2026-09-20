@@ -2093,18 +2093,20 @@ fn image_fingerprint_test_lock() -> &'static std::sync::Mutex<()> {
 }
 
 #[test]
-fn fingerprint_cache_returns_true_on_unchanged() {
+fn fingerprint_cache_matches_only_what_was_recorded() {
     let _guard = image_fingerprint_test_lock().lock();
     // Use a unique path AND unique values per run to avoid state from other tests.
     let path = format!("img-{}.jpg", uuid::Uuid::new_v4());
     let a = format!("fp-a-{}", uuid::Uuid::new_v4());
-    // First call: no prior state for this path → unchanged = false
-    assert!(!check_and_update_image_item_fingerprint(&path, &a));
-    // Second call with same value → unchanged = true
-    assert!(check_and_update_image_item_fingerprint(&path, &a));
-    // Different value → unchanged = false
     let b = format!("fp-b-{}", uuid::Uuid::new_v4());
-    assert!(!check_and_update_image_item_fingerprint(&path, &b));
+    // Nothing recorded for this path → not unchanged.
+    assert!(!image_item_fingerprint_matches(&path, &a));
+    record_image_item_fingerprint(&path, a.clone());
+    assert!(image_item_fingerprint_matches(&path, &a));
+    // A different value is not unchanged, and asking about it records nothing: the
+    // dispatch that asks has not yet had its worker deliver the change.
+    assert!(!image_item_fingerprint_matches(&path, &b));
+    assert!(image_item_fingerprint_matches(&path, &a), "a check must not overwrite what a worker recorded");
 }
 
 /// The core per-item property: one path's fingerprint is independent of
@@ -2118,11 +2120,11 @@ fn fingerprint_cache_returns_true_on_unchanged() {
 fn fingerprint_cache_is_independent_per_path() {
     let path_a = format!("a-{}.jpg", uuid::Uuid::new_v4());
     let path_b = format!("b-{}.jpg", uuid::Uuid::new_v4());
-    check_and_update_image_item_fingerprint(&path_a, "fp-a");
-    check_and_update_image_item_fingerprint(&path_b, "fp-b");
+    record_image_item_fingerprint(&path_a, "fp-a".to_string());
+    record_image_item_fingerprint(&path_b, "fp-b".to_string());
     // Both still match their own last-recorded fingerprint.
-    assert!(check_and_update_image_item_fingerprint(&path_a, "fp-a"));
-    assert!(check_and_update_image_item_fingerprint(&path_b, "fp-b"));
+    assert!(image_item_fingerprint_matches(&path_a, "fp-a"));
+    assert!(image_item_fingerprint_matches(&path_b, "fp-b"));
 }
 
 // ======================================================================
@@ -2785,7 +2787,7 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
         fs::write(&webp_path, format!("SENTINEL-{}", i)).unwrap();
         let fp = compute_image_item_fingerprint(&root.to_string_lossy(), &item.source_path, &cfg)
             .expect("source exists and is stat-able");
-        check_and_update_image_item_fingerprint(&item.source_path.to_string_lossy(), &fp);
+        record_image_item_fingerprint(&item.source_path.to_string_lossy(), fp);
         untouched_webps.push(webp_path);
         items.push(item);
     }
@@ -4721,7 +4723,7 @@ async fn skip_path_carry_forward_registers_with_no_oid_not_a_stale_one() {
     let cfg = ImageCompressionConfig::default();
     let fp = compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &cfg)
         .expect("source exists and is stat-able");
-    check_and_update_image_item_fingerprint(&item.source_path.to_string_lossy(), &fp);
+    record_image_item_fingerprint(&item.source_path.to_string_lossy(), fp);
 
     let (tx, rx) = test_utils::build_test_coordinator();
     tokio::task::spawn_blocking(move || {
@@ -4839,7 +4841,7 @@ fn a_missing_output_is_dispatched_while_its_unaffected_sibling_takes_the_skip_pa
         let rel = item.source_path.to_string_lossy().to_string();
         let fp = compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &cfg)
             .expect("source exists and is stat-able");
-        check_and_update_image_item_fingerprint(&rel, &fp);
+        record_image_item_fingerprint(&rel, fp);
     }
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
@@ -5103,10 +5105,9 @@ impl RewriteVault {
         crate::build::cache::FileStat::stamp_in_the_second_of(&self.pic(), before.modified().unwrap());
     }
 
-    /// One rebuild of the image side. `with_fingerprint_gate` runs it the way the
-    /// desktop app does (a spawner, so each image is compared with the fingerprint
-    /// of the last build that considered it); without, the way `moss build` does.
-    async fn rebuild(&self, with_fingerprint_gate: bool) {
+    /// What the blocking phase hands the worker: the images that need encoding, by the
+    /// index the last worker persisted.
+    fn collect(&self) -> Vec<ImageConversionItem> {
         let paths = MossPaths::from_moss_dir(self.moss_dir.clone());
         let structure = crate::types::content::ProjectStructure {
             root_path: self.root.to_string_lossy().to_string(),
@@ -5136,12 +5137,30 @@ impl RewriteVault {
             crate::build::cache::ObjectStore::new(paths.cache_objects()),
         );
         let mut index = crate::build::cache::HashIndex::load(&paths.cache_hash_index());
-        let items = collect_images_for_conversion(
-            &structure,
-            &transforms,
-            &mut index,
-            &ImageCompressionConfig::default(),
-        );
+        collect_images_for_conversion(&structure, &transforms, &mut index, &ImageCompressionConfig::default())
+            .into_iter()
+            .filter(|item| item.skip.is_none())
+            .collect()
+    }
+
+    /// The desktop app's services: a spawner, so each image is compared with the
+    /// fingerprint of the last build that considered it. `moss build` has none.
+    fn app_services() -> BuildServices {
+        BuildServices {
+            spawner: Some(std::sync::Arc::new(OidTestInlineSpawner) as std::sync::Arc<dyn crate::build::ports::spawner::Spawner>),
+            ..BuildServices::headless()
+        }
+    }
+
+    /// The same, with the user having cancelled the folder's work before the worker runs.
+    fn cancelled_app_services(&self) -> BuildServices {
+        let session = crate::system::folder_session::FolderSession::new(self.root.clone());
+        session.cancel.cancel();
+        BuildServices { session: Some(session), ..Self::app_services() }
+    }
+
+    /// Dispatch `items` the way a build's background phase does.
+    async fn dispatch(&self, items: Vec<ImageConversionItem>, services: BuildServices) {
         let ctx = BackgroundContext {
             image_items: items,
             source_path: self.root.to_string_lossy().to_string(),
@@ -5149,15 +5168,16 @@ impl RewriteVault {
             moss_dir: self.moss_dir.clone(),
             ..BackgroundContext::for_test()
         };
-        let services = BuildServices {
-            spawner: with_fingerprint_gate.then(|| {
-                std::sync::Arc::new(OidTestInlineSpawner) as std::sync::Arc<dyn crate::build::ports::spawner::Spawner>
-            }),
-            ..BuildServices::headless()
-        };
         tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, None))
             .await
             .unwrap();
+    }
+
+    /// One rebuild of the image side. `with_fingerprint_gate` runs it the way the
+    /// desktop app does (see `app_services`); without, the way `moss build` does.
+    async fn rebuild(&self, with_fingerprint_gate: bool) {
+        let services = if with_fingerprint_gate { Self::app_services() } else { BuildServices::headless() };
+        self.dispatch(self.collect(), services).await;
     }
 }
 
@@ -5193,6 +5213,83 @@ async fn a_same_size_rewrite_in_the_same_second_gets_past_the_fingerprint_gate()
     vault.rebuild(true).await;
 
     assert_ne!(vault.webp(), first, "the fingerprint gate carried the old variant forward over a changed source");
+}
+
+// ----- the fingerprint gate vouches for an image only once its worker delivered it -----
+
+/// The desktop app skips an image whose fingerprint matches the one recorded the last
+/// time it was considered, when its variant is still in staging. If the fingerprint is
+/// recorded at dispatch, a worker that leaves without encoding (the user cancelled,
+/// the source went back to the cloud) has already vouched for a source it never
+/// encoded, and the variant of the OLD bytes — kept in staging by the stale-output
+/// pass — is what the next build's gate finds present and skips.
+///
+/// Build 1 encodes red. The source becomes blue. Build 2 is dispatched over blue and its
+/// worker `leaves`. Build 3 finds blue unchanged since build 2, and must still encode it.
+async fn a_source_changed_under_a_worker_that_left_is_encoded_by_the_next_build(
+    leave: impl FnOnce(&RewriteVault) -> (BuildServices, Option<crate::build::icloud::pretend::Guard>),
+) {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.rebuild(true).await;
+    let first = vault.webp();
+
+    vault.rewrite_in_the_same_second([30, 30, 200]);
+    let items = vault.collect();
+    let (services, still_holding) = leave(&vault);
+    vault.dispatch(items, services).await;
+    drop(still_holding);
+    assert_eq!(vault.webp(), first, "premise: the worker that left encoded nothing, so the old variant is still staged");
+
+    vault.rebuild(true).await;
+
+    assert_ne!(vault.webp(), first, "pic.png is blue on disk but its variant is still the red encode: the gate skipped it");
+}
+
+/// The other half: a worker that delivers vouches for its source, so the next build
+/// carries the variant forward (registered without an oid — only a worker's own
+/// delivery has one) instead of dispatching it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_a_worker_delivered_is_carried_forward_by_the_next_build() {
+    use crate::build::coordinator::test_utils;
+
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let mut oids = Vec::new();
+    for _ in 0..2 {
+        let (tx, rx) = test_utils::build_test_coordinator();
+        let ctx = BackgroundContext {
+            image_items: vault.collect(),
+            source_path: vault.root.to_string_lossy().to_string(),
+            staging_dir: vault.moss_dir.join("build/staging"),
+            moss_dir: vault.moss_dir.clone(),
+            ..BackgroundContext::for_test()
+        };
+        let services = RewriteVault::app_services();
+        tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, Some(tx))).await.unwrap();
+        let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+        oids.push(sealed.staged_oid("pic.webp").map(str::to_string));
+    }
+
+    assert!(oids[0].is_some(), "premise: the first build's worker delivered the variant");
+    assert_eq!(oids[1], None, "the second build dispatched an image its worker had already delivered");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_changed_under_a_cancelled_worker_is_encoded_by_the_next_build() {
+    a_source_changed_under_a_worker_that_left_is_encoded_by_the_next_build(|vault| (vault.cancelled_app_services(), None)).await;
+}
+
+/// The other exit that leaves the old variant: the source is in the cloud when the worker
+/// gets to it (it was local when the blocking phase collected it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_changed_under_a_worker_that_deferred_it_to_the_cloud_is_encoded_by_the_next_build() {
+    a_source_changed_under_a_worker_that_left_is_encoded_by_the_next_build(|vault| {
+        (RewriteVault::app_services(), Some(crate::build::icloud::pretend::evicted(&vault.pic())))
+    })
+    .await;
 }
 
 /// Self-heal relinks a cached output by the source's oid. A same-size rewrite in the

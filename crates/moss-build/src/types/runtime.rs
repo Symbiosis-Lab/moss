@@ -380,7 +380,7 @@ impl Default for ChildProcessRegistry {
 pub struct VideoConversionState {
     /// Monotonically increasing ID for the current conversion
     conversion_id: AtomicU64,
-    /// Fingerprint of the last dispatch that considered each video, keyed by
+    /// Fingerprint of the source a run last delivered for each video, keyed by
     /// the video's relative source path. Per-item (not a single whole-set
     /// fingerprint) so that one added/changed/removed video no longer
     /// invalidates every other, untouched video's skip decision — see
@@ -452,16 +452,20 @@ impl VideoConversionState {
         self.conversion_id.load(Ordering::SeqCst)
     }
 
-    /// Check `path`'s fingerprint against the value stored from the last
-    /// dispatch that considered it, and update the stored value to
-    /// `new_fingerprint`. Returns true if it matches (this one video is
-    /// unchanged), false otherwise. Independent per path: a change to one
-    /// video's stored fingerprint never affects another's.
-    pub fn check_and_update_item_fingerprint(&self, path: &str, new_fingerprint: &str) -> bool {
-        let mut map = self.last_video_fingerprints.lock().unwrap();
-        let matches = map.get(path).map(String::as_str) == Some(new_fingerprint);
-        map.insert(path.to_string(), new_fingerprint.to_string());
-        matches
+    /// Whether `path`'s fingerprint is the one recorded when a run last delivered
+    /// it (`end_item`): this one video is unchanged since. Read only — a dispatch
+    /// that finds a change must not vouch for it, because the run it spawns may
+    /// leave (the user cancelled, a newer dispatch superseded it) without
+    /// delivering, and the previous version's mp4 and poster it leaves in staging
+    /// are exactly what the next dispatch's skip check finds present. Independent
+    /// per path.
+    pub fn item_fingerprint_matches(&self, path: &str, fingerprint: &str) -> bool {
+        self.last_video_fingerprints.lock().unwrap().get(path).map(String::as_str) == Some(fingerprint)
+    }
+
+    /// Record that `path` was delivered for the source this fingerprint describes.
+    pub fn record_item_fingerprint(&self, path: &str, fingerprint: &str) {
+        self.last_video_fingerprints.lock().unwrap().insert(path.to_string(), fingerprint.to_string());
     }
 
     /// Whether a fingerprint has ever been recorded for `path` in this process —
@@ -500,12 +504,17 @@ impl VideoConversionState {
     }
 
     /// `path` ended in run `epoch`; `landed` names what it put in staging that
-    /// no build has registered (empty when the run registers its own).
-    pub fn end_item(&self, path: &str, epoch: u64, landed: impl IntoIterator<Item = String>) {
+    /// no build has registered (empty when the run registers its own). When the run
+    /// `delivered` bytes for it, the fingerprint it was dispatched under is recorded
+    /// as the one those bytes are for — only by the run that owns the item, so a
+    /// superseded run winding down cannot vouch for what its successor is encoding.
+    pub fn end_item(&self, path: &str, epoch: u64, landed: impl IntoIterator<Item = String>, delivered: bool) {
         let mut runs = self.runs.lock().unwrap();
         runs.landed.extend(landed);
         if runs.running.get(path).is_some_and(|r| r.epoch == epoch) {
-            runs.running.remove(path);
+            if let Some(item) = runs.running.remove(path).filter(|_| delivered) {
+                self.record_item_fingerprint(path, &item.fingerprint);
+            }
         }
     }
 
@@ -943,11 +952,11 @@ mod tests {
         state.begin_run(1, [("a.mov".to_string(), "fp".to_string(), vec![])]);
         state.begin_run(2, [("a.mov".to_string(), "fp".to_string(), vec![])]);
 
-        state.end_item("a.mov", 1, []);
+        state.end_item("a.mov", 1, [], false);
         state.end_run(1);
         assert!(state.is_running("a.mov", "fp"));
 
-        state.end_item("a.mov", 2, []);
+        state.end_item("a.mov", 2, [], false);
         assert!(!state.is_running("a.mov", "fp"));
     }
 
@@ -1019,26 +1028,49 @@ mod tests {
     #[test]
     fn test_video_item_fingerprint_first_call_returns_false() {
         let state = VideoConversionState::new();
-        // First call with any fingerprint should return false (no previous)
-        assert!(!state.check_and_update_item_fingerprint("a.mov", "abc123"));
+        // Nothing recorded for this path yet: not unchanged.
+        assert!(!state.item_fingerprint_matches("a.mov", "abc123"));
     }
 
     #[test]
     fn test_video_item_fingerprint_same_returns_true() {
         let state = VideoConversionState::new();
-        state.check_and_update_item_fingerprint("a.mov", "abc123");
-        // Second call with same fingerprint should return true (match)
-        assert!(state.check_and_update_item_fingerprint("a.mov", "abc123"));
+        state.record_item_fingerprint("a.mov", "abc123");
+        assert!(state.item_fingerprint_matches("a.mov", "abc123"));
     }
 
+    /// Asking about a changed video records nothing: the dispatch that asks has not yet
+    /// had its run deliver the change.
     #[test]
-    fn test_video_item_fingerprint_different_returns_false() {
+    fn test_video_item_fingerprint_different_returns_false_and_records_nothing() {
         let state = VideoConversionState::new();
-        state.check_and_update_item_fingerprint("a.mov", "abc123");
-        // Different fingerprint should return false and update
-        assert!(!state.check_and_update_item_fingerprint("a.mov", "def456"));
-        // Now the new fingerprint should match
-        assert!(state.check_and_update_item_fingerprint("a.mov", "def456"));
+        state.record_item_fingerprint("a.mov", "abc123");
+        assert!(!state.item_fingerprint_matches("a.mov", "def456"));
+        assert!(state.item_fingerprint_matches("a.mov", "abc123"), "a check must not overwrite what a run recorded");
+    }
+
+    /// The fingerprint a run was dispatched under is recorded when that run delivers the
+    /// item, and not when it leaves without: a run that delivered nothing has vouched for
+    /// nothing. Only the run that owns the item records it, so a superseded run winding
+    /// down cannot vouch for what its successor is encoding.
+    #[test]
+    fn an_item_is_recorded_only_by_the_run_that_owns_it_and_delivered_it() {
+        let state = VideoConversionState::new();
+        let dispatched = |epoch: u64, path: &str| state.begin_run(epoch, [(path.to_string(), "fp".to_string(), vec![])]);
+
+        dispatched(1, "leaves.mov");
+        state.end_item("leaves.mov", 1, [], false);
+        assert!(!state.item_fingerprint_matches("leaves.mov", "fp"), "recorded for a run that delivered nothing");
+
+        dispatched(1, "superseded.mov");
+        dispatched(2, "superseded.mov");
+        state.end_item("superseded.mov", 1, [], true);
+        assert!(!state.item_fingerprint_matches("superseded.mov", "fp"), "recorded by a run that no longer owns the item");
+        assert!(state.is_running("superseded.mov", "fp"), "and the successor still owns it");
+
+        dispatched(3, "done.mov");
+        state.end_item("done.mov", 3, [], true);
+        assert!(state.item_fingerprint_matches("done.mov", "fp"));
     }
 
     /// The core per-item property: one path's fingerprint is independent of
@@ -1048,22 +1080,22 @@ mod tests {
     #[test]
     fn test_video_item_fingerprint_is_independent_per_path() {
         let state = VideoConversionState::new();
-        state.check_and_update_item_fingerprint("a.mov", "fp-a");
-        state.check_and_update_item_fingerprint("b.mov", "fp-b");
+        state.record_item_fingerprint("a.mov", "fp-a");
+        state.record_item_fingerprint("b.mov", "fp-b");
         // Both still match their own last-recorded fingerprint.
-        assert!(state.check_and_update_item_fingerprint("a.mov", "fp-a"));
-        assert!(state.check_and_update_item_fingerprint("b.mov", "fp-b"));
+        assert!(state.item_fingerprint_matches("a.mov", "fp-a"));
+        assert!(state.item_fingerprint_matches("b.mov", "fp-b"));
     }
 
     #[test]
     fn test_retain_item_fingerprints_drops_removed_paths() {
         let state = VideoConversionState::new();
-        state.check_and_update_item_fingerprint("a.mov", "fp-a");
-        state.check_and_update_item_fingerprint("b.mov", "fp-b");
+        state.record_item_fingerprint("a.mov", "fp-a");
+        state.record_item_fingerprint("b.mov", "fp-b");
         state.retain_item_fingerprints(&HashSet::from(["a.mov".to_string()]));
         // "a.mov" is still known...
-        assert!(state.check_and_update_item_fingerprint("a.mov", "fp-a"));
+        assert!(state.item_fingerprint_matches("a.mov", "fp-a"));
         // ...but "b.mov" was dropped, so the same fingerprint now reads as new.
-        assert!(!state.check_and_update_item_fingerprint("b.mov", "fp-b"));
+        assert!(!state.item_fingerprint_matches("b.mov", "fp-b"));
     }
 }

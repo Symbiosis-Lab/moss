@@ -13,7 +13,7 @@
         "crates/moss-build/src/build/markdown/html_post.rs": 977,
         "crates/moss-build/src/build/markdown/pipeline.rs": 2143,
         "crates/moss-build/src/build/media/ffmpeg.rs": 1672,
-        "crates/moss-build/src/build/media/image.rs": 2952,
+        "crates/moss-build/src/build/media/image.rs": 2958,
         "crates/moss-build/src/build/media/pipeline.rs": 1804,
         "crates/moss-build/src/build/media/video.rs": 1810,
         "crates/moss-build/src/build/page/meta.rs": 1366,
@@ -453,6 +453,17 @@
         "crates/moss-build/src/build/cache.rs": 1573
       },
       "reason": "cache.rs +27: HashIndex counts its own answers so a build can say what the index did (one info line, [cache] hash-index: N hits, M rehashed, printed once at the post-join point in await_completion). Two process-wide atomics, a count_hit wrapper on lookup and lookup_whole_second, one increment in update (every path that hashes for want of a hit records through it, so there is no per-caller increment to forget), and the report function; the reviewer of a930263 had to build probe binaries to count index hits. Not split out: moving HashIndex to its own module adds a 70th child to build/ (baseline 69), a relocation to do on its own.",
+      "date": "2026-09-20"
+    },
+    {
+      "row": "prod_lines_per_file",
+      "from": {
+        "crates/moss-build/src/build/media/image.rs": 2952
+      },
+      "to": {
+        "crates/moss-build/src/build/media/image.rs": 2958
+      },
+      "reason": "image.rs +6 (2952 to 2958): the image worker takes the item's fingerprint before it reads the source and records it in its teardown for an item that delivered, where the dispatch used to record it before any worker had run (the desktop gate then vouched for sources a cancelled or cloud-deferred worker never encoded). Two small fns (matches / record) replace the one check-and-update. Expected to come back down when the fingerprint becomes a (FileStat, params) value.",
       "date": "2026-09-20"
     }
   ]

@@ -2063,12 +2063,9 @@ fn test_dispatch_skips_when_item_fingerprint_unchanged() {
     let services = BuildServices::headless();
     let fingerprint = "test_fingerprint_abc123";
 
-    assert!(!services
-        .cancellation
-        .check_and_update_item_fingerprint("videos/a.mov", fingerprint));
-    assert!(services
-        .cancellation
-        .check_and_update_item_fingerprint("videos/a.mov", fingerprint));
+    assert!(!services.cancellation.item_fingerprint_matches("videos/a.mov", fingerprint));
+    services.cancellation.record_item_fingerprint("videos/a.mov", fingerprint);
+    assert!(services.cancellation.item_fingerprint_matches("videos/a.mov", fingerprint));
 }
 
 // =========================================================================

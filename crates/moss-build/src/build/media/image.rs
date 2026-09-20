@@ -1409,16 +1409,20 @@ fn image_fingerprint_cell() -> &'static Mutex<HashMap<String, String>> {
     IMAGE_FINGERPRINTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Check `path`'s fingerprint against the value stored from the last
-/// dispatch that considered it, and update the stored value to `new`.
-/// Returns `true` if it matches (this one image is unchanged), `false`
-/// otherwise. Independent per path: a change to one image's stored
-/// fingerprint never affects another's.
-pub(crate) fn check_and_update_image_item_fingerprint(path: &str, new: &str) -> bool {
-    let mut map = image_fingerprint_cell().lock().expect("image fp mutex");
-    let matches = map.get(path).map(String::as_str) == Some(new);
-    map.insert(path.to_string(), new.to_string());
-    matches
+/// Whether `path`'s fingerprint is the one recorded when a worker last delivered its
+/// variant (`record_image_item_fingerprint`): this one image is unchanged since. Read
+/// only — a dispatch that finds a change must not vouch for the change, because the
+/// worker it spawns may leave (the user cancelled, the source went back to the cloud,
+/// the hash failed) without encoding it, and the old variant it leaves in staging is
+/// exactly what the next dispatch's skip check finds present. Independent per path.
+pub(crate) fn image_item_fingerprint_matches(path: &str, fingerprint: &str) -> bool {
+    image_fingerprint_cell().lock().expect("image fp mutex").get(path).map(String::as_str) == Some(fingerprint)
+}
+
+/// Record that `path`'s variant was delivered for the source this fingerprint
+/// describes.
+pub(crate) fn record_image_item_fingerprint(path: &str, fingerprint: String) {
+    image_fingerprint_cell().lock().expect("image fp mutex").insert(path.to_string(), fingerprint);
 }
 
 /// Drop stored fingerprints for paths not in `keep` — called once per
@@ -1855,6 +1859,10 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                         break;
                     }
                     let item = &ctx.items[index];
+                    // Before anything reads the source, so a write landing during the
+                    // encode leaves a fingerprint the file no longer has. Recorded in
+                    // the teardown below, and only for an item that delivered.
+                    let fingerprint = compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &ctx.config);
                     // The whole of one image's decision. Every exit is a value,
                     // never a `return` with teardown attached — see `ItemStep`.
                     // Nothing in here releases a UiBound permit, pushes to the
@@ -2205,6 +2213,9 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     // The one teardown.
                     match step {
                         ItemStep::Handled { delivered, failed, advisories: item_advisories, encoded } => {
+                            if let Some(fingerprint) = fingerprint.filter(|_| !delivered.is_empty()) {
+                                record_image_item_fingerprint(&item.source_path.to_string_lossy(), fingerprint);
+                            }
                             record_deliveries(services, &produced_webp_paths, delivered);
                             if let Some(ref registry) = services.assets {
                                 for (url, err) in failed {
@@ -2631,7 +2642,7 @@ fn self_heal_before_registration(
 /// In GUI mode the skip/dispatch decision is made per image, not for the set
 /// as a whole: each image's own fingerprint
 /// (`compute_image_item_fingerprint`) is compared against the fingerprint
-/// recorded the last time THAT image was considered. An image whose
+/// recorded when a worker last delivered THAT image. An image whose
 /// fingerprint matches is a skip candidate; self-heal (re-materializing its
 /// `.webp` from the CAS blob store) is attempted before deciding, and only
 /// if that leaves the output present is it carried forward without ever
@@ -2701,14 +2712,9 @@ pub(crate) fn dispatch_image_conversions(
             // A fingerprint that can't be computed (source unreadable) can't
             // be proven unchanged either — dispatch it rather than risk
             // carrying forward a stale skip.
-            let fingerprint_matched = match compute_image_item_fingerprint(
-                &ctx.source_path,
-                &item.source_path,
-                &config,
-            ) {
-                Some(fp) => check_and_update_image_item_fingerprint(&rel_source, &fp),
-                None => false,
-            };
+            let fingerprint_matched =
+                compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &config)
+                    .is_some_and(|fp| image_item_fingerprint_matches(&rel_source, &fp));
 
             // Self-heal is only attempted for a skip CANDIDATE: resolving the
             // source hash can require a real read+hash on a cache miss (see
