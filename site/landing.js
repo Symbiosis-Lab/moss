@@ -1,0 +1,3835 @@
+// The whole harness surface in one place: a read side, filled in as each
+// piece of state comes into existence below, and a write side the harness
+// itself sets (stepClock/stepLimit/scrollV, read where pour() drives the
+// wash; faults, honoured at each fault's own call site so an outside write
+// reaches every caller, internal or not).
+const landing = window.__landing = { title: {}, faults: { captureHang: false } };
+// The composition (the box width is --ed-w, in the stylesheet).
+const GEOM = { cellW: 660, cellH: 620, pad: 80 };
+// The real homepages' opening text, edited as the vault's index.md.
+const BLAKE_FRONTMATTER = `---
+uid: 8f508658
+description: "I must Create a System, or be enslav'd by another Man's. I will not Reason & Compare: my business is to Create."
+children: false
+---
+
+`;
+const SEED = '';
+const TYPED = window.__LANG === 'zh'
+  ? '生在曹洞臨濟有，穿過臨濟曹洞有。\n洞曹臨濟兩俱非，羸羸然若喪家之狗。\n還識得此人麼？\n羅漢道底。'
+  : `I must Create a System, or be enslav'd by another Man's.${'  '}
+I will not Reason & Compare: my business is to Create.`;
+const FINAL = SEED + TYPED;
+const FULL_SOURCE = window.__LANG === 'zh' ? FINAL : BLAKE_FRONTMATTER + FINAL;
+const BASE_TEX_W = GEOM.cellW + 2 * GEOM.pad, BASE_TEX_H = GEOM.cellH + 2 * GEOM.pad;
+const MAX_PRINT_EDGE = 2048;
+let printRect = { x: -GEOM.pad, y: -GEOM.pad, w: BASE_TEX_W, h: BASE_TEX_H };
+let pendingPrintRect = null, printGeneration = 0;
+let printExpanded = false;
+const printW = () => printRect.w, printH = () => printRect.h;
+function applyPrintRect(next) {
+  printRect = next; printGeneration++;
+  if (typeof canvas !== 'undefined' && canvas) {
+    canvas.style.left = next.x + 'px'; canvas.style.top = next.y + 'px'; canvas.style.right = 'auto'; canvas.style.bottom = 'auto';
+    canvas.style.width = next.w + 'px'; canvas.style.height = next.h + 'px';
+  }
+}
+function setPrintRect(next) {
+  if (next.x === printRect.x && next.y === printRect.y && next.w === printRect.w && next.h === printRect.h) return;
+  if (typeof running === 'function' && running()) { pendingPrintRect = next; return; }
+  applyPrintRect(next); pendingPrintRect = null; sheets.fill(null);
+}
+function flushPrintRect() { if (pendingPrintRect && !running()) { const next = pendingPrintRect; pendingPrintRect = null; applyPrintRect(next); sheets.fill(null); } }
+// The scenes, in the order the copy reaches them: the editor, the site, the
+// three windows. `JOINS[i]` is the join between scene i and i+1 — every one of
+// them re-wets the sheet today, but a join is not a wash by definition, and a
+// later boundary can carry a different mechanism without touching the trigger.
+const PHASE = ['write', 'live', 'ships', 'deploy', 'share'];
+const SHIPS = PHASE.indexOf('ships'), DEPLOY = PHASE.indexOf('deploy'), SHARE = PHASE.indexOf('share');
+// The box's leftward spill in the widened shape, as the stylesheet's own
+// calc(100% + 32px): scene 4 measures against that shape whatever is on screen.
+const SPILL = 32;
+// Scene 3's own reserved margin: how far past the preview's own edge the
+// layout leaves room for, on either side, for whatever scene 3 needs to show
+// or drag past that edge — sized once as a sibling's peek, kept now as the
+// original card layout, so the composition's
+// own width (VIS_W, PAGE_MAX below) never has to move for scene 3's redesign.
+// SIB_MS/STAGGER/LEAD still pace the two background layers' own fade-in on
+// arrival — unrelated to any drag, kept exactly as tuned. The wash's own
+// constants are further down, at `const DT =`; a pacing complaint here is a
+// change to these.
+const PEEK = 150, SIB_MS = 320, SIB_STAGGER = 170, SIB_LEAD = 140;
+// Scene 4's control. PUB_SCALE/PUB_MS grow it, alone, before anything else
+// happens. PUB_BEAT is the pause after growth before the
+// targets start popping (below). Going back, the control drops last, after
+// PUB_OUT_DELAY — FAN_OUT_MS, which the join out of scene 4 waits on before
+// the sheet may be wetted again, gives the targets' own (much shorter) retreat
+// room inside that budget rather than timing against it directly.
+const PUB_SCALE = 2.6, PUB_MS = 420, PUB_BEAT = 120, PUB_OUT_DELAY = 450;
+const FAN_OUT_MS = PUB_OUT_DELAY + PUB_MS;
+// Scene 5's close. The loop, its poster and the headline are the page's own
+// arguments, so another cut of the footage or another line can be put in front
+// of the director without an edit. SCRIM is how much paper lies over the footage
+// so the line reads off it. XF_SPAN is the share of the distance scene 4 owns —
+// from its own resting position to scene 5's — that the crossfade is scrubbed
+// over: the last tenth of it. A pacing complaint in this scene is a change to
+// these numbers.
+const arg = (k, d) => new URLSearchParams(location.search).get(k) || d;
+const LOOP_SRC = arg('loopVideo', 'scene5-loop/out/v5-makers.mp4');
+const LOOP_POSTER = arg('loopPoster', 'scene5-loop/out/v5-makers-poster.jpg');
+const HEADLINE = arg('headline', 'Your internet publisher is here.');
+const SCRIM = 0.72, XF_SPAN = 0.1;
+// The one window radius every sheet on the stage wears (--win-r in the
+// stylesheet); mirrored here for the same reason GEOM mirrors --cell-w — a
+// print built on canvas has no custom property to read it from.
+const WIN_R = 12;
+// Only the three creative artifacts move. Their initial positions are
+// measured against the available viewport when Scene 3 opens.
+const S3_ORDER = ['sk', 'nb', 'video'];
+// the composition is three layers wide still: the cell, its 32px spill, two peeks
+const VIS_W = 660 + 32 + 2 * PEEK;
+// The width the copy column is never scaled below: its own full measure, not the
+// narrowest it can be set in. A third scene's heading is a long line, and the
+// composition gives ground to it rather than breaking it in three.
+const COPY_MIN = 440;
+// The whole composition, capped at what it needs and no more, so a wide screen
+// does not pull the sheets and the copy apart — the cap movie5 wrote as 1440,
+// now that three sheets and a full measure decide the number.
+const PAGE_MAX = 56 + VIS_W + 96 + COPY_MIN;
+// Text geometry chooses a boundary and progress; the visual track renders it.
+// The first three boundaries share liquid pigment. The third also carries a
+// solid Publish control. The last mobile boundary turns the full logo group
+// into gray film pigment while the full-screen movie takes over.
+const JOINS = [
+  { name: 'wash', wash: true },
+  { name: 'slide', wash: true },
+  { name: 'fan', wash: true },
+  { name: 'crossfade', run: (to) => fade(to) },
+];
+const joinAt = (a, b) => JOINS[Math.min(a, b)];
+
+
+for (const [k, v] of Object.entries({ '--peek': PEEK + 'px',
+  '--sib-ms': SIB_MS + 'ms', '--sib-stagger': SIB_STAGGER + 'ms', '--sib-lead': SIB_LEAD + 'ms', '--vis-w': VIS_W + 'px', '--page-max': PAGE_MAX + 'px',
+  '--pub-k': String(PUB_SCALE), '--pub-ms': PUB_MS + 'ms', '--pub-out-delay': PUB_OUT_DELAY + 'ms', '--scrim': String(SCRIM) }))
+  document.documentElement.style.setProperty(k, v);
+
+const $ = (id) => document.getElementById(id);
+const stage = $('stage'), box = $('box'), canvas = $('gl'), cell = $('cell');
+const edFrame = $('ed'), shFrame = $('sh'), vdFrame = $('vd');
+const five = $('five'), loopVid = $('loop');
+const page = document.querySelector('.page');
+// one frame per scene; scenes 2 and 3 are both moss's shell, around a different
+// page, and scene 4 is that same frame cut down to the publish control. Scene 5
+// has no frame and is never printed: no wash reaches it.
+const FRAMES = [edFrame, shFrame, vdFrame, vdFrame];
+const scenesEl = [...document.querySelectorAll('.scene')];
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+const clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const smooth = (a, b, t) => { const x = clamp01((t - a) / (b - a)); return x * x * (3 - 2 * x); };
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Scene 1's plates (director's call, 2026-09-18): every image the real home
+// page uses — blakesnotebook.com's own 9, zhudasnotebook.com's own 7 (two of
+// its <img>s repeat a collection cover, so 7 distinct files) — not a crop of
+// the article scene 2 shows. The plate directories are 640px, quality-70
+// derivatives of those live images, sized for loose sheets that render at
+// 160–260 CSS px without making the hidden preview frames use lower-resolution
+// article assets.
+const PLATE_SET = window.__LANG === 'zh'
+  ? {"dir": "zhuda/plates", "images": ["376d25daf9aa.jpg", "3926a51d36d5.jpg", "9e4725e1101e.jpg", "e265c76d268f.jpg", "e4772754b3b1.jpg", "e65a0ba027e5.jpg", "eab0bc5785fa.jpg"]}
+  : {"dir": "blake/plates", "images": ["3b119ebffab3.jpg", "b8dcbfe35cbd.jpg", "38211f928ad5.jpg", "171a382c9cc2.jpg", "771aaf08cedb.jpg", "f34b78575d36.jpg", "50e62b346c5f.jpg", "5ac4f7fb652f.jpg", "0bb22b56b263.jpg"]};
+const PLATE_ASPECT = window.__LANG === 'zh' ? {'376d25daf9aa.jpg': 280 / 640, '3926a51d36d5.jpg': 640 / 622, '9e4725e1101e.jpg': 640 / 472, 'e265c76d268f.jpg': 426 / 640, 'e4772754b3b1.jpg': 337 / 640, 'e65a0ba027e5.jpg': 426 / 640, 'eab0bc5785fa.jpg': 318 / 640} : {};
+// Where a plate may live, in #cell's own coordinates. The viewport-aware
+// bounds let a reader drag beyond the resting sheet while the print rectangle
+// grows to include the visible domain; the state textures remain bounded.
+function plateScatterBounds() {
+  const edW = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ed-w')) || 520;
+  const margin = 14;
+  const r = cell.getBoundingClientRect(), scale = r.width / GEOM.cellW || 1;
+  return { xMin: Math.max(-360, (margin - r.left) / scale), xMax: GEOM.cellW - edW + 60, yMin: -GEOM.pad + margin, yMax: GEOM.cellH + GEOM.pad - margin };
+}
+function plateBounds() {
+  const r = cell.getBoundingClientRect(), s = Math.max(SCALE, 0.5), margin = 80, limit = 1800;
+  const visible = { xMin: -r.left / s, xMax: (innerWidth - r.left) / s, yMin: -r.top / s, yMax: (innerHeight - r.top) / s };
+  return { xMin: Math.max(-limit, visible.xMin - margin), xMax: Math.min(limit, Math.max(GEOM.cellW + GEOM.pad, visible.xMax + margin)), yMin: Math.max(-limit, visible.yMin - margin), yMax: Math.min(limit, Math.max(GEOM.cellH + GEOM.pad, visible.yMax + margin)) };
+}
+function currentPrintRect() {
+  let xMin = -GEOM.pad, yMin = -GEOM.pad, xMax = GEOM.cellW + GEOM.pad, yMax = GEOM.cellH + GEOM.pad;
+  for (const pl of document.querySelectorAll('.plate')) { xMin = Math.min(xMin, pl.offsetLeft - GEOM.pad); yMin = Math.min(yMin, pl.offsetTop - GEOM.pad); xMax = Math.max(xMax, pl.offsetLeft + pl.offsetWidth + GEOM.pad); yMax = Math.max(yMax, pl.offsetTop + pl.offsetHeight + GEOM.pad); }
+  if (typeof CARDS !== 'undefined') for (const c of Object.values(CARDS)) {
+    if (!c.pose) continue;
+    xMin = Math.min(xMin, c.pose.x - GEOM.pad); yMin = Math.min(yMin, c.pose.y - GEOM.pad);
+    xMax = Math.max(xMax, c.pose.x + c.width * c.pose.s + GEOM.pad); yMax = Math.max(yMax, c.pose.y + c.height * c.pose.s + GEOM.pad);
+  }
+  xMin = Math.max(-MAX_PRINT_EDGE, xMin); yMin = Math.max(-MAX_PRINT_EDGE, yMin);
+  xMax = Math.min(MAX_PRINT_EDGE, xMax); yMax = Math.min(MAX_PRINT_EDGE, yMax);
+  return { x: xMin, y: yMin, w: xMax - xMin, h: yMax - yMin };
+}
+// Random per load (director's call #1); the only requirement is that it reads
+// as a scatter and not a grid, and that nothing clips off-viewport (the
+// initial scatter uses its own resting bounds, while dragged plates use the
+// viewport-aware bounds above, and the print domain follows them).
+// margin sits well inside the page's real left gutter at every viewport this
+// composition scales to) or piles unreadably (the greedy least-overlap pick
+// below). Each plate tries a handful of random rects and keeps the one that
+// overlaps existing plates least, rather than a single blind draw.
+function scatterPlates(plates) {
+  const b = plateScatterBounds();
+  const rand = (lo, hi) => lo + Math.random() * (hi - lo);
+  const rects = [];
+  for (const pl of plates) {
+    const aspect = PLATE_ASPECT[pl.dataset.lqip] || 1;
+    const long = Math.round(rand(190, 280));
+    const w = aspect >= 1 ? long : Math.max(96, Math.round(long * aspect));
+    const h = aspect >= 1 ? Math.max(96, Math.round(long / aspect)) : long;
+    const xHi = Math.max(b.xMin, b.xMax - w), yHi = Math.max(b.yMin, b.yMax - h);
+    let bx = b.xMin, by = b.yMin, best = Infinity;
+    for (let t = 0; t < 40 && best > 0; t++) {
+      const x = rand(b.xMin, xHi), y = rand(b.yMin, yHi);
+      let score = 0;
+      for (const r of rects) score += Math.max(0, Math.min(x + w, r.x + r.w) - Math.max(x, r.x)) * Math.max(0, Math.min(y + h, r.y + r.h) - Math.max(y, r.y));
+      if (score < best) { best = score; bx = x; by = y; }
+    }
+    rects.push({ x: bx, y: by, w, h });
+    pl.style.left = bx + 'px'; pl.style.top = by + 'px'; pl.style.width = w + 'px'; pl.style.height = h + 'px';
+    pl.style.setProperty('--r', (Math.round(rand(-7, 7) * 10) / 10) + 'deg');
+  }
+}
+function buildPlates() {
+  const els = PLATE_SET.images.map((key) => {
+    const pl = document.createElement('div');
+    pl.className = 'plate'; pl.id = 'p-' + key; pl.dataset.lqip = key;
+    const im = document.createElement('img');
+    im.alt = ''; im.decoding = 'async'; im.dataset.src = PLATE_SET.dir + '/' + key;
+    pl.appendChild(im);
+    return pl;
+  });
+  cell.prepend(...els);
+  scatterPlates(els);
+  return els;
+}
+const plateEls = buildPlates();
+
+// Each local homepage image fades in after decoding.
+plateEls.forEach((pl) => { const im = pl.querySelector('img'); im.addEventListener('load', () => im.classList.add('in')); im.src = im.dataset.src; });
+
+// Fit: the cell is a fixed composition; smaller windows scale it as one.
+let SCALE = 1, baseScale = 1;
+const mobileLayout = () => innerWidth <= 900;
+const opening = document.getElementById('intro');
+const openingTitle = opening.querySelector('h1');
+// The title's own pigment sim is set up further down (after makeSim/raster/
+// advanceWash exist); this stub is what updateOpening can safely
+// call from the very first frame, well before that setup has run. Once armed,
+// titleDissolve owns the h1's opacity and its canvas; until then the h1 is
+// left exactly as the document painted it.
+let titleDissolve = null;
+let pendingTitleP = 1;
+let titleSteps = 0;
+// True once setupTitleDissolve has decided the title's own fate (armed,
+// fell back, or does not apply here) — a harness signal so a test can wait
+// for that decision instead of guessing how long it takes.
+let titleReady = false;
+// Which mechanism owns the title: 'wash' once the real sim is driving it,
+// 'fade' for the plain-opacity fallback (no WebGL2, or a lost context), and
+// 'plain' where none of this applies at all (mobile, reduced motion) or
+// before setup has decided. A harness signal so a test can require the real
+// wash rather than silently passing on the fallback it exists to catch.
+let titleMode = 'plain';
+function driveTitleDissolve(titleP) {
+  pendingTitleP = titleP;
+  if (titleDissolve) titleDissolve(titleP);
+}
+// Overwritten once the title's own sim is ready; correct on its own for
+// mobile, reduced motion, and the brief window before that setup finishes.
+landing.title.ink = () => Number(getComputedStyle(openingTitle).opacity);
+function updateOpening() {
+  // On phones the opening and first scene are ordinary document flow. Their
+  // geometry is established once in fit(); scrolling only moves that flow.
+  if (mobileLayout()) return;
+  const visible = Math.max(0, opening.getBoundingClientRect().bottom);
+  const introP = Math.min(1, visible / Math.max(1, opening.offsetHeight));
+  const first = document.querySelector('#c1 .scene-text').getBoundingClientRect();
+  const firstRest = Math.max(1, scrollY + (first.top + first.bottom) / 2 - innerHeight * .5);
+  const titleP = clamp01(1 - scrollY / firstRest);
+  // The opening's scale and lift end with its title, so scene 1 arrives at the
+  // same stage pose scene 2 morphs from. The copy can still occupy the opening
+  // beat; it must not leave the live paper smaller or lower than its print.
+  const stageIntroP = introP * titleP;
+  const introScale = .4 + .1 * clamp01((innerHeight - 720) / 480);
+  SCALE = baseScale * (1 - (1 - introScale) * stageIntroP);
+  document.documentElement.style.setProperty('--s', String(SCALE));
+  driveTitleDissolve(titleP);
+  // CSS pins the visual from the document opening. Only the intro moves it;
+  // once titleP is zero there is no scroll-position compensation to chase.
+  const pageStart = parseFloat(document.documentElement.style.getPropertyValue('--page-start')) || 0;
+  document.documentElement.style.setProperty('--opening-lift', (titleP * (Math.max(0, pageStart - scrollY) - visible * .33)) + 'px');
+}
+function fit() {
+  const sw = (Math.min(innerWidth, PAGE_MAX) - 56 - 96 - COPY_MIN) / VIS_W;
+  const mobileScale = Math.min((innerWidth - 32) / 820, 366 / 750);
+  // Mobile browser chrome changes innerHeight while the reader scrolls. Size
+  // the visual from width so that an address-bar resize cannot move the band.
+  const visualHeight = mobileLayout() ? Math.min(390, Math.max(260, mobileScale * 750 + 24)) : Math.min(innerHeight * .48, 390);
+  baseScale = mobileLayout() ? mobileScale : Math.max(.5, Math.min(1, sw, (innerHeight - 96) / GEOM.cellH));
+  const root = document.documentElement.style;
+  root.setProperty('--layout-s', String(baseScale));
+  root.setProperty('--page-start', (document.querySelector('.page').getBoundingClientRect().top + scrollY) + 'px');
+  if (mobileLayout()) { SCALE = baseScale; root.setProperty('--s', String(SCALE)); }
+  root.setProperty('--intro-h', opening.offsetHeight + 'px');
+  root.setProperty('--mobile-vis-h', visualHeight + 'px');
+  const firstCopyHeight = document.querySelector('#c1 .scene-text').offsetHeight;
+  root.setProperty('--first-copy-h', (firstCopyHeight + 28) + 'px');
+  if (mobileLayout()) {
+    // Scene 1's scattered plates extend about 70 composition pixels above #stage.
+    // Keep that paint inside #vis so its sticky top is the visible top, then
+    // place the whole visual band one fixed reading gap after the copy.
+    root.setProperty('--mobile-stage-overhang', (70 * baseScale) + 'px');
+    root.setProperty('--mobile-dwell', Math.min(340, Math.max(220, visualHeight * .9)) + 'px');
+    root.setProperty('--mobile-col-pad', (firstCopyHeight + 32) + 'px');
+  }
+  document.getElementById('vis').inert = mobileLayout();
+  updateOpening();
+  if (printExpanded) setPrintRect(currentPrintRect());
+}
+addEventListener('resize', fit); fit();
+  document.fonts.ready.then(fit);
+scatterPlates(plateEls);
+
+// ── The morph: the sheet is flooded, the print dissolves, the next print takes ─
+// No brush. Water arrives over the whole printed area at once, the way a sheet
+// is flooded or misted (Curtis et al. 1997 shallow water: depth, velocity,
+// fibre saturation; paper relief; rim current). The old print's ink is
+// re-wetted and goes entirely into suspension, where it diffuses, rides the
+// film's currents and is stirred at large scale (an eddy diffusivity, taken
+// from the coarse mip levels of the suspended field), so the film becomes one
+// muddy pigment liquid: what a real wash does when several colours are
+// dissolved together. The sheet then takes pigment back selectively. The next
+// print is the sheet's affinity map, the way a lithographic plate takes ink
+// only on its image or a mordanted cloth takes dye only where it is sized;
+// uptake follows Langmuir kinetics, proportional to what is in the liquid and
+// to the remaining capacity, per colour channel. As the film dries the
+// unfixed liquid leaves with it (the wash-off of dyeing), a little strands at
+// the rim (Deegan's ring), and the fixed pigment cures onto the print exactly.
+// The canvas multiplies into the page: bare page paints nothing.
+const V = `#version 300 es
+in vec2 q; out vec2 vUv; void main(){ vUv = q; gl_Position = vec4(q * 2.0 - 1.0, 0.0, 1.0); }`;
+const HEAD = `#version 300 es
+precision highp float; precision highp sampler2D;
+in vec2 vUv; uniform vec2 uSize; uniform sampler2D uPaper; uniform vec3 uTint;
+// The prints at three resolutions, each a plain texture: full, the sim grid,
+// and a quarter of it for the footprint. They are downscaled on the 2D canvas
+// rather than by generateMipmap, so no driver's mip chain is in the picture.
+uniform sampler2D uSrc, uTgt, uSrcLo, uTgtLo, uSrcFt, uTgtFt;
+// uPaper is sampled in texel coordinates, so its 256x256 tileable period is
+// a fixed number of texels regardless of the instance's own grid size or
+// its CSS-px-per-texel: a grid with few, large texels sees the same period
+// as a grid with many, small ones, so the grain reads at a different size
+// on screen. uPaperScale (default 1, set once per program like uLoad) lets
+// an instance retune that without a second paper texture.
+uniform float uPaperScale;
+vec4 P(vec2 t){ t *= uPaperScale; return mix(texture(uPaper, t / 256.0), texture(uPaper, t / 977.0 + 0.37), 0.45); }
+float wetOf(float h){ return smoothstep(0.0004, 0.004, h); }
+// ink density of a printed pixel: what it takes out of the paper's light;
+// a soft-edged or shadowed pixel is its colour laid over the page at its alpha
+vec3 absorb(vec4 c){ vec3 r = mix(vec3(1.0), clamp(c.rgb / uTint, 0.0, 1.0), c.a); return -log(max(r, vec3(0.02))); }
+// the wetted sheet: the prints' footprint blurred (coarse mip) and broken by
+// the fibres, so the wet edge is ragged like a wet-in-wet wash, not a frame
+// the sheet under the scene: the union of the two prints' silhouettes (not their
+// soft shadows), blurred a little and broken by the fibres; and the next
+// print's own silhouette, which is where the film gathers as it dries
+float sil(float a, vec2 uv){ vec4 pap = P(uv * uSize); return smoothstep(0.5, 0.9, a + (pap.g - 0.5) * 0.35 + (pap.b - 0.5) * 0.15); }
+float foot(vec2 uv){ return sil(max(texture(uSrcFt, uv).a, texture(uTgtFt, uv).a), uv); }
+float footT(vec2 uv){ return sil(texture(uTgtFt, uv).a, uv); }`;
+
+// Water: (depth, u, v, saturation).
+const WATER = HEAD + `
+uniform sampler2D uW;
+uniform float uSplash, uMist, uCure, uEvap, uDrying; uniform vec2 uTilt;
+out vec4 o;
+vec4 W(vec2 t){ return texture(uW, t / uSize); }
+float wetAt(vec2 t){ return wetOf(W(t).r); }
+void main(){
+  vec2 t = gl_FragCoord.xy;
+  vec4 w0 = W(t); float s = w0.a;
+  vec2 back = t - w0.gb; vec4 wb = W(back);
+  float h = wb.r; vec2 vel = wb.gb;
+  float hl = (W(t+vec2(1,0)).r + W(t-vec2(1,0)).r + W(t+vec2(0,1)).r + W(t-vec2(0,1)).r) * 0.25;
+  h = mix(h, hl, 0.25);
+  vec4 pap = P(t);
+  // the splash: a handful of big drops land on the printed area and their
+  // impact pushes the water outward (the momentum is what makes the film move
+  // and the dissolution fast), with a light mist so every part wets
+  vec2 px = 1.0 / uSize;
+  float f = max(foot(vUv), max(max(foot(vUv + vec2(5.0, 0.0) * px), foot(vUv - vec2(5.0, 0.0) * px)), max(foot(vUv + vec2(0.0, 5.0) * px), foot(vUv - vec2(0.0, 5.0) * px))));
+  const vec2 drops[8] = vec2[8](vec2(0.30, 0.62), vec2(0.62, 0.42), vec2(0.46, 0.80), vec2(0.72, 0.72), vec2(0.24, 0.28), vec2(0.55, 0.15), vec2(0.88, 0.14), vec2(0.86, 0.86));
+  // R was a fixed texel count (110.0), tuned for the main wash's own grid
+  // (410x390 desktop): on a wide, short title grid that same texel count
+  // reaches most of the box regardless of drop position, flooding it into
+  // one blob. Scaled by the instance's own uSize (already how drops[i]*uSize
+  // places each centre) it reproduces exactly 110.0 for the main instance —
+  // min(uSize)=390 there, 110/390*390=110 — and shrinks with a smaller grid.
+  float dropR = (110.0 / 390.0) * min(uSize.x, uSize.y);
+  for (int i = 0; i < 8; i++) {
+    vec2 c = drops[i] * uSize; vec2 rd = t - c; float rl = max(length(rd), 1e-3);
+    float R = dropR * (0.8 + 0.4 * float(i % 3) * 0.5);
+    float fall = smoothstep(R, R * 0.25, rl);
+    // a drop lands where it falls: water past the print's edge dilutes the
+    // liquid and gives the wet region a drop's outline, not the print's
+    h += fall * uSplash * (0.1 + 0.9 * f);
+    vel += (rd / rl) * fall * uSplash * 1.6 * (0.3 + 0.7 * f);
+  }
+  h += uMist * f * (0.5 + 1.0 * pap.b) * (1.2 - pap.r);
+  // forces: downhill along the free surface and the paper's relief; the page lies flat
+  float hasW = smoothstep(0.0002, 0.002, h);
+  float gx = (W(t+vec2(1,0)).r + P(t+vec2(1,0)).r * 0.45) - (W(t-vec2(1,0)).r + P(t-vec2(1,0)).r * 0.45);
+  float gy = (W(t+vec2(0,1)).r + P(t+vec2(0,1)).r * 0.45) - (W(t-vec2(0,1)).r + P(t-vec2(0,1)).r * 0.45);
+  vel += (-0.45 * vec2(gx, gy) * 0.5) * hasW;
+  // the scroll tilts the sheet: the film drifts the way the page is being
+  // pushed, at once. A drift, not a force: the tilt sets a target speed the
+  // film relaxes toward, so a long scroll cannot wind it up to the cap and
+  // slide the whole film down the sheet (which is what put a lattice of
+  // advection aliasing over the plates on a real GPU)
+  vel += (uTilt - vel) * 0.15 * hasW;
+  // evaporation at the wet-dry boundary drives the flow outward: the rim
+  vec2 sob = vec2(wetAt(t+vec2(1.7,0.)) - wetAt(t-vec2(1.7,0.)), wetAt(t+vec2(0.,1.7)) - wetAt(t-vec2(0.,1.7))) * 0.5;
+  float em = length(sob);
+  // while the film stands its edge is pinned and the rim current runs outward
+  // (Deegan); as it dries the contact line depins and recedes, and the film is
+  // drawn inward toward the sheet, carrying its pigment with it
+  if (em > 1e-4) vel += (sob / em) * em * mix(-0.22, 0.9, uDrying) * hasW;
+  // the sheet wets, the page around it does not: as the film dries the contact
+  // line recedes down the wettability gradient onto the sheet (Chaudhury &
+  // Whitesides 1992), which is what contains the liquid to the scene
+  // the page around the sheet is sized and does not wet, so the film is always
+  // drawn back onto the sheet; as it dries it gathers onto the next print
+  vec2 gf = vec2(foot((t + vec2(4.0, 0.0)) * px) - foot((t - vec2(4.0, 0.0)) * px), foot((t + vec2(0.0, 4.0)) * px) - foot((t - vec2(0.0, 4.0)) * px));
+  vec2 gt = vec2(footT((t + vec2(4.0, 0.0)) * px) - footT((t - vec2(4.0, 0.0)) * px), footT((t + vec2(0.0, 4.0)) * px) - footT((t - vec2(0.0, 4.0)) * px));
+  vel += (gf * 1.2 + gt * 3.0 * uDrying) * hasW;
+  vel *= mix(0.82, 0.96, clamp(h * 6.0, 0.0, 1.0));
+  float spd = length(vel); if (spd > 2.4) vel *= 2.4 / spd;
+  // into the fibres, and along them
+  float da = min(h, 0.006 * pap.g * (1.0 - s)); h -= da; s += da * 1.3;
+  float sl = (W(t+vec2(1,0)).a + W(t-vec2(1,0)).a + W(t+vec2(0,1)).a + W(t-vec2(0,1)).a) * 0.25;
+  s += 0.10 * (sl - s) * (0.7 + 0.6 * pap.b);
+  // evaporation, fastest at the rim, and quick off the sheet
+  // pinned rims evaporate fastest; a receding one dries like the rest of the film
+  h -= uEvap * (1.0 + 2.5 * em * 8.0 * (1.0 - 0.8 * uDrying) + 6.0 * (1.0 - f));
+  s = clamp(s * (1.0 - 0.006) * (1.0 - uCure), 0.0, 1.0);
+  h = max(h, 0.0) * (1.0 - uCure);
+  o = vec4(min(h, 1.6), vel, s);
+}`;
+
+// Pigment: one liquid (suspended ink density, rgb), the fixed deposit (rgb),
+// and the sheet's record of how much of the old print has dissolved (l).
+const PIG = HEAD + `
+uniform sampler2D uW, uS, uD;
+uniform sampler2D uNear, uWhole;
+uniform float uTime, uCure, uLift, uAds, uMix, uMixG, uDrying, uStir, uRelift, uLoad;
+layout(location=0) out vec4 oS; layout(location=1) out vec4 oD;
+vec4 S(vec2 t){ return texture(uS, t / uSize); }
+vec2 curlN(vec2 p){
+  vec2 q = p / 46.0 + vec2(0.0, uTime * 0.45); float e = 1.6;
+  float n0 = texture(uPaper, q / 7.0).r, nx = texture(uPaper, (q + vec2(e / 46.0, 0.0)) / 7.0).r, ny = texture(uPaper, (q + vec2(0.0, e / 46.0)) / 7.0).r;
+  return vec2(ny - n0, n0 - nx) * (46.0 / e) * 0.05;
+}
+void main(){
+  vec2 t = gl_FragCoord.xy; vec2 px = 1.0 / uSize;
+  vec4 w = texture(uW, vUv); float h = w.r; vec2 vel = w.gb; float wet = wetOf(h);
+  // the liquid rides the flow plus unresolved convection
+  vec2 velP = vel + curlN(t) * 1.6 * smoothstep(0.025, 0.28, h);
+  vec3 s = S(t - velP).rgb;
+  // What the sheet has taken is not yet bound: while the film is wet and moving,
+  // the settled pigment is dragged along with it (a fraction of the flow the
+  // liquid follows), and it binds as the sheet cures. So a print does not appear
+  // in place at full sharpness: it comes in smeared with the current and
+  // gathers into its strokes as the film stops, the mirror of the dissolve.
+  // The sheet's record of what has dissolved (l) belongs to the place, not the pigment.
+  float mob = wet * (1.0 - uCure) * 0.6;
+  vec4 dd = texture(uD, vUv); float l = dd.a;
+  vec3 d = texture(uD, (t - velP * mob) / uSize).rgb;
+  vec4 pap = P(t);
+  // molecular diffusion while wet, and the stirring of the film at large
+  // scale: the liquid relaxes toward its neighbourhood's mean and, more
+  // slowly, toward the whole film's mean, so it becomes one colour
+  // what mixes is concentration (pigment per volume), so a thin rim holds
+  // little pigment and the veil fades to the water's edge instead of outlining it
+  float h0 = 0.02; float hc = max(h, h0);
+  vec4 wl = texture(uW, vUv + vec2(px.x, 0.0)), wr = texture(uW, vUv - vec2(px.x, 0.0)), wu = texture(uW, vUv + vec2(0.0, px.y)), wd = texture(uW, vUv - vec2(0.0, px.y));
+  // exchange between neighbours is driven by the concentration difference and
+  // limited by the thinner of the two films, so it conserves pigment and a
+  // thin rim neither gains nor gives much
+  // Mixing is the work of the flow, not a constant: an eddy diffusivity goes as
+  // the speed of the film (Prandtl's mixing length, K = l|u|). While the film
+  // stands still after the splash the pigment only creeps, and the drops'
+  // blooms and the fronts between the colours stay; the drying current then
+  // stirs the film (the resolved rim current, and the convection cells that
+  // evaporation drives in a drying film, below the grid) and it goes to one
+  // colour in a moment, just as the sheet begins to take. Long unmixed,
+  // briefly mixed: what a wet-in-wet wash does.
+  float agit = 0.12 + 0.88 * clamp(length(vel) * 2.0 + uStir * 0.5 + uDrying, 0.0, 1.0);
+  float diffF = clamp(0.45 * (0.35 + h * 45.0), 0.0, 0.45) * wet * agit;
+  vec3 c = s / hc;
+  vec3 ex = vec3(0.0);
+  ex += (S(t+vec2(1,0)).rgb / max(wl.r, h0) - c) * min(wl.r, hc);
+  ex += (S(t-vec2(1,0)).rgb / max(wr.r, h0) - c) * min(wr.r, hc);
+  ex += (S(t+vec2(0,1)).rgb / max(wu.r, h0) - c) * min(wu.r, hc);
+  ex += (S(t-vec2(0,1)).rgb / max(wd.r, h0) - c) * min(wd.r, hc);
+  s += diffF * 0.25 * ex;
+  // the neighbourhood and whole-film means come from the explicit box
+  // downsample below, not from a mip chain: the sim state is never mipmapped
+  vec4 nr = texture(uNear, vUv), wh = texture(uWhole, vec2(0.5));
+  float hn = nr.a, hw = wh.a;
+  vec3 nearc = nr.rgb / max(hn, h0), wholec = wh.rgb / max(hw, h0);
+  s += uMix * agit * wet * (nearc - c) * min(hn, hc); s += uMixG * wet * (wholec - c) * min(hw, hc);
+  s = max(s, vec3(0.0));
+  // the water re-wets the old print: its ink dissolves into the film, all of it
+  vec3 Ao = absorb(texture(uSrcLo, vUv));
+  // dissolution is faster where the film moves: flow thins the boundary layer
+  float dl = wet * uLift * (1.0 + 2.0 * min(length(vel), 1.5) + uStir) * (1.0 - l) * (0.7 + 0.6 * pap.g);
+  // uLoad is concentration released per unit dissolved, not the dissolving
+  // rate itself: 1.0 reproduces today's paint-strength ink exactly (the
+  // main wash never sets it), while a print with much less inked area than
+  // a paint wash (a title's bare strokes against a scene's own photos) can
+  // ask for a stronger dose from the same dl without dissolving any faster.
+  dl = min(dl, 1.0 - l); l += dl; s += Ao * dl * uLoad;
+  // the sheet takes pigment where the next print is: uptake proportional to
+  // what is in the liquid and to the capacity still free, per channel
+  vec3 cap = absorb(texture(uTgtLo, vUv));
+  // the image areas hold more than the print shows while wet (over-inked);
+  // the cure brings the excess to the print's own density
+  // a wash poured again to go back: the fresh water takes the deposit it had
+  // laid down back into suspension, so it can settle where the other print is
+  vec3 rl = d * wet * uRelift * (1.0 - uDrying) * (0.6 + 0.8 * pap.g);
+  d -= rl; s += rl;
+  vec3 ad = uAds * wet * s * max(cap * 1.6 - d, vec3(0.0));
+  ad = min(ad, s);
+  s -= ad; d += ad;
+  // nothing leaves: where the film has gone the pigment in it settles onto the
+  // sheet, all of it; the receding front has already carried most of it inward
+  float settle = (0.004 + 0.25 * uDrying) * pow(1.0 - wet, 3.0) * clamp(1.0 + (0.5 - pap.r) * 2.0, 0.05, 2.5);
+  vec3 st = s * settle; s -= st; d += st;
+  // drying: the sheet sharpens onto the print
+  l = max(l, uCure);
+  oS = vec4(min(s * (1.0 - uCure), 8.0), 0.0); oD = vec4(min(d, 8.0), l);
+}`;
+
+// Means: each texel the box average of a uBlock-square of (liquid rgb, depth)
+// read from uS and uW; run again over its own output for the whole-film mean.
+const MEAN = `#version 300 es
+precision highp float; precision highp sampler2D;
+in vec2 vUv; uniform sampler2D uA, uB; uniform vec2 uInSize; uniform int uBlock; uniform bool uJoin;
+out vec4 o;
+void main(){
+  ivec2 o0 = ivec2(gl_FragCoord.xy) * uBlock; vec4 acc = vec4(0.0); float n = 0.0;
+  for (int y = 0; y < 64; y++) { if (y >= uBlock) break; for (int x = 0; x < 64; x++) { if (x >= uBlock) break;
+    ivec2 q = o0 + ivec2(x, y); if (q.x >= int(uInSize.x) || q.y >= int(uInSize.y)) continue;
+    vec4 a = texelFetch(uA, q, 0); acc += uJoin ? vec4(a.rgb, texelFetch(uB, q, 0).r) : a; n += 1.0; } }
+  o = acc / max(n, 1.0);
+}`;
+
+// ?diag=N shows one state layer raw and opaque in place of the wash, to see
+// which carries an artifact (the Mac's GPU path has shown faults the Linux
+// harness cannot); compiled into the display shader only when asked for.
+// ?hold=T freezes the wash once its clock passes T seconds, so a state can be looked at.
+const DIAG = parseInt(new URLSearchParams(location.search).get('diag') || '0', 10) || 0;
+const HOLD = parseFloat(new URLSearchParams(location.search).get('hold') || '') || 0;
+const DIAG_VIEW = {
+  4: 'exp(-texture(uS, uv).rgb * 3.0)',                     // liquid
+  5: 'exp(-texture(uD, uv).rgb)',                           // deposit
+  6: 'vec3(texture(uW, uv).r * 3.0)',                       // water depth
+  8: 'vec3(texture(uD, uv).a)',                             // how much of the old print has dissolved
+  9: 'vec3(0.5 + texture(uW, uv).gb * 0.5, 0.5)',           // velocity: red +x, green +y, grey still
+  10: 'vec3(length(gh * 0.03 * wet) * uSize.x * 0.5)',      // refraction offset
+}[DIAG];
+
+// Display: the light the sheet takes out of the page, as a multiply layer.
+const SHOW = HEAD + `
+uniform sampler2D uW, uS, uD; uniform float uCure, uClearance;
+out vec4 o;
+void main(){
+  vec2 uv = vUv; vec2 px = 1.0 / uSize;
+  vec4 w = texture(uW, uv); float h = w.r; float wet = wetOf(h);
+  // the print seen through standing water bends with the surface
+  vec2 gh = vec2(texture(uW, uv + vec2(px.x, 0.0)).r - texture(uW, uv - vec2(px.x, 0.0)).r, texture(uW, uv + vec2(0.0, px.y)).r - texture(uW, uv - vec2(0.0, px.y)).r);
+  vec2 at = uv + gh * 0.03 * wet;
+  ${DIAG_VIEW ? `o = vec4(${DIAG_VIEW}, 1.0); return;` : ''}
+  vec4 dd = texture(uD, uv); float l = dd.a;
+  vec3 s = texture(uS, uv).rgb;
+  vec2 t = uv * uSize; vec4 pap = P(t);
+  float gmod = 1.0 + 0.4 * ((pap.r - 0.5) * 1.4 + (pap.b - 0.5) * 0.6);
+  vec3 A = absorb(texture(uSrc, at)) * (1.0 - l);
+  // ink is already an optical thickness; the fixed deposit cures onto the print
+  float g = max(gmod, 0.05);
+  // the suspended pigment shows with its hue stretched about its density: the
+  // same darkness, more colour; the deposit keeps the print's own colours
+  float sl = dot(s, vec3(1.0 / 3.0)); vec3 sc = max(sl + (s - sl) * 2.2, 0.0);
+  vec3 ink = min(mix(dd.rgb * g, absorb(texture(uTgt, at)), uCure) + 0.85 * sc * g, vec3(4.0));
+  A += ink * (1.0 + 0.2 * wet);
+  // The darkening P*T over the known page colour P, written as a premultiplied
+  // pixel so the canvas is truly clear where nothing is inked or wet: alpha is
+  // the deepest channel's absorption and the colour carries the rest.
+  // Clear the pigment along the paper grain, without a coloured overlay.
+  A *= mix(.22, 1.0, smoothstep(uClearance - .12, uClearance + .12, pap.g));
+  vec3 T = clamp(exp(-A), 0.0, 1.0); float a = 1.0 - min(T.r, min(T.g, T.b));
+  o = vec4(uTint * (T - (1.0 - a)), a);
+}`;
+
+// One WebGL2 pigment engine per canvas: the page's main wash and the intro
+// title's own small wash are two instances of the same factory, sharing every
+// shader, constant and step. `rect` is a getter because the main instance's
+// print rectangle grows at runtime (dragged plates, scene 3 cards) while the
+// title's stays fixed to its own box.
+function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp = 0.03, mistHold = 0.15, blockSize = 16, paperScale = 1 }) {
+  const gl = canvas.getContext('webgl2', { alpha: true, antialias: false, premultipliedAlpha: true, preserveDrawingBuffer: true });
+  if (!gl || !gl.getExtension('EXT_color_buffer_float')) return null;
+  const compile = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  const W = texW, H = texH;
+  const tint = (() => { const c = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(); const n = parseInt(c.slice(1), 16); return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; })();
+  // the texture units and constants every pass shares are set once, at link;
+  // per step only the framebuffers, the state textures and the prints change
+  const UNITS = { uW: 0, uS: 1, uD: 2, uNear: 3, uWhole: 4, uPaper: 8, uSrc: 9, uTgt: 10, uSrcLo: 11, uTgtLo: 12, uSrcFt: 13, uTgtFt: 14 };
+  const prog = (fs) => { const p = gl.createProgram(); gl.attachShader(p, compile(gl.VERTEX_SHADER, V)); gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i).name; u[nm] = gl.getUniformLocation(p, nm); }
+    gl.useProgram(p); for (const k in UNITS) if (u[k]) gl.uniform1i(u[k], UNITS[k]);
+    if (u.uSize) gl.uniform2f(u.uSize, W, H); if (u.uTint) gl.uniform3f(u.uTint, tint[0], tint[1], tint[2]);
+    if (u.uPaperScale) gl.uniform1f(u.uPaperScale, paperScale);
+    return { p, u }; };
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.disable(gl.BLEND);
+  // a shader one GPU's compiler rejects must not take the page down with it:
+  // the wash falls back to the cut, and the log says which program and why
+  let water, pig, show, mean;
+  try { water = prog(WATER); pig = prog(PIG); show = prog(SHOW); mean = prog(MEAN); }
+  catch (e) { console.error('wash sim unavailable, cutting instead:', e.message); return null; }
+  let nStep = 0;
+  const tex = (w, h, wrap = gl.CLAMP_TO_EDGE, float = true) => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
+    if (float) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null); return t; };
+  const fbo = (texes) => { const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+    texes.forEach((t, i) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, t, 0));
+    gl.drawBuffers(texes.map((_, i) => gl.COLOR_ATTACHMENT0 + i)); return f; };
+  const wT = [tex(W, H), tex(W, H)], wF = wT.map((t) => fbo([t]));
+  const pT = [0, 1].map(() => [tex(W, H), tex(W, H)]), pF = pT.map((ts) => fbo(ts));
+  let wi = 0, pi = 0;
+  const BLOCK = blockSize, NW = Math.ceil(W / BLOCK), NH = Math.ceil(H / BLOCK);
+  const nearT = tex(NW, NH), nearF = fbo([nearT]), wholeT = tex(1, 1), wholeF = fbo([wholeT]);
+  const means = (S, Wt) => {
+    gl.useProgram(mean.p);
+    gl.viewport(0, 0, NW, NH); gl.bindFramebuffer(gl.FRAMEBUFFER, nearF);
+    bind(0, S); bind(1, Wt); gl.uniform1i(mean.u.uA, 0); gl.uniform1i(mean.u.uB, 1); gl.uniform2f(mean.u.uInSize, W, H); gl.uniform1i(mean.u.uBlock, BLOCK); gl.uniform1i(mean.u.uJoin, 1);
+    draw();
+    gl.viewport(0, 0, 1, 1); gl.bindFramebuffer(gl.FRAMEBUFFER, wholeF);
+    bind(0, nearT); gl.uniform1i(mean.u.uA, 0); gl.uniform2f(mean.u.uInSize, NW, NH); gl.uniform1i(mean.u.uBlock, 64); gl.uniform1i(mean.u.uJoin, 0);
+    draw();
+  };
+
+  // Paper: r relief, g absorbency, b fibre, a pore — tileable value noise, seeded.
+  const paper = tex(256, 256, gl.REPEAT, false);
+  (function genPaper() {
+    const N = 256; let a0 = 90210;
+    const rnd = () => { a0 = (a0 + 0x6d2b79f5) | 0; let t = Math.imul(a0 ^ (a0 >>> 15), 1 | a0); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const lattice = (n) => { const g = new Float32Array(n * n); for (let i = 0; i < g.length; i++) g[i] = rnd(); return g; };
+    const sm = (t) => t * t * (3 - 2 * t);
+    const value = (g, n, x, y) => { const gx = x * n, gy = y * n, x0 = Math.floor(gx) % n, y0 = Math.floor(gy) % n, x1 = (x0 + 1) % n, y1 = (y0 + 1) % n, fx = sm(gx - Math.floor(gx)), fy = sm(gy - Math.floor(gy));
+      const a = g[y0 * n + x0], b = g[y0 * n + x1], c = g[y1 * n + x0], d = g[y1 * n + x1]; return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy; };
+    const octs = [4, 8, 16, 32, 64, 128];
+    const fbm = (lats, x, y, o0) => { let s = 0, amp = 1, tot = 0; for (let o = o0; o < octs.length; o++) { s += amp * value(lats[o], octs[o], x, y); tot += amp; amp *= 0.55; } return s / tot; };
+    const L = [0, 1, 2, 3].map(() => octs.map(lattice));
+    const ch = [0, 1, 2, 3].map(() => new Float32Array(N * N));
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const i = y * N + x, u = x / N, v = y / N;
+      ch[0][i] = fbm(L[0], u, v, 2) * 0.7 + 0.3 * rnd(); ch[1][i] = fbm(L[1], u, v, 1); ch[2][i] = fbm(L[2], u, v, 0); ch[3][i] = fbm(L[3], u, v, 3); }
+    const px = new Uint8Array(N * N * 4);
+    for (let k = 0; k < 4; k++) { let lo = 1, hi = 0; for (const t of ch[k]) { lo = Math.min(lo, t); hi = Math.max(hi, t); } for (let i = 0; i < N * N; i++) px[i * 4 + k] = ((ch[k][i] - lo) / (hi - lo)) * 255; }
+    gl.bindTexture(gl.TEXTURE_2D, paper);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  })();
+
+  // The two prints, straight alpha, flipped so uv (0,0) is the bottom-left as in the sim.
+  const prints = { src: null, tgt: null };
+  const scaled = (im, w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d'); g.imageSmoothingQuality = 'high';
+    // two halvings at a time keep the box filter honest on every browser
+    let cur = im; while (cur.width > w * 2) { const m = document.createElement('canvas'); m.width = Math.ceil(cur.width / 2); m.height = Math.ceil(cur.height / 2); const mg = m.getContext('2d'); mg.imageSmoothingQuality = 'high'; mg.drawImage(cur, 0, 0, m.width, m.height); cur = m; }
+    g.drawImage(cur, 0, 0, w, h); return c; };
+  const upload = (t, im) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, im); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); };
+  const setPrint = (key, im) => { const p = prints[key] || { full: tex(0, 0, gl.CLAMP_TO_EDGE, false), lo: tex(0, 0, gl.CLAMP_TO_EDGE, false), ft: tex(0, 0, gl.CLAMP_TO_EDGE, false) };
+    upload(p.full, im); upload(p.lo, scaled(im, W, H)); upload(p.ft, scaled(im, Math.round(W / 4), Math.round(H / 4))); prints[key] = p; };
+
+  const bind = (unit, t) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t); };
+  const draw = () => gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  // a pass with the prints bound in the wash's direction
+  const common = (pr, fwd) => {
+    const [S, T] = fwd ? [prints.src, prints.tgt] : [prints.tgt, prints.src];
+    gl.useProgram(pr.p);
+    bind(8, paper); bind(9, S.full); bind(10, T.full); bind(11, S.lo); bind(12, T.lo); bind(13, S.ft); bind(14, T.ft);
+  };
+
+  return {
+    setPrints(src, tgt) { setPrint('src', src); setPrint('tgt', tgt); },
+    reset() {
+      gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 0);
+      for (const f of [...wF, ...pF, nearF, wholeF]) { gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.clear(gl.COLOR_BUFFER_BIT); }
+    },
+    // One fixed step at time t (seconds). The schedule: flood, dissolve and
+    // stir, take up, dry and cure.
+    step(fwd, t, cure, stir = 0, tilt = 0, relift = 0) {
+      const splash = t < T_SPLASH ? splashAmp : 0, mist = t < T_SPLASH + mistHold ? mistAmp : 0;
+      // a hot-air blast: evaporation many times the rate of standing air, which
+      // thins the film, drives the rim current and settles the pigment quickly
+      const drying = smooth(T_DRY, T_DRY + 0.4, t);
+      // the sheet takes pigment once the film is stirred to one colour: uptake comes in with the drying current
+      const take = smooth(T_TAKE, T_TAKE + 0.45, t);
+      gl.viewport(0, 0, W, H);
+      common(water, fwd); gl.bindFramebuffer(gl.FRAMEBUFFER, wF[1 - wi]);
+      bind(0, wT[wi]);
+      gl.uniform1f(water.u.uSplash, splash); gl.uniform1f(water.u.uMist, mist); gl.uniform1f(water.u.uCure, cure);
+      gl.uniform1f(water.u.uEvap, 0.0008 + 0.016 * drying); gl.uniform1f(water.u.uDrying, drying); gl.uniform2f(water.u.uTilt, 0, tilt);
+      draw(); wi = 1 - wi;
+      // the coarse levels of liquid and pigment give the neighbourhood and
+      // whole-film concentrations; the stirring is slow, so every third step is enough
+      if (nStep++ % 3 === 0) means(pT[pi][0], wT[wi]);
+      gl.viewport(0, 0, W, H);
+      common(pig, fwd); gl.bindFramebuffer(gl.FRAMEBUFFER, pF[1 - pi]);
+      bind(0, wT[wi]); bind(1, pT[pi][0]); bind(2, pT[pi][1]); bind(3, nearT); bind(4, wholeT);
+      gl.uniform1f(pig.u.uTime, t); gl.uniform1f(pig.u.uCure, cure);
+      gl.uniform1f(pig.u.uLift, 0.075); gl.uniform1f(pig.u.uAds, 0.18 * take);
+      // the whole film is stirred by the drying current (and by the hand that scrolls), not before
+      gl.uniform1f(pig.u.uMix, 0.06); gl.uniform1f(pig.u.uMixG, 0.005 + 0.025 * Math.max(drying, Math.min(1, stir)));
+      gl.uniform1f(pig.u.uDrying, drying); gl.uniform1f(pig.u.uStir, stir); gl.uniform1f(pig.u.uRelift, relift);
+      gl.uniform1f(pig.u.uLoad, load);
+      draw(); pi = 1 - pi;
+    },
+    // read one texel of the state, for the harness: [h,u,v,sat], s.rgb, [d.rgb,l]
+    probe(x, y) {
+      const out = [];
+      for (const [f, n] of [[wF[wi], 1], [pF[pi], 2]]) { gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+        for (let i = 0; i < n; i++) { gl.readBuffer(gl.COLOR_ATTACHMENT0 + i); const px = new Float32Array(4); gl.readPixels(x, y, 1, 1, gl.RGBA, gl.FLOAT, px); out.push([...px].map((v) => +v.toFixed(4))); } }
+      return out;
+    },
+    // How much of the old print has not yet dissolved, weighted by where it
+    // had ink (mask/maskTotal, at this instance's own W x H, GL's row order).
+    // l only ever grows within a forward wash, so this is monotone by
+    // construction where a rendered-pixel read is not: a bloom can raise
+    // total on-screen coverage while it is lifting the print off its own
+    // letterforms, and a real GPU's step-to-step rate is not bit-identical
+    // across engines, so a display-shader proxy can wobble at a shared
+    // sample point even though the wash is strictly further along.
+    remaining(mask, maskTotal) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, pF[pi]);
+      gl.readBuffer(gl.COLOR_ATTACHMENT1);
+      const buf = new Float32Array(W * H * 4);
+      gl.readPixels(0, 0, W, H, gl.RGBA, gl.FLOAT, buf);
+      let dot = 0;
+      for (let i = 0; i < W * H; i++) dot += mask[i] * (1 - buf[i * 4 + 3]);
+      return dot / maskTotal;
+    },
+    // the display pass onto the canvas
+    draw(fwd, cure, clearance = -.2) {
+      const r = rect();
+      const dpr = Math.min(2, devicePixelRatio || 1);
+      const cw = Math.round(r.w * dpr), chh = Math.round(r.h * dpr);
+      if (canvas.width !== cw || canvas.height !== chh) { canvas.width = cw; canvas.height = chh; }
+      canvas.style.left = r.x + 'px'; canvas.style.top = r.y + 'px'; canvas.style.right = 'auto'; canvas.style.bottom = 'auto';
+      canvas.style.width = r.w + 'px'; canvas.style.height = r.h + 'px';
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cw, chh);
+      common(show, fwd);
+      bind(0, wT[wi]); bind(1, pT[pi][0]); bind(2, pT[pi][1]);
+      gl.uniform1f(show.u.uCure, cure);
+      gl.uniform1f(show.u.uClearance, clearance);
+      draw();
+    },
+  };
+}
+// Phones display the wash at less than half its design size. The page's own
+// canvas and print rectangle are today's exact values; only the factory above
+// is new.
+const sim = makeSim({ canvas, texW: Math.round(BASE_TEX_W / (mobileLayout() ? 4 : 2)), texH: Math.round(BASE_TEX_H / (mobileLayout() ? 4 : 2)), rect: () => printRect });
+// Wherever the cursor is, a scroll gesture moves the page and nothing else. The
+// editor and the preview are live documents with their own scroll containers,
+// so each frame has its own scrolling switched off and the browser chains the
+// gesture to the page on its own; hover, cursor and clicks are untouched.
+// It used to cancel the wheel inside each frame and call `scrollBy` for it,
+// which both chained and scrolled: measured 2026-09-14, a wheel over the
+// composition moved the page twice as far as the same wheel over the margin,
+// and a touch drag over it moved nothing at all. Cancelling the reader's own
+// gesture is the one thing this page may never do.
+{
+  const inert = (doc) => {
+    if (!doc || doc.__inert) return; doc.__inert = true;
+    // the preview itself stays a real page: it scrolls under the wheel, and
+    // hands the wheel up to this page only when it has no further to go
+    const fe = doc.defaultView && doc.defaultView.frameElement;
+    if (window.__LANG === 'zh' && (fe?.id === 'ed' || fe?.id === 'sh')) {
+      const hant = window.__LANDING_LOCALE === 'zh-hant';
+      const strings = hant ? {
+        'New page':'新增頁面', 'Toggle full width':'切換全寬', 'Edit page':'編輯頁面',
+        'Go back':'返回', 'Go forward':'前進', 'Toggle desktop/mobile preview':'切換桌面／行動版預覽',
+        'Settings':'設定', 'Website':'網站', 'Add channel':'新增管道', 'Publish site':'發布網站',
+        'Open editor':'開啟編輯器', 'Import from URL':'從 URL 匯入',
+        'Publish':'發布', 'Publish site':'發布網站', 'Cancel':'取消', 'Confirm':'確認', 'Later':'稍後',
+        'Close':'關閉', 'Visit site':'造訪網站', 'Your site is live':'你的網站已上線', 'Settings':'設定',
+        'This Page':'此頁面', 'Child Pages':'子頁面', 'Live preview':'即時預覽', 'Source':'原始碼',
+        'Writing mode':'寫作模式', 'Untitled':'未命名', 'New Page':'新增頁面', 'New Folder':'新增資料夾',
+      } : {
+        'New page':'新建页面', 'Toggle full width':'切换全宽', 'Edit page':'编辑页面',
+        'Go back':'后退', 'Go forward':'前进', 'Toggle desktop/mobile preview':'切换桌面／移动版预览',
+        'Settings':'设置', 'Website':'网站', 'Add channel':'添加渠道', 'Publish site':'发布网站',
+        'Open editor':'打开编辑器', 'Import from URL':'从 URL 导入',
+        'Publish':'发布', 'Publish site':'发布网站', 'Cancel':'取消', 'Confirm':'确认', 'Later':'稍后',
+        'Close':'关闭', 'Visit site':'访问网站', 'Your site is live':'你的网站已上线', 'Settings':'设置',
+        'This Page':'此页面', 'Child Pages':'子页面', 'Live preview':'实时预览', 'Source':'源代码',
+        'Writing mode':'写作模式', 'Untitled':'未命名', 'New Page':'新建页面', 'New Folder':'新建文件夹',
+      };
+      const translateTree = (root) => {
+        if (!root) return;
+        if (root.nodeType === 3) { const value = strings[root.nodeValue.trim()]; if (value) root.nodeValue = root.nodeValue.replace(root.nodeValue.trim(), value); return; }
+        const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
+        nodes.forEach((node) => { const value = strings[node.nodeValue.trim()]; if (value) node.nodeValue = node.nodeValue.replace(node.nodeValue.trim(), value); });
+      };
+      translateTree(doc.body);
+      for (const el of doc.querySelectorAll('[data-tooltip]')) {
+        const value = strings[el.getAttribute('data-tooltip')];
+        if (value) el.setAttribute('data-tooltip', value);
+      }
+      for (const el of doc.querySelectorAll('[aria-label]')) {
+        const value = strings[el.getAttribute('aria-label')];
+        if (value) el.setAttribute('aria-label', value);
+      }
+      const translateAttrs = (el) => {
+        if (!el || el.nodeType !== 1) return;
+        for (const attr of ['data-tooltip', 'aria-label', 'placeholder', 'title']) {
+          const value = strings[el.getAttribute(attr)];
+          if (value) el.setAttribute(attr, value);
+        }
+      };
+      new MutationObserver((records) => records.forEach((record) => { translateAttrs(record.target); if (record.type === 'childList') record.addedNodes.forEach(translateTree); })).observe(doc, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-tooltip', 'aria-label', 'placeholder'] });
+
+      doc.documentElement.lang = hant ? 'zh-Hant' : 'zh-Hans';
+    }
+    if (fe && fe.id === 'ed') {
+      const style = doc.createElement('style');
+      style.textContent = '.landing-playback .insert-bar, .landing-playback .editor-band { opacity: .42; pointer-events: none; transition: none !important; } .landing-playback .insert-bar *, .landing-playback .editor-band * { transition: none !important; }';
+      doc.head.appendChild(style);
+    }
+    if (fe && fe.id === 'sh') {
+      const style = doc.createElement('style');
+      style.textContent = '.moss-publish-button:not(:disabled)::after { content: ""; position: absolute; inset: -5px; border: 1px solid currentColor; border-radius: 999px; opacity: 0; pointer-events: none; animation: landing-publish-cue 5.6s ease-out infinite; } @keyframes landing-publish-cue { 0%, 62% { opacity: 0; transform: scale(.96); } 68% { opacity: .42; transform: scale(1); } 78%, 100% { opacity: 0; transform: scale(1.05); } } @media (prefers-reduced-motion: reduce) { .moss-publish-button:not(:disabled)::after { animation: none; opacity: .28; } }';
+      doc.head.appendChild(style);
+      const preview = doc.getElementById('moss-preview-iframe');
+      const suppressPreviewLinks = () => {
+        const previewDoc = preview && preview.contentDocument;
+        if (!previewDoc || previewDoc.__landingLinksInert) return;
+        previewDoc.__landingLinksInert = true;
+        previewDoc.addEventListener('click', (event) => {
+          if (event.target.closest?.('a')) { event.preventDefault(); event.stopImmediatePropagation(); }
+        }, true);
+      };
+      if (preview) { preview.addEventListener('load', suppressPreviewLinks); suppressPreviewLinks(); }
+    }
+    // and it is always the light theme: the scene is a light page, whatever the OS prefers
+    // and it shows no scrollbar: a classic scrollbar (a mouse plugged into a
+    // Mac shows one) narrows the live page by 15px against its print, which is
+    // laid out with none, and the picture shifted as the sheet cured
+    if (fe && fe.id === 'moss-preview-iframe') {
+      doc.documentElement.dataset.theme = 'light';
+      const st = doc.createElement('style');
+      st.textContent = 'html, body[data-typesetting="vertical"] { scrollbar-width: none; } html::-webkit-scrollbar, body[data-typesetting="vertical"]::-webkit-scrollbar { display: none; }';
+      doc.head.appendChild(st);
+      // The harvested vertical page keeps native horizontal trackpad scrolling.
+      // A conventional mouse wheel moves its columns, without a visible bar.
+      if (doc.body?.dataset.typesetting === 'vertical') doc.addEventListener('wheel', (event) => {
+        if (event.ctrlKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+        const body = doc.body, before = body.scrollLeft;
+        const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? body.clientWidth : 1);
+        body.scrollLeft -= delta;
+        event.stopImmediatePropagation();
+        if (body.scrollLeft !== before) event.preventDefault();
+      }, { passive: false, capture: true });
+      return;
+    }
+    doc.documentElement.style.overflow = 'hidden'; if (doc.body) doc.body.style.overflow = 'hidden';
+    doc.querySelectorAll('iframe').forEach((f) => { const go = () => inert(f.contentDocument); f.addEventListener('load', go); if (f.contentDocument && f.contentDocument.readyState === 'complete') go(); });
+  };
+  for (const id of ['ed', 'sh', 'vd']) { const f = document.getElementById(id); const go = () => inert(f.contentDocument); f.addEventListener('load', go); if (f.contentDocument && f.contentDocument.readyState === 'complete') go(); }
+}
+// The editor's surface takes the page colour: the wash is a multiply layer and
+// cannot paint a surface lighter than the page, so the live editor and its
+// print must agree on it.
+{ const f = document.getElementById('ed');
+  const tint = () => f.contentDocument.documentElement.style.setProperty('--moss-color-bg', getComputedStyle(document.documentElement).getPropertyValue('--bg').trim());
+  f.addEventListener('load', tint); if (f.contentDocument && f.contentDocument.readyState === 'complete') tint(); }
+
+// ── Scenes: the pinned visual shows one scene at a time ───────────────────
+// shown: the scene on the sheet (0 write, 1 live). target: the scene the copy
+// on screen asks for. A change runs the wash to completion; if the target
+// flips mid-wash the wash finishes and a second one runs back.
+let shown = 0, target = 0, phase = 'idle', steps = 0;
+let ed = null, sh = null, vd = null;
+// A scene change in flight. A wash announces itself by holding the phase at
+// 'morph', but neither of the other two mechanisms does — the crossfade leaves
+// the phase where it was, on purpose, and a jump puts the scenes it passes
+// through on the page — so the drive says so itself, and nothing may start a
+// second one under any of them.
+let driving = false;
+const running = () => phase === 'morph' || driving;
+// The pacing, all of it, so a complaint about how the page feels is a change to
+// these numbers and not to the model.
+// The wash's clock runs from 0 to T_TOTAL in sim-seconds, and each T_ is a mark
+// on it: T_SPLASH the first drops, T_TAKE where the print begins to smear,
+// T_DRY and T_CURE where the paper takes and sets, and T_WET where the scroll's
+// own work ends — the film at its wettest, the print fully smeared. From T_WET
+// to T_TOTAL is the cure, which belongs to time and not to the hand. DT is one
+// step of that clock and STEPS_PER_FRAME the most a frame may spend on it;
+// SPLIT is how much of the gap between two texts buys the part before T_TAKE;
+// V_TAU is the memory of the scroll-speed integrator that agitates and tilts
+// the film.
+// Three rates say how fast the clock runs when the scroll is not the thing
+// feeding it, in sim-seconds per real second: ARRIVE once the reader has
+// arrived at the text — or stopped, which asks for a scene just as plainly —
+// ARRIVE_SMEAR through the smeared window, so it is seen rather than skipped,
+// and ARRIVE_JUMP for a jump of more than one boundary, which is nobody's
+// reading; it is separate from ARRIVE so it can be answered alone. There is no
+// fourth rate for standing still between two texts, because a rest is no longer
+// left there: it settles onto a scene, and the wash runs out to it.
+const DT = 1 / 120, SPF = 2, STEPS_PER_FRAME = 36, V_TAU = 0.4, SPLIT = 0.4,
+  T_SPLASH = 0.2, T_TAKE = 1.2, T_DRY = 1.2, T_CURE = .9, T_WET = 1.6, T_TOTAL = 2.1,
+  ARRIVE = 6, ARRIVE_SMEAR = 1, ARRIVE_JUMP = ARRIVE;
+// The rest. REST_MS is how long the scroll must have been still to count as a
+// stop. A wheel is nudges rather than a stream — a reader turning it slowly
+// leaves a fifth of a second between them — and the old catch window could
+// afford 140ms because it only ever fired near a designed position and in the
+// direction of travel. This one acts on any rest anywhere, so the window has to
+// be longer than the gap inside a gesture or it cuts one in half: at 140ms a
+// steady scroll across one boundary turned into two washes, the second one back
+// (harness/jump.mjs, 2026-09-14). The copy is then carried to the scene's
+// designed position on a critically damped spring — SETTLE_K is the stiffness
+// the prior art starts from (SwiftUI's half-second spring at mass 1) and
+// SETTLE_C the damping that is critical at that stiffness, 2*sqrt(K). It is not
+// the 17 the same source names beside 160: that is its bounce-0.3 pairing, and
+// a bounce is the one thing an arrival may not have. SETTLE_SECS is the
+// spring's own duration, which follows from K, and is used only when no wash is
+// owed; when one is, the settle borrows the wash's clock and runs for what the
+// cure has left, so the copy comes to rest in the same beat the film sets
+// rather than on a clock of its own (measured within a third of a second either
+// way, against a second and more for a fixed duration). SETTLE_MIN is the floor
+// on that, for a cure with almost nothing left to run. It does not fold into
+// SETTLE_SECS: the only ratio between them that reproduces 0.12 is a curve fit
+// to that number, not a derivation of it, and would read as a reason where
+// there isn't one — checked 2026-09-15, kept as two constants.
+// DEAD is the dead zone, in fractions of a gap, that still counts a stop as
+// arrival rather than as onward travel: once a reader scrolls with intent
+// they almost always want the next scene in the direction they were going,
+// so a rest carries forward to it, and only a stop still this close to the
+// scene behind that travel springs back — a small nudge, not a change of
+// mind. This is paging, not proximity: iOS's UIScrollView, Android's
+// PagerSnapHelper, and GSAP ScrollTrigger's own `snap: { directional: true }`
+// all carry a deliberate scroll onward rather than resting on whichever
+// position is numerically nearer (research/2026-09-14/scroll-rest-physics.md,
+// §4). It happens to equal SETTLE_MIN above; the two answer unrelated
+// questions — one a fraction of a gap's distance, the other a floor on the
+// spring's own seconds — and share no derivation, so moving one is not
+// expected to move the other.
+const REST_MS = 300, SETTLE_K = 160, SETTLE_C = 2 * Math.sqrt(SETTLE_K), SETTLE_MIN = 0.12, DEAD = 0.12;
+const SETTLE_SECS = 2 * Math.PI / Math.sqrt(SETTLE_K);
+// ?carry= switches which of three scroll-rest behaviours drives the page. 'intent'
+// (research/2026-09-16/continuous-carry.md) won the comparison and is the default: a release
+// hands the reader's own speed to the integrator, so the page keeps going like a let-go spring.
+// 'wait' (the REST_MS-then-spring path above, which stops dead on release) and 'css' stay
+// reachable by flag only, each a self-contained block near watchScroll below, until deleted.
+const CARRY = (() => { const c = arg('carry', 'intent'); return c === 'wait' || c === 'css' ? c : 'intent'; })();
+document.documentElement.dataset.carry = CARRY;   // the [data-carry="css"] rule above, and the harness
+// ?carry=intent's own critically damped pull toward the well ahead — the same ζ=1 ratio as
+// SETTLE_K/SETTLE_C, named separately because this one runs every frame on live real-time dt
+// for the page's whole life, not the settle's rate-scaled, wash-synced clock.
+const CARRY_K = 40, CARRY_C = 2 * Math.sqrt(CARRY_K);
+// How much of one wheel tick's pixel delta becomes velocity (px/s), added straight into the
+// integrator's v the instant the tick arrives — "v += delta * PUSH_GAIN",
+// research/2026-09-16/continuous-carry.md §5. Tuned by feel, not derived: too low reads as
+// inert, too high as a teleport across scenes.
+const PUSH_GAIN = 12;
+// How far the live scroll position may drift from ?carry=intent's own tracked position before
+// that reads as a foreign write — a scrollbar drag, or keyboard/touch scrolling, both left
+// outside this system — rather than ordinary rounding from the integrator's own last write.
+const CARRY_EPS = 2;
+// How long a gap between trackpad wheel ticks still reads as the same continuous gesture in
+// contact with the pad, used only where WheelEvent.momentum is unavailable (see the held-state
+// comment above the wheel listener) — a real gesture's own ticks land well inside this, a pause
+// or the coast after release does not.
+const HOLD_GAP = 100, WHEEL_GESTURE_GAP = 280;
+
+function sceneClasses(scene) { stage.classList.toggle('live', scene >= 1); stage.dataset.scene = String(scene); }
+function editorPlayback(active) {
+  const doc = edFrame.contentDocument;
+  if (doc) { doc.documentElement.classList.toggle('landing-playback', active); if (active) doc.querySelector('.insert-bar')?.classList.add('dim', 'visible'); }
+}
+// The grounds' opacity: the shadow of the scene being shown, faded as its
+// sheet wets and returned as the next one dries. The approach is eased so a
+// late turnaround does not snap the destination ground to nothing.
+const gOp = [1, 0];
+function ground(a, b) { gOp[0] = a; gOp[1] = b; stage.style.setProperty('--g0', a.toFixed(3)); stage.style.setProperty('--g1', b.toFixed(3)); }
+// There are two sheet shapes, not four: the editor's, and the widened one that
+// scenes 2 and 3 share. So a 2 to 3 wash never touches the ground at all, and
+// scene 4 is under neither of them — the sheet itself has gone and what is left
+// on the paper is the control, which carries no window shadow.
+const GROUND = [[1, 0], [0, 1], [0, 1], [0, 0], [0, 0]];
+function groundAt(scene) { ground(...GROUND[scene]); }
+function groundToward(to, dryness, dtReal) {
+  const k = 1 - Math.exp(-dtReal / 0.25);
+  const want = GROUND[to].map((g) => g * dryness);
+  ground(gOp[0] + (want[0] - gOp[0]) * k, gOp[1] + (want[1] - gOp[1]) * k);
+}
+
+// ── Scene 4's control: the shell's own, measured rather than copied ───────
+// Where the control is and how big it is are read from the shell, never written
+// here: its frame is a fixed cellW+SPILL by cellH whatever the box is doing, so
+// the rect the shell reports is already in the box's own coordinates. What the
+// stylesheet needs from it is the circle to cut (centre and radius) and the
+// distance from there to the middle of the cell, where the grown control lands
+// and where every target orbits.
+const fanEl = $('fan');
+let pubR = 25;
+function measurePub() {
+  const doc = vdFrame.contentDocument;
+  const btn = doc && doc.querySelector('.moss-publish-button');
+  const r = btn && btn.getBoundingClientRect();
+  if (!r || !r.width) return false;
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  pubR = r.width / 2;
+  for (const [k, v] of Object.entries({ '--pub-cx': cx + 'px', '--pub-cy': cy + 'px', '--pub-r': pubR + 'px',
+    '--pub-dx': (GEOM.cellW / 2 + SPILL - cx) + 'px', '--pub-dy': (GEOM.cellH / 2 - cy) + 'px' }))
+    stage.style.setProperty(k, v);
+  return true;
+}
+
+// ── Scene 4's targets: one circle per deploy target, run by d3-force ──────
+// The deploy target list itself is never hardcoded here: scene4/logos/ is a
+// rights audit in progress, other hands add and re-verify entries in
+// targets.json while this scene only reads it. Each entry's own `file` and
+// `allowed_on_circle` decide whether a circle shows a real mark or the
+// fallback name — see buildCircle — so a target moving from unclear to
+// cleared needs no code change on this side either.
+let TARGETS = [];
+let targetsPromise = null;
+const loadTargets = () => targetsPromise || (targetsPromise = fetch('scene4/logos/targets.json').then((r) => r.json())
+  .catch((e) => { console.warn('scene 4: targets.json failed to load, no targets to show', e && e.message); return []; }));
+// Fired now, well before the reader could plausibly reach scene 4 (it is the
+// fourth of five), so by the time startOrbit awaits it the promise is
+// normally already settled — a small same-origin JSON file, not something
+// worth gating behind the scene entry the way d3-force itself is.
+loadTargets();
+
+// Popping, colliding and huddling are all governed by a real d3-force
+// simulation (forceRadial at radius 0 — a point attraction toward the
+// control, not a ring to keep to — forceCollide against overlap, with the
+// control itself in the node list as a fixed body per the brief, and a
+// hand-rolled mutual pull between the targets themselves below; nothing here
+// is a keyframed ring). The module is fetched lazily on the scene's first
+// entry, so nothing pays for the physics engine before the reader has
+// scrolled this far, and only d3-force and its own dependencies come down,
+// never the rest of d3. ORBIT_D is a target's own width on the page;
+// ORBIT_STAGGER and ORBIT_STAGGER_SWING set how far apart pops land —
+// alternating short and long like a heartbeat's own two beats around that
+// average, never a metronome's even tick, and both ends of the swing still
+// under one pop a second; ORBIT_POP_MS one pop's spring; ORBIT_ATTRACT how
+// hard a target is drawn toward the control; ORBIT_HUDDLE a little of that
+// same pull between the targets themselves, so a settled pack leans into
+// itself rather than sitting in one even, lattice-like ring; ORBIT_ALPHA_DRAG
+// is how much hotter the simulation runs while the reader holds one target;
+// ORBIT_OUT_MS is the targets' own retreat into the control on exit — well
+// inside FAN_OUT_MS's budget for the whole scene to have stood down before
+// the sheet may re-wet; ORBIT_TANGENT is each new arrival's own clockwise
+// velocity, ORBIT_SPEED_MAX bounds collision energy without friction below
+// that ceiling, and ORBIT_RETURN_MS is the gentle path home after a drag.
+// A pacing complaint here is a change to these numbers.
+const ORBIT_D = mobileLayout() ? 60 : 44, ORBIT_STAGGER = 1250, ORBIT_STAGGER_SWING = 150, ORBIT_POP_MS = 480;
+const ORBIT_ATTRACT = 0.1, ORBIT_HUDDLE = 0.35, ORBIT_ALPHA_DRAG = 0.4, ORBIT_OUT_MS = 380;
+const ORBIT_TANGENT = 0.42, ORBIT_SPEED_MAX = 0.65, ORBIT_RETURN_MS = 1100, ORBIT_ALPHA_IDLE = 0.025;
+document.documentElement.style.setProperty('--orbit-d', ORBIT_D + 'px');
+
+const orbitCx = GEOM.cellW / 2, orbitCy = GEOM.cellH / 2;
+const buttonR = () => pubR * PUB_SCALE;
+// Where a target rests once it has packed against the control: touching its
+// edge, not standing off at a fixed ring radius — the "bump directly" the
+// brief asks for. Read fresh each time rather than cached, since buttonR()
+// itself can change (a resize re-measures the control) and nothing here may
+// repeat forceCollide's own known bug of pinning a radius at its first read.
+const restR = () => buttonR() + ORBIT_D / 2;
+// Target i's own even slice of the ring, starting at 12 o'clock — used only
+// for reduced motion's static layout (startOrbit, at restR()). Full motion's
+// targets land at a random arrival angle instead (popAll) and pack against
+// the control and each other from there, so no fixed slice governs where
+// they end up.
+const ringAngle = (i, n) => (i / n) * Math.PI * 2 - Math.PI / 2;
+// A back-out ease: overshoots past 1 before settling, which is the "spring"
+// a target's pop reads as. Position itself needs no such curve — it is the
+// simulation's own attraction that carries a target out from the control.
+const easeOutBack = (t) => { const c1 = 1.70158, c3 = c1 + 1, p = t - 1; return 1 + c3 * p * p * p + c1 * p * p; };
+const popScale = (n, now) => { if (!n.popAt) return 0; const t = clamp01((now - n.popAt) / ORBIT_POP_MS); return t >= 1 ? 1 : easeOutBack(t); };
+// A released drag returns without a snap or exaggerated overshoot.
+const easeOutCubic = (t) => 1 - (1 - t) ** 3;
+
+let d3fPromise = null, orbitStartPromise = null, orbitStartToken = 0, orbitExitFrame = 0;
+function loadVendorScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src; script.async = false;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error(`could not load ${src}`));
+    document.head.appendChild(script);
+  });
+}
+// Load the checked-in official UMD builds in dependency order. Keeping these
+// local makes the interaction work offline and avoids CDN ESM rewrites whose
+// bare dependency URLs resolve against this site in some browsers.
+const loadD3Force = () => d3fPromise || (d3fPromise = (async () => {
+  for (const file of ['d3-dispatch.min.js', 'd3-quadtree.min.js', 'd3-timer.min.js', 'd3-force.min.js']) {
+    await loadVendorScript(`vendor/d3-force/${file}`);
+  }
+  return window.d3;
+})());
+
+// The targets' own mutual pull, separate from their shared attraction to the
+// control: without it, attraction plus collide alone settle into one evenly
+// spaced ring, which reads as a lattice rather than a huddle. A weak pairwise
+// draw between neighbours — inverse-distance, and cut off past a few
+// diameters so it is a local lean rather than the whole cluster bunching into
+// one corner — lets targets lean on each other instead, the "jostle, settle,
+// nudge" the director asked for. Collide still has the final word on actual
+// overlap; this only decides who leans toward whom while it does.
+function makeHuddle() {
+  let nodes = [];
+  function force(alpha) {
+    for (let i = 0; i < nodes.length; i++) {
+      const a = nodes[i];
+      if (a.fx != null || !a.popAt || a.exiting) continue;
+      for (let j = i + 1; j < nodes.length; j++) {
+        const b = nodes[j];
+        if (b.fx != null || !b.popAt || b.exiting) continue;
+        const dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy) || 1;
+        if (dist > ORBIT_D * 3) continue;
+        const k = ORBIT_HUDDLE * alpha / dist;
+        const fx = dx * k, fy = dy * k;
+        a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+      }
+    }
+  }
+  force.initialize = (ns) => { nodes = ns; };
+  return force;
+}
+// Collision can concentrate several targets' momentum into one. Preserve
+// frictionless motion below this ceiling while preventing a crowded contact
+// from catapulting one target out of the composition.
+function makeSpeedLimit(max) {
+  let nodes = [];
+  function force() {
+    for (const n of nodes) {
+      const speed = Math.hypot(n.vx, n.vy);
+      if (speed > max) { n.vx *= max / speed; n.vy *= max / speed; }
+    }
+  }
+  force.initialize = (ns) => { nodes = ns; };
+  return force;
+}
+
+// pointer coordinates -> the cell's own 660×620 space, whatever --s has
+// scaled the composition to on screen
+function toCell(x, y) {
+  const r = $('cell').getBoundingClientRect();
+  return { x: (x - r.left) * (GEOM.cellW / r.width), y: (y - r.top) * (GEOM.cellH / r.height) };
+}
+let dragging = null;
+// A released drag's own gentle path back into the pack. fx/fy stay pinned to
+// the tween itself, exactly like a
+// synthetic drag, so collide keeps pushing any target already sitting where
+// this one is about to land — the same force that resolves two targets
+// dropped on each other (the collision test) resolves a bounced-back one
+// arriving into a crowded pack. Independent of the simulation's own tick
+// cadence for the same reason stopOrbit's retreat is: a fixed, authored curve
+// is what this one motion asks for, not more simulation.
+function bounceBack(node) {
+  const from = { x: node.fx, y: node.fy };
+  const th = Math.atan2(from.y - orbitCy, from.x - orbitCx);
+  const to = { x: orbitCx + restR() * Math.cos(th), y: orbitCy + restR() * Math.sin(th) };
+  const t0 = performance.now(), g = gen;
+  const step = () => {
+    if (gen !== g || dragging === node || node.exiting) return;
+    const t = clamp01((performance.now() - t0) / ORBIT_RETURN_MS), e = easeOutCubic(t);
+    node.fx = from.x + (to.x - from.x) * e;
+    node.fy = from.y + (to.y - from.y) * e;
+    if (orbitNodes) render();
+    if (t < 1) requestAnimationFrame(step);
+    else {
+      node.fx = null; node.fy = null;
+      node.vx = -Math.sin(th) * ORBIT_TANGENT;
+      node.vy = Math.cos(th) * ORBIT_TANGENT;
+    }
+  };
+  requestAnimationFrame(step);
+}
+// The standard d3 drag pattern, by hand rather than by importing d3-drag: on
+// down, fx/fy pin the target to the pointer and the simulation is asked to
+// run hotter so its neighbours give way; on release the pin lifts and
+// bounceBack returns the target over a readable interval — reduced motion
+// skips that path and lands directly. Pointer capture
+// keeps the events coming even once the pointer has left the target's own
+// small circle, and touch-action:none on the element (styled above) is what
+// stops a touch drag from also scrolling the page.
+function bindDrag(el, node) {
+  // render() is called directly too, not only left to the simulation's own
+  // tick: a drag started before d3-force has finished loading would otherwise
+  // move fx/fy with nothing to paint it, since nothing ticks yet.
+  const move = (e) => { e.preventDefault(); const p = toCell(e.clientX, e.clientY); node.fx = p.x; node.fy = p.y; if (orbitNodes) render(); };
+  const release = (e) => {
+    el.removeEventListener('pointermove', move);
+    try { el.releasePointerCapture(e.pointerId); } catch {}
+    if (dragging === node) dragging = null;
+    if (reduce) {
+      const th = Math.atan2(node.fy - orbitCy, node.fx - orbitCx);
+      node.x = orbitCx + restR() * Math.cos(th); node.y = orbitCy + restR() * Math.sin(th);
+      node.fx = null; node.fy = null;
+      if (orbitSim) { orbitSim.alphaTarget(0); render(); }
+      return;
+    }
+    if (orbitSim) orbitSim.alpha(Math.max(orbitSim.alpha(), 0.2)).alphaTarget(ORBIT_ALPHA_IDLE).restart();
+    bounceBack(node);
+  };
+  el.addEventListener('pointerdown', (e) => {
+    if (node.exiting || e.button > 0) return;
+    e.preventDefault();
+    try { el.setPointerCapture(e.pointerId); } catch {}   // no capture, no fallout: the listeners below still track this pointer by its move/up
+    dragging = node;
+    const p = toCell(e.clientX, e.clientY);
+    node.fx = p.x; node.fy = p.y;
+    if (orbitNodes) render();
+    if (orbitSim) orbitSim.alpha(Math.max(orbitSim.alpha(), ORBIT_ALPHA_DRAG)).alphaTarget(ORBIT_ALPHA_DRAG).restart();
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', release, { once: true });
+    el.addEventListener('pointercancel', release, { once: true });
+  });
+}
+// Shrinks a fallback label's own type until its wrap fits inside the circle,
+// rather than truncating it: a name set in the page's own typeface reads as
+// a name and is honest about not being the target's mark, where two letters
+// ("CF") used to read as a bad fake logo. Measured against the element's own
+// rendered layout — it must already be attached to the document for this to
+// mean anything, which is why buildCircle only creates the element and
+// ensureOrbitNodes calls this after appending it — since the page's type is
+// proportional and no two labels cost the same width at the same size.
+const FALLBACK_MAX_PX = 10, FALLBACK_MIN_PX = 7, FALLBACK_STEP_PX = 0.5;
+function fitFallback(el) {
+  let px = FALLBACK_MAX_PX;
+  el.style.fontSize = px + 'px';
+  // Two lines' worth at the current size (line-height is the 1.05 ratio set
+  // in CSS), not a fraction of the circle — a fixed height budget would let
+  // several short, dense lines slip through as "small enough" even though
+  // that reads as three or four lines, not two. A name long enough to still
+  // overflow this at FALLBACK_MIN_PX is left to wrap past two lines rather
+  // than truncated or invented-abbreviated — there is no shorter form of it
+  // on record to fall back to.
+  while (px > FALLBACK_MIN_PX && el.scrollHeight > px * 1.05 * 2 + 0.5) {
+    px -= FALLBACK_STEP_PX;
+    el.style.fontSize = px + 'px';
+  }
+}
+// `display_file` records an explicit product decision to show the official
+// source asset. It stays separate from the provenance audit's
+// `allowed_on_circle`: displaying a mark must not rewrite that evidence into
+// a permission claim. The fallback remains in the DOM in case an image fails.
+function buildCircle(t, node) {
+  const el = document.createElement('div');
+  el.className = 'orbit-circle'; el.dataset.id = t.id;
+  const planned = t.availability === 'planned';
+  const accessibleLabel = `${t.label}${planned ? ' — planned' : ''}`;
+  el.setAttribute('role', 'img'); el.setAttribute('aria-label', accessibleLabel);
+  el.title = accessibleLabel;
+  const fb = document.createElement('span'); fb.className = 'orbit-fallback'; fb.textContent = t.label.toLowerCase();
+  const logoFile = t.display_file || (t.allowed_on_circle === true && t.file ? t.file : null);
+  if (logoFile) {
+    const img = document.createElement('img');
+    img.alt = ''; img.draggable = false; img.decoding = 'async';
+    img.addEventListener('load', () => el.classList.add('has-logo'));
+    img.addEventListener('error', () => img.remove());
+    img.src = `scene4/logos/${logoFile}`;
+    el.append(img, fb);
+  } else el.append(fb);
+  bindDrag(el, node);
+  return el;
+}
+
+// Every position a target's element shows on the page — orbiting, mid-pop, or
+// tweening back into the control — reads off orbitNodes here and nowhere
+// else, so there is exactly one place that turns "where is it" into pixels.
+let orbitSim = null, orbitNodes = null, orbitEls = null, buttonNode = null, orbitCollide = null;
+function render(now = performance.now()) {
+  for (let i = 0; i < orbitNodes.length; i++) {
+    const n = orbitNodes[i], el = orbitEls[i];
+    let x = n.x, y = n.y, s, op;
+    if (n.exiting) {
+      const t = clamp01((now - n.exitAt) / ORBIT_OUT_MS), e = smooth(0, 1, t);
+      x = n.exitFrom.x + (orbitCx - n.exitFrom.x) * e;
+      y = n.exitFrom.y + (orbitCy - n.exitFrom.y) * e;
+      s = n.exitFrom.s * (1 - e); op = 1 - e;
+    } else { s = popScale(n, now); op = n.popAt ? 1 : 0; }
+    el.style.transform = `translate(${(x - ORBIT_D / 2).toFixed(1)}px, ${(y - ORBIT_D / 2).toFixed(1)}px) scale(${Math.max(0, s).toFixed(3)})`;
+    el.style.opacity = op.toFixed(3);
+  }
+}
+// Staggers the release of one target at a time, each at its own random
+// angle off the control's edge — collide and attraction carry it the rest of
+// the way into the pack, so the spread the reader sees is the simulation's,
+// not a layout this function computed. Only the new target receives the
+// clockwise tangent; an arrival never shakes the standing pack.
+async function popAll(g) {
+  for (let i = 0; i < orbitNodes.length; i++) {
+    if (gen !== g) return;
+    const n = orbitNodes[i], th = Math.random() * Math.PI * 2;
+    const r0 = Math.max(1, buttonR() - ORBIT_D * 0.6);
+    n.spawnAngle = th; n.spawnR = r0;
+    n.x = orbitCx + r0 * Math.cos(th); n.y = orbitCy + r0 * Math.sin(th);
+    n.vx = -Math.sin(th) * ORBIT_TANGENT; n.vy = Math.cos(th) * ORBIT_TANGENT;
+    n.spawnVx = n.vx; n.spawnVy = n.vy;
+    n.fx = null; n.fy = null; n.popAt = performance.now();
+    if (orbitCollide) orbitCollide.radius((d) => d === buttonNode ? buttonR() : d.popAt ? ORBIT_D / 2 : 0);
+    if (i < orbitNodes.length - 1) await wait(i % 2 === 0 ? ORBIT_STAGGER - ORBIT_STAGGER_SWING : ORBIT_STAGGER + ORBIT_STAGGER_SWING);
+  }
+}
+function ensureOrbitNodes() {
+  if (orbitNodes) {
+    for (const n of orbitNodes) { n.x = orbitCx; n.y = orbitCy; n.fx = orbitCx; n.fy = orbitCy; n.vx = 0; n.vy = 0; n.popAt = 0; n.exiting = false; }
+    return;
+  }
+  orbitNodes = TARGETS.map(() => ({ x: orbitCx, y: orbitCy, vx: 0, vy: 0, fx: orbitCx, fy: orbitCy, popAt: 0, exiting: false }));
+  orbitEls = orbitNodes.map((n, i) => {
+    const el = buildCircle(TARGETS[i], n);
+    fanEl.appendChild(el);
+    const fb = el.querySelector('.orbit-fallback');
+    if (fb) fitFallback(fb);   // needs a real layout box, hence after appendChild
+    return el;
+  });
+}
+async function startOrbit() {
+  if (orbitSim) return;
+  if (orbitStartPromise) return orbitStartPromise;
+  cancelAnimationFrame(orbitExitFrame); orbitExitFrame = 0;
+  const startToken = ++orbitStartToken;
+  const run = (async () => {
+  const g = gen;
+  TARGETS = TARGETS.length ? TARGETS : await loadTargets();
+  if (gen !== g || startToken !== orbitStartToken) return;   // the reader left before the target list resolved
+  ensureOrbitNodes();
+  if (reduce) {
+    // The static pack an unwilling-to-move reader gets, standing the instant
+    // the scene does rather than once a network fetch resolves: every target
+    // already touching the control at its own even slice, nothing popped in
+    // and nothing turning. d3-force is still loaded below (so a drag has a
+    // simulation to collide and settle against), but nothing about the
+    // reader's first look at the scene waits on it.
+    let placed = 0, ring = 0;
+    while (placed < orbitNodes.length) {
+      const radius = restR() + ring * ORBIT_D;
+      const capacity = Math.max(1, Math.floor(Math.PI * 2 * radius / (ORBIT_D * 1.05)));
+      const count = Math.min(capacity, orbitNodes.length - placed);
+      for (let j = 0; j < count; j++) {
+        const n = orbitNodes[placed + j], th = ringAngle(j, count) + ring * 0.21;
+        n.x = orbitCx + radius * Math.cos(th); n.y = orbitCy + radius * Math.sin(th);
+        n.fx = null; n.fy = null; n.popAt = -Infinity;
+      }
+      placed += count; ring++;
+    }
+  }
+  render();
+  let mod;
+  try { [mod] = await Promise.all([loadD3Force(), reduce ? null : wait(PUB_MS + PUB_BEAT)]); }
+  catch (e) { console.warn('scene 4: d3-force failed to load, targets stay' + (reduce ? ' static' : ' unpopped'), e && e.message); return; }
+  if (gen !== g || startToken !== orbitStartToken) return;   // the reader left before this resolved
+  const { forceSimulation, forceCollide, forceRadial } = mod;
+  buttonNode = buttonNode || { id: 'button', x: orbitCx, y: orbitCy, vx: 0, vy: 0, fx: orbitCx, fy: orbitCy };
+
+  orbitCollide = forceCollide((n) => n === buttonNode ? buttonR() : n.popAt ? ORBIT_D / 2 : 0).iterations(4);
+  orbitSim = forceSimulation([buttonNode, ...orbitNodes])
+    .velocityDecay(0)
+    // A point attraction, not a ring: radius 0 is the standard forceRadial
+    // idiom for a plain pull toward (cx, cy), so every target is drawn
+    // straight at the control rather than held off at a fixed distance from
+    // it — what stops it there is forceCollide below, not this force easing
+    // off.
+    .force('attract', forceRadial(0, orbitCx, orbitCy).strength(ORBIT_ATTRACT))
+    // A fixed radius per node, not one keyed on n.popAt: forceCollide reads
+    // its radius accessor once, at initialize, and caches it — a target not
+    // yet popped is still pinned exactly to the control's own centre either
+    // way, so collide never has reason to move it, and every already-packed
+    // target still collides against where an unpopped one is standing. The
+    // radius itself is each circle's own, with no added gap, so a settled
+    // pack touches rather than keeps a courteous distance.
+    // Default collide only relaxes overlap by one pass a tick, which a hub
+    // this small and a dozen-plus targets converging on it can outrun,
+    // leaving a soft overlap standing rather than a second shell forming
+    // cleanly outside the first; a few more iterations a tick is what a
+    // crowded packing needs to actually resolve (d3-force's own remedy for
+    // this, not a workaround).
+    .force('huddle', makeHuddle())
+    // Resolve contact after attraction and huddling have applied their
+    // velocities, so neither pull can re-introduce overlap in the same tick.
+    .force('collide', orbitCollide)
+    .force('speed-limit', makeSpeedLimit(ORBIT_SPEED_MAX))
+    .alphaTarget(ORBIT_ALPHA_IDLE)
+    .on('tick', render);
+  if (reduce) orbitSim.alpha(0);
+  else await popAll(g);
+  })();
+  orbitStartPromise = run;
+  try { await run; } finally { if (orbitStartPromise === run) orbitStartPromise = null; }
+}
+// The reverse of a pop: each target tweens, by its own current position and
+// pop-scale, straight back to the control over ORBIT_OUT_MS — a plain
+// interpolation rather than more simulation, since this is the one part of
+// the scene a fixed duration is asked of it (FAN_OUT_MS, above, is timed
+// against it). The simulation itself is stopped first, which also cancels
+// whatever the cluster's alpha was still cooling down from — leaving the
+// scene ends the physics outright rather than waiting for it to settle.
+function stopOrbit() {
+  orbitStartToken++;
+  orbitStartPromise = null;
+  if (!orbitNodes) return;
+  if (dragging) { dragging.fx = null; dragging.fy = null; dragging = null; }
+  if (orbitSim) { orbitSim.stop(); orbitSim = null; }
+  const g = gen, now0 = performance.now();
+  for (const n of orbitNodes) { n.exiting = true; n.exitAt = now0; n.exitFrom = { x: n.x, y: n.y, s: popScale(n, now0) }; }
+  const step = () => {
+    const now = performance.now();
+    render(now);
+    const active = orbitNodes.some((n) => now - n.exitAt < ORBIT_OUT_MS);
+    if (active && gen === g) { orbitExitFrame = requestAnimationFrame(step); return; }
+    for (const n of orbitNodes) n.exiting = false;
+  };
+  orbitExitFrame = requestAnimationFrame(step);
+}
+// The targets are scene 4's and no other scene's; leaving either way sends
+// them back into the control, and the simulation stops with them.
+const setFan = (on) => { stage.classList.toggle('fanned', on); if (on) startOrbit(); else stopOrbit(); };
+// ── Scene 5: the loop, and whether it is running ──────────────────────────
+// The footage is asked for once, at the first crossing toward it, and never
+// under reduced motion — a <video> with no source fetches nothing, so the
+// poster is the whole scene there and no request for the loop is made. Whether
+// the loop runs is then the reader's: the control below is a real button, and a
+// hand that stops it keeps it stopped through every crossing after.
+loopVid.poster = LOOP_POSTER;
+const closingPoster = new Image(); closingPoster.src = LOOP_POSTER;
+$('five-headline').textContent = HEADLINE;
+// loopOn starts unknown rather than false, so the first call after the source
+// is mounted always says something to the element. It has to: the tag carries
+// `autoplay`, and left alone the browser would start decoding the moment the
+// source arrives — at the first crossing toward the scene, while the scrub has
+// not begun and nothing has asked for it. An explicit pause there is what
+// clears the autoplay flag and leaves the running state the script's to decide.
+let xf = 0, loopMounted = false, loopWanted = true, loopOn = null;
+function mountLoop() {
+  if (loopMounted || reduce) return;
+  loopMounted = true;
+  loopVid.src = LOOP_SRC;
+  syncLoop();
+}
+// One place decides: the loop runs when it is on the page and the reader has
+// not stopped it. Called every frame of the scrub, so it acts only on a change.
+function syncLoop() {
+  const want = !document.hidden && !reduce && loopMounted && loopWanted && xf > 0;
+  if (want === loopOn) return;
+  loopOn = want;
+  if (want) loopVid.play().catch(() => {}); else loopVid.pause();
+}
+// How far the last join has run, and the only thing it moves.
+const setCross = (q) => { xf = q; document.documentElement.style.setProperty('--xf', q.toFixed(3)); syncLoop(); };
+// The close takes the pointer and the tab order only where it is settled: during
+// the scrub it is paint, and behind the page it is not there at all. The join
+// has two sides and the page is the other one: where the close is settled the
+// page is faded to nothing, and a control faded to nothing is still a tab stop
+// until the element it sits in is inert.
+const fiveOn = (on) => {
+  const entering = on && !five.classList.contains('on');
+  five.classList.toggle('on', on); five.inert = !on; page.inert = on;
+  if (entering) requestAnimationFrame(() => {
+    settleArmed = true;
+    restSince = performance.now();
+    if (reduce && !mobileLayout()) scrollTo(0, closingRestY());
+  });
+};
+// The canvas takes over the scene: the prints it shows are the pixels on
+// screen, so the DOM under it can change without a visible frame.
+// The sim keeps the boundary's two prints in SCENE order and `fwd` says which
+// end the wash runs from, so the pair is keyed by scene and never by direction;
+// handing it (from, to) would swap the source and the target on every wash back.
+function holdCanvas(src, tgt, scene, fwd, mobileTransition = false) {
+  groundAt(scene); sim.setPrints(src, tgt); sim.reset(); sim.draw(fwd, 0);
+  if (mobileTransition) {
+    stage.classList.add('mobile-handoff');
+    stage.style.setProperty('--wash-cover', '0');
+  } else stage.classList.add('morphing');
+}
+function releasePigmentCover() {
+  stage.classList.remove('morphing', 'mobile-handoff');
+  stage.style.removeProperty('--wash-cover');
+  canvas.style.filter = '';
+  cell.style.transform = '';
+}
+// When the scene last came to a stand, for the work that may only run at a
+// rest: a dwell counts from here, not from the frame the target changed.
+let settledAt = 0;
+function still(scene) {
+  settledAt = performance.now();
+  // Install the no-transition guard before changing data-scene. Otherwise a
+  // publish frame can paint once with the shell's lower-right source pose
+  // before the centred end-state transform is applied.
+  if (scene === DEPLOY) stage.classList.add('snap');
+  sceneClasses(scene);
+  groundAt(scene);
+  fiveOn(scene === SHARE);
+  scenes(PHASE[scene]);
+  // Place scene furniture while the wash still covers the live DOM. This
+  // keeps the clipped Publish control from flashing once in its source
+  // position at the shell's lower-right before its centred transform lands.
+  if (scene === DEPLOY) snapStage();
+  // A final wash owns the pixels while the reader turns around. Keep its
+  // cached source covered until the next frame can set the reverse direction;
+  // otherwise the live Publish control flashes in its shell corner.
+  if (!(finalWash?.covered && scene === DEPLOY)) releasePigmentCover();
+  if (mobileLayout() && scene === SHIPS) { sketchVisible(true); videoActive(true); }
+  if (mobileLayout()) mobileWatchKey = '';
+  if (scene !== DEPLOY && finalWash) { cancelAnimationFrame(finalWash.raf); finalWash = null; canvas.style.filter = ''; }
+  if (scene < DEPLOY) finalPrints = null;
+}
+
+// The signup link is navigation: it skips the scene performance.
+window.mossLanding = {
+  openSignup() {
+    cancelSettle();
+    if (running()) setTarget(SHARE);
+    else { shown = target = SHARE; still(SHARE); }
+    mountLoop(); setCross(1); fiveOn(true);
+  },
+  // Whether the page has actually arrived at the close, not just been asked
+  // to go there: closing.js polls this to know when it may safely focus the
+  // signup field, the same rest condition the wash itself already tracks.
+  atClosing: () => shown === SHARE && !running(),
+};
+
+// ── The last join: the page gives way to the full-bleed close ─────────────
+// The scrub is a position, not a clock: where the reader stands inside the last
+// XF_SPAN of the distance scene 4 owns. So it reverses for free — a turnaround
+// needs nothing said about it — and the join settles on whichever end the
+// reader carried it to. Only opacity changes per frame.
+// The incoming text owns contact. No dissolve begins in the gap before it.
+function mobileInkProgress(text) {
+  const band = mobileVisualBand();
+  const rect = text.getBoundingClientRect();
+  return clamp01((band.bottom - rect.top) / (band.height + rect.height));
+}
+// The first visual enters with its own copy. Morph once fully visible,
+// finishing before the second scene's text arrives at the viewport edge.
+function mobileEntranceProgress() {
+  const col = document.getElementById('col'), band = mobileVisualBand();
+  const top = col.getBoundingClientRect().top + parseFloat(getComputedStyle(col).paddingTop);
+  const span = textTop(scenesEl[1]) - top - band.height;
+  return clamp01((innerHeight - band.height - top) / Math.max(1, span));
+}
+function mobileClosingProgress() { return mobileInkProgress(scenesEl[DEPLOY].firstElementChild); }
+function mobileVisualBand() {
+  const visual = document.getElementById('vis');
+  const top = parseFloat(getComputedStyle(visual).top);
+  const height = visual.offsetHeight;
+  return { top, bottom: top + height, height };
+}
+function xfAt() {
+  if (mobileLayout()) return smooth(.45, 1, mobileClosingProgress());
+  const top = five.offsetTop;
+  return clamp01((scrollY - (top - innerHeight * .8)) / (innerHeight * .6));
+}
+function nativeScroll() {
+  // At the exact first crossfade pixel xfAt() is still zero. Keep the carry
+  // integrator for that boundary frame so its release velocity moves into the
+  // join; handing off there would clear carryV while watchScrollCss still has
+  // no positive crossfade to finish, leaving the page parked on the seam.
+  return mobileLayout() || xfAt() > 0;
+}
+// The scene on the far side of this join arrives already standing rather than
+// drawing itself under the fade: the fan is scene 4's end state, not a
+// performance to replay each time the reader crosses back.
+let snapToken = 0;
+function snapStage() {
+  const token = ++snapToken;
+  stage.classList.add('snap');
+  requestAnimationFrame(() => requestAnimationFrame(() => { if (token === snapToken) stage.classList.remove('snap'); }));
+}
+async function fade(to) {
+  // Restore the centred composition under pigment, never replay its entrance.
+  if (shown === SHARE) {
+    snapStage(); sceneClasses(DEPLOY); groundAt(DEPLOY);
+    stage.classList.add('fanned');
+  }
+  mountLoop();
+  if (reduce) { setCross(to === SHARE ? 1 : 0); return to; }
+  const settled = await new Promise(done => {
+    const frame = () => {
+      const q = xfAt(); setCross(q); updateFinalDissolve();
+      if (q >= 1 && target !== DEPLOY) done(SHARE);
+      else if (q <= 0 && target !== SHARE) done(DEPLOY);
+      else requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  });
+  setCross(settled === SHARE ? 1 : 0); snapStage();
+  return settled;
+}
+
+const stepToward = (from, t) => t === from ? from : from + Math.sign(t - from);
+const isJump = (a, b) => Math.abs(a - b) > 1;
+// How far one mechanism carries the sheet toward `want`. A wash swallows every
+// wash boundary in its path — three boundaries is still one wash, from the
+// pixels on screen to the print of the scene asked for — while a join that
+// brings its own mechanism is always a step of its own, so the crossfade is
+// never folded into a wash and no wash is ever asked to reach the scene that
+// has no print. `onHand` bounds the answer by the prints there are: a wash
+// re-points on the frame the target moves and cannot wait for a capture, so it
+// points at the farthest print it has and the next leg carries the rest.
+const legToward = (from, want, onHand) => {
+  let to = stepToward(from, want);
+  if (to === from || !joinAt(from, to).wash) return to;
+  while (to !== want && joinAt(to, stepToward(to, want)).wash) to = stepToward(to, want);
+  if (onHand) while (to !== from && !sheets[to]) to = stepToward(to, from);
+  return to;
+};
+// The scenes a jump passes over are states, not performances: each is applied
+// to the page in turn and none of them gets a wash of its own. It all happens
+// inside one frame, under the canvas, so no intermediate scene is ever on
+// screen — and none of their interiors is started, which is what keeps a
+// notebook that was only passed over from booting a kernel. The fan and the
+// interiors belong to the scene the reader arrives at, which `still` sets: the
+// one scene that carries a fan sits next to the one join that never washes, so
+// it is always a leg's end and never a scene passed over.
+const passThrough = (from, to) => { for (let s = stepToward(from, to); s !== to; s = stepToward(s, to)) { sceneClasses(s); groundAt(s); } };
+// A scene change: one mechanism at a time, and never two at once. The target is
+// read whole off the scroll position, so a jump is not a queue of joins to walk
+// — a wash already running is re-pointed at the newest target inside `pour`,
+// and this loop only starts another mechanism once the last one has landed
+// somewhere the target has since moved away from.
+let joinsRun = 0, washesRun = 0;
+async function runJoin() {
+  if (driving) return;
+  driving = true;
+  try {
+    while (target !== shown) {
+      const to = legToward(shown, target);
+      joinsRun++;
+      // The mechanism is the first boundary's: it is the one whose scene is
+      // being left, and the only one with anything standing to take back.
+      const join = joinAt(shown, stepToward(shown, to));
+      // A join that brings its own mechanism runs it and nothing else: the
+      // wash's preamble takes down what the scene being left had standing, and
+      // a crossfade needs both scenes left exactly as they are.
+      if (join.back && to < shown && !mobileLayout()) shown = await join.back(to);
+      else if (join.run) shown = await join.run(to);
+      else {
+        // A jump can ask for a scene no print was ever taken for: the prints on
+        // hand are the neighbours', and two boundaries away is not a neighbour.
+        // Stopping to take one costs 14 to 54ms of clone-and-serialize on the
+        // frame the reader is still moving in (measured 2026-09-14), so the
+        // wash reaches as far as the prints it holds and the rest of the leg is
+        // a cut. The warmer has the others by the next rest.
+        const reach = washing() && join.wash && sheets[shown] ? legToward(shown, target, true) : shown;
+        // With no simulation (reduced motion, or no float render targets) a
+        // wash is a cut, and so is a boundary whose print never arrived; a wash
+        // that runs may be re-pointed or turned around inside.
+        if (reach !== shown) { shown = await pour(reach); wentStale(); }
+        else { passThrough(shown, to); shown = to; }
+      }
+      if (target === SHARE && xfAt() >= 1) { standAtTerminalClose(); break; }
+      still(shown);
+    }
+  } finally { driving = false; flushPrintRect(); }
+}
+// One mobile pigment clock. The text track supplies a position; this advances
+// or rewinds the same liquid surface, and does no GPU draw at an unchanged rest.
+function advanceWash(simInstance, state, { goal, fwd, stir = 0, tilt = 0, relift = 0, budget = STEPS_PER_FRAME }, paint) {
+  if (state.t > goal + DT) { simInstance.reset(); state.t = 0; state.drawn = -1; }
+  let count = 0;
+  while (state.t < goal && state.t < T_TOTAL && budget-- > 0) {
+    simInstance.step(fwd, state.t, smooth(T_CURE, T_TOTAL, state.t), stir, tilt, relift);
+    state.t += DT; count++;
+  }
+  if (state.t >= goal - DT && state.t !== state.drawn) { paint(state.t); state.drawn = state.t; }
+  return { caughtUp: state.t >= goal - DT, count };
+}
+function publishBridge(from, to, prints) {
+  if (Math.min(from, to) !== SHIPS || Math.max(from, to) !== DEPLOY) return null;
+  const button = vdFrame.contentDocument.querySelector('.moss-publish-button');
+  if (!button) return null;
+  const r = button.getBoundingClientRect(), size = r.width;
+  const clone = button.cloneNode(true);
+  const originals = [button, ...button.querySelectorAll('*')], copies = [clone, ...clone.querySelectorAll('*')];
+  originals.forEach((el, i) => {
+    const style = el.ownerDocument.defaultView.getComputedStyle(el);
+    for (const property of style) copies[i].style.setProperty(property, style.getPropertyValue(property));
+  });
+  clone.id = 'publish-bridge'; clone.setAttribute('aria-hidden', 'true'); clone.tabIndex = -1;
+  Object.assign(clone.style, { position: 'absolute', right: 'auto', bottom: 'auto', margin: '0', zIndex: '110', pointerEvents: 'none', visibility: 'visible', transformOrigin: 'center' });
+  stage.appendChild(clone);
+  const priorVisibility = button.style.visibility;
+  button.style.visibility = 'hidden';
+  const cs = button.ownerDocument.defaultView.getComputedStyle(button);
+  const x = 120 + 540 - (parseFloat(cs.right) || 6) - size / 2;
+  const y = 30 + 560 - (parseFloat(cs.bottom) || 6) - size / 2;
+  // The live control survives independently; remove its ink from both sheets.
+  for (const scene of [SHIPS, DEPLOY]) {
+    const source = prints[scene], copy = document.createElement('canvas');
+    copy.width = source.width; copy.height = source.height;
+    const context = copy.getContext('2d');
+    if (scene === SHIPS) {
+      context.drawImage(source, 0, 0);
+      const k = copy.width / printW();
+      context.clearRect((x - size / 2 - 2 - printRect.x) * k, (y - size / 2 - 2 - printRect.y) * k, (size + 4) * k, (size + 4) * k);
+    }
+    prints[scene] = copy;
+  }
+  return {
+    draw(t) {
+      const q = smooth(0, T_TOTAL, t), p = from === SHIPS ? q : 1 - q;
+      const cx = (x + (GEOM.cellW / 2 - x) * p) * SCALE;
+      const cy = (y + (GEOM.cellH / 2 - y) * p) * SCALE + (mobileLayout() ? 0 : (1 - SCALE) * GEOM.cellH / 2);
+      const scale = SCALE * (1 + (PUB_SCALE * (mobileLayout() ? 1.4 : 1) - 1) * p);
+      clone.style.left = (cx - size / 2) + 'px'; clone.style.top = (cy - size / 2) + 'px';
+      clone.style.transform = `scale(${scale})`;
+      if (mobileLayout()) {
+        const expansion = (from === DEPLOY ? 1.4 : 1) + (to === DEPLOY ? .4 : -.4) * smooth(.35, T_TOTAL, t);
+        fanEl.style.transformOrigin = `${orbitCx}px ${orbitCy}px`;
+        fanEl.style.transform = `translate(${(x - orbitCx) * (1 - p) / expansion}px, ${(y - orbitCy) * (1 - p) / expansion}px) scale(${scale / (SCALE * expansion * PUB_SCALE)})`;
+      }
+    },
+    remove() { button.style.visibility = priorVisibility; clone.remove(); fanEl.style.transform = ''; fanEl.style.transformOrigin = ''; }
+  };
+}
+async function pour(to) {
+  const from = shown;
+  let terminal = false;
+  let fwd = to > from;
+  washesRun++;
+  // The prints are on hand (below), so the first drops land on the frame the
+  // trigger fires and the wash knows from its first step what it is dissolving
+  // and what it is to become. Nothing is ever taken up toward a stand-in. A
+  // fresh capture of the scene on screen replaces its print under the splash,
+  // so the poem is the poem being typed.
+  // Freeze a reader's arrangement before taking its ink. No spring or teardown
+  // may move an artifact back while its outgoing print is being captured.
+  if (from === SHIPS && s3Touched) {
+    for (const id of S3_ORDER) stopCard(id);
+    try { setSheet(SHIPS, await capture(SHIPS)); }
+    catch (error) { console.warn('scene 3 outgoing print:', error.message); }
+  }
+  const pr = { [from]: sheets[from], [to]: sheets[to] };
+  const bridge = publishBridge(from, to, pr);
+  bridge?.draw(0);
+  const inOrder = () => [pr[Math.min(from, to)], pr[Math.max(from, to)]];
+  const mobileHandoff = mobileLayout() || !!bridge;
+  holdCanvas(...inOrder(), from, fwd, mobileHandoff);
+  if (mobileHandoff && from === SHIPS) { sketchVisible(false); videoActive(false); }
+  let liveScene = from, lastCover = -1, drawnT = -1;
+  const pigment = { t: 0, drawn: -1 };
+  const showUnderCover = (scene) => {
+    if (scene === liveScene) return;
+    snapStage();
+    sceneClasses(scene);
+    groundAt(scene);
+    if (!(bridge && scene === DEPLOY)) scenes(PHASE[scene]);
+    if (scene === SHIPS) { sketchVisible(false); videoActive(false); }
+    liveScene = scene;
+  };
+  // The scenes' classes all land in this frame, under the canvas: the ones a
+  // jump passes over, and the target's. The wash used to take a fresh print of
+  // the scene it was leaving first, so the poem under the splash was the poem as
+  // typed — 35 to 54ms of capture inside the frames of a running wash, measured
+  // 2026-09-14, to buy at most one warm tick of typing. The rest's own retake
+  // keeps that print no older than that, and the splash reads it.
+  if (!mobileHandoff) { scenes('morph'); passThrough(from, to); sceneClasses(to); }
+  // sim seconds per window height of scroll: the wash completes as the reading
+  // line travels from one text to the other, whatever the speed of the hand
+  // the two texts the wash runs between, which a turnaround swaps and a jump
+  // sets further apart
+  const gapOf = (a, b) => { const lo = Math.min(a, b), hi = Math.max(a, b); return Math.max(0.2, (textTop(scenesEl[hi > lo ? hi : lo + 1]) - textBottom(scenesEl[lo])) / innerHeight); };
+  let gapVh = gapOf(from, to);
+  // The gap is spent unevenly: the dissolve and the blooms take the first part,
+  // the smeared print takes the larger rest, and the cure is not the scroll's at
+  // all — it runs once the reader has arrived at the text, or stopped anywhere
+  // and been settled onto a scene.
+  const K = (t) => t < T_TAKE ? T_TAKE / (SPLIT * gapVh) : t < T_WET ? (T_WET - T_TAKE) / ((1 - SPLIT) * gapVh) : 0;
+  // The scroll works the wash. Its clock is the distance scrolled: each frame
+  // advances it by what the page moved, so a flick that covers the gap between
+  // the texts completes the wash in the frames the flick takes (bounded only by
+  // the steps a frame can run), and a slow read paces it. Left alone the film
+  // does not move at all: a reader who has stopped is not left standing in a
+  // half-finished wash, they are settled onto a scene, and from that moment the
+  // wash owes them it and runs on at ARRIVE — as it does the moment the reading
+  // line reaches the text of the scene being set.
+  // Speed also agitates the film and tilts the sheet so the water runs the way
+  // the page is pushed; a crossing back turns the wash around: the water is
+  // poured again, what it laid down lifts, and it sets on the scene the reader
+  // went back to. Every input shows on the next frame.
+  let t = 0, acc = 0, relift = 0, last = performance.now(), lastY = scrollY;
+  steps = 0; washT = 0;
+  await new Promise((finish) => {
+    const f = (now) => {
+      if (target === SHARE && xfAt() >= 1) { terminal = true; finish(); return; }
+      const stepClock = landing.stepClock;
+      if (stepClock && landing.stepLimit != null && steps >= landing.stepLimit) { requestAnimationFrame(f); return; }
+      const dtReal = Math.min(0.1, (now - last) / 1000); last = now;
+      const moved = Math.abs(scrollY - lastY) / innerHeight; lastY = scrollY;
+      // The newest target, however far off it is: this wash is re-pointed at
+      // it rather than finishing and handing on to a second one.
+      const turn = legToward(from, target, true);
+      if (mobileLayout() && turn === from) { to = from; finish(); return; }
+      if (turn !== to) {
+        // Back across the scene it began on is the turnaround it always was:
+        // the water is poured again and what it laid down lifts. Anything else
+        // is a re-point — the film keeps its pigment and its motion, and only
+        // the print it is drying onto changes.
+        const back = (turn - from) * (to - from) <= 0;
+        to = turn; fwd = to > from;
+        if (!pr[to]) pr[to] = sheets[to] || pr[from];
+        if (back) { t = 0; acc = 0; relift = 1; }
+        gapVh = gapOf(from, to); sim.setPrints(...inOrder());
+        if (!mobileHandoff) { scenes('morph'); passThrough(from, to); sceneClasses(to); }
+      }
+      const v = stepClock ? (landing.scrollV || 0) : scrollV;   // the harness can hold a scroll speed
+      // a jump has left the text it started from far behind: it is arrived by
+      // definition, and nothing it crosses is being read
+      const jump = isJump(to, from);
+      const line = innerHeight * LINE, arrived = jump || (to > from ? textTop(scenesEl[to]) <= line : textBottom(scenesEl[to]) >= line);
+      const stir = Math.min(2, 3 * Math.abs(v)), tilt = -0.35 * Math.max(-1.2, Math.min(1.2, v));
+      // arrived, the wash runs on at ARRIVE, but through the smear at reading
+      // pace, so it is seen. Anywhere else the scroll is the only thing that
+      // moves it — including the settle's own travel, which the clock reads as
+      // the scroll it is, and which ends inside the scene's text: a rest needs
+      // no rate of its own, because being carried to a scene is an arrival.
+      const own = mobileLayout() ? 0 : jump ? ARRIVE_JUMP : arrived ? (t >= T_TAKE && t < T_WET ? ARRIVE_SMEAR : ARRIVE) : 0;
+      if (!stepClock) {
+        if (mobileLayout()) {
+          acc = T_TOTAL * clamp01((progressAt() - from) / (to - from));
+          // The fluid simulation runs forward. On reversal rebuild its bounded
+          // state, keeping the previous canvas visible until it catches up.
+          // Reverse/replay is owned by advanceWash below.
+        } else acc += dtReal * own + K(t) * moved;
+      }
+      washDbg = { acc: +acc.toFixed(3), arrived, own, dtReal: +dtReal.toFixed(3), fps: Math.round(1 / Math.max(dtReal, 1e-3)) };
+      if (mobileHandoff && !stepClock) {
+        pigment.t = t;
+        const advanced = advanceWash(sim, pigment, { goal: acc, fwd, stir, tilt, relift }, () => {});
+        t = pigment.t; steps += advanced.count;
+      } else {
+        let budget = stepClock ? SPF : STEPS_PER_FRAME;
+        while (t < T_TOTAL && budget-- > 0 && (stepClock || t < acc) && !(HOLD && t >= HOLD)) { sim.step(fwd, t, smooth(T_CURE, T_TOTAL, t), stir, tilt, relift); t += DT; steps++; }
+      }
+      washT = t;
+      const caughtUp = t >= acc - DT;
+      if (mobileHandoff && caughtUp) {
+        // All source furniture stays put while the cover rises. Both live
+        // compositions switch only under opaque pigment, including reversal.
+        const cover = Math.min(smooth(0, .35, t), 1 - smooth(1.92, T_TOTAL, t));
+        if (cover !== lastCover) {
+          stage.style.setProperty('--wash-cover', cover.toFixed(3));
+          lastCover = cover;
+        }
+        showUnderCover(t < .35 ? from : to);
+        bridge?.draw(t);
+        if (bridge && mobileLayout() && to === DEPLOY && t > .35 &&
+            textBottom(scenesEl[SHIPS]) <= stage.getBoundingClientRect().top + GEOM.cellH * SCALE / 2) {
+          scenes(PHASE[DEPLOY]);
+          // The logo group stays solid while the remaining article ink settles.
+          fanEl.style.filter = 'none';
+          fanEl.style.zIndex = '101';
+        }
+        const sizeProgress = smooth(.35, T_TOTAL, t);
+        const size = (from === DEPLOY ? 1.4 : 1) + ((to === DEPLOY ? 1.4 : 1) - (from === DEPLOY ? 1.4 : 1)) * sizeProgress;
+        if (mobileLayout()) cell.style.transform = `scale(${SCALE}) translate(${(1 - size) * GEOM.cellW / 2}px, ${(1 - size) * GEOM.cellH / 2}px) scale(${size})`;
+      }
+      if (!mobileHandoff || (caughtUp && t !== drawnT)) {
+        sim.draw(fwd, smooth(T_CURE, T_TOTAL, t), mobileLayout() ? -.2 + 1.4 * smooth(.35, T_TAKE, t) * (1 - smooth(1.3, 1.72, t)) : -.2);
+        drawnT = t;
+      }
+      if (!mobileHandoff) groundToward(to, smooth(T_DRY, T_TOTAL, t), stepClock ? DT * SPF : dtReal);
+      if (t >= T_TOTAL - 1e-6) finish(); else requestAnimationFrame(f);
+    };
+    requestAnimationFrame(f);
+  });
+  if (mobileHandoff) releasePigmentCover();
+  bridge?.remove();
+  fanEl.style.filter = '';
+  fanEl.style.zIndex = '';
+  if (terminal) return SHARE;
+  if (!bridge) setSheet(to, pr[to]);   // the scene now on screen, at rest
+  return to;
+}
+// The wash needs the scene as pixels, and a browser will not hand over its own
+// rendering, so the scene is re-rendered by the same engine: each document
+// (the stage, the editor, the preview's chrome, the page inside it) is cloned,
+// its images and stylesheets inlined, drawn as an SVG foreignObject image, and
+// the images are composited at the rects the live frames occupy. One document
+// per image, because a single SVG has one stylesheet namespace and three
+// documents' `body`, `h1` and `:root` rules would fight in it. Same engine,
+// same fonts, same pixels as the live scene, on whatever machine is looking.
+// (A blob: URL taints the canvas in Chromium; a data: URL does not.)
+// A print must never wait on the network. Its resources are already on the
+// page, so a fetch here is a re-read, and a re-read that hangs (a pooled
+// socket gone stale behind an ssh forward, seen on the Mac: the first print
+// never finished, so the poem never typed and no wash could arm) must give up
+// and print without. Successes are cached for good; a failure is remembered
+// for a while so the prints that follow do not each pay the wait, then tried again.
+const FETCH_MS = 2500, RETRY_MS = 20000;
+const fetchT = (url) => fetch(url, { signal: AbortSignal.timeout(FETCH_MS) });
+// Nothing a print waits for may wait forever. Everything that can hang gets the
+// same budget as a re-read: the browser's own font loading, and its decode of
+// the finished SVG.
+const capped = (p, ms, msg) => { let t; return Promise.race([p, new Promise((_, no) => { t = setTimeout(() => no(new Error(msg)), ms); })]).finally(() => clearTimeout(t)); };
+// A print must not be taken while the document is still loading a face, or it
+// is folded and laid out on fallback metrics. `fonts.ready` settles when the
+// faces are loaded and the last layout that wanted them is done; nothing here
+// waited for it. It buys less than it looks: the glyphs themselves already
+// travel, because `inlineCss` embeds a src `url()` as a data url like any other
+// (and the moss faces are all `local()`), so a Chromium print carries the face
+// with or without this wait — and a WebKit print does not carry it either way,
+// because a WebKit SVG image will not load a data-url @font-face at all
+// (measured 2026-09-13, harness/font-presence.mjs: the WebKit fallback-font gap
+// is still open). A face that never arrives is not worth a hung capture: it
+// gets a re-read's budget and the print goes out on the fallback, which is
+// off-brand, not broken.
+const fontsReady = (doc) => capped(doc.fonts ? doc.fonts.ready : Promise.resolve(), FETCH_MS, 'fonts timed out').catch(() => {});
+const cached = (cache, key, get) => {
+  const c = cache.get(key);
+  if (c && (!c.failedAt || performance.now() - c.failedAt < RETRY_MS)) return c.p;
+  const p = get().catch((e) => { cache.set(key, { p, failedAt: performance.now() }); throw e; });
+  cache.set(key, { p });
+  return p;
+};
+const dataCache = new Map(), cssCache = new Map();
+function toData(url) {
+  if (url.startsWith('data:')) return Promise.resolve(url);
+  return cached(dataCache, url, () => fetchT(url).then((r) => r.blob()).then((bl) => new Promise((ok) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.readAsDataURL(bl); }))).catch(() => url);
+}
+const cssText = (href) => cached(cssCache, href, () => fetchT(href).then((r) => r.text())).catch(() => '');
+async function inlineCss(css, base) {
+  const urls = [...new Set([...css.matchAll(/url\((['"]?)([^'")]+)\1\)/g)].map((m) => m[2]).filter((u) => !u.startsWith('data:') && !u.startsWith('#')))];
+  const got = await Promise.all(urls.map((u) => { let abs; try { abs = new URL(u, base).href; } catch { return null; } return toData(abs).then((d) => [u, d]); }));
+  for (const g of got) if (g) css = css.split(g[0]).join(g[1]);
+  return css;
+}
+const svgDoc = new DOMParser().parseFromString('<svg xmlns="http://www.w3.org/2000/svg"/>', 'image/svg+xml');
+// A print is flat paint: no shadows, no filters. Safari draws a box-shadow or a
+// backdrop-filter inside a foreignObject image as a hard offset block (the pill
+// buttons of the shell grew shadow-shaped slabs beside them as the sheet cured),
+// and the live page paints them again the moment it returns.
+const FLAT = '*, *::before, *::after { box-shadow: none !important; text-shadow: none !important; filter: none !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }';
+const flatStyle = (doc) => { const st = doc.createElement('style'); st.textContent = FLAT; return st; };
+// One document's element tree, cloned to render standalone: scripts out,
+// frames and canvases become empty blocks of their size, images and
+// stylesheet urls inlined, comments out (a `--` inside one breaks XML).
+// Whether a live element's own box, in its own document's current viewport
+// (already what getBoundingClientRect() reads against — no scroll-offset
+// math of its own needed, whatever document this is), falls inside the
+// frame a print actually shows. Shared by `fold` (which reads it to decide
+// what to inline) and `withholdOffscreen` (which reads it to decide what the
+// live DOM should be allowed to fetch at all) so the two can never disagree
+// about where "on screen" ends.
+const rectInFrame = (vw, vh, r) => r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
+// A document's own current viewport box — `fold` and `offscreenImgs` both
+// need just the size (not `rasterDoc`'s scroll offsets too), so this is the
+// one place either reads `scrollingElement` for it.
+const docViewport = (doc) => { const vp = doc.scrollingElement || doc.documentElement; return [vp.clientWidth, vp.clientHeight]; };
+async function fold(doc, liveRoot, options = {}) {
+  const root = liveRoot.cloneNode(true);
+  const live = [liveRoot, ...liveRoot.querySelectorAll('*')], copy = [root, ...root.querySelectorAll('*')];
+  const drop = [], work = [];   // the inlining runs in parallel: one slow resource must not hold the rest
+  // A print only ever shows the frame the reader is looking at — this doc's
+  // own current viewport, the same box `rasterDoc` rasters into. An article
+  // can carry many images below that (27 plates behind scene 1); DOM
+  // `loading=lazy` already keeps the live page from fetching them until
+  // scrolled to, and the fold must not undo that by reading every one of
+  // them into a data url just to build a print of the first screen. Measured
+  // 2026-09-17 (harness/scenes12-perf.mjs): fetching all of them at boot cost
+  // Chromium +2.21MB/+170ms and WebKit +6MB/+287ms over the pre-article baseline.
+  const [vw, vh] = docViewport(doc);
+  for (let i = 0; i < live.length; i++) {
+    const L = live[i], C = copy[i]; if (!C) break;
+    const tag = L.tagName;
+    if (tag === 'SCRIPT' || tag === 'NOSCRIPT' || tag === 'META' || tag === 'TITLE' || (tag === 'LINK' && L.rel !== 'stylesheet')) { drop.push(C); continue; }
+    if (L.classList && L.classList.contains('cm-cursorLayer')) { drop.push(C); continue; }
+    // A <picture>'s <source srcset> is never rewritten to an absolute or
+    // inlined URL (only its sibling <img> is, below) — serialized as-is into
+    // the print's foreignObject, its relative path resolves against the TOP
+    // page's URL instead of the source document's, 404ing. The <img> already
+    // carries the browser's own picked resource via currentSrc, srcset and
+    // all, so the source is redundant for a print and safe to drop.
+    if (tag === 'SOURCE') { drop.push(C); continue; }
+    if (tag === 'IFRAME' || tag === 'CANVAS') {
+      if (tag === 'CANVAS' && options.snapshotCanvases && L.width && L.height) {
+        try {
+          const im = doc.createElement('img');
+          im.setAttribute('style', `display:block;width:${L.clientWidth || L.width}px;height:${L.clientHeight || L.height}px;`);
+          im.id = L.id; im.className = L.className;
+          im.src = L.mossCaptureFrame ? L.mossCaptureFrame() : L.toDataURL('image/png'); C.replaceWith(im); continue;
+        } catch (e) { /* a tainted sketch canvas falls back to its sized hole */ }
+      }
+      const hole = doc.createElement('div'); hole.setAttribute('style', `display:block;width:${L.clientWidth}px;height:${L.clientHeight}px;` + (L.getAttribute('style') || '')); if (L.id) hole.id = L.id; hole.className = L.className; C.replaceWith(hole); continue;
+    }
+    // A video draws nothing inside a foreignObject image, so the print takes the
+    // frame that is on screen: the element the sheet actually shows, frozen, the
+    // same as every other pixel of a print. Its poster if no frame has decoded
+    // yet, and a plain box if there is not even that.
+    if (tag === 'VIDEO') {
+      const cs = getComputedStyle(L);
+      const im = doc.createElement('img');
+      im.setAttribute('style', `display:block;width:${L.clientWidth}px;height:${L.clientHeight}px;object-fit:${cs.objectFit};border-radius:${cs.borderRadius};`);
+      let frame = null;
+      if (L.readyState >= 2 && L.videoWidth) {
+        try { const cv = document.createElement('canvas'); cv.width = L.videoWidth; cv.height = L.videoHeight; cv.getContext('2d').drawImage(L, 0, 0); frame = cv.toDataURL('image/jpeg', 0.9); } catch (e) { frame = null; }
+      }
+      if (frame) im.setAttribute('src', frame);
+      else if (L.poster) work.push(toData(L.poster).then((d) => im.setAttribute('src', d)));
+      C.replaceWith(im); continue;
+    }
+    if (tag === 'IMG') { C.removeAttribute('srcset'); C.removeAttribute('loading'); const src = L.currentSrc || L.src;
+      if (doc !== document && L.complete && L.naturalWidth) C.style.opacity = '1';
+      // the plates are drawn onto the print from their loaded images, not through the raster (capture): no need to read them again.
+      // `[data-lqip]` (not bare .plate): moss's own site CSS gives a hero image the
+      // class "plate" too (its fit-mode, unrelated to this page's decorative sheets),
+      // and without the attribute check a nested preview's own hero silently kept its
+      // un-inlined, page-relative src — fine on its own document, a 404 once serialized
+      // into this document's print.
+      // A .sib card (scene 3's own background/chrome layers) is the same story
+      // one level further: takePrint hides `.sib` outright (`.plate, .sib {
+      // display: none }`, near takePrint below) because the wash never touches
+      // them — they sit on top of the print as ordinary live DOM, page
+      // furniture the same as the centre sheet's shadow. So nothing under
+      // one is worth reading into a print, at any weight: this is what lets the
+      // notebook window hold its real, heavy baked animation
+      // (scene3/notebook/breed/mandelbrot-smooth-zoom.webp) instead of a shrunk
+      // stand-in — a print never asks for its bytes, heavy or not, in the first
+      // place. Before this exclusion, that read scaled with the source file's
+      // own bytes and reliably stalled a capture long enough for a drag's
+      // pointerdown to land on the wrong element underneath (scene3/README.md
+      // has the reliability numbers behind that diagnosis).
+      if (L.closest('.sib')) { C.removeAttribute('src'); continue; }
+      // getBoundingClientRect() is already relative to this element's own
+      // scrolling viewport (the doc's, whatever doc that is), so it needs no
+      // scroll-offset math of its own to say whether the print's frame shows it.
+      const onScreen = rectInFrame(vw, vh, L.getBoundingClientRect());
+      // An offscreen clone keeps no src at all, inlined or not: a bare src
+      // left on it is not inert (the comment above already found the
+      // relative-path half of this — a page-relative one 404s once
+      // serialized), an absolute one resolves fine and the foreignObject
+      // fetches it for real, which is the same network cost `toData` would
+      // have paid. Only an on-screen image is worth reading at all.
+      if (!onScreen) { C.removeAttribute('src'); continue; }
+      // A LQIP plate is drawn manually for the landing editor, but the same
+      // class is used by the harvested preview article. Its visible image is
+      // part of that document's print and must be inlined there; otherwise the
+      // wash captures only the placeholder and the article image pops in live.
+      if (src) work.push(toData(src).then((d) => {
+        if (typeof d === 'string' && d.startsWith('data:')) maxPrintImgBytes = Math.max(maxPrintImgBytes, d.length);
+        C.setAttribute('src', d);
+      })); continue; }
+    if (tag === 'STYLE') { work.push(inlineCss(L.textContent, doc.baseURI).then((css) => { C.textContent = css; })); continue; }
+    if (tag === 'LINK') { const st = doc.createElement('style'); C.replaceWith(st); work.push(cssText(L.href).then((css) => inlineCss(css, L.href)).then((css) => { st.textContent = css; })); continue; }
+    if (L.style && L.style.backgroundImage && L.style.backgroundImage.includes('url(')) work.push(inlineCss(L.style.backgroundImage, doc.baseURI).then((v) => { C.style.backgroundImage = v; }));
+  }
+  await Promise.all(work);
+  drop.forEach((n) => n.remove());
+  { const tw = doc.createTreeWalker(root, NodeFilter.SHOW_COMMENT); const cs = []; while (tw.nextNode()) cs.push(tw.currentNode); cs.forEach((c) => c.remove()); }
+  return root;
+}
+// Render an element tree (plus the stylesheets it needs) at w x h into an Image.
+async function raster(nodes, w, h, srcDoc = document) {
+  await fontsReady(srcDoc);   // the engine must have the faces before it draws the image
+  const host = document.createElement('div'); host.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+  host.setAttribute('style', `position:relative;width:${w}px;height:${h}px;overflow:hidden;`);
+  nodes.forEach((n) => host.appendChild(n));
+  host.querySelectorAll('style').forEach((st) => { const css = st.textContent; st.textContent = ''; st.appendChild(svgDoc.createCDATASection(css.replace(/]]>/g, ']]]]><![CDATA[>'))); });
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><foreignObject width="100%" height="100%">${new XMLSerializer().serializeToString(host)}</foreignObject></svg>`;
+  const img = new Image();
+  // a decode that never finishes (a malformed serialization, an engine stall)
+  // would hold the retake loop or a pour open for good; a distinct message so
+  // the caller can tell a slow print from an impossible one
+  await capped(new Promise((ok, no) => { img.onload = ok; img.onerror = () => no(new Error('scene raster failed')); img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg); }), FETCH_MS, 'scene raster timed out');
+  return img;
+}
+// The intro title's own small wash: a second makeSim instance sized to the
+// h1's own box, driven by the same titleP that already reaches zero at scene
+// 1's rest (updateOpening, above). Desktop only, and never under reduced
+// motion — both keep the title exactly as plain scrolling text.
+(async function setupTitleDissolve() {
+  if (mobileLayout() || reduce) { titleReady = true; return; }
+  // Wait for the page to boot AND come to rest before doing any of this: a
+  // second WebGL2 context and its shader compiles are synchronous main-thread
+  // work, and watchScrollIntent's own spring clamps its per-frame dt to 0.1s
+  // (springStep's stability margin, above), so a compile stall borrows real
+  // time the spring never gets to spend — measured settling 60+px short of
+  // rest after a single wheel tick. atRest() is the page's own existing
+  // signal for "safe to do a background task now" (used to gate stale-print
+  // retakes); titleP is 1 (nothing to show yet) for as long as the reader has
+  // not scrolled, so nothing is lost by waiting for it here too.
+  // A failed boot sets dataset.static instead of ever reaching data-ready
+  // (see the ready().catch() path, below), so this loop already cannot
+  // advance without it — checked anyway after every wait, cheap insurance
+  // against a future change to that exclusivity leaving this polling forever
+  // on a page that has already given up and shown the static fallback.
+  while (document.documentElement.dataset.ready !== '1') {
+    if (document.documentElement.dataset.static) { titleReady = true; return; }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  if (document.documentElement.dataset.static) { titleReady = true; return; }
+  // atRest() can already read true the instant ready flips (restSince was set
+  // once, at script start) — before the reader's very first gesture, fired
+  // at that same instant, has reached even one watchScrollIntent frame and
+  // moved it. Wait out a gesture's own settling window once unconditionally,
+  // then require atRest() on several checks in a row before trusting it.
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  if (document.documentElement.dataset.static) { titleReady = true; return; }
+  for (let stable = 0; stable < 3; ) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    if (document.documentElement.dataset.static) { titleReady = true; return; }
+    stable = atRest() ? stable + 1 : 0;
+  }
+  const liveRect = openingTitle.getBoundingClientRect();
+  if (!liveRect.width || !liveRect.height) { titleReady = true; return; }
+  const pad = GEOM.pad;
+  // Cloned rather than styled by a shared class, so a future edit to #intro
+  // h1's own rule cannot silently desync the two; the cost is borne once per
+  // raster, not per frame. Named properties only: copying every computed
+  // property (including ones that mean nothing here, like the live sticky
+  // positioning) measured fine via a plain DOM append, but pushed the clone's
+  // own box to the bottom of the print once serialized through raster()'s
+  // SVG foreignObject — some property in the full set is read differently
+  // there. This list is exactly what the task needs: font, size, colour,
+  // letter-spacing and line breaks (the <br> tags clone with the node).
+  const cloneTitle = () => {
+    const cs = getComputedStyle(openingTitle);
+    const node = openingTitle.cloneNode(true);
+    node.style.cssText = `position:absolute; left:${pad}px; top:${pad}px; margin:0; font-family:${cs.fontFamily}; font-size:${cs.fontSize}; font-weight:${cs.fontWeight}; font-style:${cs.fontStyle}; line-height:${cs.lineHeight}; letter-spacing:${cs.letterSpacing}; color:${cs.color}; text-align:${cs.textAlign}; text-transform:${cs.textTransform}; white-space:${cs.whiteSpace};`;
+    return node;
+  };
+  // Fully transparent target, at any size: nothing in it to stretch.
+  const blank = document.createElement('canvas'); blank.width = blank.height = 1;
+  const fallbackFade = () => { titleMode = 'fade'; titleDissolve = (p) => { openingTitle.style.opacity = String(p); }; titleDissolve(pendingTitleP); titleReady = true; };
+  // A stroke a couple of px wetter than its own geometry, not a different
+  // print: the swap still lands on the live h1's own pixels (anti-aliasing
+  // already softens a 2px difference to invisible at reading distance), but
+  // the print's footprint — what foot() downsamples the splash gate against
+  // — stops vanishing into the coarse .ft mip between thin strokes.
+  const dilate = (img, w, h, r) => {
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) { if (dx * dx + dy * dy <= r * r) g.drawImage(img, dx, dy); }
+    return c;
+  };
+  // The title's strokes are only 3-5 texels wide at 2 real px/texel — thin
+  // enough that WATER's own per-step diffusion, fixed in TEXELS by step
+  // count (not by anything this file can scale), reaches well past them
+  // before the wash finishes, on screen. Running the title's grid finer
+  // halves that spread's own on-screen reach without touching the shader:
+  // the same texel-count blur now covers half the real distance. Measured
+  // cost (commit body) stays inside a 60fps scroll at 1440x900 at 1; 0.75
+  // is available if a future viewport needs it and the cost still allows.
+  const TITLE_PX_PER_TEXEL = 1;
+  let box = { x: liveRect.left - pad, y: liveRect.top - pad, w: Math.min(MAX_PRINT_EDGE, liveRect.width + 2 * pad), h: Math.min(MAX_PRINT_EDGE, liveRect.height + 2 * pad) };
+  const clone = cloneTitle();
+  clone.style.width = liveRect.width + 'px'; clone.style.height = liveRect.height + 'px';
+  // dilate's radius is real px on the rasterized print (box.w x box.h,
+  // independent of the sim's own grid): at the old 2 px/texel grid, 2 real
+  // px was 1 texel of anti-vanishing margin. Keeping that same 1-texel
+  // margin at the new resolution means the real-px radius scales with
+  // TITLE_PX_PER_TEXEL too, rather than doubling the margin along with it.
+  const TITLE_DILATE = Math.max(1, Math.round(TITLE_PX_PER_TEXEL));
+  let print;
+  try { print = dilate(await raster([clone], box.w, box.h), box.w, box.h, TITLE_DILATE); }
+  catch (e) { console.warn('title print unavailable, falling back to a fade:', e.message); fallbackFade(); return; }
+  if (document.documentElement.dataset.static) { titleReady = true; return; }
+  const titleCanvas = document.createElement('canvas');
+  titleCanvas.id = 'gl-title';
+  titleCanvas.style.cssText = 'position:fixed; left:0; top:0; pointer-events:none; display:none;';
+  document.body.appendChild(titleCanvas);
+  const gridW = Math.round(box.w / TITLE_PX_PER_TEXEL), gridH = Math.round(box.h / TITLE_PX_PER_TEXEL);
+  // A title's strokes cover a small fraction of its own box next to a
+  // scene's photos and screenshots, so the same paint-strength release
+  // (load 1, what the main wash always uses) reads as a thin stain rather
+  // than ink bleeding. TITLE_LOAD raises how much suspended pigment each
+  // step's dissolution releases (concentration, not rate — l still grows at
+  // the same pace, so "completely gone" keeps its own timing).
+  const TITLE_LOAD = 14;
+  // The shared splash is eight discrete drops with a circular falloff
+  // (WATER, drops[]/dropR): on a photo it hides inside the print's own
+  // texture, but on bare glyph strokes it is the whole picture — a judge
+  // read it as "a polka-dot brush". Zeroed here: no drop lands, so neither
+  // the disk-shaped rise in h nor its outward vel kick exist. What is left
+  // is the mist term alone (`uMist * f * paper-grain`), gated by the same
+  // print footprint and shaped by the same paper texture every scene wash
+  // reads.
+  //
+  // A prior pass chased a wrong reading of "legible": it pushed MIST/HOLD
+  // to a hard, short pulse (0.48/0.019) to force the glyph-mask correlation
+  // to peak by 25% specifically, a knife-edge under 0.05 of TITLE_MIST wide
+  // on chromium and visibly darker and flatter at 25-50% than this pass's
+  // own reference frames for it. The owner's actual bar is simpler: legible
+  // through wetting early, then progressively lost, then gone — a floor at
+  // 25%, not a peak there (assertion G, below, now asks for exactly that).
+  // These are the same amplitude and hold this file used before
+  // TITLE_PX_PER_TEXEL went from 2 to 1 (the previous commit): mistAmp and
+  // mistHold are seconds- and height-per-step quantities, not inherently
+  // tied to the grid's own texel size, and the finer grid's own effect
+  // (WATER's per-step blur reaching half as far on screen for the same
+  // texel-count spread) is what TITLE_PAPER_SCALE/TITLE_BLOCK below already
+  // account for — reapplying the old values here and looking at the result
+  // against the reference frames (scratchpad/phase1g/) confirmed the same
+  // character carries over rather than needing its own re-derivation.
+  const TITLE_SPLASH = 0, TITLE_MIST = 0.14, TITLE_MIST_HOLD = 0.08;
+  // R (the splash radius) needs no rescaling for TITLE_PX_PER_TEXEL: with
+  // TITLE_SPLASH=0 it multiplies out to nothing in both the h and vel terms
+  // (WATER) regardless of its own value, so it is unaffected either way.
+  //
+  // uPaper's 256-texel period reads at a different size on screen per
+  // instance, because "texel" isn't a fixed screen size: the main wash's
+  // grid is a fixed 820x780 design-px box (BASE_TEX_W x BASE_TEX_H) at
+  // 410x390 texels — 2 design px/texel — rendered through the stage's own
+  // `--s` (SCALE, this file's global) design-px-to-real-px factor, so its
+  // on-screen px/texel is 2*SCALE. The title's box, by contrast, is
+  // #intro's own live layout, not inside that transform, so its
+  // gridW = box.w/TITLE_PX_PER_TEXEL already IS TITLE_PX_PER_TEXEL *real*
+  // px/texel, unscaled. One period is 256 texels either way, so on screen:
+  // main = 256*2*SCALE px, title (at uPaperScale=1) =
+  // 256*TITLE_PX_PER_TEXEL px. Setting uPaperScale =
+  // TITLE_PX_PER_TEXEL/(2*SCALE) shrinks the title's period by exactly the
+  // ratio needed (P() divides t*uPaperScale, so the period in texels is
+  // 256/uPaperScale) to match the main wash's on-screen grain size. Half
+  // its previous value now that TITLE_PX_PER_TEXEL is 1 instead of 2 — each
+  // texel is half the real screen size, so half as much scaling is needed
+  // to reach the same physical period. SCALE moves during the intro's own
+  // zoom, so this reads it once, at setup — the same moment gridW/gridH
+  // themselves are fixed for this sim's lifetime (see onResize, below:
+  // uSize is never re-issued either).
+  const TITLE_PAPER_SCALE = TITLE_PX_PER_TEXEL / (2 * Math.max(0.05, SCALE));
+  // BLOCK is the same on-screen-match problem as the paper period, with 16
+  // texels (PIG's uNear neighbourhood) standing in for uPaper's 256:
+  // TITLE_BLOCK*TITLE_PX_PER_TEXEL (title's on-screen block size) must
+  // equal 16*2*SCALE (main's), the same equality TITLE_PAPER_SCALE solves,
+  // so TITLE_BLOCK = 16/TITLE_PAPER_SCALE falls out of it directly.
+  const TITLE_BLOCK = Math.max(1, Math.round(16 / TITLE_PAPER_SCALE));
+  // What is left, after the above (verified via ?diag=12, uPaper's own
+  // fibre channel, and ?diag=6, the sim's actual water depth: the first is
+  // now fine grain at this scale, the second still shows the same large
+  // round lumps as before the fix). The lumps are not the paper texture —
+  // they are WATER's own per-step neighbour blur, `h = mix(h, hl, 0.25)`,
+  // compounding over the ~hundreds of steps a wash runs, a diffusion
+  // process whose length scale is set by step count, not by what fed it.
+  // The main wash's own grid absorbs that spread across many more texels;
+  // the title's smaller grid does not. A fix would need that blur (or an
+  // equivalent) to become instance-aware too — a second shader change,
+  // not the one this pass authorized.
+  const titleSim = makeSim({ canvas: titleCanvas, texW: gridW, texH: gridH, rect: () => box, load: TITLE_LOAD, splashAmp: TITLE_SPLASH, mistAmp: TITLE_MIST, mistHold: TITLE_MIST_HOLD, blockSize: TITLE_BLOCK, paperScale: TITLE_PAPER_SCALE });
+  // Cost guard: the 4x-larger grid (TITLE_PX_PER_TEXEL halved from 2) costs
+  // real GPU time now — measured (real hardware, headless:false; headless
+  // Playwright's default SwiftShader answer is not this machine's own) a
+  // synced (gl.readPixels-forced) 36-step burst, STEPS_PER_FRAME's own
+  // default budget, at 17.5-20.2ms, over a 16.67ms/60fps frame. 24 steps
+  // measured a steady 13.0ms, with margin; a worse-case single-frame catch-
+  // up after a hard scroll jump now takes more frames instead of stalling
+  // one. Only this instance's budget changes — the shared default and the
+  // main wash's own call sites are untouched.
+  const TITLE_STEP_BUDGET = 24;
+  if (!titleSim) { titleCanvas.remove(); fallbackFade(); return; }
+  let broken = false;
+  // No webglcontextrestored handler: the canvas is removed here, same as the
+  // !titleSim path above, so there is nothing left to restore into — a
+  // future context would need a fresh setupTitleDissolve, which only runs
+  // again on the next full page load.
+  const fallBack = () => {
+    broken = true;
+    titleCanvas.getContext('webgl2')?.getExtension('WEBGL_lose_context')?.loseContext();
+    titleCanvas.remove();
+    fallbackFade();
+  };
+  titleCanvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); fallBack(); });
+  titleSim.setPrints(print, blank);
+  titleSim.reset();
+  // Ink remaining is read from the sim's own dissolved-fraction state (l),
+  // weighted by where the print's own ink was, at the sim's own grid — not
+  // from the rendered pixels. l only ever grows within a forward wash, so
+  // this stays monotone through a bloom that spreads pigment outward and can
+  // raise total on-screen coverage while it lifts, and across two engines
+  // whose per-step rate is not bit-identical. drawImage's y-axis runs top
+  // down; the print was uploaded with UNPACK_FLIP_Y_WEBGL, so the mask is
+  // flipped to land in the same row order as the state grid's own readback.
+  let mask = null, maskTotal = 1, solidFrac = 0;
+  const captureMask = (img) => {
+    const c = document.createElement('canvas'); c.width = gridW; c.height = gridH;
+    const g = c.getContext('2d'); g.translate(0, gridH); g.scale(1, -1); g.drawImage(img, 0, 0, gridW, gridH);
+    const d = g.getImageData(0, 0, gridW, gridH).data;
+    const m = new Float32Array(gridW * gridH);
+    let total = 0, solid = 0;
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) { m[p] = d[i + 3] / 255; total += m[p]; if (m[p] > 0.5) solid++; }
+    mask = m; maskTotal = Math.max(1, total); solidFrac = solid / (gridW * gridH);
+  };
+  captureMask(print);
+  landing.title.ink = () => {
+    if (broken || getComputedStyle(titleCanvas).display === 'none') return Number(getComputedStyle(openingTitle).opacity);
+    return titleSim.remaining(mask, maskTotal);
+  };
+  // Raw readbacks only — no verdict here, so a check can grade what the
+  // reader actually sees instead of grading the page's own opinion of it.
+  // title.raw resamples the rendered canvas down to the sim's own grid
+  // (gridW x gridH), the same resolution title.mask is already at, so a
+  // caller can compare the two index-for-index without knowing anything
+  // about devicePixelRatio or the print's own pixel size.
+  landing.title.raw = () => {
+    if (broken || getComputedStyle(titleCanvas).display === 'none') return { w: gridW, h: gridH, alpha: new Array(gridW * gridH).fill(0) };
+    const c = document.createElement('canvas'); c.width = gridW; c.height = gridH;
+    const g = c.getContext('2d'); g.drawImage(titleCanvas, 0, 0, titleCanvas.width, titleCanvas.height, 0, 0, gridW, gridH);
+    const d = g.getImageData(0, 0, gridW, gridH).data;
+    const alpha = new Array(gridW * gridH);
+    for (let i = 3, p = 0; i < d.length; i += 4, p++) alpha[p] = d[i];
+    return { w: gridW, h: gridH, alpha };
+  };
+  landing.title.mask = () => ({ w: gridW, h: gridH, mask: Array.from(mask) });
+  // Each rendered line's own box, as a fraction of the print's own box
+  // (resolution-independent, so a caller scales onto title.raw/title.mask
+  // or onto a screenshot equally) — for the per-line, per-column coverage
+  // grid a legibility check needs.
+  landing.title.lines = () => {
+    const range = document.createRange();
+    range.selectNodeContents(openingTitle);
+    return [...range.getClientRects()].map((r) => ({ x: (r.left - box.x) / box.w, y: (r.top - box.y) / box.h, w: r.width / box.w, h: r.height / box.h }));
+  };
+  const clock = { t: 0, drawn: -1 };
+  let shownAs = 'solid';   // 'solid' | 'wash' | 'gone' — which of {h1, canvas} owns the pixels
+  // A later cure onset than the main wash's own T_CURE: only draw() reads
+  // this value (T_CURE/T_TOTAL/the step math stay the shared constants), so
+  // the bloom this releases stays suspended and visible longer before the
+  // display starts blending it toward the (blank) target.
+  const TITLE_CURE = T_CURE * 1.35;
+  const paint = (t) => titleSim.draw(true, smooth(TITLE_CURE, T_TOTAL, t));
+  // The simplest monotonic map: scroll fraction straight to clock seconds.
+  // T_SPLASH(0.2)/T_TAKE(1.2) put the splash and the start of real dissolving
+  // within the first ~10-55% of scroll, TITLE_CURE(~1.2) delays the fade so
+  // 50% is still mid-bleed, and it lands on exactly T_TOTAL at 100% — no
+  // separate legs, no tuned knots, so there is nothing here fighting what the
+  // fixed splash actually does over time.
+  const titleGoal = (s) => s * T_TOTAL;
+  titleDissolve = (titleP) => {
+    if (broken) return;
+    const goal = titleGoal(1 - clamp01(titleP));
+    // A little agitation, the way a real hand's scroll stirs the main wash's
+    // own film — constant here because the title is a fixed clock, not a
+    // speed the reader sets — spreads the bloom past single stroke edges.
+    const advanced = advanceWash(titleSim, clock, { goal, fwd: true, stir: 0.8, budget: TITLE_STEP_BUDGET }, paint);
+    titleSteps += advanced.count;
+    if (clock.t <= 0) {
+      if (shownAs !== 'solid') { titleCanvas.style.display = 'none'; openingTitle.style.opacity = '1'; shownAs = 'solid'; }
+    } else if (clock.t >= T_TOTAL - 1e-6) {
+      if (shownAs !== 'gone') { titleCanvas.style.display = 'none'; openingTitle.style.opacity = '0'; shownAs = 'gone'; }
+    } else if (shownAs !== 'wash') {
+      openingTitle.style.opacity = '0'; titleCanvas.style.display = 'block'; shownAs = 'wash';
+    }
+  };
+  titleMode = 'wash';
+  titleDissolve(pendingTitleP);
+  titleReady = true;
+  // Re-raster on resize or a language swap that changes the box: never
+  // mid-dissolve unless the size actually moved, so a reader mid-scroll never
+  // sees a pop. A resize past the mobile breakpoint tears the wash down and
+  // returns to plain scrolling text, matching a page that loaded there.
+  let resizeTimer = null;
+  const onResize = () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(async () => {
+      if (mobileLayout() || reduce) { fallBack(); return; }
+      const r2 = openingTitle.getBoundingClientRect();
+      if (!r2.width || !r2.height) return;
+      const w2 = Math.min(MAX_PRINT_EDGE, r2.width + 2 * pad), h2 = Math.min(MAX_PRINT_EDGE, r2.height + 2 * pad);
+      const sizeChanged = Math.abs(w2 - box.w) > 1 || Math.abs(h2 - box.h) > 1;
+      if (shownAs === 'wash' && !sizeChanged) { box = { x: r2.left - pad, y: r2.top - pad, w: box.w, h: box.h }; return; }
+      const node = cloneTitle();
+      node.style.width = r2.width + 'px'; node.style.height = r2.height + 'px';
+      let print2;
+      try { print2 = dilate(await raster([node], w2, h2), w2, h2, TITLE_DILATE); } catch (e) { return; }
+      box = { x: r2.left - pad, y: r2.top - pad, w: w2, h: h2 };
+      titleSim.setPrints(print2, blank);
+      titleSim.reset();
+      captureMask(print2);
+      clock.t = 0; clock.drawn = -1; shownAs = 'solid';
+      titleDissolve(pendingTitleP);
+    }, 200);
+  };
+  addEventListener('resize', onResize);
+})();
+// A whole document, laid out at w x h, scrolled as it is on screen.
+async function rasterDoc(doc, w, h, options = {}) {
+  const se = doc.scrollingElement || doc.documentElement;
+  const html = await fold(doc, doc.documentElement, options);
+  // inside the SVG image `:root` is the <svg>, so a document's `:root` rules
+  // (and its `prefers-color-scheme: dark` guard on `:root:not([data-theme=light])`)
+  // would land on the wrong element and inherit down as the OS theme
+  html.querySelectorAll('style').forEach((st) => { st.textContent = st.textContent.replace(/:root\b/g, 'html'); });
+  // percentage heights in the document resolve against these, as they did against the frame
+  // at the width the live document lays out in (a scrollbar, if it has one, takes the rest)
+  html.style.width = (se.clientWidth || w) + 'px'; html.style.height = h + 'px'; html.style.overflow = 'visible';
+  // in a real document body's overflow propagates to the viewport; inside the
+  // foreignObject there is none, so body would become a scroll container and
+  // grow a scrollbar that steals width from everything it centres
+  const body = html.querySelector('body'); if (body) { body.style.height = h + 'px'; body.style.overflow = 'visible'; }
+  html.appendChild(flatStyle(doc));
+  const shift = document.createElement('div'); shift.setAttribute('style', `position:absolute;left:${-se.scrollLeft}px;top:${-se.scrollTop}px;width:${w}px;height:${h}px;`);
+  shift.appendChild(html);
+  const base = await raster([shift], w, h + se.scrollTop, doc);
+  // WebKit can paint an image's LQIP background but omit its decoded <img>
+  // inside SVG foreignObject. Composite those same live pixels directly,
+  // with their real fit and clipping, so photos share the pigment surface.
+  const images = [...doc.images].filter(im => im.complete && im.naturalWidth && rectInFrame(w, h, im.getBoundingClientRect()));
+  if (!images.length) return base;
+  const result = document.createElement('canvas'); result.width = base.width; result.height = base.height;
+  const g = result.getContext('2d'); g.drawImage(base, 0, 0);
+  for (const im of images) {
+    const r = im.getBoundingClientRect(), css = doc.defaultView.getComputedStyle(im);
+    if (css.visibility === 'hidden' || css.display === 'none' || !r.width || !r.height) continue;
+    g.save(); g.beginPath(); g.rect(0, 0, w, h); g.clip();
+    for (let el = im; el && el !== doc.body; el = el.parentElement) {
+      const style = doc.defaultView.getComputedStyle(el);
+      if (el === im || /hidden|clip|auto|scroll/.test(style.overflow)) {
+        const rect = el.getBoundingClientRect();
+        g.beginPath(); g.roundRect(rect.x, rect.y, rect.width, rect.height, parseFloat(style.borderRadius) || 0); g.clip();
+      }
+    }
+    const fit = css.objectFit, scale = fit === 'contain' ? Math.min(r.width / im.naturalWidth, r.height / im.naturalHeight) : Math.max(r.width / im.naturalWidth, r.height / im.naturalHeight);
+    const dw = fit === 'fill' ? r.width : im.naturalWidth * scale, dh = fit === 'fill' ? r.height : im.naturalHeight * scale;
+    const pos = css.objectPosition.split(/\s+/).map(v => v.endsWith('%') ? parseFloat(v) / 100 : .5);
+    g.drawImage(im, r.x + (r.width - dw) * (pos[0] ?? .5), r.y + (r.height - dh) * (pos[1] ?? .5), dw, dh);
+    g.restore();
+  }
+  return result;
+}
+// A shell frame's own chrome and, when it wraps a moss preview page, that
+// page too — the two-layer print every scene from 'live' on needs for its
+// own capture (takePrint). Coordinates are local to the frame's own w x h; a
+// caller compositing at an offset onto a larger canvas adds it.
+async function rasterFrame(frame, w, h, withInner) {
+  const jobs = [rasterDoc(frame.contentDocument, w, h)];
+  let innerR = null, innerRadius = 0;
+  if (withInner) {
+    const f = frame.contentDocument.getElementById('moss-preview-iframe');
+    if (f && f.contentDocument) {
+      const fr = f.getBoundingClientRect();
+      innerR = { x: Math.round(fr.left), y: Math.round(fr.top), w: Math.round(fr.width), h: Math.round(fr.height) };
+      innerRadius = parseFloat(getComputedStyle(f).borderRadius) || 0;
+      jobs.push(rasterDoc(f.contentDocument, innerR.w, innerR.h));
+    }
+  }
+  const [frameImg, innerImg] = await Promise.all(jobs);
+  return { frameImg, innerImg, innerR, innerRadius };
+}
+// Each plate as the page shows it: its layout box (transform leaves offset*
+// alone), turned by --r about its centre, the image cropped as object-fit
+// cover with object-position, the LQIP colour under it until the image is in.
+function drawPlates(g, k) {
+  for (const pl of document.querySelectorAll('.plate')) {
+    const cs = getComputedStyle(pl);
+    const x = pl.offsetLeft - printRect.x, y = pl.offsetTop - printRect.y, w = pl.offsetWidth, h = pl.offsetHeight;
+    const rot = parseFloat(cs.getPropertyValue('--r')) * Math.PI / 180 || 0, radius = parseFloat(cs.borderRadius) || 0;
+    g.save();
+    g.translate((x + w / 2) * k, (y + h / 2) * k); g.rotate(rot); g.translate(-w / 2 * k, -h / 2 * k);
+    g.beginPath(); g.roundRect(0, 0, w * k, h * k, radius * k); g.clip();
+    g.fillStyle = cs.backgroundColor; g.fillRect(0, 0, w * k, h * k);
+    const im = pl.querySelector('img');
+    if (im && im.complete && im.naturalWidth) {
+      const pos = (cs.getPropertyValue('--pos') || '50% 50%').trim().split(/\s+/).map((v) => parseFloat(v) / 100);
+      const sc = Math.min(w / im.naturalWidth, h / im.naturalHeight), sw = w / sc, sh = h / sc;
+      const sx = (im.naturalWidth - sw) * (pos[0] ?? 0.5), sy = (im.naturalHeight - sh) * (pos[1] ?? 0.5);
+      g.drawImage(im, sx, sy, sw, sh, 0, 0, w * k, h * k);
+    }
+    g.restore();
+  }
+}
+function roundClip(g, r, k, radius) { g.beginPath(); g.roundRect(r.x * k, r.y * k, r.w * k, r.h * k, radius * k); g.clip(); }
+// Scene 3's three artifacts are live layers rather than part of the shell
+// print. Mobile needs their current pixels in the wash target, so rasterize
+// the two same-origin documents (including a live sketch canvas) and freeze
+// the detached video's already-decoded frame without asking for new assets.
+async function rasterScene3Artifact(id) {
+  const c = CARDS[id], el = c && c.el;
+  if (!c || !el) return null;
+  if (id === 'video') {
+    const v = el.querySelector('video');
+    if (!v) return null;
+    if (v.readyState < 2 || !v.videoWidth) {
+      const poster = new Image(); poster.src = v.poster || v.dataset.poster;
+      try { await capped(poster.decode(), FETCH_MS, 'video poster timed out'); return poster; } catch (e) { return null; }
+    }
+    try {
+      const cv = document.createElement('canvas'); cv.width = v.videoWidth; cv.height = v.videoHeight;
+      cv.getContext('2d').drawImage(v, 0, 0);
+      const im = new Image(); im.src = cv.toDataURL('image/jpeg', .9); await im.decode();
+      return im;
+    } catch (e) { return null; }
+  }
+  const frame = el.querySelector('iframe');
+  const doc = frame && frame.contentDocument;
+  if (!doc) return null;
+  if (id === 'sk') {
+    const canvas = doc.querySelector('canvas');
+    if (!canvas) return null;
+    const image = new Image(); image.src = canvas.mossCaptureFrame ? canvas.mossCaptureFrame() : canvas.toDataURL();
+    await capped(image.decode(), FETCH_MS, 'sketch frame timed out');
+    return image;
+  }
+  try { return await rasterDoc(doc, Math.round(c.width), Math.round(c.height), { snapshotCanvases: true }); }
+  catch (e) { console.warn(`Artifact ${id}: ${e.message}`); return null; }
+}
+function drawScene3Artifacts(g, k, images, raised = null) {
+  const ids = [...S3_ORDER].sort((a, b) => (+(CARDS[a].el.style.zIndex || 0)) - (+(CARDS[b].el.style.zIndex || 0)));
+  const ox = -printRect.x, oy = -printRect.y;
+  for (const id of ids) {
+    const im = images[id], c = CARDS[id], p = c.pose;
+    if (!im || !p) continue;
+    const isRaised = !!(c.docked || s3Drag?.id === id || c.el.matches(':focus-visible'));
+    if (raised !== null && isRaised !== raised) continue;
+    const w = c.width * p.s, h = c.height * p.s;
+    g.save();
+    // Docked artifacts are clipped by the article's measured paper aperture;
+    // outside artifacts retain their full current pose. Normal outside cards
+    // are drawn before the preview window; held/focused and docked cards are
+    // drawn after it, matching cardDepths() and the live z-order.
+    if (c.docked) {
+      const x = Math.max(p.x, s3Paper.x), y = Math.max(p.y, s3Paper.y);
+      const r = Math.min(p.x + w, s3Paper.x + s3Paper.w), b = Math.min(p.y + h, s3Paper.y + s3Paper.h);
+      if (r <= x || b <= y) { g.restore(); continue; }
+      g.beginPath(); g.rect((x + ox) * k, (y + oy) * k, (r - x) * k, (b - y) * k); g.clip();
+    }
+    g.drawImage(im, (p.x + ox) * k, (p.y + oy) * k, w * k, h * k);
+    g.restore();
+  }
+}
+async function prepareScene3Capture() {
+  warmScene3Media();
+  const waitFrame = (frame) => {
+    if (frame.contentDocument?.readyState === 'complete' && frame.contentDocument.location.href !== 'about:blank') return Promise.resolve();
+    return new Promise((resolve) => frame.addEventListener('load', resolve, { once: true }));
+  };
+  await capped(Promise.all([waitFrame($('sk')), waitFrame($('nb'))]), FETCH_MS, 'scene 3 media timed out').catch(() => {});
+  await nestedPreviewReady(SHIPS);
+  const video = $('s3-video-el');
+  // A paused, preload-none video uses its existing poster until playback starts.
+  // Capture can warm scene 3 while another scene is shown. Establish the same
+  // deterministic poses enterScene3() would have supplied before measuring or
+  // rasterizing any artifact.
+  if (!s3Initialized) { placeScene3Artifacts(); s3Initialized = true; }
+  cardDepths();
+  let ready = false;
+  for (let i = 0; i < 8 && !ready; i++) {
+    ready = layoutScene3Layers();
+    if (!ready) await new Promise((resolve) => requestAnimationFrame(resolve));
+  }
+  sketchVisible(true);
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  sketchVisible(false);
+  if (!ready) throw new Error('scene 3 layers not ready');
+}
+// The print of the scene the DOM is showing now (the wash switches the DOM
+// under its own canvas before asking for the target's print).
+let captureMs = 0, washT = 0, washDbg = null;
+// Counters for the harness only; nothing in the page reads them. A wrapper so
+// that the count is right however `takePrint` leaves (returned, thrown, timed out).
+let captures = 0, inFlight = 0, peakInFlight = 0;
+// The heaviest single <img> any print has actually inlined (fold(), IMG
+// branch below) — a general trip-wire, not keyed to any one file: a heavy
+// image that slips into a print despite the .sib/.plate exclusions shows up
+// here as a byte count instead of as an intermittent drag failure.
+let maxPrintImgBytes = 0;
+async function capture(scene) {
+  // Checked here, not by letting an outside caller replace this function's
+  // export, so it reaches every caller of capture() including the ones
+  // inside this script that only ever hold the local binding.
+  if (landing.faults.captureHang) return new Promise(() => {});
+  captures++; inFlight++; peakInFlight = Math.max(peakInFlight, inFlight);
+  const generation = printGeneration;
+  try {
+    const c = await takePrint(scene);
+    c.__printGeneration = generation;
+    return c;
+  } finally { inFlight--; }
+}
+async function takePrint(scene) {
+  const t0 = performance.now();
+  if (scene === 1) {
+    await nestedPreviewReady(scene);
+    const doc = shFrame.contentDocument?.getElementById('moss-preview-iframe')?.contentDocument;
+    if (doc) {
+      const [width, height] = docViewport(doc);
+      const images = [...doc.querySelectorAll('img[src]')].filter(im => rectInFrame(width, height, im.getBoundingClientRect()));
+      await capped(Promise.all(images.map(im => { im.loading = 'eager'; return im.decode().catch(() => {}); })), FETCH_MS, 'preview image decode timed out').catch(() => {});
+    }
+  }
+  const artifactIds = scene === SHIPS ? [...S3_ORDER] : [];
+  if (artifactIds.length) await prepareScene3Capture();
+  const k = Math.min(mobileLayout() ? 1 : 2, devicePixelRatio || 1, MAX_PRINT_EDGE / Math.max(printW(), printH()));
+  const c = document.createElement('canvas'); c.width = printW() * k; c.height = printH() * k;
+  const g = c.getContext('2d');
+  // the stage: plates, the box's shadow and ground, frames as holes
+  const stageC = await fold(document, stage);
+  // A print is the sheet at rest: not mid-wash, and not with scene 4's fan
+  // already out. The strokes are page furniture the same as the siblings and
+  // the shadow — they are drawn after the sheet has dried, and the sheet the
+  // wash dissolves and cures is the control at the size it was left.
+  stageC.classList.remove('morphing', 'fanned');
+  stageC.querySelector('#gl')?.remove(); stageC.querySelector('#fan')?.remove(); stageC.querySelectorAll('.ground').forEach((n) => n.remove());
+  const styles = [...document.querySelectorAll('style')].map((st) => st.cloneNode(true));
+  // The plates are drawn straight onto the print from their loaded images,
+  // not through the SVG raster: Safari tiles an <img> inside a foreignObject
+  // image, and a tiled plate dissolves into a grid.
+  // The siblings are not in the print at all: the wash dissolves the centre
+  // sheet, and they are page furniture around it, the same as its shadow.
+  const noPlates = document.createElement('style'); noPlates.textContent = '.plate, .sib, #s3-video { display: none !important; }'; styles.push(noPlates, flatStyle(document));
+  const at = document.createElement('div'); at.setAttribute('style', `position:absolute;left:${-printRect.x}px;top:${-printRect.y}px;width:${GEOM.cellW}px;height:${GEOM.cellH}px;--s:1;`);
+  at.appendChild(stageC);
+  // the box's own layout box, not its rect: in scene 4 the grown control has a
+  // transform on it, and a transform moves the rect while the print is of the
+  // sheet at rest
+  const boxR = { x: box.offsetLeft - printRect.x, y: box.offsetTop - printRect.y, w: box.offsetWidth, h: box.offsetHeight };
+  const radius = parseFloat(getComputedStyle(box).borderRadius) || 0;
+  const frame = FRAMES[scene];
+  // every scene but the editor is the shell around a page of its own; scene 4 keeps none of the page
+  const jobs = [
+    raster([...styles, at], printW(), printH()),
+    rasterFrame(frame, Math.round(boxR.w), Math.round(boxR.h), scene >= 1 && scene !== DEPLOY),
+  ];
+  const artifactJobs = artifactIds.map((id) => rasterScene3Artifact(id));
+  const [stageImg, shell, ...artifactImages] = await Promise.all([...jobs, ...artifactJobs]);
+  if (artifactIds.some((_, i) => !artifactImages[i])) throw new Error('scene 3 artifact raster failed: ' + artifactIds.filter((_, i) => !artifactImages[i]).join(', '));
+  const { frameImg, innerImg, innerRadius } = shell;
+  // The inner frame's own rect (rasterFrame's, local to the shell) is
+  // shifted onto the box's, in the cell's coordinates: the shell's viewport
+  // is the box's own width in the shell's own CSS pixels, whatever the whole
+  // composition is scaled to on screen. Dividing it by that scale again drew
+  // the inner page 753 wide inside a 692 window at a 1440 one — latent while
+  // the page's max-width was 1440 and --s was 1 there, live since the third
+  // scene's two siblings widened it to 1584.
+  const innerR = shell.innerR && { x: boxR.x + shell.innerR.x, y: boxR.y + shell.innerR.y, w: shell.innerR.w, h: shell.innerR.h };
+  g.drawImage(stageImg, 0, 0, c.width, c.height);
+  if (scene === 0) drawPlates(g, k);
+  if (artifactIds.length) drawScene3Artifacts(g, k, Object.fromEntries(artifactIds.map((id, i) => [id, artifactImages[i]])), false);
+  g.save();
+  // Scene 4's sheet is the shell cut to the control's own circle, the same cut
+  // the stylesheet makes on the live box: the print carries the real pixels of
+  // the real control and nothing of the window around it.
+  if (scene === DEPLOY) { const cs = getComputedStyle(stage);
+    const cut = (n) => parseFloat(cs.getPropertyValue(n)) || 0;
+    g.beginPath(); g.arc((boxR.x + cut('--pub-cx')) * k, (boxR.y + cut('--pub-cy')) * k, cut('--pub-r') * k, 0, Math.PI * 2); g.clip();
+  } else roundClip(g, boxR, k, radius);
+  g.drawImage(frameImg, boxR.x * k, boxR.y * k, boxR.w * k, frameImg.height * k); g.restore();
+  if (innerImg) { g.save(); roundClip(g, boxR, k, radius); roundClip(g, innerR, k, innerRadius); g.drawImage(innerImg, innerR.x * k, innerR.y * k, innerR.w * k, innerImg.height * k); g.restore(); }
+  if (artifactIds.length) drawScene3Artifacts(g, k, Object.fromEntries(artifactIds.map((id, i) => [id, artifactImages[i]])), true);
+  captureMs = Math.round(performance.now() - t0);
+  return c;
+}
+landing.capture = capture;
+// The prints on hand, so a trigger never waits for a capture. The scene off
+// screen is at rest (the poem finished, or the shell held), so its print is
+// taken once, when the other scene is reached: the canvas shows the print of
+// the scene on screen while the DOM switches under it for two frames. The
+// scene on screen moves (the poem is typed), so its print is retaken every
+// second the page rests, and at once when a sheet is put down.
+const sheets = new Array(PHASE.length).fill(null);
+// The scenes a wash can reach from here, and so the prints that must be on hand.
+// A boundary whose join is not a wash carries nothing across as pixels, so it
+// asks for no print — and the scenes on either side of one are not held shut
+// waiting for a capture that would never be used.
+const neighbours = (s) => [s - 1, s + 1].filter((n) => n >= 0 && n < PHASE.length && joinAt(s, n).wash);
+// What this scene cannot do without: its own print and its washing neighbours'.
+// A scene no wash ever leaves needs none at all, not even its own.
+const needed = (s) => { const ns = neighbours(s); return ns.length ? [s, ...ns] : []; };
+// Every scene a wash can reach, and so every print a jump may ask for. What
+// holds the page shut is still `needed` — a jump is rare and can stop to take
+// its own print — but the idle tick fills these, so a fling from a scene the
+// reader has been resting on is one wash and not one wash behind one capture.
+const washable = PHASE.map((_, s) => s).filter((s) => neighbours(s).length);
+// When the shown print was replaced, and by which capture: a capture that
+// started before the print now on hand was put there is stale, and a stale
+// print must never take the place of a newer one.
+let shownAt = 0, shownSeq = 0;
+const setSheet = (scene, c) => {
+  if (!c || c.__printGeneration !== printGeneration) return false;
+  sheets[scene] = c; shownAt = performance.now(); shownSeq++; return true;
+};
+// Prints are the wash's. Reduced motion cuts, a machine without float render
+// targets cuts, and a scene whose print has proved impossible cuts too; none of
+// them needs a capture, and the retake loop was taking one every second anyway.
+let printable = true;
+const washing = () => !!sim && !reduce && printable;
+const primed = () => !washing() || needed(shown).every((n) => sheets[n]);   // a cut needs no prints
+// The article iframe nested inside a scene's own shell (the preview pane),
+// if this scene has one, and its offscreen `<img>`s by the same on-screen
+// test `fold` uses. Not `fold`'s own clone — the LIVE elements, because what
+// forces them to load lives one layer up from the fold.
+// The nested moss-preview-iframe's own navigation (kicked off by the shell's
+// own `setPreview`, ui/shell.html) is independent of `__shell` becoming
+// available on its parent frame — `when()` above only proves the shell's own
+// script has run, not that the article it just pointed the preview at has
+// finished loading. `offscreenImgs()` below reads that iframe's live
+// `<img>` elements to decide what to withhold from a reveal (2ec26e2); read
+// too early, before the navigation lands, it finds none and withholds
+// nothing, so every one of those images (not just the ones on screen) is
+// free to fetch the moment the frame is revealed. `readyState === 'complete'`
+// alone doesn't prove the article has loaded — the still-blank starting
+// document the iframe is created with is 'complete' too — so this also
+// checks the navigation has actually landed before trusting it.
+async function nestedPreviewReady(scene) {
+  const frame = FRAMES[scene], outer = frame && frame.contentDocument;
+  const f = outer && outer.getElementById('moss-preview-iframe');
+  if (!f || !f.src) return;
+  const navigated = () => f.contentDocument && f.contentDocument.readyState === 'complete' && f.contentDocument.location.href !== 'about:blank';
+  if (navigated()) return;
+  await capped(new Promise((resolve) => f.addEventListener('load', resolve, { once: true })), FETCH_MS, 'preview iframe load timed out').catch(() => {});
+}
+function offscreenImgs(scene) {
+  if (scene < 1 || scene === DEPLOY) return [];
+  const frame = FRAMES[scene], outer = frame && frame.contentDocument;
+  const f = outer && outer.getElementById('moss-preview-iframe');
+  const doc = f && f.contentDocument; if (!doc) return [];
+  const [vw, vh] = docViewport(doc);
+  return [...doc.querySelectorAll('img[src]')].filter((im) => !rectInFrame(vw, vh, im.getBoundingClientRect()));
+}
+// `sceneClasses(other)` below is the one thing that can make this preview
+// iframe visible for the first time — and a same-origin iframe going from
+// unseen to seen flushes every `loading=lazy` image inside it at once, not
+// just the ones its own viewport shows (the earlier article had 27 plates in
+// one burst, confirmed independent of `fold`'s own inlining — CDP shows the
+// browser's own loader as the initiator, not this page's script). Pulling an
+// offscreen image's src off for exactly the reveal-and-capture window, and
+// putting it back once captured, keeps that flush from ever seeing them:
+// restoring while the frame is already visible (not freshly unfrozen) lets
+// native lazy loading re-evaluate them correctly, which is what the
+// resource-stall-free steady state already does for the shown scene.
+function withholdOffscreen(scene) {
+  // A decoded image is already safe from the reveal burst and is valid print
+  // input. Keep its source in place so a warm capture cannot serialize a blank
+  // hole or leave the live preview waiting on restoration.
+  const imgs = offscreenImgs(scene).filter((im) => !(im.complete && im.naturalWidth));
+  if (!imgs.length) return () => {};
+  const saved = imgs.map((im) => {
+    const pic = im.parentElement && im.parentElement.tagName === 'PICTURE' ? im.parentElement : null;
+    const sources = pic ? [...pic.querySelectorAll('source[srcset]')] : [];
+    const entry = { im, src: im.getAttribute('src'), srcset: im.getAttribute('srcset'), sources: sources.map((s) => [s, s.getAttribute('srcset')]) };
+    im.removeAttribute('src'); im.removeAttribute('srcset');
+    sources.forEach((s) => s.removeAttribute('srcset'));
+    return entry;
+  });
+  let restored = false;
+  return () => {
+    if (restored) return; restored = true;
+    for (const { im, src, srcset, sources } of saved) {
+      if (src != null) im.setAttribute('src', src);
+      if (srcset != null) im.setAttribute('srcset', srcset);
+      for (const [s, v] of sources) if (v != null) s.setAttribute('srcset', v);
+    }
+  };
+}
+// Which scenes is the caller's: a wash refreshes the neighbours it might run to
+// next, and a jump or the idle tick asks for one the prints on hand are missing.
+async function takeOthers(list = neighbours(shown)) {
+  // Neighbour prints are immutable handoff state once warmed. Re-entering a
+  // live scene to refresh an already-held print changes its measured shell
+  // width and data-scene for several frames; that mutation is visible even
+  // when the capture itself is hidden under the wash canvas. A stale neighbour
+  // can safely keep its existing print until the next real wash replaces it.
+  list = list.filter((other) => !sheets[other]);
+  if (!list.length) return;
+  const from = shown;
+  let held = false;
+  for (const other of list) {
+    // Two frames pass before the capture, and a reader can start a wash inside
+    // them: the print is then the next rest's, not this one's.
+    if (running()) break;
+    await nestedPreviewReady(other);
+    if (running() || shown !== from) break;
+    if (!held) { holdCanvas(sheets[from], sheets[from], from, true); held = true; }   // one print at both ends: the direction cannot show
+    const restoreImgs = withholdOffscreen(other);
+    sceneClasses(other);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    if (running()) { restoreImgs(); break; }
+    // An unprintable neighbour must not lock every transition behind primed()
+    // and repeatedly switch the live stage while retrying. Use the existing
+    // cut fallback for this visit, then restore the visible scene below.
+    try { setSheet(other, await capture(other)); }
+    catch (e) { printable = false; console.warn('Watercolor unavailable:', e.message); break; }
+    finally { restoreImgs(); }
+  }
+  // The reader may have crossed a boundary while the foreignObject capture was
+  // drawing. Restore the scene that actually won, not the one the warmer began
+  // on, or its old width and morph cover flash after the new scene has arrived.
+  sceneClasses(shown);
+  // The scene comes back already standing. Its furniture — the siblings, the
+  // control, the fan — has not been anywhere the reader could see, and replaying
+  // the transitions that bring it in is a flicker every time a print is taken.
+  if (held) snapStage();
+  if (held && !running()) stage.classList.remove('morphing');   // a wash that has begun meanwhile keeps the canvas up
+  if (held && !running() && shown === SHIPS) layoutScene3Layers();
+}
+// One retake at a time. A capture slower than the tick (WebKit's foreignObject
+// path, or a document that has grown) used to let the next tick start a second
+// one: the two competed for the same work, each made the other slower, and they
+// could finish out of order and put a stale print back on hand. A tick that
+// finds one running is skipped, not queued.
+let retaking = false;
+// A scene reached without a wash (the harness's `landing.still`, a capture that failed
+// once) leaves a print missing, and `primed()` then blocks every wash and every
+// retake — including the retake that would have filled it. The tick that retakes
+// fills whatever gap it finds first, the scene on screen before its neighbours.
+// `booted` is what keeps the tick off the boot: until ready() has taken its own
+// prints nothing is primed, and a fill that starts meanwhile is a second capture
+// drawing beside the first — which is exactly what the retake flag exists to stop.
+// It fills past what this scene needs, as far as every scene a wash can reach,
+// because the scene a jump asks for is not one of this scene's neighbours.
+let booted = false;
+async function fillPrints() {
+  if (!booted || retaking || running() || !washing() || !needed(shown).length) return false;   // scene 5 has no print to hold the canvas with
+  // one a tick: each capture holds the canvas up over a reader who is resting
+  const scene = [...needed(shown), ...washable].find((s) => !sheets[s]);
+  if (scene == null) return false;
+  if (mobileLayout() && scene >= SHIPS && shown < 1 && target < 1) return false;
+  retaking = true;
+  try {
+    if (scene === shown) { const c = await capture(scene); if (scene === shown) setSheet(scene, c); }
+    else await takeOthers([scene]);
+  } catch (e) { console.warn('print fill skipped:', e.message); }
+  finally { retaking = false; }
+  return true;
+}
+async function retakeShown() {
+  if (mobileLayout() || retaking || running() || !washing() || !needed(shown).length) return;
+  retaking = true;
+  const scene = shown, seq = shownSeq;
+  try {
+    const c = await capture(scene);
+    // Not if a wash has begun meanwhile, not if a newer print landed while this
+    // one drew, and not if the scene changed under it: with three scenes the
+    // print of the one that was showing is not the print of the one that is.
+    if (!running() && scene === shown && seq === shownSeq && c.__printGeneration === printGeneration) setSheet(scene, c);
+  } catch (e) {
+    console.warn('retake skipped:', e.message);   // late or failed: the print on hand is still good
+  } finally { retaking = false; }
+}
+// Every print the page takes for itself is discretionary work, and none of it
+// may run under a reader who is moving. A capture is 14 to 54ms of clone and
+// serialize on the main thread (measured 2026-09-14), and `takeOthers` switches
+// the DOM under the canvas besides — a reader still scrolling would see a page
+// that had stopped answering. So the warmer waits for a real rest — the scroll
+// still for IDLE_REST and nothing running — and then the browser's own idle
+// callback picks the frame (WebKit shipped one late, hence the fallback). One
+// piece of work a tick, so no rest pays for two captures at once. A join owed
+// but held shut for want of a print is not a reason to wait: filling that print
+// is the only thing that can unblock it.
+const IDLE_REST = 180, WARM_MS = 1000, IDLE_WAIT = 300;
+const whenIdle = window.requestIdleCallback ? (fn) => requestIdleCallback(fn, { timeout: IDLE_WAIT }) : (fn) => setTimeout(fn, 1);
+const atRest = () => !running() && !document.hidden && performance.now() - restSince >= IDLE_REST;
+// The prints a wash has just left behind. The scene it came from was being
+// typed into a moment before, so the print taken of it is no longer what the
+// live scene shows — it stays on hand, because a wash back is better run onto a
+// stale print than cut, and it is retaken at the next rest.
+const stale = new Set();
+const wentStale = () => { for (const n of neighbours(shown)) stale.add(n); warmSoon(0); };
+async function refreshStale() {
+  if (retaking || running() || !washing()) return false;
+  const scene = [...stale][0];
+  if (scene == null) return false;
+  stale.delete(scene);
+  retaking = true;
+  try { await takeOthers([scene]); } catch (e) { console.warn('stale print skipped:', e.message); }
+  finally { retaking = false; }
+  return true;
+}
+let warmTimer = null;
+function warmSoon(ms = WARM_MS) { if (warmTimer != null) return; warmTimer = setTimeout(() => { warmTimer = null; whenIdle(warm); }, ms); }
+async function warm() {
+  if (document.documentElement.dataset.static) return;
+  warmSoon();            // the next tick is a second from this one's start, not from its end
+  if (!atRest() && !(target !== shown && !primed())) return;
+  stale.delete(shown);   // the scene on screen has its own retake
+  // One thing a tick, in this order: a print a jump may ask for that nobody has
+  // taken, then one a wash has just left behind, then the scene on screen, whose
+  // print goes off because the scene moves.
+  if (!await fillPrints() && !await refreshStale()) await retakeShown();
+  maybeJoin();
+}
+warmSoon();
+// The one door into a join. A target asked for while a print it needs was still
+// being taken used to be dropped on the floor and wait for the reader to move
+// again; the warmer knocks here after every print it lands, so the join the
+// prints were holding shut runs as soon as they are on hand.
+function maybeJoin() { if (!running() && !retaking && target !== shown && primed()) runJoin(); }
+function setTarget(t) {
+  if (t === SHARE && xfAt() >= 1) {
+    target = t;
+    // Closing copy and its poster are independent of the active join.
+    mountLoop(); setCross(1); fiveOn(true);
+    if (!running() && shown !== SHARE) standAtTerminalClose();
+    return;
+  }
+  if (t === target) return;
+  target = t;
+  maybeJoin();
+}
+// The closing scene has no captured print or embedded app dependency. A cold
+// load can reach the document bottom while those earlier scenes are still
+// loading; let the terminal position stand immediately instead of queuing it
+// behind prints the reader has already passed. If they reverse before boot,
+// onScroll keeps the new target and ready() drives the ordinary joins back.
+function standAtTerminalClose() {
+  shown = target = SHARE;
+  still(SHARE);
+  mountLoop();
+  setCross(1);
+  fiveOn(true);
+}
+// Scroll: the reading line is mid-window, and where it stands is what names the
+// scene. A wash then runs at its own pace and sets where it is; the scroll only
+// works it.
+const LINE = 0.5;
+const textTop = (sec) => sec.firstElementChild.getBoundingClientRect().top;
+const textBottom = (sec) => sec.lastElementChild.getBoundingClientRect().bottom;
+// Where the reader is, read whole rather than counted up one crossing at a
+// time. The line standing inside a scene's text names that scene. Between two
+// texts it names neither, and what it names there is the scene being travelled
+// toward: that is what hands the wash the whole gap between the texts to run
+// across, and what a turnaround reads to send it back. Because this is a
+// position and not a tally, a fling that clears three texts names the scene it
+// landed on from its first frame, and the wash in flight is re-pointed at it.
+// The pair-of-edges crossing detector this replaces could only ever step one
+// boundary at a time, so scene 1 to scene 3 played both joins in sequence and
+// the reader watched the page morph through scene 2 to get there.
+// One number: the scene whose text the reading line stands in, or a fraction
+// between two scenes when it stands in the gap between their texts. Everything
+// that asks which scene a position belongs to reads it here — the target the
+// wash follows, and the scene a rest is carried to — so the two cannot come to
+// disagree as either scene's markup changes.
+const progressAt = () => {
+  if (mobileLayout()) {
+    const entrance = mobileEntranceProgress();
+    if (entrance < 1) return entrance;
+    for (let scene = 1; scene < DEPLOY; scene++) {
+      const q = mobileInkProgress(scenesEl[scene].firstElementChild);
+      if (q < 1) return scene + q;
+    }
+    return DEPLOY + mobileClosingProgress();
+  }
+
+  const line = innerHeight * LINE;
+  for (let i = 0; i < JOINS.length; i++) {
+    if (textBottom(scenesEl[i]) >= line) return i;   // the line is still inside this text
+    const top = textTop(scenesEl[i + 1]);
+    if (top >= line) { const bot = textBottom(scenesEl[i]); return i + (line - bot) / Math.max(1, top - bot); }
+  }
+  return JOINS.length;
+};
+// In the gap the position names neither scene, and what it names there is the
+// one being travelled toward. Same zero-is-not-downward rule as
+// sceneForRest: dir is 0 before the reader's first gesture, which a
+// scroll-restored reload reaches with the position already mid-gap, so the
+// ceil branch below must not stand in for "no direction yet".
+const targetAt = (dir) => {
+  const p = progressAt();
+  // Pixel rounding at a rest must not start a reverse wash by a fraction.
+  if (Math.abs(p - Math.round(p)) < .002) return Math.round(p);
+  // Keep the same pair of prints while a finger reverses within their wash.
+  if (mobileLayout()) return p < shown ? Math.floor(p) : Math.ceil(p);
+  return dir === 0 ? Math.round(p) : dir < 0 ? Math.floor(p) : Math.ceil(p);
+};
+let scrollV = 0, asked = null;
+// warmScene3Media (defined with the rest of scene 3's own script, below)
+// needs this declared up here, ahead of watchScroll's own IIFE (further
+// down): that IIFE's first call is synchronous, part of this same top-level
+// script's own run, and on a reload that restores scrollY past scene 1 it
+// reaches onScroll's `t >= SHIPS - 1` check below before the script has gone
+// anywhere near warmScene3Media's own definition — a `let` declared down
+// there would throw "before initialization" on that very first tick, an
+// uncaught exception that stops the rest of this script cold (`landing.state`
+// and everything after it would never be defined). A `let` this early has no
+// such window.
+let s3MediaWarmed = false;
+function onScroll(dy) {
+  // scroll speed in window heights per second, a leaky integrator of the
+  // displacement (time constant V_TAU, decayed by the frame): what agitates
+  // and tilts the film
+  scrollV += dy / innerHeight / V_TAU;
+  const t = targetAt(travel);
+  if (!booted && shown === SHARE) {
+    const q = xfAt();
+    asked = target = t;
+    setCross(q);
+    fiveOn(q >= 1);
+    return;
+  }
+  if (t === SHARE && xfAt() >= 1) {
+    asked = t; setTarget(SHARE);
+    return;
+  }
+  // Scene 3's own heavy media (warmScene3Media, defined below) starts here:
+  // `t` is read off the real scroll position every frame no matter how the
+  // reader got here, so this is the earliest the page ever knows they are
+  // headed for scene 3 or beyond.
+  if (t >= SHIPS - 1) warmScene3Media();
+  // The position asks for a scene when the scene it names changes, so a scene
+  // set by another hand — the harness's `landing.still`, a restored position — is
+  // left standing until the reader moves. And nothing may fire before the first
+  // prints are on hand: `ready` starts the first join.
+  if (t === asked) return;
+  asked = t;
+  if (booted) setTarget(t); else target = t;
+}
+// The sheets are loose: while the editor is on screen a plate can be dragged
+// anywhere plateBounds() allows, and the print rectangle expands on drop when
+// it leaves the resting domain. The wash then takes the live layout from that
+// expanded print, using the same single watercolor engine.
+{
+  let held = null;
+  stage.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    const pl = e.target.closest('.plate'); if (!pl || running() || shown !== 0) return;
+    held = { pl, x: e.clientX, y: e.clientY, left: pl.offsetLeft, top: pl.offsetTop };
+    pl.classList.add('held'); pl.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!held) return;
+    const b = plateBounds(), w = held.pl.offsetWidth, h = held.pl.offsetHeight;
+    const x = clampTo(held.left + (e.clientX - held.x) / SCALE, b.xMin, Math.max(b.xMin, b.xMax - w));
+    const y = clampTo(held.top + (e.clientY - held.y) / SCALE, b.yMin, Math.max(b.yMin, b.yMax - h));
+    held.pl.style.left = x + 'px'; held.pl.style.top = y + 'px';
+  });
+  const drop = () => {
+    if (!held) return;
+    const { pl } = held;
+    pl.classList.remove('held'); held = null;
+    const outsideBase = pl.offsetLeft < -GEOM.pad || pl.offsetTop < -GEOM.pad ||
+      pl.offsetLeft + pl.offsetWidth > GEOM.cellW + GEOM.pad ||
+      pl.offsetTop + pl.offsetHeight > GEOM.cellH + GEOM.pad;
+    if (outsideBase) { printExpanded = true; setPrintRect(currentPrintRect()); }
+    retakeShown();
+  };
+  stage.addEventListener('pointerup', drop); stage.addEventListener('pointercancel', drop);
+}
+// Read the position every frame rather than listening for scroll events: the
+// events arrive a frame late at best and were seen not to arrive at all after a
+// long frame, and a comparison per frame costs nothing.
+let lastScrollY = null;
+let lastWatchT = performance.now();
+// Wherever the reader comes to rest, the page finishes: the scene the reader
+// was carrying themselves toward (or, inside DEAD, the one just left), the
+// wash run out to it, and the copy carried onto that scene's designed position.
+// Not CSS scroll snap — that re-snaps after every scroll, a deliberate small one
+// included, and knows nothing of the wash it would have to land with. And not
+// the catch window this replaces either: that fired only on a coast dying
+// within a third of a window of a designed position, so a reader who simply
+// stopped between two texts was left with the film wet and the print smeared,
+// waiting on a creep that takes thirteen seconds to reach even the hold it was
+// creeping to (measured 2026-09-14). A stop is not a state the page can hold.
+// The inverse of progressAt(): the scroll position at the centre of the same
+// plateau it reads as this scene — textTop() to textBottom(), the identical
+// pair it names the scene from — so a settle and the function judging where
+// it landed can never disagree by construction, not just by measurement.
+// Frame the title and signup together; the footer remains a natural scroll away.
+function closingRestY() {
+  const max = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+  if (mobileLayout()) return max;
+  const top = scrollY + document.querySelector('#five h2').getBoundingClientRect().top;
+  const bottom = scrollY + document.querySelector('#beta .input-row').getBoundingClientRect().bottom;
+  const centered = (top + bottom - innerHeight) / 2;
+  const withFormVisible = Math.max(centered, bottom - innerHeight + 56);
+  return Math.round(Math.max(0, Math.min(max, withFormVisible)));
+}
+const restY = (scene) => {
+  if (scene < 0) return 0;
+  if (scene === 0 && mobileLayout()) return Math.max(0, Math.round(scrollY + textTop(scenesEl[0]) - 88));
+  if (scene === SHARE) return closingRestY();
+  if (mobileLayout()) {
+    const band = mobileVisualBand();
+    return Math.round(scrollY + (scene === 1 ? textTop(scenesEl[1]) - band.bottom - 24 : textBottom(scenesEl[scene - 1]) - band.top));
+  }
+  const top = textTop(scenesEl[scene]), bot = textBottom(scenesEl[scene]);
+  return Math.round(scrollY + (top + bot) / 2 - innerHeight * LINE);
+};
+// What the wash has left to run, in real seconds at the pace it will run it:
+// the smeared window is the slow one and the rest is the arrival pace. The
+// settle borrows this rather than keeping a duration of its own, so the copy
+// stops moving in the frame the film finishes curing.
+const spanLeft = (a, b, t) => Math.max(0, b - Math.max(a, t));
+const cureLeft = (t) => spanLeft(0, T_TAKE, t) / ARRIVE + spanLeft(T_TAKE, T_WET, t) / ARRIVE_SMEAR + spanLeft(T_WET, T_TOTAL, t) / ARRIVE;
+let restSince = performance.now(), travel = 0, settleArmed = false, settleRun = null;
+// The opening is a held first frame. A rest target is allowed to move the page
+// only after a real gesture has armed the carry, so a loaded page never pages
+// itself into scene 1 while the reader is still looking at the title.
+let inputArmed = false;
+// ?carry=intent's own state: the position and velocity the integrator owns, kept separate
+// from the real scrollY it writes every frame so a foreign write (CARRY_EPS above) can be
+// told apart from its own last write. carryX starts null and is seeded from scrollY on the
+// first tick, so a reload that restores mid-gap is picked up wherever the browser left it.
+let carryX = null, carryV = 0, carryGoal = null;
+// Direct manipulation (WWDC 2018 "Designing Fluid Interfaces", UIScrollView): while the reader
+// is in contact — a touch, a scrollbar drag, or an unreleased trackpad gesture — the pull is
+// off and the page follows their input one-to-one; release hands the integrator the speed that
+// contact was carrying, so the pull resumes from a real number instead of zero. Split into two
+// flags, not one `held`, because the two kinds of contact release differently: a touch or a
+// scrollbar drag has its own up event, but a trackpad gesture doesn't, so it's a heuristic that
+// can only be renewed on each tick, not switched off directly — watchScrollIntent below is what
+// notices a heuristic hold has gone quiet (touchHeld doesn't need that, so it isn't checked
+// there). Named touchHeld/wheelHeld, not `held`, to stay clear of the unrelated plate-drag
+// `held` above.
+let touchHeld = false, wheelHeld = false;
+// Trackpad-contact heuristic state (used only where WheelEvent.momentum is unavailable): the
+// last three tick magnitudes, oldest first, and the previous tick's own timestamp.
+let wheelMags = [], lastWheelT = 0, lastWheelStamp = 0;
+let wheelOrigin = 0, wheelDistance = 0, wheelCoasting = false;
+// What settleAtRest chose, frozen at the moment it fires rather than re-read
+// later. settleCureLeft is cureLeft(washT), and settleShown/settleRunning are
+// shown/running() themselves — all three on their own line, unconditionally,
+// so they are the ternary's raw inputs rather than its output, and the
+// harness can recompute the branch (scene === settleShown && !settleRunning
+// ? SETTLE_SECS : settleCureLeft) itself and compare that against settleSecs,
+// the duration actually handed to the spring. This used to expose
+// settleExpected instead — the same branch, pre-computed here — which meant a
+// defect inside the branch itself (a swapped arm, a flipped condition) would
+// corrupt settleExpected identically to settleSecs and the two would still
+// agree (caught by review of b0df986 before it shipped, 2026-09-15).
+// settleShown/settleRunning can't be read live off the page after the fact:
+// shown only becomes the new scene once the wash itself finishes, well after
+// the settle that used its old value has also finished, so anything read
+// post-settle is the wrong instant. For the harness only — see
+// landing.state below.
+let settleSecs = null, settleCureLeft = null, settleShown = null, settleRunning = null;
+// One substep of a critically damped spring (c = 2*sqrt(k) is always
+// critical): given the current displacement from target and velocity, the
+// next of each after dt seconds. Substepped at 240Hz regardless of the
+// caller's own dt, which is what keeps the integration stable whatever the
+// frame length is. The only spring this page has — the scroll settle below
+// and a scene-3 card's own release (settleCard) both
+// call it rather than each keeping its own copy of the ODE.
+function springStep(x, v, dt, k) {
+  const c = 2 * Math.sqrt(k);
+  for (let n = Math.max(1, Math.ceil(dt * 240)), h = dt / n; n-- > 0;) { v += (-k * x - c * v) * h; x += v * h; }
+  return [x, v];
+}
+// A critically damped spring, seeded with the speed the reader was carrying and
+// run on the wash's clock rather than one of its own. It is integrated rather
+// than tweened because a spring retargets for free: a reader who reaches for the
+// wheel mid-settle is a new initial condition, not a tween to cancel and redo.
+function settleTo(y, v0, secs) {
+  const rate = SETTLE_SECS / Math.max(SETTLE_MIN, secs);   // the spring's own seconds per real second
+  let x = scrollY - y, v = v0 / rate;
+  if (!x && !v) return;
+  let last = performance.now();
+  const run = settleRun = { cancel: false };
+  const f = (now) => {
+    if (run.cancel) return;
+    // Real time, substepped at 240Hz — the substep is what keeps the integration
+    // stable, so the frame itself need not be short. A frame longer than a
+    // quarter second is a stall rather than a slow machine, and the spring does
+    // not swallow the whole gap for it.
+    const dt = Math.min(0.25, Math.max(0, (now - last) / 1000)) * rate; last = now;
+    [x, v] = springStep(x, v, dt, SETTLE_K);
+    if (Math.abs(x) < 0.5 && Math.abs(v) < 4) { settleRun = null; scrollTo(0, y); return; }
+    scrollTo(0, Math.round(y + x));
+    requestAnimationFrame(f);
+  };
+  requestAnimationFrame(f);
+}
+// The reader's own gesture ends the settle in the frame it arrives, and the
+// scroll it asks for is the browser's from there. The rest begins again from
+// the gesture itself rather than from the next frame that moves: a gesture that
+// moves the page by nothing at all — a key the page does not scroll on, a wheel
+// against the end of the document — would otherwise leave the copy standing
+// wherever the spring had got to.
+const cancelSettle = () => {
+  inputArmed = true;
+  if (settleRun) { settleRun.cancel = true; settleRun = null; }
+  settleArmed = true; restSince = performance.now();
+};
+// Watched, not taken: passive, and on the bubble phase, so nothing the page
+// does here can stand between the reader's gesture and the scroll it asks for.
+for (const ev of ['wheel', 'touchstart', 'pointerdown', 'keydown']) addEventListener(ev, cancelSettle, { passive: true });
+// Which scene a rest carries to: the one ahead in the direction of `dir` (the
+// sign of the reader's last nonzero scroll delta — `travel`, read at the call
+// site, not re-measured here), unless the stop is still within DEAD of the
+// scene behind that direction, which reads as a small correction rather than
+// onward intent. Exposed on window so the harness reads this one formula
+// rather than keeping a second copy of it, the same reason restY() and
+// targetAt() are exposed below.
+// dir === 0 is not downward, it is no direction at all — travel starts at 0
+// and a native scroll-restored reload can land here before the reader's
+// first gesture of the session, so there is nothing to carry forward and the
+// rest is just the nearest scene.
+const sceneForRest = (p, dir) => (dir === 0 ? Math.round(p) : dir < 0 ? Math.floor(p + DEAD) : Math.ceil(p - DEAD));
+// The opening is a real rest well even though it has no separate film scene.
+// Once an upward gesture passes scene 1's rest, keep carrying to the document
+// top; a downward gesture at the same position still selects scene 1.
+const restSceneAt = (p, dir) => dir <= 0 && scrollY < restY(0) ? -1 : sceneForRest(p, dir);
+function settleAtRest(now) {
+  if (!inputArmed || !settleArmed || settleRun || now - restSince < REST_MS) return;
+  settleArmed = false;
+  const scene = restSceneAt(progressAt(), travel);
+  const visualScene = Math.max(0, scene);
+  // A wash owed or already running lends its clock; with none, the spring
+  // keeps its own half second. cureLeft(washT) and the branch choice
+  // (`expected`) are each kept on their own line, unconditionally, so they
+  // stand as values independent of whatever secs itself is actually wired to.
+  const washCureLeft = cureLeft(phase === 'morph' ? washT : 0);
+  const expected = visualScene === shown && !running() ? SETTLE_SECS : washCureLeft;
+  const secs = expected;
+  settleSecs = secs; settleCureLeft = washCureLeft; settleShown = shown; settleRunning = running();
+  const v = scrollV * innerHeight;          // the reader's own speed, in pixels a second
+  const y = restY(scene);
+  setTarget(visualScene);   // the intro shares scene 1's film but owns scroll rest 0
+  if (reduce) return scrollTo(0, y);   // reduced motion arrives rather than travels
+  // The seed is the reader's motion carried forward, so it is taken only where
+  // it points at the rest the page picked: a speed pointing away from it is
+  // motion the reader has already stopped making.
+  settleTo(y, Math.sign(y - scrollY) === Math.sign(v) ? v : 0, secs);
+}
+// ?carry=intent listens to wheel directly and owns the scroll itself (preventDefault), so a
+// tick's delta becomes velocity the instant it arrives rather than something read back off
+// scrollY next frame. ctrlKey marks a trackpad pinch-zoom, not a scroll, and is left alone.
+// Reduced motion turns the interception off entirely — "raw 1:1 scroll, no pull" per
+// continuous-carry.md §6 — so wheel behaves exactly as it does in every other mode, and
+// watchScroll below always routes reduced motion to the wait path regardless of ?carry=.
+if (CARRY === 'intent') {
+  // Touch and a scrollbar drag are native browser scrolling, so holding for them is only a
+  // presence flag — watchScrollIntent reads scrollY's own motion back each frame while it's
+  // set. clientX at or beyond the layout viewport's width is the scrollbar track, the one
+  // place a pointerdown is a drag on the thumb rather than a touch on the content; touchstart
+  // needs no such check, only touch fires it.
+  const holdOn = (e) => { if (e.pointerType === 'touch' || e.clientX >= document.documentElement.clientWidth) touchHeld = true; };
+  const holdOff = () => { touchHeld = false; };
+  addEventListener('pointerdown', holdOn);
+  addEventListener('touchstart', () => { touchHeld = true; }, { passive: true });
+  addEventListener('pointerup', holdOff);
+  addEventListener('touchend', holdOff);
+  addEventListener('touchcancel', holdOff);
+
+  addEventListener('wheel', (e) => {
+    if (reduce || e.ctrlKey || nativeScroll() || !e.deltaY) return;
+    e.preventDefault();
+    // travel is set from the tick itself, not from carryV's own sign inside the integrator
+    // below: the spring's restoring force can drive carryV through zero and even negative
+    // purely from its own reaction while the reader is still pushing forward (measured
+    // directly, 2026-09-16 — a modest push fell straight back to scene 0), which would read as
+    // a reversal that never happened. The wheel tick is the one place a reversal is real.
+    const direction = Math.sign(e.deltaY);
+    // A trackpad has no pointerdown/up of its own, so its contact is read off the ticks
+    // themselves: WheelEvent.momentum, where a browser exposes it, says outright whether this
+    // tick is the reader's own push (false) or the coast after release (true). Elsewhere, a
+    // run of ticks still arriving within HOLD_GAP and not shrinking across the last three
+    // reads as the same contact; watchScrollIntent below is what notices a pause, since there's
+    // no event for it here — only a decaying run is caught at tick time.
+    const now = performance.now();
+    // Delivery can pause while captures render. Event timestamps describe the
+    // input itself; releasing the spring is not the end of a wheel gesture.
+    const newGesture = !lastWheelStamp || e.timeStamp - lastWheelStamp > WHEEL_GESTURE_GAP;
+    const reversed = direction !== travel;
+    if (newGesture || reversed) {
+      wheelOrigin = scrollY; wheelDistance = 0; wheelCoasting = false;
+      wheelMags = [];
+    }
+    const atGoal = carryGoal != null && Math.abs(scrollY - restY(carryGoal)) <= CARRY_EPS;
+    if (direction !== travel || (newGesture && (carryGoal == null || atGoal))) {
+      let anchor = carryGoal;
+      if (anchor == null || newGesture) {
+        anchor = -1;
+        for (let scene = 0; scene <= SHARE; scene++) {
+          if (Math.abs(scrollY - restY(scene)) < Math.abs(scrollY - restY(anchor))) anchor = scene;
+        }
+      }
+      carryGoal = Math.max(-1, Math.min(SHARE, anchor + direction));
+    }
+    travel = direction;
+    const mag = Math.abs(e.deltaY);
+    if ('momentum' in e) wheelCoasting = e.momentum;
+    else {
+      if (wheelCoasting && mag > (wheelMags.at(-1) || 0) + 2) wheelCoasting = false;
+      wheelMags.push(mag); if (wheelMags.length > 3) wheelMags.shift();
+      if (wheelMags.length === 3 && wheelMags[0] >= wheelMags[1] && wheelMags[1] >= wheelMags[2] && wheelMags[0] > wheelMags[2]) wheelCoasting = true;
+    }
+    wheelHeld = !wheelCoasting && now - lastWheelT <= HOLD_GAP;
+    lastWheelT = now; lastWheelStamp = e.timeStamp;
+    if (!wheelCoasting) wheelDistance += e.deltaY;
+    if (wheelHeld) {
+      // 1:1, no pull: the tick moves the page by its own delta and nothing more.
+      const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+      const requested = Math.min(maxY, Math.max(0, scrollY + e.deltaY));
+      // Advance only when the reader's own direct tick crosses the goal. The
+      // spring's motion between ticks must never promote a three-tick nudge.
+      if (carryGoal != null) {
+        while (direction > 0 && carryGoal < SHARE && wheelOrigin + wheelDistance > restY(carryGoal)) carryGoal++;
+        while (direction < 0 && carryGoal > -1 && wheelOrigin + wheelDistance < restY(carryGoal)) carryGoal--;
+      }
+      scrollTo(0, Math.round(requested));
+    } else if (!wheelCoasting) carryV += e.deltaY * PUSH_GAIN;
+  }, { passive: false });
+}
+
+// The always-on integrator (research/2026-09-16/continuous-carry.md §5): one loop, no rest
+// branch, running from the first frame whether or not the reader has touched the wheel yet.
+// The well is chosen from `travel` — the same direction-and-dead-zone rule settleAtRest
+// uses, kept current by the wheel listener above rather than re-read from carryV here — and
+// the pull is the only deceleration force there is: the page never stops on its own, only by
+// arriving at rest at the well it's in.
+function watchScrollIntent(now) {
+  const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
+  if (carryX == null) carryX = scrollY;
+  if (!inputArmed) { carryX = scrollY; carryV = 0; return; }
+  // A trackpad's own contact has no release event, only a pause: past HOLD_GAP since the last
+  // tick with nothing new arriving, wheelHeld's own last value has gone stale, and this is the
+  // one place with a per-frame clock to notice it — touchHeld needs no such check, it already
+  // has pointerup/touchend/touchcancel to turn it off directly.
+  const carryHeld = touchHeld || (wheelHeld && now - lastWheelT <= HOLD_GAP);
+  if (carryHeld) {
+    // Direct manipulation: no pull. scrollY is the ground truth of what actually moved the
+    // page this frame — native touch/scrollbar-drag scrolling, or the wheel listener's own
+    // 1:1 write above — so carryX just reads it back, and carryV becomes the measured speed
+    // that carried, ready to hand to the integrator the moment the reader lets go.
+    const prevX = carryX;
+    carryX = scrollY;
+    carryV = dt > 0 ? (carryX - prevX) / dt : carryV;
+    if (carryV) travel = Math.sign(carryV);
+    if (touchHeld) carryGoal = null;
+  } else if (Math.abs(scrollY - carryX) > CARRY_EPS) { carryX = scrollY; carryV = 0; carryGoal = null; }   // a foreign write hands control back
+  const scene = carryGoal == null ? restSceneAt(progressAt(), travel) : carryGoal;
+  const y = restY(scene);
+  if (Math.abs(carryV) > 4 || Math.abs(carryX - y) > 0.5) restSince = now;   // bookkeeping for NB_DWELL elsewhere, not a branch in the physics below
+  setTarget(Math.max(0, scene));
+  scrollV = carryV / innerHeight;
+  // Substepped at 240Hz, the same stability margin settleTo() uses for this exact K/C pair:
+  // a plain once-a-frame Euler step here overshot the well by a full scene and oscillated
+  // (measured directly, 2026-09-16) — the spring itself was never the problem, the step size was.
+  // Held: any held input during free motion catches it immediately, by skipping this loop the
+  // very frame carryHeld goes true — nothing left to add pull to it.
+  if (!carryHeld) for (let n = Math.max(1, Math.ceil(dt * 240)), h = dt / n; n-- > 0;) {
+    const a = -CARRY_K * (carryX - y) - CARRY_C * carryV;
+    carryV += a * h; carryX += carryV * h;
+  }
+  const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+  carryX = Math.min(maxY, Math.max(0, carryX));
+  scrollTo(0, Math.round(carryX));
+}
+
+// ?carry=css: give each scene a snap point at exactly restY(scene) — the same position the
+// other two paths carry the reader onto — by turning that absolute target into a
+// scroll-margin-top correction on the element scroll-snap-align already aligns to (the
+// matching [data-carry="css"] rule lives in <style>). Run once layout is real and again on
+// resize; a font swap or reflow between resizes is the one thing this doesn't chase.
+function setupCssSnap() {
+  for (const [i, el] of scenesEl.entries()) el.style.scrollMarginTop = (el.getBoundingClientRect().top + scrollY - restY(i)) + 'px';
+}
+if (CARRY === 'css') { addEventListener('resize', setupCssSnap); setupCssSnap(); }
+// The browser owns motion here; settleAtRest is never called. On mobile this is a strictly
+// observational path: native scrolling supplies scrollY, which drives the scenes and closing
+// scrub continuously, and no release may move the page after the reader lets go.
+let mobileWatchKey = '', finalDissolve = 0, finalWash = null, finalPrints = null;
+function deployPrint() {
+  const copy = document.createElement('canvas'); copy.width = printW(); copy.height = printH();
+  const g = copy.getContext('2d'), ox = -printRect.x, oy = -printRect.y;
+  // Use loaded logo images at their exact current physics positions.
+  for (let i = 0; i < (orbitNodes?.length || 0); i++) {
+    const n = orbitNodes[i], el = orbitEls[i], im = el.querySelector('img');
+    const radius = ORBIT_D * Math.max(0, popScale(n, performance.now())) / 2;
+    if (!n.popAt || !radius) continue;
+    g.save(); g.beginPath(); g.arc(n.x + ox, n.y + oy, radius, 0, Math.PI * 2); g.clip();
+    g.fillStyle = getComputedStyle(el).backgroundColor; g.fillRect(n.x + ox - radius, n.y + oy - radius, radius * 2, radius * 2);
+    if (im?.complete && im.naturalWidth) {
+      const k = Math.min(radius * 1.24 / im.naturalWidth, radius * 1.24 / im.naturalHeight);
+      g.drawImage(im, n.x + ox - im.naturalWidth * k / 2, n.y + oy - im.naturalHeight * k / 2, im.naturalWidth * k, im.naturalHeight * k);
+    }
+    g.restore();
+  }
+  const source = sheets[DEPLOY];
+  if (source) {
+    const cs = getComputedStyle(stage), cx = parseFloat(cs.getPropertyValue('--pub-cx')), cy = parseFloat(cs.getPropertyValue('--pub-cy'));
+    const k = source.width / printW(), r = pubR, diameter = r * 2 * PUB_SCALE;
+    g.drawImage(source, (-32 + cx - r + ox) * k, (cy - r + oy) * k, r * 2 * k, r * 2 * k,
+      GEOM.cellW / 2 + ox - diameter / 2, GEOM.cellH / 2 + oy - diameter / 2, diameter, diameter);
+  }
+  return copy;
+}
+function closingPigmentPrint() {
+  const sheet = document.createElement('canvas'); sheet.width = printW(); sheet.height = printH();
+  const g = sheet.getContext('2d');
+  if (closingPoster.complete && closingPoster.naturalWidth) {
+    const k = Math.max(sheet.width / closingPoster.naturalWidth, sheet.height / closingPoster.naturalHeight);
+    g.globalAlpha = .45;
+    g.drawImage(closingPoster, (sheet.width - closingPoster.naturalWidth * k) / 2, (sheet.height - closingPoster.naturalHeight * k) / 2, closingPoster.naturalWidth * k, closingPoster.naturalHeight * k);
+    g.globalAlpha = 1;
+  } else { g.fillStyle = '#777777'; g.fillRect(0, 0, sheet.width, sheet.height); }
+  g.globalCompositeOperation = 'destination-in';
+  const gradient = g.createRadialGradient(sheet.width / 2, sheet.height / 2, 35, sheet.width / 2, sheet.height / 2, sheet.width * .5);
+  gradient.addColorStop(0, '#000'); gradient.addColorStop(.55, '#000b'); gradient.addColorStop(1, '#0000');
+  g.fillStyle = gradient; g.fillRect(0, 0, sheet.width, sheet.height);
+  return sheet;
+}
+function updateFinalDissolve() {
+  if (!sim || reduce || !sheets[DEPLOY]) return;
+  const active = shown >= DEPLOY && +stage.dataset.scene === DEPLOY;
+  const q = active ? (mobileLayout() ? mobileClosingProgress() : xfAt()) : 0;
+  finalDissolve = q;
+  if (!q) {
+    if (finalWash) {
+      cancelAnimationFrame(finalWash.raf); finalWash = null;
+      releasePigmentCover(); canvas.style.filter = '';
+      if (shown === DEPLOY) orbitSim?.restart();
+    }
+    return;
+  }
+  if (!finalWash) {
+    if (!active) return;
+    orbitSim?.stop();
+    // Retain these exact pixels through the final scene and the return trip.
+    if (!finalPrints) finalPrints = { source: deployPrint(), film: closingPigmentPrint() };
+    holdCanvas(finalPrints.source, finalPrints.film, DEPLOY, true, true);
+    finalWash = { t: 0, drawn: -1, goal: q * T_TOTAL, raf: 0, covered: true };
+  }
+  const wash = finalWash; wash.goal = q * T_TOTAL;
+  if (wash.raf) return;
+  const frame = () => {
+    if (finalWash !== wash) return;
+    wash.raf = 0;
+    // Reverse scroll reconstructs the same forward field at the earlier
+    // position. One clock owns both directions, without competing fade loops.
+    const result = advanceWash(sim, wash, { goal: wash.goal, fwd: true }, t => {
+      const p = wash.goal / T_TOTAL;
+      stage.style.setProperty('--wash-cover', String(smooth(0, .18, p)));
+      canvas.style.filter = `grayscale(${smooth(.1, .65, p)})`;
+      sim.draw(true, smooth(T_CURE, T_TOTAL, t), -.2 + 1.4 * smooth(.94, 1, p));
+    });
+    if (!result.caughtUp) wash.raf = requestAnimationFrame(frame);
+  };
+  wash.raf = requestAnimationFrame(frame);
+}
+
+function watchScrollCss(now) {
+  if (mobileLayout()) {
+    const key = `${scrollY}:${innerWidth}:${innerHeight}`;
+    if (key === mobileWatchKey) return;
+    mobileWatchKey = key;
+
+  }
+  const dy = lastScrollY == null ? 0 : scrollY - lastScrollY;
+  lastScrollY = scrollY;
+  if (dy) { travel = Math.sign(dy); restSince = now; }
+  onScroll(dy);
+  updateFinalDissolve();
+  // Desktop's closing section shares the release spring. Mobile remains on the
+  // observational path above through the whole close.
+  if (!mobileLayout() && xfAt() > 0 && travel > 0 && settleArmed && !settleRun && !touchHeld && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
+    settleArmed = false;
+    const destination = Math.max(scrollY, closingRestY());
+    if (reduce) scrollTo(0, destination);
+    else settleTo(destination, Math.max(0, scrollV * innerHeight), SETTLE_SECS);
+  }
+  const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
+  scrollV *= Math.exp(-dt / V_TAU);
+}
+
+// Today's path, unchanged: REST_MS of quiet, then a spring to the designed position.
+function watchScrollWait(now) {
+  const dy = lastScrollY == null ? 0 : scrollY - lastScrollY;
+  lastScrollY = scrollY;
+  // The settle's own scrollTo calls land here too, including its last frame,
+  // and can flip `travel` and re-arm settleArmed. That can never flip which
+  // scene a later rest picks: by convergence restY has put progressAt()
+  // exactly on the target's integer position, where sceneForRest(p, dir)
+  // already agrees for either sign of dir.
+  if (dy) { travel = Math.sign(dy); restSince = now; if (!settleRun) settleArmed = true; }
+  onScroll(dy);   // the target is a position, so it is read every frame, against the direction this frame carried
+  settleAtRest(now);
+  // decay by real time, not by frame: a 120 Hz display would otherwise halve the integral
+  const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
+  scrollV *= Math.exp(-dt / V_TAU);
+}
+(function watchScroll(now = performance.now()) {
+  if (document.documentElement.dataset.static) return;
+  // Reduced motion always takes the wait path, whatever ?carry= says: every mode's
+  // reduced-motion behaviour is already that path's own instant arrival (settleAtRest's own
+  // `if (reduce)`), so there is nothing for intent or css to do differently under it.
+  updateOpening();
+  if (nativeScroll()) { carryX = null; carryV = 0; carryGoal = null; watchScrollCss(now); }
+  else if (reduce || CARRY === 'wait') watchScrollWait(now);
+  else if (CARRY === 'intent') watchScrollIntent(now);
+  else watchScrollCss(now);
+  requestAnimationFrame(watchScroll);
+})();
+
+// ── Scene 1: a poem being written ─────────────────────────────────────────
+// Each scene change is a generation; a loop runs while its own generation is
+// current, so a return to the same scene starts a fresh loop and the old one
+// falls out at its next wait.
+let gen = 0;
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+async function writeLoop(afterWash) {
+  const g = gen;
+  if (afterWash) await new Promise((r) => setTimeout(r, 1800));   // the poem the wash returned stays to be read
+  while (gen === g) {
+    editorPlayback(true);
+    ed.setDoc(SEED);
+    if (!mobileLayout()) {
+      const focusY = scrollY;
+      ed.focus();
+      // WebKit scrolls the parent document to reveal a focused control inside
+      // an offscreen iframe. Typing owns the editor caret, not the page position.
+      requestAnimationFrame(() => { if (shown === 0 && Math.abs(scrollY - focusY) > 1) scrollTo(0, focusY); });
+    }
+    await new Promise((r) => setTimeout(r, 700));
+    if (gen !== g) break;
+    const done = await ed.type(TYPED, { seed: 11, median: window.__LANG === 'zh' ? 95 : 18, slipAt: 47 });
+    editorPlayback(false);
+    if (!done) break;
+    await new Promise((r) => setTimeout(r, 2600));   // the poet reads it back
+  }
+}
+
+// ── Scene 2: the site keeps up ────────────────────────────────────────────
+// The hairline breathes: each breath is one rebuild, slow inhale to full,
+// then the dissolve. Each breath lands one more change on the publish ring,
+// which grows into it: an edit, a new page, more edits, a stylesheet change
+// that restyles every page (the outer orbit), a deletion. Then the author
+// publishes, the ring clears, and the afternoon starts over.
+const EVENTS = [
+  { edited: 1 },
+  { edited: 1, added: 1 },
+  { edited: 2, added: 1 },
+  { edited: 2, added: 2 },
+  { edited: 3, added: 2, restyled: 14 },
+  { edited: 4, added: 2, deleted: 1, restyled: 14 },
+  { edited: 5, added: 3, deleted: 1, restyled: 14 },
+];
+async function liveLoop() {
+  const g = gen;
+  while (gen === g) {
+    sh.setPending({});
+    await wait(900);
+    for (const ev of EVENTS) {
+      if (gen !== g) break;
+      const breathed = await sh.breathe(2200, 700);
+      if (!breathed || gen !== g) break;
+      await sh.growTo(ev, 700);
+    }
+    if (gen !== g) break;
+    await wait(1200);
+    sh.publishFlash(); await wait(2200);
+  }
+}
+
+// Scene 3 keeps genuine app chrome above the artifacts and website paper
+// around a fixed article. Only the three artifacts change position.
+const NB_SRC = 'scene3/notebook/breed/mandelbrot-live.html';
+const S3_ARTICLE = '/scene3/article/';
+const S3_VIDEO = '/scene3/movie/pool/clips/general-railroad-ties.mp4';
+const CARDS = {
+  sk: { docked: false, el: $('sib-sk'), label: 'the algorithmic artwork — drag anywhere' },
+  nb: { docked: false, el: $('sib-nb'), label: 'the notebook, an IPython zoom — drag to move' },
+  video: { el: $('s3-video'), label: 'the video itself — drag to move', docked: true },
+};
+// Warm the local documents only as Scene 3 approaches.
+function warmScene3Media() {
+  // watchScroll's own first tick runs synchronously, before the Promise.all
+  // below has assigned `vd` — reachable when a reload restores scrollY past
+  // scene 1, same as the TDZ case this shares a comment with. Bail without
+  // marking it warmed: the very next tick, a real animation frame away, runs
+  // after that Promise has settled and retries for real.
+  if (s3MediaWarmed || !vd) return;
+  s3MediaWarmed = true;
+  $('sk').src = $('sk').dataset.src;
+  $('nb').src = NB_SRC;
+  vd.setPreview(S3_ARTICLE);
+  $('s3-video-el').poster = $('s3-video-el').dataset.poster;
+  $('s3-video-el').src = S3_VIDEO;
+}
+// The detached video and the copy inside the assembled preview share playback
+// state: only Scene 3 runs them, and reduced motion starts both paused.
+function videoActive(on) {
+  let nestedVideo = null;
+  try { nestedVideo = vdFrame.contentDocument.getElementById('moss-preview-iframe').contentDocument.querySelector('video'); } catch (e) {}
+  for (const media of [nestedVideo, $('s3-video-el')]) {
+    if (!media) continue;
+    if (on && !document.hidden && !reduce) media.play().catch(() => {}); else media.pause();
+  }
+}
+document.addEventListener('visibilitychange', () => {
+  syncLoop();
+  videoActive(shown === SHIPS);
+  sketchVisible(!document.hidden && shown === SHIPS);
+});
+
+// Measure docking inside the real preview; the window remains a single layer.
+function layoutScene3Layers() {
+  try {
+    const shellDoc = vdFrame.contentDocument;
+    const nested = shellDoc.getElementById('moss-preview-iframe');
+    if (!nested || !nested.contentDocument) return false;
+    const sourceVideo = nested.contentDocument && nested.contentDocument.querySelector('video');
+    if (!sourceVideo) return false;
+    const nr = nested.getBoundingClientRect(), vr = sourceVideo.getBoundingClientRect();
+    s3Paper = { x: box.offsetLeft + nr.left, y: box.offsetTop + nr.top, w: nr.width, h: nr.height };
+    s3Slot = { x: s3Paper.x + vr.left, y: s3Paper.y + vr.top, w: vr.width, h: vr.height };
+    CARDS.video.height = CARDS.video.width * vr.height / vr.width;
+    for (const id of S3_ORDER) {
+      const c = CARDS[id];
+      if (c.pose && c.docked && s3Drag?.id !== id) { stopCard(id); c.pose = dockPose(id); paintCard(id); }
+    }
+    // The shell and article remain one intact preview. Only its original
+    // media is hidden: the movable artifacts paint above the whole window.
+    const article = nested.contentDocument;
+    let hide = article.getElementById('s3-hide-video');
+    if (!hide) {
+      hide = article.createElement('style'); hide.id = 's3-hide-video';
+      hide.textContent = '.moss-ambient-video{visibility:hidden!important}';
+      article.head.appendChild(hide);
+    }
+    nested.style.visibility = '';
+    stage.classList.add('s3-ready');
+    return true;
+  } catch (e) { return false; }
+}
+function showAssembledPreview() {
+  stage.classList.remove('s3-ready');
+  try { const d = vdFrame.contentDocument; d.documentElement.classList.remove('s3-aperture'); d.getElementById('moss-preview-iframe').style.visibility = ''; } catch (e) {}
+}
+function armScene3Layers() {
+  let tries = 0;
+  const attempt = () => {
+    if (shown !== SHIPS || layoutScene3Layers() || tries++ > 120) return;
+    requestAnimationFrame(attempt);
+  };
+  attempt();
+}
+// The sketch's own canvas already pauses when its IntersectionObserver says
+// its canvas is out of view (scene3/sketch/native.html?id=processing-03) — which never fires
+// on its own here, since the canvas fills its iframe's whole viewport
+// whatever the parent page is doing. This is the signal that observer is
+// missing: whether scene 3 itself, the one place the sketch is ever drawn,
+// is actually the scene on screen.
+function sketchVisible(on) {
+  for (const id of ['sk', 'nb']) {
+    const w = $(id).contentWindow;
+    try { w && w.postMessage({ type: 'moss-visible', visible: on && !document.hidden }, location.origin); } catch (e) {}
+  }
+}
+
+// ── Scene 3: one pose per artifact, in the scaled cell's coordinates ────
+// Scaling the complete artifact preserves the harvested UI's proportions.
+Object.assign(CARDS.nb, { width: 520, height: 520 * 560 / 670 });
+Object.assign(CARDS.sk, { width: 440, height: 440 });
+Object.assign(CARDS.video, { width: 520, height: 390 });
+let s3Drag = null, s3HardStop = true, s3Touched = false;
+let s3Paper = { x: 120, y: 78, w: 540, h: 512 };
+let s3Slot = { x: 180, y: 290, w: 380, h: 285 };
+let s3Stack = ['video'], s3Initialized = false;
+const s3Jitter = [Math.random() - .5, Math.random() - .5, Math.random() - .5, Math.random() - .5];
+const cardId = el => S3_ORDER.find(id => CARDS[id].el === el);
+const localPoint = e => { const r = cell.getBoundingClientRect(); return { x: (e.clientX - r.left) / SCALE, y: (e.clientY - r.top) / SCALE }; };
+const inPreview = p => p.x >= s3Paper.x + 16 && p.x <= s3Paper.x + s3Paper.w - 16 && p.y >= s3Paper.y + 64 && p.y <= s3Paper.y + s3Paper.h - 12;
+function dockPose(id) {
+  const c = CARDS[id], scale = s3Slot.w / c.width;
+  return { x: s3Slot.x, y: s3Slot.y, s: scale };
+}
+function cardDepths() {
+  for (const id of S3_ORDER) {
+    const c = CARDS[id], focused = s3Drag?.id === id || c.el.matches(':focus-visible');
+    // Outside creations sit behind the preview window. A held or focused card
+    // rises above it, while docked cards use the same stack order as the paper.
+    c.el.style.zIndex = String(focused ? 20 : c.docked ? 12 + Math.max(0, s3Stack.indexOf(id)) : 1 + S3_ORDER.indexOf(id));
+    c.el.dataset.placement = c.docked ? 'preview' : 'outside';
+  }
+}
+function paintCard(id) {
+  const c = CARDS[id], p = c.pose;
+  c.el.style.left = c.el.style.top = '0px';
+  c.el.style.width = c.width + 'px'; c.el.style.height = c.height + 'px';
+  c.el.style.transform = `translate(${p.x.toFixed(2)}px,${p.y.toFixed(2)}px) scale(${p.s.toFixed(5)})`;
+  if (c.docked && !s3Drag) {
+    const left = Math.max(0, (s3Paper.x - p.x) / p.s), top = Math.max(0, (s3Paper.y - p.y) / p.s);
+    const right = Math.max(0, (p.x + c.width * p.s - s3Paper.x - s3Paper.w) / p.s);
+    const bottom = Math.max(0, (p.y + c.height * p.s - s3Paper.y - s3Paper.h) / p.s);
+    c.el.style.clipPath = `inset(${top}px ${right}px ${bottom}px ${left}px round 3px)`;
+  } else c.el.style.clipPath = '';
+}
+function stopCard(id) { cancelAnimationFrame(CARDS[id].raf); CARDS[id].raf = 0; }
+function settleCard(id, target) {
+  const c = CARDS[id]; stopCard(id);
+  if (reduce) { c.pose = { ...target }; paintCard(id); return; }
+  const v = { x: 0, y: 0, s: 0 }; let last = performance.now();
+  const frame = now => {
+    c.raf = 0; if (s3HardStop || s3Drag?.id === id) return;
+    const dt = Math.min(.05, (now - last) / 1000); last = now;
+    for (const key of ['x', 'y', 's']) { let d; [d, v[key]] = springStep(c.pose[key] - target[key], v[key], dt, SETTLE_K); c.pose[key] = target[key] + d; }
+    const done = Math.abs(c.pose.x - target.x) < .2 && Math.abs(c.pose.y - target.y) < .2 && Math.abs(c.pose.s - target.s) < .0005;
+    if (done) c.pose = { ...target };
+    paintCard(id); if (!done) c.raf = requestAnimationFrame(frame);
+  };
+  c.raf = requestAnimationFrame(frame);
+}
+function updateDrag(now) {
+  const d = s3Drag; if (!d || s3HardStop) return;
+  const c = CARDS[d.id], dt = Math.min(.05, Math.max(0, (now - d.last) / 1000)); d.last = now;
+  const targetScale = d.inside ? dockPose(d.id).s : 1;
+  let delta; [delta, d.vs] = springStep(c.pose.s - targetScale, d.vs, dt, 260);
+  c.pose.s = reduce ? targetScale : targetScale + delta;
+  c.pose.x = d.point.x - d.grab.x * c.pose.s; c.pose.y = d.point.y - d.grab.y * c.pose.s;
+  paintCard(d.id); c.raf = requestAnimationFrame(updateDrag);
+}
+stage.addEventListener('pointerdown', e => {
+  if (shown !== SHIPS || phase === 'morph' || s3Drag || e.button !== 0) return;
+  const el = e.target.closest('[data-asset]'), id = el && cardId(el); if (!id) return;
+  const c = CARDS[id], point = localPoint(e); stopCard(id); s3Touched = true;
+  s3Drag = { id, el, point, inside: inPreview(point), grab: { x: (point.x - c.pose.x) / c.pose.s, y: (point.y - c.pose.y) / c.pose.s }, origin: { ...c.pose }, wasDocked: c.docked, last: performance.now(), vs: 0, pointerId: e.pointerId };
+  el.classList.add('s3-drag'); el.focus({ preventScroll: true }); cardDepths();
+  el.setPointerCapture(e.pointerId); e.preventDefault(); c.raf = requestAnimationFrame(updateDrag);
+});
+stage.addEventListener('pointermove', e => {
+  if (!s3Drag) return;
+  s3Drag.point = localPoint(e); s3Drag.inside = inPreview(s3Drag.point);
+});
+function endDrag(cancelled = false) {
+  if (!s3Drag) return;
+  const d = s3Drag, c = CARDS[d.id]; stopCard(d.id); s3Drag = null;
+  d.el.classList.remove('s3-drag'); d.el.blur();
+  if (d.el.hasPointerCapture(d.pointerId)) d.el.releasePointerCapture(d.pointerId);
+  c.docked = cancelled ? d.wasDocked : d.inside;
+  s3Stack = s3Stack.filter(id => id !== d.id); if (c.docked) s3Stack.push(d.id);
+  let target;
+  if (cancelled) target = d.origin;
+  else if (c.docked) target = dockPose(d.id);
+  else { target = { x: d.point.x - d.grab.x, y: d.point.y - d.grab.y, s: 1 }; c.outside = { ...target }; }
+  cardDepths(); settleCard(d.id, target);
+  if (target.x < printRect.x || target.y < printRect.y || target.x + c.width * target.s > printRect.x + printRect.w || target.y + c.height * target.s > printRect.y + printRect.h) {
+    printExpanded = true; setPrintRect(currentPrintRect()); warmSoon(0);
+  }
+}
+stage.addEventListener('pointerup', e => { if (s3Drag) { s3Drag.point = localPoint(e); s3Drag.inside = inPreview(s3Drag.point); endDrag(); } });
+stage.addEventListener('pointercancel', () => endDrag(true));
+stage.addEventListener('lostpointercapture', () => endDrag(true));
+stage.addEventListener('keydown', e => {
+  if (shown !== SHIPS) return;
+  if (e.key === 'Escape' && s3Drag) { e.preventDefault(); endDrag(true); return; }
+  if (!['Enter', ' '].includes(e.key) || s3Drag) return;
+  const id = cardId(e.target.closest('[data-asset]')); if (!id) return;
+  e.preventDefault(); s3Touched = true;
+  const c = CARDS[id]; c.docked = !c.docked;
+  s3Stack = s3Stack.filter(key => key !== id); if (c.docked) s3Stack.push(id);
+  cardDepths(); settleCard(id, c.docked ? dockPose(id) : c.outside);
+});
+stage.addEventListener('focusin', () => { if (shown === SHIPS) cardDepths(); });
+stage.addEventListener('focusout', () => { if (shown === SHIPS) requestAnimationFrame(cardDepths); });
+function placeScene3Artifacts() {
+  const r = cell.getBoundingClientRect(), left = Math.max(-260, (16 - r.left) / SCALE);
+  const homes = { nb: { x: left + 8 + s3Jitter[0] * 20, y: -4 + s3Jitter[1] * 16, s: 1 }, sk: { x: left + 42 + s3Jitter[2] * 28, y: 305 + s3Jitter[3] * 20, s: 1 }, video: { x: left + 20, y: 185, s: 1 } };
+  for (const id of S3_ORDER) { const c = CARDS[id]; c.outside = homes[id]; c.pose = c.docked ? dockPose(id) : { ...c.outside }; paintCard(id); }
+}
+addEventListener('resize', () => {
+  if (shown !== SHIPS) return;
+  layoutScene3Layers(); if (!s3Touched && !s3Drag) placeScene3Artifacts();
+});
+for (const id of ['nb', 'sk']) $(id).addEventListener('load', () => sketchVisible(shown === SHIPS));
+function enterScene3() {
+  s3HardStop = false; warmScene3Media();
+  for (const id of S3_ORDER) {
+    const c = CARDS[id]; c.el.tabIndex = 0;
+    c.el.setAttribute('role', 'button'); c.el.setAttribute('aria-label', c.label + '; Enter moves it into or out of the article');
+    c.el.setAttribute('aria-keyshortcuts', 'Enter Space');
+  }
+  if (!s3Initialized) { placeScene3Artifacts(); s3Initialized = true; }
+  cardDepths(); armScene3Layers(); sketchVisible(true); videoActive(true);
+}
+function leaveScene3() {
+  if (s3Drag) endDrag(true); s3HardStop = true;
+  for (const id of S3_ORDER) {
+    const el = CARDS[id].el; stopCard(id);
+    el.tabIndex = -1; el.removeAttribute('role'); el.removeAttribute('aria-label'); el.removeAttribute('aria-keyshortcuts');
+  }
+  showAssembledPreview(); videoActive(false); sketchVisible(false);
+}
+function scenes(next) {
+  if (!ed || !sh || !vd) return;
+  if (next === phase) return;
+  const from = phase; phase = next; gen++;
+  if (from === 'write') { ed.stop(); ed.setDoc(FINAL); ed.blur(); }   // the poem is finished; the brush arrives
+  if (next !== 'write') editorPlayback(false);
+  if (next !== 'live') { sh.hold(); sh.setPending({}); }
+  if (from === 'ships' && next !== 'ships') leaveScene3();
+  setFan(next === 'deploy');
+  if (next === 'write') writeLoop(from === 'morph');
+  else if (next === 'live') liveLoop();
+  else if (next === 'ships') enterScene3();
+}
+
+// For the harness.
+landing.still = (scene) => {
+  shown = target = scene; still(scene);   // the tick fills whatever print this leaves missing
+  // A real arrival always runs onScroll (which triggers warmScene3Media)
+  // before still() ever does — this bypasses that, so it stands in.
+  if (scene >= SHIPS - 1 && scene <= SHIPS + 1) warmScene3Media();
+};
+landing.wash = (to) => { if (running()) return Promise.resolve(false); target = to; return runJoin().then(() => true); };
+landing.probe = (x, y) => sim.probe(x, y);
+// The live array itself, not a copy: a fault is injected by assigning into
+// an element (e.g. prints[3] = null), so a snapshot here would turn that
+// into a no-op that still passes.
+landing.prints = sheets;
+landing.restY = restY;   // the settle's own geometry, so a rest check reads it rather than keeping a second copy
+landing.targetAt = targetAt;   // what a rested position names, read the same way the wash reads it
+landing.sceneForRest = sceneForRest;   // which scene a rest carries to, the same formula settleAtRest uses
+landing.state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: !!settleRun, settleSecs, settleCureLeft, settleShown, settleRunning, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, carry: CARRY, titleSteps, titleReady, titleMode });
+
+const when = (frame, key) => new Promise((resolve, reject) => {
+  const deadline = setTimeout(() => { clearInterval(poll); reject(new Error(`Demo ${frame.id} did not initialize`)); }, 10000);
+  const poll = setInterval(() => {
+    const api = frame.contentWindow?.[key];
+    if (api) { clearInterval(poll); clearTimeout(deadline); resolve(api); }
+  }, 50);
+});
+async function ready() {
+  // Images and creative artifacts share one complete printable domain before
+  // any scene is captured, including untouched initial arrangements.
+  placeScene3Artifacts(); s3Initialized = true;
+  printExpanded = true; setPrintRect(currentPrintRect());
+  // a print that never arrives must not hold the page shut: with none, the
+  // scenes cut, which is the path reduced motion already takes
+  if (washing() && needed(shown).length) { try { setSheet(shown, await capture(shown)); await takeOthers(mobileLayout() ? neighbours(shown) : washable.filter((scene) => scene !== shown)); } catch (e) { printable = false; console.warn('no prints:', e.message); } }
+  booted = true;
+  onScroll(0); if (target !== shown && primed()) runJoin(); else still(shown);
+  document.documentElement.dataset.ready = '1';
+}
+// Every frame must be there before the first prints are taken: a print of a
+// scene whose document has not loaded is a blank sheet.
+Promise.all([when(edFrame, '__editor'), when(shFrame, '__shell'), when(vdFrame, '__shell')])
+  .then(([e, s, v]) => {
+    ed = e; sh = s; vd = v;
+    // The control scene 4 is left holding is a live one, in both the scenes
+    // that show it — set once, so a print taken in scene 3 and the control the
+    // wash cures onto in scene 4 are the same control in the same state. Files
+    // to upload and no classified change set: the pill is ink and awake, and
+    // the composition ring stays clear, so the only colour in the scene is ink.
+    vd.setPending({ flatUpload: 1 });
+    measurePub();
+    return ready();
+  }).catch(error => {
+    console.warn('Showing the readable landing page:', error.message);
+    document.documentElement.dataset.static = '1';
+    page.inert = false; five.inert = false;
+    // watchScroll (and with it driveTitleDissolve) stops once dataset.static
+    // is set, so a dissolve caught mid-flight would otherwise freeze the
+    // title invisible; the static layout needs it back as plain text.
+    openingTitle.style.opacity = '';
+    document.getElementById('gl-title')?.style.setProperty('display', 'none');
+  });

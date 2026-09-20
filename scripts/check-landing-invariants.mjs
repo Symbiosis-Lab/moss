@@ -11,7 +11,7 @@
 //           plates first, before any card is ever touched, then again after
 //           the card. Two independent faults, each proven on its own: the
 //           plate drop's own `printExpanded = true;
-//           setPrintRect(currentPrintRect());` (site/index.html, the
+//           setPrintRect(currentPrintRect());` (site/landing.js, the
 //           outsideBase branch) deleted -- red on the very next plate check,
 //           restored -- green. The same two lines deleted from endDrag()'s
 //           card-drop branch instead -- red on the card check, restored --
@@ -27,13 +27,13 @@
 //           already lands settleAtRest at x=0, which returns before ever
 //           choosing between the two paths.)
 // I-fuzz    (R7) shown === target was too weak: with maybeJoin()'s own
-//           `runJoin()` call site deleted (site/index.html), shown never
+//           `runJoin()` call site deleted (site/landing.js), shown never
 //           moves again, yet that check still passed every time -- not
 //           because of print pre-capture (the first theory here), but
 //           because this file's own ready(page) helper waited on
 //           state().ready, which can go true *while boot's own ready() is
 //           still deciding whether to fire its own, separate runJoin() call
-//           (site/index.html, the very end of that function, independent of
+//           (site/landing.js, the very end of that function, independent of
 //           maybeJoin() entirely)* -- so the fuzz's early jumps raced that
 //           decision and a real join sometimes ran anyway, settling shown
 //           for reasons that had nothing to do with the call site under
@@ -214,7 +214,7 @@ async function iCommit(browsers) {
 // because the *other* site's later currentPrintRect() call unions in
 // whatever the first drag left stranded and rescues it retroactively. Fault:
 // deleting the plate drop handler's `printExpanded = true;
-// setPrintRect(currentPrintRect());` (site/index.html, the outsideBase
+// setPrintRect(currentPrintRect());` (site/landing.js, the outsideBase
 // branch) -- red on the plate check, before any card is ever touched, then
 // restored -- green. Fault: deleting the same two lines from endDrag()'s
 // card-drop branch -- red on the card check, then restored -- green. Each
@@ -372,7 +372,7 @@ async function iReduced(browsers) {
 // I-fuzz (R7): a seeded run of fast, unwaited jumps must still end at rest on
 // the RIGHT rendered scene with no page errors, not merely "some scene,
 // whatever shown last happened to hold". shown === target was too weak: with
-// runJoin()'s call site deleted from maybeJoin() (site/index.html), shown
+// runJoin()'s call site deleted from maybeJoin() (site/landing.js), shown
 // never moves again, yet that check still passed on every run, both engines
 // -- because watchScrollIntent keeps computing target from the live scroll
 // position every frame regardless of whether a join ever ran, and this
@@ -404,7 +404,7 @@ async function fuzzToRest(page, engineName, rand, minY, maxY, label) {
   });
   const elapsed = Date.now() - start;
   // The morphing class comes off on its own held/!running rAF check (still()'s
-  // caller elsewhere in site/index.html), not synchronously with shown/target
+  // caller elsewhere in site/landing.js), not synchronously with shown/target
   // settling -- a frame or two of lag here is real and not itself a fault.
   await page.waitForTimeout(300);
   const info = await page.evaluate(() => {
@@ -444,7 +444,7 @@ async function iFuzz(browsers) {
 // I-fuzz, invalidated-print variant: the historical deadlock this guards
 // against needed a print actually missing mid-visit, not merely never taken
 // -- boot's ready() pre-captures every scene before any fuzzing starts,
-// which is why nulling one print or all of them (site/index.html's own
+// which is why nulling one print or all of them (site/landing.js's own
 // fillPrints() path) and forcing every fresh capture to hang
 // (faults.captureHang) both did nothing to the plain I-fuzz above. Dragging
 // a plate or card far enough to expand the print rectangle is the one path

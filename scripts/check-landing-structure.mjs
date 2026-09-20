@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // A ratchet on the runtime script's own bloat, not on what it does: every
-// phase of the landing rewrite either lowers one of these four numbers or
+// phase of the landing rewrite either lowers one of these five numbers or
 // leaves it alone, and this fails a phase that quietly lets one rise. Unlike
 // a normal ratchet it also fails on an unlocked improvement (see below) —
 // this script's own stored numbers are the baseline every later phase edits
@@ -9,33 +9,25 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
-const INDEX_HTML = resolve(fileURLToPath(new URL('.', import.meta.url)), '..', 'site', 'index.html');
+const SITE_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)), '..', 'site');
+const INDEX_HTML = resolve(SITE_DIR, 'index.html');
+const LANDING_JS = resolve(SITE_DIR, 'landing.js');
 
-// Recorded after phase 2's `window.__landing` consolidation (2026-09-20).
-// Lower these numbers, in the same commit that earns it, whenever a later
-// phase actually reduces one — see the fail message below for why leaving
-// a lowered number unrecorded is itself a failure.
+// Recorded after phase 3's script extraction (2026-09-20): the runtime moved
+// verbatim from an inline <script> in site/index.html to site/landing.js,
+// loaded the same way (a classic, non-deferred, non-module <script src>) at
+// the same position, so the two byte counts below replace the single
+// byteSize this script used to track. Lower any of these numbers, in the
+// same commit that earns it, whenever a later phase actually reduces one —
+// see the fail message below for why leaving a lowered number unrecorded is
+// itself a failure.
 const BASELINE = {
   windowAssignments: 1,
   topLevelLets: 90,
   sceneComparisons: 14,
-  // Raised from 282550 (phase 2a) after window.mossLanding gained atClosing():
-  // real product code check-landing-subscription.mjs's focus handler now
-  // reads instead of window.__landing, not debug-surface growth.
-  byteSize: 282842,
+  htmlBytes: 45893,
+  scriptBytes: 236965,
 };
-
-// Locates the runtime script: the one inline, non-`src` `<script>` block
-// that defines `window.__landing` — the state machine, the print pipeline,
-// the fluid renderer and the scroll drivers all live in it. Not the tiny
-// loader scripts in <head>, and not the per-iframe setup snippet in the
-// markup, which are a handful of lines each and carry none of this.
-function runtimeScript(html) {
-  const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
-  const found = blocks.find((b) => b.includes('window.__landing'));
-  if (!found) throw new Error('runtime script (window.__landing) not found in site/index.html');
-  return found;
-}
 
 function countWindowAssignments(text) {
   // A real assignment only: `window.__NAME =` with a single `=`, not the
@@ -96,12 +88,13 @@ function countSceneComparisons(text) {
 }
 
 const html = await readFile(INDEX_HTML, 'utf8');
-const script = runtimeScript(html);
+const script = await readFile(LANDING_JS, 'utf8');
 const current = {
   windowAssignments: countWindowAssignments(script),
   topLevelLets: countTopLevelLetBindings(script),
   sceneComparisons: countSceneComparisons(script).total,
-  byteSize: Buffer.byteLength(html, 'utf8'),
+  htmlBytes: Buffer.byteLength(html, 'utf8'),
+  scriptBytes: Buffer.byteLength(script, 'utf8'),
 };
 
 const failures = [];
@@ -116,5 +109,5 @@ if (failures.length) {
   for (const f of failures) console.error(f);
   process.exitCode = 1;
 } else {
-  console.log('structure: window.__ assignments, top-level let bindings, scene comparisons in the shared functions, and page byte size all match the recorded baseline');
+  console.log('structure: window.__ assignments, top-level let bindings, scene comparisons in the shared functions, and the HTML and script byte sizes all match the recorded baseline');
 }
