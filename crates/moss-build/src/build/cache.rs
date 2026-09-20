@@ -761,6 +761,40 @@ impl FileStat {
         fs::File::options().write(true).open(path).unwrap().set_modified(stamped).unwrap();
         stamped
     }
+
+    /// Replace `path` the way an atomic save does — write the new bytes beside it and
+    /// rename over — with the old mtime carried across. Size and mtime are what a
+    /// record keyed by them cannot tell apart; the inode (and, a second later, the
+    /// ctime) is all that does.
+    pub(crate) fn replace_by_rename_keeping_mtime(path: &Path, bytes: &[u8]) {
+        let before = fs::metadata(path).unwrap();
+        assert_eq!(bytes.len() as u64, before.len(), "precondition: a same-size replacement");
+        let beside = path.with_file_name(format!("{}.replacement", path.file_name().unwrap().to_string_lossy()));
+        fs::write(&beside, bytes).unwrap();
+        fs::File::options().write(true).open(&beside).unwrap().set_modified(before.modified().unwrap()).unwrap();
+        fs::rename(&beside, path).unwrap();
+        assert_eq!(fs::metadata(path).unwrap().modified().unwrap(), before.modified().unwrap());
+    }
+
+    /// This record with each field changed in turn: what a record taken at another
+    /// instant of the file can differ in. A consumer that leaves one out of the stat
+    /// it looks up (or records) trusts the hash of bytes the file no longer has.
+    /// ctime and inode are left out where the platform has none, since an absent
+    /// field agrees with anything.
+    pub(crate) fn each_field_changed(&self) -> Vec<(&'static str, FileStat)> {
+        let mut rows = vec![
+            ("size", FileStat { size: self.size + 1, ..*self }),
+            ("mtime", FileStat { mtime: self.mtime + 1, ..*self }),
+            ("sub-second mtime", FileStat { mtime_nanos: self.mtime_nanos.map(|n| (n + 250_000_000) % 1_000_000_000), ..*self }),
+        ];
+        if let Some(c) = self.ctime {
+            rows.push(("ctime", FileStat { ctime: Some(c - 7), ..*self }));
+        }
+        if let Some(i) = self.inode {
+            rows.push(("inode", FileStat { inode: Some(i + 1), ..*self }));
+        }
+        rows
+    }
 }
 
 /// A single entry in the hash index: the stat record a file had when its bytes
@@ -1007,7 +1041,9 @@ impl HashIndex {
     /// re-recording the hit under the file's current stat, is what keeps the record
     /// honest: a hit that came from [`lookup_whole_second`](Self::lookup_whole_second)
     /// could be a stale one, and stamping it with today's stat would turn it into an
-    /// entry [`lookup`](Self::lookup) trusts.
+    /// entry [`lookup`](Self::lookup) trusts. That is not only a video's concern: the
+    /// scan answers an evicted image by the whole-second rule too, and its hit may be
+    /// a strict entry that only ctime and inode disagree with.
     pub fn carry_forward(&mut self, previous: &HashIndex, relative_path: &str) {
         if let Some(entry) = previous.entries.get(relative_path) {
             self.entries.insert(relative_path.to_string(), entry.clone());

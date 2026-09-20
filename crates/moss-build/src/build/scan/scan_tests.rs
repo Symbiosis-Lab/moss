@@ -1682,6 +1682,87 @@ fn an_evicted_image_never_has_a_non_answer_cached_under_its_hash() {
 }
 
 // =========================================================================
+// What the walk feeds the hash index: the file's whole stat record
+// =========================================================================
+
+/// A vault with one image, scanned the way a build scans it (`defer_placeholders =
+/// false`, which hashes an image it has no trusted entry for). The persisted index is
+/// the observable: an entry the scan trusted comes back as it was, one it did not comes
+/// back re-hashed.
+struct ScannedVault {
+    dir: tempfile::TempDir,
+}
+
+impl ScannedVault {
+    fn new() -> Self {
+        // Not `tempdir()`'s dot-named directory: the walk skips hidden folders.
+        let dir = tempfile::Builder::new().prefix("moss_scan_vault_").tempdir().unwrap();
+        // Two solid colours whose PNGs are the same number of bytes, so the rewrite
+        // below is a same-size one.
+        create_solid_color_png(&dir.path().join("photo.png"), 24, 24, [200, 30, 30]);
+        Self { dir }
+    }
+
+    fn png(&self) -> std::path::PathBuf {
+        self.dir.path().join("photo.png")
+    }
+
+    fn index_path(&self) -> std::path::PathBuf {
+        self.dir.path().join(".moss/build/cache/hash-index.json")
+    }
+
+    /// Scan, and return `photo.png`'s entry in the index the scan persisted.
+    fn scan(&self) -> crate::build::cache::HashIndexEntry {
+        scan_folder_with_dedup_emit(self.dir.path().to_str().unwrap(), None, None, false).unwrap();
+        HashIndex::load(&self.index_path()).entries.remove("photo.png").expect("the scan recorded the image")
+    }
+
+    /// Leave an index that holds `hash` for `photo.png` as it stood at `recorded`.
+    fn record(&self, recorded: &FileStat, hash: &str) {
+        let mut index = HashIndex::new();
+        index.update("photo.png".to_string(), recorded, hash.to_string());
+        index.save(&self.index_path()).unwrap();
+    }
+}
+
+/// The walk hands each image's stat to the scan, and the scan trusts an entry only for
+/// that whole record. An entry recorded for another size, mtime, sub-second mtime,
+/// ctime or inode is not this file's, and the hash in it — planted here so a wrongly
+/// trusted entry is visible — must not come back. The exact record is the control.
+#[test]
+fn the_scan_trusts_an_entry_only_for_the_images_whole_stat_record() {
+    let vault = ScannedVault::new();
+    let real = FileStat::of(&fs::metadata(vault.png()).unwrap());
+    let hashed = ObjectStore::hash_file(&vault.png()).unwrap();
+
+    vault.record(&real, "planted");
+    assert_eq!(vault.scan().content_hash, "planted", "control: the exact record hits");
+
+    for (field, changed) in real.each_field_changed() {
+        vault.record(&changed, "planted");
+        assert_eq!(vault.scan().content_hash, hashed, "an entry recorded for another {field} was trusted");
+    }
+}
+
+/// Replace-via-rename with size and mtime kept: the scan must hash the new file, not
+/// carry the old one's hash into the index the image worker reads.
+#[cfg(unix)]
+#[test]
+fn an_image_replaced_by_rename_with_its_size_and_mtime_kept_is_hashed_again() {
+    let vault = ScannedVault::new();
+    let first = vault.scan().content_hash;
+
+    let replacement = vault.dir.path().join("replacement.png");
+    create_solid_color_png(&replacement, 24, 24, [30, 30, 200]);
+    FileStat::replace_by_rename_keeping_mtime(&vault.png(), &fs::read(&replacement).unwrap());
+    fs::remove_file(&replacement).unwrap();
+
+    let second = vault.scan().content_hash;
+    assert_ne!(second, first, "the scan kept the hash of the image that was replaced");
+    assert_eq!(second, ObjectStore::hash_file(&vault.png()).unwrap());
+}
+
+// =========================================================================
 // Test Helpers
 // =========================================================================
 

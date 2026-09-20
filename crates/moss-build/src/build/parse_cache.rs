@@ -231,6 +231,12 @@ impl FileHasher {
     }
 
     fn compute(&self, relative_path: &str) -> Option<String> {
+        self.compute_with(relative_path, |abs| std::fs::read(abs).ok())
+    }
+
+    /// [`compute`](Self::compute) with the read passed in, so a test can change the
+    /// file between the read and the record.
+    fn compute_with(&self, relative_path: &str, read: impl FnOnce(&Path) -> Option<Vec<u8>>) -> Option<String> {
         let abs = self.root.join(relative_path);
         // Stat BEFORE reading: see `HashIndex::update`.
         let stat = FileStat::of(&std::fs::metadata(&abs).ok()?);
@@ -242,7 +248,7 @@ impl FileHasher {
         {
             return Some(hit);
         }
-        let bytes = std::fs::read(&abs).ok()?;
+        let bytes = read(&abs)?;
         let hash = format!("{:x}", Sha256::digest(&bytes));
         if let Ok(mut index) = self.index.lock() {
             index.update(relative_path.to_string(), &stat, hash.clone());
@@ -777,6 +783,85 @@ mod tests {
         assert!(session.lookup("a.md").is_none());
         session.finish(std::slice::from_ref(&doc));
         reset_for_tests();
+    }
+
+    /// A replace-via-rename — the atomic-save pattern — that carries the old mtime
+    /// across and keeps the size: only the inode says the page is a different file.
+    #[cfg(unix)]
+    #[test]
+    fn a_page_replaced_by_rename_with_its_size_and_mtime_kept_misses() {
+        let _guard = store_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("hash-index.json");
+        let page = dir.path().join("a.md");
+        std::fs::write(&page, "hello").unwrap();
+        reset_for_tests();
+        let doc = ParsedDocument {
+            source_path: Some("a.md".to_string()),
+            ..Default::default()
+        };
+
+        ParseSession::begin(dir.path(), &index, true, "fp".to_string())
+            .finish(std::slice::from_ref(&doc));
+        FileStat::replace_by_rename_keeping_mtime(&page, b"world");
+
+        let session = ParseSession::begin(dir.path(), &index, true, "fp".to_string());
+        assert!(session.lookup("a.md").is_none(), "replayed the parse of the page that was replaced");
+        session.finish(std::slice::from_ref(&doc));
+        reset_for_tests();
+    }
+
+    /// What `compute` feeds the index: the file's whole stat record. A record that
+    /// differs in any one field is not this file's — and the hash in it, planted here
+    /// so a wrongly trusted entry is visible, must not come back. The exact record is
+    /// the control: a hit is answered from the index without reading the file.
+    #[test]
+    fn the_hasher_trusts_an_entry_only_for_the_files_whole_stat_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let page = dir.path().join("a.md");
+        std::fs::write(&page, "hello").unwrap();
+        let real = FileStat::of(&std::fs::metadata(&page).unwrap());
+        let read = format!("{:x}", Sha256::digest(b"hello"));
+
+        let hashed_with_entry_recorded_at = |recorded: &FileStat| {
+            let mut index = HashIndex::new();
+            index.update("a.md".to_string(), recorded, "planted".to_string());
+            FileHasher::new(dir.path(), index).hash("a.md")
+        };
+
+        assert_eq!(hashed_with_entry_recorded_at(&real).as_deref(), Some("planted"), "control: the exact record hits");
+        for (field, changed) in real.each_field_changed() {
+            assert_eq!(
+                hashed_with_entry_recorded_at(&changed).as_deref(),
+                Some(read.as_str()),
+                "an entry recorded for another {field} was trusted"
+            );
+        }
+    }
+
+    /// The stat is taken before the bytes are read, so a write landing during the read
+    /// leaves an entry the file no longer matches. Recording the stat afterwards would
+    /// pair the new file's stat with the old bytes' hash and vouch for it. The read is
+    /// injected, so the write lands exactly between the two.
+    #[test]
+    fn the_hasher_records_the_stat_the_file_had_before_it_was_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let page = dir.path().join("a.md");
+        std::fs::write(&page, "hello").unwrap();
+        let hasher = FileHasher::new(dir.path(), HashIndex::new());
+
+        let hash = hasher.compute_with("a.md", |abs| {
+            let bytes = std::fs::read(abs).ok();
+            std::fs::write(abs, "rewritten while it was being hashed").unwrap();
+            bytes
+        });
+
+        assert_eq!(hash, Some(format!("{:x}", Sha256::digest(b"hello"))), "the hash is of the bytes that were read");
+        let now = FileStat::of(&std::fs::metadata(&page).unwrap());
+        assert!(
+            hasher.into_index().lookup("a.md", &now).is_none(),
+            "the index vouches for the rewritten file with the hash of the old bytes"
+        );
     }
 
     #[test]

@@ -1372,10 +1372,18 @@ pub(crate) fn compute_image_item_fingerprint(
     item: &Path,
     config: &ImageCompressionConfig,
 ) -> Option<String> {
+    let source = Path::new(source_path).join(item);
+    image_item_fingerprint(item, &crate::build::cache::FileStat::of(&fs::metadata(&source).ok()?), config)
+}
+
+/// [`compute_image_item_fingerprint`] for a stat record already in hand.
+pub(crate) fn image_item_fingerprint(
+    item: &Path,
+    stat: &crate::build::cache::FileStat,
+    config: &ImageCompressionConfig,
+) -> Option<String> {
     use sha2::{Digest, Sha256};
 
-    let source = Path::new(source_path).join(item);
-    let stat = crate::build::cache::FileStat::of(&fs::metadata(&source).ok()?);
     // No mtime at all: nothing to tell one write from the next.
     stat.mtime_nanos?;
 

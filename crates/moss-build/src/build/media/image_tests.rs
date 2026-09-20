@@ -209,6 +209,68 @@ fn fingerprint_missing_source_returns_none() {
     assert!(fp.is_none(), "an unstat-able source must not produce a fingerprint");
 }
 
+/// The fingerprint says "this image is unchanged" for the dispatch gate, so it must
+/// move when ANY field of the stat record does: a same-size rewrite in the same second
+/// differs in the sub-second mtime, a replace-via-rename in the inode, an in-place
+/// rewrite that puts the old mtime back in the ctime.
+#[test]
+fn the_fingerprint_moves_with_every_field_of_the_stat_record() {
+    let cfg = ImageCompressionConfig::default();
+    let stat = crate::build::cache::FileStat {
+        size: 1024,
+        mtime: 1_700_000_000,
+        mtime_nanos: Some(250_000_000),
+        ctime: Some(1_700_000_005),
+        inode: Some(77),
+    };
+    let control = image_item_fingerprint(Path::new("a.jpg"), &stat, &cfg).expect("a stat with an mtime");
+    assert_eq!(image_item_fingerprint(Path::new("a.jpg"), &stat, &cfg), Some(control.clone()), "premise: deterministic");
+
+    for (field, changed) in stat.each_field_changed() {
+        assert_ne!(
+            image_item_fingerprint(Path::new("a.jpg"), &changed, &cfg),
+            Some(control.clone()),
+            "the fingerprint ignores {field}: a change in it would be carried forward as no change"
+        );
+    }
+}
+
+/// What `compute_image_item_fingerprint` feeds the fingerprint: the file's whole stat
+/// record, as `FileStat::of` reads it — not a subset of it.
+#[test]
+fn the_fingerprint_of_a_file_is_the_fingerprint_of_its_whole_stat_record() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a.jpg");
+    make_big_jpeg(&file, 40, 30);
+    let cfg = ImageCompressionConfig::default();
+
+    let stat = crate::build::cache::FileStat::of(&fs::metadata(&file).unwrap());
+    assert_eq!(
+        compute_image_item_fingerprint(&tmp.path().to_string_lossy(), Path::new("a.jpg"), &cfg),
+        image_item_fingerprint(Path::new("a.jpg"), &stat, &cfg),
+    );
+}
+
+/// Replace-via-rename with size and mtime kept: only the inode says the image is a
+/// different file, and the dispatch gate must not carry the old variant forward over it.
+#[cfg(unix)]
+#[test]
+fn an_image_replaced_by_rename_with_its_size_and_mtime_kept_has_a_new_fingerprint() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a.jpg");
+    make_big_jpeg(&file, 40, 30);
+    let cfg = ImageCompressionConfig::default();
+    let root = tmp.path().to_string_lossy().to_string();
+    let before = compute_image_item_fingerprint(&root, Path::new("a.jpg"), &cfg);
+
+    let mut bytes = fs::read(&file).unwrap();
+    let middle = bytes.len() / 2;
+    bytes[middle] ^= 0xff;
+    crate::build::cache::FileStat::replace_by_rename_keeping_mtime(&file, &bytes);
+
+    assert_ne!(compute_image_item_fingerprint(&root, Path::new("a.jpg"), &cfg), before);
+}
+
 // ----- convert_single_image happy path + cache hit + legacy sentinel handling -----
 
 /// Build an oversized JPEG that WebP will shrink.
@@ -2228,6 +2290,58 @@ fn test_collect_images_reuses_stat_matched_hash_without_rehashing() {
         items[0].source_oid, "deadbeef",
         "collect must reuse the stat-matched hash from the index, never re-hash"
     );
+}
+
+/// What the blocking collect feeds the index: the file's whole stat record. An entry
+/// the worker recorded for another size, mtime, sub-second mtime, ctime or inode is not
+/// this file's, and the oid in it — planted here so a wrongly trusted entry is visible —
+/// must not become the item's. The exact record is the control (the test above).
+#[test]
+fn collect_trusts_an_entry_only_for_the_files_whole_stat_record() {
+    let (structure, tmp) = build_project_with_images(&[("photo.jpg", "jpg", None, true)]);
+    let transforms = crate::build::cache::TransformCache::new(
+        tmp.path().join("cache_transforms"),
+        crate::build::cache::ObjectStore::new(tmp.path().join("cache_objects")),
+    );
+    let cfg = ImageCompressionConfig { min_size_kb: 0, ..Default::default() };
+    let real = crate::build::cache::FileStat::of(&fs::metadata(tmp.path().join("photo.jpg")).unwrap());
+
+    for (field, changed) in real.each_field_changed() {
+        let mut hash_index = crate::build::cache::HashIndex::new();
+        hash_index.update("photo.jpg".to_string(), &changed, "planted".to_string());
+
+        let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg);
+
+        assert_eq!(items.len(), 1);
+        assert!(items[0].source_oid.is_empty(), "an entry recorded for another {field} was trusted: {:?}", items[0].source_oid);
+    }
+}
+
+/// Replace-via-rename with size and mtime kept: the worker's recorded oid is the old
+/// file's, and only the inode says so. Trusting it would encode the new image under the
+/// old one's cache key and ship the previous picture's variant.
+#[cfg(unix)]
+#[test]
+fn collect_does_not_take_the_oid_of_an_image_replaced_by_rename() {
+    let (structure, tmp) = build_project_with_images(&[("photo.jpg", "jpg", None, true)]);
+    let transforms = crate::build::cache::TransformCache::new(
+        tmp.path().join("cache_transforms"),
+        crate::build::cache::ObjectStore::new(tmp.path().join("cache_objects")),
+    );
+    let cfg = ImageCompressionConfig { min_size_kb: 0, ..Default::default() };
+    let file = tmp.path().join("photo.jpg");
+    let mut hash_index = crate::build::cache::HashIndex::new();
+    hash_index.resolve(&file, "photo.jpg").unwrap();
+
+    let mut bytes = fs::read(&file).unwrap();
+    let middle = bytes.len() / 2;
+    bytes[middle] ^= 0xff;
+    crate::build::cache::FileStat::replace_by_rename_keeping_mtime(&file, &bytes);
+
+    let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg);
+
+    assert_eq!(items.len(), 1);
+    assert!(items[0].source_oid.is_empty(), "took the recorded oid of the file that was replaced: {:?}", items[0].source_oid);
 }
 
 #[test]

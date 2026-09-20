@@ -993,6 +993,35 @@ fn resolve_hashes_a_file_replaced_by_rename_even_when_size_and_mtime_survive() {
     assert_ne!(idx.resolve(&file, "pic.png").unwrap(), "planted", "a different inode must not reuse the hash");
 }
 
+/// The stat is taken before the bytes are read (`HashIndex::update`): a write landing
+/// during the read then leaves an entry the file no longer matches, where the other
+/// order pairs the new file's stat with the old bytes' hash and vouches for it. The
+/// hasher is injected so the write lands exactly between the two.
+#[test]
+fn resolve_with_records_the_stat_the_file_had_before_it_was_read() {
+    let dir = make_test_dir("hash_idx_resolve_stat_first");
+    let file = write_temp_file(&dir, "pic.png", b"first version!");
+    let mut idx = HashIndex::new();
+
+    let hash = idx
+        .resolve_with(
+            &file,
+            "pic.png",
+            |path| {
+                let read = ObjectStore::hash_file(path);
+                fs::write(path, b"rewritten while it was being hashed").unwrap();
+                read
+            },
+            |_| false,
+        )
+        .unwrap();
+
+    let probe = write_temp_file(&dir, "probe", b"first version!");
+    assert_eq!(hash, ObjectStore::hash_file(&probe).unwrap(), "the hash is of the bytes that were read");
+    let now = FileStat::of(&fs::metadata(&file).unwrap());
+    assert!(idx.lookup("pic.png", &now).is_none(), "the index vouches for the rewritten file with the old bytes' hash");
+}
+
 /// A file still in the cloud is not read to learn its hash: reading a dehydrated
 /// file blocks for the provider's download or fails, and a provider re-materialising
 /// one changes its ctime and inode, so the strict lookup misses on exactly the files
