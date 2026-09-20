@@ -14,7 +14,7 @@
         "crates/moss-build/src/build/markdown/pipeline.rs": 2143,
         "crates/moss-build/src/build/media/ffmpeg.rs": 1672,
         "crates/moss-build/src/build/media/image.rs": 2937,
-        "crates/moss-build/src/build/media/pipeline.rs": 1760,
+        "crates/moss-build/src/build/media/pipeline.rs": 1804,
         "crates/moss-build/src/build/media/video.rs": 1810,
         "crates/moss-build/src/build/page/meta.rs": 1366,
         "crates/moss-build/src/build/pipeline.rs": 2018,
@@ -382,6 +382,17 @@
       },
       "reason": "dispatch_video_conversions back under control: the probe-and-relink of one video's staged outputs is VideoStore::stage and the output-key list is one helper shared by registration and the run ledger (dispatch 368 -> 301 lines)",
       "date": "2026-09-17"
+    },
+    {
+      "row": "prod_lines_per_file",
+      "from": {
+        "crates/moss-build/src/build/media/pipeline.rs": 1760
+      },
+      "to": {
+        "crates/moss-build/src/build/media/pipeline.rs": 1804
+      },
+      "reason": "the file stood at 1821 prod lines on develop against this row's 1760 baseline before this change touched it - growth from unrelated commits that nobody accepted (ten other files in this row are in the same unaccepted-growth state and are NOT touched by this entry). copy_deferred_assets' place-blob/record-blob/preserve-link dedup lowers it to 1804, still above 1760 but below where it started; the entry is set to 1804, the final count, so the file cannot regrow past it unnoticed. Scoped to this one path deliberately — `ratchet.mjs accept` has no per-path filter.",
+      "date": "2026-09-20"
     }
   ]
 }

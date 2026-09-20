@@ -681,6 +681,72 @@ async fn copy_deferred_assets_manifest_hash_is_xxh3_not_sha256() {
     );
 }
 
+/// The `.moss/theme` mirror's own place-then-record call had no coverage
+/// beyond `Path::exists()` elsewhere in this file — nothing asserted it went
+/// through `record_blob` at all. Assert the sealed manifest hash and the
+/// staged CAS oid directly, so a regression at that call site (dropped hash,
+/// wrong oid) fails here instead of only showing up as a broken cover in a
+/// real vault.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_theme_video_overlay_copied_to_output() {
+    use crate::build::coordinator::test_utils;
+    use crate::types::content::SiteHashes;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    fs::create_dir_all(&base).expect("create target/test-tmp");
+    let tmp = TempDir::new_in(&base).unwrap();
+    let source = tmp.path().join("source");
+    let moss_dir = tmp.path().join(".moss");
+    let staging = moss_dir.join("build/site-stage");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache/objects")).unwrap();
+
+    // A theme-mirrored texture — anything other than style.css/script.js,
+    // which the theme walk deliberately skips (the blocking phase already
+    // emits those under the same output prefix).
+    let overlay = source.join(".moss/theme/grain.png");
+    fs::create_dir_all(overlay.parent().unwrap()).unwrap();
+    fs::write(&overlay, b"pretend-png-bytes-for-grain-overlay").unwrap();
+
+    let ctx = crate::types::services::BackgroundContext {
+        source_path: source.clone().to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        blocking_keys: Default::default(),
+        dir_overrides: Default::default(),
+        ..crate::types::services::BackgroundContext::for_test()
+    };
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+    })
+    .await
+    .unwrap();
+
+    let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+    let entry = sealed
+        .files()
+        .get("_moss/theme/grain.png")
+        .expect("theme overlay must be registered in the sealed manifest");
+    let (_, hash) = crate::types::content::parse_entry(entry);
+    assert_eq!(hash.len(), 16, "manifest hash must be an xxh3 (16 hex chars), not the CAS oid");
+
+    assert!(
+        sealed.staged_oid("_moss/theme/grain.png").is_some(),
+        "theme overlay must carry a staged CAS oid so ship_phase can copy from the CAS"
+    );
+
+    assert!(
+        staging.join("_moss/theme/grain.png").exists(),
+        "theme overlay must also be linked into staging"
+    );
+}
+
 #[test]
 fn remove_stale_files_idempotent_with_no_placeholders() {
     // Fresh vault has no .placeholder.svg files. Running cleanup twice

@@ -847,6 +847,115 @@ fn recall_or_hash_output(
     }
 }
 
+/// Register a `Preserved` symlink/alias outcome in `live_symlinks` and the
+/// manifest; any other outcome is already logged by `handle_symlink_entry` /
+/// `handle_alias_entry`. Returns whether it was `Preserved`, so the caller
+/// can credit its own counter — a real symlink and a resolved Finder alias
+/// count separately even though they register identically. `kind` names the
+/// entry in an invalid-path warning ("symlink" or "alias").
+fn preserve_link(
+    outcome: &crate::build::media::symlink::SymlinkOutcome,
+    site_hashes: &mut SiteHashes,
+    live_symlinks: &mut std::collections::HashSet<String>,
+    kind: &str,
+) -> bool {
+    use crate::build::media::symlink::SymlinkOutcome;
+    let SymlinkOutcome::Preserved { rel_path, target } = outcome else {
+        return false;
+    };
+    live_symlinks.insert(rel_path.clone());
+    // Register in the manifest so deploy uploads the symlink.
+    // Wire format: see docs/reference/deploy-upload-contract.md.
+    let target_str = target.to_string_lossy();
+    match crate::build::served_path::ServedPath::from_source(rel_path) {
+        Ok(out_path) => {
+            site_hashes.insert_file_hash(&out_path, crate::types::content::symlink_entry(&target_str));
+        }
+        Err(e) => {
+            log::warn!("[background-assets] Skipping {kind} with invalid path '{}': {}", rel_path, e);
+        }
+    }
+    true
+}
+
+/// `place_blob`'s inputs, grouped so both call sites below name each field
+/// instead of relying on position — the main-walk call repeats one
+/// expression for both `log_label` and `report_path`.
+struct BlobPlacement<'a> {
+    link_oid: &'a str,
+    target: &'a Path,
+    log_label: &'a str,
+    report_path: &'a str,
+    ext: &'a str,
+}
+
+/// Link the blob into output and, for an image extension, report
+/// `AssetReady` — shared by the main asset walk and the `.moss/theme`
+/// mirror below. `false` (already logged) on a link failure.
+fn place_blob(
+    object_store: &crate::build::cache::ObjectStore,
+    placement: BlobPlacement,
+    reporter: &dyn crate::build::ports::reporter::BuildReporter,
+) -> bool {
+    if let Err(e) = object_store.link_to(placement.link_oid, placement.target) {
+        log::warn!("[background-assets] Failed to link {}: {}", placement.log_label, e);
+        return false;
+    }
+    if is_image_extension(placement.ext) {
+        reporter.report(&PipelineEvent::AssetReady {
+            path: placement.report_path.to_string(),
+            asset_type: "image".to_string(),
+        });
+    }
+    true
+}
+
+/// `record_blob`'s hash source: a value already computed byte-exactly (SPA
+/// post-injection — the memo would answer for the wrong, pre-injection
+/// blob), or the inputs to resolve one via `recall_or_hash_output`. A type,
+/// not four more `&str` params dead under `Known` and, at the theme call
+/// site, three positional copies of the same `oid` with nothing to catch a swap.
+enum OutputHash<'a> {
+    Known(String),
+    Compute {
+        memo_key: &'a str,
+        target: &'a Path,
+        fallback_oid: &'a str,
+        log_context: &'a str,
+    },
+}
+
+/// Resolve `hash` and register it, plus the staged CAS object id, for a blob
+/// `place_blob` already linked into `out_path`'s target.
+///
+/// This records the staged, PRE-`apply_transform` bytes' hash — for an HTML
+/// entry, `ship::verify_ship_integrity` compares POST-transform bytes
+/// instead. Benign: an entry here normally carries a live `staged_oid`,
+/// which skips that check entirely, and the check is fail-open/log-only on
+/// the rare entry that does reach it.
+///
+/// A hash failure registers `fallback_oid` rather than panicking (this runs
+/// inside a `spawn_blocking` worker, where a panic is swallowed) and rather
+/// than skipping, which would leave a linked-but-unregistered blob for
+/// `remove_stale_files` to delete as stale.
+fn record_blob(
+    manifest_hash_memo: &crate::build::media::manifest_hash_memo::ManifestHashMemo,
+    site_hashes: &mut SiteHashes,
+    staged_oids: &mut HashMap<String, String>,
+    hash: OutputHash,
+    out_path: &crate::build::served_path::ServedPath,
+    staged_oid: &str,
+) {
+    let hash = match hash {
+        OutputHash::Known(h) => h,
+        OutputHash::Compute { memo_key, target, fallback_oid, log_context } => {
+            recall_or_hash_output(manifest_hash_memo, memo_key, target, fallback_oid, log_context)
+        }
+    };
+    site_hashes.insert_file_hash(out_path, crate::types::content::file_entry(&hash));
+    staged_oids.insert(out_path.as_str().to_string(), staged_oid.to_string());
+}
+
 /// After all assets are placed, stale cleanup runs to remove output files that
 /// no longer have a corresponding source.
 ///
@@ -1013,33 +1122,14 @@ pub(crate) fn copy_deferred_assets(
         // (whether to dirs or files) report `is_file() == false` under the
         // walker's default `follow_links(false)`.
         if entry.file_type().is_symlink() {
-            use crate::build::media::symlink::{handle_symlink_entry, SymlinkOutcome};
+            use crate::build::media::symlink::handle_symlink_entry;
             let outcome = handle_symlink_entry(
                 entry.path(),
                 source_root,
                 &canonical_source_root,
                 output_dir,
             );
-            if let SymlinkOutcome::Preserved { ref rel_path, ref target } = outcome {
-                live_symlinks.insert(rel_path.clone());
-                // Register in the manifest so deploy uploads the symlink.
-                // Wire format: see docs/reference/deploy-upload-contract.md.
-                let target_str = target.to_string_lossy();
-                match crate::build::served_path::ServedPath::from_source(rel_path) {
-                    Ok(out_path) => {
-                        site_hashes.insert_file_hash(
-                            &out_path,
-                            crate::types::content::symlink_entry(&target_str),
-                        );
-                    }
-                    Err(e) => {
-                        log::warn!("[background-assets] Skipping symlink with invalid path '{}': {}", rel_path, e);
-                    }
-                }
-            }
-            // Other outcomes (escape/broken/processable/absolute/unsupported)
-            // are already logged inside handle_symlink_entry; count the skip.
-            if matches!(outcome, SymlinkOutcome::Preserved { .. }) {
+            if preserve_link(&outcome, &mut site_hashes, &mut live_symlinks, "symlink") {
                 preserved_symlinks += 1;
             } else {
                 skipped_symlinks += 1;
@@ -1054,31 +1144,16 @@ pub(crate) fn copy_deferred_assets(
         // handles it via its own symlink branch — no alias branch needed there.
         #[cfg(target_os = "macos")]
         if entry.file_type().is_file() {
-            use crate::build::media::symlink::{handle_alias_entry, SymlinkOutcome};
+            use crate::build::media::symlink::handle_alias_entry;
             if let Some(outcome) = handle_alias_entry(
                 entry.path(),
                 source_root,
                 &canonical_source_root,
                 output_dir,
             ) {
-                if let SymlinkOutcome::Preserved { ref rel_path, ref target } = outcome {
-                    live_symlinks.insert(rel_path.clone());
-                    let target_str = target.to_string_lossy();
-                    match crate::build::served_path::ServedPath::from_source(rel_path) {
-                        Ok(out_path) => {
-                            site_hashes.insert_file_hash(
-                                &out_path,
-                                crate::types::content::symlink_entry(&target_str),
-                            );
-                        }
-                        Err(e) => {
-                            log::warn!("[background-assets] Skipping alias with invalid path '{}': {}", rel_path, e);
-                        }
-                    }
-                }
                 // Count any non-Preserved alias outcome (escape/broken/
                 // processable/absolute/unresolvable) as a skipped symlink.
-                if matches!(outcome, SymlinkOutcome::Preserved { .. }) {
+                if preserve_link(&outcome, &mut site_hashes, &mut live_symlinks, "alias") {
                     preserved_aliases += 1;
                 } else {
                     skipped_symlinks += 1;
@@ -1357,16 +1432,10 @@ pub(crate) fn copy_deferred_assets(
                 };
 
                 let target = output_dir.join(&mapped_path);
-                if let Err(e) = object_store.link_to(&link_oid, &target) {
-                    log::warn!("[background-assets] Failed to link {}: {}", mapped_path, e);
+                let placement =
+                    BlobPlacement { link_oid: &link_oid, target: &target, log_label: &mapped_path, report_path: &mapped_path, ext: &ext };
+                if !place_blob(&object_store, placement, reporter) {
                     continue;
-                }
-                // Emit AssetReady for images so the preview can swap placeholders
-                if is_image_extension(&ext) {
-                    reporter.report(&PipelineEvent::AssetReady {
-                        path: mapped_path.clone(),
-                        asset_type: "image".to_string(),
-                    });
                 }
 
                 // Issue #697: register audio/PDF/static assets as Ready so the
@@ -1460,72 +1529,8 @@ pub(crate) fn copy_deferred_assets(
                         inode: src_inode,
                     },
                 );
-                // Use post-injection hash when SPA injection rewrote the file,
-                // so deploy diffing reflects the on-disk content.
-                // For the non-SPA path, compute the xxh3 manifest hash from the
-                // OUTPUT file (`target`, just written by link_to above), NOT the
-                // SOURCE file (`file_path`).
-                //
-                // Why output, not source?
-                //   • `target` is a freshly-COW-copied local file — no iCloud
-                //     eviction risk (eviction only affects user-visible source
-                //     files, not .moss/build output).
-                //   • On a cache hit the source is NOT read this build; opening
-                //     it here is a new I/O hazard that can fail independently
-                //     (iCloud dataless race, permission change, delete race).
-                //   • Critically: a failure here with `continue` skips
-                //     `insert_file_hash`, leaving the just-linked `target` with
-                //     NO manifest entry.  `remove_stale_files` (called post-seal)
-                //     then deletes any on-disk staged file whose key is absent
-                //     from `site_hashes.files` — silently dropping the asset from
-                //     the deploy.  This is the confirmed broken-cover / dropped-
-                //     asset incident class.  The old `unwrap_or(oid)` path was
-                //     safe because it could never fail; reading the source can.
-                //   • Hashing the OUTPUT (not the source oid) is REQUIRED now
-                //     that raster originals are re-encoded to a sized output
-                //     (`image::sized_raster_oid_for_original`): output bytes no
-                //     longer equal source bytes, so the manifest must carry the
-                //     xxh3 of the actual deployed file or `verify_file_bytes` in
-                //     deploy.rs would mismatch. For verbatim assets (non-raster,
-                //     or a keep-smaller source) output == source, so it is also
-                //     correct there.
-                //
-                // Cache hits used to re-read and re-hash the just-linked output
-                // on every incremental build (the old oid path was a free
-                // metadata-stat fast-path). `recall_or_hash_output` fixes that
-                // with an oid-keyed memo (see its doc comment) instead of the
-                // (size, mtime) staleness heuristic a first draft of this fix
-                // considered — see `ManifestHashMemo`'s module doc for why a
-                // heuristic was rejected in favor of an exact key.
-                //
-                // On hashing failure, the fallback below is the CAS oid, not
-                // the memo — see `recall_or_hash_output`'s doc comment. The
-                // long-standing reasons for that fallback (rather than
-                // `continue` or a panic) are unchanged: the .moss/build path
-                // can live inside an iCloud vault (Obsidian), so the freshly-
-                // linked file CAN be evicted in a narrow window; dropping the
-                // asset lets `remove_stale_files` delete the just-deployed
-                // file (the broken-cover hazard), and this runs in a
-                // spawn_blocking worker where a panic aborts the entire asset
-                // copy and may be swallowed. If this (sha256, wrong-format)
-                // hash is ever actually used, the deploy's verify_file_bytes
-                // surfaces it loudly per-asset rather than silently dropping a
-                // published file.
-                //
-                // This hashes the staged, PRE-`apply_transform` bytes — for an
-                // HTML entry, `ship::verify_ship_integrity` later compares
-                // against the POST-transform bytes instead, a different
-                // byte-view of the same file. Benign today: an entry
-                // registered here normally carries a live `staged_oid` and
-                // ship-by-OID skips that check entirely, and the check is
-                // fail-open and log-only on the rare entry that does reach it.
-                let recorded_hash = match spa_post_hash {
-                    Some(h) => h,
-                    None => recall_or_hash_output(&manifest_hash_memo, &link_oid, &target, &oid, "output"),
-                };
                 match crate::build::served_path::ServedPath::from_source(&mapped_path) {
                     Ok(out_path) => {
-                        site_hashes.insert_file_hash(&out_path, crate::types::content::file_entry(&recorded_hash));
                         // The CAS object actually backing `target`'s bytes: the
                         // post-injection object when SPA injection changed
                         // them, otherwise the object `link_to` placed there
@@ -1533,7 +1538,13 @@ pub(crate) fn copy_deferred_assets(
                         // pure and path-only, so a later CAS read reproduces
                         // exactly what reading `target` now would.
                         let staged_oid = spa_post_oid.clone().unwrap_or_else(|| link_oid.clone());
-                        staged_oids.insert(out_path.as_str().to_string(), staged_oid);
+                        let hash = spa_post_hash.map(OutputHash::Known).unwrap_or(OutputHash::Compute {
+                            memo_key: &link_oid,
+                            target: &target,
+                            fallback_oid: &oid,
+                            log_context: "output",
+                        });
+                        record_blob(&manifest_hash_memo, &mut site_hashes, &mut staged_oids, hash, &out_path, &staged_oid);
                         copied += 1;
                     }
                     Err(e) => {
@@ -1624,48 +1635,20 @@ pub(crate) fn copy_deferred_assets(
             match object_store.store_file(file_path) {
                 Ok(oid) => {
                     let target = out_path.to_disk(output_dir);
-                    if let Err(e) = object_store.link_to(&oid, &target) {
-                        log::warn!("[background-assets] Failed to link .moss/theme/{}: {}", relative_path, e);
-                        continue;
-                    }
                     let moss_ext = file_path
                         .extension()
                         .and_then(|e| e.to_str())
                         .unwrap_or("")
                         .to_lowercase();
-                    if is_image_extension(&moss_ext) {
-                        reporter.report(&PipelineEvent::AssetReady {
-                            path: out_path.as_str().to_string(),
-                            asset_type: "image".to_string(),
-                        });
+                    let log_label = format!(".moss/theme/{}", relative_path);
+                    let placement =
+                        BlobPlacement { link_oid: &oid, target: &target, log_label: &log_label, report_path: out_path.as_str(), ext: &moss_ext };
+                    if !place_blob(&object_store, placement, reporter) {
+                        continue;
                     }
-                    // Compute xxh3 manifest hash (not the CAS oid which is SHA-256)
-                    // so deploy.rs::verify_file_bytes can round-trip successfully.
-                    //
-                    // Hash the OUTPUT file (`target`, just written by link_to
-                    // above), NOT the SOURCE `file_path`.  Rationale mirrors the
-                    // source-asset walk above: hashing the source opens a new I/O
-                    // hazard (iCloud eviction, permission race) that did not exist
-                    // before the manifest-hash fix.  On failure the old `continue`
-                    // path skipped `insert_file_hash`, leaving `target` without a
-                    // manifest entry and causing stale-cleanup to delete the
-                    // just-linked file — the same confirmed drop-hazard.  `target`
-                    // is a freshly-COW-copied local .moss/build file; its bytes
-                    // equal the source bytes, so the xxh3 is identical.
-                    //
-                    // Same fix as the source-asset walk above: consult the
-                    // oid-keyed memo before re-reading `target`. `target` is
-                    // the blob named `oid`, freshly COW-copied by `link_to`,
-                    // so its bytes are a pure function of `oid` and the memo
-                    // needs no staleness rule. On failure the fallback is the
-                    // CAS oid (never memoized — see `recall_or_hash_output`),
-                    // and `insert_file_hash` still always runs: skipping it
-                    // drops the asset and `remove_stale_files` deletes the
-                    // just-linked file — the confirmed drop-hazard.
-                    let manifest_hash =
-                        recall_or_hash_output(&manifest_hash_memo, &oid, &target, &oid, ".moss/theme output");
-                    site_hashes.insert_file_hash(&out_path, crate::types::content::file_entry(&manifest_hash));
-                    staged_oids.insert(out_path.as_str().to_string(), oid.clone());
+                    let hash =
+                        OutputHash::Compute { memo_key: &oid, target: &target, fallback_oid: &oid, log_context: ".moss/theme output" };
+                    record_blob(&manifest_hash_memo, &mut site_hashes, &mut staged_oids, hash, &out_path, &oid);
                     copied += 1;
                 }
                 Err(e) => {
