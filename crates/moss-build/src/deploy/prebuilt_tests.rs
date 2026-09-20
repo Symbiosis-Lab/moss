@@ -67,12 +67,19 @@ fn prebuilt_generation_id_is_deterministic() {
 use crate::deploy::freeze::{with_publish_guard, PUBLISH_IN_PROGRESS_MSG};
 use crate::deploy::progress::silent;
 
-/// Serializes every test in THIS binary that touches the publish latch.
-///
-/// `moss_build::deploy::freeze` declares its own twin, and that is not
-/// duplication to fold: a `#[cfg(test)]` static compiles only into its own
-/// crate's test binary, so the two are never live in the same process.
-static PUBLISH_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// Serializes every test in THIS binary that touches the publish latch — the
+// very lock `deploy::freeze`'s own latch tests take. The latch is one
+// process-global, so a lock per test module is no lock: these tests and
+// freeze's run in the same test binary, and a freeze test parking a publish
+// made `push_prebuilt` here answer "a publish is already running".
+//
+// A test that also sets `MOSS_SETA_URL` takes `crate::ENV_TEST_MUTEX` too,
+// always second, so the two can never be held in opposite orders. This file's
+// own lock used to guard the env var as well, while `deploy::push`'s tests
+// guard it with `ENV_TEST_MUTEX`: two locks, one variable, so a prebuilt test
+// and a push test running together each pointed the other's client at its
+// own mock server.
+use crate::deploy::freeze::single_flight_tests::TEST_LOCK as PUBLISH_TEST_LOCK;
 
 fn tmp_dir() -> tempfile::TempDir {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/test-tmp");
@@ -131,6 +138,7 @@ async fn a_normal_publish_is_rejected_while_a_prebuilt_publish_is_in_flight() {
     use std::task::{Context, Poll, Waker};
 
     let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
     // Park the in-flight prebuilt publish on a connect to a dead local port:
     // it reaches its first await and stays there, and no traffic leaves the box.
@@ -226,59 +234,13 @@ async fn a_version_ahead_config_refuses_before_hashing_the_directory() {
 // places the rewrite between the manifest hash (already computed by then) and
 // the upload's own re-read (which only happens once that response arrives).
 
-/// Drain one raw HTTP/1.1 request off `stream`, without answering it —
-/// `crate::test_mock_http_conn` drains-then-responds as one unit, which
-/// cannot fit a caller that needs to do work (here: rewrite a file)
-/// in between receiving a request and answering it.
-async fn drain_request(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
-    use tokio::io::AsyncReadExt;
-    let mut raw = Vec::new();
-    let mut buf = [0u8; 8192];
-    loop {
-        let n = stream.read(&mut buf).await.unwrap_or(0);
-        if n == 0 {
-            break;
-        }
-        raw.extend_from_slice(&buf[..n]);
-        if let Some(hdr_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
-            let hdr_str = String::from_utf8_lossy(&raw[..hdr_end]);
-            let body_len = hdr_str
-                .lines()
-                .find_map(|l| {
-                    l.to_ascii_lowercase()
-                        .strip_prefix("content-length:")
-                        .and_then(|v| v.trim().parse::<usize>().ok())
-                })
-                .unwrap_or(0);
-            let expected_total = hdr_end + 4 + body_len;
-            while raw.len() < expected_total {
-                let n = stream.read(&mut buf).await.unwrap_or(0);
-                if n == 0 {
-                    break;
-                }
-                raw.extend_from_slice(&buf[..n]);
-            }
-            break;
-        }
-    }
-    raw
-}
-
-/// Write a response and close — the second half of what
-/// `crate::test_mock_http_conn` does in one call; split out so a caller can
-/// act between [`drain_request`] and this.
-async fn respond(stream: &mut tokio::net::TcpStream, resp: &[u8]) {
-    use tokio::io::AsyncWriteExt;
-    stream.write_all(resp).await.ok();
-    stream.shutdown().await.ok();
-}
-
 #[tokio::test]
 async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit() {
     use sha2::{Digest, Sha256};
     use tokio::net::TcpListener;
 
     let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let prev_url = std::env::var("MOSS_SETA_URL").ok();
 
     let old_bytes = b"<html>content the manifest hash was computed from</html>";
@@ -311,8 +273,8 @@ async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit()
         // short-circuit: no live generation known, proceed normally).
         {
             let (mut stream, _) = listener.accept().await.unwrap();
-            drain_request(&mut stream).await;
-            respond(
+            crate::test_drain_http_request(&mut stream).await;
+            crate::test_respond_and_close(
                 &mut stream,
                 b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
             )
@@ -324,11 +286,11 @@ async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit()
         // read) happens only after the rewrite has landed.
         {
             let (mut stream, _) = listener.accept().await.unwrap();
-            drain_request(&mut stream).await;
+            crate::test_drain_http_request(&mut stream).await;
             tokio::fs::write(&rewrite_target, &new_bytes_owned)
                 .await
                 .expect("rewrite mid-deploy");
-            respond(
+            crate::test_respond_and_close(
                 &mut stream,
                 b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"need\":[\"index.html\"],\"remove\":[]}",
             )
@@ -337,8 +299,8 @@ async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit()
         // conn 2: PUT /api/sites/:id/files/index.html — the upload itself.
         {
             let (mut stream, _) = listener.accept().await.unwrap();
-            drain_request(&mut stream).await;
-            respond(
+            crate::test_drain_http_request(&mut stream).await;
+            crate::test_respond_and_close(
                 &mut stream,
                 b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
             )
@@ -348,8 +310,8 @@ async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit()
         // can inspect which hash actually got committed.
         {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let raw = drain_request(&mut stream).await;
-            respond(
+            let raw = crate::test_drain_http_request(&mut stream).await;
+            crate::test_respond_and_close(
                 &mut stream,
                 b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 104\r\n\r\n{\"url\":\"https://healed-prebuilt.mosspub.com\",\"files_updated\":1,\"files_removed\":0,\"timestamp\":1700000000}",
             )
