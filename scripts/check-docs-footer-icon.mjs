@@ -6,13 +6,12 @@
 // plus the ::after inset pad) must clear the accessible 24x24 CSS px minimum.
 // Screenshots of the footer region are saved for desktop and mobile, en and
 // zh-hans, into SCREENSHOT_DIR (or CWD if unset) for visual review.
-import { pathToFileURL } from 'node:url';
 import { mkdir } from 'node:fs/promises';
+import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
 
-if (!process.argv[2]) throw new Error('Usage: node scripts/check-docs-footer-icon.mjs <site-url>');
-const base = new URL(process.argv[2]);
-const moduleName = process.env.PLAYWRIGHT_MODULE || 'playwright';
-const engines = await import(moduleName.startsWith('/') ? pathToFileURL(moduleName).href : moduleName);
+const { baseURL, close } = await resolveBaseURL(process.argv[2]);
+const base = new URL(baseURL);
+const engines = await loadPlaywright();
 const engineNames = (process.env.ENGINE || 'chromium,webkit').split(',');
 const screenshotDir = process.env.SCREENSHOT_DIR || '.';
 await mkdir(screenshotDir, { recursive: true });
@@ -26,6 +25,7 @@ const widths = [1280, 390];
 const failures = [];
 const results = [];
 
+try {
 for (const engineName of engineNames) {
   const browser = await engines[engineName].launch();
   try {
@@ -85,6 +85,7 @@ for (const engineName of engineNames) {
     await browser.close();
   }
 }
+} finally { await close(); }
 
 console.log(JSON.stringify({ base: base.href, results, failures }, null, 2));
 process.exitCode = failures.length ? 1 : 0;

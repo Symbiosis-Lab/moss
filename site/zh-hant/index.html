@@ -543,6 +543,12 @@
 </section>
 
 <script>
+// The whole harness surface in one place: a read side, filled in as each
+// piece of state comes into existence below, and a write side the harness
+// itself sets (stepClock/stepLimit/scrollV, read where pour() drives the
+// wash; faults, honoured at each fault's own call site so an outside write
+// reaches every caller, internal or not).
+const landing = window.__landing = { title: {}, faults: { captureHang: false } };
 // The composition (the box width is --ed-w, in the stylesheet).
 const GEOM = { cellW: 660, cellH: 620, pad: 80 };
 // The real homepages' opening text, edited as the vault's index.md.
@@ -560,7 +566,6 @@ const TYPED = window.__LANG === 'zh'
 I will not Reason & Compare: my business is to Create.`;
 const FINAL = SEED + TYPED;
 const FULL_SOURCE = window.__LANG === 'zh' ? FINAL : BLAKE_FRONTMATTER + FINAL;
-window.__editorSource = () => FULL_SOURCE;
 const BASE_TEX_W = GEOM.cellW + 2 * GEOM.pad, BASE_TEX_H = GEOM.cellH + 2 * GEOM.pad;
 const MAX_PRINT_EDGE = 2048;
 let printRect = { x: -GEOM.pad, y: -GEOM.pad, w: BASE_TEX_W, h: BASE_TEX_H };
@@ -783,7 +788,7 @@ function driveTitleDissolve(titleP) {
 }
 // Overwritten once the title's own sim is ready; correct on its own for
 // mobile, reduced motion, and the brief window before that setup finishes.
-window.__titleInk = () => Number(getComputedStyle(openingTitle).opacity);
+landing.title.ink = () => Number(getComputedStyle(openingTitle).opacity);
 function updateOpening() {
   // On phones the opening and first scene are ordinary document flow. Their
   // geometry is established once in fit(); scrolling only moves that flow.
@@ -1954,13 +1959,6 @@ function stopOrbit() {
 // The targets are scene 4's and no other scene's; leaving either way sends
 // them back into the control, and the simulation stops with them.
 const setFan = (on) => { stage.classList.toggle('fanned', on); if (on) startOrbit(); else stopOrbit(); };
-// For the harness, and for nothing the page itself reads: raw node state
-// rather than anything computed from the DOM, so a check can tell a target
-// apart from its own rendering.
-window.__orbit = () => ({ running: !!orbitSim, r: restR(), d: ORBIT_D, cx: orbitCx, cy: orbitCy,
-  buttonR: buttonR(), nodes: orbitNodes ? orbitNodes.map((n, i) => ({ id: TARGETS[i].id, x: n.x, y: n.y, vx: n.vx, vy: n.vy,
-    popAt: n.popAt, spawnAngle: n.spawnAngle, spawnR: n.spawnR, spawnVx: n.spawnVx, spawnVy: n.spawnVy,
-    exiting: n.exiting, held: dragging === n, returning: n.fx != null && dragging !== n && !n.exiting })) : null });
 // ── Scene 5: the loop, and whether it is running ──────────────────────────
 // The footage is asked for once, at the first crossing toward it, and never
 // under reduced motion — a <video> with no source fetches nothing, so the
@@ -2324,8 +2322,8 @@ async function pour(to) {
   await new Promise((finish) => {
     const f = (now) => {
       if (target === SHARE && xfAt() >= 1) { terminal = true; finish(); return; }
-      const stepClock = window.__stepClock;
-      if (stepClock && window.__stepLimit != null && steps >= window.__stepLimit) { requestAnimationFrame(f); return; }
+      const stepClock = landing.stepClock;
+      if (stepClock && landing.stepLimit != null && steps >= landing.stepLimit) { requestAnimationFrame(f); return; }
       const dtReal = Math.min(0.1, (now - last) / 1000); last = now;
       const moved = Math.abs(scrollY - lastY) / innerHeight; lastY = scrollY;
       // The newest target, however far off it is: this wash is re-pointed at
@@ -2344,7 +2342,7 @@ async function pour(to) {
         gapVh = gapOf(from, to); sim.setPrints(...inOrder());
         if (!mobileHandoff) { scenes('morph'); passThrough(from, to); sceneClasses(to); }
       }
-      const v = stepClock ? (window.__scrollV || 0) : scrollV;   // the harness can hold a scroll speed
+      const v = stepClock ? (landing.scrollV || 0) : scrollV;   // the harness can hold a scroll speed
       // a jump has left the text it started from far behind: it is arrived by
       // definition, and nothing it crosses is being read
       const jump = isJump(to, from);
@@ -2821,17 +2819,17 @@ async function raster(nodes, w, h, srcDoc = document) {
     mask = m; maskTotal = Math.max(1, total); solidFrac = solid / (gridW * gridH);
   };
   captureMask(print);
-  window.__titleInk = () => {
+  landing.title.ink = () => {
     if (broken || getComputedStyle(titleCanvas).display === 'none') return Number(getComputedStyle(openingTitle).opacity);
     return titleSim.remaining(mask, maskTotal);
   };
   // Raw readbacks only — no verdict here, so a check can grade what the
   // reader actually sees instead of grading the page's own opinion of it.
-  // __titleRaw resamples the rendered canvas down to the sim's own grid
-  // (gridW x gridH), the same resolution __titleMask is already at, so a
+  // title.raw resamples the rendered canvas down to the sim's own grid
+  // (gridW x gridH), the same resolution title.mask is already at, so a
   // caller can compare the two index-for-index without knowing anything
   // about devicePixelRatio or the print's own pixel size.
-  window.__titleRaw = () => {
+  landing.title.raw = () => {
     if (broken || getComputedStyle(titleCanvas).display === 'none') return { w: gridW, h: gridH, alpha: new Array(gridW * gridH).fill(0) };
     const c = document.createElement('canvas'); c.width = gridW; c.height = gridH;
     const g = c.getContext('2d'); g.drawImage(titleCanvas, 0, 0, titleCanvas.width, titleCanvas.height, 0, 0, gridW, gridH);
@@ -2840,12 +2838,12 @@ async function raster(nodes, w, h, srcDoc = document) {
     for (let i = 3, p = 0; i < d.length; i += 4, p++) alpha[p] = d[i];
     return { w: gridW, h: gridH, alpha };
   };
-  window.__titleMask = () => ({ w: gridW, h: gridH, mask: Array.from(mask) });
+  landing.title.mask = () => ({ w: gridW, h: gridH, mask: Array.from(mask) });
   // Each rendered line's own box, as a fraction of the print's own box
-  // (resolution-independent, so a caller scales onto __titleRaw/__titleMask
+  // (resolution-independent, so a caller scales onto title.raw/title.mask
   // or onto a screenshot equally) — for the per-line, per-column coverage
   // grid a legibility check needs.
-  window.__titleLines = () => {
+  landing.title.lines = () => {
     const range = document.createRange();
     range.selectNodeContents(openingTitle);
     return [...range.getClientRects()].map((r) => ({ x: (r.left - box.x) / box.w, y: (r.top - box.y) / box.h, w: r.width / box.w, h: r.height / box.h }));
@@ -3094,6 +3092,10 @@ let captures = 0, inFlight = 0, peakInFlight = 0;
 // here as a byte count instead of as an intermittent drag failure.
 let maxPrintImgBytes = 0;
 async function capture(scene) {
+  // Checked here, not by letting an outside caller replace this function's
+  // export, so it reaches every caller of capture() including the ones
+  // inside this script that only ever hold the local binding.
+  if (landing.faults.captureHang) return new Promise(() => {});
   captures++; inFlight++; peakInFlight = Math.max(peakInFlight, inFlight);
   const generation = printGeneration;
   try {
@@ -3175,7 +3177,7 @@ async function takePrint(scene) {
   captureMs = Math.round(performance.now() - t0);
   return c;
 }
-window.__capture = capture;
+landing.capture = capture;
 // The prints on hand, so a trigger never waits for a capture. The scene off
 // screen is at rest (the poem finished, or the shell held), so its print is
 // taken once, when the other scene is reached: the canvas shows the print of
@@ -3324,7 +3326,7 @@ async function takeOthers(list = neighbours(shown)) {
 // could finish out of order and put a stale print back on hand. A tick that
 // finds one running is skipped, not queued.
 let retaking = false;
-// A scene reached without a wash (the harness's `__still`, a capture that failed
+// A scene reached without a wash (the harness's `landing.still`, a capture that failed
 // once) leaves a print missing, and `primed()` then blocks every wash and every
 // retake — including the retake that would have filled it. The tick that retakes
 // fills whatever gap it finds first, the scene on screen before its neighbours.
@@ -3495,7 +3497,7 @@ let scrollV = 0, asked = null;
 // reaches onScroll's `t >= SHIPS - 1` check below before the script has gone
 // anywhere near warmScene3Media's own definition — a `let` declared down
 // there would throw "before initialization" on that very first tick, an
-// uncaught exception that stops the rest of this script cold (`window.__state`
+// uncaught exception that stops the rest of this script cold (`landing.state`
 // and everything after it would never be defined). A `let` this early has no
 // such window.
 let s3MediaWarmed = false;
@@ -3522,7 +3524,7 @@ function onScroll(dy) {
   // headed for scene 3 or beyond.
   if (t >= SHIPS - 1) warmScene3Media();
   // The position asks for a scene when the scene it names changes, so a scene
-  // set by another hand — the harness's `__still`, a restored position — is
+  // set by another hand — the harness's `landing.still`, a restored position — is
   // left standing until the reader moves. And nothing may fire before the first
   // prints are on hand: `ready` starts the first join.
   if (t === asked) return;
@@ -3646,7 +3648,7 @@ let wheelOrigin = 0, wheelDistance = 0, wheelCoasting = false;
 // shown only becomes the new scene once the wash itself finishes, well after
 // the settle that used its old value has also finished, so anything read
 // post-settle is the wrong instant. For the harness only — see
-// window.__state below.
+// landing.state below.
 let settleSecs = null, settleCureLeft = null, settleShown = null, settleRunning = null;
 // One substep of a critically damped spring (c = 2*sqrt(k) is always
 // critical): given the current displacement from target and velocity, the
@@ -4296,8 +4298,6 @@ function leaveScene3() {
   }
   showAssembledPreview(); videoActive(false); sketchVisible(false);
 }
-window.__s3 = () => ({ dragging: !!s3Drag, draggingId: s3Drag?.id, paper: { ...s3Paper }, slot: { ...s3Slot }, stack: [...s3Stack], cards: Object.fromEntries(S3_ORDER.map(id => { const c = CARDS[id]; return [id, { ...c.pose, width: c.width, height: c.height, docked: c.docked, z: +c.el.style.zIndex, animating: !!c.raf }]; })) });
-
 function scenes(next) {
   if (!ed || !sh || !vd) return;
   if (next === phase) return;
@@ -4313,29 +4313,22 @@ function scenes(next) {
 }
 
 // For the harness.
-window.__still = (scene) => {
+landing.still = (scene) => {
   shown = target = scene; still(scene);   // the tick fills whatever print this leaves missing
   // A real arrival always runs onScroll (which triggers warmScene3Media)
   // before still() ever does — this bypasses that, so it stands in.
   if (scene >= SHIPS - 1 && scene <= SHIPS + 1) warmScene3Media();
 };
-window.__wash = (to) => { if (running()) return Promise.resolve(false); target = to; return runJoin().then(() => true); };
-window.__probe = (x, y) => sim.probe(x, y);
-window.__target = (t) => { target = t; };   // the harness can turn a wash around
-window.__onHand = sheets;
-window.__restY = restY;   // the settle's own geometry, so a rest check reads it rather than keeping a second copy
-window.__targetAt = targetAt;   // what a rested position names, read the same way the wash reads it
-window.__sceneForRest = sceneForRest;   // which scene a rest carries to, the same formula settleAtRest uses
-window.__DEAD = DEAD;   // the dead zone in that formula, read-only, so the harness can recompute sceneForRest's answer from primitives instead of asking the page's own function for it
-window.__plateBounds = plateBounds;   // the region a scattered/dragged plate must stay inside, the same formula the drag clamp and the initial scatter both read
-window.__state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: !!settleRun, settleSecs, settleCureLeft, settleShown, settleRunning, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, carry: CARRY, titleSteps, titleReady, titleMode });
-// window.__s3 is defined with the rest of scene 3's own script, above.
-// How the print pipeline is doing: captures started, how many are drawing now,
-// the most that ever drew at once, and how old the print on hand is.
-// How many joins have been run. A join that settles back where it started has
-// nothing to show for itself except this number climbing.
-window.__joins = () => joinsRun;
-window.__prints = () => ({ captures, inFlight, peakInFlight, shownSeq, shownAge: shownAt ? Math.round(performance.now() - shownAt) : null, captureMs, maxPrintImgBytes });
+landing.wash = (to) => { if (running()) return Promise.resolve(false); target = to; return runJoin().then(() => true); };
+landing.probe = (x, y) => sim.probe(x, y);
+// The live array itself, not a copy: a fault is injected by assigning into
+// an element (e.g. prints[3] = null), so a snapshot here would turn that
+// into a no-op that still passes.
+landing.prints = sheets;
+landing.restY = restY;   // the settle's own geometry, so a rest check reads it rather than keeping a second copy
+landing.targetAt = targetAt;   // what a rested position names, read the same way the wash reads it
+landing.sceneForRest = sceneForRest;   // which scene a rest carries to, the same formula settleAtRest uses
+landing.state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: !!settleRun, settleSecs, settleCureLeft, settleShown, settleRunning, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, carry: CARRY, titleSteps, titleReady, titleMode });
 
 const when = (frame, key) => new Promise((resolve, reject) => {
   const deadline = setTimeout(() => { clearInterval(poll); reject(new Error(`Demo ${frame.id} did not initialize`)); }, 10000);

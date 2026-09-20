@@ -4,12 +4,17 @@
 // it rendered at, and whether the page's console/network surfaced anything.
 // Run against plain compiled output as well as the deployed site, and in both
 // chromium and webkit — a static-server 200 does not prove the browser painted it.
-import { pathToFileURL } from 'node:url';
+import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
 
-if (!process.argv[2]) throw new Error('Usage: node scripts/check-docs-media.mjs <site-url> [more-urls...]');
-const bases = process.argv.slice(2).map(arg => new URL(arg));
-const moduleName = process.env.PLAYWRIGHT_MODULE || 'playwright';
-const engines = await import(moduleName.startsWith('/') ? pathToFileURL(moduleName).href : moduleName);
+// Same as every other check: no URL serves the local build instead of
+// requiring one. One or more URLs still run against exactly what was
+// passed, unchanged — this script's own reason to take several at once
+// (plain compiled output as well as the deployed site) is a second base to
+// add, not a replacement for the harness's default.
+const noArgs = process.argv.length <= 2;
+const { baseURL, close } = noArgs ? await resolveBaseURL() : { baseURL: null, close: async () => {} };
+const bases = (noArgs ? [baseURL] : process.argv.slice(2)).map(arg => new URL(arg));
+const engines = await loadPlaywright();
 const engineNames = (process.env.ENGINE || 'chromium,webkit').split(',');
 
 // Each locale's Get Started section root. Pages inside are discovered by
@@ -212,3 +217,4 @@ for (const base of bases) {
 
 console.log(JSON.stringify({ ...report, failures }, null, 2));
 process.exitCode = failures.length ? 1 : 0;
+await close();

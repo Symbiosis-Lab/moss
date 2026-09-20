@@ -159,7 +159,7 @@
         window.mossLanding?.openSignup();
         const started = performance.now();
         const focusEmail = () => {
-          const state = window.__state?.();
+          const state = window.__landing.state?.();
           if (email && !email.closest('[inert]') && state?.shown === 4 && !state.running) email.focus({ preventScroll: true });
           else if (performance.now() - started < 10000) setTimeout(focusEmail, 50);
         };

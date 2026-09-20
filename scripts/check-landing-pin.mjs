@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { pathToFileURL } from 'node:url';
 import { readFile } from 'node:fs/promises';
-const moduleName = process.env.PLAYWRIGHT_MODULE || 'playwright';
-const engines = await import(moduleName.startsWith('/') ? pathToFileURL(moduleName).href : moduleName);
-if (!process.argv[2]) throw new Error('Usage: node scripts/check-landing-pin.mjs <site-url>');
+import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
+const { baseURL, close } = await resolveBaseURL(process.argv[2]);
+const engines = await loadPlaywright();
+try {
 for (const name of ['chromium', 'webkit']) {
   const browser = await engines[name].launch();
   try {
@@ -11,16 +11,16 @@ for (const name of ['chromium', 'webkit']) {
       const page = await browser.newPage({ viewport });
       if (process.env.LANDING_HTML_OVERRIDE) {
         const body = await readFile(process.env.LANDING_HTML_OVERRIDE, 'utf8');
-        await page.route(new URL(process.argv[2]).href, route => route.fulfill({ contentType: 'text/html', body }));
+        await page.route(baseURL, route => route.fulfill({ contentType: 'text/html', body }));
       }
-      await page.goto(process.argv[2]);
-      await page.waitForFunction(() => window.__state?.().ready, null, { timeout: 30000 });
-      await page.evaluate(() => scrollTo(0, __restY(0) + 2));
+      await page.goto(baseURL);
+      await page.waitForFunction(() => window.__landing.state?.().ready, null, { timeout: 30000 });
+      await page.evaluate(() => scrollTo(0, window.__landing.restY(0) + 2));
       await page.waitForTimeout(500);
       const samples = await page.evaluate(async () => {
         const out = [];
         for (const offset of [2, 60, 120, 240, 420, 240, 60, 2]) {
-          scrollTo(0, __restY(0) + offset);
+          scrollTo(0, window.__landing.restY(0) + offset);
           // Inspect before JS gets a frame to compensate, as well as afterward.
           for (let frame = 0; frame < 2; frame++) {
             const stage = document.querySelector('#stage').getBoundingClientRect();
@@ -40,3 +40,4 @@ for (const name of ['chromium', 'webkit']) {
     }
   } finally { await browser.close(); }
 }
+} finally { await close(); }

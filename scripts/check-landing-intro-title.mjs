@@ -8,37 +8,35 @@
 // fallback keep the title as plain scrolling text (F below).
 //
 // All pixel maths for G run here, in Node, off raw readbacks
-// (window.__titleRaw/__titleMask/__titleLines) — the page hands back
+// (window.__landing.title.raw/mask/lines) — the page hands back
 // arrays and moments, never a verdict, so the check is grading what a
 // screenshot would show rather than the page's own opinion of itself.
-import { pathToFileURL } from 'node:url';
-const modulePath = process.env.PLAYWRIGHT_MODULE || 'playwright';
-const { chromium, webkit } = await import(modulePath.startsWith('/') ? pathToFileURL(modulePath).href : modulePath);
-const url = process.argv[2];
-if (!url) throw Error('Usage: check-landing-intro-title.mjs <url>');
+import { loadPlaywright, resolveBaseURL, trackErrors } from './landing-harness.mjs';
+const { baseURL: url, close } = await resolveBaseURL(process.argv[2]);
+const { chromium, webkit } = await loadPlaywright();
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 const locales = ['', 'zh-hans/', 'zh-hant/'];
 const desktopViewports = [{ width: 1440, height: 900 }, { width: 1100, height: 700 }];
 
-// "Ink" is window.__titleInk(): the sim's own dissolved-fraction state (l),
+// "Ink" is window.__landing.title.ink(): the sim's own dissolved-fraction state (l),
 // weighted against where the print's own ink was. l only ever grows within
 // a forward wash, so this stays monotone through a bloom that can raise
 // total on-screen coverage while it lifts, and across two engines whose
 // per-step rate is not bit-identical. At either rest the canvas is hidden
-// by design, so window.__titleInk() falls back to the h1's own opacity.
+// by design, so window.__landing.title.ink() falls back to the h1's own opacity.
 /* eslint-disable no-undef */
 function measureTitle() {
   const canvas = document.getElementById('gl-title');
   const h1 = document.querySelector('#intro h1');
   return {
-    ink: window.__titleInk(),
+    ink: window.__landing.title.ink(),
     h1Opacity: Number(getComputedStyle(h1).opacity),
     canvasVisible: !!canvas && getComputedStyle(canvas).display !== 'none',
-    titleSteps: window.__state().titleSteps,
-    titleMode: window.__state().titleMode,
+    titleSteps: window.__landing.state().titleSteps,
+    titleMode: window.__landing.state().titleMode,
   };
 }
-function readRaw() { return { raw: window.__titleRaw(), mask: window.__titleMask(), lines: window.__titleLines() }; }
+function readRaw() { return { raw: window.__landing.title.raw(), mask: window.__landing.title.mask(), lines: window.__landing.title.lines() }; }
 /* eslint-enable no-undef */
 
 // Node-side pixel maths — see the module comment above for why this does not
@@ -95,7 +93,7 @@ function boundaryGradient(raw, mask) {
   return n ? sum / n : 0;
 }
 
-// The step-clock harness (__stepClock/__stepLimit) belongs to the shared
+// The step-clock harness (window.__landing.stepClock/stepLimit) belongs to the shared
 // pour() wash; the title's own driver runs off requestAnimationFrame, so
 // settling means polling the step counter until it stops moving rather than
 // asking the harness to hold a frame budget.
@@ -107,18 +105,19 @@ async function waitTitleSettled(page) {
   for (let confirmations = 0; confirmations < 2; ) {
     await page.evaluate(() => { window.__titleSettleAt = -1; window.__titleSettleTicks = 0; });
     await page.waitForFunction(() => {
-      const cur = window.__state().titleSteps;
+      const cur = window.__landing.state().titleSteps;
       if (cur === window.__titleSettleAt) window.__titleSettleTicks++;
       else { window.__titleSettleAt = cur; window.__titleSettleTicks = 0; }
       return window.__titleSettleTicks >= 8;
     }, null, { timeout: 8000, polling: 'raf' });
-    const before = await page.evaluate(() => window.__state().titleSteps);
+    const before = await page.evaluate(() => window.__landing.state().titleSteps);
     await page.waitForTimeout(100);
-    const after = await page.evaluate(() => window.__state().titleSteps);
+    const after = await page.evaluate(() => window.__landing.state().titleSteps);
     confirmations = before === after ? confirmations + 1 : 0;
   }
 }
 
+try {
 for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]]) {
   const browser = await engine.launch();
   try {
@@ -126,19 +125,18 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
       for (const viewport of desktopViewports) {
         const label = `${engineName} ${locale || 'en'} ${viewport.width}x${viewport.height}`;
         const page = await browser.newPage({ viewport });
-        const errors = [];
         // Uncaught exceptions only, matching check-landing-transitions.mjs:
         // the embedded editor/shell demo iframes log benign console errors
         // (background polling 404s) unrelated to the title, on every run.
-        page.on('pageerror', (e) => errors.push(e.message));
+        const errors = trackErrors(page);
         await page.goto(new URL(locale, url).href);
-        await page.waitForFunction(() => window.__state?.().ready, null, { timeout: 30000 });
+        await page.waitForFunction(() => window.__landing.state?.().ready, null, { timeout: 30000 });
         // setupTitleDissolve deliberately waits for the page to come to rest
         // before touching WebGL (a compile stall borrows time from the
         // desktop scroll spring otherwise); wait for its own decision rather
         // than assuming it beats a fixed timeout.
-        await page.waitForFunction(() => window.__state().titleReady, null, { timeout: 10000 });
-        assert((await page.evaluate(() => window.__state().titleMode)) === 'wash', `${label}: desktop did not arm the real wash (titleMode)`);
+        await page.waitForFunction(() => window.__landing.state().titleReady, null, { timeout: 10000 });
+        assert((await page.evaluate(() => window.__landing.state().titleMode)) === 'wash', `${label}: desktop did not arm the real wash (titleMode)`);
 
         // A: cold load, no input.
         await page.waitForTimeout(1500);
@@ -147,7 +145,7 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         assert(cold.titleSteps === 0, `${label}: A cold load already took steps: ${JSON.stringify(cold)}`);
 
         // B: scrub to 25/50/75/100% of the way to scene 1's rest.
-        const restY0 = await page.evaluate(() => window.__restY(0));
+        const restY0 = await page.evaluate(() => window.__landing.restY(0));
         const readings = [];
         const pixels = [];
         for (const frac of [0.25, 0.5, 0.75, 1]) {
@@ -209,7 +207,7 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         // Progressively lost: strictly falling from 50% on, where the
         // owner's own language ("then progressively lost") starts, not
         // from 25% (the honest peak sits past it). Completely gone: exactly
-        // zero at 100%, the same rest __titleRaw already returns as an
+        // zero at 100%, the same rest window.__landing.title.raw() already returns as an
         // all-zero array while the canvas is hidden, so this is the
         // literal value, not a tolerance.
         assert(corr[1] > corr[2] && corr[2] > corr[3], `${label}: G legibility did not strictly fall across 50/75/100%: ${JSON.stringify(corr.map((v) => +v.toFixed(4)))}`);
@@ -253,9 +251,9 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         // E: resting on scene 1, no further steps.
         await page.evaluate((y) => scrollTo(0, y), restY0);
         await waitTitleSettled(page);
-        const beforeIdle = await page.evaluate(() => window.__state().titleSteps);
+        const beforeIdle = await page.evaluate(() => window.__landing.state().titleSteps);
         await page.waitForTimeout(1500);
-        const afterIdle = await page.evaluate(() => window.__state().titleSteps);
+        const afterIdle = await page.evaluate(() => window.__landing.state().titleSteps);
         assert(beforeIdle === afterIdle, `${label}: E steps increased at rest: ${beforeIdle} -> ${afterIdle}`);
 
         console.log(`${label}: cold solid, scrub dissolves both ways with a glyph-following bleed, rest is completely gone, idle takes no steps`);
@@ -271,11 +269,11 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
     await page.goto(url);
-    await page.waitForFunction(() => window.__state?.().ready, null, { timeout: 30000 });
+    await page.waitForFunction(() => window.__landing.state?.().ready, null, { timeout: 30000 });
     const state = await page.evaluate(() => ({
       canvas: !!document.getElementById('gl-title'),
       h1Opacity: Number(getComputedStyle(document.querySelector('#intro h1')).opacity),
-      titleMode: window.__state().titleMode,
+      titleMode: window.__landing.state().titleMode,
     }));
     assert(!state.canvas, `${engineName}: F a title canvas was created on mobile + reduced motion`);
     assert(state.h1Opacity === 1, `${engineName}: F the title is not plain visible text: ${JSON.stringify(state)}`);
@@ -284,3 +282,4 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
     await page.close();
   } finally { await browser.close(); }
 }
+} finally { await close(); }

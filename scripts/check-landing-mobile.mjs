@@ -1,22 +1,11 @@
 #!/usr/bin/env node
 
 import { readFile } from 'node:fs/promises';
-import { pathToFileURL } from 'node:url';
+import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
 
-const input = process.argv[2];
-if (!input) {
-  console.error('Usage: node scripts/check-landing-mobile.mjs <preview-url>');
-  process.exit(2);
-}
-const base = new URL(input);
-const requestedModule = process.env.PLAYWRIGHT_MODULE || 'playwright';
-const moduleSpecifier = requestedModule.startsWith('/') ? pathToFileURL(requestedModule).href : requestedModule;
-let playwright;
-try {
-  playwright = await import(moduleSpecifier);
-} catch (error) {
-  throw new Error(`Could not load Playwright from ${requestedModule}. Set PLAYWRIGHT_MODULE to playwright/index.mjs in an existing install.\n${error}`);
-}
+const { baseURL, close } = await resolveBaseURL(process.argv[2]);
+const base = new URL(baseURL);
+const playwright = await loadPlaywright();
 
 const overrideHtml = process.env.LANDING_HTML_STDIN
   ? await new Promise((resolve, reject) => {
@@ -44,7 +33,7 @@ const instrumentScroll = () => {
 };
 const ready = async (page) => {
   await page.waitForSelector('html[data-ready="1"]', { timeout: 30000 });
-  await page.waitForFunction(() => window.__state?.().ready && window.__restY, null, { timeout: 30000 });
+  await page.waitForFunction(() => window.__landing.state?.().ready && window.__landing.restY, null, { timeout: 30000 });
 };
 
 async function mobilePage(search = '', viewport = { width: 390, height: 844 }) {
@@ -68,10 +57,10 @@ async function swipe(page, fromY, toY, steps = 6) {
 const mobileState = (page) => page.evaluate(() => ({
   y: scrollY,
   max: document.documentElement.scrollHeight - innerHeight,
-  progress: __state().progress,
+  progress: window.__landing.state().progress,
   xf: +xfAt().toFixed(3),
-  renderedXf: __state().xf,
-  target: __state().target,
+  renderedXf: window.__landing.state().xf,
+  target: window.__landing.state().target,
   snap: getComputedStyle(document.documentElement).scrollSnapType,
   mobileSnap: document.documentElement.hasAttribute('data-mobile-snap'),
   writes: window.__landingScrollWrites.length,
@@ -113,7 +102,7 @@ async function checkSceneTiming() {
   const read = () => page.evaluate(() => {
     const text = document.querySelector('#c2 .scene-text').getBoundingClientRect();
     const band = mobileVisualBand();
-    return { text: { top: text.top, bottom: text.bottom }, band, progress: progressAt(), state: __state(), writes: window.__landingScrollWrites.length };
+    return { text: { top: text.top, bottom: text.bottom }, band, progress: progressAt(), state: window.__landing.state(), writes: window.__landingScrollWrites.length };
   });
   const wheelTextTopTo = async (desired) => {
     const delta = await page.evaluate((value) => document.querySelector('#c2 .scene-text').getBoundingClientRect().top - value, desired);
@@ -144,9 +133,9 @@ async function checkSceneTiming() {
   const entryHalf = await moveTo((entranceStart + entranceEnd) / 2);
   assert(entryHalf.progress > .4 && entryHalf.progress < .6, `first morph did not follow entrance: ${JSON.stringify(entryHalf)}`);
   const pinned = await moveTo(entranceEnd + 2);
-  await page.waitForFunction(() => __state().shown === 1 && !__state().running, null, { timeout: 10000 });
+  await page.waitForFunction(() => window.__landing.state().shown === 1 && !window.__landing.state().running, null, { timeout: 10000 });
   assert(pinned.progress === 1, `scene 2 was not consolidated when its copy entered: ${JSON.stringify(pinned)}`);
-  await page.waitForFunction(() => [0, 1, 2, 3].every(i => __onHand[i]), null, { timeout: 30000 });
+  await page.waitForFunction(() => [0, 1, 2, 3].every(i => window.__landing.prints[i]), null, { timeout: 30000 });
   const plateauStart = await page.evaluate(() => scrollY);
   const before = await wheelTextTopTo(band.bottom + 24);
   const plateau = await page.evaluate(() => scrollY) - plateauStart;
@@ -247,12 +236,13 @@ try {
   await ready(desktop);
   await desktop.mouse.wheel(0, 120);
   await desktop.waitForTimeout(1200);
-  const desktopState = await desktop.evaluate(() => ({ y: scrollY, rest: __restY(0), carry: __state().carry }));
+  const desktopState = await desktop.evaluate(() => ({ y: scrollY, rest: window.__landing.restY(0), carry: window.__landing.state().carry }));
   assert(desktopState.carry === 'intent' && Math.abs(desktopState.y - desktopState.rest) < 3, `desktop carry regressed: ${JSON.stringify(desktopState)}`);
   results.desktop = desktopState;
   await desktop.close();
 } finally {
   await browser.close();
+  await close();
 }
 
 console.log(JSON.stringify({ baseUrl: base.href, ...results }, null, 2));

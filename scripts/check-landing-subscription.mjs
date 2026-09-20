@@ -1,8 +1,7 @@
-import { pathToFileURL } from 'node:url';
-const modulePath = process.env.PLAYWRIGHT_MODULE || 'playwright';
-const { chromium, webkit } = await import(modulePath.startsWith('/') ? pathToFileURL(modulePath).href : modulePath);
-const base = process.argv[2];
-if (!base) throw Error('Pass site URL');
+import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
+const { baseURL, close } = await resolveBaseURL(process.argv[2]);
+const { chromium, webkit } = await loadPlaywright();
+try {
 for (const engine of [chromium, webkit]) {
  const browser = await engine.launch();
  try {
@@ -10,7 +9,7 @@ for (const engine of [chromium, webkit]) {
    const page = await browser.newPage({reducedMotion:'reduce'});
    const calls=[]; let reply={subscribed:true,confirmationSent:true}, status=200;
    await page.route('https://api.mosspub.com/**',async route=>{calls.push({url:route.request().url(),body:JSON.parse(route.request().postData())});await route.fulfill({status,contentType:'application/json',body:JSON.stringify(reply)});});
-   await page.goto(new URL(locale,base).href);
+   await page.goto(new URL(locale,baseURL).href);
    await page.locator('a[href="#beta"]').first().click();
    await page.waitForFunction(()=>document.activeElement?.id==='beta-email',null,{timeout:20000});
    const input=page.locator('#beta-email'), button=page.locator('#beta-form button'), message=page.locator('#beta-form .form-status');
@@ -29,3 +28,4 @@ for (const engine of [chromium, webkit]) {
   }
  } finally {await browser.close();}
 }
+} finally { await close(); }

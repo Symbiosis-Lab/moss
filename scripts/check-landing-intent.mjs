@@ -1,15 +1,13 @@
 #!/usr/bin/env node
-import { pathToFileURL } from 'node:url';
-const base = process.argv[2];
-if (!base) throw new Error('Usage: node scripts/check-landing-intent.mjs <site-url>');
-const moduleName = process.env.PLAYWRIGHT_MODULE || 'playwright';
-const { chromium } = await import(moduleName.startsWith('/') ? pathToFileURL(moduleName).href : moduleName);
+import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
+const { baseURL, close } = await resolveBaseURL(process.argv[2]);
+const { chromium } = await loadPlaywright();
 const browser = await chromium.launch();
 try {
   for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1200 }]) {
     const page = await browser.newPage({ viewport });
-    await page.goto(base);
-    await page.waitForFunction(() => window.__state?.().ready, null, { timeout: 30000 });
+    await page.goto(baseURL);
+    await page.waitForFunction(() => window.__landing.state?.().ready, null, { timeout: 30000 });
     await page.waitForTimeout(500);
     if (await page.evaluate(() => scrollY !== 0)) throw new Error('The opening moved before input');
     // Clicking an empty area or pressing a non-navigation key is not a request
@@ -27,9 +25,9 @@ try {
       // clear the internal carryGoal after arriving (notably at document top),
       // so requiring that diagnostic field to remain latched reports a failure
       // while the page is already correctly and stably at rest.
-      await page.waitForFunction(goal => Math.abs(scrollY - __restY(goal)) <= 1, goal, { timeout: 15000 }).catch(async error => { throw new Error(`${viewport.width}px direction=${direction}, goal=${goal}, ticks=${ticks}: ${JSON.stringify(await page.evaluate(() => ({ y: scrollY, state: __state() })))}`, { cause: error }); });
+      await page.waitForFunction(goal => Math.abs(scrollY - window.__landing.restY(goal)) <= 1, goal, { timeout: 15000 }).catch(async error => { throw new Error(`${viewport.width}px direction=${direction}, goal=${goal}, ticks=${ticks}: ${JSON.stringify(await page.evaluate(() => ({ y: scrollY, state: window.__landing.state() })))}`, { cause: error }); });
       await page.waitForTimeout(450);
-      const held = await page.evaluate(goal => Math.abs(scrollY - __restY(goal)) <= 1, goal);
+      const held = await page.evaluate(goal => Math.abs(scrollY - window.__landing.restY(goal)) <= 1, goal);
       if (!held) throw new Error(`Rebounded from rest ${goal}`);
     }
     console.log(`${viewport.width}×${viewport.height}: single-tick and three-tick gestures settle without rebound`);
@@ -37,4 +35,5 @@ try {
   }
 } finally {
   await browser.close();
+  await close();
 }

@@ -8,12 +8,11 @@
 // produces the right ink color. See site/.moss/theme/script.js and the inline
 // script in site/index.html for why this is a runtime href swap rather than
 // relying on the SVG's own embedded @media rule (Safari doesn't evaluate it).
-import { pathToFileURL } from 'node:url';
+import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
 
-if (!process.argv[2]) throw new Error('Usage: node scripts/check-favicon-theme.mjs <site-url>');
-const base = new URL(process.argv[2]);
-const moduleName = process.env.PLAYWRIGHT_MODULE || 'playwright';
-const engines = await import(moduleName.startsWith('/') ? pathToFileURL(moduleName).href : moduleName);
+const { baseURL, close } = await resolveBaseURL(process.argv[2]);
+const base = new URL(baseURL);
+const engines = await loadPlaywright();
 const engineNames = (process.env.ENGINE || 'chromium,webkit').split(',');
 const pages = [
   { path: '', name: 'landing-en' },
@@ -25,6 +24,7 @@ const expectRGB = { light: '0,0,0', dark: '255,255,255' };
 const failures = [];
 const results = [];
 
+try {
 for (const engineName of engineNames) {
   const browser = await engines[engineName].launch();
   try {
@@ -76,6 +76,7 @@ for (const engineName of engineNames) {
     await browser.close();
   }
 }
+} finally { await close(); }
 
 console.log(JSON.stringify({ base: base.href, results, failures }, null, 2));
 if (failures.length === 0) {

@@ -1,15 +1,14 @@
 #!/usr/bin/env node
-import { pathToFileURL } from 'node:url';
-const modulePath = process.env.PLAYWRIGHT_MODULE || 'playwright';
-const { chromium, webkit } = await import(modulePath.startsWith('/') ? pathToFileURL(modulePath).href : modulePath);
-const url = process.argv[2];
-if (!url) throw Error('Usage: check-landing-text-track.mjs <url>');
+import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
+const { baseURL, close } = await resolveBaseURL(process.argv[2]);
+const { chromium, webkit } = await loadPlaywright();
+try {
 for (const engine of [chromium, webkit]) {
   const browser = await engine.launch();
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true });
-    await page.goto(url);
-    await page.waitForFunction(() => window.__state?.().ready);
+    await page.goto(baseURL);
+    await page.waitForFunction(() => window.__landing.state?.().ready);
     for (const scene of [1, 2, 3]) {
       for (const fraction of [-.01, .5, 1.01, .5, -.01]) {
         await page.evaluate(({ scene, fraction }) => {
@@ -17,11 +16,11 @@ for (const engine of [chromium, webkit]) {
           scrollTo(0, scrollY + text.top - band.bottom + fraction * (band.height + text.height));
         }, { scene, fraction });
         const expected = scene + Math.max(0, Math.min(1, fraction));
-        await page.waitForFunction(expected => Math.abs(__state().progress - expected) < .005, expected);
+        await page.waitForFunction(expected => Math.abs(window.__landing.state().progress - expected) < .005, expected);
         await page.waitForTimeout(300);
         if (fraction === .5) {
           await page.waitForFunction(scene => {
-            const state = __state();
+            const state = window.__landing.state();
             return scene === 3 ? Math.abs(finalDissolve - .5) < .01 : state.running && Math.abs(state.washT - 1.05) < .06;
           }, scene, { timeout: 15000 });
         }
@@ -35,3 +34,4 @@ for (const engine of [chromium, webkit]) {
     }
   } finally { await browser.close(); }
 }
+} finally { await close(); }

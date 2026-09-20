@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-import { pathToFileURL } from 'node:url';
+import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
 
-const modulePath = process.env.PLAYWRIGHT_MODULE || 'playwright';
-const engines = await import(modulePath.startsWith('/') ? pathToFileURL(modulePath).href : modulePath);
-const base = new URL(process.argv[2] || 'http://localhost:8080/');
+const { baseURL, close } = await resolveBaseURL(process.argv[2]);
+const base = new URL(baseURL);
+const engines = await loadPlaywright();
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 
 async function state(page) {
   return page.evaluate(() => ({
-    ...window.__state(),
+    ...window.__landing.state(),
     y: scrollY,
     max: document.documentElement.scrollHeight - innerHeight,
     closing: document.querySelector('#five').classList.contains('on'),
@@ -46,19 +46,19 @@ try {
     await page.mouse.move(10, 100);
     await page.mouse.down();
     // Return to the actual scene 4 rest; footer height differs by viewport and locale.
-    await page.evaluate(() => scrollTo(0, window.__restY(3)));
+    await page.evaluate(() => scrollTo(0, window.__landing.restY(3)));
     await page.mouse.up();
     await page.waitForTimeout(200);
     const coldReverse = await state(page);
     assert(coldReverse.xf < cold.xf && !coldReverse.closing, `${test.name}: cold reverse did not uncover scene 4: ${JSON.stringify(coldReverse)}`);
     await page.waitForFunction(() => document.documentElement.dataset.ready === '1', null, { timeout: 20000 });
-    await page.evaluate(() => scrollTo(0, window.__restY(3)));
-    await page.waitForFunction(() => { const s = window.__state(); return s.shown === 3 && s.target === 3 && !s.running; }, null, { timeout: 10000 }).catch(async error => { throw new Error(`${test.name}: return failed ${JSON.stringify(await state(page))}`, {cause:error}); });
+    await page.evaluate(() => scrollTo(0, window.__landing.restY(3)));
+    await page.waitForFunction(() => { const s = window.__landing.state(); return s.shown === 3 && s.target === 3 && !s.running; }, null, { timeout: 10000 }).catch(async error => { throw new Error(`${test.name}: return failed ${JSON.stringify(await state(page))}`, {cause:error}); });
 
-    await page.evaluate(() => scrollTo(0, window.__restY(1)));
-    await page.waitForFunction(() => window.__state().running, null, { timeout: 5000 });
+    await page.evaluate(() => scrollTo(0, window.__landing.restY(1)));
+    await page.waitForFunction(() => window.__landing.state().running, null, { timeout: 5000 });
     await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
-    await page.waitForFunction(() => { const s = window.__state(); return s.shown === 4 && s.xf === 1 && !s.running; }, null, { timeout: 2000 }).catch(async error => { throw new Error(`${test.name}: active jump failed ${JSON.stringify(await state(page))}`, {cause:error}); });
+    await page.waitForFunction(() => { const s = window.__landing.state(); return s.shown === 4 && s.xf === 1 && !s.running; }, null, { timeout: 2000 }).catch(async error => { throw new Error(`${test.name}: active jump failed ${JSON.stringify(await state(page))}`, {cause:error}); });
     const activeJoin = await state(page);
     assert(activeJoin.closing, `${test.name}: closing remained queued behind active join`);
     results.push({ name: test.name, cold, coldReverse, activeJoin });
@@ -67,4 +67,5 @@ try {
   console.log(JSON.stringify(results, null, 2));
 } finally {
   await browser.close();
+  await close();
 }
