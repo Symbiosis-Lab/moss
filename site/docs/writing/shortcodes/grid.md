@@ -117,6 +117,8 @@ Short description](/target)
 
 Do not hand-write the `<a>` wrapper. Author the single markdown link and let moss emit the anchor.
 
+An image inside the link takes precedence over [folder auto-conversion](#folder-auto-conversion) below: `[![Cover](cover.jpg)](/target)` keeps your image inside the `<a>` even when `/target` names a page in the build — only a bare-text link (no image) is eligible to become an automatic page card.
+
 A cell with anything else (two links, text plus a link) renders as regular cell content, unwrapped — so you can mix clickable cards and rich cells in the same grid.
 
 Theme CSS targets each flavor independently:

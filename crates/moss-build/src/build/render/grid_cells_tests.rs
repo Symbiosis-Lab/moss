@@ -460,6 +460,102 @@ fn external_links_never_become_collection_cards() {
 }
 
 #[test]
+fn an_internal_image_link_cell_keeps_its_authored_image() {
+    // A `Block::LinkCard` built around an image is the author's own card —
+    // resolving its href to a real page in the build must not throw the
+    // image away for an auto-generated page card. Mirrors what an external
+    // image-link cell already does (below).
+    let docs = vec![make_doc("About", "about/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid 1\n[![Alt text](a.jpg)](about/)\n:::\n");
+    assert!(html.contains("<img"), "authored image must survive: {html}");
+    assert!(
+        !html.contains(r#"class="moss-card""#),
+        "must not become an auto page card: {html}"
+    );
+    assert!(
+        html.contains(r#"data-kind="link""#),
+        "wraps as an internal link card, the shape the serializer already emits: {html}"
+    );
+}
+
+#[test]
+fn an_internal_image_with_a_caption_keeps_its_authored_image() {
+    // `detect_compound_link`'s caption carve-out (moss-core) routes an
+    // ordinary image followed by a blank-line caption to `leading_link`
+    // instead of `Block::LinkCard` — a different classify_cell shape, same
+    // authored-image rule. The cell's own paragraph already links the image,
+    // so this shape is left exactly as the serializer rendered it (like
+    // `.no-cards`) rather than nesting a second `<a>` around it.
+    let docs = vec![make_doc("About", "about/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let md = ":::grid 1\n[![Poster alt](a.jpg)](about/)\n\nA caption paragraph.\n:::\n";
+    let html = both_passes(md, &page, None);
+    assert_eq!(
+        html,
+        plan_of(md).to_html(),
+        "left exactly as the serializer rendered it"
+    );
+    assert!(html.contains("<img"), "authored image must survive: {html}");
+    assert!(
+        !html.contains(r#"class="moss-card""#),
+        "must not become an auto page card: {html}"
+    );
+    assert!(
+        html.contains("A caption paragraph."),
+        "the caption must survive too: {html}"
+    );
+    assert_eq!(
+        html.matches("<a ").count(),
+        1,
+        "exactly one anchor, around the image -- no nested wrapper: {html}"
+    );
+}
+
+#[test]
+fn a_bare_text_internal_link_cell_still_becomes_a_page_card() {
+    // The other half of the same distinction: a link with no authored
+    // content of its own still asks moss to generate a page card.
+    let docs = vec![make_doc("About", "about/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid 1\n[About](about/)\n:::\n");
+    assert_eq!(card_count(&html), 1, "got: {html}");
+}
+
+#[test]
+fn an_external_image_link_cell_keeps_its_authored_image() {
+    // The behaviour the internal case above must mirror: an authored image
+    // wrapped in an external link keeps the image, inside the link-preview
+    // anchor the serializer already emitted — left exactly as rendered,
+    // same as `a_whole_cell_link_keeps_the_chrome_the_serializer_gave_it`.
+    let docs: Vec<ParsedDocument> = vec![];
+    let page = Page::new("index.html", &docs);
+    let md = ":::grid 1\n[![Alt text](a.jpg)](https://example.org/)\n:::\n";
+    let html = both_passes(md, &page, None);
+    assert!(html.contains("<img"), "authored image must survive: {html}");
+    assert!(html.contains("link-preview"), "got: {html}");
+    assert_eq!(
+        html,
+        plan_of(md).to_html(),
+        "left exactly as the serializer rendered it"
+    );
+}
+
+#[test]
+fn no_cards_already_leaves_an_internal_image_link_cell_alone() {
+    // `{.no-cards}` skips `apply_collection_cards` entirely, so it never hit
+    // this bug: the serializer's own `data-kind="link"` markup survives
+    // whether or not the href resolves to a page in the build.
+    let docs = vec![make_doc("About", "about/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let md = ":::grid 1 {.no-cards}\n[![Alt text](a.jpg)](about/)\n:::\n";
+    assert_eq!(page.cards(md), plan_of(md).to_html());
+    let html = plan_of(md).to_html();
+    assert!(html.contains("<img"), "got: {html}");
+    assert!(html.contains(r#"data-kind="link""#), "got: {html}");
+}
+
+#[test]
 fn a_grid_free_body_is_untouched() {
     let docs = vec![make_doc("Design", "design/index.html", None)];
     let page = Page::new("index.html", &docs);

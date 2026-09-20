@@ -89,6 +89,12 @@ pub(crate) struct CellLink<'a> {
     /// already emitted final `<a class="moss-grid-card">` chrome for it, so a
     /// pass that would re-wrap the cell has to leave it alone.
     pub whole_cell: bool,
+    /// The link's own content opens with an authored image — a
+    /// `Block::LinkCard` built around a photo, or a leading link followed by
+    /// a separate caption paragraph (see [`leading_link`]). Either way, no
+    /// pass may replace the cell with a generated page/collection card, or
+    /// re-wrap it in a second `<a>`.
+    pub carries_image: bool,
 }
 
 impl CellLink<'_> {
@@ -103,6 +109,15 @@ impl CellLink<'_> {
     /// than from the link text.
     fn wants_fetched_title(&self) -> bool {
         self.text.is_empty() || self.text.starts_with("http://") || self.text.starts_with("https://")
+    }
+
+    /// True when a generated page or collection card must not replace this
+    /// cell: it either leaves the site (never a candidate — it names nothing
+    /// in this build), or it already carries its own authored content that
+    /// such a card would throw away. The one check both card-generating
+    /// passes ([`card_markup`], [`summary_card_markup`]) share.
+    fn ineligible_for_a_generated_card(&self) -> bool {
+        self.external() || self.carries_image
     }
 }
 
@@ -136,6 +151,7 @@ pub(crate) fn classify_cell(blocks: &[Block]) -> GridCell<'_> {
                 kind: r.kind,
                 text: blocks_text(children),
                 whole_cell: true,
+                carries_image: cover_image_href(children).is_some(),
             }),
             None => GridCell::Opaque,
         },
@@ -172,6 +188,11 @@ fn leading_link(inlines: &[Inline]) -> GridCell<'_> {
             kind: r.kind,
             text: inlines_text(children),
             whole_cell: false,
+            // An ordinary (non-wikilink) image-plus-caption cell reaches this
+            // shape rather than `Block::LinkCard` (see
+            // `moss_core::ast::shortcode_extract::detect_compound_link`), so
+            // the link's own children can still open with an image.
+            carries_image: matches!(children.first(), Some(Inline::Image { .. })),
         }),
         None => GridCell::Opaque,
     }
@@ -355,7 +376,7 @@ fn summary_card_markup(cell: &GridCellEmission, index: &BuildIndex<'_>) -> Optio
     let GridCell::Link(link) = classify_cell(&cell.blocks) else {
         return None;
     };
-    if link.external() {
+    if link.ineligible_for_a_generated_card() {
         return None;
     }
     let props = picked_card_props(&link, index)?;
@@ -450,7 +471,7 @@ fn card_markup(
     let GridCell::Link(link) = classify_cell(&cell.blocks) else {
         return None;
     };
-    if link.external() {
+    if link.ineligible_for_a_generated_card() {
         return None;
     }
     let props = picked_card_props(&link, index)?;
@@ -517,6 +538,13 @@ fn preview_markup(
         return None;
     }
     if !link.external() {
+        // Same reason, for the shape that reaches here carrying an image
+        // instead of a `Block::LinkCard`: the cell's own paragraph already
+        // links the image, so `render_link_card` would nest a second `<a>`
+        // around it.
+        if link.carries_image {
+            return None;
+        }
         return Some(render_link_card(link.href, cell.inner()));
     }
     let (title, favicon) = if link.wants_fetched_title() {
