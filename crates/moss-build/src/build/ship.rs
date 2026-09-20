@@ -1830,6 +1830,35 @@ mod tests {
         assert_eq!(std::fs::read(site.path().join("llms.txt")).unwrap(), b"everything");
     }
 
+    /// A failed write of held bytes must fail the ship. Otherwise the
+    /// generation is promoted one file short of what its own manifest names, and
+    /// the gap surfaces at the next publish instead of here. Only that entry
+    /// fails: the rest of the generation is still written, as for any per-file
+    /// fault (`ship_phase`'s doc). Entries are visited in hash-map order, so
+    /// several healthy ones make it likely that some come after the bad one.
+    #[test]
+    fn a_held_output_that_cannot_be_written_fails_the_ship_and_spares_the_rest() {
+        let stage = tempdir().unwrap();
+        let site = tempdir().unwrap();
+        let healthy = ["sitemap.xml", "rss.xml", "a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "f.txt"];
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        for rel in healthy.iter().chain(&["llms.txt"]) {
+            let sp = crate::build::served_path::ServedPath::from_source(rel).unwrap();
+            pending.register_held(&sp, format!("bytes of {rel}").into_bytes(), HashBucket::Files).unwrap();
+        }
+        let sealed = pending.seal();
+        // A directory where `llms.txt` must land: the write cannot replace it.
+        std::fs::create_dir(site.path().join("llms.txt")).unwrap();
+
+        let err = ship_phase(stage.path(), site.path(), &sealed, None, None)
+            .expect_err("a generation missing a file its manifest names must not ship");
+
+        assert!(err.to_string().contains("1 file(s) failed"), "{err}");
+        for rel in healthy {
+            assert_eq!(std::fs::read(site.path().join(rel)).unwrap(), format!("bytes of {rel}").into_bytes(), "{rel}");
+        }
+    }
+
     /// One test that a genuine post-seal byte change is caught...
     #[test]
     fn ship_phase_integrity_check_catches_a_genuine_post_seal_byte_change() {
