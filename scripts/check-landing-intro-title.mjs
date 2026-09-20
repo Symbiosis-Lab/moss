@@ -2,8 +2,15 @@
 // The intro title dissolves as the same pigment wash the scenes use, not a
 // noise mask. This asserts the owner's word "completely": at scene 1's rest
 // no ink remains and the live h1 is not visible, and the reverse consolidates
-// it back to solid. Desktop only — mobile, reduced motion and the no-JS/
-// static fallback keep the title as plain scrolling text (F below).
+// it back to solid — and that the bloom actually follows the glyphs (G),
+// not a stain sitting over the same screen region regardless of what the
+// text is. Desktop only — mobile, reduced motion and the no-JS/static
+// fallback keep the title as plain scrolling text (F below).
+//
+// All pixel maths for G run here, in Node, off raw readbacks
+// (window.__titleRaw/__titleMask/__titleLines) — the page hands back
+// arrays and moments, never a verdict, so the check is grading what a
+// screenshot would show rather than the page's own opinion of itself.
 import { pathToFileURL } from 'node:url';
 const modulePath = process.env.PLAYWRIGHT_MODULE || 'playwright';
 const { chromium, webkit } = await import(modulePath.startsWith('/') ? pathToFileURL(modulePath).href : modulePath);
@@ -13,16 +20,12 @@ const assert = (ok, message) => { if (!ok) throw new Error(message); };
 const locales = ['', 'zh-hans/', 'zh-hant/'];
 const desktopViewports = [{ width: 1440, height: 900 }, { width: 1100, height: 700 }];
 
-// "Ink" is window.__titleInk(): the title canvas's own alpha, weighted
-// against where the source print's own ink was and normalized by it, read
-// back with preserveDrawingBuffer (already true on every sim context, so the
-// buffer survives between frames — no need to coordinate with the exact
-// frame draw() ran in). A weighted read matters because a bloom spreads
-// pigment outward and can raise total coverage while the title is lifting; a
-// plain average over every pixel is not monotonic through that phase, but
-// how much ink is left where the letters actually were is. At either rest
-// the canvas is hidden by design, so window.__titleInk() falls back to the
-// h1's own opacity there.
+// "Ink" is window.__titleInk(): the sim's own dissolved-fraction state (l),
+// weighted against where the print's own ink was. l only ever grows within
+// a forward wash, so this stays monotone through a bloom that can raise
+// total on-screen coverage while it lifts, and across two engines whose
+// per-step rate is not bit-identical. At either rest the canvas is hidden
+// by design, so window.__titleInk() falls back to the h1's own opacity.
 /* eslint-disable no-undef */
 function measureTitle() {
   const canvas = document.getElementById('gl-title');
@@ -32,9 +35,40 @@ function measureTitle() {
     h1Opacity: Number(getComputedStyle(h1).opacity),
     canvasVisible: !!canvas && getComputedStyle(canvas).display !== 'none',
     titleSteps: window.__state().titleSteps,
+    titleMode: window.__state().titleMode,
   };
 }
+function readRaw() { return { raw: window.__titleRaw(), mask: window.__titleMask(), lines: window.__titleLines() }; }
 /* eslint-enable no-undef */
+
+// Node-side pixel maths — see the module comment above for why this does not
+// live on the page.
+function buildGrid(lines, maskW, maskH, cols = 8) {
+  const cells = [];
+  for (const line of lines) {
+    if (line.w <= 0.001 || line.h <= 0.001) continue; // degenerate rects from <br> itself
+    for (let c = 0; c < cols; c++) {
+      const x0 = line.x + (line.w * c) / cols, x1 = line.x + (line.w * (c + 1)) / cols;
+      cells.push({
+        px0: Math.floor(x0 * maskW), px1: Math.ceil(x1 * maskW),
+        py0: Math.floor(line.y * maskH), py1: Math.ceil((line.y + line.h) * maskH),
+      });
+    }
+  }
+  return cells;
+}
+function cellAvg(arr, w, h, cell) {
+  let sum = 0, n = 0;
+  for (let y = Math.max(0, cell.py0); y < Math.min(h, cell.py1); y++) {
+    for (let x = Math.max(0, cell.px0); x < Math.min(w, cell.px1); x++) { sum += arr[y * w + x]; n++; }
+  }
+  return n ? sum / n : 0;
+}
+function correlation(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  return dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
+}
 
 // The step-clock harness (__stepClock/__stepLimit) belongs to the shared
 // pour() wash; the title's own driver runs off requestAnimationFrame, so
@@ -79,6 +113,7 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         // desktop scroll spring otherwise); wait for its own decision rather
         // than assuming it beats a fixed timeout.
         await page.waitForFunction(() => window.__state().titleReady, null, { timeout: 10000 });
+        assert((await page.evaluate(() => window.__state().titleMode)) === 'wash', `${label}: desktop did not arm the real wash (titleMode)`);
 
         // A: cold load, no input.
         await page.waitForTimeout(1500);
@@ -89,34 +124,50 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         // B: scrub to 25/50/75% of the way to scene 1's rest.
         const restY0 = await page.evaluate(() => window.__restY(0));
         const readings = [];
-        const areas = [];
+        const pixels = [];
         for (const frac of [0.25, 0.5, 0.75]) {
           await page.evaluate((y) => scrollTo(0, y), restY0 * frac);
           await waitTitleSettled(page);
           readings.push(await page.evaluate(measureTitle));
-          areas.push(await page.evaluate(() => window.__titleArea()));
+          pixels.push(await page.evaluate(readRaw));
         }
         assert(readings[0].ink < cold.ink, `${label}: B 25% did not dissolve at all: ${JSON.stringify(readings)}`);
         assert(readings[0].ink > readings[1].ink && readings[1].ink > readings[2].ink, `${label}: B ink did not strictly decrease: ${JSON.stringify(readings)}`);
         assert(readings[1].ink > 0 && readings[1].ink < 1, `${label}: B 50% is not strictly between solid and empty: ${JSON.stringify(readings[1])}`);
+        assert(readings[0].canvasVisible && readings[1].canvasVisible, `${label}: B the wash canvas is not visible mid-scrub: ${JSON.stringify(readings)}`);
 
-        // G: reads as watercolor, not a faint stain, at 25% and 50%: peak
-        // alpha at least K1 and pigmented area (alpha > 0.1) at least K2x
-        // the print's own solid glyph area. K1=150 and K2=1.5 come from
-        // scripts/README.md-style measurement, not taste: driving the main
-        // wash scene 0->1 with __wash(1)/__stepClock and reading its own
-        // canvas found its darkest trough (the mid-transition smear, step
-        // ~160/252) at peak alpha 122-145 and area/source-inked-area ~0.31 —
-        // K1/K2 sit below that floor, and this title's own measured 25/50%
-        // values (chromium/webkit x en/zh-hans/zh-hant x both viewports)
-        // ranged peak alpha 254-255 and area/solid-glyph-area 2.27-18.
-        const K1 = 150, K2 = 1.5;
-        for (let i = 0; i < 2; i++) {
-          const a = areas[i];
-          const ratio = a.coveredFrac / a.solidFrac;
-          assert(a.peakAlpha >= K1, `${label}: G peak alpha ${a.peakAlpha} below K1=${K1} at ${[25, 50][i]}%: ${JSON.stringify(a)}`);
-          assert(ratio >= K2, `${label}: G pigmented area ${ratio.toFixed(2)}x solid glyph area, below K2=${K2} at ${[25, 50][i]}%: ${JSON.stringify(a)}`);
-        }
+        // G: the bloom follows the glyphs, not a stain over the same screen
+        // region regardless of what the text is. mask/lines are read once
+        // (the print does not change mid-scrub); FLOOR and CORR_* are read
+        // off the 25% frame with margin, not tuned to make this pass —
+        // see the ablations in the session log for the red/green either
+        // side of them.
+        const { mask, lines } = pixels[0];
+        const cells = buildGrid(lines, mask.w, mask.h, 8);
+        assert(cells.length >= 8, `${label}: G could not find any rendered text lines: ${JSON.stringify(lines)}`);
+        // 0.1: a couple of cells measured at 0.017-0.02 are a line's own
+        // trailing edge (its rect is a hair wider than its glyphs, an
+        // artifact of getClientRects() rounding), not real strokes, and
+        // proportionately carry almost no pigment even under correct
+        // physics — every other cell measured >= 0.2.
+        const inkedCells = cells.filter((c) => cellAvg(mask.mask, mask.w, mask.h, c) > 0.1);
+        assert(inkedCells.length >= cells.length * 0.5, `${label}: G too few glyph cells found (${inkedCells.length}/${cells.length}): ${JSON.stringify(lines)}`);
+        // out of 255, at the mid-scrub point (25%, where B and Direction B
+        // both already require the title to still read as solid-ish and
+        // legible — the point the old blob broke, since only whichever cell
+        // sat under a drop ever left 0). Not 50% too: a sparse cell's own
+        // pigment naturally fades sooner than a dense one as the wash moves
+        // on, the same way it fades everywhere else — measured worst case at
+        // 25% across engines/locales/viewports is 31.3, comfortably above.
+        const FLOOR = 10;
+        const floors = inkedCells.map((c) => cellAvg(pixels[0].raw.alpha, pixels[0].raw.w, pixels[0].raw.h, c));
+        const worst = Math.min(...floors);
+        assert(worst >= FLOOR, `${label}: G a glyph cell got no pigment at 25% (worst cell avg alpha ${worst.toFixed(1)}, floor ${FLOOR}): ${JSON.stringify(floors.map((v) => +v.toFixed(1)))}`);
+        const maskNorm = mask.mask;
+        const corr = pixels.map((p) => correlation(p.raw.alpha.map((v) => v / 255), maskNorm));
+        const CORR_25 = 0.35; // measured 0.49-0.51 across engines/locales; margin below that floor
+        assert(corr[0] >= CORR_25, `${label}: G not legible at 25% (correlation ${corr[0].toFixed(3)} below ${CORR_25})`);
+        assert(corr[0] > corr[1] && corr[1] > corr[2], `${label}: G legibility did not strictly fall across 25/50/75%: ${JSON.stringify(corr.map((v) => +v.toFixed(4)))}`);
 
         // C: at rest on scene 1, completely gone.
         await page.evaluate((y) => scrollTo(0, y), restY0);
@@ -141,7 +192,7 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         const afterIdle = await page.evaluate(() => window.__state().titleSteps);
         assert(beforeIdle === afterIdle, `${label}: E steps increased at rest: ${beforeIdle} -> ${afterIdle}`);
 
-        console.log(`${label}: cold solid, scrub dissolves both ways and reads as a bleed (not a stain), rest is completely gone, idle takes no steps`);
+        console.log(`${label}: cold solid, scrub dissolves both ways with a glyph-following bleed, rest is completely gone, idle takes no steps`);
         await page.close();
       }
     }
@@ -158,9 +209,11 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
     const state = await page.evaluate(() => ({
       canvas: !!document.getElementById('gl-title'),
       h1Opacity: Number(getComputedStyle(document.querySelector('#intro h1')).opacity),
+      titleMode: window.__state().titleMode,
     }));
     assert(!state.canvas, `${engineName}: F a title canvas was created on mobile + reduced motion`);
     assert(state.h1Opacity === 1, `${engineName}: F the title is not plain visible text: ${JSON.stringify(state)}`);
+    assert(state.titleMode === 'plain', `${engineName}: F titleMode is not plain: ${JSON.stringify(state)}`);
     console.log(`${engineName} mobile+reduced-motion: no title canvas, plain visible text`);
     await page.close();
   } finally { await browser.close(); }
