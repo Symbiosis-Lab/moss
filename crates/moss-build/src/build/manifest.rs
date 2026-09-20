@@ -137,7 +137,8 @@ pub struct PendingManifest {
     /// Output-bucket paths registered during this build (mark set). At seal
     /// time, the four output buckets are pruned to retain only keys in this
     /// set. Populated unconditionally by `register_with_hash`; outside the
-    /// struct it is visible only as [`owns`][PendingManifest::owns]. See module
+    /// struct it is visible only through the refusal in
+    /// [`attach_final_bytes`][PendingManifest::attach_final_bytes]. See module
     /// docs for the rationale.
     touched: HashSet<String>,
     /// The PREVIOUS build's `source_to_output`, kept because `new` clears the
@@ -578,19 +579,11 @@ impl PendingManifest {
         self.register_with_hash(rel_path.as_str().to_string(), hash, bucket, None);
     }
 
-    /// Whether THIS build's own registrations already name `rel_path` — the
-    /// same `touched` mark set `seal` prunes by, and nothing carried in from the
-    /// previous manifest. What separates a page this build produced from one
-    /// that merely still sits in `stage_dir`.
-    pub(crate) fn owns(&self, rel_path: &str) -> bool {
-        self.touched.contains(rel_path)
-    }
-
     /// Give a page this build already registered its final bytes: the manifest
     /// hash of what the site will serve, and the CAS object holding exactly
     /// those bytes (`None` when the store could not take them, which leaves the
-    /// page to the stage-path fingerprint). Returns `false` and changes nothing
-    /// for a path this build does not own.
+    /// page to the stage-path fingerprint). Returns the entry now on record, or
+    /// `None` and changes nothing for a path this build does not own.
     ///
     /// Attach, not register, and the refusal is the point. The slot pass walks
     /// every `.html` under `stage_dir`, and the stage keeps what the previous
@@ -599,17 +592,22 @@ impl PendingManifest {
     /// `index*.html`. Registering a stale page would mark it `touched`, keep it
     /// through `seal`, and — because a live CAS blob counts as present to
     /// `drop_absent_outputs` — ship a deleted page from the CAS for good.
+    ///
+    /// A path is this build's own when its registrations already name it: the
+    /// `touched` mark set `seal` prunes by, and nothing carried in from the
+    /// previous manifest. That is what separates a page this build produced from
+    /// one that merely still sits in `stage_dir`.
     pub(crate) fn attach_final_bytes(
         &mut self,
         rel_path: &crate::build::served_path::ServedPath,
         hash: &str,
         oid: Option<String>,
-    ) -> bool {
-        if !self.owns(rel_path.as_str()) {
-            return false;
+    ) -> Option<String> {
+        if !self.touched.contains(rel_path.as_str()) {
+            return None;
         }
         self.register_with_hash(rel_path.as_str().to_string(), hash, HashBucket::Files, oid);
-        true
+        self.inner.files.get(rel_path.as_str()).cloned()
     }
 
     /// Test-only escape hatch mirroring the coordinator's `oid`-carrying path

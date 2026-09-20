@@ -77,13 +77,9 @@ pub fn apply_to_stage_and_manifest(
         let Ok(sp) = crate::build::served_path::ServedPath::from_source(&receipt.page_path) else {
             continue;
         };
-        if !pending.attach_final_bytes(&sp, &receipt.manifest_hash, receipt.content_oid) {
-            continue;
-        }
-        let Some(entry) = pending.files().get(sp.as_str()).cloned() else {
+        let Some(entry) = pending.attach_final_bytes(&sp, &receipt.manifest_hash, receipt.content_oid) else {
             continue;
         };
-
         site_result.hashes.insert_file_hash(&sp, entry);
     }
 
