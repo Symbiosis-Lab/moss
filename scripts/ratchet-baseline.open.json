@@ -20,7 +20,7 @@
         "crates/moss-build/src/build/pipeline.rs": 2018,
         "crates/moss-build/src/build/render/blocking.rs": 3591,
         "crates/moss-build/src/build/render/html.rs": 1617,
-        "crates/moss-build/src/build/scan/scan.rs": 1504,
+        "crates/moss-build/src/build/scan/scan.rs": 1487,
         "crates/moss-build/src/build/ship.rs": 820,
         "crates/moss-build/src/build/types.rs": 832,
         "crates/moss-build/src/build/watch.rs": 1126,

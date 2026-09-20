@@ -1532,9 +1532,33 @@ impl ScanFixture {
         new_index: &mut HashIndex,
         defer_placeholders: bool,
     ) -> MediaMetadata {
+        self.scan_deduped(stat, old_index, new_index, defer_placeholders, None)
+    }
+
+    /// [`scan`](Self::scan) with the singleflight that shares one extraction between
+    /// concurrent scans of the same content, as the walk gives it.
+    fn scan_deduped(
+        &self,
+        stat: &FileStat,
+        old_index: &HashIndex,
+        new_index: &mut HashIndex,
+        defer_placeholders: bool,
+        dedup: Option<&crate::build::cache::Singleflight<MediaMetadata>>,
+    ) -> MediaMetadata {
         extract_media_metadata_cached(
-            &self.png, "photo.png", "png", stat, None, None, old_index, new_index, &self.objects, &self.transforms, None,
+            &self.png, "photo.png", "png", stat, None, None, old_index, new_index, &self.objects, &self.transforms, dedup,
             defer_placeholders,
+        )
+    }
+
+    /// A video beside the image, scanned as a scan meets one: no hash, its metadata found by
+    /// the stat key. Without an ffmpeg there is nothing to read, so what is cached is a bare
+    /// entry, which is all the tests need of it.
+    fn scan_video(&self, stat: &FileStat) -> MediaMetadata {
+        fs::write(self.dir.join("clip.mp4"), b"not really a video").unwrap();
+        extract_media_metadata_cached(
+            &self.dir.join("clip.mp4"), "clip.mp4", "mp4", stat, None, None, &HashIndex::new(), &mut HashIndex::new(),
+            &self.objects, &self.transforms, None, false,
         )
     }
 
@@ -1665,20 +1689,26 @@ fn an_image_on_disk_is_not_matched_by_the_whole_second_rule() {
 /// What an evicted source yields is a non-answer, and cached under its hash — which
 /// its arrival does not change — it would be permanent. Reachable once an evicted
 /// file can hold a hash the index recorded while it was local, and the metadata was
-/// never cached under it (a preview scan hashes nothing).
+/// never cached under it (a preview scan hashes nothing). Both ways the scan extracts:
+/// directly, and through the singleflight that shares one extraction between concurrent
+/// scans of the same content, where an evicted file's non-answer would also be handed to
+/// a scan of a file that can be read.
 #[test]
 fn an_evicted_image_never_has_a_non_answer_cached_under_its_hash() {
-    let fx = ScanFixture::new("evicted_no_poison");
-    let (stat, old_index) = recorded_before_the_provider_touched_it(&fx, "hash-with-no-cached-metadata");
-    let _cloud = crate::build::icloud::pretend::evicted(&fx.png);
+    let dedup = crate::build::cache::Singleflight::new();
+    for (how, dedup) in [("directly", None), ("through the singleflight", Some(&dedup))] {
+        let fx = ScanFixture::new("evicted_no_poison");
+        let (stat, old_index) = recorded_before_the_provider_touched_it(&fx, "hash-with-no-cached-metadata");
+        let _cloud = crate::build::icloud::pretend::evicted(&fx.png);
 
-    let meta = fx.scan(&stat, &old_index, &mut HashIndex::new(), false);
+        let meta = fx.scan_deduped(&stat, &old_index, &mut HashIndex::new(), false, dedup);
 
-    assert_eq!(meta.dimensions, None, "premise: an evicted image is read as nothing");
-    assert!(
-        read_cached_meta(&fx.transforms, &fx.objects, "hash-with-no-cached-metadata").is_none(),
-        "the scan cached dimensions: None under the hash of a file it could not read"
-    );
+        assert_eq!(meta.dimensions, None, "{how}: premise: an evicted image is read as nothing");
+        assert!(
+            read_cached_meta(&fx.transforms, &fx.objects, "hash-with-no-cached-metadata").is_none(),
+            "{how}: the scan cached dimensions: None under the hash of a file it could not read"
+        );
+    }
 }
 
 /// A preview scan reads an image's dimensions and caches them under a key made of its
@@ -1722,6 +1752,23 @@ fn a_build_scan_does_not_hash_an_image_that_went_to_the_cloud_after_it_was_check
     fx.scan(&stat, &HashIndex::new(), &mut new_index, false);
 
     assert!(new_index.entries.is_empty(), "the scan hashed an image that was in the cloud: {:?}", new_index.entries);
+}
+
+/// The same for a video, which never enters the hash index: nothing but its stat key could
+/// ever find the entry, and the key survives the file's arrival.
+#[test]
+fn a_scan_caches_nothing_under_the_stat_key_of_an_evicted_video() {
+    let fx = ScanFixture::new("evicted_video_stat_key");
+    let stat = FileStat::whole_second(18, 1_700_000_000);
+    let key = image_meta_stat_key("clip.mp4", stat.size, stat.mtime);
+
+    let cloud = crate::build::icloud::pretend::evicted(&fx.dir.join("clip.mp4"));
+    fx.scan_video(&stat);
+    assert!(read_cached_meta(&fx.transforms, &fx.objects, &key).is_none(), "the scan cached what it read of an evicted video under its stat key");
+
+    drop(cloud);
+    fx.scan_video(&stat);
+    assert!(read_cached_meta(&fx.transforms, &fx.objects, &key).is_some(), "control: the same scan of a video on disk caches under the stat key");
 }
 
 // =========================================================================

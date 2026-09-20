@@ -375,6 +375,17 @@ pub(crate) fn read_cached_meta(
     serde_json::from_slice(&raw).ok()
 }
 
+impl From<&MediaMetadata> for CachedMediaMeta {
+    fn from(meta: &MediaMetadata) -> Self {
+        Self {
+            dimensions: meta.dimensions,
+            dominant_color: meta.dominant_color.clone(),
+            lqip_data_uri: meta.lqip_data_uri.clone(),
+            is_animated: meta.is_animated,
+        }
+    }
+}
+
 /// Store media metadata in the ObjectStore + TransformCache.
 ///
 /// `pub(crate)` so the background media phase can enrich an image's stat-key
@@ -516,6 +527,13 @@ fn extract_media_metadata_cached(
         // Burst-capped inside `request_download`, same as above.
         crate::build::cloud_readiness::request_download(abs_path);
     }
+    // The only place this scan caches what it found out about the file, so a non-answer
+    // has one guard to get past, not one per branch below.
+    let store_meta = |key: &str, meta: &MediaMetadata| {
+        if !source_is_evicted {
+            write_cached_meta(objects, transform_cache, key, size, &CachedMediaMeta::from(meta));
+        }
+    };
     let skip_content_read = is_video || defer_this_image || source_is_evicted;
     let content_hash = if skip_content_read {
         // Videos / images / evicted files: only use a cached hash from the
@@ -591,18 +609,7 @@ fn extract_media_metadata_cached(
         );
 
         // Cache under stat key so subsequent calls in this session are fast.
-        let cached = CachedMediaMeta {
-            dimensions: meta.dimensions,
-            dominant_color: meta.dominant_color.clone(),
-            lqip_data_uri: meta.lqip_data_uri.clone(),
-            is_animated: meta.is_animated,
-        };
-        // See `source_is_evicted` above: caching a non-answer under a key the
-        // arrival does not change makes it permanent.
-        if !source_is_evicted {
-            write_cached_meta(objects, transform_cache, &stat_key, size, &cached);
-        }
-
+        store_meta(&stat_key, &meta);
         return meta;
     }
 
@@ -649,29 +656,18 @@ fn extract_media_metadata_cached(
             "Media meta stat-cache miss for {} (dimensions only; color/LQIP deferred)",
             relative_path
         );
-        let dimensions = extract_image_dimensions(abs_path);
-        let is_animated = sniff_is_animated(abs_path, extension);
-        let cached = CachedMediaMeta {
-            dimensions,
-            dominant_color: None,
-            lqip_data_uri: None,
-            is_animated,
-        };
-        // See `source_is_evicted` above.
-        if !source_is_evicted {
-            write_cached_meta(objects, transform_cache, &stat_key, size, &cached);
-        }
-
-        return MediaMetadata {
+        let meta = MediaMetadata {
             path: relative_path.to_string(),
             file_type: extension.to_string(),
             size,
             modified,
-            dimensions,
+            dimensions: extract_image_dimensions(abs_path),
             dominant_color: None,
             lqip_data_uri: None,
-            is_animated,
+            is_animated: sniff_is_animated(abs_path, extension),
         };
+        store_meta(&stat_key, &meta);
+        return meta;
     }
 
     // Step 3: Cache miss — run the real extraction.
@@ -679,14 +675,13 @@ fn extract_media_metadata_cached(
     // extraction so concurrent scans for the same file share the result.
     log::debug!("Media meta cache miss for {}", relative_path);
 
-    // Only a source that could be read gets its result cached under its hash. An
-    // evicted one yields a non-answer (see `source_is_evicted` above), and the
-    // hash — which the file's arrival does not change — would make it permanent.
-    // Reachable now that an evicted file can hold a hash the index recorded for it
-    // while it was local.
-    let cache_hash = content_hash.as_ref().filter(|_| !source_is_evicted);
+    // An evicted source stays out of the singleflight too, not only out of the caches:
+    // it hands one extraction to every concurrent scan of the same content, and this
+    // file's non-answer would be handed to a scan of one that can be read. Reachable now
+    // that an evicted file can hold a hash the index recorded for it while it was local.
+    let shareable_hash = content_hash.as_ref().filter(|_| !source_is_evicted);
 
-    if let (Some(dedup), Some(hash)) = (metadata_dedup, cache_hash) {
+    if let (Some(dedup), Some(hash)) = (metadata_dedup, shareable_hash) {
         let dedup_key = format!("meta:{}", hash);
         // Clone data into owned values for the closure (FnOnce + Send).
         let abs_path_owned = abs_path.to_path_buf();
@@ -722,13 +717,7 @@ fn extract_media_metadata_cached(
                 cache_dir.join("transforms"),
                 ObjectStore::new(objects.root().to_path_buf()),
             );
-            let cached = CachedMediaMeta {
-                dimensions: meta.dimensions,
-                dominant_color: meta.dominant_color.clone(),
-                lqip_data_uri: meta.lqip_data_uri.clone(),
-                is_animated: meta.is_animated,
-            };
-            write_cached_meta(&objects, &transform_cache, &hash_clone, size, &cached);
+            write_cached_meta(&objects, &transform_cache, &hash_clone, size, &CachedMediaMeta::from(&meta));
 
             meta
         });
@@ -748,14 +737,8 @@ fn extract_media_metadata_cached(
     );
 
     // Step 4: Store the result in the transform cache for next time.
-    if let Some(hash) = cache_hash {
-        let cached = CachedMediaMeta {
-            dimensions: meta.dimensions,
-            dominant_color: meta.dominant_color.clone(),
-            lqip_data_uri: meta.lqip_data_uri.clone(),
-            is_animated: meta.is_animated,
-        };
-        write_cached_meta(objects, transform_cache, hash, size, &cached);
+    if let Some(hash) = &content_hash {
+        store_meta(hash, &meta);
     }
 
     meta
