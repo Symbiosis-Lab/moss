@@ -453,6 +453,103 @@ fn a_no_op_page_reports_its_receipt_cold_and_from_the_cache_warm() {
     assert_eq!(warm[0].content_oid.as_deref(), Some(oid.as_str()));
 }
 
+/// Slot content with 8 keys in every map, nested ones included. `ResolvedSlots`
+/// is rebuilt from scratch each build and its `HashMap`s iterate in a per-instance
+/// random order; with 8 keys (40320 orderings) two constructions differ in order
+/// almost every time, so a hash that leaks the order fails on the first pair
+/// rather than on an unlucky run. `edit` is appended to one slot's HTML.
+fn slots_with_eight_keys_per_map(edit: &str) -> ResolvedSlots {
+    let mut content: HashMap<String, EnhanceContent> = (0..8)
+        .map(|i| (format!("slot-{i}"), EnhanceContent::Static { html: format!("<p>{i}{edit}</p>") }))
+        .collect();
+    content.insert(
+        "per-page".to_string(),
+        EnhanceContent::PerPage { pages: (0..8).map(|i| (format!("/p{i}/"), format!("<b>{i}</b>"))).collect() },
+    );
+    content.insert(
+        "per-language".to_string(),
+        EnhanceContent::PerLanguage {
+            default: Some("<i>default</i>".to_string()),
+            by_lang: (0..8).map(|i| (format!("lang-{i}"), format!("<i>{i}</i>"))).collect(),
+        },
+    );
+    let mut slots = ResolvedSlots::empty();
+    slots.merge(&EnhanceResult { success: true, slots: content }, 10, "test");
+    slots
+}
+
+/// The hash keys the slot-injection cache, so identical slot content must hash
+/// identically however its maps happen to iterate. Fifty independent
+/// constructions: a hash that leaks iteration order gives ~50 distinct values.
+/// The second assertion keeps a degenerate "canonical" hash honest — a constant
+/// would also pass the first.
+#[test]
+fn slots_hash_does_not_depend_on_map_iteration_order() {
+    let distinct: std::collections::HashSet<String> =
+        (0..50).map(|_| resolved_slots_hash(&slots_with_eight_keys_per_map(""))).collect();
+    assert_eq!(
+        distinct.len(),
+        1,
+        "the same slot content hashed to {} different values across 50 constructions",
+        distinct.len()
+    );
+    assert_ne!(
+        resolved_slots_hash(&slots_with_eight_keys_per_map("")),
+        resolved_slots_hash(&slots_with_eight_keys_per_map("-edited")),
+        "the hash must still tell different slot content apart"
+    );
+}
+
+/// What that buys: a build that reconstructs identical slots must hit the
+/// injection cache, not miss on every page. Pins the call site, which the test
+/// above cannot see — a pass that stopped keying on `resolved_slots_hash` would
+/// leave that one green.
+///
+/// The record is overwritten with a sentinel before each run, as in the no-op
+/// receipt test above, because a miss writes the real hash back over it.
+#[test]
+fn rebuilt_identical_slots_hit_the_injection_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let (objects, transforms) = slot_test_cache(cache_dir.path());
+    let html = "<html><head></head><body>no markers</body></html>";
+    std::fs::write(dir.path().join("index.html"), html).unwrap();
+
+    let first = slots_with_eight_keys_per_map("");
+    let cold =
+        inject_slots_into_directory_cached(dir.path(), dir.path(), &first, &objects, &transforms).unwrap();
+    let oid = cold[0].content_oid.clone().expect("a no-op page still gets a blob");
+    let source_oid = format!("xxh3:{}", crate::build::assets::paths::compute_binary_hash(html.as_bytes()));
+    let params = serde_json::json!({
+        "page_path": "index.html",
+        "slots_hash": resolved_slots_hash(&first),
+        "ship_rev": crate::build::ship::SHIP_TRANSFORM_REV,
+    });
+
+    for build in 1..=10 {
+        write_slot_inject_record(
+            &objects,
+            &transforms,
+            &source_oid,
+            html.len() as u64,
+            &params,
+            &SlotInjectRecord {
+                content_oid: oid.clone(),
+                manifest_hash: "SENTINEL".to_string(),
+                rewritten: false,
+                residual: vec![],
+            },
+        );
+        let rebuilt = slots_with_eight_keys_per_map("");
+        let warm =
+            inject_slots_into_directory_cached(dir.path(), dir.path(), &rebuilt, &objects, &transforms).unwrap();
+        assert_eq!(
+            warm[0].manifest_hash, "SENTINEL",
+            "build {build}: identical slot content, rebuilt from scratch, missed the cache"
+        );
+    }
+}
+
 /// A record can outlive its blob (GC). A receipt naming a missing blob would
 /// hand `ship_phase` nothing to read, so the hit is refused and the page takes
 /// the miss path, which stores the bytes again.

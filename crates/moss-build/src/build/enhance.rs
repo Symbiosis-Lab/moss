@@ -360,14 +360,24 @@ pub struct SlotInjectionReceipt {
 }
 
 /// Canonical hash of the fully-resolved slot content, for the `slots_hash`
-/// cache-params field. `serde_json::to_vec` serializes `HashMap` fields via
-/// `serde_json::Value`'s (non-`preserve_order`) `Map`, which is BTreeMap-
-/// backed and therefore key-sorted — so this hash is stable across runs
-/// regardless of the source `HashMap`s' random iteration order (the
-/// `26b400251` HashMap-nondeterminism lesson, satisfied for free rather than
-/// by hand-sorting every nested map).
+/// cache-params field.
+///
+/// The bytes hashed must not depend on `HashMap` iteration order, which is
+/// random per instance: `ResolvedSlots` is rebuilt from scratch every build, so
+/// an order-dependent hash differs build to build and the slot-injection cache
+/// misses on pages that did not change.
+///
+/// `serde_json::to_vec(slots)` is NOT order-independent — it walks each
+/// `HashMap` in its own iteration order and writes keys as it meets them.
+/// Going through [`serde_json::Value`] first is what sorts: `Value::Object`
+/// is a `BTreeMap` unless serde_json's `preserve_order` feature is on (nothing
+/// in the build graph enables it), and every nested map goes through the same
+/// conversion. If a dependency ever turns that feature on,
+/// `slots_hash_does_not_depend_on_map_iteration_order` fails.
 fn resolved_slots_hash(slots: &ResolvedSlots) -> String {
-    let bytes = serde_json::to_vec(slots).unwrap_or_default();
+    let bytes = serde_json::to_value(slots)
+        .and_then(|canonical| serde_json::to_vec(&canonical))
+        .unwrap_or_default();
     crate::build::assets::paths::compute_binary_hash(&bytes)
 }
 
