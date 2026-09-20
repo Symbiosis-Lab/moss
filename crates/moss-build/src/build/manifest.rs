@@ -596,15 +596,27 @@ impl PendingManifest {
         // `docs/archive/2026-05-18-manifest-integrity.md`.
         self.touched.insert(rel_path.clone());
 
-        // Record the staged CAS object backing these exact bytes, when the
-        // caller already knows one. Never cleared here on a `None` — the only
-        // producer that ever passes `Some` (the asset walk) registers each
-        // path once per build, so there is nothing for a later `None` to race
-        // against; `SealedManifest::stamp_ship_fingerprints` is the one place
-        // a `Cas` entry is replaced after the fact (a post-seal repair
-        // transitions it straight to `Fingerprint`).
-        if let Some(oid) = oid {
-            self.ship_sources.insert(rel_path.clone(), ShipSource::Cas(oid));
+        // The last registration of a path wins, its CAS object included: an oid
+        // is valid only for the (path, hash) pair it was registered with. A
+        // later registration that carries no oid describes bytes nobody has a
+        // blob for, so it drops the one on record instead of leaving it to ship
+        // the OLD bytes under the NEW hash — which deploy refuses whole.
+        //
+        // A path is registered more than once per build. The notebook step
+        // rewrites viewer pages (`notebooks/x.html`) after the slot pass has
+        // seen the previous build's copy of them; and a page the render phase
+        // registered can be re-registered by anything that later learns better.
+        // `ship_sources` holds only `Cas` here (`Fingerprint` is stamped after
+        // seal, on `SealedManifest`), so removing is dropping the `Cas`.
+        // `SealedManifest::stamp_ship_fingerprints` remains the one place a
+        // `Cas` entry is replaced after seal.
+        match oid {
+            Some(oid) => {
+                self.ship_sources.insert(rel_path.clone(), ShipSource::Cas(oid));
+            }
+            None => {
+                self.ship_sources.remove(&rel_path);
+            }
         }
 
         // Unconditional: every artifact must reach the deploy wire manifest.

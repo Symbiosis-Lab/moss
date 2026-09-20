@@ -1075,3 +1075,41 @@ fn cancelled_notebook_run_keeps_the_previous_bundle_byte_identical() {
         assert_eq!(sealed.files().get(key), prev.files.get(key), "{key} entry must be byte-identical");
     }
 }
+
+// -----------------------------------------------------------------------
+// A CAS object id belongs to the (path, hash) it was registered with
+// -----------------------------------------------------------------------
+
+/// Notebook viewer pages are written AFTER the slot pass, so on a second build
+/// the pass can see the previous viewer and hand it an oid; the notebook step
+/// then rewrites the page and registers the new hash without one. If the old
+/// oid survived, `ship_phase` would read the old blob under the new hash and
+/// deploy would refuse the generation.
+#[test]
+fn a_later_registration_without_an_oid_drops_the_earlier_cas_source() {
+    use crate::build::served_path::ServedPath;
+    let sp = ServedPath::from_source("notebooks/analysis.html").unwrap();
+    let mut m = empty_manifest();
+
+    m.register_with_oid_for_test(&sp, "aaaaaaaaaaaaaaaa", HashBucket::Files, "old-blob".to_string());
+    m.register_hashed(&sp, "bbbbbbbbbbbbbbbb", HashBucket::NotebookOutputs);
+
+    let sealed = m.seal();
+    assert_eq!(
+        sealed.staged_oid("notebooks/analysis.html"),
+        None,
+        "an oid registered for the OLD hash must not outlive a re-registration under a new one"
+    );
+}
+
+#[test]
+fn a_later_registration_with_an_oid_replaces_the_earlier_one() {
+    use crate::build::served_path::ServedPath;
+    let sp = ServedPath::from_source("a.html").unwrap();
+    let mut m = empty_manifest();
+
+    m.register_with_oid_for_test(&sp, "aaaaaaaaaaaaaaaa", HashBucket::Files, "first".to_string());
+    m.register_with_oid_for_test(&sp, "bbbbbbbbbbbbbbbb", HashBucket::Files, "second".to_string());
+
+    assert_eq!(m.seal().staged_oid("a.html"), Some("second"));
+}
