@@ -147,15 +147,15 @@ Pre-commit consistency check for the shortcode demo blocks under
 
 ## Landing animation checks
 
-For publication, test the compiled generation through a plain static server as well as moss's native preview. The preview bridge can change harvested HTML; in September 2026 it masked a shipping transform that corrupted a quoted `data-moss-preview` attribute and broke the watercolor renderer only after deployment. Use an explicit compiled directory, then repeat the animation check against the scratch deployment:
+One command runs the whole regression net — every check below plus `check-landing-structure.mjs` — against a single served build, printing one script/engine/pass-or-fail table:
 
 ```bash
-python3 -m http.server 8088 --directory site/.moss/build/current
-PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node scripts/check-landing-transitions.mjs http://localhost:8088/
-PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node scripts/check-landing-mobile.mjs http://localhost:8088/
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node scripts/check-landing-all.mjs
 ```
 
-The scripts reuse an installed Playwright package (`playwright` by default); no new browser dependency is required. The transition check runs Chromium and WebKit; `ENGINE=chromium` or `ENGINE=webkit` narrows a diagnosis. Native preview remains the editing workflow; the plain artifact check verifies exactly what gets published.
+With no argument it builds nothing itself but serves `site/.moss/build/current` on a free local port (`scripts/landing-harness.mjs`); run `target/debug/moss-cli build site` first. Every script below is also independently runnable the same way — `node scripts/check-landing-pin.mjs` with no URL serves the local build; passing a URL (`https://scratch.mosspub.com/` or another `http://localhost:PORT/`) runs the same script against a deployed site instead, including the scratch deployment used before publication. The preview bridge can change harvested HTML; in September 2026 it masked a shipping transform that corrupted a quoted `data-moss-preview` attribute and broke the watercolor renderer only after deployment — native preview remains the editing workflow, the plain artifact check verifies exactly what gets published.
+
+The scripts reuse an installed Playwright package (`playwright` by default); no new browser dependency is required. The transition check runs Chromium and WebKit; `ENGINE=chromium` or `ENGINE=webkit` narrows a diagnosis.
 
 `check-landing-cold-bottom.mjs <site-url>` delays the harvested UI and verifies immediate closing-scene display, reversal, and a jump during an active join on desktop and mobile. `check-landing-intent.mjs <site-url>` checks light wheel gestures and stable intro returns at compact and large desktop sizes. Both accept `PLAYWRIGHT_MODULE` like the other browser harnesses. Run them against plain compiled files or the scratch deployment as well as the native preview.
 
