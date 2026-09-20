@@ -300,32 +300,63 @@ fn log_residual_slot_markers(page_path: &str, residual: &[&str]) {
 /// Transform name used for cached `html/slots` output in the `TransformCache`.
 const SLOT_INJECT_TRANSFORM: &str = "html/slots";
 
-/// Cached record for an `html/slots` transform: what the injection produced
-/// (`None` when it was a no-op — no known marker was present to substitute),
-/// plus the residual-marker scan result so the `residual_known_slot_markers`
+/// Cached record for an `html/slots` transform: the page's shipped bytes (the
+/// blob holding them and their manifest hash), whether injection changed them,
+/// and the residual-marker scan result so the `residual_known_slot_markers`
 /// diagnostic can still fire on a cache hit (moss#919 item 2, prior-art
 /// requirement from `4dca6d3fc`: a coverage bug once shipped a raw marker to a
 /// real user's browser — caching must never make that WARN skippable).
 ///
-/// `injected` is one `Option` holding two values, not two `Option`s that must
-/// agree: the content-store OID of the injected bytes, and the **manifest
-/// hash** of those bytes after `ship::apply_transform`. Both exist exactly when
-/// injection rewrote the page, so a state where one is present and the other is
-/// not cannot be written down.
+/// The blob and hash are recorded for EVERY outcome, a no-op included, so a hit
+/// hands back the page's [`SlotInjectionReceipt`] without touching its bytes.
+/// Recomputing them is a SHA-256, three strip regexes and an xxh3 per page,
+/// inside the stage-write lock, scaling with the corpus — and a watch rebuild
+/// carries most pages, so the no-op is the outcome most hits have.
 ///
-/// The manifest hash has to be stored because neither arm can recover it later.
-/// The stage holds pre-strip bytes by design (the preview wants the annotations
-/// the published site does not), and the cache-hit arm `link_to`s a blob keyed
-/// by SHA-256 of the *un*stripped content — the wrong algorithm over the wrong
-/// bytes. Storing it at miss time, when the injected bytes are in hand, is what
-/// lets the registration site stop reading the stage back.
+/// `manifest_hash` is the hash of `content_oid`'s bytes after
+/// `ship::apply_transform`. It has to be stored because neither arm can recover
+/// it later. The stage holds pre-strip bytes by design (the preview wants the
+/// annotations the published site does not), and `content_oid` is SHA-256 of the
+/// *un*stripped content — the wrong algorithm over the wrong bytes. Storing it
+/// at miss time, when the bytes are in hand, is what lets the registration site
+/// stop reading the stage back.
+///
+/// `rewritten` says whether those bytes differ from the freshly-rendered page
+/// this record is keyed on: a hit `link_to`s them into place when they do, and
+/// leaves the render's own bytes alone when they do not.
 ///
 /// A shape change here needs no version gate: `read_slot_inject_record` returns
-/// `None` on a deserialize failure and falls through to a live re-run.
+/// `None` on a deserialize failure and falls through to a live re-run — which is
+/// how records written before these fields existed are retired.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SlotInjectRecord {
-    injected: Option<(String, String)>,
+    content_oid: String,
+    manifest_hash: String,
+    rewritten: bool,
     residual: Vec<String>,
+}
+
+/// What the slot pass reports about one page it scanned: the bytes the page
+/// ships as, in the two forms the manifest needs.
+///
+/// One per scanned page, rewritten or not — a page injection left alone still
+/// needs a CAS object for `ship_phase` to read instead of the shared stage
+/// path. The pass scans everything in the stage, so a receipt is a claim about
+/// bytes on disk, not a claim that this build produced them: the consumer
+/// (`emit::slots::apply_to_stage_and_manifest`) decides which receipts belong
+/// to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotInjectionReceipt {
+    /// Stage-relative, `/`-separated.
+    pub page_path: String,
+    /// Hash of the bytes the SITE serves: the staged bytes after
+    /// `ship::apply_transform`.
+    pub manifest_hash: String,
+    /// The CAS object holding the staged bytes exactly as they stand after
+    /// injection (before `apply_transform`, which `ship_phase` applies on read).
+    /// `None` when the store could not take them — the page then ships from the
+    /// stage under a fingerprint, as before ship-by-oid existed.
+    pub content_oid: Option<String>,
 }
 
 /// Canonical hash of the fully-resolved slot content, for the `slots_hash`
@@ -389,6 +420,43 @@ fn write_slot_inject_record(
     }
 }
 
+/// Pages the object store could not take during one pass.
+///
+/// A full or unwritable store must cost a page its CAS object, never the build,
+/// so storing fails OPEN here and the reason is kept for one report at the end:
+/// a store that is full fails every page, and a WARN per page is a corpus's
+/// worth of the same line.
+#[derive(Default)]
+struct StoreFailures {
+    pages: usize,
+    first_reason: Option<String>,
+}
+
+impl StoreFailures {
+    /// `store_bytes`, with `None` for a page the store could not take.
+    fn store(&mut self, object_store: &crate::build::cache::ObjectStore, bytes: &[u8]) -> Option<String> {
+        match object_store.store_bytes(bytes) {
+            Ok(oid) => Some(oid),
+            Err(reason) => {
+                self.pages += 1;
+                self.first_reason.get_or_insert(reason);
+                None
+            }
+        }
+    }
+
+    fn report(self) {
+        if let Some(reason) = self.first_reason {
+            log::warn!(
+                target: "slots",
+                "{} page(s) could not be stored in the content store ({}); they ship from the stage under a fingerprint instead of an immutable copy",
+                self.pages,
+                reason,
+            );
+        }
+    }
+}
+
 /// The slot-injection pass over the stage, used by the live pipeline.
 ///
 /// `generate_blocking_content` re-renders and writes every page's HTML on
@@ -406,6 +474,11 @@ fn write_slot_inject_record(
 /// re-emits the cached residual-marker WARN if the miss that produced this
 /// entry had one — the diagnostic must never become cache-skippable. On a
 /// miss, runs the real read/inject/diff once and stores the result.
+///
+/// Returns one [`SlotInjectionReceipt`] per page scanned, whichever way it went.
+/// A CAS that cannot take a page's bytes costs that page its `content_oid`, never
+/// the build: a full or unwritable object store must not fail a build that
+/// succeeds today for a page that never needed a blob.
 pub fn inject_slots_into_directory_cached(
     // The VAULT root, not `dir` (which is the stage below it): `io_stop` asks
     // the watcher predicates about the path inside the vault (#1067).
@@ -416,20 +489,21 @@ pub fn inject_slots_into_directory_cached(
     transform_cache: &crate::build::cache::TransformCache,
     // `BuildStopped`: this reads the stage back, so a cloud eviction here must
     // stay distinguishable from a plugin returning garbage. See `build::outcome`.
-) -> Result<Vec<(String, String)>, BuildStopped> {
+) -> Result<Vec<SlotInjectionReceipt>, BuildStopped> {
     let slots_hash = resolved_slots_hash(slots);
-    let mut changed = Vec::new();
+    let mut receipts = Vec::new();
     let mut scanned = 0usize;
+    let mut rewritten = 0usize;
     let mut residual_files = 0usize;
+    let mut store_failures = StoreFailures::default();
     // Split the pass into the part that scales with the CORPUS (walk every HTML
     // file, read it, hash it — paid even when nothing changed) and the part that
     // scales with the DELTA (inject + write). moss#968 predicted the walk is the
     // majority of the ~0.9s and that narrowing the render set therefore reclaims
     // less of it than it looks; these two numbers settle that.
     // `walk` is measured directly and `rewrite` derived as the remainder, because
-    // the cache-hit path below leaves the loop body through three separate
-    // `continue`s and an accumulator at each one would rot the moment a fourth
-    // is added.
+    // the cache-hit path below leaves the loop body through a `continue` and an
+    // accumulator at each exit would rot the moment another is added.
     let mut walk_ms = std::time::Duration::ZERO;
     let t_pass = std::time::Instant::now();
 
@@ -456,28 +530,29 @@ pub fn inject_slots_into_directory_cached(
             "ship_rev": crate::build::ship::SHIP_TRANSFORM_REV,
         });
 
-        if let Some(record_oid) =
-            transform_cache.find_cached_output(&source_oid, SLOT_INJECT_TRANSFORM, &params)
-        {
-            if let Some(record) = read_slot_inject_record(object_store, &record_oid) {
-                if !record.residual.is_empty() {
-                    residual_files += 1;
-                    let residual: Vec<&str> = record.residual.iter().map(String::as_str).collect();
-                    log_residual_slot_markers(&page_path, &residual);
-                }
-                match record.injected {
-                    Some((content_oid, manifest_hash))
-                        if object_store.get_path(&content_oid).is_some() =>
-                    {
-                        object_store.link_to(&content_oid, entry.path())?;
-                        changed.push((page_path, manifest_hash));
-                        continue;
-                    }
-                    None => continue, // cached no-op — the freshly-rendered raw bytes are already correct
-                    Some(_) => {}     // inner blob GC'd — fall through to a live re-run
-                }
+        let hit = transform_cache
+            .find_cached_output(&source_oid, SLOT_INJECT_TRANSFORM, &params)
+            // Present but unreadable/corrupt (or written before this shape): a miss.
+            .and_then(|record_oid| read_slot_inject_record(object_store, &record_oid))
+            // Its blob may have been collected since: a miss too, re-run live. A
+            // receipt must never name a blob `ship_phase` would not find.
+            .filter(|record| object_store.get_path(&record.content_oid).is_some());
+        if let Some(record) = hit {
+            if !record.residual.is_empty() {
+                residual_files += 1;
+                let residual: Vec<&str> = record.residual.iter().map(String::as_str).collect();
+                log_residual_slot_markers(&page_path, &residual);
             }
-            // Record present but unreadable/corrupt — fall through as well.
+            if record.rewritten {
+                object_store.link_to(&record.content_oid, entry.path())?;
+                rewritten += 1;
+            }
+            receipts.push(SlotInjectionReceipt {
+                page_path,
+                manifest_hash: record.manifest_hash,
+                content_oid: Some(record.content_oid),
+            });
+            continue;
         }
 
         // Miss (or stale record) — do the real work.
@@ -487,45 +562,52 @@ pub fn inject_slots_into_directory_cached(
             residual_files += 1;
             log_residual_slot_markers(&page_path, &residual);
         }
-        let injected_record = if injected != html {
+        let changed_page = injected != html;
+        if changed_page {
             // `write_output`, not `fs::write`: `dir` is `.moss/build/staging/`,
             // and an `O_TRUNC` open of a page the sync client evicted between
             // render and injection fails EDEADLK (ADR-043).
             crate::build::io_utils::write_output(entry.path(), injected.as_bytes())
                 .map_err(|e| io_stop(root, "write injected page", entry.path(), e))?;
-            // The manifest records the bytes the SITE will serve, which are the
-            // stripped ones — computed here, from the bytes in hand, because
-            // this is the last moment anything holds them.
-            let manifest_hash = crate::build::assets::paths::compute_binary_hash(
-                &crate::build::ship::apply_transform(
-                    crate::build::ship::transform_for(&page_path),
-                    injected.as_bytes(),
-                ),
-            );
-            changed.push((page_path.clone(), manifest_hash.clone()));
-            Some((object_store.store_bytes(injected.as_bytes())?, manifest_hash))
-        } else {
-            None
-        };
-        write_slot_inject_record(
-            object_store,
-            transform_cache,
-            &source_oid,
-            html.len() as u64,
-            &params,
-            &SlotInjectRecord {
-                injected: injected_record,
-                residual: residual.iter().map(|s| s.to_string()).collect(),
-            },
+            rewritten += 1;
+        }
+        // The manifest records the bytes the SITE will serve, which are the
+        // stripped ones — computed here, from the bytes in hand, because
+        // this is the last moment anything holds them.
+        let manifest_hash = crate::build::assets::paths::compute_binary_hash(
+            &crate::build::ship::apply_transform(
+                crate::build::ship::transform_for(&page_path),
+                injected.as_bytes(),
+            ),
         );
+        let content_oid = store_failures.store(object_store, injected.as_bytes());
+        // Cache only what a hit can serve whole: a record without its blob would
+        // have to be a miss again anyway.
+        if let Some(oid) = &content_oid {
+            write_slot_inject_record(
+                object_store,
+                transform_cache,
+                &source_oid,
+                html.len() as u64,
+                &params,
+                &SlotInjectRecord {
+                    content_oid: oid.clone(),
+                    manifest_hash: manifest_hash.clone(),
+                    rewritten: changed_page,
+                    residual: residual.iter().map(|s| s.to_string()).collect(),
+                },
+            );
+        }
+        receipts.push(SlotInjectionReceipt { page_path, manifest_hash, content_oid });
     }
 
+    store_failures.report();
     let total = t_pass.elapsed();
     log::info!(
         target: "slots",
         "slot injection: {} html scanned, {} rewritten, {} with unresolved markers",
         scanned,
-        changed.len(),
+        rewritten,
         residual_files,
     );
     log::info!(
@@ -535,9 +617,9 @@ pub fn inject_slots_into_directory_cached(
         walk_ms,
         scanned,
         total.saturating_sub(walk_ms),
-        changed.len(),
+        rewritten,
     );
-    Ok(changed)
+    Ok(receipts)
 }
 
 /// Wrap any `<style>…</style>` blocks in the `head-end` slot of the given

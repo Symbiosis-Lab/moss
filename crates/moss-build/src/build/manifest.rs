@@ -136,8 +136,9 @@ pub struct PendingManifest {
     blocking_keys: HashSet<String>,
     /// Output-bucket paths registered during this build (mark set). At seal
     /// time, the four output buckets are pruned to retain only keys in this
-    /// set. Populated unconditionally by `register_with_hash`; not exposed
-    /// outside the struct. See module docs for the rationale.
+    /// set. Populated unconditionally by `register_with_hash`; outside the
+    /// struct it is visible only as [`owns`][PendingManifest::owns]. See module
+    /// docs for the rationale.
     touched: HashSet<String>,
     /// The PREVIOUS build's `source_to_output`, kept because `new` clears the
     /// live one. Read by [`carry_forward_deferred_page`], which is the only way
@@ -191,6 +192,13 @@ pub struct PendingManifest {
     /// the field lives on `PendingManifest` rather than only on
     /// `SealedManifest` because [`seal`][PendingManifest::seal] carries it
     /// straight into the sealed manifest's own map of the same name.
+    ///
+    /// Two kinds of producer fill it: the background workers, through
+    /// [`apply_message`][PendingManifest::apply_message] (the deferred-asset
+    /// walk, image and video encodes), and the slot pass, through
+    /// [`attach_final_bytes`][PendingManifest::attach_final_bytes], for the
+    /// rendered HTML pages of THIS build. The last registration of a path wins,
+    /// its oid included — see `register_with_hash`.
     ///
     /// In-memory only — deliberately not a field of `SiteHashes`/`hashes.json`.
     /// `ship_phase` reads a `Cas` entry (through `SealedManifest::staged_oid`)
@@ -334,8 +342,8 @@ impl PendingManifest {
     /// [`register`][PendingManifest::register] everywhere else.
     ///
     /// `oid` is `Some` only when the sender already knows the CAS object
-    /// backing these exact staged bytes (currently just `copy_deferred_assets`'
-    /// asset walk); see `ship_sources`.
+    /// backing these exact staged bytes (the deferred-asset walk and the image
+    /// and video encodes); see `ship_sources`.
     pub(crate) fn apply_message(&mut self, rel_path: String, hash: &str, bucket: HashBucket, oid: Option<String>) {
         self.register_with_hash(rel_path, hash, bucket, oid);
     }
@@ -568,6 +576,40 @@ impl PendingManifest {
         bucket: HashBucket,
     ) {
         self.register_with_hash(rel_path.as_str().to_string(), hash, bucket, None);
+    }
+
+    /// Whether THIS build's own registrations already name `rel_path` — the
+    /// same `touched` mark set `seal` prunes by, and nothing carried in from the
+    /// previous manifest. What separates a page this build produced from one
+    /// that merely still sits in `stage_dir`.
+    pub(crate) fn owns(&self, rel_path: &str) -> bool {
+        self.touched.contains(rel_path)
+    }
+
+    /// Give a page this build already registered its final bytes: the manifest
+    /// hash of what the site will serve, and the CAS object holding exactly
+    /// those bytes (`None` when the store could not take them, which leaves the
+    /// page to the stage-path fingerprint). Returns `false` and changes nothing
+    /// for a path this build does not own.
+    ///
+    /// Attach, not register, and the refusal is the point. The slot pass walks
+    /// every `.html` under `stage_dir`, and the stage keeps what the previous
+    /// build left there: `sweep_staging` spares anything the previous manifest
+    /// listed, and `remove_stale_html` runs AFTER the pass and deletes only
+    /// `index*.html`. Registering a stale page would mark it `touched`, keep it
+    /// through `seal`, and — because a live CAS blob counts as present to
+    /// `drop_absent_outputs` — ship a deleted page from the CAS for good.
+    pub(crate) fn attach_final_bytes(
+        &mut self,
+        rel_path: &crate::build::served_path::ServedPath,
+        hash: &str,
+        oid: Option<String>,
+    ) -> bool {
+        if !self.owns(rel_path.as_str()) {
+            return false;
+        }
+        self.register_with_hash(rel_path.as_str().to_string(), hash, HashBucket::Files, oid);
+        true
     }
 
     /// Test-only escape hatch mirroring the coordinator's `oid`-carrying path
@@ -948,12 +990,11 @@ impl SealedManifest {
         self.inner.pruned_image_outputs = keys;
     }
 
-    /// The CAS object id already backing `rel_path`'s staged bytes, if
-    /// [`copy_deferred_assets`] recorded one and it has not since transitioned
-    /// to a [`ShipSource::Fingerprint`] (a post-seal repair rewrote it
-    /// directly — see [`stamp_ship_fingerprints`][Self::stamp_ship_fingerprints]).
-    ///
-    /// [`copy_deferred_assets`]: crate::build::media::pipeline::copy_deferred_assets
+    /// The CAS object id already backing `rel_path`'s staged bytes, if a
+    /// producer recorded one (see [`PendingManifest::ship_sources`]) and it has
+    /// not since transitioned to a [`ShipSource::Fingerprint`] (a post-seal
+    /// repair rewrote it directly — see
+    /// [`stamp_ship_fingerprints`][Self::stamp_ship_fingerprints]).
     pub(crate) fn staged_oid(&self, rel_path: &str) -> Option<&str> {
         match self.ship_sources.get(rel_path) {
             Some(ShipSource::Cas(oid)) => Some(oid.as_str()),

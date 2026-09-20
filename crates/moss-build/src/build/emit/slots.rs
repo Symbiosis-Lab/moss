@@ -3,7 +3,8 @@
 //!
 //! Slot injection rewrites `<!-- slot:... -->` markers into real content, so
 //! every page it touches has different bytes than the render phase registered.
-//! This module runs that pass and re-registers the rewritten pages, which is
+//! This module runs that pass and hands its receipts to the manifest — the
+//! final hash, and the CAS object `ship_phase` reads the page from — which is
 //! why it owns both halves: a caller that ran one without the other would seal
 //! a manifest describing bytes that are no longer on disk.
 //!
@@ -48,7 +49,7 @@ pub fn apply_to_stage_and_manifest(
     // first point that has both. See `build::emit::feature_styles`.
     crate::build::emit::feature_styles::emit(slots.feature_styles(), stage_dir, pending)?;
 
-    let changed = crate::build::enhance::inject_slots_into_directory_cached(
+    let receipts = crate::build::enhance::inject_slots_into_directory_cached(
         paths.project_root(),
         stage_dir,
         slots,
@@ -59,14 +60,26 @@ pub fn apply_to_stage_and_manifest(
     // verdict. `BuildStopped` has no `Display`, so that mistake cannot compile.
     .map_err(|e| e.with_context("Slot injection failed on site-stage"))?;
 
-    // Registers what the injection pass REPORTS it wrote, never what a read of
-    // the stage says is there. The hash arrives in the receipt because the
-    // injected bytes existed in memory at write time and nowhere afterwards.
-    for (rel_path_str, hash) in changed {
-        let sp = crate::build::served_path::ServedPath::from_source(&rel_path_str)
-            .map_err(|e| format!("slot-inject registration: invalid path {rel_path_str}: {e}"))?;
-
-        pending.register_hashed(&sp, &hash, crate::build::manifest::HashBucket::Files);
+    // Takes what the injection pass REPORTS, never what a read of the stage says
+    // is there. The hash and the CAS object arrive in the receipt because the
+    // bytes existed in memory when the pass held them and nowhere afterwards.
+    //
+    // The pass reports on every `.html` in the stage, including pages an earlier
+    // build left there, so a receipt is not proof that this build made the page.
+    // `attach_final_bytes` gives the final bytes only to pages the render phase
+    // already registered, and drops the rest — see it for what a stale page
+    // would otherwise do. Nothing that used to be registered here is lost: a page
+    // keeps its markers only until the first pass that fills them, so the pages
+    // the pass rewrites are the ones this build just rendered.
+    for receipt in receipts {
+        // A stage path no page of this build could have (`_moss/...` bundles the
+        // search lane laid down last time) is simply not one.
+        let Ok(sp) = crate::build::served_path::ServedPath::from_source(&receipt.page_path) else {
+            continue;
+        };
+        if !pending.attach_final_bytes(&sp, &receipt.manifest_hash, receipt.content_oid) {
+            continue;
+        }
         let Some(entry) = pending.files().get(sp.as_str()).cloned() else {
             continue;
         };

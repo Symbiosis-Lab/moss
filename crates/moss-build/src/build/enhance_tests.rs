@@ -341,6 +341,7 @@ fn inject_slots_into_directory_cached_hit_matches_miss_output_byte_for_byte() {
             .unwrap();
 
     assert_eq!(changed_a, changed_b);
+    assert!(changed_a[0].content_oid.is_some(), "an injected page reports the blob it minted");
     let out_a = std::fs::read_to_string(src_dir_a.path().join("index.html")).unwrap();
     let out_b = std::fs::read_to_string(src_dir_b.path().join("index.html")).unwrap();
     assert_eq!(out_a, out_b);
@@ -378,7 +379,9 @@ fn inject_slots_receipt_hashes_the_stripped_bytes_not_the_staged_ones() {
             &staged,
         ),
     );
-    assert_eq!(changed, vec![("index.html".to_string(), expected.clone())]);
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0].page_path, "index.html");
+    assert_eq!(changed[0].manifest_hash, expected);
     assert_ne!(
         expected,
         crate::build::assets::paths::compute_binary_hash(&staged),
@@ -386,30 +389,142 @@ fn inject_slots_receipt_hashes_the_stripped_bytes_not_the_staged_ones() {
     );
 }
 
+/// The receipt of a page injection leaves alone: the blob holds its bytes, the
+/// hash is that of the SHIPPED bytes, and a hit takes both from the record — no
+/// hash is recomputed. Replaces a test that mutated the file between runs and so
+/// changed the cache key, exercising a miss both times.
+///
+/// The record is overwritten with a sentinel hash between the runs: a warm run
+/// that answered by rehashing would report the real one.
 #[test]
-fn inject_slots_into_directory_cached_no_op_result_is_cached_too() {
-    let src_dir_a = tempfile::tempdir().unwrap();
-    let src_dir_b = tempfile::tempdir().unwrap();
+fn a_no_op_page_reports_its_receipt_cold_and_from_the_cache_warm() {
+    let dir = tempfile::tempdir().unwrap();
     let cache_dir = tempfile::tempdir().unwrap();
     let (objects, transforms) = slot_test_cache(cache_dir.path());
-    // No markers at all — injection is a no-op (content_oid: None cache path).
+    // No markers at all, and an annotation the shipped bytes lose.
+    let html = r#"<html><head></head><body><p data-source-line="2">no markers</p></body></html>"#;
+    std::fs::write(dir.path().join("index.html"), html).unwrap();
+    let slots = ResolvedSlots::empty();
+    let run = || {
+        inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms).unwrap()
+    };
+
+    let cold = run();
+    assert_eq!(cold.len(), 1);
+    let oid = cold[0].content_oid.clone().expect("a no-op page still gets a blob");
+    assert_eq!(
+        std::fs::read(objects.get_path(&oid).unwrap()).unwrap(),
+        html.as_bytes(),
+        "the blob holds the page exactly as staged"
+    );
+    assert_eq!(
+        cold[0].manifest_hash,
+        crate::build::assets::paths::compute_binary_hash(&crate::build::ship::apply_transform(
+            crate::build::ship::transform_for("index.html"),
+            html.as_bytes(),
+        )),
+        "the hash is of what the site serves, annotations stripped"
+    );
+    assert_eq!(std::fs::read_to_string(dir.path().join("index.html")).unwrap(), html, "and the page is untouched");
+
+    let source_oid = format!("xxh3:{}", crate::build::assets::paths::compute_binary_hash(html.as_bytes()));
+    let params = serde_json::json!({
+        "page_path": "index.html",
+        "slots_hash": resolved_slots_hash(&slots),
+        "ship_rev": crate::build::ship::SHIP_TRANSFORM_REV,
+    });
+    write_slot_inject_record(
+        &objects,
+        &transforms,
+        &source_oid,
+        html.len() as u64,
+        &params,
+        &SlotInjectRecord {
+            content_oid: oid.clone(),
+            manifest_hash: "SENTINEL".to_string(),
+            rewritten: false,
+            residual: vec![],
+        },
+    );
+
+    let warm = run();
+    assert_eq!(warm.len(), 1);
+    assert_eq!(warm[0].manifest_hash, "SENTINEL", "a hit must answer from the record, not rehash");
+    assert_eq!(warm[0].content_oid.as_deref(), Some(oid.as_str()));
+}
+
+/// A record can outlive its blob (GC). A receipt naming a missing blob would
+/// hand `ship_phase` nothing to read, so the hit is refused and the page takes
+/// the miss path, which stores the bytes again.
+#[test]
+fn a_record_naming_a_collected_blob_is_a_miss_that_stores_it_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let (objects, transforms) = slot_test_cache(cache_dir.path());
     let html = "<html><head></head><body>no markers</body></html>";
-    std::fs::write(src_dir_a.path().join("index.html"), html).unwrap();
-    std::fs::write(src_dir_b.path().join("index.html"), html).unwrap();
+    std::fs::write(dir.path().join("index.html"), html).unwrap();
     let slots = ResolvedSlots::empty();
 
-    inject_slots_into_directory_cached(src_dir_a.path(), src_dir_a.path(), &slots, &objects, &transforms).unwrap();
-    // Prove the cache-hit no-op path does not overwrite the file: mutate
-    // it between the miss and the hit, then confirm the hit leaves the
-    // mutation untouched (a real rewrite would clobber it back to `html`).
-    std::fs::write(src_dir_b.path().join("index.html"), "MUTATED").unwrap();
-    let changed_b =
-        inject_slots_into_directory_cached(src_dir_b.path(), src_dir_b.path(), &slots, &objects, &transforms)
-            .unwrap();
+    let cold =
+        inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms).unwrap();
+    let oid = cold[0].content_oid.clone().unwrap();
+    std::fs::remove_file(objects.get_path(&oid).unwrap()).unwrap();
+    assert!(objects.get_path(&oid).is_none(), "fixture: the blob is gone");
 
-    assert!(changed_b.is_empty());
-    let out_b = std::fs::read_to_string(src_dir_b.path().join("index.html")).unwrap();
-    assert_eq!(out_b, "MUTATED");
+    let warm =
+        inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms).unwrap();
+
+    assert_eq!(warm[0].content_oid.as_deref(), Some(oid.as_str()));
+    assert!(objects.get_path(&oid).is_some(), "the miss path must put the blob back");
+}
+
+/// A full or unwritable object store must not fail the pass: it costs each page
+/// its `content_oid`, and the page — injected or not — still gets its hash and its
+/// place in the stage. Both arms, because they store through the same call.
+#[test]
+fn an_unwritable_object_store_costs_a_page_its_oid_not_the_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    // A file where the store's directory should be: every write beneath it fails.
+    let blocker = cache_dir.path().join("not-a-dir");
+    std::fs::write(&blocker, "x").unwrap();
+    let objects = crate::build::cache::ObjectStore::new(blocker.join("objects"));
+    let transforms = crate::build::cache::TransformCache::new(
+        cache_dir.path().join("transforms"),
+        crate::build::cache::ObjectStore::new(blocker.join("objects")),
+    );
+    std::fs::write(
+        dir.path().join("marked.html"),
+        "<html><head><!-- slot:head-end --></head><body></body></html>",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("plain.html"), "<html><body>no markers</body></html>").unwrap();
+
+    let mut receipts = inject_slots_into_directory_cached(
+        dir.path(),
+        dir.path(),
+        &head_end_slots("<style>h1{}</style>"),
+        &objects,
+        &transforms,
+    )
+    .expect("a store that cannot take blobs must not fail the pass");
+    receipts.sort_by(|a, b| a.page_path.cmp(&b.page_path));
+
+    assert_eq!(receipts.len(), 2);
+    for receipt in &receipts {
+        assert_eq!(receipt.content_oid, None, "{}: nothing to name", receipt.page_path);
+        let staged = std::fs::read(dir.path().join(&receipt.page_path)).unwrap();
+        assert_eq!(
+            receipt.manifest_hash,
+            crate::build::assets::paths::compute_binary_hash(&crate::build::ship::apply_transform(
+                crate::build::ship::transform_for(&receipt.page_path),
+                &staged,
+            )),
+            "{}: the hash still describes the staged bytes",
+            receipt.page_path
+        );
+    }
+    assert!(std::fs::read_to_string(dir.path().join("marked.html")).unwrap().contains("<style>h1{}</style>"));
 }
 
 #[test]
@@ -429,7 +544,9 @@ fn slot_inject_record_residual_round_trips_through_the_cache() {
     let (objects, transforms) = slot_test_cache(cache_dir.path());
     let params = serde_json::json!({ "page_path": "index.html", "slots_hash": "test" });
     let record = SlotInjectRecord {
-        injected: None,
+        content_oid: "0".repeat(64),
+        manifest_hash: "0".repeat(16),
+        rewritten: false,
         residual: vec!["footer-end".to_string()],
     };
     write_slot_inject_record(&objects, &transforms, "xxh3:deadbeef", 4, &params, &record);
