@@ -16,16 +16,22 @@
 //!   `.scope()`) is sampled by `advertise_sealed` itself immediately after
 //!   `materialize_and_promote` returns and before `drop(cache_lease)` — proof
 //!   the lease is still open at the one moment that actually distinguishes
-//!   this fix from the bug it closed. A guard-based probe can't see this
-//!   moment: `_stage_write_guard` is held uniformly across the whole tail, so
-//!   a poll against it can't tell "before ship" from "after ship".
-//! - `FolderSession::try_lock_stage_write` — production machinery too, the
-//!   rebuild worker's own try-admission probe — is reused as a deterministic
-//!   "has `collect_build_store` already run?" signal: the real
-//!   `_stage_write_guard` `advertise_sealed` holds is acquired before
-//!   `materialize_and_promote` and dropped only AFTER its `collect_build_store`
-//!   call (see `build.rs`), so observing the guard go held-then-free is proof
-//!   of that ordering, not a timing guess.
+//!   this fix from the bug it closed. Nothing sampled later can see this
+//!   moment: `_stage_write_guard` is held uniformly across the whole tail, and
+//!   a lease dropped before the ship reads the same, 0, as a correct one at
+//!   any point after it.
+//! - The `is_pinned` closure handed to `advertise_sealed` is called while the
+//!   tail resolves its pin set — inside step 3, after the ship and before
+//!   `collect_build_store` is handed to the blocking pool — and the seal tail's
+//!   own `_stage_write_guard` is held across all of it. Sampling the cache
+//!   lease's writer count there answers "was the lease already dropped before
+//!   `collect_build_store` could run?" at a point the tail itself parks the
+//!   test on, so it is a program-order fact, not something polled for. An
+//!   earlier version polled the guard from a task interleaved with the tail and
+//!   failed about 1 run in 2000 under load: the guard was held only across the
+//!   `spawn_blocking(collect_build_store).await` suspension, and when the
+//!   blocking pool finished that job before the tail's first poll of it the
+//!   suspension never happened and the guard was never visible.
 
 use super::*;
 use crate::build::manifest::{HashBucket, PendingManifest};
@@ -67,8 +73,8 @@ fn seal_ports() -> SealPorts {
 /// that drops `cache_lease` any earlier, e.g. right after
 /// `_stage_write_guard` is acquired and before `repair_staged_html` /
 /// `materialize_and_promote` run at all, reopens the exact GC race this fix
-/// closed, and `lease_sample` below must catch it even though the
-/// guard-based probe (held uniformly across the whole tail) cannot. Second,
+/// closed, and `lease_sample` below must catch it even though the later
+/// pin-resolution sample cannot (a lease dropped early reads 0 there too). Second,
 /// `advertise_sealed` must drop the lease before its own step-3
 /// `collect_build_store` call runs — held any longer and this build's own
 /// cache GC would always find its own lease open and skip, deferring cleanup
@@ -102,65 +108,51 @@ async fn advertise_sealed_drops_the_cache_lease_before_collect_build_store() {
     // "never sampled", which would itself be a failure below.
     let lease_sample = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
 
-    let seal_fut = super::SHIP_PHASE_LEASE_SAMPLE.scope(
-        lease_sample.clone(),
-        advertise_sealed(
-            &ports,
-            &mp,
-            &hashes_path,
-            &stage,
-            sealed,
-            None,
-            |_| false,
-            Some(&session),
-            epoch,
-            Some(1),
-            true,
-            crate::build::feeds::search_lane::Freshness::Now,
-            &folder_path,
-            SealGuards {
-                final_sweep: None,
-                cache_lease: Some(lease),
-            },
-        ),
-    );
-
-    // Two-phase probe of the seal tail's OWN stage-write guard, which is
-    // acquired before `materialize_and_promote` and released only after
-    // `collect_build_store` has returned (`build.rs`'s step-3 comment).
-    // Phase 1 waits for the guard to actually become held — proof that
-    // `advertise_sealed` has started and is genuinely mid-tail, not just
-    // "the lock happens to be free because nothing touched it yet". Phase 2
-    // then waits for it to free up again, which by that same ordering can
-    // only happen once `collect_build_store` has already run.
-    let poll_fut = async {
-        let mut observed_held = false;
-        for _ in 0..200_000 {
-            if session.try_lock_stage_write().is_none() {
-                observed_held = true;
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        assert!(
-            observed_held,
-            "advertise_sealed never appeared to acquire its own stage-write guard"
+    // Sampled by `is_pinned`, which `advertise_sealed` calls once per stored
+    // generation while it resolves the pin set (step 3) — after the lease's
+    // drop point and before `collect_build_store` is spawned. `usize::MAX` is
+    // the "never called" sentinel, which is itself a failure below: without
+    // this call the tail never reached step 3 and the ordering proves nothing.
+    // The stage-write guard must be held at that instant, or this is not the
+    // span step 3's comment says it is.
+    let writers_at_pin_resolution = std::sync::atomic::AtomicUsize::new(usize::MAX);
+    let guard_held_at_pin_resolution = std::sync::atomic::AtomicBool::new(false);
+    let is_pinned = |_: &str| {
+        writers_at_pin_resolution.store(
+            crate::build::lifecycle::snapshot(&mp).2,
+            std::sync::atomic::Ordering::SeqCst,
         );
-        loop {
-            if session.try_lock_stage_write().is_some() {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        crate::build::lifecycle::snapshot(&mp).2
+        guard_held_at_pin_resolution.store(
+            session.try_lock_stage_write().is_none(),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        false
     };
 
-    let (_, writers_when_guard_freed) = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        futures::future::join(seal_fut, poll_fut),
-    )
-    .await
-    .expect("advertise_sealed (and the probe) must finish well within 10s");
+    super::SHIP_PHASE_LEASE_SAMPLE
+        .scope(
+            lease_sample.clone(),
+            advertise_sealed(
+                &ports,
+                &mp,
+                &hashes_path,
+                &stage,
+                sealed,
+                None,
+                is_pinned,
+                Some(&session),
+                epoch,
+                Some(1),
+                true,
+                crate::build::feeds::search_lane::Freshness::Now,
+                &folder_path,
+                SealGuards {
+                    final_sweep: None,
+                    cache_lease: Some(lease),
+                },
+            ),
+        )
+        .await;
 
     assert_eq!(
         lease_sample.load(std::sync::atomic::Ordering::SeqCst),
@@ -168,11 +160,23 @@ async fn advertise_sealed_drops_the_cache_lease_before_collect_build_store() {
         "the cache lease must still be open right after materialize_and_promote \
          (ship_phase) — dropping it any earlier reopens the GC race this fix closed"
     );
+    assert_ne!(
+        writers_at_pin_resolution.load(std::sync::atomic::Ordering::SeqCst),
+        usize::MAX,
+        "the tail never resolved its pin set, so it never reached step 3 and \
+         `collect_build_store`; the ordering asserted below would prove nothing"
+    );
+    assert!(
+        guard_held_at_pin_resolution.load(std::sync::atomic::Ordering::SeqCst),
+        "pin resolution must run inside the seal tail's stage-write guard span — that span is \
+         what serializes it against the next rebuild's promotion"
+    );
     assert_eq!(
-        writers_when_guard_freed, 0,
-        "the cache lease must already be dropped by the time collect_build_store has run \
-         (proven by the seal tail's own stage-write guard being free again) — held past it \
-         means this build's own cache GC would always see its own lease as still open"
+        writers_at_pin_resolution.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the cache lease must already be dropped before collect_build_store is handed to the \
+         blocking pool — held past it means this build's own cache GC would always see its own \
+         lease as still open and skip"
     );
     assert_eq!(
         crate::build::lifecycle::snapshot(&mp).2, 0,
