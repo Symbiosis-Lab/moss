@@ -322,6 +322,10 @@ fn a_page_re_registered_after_the_slot_pass_loses_the_passes_oid() {
 /// A full or unwritable object store must not fail a build that succeeds today:
 /// a page loses its immutable copy, not its place in the generation. The pages
 /// fall back to the stage-path fingerprint `advertise_sealed` stamps after seal.
+///
+/// Losing the oid must not cost the page its final hash. Such a page ships from
+/// the stage, and the stage holds the injected bytes, so a manifest still carrying
+/// the render phase's hash would seal a generation whose bytes match no entry.
 #[test]
 fn an_unwritable_object_store_costs_the_pages_their_oid_not_the_build() {
     let site = Site::new();
@@ -338,6 +342,12 @@ fn an_unwritable_object_store_costs_the_pages_their_oid_not_the_build() {
     for key in ["index.html", "about/index.html"] {
         assert!(sealed.files().contains_key(key), "{key} must still be in the generation");
         assert_eq!(sealed.staged_oid(key), None, "{key}: nothing to name");
+        let staged = std::fs::read(site.stage(key)).unwrap();
+        assert_eq!(
+            sealed.files().get(key),
+            Some(&entry_for(key, &staged)),
+            "{key}: without an oid it ships the staged bytes, so the entry must hash them"
+        );
     }
     sealed.stamp_all_ship_fingerprints(&site.paths().staging_dir());
     for key in ["index.html", "about/index.html"] {
