@@ -27,6 +27,7 @@ const CHECKS = [
   'check-docs-media.mjs',
   'check-favicon-theme.mjs',
   'check-landing-structure.mjs',
+  'check-landing-invariants.mjs',
 ];
 
 const ENGINE_RE = /\b(chromium|webkit)\b/g;
