@@ -8,9 +8,7 @@
 | Windows  | `%LOCALAPPDATA%\host.moss.publisher\logs\` |
 | Linux    | `~/.local/share/host.moss.publisher/logs/` |
 
-Raise verbosity: `MOSS_LOG_LEVEL=debug moss build <folder>`. Lower it to only
-problems: `MOSS_LOG_LEVEL=warn moss build <folder>`. Accepted levels are
-`error`, `warn`, `info` and `debug`; a release build defaults to `info`.
+The table is where the desktop app keeps its logs; `moss build` logs to stderr instead, and only problems unless `MOSS_LOG_LEVEL` asks for more: `warn` is the default, so a build that prints nothing had nothing to report, not timings it kept back. `error` prints less; `info` adds the `build.summary` line (per-phase milliseconds) and a few summary lines (`[slots]`, `[search]`, `[cache]`, two `[render]`); `debug` adds the per-step `[render]`, `[reduce]`, `[scan]` and `[build]` timings. Chasing a slow build: `MOSS_LOG_LEVEL=debug moss build <folder>`. `RUST_LOG` is not read.
 
 ## Isolating plugin vs. core failures
 

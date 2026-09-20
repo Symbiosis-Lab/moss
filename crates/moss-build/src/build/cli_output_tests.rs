@@ -139,6 +139,17 @@ fn build_result_returns_the_count_it_drained() {
     );
 }
 
+/// The agent guidance says which level a `moss build` prints at when `MOSS_LOG_LEVEL` is
+/// unset. It said `info` (the desktop app's release level) for as long as nothing tied it
+/// to `headless_log_level`, and an agent that believed it looked for timing lines that only
+/// appear when they are asked for. The default itself is pinned below.
+#[test]
+fn the_debugging_guide_says_a_build_defaults_to_warn() {
+    let guide = include_str!("../assets/skills/moss/references/debugging.md");
+    assert!(guide.contains("`warn` is the default"), "the guide does not name the default level:\n{guide}");
+    assert!(!guide.contains("defaults to `info`"), "the guide gives the desktop app's default as a build's");
+}
+
 /// `headless_log_level` must default to `Warn` and honor every `MOSS_LOG_LEVEL`
 /// value the GUI's own parser accepts (`lib.rs`), so the two paths cannot drift
 /// on what a given env var means even though they pick different defaults.
