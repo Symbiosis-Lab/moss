@@ -215,22 +215,14 @@ try {
   results.mobile = { releasedY, partial, forward, reverse, writes: reverseHeld.writes };
   await page.close();
 
-  const cssPage = await mobilePage('?carry=css');
-  await swipe(cssPage, 720, 400);
-  await cssPage.waitForTimeout(200);
-  const cssState = await mobileState(cssPage);
-  assert(cssState.snap === 'none' && !cssState.mobileSnap, `carry=css enabled mobile snapping: ${JSON.stringify(cssState)}`);
-  await cssPage.close();
-  results.mobileCss = cssState;
-
   const desktop = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await installOverride(desktop);
   await desktop.goto(base.href, { waitUntil: 'domcontentloaded' });
   await whenReady(desktop);
   await desktop.mouse.wheel(0, 120);
   await desktop.waitForTimeout(1200);
-  const desktopState = await desktop.evaluate(() => ({ y: scrollY, rest: window.__landing.restY(0), carry: window.__landing.state().carry }));
-  assert(desktopState.carry === 'intent' && Math.abs(desktopState.y - desktopState.rest) < 3, `desktop carry regressed: ${JSON.stringify(desktopState)}`);
+  const desktopState = await desktop.evaluate(() => ({ y: scrollY, rest: window.__landing.restY(0) }));
+  assert(Math.abs(desktopState.y - desktopState.rest) < 3, `desktop drive did not settle at rest: ${JSON.stringify(desktopState)}`);
   results.desktop = desktopState;
   await desktop.close();
 } finally {

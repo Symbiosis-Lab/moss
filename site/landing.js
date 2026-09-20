@@ -938,25 +938,21 @@ const DT = 1 / 120, SPF = 2, STEPS_PER_FRAME = 36, V_TAU = 0.4, SPLIT = 0.4,
 // expected to move the other.
 const REST_MS = 300, SETTLE_K = 160, SETTLE_C = 2 * Math.sqrt(SETTLE_K), SETTLE_MIN = 0.12, DEAD = 0.12;
 const SETTLE_SECS = 2 * Math.PI / Math.sqrt(SETTLE_K);
-// ?carry= switches which of three scroll-rest behaviours drives the page. 'intent'
-// (research/2026-09-16/continuous-carry.md) won the comparison and is the default: a release
-// hands the reader's own speed to the integrator, so the page keeps going like a let-go spring.
-// 'wait' (the REST_MS-then-spring path above, which stops dead on release) and 'css' stay
-// reachable by flag only, each a self-contained block near watchScroll below, until deleted.
-const CARRY = (() => { const c = arg('carry', 'intent'); return c === 'wait' || c === 'css' ? c : 'intent'; })();
-document.documentElement.dataset.carry = CARRY;   // the [data-carry="css"] rule above, and the harness
-// ?carry=intent's own critically damped pull toward the well ahead — the same ζ=1 ratio as
-// SETTLE_K/SETTLE_C, named separately because this one runs every frame on live real-time dt
-// for the page's whole life, not the settle's rate-scaled, wash-synced clock.
+// watchScrollIntent's own critically damped pull toward the well ahead
+// (research/2026-09-16/continuous-carry.md) — a release hands the reader's own speed to the
+// integrator, so the page keeps going like a let-go spring. The same ζ=1 ratio as SETTLE_K/
+// SETTLE_C, named separately because this one runs every frame on live real-time dt for the
+// page's whole life, not the settle's rate-scaled, wash-synced clock.
 const CARRY_K = 40, CARRY_C = 2 * Math.sqrt(CARRY_K);
 // How much of one wheel tick's pixel delta becomes velocity (px/s), added straight into the
 // integrator's v the instant the tick arrives — "v += delta * PUSH_GAIN",
 // research/2026-09-16/continuous-carry.md §5. Tuned by feel, not derived: too low reads as
 // inert, too high as a teleport across scenes.
 const PUSH_GAIN = 12;
-// How far the live scroll position may drift from ?carry=intent's own tracked position before
-// that reads as a foreign write — a scrollbar drag, or keyboard/touch scrolling, both left
-// outside this system — rather than ordinary rounding from the integrator's own last write.
+// How far the live scroll position may drift from watchScrollIntent's own tracked position
+// before that reads as a foreign write — a scrollbar drag, or keyboard/touch scrolling, both
+// left outside this system — rather than ordinary rounding from the integrator's own last
+// write.
 const CARRY_EPS = 2;
 // How long a gap between trackpad wheel ticks still reads as the same continuous gesture in
 // contact with the pad, used only where WheelEvent.momentum is unavailable (see the held-state
@@ -3074,7 +3070,7 @@ let restSince = performance.now(), travel = 0, settleArmed = false, settleRun = 
 // only after a real gesture has armed the carry, so a loaded page never pages
 // itself into scene 1 while the reader is still looking at the title.
 let inputArmed = false;
-// ?carry=intent's own state: the position and velocity the integrator owns, kept separate
+// watchScrollIntent's own state: the position and velocity the integrator owns, kept separate
 // from the real scrollY it writes every frame so a foreign write (CARRY_EPS above) can be
 // told apart from its own last write. carryX starts null and is seeded from scrollY on the
 // first tick, so a reload that restores mid-gap is picked up wherever the browser left it.
@@ -3199,86 +3195,84 @@ function settleAtRest(now) {
   // motion the reader has already stopped making.
   settleTo(y, Math.sign(y - scrollY) === Math.sign(v) ? v : 0, secs);
 }
-// ?carry=intent listens to wheel directly and owns the scroll itself (preventDefault), so a
-// tick's delta becomes velocity the instant it arrives rather than something read back off
+// watchScrollIntent listens to wheel directly and owns the scroll itself (preventDefault), so
+// a tick's delta becomes velocity the instant it arrives rather than something read back off
 // scrollY next frame. ctrlKey marks a trackpad pinch-zoom, not a scroll, and is left alone.
 // Reduced motion turns the interception off entirely — "raw 1:1 scroll, no pull" per
 // continuous-carry.md §6 — so wheel behaves exactly as it does in every other mode, and
-// watchScroll below always routes reduced motion to the wait path regardless of ?carry=.
-if (CARRY === 'intent') {
-  // Touch and a scrollbar drag are native browser scrolling, so holding for them is only a
-  // presence flag — watchScrollIntent reads scrollY's own motion back each frame while it's
-  // set. clientX at or beyond the layout viewport's width is the scrollbar track, the one
-  // place a pointerdown is a drag on the thumb rather than a touch on the content; touchstart
-  // needs no such check, only touch fires it.
-  const holdOn = (e) => { if (e.pointerType === 'touch' || e.clientX >= document.documentElement.clientWidth) touchHeld = true; };
-  const holdOff = () => { touchHeld = false; };
-  addEventListener('pointerdown', holdOn);
-  addEventListener('touchstart', () => { touchHeld = true; }, { passive: true });
-  addEventListener('pointerup', holdOff);
-  addEventListener('touchend', holdOff);
-  addEventListener('touchcancel', holdOff);
+// watchScroll below always routes reduced motion to the wait path instead.
+// Touch and a scrollbar drag are native browser scrolling, so holding for them is only a
+// presence flag — watchScrollIntent reads scrollY's own motion back each frame while it's
+// set. clientX at or beyond the layout viewport's width is the scrollbar track, the one
+// place a pointerdown is a drag on the thumb rather than a touch on the content; touchstart
+// needs no such check, only touch fires it.
+const holdOn = (e) => { if (e.pointerType === 'touch' || e.clientX >= document.documentElement.clientWidth) touchHeld = true; };
+const holdOff = () => { touchHeld = false; };
+addEventListener('pointerdown', holdOn);
+addEventListener('touchstart', () => { touchHeld = true; }, { passive: true });
+addEventListener('pointerup', holdOff);
+addEventListener('touchend', holdOff);
+addEventListener('touchcancel', holdOff);
 
-  addEventListener('wheel', (e) => {
-    if (reduce || e.ctrlKey || nativeScroll() || !e.deltaY) return;
-    e.preventDefault();
-    // travel is set from the tick itself, not from carryV's own sign inside the integrator
-    // below: the spring's restoring force can drive carryV through zero and even negative
-    // purely from its own reaction while the reader is still pushing forward (measured
-    // directly, 2026-09-16 — a modest push fell straight back to scene 0), which would read as
-    // a reversal that never happened. The wheel tick is the one place a reversal is real.
-    const direction = Math.sign(e.deltaY);
-    // A trackpad has no pointerdown/up of its own, so its contact is read off the ticks
-    // themselves: WheelEvent.momentum, where a browser exposes it, says outright whether this
-    // tick is the reader's own push (false) or the coast after release (true). Elsewhere, a
-    // run of ticks still arriving within HOLD_GAP and not shrinking across the last three
-    // reads as the same contact; watchScrollIntent below is what notices a pause, since there's
-    // no event for it here — only a decaying run is caught at tick time.
-    const now = performance.now();
-    // Delivery can pause while captures render. Event timestamps describe the
-    // input itself; releasing the spring is not the end of a wheel gesture.
-    const newGesture = !lastWheelStamp || e.timeStamp - lastWheelStamp > WHEEL_GESTURE_GAP;
-    const reversed = direction !== travel;
-    if (newGesture || reversed) {
-      wheelOrigin = scrollY; wheelDistance = 0; wheelCoasting = false;
-      wheelMags = [];
-    }
-    const atGoal = carryGoal != null && Math.abs(scrollY - restY(carryGoal)) <= CARRY_EPS;
-    if (direction !== travel || (newGesture && (carryGoal == null || atGoal))) {
-      let anchor = carryGoal;
-      if (anchor == null || newGesture) {
-        anchor = -1;
-        for (let scene = 0; scene <= SHARE; scene++) {
-          if (Math.abs(scrollY - restY(scene)) < Math.abs(scrollY - restY(anchor))) anchor = scene;
-        }
+addEventListener('wheel', (e) => {
+  if (reduce || e.ctrlKey || nativeScroll() || !e.deltaY) return;
+  e.preventDefault();
+  // travel is set from the tick itself, not from carryV's own sign inside the integrator
+  // below: the spring's restoring force can drive carryV through zero and even negative
+  // purely from its own reaction while the reader is still pushing forward (measured
+  // directly, 2026-09-16 — a modest push fell straight back to scene 0), which would read as
+  // a reversal that never happened. The wheel tick is the one place a reversal is real.
+  const direction = Math.sign(e.deltaY);
+  // A trackpad has no pointerdown/up of its own, so its contact is read off the ticks
+  // themselves: WheelEvent.momentum, where a browser exposes it, says outright whether this
+  // tick is the reader's own push (false) or the coast after release (true). Elsewhere, a
+  // run of ticks still arriving within HOLD_GAP and not shrinking across the last three
+  // reads as the same contact; watchScrollIntent below is what notices a pause, since there's
+  // no event for it here — only a decaying run is caught at tick time.
+  const now = performance.now();
+  // Delivery can pause while captures render. Event timestamps describe the
+  // input itself; releasing the spring is not the end of a wheel gesture.
+  const newGesture = !lastWheelStamp || e.timeStamp - lastWheelStamp > WHEEL_GESTURE_GAP;
+  const reversed = direction !== travel;
+  if (newGesture || reversed) {
+    wheelOrigin = scrollY; wheelDistance = 0; wheelCoasting = false;
+    wheelMags = [];
+  }
+  const atGoal = carryGoal != null && Math.abs(scrollY - restY(carryGoal)) <= CARRY_EPS;
+  if (direction !== travel || (newGesture && (carryGoal == null || atGoal))) {
+    let anchor = carryGoal;
+    if (anchor == null || newGesture) {
+      anchor = -1;
+      for (let scene = 0; scene <= SHARE; scene++) {
+        if (Math.abs(scrollY - restY(scene)) < Math.abs(scrollY - restY(anchor))) anchor = scene;
       }
-      carryGoal = Math.max(-1, Math.min(SHARE, anchor + direction));
     }
-    travel = direction;
-    const mag = Math.abs(e.deltaY);
-    if ('momentum' in e) wheelCoasting = e.momentum;
-    else {
-      if (wheelCoasting && mag > (wheelMags.at(-1) || 0) + 2) wheelCoasting = false;
-      wheelMags.push(mag); if (wheelMags.length > 3) wheelMags.shift();
-      if (wheelMags.length === 3 && wheelMags[0] >= wheelMags[1] && wheelMags[1] >= wheelMags[2] && wheelMags[0] > wheelMags[2]) wheelCoasting = true;
+    carryGoal = Math.max(-1, Math.min(SHARE, anchor + direction));
+  }
+  travel = direction;
+  const mag = Math.abs(e.deltaY);
+  if ('momentum' in e) wheelCoasting = e.momentum;
+  else {
+    if (wheelCoasting && mag > (wheelMags.at(-1) || 0) + 2) wheelCoasting = false;
+    wheelMags.push(mag); if (wheelMags.length > 3) wheelMags.shift();
+    if (wheelMags.length === 3 && wheelMags[0] >= wheelMags[1] && wheelMags[1] >= wheelMags[2] && wheelMags[0] > wheelMags[2]) wheelCoasting = true;
+  }
+  wheelHeld = !wheelCoasting && now - lastWheelT <= HOLD_GAP;
+  lastWheelT = now; lastWheelStamp = e.timeStamp;
+  if (!wheelCoasting) wheelDistance += e.deltaY;
+  if (wheelHeld) {
+    // 1:1, no pull: the tick moves the page by its own delta and nothing more.
+    const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+    const requested = Math.min(maxY, Math.max(0, scrollY + e.deltaY));
+    // Advance only when the reader's own direct tick crosses the goal. The
+    // spring's motion between ticks must never promote a three-tick nudge.
+    if (carryGoal != null) {
+      while (direction > 0 && carryGoal < SHARE && wheelOrigin + wheelDistance > restY(carryGoal)) carryGoal++;
+      while (direction < 0 && carryGoal > -1 && wheelOrigin + wheelDistance < restY(carryGoal)) carryGoal--;
     }
-    wheelHeld = !wheelCoasting && now - lastWheelT <= HOLD_GAP;
-    lastWheelT = now; lastWheelStamp = e.timeStamp;
-    if (!wheelCoasting) wheelDistance += e.deltaY;
-    if (wheelHeld) {
-      // 1:1, no pull: the tick moves the page by its own delta and nothing more.
-      const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight);
-      const requested = Math.min(maxY, Math.max(0, scrollY + e.deltaY));
-      // Advance only when the reader's own direct tick crosses the goal. The
-      // spring's motion between ticks must never promote a three-tick nudge.
-      if (carryGoal != null) {
-        while (direction > 0 && carryGoal < SHARE && wheelOrigin + wheelDistance > restY(carryGoal)) carryGoal++;
-        while (direction < 0 && carryGoal > -1 && wheelOrigin + wheelDistance < restY(carryGoal)) carryGoal--;
-      }
-      scrollTo(0, Math.round(requested));
-    } else if (!wheelCoasting) carryV += e.deltaY * PUSH_GAIN;
-  }, { passive: false });
-}
+    scrollTo(0, Math.round(requested));
+  } else if (!wheelCoasting) carryV += e.deltaY * PUSH_GAIN;
+}, { passive: false });
 
 // The always-on integrator (research/2026-09-16/continuous-carry.md §5): one loop, no rest
 // branch, running from the first frame whether or not the reader has touched the wheel yet.
@@ -3325,15 +3319,6 @@ function watchScrollIntent(now) {
   scrollTo(0, Math.round(carryX));
 }
 
-// ?carry=css: give each scene a snap point at exactly restY(scene) — the same position the
-// other two paths carry the reader onto — by turning that absolute target into a
-// scroll-margin-top correction on the element scroll-snap-align already aligns to (the
-// matching [data-carry="css"] rule lives in <style>). Run once layout is real and again on
-// resize; a font swap or reflow between resizes is the one thing this doesn't chase.
-function setupCssSnap() {
-  for (const [i, el] of scenesEl.entries()) el.style.scrollMarginTop = (el.getBoundingClientRect().top + scrollY - restY(i)) + 'px';
-}
-if (CARRY === 'css') { addEventListener('resize', setupCssSnap); setupCssSnap(); }
 // The browser owns motion here; settleAtRest is never called. On mobile this is a strictly
 // observational path: native scrolling supplies scrollY, which drives the scenes and closing
 // scrub continuously, and no release may move the page after the reader lets go.
@@ -3459,14 +3444,13 @@ function watchScrollWait(now) {
 }
 (function watchScroll(now = performance.now()) {
   if (document.documentElement.dataset.static) return;
-  // Reduced motion always takes the wait path, whatever ?carry= says: every mode's
-  // reduced-motion behaviour is already that path's own instant arrival (settleAtRest's own
-  // `if (reduce)`), so there is nothing for intent or css to do differently under it.
+  // Reduced motion always takes the wait path: its reduced-motion behaviour is already that
+  // path's own instant arrival (settleAtRest's own `if (reduce)`), so there is nothing for
+  // watchScrollIntent to do differently under it.
   updateOpening();
   if (nativeScroll()) { carryX = null; carryV = 0; carryGoal = null; watchScrollCss(now); }
-  else if (reduce || CARRY === 'wait') watchScrollWait(now);
-  else if (CARRY === 'intent') watchScrollIntent(now);
-  else watchScrollCss(now);
+  else if (reduce) watchScrollWait(now);
+  else watchScrollIntent(now);
   requestAnimationFrame(watchScroll);
 })();
 
@@ -3789,7 +3773,7 @@ landing.prints = sheets;
 landing.restY = restY;   // the settle's own geometry, so a rest check reads it rather than keeping a second copy
 landing.targetAt = targetAt;   // what a rested position names, read the same way the wash reads it
 landing.sceneForRest = sceneForRest;   // which scene a rest carries to, the same formula settleAtRest uses
-landing.state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: !!settleRun, settleSecs, settleCureLeft, settleShown, settleRunning, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, carry: CARRY, titleSteps, titleReady, titleMode });
+landing.state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: !!settleRun, settleSecs, settleCureLeft, settleShown, settleRunning, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, titleSteps, titleReady, titleMode });
 
 const when = (frame, key) => new Promise((resolve, reject) => {
   const deadline = setTimeout(() => { clearInterval(poll); reject(new Error(`Demo ${frame.id} did not initialize`)); }, 10000);

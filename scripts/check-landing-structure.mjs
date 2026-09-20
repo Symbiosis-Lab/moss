@@ -25,8 +25,8 @@ const BASELINE = {
   windowAssignments: 1,
   topLevelLets: 90,
   sceneComparisons: 14,
-  htmlBytes: 45893,
-  scriptBytes: 236965,
+  htmlBytes: 45380,
+  scriptBytes: 235473,
 };
 
 function countWindowAssignments(text) {

@@ -321,15 +321,6 @@
   :is(html:not(.js), html[data-static]) #five { position: relative; min-height: 100vh; opacity: 1; pointer-events: auto; background: #101110; }
   :is(html:not(.js), html[data-static]) #five-in { width: min(900px, calc(100% - 40px)); }
 
-  /* ?carry=css: the browser's own scroll-snap owns the resting position instead of the
-     hand-rolled settle; setupCssSnap() (movie6.html script, beside watchScrollCss) computes
-     each scene's scroll-margin-top so the snap point lands on restY(), the same position the
-     other two paths carry the reader onto. */
-  @media (min-width: 901px) {
-    html[data-carry="css"] { scroll-snap-type: y proximity; }
-    html[data-carry="css"] .scene, html[data-carry="css"] #five { scroll-snap-align: start; }
-  }
-
   /* Layout pass: the intro owns the first beat, while the stage remains tied
      to the measured desktop composition. The script supplies these variables
      after it knows the viewport and copy heights. */

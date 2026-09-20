@@ -487,12 +487,11 @@ async function iFuzzInvalidated(browsers) {
 }
 
 // I-default: every check script's own default navigation loads the
-// unflagged URL. A carry= baked into a literal .goto() call site is exactly
+// unflagged URL. A carry= baked into a literal .goto() call site was exactly
 // the historical bug (design doc: "the fixed driver was never made the
-// default URL and no test loaded the unflagged page") -- a script's own
-// separate, explicit test of the legacy ?carry= flag (check-landing-
-// mobile.mjs's mobilePage('?carry=css') case) is not this, and is not
-// flagged: it never appears on a `.goto(` line itself.
+// default URL and no test loaded the unflagged page") -- the ?carry= flag
+// itself is gone as of phase 4, so this now also guards against a future
+// script reintroducing the same shape of mistake under a different name.
 async function iDefault() {
   const entries = await readdir(HERE);
   const files = entries.filter((f) => /^check-(landing|site-preview|docs|favicon)/.test(f) && f.endsWith('.mjs') && f !== 'check-landing-invariants.mjs' && f !== 'check-landing-all.mjs' && f !== 'check-landing-structure.mjs');
