@@ -1091,7 +1091,7 @@ fn a_later_registration_without_an_oid_drops_the_earlier_cas_source() {
     let sp = ServedPath::from_source("notebooks/analysis.html").unwrap();
     let mut m = empty_manifest();
 
-    m.register_with_oid_for_test(&sp, "aaaaaaaaaaaaaaaa", HashBucket::Files, "old-blob".to_string());
+    m.apply_message(sp.as_str().to_string(), "aaaaaaaaaaaaaaaa", HashBucket::Files, Some("old-blob".to_string()));
     m.register_hashed(&sp, "bbbbbbbbbbbbbbbb", HashBucket::NotebookOutputs);
 
     let sealed = m.seal();
@@ -1108,8 +1108,8 @@ fn a_later_registration_with_an_oid_replaces_the_earlier_one() {
     let sp = ServedPath::from_source("a.html").unwrap();
     let mut m = empty_manifest();
 
-    m.register_with_oid_for_test(&sp, "aaaaaaaaaaaaaaaa", HashBucket::Files, "first".to_string());
-    m.register_with_oid_for_test(&sp, "bbbbbbbbbbbbbbbb", HashBucket::Files, "second".to_string());
+    m.apply_message(sp.as_str().to_string(), "aaaaaaaaaaaaaaaa", HashBucket::Files, Some("first".to_string()));
+    m.apply_message(sp.as_str().to_string(), "bbbbbbbbbbbbbbbb", HashBucket::Files, Some("second".to_string()));
 
     assert_eq!(m.seal().staged_oid("a.html"), Some("second"));
 }

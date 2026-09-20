@@ -614,21 +614,6 @@ impl PendingManifest {
         self.inner.files.get(rel_path.as_str()).cloned()
     }
 
-    /// Test-only escape hatch mirroring the coordinator's `oid`-carrying path
-    /// (`EmitMessage::File` → `apply_message`), for ship/manifest tests that
-    /// need a `staged_oid` on an entry without driving the full background
-    /// pipeline.
-    #[cfg(test)]
-    pub(crate) fn register_with_oid_for_test(
-        &mut self,
-        rel_path: &crate::build::served_path::ServedPath,
-        hash: &str,
-        bucket: HashBucket,
-        oid: String,
-    ) {
-        self.register_with_hash(rel_path.as_str().to_string(), hash, bucket, Some(oid));
-    }
-
     fn register_with_hash(&mut self, rel_path: String, hash: &str, bucket: HashBucket, oid: Option<String>) {
         // Mark-and-sweep mark step: record that this build owns `rel_path`.
         // Every output-bucket entry must pass through this chokepoint

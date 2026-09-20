@@ -206,10 +206,16 @@ async fn read_leading_bytes(path: &Path, n: usize) -> Result<Vec<u8>, String> {
 /// something systemic (a stale or wrong stage directory, a build that never
 /// finished) that healing file-by-file would otherwise paper over silently,
 /// one warning at a time, until nobody notices the publish shipped mostly
-/// self-healed content. Floor of 3 so a small site's handful of files isn't
-/// capped at zero; 5% beyond that so a large site's tolerance scales with it.
-pub(crate) fn self_heal_cap(total_files: usize) -> usize {
-    (total_files / 20).max(3)
+/// self-healed content. Floor of 3 so a small publish isn't capped at zero; 5%
+/// beyond that so a large one's tolerance scales with it.
+///
+/// `uploading` is how many files THIS deploy uploads (`diff.need.len()`, what
+/// the server asked for), not how many the site has: an incremental publish
+/// uploads a handful of files, so its cap is the floor of 3 however large the
+/// site is. That is deliberate — the cap is a share of what this deploy is
+/// moving, since only those files can drift from the sealed manifest in it.
+pub(crate) fn self_heal_cap(uploading: usize) -> usize {
+    (uploading / 20).max(3)
 }
 
 /// Enforce [`self_heal_cap`] against one more self-heal. Bumps the shared

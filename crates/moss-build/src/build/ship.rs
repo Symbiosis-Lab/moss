@@ -1737,7 +1737,7 @@ mod tests {
 
         let mut pending = PendingManifest::new(SiteHashes::default());
         let sp = crate::build::served_path::ServedPath::from_source("style.css").unwrap();
-        pending.register_with_oid_for_test(&sp, "deadbeefdeadbeef", HashBucket::Files, oid);
+        pending.apply_message(sp.as_str().to_string(), "deadbeefdeadbeef", HashBucket::Files, Some(oid));
         let sealed = pending.seal();
 
         // A concurrent build rewrites the mutable stage copy after this
@@ -1774,7 +1774,7 @@ mod tests {
 
         let mut pending = PendingManifest::new(SiteHashes::default());
         let sp = crate::build::served_path::ServedPath::from_source("asset.bin").unwrap();
-        pending.register_with_oid_for_test(&sp, "cafefacecafeface", HashBucket::Files, oid);
+        pending.apply_message(sp.as_str().to_string(), "cafefacecafeface", HashBucket::Files, Some(oid));
         let mut sealed = pending.seal();
 
         let dropped = drop_absent_outputs(stage.path(), &mut sealed, Some(&object_store));
