@@ -2407,3 +2407,6 @@ mod promise_gate_tests;
 #[path = "build/cache_lease_ship_tests.rs"]
 mod cache_lease_ship_tests;
 
+#[cfg(test)]
+#[path = "build/overlap_tests.rs"]
+mod overlap_tests;
