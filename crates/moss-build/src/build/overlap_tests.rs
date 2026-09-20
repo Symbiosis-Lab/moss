@@ -111,12 +111,12 @@ fn ships_from_stage_by_design(key: &str) -> bool {
 // The vault
 // ---------------------------------------------------------------------------
 
-/// 16 x 16 solid PNG. Small on purpose: a `.png`/`.jpg` is converted to a `.webp`
-/// however small it is (`raster_with_picture` in `media/image.rs`), and encode time
-/// is the one thing here that grows with pixels.
-fn write_png(path: &std::path::Path, rgb: [u8; 3]) {
+/// A `side` x `side` solid PNG. Small on purpose: a `.png`/`.jpg` is converted to a
+/// `.webp` however small it is (`raster_with_picture` in `media/image.rs`), and
+/// encode time is the one thing here that grows with pixels.
+fn write_png(path: &std::path::Path, rgb: [u8; 3], side: u32) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    ::image::RgbImage::from_pixel(16, 16, ::image::Rgb(rgb)).save(path).unwrap();
+    ::image::RgbImage::from_pixel(side, side, ::image::Rgb(rgb)).save(path).unwrap();
 }
 
 const HOME: &str = "---\ntitle: Home\n---\n\nWelcome. [notes](notes) [data](assets/data.txt)\n";
@@ -198,7 +198,7 @@ impl Overlap {
         vault.write("posts/a.md", POST_A);
         vault.write("posts/b.md", POST_B);
         vault.write("assets/data.txt", "alpha\n");
-        write_png(&vault.folder.join("images/pic.png"), [200, 30, 30]);
+        write_png(&vault.folder.join("images/pic.png"), [200, 30, 30], 16);
         vault
     }
 
@@ -455,7 +455,16 @@ const EVERYTHING: Edit = Edit {
         );
         vault.write("extra.md", "---\ntitle: Extra\n---\n\nExtra page.\n");
         vault.write("assets/data.txt", "beta, quite different\n");
-        write_png(&vault.folder.join("images/pic.png"), [20, 60, 220]);
+        // A different SIZE, not just different pixels. The image worker skips a source
+        // whose (path, size, whole-second mtime) matches the previous build's
+        // (`hash_index.lookup` in `media/image.rs`), so a same-size rewrite landing in
+        // the same wall-clock second as the fixture's first write is never re-encoded
+        // and this edit silently changes nothing: the suite failed one full run in
+        // three on exactly that.
+        let pic = vault.folder.join("images/pic.png");
+        let before = std::fs::metadata(&pic).unwrap().len();
+        write_png(&pic, [20, 60, 220], 24);
+        assert_ne!(std::fs::metadata(&pic).unwrap().len(), before, "the edited image must change size");
     },
     // A page was created, so a watcher classifies the batch `Structural`; the asset
     // and the image are not markdown either. This build renders every page.
