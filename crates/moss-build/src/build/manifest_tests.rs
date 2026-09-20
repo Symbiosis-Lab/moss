@@ -1238,6 +1238,41 @@ mod held {
         );
     }
 
+    /// The largest real vault measured (246 pages) has a 4.1 MB `llms.txt` and a
+    /// 4.8 MB `rss.xml`. Every other fixture here is a few KB, so lowering
+    /// `HELD_BYTES_BUDGET` to "save memory" would keep them all green while every
+    /// real vault silently lost the protection `Held` exists for.
+    #[test]
+    fn a_real_vaults_llms_txt_and_feed_are_both_held_not_demoted() {
+        let llms = vec![b'l'; 4_100_000];
+        let rss = vec![b'r'; 4_800_000];
+        let mut m = empty_manifest();
+        m.register_held(&served("llms.txt"), llms.clone(), HashBucket::Files).unwrap();
+        m.register_held(&served("rss.xml"), rss.clone(), HashBucket::Files).unwrap();
+
+        let sealed = m.seal();
+        // `==` on the slices, not `assert_eq!`: a failure would print megabytes.
+        assert!(sealed.held_bytes("llms.txt") == Some(llms.as_slice()), "llms.txt was not held");
+        assert!(sealed.held_bytes("rss.xml") == Some(rss.as_slice()), "rss.xml was not held");
+    }
+
+    /// A sealed manifest is cloned freely (the seal tail hands deploy one), and a
+    /// real vault holds megabytes. Cloning has to share what is held; a deep copy
+    /// would multiply the budget by the number of live clones. The payload is
+    /// small on purpose: the property is the shared buffer, not the size, and it
+    /// should not also depend on the budget.
+    #[test]
+    fn cloning_a_manifest_shares_the_held_bytes_instead_of_copying_them() {
+        let mut m = empty_manifest();
+        m.register_held(&served("llms.txt"), vec![b'l'; 4096], HashBucket::Files).unwrap();
+        let sealed = m.seal();
+
+        let clone = sealed.clone();
+
+        let (original, cloned) = (sealed.held_bytes("llms.txt").unwrap(), clone.held_bytes("llms.txt").unwrap());
+        assert!(std::ptr::eq(original.as_ptr(), cloned.as_ptr()), "the clone holds its own copy of the bytes");
+    }
+
     /// Replacing a held payload frees it first: re-registering one path with a
     /// payload that alone fits must not be judged against the payload it replaces.
     #[test]
