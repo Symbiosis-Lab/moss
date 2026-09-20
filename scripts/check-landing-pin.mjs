@@ -1,18 +1,16 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
-import { loadPlaywright, resolveBaseURL, whenReady } from './landing-harness.mjs';
+import { loadPlaywright, resolveBaseURL, whenReady, installPageOverride } from './landing-harness.mjs';
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
 const engines = await loadPlaywright();
+const overrideHtml = process.env.LANDING_HTML_OVERRIDE ? await readFile(process.env.LANDING_HTML_OVERRIDE, 'utf8') : null;
 try {
 for (const name of ['chromium', 'webkit']) {
   const browser = await engines[name].launch();
   try {
     for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900 }]) {
       const page = await browser.newPage({ viewport });
-      if (process.env.LANDING_HTML_OVERRIDE) {
-        const body = await readFile(process.env.LANDING_HTML_OVERRIDE, 'utf8');
-        await page.route(baseURL, route => route.fulfill({ contentType: 'text/html', body }));
-      }
+      await installPageOverride(page, baseURL, { html: overrideHtml, jsOverridePath: process.env.LANDING_JS_OVERRIDE });
       await page.goto(baseURL);
       await whenReady(page);
       await page.evaluate(() => scrollTo(0, window.__landing.restY(0) + 2));

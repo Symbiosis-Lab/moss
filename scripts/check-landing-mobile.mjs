@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { readFile } from 'node:fs/promises';
-import { loadPlaywright, resolveBaseURL, whenReady } from './landing-harness.mjs';
+import { loadPlaywright, resolveBaseURL, whenReady, installPageOverride } from './landing-harness.mjs';
 
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
 const base = new URL(baseURL);
@@ -22,10 +22,7 @@ const overrideHtml = process.env.LANDING_HTML_STDIN
 const browser = await playwright.chromium.launch({ headless: true });
 const results = {};
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
-const installOverride = async (page) => {
-  if (!overrideHtml) return;
-  await page.route(base.href, (route) => route.fulfill({ status: 200, contentType: 'text/html', body: overrideHtml }));
-};
+const installOverride = (page) => installPageOverride(page, base.href, { html: overrideHtml, jsOverridePath: process.env.LANDING_JS_OVERRIDE });
 const instrumentScroll = () => {
   window.__landingScrollWrites = [];
   const nativeScrollTo = window.scrollTo.bind(window);
