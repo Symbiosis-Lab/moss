@@ -5,6 +5,25 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <base href="/">
 <link rel="icon" type="image/svg+xml" href="/assets/brand/favicon.svg">
+<script>
+// Favicon dark-mode swap — kept identical in spirit to site/.moss/theme/script.js,
+// but duplicated here because this page is a verbatim passthrough (see
+// scripts/README.md) that never loads moss's own theme script. favicon.svg already
+// carries an embedded `@media (prefers-color-scheme:dark)` rule that Chromium and
+// Firefox honor on their own, but Safari (through at least 26.0) renders an SVG
+// favicon's base styles only and never evaluates @media inside it. Swapping the
+// `<link>`'s href via a matchMedia listener is ordinary DOM behavior every engine,
+// including Safari, implements the same way, so it works regardless of whether the
+// engine evaluates the SVG's own rule. See site/assets/brand/favicon-dark.svg's own
+// header for how the dark counterpart was generated.
+(() => {
+  const link = document.querySelector('link[rel="icon"]');
+  const query = matchMedia('(prefers-color-scheme: dark)');
+  const apply = (dark) => link.setAttribute('href', dark ? '/assets/brand/favicon-dark.svg' : '/assets/brand/favicon.svg');
+  apply(query.matches);
+  query.addEventListener('change', (event) => apply(event.matches));
+})();
+</script>
 <title>moss — Publish your site from your folder</title>
 <meta name="description" content="Write in your folder and publish to your internet. moss turns Markdown, media, and creative code into a website you own.">
 <!-- landing-discovery:start -->
