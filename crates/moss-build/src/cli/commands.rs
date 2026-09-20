@@ -173,6 +173,17 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
 const OPTION_LINES: &str = "    -h, --help                     Show this help message
     -V, --version                  Print the version and exit";
 
+/// The one environment variable that belongs to no command. `build`, `deploy`
+/// and `history` all log through `build::cli_output::install_headless_logger`,
+/// which reads `MOSS_LOG_LEVEL` and nothing else, so `RUST_LOG` is silently
+/// ignored; without this line the only way to find the switch that turns on the
+/// timing lines was to read that source (2026-09-19, a build-speed investigation
+/// by an agent).
+const ENVIRONMENT_LINES: &str = "    MOSS_LOG_LEVEL=<level>         Log verbosity on stderr: error, warn
+                                   (default), info or debug. `info` adds
+                                   the per-phase timing lines ([render],
+                                   [slots]). RUST_LOG is not read.";
+
 /// The first sentence of a description — what a command is, without the
 /// paragraph of consequences `<cmd> --help` and `moss describe` print in full.
 fn summary(description: &str) -> &str {
@@ -280,6 +291,8 @@ pub fn top_level_help(version: &str, answers: &dyn Fn(&str) -> bool) -> String {
     }
     text.push_str("OPTIONS:\n");
     text.push_str(OPTION_LINES);
+    text.push_str("\n\nENVIRONMENT:\n");
+    text.push_str(ENVIRONMENT_LINES);
     text.push_str("\n\nEXAMPLES:\n");
     for (_, line) in EXAMPLE_LINES.iter().filter(|(verb, _)| answers(verb)) {
         text.push_str(&format!("    {line}\n"));
@@ -363,6 +376,18 @@ mod tests {
             wrap(dashes.trim(), "").lines().all(|l| l.chars().count() <= 78),
             "wrapped by bytes, not characters"
         );
+    }
+
+    /// `MOSS_LOG_LEVEL` is the only way to see the timing lines and `RUST_LOG` is
+    /// ignored, so `--help` has to say both or an agent chasing build speed reads
+    /// source to find out.
+    #[test]
+    fn top_level_help_says_how_to_see_timing_output() {
+        let text = top_level_help("0.0.0", &|_| true);
+        assert!(text.contains("\nENVIRONMENT:\n"), "no ENVIRONMENT section:\n{text}");
+        assert!(text.contains("MOSS_LOG_LEVEL"), "MOSS_LOG_LEVEL not named:\n{text}");
+        assert!(text.contains("`info` adds"), "the level that shows timing is not named:\n{text}");
+        assert!(text.contains("RUST_LOG is not read"), "RUST_LOG's silence not stated:\n{text}");
     }
 
     /// The rendered text has to carry the argument grammar, or it is a slogan
