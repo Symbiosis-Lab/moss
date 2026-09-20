@@ -40,8 +40,34 @@ article img[src$=".gif"] { max-width: min(600px, 100%); margin-inline: auto; }
 footer.container::before { margin-bottom: .25rem; }
 footer.container > * { font-size: .8em; }
 footer.container > p { font-size: var(--moss-reading-size); }
-footer.container .footer-github { display: inline-flex; vertical-align: text-bottom; }
+/* The old `vertical-align: text-bottom` sat the icon ~1.5px below the
+   optical center of the adjacent footer text, and CSS `middle` (which
+   aligns to the parent's baseline + half its x-height, not to the text's
+   own line-box center) measured slightly worse. `-2.4px` is an empirical
+   nudge down from `baseline` (measured with Playwright against the footer
+   text's line-box center in both chromium and webkit at the system font
+   stack this theme uses); it lands within ~0.2px of center in both — see
+   scripts/check-docs-footer-icon.mjs. Re-measure if the footer font stack
+   ever changes.
+   `position: relative` + `::after` inset hit area: the ::after is
+   out-of-flow, so it pads the click/tap target to the accessible 24x24px
+   minimum (icon is 17-19px per locale; +4px inset on all sides clears 24px)
+   without growing the icon's own box or the footer line's height. */
+footer.container .footer-github { position: relative; display: inline-flex; align-items: center; vertical-align: -2.4px; }
 footer.container .footer-github::before { content: ""; display: block; width: 1em; height: 1em; opacity: .72; background: currentColor; -webkit-mask: url("/assets/platforms/github.svg") center / contain no-repeat; mask: url("/assets/platforms/github.svg") center / contain no-repeat; }
+footer.container .footer-github::after { content: ""; position: absolute; inset: -4px; }
+
+/* Mobile: pin the icon to the right end of the footer's own content row
+   (not just the end of the text, which is shorter than the row) while the
+   text links stay put at the start. The <p> becomes a flex row spanning
+   the full row (footer.container is already a flex row itself, see
+   `:has(> .moss-subscribe)` above, so a shrink-to-fit <p> would otherwise
+   sit at whatever width its own text needs); `margin-inline-start: auto`
+   on the icon alone pushes only it to the end. */
+@media (max-width: 600px) {
+  footer.container > p:has(.footer-github) { display: flex; flex-wrap: wrap; align-items: baseline; flex: 1 1 100%; }
+  footer.container .footer-github { margin-inline-start: auto; align-self: center; }
+}
 
 .moss-grid.sc-demo { margin-block: 0; overflow: hidden; border: 1px solid var(--moss-border-light); border-radius: 6px; gap: 0; }
 .moss-grid.sc-demo > .moss-grid-card { padding: 1.25rem; }
