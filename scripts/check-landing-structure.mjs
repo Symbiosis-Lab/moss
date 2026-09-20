@@ -23,7 +23,7 @@ const LANDING_JS = resolve(SITE_DIR, 'landing.js');
 // itself a failure.
 const BASELINE = {
   windowAssignments: 1,
-  topLevelLets: 90,
+  topLevelLets: 87,
   sceneComparisons: 14,
   htmlBytes: 45380,
   scriptBytes: 235473,
@@ -71,7 +71,7 @@ function extractFunction(text, name) {
 // §2b/§2c and the scroll drivers §2a): the only places a scene index is
 // meant to be tested against a literal or SHIPS/DEPLOY/SHARE at all, once
 // phase 5 merges PHASE/FRAMES/GROUND/JOINS into one table.
-const SCENE_FUNCTIONS = ['pour', 'takePrint', 'watchScrollIntent', 'watchScrollWait', 'watchScrollCss'];
+const SCENE_FUNCTIONS = ['pour', 'takePrint', 'watchScrollDesktop', 'watchScrollReduced', 'watchScrollNative'];
 
 function countSceneComparisons(text) {
   const ident = '(?:scene|to|from|target|shown)';

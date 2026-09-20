@@ -3,7 +3,7 @@
 // shown red then green before it was trusted -- see each function below for
 // the one-line record:
 //
-// I-commit  (R3) fault: watchScrollIntent's own `setTarget(Math.max(0,
+// I-commit  (R3) fault: watchScrollDesktop's own `setTarget(Math.max(0,
 //           scene))` call site deleted -- no scroll ever picks a target
 //           scene again, so every boundary times out instead of committing.
 //           RED/GREEN recorded below each function.
@@ -94,7 +94,7 @@ async function ready(page) {
 // copy column at this viewport, not the visual cell; Chromium is unaffected
 // either way. Each engine gets the position proven to work for it.
 function gesturePos(engineName) { return engineName === 'webkit' ? [1400, 160] : [50, 400]; }
-// A real, no-op gesture: desktop's default scroll driver (watchScrollIntent)
+// A real, no-op gesture: desktop's default scroll driver (watchScrollDesktop)
 // ignores window.scrollTo() writes entirely until a genuine wheel/pointer/key
 // event has armed it (cancelSettle), the same gate a reader's first touch
 // clears. One dummy click clears it for the rest of the page's life.
@@ -133,7 +133,7 @@ async function arrived(page, to) {
     ? page.evaluate(() => Math.abs(scrollY) <= 2)
     : page.evaluate((s) => window.__landing.state().shown === s && window.__landing.state().target === s && !window.__landing.state().running, to);
 }
-// A hand that never lets go never commits (watchScrollIntent tracks a held
+// A hand that never lets go never commits (watchScrollDesktop tracks a held
 // wheel 1:1 and only asks the dead-zone formula what scene to land on once
 // released), so this is a burst -- a handful of ticks -- then release and
 // check, retrying with another burst if the last one was not enough; never
@@ -374,7 +374,7 @@ async function iReduced(browsers) {
 // whatever shown last happened to hold". shown === target was too weak: with
 // runJoin()'s call site deleted from maybeJoin() (site/landing.js), shown
 // never moves again, yet that check still passed on every run, both engines
-// -- because watchScrollIntent keeps computing target from the live scroll
+// -- because watchScrollDesktop keeps computing target from the live scroll
 // position every frame regardless of whether a join ever ran, and this
 // codebase's rest formula (sceneForRest) is defined purely on that position,
 // not on shown, so target kept landing back on whatever scene the reader's
