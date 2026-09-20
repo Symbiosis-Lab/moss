@@ -67,7 +67,7 @@
 //
 // Rules: every scene reach uses a real armed gesture plus window.__landing's
 // own restY()/state(), never a fixed sleep or a per-frame poll of the canvas.
-import { loadPlaywright, resolveBaseURL, PRESETS, trackErrors } from './landing-harness.mjs';
+import { loadPlaywright, resolveBaseURL, PRESETS, trackErrors, whenReady } from './landing-harness.mjs';
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -79,18 +79,15 @@ const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
 // Scene boundaries in code-index terms; -1 is the intro (restY(-1) === 0).
 const SCENES = [-1, 0, 1, 2, 3, 4];
 
+// landing-harness.mjs's whenReady() is what found and closed this file's own
+// I-fuzz race (see the header above): state().ready can go true while boot's
+// ready() is still deciding whether to fire its own runJoin() call, so
+// waiting on it alone let a real join run for reasons unrelated to the call
+// site under test. Every landing check now shares that one wait instead of
+// keeping a per-script variant of it.
 async function ready(page) {
   await page.goto(baseURL);
-  // state().ready (!!(ed && sh) && primed()) goes true while the page's own
-  // boot ready() is still running -- ed/sh are assigned in the promise
-  // callback just before ready() is called, but ready() itself still has to
-  // decide whether to fire its own runJoin() (site/index.html, the one at
-  // the end of boot's ready(), independent of maybeJoin()) before finishing.
-  // Waiting on that alone raced I-fuzz's ablation test: the fuzz loop's own
-  // jumps could land while boot's decision was still pending, so boot's own
-  // runJoin() fired for real and the ablated maybeJoin() call site was never
-  // the one on trial. dataset.ready='1' is the last line of that function.
-  await page.waitForFunction(() => document.documentElement.dataset.ready === '1', null, { timeout: 30000 });
+  await whenReady(page);
 }
 // The mouse position a wheel event is dispatched at changes what it does --
 // measured directly: WebKit only registers scroll input at all over the

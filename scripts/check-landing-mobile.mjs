@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { readFile } from 'node:fs/promises';
-import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
+import { loadPlaywright, resolveBaseURL, whenReady } from './landing-harness.mjs';
 
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
 const base = new URL(baseURL);
@@ -31,10 +31,6 @@ const instrumentScroll = () => {
   const nativeScrollTo = window.scrollTo.bind(window);
   window.scrollTo = (...args) => { window.__landingScrollWrites.push(args); return nativeScrollTo(...args); };
 };
-const ready = async (page) => {
-  await page.waitForSelector('html[data-ready="1"]', { timeout: 30000 });
-  await page.waitForFunction(() => window.__landing.state?.().ready && window.__landing.restY, null, { timeout: 30000 });
-};
 
 async function mobilePage(search = '', viewport = { width: 390, height: 844 }) {
   const page = await browser.newPage({ viewport, isMobile: true, hasTouch: true });
@@ -42,7 +38,7 @@ async function mobilePage(search = '', viewport = { width: 390, height: 844 }) {
   await page.addInitScript(instrumentScroll);
   const url = new URL(base.href); url.search = search;
   await page.goto(url.href, { waitUntil: 'domcontentloaded' });
-  await ready(page);
+  await whenReady(page);
   return page;
 }
 async function swipe(page, fromY, toY, steps = 6) {
@@ -233,7 +229,7 @@ try {
   const desktop = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await installOverride(desktop);
   await desktop.goto(base.href, { waitUntil: 'domcontentloaded' });
-  await ready(desktop);
+  await whenReady(desktop);
   await desktop.mouse.wheel(0, 120);
   await desktop.waitForTimeout(1200);
   const desktopState = await desktop.evaluate(() => ({ y: scrollY, rest: window.__landing.restY(0), carry: window.__landing.state().carry }));

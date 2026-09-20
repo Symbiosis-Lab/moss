@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
-import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
+import { loadPlaywright, resolveBaseURL, whenReady } from './landing-harness.mjs';
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
 const { chromium, webkit } = await loadPlaywright();
 try {
@@ -13,7 +13,7 @@ for (const engine of [chromium, webkit]) {
       await page.route(baseURL, route => route.fulfill({ contentType: 'text/html', body }));
     }
     await page.goto(baseURL);
-    await page.waitForFunction(() => window.__landing.state?.().ready);
+    await whenReady(page);
     await page.evaluate(() => scrollTo(0, window.__landing.restY(2)));
     await page.waitForFunction(() => window.__landing.state().shown === 2 && !window.__landing.state().running, null, { timeout: 30000 });
     // A cold jump can reach the creative scene before its next print exists.

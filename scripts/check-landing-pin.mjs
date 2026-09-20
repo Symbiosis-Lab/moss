@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
-import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
+import { loadPlaywright, resolveBaseURL, whenReady } from './landing-harness.mjs';
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
 const engines = await loadPlaywright();
 try {
@@ -14,7 +14,7 @@ for (const name of ['chromium', 'webkit']) {
         await page.route(baseURL, route => route.fulfill({ contentType: 'text/html', body }));
       }
       await page.goto(baseURL);
-      await page.waitForFunction(() => window.__landing.state?.().ready, null, { timeout: 30000 });
+      await whenReady(page);
       await page.evaluate(() => scrollTo(0, window.__landing.restY(0) + 2));
       await page.waitForTimeout(500);
       const samples = await page.evaluate(async () => {

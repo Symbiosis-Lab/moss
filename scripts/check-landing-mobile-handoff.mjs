@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
+import { loadPlaywright, resolveBaseURL, whenReady } from './landing-harness.mjs';
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
 const { chromium, webkit } = await loadPlaywright();
 try {
@@ -9,7 +9,7 @@ for (const engine of [chromium, webkit]) {
     for (const scene of [1, 2]) {
       const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true });
       await page.goto(baseURL);
-      await page.waitForFunction(() => window.__landing.state?.().ready, null, { timeout: 60000 });
+      await whenReady(page, { timeout: 60000 });
       await page.evaluate(() => scrollTo(0, window.__landing.restY(1) + 24));
       await page.waitForFunction(() => [0, 1, 2, 3].every(i => window.__landing.prints[i]), null, { timeout: 30000 });
       await page.evaluate(s => scrollTo(0, window.__landing.restY(s) + 24), scene);

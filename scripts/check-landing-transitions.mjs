@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Run against plain compiled output or the deployed site, not only moss's preview wrapper.
-import { loadPlaywright, resolveBaseURL, trackErrors } from './landing-harness.mjs';
+import { loadPlaywright, resolveBaseURL, trackErrors, whenReady } from './landing-harness.mjs';
 
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
 const base = new URL(baseURL);
@@ -16,7 +16,7 @@ for (const name of (process.env.ENGINE || 'chromium,webkit').split(',')) {
       const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: 'no-preference' });
       const errors = trackErrors(page);
       await page.goto(new URL(locale, base).href);
-      await page.waitForFunction(() => document.documentElement.dataset.ready === '1', null, { timeout: 30000 });
+      await whenReady(page);
       const initial = await page.evaluate(() => ({ state: window.__landing.state(), sheets: window.__landing.prints.slice(0, 4).map(Boolean) }));
       assert(initial.state.sim && initial.state.primed && initial.sheets.every(Boolean), `${name}/${locale}: wash captures unavailable: ${JSON.stringify(initial)}`);
       // The idle clause, restated as R8 actually states it: simulation

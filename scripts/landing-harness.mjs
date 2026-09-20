@@ -102,3 +102,28 @@ export function trackErrors(page) {
   page.on('pageerror', (error) => errors.push(error.message));
   return errors;
 }
+
+// The true end of boot, not a proxy for it. `window.__landing.state().ready`
+// (`!!(ed && sh) && primed()`) can go true while boot's own ready() function
+// in the runtime script is still mid-flight -- ed/sh are assigned just before
+// ready() is called, but ready() still has to decide whether to fire its own
+// runJoin() call (independent of any caller's own scroll/join logic) before
+// it finishes. A script that starts driving the page as soon as state().ready
+// flips races that decision (found in check-landing-invariants.mjs's I-fuzz:
+// a fuzz loop's own jumps landed mid-decision and a real join ran for
+// reasons that had nothing to do with the call site under test). Boot sets
+// documentElement.dataset.ready='1' only after that decision is made, on the
+// success path; the failed-boot path (a demo iframe never initializing) sets
+// dataset.static='1' instead and never reaches ready() at all. Every landing
+// check waits on this one function rather than keeping its own variant, so
+// there is one place that knows what "the page has settled its own boot
+// decisions" means.
+export async function whenReady(page, { timeout = 30000 } = {}) {
+  const handle = await page.waitForFunction(() => {
+    const root = document.documentElement.dataset;
+    if (root.ready === '1') return 'ready';
+    if (root.static === '1') return 'static';
+    return false;
+  }, null, { timeout });
+  return handle.jsonValue();
+}

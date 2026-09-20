@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
+import { loadPlaywright, resolveBaseURL, whenReady } from './landing-harness.mjs';
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
 const { chromium, webkit } = await loadPlaywright();
 try {
@@ -8,7 +8,7 @@ for (const engine of [chromium, webkit]) {
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true });
     await page.goto(baseURL);
-    await page.waitForFunction(() => window.__landing.state?.().ready);
+    await whenReady(page);
     for (const scene of [1, 2, 3]) {
       for (const fraction of [-.01, .5, 1.01, .5, -.01]) {
         await page.evaluate(({ scene, fraction }) => {

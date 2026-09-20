@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
+import { loadPlaywright, resolveBaseURL, whenReady } from './landing-harness.mjs';
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
 const playwright = await loadPlaywright();
 const locales = ['', 'zh-hans/', 'zh-hant/'];
@@ -22,7 +22,7 @@ try {
         for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1200 }]) {
           const page = await browser.newPage({ viewport });
           await page.goto(new URL(locale, baseURL).href);
-          await page.waitForFunction(() => window.__landing.state?.().ready, null, { timeout: 30000 });
+          await whenReady(page);
           if (!(await stableAt(page, () => scrollY === 0))) throw new Error(`${engineName} ${locale || 'en'} ${viewport.width}px: the opening moved before input`);
           // Clicking an empty area or pressing a non-navigation key is not a request
           // to leave the intro, even though either can cancel an active spring.

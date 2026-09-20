@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
+import { loadPlaywright, resolveBaseURL, whenReady } from './landing-harness.mjs';
 
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
 const base = new URL(baseURL);
@@ -51,7 +51,7 @@ try {
     await page.waitForTimeout(200);
     const coldReverse = await state(page);
     assert(coldReverse.xf < cold.xf && !coldReverse.closing, `${test.name}: cold reverse did not uncover scene 4: ${JSON.stringify(coldReverse)}`);
-    await page.waitForFunction(() => document.documentElement.dataset.ready === '1', null, { timeout: 20000 });
+    await whenReady(page, { timeout: 20000 });
     await page.evaluate(() => scrollTo(0, window.__landing.restY(3)));
     await page.waitForFunction(() => { const s = window.__landing.state(); return s.shown === 3 && s.target === 3 && !s.running; }, null, { timeout: 10000 }).catch(async error => { throw new Error(`${test.name}: return failed ${JSON.stringify(await state(page))}`, {cause:error}); });
 

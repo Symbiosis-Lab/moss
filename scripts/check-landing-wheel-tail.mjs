@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
+import { loadPlaywright, resolveBaseURL, whenReady } from './landing-harness.mjs';
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
 const engines = await loadPlaywright();
 const browser = await engines[process.env.ENGINE || 'webkit'].launch();
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await page.goto(baseURL);
-  await page.waitForFunction(() => window.__landing.state?.().ready, null, { timeout: 30000 });
+  await whenReady(page);
   await page.mouse.move(1400, 160);
   // One decreasing gesture with a sparse, quantized tail. Its total physical
   // travel is shorter than the intro; the spring must not turn it into new input.

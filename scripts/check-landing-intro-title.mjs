@@ -11,7 +11,7 @@
 // (window.__landing.title.raw/mask/lines) — the page hands back
 // arrays and moments, never a verdict, so the check is grading what a
 // screenshot would show rather than the page's own opinion of itself.
-import { loadPlaywright, resolveBaseURL, trackErrors } from './landing-harness.mjs';
+import { loadPlaywright, resolveBaseURL, trackErrors, whenReady } from './landing-harness.mjs';
 const { baseURL: url, close } = await resolveBaseURL(process.argv[2]);
 const { chromium, webkit } = await loadPlaywright();
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
@@ -130,7 +130,7 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         // (background polling 404s) unrelated to the title, on every run.
         const errors = trackErrors(page);
         await page.goto(new URL(locale, url).href);
-        await page.waitForFunction(() => window.__landing.state?.().ready, null, { timeout: 30000 });
+        await whenReady(page);
         // setupTitleDissolve deliberately waits for the page to come to rest
         // before touching WebGL (a compile stall borrows time from the
         // desktop scroll spring otherwise); wait for its own decision rather
@@ -269,7 +269,7 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
     await page.goto(url);
-    await page.waitForFunction(() => window.__landing.state?.().ready, null, { timeout: 30000 });
+    await whenReady(page);
     const state = await page.evaluate(() => ({
       canvas: !!document.getElementById('gl-title'),
       h1Opacity: Number(getComputedStyle(document.querySelector('#intro h1')).opacity),
