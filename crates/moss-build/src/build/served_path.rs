@@ -467,9 +467,71 @@ impl AsRef<std::path::Path> for ServedPath {
     }
 }
 
+// ---------------------------------------------------------------------------
+// How ship treats a served path
+// ---------------------------------------------------------------------------
+//
+// Here rather than in `ship` because `manifest` has to ask it (`register_held`
+// refuses a path ship would rewrite) and `ship` depends on `manifest`. This
+// module depends on neither. `ship` re-exports both names, and keeps
+// `apply_transform`, the byte rewrite the enum selects.
+
+/// How a file should be transformed during the stage→site ship pass.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShipTransform {
+    /// Copy the file byte-for-byte. Used for all non-HTML artifacts.
+    CopyAsIs,
+    /// Strip preview-only source-annotation attributes before writing to site.
+    /// Used for `.html` / `.htm` files.
+    StripPreviewAttrs,
+}
+
+/// Classify a relative path into the transform that the ship pass should apply.
+///
+/// It used to take an `annotations_present` flag, for a publish build that
+/// emitted no `data-source-*` attributes and could skip the regex. No such
+/// build exists: `emit_source_lines` (`pipeline.rs:1251`) is a literal `true`,
+/// so every caller passed `true` and the other arm was a no-op waiting to be
+/// wrong — it also skipped `ship`'s `STRIP_NO_PREVIEW_MARKER`, which is not
+/// annotation-dependent at all.
+///
+/// Public so tests can verify classification without running a full ship.
+pub fn transform_for(rel_path: &str) -> ShipTransform {
+    if rel_path.ends_with(".html") || rel_path.ends_with(".htm") {
+        ShipTransform::StripPreviewAttrs
+    } else {
+        ShipTransform::CopyAsIs
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transform_for_html_returns_strip() {
+        assert_eq!(
+            transform_for("index.html"),
+            ShipTransform::StripPreviewAttrs
+        );
+        assert_eq!(
+            transform_for("articles/foo/index.html"),
+            ShipTransform::StripPreviewAttrs
+        );
+        assert_eq!(
+            transform_for("legacy.htm"),
+            ShipTransform::StripPreviewAttrs
+        );
+    }
+
+    #[test]
+    fn transform_for_non_html_returns_copy() {
+        assert_eq!(transform_for("style.css"), ShipTransform::CopyAsIs);
+        assert_eq!(transform_for("og/home.png"), ShipTransform::CopyAsIs);
+        assert_eq!(transform_for("rss.xml"), ShipTransform::CopyAsIs);
+        assert_eq!(transform_for("data.json"), ShipTransform::CopyAsIs);
+        assert_eq!(transform_for("video.mp4"), ShipTransform::CopyAsIs);
+    }
 
     #[test]
     fn lowercases_directory_segments() {

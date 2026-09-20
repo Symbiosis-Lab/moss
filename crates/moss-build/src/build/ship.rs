@@ -23,6 +23,11 @@ use std::sync::LazyLock;
 
 use crate::build::manifest::SealedManifest;
 
+// Defined in `served_path` so `manifest` can ask them without depending on this
+// module, which depends on `manifest`; re-exported so callers keep saying
+// `ship::transform_for`.
+pub use crate::build::served_path::{transform_for, ShipTransform};
+
 // ---------------------------------------------------------------------------
 // Regex constants — the one definition. A second copy lived in
 // `media/pipeline.rs` until its last caller (`sync_dir`) was deleted.
@@ -60,42 +65,6 @@ static STRIP_PREVIEW_ATTR: LazyLock<regex::Regex> = LazyLock::new(|| {
 static STRIP_NO_PREVIEW_MARKER: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"<!--/?moss:no-preview-->").unwrap()
 });
-
-// ---------------------------------------------------------------------------
-// ShipTransform
-// ---------------------------------------------------------------------------
-
-/// How a file should be transformed during the stage→site ship pass.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ShipTransform {
-    /// Copy the file byte-for-byte. Used for all non-HTML artifacts.
-    CopyAsIs,
-    /// Strip preview-only source-annotation attributes before writing to site.
-    /// Used for `.html` / `.htm` files.
-    StripPreviewAttrs,
-}
-
-// ---------------------------------------------------------------------------
-// Extension-based dispatch
-// ---------------------------------------------------------------------------
-
-/// Classify a relative path into the transform that the ship pass should apply.
-///
-/// It used to take an `annotations_present` flag, for a publish build that
-/// emitted no `data-source-*` attributes and could skip the regex. No such
-/// build exists: `emit_source_lines` (`pipeline.rs:1251`) is a literal `true`,
-/// so every caller passed `true` and the other arm was a no-op waiting to be
-/// wrong — it also skipped `STRIP_NO_PREVIEW_MARKER`, which is not
-/// annotation-dependent at all.
-///
-/// Public so tests can verify classification without running a full ship.
-pub fn transform_for(rel_path: &str) -> ShipTransform {
-    if rel_path.ends_with(".html") || rel_path.ends_with(".htm") {
-        ShipTransform::StripPreviewAttrs
-    } else {
-        ShipTransform::CopyAsIs
-    }
-}
 
 // ---------------------------------------------------------------------------
 // apply_transform
@@ -983,31 +952,6 @@ mod tests {
     use crate::build::manifest::{HashBucket, PendingManifest};
     use crate::types::content::SiteHashes;
     use tempfile::tempdir;
-
-    #[test]
-    fn transform_for_html_returns_strip() {
-        assert_eq!(
-            transform_for("index.html"),
-            ShipTransform::StripPreviewAttrs
-        );
-        assert_eq!(
-            transform_for("articles/foo/index.html"),
-            ShipTransform::StripPreviewAttrs
-        );
-        assert_eq!(
-            transform_for("legacy.htm"),
-            ShipTransform::StripPreviewAttrs
-        );
-    }
-
-    #[test]
-    fn transform_for_non_html_returns_copy() {
-        assert_eq!(transform_for("style.css"), ShipTransform::CopyAsIs);
-        assert_eq!(transform_for("og/home.png"), ShipTransform::CopyAsIs);
-        assert_eq!(transform_for("rss.xml"), ShipTransform::CopyAsIs);
-        assert_eq!(transform_for("data.json"), ShipTransform::CopyAsIs);
-        assert_eq!(transform_for("video.mp4"), ShipTransform::CopyAsIs);
-    }
 
     #[test]
     fn apply_strip_removes_data_source_line() {
