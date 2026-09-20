@@ -44,7 +44,7 @@
         "crates/moss-core/src/resolve/wikilink_dispatch.rs": 1044,
         "crates/moss-core/src/schema_fields.rs": 873,
         "packages/moss-api/src/testing/mock-tauri.ts": 1140,
-        "crates/moss-build/src/build/manifest.rs": 966,
+        "crates/moss-build/src/build/manifest.rs": 961,
         "crates/moss-build/src/build/feeds/search_lane.rs": 801
       }
     },
