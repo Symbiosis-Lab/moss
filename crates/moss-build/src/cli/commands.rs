@@ -179,11 +179,20 @@ const OPTION_LINES: &str = "    -h, --help                     Show this help me
 /// ignored; without this line the only way to find the switch that turns on the
 /// timing lines was to read that source (2026-09-19, a build-speed investigation
 /// by an agent).
+///
+/// The level split is read off the `log::info!` / `log::debug!` call sites
+/// (2026-09-20, after the first wording put the `[render]` timings at `info`).
+/// At `info`: `[slots]`, `[search]` and two `[render]` summaries (all
+/// `target: "timing"`), one `[cache]` line and the `build.summary` line. Every
+/// other `[render]` line and all the `[reduce]`, `[scan]`, `[pipeline]` and
+/// `[build]` ones are `debug`. Change a call's level and this text moves with it.
 const ENVIRONMENT_LINES: &str = "    MOSS_LOG_LEVEL=<level>         Log verbosity on stderr: error, warn
-                                   (default), info or debug. `info` adds
-                                   the per-phase timing lines ([render],
-                                   [slots]) and what the hash index saved
-                                   ([cache]). RUST_LOG is not read.";
+                                   (default), info or debug. `info` adds the
+                                   build.summary line (per-phase ms) and the
+                                   [slots], [search], [cache] and two [render]
+                                   summary lines; `debug` adds the per-step
+                                   [render], [reduce], [scan] and [build]
+                                   timings. RUST_LOG is not read.";
 
 /// The first sentence of a description — what a command is, without the
 /// paragraph of consequences `<cmd> --help` and `moss describe` print in full.
@@ -380,14 +389,27 @@ mod tests {
     }
 
     /// `MOSS_LOG_LEVEL` is the only way to see the timing lines and `RUST_LOG` is
-    /// ignored, so `--help` has to say both or an agent chasing build speed reads
-    /// source to find out.
+    /// ignored, so `--help` has to say both, and which level shows which: at
+    /// `info` a build prints its `build.summary` and a handful of `[slots]` /
+    /// `[render]` / `[cache]` summary lines, and the per-step `[render]`,
+    /// `[reduce]`, `[scan]` and `[build]` breakdown only appears at `debug`. An
+    /// earlier wording promised the `[render]` timings at `info`, where only two
+    /// `[render]` summary lines print.
     #[test]
     fn top_level_help_says_how_to_see_timing_output() {
         let text = top_level_help("0.0.0", &|_| true);
+        // The block is wrapped for the terminal; compare it as words.
+        let words = text.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(text.contains("\nENVIRONMENT:\n"), "no ENVIRONMENT section:\n{text}");
         assert!(text.contains("MOSS_LOG_LEVEL"), "MOSS_LOG_LEVEL not named:\n{text}");
-        assert!(text.contains("`info` adds"), "the level that shows timing is not named:\n{text}");
+        assert!(
+            words.contains("`info` adds the build.summary line (per-phase ms) and the [slots], [search], [cache] and two [render] summary lines;"),
+            "what `info` shows is not stated:\n{text}"
+        );
+        assert!(
+            words.contains("`debug` adds the per-step [render], [reduce], [scan] and [build] timings."),
+            "what only `debug` shows is not stated:\n{text}"
+        );
         assert!(text.contains("RUST_LOG is not read"), "RUST_LOG's silence not stated:\n{text}");
     }
 
