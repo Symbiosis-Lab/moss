@@ -39,9 +39,10 @@ for (const name of (process.env.ENGINE || 'chromium,webkit').split(',')) {
         const previous = await page.evaluate(() => __state());
         const prior = previous.washes;
         await page.evaluate(scene => scrollTo(0, __restY(scene)), scene);
-        // Returning from the orbit intentionally shrinks the surviving Publish
-        // control into the preview instead of dissolving it.
-        if (!(previous.shown === 3 && scene === 2)) {
+        // The Publish control stays solid and travels between the preview and the
+        // orbit in both directions, so neither leg of that swap is a pigment wash.
+        const carriesPublish = Math.min(previous.shown, scene) === 2 && Math.max(previous.shown, scene) === 3;
+        if (!carriesPublish) {
           await page.waitForFunction(prior => __state().washes > prior && document.getElementById('stage').classList.contains('morphing'), prior, { timeout: 15000 });
           const visible = await page.evaluate(() => {
             const style = getComputedStyle(document.getElementById('gl'));
