@@ -319,6 +319,61 @@ fn a_page_re_registered_after_the_slot_pass_loses_the_passes_oid() {
     assert_eq!(pending.seal().staged_oid("page.html"), None);
 }
 
+/// The pipeline compares `site_result.hashes` with the previous build's manifest
+/// to decide whether anything changed, and hands a copy to the watcher. It holds
+/// the render phase's entries, which are the hashes of the pages BEFORE injection;
+/// the pass has to bring them to the entries it gave the manifest, or every page
+/// that injection rewrites reads as changed against a manifest that recorded the
+/// injected bytes. No other test looks at `site_result` after the pass, which is
+/// how dropping that update went unnoticed by the whole suite.
+///
+/// Twice: once with a store that takes the blob, once with one that cannot, since
+/// the page without an oid takes its own branch of the receipt loop.
+#[test]
+fn the_slot_pass_brings_the_change_detection_hashes_to_the_manifests_entries() {
+    use crate::build::manifest::{HashBucket, PendingManifest};
+    use crate::build::served_path::ServedPath;
+
+    for store_takes_blobs in [true, false] {
+        let tmp = TempDir::new().unwrap();
+        let paths = MossPaths::new(tmp.path());
+        let stage = paths.staging_dir();
+        std::fs::create_dir_all(&stage).unwrap();
+        if !store_takes_blobs {
+            // A file where the object store's directory should be.
+            std::fs::create_dir_all(paths.cache_objects().parent().unwrap()).unwrap();
+            std::fs::write(paths.cache_objects(), "not a directory").unwrap();
+        }
+        let rendered = "<html><head><!-- slot:head-end --></head><body></body></html>";
+        std::fs::write(stage.join("page.html"), rendered).unwrap();
+
+        let page = ServedPath::from_source("page.html").unwrap();
+        let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
+        pending.register(&page, rendered.as_bytes(), HashBucket::Files);
+        // What `generate_blocking_content` leaves in `SiteResult`: the manifest as
+        // the render phase saw it.
+        let mut site_result = empty_site_result();
+        site_result.hashes = pending.as_parts_clone().0;
+        let render_phase_entry = site_result.hashes.files["page.html"].clone();
+
+        apply_to_stage_and_manifest(&paths, &stage, &ResolvedSlots::empty(), &mut pending, &mut site_result, None)
+            .expect("slot pass");
+
+        let final_entry = entry_for("page.html", &std::fs::read(stage.join("page.html")).unwrap());
+        assert_ne!(render_phase_entry, final_entry, "fixture: injection changed the page's bytes");
+        assert_eq!(
+            pending.files().get("page.html"),
+            Some(&final_entry),
+            "[store takes blobs: {store_takes_blobs}] the manifest holds the final entry"
+        );
+        assert_eq!(
+            site_result.hashes.files.get("page.html"),
+            Some(&final_entry),
+            "[store takes blobs: {store_takes_blobs}] and so does the copy the pipeline compares against the previous build"
+        );
+    }
+}
+
 /// A full or unwritable object store must not fail a build that succeeds today:
 /// a page loses its immutable copy, not its place in the generation. The pages
 /// fall back to the stage-path fingerprint `advertise_sealed` stamps after seal.
