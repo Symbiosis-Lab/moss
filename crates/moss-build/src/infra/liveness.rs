@@ -93,6 +93,25 @@ fn origin() -> Instant {
 pub fn bump() {
     LAST_ACTIVITY_MS.store(origin().elapsed().as_millis() as u64, Ordering::Relaxed);
     BUMPS.fetch_add(1, Ordering::Relaxed);
+    #[cfg(test)]
+    THREAD_BUMPS.with(|c| c.set(c.get() + 1));
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Bumps made by THIS thread only — what a test asking "did the code I
+    /// just called bump?" reads. [`bump_count`] counts the whole process, and
+    /// every publish test in the binary bumps it, so "nothing bumped between
+    /// these two lines" was false whenever another test happened to be
+    /// mid-publish; a lock cannot fix that, because the bumpers do not take it.
+    static THREAD_BUMPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// [`bump`]s made by the calling thread. Only meaningful around code that runs
+/// synchronously on that thread.
+#[cfg(test)]
+pub(crate) fn thread_bump_count() -> u64 {
+    THREAD_BUMPS.with(|c| c.get())
 }
 
 /// How long since the last [`bump`].

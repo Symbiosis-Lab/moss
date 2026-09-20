@@ -795,18 +795,15 @@ mod tests {
     /// gets cancelled while healthy — the 2026-08-04 failure, reintroduced.
     #[test]
     fn upload_byte_credit_is_a_liveness_bump() {
-        let _lock = crate::infra::liveness::CLOCK_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
         let st = progress::UploadProgressState::new(4096, 1, 0);
-        let before = crate::infra::liveness::bump_count();
+        let before = crate::infra::liveness::thread_bump_count();
         credit_upload_bytes(&st, 1024);
         assert_eq!(
             st.bytes_uploaded.load(std::sync::atomic::Ordering::Relaxed),
             1024
         );
         assert!(
-            crate::infra::liveness::bump_count() > before,
+            crate::infra::liveness::thread_bump_count() > before,
             "confirmed bytes are the upload phase's proof of progress"
         );
     }
@@ -817,18 +814,15 @@ mod tests {
     /// leave the watchdog inert exactly where stalls happen.
     #[test]
     fn the_upload_progress_ticker_is_not_a_liveness_bump() {
-        let _lock = crate::infra::liveness::CLOCK_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
         let st = progress::UploadProgressState::new(4096, 8, 0);
         let sink = progress::RecordingSink::default();
-        let before = crate::infra::liveness::bump_count();
+        let before = crate::infra::liveness::thread_bump_count();
         for _ in 0..40 {
             sink.upload_sample(&st);
         }
         assert_eq!(sink.drain().len(), 40, "every tick reported, none credited");
         assert_eq!(
-            crate::infra::liveness::bump_count(),
+            crate::infra::liveness::thread_bump_count(),
             before,
             "the ticker fires on a timer, not on progress — it must never bump"
         );
