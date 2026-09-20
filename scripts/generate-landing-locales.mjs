@@ -1,12 +1,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 
 const source = new URL('../site/index.html', import.meta.url);
 const html = await readFile(source, 'utf8');
-const runtime = await readFile(new URL('../site/landing-i18n.js', import.meta.url), 'utf8');
-const catalogSource = runtime.match(/  const en = \{[\s\S]+?  const catalogs=/)?.[0]
-  .replace('  const catalogs=', '  return { en, hans, hant };');
-if (!catalogSource) throw new Error('Could not read landing locale catalogs');
-const { en, hans, hant } = Function(catalogSource)();
+// landing-i18n.js exports its catalog as a plain CommonJS module when
+// `document` doesn't exist (see the file itself), so this is a real
+// require(), not a regex slice of the source evaluated with Function().
+const { en, hans, hant } = createRequire(import.meta.url)('../site/landing-i18n.js');
 const catalogs = { 'zh-hans': hans, 'zh-hant': hant };
 
 function escaped(value) {

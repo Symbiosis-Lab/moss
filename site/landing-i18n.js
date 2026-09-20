@@ -1,12 +1,4 @@
 (() => {
-  const supported = new Set(['en', 'zh-hans', 'zh-hant']);
-  const requested = new URLSearchParams(location.search).get('lang');
-  const routeLocale = location.pathname.match(/^\/(zh-hans|zh-hant)(?:\/|$)/)?.[1] || (location.pathname === '/' ? 'en' : null);
-  let stored = null; try { stored = localStorage.getItem('moss-landing-locale'); } catch {}
-  const initial = requested === 'zh' ? 'zh-hans' : supported.has(requested) ? requested : routeLocale || (supported.has(stored) ? stored : 'en');
-  window.__LANDING_LOCALE = initial;
-  window.__LANG = initial === 'en' ? 'en' : 'zh';
-  document.documentElement.lang = initial;
   const en = {
     product:'moss',
     title:'moss — Publish your site from your folder',description:'Write in your folder and publish to your internet. moss turns Markdown, media, and creative code into a website you own.',
@@ -39,33 +31,43 @@
     docs:{start:'/zh-hant/開始使用/',editor:'/zh-hant/開始使用/editor/',theme:'/zh-hant/開始使用/design/',media:'/zh-hant/開始使用/links/',plugin:'/zh-hant/開始使用/extend/',privacy:'/zh-hant/privacy/'}
   };
   const catalogs={en,'zh-hans':hans,'zh-hant':hant};
+  // Loaded two ways: a browser <script> runs the rest of this IIFE, and
+  // generate-landing-locales.mjs requires this same file for the catalog
+  // alone -- a plain object export, not the regex-plus-Function() eval this
+  // replaced. `document` (and everything below that depends on it) does not
+  // exist in that second context, so the export happens here and the rest
+  // of the file never runs there.
+  if (typeof document === 'undefined') { if (typeof module !== 'undefined') module.exports = { en, hans, hant }; return; }
+  const supported = new Set(['en', 'zh-hans', 'zh-hant']);
+  const routeLocale = location.pathname.match(/^\/(zh-hans|zh-hant)(?:\/|$)/)?.[1] || (location.pathname === '/' ? 'en' : null);
+  // The one live use of ?lang=: a real redirect to the locale's own path, not
+  // a client-side repaint of the current one. A stored-preference repaint on
+  // "/" would have trapped a shared English link and sent a crawler away
+  // from the canonical URL -- the route locale already wins on every real
+  // path, which is also why this redirect only fires when the query asks
+  // for a locale the path doesn't already carry.
+  const requested = new URLSearchParams(location.search).get('lang');
+  const redirectTo = requested === 'zh' ? 'zh-hans' : supported.has(requested) ? requested : null;
+  if (redirectTo && redirectTo !== routeLocale) location.replace((redirectTo === 'en' ? '/' : `/${redirectTo}/`) + location.hash);
+  const initial = routeLocale || 'en';
+  window.__LANDING_LOCALE = initial;
+  window.__LANG = initial === 'en' ? 'en' : 'zh';
+  document.documentElement.lang = initial;
   const t=(key)=>catalogs[window.__LANDING_LOCALE||initial]?.[key]??en[key]??key;
   window.__landingI18n={t,locale:()=>window.__LANDING_LOCALE||initial};
-  const text=(selector,key)=>{const n=document.querySelector(selector);if(n)n.textContent=t(key)};
-  const html=(selector,key)=>{const n=document.querySelector(selector);if(n)n.innerHTML=t(key)};
-  const attr=(selector,name,key)=>{const n=document.querySelector(selector);if(n)n.setAttribute(name,t(key))};
-  function apply(next){
-    window.__LANDING_LOCALE=next;window.__LANG=next==='en'?'en':'zh';const c=catalogs[next];
-    document.documentElement.lang=next;document.title=c.title;document.querySelector('meta[name="description"]')?.setAttribute('content',c.description);text('.brand .moss-wordmark','product');
-    html('#intro h1','intro');for(let i=1;i<=4;i++){html('#c'+i+' h2','h'+i);text('#c'+i+' .lede','b'+i)}
-    const c1=document.querySelectorAll('#c1 .btns a');if(c1[0])c1[0].textContent=c.betaCta;if(c1[1]){c1[1].textContent=c.start;c1[1].href=c.docs.start}
-    const c2=document.querySelectorAll('#c2 .btns a');if(c2[0]){c2[0].textContent=c.editor;c2[0].href=c.docs.editor}if(c2[1]){c2[1].textContent=c.theme;c2[1].href=c.docs.theme}
-    const c3=document.querySelectorAll('#c3 .btns a');if(c3[0]){c3[0].textContent=c.media;c3[0].href=c.docs.media}if(c3[1])c3[1].textContent=c.requestType;
-    const c4=document.querySelectorAll('#c4 .btns a');if(c4[0]){c4[0].textContent=c.plugin;c4[0].href=c.docs.plugin}if(c4[1])c4[1].textContent=c.registry;
-    text('#five-headline','closeH');text('.closing-lede','closeB');attr('#downloads','aria-label','download');
-    const notes=document.querySelectorAll('#downloads .availability');if(notes[0])notes[0].textContent=c.macNote;if(notes[1])notes[1].textContent=c.soon;if(notes[2])notes[2].textContent=c.soon;attr('[data-platform="macos"]','title','macTitle');attr('[data-platform="windows"]','aria-label','windowsAria');attr('[data-platform="linux"]','aria-label','linuxAria');
-    attr('#commands','aria-label','install');document.querySelectorAll('.command button').forEach((b,i)=>{b.textContent=c.copy;b.setAttribute('aria-label',i?c.copyBrew:c.copyNpm)});
-    text('#beta-title','betaH');text('#beta > div p','betaB');text('label[for="beta-email"]','email');attr('#beta-email','placeholder','email');text('#beta-form button','request');
-    const footer=document.querySelector('#footer nav');footer?.setAttribute('aria-label',c.footer);const links=footer?.querySelectorAll('a');if(links?.[0]){links[0].textContent=c.privacy;links[0].href=c.docs.privacy}if(links?.[2])links[2].setAttribute('aria-label',c.github);
-    attr('#ed','title','editorFrame');attr('#sh','title','previewFrame');attr('#vd','title','previewFrame');attr('#nb','title','notebook');attr('#sk','title','sketch');attr('#s3-site-frame','title','article');
-    const toggle=document.querySelector('#loop-toggle');if(toggle){const playing=[en.pause,hans.pause,hant.pause].includes(toggle.textContent);toggle.textContent=playing?c.pause:c.play;toggle.setAttribute('aria-label',playing?c.pauseAria:c.playAria)}
-    document.querySelector('.language-picker')?.setAttribute('aria-label',c.language);
-    const status=document.querySelector('#beta-form .form-status');if(status?.dataset.messageKey)status.textContent=t(status.dataset.messageKey);
-  }
-  const key=url=>'moss-landing:'+url;
-  const snap=()=>{const pending=!!document.querySelector('#beta-form button[aria-busy="true"]');return {y:scrollY,email:document.querySelector('#beta-email')?.value||'',status:pending?'':document.querySelector('#beta-form .form-status')?.textContent||'',state:pending?'':document.querySelector('#beta-form .form-status')?.dataset.state||'',messageKey:pending?'':document.querySelector('#beta-form .form-status')?.dataset.messageKey||''}};
-  document.addEventListener('click',event=>{if(event.target.closest?.('[data-landing-locale]')&&document.querySelector('#beta-form button[aria-busy="true"]'))event.preventDefault()},true);
-  const save=(url,state)=>{try{sessionStorage.setItem(key(url),JSON.stringify(state))}catch{}};
-  const restore=()=>{try{const s=JSON.parse(sessionStorage.getItem(key(location.href))||'null');if(!s)return;const applyState=()=>{const input=document.querySelector('#beta-email');if(input)input.value=s.email;const status=document.querySelector('#beta-form .form-status');if(status){status.textContent=s.messageKey?t(s.messageKey):s.status;if(s.state)status.dataset.state=s.state;if(s.messageKey)status.dataset.messageKey=s.messageKey}scrollTo(0,s.y)};requestAnimationFrame(applyState);setTimeout(applyState,250)}catch{}};
-  document.addEventListener('DOMContentLoaded',()=>{apply(initial);restore();document.querySelectorAll('a[href]').forEach(link=>{const url=new URL(link.href);if(url.origin!==location.origin){link.target='_blank';link.rel='noopener'}});document.querySelectorAll('[data-landing-locale]').forEach(link=>link.addEventListener('click',event=>{if(document.querySelector('#beta-form button[aria-busy="true"]')){event.preventDefault();return}const next=link.dataset.landingLocale;if(!supported.has(next)||next===window.__LANDING_LOCALE)return;const state=snap(),url=new URL(link.href);save(location.href,state);save(url.href,state);try{localStorage.setItem('moss-landing-locale',next)}catch{}}))});
+  // apply() -- the runtime re-patching this file used to do (text/html/attr
+  // helpers, then a function touching every heading, button, frame title
+  // and aria-label on the page) -- was verified to change nothing: a DOM
+  // diff with it disabled vs enabled, on all three locale routes, showed
+  // zero content differences (see the commit this landed in). The generator
+  // already bakes every one of these strings statically
+  // (generate-landing-locales.mjs), which is also why moss's own no-JS
+  // fallback has always shown correct copy. Deleted along with it: the
+  // localStorage read/write and sessionStorage save/restore of a "stored
+  // preference" that this same proof shows never took visible effect, and
+  // the #loop-toggle relabeling, which queried an element that does not
+  // exist in the current markup. The external-link and #beta-form busy-
+  // guard wiring that lived in the same DOMContentLoaded listener moved to
+  // closing.js, which owns the rest of the page's one-time wiring and
+  // #beta-form itself.
 })();

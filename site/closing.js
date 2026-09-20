@@ -6,6 +6,20 @@
   ready(() => {
     if (document.documentElement.dataset.closingWired === 'true') return;
     document.documentElement.dataset.closingWired = 'true';
+
+    // Moved from landing-i18n.js's apply() (phase 3): a route change, not a
+    // repaint, so it belongs with the rest of the page's one-time wiring,
+    // not with locale detection.
+    document.querySelectorAll('a[href]').forEach((link) => {
+      const url = new URL(link.href);
+      if (url.origin !== location.origin) { link.target = '_blank'; link.rel = 'noopener'; }
+    });
+    // Same move: guards #beta-form's own in-flight submit, which is this
+    // file's concern, not landing-i18n.js's.
+    document.querySelectorAll('[data-landing-locale]').forEach((link) => link.addEventListener('click', (event) => {
+      if (document.querySelector('#beta-form button[aria-busy="true"]')) event.preventDefault();
+    }));
+
     const downloads = document.querySelector('#downloads');
     const release = {
       macos: 'https://github.com/Symbiosis-Lab/moss/releases/download/v0.14.1/moss_0.14.1_universal.dmg',

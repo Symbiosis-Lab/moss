@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Verify the served site, including the assets whose failure leaves an HTTP-200 page unstyled.
 import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { resolveBaseURL } from './landing-harness.mjs';
 
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
@@ -9,6 +10,25 @@ const contract = JSON.parse(await readFile(new URL('./landing-routes.json', impo
 const landingRoutes = new Set(['/', '/zh-hans/', '/zh-hant/']);
 const landingLocale = { '/': 'en', '/zh-hans/': 'zh-hans', '/zh-hant/': 'zh-hant' };
 const routes = [...landingRoutes, ...contract.required];
+// This script never runs a browser -- fetch() and text matching only -- so
+// checking the served bytes here is exactly "with JavaScript disabled",
+// the condition the generator's own static substitution has to satisfy
+// on its own, now that landing-i18n.js's apply() no longer re-patches
+// anything at runtime (phase 3).
+const { en, hans, hant } = createRequire(import.meta.url)('../site/landing-i18n.js');
+const catalogByRoute = { '/': en, '/zh-hans/': hans, '/zh-hant/': hant };
+const escapeHtml = (value) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+// The same "must be statically present" list generate-landing-locales.mjs
+// checks right after substitution -- kept as a second copy rather than an
+// import, since importing that script would re-run its own top-level
+// generation/--check side effects. Deliberately narrower than the full
+// catalog: macTitle/windowsAria/linuxAria/pause/play/.../copied/selected/
+// sending/success/alreadySubscribed/offline/error are values closing.js
+// sets at runtime (form status, download link titles), never present in
+// markup no JS ever touches, and editorFrame/previewFrame/notebook/sketch/
+// article/github/language/product target elements or attributes a raw-text
+// scan can't see are missing without false positives.
+const required = ['title', 'description', 'intro', 'h1', 'b1', 'h2', 'b2', 'h3', 'b3', 'h4', 'b4', 'betaCta', 'start', 'editor', 'theme', 'media', 'requestType', 'plugin', 'registry', 'closeH', 'closeB', 'download', 'macNote', 'soon', 'install', 'copy', 'betaH', 'betaB', 'email', 'request', 'privacy'];
 const failures = [];
 const assets = new Map();
 const attr = (tag, name) => tag.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'i'))?.[1];
@@ -39,6 +59,9 @@ for (const route of routes) {
   if (/Directory listing for/i.test(html)) failures.push({ url: String(url), problem: 'Serving a directory listing instead of the site' });
   if (landingRoutes.has(route) && !html.includes('id="intro"')) failures.push({ url: String(url), problem: 'Custom landing homepage is missing' });
   if (landingRoutes.has(route)) {
+    const catalog = catalogByRoute[route];
+    const missing = required.filter((key) => !html.includes(catalog[key]) && !html.includes(escapeHtml(catalog[key])));
+    if (missing.length) failures.push({ url: String(url), problem: `Visible strings missing with JavaScript disabled: ${missing.join(', ')}` });
     // The footer privacy link must be same-origin (so it works on any host, including staging)
     // and must resolve to the page in the SAME language as the landing page it's linked from.
     const footerNav = html.match(/<nav aria-label="[^"]*"[^>]*>[\s\S]*?<\/nav>/i)?.[0] ?? '';
