@@ -554,6 +554,40 @@ fn the_record_a_cold_pass_wrote_is_what_the_next_pass_ships() {
     assert_eq!(warm, cold, "and reports the receipt the cold pass returned");
 }
 
+/// A page injection leaves alone stays alone: the warm pass answers from the
+/// cache without writing the stage file. A watch rebuild carries most pages
+/// through this arm, so a hit that relinked every one of them from its blob would
+/// hand the file the same bytes under a new mtime on every build, and everything
+/// downstream that watches the stage would see a change that is not one.
+///
+/// The file's mtime is pinned to the distant past before the warm pass, so a
+/// rewrite of any kind moves it and no timing has to be waited out.
+#[test]
+fn a_warm_no_op_page_is_left_untouched_in_the_stage() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let (objects, transforms) = slot_test_cache(cache_dir.path());
+    let page = dir.path().join("index.html");
+    std::fs::write(&page, "<html><head></head><body>no markers</body></html>").unwrap();
+    let slots = ResolvedSlots::empty();
+    let run = || {
+        inject_slots_into_directory_cached(dir.path(), dir.path(), &slots, &objects, &transforms).unwrap()
+    };
+
+    let cold = run();
+    let long_ago = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    std::fs::OpenOptions::new().write(true).open(&page).unwrap().set_modified(long_ago).unwrap();
+
+    let warm = run();
+
+    assert_eq!(warm, cold, "the warm pass reports the same receipt");
+    assert_eq!(
+        std::fs::metadata(&page).unwrap().modified().unwrap(),
+        long_ago,
+        "the warm pass rewrote a page that injection had not changed"
+    );
+}
+
 /// Slot content with 8 keys in every map, nested ones included. `ResolvedSlots`
 /// is rebuilt from scratch each build and its `HashMap`s iterate in a per-instance
 /// random order; with 8 keys (40320 orderings) two constructions differ in order
