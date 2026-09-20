@@ -96,3 +96,7 @@ pub fn apply_to_stage_and_manifest(
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "slots_tests.rs"]
+mod tests;
