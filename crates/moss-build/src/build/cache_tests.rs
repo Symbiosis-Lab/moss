@@ -737,6 +737,11 @@ fn test_store_bytes_json_blob() {
 // HashIndex tests
 // -----------------------------------------------------------------------
 
+/// A full stat record, as `FileStat::of` builds one on unix: every field present.
+fn stat(size: u64, mtime: u64) -> FileStat {
+    FileStat { size, mtime, mtime_nanos: Some(250_000_000), ctime: Some(1_700_000_005), inode: Some(77) }
+}
+
 #[test]
 fn test_hash_index_new_is_empty() {
     let idx = HashIndex::new();
@@ -746,50 +751,84 @@ fn test_hash_index_new_is_empty() {
 #[test]
 fn test_hash_index_update_and_lookup_hit() {
     let mut idx = HashIndex::new();
-    idx.update(
-        "photo.jpg".to_string(),
-        1024,
-        1700000000,
-        "abcd1234".to_string(),
-    );
+    idx.update("photo.jpg".to_string(), &stat(1024, 1700000000), "abcd1234".to_string());
 
-    // Same stat fields → cache hit.
-    let hash = idx.lookup("photo.jpg", 1024, 1700000000);
-    assert_eq!(hash, Some("abcd1234"));
-}
-
-#[test]
-fn test_hash_index_lookup_miss_size_changed() {
-    let mut idx = HashIndex::new();
-    idx.update(
-        "photo.jpg".to_string(),
-        1024,
-        1700000000,
-        "abcd1234".to_string(),
-    );
-
-    // Size differs → cache miss.
-    assert!(idx.lookup("photo.jpg", 2048, 1700000000).is_none());
-}
-
-#[test]
-fn test_hash_index_lookup_miss_mtime_changed() {
-    let mut idx = HashIndex::new();
-    idx.update(
-        "photo.jpg".to_string(),
-        1024,
-        1700000000,
-        "abcd1234".to_string(),
-    );
-
-    // Mtime differs → cache miss.
-    assert!(idx.lookup("photo.jpg", 1024, 1700000001).is_none());
+    // Same stat record → cache hit.
+    assert_eq!(idx.lookup("photo.jpg", &stat(1024, 1700000000)), Some("abcd1234"));
 }
 
 #[test]
 fn test_hash_index_lookup_miss_not_present() {
     let idx = HashIndex::new();
-    assert!(idx.lookup("nonexistent.jpg", 0, 0).is_none());
+    assert!(idx.lookup("nonexistent.jpg", &stat(0, 0)).is_none());
+}
+
+/// Every field of the record is part of the key: a file that differs from what was
+/// hashed in ANY of them — a same-size rewrite in the same second differs in the
+/// sub-second mtime alone — must miss.
+#[test]
+fn a_lookup_misses_when_any_one_field_of_the_stat_record_differs() {
+    let recorded = stat(1024, 1700000000);
+    let mut idx = HashIndex::new();
+    idx.update("photo.jpg".to_string(), &recorded, "abcd1234".to_string());
+    assert_eq!(idx.lookup("photo.jpg", &recorded), Some("abcd1234"), "premise: the record itself hits");
+
+    let variants = [
+        ("size", FileStat { size: 1025, ..recorded }),
+        ("mtime", FileStat { mtime: 1700000001, ..recorded }),
+        ("sub-second mtime", FileStat { mtime_nanos: Some(250_000_001), ..recorded }),
+        ("ctime", FileStat { ctime: Some(1_700_000_006), ..recorded }),
+        ("inode", FileStat { inode: Some(78), ..recorded }),
+    ];
+    for (field, changed) in variants {
+        assert!(
+            idx.lookup("photo.jpg", &changed).is_none(),
+            "a file whose {field} differs from the hashed one must not reuse its hash"
+        );
+    }
+}
+
+/// Missing precision fails OPEN: a fact the entry never recorded, or the file no
+/// longer reports, is a miss — never a hit on what remains. ctime and inode are the
+/// exception the crate already makes (`identity_disagrees`): a platform that has
+/// neither, on either side, must not lose the index for good.
+#[test]
+fn a_missing_subsecond_mtime_never_hits_but_a_missing_ctime_or_inode_does() {
+    let full = stat(1024, 1700000000);
+    let mut idx = HashIndex::new();
+    idx.update("photo.jpg".to_string(), &full, "abcd1234".to_string());
+
+    // The file reports no sub-second mtime: nothing to compare, so nothing to trust.
+    assert!(idx.lookup("photo.jpg", &FileStat { mtime_nanos: None, ..full }).is_none());
+
+    // The entry has none (recorded by a caller that had only whole seconds): None on
+    // both sides is not agreement.
+    idx.update_whole_second("clip.mov".to_string(), 1024, 1700000000, "abcd1234".to_string());
+    assert!(idx.lookup("clip.mov", &FileStat::whole_second(1024, 1700000000)).is_none());
+    assert!(idx.lookup("clip.mov", &full).is_none());
+
+    // ctime / inode: absence on either side is agreement.
+    assert_eq!(idx.lookup("photo.jpg", &FileStat { ctime: None, inode: None, ..full }), Some("abcd1234"));
+}
+
+/// The video path's rule is unchanged: size + whole-second mtime, blind to the rest,
+/// and what it records carries no sub-second field for `lookup` to trust.
+#[test]
+fn the_whole_second_pair_keeps_its_old_rule_and_its_old_serialized_form() {
+    let mut idx = HashIndex::new();
+    idx.update_whole_second("clip.mov".to_string(), 4096, 1700000000, "vvvv".to_string());
+
+    assert_eq!(idx.lookup_whole_second("clip.mov", 4096, 1700000000), Some("vvvv"));
+    assert!(idx.lookup_whole_second("clip.mov", 4097, 1700000000).is_none());
+    assert!(idx.lookup_whole_second("clip.mov", 4096, 1700000001).is_none());
+    // A full-stat entry is still visible to it.
+    idx.update("pic.png".to_string(), &stat(10, 20), "pppp".to_string());
+    assert_eq!(idx.lookup_whole_second("pic.png", 10, 20), Some("pppp"));
+
+    // Nothing but the three original keys, so an index a video was recorded in reads
+    // exactly as it did before the stat record existed.
+    let json = serde_json::to_value(&idx.entries["clip.mov"]).unwrap();
+    assert_eq!(json, serde_json::json!({ "size": 4096, "mtime": 1700000000, "content_hash": "vvvv" }));
 }
 
 #[test]
@@ -798,14 +837,59 @@ fn test_hash_index_save_load_roundtrip() {
     let path = dir.join("hash-index.json");
 
     let mut idx = HashIndex::new();
-    idx.update("a.jpg".to_string(), 100, 1000, "aaaa".to_string());
-    idx.update("b.mp4".to_string(), 200, 2000, "bbbb".to_string());
+    idx.update("a.jpg".to_string(), &stat(100, 1000), "aaaa".to_string());
+    idx.update("b.mp4".to_string(), &stat(200, 2000), "bbbb".to_string());
     idx.save(&path).expect("save");
 
     let loaded = HashIndex::load(&path);
     assert_eq!(loaded.entries.len(), 2);
-    assert_eq!(loaded.lookup("a.jpg", 100, 1000), Some("aaaa"));
-    assert_eq!(loaded.lookup("b.mp4", 200, 2000), Some("bbbb"));
+    assert_eq!(loaded.lookup("a.jpg", &stat(100, 1000)), Some("aaaa"));
+    assert_eq!(loaded.lookup("b.mp4", &stat(200, 2000)), Some("bbbb"));
+}
+
+/// An index the previous version wrote — entries of `size`, `mtime` and
+/// `content_hash` only — loads without error through both loaders, its entries
+/// miss the full-stat lookup, and hashing the file rewrites the entry in the new
+/// format. No migration, no schema version.
+#[test]
+fn an_index_written_before_the_stat_record_existed_loads_misses_and_is_rewritten() {
+    let dir = make_test_dir("hash_idx_old_format");
+    let file = write_temp_file(&dir, "pic.png", b"the bytes as they are now");
+    let now = FileStat::of(&fs::metadata(&file).unwrap());
+
+    // The old format, with an entry that the OLD lookup would have trusted: same size,
+    // same whole second — and a hash that is wrong for these bytes.
+    let old_index = serde_json::json!({
+        "entries": { "pic.png": { "size": now.size, "mtime": now.mtime, "content_hash": "stale" } }
+    });
+    let path = dir.join("hash-index.json");
+    fs::write(&path, old_index.to_string()).unwrap();
+
+    let loaded = HashIndex::load(&path);
+    assert_eq!(loaded.entries.len(), 1, "an old-format index must load, not be discarded as corrupt");
+    let strict = HashIndex::load_strict(&path).expect("the GC's strict loader must accept it too");
+    assert_eq!(strict.map(|i| i.entries.len()), Some(1));
+    assert!(loaded.lookup("pic.png", &now).is_none(), "an entry with no sub-second field must miss");
+
+    let mut idx = loaded;
+    let hash = idx.resolve(&file, "pic.png").unwrap();
+    assert_ne!(hash, "stale", "the stale hash must not survive");
+    assert_eq!(hash, ObjectStore::hash_file(&file).unwrap());
+    assert_eq!(idx.lookup("pic.png", &now), Some(hash.as_str()), "the entry is rewritten in the new format");
+}
+
+/// An index written by THIS version still loads in the previous one: it ignores the
+/// fields it does not know (asserted here as "the new fields are additive JSON keys").
+#[test]
+fn a_full_stat_entry_only_adds_keys_to_the_old_format() {
+    let mut idx = HashIndex::new();
+    idx.update("pic.png".to_string(), &stat(10, 20), "pppp".to_string());
+    let json = serde_json::to_value(&idx.entries["pic.png"]).unwrap();
+    let object = json.as_object().unwrap();
+    for original in ["size", "mtime", "content_hash"] {
+        assert!(object.contains_key(original), "the original key {original} must still be written");
+    }
+    assert_eq!(object.len(), 6);
 }
 
 #[test]
@@ -828,20 +912,85 @@ fn test_hash_index_load_corrupt_file_returns_empty() {
 fn test_hash_index_stale_entries_pruned() {
     // Simulates the scan flow: only entries seen this scan survive.
     let mut old_idx = HashIndex::new();
-    old_idx.update("kept.jpg".to_string(), 100, 1000, "aaaa".to_string());
-    old_idx.update("deleted.jpg".to_string(), 200, 2000, "bbbb".to_string());
+    old_idx.update("kept.jpg".to_string(), &stat(100, 1000), "aaaa".to_string());
+    old_idx.update("deleted.jpg".to_string(), &stat(200, 2000), "bbbb".to_string());
 
     // During a scan, we build a NEW index containing only seen files.
     let mut new_idx = HashIndex::new();
     // "kept.jpg" is seen again, carry over its entry.
-    if let Some(hash) = old_idx.lookup("kept.jpg", 100, 1000) {
-        new_idx.update("kept.jpg".to_string(), 100, 1000, hash.to_string());
+    if old_idx.lookup("kept.jpg", &stat(100, 1000)).is_some() {
+        new_idx.carry_forward(&old_idx, "kept.jpg");
     }
     // "deleted.jpg" is NOT seen, so it doesn't get carried over.
 
     assert_eq!(new_idx.entries.len(), 1);
-    assert!(new_idx.lookup("kept.jpg", 100, 1000).is_some());
-    assert!(new_idx.lookup("deleted.jpg", 200, 2000).is_none());
+    assert!(new_idx.lookup("kept.jpg", &stat(100, 1000)).is_some());
+    assert!(new_idx.lookup("deleted.jpg", &stat(200, 2000)).is_none());
+}
+
+/// A carried-forward entry is the entry as recorded, not the hit re-stamped with the
+/// file's current stat: a whole-second hit is not proof of anything finer, and
+/// re-stamping it would launder it into an entry the full-stat lookup trusts.
+#[test]
+fn carrying_an_entry_forward_never_upgrades_it() {
+    let mut old_idx = HashIndex::new();
+    old_idx.update_whole_second("clip.mov".to_string(), 4096, 1700000000, "vvvv".to_string());
+
+    let mut new_idx = HashIndex::new();
+    new_idx.carry_forward(&old_idx, "clip.mov");
+    new_idx.carry_forward(&old_idx, "never-recorded.mov");
+
+    assert_eq!(new_idx.entries, old_idx.entries);
+    assert!(new_idx.lookup("clip.mov", &stat(4096, 1700000000)).is_none());
+}
+
+/// `resolve` is the one place that turns a file into a hash through the index: a hit
+/// is trusted without reading the file, and a rewrite that keeps the size and the
+/// whole second — but not the instant inside it — is hashed, not trusted.
+#[test]
+fn resolve_hashes_a_same_size_rewrite_in_the_same_second_instead_of_trusting_the_index() {
+    let dir = make_test_dir("hash_idx_resolve_rewrite");
+    let file = write_temp_file(&dir, "pic.png", b"first version!");
+    let first = ObjectStore::hash_file(&file).unwrap();
+
+    let mut idx = HashIndex::new();
+    assert_eq!(idx.resolve(&file, "pic.png").unwrap(), first);
+    // Unchanged: the entry is trusted (a planted hash comes back, proving the file
+    // was not read).
+    idx.entries.get_mut("pic.png").unwrap().content_hash = "planted".to_string();
+    assert_eq!(idx.resolve(&file, "pic.png").unwrap(), "planted");
+
+    // Same size, different bytes, same wall-clock second, another instant in it.
+    let before = fs::metadata(&file).unwrap().modified().unwrap();
+    fs::write(&file, b"second version").unwrap();
+    assert_eq!(fs::metadata(&file).unwrap().len(), 14, "premise: same size");
+    FileStat::stamp_in_the_second_of(&file, before);
+
+    let second = idx.resolve(&file, "pic.png").unwrap();
+    assert_ne!(second, "planted", "the rewrite must not be answered from the index");
+    assert_eq!(second, ObjectStore::hash_file(&file).unwrap());
+}
+
+/// Replace-via-rename — the atomic-save pattern — with size and mtime carried over
+/// exactly: only the inode says the file is a different one.
+#[cfg(unix)]
+#[test]
+fn resolve_hashes_a_file_replaced_by_rename_even_when_size_and_mtime_survive() {
+    let dir = make_test_dir("hash_idx_resolve_inode");
+    let file = write_temp_file(&dir, "pic.png", b"first version!");
+    let at = fs::metadata(&file).unwrap().modified().unwrap();
+
+    let mut idx = HashIndex::new();
+    idx.resolve(&file, "pic.png").unwrap();
+    idx.entries.get_mut("pic.png").unwrap().content_hash = "planted".to_string();
+
+    let replacement = write_temp_file(&dir, "pic.png.new", b"second version");
+    fs::File::options().write(true).open(&replacement).unwrap().set_modified(at).unwrap();
+    fs::rename(&replacement, &file).unwrap();
+    let after = fs::metadata(&file).unwrap();
+    assert_eq!((after.len(), after.modified().unwrap()), (14, at), "premise: size and mtime survive the replacement");
+
+    assert_ne!(idx.resolve(&file, "pic.png").unwrap(), "planted", "a different inode must not reuse the hash");
 }
 
 /// Simulate the iCloud eviction scenario: parent directory disappears
@@ -854,7 +1003,7 @@ fn test_hash_index_save_retries_on_parent_dir_eviction() {
     let path = cache_dir.join("hash-index.json");
 
     let mut idx = HashIndex::new();
-    idx.update("a.jpg".to_string(), 100, 1000, "aaaa".to_string());
+    idx.update("a.jpg".to_string(), &stat(100, 1000), "aaaa".to_string());
 
     // First save should succeed and create the parent directory.
     idx.save(&path).expect("first save");
@@ -867,14 +1016,14 @@ fn test_hash_index_save_retries_on_parent_dir_eviction() {
     // Second save should succeed via the retry path: save() calls
     // create_dir_all, writes the tmp file, rename fails with NotFound
     // (parent gone), retry re-creates parent, rename succeeds.
-    idx.update("b.jpg".to_string(), 200, 2000, "bbbb".to_string());
+    idx.update("b.jpg".to_string(), &stat(200, 2000), "bbbb".to_string());
     idx.save(&path).expect("save after eviction should succeed");
 
     // Verify the data round-trips correctly.
     let loaded = HashIndex::load(&path);
     assert_eq!(loaded.entries.len(), 2);
-    assert_eq!(loaded.lookup("a.jpg", 100, 1000), Some("aaaa"));
-    assert_eq!(loaded.lookup("b.jpg", 200, 2000), Some("bbbb"));
+    assert_eq!(loaded.lookup("a.jpg", &stat(100, 1000)), Some("aaaa"));
+    assert_eq!(loaded.lookup("b.jpg", &stat(200, 2000)), Some("bbbb"));
 }
 
 // -----------------------------------------------------------------------
@@ -1867,6 +2016,9 @@ fn test_gc_removes_orphaned_transform() {
                 HashIndexEntry {
                     size: 100,
                     mtime: 1000,
+                    mtime_nanos: None,
+                    ctime: None,
+                    inode: None,
                     content_hash: live_oid.clone(),
                 },
             );
@@ -2035,6 +2187,9 @@ fn test_gc_preserves_objects_referenced_by_transforms() {
                 HashIndexEntry {
                     size: 500,
                     mtime: 2000,
+                    mtime_nanos: None,
+                    ctime: None,
+                    inode: None,
                     content_hash: source_oid.clone(),
                 },
             );
@@ -2110,7 +2265,7 @@ fn gc_deletes_nothing_when_a_mark_input_is_unreadable() {
         let mut entries = HashMap::new();
         entries.insert(
             "file.jpg".to_string(),
-            HashIndexEntry { size: 500, mtime: 2000, content_hash: source_oid.clone() },
+            HashIndexEntry { size: 500, mtime: 2000, mtime_nanos: None, ctime: None, inode: None, content_hash: source_oid.clone() },
         );
         HashIndex { entries }
             .save(&build_dir.join("cache").join("hash-index.json"))

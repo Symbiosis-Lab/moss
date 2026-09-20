@@ -69,7 +69,7 @@ use notify::EventKind;
 use notify_debouncer_full::DebouncedEvent;
 use std::path::{Path, PathBuf};
 
-use crate::build::types::SourceMetadata;
+use crate::build::types::{identity_disagrees, SourceMetadata};
 
 pub mod drift;
 pub mod scope;
@@ -615,13 +615,6 @@ pub(crate) fn mtime_is_racy(meta: &SourceMetadata, captured_at: Option<u64>) -> 
         Some(cap) => meta.mtime.abs_diff(cap) <= RACY_WRITE_EPSILON_SECS,
         None => false,
     }
-}
-
-/// Both sides reported a value and they disagree. Absence on either side is
-/// agreement (fail open) — old manifests and platforms without the field
-/// must not lose the fast path forever.
-fn identity_disagrees<T: PartialEq>(recorded: Option<T>, current: Option<T>) -> bool {
-    matches!((recorded, current), (Some(a), Some(b)) if a != b)
 }
 
 /// [`source_metadata_matches`] with the sweep's two demotions armed:

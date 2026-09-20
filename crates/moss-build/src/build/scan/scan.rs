@@ -14,7 +14,7 @@
 //! This metadata enables ADR-002 (dynamic SVG placeholders) during page rendering.
 
 use crate::types::content::{FileInfo, MediaMetadata, ProjectStructure};
-use crate::build::cache::{CachedMediaMeta, HashIndex, ObjectStore, TransformCache, TransformEntry, TransformRecord};
+use crate::build::cache::{CachedMediaMeta, FileStat, HashIndex, ObjectStore, TransformCache, TransformEntry, TransformRecord};
 use super::classify::{classify_extension, is_excluded_dir_name, skip_root_agent_config, ScanBucket};
 use crate::build::media::ffmpeg::FFmpegManager;
 use walkdir::WalkDir;
@@ -341,28 +341,28 @@ pub(crate) fn image_meta_stat_key(relative_path: &str, size: u64, mtime: u64) ->
 
 /// Resolve the content hash for a file, using the hash index for speed.
 ///
-/// If the hash index has a matching entry (same size+mtime), the cached
-/// hash is returned without reading the file.  Otherwise, the file is
-/// hashed via `ObjectStore::hash_file` and the *new* index is updated.
+/// If the hash index has an entry that still matches the file's full stat record
+/// (`HashIndex::lookup`), that entry is carried into the new index and its hash
+/// returned without reading the file.  Otherwise, the file is hashed via
+/// `ObjectStore::hash_file` and the *new* index is updated.
 fn resolve_content_hash(
     abs_path: &Path,
     relative_path: &str,
-    size: u64,
-    mtime: u64,
+    stat: &FileStat,
     old_index: &HashIndex,
     new_index: &mut HashIndex,
 ) -> Option<String> {
     // Check old index for a stat-matching entry.
-    if let Some(cached_hash) = old_index.lookup(relative_path, size, mtime) {
+    if let Some(cached_hash) = old_index.lookup(relative_path, stat) {
         let hash = cached_hash.to_string();
-        new_index.update(relative_path.to_string(), size, mtime, hash.clone());
+        new_index.carry_forward(old_index, relative_path);
         return Some(hash);
     }
 
     // Stat miss — re-hash the file.
     match ObjectStore::hash_file(abs_path) {
         Ok(hash) => {
-            new_index.update(relative_path.to_string(), size, mtime, hash.clone());
+            new_index.update(relative_path.to_string(), stat, hash.clone());
             Some(hash)
         }
         Err(e) => {
@@ -474,8 +474,7 @@ fn extract_media_metadata_cached(
     abs_path: &Path,
     relative_path: &str,
     extension: &str,
-    size: u64,
-    mtime: u64,
+    stat: &FileStat,
     modified: Option<String>,
     ffmpeg: Option<&FFmpegManager>,
     old_index: &HashIndex,
@@ -490,6 +489,7 @@ fn extract_media_metadata_cached(
     // deployed site must be complete, not progressive. See `scan_folder_with_dedup_emit`.
     defer_placeholders: bool,
 ) -> MediaMetadata {
+    let (size, mtime) = (stat.size, stat.mtime);
     let is_video = matches!(extension, "mov" | "mp4" | "webm" | "avi" | "mkv" | "m4v");
     // Raster images whose dominant color / LQIP require a full pixel decode.
     // SVG is excluded — it is a vector format (`image::open` can't decode it, so
@@ -536,14 +536,23 @@ fn extract_media_metadata_cached(
     let skip_content_read = is_video || defer_this_image || source_is_evicted;
     let content_hash = if skip_content_read {
         // Videos / images / evicted files: only use a cached hash from the
-        // index; never read file content on the blocking scan.
-        old_index.lookup(relative_path, size, mtime).map(|h| {
+        // index; never read file content on the blocking scan. A video is matched
+        // by the whole-second rule its own worker records under (it can never
+        // fall back to hashing a multi-GB file); anything else by the full stat
+        // record, so a hit here is one `collect_images_for_conversion` will also
+        // take. The hit is carried forward as recorded, never re-stamped.
+        let hit = if is_video {
+            old_index.lookup_whole_second(relative_path, size, mtime)
+        } else {
+            old_index.lookup(relative_path, stat)
+        };
+        hit.map(|h| {
             let hash = h.to_string();
-            new_index.update(relative_path.to_string(), size, mtime, hash.clone());
+            new_index.carry_forward(old_index, relative_path);
             hash
         })
     } else {
-        resolve_content_hash(abs_path, relative_path, size, mtime, old_index, new_index)
+        resolve_content_hash(abs_path, relative_path, stat, old_index, new_index)
     };
 
     // Step 2: If we have a content hash, check the transform cache.
@@ -971,8 +980,7 @@ pub fn scan_folder_with_dedup_emit(
         abs_path: std::path::PathBuf,
         relative_path: String,
         extension: String,
-        size: u64,
-        mtime: u64,
+        stat: FileStat,
         modified: Option<String>,
     }
 
@@ -1129,8 +1137,7 @@ pub fn scan_folder_with_dedup_emit(
                     abs_path: file_path.to_path_buf(),
                     relative_path,
                     extension: extension.clone(),
-                    size,
-                    mtime: mtime_secs,
+                    stat: FileStat::of(&metadata),
                     modified,
                 });
             }
@@ -1151,8 +1158,7 @@ pub fn scan_folder_with_dedup_emit(
                     file_path,
                     &relative_path,
                     &extension,
-                    size,
-                    mtime_secs,
+                    &FileStat::of(&metadata),
                     modified,
                     ffmpeg.as_ref(),
                     &old_index,
@@ -1261,8 +1267,7 @@ pub fn scan_folder_with_dedup_emit(
                 &e.abs_path,
                 &e.relative_path,
                 &e.extension,
-                e.size,
-                e.mtime,
+                &e.stat,
                 e.modified.clone(),
                 None, // images don't need FFmpeg
                 &old_index,
@@ -1318,8 +1323,7 @@ pub fn scan_folder_with_dedup_emit(
                 &e.abs_path,
                 &e.relative_path,
                 &e.extension,
-                e.size,
-                e.mtime,
+                &e.stat,
                 e.modified.clone(),
                 None,
                 &old_index,

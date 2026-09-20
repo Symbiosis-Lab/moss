@@ -2206,18 +2206,10 @@ fn test_collect_images_reuses_stat_matched_hash_without_rehashing() {
     // Pre-populate the index with a stat-match for photo.jpg (as the
     // background worker would have persisted on a prior build).
     let file_path = _tmp.path().join("photo.jpg");
-    let m = fs::metadata(&file_path).unwrap();
-    let mtime = m
-        .modified()
-        .unwrap()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
     let mut hash_index = crate::build::cache::HashIndex::new();
     hash_index.update(
         "photo.jpg".to_string(),
-        m.len(),
-        mtime,
+        &crate::build::cache::FileStat::of(&fs::metadata(&file_path).unwrap()),
         "deadbeef".to_string(),
     );
 
@@ -3927,7 +3919,7 @@ fn rematerialize_relinks_orphaned_staged_webp() {
         "CAS blob must survive"
     );
 
-    // Self-heal — unchanged source (same size+mtime) ⇒ resolve_source_hash
+    // Self-heal — unchanged source (same stat record) ⇒ HashIndex::resolve
     // recovers the same oid, find_cached_output hits, link_to restores it.
     let params = cfg.to_params();
     let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
@@ -4939,4 +4931,176 @@ fn registration_over_an_unreadable_variant_reports_it_and_never_fails_it() {
         Ok(EmitMessage::Unverified { rel_path, .. }) => assert_eq!(rel_path, "locked/photo.webp"),
         other => panic!("expected an Unverified report, got {other:?}"),
     }
+}
+
+// ----- a same-size rewrite in the same second is a different file -----
+
+/// A vault with one image, and an image-side rebuild run the way a real one runs
+/// it: the blocking phase collects against the index the last worker persisted,
+/// then the worker encodes whatever it was handed.
+struct RewriteVault {
+    _tmp: tempfile::TempDir,
+    root: PathBuf,
+    moss_dir: PathBuf,
+}
+
+impl RewriteVault {
+    fn new() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let moss_dir = root.join(".moss");
+        for dir in ["staging", "cache/objects", "cache/transforms", "cache/tmp"] {
+            fs::create_dir_all(moss_dir.join("build").join(dir)).unwrap();
+        }
+        Self { _tmp: tmp, root, moss_dir }
+    }
+
+    fn pic(&self) -> PathBuf {
+        self.root.join("pic.png")
+    }
+
+    /// The staged variant, as the last rebuild left it.
+    fn webp(&self) -> Vec<u8> {
+        fs::read(self.moss_dir.join("build/staging/pic.webp")).expect("the rebuild staged pic.webp")
+    }
+
+    /// Two solid colours whose PNGs are the same number of bytes, so a rewrite
+    /// from one to the other is a same-size rewrite.
+    fn write_pic(&self, rgb: [u8; 3]) {
+        image::RgbImage::from_pixel(24, 24, Rgb(rgb)).save(self.pic()).unwrap();
+    }
+
+    /// Replace the image with same-size different bytes, stamped with the whole
+    /// second the previous write carries (see `FileStat::stamp_in_the_second_of`).
+    fn rewrite_in_the_same_second(&self, rgb: [u8; 3]) {
+        let before = fs::metadata(self.pic()).unwrap();
+        self.write_pic(rgb);
+        assert_eq!(fs::metadata(self.pic()).unwrap().len(), before.len(), "precondition: a same-size rewrite");
+        crate::build::cache::FileStat::stamp_in_the_second_of(&self.pic(), before.modified().unwrap());
+    }
+
+    /// One rebuild of the image side. `with_fingerprint_gate` runs it the way the
+    /// desktop app does (a spawner, so each image is compared with the fingerprint
+    /// of the last build that considered it); without, the way `moss build` does.
+    async fn rebuild(&self, with_fingerprint_gate: bool) {
+        let paths = MossPaths::from_moss_dir(self.moss_dir.clone());
+        let structure = crate::types::content::ProjectStructure {
+            root_path: self.root.to_string_lossy().to_string(),
+            markdown_files: vec![],
+            html_files: vec![],
+            image_files: vec![MediaMetadata {
+                path: "pic.png".to_string(),
+                file_type: "png".to_string(),
+                size: fs::metadata(self.pic()).unwrap().len(),
+                ..Default::default()
+            }],
+            video_files: vec![],
+            notebook_files: vec![],
+            other_files: vec![],
+            total_files: 0,
+            homepage_file: None,
+            ffmpeg_bin_path: None,
+            evicted_count: 0,
+            evicted_paths: Vec::new(),
+            has_content_folders: false,
+            has_language_trees: false,
+            passthrough_roots: std::collections::HashSet::new(),
+            dirs: Vec::new(),
+        };
+        let transforms = crate::build::cache::TransformCache::new(
+            paths.cache_transforms(),
+            crate::build::cache::ObjectStore::new(paths.cache_objects()),
+        );
+        let mut index = crate::build::cache::HashIndex::load(&paths.cache_hash_index());
+        let items = collect_images_for_conversion(
+            &structure,
+            &transforms,
+            &mut index,
+            &ImageCompressionConfig::default(),
+        );
+        let ctx = BackgroundContext {
+            image_items: items,
+            source_path: self.root.to_string_lossy().to_string(),
+            staging_dir: self.moss_dir.join("build/staging"),
+            moss_dir: self.moss_dir.clone(),
+            ..BackgroundContext::for_test()
+        };
+        let services = BuildServices {
+            spawner: with_fingerprint_gate.then(|| {
+                std::sync::Arc::new(OidTestInlineSpawner) as std::sync::Arc<dyn crate::build::ports::spawner::Spawner>
+            }),
+            ..BuildServices::headless()
+        };
+        tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, None))
+            .await
+            .unwrap();
+    }
+}
+
+/// The image worker's oid comes from the persisted index, and the index used to be
+/// keyed by (path, size, whole-second mtime). A rewrite of the same size in the same
+/// second matched the previous write's entry, so the old oid was reused, the cached
+/// encode was found under it, and `pic.webp` kept the old picture.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_same_size_rewrite_in_the_same_second_is_re_encoded() {
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.rebuild(false).await;
+    let first = vault.webp();
+
+    vault.rewrite_in_the_same_second([30, 30, 200]);
+    vault.rebuild(false).await;
+
+    assert_ne!(vault.webp(), first, "pic.png changed on disk but its variant is still the old encode");
+}
+
+/// The desktop app's rebuild has a second whole-second key in front of the index:
+/// an image whose fingerprint (path, size, mtime, config) matches the last build's is
+/// carried forward without ever reaching the worker.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_same_size_rewrite_in_the_same_second_gets_past_the_fingerprint_gate() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.rebuild(true).await;
+    let first = vault.webp();
+
+    vault.rewrite_in_the_same_second([30, 30, 200]);
+    vault.rebuild(true).await;
+
+    assert_ne!(vault.webp(), first, "the fingerprint gate carried the old variant forward over a changed source");
+}
+
+/// Self-heal relinks a cached output by the source's oid. A same-size rewrite in the
+/// same second has a new oid, so the previous picture's variant is not its output and
+/// must not be linked into staging under its name.
+#[test]
+fn rematerialize_does_not_relink_the_previous_versions_output_over_a_same_size_rewrite() {
+    let h = harness();
+    let src = h._tmp.path().join("pic.png");
+    let write = |rgb: [u8; 3]| image::RgbImage::from_pixel(24, 24, Rgb(rgb)).save(&src).unwrap();
+    write([200, 30, 30]);
+    let cfg = ImageCompressionConfig::default();
+
+    // The last build: hashed through the index, encoded under that oid.
+    let mut index = crate::build::cache::HashIndex::new();
+    let oid = index.resolve(&src, "pic.png").unwrap();
+    let outcome = convert_single_image(
+        &src, &oid, "pic.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &HashMap::new(),
+    );
+    assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
+    let staged = h.staging.join("pic.webp");
+    fs::remove_file(&staged).unwrap();
+
+    let before = fs::metadata(&src).unwrap();
+    write([30, 30, 200]);
+    assert_eq!(fs::metadata(&src).unwrap().len(), before.len(), "precondition: a same-size rewrite");
+    crate::build::cache::FileStat::stamp_in_the_second_of(&src, before.modified().unwrap());
+
+    let outcome = rematerialize(
+        &h.objects, &h.transforms, &cfg.to_params(), &mut index, &src, "pic.png", &staged, "image/webp",
+        HashPolicy::HashOnMiss,
+    );
+    assert!(matches!(outcome, HealOutcome::NotCached), "healed a rewritten source from the old one's output: {outcome:?}");
+    assert!(!staged.exists(), "the previous version's variant was linked into staging");
 }

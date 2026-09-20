@@ -8,7 +8,7 @@
       "armed": true,
       "value": {
         "crates/moss-build/src/build/assets/binary_resolver.rs": 1016,
-        "crates/moss-build/src/build/cache.rs": 1390,
+        "crates/moss-build/src/build/cache.rs": 1523,
         "crates/moss-build/src/build/folder_embed.rs": 1460,
         "crates/moss-build/src/build/markdown/html_post.rs": 977,
         "crates/moss-build/src/build/markdown/pipeline.rs": 2143,
@@ -20,10 +20,10 @@
         "crates/moss-build/src/build/pipeline.rs": 2018,
         "crates/moss-build/src/build/render/blocking.rs": 3591,
         "crates/moss-build/src/build/render/html.rs": 1617,
-        "crates/moss-build/src/build/scan/scan.rs": 1512,
+        "crates/moss-build/src/build/scan/scan.rs": 1511,
         "crates/moss-build/src/build/ship.rs": 820,
-        "crates/moss-build/src/build/types.rs": 824,
-        "crates/moss-build/src/build/watch.rs": 1133,
+        "crates/moss-build/src/build/types.rs": 832,
+        "crates/moss-build/src/build/watch.rs": 1126,
         "crates/moss-build/src/build.rs": 2189,
         "crates/moss-build/src/engine.rs": 918,
         "crates/moss-build/src/moss_paths.rs": 1197,
@@ -403,6 +403,19 @@
         "crates/moss-build/src/build/manifest.rs": 966
       },
       "reason": "the file stood at 1090 prod lines on develop against this row baseline of 818 - growth nobody accepted (nine other files in this row are in the same state and are NOT touched by this entry). Moving the ship-source seam (ShipSource, ShipFingerprint, the staged_oid/ship_fingerprint/stamp_* accessors) into manifest/ship_source.rs lowers it to 966, still above 818 but 124 below where it started; the entry is set to 966, the final count, so the file cannot regrow past it unnoticed. Scoped to this one path by hand because `ratchet.mjs accept` has no per-path filter.",
+      "date": "2026-09-20"
+    },
+    {
+      "row": "prod_lines_per_file",
+      "from": {
+        "crates/moss-build/src/build/cache.rs": 1390,
+        "crates/moss-build/src/build/types.rs": 824
+      },
+      "to": {
+        "crates/moss-build/src/build/cache.rs": 1523,
+        "crates/moss-build/src/build/types.rs": 832
+      },
+      "reason": "both files stood exactly at their baselines on develop. The image hash index was keyed by (size, whole-second mtime), so a same-size rewrite in the same second reused the previous picture's variant; the fix gives HashIndexEntry the stat record SourceMetadata already carries (FileStat, the full-stat lookup/update/carry_forward/resolve, and the doc for why the video path keeps lookup_whole_second) = +133 in cache.rs, and moves identity_disagrees next to stat_identity in types.rs (+8) so the watcher, the frontmatter scan cache and the index share one definition (two hand copies deleted from watch.rs and frontmatter_cache.rs). The change also deletes four hand-copied (size, whole-second mtime) extractions from image.rs, cas_heal.rs, parse_cache.rs and scan.rs. Not split out: moving HashIndex to its own module adds a 70th child to build/ (baseline 69) and carries ~250 lines of its tests with it, which is a relocation to do on its own, not inside a correctness fix.",
       "date": "2026-09-20"
     }
   ]

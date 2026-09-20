@@ -808,6 +808,14 @@ pub fn stat_identity(md: &std::fs::Metadata) -> (Option<i64>, Option<u64>) {
     }
 }
 
+/// Both sides reported a value and they disagree. Absence on either side is
+/// agreement (fail open) — old records and platforms without the field must not
+/// lose their fast path forever. Every consumer of [`stat_identity`] compares
+/// through this one definition.
+pub(crate) fn identity_disagrees<T: PartialEq>(recorded: Option<T>, current: Option<T>) -> bool {
+    matches!((recorded, current), (Some(a), Some(b)) if a != b)
+}
+
 impl moss_core::sort::SortableDoc for ParsedDocument {
     fn url_path(&self) -> &str { &self.url_path }
     fn date(&self) -> Option<&str> { self.date.as_deref() }

@@ -60,8 +60,10 @@
 //!   verified by mutation in
 //!   `tests/incremental_parse_cache.rs::a_transclusion_edit_reaches_the_rendered_html_on_disk`.
 //!
-//! Content hashes go through [`HashIndex`], the existing `(size, mtime) →
-//! sha256` accelerator, so an unchanged file is not re-read to be hashed.
+//! Content hashes go through [`HashIndex`], the existing `stat → sha256`
+//! accelerator, so an unchanged file is not re-read to be hashed. It trusts a
+//! hash only for the file's full stat record, so a same-size edit in the same
+//! second as the last one is not mistaken for no edit.
 //!
 //! # What this deliberately does NOT track
 //!
@@ -110,7 +112,7 @@
 //! against the freshly parsed document's facade so a stale reuse shows up as a
 //! logged error instead of a wrong page.
 
-use crate::build::cache::HashIndex;
+use crate::build::cache::{FileStat, HashIndex};
 use crate::build::types::ParsedDocument;
 use moss_core::dep_graph::DepGraph;
 use sha2::{Digest, Sha256};
@@ -230,26 +232,20 @@ impl FileHasher {
 
     fn compute(&self, relative_path: &str) -> Option<String> {
         let abs = self.root.join(relative_path);
-        let meta = std::fs::metadata(&abs).ok()?;
-        let size = meta.len();
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        // Stat BEFORE reading: see `HashIndex::update`.
+        let stat = FileStat::of(&std::fs::metadata(&abs).ok()?);
         if let Some(hit) = self
             .index
             .lock()
             .ok()
-            .and_then(|i| i.lookup(relative_path, size, mtime).map(str::to_string))
+            .and_then(|i| i.lookup(relative_path, &stat).map(str::to_string))
         {
             return Some(hit);
         }
         let bytes = std::fs::read(&abs).ok()?;
         let hash = format!("{:x}", Sha256::digest(&bytes));
         if let Ok(mut index) = self.index.lock() {
-            index.update(relative_path.to_string(), size, mtime, hash.clone());
+            index.update(relative_path.to_string(), &stat, hash.clone());
         }
         Some(hash)
     }
@@ -748,6 +744,34 @@ mod tests {
         ParseSession::begin(dir.path(), &index, true, "fp".to_string())
             .finish(std::slice::from_ref(&doc));
         std::fs::write(dir.path().join("a.md"), "hello, edited").unwrap();
+
+        let session = ParseSession::begin(dir.path(), &index, true, "fp".to_string());
+        assert!(session.lookup("a.md").is_none());
+        session.finish(std::slice::from_ref(&doc));
+        reset_for_tests();
+    }
+
+    /// A same-size edit in the same wall-clock second as the write the last build
+    /// hashed is still an edit. The content hash comes from the stat-keyed index, and
+    /// a stat that cannot tell the two writes apart replays the old parse.
+    #[test]
+    fn a_same_size_edit_in_the_same_second_misses() {
+        let _guard = store_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("hash-index.json");
+        let page = dir.path().join("a.md");
+        std::fs::write(&page, "hello").unwrap();
+        reset_for_tests();
+        let doc = ParsedDocument {
+            source_path: Some("a.md".to_string()),
+            ..Default::default()
+        };
+
+        ParseSession::begin(dir.path(), &index, true, "fp".to_string())
+            .finish(std::slice::from_ref(&doc));
+        let before = std::fs::metadata(&page).unwrap().modified().unwrap();
+        std::fs::write(&page, "world").unwrap();
+        FileStat::stamp_in_the_second_of(&page, before);
 
         let session = ParseSession::begin(dir.path(), &index, true, "fp".to_string());
         assert!(session.lookup("a.md").is_none());

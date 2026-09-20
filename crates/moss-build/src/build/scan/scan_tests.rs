@@ -1074,8 +1074,7 @@ fn test_video_scan_skips_hash_on_stat_miss() {
         &video_path,
         "big_video.mp4",
         "mp4",
-        27, // size of "fake video data for testing"
-        1234567890,
+        &FileStat::whole_second(27, 1234567890),
         None,
         None, // No FFmpeg — dimensions will be None (that's fine)
         &old_index,
@@ -1095,7 +1094,7 @@ fn test_video_scan_skips_hash_on_stat_miss() {
     // video, because we skipped hashing. This proves we avoided the
     // expensive SHA-256 computation.
     assert!(
-        new_index.lookup("big_video.mp4", 27, 1234567890).is_none(),
+        !new_index.entries.contains_key("big_video.mp4"),
         "Video file should NOT have been hashed on stat miss (first scan)"
     );
 
@@ -1129,7 +1128,7 @@ fn test_video_scan_uses_hash_when_index_hits() {
     // Pre-populate hash index with a stat match.
     let fake_hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
     let mut old_index = HashIndex::new();
-    old_index.update(
+    old_index.update_whole_second(
         "cached_video.mov".to_string(),
         10,
         9999999,
@@ -1151,8 +1150,7 @@ fn test_video_scan_uses_hash_when_index_hits() {
         &video_path,
         "cached_video.mov",
         "mov",
-        10,
-        9999999,
+        &FileStat::whole_second(10, 9999999),
         Some("2024-01-01".to_string()),
         None,
         &old_index,
@@ -1170,7 +1168,7 @@ fn test_video_scan_uses_hash_when_index_hits() {
 
     // Hash should be propagated to new_index (stat match was found).
     assert!(
-        new_index.lookup("cached_video.mov", 10, 9999999).is_some(),
+        new_index.lookup_whole_second("cached_video.mov", 10, 9999999) == Some(fake_hash),
         "Hash should be propagated to new_index when hash index has a stat match"
     );
 
@@ -1215,8 +1213,7 @@ fn test_image_scan_defers_expensive_work_on_stat_miss() {
         &png_path,
         "photo.png",
         "png",
-        file_size,
-        1234567890,
+        &FileStat::whole_second(file_size, 1234567890),
         None,
         None,
         &old_index,
@@ -1248,9 +1245,7 @@ fn test_image_scan_defers_expensive_work_on_stat_miss() {
 
     // The full-file SHA-256 is DEFERRED too — no hash entry on the blocking scan.
     assert!(
-        new_index
-            .lookup("photo.png", file_size, 1234567890)
-            .is_none(),
+        !new_index.entries.contains_key("photo.png"),
         "image must NOT be SHA-256 hashed on the blocking scan (deferred to background)"
     );
 
@@ -1309,8 +1304,7 @@ fn test_scan_carries_is_animated_for_animated_webp() {
         &webp_path,
         "loop.webp",
         "webp",
-        file_size,
-        1234567890,
+        &FileStat::whole_second(file_size, 1234567890),
         None,
         None,
         &old_index,
@@ -1331,8 +1325,7 @@ fn test_scan_carries_is_animated_for_animated_webp() {
         &webp_path,
         "loop.webp",
         "webp",
-        file_size,
-        1234567890,
+        &FileStat::whole_second(file_size, 1234567890),
         None,
         None,
         &old_index,
@@ -1382,8 +1375,7 @@ fn test_scan_static_webp_is_not_animated() {
         &webp_path,
         "still.webp",
         "webp",
-        file_size,
-        1234567890,
+        &FileStat::whole_second(file_size, 1234567890),
         None,
         None,
         &old_index,
@@ -1463,8 +1455,7 @@ fn test_video_scan_stat_cache_hit_on_second_call() {
         &video_path,
         "repeat.mp4",
         "mp4",
-        15,
-        5555555555,
+        &FileStat::whole_second(15, 5555555555),
         None,
         None,
         &old_index,
@@ -1480,8 +1471,7 @@ fn test_video_scan_stat_cache_hit_on_second_call() {
         &video_path,
         "repeat.mp4",
         "mp4",
-        15,
-        5555555555,
+        &FileStat::whole_second(15, 5555555555),
         None,
         None,
         &old_index,
@@ -1499,11 +1489,105 @@ fn test_video_scan_stat_cache_hit_on_second_call() {
 
     // Still no hash entry — both calls used the stat-key path.
     assert!(
-        new_index.lookup("repeat.mp4", 15, 5555555555).is_none(),
+        !new_index.entries.contains_key("repeat.mp4"),
         "Video should not have been hashed in either call"
     );
 
     fs::remove_dir_all(&temp_dir).ok();
+}
+
+// =========================================================================
+// The hash index across a scan: stat identity carried, never laundered
+// =========================================================================
+
+/// One image and the caches a scan reads and writes, for the tests below.
+struct ScanFixture {
+    dir: std::path::PathBuf,
+    png: std::path::PathBuf,
+    objects: ObjectStore,
+    transforms: TransformCache,
+}
+
+impl ScanFixture {
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("moss_scan_{name}_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let cache = dir.join(".moss/build/cache");
+        fs::create_dir_all(cache.join("objects")).unwrap();
+        fs::create_dir_all(cache.join("transforms")).unwrap();
+        let png = dir.join("photo.png");
+        create_solid_color_png(&png, 8, 8, [255, 0, 0]);
+        Self {
+            dir,
+            png,
+            objects: ObjectStore::new(cache.join("objects")),
+            transforms: TransformCache::new(cache.join("transforms"), ObjectStore::new(cache.join("objects"))),
+        }
+    }
+
+    fn scan(&self, stat: &FileStat, old_index: &HashIndex, new_index: &mut HashIndex, defer_placeholders: bool) {
+        extract_media_metadata_cached(
+            &self.png, "photo.png", "png", stat, None, None, old_index, new_index, &self.objects, &self.transforms, None,
+            defer_placeholders,
+        );
+    }
+}
+
+impl Drop for ScanFixture {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.dir).ok();
+    }
+}
+
+/// The background worker records each image with its full stat record and the next
+/// scan rewrites the index from scratch, so the scan has to hand the record on as it
+/// found it — or `collect_images_for_conversion` would miss on every image, every
+/// build, and the worker would hash them all again.
+#[test]
+fn a_scan_carries_a_full_stat_entry_forward_so_the_next_collect_still_matches() {
+    let fx = ScanFixture::new("carry_full");
+    let stat = FileStat::of(&fs::metadata(&fx.png).unwrap());
+    let mut old_index = HashIndex::new();
+    old_index.update("photo.png".to_string(), &stat, "recorded-by-the-worker".to_string());
+    let mut new_index = HashIndex::new();
+
+    fx.scan(&stat, &old_index, &mut new_index, true);
+
+    assert_eq!(new_index.lookup("photo.png", &stat), Some("recorded-by-the-worker"));
+}
+
+/// An entry recorded for another instant of the file is not this file's hash, and the
+/// scan must not carry it — nor, by re-stamping it with the current stat, turn it into
+/// one that `lookup` would trust. A preview scan (which never hashes an image) leaves
+/// the file out of the new index; a build-mode scan hashes it afresh.
+#[test]
+fn a_scan_does_not_carry_forward_an_entry_recorded_for_a_different_instant() {
+    let fx = ScanFixture::new("carry_stale");
+    let stat = FileStat::of(&fs::metadata(&fx.png).unwrap());
+    let earlier = FileStat { mtime_nanos: stat.mtime_nanos.map(|n| (n + 250_000_000) % 1_000_000_000), ..stat };
+    let mut old_index = HashIndex::new();
+    old_index.update("photo.png".to_string(), &earlier, "hash-of-the-previous-bytes".to_string());
+
+    let mut preview = HashIndex::new();
+    fx.scan(&stat, &old_index, &mut preview, true);
+    assert!(preview.entries.is_empty(), "preview scan carried forward {:?}", preview.entries);
+
+    let mut build = HashIndex::new();
+    fx.scan(&stat, &old_index, &mut build, false);
+    assert_eq!(build.lookup("photo.png", &stat), Some(ObjectStore::hash_file(&fx.png).unwrap().as_str()));
+}
+
+/// A build-mode scan hashes an image it has no entry for, and what it records must be
+/// the record `collect_images_for_conversion` will look for.
+#[test]
+fn a_build_mode_scan_records_the_hash_it_computed_with_the_files_full_stat() {
+    let fx = ScanFixture::new("record_full");
+    let stat = FileStat::of(&fs::metadata(&fx.png).unwrap());
+    let mut new_index = HashIndex::new();
+
+    fx.scan(&stat, &HashIndex::new(), &mut new_index, false);
+
+    assert_eq!(new_index.lookup("photo.png", &stat), Some(ObjectStore::hash_file(&fx.png).unwrap().as_str()));
 }
 
 // =========================================================================

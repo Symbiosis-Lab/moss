@@ -2,6 +2,7 @@
 //! [`super::build_external_url_map`] — see [`FrontmatterScanCache`] for the
 //! corpus-scaled cost this closes.
 
+use crate::build::types::identity_disagrees;
 use std::path::Path;
 
 /// One file's cached frontmatter pre-scan result, plus the stat identity it
@@ -45,10 +46,9 @@ const SCHEMA: u32 = 2;
 /// Correctness: an entry is trusted only when the file's `(size, mtime,
 /// mtime_nanos)` match exactly AND any ctime/inode recorded on both sides
 /// agree — the same "both sides present and disagree ⇒ don't trust" rule
-/// the watcher's admission gate uses (duplicated here in miniature, see
-/// [`identity_disagrees`], rather than imported: this cache has no hash tier
-/// to demote to on disagreement, so unlike the watcher it always fails open
-/// to a full re-parse rather than trusting a forged mtime). A missed cache
+/// the watcher's admission gate uses ([`identity_disagrees`]; this cache has
+/// no hash tier to demote to on disagreement, so unlike the watcher it always
+/// fails open to a full re-parse rather than trusting a forged mtime). A missed cache
 /// hit costs one extra file read; a false hit would silently ship a stale
 /// URL, so the bar here is "never wrong", not "never re-parse".
 ///
@@ -132,14 +132,6 @@ fn unquote(v: &str) -> &str {
         }
     }
     v
-}
-
-/// Both sides present and disagree ⇒ untrusted. Absence on either side is
-/// agreement (fail open) — mirrors `build::watch`'s `identity_disagrees`,
-/// duplicated locally so this module doesn't reach into the sweep/drift
-/// machinery for three lines of logic with no hash-tier fallback to share.
-fn identity_disagrees<T: PartialEq>(recorded: Option<T>, current: Option<T>) -> bool {
-    matches!((recorded, current), (Some(a), Some(b)) if a != b)
 }
 
 /// Scans every markdown file's frontmatter for `url:` and `external_url:` in

@@ -25,6 +25,7 @@
 //!     └── ab/cd/<source_hash>.json
 //! ```
 
+use crate::build::types::identity_disagrees;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -700,14 +701,90 @@ pub struct CachedMediaMeta {
     pub is_animated: bool,
 }
 
-/// A single entry in the hash index, mapping file stat fields to a
-/// content hash.
+/// What `stat(2)` reports about a file that can tell one version of its bytes
+/// from another — the record the [`HashIndex`] keeps beside a content hash, and
+/// the record a file must still show for the hash to be trusted.
+///
+/// The same fields, for the same reasons, as `SourceMetadata` (`build/types.rs`):
+/// a whole-second mtime cannot tell the hashed file from a same-size rewrite
+/// landing in the same second, ctime cannot be forged from userland where mtime
+/// can, and replace-via-rename changes the inode even when size and mtime survive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileStat {
+    pub size: u64,
+    /// Modification time, whole Unix seconds.
+    pub mtime: u64,
+    /// Sub-second part of the modification time. `None` when the platform reports
+    /// no mtime, or for a stat built by [`FileStat::whole_second`].
+    pub mtime_nanos: Option<u32>,
+    /// Inode change time, Unix seconds, where the platform reports one.
+    pub ctime: Option<i64>,
+    /// Inode number, where the platform reports one.
+    pub inode: Option<u64>,
+}
+
+impl FileStat {
+    /// Everything the platform reports about `md`.
+    pub fn of(md: &fs::Metadata) -> Self {
+        let mtime = md
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+        let (ctime, inode) = crate::build::types::stat_identity(md);
+        Self {
+            size: md.len(),
+            mtime: mtime.map_or(0, |d| d.as_secs()),
+            mtime_nanos: mtime.map(|d| d.subsec_nanos()),
+            ctime,
+            inode,
+        }
+    }
+
+    /// Size and whole-second mtime only, for a caller that has nothing finer —
+    /// see [`HashIndex::lookup_whole_second`].
+    pub fn whole_second(size: u64, mtime: u64) -> Self {
+        Self { size, mtime, mtime_nanos: None, ctime: None, inode: None }
+    }
+}
+
+#[cfg(test)]
+impl FileStat {
+    /// Stamp `path` with the wall-clock second `previous` carries, at a different
+    /// instant inside it — which is what two writes in one second are on a
+    /// filesystem with sub-second timestamps, forced instead of hoped for. Nothing
+    /// sleeps. Returns the new mtime.
+    pub(crate) fn stamp_in_the_second_of(path: &Path, previous: std::time::SystemTime) -> std::time::SystemTime {
+        let d = previous.duration_since(std::time::UNIX_EPOCH).unwrap();
+        let nanos = d.subsec_nanos();
+        let other = if nanos >= 500_000_000 { nanos - 250_000_000 } else { nanos + 250_000_000 };
+        let stamped = std::time::UNIX_EPOCH + std::time::Duration::new(d.as_secs(), other);
+        fs::File::options().write(true).open(path).unwrap().set_modified(stamped).unwrap();
+        stamped
+    }
+}
+
+/// A single entry in the hash index: the stat record a file had when its bytes
+/// were hashed, and the hash.
+///
+/// Only `size`, `mtime` and `content_hash` existed in the first format. The
+/// rest are `#[serde(default)]` so an index written by that version still loads
+/// — its entries simply never match a full-stat lookup, and are rewritten the
+/// next time the file is hashed (see [`HashIndex::lookup`]).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct HashIndexEntry {
     /// File size in bytes (corresponds to `st_size`).
     pub size: u64,
     /// Modification time as Unix epoch seconds (corresponds to `st_mtime`).
     pub mtime: u64,
+    /// Sub-second part of the modification time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtime_nanos: Option<u32>,
+    /// Inode change time as Unix seconds (`st_ctime`), where the platform has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctime: Option<i64>,
+    /// Inode number (`st_ino`), where the platform has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inode: Option<u64>,
     /// SHA-256 content hash (hex, 64 chars).
     pub content_hash: String,
 }
@@ -729,12 +806,20 @@ pub struct HashIndexEntry {
 ///   Git handles this by comparing actual content for entries whose mtime
 ///   equals the index mtime (see racy-git.txt for details).
 ///
-/// Our simplified version:
-///   - Key: (relative_path) → { size: u64, mtime: u64, content_hash: String }
-///   - If (size, mtime) match: trust content_hash, skip ObjectStore::hash_file()
-///   - If either differs: re-hash via ObjectStore::hash_file(), update entry
-///   - Racy-clean edge case is acceptable for media metadata caching —
-///     worst case is one extra ffprobe call, not data corruption
+/// Our version:
+///   - Key: (relative_path) → the file's [`FileStat`] + `content_hash`
+///   - [`lookup`](Self::lookup) trusts `content_hash` only while size, mtime to the
+///     nanosecond, ctime and inode all still match, and fails OPEN — a field
+///     either side lacks is a miss, and a miss costs one hash — never to a hit
+///   - [`lookup_whole_second`](Self::lookup_whole_second) is the older, weaker
+///     rule (size + whole-second mtime), kept for the one caller that cannot hash
+///     on a miss: the video path
+///
+/// The racy-clean edge case is NOT acceptable for an image: its content hash
+/// names the encode, so a false hit ships the previous picture's variant. A
+/// same-second rewrite is told apart by the sub-second mtime (the filesystems
+/// moss runs on report one); on a filesystem whose timestamps are whole seconds
+/// the comparison is no weaker than it used to be, and no stronger.
 ///
 /// Reference: <https://git-scm.com/docs/racy-git>
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -855,29 +940,92 @@ impl HashIndex {
         merged.save(path)
     }
 
-    /// Look up the cached content hash for a file.
+    /// The content hash recorded for `relative_path`, if the file still shows the
+    /// stat record it was hashed at.
     ///
-    /// Returns `Some(content_hash)` if (size, mtime) match the cached entry.
-    /// Returns `None` if the entry is missing or stat fields differ.
-    pub fn lookup(&self, relative_path: &str, size: u64, mtime: u64) -> Option<&str> {
+    /// Fails open. A field that is `Some` on both sides and differs is a miss (the
+    /// rule `SourceMetadata` uses), and so is a missing sub-second mtime on either
+    /// side — an entry from before the field existed, one recorded by
+    /// [`update_whole_second`](Self::update_whole_second), a file whose mtime the
+    /// platform will not report: a whole-second match cannot rule out a same-size
+    /// rewrite in the same second. A miss costs one hash; a hit that should have
+    /// missed is a stale image.
+    pub fn lookup(&self, relative_path: &str, stat: &FileStat) -> Option<&str> {
         let entry = self.entries.get(relative_path)?;
-        if entry.size == size && entry.mtime == mtime {
-            Some(&entry.content_hash)
-        } else {
-            None
-        }
+        let same_instant = stat.mtime_nanos.is_some() && entry.mtime_nanos == stat.mtime_nanos;
+        (entry.size == stat.size
+            && entry.mtime == stat.mtime
+            && same_instant
+            && !identity_disagrees(entry.ctime, stat.ctime)
+            && !identity_disagrees(entry.inode, stat.inode))
+        .then_some(entry.content_hash.as_str())
     }
 
-    /// Insert or update an entry in the hash index.
-    pub fn update(&mut self, relative_path: String, size: u64, mtime: u64, content_hash: String) {
+    /// [`lookup`](Self::lookup)'s older rule: size and whole-second mtime only,
+    /// blind to a same-size rewrite in the same second.
+    ///
+    /// For the video path, which cannot afford the full-stat rule: the render thread
+    /// hashes no multi-GB source (`HashPolicy::StatOnly`), and a stricter worker would
+    /// rehash every video on any ctime or inode change (a cloud provider
+    /// re-materializing it) and on the first build after this rule changed. Callers
+    /// record with [`update_whole_second`](Self::update_whole_second), so what they
+    /// leave in the index is never mistaken for a full stat record.
+    pub fn lookup_whole_second(&self, relative_path: &str, size: u64, mtime: u64) -> Option<&str> {
+        let entry = self.entries.get(relative_path)?;
+        (entry.size == size && entry.mtime == mtime).then_some(entry.content_hash.as_str())
+    }
+
+    /// Record `content_hash` for a file as it stood at `stat`.
+    ///
+    /// `stat` must be taken BEFORE the bytes are read: a write landing during the
+    /// hash then leaves an entry the file no longer matches, where the other order
+    /// would pair the new stat with the old bytes' hash and vouch for it.
+    pub fn update(&mut self, relative_path: String, stat: &FileStat, content_hash: String) {
         self.entries.insert(
             relative_path,
             HashIndexEntry {
-                size,
-                mtime,
+                size: stat.size,
+                mtime: stat.mtime,
+                mtime_nanos: stat.mtime_nanos,
+                ctime: stat.ctime,
+                inode: stat.inode,
                 content_hash,
             },
         );
+    }
+
+    /// [`update`](Self::update) for a caller that only has size and whole-second
+    /// mtime: the entry carries no sub-second field, so [`lookup`](Self::lookup)
+    /// will never trust it.
+    pub fn update_whole_second(&mut self, relative_path: String, size: u64, mtime: u64, content_hash: String) {
+        self.update(relative_path, &FileStat::whole_second(size, mtime), content_hash);
+    }
+
+    /// Copy `relative_path`'s entry from `previous` exactly as it was recorded.
+    ///
+    /// For carrying a hit forward into a fresh index. Copying, rather than
+    /// re-recording the hit under the file's current stat, is what keeps the record
+    /// honest: a hit that came from [`lookup_whole_second`](Self::lookup_whole_second)
+    /// could be a stale one, and stamping it with today's stat would turn it into an
+    /// entry [`lookup`](Self::lookup) trusts.
+    pub fn carry_forward(&mut self, previous: &HashIndex, relative_path: &str) {
+        if let Some(entry) = previous.entries.get(relative_path) {
+            self.entries.insert(relative_path.to_string(), entry.clone());
+        }
+    }
+
+    /// The content hash of `file`: the recorded one while [`lookup`](Self::lookup)
+    /// trusts it, otherwise hashed now and recorded.
+    pub fn resolve(&mut self, file: &Path, relative_path: &str) -> Result<String, String> {
+        let stat = FileStat::of(
+            &fs::metadata(file).map_err(|e| format!("Failed to stat {}: {}", file.display(), e))?,
+        );
+        if let Some(hash) = self.lookup(relative_path, &stat) {
+            return Ok(hash.to_string());
+        }
+        let hash = ObjectStore::hash_file(file)?;
+        self.update(relative_path.to_string(), &stat, hash.clone());
+        Ok(hash)
     }
 }
 

@@ -12,11 +12,18 @@ use std::path::Path;
 /// How far the heal may go to learn the source's content hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HashPolicy {
-    /// Only a `(size, mtime)` hit in the hash index. The video dispatcher runs
-    /// on the render thread and must never hash a multi-GB source there.
+    /// Only a `(size, whole-second mtime)` hit in the hash index
+    /// ([`HashIndex::lookup_whole_second`]). The video dispatcher runs on the render
+    /// thread and must never hash a multi-GB source there, so unlike `HashOnMiss` it
+    /// cannot fail open to a hash and cannot afford the full-stat comparison.
+    ///
+    /// [`HashIndex::lookup_whole_second`]: crate::build::cache::HashIndex::lookup_whole_second
     StatOnly,
-    /// Hash the source on an index miss. Images take this behind their
-    /// fingerprint gate, where the file is small and already known unchanged.
+    /// Hash the source on an index miss, trusting a hit only by the full stat
+    /// record ([`HashIndex::resolve`]). Images take this: the file is small, and the
+    /// fingerprint gate has usually already said it is unchanged.
+    ///
+    /// [`HashIndex::resolve`]: crate::build::cache::HashIndex::resolve
     HashOnMiss,
 }
 
@@ -68,7 +75,7 @@ pub(crate) fn rematerialize(
             None => return HealOutcome::NotCached,
         },
         HashPolicy::HashOnMiss => {
-            match crate::build::video::resolve_source_hash(source_file, rel_source, hash_index) {
+            match hash_index.resolve(source_file, rel_source) {
                 Ok(oid) => oid,
                 Err(_) => return HealOutcome::NotCached,
             }
@@ -92,18 +99,17 @@ pub(crate) fn rematerialize(
 }
 
 /// The source's content hash when the index already holds it for the file's
-/// current size and mtime; `None` on a miss or an unstat-able source.
+/// current size and whole-second mtime; `None` on a miss or an unstat-able source.
+///
+/// Whole-second because the caller cannot hash: a same-size rewrite in the same
+/// second still hits here and relinks the previous source's cached output. It is
+/// only ever asked for a video, whose own dispatch (and worker) decide what is
+/// encoded — see `VideoStore::stage`.
 fn indexed_hash(
     hash_index: &crate::build::cache::HashIndex,
     source_file: &Path,
     rel_source: &str,
 ) -> Option<String> {
-    let meta = std::fs::metadata(source_file).ok()?;
-    let mtime = meta
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    hash_index.lookup(rel_source, meta.len(), mtime).map(str::to_string)
+    let stat = crate::build::cache::FileStat::of(&std::fs::metadata(source_file).ok()?);
+    hash_index.lookup_whole_second(rel_source, stat.size, stat.mtime).map(str::to_string)
 }

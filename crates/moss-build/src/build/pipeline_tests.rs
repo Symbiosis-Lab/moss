@@ -2927,7 +2927,7 @@ fn test_resolve_source_hash_uses_cached_hash_on_mtime_match() {
         .as_secs();
 
     let mut hash_index = HashIndex::new();
-    hash_index.update(
+    hash_index.update_whole_second(
         "video.mov".to_string(),
         size,
         mtime,
@@ -2952,7 +2952,7 @@ fn test_resolve_source_hash_rehashes_on_mtime_mismatch() {
     let size = meta.len();
 
     let mut hash_index = HashIndex::new();
-    hash_index.update(
+    hash_index.update_whole_second(
         "video.mov".to_string(),
         size,
         1000,
@@ -3028,7 +3028,7 @@ fn test_fast_path_rejects_zero_byte_canonical_files() {
         .unwrap()
         .as_secs();
     let mut hash_index = HashIndex::new();
-    hash_index.update(
+    hash_index.update_whole_second(
         "videos/clip.mov".to_string(),
         source_size,
         source_mtime,

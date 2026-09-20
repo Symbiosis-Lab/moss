@@ -490,11 +490,11 @@ pub(crate) fn convert_single_video(
     }
 }
 
-/// Resolve the content hash for a source file, using HashIndex as a cache.
+/// Resolve the content hash for a VIDEO source file, using HashIndex as a cache.
 ///
-/// If the file's (size, mtime) match the cached entry, returns the cached hash
-/// without reading the file. Otherwise, hashes the file via `ObjectStore::hash_file()`
-/// and updates the index.
+/// Matches by (size, whole-second mtime) only — the rule video keeps on purpose, see
+/// [`HashIndex::lookup_whole_second`]; images take [`HashIndex::resolve`]. On a miss,
+/// hashes the file via `ObjectStore::hash_file()` and updates the index.
 pub(crate) fn resolve_source_hash(
     source_file: &Path,
     relative_path: &str,
@@ -512,13 +512,13 @@ pub(crate) fn resolve_source_hash(
         .as_secs();
 
     // Check HashIndex cache: if (size, mtime) match, use cached hash
-    if let Some(cached_hash) = hash_index.lookup(relative_path, size, mtime) {
+    if let Some(cached_hash) = hash_index.lookup_whole_second(relative_path, size, mtime) {
         return Ok(cached_hash.to_string());
     }
 
     // Cache miss: hash the file and update index
     let hash = ObjectStore::hash_file(source_file)?;
-    hash_index.update(relative_path.to_string(), size, mtime, hash.clone());
+    hash_index.update_whole_second(relative_path.to_string(), size, mtime, hash.clone());
     Ok(hash)
 }
 
@@ -2243,7 +2243,7 @@ pub(crate) mod tests {
         let mut index = HashIndex::load(&index_path);
         let meta = std::fs::metadata(&source).unwrap();
         let mtime = meta.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        index.update(item.to_string(), meta.len(), mtime, source_oid);
+        index.update_whole_second(item.to_string(), meta.len(), mtime, source_oid);
         index.save(&index_path).unwrap();
     }
 

@@ -657,7 +657,7 @@ fn probe_cmyk_magic_already_small(
 ///
 /// For each image in `image_files`, applies skip rules. Images that pass
 /// (i.e., should be encoded) are returned as `ImageConversionItem`s with
-/// content-addressed `source_oid` resolved via `resolve_source_hash`.
+/// content-addressed `source_oid` taken from the hash index (`HashIndex::lookup`).
 ///
 /// On hash-resolution error, the item is logged and skipped.
 pub(crate) fn collect_images_for_conversion(
@@ -681,15 +681,8 @@ pub(crate) fn collect_images_for_conversion(
         let source_oid = std::fs::metadata(&file_path)
             .ok()
             .and_then(|m| {
-                let size = m.len();
-                let mtime = m
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
                 hash_index
-                    .lookup(&media_meta.path, size, mtime)
+                    .lookup(&media_meta.path, &crate::build::cache::FileStat::of(&m))
                     .map(str::to_string)
             })
             .unwrap_or_default();
@@ -1382,19 +1375,19 @@ pub(crate) fn compute_image_item_fingerprint(
     use sha2::{Digest, Sha256};
 
     let source = Path::new(source_path).join(item);
-    let meta = fs::metadata(&source).ok()?;
-    let mtime = meta
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
+    let stat = crate::build::cache::FileStat::of(&fs::metadata(&source).ok()?);
+    // No mtime at all: nothing to tell one write from the next.
+    stat.mtime_nanos?;
 
     let mut hasher = Sha256::new();
     hasher.update(item.to_string_lossy().as_bytes());
     hasher.update(b"\0");
-    hasher.update(meta.len().to_le_bytes());
-    hasher.update(mtime.to_le_bytes());
+    // The whole stat record, not size + whole-second mtime: a same-size rewrite in
+    // the same second must not fingerprint like the file it replaced. In-process
+    // only, so the derived Debug form is a stable enough encoding — and a field
+    // added to `FileStat` joins the fingerprint without anyone remembering to.
+    hasher.update(format!("{stat:?}").as_bytes());
+    hasher.update(b"\0");
     hasher.update(config.to_params().to_string().as_bytes());
     Some(format!("{:x}", hasher.finalize()))
 }
@@ -1930,7 +1923,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
 
         // Resolve the content hash. The blocking collect deferred it (stat-match
         // only), so first paint wasn't gated on hashing hundreds of MB of images;
-        // we do it here on the background worker. resolve_source_hash stat-matches
+        // we do it here on the background worker. `HashIndex::resolve` stat-matches
         // `bg_hash_index` and hashes only on a miss; the index is persisted after
         // the loop so the next build's collect stat-matches cheaply.
         //
@@ -1938,11 +1931,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         // above already took the one transient reason for that — so it gets the
         // same answer as a failed decode, not the silent `return` it used to be.
         let source_oid = if item.source_oid.is_empty() {
-            match crate::build::video::resolve_source_hash(
-                &source_file,
-                &rel_source_str,
-                &mut bg_hash_index.lock().unwrap(),
-            ) {
+            match bg_hash_index.lock().unwrap().resolve(&source_file, &rel_source_str) {
                 Ok(oid) => oid,
                 Err(e) => {
                     log::warn!("Failed to hash image {}: {}", rel_source_str, e);
