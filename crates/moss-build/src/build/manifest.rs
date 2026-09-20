@@ -63,7 +63,6 @@ pub mod link_audit;
 pub mod published_record;
 /// How `ship_phase` reads one entry's staged bytes: [`ShipSource`] and its accessors.
 mod ship_source;
-pub(crate) use ship_source::ShipFingerprint;
 use ship_source::ShipSource;
 
 use std::collections::{HashMap, HashSet};

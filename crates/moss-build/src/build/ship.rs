@@ -183,7 +183,7 @@ fn verify_ship_integrity(
 ) -> Option<String> {
     let expected_fp = sealed.ship_fingerprint(rel_path)?;
     let meta = std::fs::metadata(stage_path).ok()?;
-    let actual_fp = crate::build::manifest::ShipFingerprint::of(&meta)?;
+    let actual_fp = crate::build::cache::FileStat::of(&meta);
     if actual_fp == *expected_fp {
         return None;
     }

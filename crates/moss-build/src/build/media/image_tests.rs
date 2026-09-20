@@ -161,37 +161,7 @@ fn fingerprint_deterministic_same_input() {
     let fp1 = compute_image_item_fingerprint(&source_str, Path::new("a.jpg"), &cfg);
     let fp2 = compute_image_item_fingerprint(&source_str, Path::new("a.jpg"), &cfg);
     assert_eq!(fp1, fp2);
-    assert_eq!(
-        fp1.expect("source exists and is stat-able").len(),
-        64,
-        "sha256 hex should be 64 chars"
-    );
-}
-
-/// Two different images with byte-identical content must not alias to the
-/// same per-item fingerprint — the path is part of the hashed identity, not
-/// just size/mtime. Replaces `fingerprint_sort_agnostic`, which asserted the
-/// old whole-SET fingerprint was order-independent; per-item fingerprinting
-/// has no set to order.
-#[test]
-fn fingerprint_differs_by_path_even_with_identical_content() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path();
-    for name in ["a.jpg", "b.jpg"] {
-        let p = root.join(name);
-        let buf: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(2, 2, |_, _| Rgb([4, 5, 6]));
-        let img = DynamicImage::ImageRgb8(buf);
-        img.save_with_format(&p, image::ImageFormat::Jpeg).unwrap();
-    }
-
-    let cfg = ImageCompressionConfig::default();
-    let root_str = root.to_string_lossy().to_string();
-    let fp_a = compute_image_item_fingerprint(&root_str, Path::new("a.jpg"), &cfg);
-    let fp_b = compute_image_item_fingerprint(&root_str, Path::new("b.jpg"), &cfg);
-    assert_ne!(
-        fp_a, fp_b,
-        "two different images with identical bytes must not alias to the same per-item fingerprint"
-    );
+    assert!(fp1.is_some(), "source exists and is stat-able");
 }
 
 /// An unstat-able source (never written) must not produce a fingerprint —
@@ -209,30 +179,17 @@ fn fingerprint_missing_source_returns_none() {
     assert!(fp.is_none(), "an unstat-able source must not produce a fingerprint");
 }
 
-/// The fingerprint says "this image is unchanged" for the dispatch gate, so it must
-/// move when ANY field of the stat record does: a same-size rewrite in the same second
-/// differs in the sub-second mtime, a replace-via-rename in the inode, an in-place
-/// rewrite that puts the old mtime back in the ctime.
+/// A config change re-dispatches every image even when no file moved: the compression
+/// params are part of what the gate compares.
 #[test]
-fn the_fingerprint_moves_with_every_field_of_the_stat_record() {
-    let cfg = ImageCompressionConfig::default();
-    let stat = crate::build::cache::FileStat {
-        size: 1024,
-        mtime: 1_700_000_000,
-        mtime_nanos: Some(250_000_000),
-        ctime: Some(1_700_000_005),
-        inode: Some(77),
-    };
-    let control = image_item_fingerprint(Path::new("a.jpg"), &stat, &cfg).expect("a stat with an mtime");
-    assert_eq!(image_item_fingerprint(Path::new("a.jpg"), &stat, &cfg), Some(control.clone()), "premise: deterministic");
+fn the_fingerprint_moves_with_the_compression_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_big_jpeg(&tmp.path().join("a.jpg"), 40, 30);
+    let root = tmp.path().to_string_lossy().to_string();
+    let fp = |config: &ImageCompressionConfig| compute_image_item_fingerprint(&root, Path::new("a.jpg"), config);
 
-    for (field, changed) in stat.each_field_changed() {
-        assert_ne!(
-            image_item_fingerprint(Path::new("a.jpg"), &changed, &cfg),
-            Some(control.clone()),
-            "the fingerprint ignores {field}: a change in it would be carried forward as no change"
-        );
-    }
+    let default = ImageCompressionConfig::default();
+    assert_ne!(fp(&default), fp(&ImageCompressionConfig { quality: default.quality - 10, ..default.clone() }));
 }
 
 /// What `compute_image_item_fingerprint` feeds the fingerprint: the file's whole stat
@@ -247,7 +204,7 @@ fn the_fingerprint_of_a_file_is_the_fingerprint_of_its_whole_stat_record() {
     let stat = crate::build::cache::FileStat::of(&fs::metadata(&file).unwrap());
     assert_eq!(
         compute_image_item_fingerprint(&tmp.path().to_string_lossy(), Path::new("a.jpg"), &cfg),
-        image_item_fingerprint(Path::new("a.jpg"), &stat, &cfg),
+        Some(ImageFingerprint { stat, params: cfg.to_params() }),
     );
 }
 
@@ -2092,13 +2049,20 @@ fn image_fingerprint_test_lock() -> &'static std::sync::Mutex<()> {
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
+/// A fingerprint that differs from `tag`'s in one field, for the cache tests below.
+fn test_fingerprint(tag: u64) -> ImageFingerprint {
+    ImageFingerprint {
+        stat: crate::build::cache::FileStat { size: tag, mtime: 1, mtime_nanos: Some(1), ctime: Some(1), inode: Some(1) },
+        params: serde_json::json!({}),
+    }
+}
+
 #[test]
 fn fingerprint_cache_matches_only_what_was_recorded() {
     let _guard = image_fingerprint_test_lock().lock();
-    // Use a unique path AND unique values per run to avoid state from other tests.
+    // Use a unique path per run to avoid state from other tests.
     let path = format!("img-{}.jpg", uuid::Uuid::new_v4());
-    let a = format!("fp-a-{}", uuid::Uuid::new_v4());
-    let b = format!("fp-b-{}", uuid::Uuid::new_v4());
+    let (a, b) = (test_fingerprint(1), test_fingerprint(2));
     // Nothing recorded for this path → not unchanged.
     assert!(!image_item_fingerprint_matches(&path, &a));
     record_image_item_fingerprint(&path, a.clone());
@@ -2120,11 +2084,15 @@ fn fingerprint_cache_matches_only_what_was_recorded() {
 fn fingerprint_cache_is_independent_per_path() {
     let path_a = format!("a-{}.jpg", uuid::Uuid::new_v4());
     let path_b = format!("b-{}.jpg", uuid::Uuid::new_v4());
-    record_image_item_fingerprint(&path_a, "fp-a".to_string());
-    record_image_item_fingerprint(&path_b, "fp-b".to_string());
+    let (a, b) = (test_fingerprint(1), test_fingerprint(2));
+    record_image_item_fingerprint(&path_a, a.clone());
+    record_image_item_fingerprint(&path_b, b.clone());
     // Both still match their own last-recorded fingerprint.
-    assert!(image_item_fingerprint_matches(&path_a, "fp-a"));
-    assert!(image_item_fingerprint_matches(&path_b, "fp-b"));
+    assert!(image_item_fingerprint_matches(&path_a, &a));
+    assert!(image_item_fingerprint_matches(&path_b, &b));
+    // And a path nothing was recorded for is not vouched for by another's: the
+    // fingerprint no longer carries the path, so the cell's key is all that says whose it is.
+    assert!(!image_item_fingerprint_matches(&format!("c-{}.jpg", uuid::Uuid::new_v4()), &a));
 }
 
 // ======================================================================

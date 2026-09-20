@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::{HashBucket, PendingManifest, SealedManifest};
+use crate::build::cache::FileStat;
 use crate::build::served_path::{transform_for, ServedPath, ShipTransform};
 
 /// The most bytes one manifest holds for [`ShipSource::Held`].
@@ -51,37 +52,6 @@ impl std::fmt::Debug for HeldBytes {
     }
 }
 
-/// The forgery-resistant stat snapshot `ship_phase`'s integrity check compares
-/// against, for one manifest entry. Same fields `SourceMetadata`/`stat_identity`
-/// already model for the identical reason (`build/types.rs`): `mtime` alone
-/// cannot distinguish the hashed bytes from a same-second, same-size rewrite,
-/// and a replace-via-rename changes the inode even when size and mtime survive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ShipFingerprint {
-    size: u64,
-    mtime_secs: u64,
-    mtime_nanos: Option<u32>,
-    ctime: Option<i64>,
-    inode: Option<u64>,
-}
-
-impl ShipFingerprint {
-    pub(crate) fn of(meta: &std::fs::Metadata) -> Option<Self> {
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
-        let (ctime, inode) = crate::build::types::stat_identity(meta);
-        Some(Self {
-            size: meta.len(),
-            mtime_secs: mtime.map(|d| d.as_secs()).unwrap_or(0),
-            mtime_nanos: mtime.map(|d| d.subsec_nanos()),
-            ctime,
-            inode,
-        })
-    }
-}
-
 /// Which of the ways `ship_phase` can resolve an entry's staged bytes is on
 /// record for it — `Cas` or `Held` before anything runs a post-seal rewrite,
 /// `Fingerprint` once one does. An entry with none is read straight from the
@@ -112,9 +82,12 @@ pub(crate) enum ShipSource {
     /// (`sitemap.xml`, `llms.txt`), where a CAS object would be minted and
     /// abandoned on every edit. See [`HELD_BYTES_BUDGET`] for the bound.
     Held(HeldBytes),
-    /// The stat-identity fingerprint taken at (or re-taken after) seal, for
-    /// an entry `ship_phase` will read from the mutable stage path.
-    Fingerprint(ShipFingerprint),
+    /// The stat record taken at (or re-taken after) seal, for an entry
+    /// `ship_phase` will read from the mutable stage path. The forgery-resistant
+    /// one (`FileStat`): `mtime` alone cannot tell the hashed bytes from a
+    /// same-second, same-size rewrite, and a replace-via-rename changes the inode
+    /// even when size and mtime survive.
+    Fingerprint(FileStat),
 }
 
 impl ShipSource {
@@ -207,7 +180,7 @@ impl SealedManifest {
     /// The fingerprint recorded for `rel_path`, if any — `None` for a
     /// CAS-backed entry (never stamped), a symlink entry (never stamped), or
     /// one whose stage file could not be stat'd when stamping ran.
-    pub(crate) fn ship_fingerprint(&self, rel_path: &str) -> Option<&ShipFingerprint> {
+    pub(crate) fn ship_fingerprint(&self, rel_path: &str) -> Option<&FileStat> {
         match self.ship_sources.get(rel_path) {
             Some(ShipSource::Fingerprint(fp)) => Some(fp),
             _ => None,
@@ -250,7 +223,7 @@ impl SealedManifest {
         keys: impl IntoIterator<Item = &'a str>,
     ) {
         for key in keys {
-            match std::fs::metadata(stage_dir.join(key)).ok().and_then(|m| ShipFingerprint::of(&m)) {
+            match std::fs::metadata(stage_dir.join(key)).ok().map(|m| FileStat::of(&m)) {
                 Some(fp) => {
                     self.ship_sources.insert(key.to_string(), ShipSource::Fingerprint(fp));
                 }

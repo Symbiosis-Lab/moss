@@ -1350,62 +1350,41 @@ pub(crate) fn convert_single_image(
 // Fingerprint (for skip-on-no-change)
 // ---------------------------------------------------------------------------
 
-/// SHA-256 fingerprint of one image's `(path, size, mtime)` plus the
-/// compression config. Matching the previous dispatch's fingerprint for THIS
-/// path means this one image is unchanged, and — combined with its output
-/// still being present on disk, checked separately in
-/// `dispatch_image_conversions` — there is no reason to re-encode it. The
-/// compression params are folded in so a config change re-dispatches every
-/// image's fingerprint even when no file moved.
+/// What the dispatch gate compares for one image: its whole stat record (a same-size
+/// rewrite in the same second, or a replace-via-rename, must not look like the file
+/// it replaced) and the compression params, so a config change re-dispatches every
+/// image even when no file moved. Matching the last delivered one for THIS path
+/// means the image is unchanged, and — with its output still present, checked
+/// separately in `dispatch_image_conversions` — there is no reason to re-encode it.
 ///
-/// Per item, not per set: mirrors `compute_video_item_fingerprint`
-/// (build/media/video.rs, commit 5323496908) — the old scheme hashed the
-/// whole sorted image list into one fingerprint, so any single added,
-/// changed or removed image invalidated it and forced a full re-dispatch,
-/// which drops every OTHER, untouched image out of that round's manifest if
-/// the async batch doesn't finish registering them before the build seals.
-///
-/// Returns `None` when the source can't be stat'd (missing / unreadable) —
-/// the caller must treat that as "cannot prove unchanged" and dispatch it.
+/// Per item, not per set: one added, changed or removed image must not invalidate
+/// every other, untouched image's skip decision and drop it out of that round's
+/// manifest. Compared by value, in-process only: the cell below is keyed by path.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ImageFingerprint {
+    stat: crate::build::cache::FileStat,
+    params: serde_json::Value,
+}
+
+/// `None` when the source can't be stat'd (missing / unreadable) or reports no
+/// mtime at all (nothing to tell one write from the next) — the caller must treat
+/// that as "cannot prove unchanged" and dispatch it.
 pub(crate) fn compute_image_item_fingerprint(
     source_path: &str,
     item: &Path,
     config: &ImageCompressionConfig,
-) -> Option<String> {
-    let source = Path::new(source_path).join(item);
-    image_item_fingerprint(item, &crate::build::cache::FileStat::of(&fs::metadata(&source).ok()?), config)
-}
-
-/// [`compute_image_item_fingerprint`] for a stat record already in hand.
-pub(crate) fn image_item_fingerprint(
-    item: &Path,
-    stat: &crate::build::cache::FileStat,
-    config: &ImageCompressionConfig,
-) -> Option<String> {
-    use sha2::{Digest, Sha256};
-
-    // No mtime at all: nothing to tell one write from the next.
+) -> Option<ImageFingerprint> {
+    let stat = crate::build::cache::FileStat::of(&fs::metadata(Path::new(source_path).join(item)).ok()?);
     stat.mtime_nanos?;
-
-    let mut hasher = Sha256::new();
-    hasher.update(item.to_string_lossy().as_bytes());
-    hasher.update(b"\0");
-    // The whole stat record, not size + whole-second mtime: a same-size rewrite in
-    // the same second must not fingerprint like the file it replaced. In-process
-    // only, so the derived Debug form is a stable enough encoding — and a field
-    // added to `FileStat` joins the fingerprint without anyone remembering to.
-    hasher.update(format!("{stat:?}").as_bytes());
-    hasher.update(b"\0");
-    hasher.update(config.to_params().to_string().as_bytes());
-    Some(format!("{:x}", hasher.finalize()))
+    Some(ImageFingerprint { stat, params: config.to_params() })
 }
 
 /// Module-local fingerprint cache for image conversion (independent of
 /// `VideoConversionState`, which owns the video fingerprint), keyed by each
 /// image's relative source path. Per-item, not per-set — mirrors
 /// `VideoConversionState::last_video_fingerprints`.
-fn image_fingerprint_cell() -> &'static Mutex<HashMap<String, String>> {
-    static IMAGE_FINGERPRINTS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+fn image_fingerprint_cell() -> &'static Mutex<HashMap<String, ImageFingerprint>> {
+    static IMAGE_FINGERPRINTS: OnceLock<Mutex<HashMap<String, ImageFingerprint>>> = OnceLock::new();
     IMAGE_FINGERPRINTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -1415,13 +1394,13 @@ fn image_fingerprint_cell() -> &'static Mutex<HashMap<String, String>> {
 /// worker it spawns may leave (the user cancelled, the source went back to the cloud,
 /// the hash failed) without encoding it, and the old variant it leaves in staging is
 /// exactly what the next dispatch's skip check finds present. Independent per path.
-pub(crate) fn image_item_fingerprint_matches(path: &str, fingerprint: &str) -> bool {
-    image_fingerprint_cell().lock().expect("image fp mutex").get(path).map(String::as_str) == Some(fingerprint)
+pub(crate) fn image_item_fingerprint_matches(path: &str, fingerprint: &ImageFingerprint) -> bool {
+    image_fingerprint_cell().lock().expect("image fp mutex").get(path) == Some(fingerprint)
 }
 
 /// Record that `path`'s variant was delivered for the source this fingerprint
 /// describes.
-pub(crate) fn record_image_item_fingerprint(path: &str, fingerprint: String) {
+pub(crate) fn record_image_item_fingerprint(path: &str, fingerprint: ImageFingerprint) {
     image_fingerprint_cell().lock().expect("image fp mutex").insert(path.to_string(), fingerprint);
 }
 
