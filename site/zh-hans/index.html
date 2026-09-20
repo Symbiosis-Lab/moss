@@ -308,7 +308,7 @@
   #five .moss-btn[data-role="primary"]:hover { background: #e7ede5; }
   /* Reduced motion is the poster and nothing else: no video element is ever
      given a source, so there is nothing playing and nothing to pause. */
-  @media (prefers-reduced-motion: reduce) { #loop-toggle { display: none; } #intro h1 { opacity: 1; -webkit-mask-image: none !important; mask-image: none !important; } }
+  @media (prefers-reduced-motion: reduce) { #loop-toggle { display: none; } #intro h1 { opacity: 1; } }
 
   /* The document still has a useful close if JavaScript is unavailable: the
      scripts add .js before body paint, while the static section keeps its own
@@ -399,7 +399,7 @@
   @media (max-width: 900px) {
     body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; opacity: calc(1 - var(--xf)); background: linear-gradient(to bottom, var(--bg) 0 34px, color-mix(in srgb, var(--bg) 72%, transparent) 52px, transparent); }
     #intro { min-height: 0; justify-items: start; padding: 88px 34px 32px; }
-    #intro h1 { position: static; text-align: left; font-size: clamp(40px, 11vw, 58px); opacity: 1; -webkit-mask-image: none !important; mask-image: none !important; }
+    #intro h1 { position: static; text-align: left; font-size: clamp(40px, 11vw, 58px); opacity: 1; }
     .page { margin-top: 0; opacity: 1; }
     #col { opacity: calc(1 - var(--xf)); }
     #c4 .scene-text { color: color-mix(in srgb, var(--text), white calc(var(--xf) * 100%)); }
@@ -759,37 +759,25 @@ let SCALE = 1, baseScale = 1;
 const mobileLayout = () => innerWidth <= 900;
 const opening = document.getElementById('intro');
 const openingTitle = opening.querySelector('h1');
-let introMaskStep = -1;
-const introMaskCache = new Map();
-function introWatercolor(progress) {
-  if (reduce || progress > .94) {
-    introMaskStep = -1;
-    openingTitle.style.webkitMaskImage = openingTitle.style.maskImage = 'none';
-    return;
-  }
-  const step = Math.round((1 - progress) * 24);
-  if (step === introMaskStep) return;
-  introMaskStep = step;
-  let data = introMaskCache.get(step);
-  if (!data) {
-    const c = document.createElement('canvas'); c.width = 192; c.height = 64;
-    const x = c.getContext('2d'), im = x.createImageData(c.width, c.height);
-    const hash = (ix, iy) => { let v = Math.imul(ix + 37, 374761393) ^ Math.imul(iy + 71, 668265263) ^ 0x5f3759df; v = Math.imul(v ^ v >>> 13, 1274126177); return ((v ^ v >>> 16) >>> 0) / 4294967295; };
-    const noise = (px, py) => { const ix = Math.floor(px), iy = Math.floor(py), fx = px - ix, fy = py - iy, sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy); return (hash(ix, iy) * (1 - sx) + hash(ix + 1, iy) * sx) * (1 - sy) + (hash(ix, iy + 1) * (1 - sx) + hash(ix + 1, iy + 1) * sx) * sy; };
-    const fbm = (px, py) => .57 * noise(px / 22, py / 22) + .29 * noise(px / 10 + 19, py / 10 + 7) + .14 * noise(px / 4 + 43, py / 4 + 29);
-    const threshold = .18 + step / 24 * .72;
-    for (let py = 0; py < c.height; py++) for (let px = 0; px < c.width; px++) {
-      const value = fbm(px, py) + px / c.width * .18;
-      const t = Math.max(0, Math.min(1, (value - (threshold - .06)) / .12));
-      const a = Math.round((t * t * (3 - 2 * t)) * 255);
-      im.data[(py * c.width + px) * 4 + 3] = a;
-    }
-    x.putImageData(im, 0, 0); data = c.toDataURL(); introMaskCache.set(step, data);
-  }
-  const url = `url(${data})`;
-  openingTitle.style.webkitMaskImage = openingTitle.style.maskImage = url;
-  openingTitle.style.webkitMaskSize = openingTitle.style.maskSize = '100% 100%';
+// The title's own pigment sim is set up further down (after makeSim/raster/
+// advanceMobilePigment exist); this stub is what updateOpening can safely
+// call from the very first frame, well before that setup has run. Once armed,
+// titleDissolve owns the h1's opacity and its canvas; until then the h1 is
+// left exactly as the document painted it.
+let titleDissolve = null;
+let pendingTitleP = 1;
+let titleSteps = 0;
+// True once setupTitleDissolve has decided the title's own fate (armed,
+// fell back, or does not apply here) — a harness signal so a test can wait
+// for that decision instead of guessing how long it takes.
+let titleReady = false;
+function driveTitleDissolve(titleP) {
+  pendingTitleP = titleP;
+  if (titleDissolve) titleDissolve(titleP);
 }
+// Overwritten once the title's own sim is ready; correct on its own for
+// mobile, reduced motion, and the brief window before that setup finishes.
+window.__titleInk = () => Number(getComputedStyle(openingTitle).opacity);
 function updateOpening() {
   // On phones the opening and first scene are ordinary document flow. Their
   // geometry is established once in fit(); scrolling only moves that flow.
@@ -806,8 +794,7 @@ function updateOpening() {
   const introScale = .4 + .1 * clamp01((innerHeight - 720) / 480);
   SCALE = baseScale * (1 - (1 - introScale) * stageIntroP);
   document.documentElement.style.setProperty('--s', String(SCALE));
-  document.documentElement.style.setProperty('--intro-title-p', String(titleP));
-  introWatercolor(titleP);
+  driveTitleDissolve(titleP);
   openingTitle.style.setProperty('--intro-bleed', ((1 - titleP) * 2.5).toFixed(2) + 'px');
   // CSS pins the visual from the document opening. Only the intro moves it;
   // once titleP is zero there is no scroll-position compensation to chase.
@@ -1238,6 +1225,23 @@ function makeSim({ canvas, texW, texH, rect }) {
       for (const [f, n] of [[wF[wi], 1], [pF[pi], 2]]) { gl.bindFramebuffer(gl.FRAMEBUFFER, f);
         for (let i = 0; i < n; i++) { gl.readBuffer(gl.COLOR_ATTACHMENT0 + i); const px = new Float32Array(4); gl.readPixels(x, y, 1, 1, gl.RGBA, gl.FLOAT, px); out.push([...px].map((v) => +v.toFixed(4))); } }
       return out;
+    },
+    // How much of the old print has not yet dissolved, weighted by where it
+    // had ink (mask/maskTotal, at this instance's own W x H, GL's row order).
+    // l only ever grows within a forward wash, so this is monotone by
+    // construction where a rendered-pixel read is not: a bloom can raise
+    // total on-screen coverage while it is lifting the print off its own
+    // letterforms, and a real GPU's step-to-step rate is not bit-identical
+    // across engines, so a display-shader proxy can wobble at a shared
+    // sample point even though the wash is strictly further along.
+    remaining(mask, maskTotal) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, pF[pi]);
+      gl.readBuffer(gl.COLOR_ATTACHMENT1);
+      const buf = new Float32Array(W * H * 4);
+      gl.readPixels(0, 0, W, H, gl.RGBA, gl.FLOAT, buf);
+      let dot = 0;
+      for (let i = 0; i < W * H; i++) dot += mask[i] * (1 - buf[i * 4 + 3]);
+      return dot / maskTotal;
     },
     // the display pass onto the canvas
     draw(fwd, cure, clearance = -.2) {
@@ -2166,11 +2170,11 @@ async function runJoin() {
 }
 // One mobile pigment clock. The text track supplies a position; this advances
 // or rewinds the same liquid surface, and does no GPU draw at an unchanged rest.
-function advanceMobilePigment(state, goal, fwd, stir, tilt, relift, paint) {
-  if (state.t > goal + DT) { sim.reset(); state.t = 0; state.drawn = -1; }
+function advanceMobilePigment(state, goal, fwd, stir, tilt, relift, paint, simInstance = sim) {
+  if (state.t > goal + DT) { simInstance.reset(); state.t = 0; state.drawn = -1; }
   let budget = STEPS_PER_FRAME, count = 0;
   while (state.t < goal && state.t < T_TOTAL && budget-- > 0) {
-    sim.step(fwd, state.t, smooth(T_CURE, T_TOTAL, state.t), stir, tilt, relift);
+    simInstance.step(fwd, state.t, smooth(T_CURE, T_TOTAL, state.t), stir, tilt, relift);
     state.t += DT; count++;
   }
   if (state.t >= goal - DT && state.t !== state.drawn) { paint(state.t); state.drawn = state.t; }
@@ -2575,6 +2579,147 @@ async function raster(nodes, w, h, srcDoc = document) {
   await capped(new Promise((ok, no) => { img.onload = ok; img.onerror = () => no(new Error('scene raster failed')); img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg); }), FETCH_MS, 'scene raster timed out');
   return img;
 }
+// The intro title's own small wash: a second makeSim instance sized to the
+// h1's own box, driven by the same titleP that already reaches zero at scene
+// 1's rest (updateOpening, above). Desktop only, and never under reduced
+// motion — both keep the title exactly as plain scrolling text.
+(async function setupTitleDissolve() {
+  if (mobileLayout() || reduce) { titleReady = true; return; }
+  // Wait for the page to boot AND come to rest before doing any of this: a
+  // second WebGL2 context and its shader compiles are synchronous main-thread
+  // work, and watchScrollIntent's own spring clamps its per-frame dt to 0.1s
+  // (springStep's stability margin, above), so a compile stall borrows real
+  // time the spring never gets to spend — measured settling 60+px short of
+  // rest after a single wheel tick. atRest() is the page's own existing
+  // signal for "safe to do a background task now" (used to gate stale-print
+  // retakes); titleP is 1 (nothing to show yet) for as long as the reader has
+  // not scrolled, so nothing is lost by waiting for it here too.
+  while (document.documentElement.dataset.ready !== '1') await new Promise((resolve) => setTimeout(resolve, 150));
+  // atRest() can already read true the instant ready flips (restSince was set
+  // once, at script start) — before the reader's very first gesture, fired
+  // at that same instant, has reached even one watchScrollIntent frame and
+  // moved it. Wait out a gesture's own settling window once unconditionally,
+  // then require atRest() on several checks in a row before trusting it.
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  for (let stable = 0; stable < 3; ) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    stable = atRest() ? stable + 1 : 0;
+  }
+  const liveRect = openingTitle.getBoundingClientRect();
+  if (!liveRect.width || !liveRect.height) { titleReady = true; return; }
+  const pad = GEOM.pad;
+  // Cloned rather than styled by a shared class, so a future edit to #intro
+  // h1's own rule cannot silently desync the two; the cost is borne once per
+  // raster, not per frame.
+  const cloneTitle = () => {
+    const cs = getComputedStyle(openingTitle);
+    const node = openingTitle.cloneNode(true);
+    for (const prop of cs) node.style.setProperty(prop, cs.getPropertyValue(prop), cs.getPropertyPriority(prop));
+    node.style.position = 'absolute'; node.style.margin = '0'; node.style.filter = 'none';
+    node.style.left = pad + 'px'; node.style.top = pad + 'px';
+    return node;
+  };
+  // Fully transparent target, at any size: nothing in it to stretch.
+  const blank = document.createElement('canvas'); blank.width = blank.height = 1;
+  const fallbackFade = () => { titleDissolve = (p) => { openingTitle.style.opacity = String(p); }; titleDissolve(pendingTitleP); titleReady = true; };
+  let box = { x: liveRect.left - pad, y: liveRect.top - pad, w: Math.min(MAX_PRINT_EDGE, liveRect.width + 2 * pad), h: Math.min(MAX_PRINT_EDGE, liveRect.height + 2 * pad) };
+  const clone = cloneTitle();
+  clone.style.width = liveRect.width + 'px'; clone.style.height = liveRect.height + 'px';
+  let print;
+  try { print = await raster([clone], box.w, box.h); }
+  catch (e) { console.warn('title print unavailable, falling back to a fade:', e.message); fallbackFade(); return; }
+  const titleCanvas = document.createElement('canvas');
+  titleCanvas.id = 'gl-title';
+  titleCanvas.style.cssText = 'position:fixed; left:0; top:0; pointer-events:none; display:none;';
+  document.body.appendChild(titleCanvas);
+  const gridW = Math.round(box.w / 2), gridH = Math.round(box.h / 2);
+  const titleSim = makeSim({ canvas: titleCanvas, texW: gridW, texH: gridH, rect: () => box });
+  if (!titleSim) { titleCanvas.remove(); fallbackFade(); return; }
+  let broken = false;
+  const fallBack = () => { broken = true; titleCanvas.style.display = 'none'; fallbackFade(); };
+  titleCanvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); fallBack(); });
+  titleSim.setPrints(print, blank);
+  titleSim.reset();
+  // Ink remaining is read from the sim's own dissolved-fraction state (l),
+  // weighted by where the print's own ink was, at the sim's own grid — not
+  // from the rendered pixels. l only ever grows within a forward wash, so
+  // this stays monotone through a bloom that spreads pigment outward and can
+  // raise total on-screen coverage while it lifts, and across two engines
+  // whose per-step rate is not bit-identical. drawImage's y-axis runs top
+  // down; the print was uploaded with UNPACK_FLIP_Y_WEBGL, so the mask is
+  // flipped to land in the same row order as the state grid's own readback.
+  let mask = null, maskTotal = 1;
+  const captureMask = (img) => {
+    const c = document.createElement('canvas'); c.width = gridW; c.height = gridH;
+    const g = c.getContext('2d'); g.translate(0, gridH); g.scale(1, -1); g.drawImage(img, 0, 0, gridW, gridH);
+    const d = g.getImageData(0, 0, gridW, gridH).data;
+    const m = new Float32Array(gridW * gridH);
+    let total = 0;
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) { m[p] = d[i + 3] / 255; total += m[p]; }
+    mask = m; maskTotal = Math.max(1, total);
+  };
+  captureMask(print);
+  window.__titleInk = () => {
+    if (broken || getComputedStyle(titleCanvas).display === 'none') return Number(getComputedStyle(openingTitle).opacity);
+    return titleSim.remaining(mask, maskTotal);
+  };
+  const clock = { t: 0, drawn: -1 };
+  let shownAs = 'solid';   // 'solid' | 'wash' | 'gone' — which of {h1, canvas} owns the pixels
+  const paint = (t) => titleSim.draw(true, smooth(T_CURE, T_TOTAL, t));
+  // A title is mostly bare page between thin strokes, so it carries far less
+  // ink than a scene's own photos and screenshots: measured against the same
+  // absorb() math, its rendered alpha is already most of the way to its own
+  // vanishing point by the time a photo-sized wash would still be arriving
+  // (T_TAKE, where pour() itself first lets the sheet start taking pigment).
+  // TITLE_SPLIT spends only this much of the scroll reaching T_TAKE — a
+  // fifth of pour()'s own SPLIT — so the rest of the scroll is spent where
+  // the ink is actually visibly leaving, not sitting nearly unchanged.
+  const TITLE_SPLIT = 0.15;
+  const titleGoal = (s) => s < TITLE_SPLIT ? T_TAKE * (s / TITLE_SPLIT) : T_TAKE + (T_TOTAL - T_TAKE) * ((s - TITLE_SPLIT) / (1 - TITLE_SPLIT));
+  titleDissolve = (titleP) => {
+    if (broken) return;
+    const goal = titleGoal(1 - clamp01(titleP));
+    const advanced = advanceMobilePigment(clock, goal, true, 0, 0, 0, paint, titleSim);
+    titleSteps += advanced.count;
+    if (clock.t <= 0) {
+      if (shownAs !== 'solid') { titleCanvas.style.display = 'none'; openingTitle.style.opacity = '1'; shownAs = 'solid'; }
+    } else if (clock.t >= T_TOTAL - 1e-6) {
+      openingTitle.style.opacity = '0';
+      if (shownAs !== 'gone') { titleCanvas.style.display = 'none'; shownAs = 'gone'; }
+    } else if (shownAs !== 'wash') {
+      openingTitle.style.opacity = '0'; titleCanvas.style.display = 'block'; shownAs = 'wash';
+    }
+  };
+  titleDissolve(pendingTitleP);
+  titleReady = true;
+  // Re-raster on resize or a language swap that changes the box: never
+  // mid-dissolve unless the size actually moved, so a reader mid-scroll never
+  // sees a pop. A resize past the mobile breakpoint tears the wash down and
+  // returns to plain scrolling text, matching a page that loaded there.
+  let resizeTimer = null;
+  const onResize = () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(async () => {
+      if (mobileLayout() || reduce) { fallBack(); return; }
+      const r2 = openingTitle.getBoundingClientRect();
+      if (!r2.width || !r2.height) return;
+      const w2 = Math.min(MAX_PRINT_EDGE, r2.width + 2 * pad), h2 = Math.min(MAX_PRINT_EDGE, r2.height + 2 * pad);
+      const sizeChanged = Math.abs(w2 - box.w) > 1 || Math.abs(h2 - box.h) > 1;
+      if (shownAs === 'wash' && !sizeChanged) { box = { x: r2.left - pad, y: r2.top - pad, w: box.w, h: box.h }; return; }
+      const node = cloneTitle();
+      node.style.width = r2.width + 'px'; node.style.height = r2.height + 'px';
+      let print2;
+      try { print2 = await raster([node], w2, h2); } catch (e) { return; }
+      box = { x: r2.left - pad, y: r2.top - pad, w: w2, h: h2 };
+      titleSim.setPrints(print2, blank);
+      titleSim.reset();
+      captureMask(print2);
+      clock.t = 0; clock.drawn = -1; shownAs = 'solid';
+      titleDissolve(pendingTitleP);
+    }, 200);
+  };
+  addEventListener('resize', onResize);
+})();
 // A whole document, laid out at w x h, scrolled as it is on screen.
 async function rasterDoc(doc, w, h, options = {}) {
   const se = doc.scrollingElement || doc.documentElement;
@@ -3991,7 +4136,7 @@ window.__targetAt = targetAt;   // what a rested position names, read the same w
 window.__sceneForRest = sceneForRest;   // which scene a rest carries to, the same formula settleAtRest uses
 window.__DEAD = DEAD;   // the dead zone in that formula, read-only, so the harness can recompute sceneForRest's answer from primitives instead of asking the page's own function for it
 window.__plateBounds = plateBounds;   // the region a scattered/dragged plate must stay inside, the same formula the drag clamp and the initial scatter both read
-window.__state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: !!settleRun, settleSecs, settleCureLeft, settleShown, settleRunning, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, carry: CARRY });
+window.__state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: !!settleRun, settleSecs, settleCureLeft, settleShown, settleRunning, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, carry: CARRY, titleSteps, titleReady });
 // window.__s3 is defined with the rest of scene 3's own script, above.
 // How the print pipeline is doing: captures started, how many are drawing now,
 // the most that ever drew at once, and how old the print on hand is.
@@ -4036,6 +4181,11 @@ Promise.all([when(edFrame, '__editor'), when(shFrame, '__shell'), when(vdFrame, 
     console.warn('Showing the readable landing page:', error.message);
     document.documentElement.dataset.static = '1';
     page.inert = false; five.inert = false;
+    // watchScroll (and with it driveTitleDissolve) stops once dataset.static
+    // is set, so a dissolve caught mid-flight would otherwise freeze the
+    // title invisible; the static layout needs it back as plain text.
+    openingTitle.style.opacity = '';
+    document.getElementById('gl-title')?.style.setProperty('display', 'none');
   });
 </script>
 <script src="closing.js" defer></script>
