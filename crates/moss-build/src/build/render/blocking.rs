@@ -2500,7 +2500,7 @@ pub fn generate_blocking_content(
 
             // Site 10 (Pattern A): emit rss.xml.
             BuildContext::for_render(output_dir, pending)
-                .emit(&ServedPath::for_rss("").unwrap(), rss_content.as_bytes(), HashBucket::Files)
+                .emit_held(&ServedPath::for_rss("").unwrap(), rss_content.into_bytes(), HashBucket::Files)
                 .map_err(|e| format!("Failed to emit rss.xml: {}", e))?;
         }
 
@@ -2532,7 +2532,7 @@ pub fn generate_blocking_content(
         let sitemap_content = crate::build::feeds::sitemap::generate_sitemap(&sitemap_entries, url);
         // Site 11 (Pattern A): emit sitemap.xml.
         BuildContext::for_render(output_dir, pending)
-            .emit(&ServedPath::for_sitemap(), sitemap_content.as_bytes(), HashBucket::Files)
+            .emit_held(&ServedPath::for_sitemap(), sitemap_content.into_bytes(), HashBucket::Files)
             .map_err(|e| format!("Failed to emit sitemap.xml: {}", e))?;
 
         // Generate robots.txt (user's own will overwrite during background asset copy)
@@ -2583,7 +2583,7 @@ pub fn generate_blocking_content(
         );
         // Site 14 (Pattern A): emit llms.txt.
         BuildContext::for_render(output_dir, pending)
-            .emit(&ServedPath::for_llms_txt(), llms_content.as_bytes(), HashBucket::Files)
+            .emit_held(&ServedPath::for_llms_txt(), llms_content.into_bytes(), HashBucket::Files)
             .map_err(|e| format!("Failed to emit llms.txt: {}", e))?;
     }
     log::debug!(target: "timing", "[render] prelude: llms.txt: {:?}", total_start.elapsed());
@@ -2854,7 +2854,7 @@ pub fn generate_blocking_content(
         // Site 14c (Pattern A): emit _moss/previews.json (conditional on serialization success).
         if let Ok(json) = serde_json::to_string(&previews) {
             if let Err(e) = BuildContext::for_render(output_dir, pending)
-                .emit(&ServedPath::for_previews_manifest(), json.as_bytes(), HashBucket::Files)
+                .emit_held(&ServedPath::for_previews_manifest(), json.into_bytes(), HashBucket::Files)
             {
                 log::warn!("Failed to emit _moss/previews.json: {}", e);
             }

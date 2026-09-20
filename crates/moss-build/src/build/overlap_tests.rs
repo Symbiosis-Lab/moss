@@ -7,10 +7,11 @@
 //! generation may receive the second build's bytes under the first build's frozen
 //! manifest hash — deploy then refuses it ("file bytes do not match sealed
 //! manifest"). The race was closed class by class (deferred assets, image variants,
-//! rendered HTML) by giving a manifest entry a CAS object id, so `ship_phase` reads
-//! an immutable blob. Every unit test for that overwrites one stage file once; this
-//! runs the whole sequence, so a class that regresses, or a producer added without
-//! protection, shows up here.
+//! rendered HTML, then the derived files) by giving a manifest entry an immutable
+//! source: a CAS object id, or for the derived files the bytes themselves
+//! (`ShipSource::Held`), so `ship_phase` never reads the mutable stage. Every unit
+//! test for that overwrites one stage file once; this runs the whole sequence, so a
+//! class that regresses, or a producer added without protection, shows up here.
 //!
 //! The sequence, all through the real `run_pipeline` and the real tail:
 //!
@@ -56,16 +57,19 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------------------
-// What is allowed to diverge, and what may ship from the stage at all
+// What may ship from the stage at all
 // ---------------------------------------------------------------------------
 
-/// The keys that still diverge in a real overlap: the derived files, which have no
-/// CAS object id and so ship from whatever the stage holds when the tail runs.
+/// The derived files, registered with `emit_held`: the generation ships the bytes
+/// the manifest kept, not whatever the stage holds when the tail runs.
 ///
-/// **Only ever shrinks.** The harness asserts the diverging set EQUALS this list, so
-/// a new divergence fails it, and so does closing one of these until the entry is
-/// deleted here.
-const KNOWN_DIVERGING: &[&str] = &[
+/// The manifest the tail hands to deploy cannot show that, because `release_held`
+/// drops the bytes first, on purpose. What proves each of these protected is that
+/// nothing diverges under the edits below, each calibrated to move the files it
+/// names. Listing them is what lets
+/// [`assert_every_stage_shipped_entry_is_classified`] fail on any OTHER entry that
+/// has no immutable source.
+const DERIVED: [&str; 4] = [
     // Hover-preview index: one entry per public page, from its title, description
     // and the first 300 characters of its body.
     "_moss/previews.json",
@@ -81,9 +85,9 @@ const KNOWN_DIVERGING: &[&str] = &[
 /// Whether an entry with no CAS object id is safe to ship from the stage by design.
 ///
 /// The edit-independent half of the guard: a fingerprint-only producer that the
-/// fixture's edit happens not to vary would pass the equality above unnoticed, so
-/// every such entry in A's manifest must be either in [`KNOWN_DIVERGING`] or match
-/// here. A new producer trips it the first time it appears.
+/// fixture's edit happens not to vary would pass the divergence check unnoticed, so
+/// every such entry in A's manifest must be one of [`DERIVED`] or match here. A new
+/// producer trips it the first time it appears.
 ///
 /// Producers the fixture does not run — the search bundle, notebooks, math PNGs, a
 /// custom theme — are absent on purpose: adding one to the fixture is exactly when
@@ -384,35 +388,29 @@ async fn overlap(edit: &Edit) -> Outcome {
     Outcome { vault, a: a_sealed, diverging, b_diverging, drift }
 }
 
-/// The four derived files, whether or not they are still allowed to diverge: what
-/// each edit below is calibrated against, so that closing one leaves the edit still
-/// changing the file its protection has to survive.
-const DERIVED: [&str; 4] = ["_moss/previews.json", "llms.txt", "rss.xml", "sitemap.xml"];
-
 fn set(keys: &[&str]) -> BTreeSet<String> {
     keys.iter().map(|k| k.to_string()).collect()
 }
 
-/// `KNOWN_DIVERGING` restricted to what B's edit actually changed: a file B did not
-/// change cannot diverge, so it is not expected to.
-fn known_and_changed(drift: &BTreeSet<String>) -> BTreeSet<String> {
-    KNOWN_DIVERGING.iter().filter(|k| drift.contains(**k)).map(|k| k.to_string()).collect()
+/// The derived files B's edit moved. A file B did not change cannot diverge, so an
+/// edit that stopped moving one would stop testing it: each test below pins what its
+/// edit moves, from the generators (`feeds/{sitemap,rss,llms_txt}.rs`,
+/// `render/blocking.rs`).
+fn derived_moved(drift: &BTreeSet<String>) -> BTreeSet<String> {
+    drift.iter().filter(|k| DERIVED.contains(&k.as_str())).cloned().collect()
 }
 
-/// The ratchet. Both ways of being wrong get their own message: a NEW divergence
-/// means a protected class stopped being protected (or a producer was added without
-/// protection); a MISSING one means a class was closed and the allow-list must
-/// shrink.
-fn assert_diverging_is(outcome: &Outcome, expected: &BTreeSet<String>) {
-    let unexpected: Vec<&String> = outcome.diverging.difference(expected).collect();
-    let closed: Vec<&String> = expected.difference(&outcome.diverging).collect();
-    let pages: Vec<&&String> = unexpected.iter().filter(|k| k.ends_with(".html")).collect();
+/// The ratchet, at its floor: nothing in A's generation may differ from the manifest
+/// A sealed. A divergence means a protected class stopped being protected, or a
+/// producer was added without protection.
+fn assert_nothing_diverges(outcome: &Outcome) {
+    let pages: Vec<&String> = outcome.diverging.iter().filter(|k| k.ends_with(".html")).collect();
     assert!(
-        unexpected.is_empty() && closed.is_empty(),
-        "generation files whose bytes do not match the sealed manifest are not the known set.\n\
-         NEW divergence (a protected class regressed, or a producer was added unprotected): {unexpected:?}\n\
-         of which rendered HTML pages: {pages:?}\n\
-         NO LONGER diverging (a class was closed: delete these from KNOWN_DIVERGING): {closed:?}"
+        outcome.diverging.is_empty(),
+        "generation files whose bytes do not match the sealed manifest: {:?}\n\
+         (a protected class regressed, or a producer was added unprotected)\n\
+         of which rendered HTML pages: {pages:?}",
+        outcome.diverging
     );
     // The far end of the chain: B's own tail, after A's, ships B faithfully.
     assert!(
@@ -422,8 +420,8 @@ fn assert_diverging_is(outcome: &Outcome, expected: &BTreeSet<String>) {
     );
 }
 
-/// Every entry that ships from the mutable stage is either known to diverge or
-/// named as safe by design — whatever the edit varied.
+/// Every entry that ships from the mutable stage is either a derived file or named
+/// as safe by design — whatever the edit varied.
 fn assert_every_stage_shipped_entry_is_classified(sealed: &SealedManifest) {
     let unclassified: Vec<&String> = sealed
         .files()
@@ -431,13 +429,14 @@ fn assert_every_stage_shipped_entry_is_classified(sealed: &SealedManifest) {
         .filter(|(_, entry)| crate::types::content::parse_entry(entry).0 == crate::types::content::MODE_FILE)
         .map(|(key, _)| key)
         .filter(|key| sealed.staged_oid(key).is_none())
-        .filter(|key| !KNOWN_DIVERGING.contains(&key.as_str()) && !ships_from_stage_by_design(key))
+        .filter(|key| !DERIVED.contains(&key.as_str()) && !ships_from_stage_by_design(key))
         .collect();
     assert!(
         unclassified.is_empty(),
         "these entries have no CAS object id, so they ship from whatever the stage holds when the tail runs, \
-         and nothing classifies them. Give the producer a CAS source, or add it to KNOWN_DIVERGING (it diverges) \
-         or ships_from_stage_by_design (it cannot): {unclassified:?}"
+         and nothing classifies them. Give the producer an immutable source (a CAS object, or `emit_held` for a \
+         derived file, then add it to DERIVED), or add it to ships_from_stage_by_design if it cannot diverge: \
+         {unclassified:?}"
     );
 }
 
@@ -447,7 +446,7 @@ fn assert_every_stage_shipped_entry_is_classified(sealed: &SealedManifest) {
 
 /// A rewritten dated article, a new page, a re-encoded image and an overwritten
 /// asset, all between A's render and A's ship. Every class of output changes bytes
-/// under a held-back tail; only the derived files may reach the generation as B's.
+/// under a held-back tail; none of it may reach A's generation.
 const EVERYTHING: Edit = Edit {
     apply: |vault| {
         vault.write(
@@ -473,12 +472,11 @@ async fn real_overlap_ships_every_generation_file_under_its_own_manifest_hash() 
     for probe in ["posts/a/index.html", "extra/index.html", "assets/data.txt", "images/pic.png", "images/pic.webp"] {
         assert!(o.drift.contains(probe), "the edit must change {probe}, or its absence below proves nothing: {:?}", o.drift);
     }
-    // ...and every derived file the allow-list names, or `known_and_changed` would
-    // quietly stop expecting it.
-    assert_eq!(known_and_changed(&o.drift), set(KNOWN_DIVERGING), "the edit must move every derived file");
+    // ...and every derived file, or one of them would quietly stop being tested.
+    assert_eq!(derived_moved(&o.drift), set(&DERIVED), "the edit must move every derived file");
 
     // The ratchet first, so a regression is reported as the set of files it broke.
-    assert_diverging_is(&o, &set(KNOWN_DIVERGING));
+    assert_nothing_diverges(&o);
 
     // A's page still says what A rendered, though the stage now says B's.
     let page = "posts/a/index.html";
@@ -497,19 +495,16 @@ async fn an_unedited_overlap_diverges_nowhere() {
     let o = overlap(&Edit { apply: |_| {}, trigger: || md_only("notes.md"), on_stage: None }).await;
 
     assert!(o.drift.is_empty(), "two builds of one vault must produce one set of bytes: {:?}", o.drift);
-    assert_diverging_is(&o, &BTreeSet::new());
+    assert_nothing_diverges(&o);
     assert_every_stage_shipped_entry_is_classified(&o.a);
 }
 
-/// Which edit moves which derived file — the fixture's calibration. A file only
-/// diverges if B changed it, so an edit that stopped moving a file would stop
-/// testing it; this pins what each edit moves, from the generators
-/// (`feeds/{sitemap,rss,llms_txt}.rs`, `render/blocking.rs`).
+/// Which edit moves which derived file — the fixture's calibration; see
+/// [`derived_moved`].
 async fn an_md_edit_moves(edit: Edit, moves: &[&str]) {
     let o = overlap(&edit).await;
-    let derived_moved: BTreeSet<String> = o.drift.iter().filter(|k| DERIVED.contains(&k.as_str())).cloned().collect();
-    assert_eq!(derived_moved, set(moves), "the edit moves a different set of derived files than expected");
-    assert_diverging_is(&o, &known_and_changed(&o.drift));
+    assert_eq!(derived_moved(&o.drift), set(moves), "the edit moves a different set of derived files than expected");
+    assert_nothing_diverges(&o);
 }
 
 /// Body text of an undated page, past the hover preview's 300 characters: only the
