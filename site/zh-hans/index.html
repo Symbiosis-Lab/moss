@@ -2707,7 +2707,7 @@ async function raster(nodes, w, h, srcDoc = document) {
   // than ink bleeding. TITLE_LOAD raises how much suspended pigment each
   // step's dissolution releases (concentration, not rate — l still grows at
   // the same pace, so "completely gone" keeps its own timing).
-  const TITLE_LOAD = 20;
+  const TITLE_LOAD = 14;
   // The shared splash is eight discrete drops with a circular falloff
   // (WATER, drops[]/dropR): on a photo it hides inside the print's own
   // texture, but on bare glyph strokes it is the whole picture — a judge
@@ -2717,21 +2717,23 @@ async function raster(nodes, w, h, srcDoc = document) {
   // print footprint and shaped by the same paper texture every scene wash
   // reads.
   //
-  // MIST/MIST_HOLD are tuned against G (legibility must peak by 25%), not
-  // TITLE_LOAD: LOAD only scales how dark dissolved pigment reads, and
-  // measurably stopped moving G's own numbers well before it plateaued
-  // here (tried up to 55 with no material change) — it is not the timing
-  // lever. At the finer TITLE_PX_PER_TEXEL, the finer grid's own strokes
-  // take genuinely more wash-clock time to fully wet and darken (confirmed
-  // by sampling correlation across the whole 10-75% range, not just G's
-  // three points: at a gentler mist/hold the true peak sat around 35-50%
-  // scroll, not 25%), so the fix is a hard, short pulse — high amplitude,
-  // brief hold — that pushes as much concentration in as early as physics
-  // allows rather than a slower, longer soak. This is a narrow-margin
-  // value: G's peak-by-25% requirement and B's must-still-be-gradual-at-
-  // 50% requirement bound it on both sides, and the passing window on
-  // chromium was under 0.05 of TITLE_MIST wide against the tested step.
-  const TITLE_SPLASH = 0, TITLE_MIST = 0.48, TITLE_MIST_HOLD = 0.019;
+  // A prior pass chased a wrong reading of "legible": it pushed MIST/HOLD
+  // to a hard, short pulse (0.48/0.019) to force the glyph-mask correlation
+  // to peak by 25% specifically, a knife-edge under 0.05 of TITLE_MIST wide
+  // on chromium and visibly darker and flatter at 25-50% than this pass's
+  // own reference frames for it. The owner's actual bar is simpler: legible
+  // through wetting early, then progressively lost, then gone — a floor at
+  // 25%, not a peak there (assertion G, below, now asks for exactly that).
+  // These are the same amplitude and hold this file used before
+  // TITLE_PX_PER_TEXEL went from 2 to 1 (the previous commit): mistAmp and
+  // mistHold are seconds- and height-per-step quantities, not inherently
+  // tied to the grid's own texel size, and the finer grid's own effect
+  // (WATER's per-step blur reaching half as far on screen for the same
+  // texel-count spread) is what TITLE_PAPER_SCALE/TITLE_BLOCK below already
+  // account for — reapplying the old values here and looking at the result
+  // against the reference frames (scratchpad/phase1g/) confirmed the same
+  // character carries over rather than needing its own re-derivation.
+  const TITLE_SPLASH = 0, TITLE_MIST = 0.14, TITLE_MIST_HOLD = 0.08;
   // R (the splash radius) needs no rescaling for TITLE_PX_PER_TEXEL: with
   // TITLE_SPLASH=0 it multiplies out to nothing in both the h and vel terms
   // (WATER) regardless of its own value, so it is unaffected either way.
