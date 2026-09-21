@@ -169,7 +169,14 @@ const BASELINE = {
   // it measures site/landing.js only, by design (SITE_DIR/LANDING_JS
   // above); the new file is scripted separately if a future phase wants a
   // ratchet on it too.
-  scriptBytes: 253580,
+  // Mobile scene1->2 restoration (finding 7, 2026-09-21): rose 253580 ->
+  // 254419. mobileEntranceProgress's own Math.min(entrance, pinned) --
+  // pinned a boolean -- is now one clamp01 ratio (net smaller), but the
+  // reasoning for its 0.55*band.height span and the earlyBy constant's new
+  // name and window.__landing.mobileEarlyBy exposure (so
+  // check-landing-text-track.mjs observes it instead of re-typing 40) are
+  // real additions, not bloat.
+  scriptBytes: 254419,
 };
 
 function countWindowAssignments(text) {

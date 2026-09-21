@@ -92,6 +92,19 @@ async function checkOpening(viewport) {
 
 async function checkSceneTiming() {
   const page = await mobilePage();
+  // Started here, awaited much further down: the print-warming this waits
+  // for is not gated on scroll position, so there is no reason to delay it
+  // behind everything this function does before it first needs a print --
+  // the earlier request for the whole entrance-ramp shape below cost this
+  // wait several real seconds of wheel/settle round trips it used to not
+  // have to sit behind. .catch() here, not left to reject on its own: an
+  // unrelated assertion failing anywhere above the real `await printsReady`
+  // closes the page (the outer finally), which then rejects this dangling
+  // promise too -- unhandled, that raced the real error to the console and
+  // printed "Target page ... has been closed" in its place (found live).
+  // Turning the rejection into a resolved Error value defers surfacing it
+  // to the real await, without ever leaving it unhandled in between.
+  const printsReady = page.waitForFunction(() => [0, 1, 2, 3].every(i => window.__landing.prints[i]), null, { timeout: 30000 }).catch((e) => e);
   const read = () => page.evaluate(() => {
     const text = document.querySelector('#c2 .scene-text').getBoundingClientRect();
     const band = mobileVisualBand();
@@ -117,24 +130,83 @@ async function checkSceneTiming() {
     return read();
   };
   // K (owner item 3a): "scene 1 should start dissolving after it gets into
-  // position, not before" -- progress must stay 0 until #vis's own box has
-  // actually reached its pinned top (band.top), not merely the old
-  // entranceStart (text fully entering the viewport), which on this layout
-  // lands up to 60px of scroll before the box is really pinned.
+  // position, not before" AND "it simply swapped" -- both true of the old
+  // Math.min(entrance, pinned) shape (site/landing.js): entrance already
+  // read close to 1 while #vis's own box was still sliding toward its
+  // pinned top, and the boolean `pinned` held progress at exactly 0 until
+  // the instant it flipped, then jumped straight to 1 in one scroll tick.
+  // mobileEntranceProgress is now a ratio over a span (band.height) that
+  // starts counting at the pin point, not a boolean. Three things a boolean
+  // gate cannot produce: progress reads 0 exactly AT the pin point (not
+  // merely before it); no single 2px scroll step between the pin point and
+  // scene 2's text resting raises progress by more than 0.05
+  // (probe-progress-grid.mjs's own bound -- BEFORE's build measured a worst
+  // step of 0.0057 over the equivalent leg); and progress still reaches 1
+  // at least 40px of scroll before scene 2's text reaches its resting
+  // position, leaving room for the dissolve leg that follows. Sampled with
+  // scrollTo on a fine grid (no wheel-gap waits, so load timing cannot be
+  // mistaken for a step), then the same grid read backward -- a pure
+  // function of scroll position gives the same verdict either way, and a
+  // fix that secretly reads shown/target/dir instead would not.
   const pinnedStart = await page.evaluate(() => {
     const band = mobileVisualBand();
     return scrollY + (document.getElementById('vis').getBoundingClientRect().top - band.top);
   });
-  const beforePinned = await moveTo(pinnedStart - 8);
-  assert(beforePinned.progress === 0, `scene 1 morphed before the visual pinned: ${JSON.stringify(beforePinned)}`);
-  const atPinned = await moveTo(pinnedStart + 2);
-  assert(atPinned.progress === 1, `scene 1 did not start once the visual pinned: ${JSON.stringify(atPinned)}`);
-  // Both directions: scrolling back up past the pin point must undo it.
-  const backBeforePinned = await moveTo(pinnedStart - 8);
-  assert(backBeforePinned.progress === 0, `reversing past the pin point did not return progress to 0: ${JSON.stringify(backBeforePinned)}`);
-  await moveTo(pinnedStart + 2);
+  const atPin = await moveTo(pinnedStart);
+  assert(atPin.progress <= 0.01, `progress is not ~0 at the pin point: ${JSON.stringify(atPin)}`);
+  const restY = await page.evaluate((band) => {
+    const text = document.querySelector('#c2 .scene-text').getBoundingClientRect();
+    const oldRestTop = band.top - text.height;
+    return scrollY + (text.top - oldRestTop);
+  }, band);
+  const grid = await page.evaluate(({ from, to, step }) => {
+    const keep = scrollY;
+    const rows = [];
+    for (let y = from; y <= to; y += step) { scrollTo(0, y); rows.push([y, +progressAt().toFixed(4)]); }
+    scrollTo(0, keep);
+    return rows;
+  }, { from: pinnedStart - 20, to: restY + 20, step: 2 });
+  let worst = 0, worstAt = null;
+  for (let i = 1; i < grid.length; i++) {
+    const d = grid[i][1] - grid[i - 1][1];
+    if (d > worst) { worst = d; worstAt = grid[i][0]; }
+  }
+  assert(worst <= 0.05, `a 2px scroll step raises progress by ${worst.toFixed(3)} at y=${worstAt} -- a swap, not a ramp`);
+  let worstRev = 0, worstRevAt = null;
+  for (let i = grid.length - 2; i >= 0; i--) {
+    const d = grid[i][1] - grid[i + 1][1];
+    if (d > worstRev) { worstRev = d; worstRevAt = grid[i][0]; }
+  }
+  assert(worstRev <= 0.05, `progress is non-monotonic enough to step ${worstRev.toFixed(3)} scrolling upward at y=${worstRevAt}`);
+  const reachesOne = grid.find((row) => row[1] >= 1);
+  assert(reachesOne, `progress never reached 1 across the sampled grid (tail ${JSON.stringify(grid.slice(-5))})`);
+  assert(restY - reachesOne[0] >= 40, `progress only reaches 1 ${(restY - reachesOne[0]).toFixed(1)}px before scene 2's text rests (want >=40)`);
+  // The grid above calls the instrumented scrollTo (instrumentScroll,
+  // above) several hundred times to sample it; window.__landingScrollWrites
+  // counts from page load, not from whenever a caller starts watching it,
+  // so left alone this makes every writes===0 assertion from here on fail
+  // permanently -- not because anything wrote during ITS OWN window, but
+  // because the grid already wrote hundreds of times during a window
+  // nobody downstream meant to include.
+  await page.evaluate(() => { window.__landingScrollWrites.length = 0; });
+  // A real touch drive over a few px, not just the static grid above:
+  // confirms a genuine wheel gesture also ramps rather than steps, and
+  // reverses, near the pin point -- the same narrow-range shape the
+  // pre-fix version of this check used (pinnedStart -8/+2), so it costs no
+  // more real scroll distance than that did.
+  const justPastPin = await moveTo(pinnedStart + 2);
+  assert(justPastPin.progress > 0 && justPastPin.progress <= 0.05, `a 2px real scroll past the pin point reads ${justPastPin.progress} -- not a ramp`);
+  const backAtPin = await moveTo(pinnedStart - 2);
+  assert(backAtPin.progress <= 0.01, `reversing 4px back across the pin point did not return progress to ~0: ${JSON.stringify(backAtPin)}`);
+  // Just past where progress first reaches 1 (my own ramp finishing, q not
+  // yet under way): targetAt() rounds progress to the nearest scene, so
+  // shown settles at 1 anywhere in [0.5, 1.5) -- reachesOne[0] sits at the
+  // low end of that window, well short of q's own later midpoint (restY-40
+  // rounds to shown 2, past this window entirely).
+  await moveTo(reachesOne[0] + 2);
   await page.waitForFunction(() => window.__landing.state().shown === 1 && !window.__landing.state().running, null, { timeout: 10000 });
-  await page.waitForFunction(() => [0, 1, 2, 3].every(i => window.__landing.prints[i]), null, { timeout: 30000 });
+  const printsResult = await printsReady;
+  if (printsResult instanceof Error) throw printsResult;
   const plateauStart = await page.evaluate(() => scrollY);
   const before = await wheelTextTopTo(band.bottom + 24);
   const plateau = await page.evaluate(() => scrollY) - plateauStart;
@@ -167,7 +239,7 @@ async function checkSceneTiming() {
   assert(reversed.progress < half.progress && reversed.state.washT < half.state.washT - .02 && reversed.writes === 0,
     `scene 2 wash did not reverse with upward scroll: ${JSON.stringify({ half, reversed })}`);
   await page.close();
-  return { atPinned: atPinned.progress, consolidatedEarly: +consolidatedEarly.progress.toFixed(3), before: +before.progress.toFixed(3), contact: +contact.progress.toFixed(3),
+  return { atPin: atPin.progress, entranceSpanPx: reachesOne[0] - pinnedStart, marginBeforeRestPx: +(restY - reachesOne[0]).toFixed(1), consolidatedEarly: +consolidatedEarly.progress.toFixed(3), before: +before.progress.toFixed(3), contact: +contact.progress.toFixed(3),
     half: +half.progress.toFixed(3), halfWashT: half.state.washT, pausedWashT: paused.state.washT,
     reversed: +reversed.progress.toFixed(3), reversedWashT: reversed.state.washT, clearedShown: reversed.state.shown };
 }
