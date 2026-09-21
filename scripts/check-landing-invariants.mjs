@@ -78,6 +78,10 @@ const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
 
 // Scene boundaries in code-index terms; -1 is the intro (restY(-1) === 0).
 const SCENES = [-1, 0, 1, 2, 3, 4];
+// site/landing.js's own PHASE names for the two indices this file's new
+// checks read by name rather than a bare number -- PHASE itself lives in
+// that module's scope, not this process's, so the names are repeated here.
+const LIVE = 1, SHIPS = 2;
 
 // landing-harness.mjs's whenReady() is what found and closed this file's own
 // I-fuzz race (see the header above): state().ready can go true while boot's
@@ -540,6 +544,43 @@ async function iPlate(browsers) {
   }
 }
 
+// I-pub-cue (site owner, 2026-09-20): the old "Try publishing" label plus a
+// small pulsing ring (site/ui/shell.html) is replaced by a body-level ring
+// layer (site/index.html #pub-cue, driven from site/landing.js). RED
+// (#pub-cue's `!mobileLayout() && ... && shown === LIVE` condition in
+// syncPubCue changed to always-true, restored after): the ring stays on in
+// scene 3 too, where this asserts it must not. GREEN restored.
+async function iPubCue(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const page = await browser.newPage(PRESETS.desktop);
+    await ready(page);
+    await arm(page, gesturePos(engineName));
+    const anyTryPublishing = await page.evaluate(() => {
+      const docs = [document, document.getElementById('sh')?.contentDocument, document.getElementById('vd')?.contentDocument].filter(Boolean);
+      return docs.some((d) => d.body && d.body.innerText.includes('Try publishing') || d.body && (d.body.innerText.includes('試試發布') || d.body.innerText.includes('试试发布')));
+    });
+    assert(!anyTryPublishing, `I-pub-cue ${engineName}: "Try publishing" (or its zh strings) still appears in the DOM`);
+    await gotoScene(page, LIVE);
+    await page.waitForTimeout(400); // syncPubCue's own 250ms poll
+    const atRest = await page.evaluate(() => {
+      const el = document.getElementById('pub-cue');
+      const cs = getComputedStyle(el);
+      return { on: el.classList.contains('on'), cx: parseFloat(cs.getPropertyValue('--pub-ring-cx')), cy: parseFloat(cs.getPropertyValue('--pub-ring-cy')), r0: parseFloat(cs.getPropertyValue('--pub-ring-r0')), k: parseFloat(cs.getPropertyValue('--pub-ring-k')) };
+    });
+    assert(atRest.on, `I-pub-cue ${engineName}: cue is off at rest in scene 2 (LIVE)`);
+    const rFinal = atRest.r0 * atRest.k;
+    const vp = page.viewportSize();
+    const exceeds = atRest.cx - rFinal < 0 && atRest.cx + rFinal > vp.width && atRest.cy - rFinal < 0 && atRest.cy + rFinal > vp.height;
+    assert(exceeds, `I-pub-cue ${engineName}: a ring's end-of-life box (${JSON.stringify(atRest)}, rFinal ${rFinal}) does not clear all four viewport edges (${vp.width}x${vp.height})`);
+    await gotoScene(page, SHIPS);
+    await page.waitForTimeout(400);
+    const animCount = await page.evaluate(() => document.getElementById('pub-cue').getAnimations({ subtree: true }).length);
+    assert(animCount === 0, `I-pub-cue ${engineName}: ${animCount} ring animation(s) still running in scene 3, where the cue must be off`);
+    console.log(`${engineName}: I-pub-cue no "Try publishing" text; ring at rest clears the viewport on all four sides; zero animating outside scene 2`);
+    await page.close();
+  }
+}
+
 // I-default: every check script's own default navigation loads the
 // unflagged URL. A carry= baked into a literal .goto() call site is exactly
 // the historical bug (design doc: "the fixed driver was never made the
@@ -572,6 +613,7 @@ try {
   await iFuzz(browsers);
   await iFuzzInvalidated(browsers);
   await iPlate(browsers);
+  await iPubCue(browsers);
   await iDefault();
 } finally {
   await Promise.all(Object.values(browsers).map((b) => b.close()));

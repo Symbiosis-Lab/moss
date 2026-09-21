@@ -45,7 +45,7 @@ function flushPrintRect() { if (pendingPrintRect && !running()) { const next = p
 // them re-wets the sheet today, but a join is not a wash by definition, and a
 // later boundary can carry a different mechanism without touching the trigger.
 const PHASE = ['write', 'live', 'ships', 'deploy', 'share'];
-const SHIPS = PHASE.indexOf('ships'), DEPLOY = PHASE.indexOf('deploy'), SHARE = PHASE.indexOf('share');
+const LIVE = PHASE.indexOf('live'), SHIPS = PHASE.indexOf('ships'), DEPLOY = PHASE.indexOf('deploy'), SHARE = PHASE.indexOf('share');
 // The box's leftward spill in the widened shape, as the stylesheet's own
 // calc(100% + 32px): scene 4 measures against that shape whatever is on screen.
 const SPILL = 32;
@@ -836,9 +836,6 @@ const sim = makeSim({ canvas, texW: Math.round(BASE_TEX_W / (mobileLayout() ? 4 
       doc.head.appendChild(style);
     }
     if (fe && fe.id === 'sh') {
-      const style = doc.createElement('style');
-      style.textContent = '.moss-publish-button:not(:disabled)::after { content: ""; position: absolute; inset: -5px; border: 1px solid currentColor; border-radius: 999px; opacity: 0; pointer-events: none; animation: landing-publish-cue 5.6s ease-out infinite; } @keyframes landing-publish-cue { 0%, 62% { opacity: 0; transform: scale(.96); } 68% { opacity: .42; transform: scale(1); } 78%, 100% { opacity: 0; transform: scale(1.05); } } @media (prefers-reduced-motion: reduce) { .moss-publish-button:not(:disabled)::after { animation: none; opacity: .28; } }';
-      doc.head.appendChild(style);
       const preview = doc.getElementById('moss-preview-iframe');
       const suppressPreviewLinks = () => {
         const previewDoc = preview && preview.contentDocument;
@@ -1024,6 +1021,51 @@ function measurePub() {
     stage.style.setProperty(k, v);
   return true;
 }
+
+// ── Scene 2's Publish cue: a ring that leaves the window ──────────────────
+// Replaces the old cue (site owner, 2026-09-20): a small pulsing ring plus a
+// "Try publishing" label, both injected into shell.html's own document and
+// clipped by #box's overflow:hidden long before they could read as "the
+// whole periodical radiates outward". This version lives in a body-level
+// fixed layer -- a sibling of #stage, never a descendant -- so it can grow
+// past every ancestor's overflow:hidden on its way to and past the window
+// edge, and so it is never folded into a print (fold() only walks #stage).
+// It re-measures the button's live screen rect on its own poll instead of
+// hooking any scene-transition call site, which keeps it decoupled from
+// watchScroll*/settle*, under restructuring on another branch.
+const pubCue = $('pub-cue');
+let publishActivated = false;
+function pubCueButton() {
+  const doc = shFrame.contentDocument;
+  const btn = doc && doc.querySelector('.moss-publish-button');
+  if (!btn || btn.disabled) return null;
+  if (!btn.dataset.pubCueBound) { btn.dataset.pubCueBound = '1'; btn.addEventListener('click', () => { publishActivated = true; syncPubCue(); }); }
+  return btn;
+}
+function syncPubCue() {
+  if (!pubCue) return;
+  const btn = !mobileLayout() && !publishActivated && !running() && shown === LIVE && !document.hidden ? pubCueButton() : null;
+  if (!btn) { pubCue.classList.remove('on'); return; }
+  // The button lives in an iframe with its own layout viewport; its own
+  // getBoundingClientRect() is in THAT viewport, not this fixed layer's.
+  // shFrame's own rect (in this document) versus its unscaled layout size
+  // gives the one ratio that maps iframe-local px onto real screen px,
+  // whatever #cell's own --s scale currently is.
+  const outer = shFrame.getBoundingClientRect();
+  const scale = outer.width / (shFrame.offsetWidth || 1);
+  const r = btn.getBoundingClientRect();
+  const cx = outer.left + (r.left + r.width / 2) * scale, cy = outer.top + (r.top + r.height / 2) * scale;
+  const r0 = Math.max(1, (r.width / 2) * scale);
+  pubCue.style.setProperty('--pub-ring-cx', cx + 'px');
+  pubCue.style.setProperty('--pub-ring-cy', cy + 'px');
+  pubCue.style.setProperty('--pub-ring-r0', String(r0));
+  // The scale that carries the ring's own radius past every one of the four
+  // edges: the farthest one from the button's own screen position, plus one
+  // more radius so the ring's stroke itself has fully crossed it too.
+  pubCue.style.setProperty('--pub-ring-k', String(Math.max(cx, innerWidth - cx, cy, innerHeight - cy) / r0 + 1));
+  pubCue.classList.add('on');
+}
+if (pubCue) { setInterval(syncPubCue, 250); addEventListener('resize', syncPubCue); addEventListener('visibilitychange', syncPubCue); }
 
 // ── Scene 4's targets: one circle per deploy target, run by d3-force ──────
 // The deploy target list itself is never hardcoded here: scene4/logos/ is a

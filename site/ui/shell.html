@@ -5704,50 +5704,13 @@ html[data-preview-mode="mobile"] .moss-device-toggle .mobile-icon { display: non
   filter: grayscale(1);
 }
 
-/* Landing scene 2's quiet invitation. The shell adds the class only for the
-   harvested preview, so the normal app chrome never carries this prompt. */
-.moss-landing-publish-hint {
-  position: fixed;
-  right: 50px;
-  bottom: 9px;
-  z-index: calc(var(--z-panel) + 1);
-  display: none;
-  color: var(--moss-chrome-publish-bg);
-  font-size: 13px;
-  background: var(--moss-chrome-bg, #faf8f5);
-  padding: 2px 5px;
-  border-radius: 3px;
-  font-weight: 600;
-  letter-spacing: .04em;
-  white-space: nowrap;
-  pointer-events: none;
-  user-select: none;
-}
-body.moss-landing-scene2 .moss-landing-publish-hint { display: block; }
-body.moss-landing-scene2 .moss-publish-button:not(:disabled) {
-  position: fixed;
-}
-body.moss-landing-scene2 .moss-publish-button:not(:disabled)::after {
-  content: "";
-  position: absolute;
-  inset: -2px;
-  border: 1px solid var(--moss-chrome-publish-bg);
-  border-radius: 999px;
-  opacity: 0;
-  pointer-events: none;
-  animation: moss-landing-publish-cue 5.6s ease-out infinite;
-}
-@keyframes moss-landing-publish-cue {
-  0%, 62% { opacity: 0; transform: scale(.96); }
-  68% { opacity: .42; transform: scale(1); }
-  88%, 100% { opacity: 0; transform: scale(1.3); }
-}
-@media (prefers-reduced-motion: reduce) {
-  body.moss-landing-scene2 .moss-publish-button:not(:disabled)::after {
-    animation: none;
-    opacity: .28;
-  }
-}
+/* Landing scene 2's Publish cue used to live here: a "Try publishing" label
+   plus a small pulsing ring, both gated on body.moss-landing-scene2. Removed
+   2026-09-20 -- the site owner asked for a ring that leaves the window
+   entirely, which this harvested shell's own overflow can't show; the
+   replacement is a body-level layer in the landing page itself
+   (site/landing.js, "Scene 2's Publish cue"), driven from this button's live
+   screen rect rather than a class this document sets on itself. */
 
 /* moss-spin keyframes live in styles/shared/progress.css (the ONE spin). */
 
@@ -9497,7 +9460,6 @@ body.moss-action-panel-below-titlebar .moss-action-panel-spinner-overlay.visible
           <path d="M21 12a9 9 0 1 1-6.219-8.56" />
         </svg>
       </button>
-      <span class="moss-landing-publish-hint" aria-hidden="true">Try publishing</span>
 
     </div>
 
@@ -9618,25 +9580,6 @@ bob@example.com`,"subscribers.added_no_email":"\u76F4\u63A5\u65B0\u589E\uFF0C\u7
   w.addEventListener("click",open);
 })();
 document.documentElement.dataset.ready="1";})();
-</script>
-<script>
-(() => {
-  const params = new URLSearchParams(location.search);
-  const button = document.querySelector('.moss-publish-button');
-  const hint = document.querySelector('.moss-landing-publish-hint');
-  if (!button || !hint || !params.has('preview') || matchMedia('(pointer: coarse)').matches) return;
-  document.body.classList.add('moss-landing-scene2');
-  const locale = globalThis.__LANDING_LOCALE || (() => { try { return parent.__LANDING_LOCALE; } catch (_) { return ''; } })();
-  hint.textContent = locale === 'zh-hant' ? '試試發布' : locale === 'zh-hans' ? '试试发布' : 'Try publishing';
-  const stop = () => {
-    document.body.classList.remove('moss-landing-scene2');
-    hint.remove();
-  };
-  button.addEventListener('click', stop, { once: true });
-  button.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ' ') stop();
-  }, { once: true });
-})();
 </script>
 </body>
 </html>
