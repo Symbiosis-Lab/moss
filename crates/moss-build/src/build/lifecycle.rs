@@ -14,6 +14,7 @@
 //! from a dead process can never be compared with one from this one.
 
 pub(crate) mod cas_heal;
+pub(crate) mod root_identity;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -110,6 +111,7 @@ fn read(cell: &ServedCell) -> PathBuf {
 pub(crate) fn adopt_server(mp: &MossPaths, cell: &ServedCell) {
     let target = mp.initial_serve_dir();
     let build_dir = mp.build_dir();
+    root_identity::log_build_root(&build_dir, "serve", None);
     let record = lock_for(mp);
     let mut st = record.state();
     st.served = Some(cell.clone());

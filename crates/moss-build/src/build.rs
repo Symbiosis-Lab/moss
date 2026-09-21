@@ -727,6 +727,8 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // allow:raw_write `.moss` itself; the regenerable tree starts below it
     std::fs::create_dir_all(&moss_dir_path).map_err(|e| format!("Failed to create .moss directory: {}", e))?;
     crate::infra::moss_paths::exclude_dirs_from_cloud_sync(&moss_dir_path); // regenerable output: keep it out of iCloud, and out of the set moss waits for
+    // This build's root identity, to compare against later phases.
+    let start_identity = crate::build::lifecycle::root_identity::log_build_root(&lifecycle_paths.build_dir(), "start", None);
 
     // Begin a fresh link-meta URL session for this build. Render fills the
     // session via `record_urls_for_prewarm`; we flush it just before spawning
@@ -1362,6 +1364,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                                 // be reading `stage_dir`. Never reclaim here.
                                 final_sweep: None,
                                 cache_lease,
+                                build_root_identity: start_identity,
                             },
                         )
                         .await;
@@ -1443,6 +1446,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                             // this process. Reclaim now or never.
                             final_sweep: Some(crate::build::lifecycle::final_build_permit(&mp)),
                             cache_lease,
+                            build_root_identity: start_identity,
                         },
                     )
                     .await;
@@ -1699,17 +1703,25 @@ pub(crate) struct SealPorts {
     pub server_diff: Option<crate::build::ports::host::ServerDiff>,
 }
 
-/// The seal tail's one-off RAII permits, bundled by value so the next one
-/// joins as a field rather than growing `advertise_sealed`'s parameter list
-/// again — the same move `SealPorts` already makes for the host ports above.
-/// Bundling changes neither field's lifetime: each is still read or dropped
-/// at its own point inside `advertise_sealed`, on its own schedule.
+/// The seal tail's one-off RAII permits plus passthrough values, bundled by
+/// value so the next one joins as a field rather than growing
+/// `advertise_sealed`'s parameter list again — the same move `SealPorts`
+/// already makes for the host ports above. Bundling changes neither field's
+/// lifetime: each is still read or dropped at its own point inside
+/// `advertise_sealed`, on its own schedule.
+#[derive(Default)]
 pub(crate) struct SealGuards {
     /// `Some` only from the `exits_after_build` call site (CLI / `build_sync` /
     /// the snapshot-test harness), whose caller drops the runtime as soon as
     /// this returns: no later build will sweep what this one orphaned, so the
     /// tail reclaims it now (`ship::reclaim_staging_now`).
     pub final_sweep: Option<crate::build::lifecycle::SweepPermit>,
+    /// The identity `root_identity::log_build_root` observed for this
+    /// build's root at "start", carried here because this is the one value
+    /// that already reaches both the detached seal task and `advertise_sealed`
+    /// — the next one joins as a field for the same reason `cache_lease` and
+    /// `final_sweep` do.
+    pub build_root_identity: Option<crate::build::lifecycle::root_identity::RootIdentity>,
     /// The build's `lifecycle::CacheWriteLease`, handed back by
     /// `BackgroundHandle::await_completion` instead of being dropped there.
     /// Held across `materialize_and_promote` (`ship_phase`) in
@@ -1948,6 +1960,8 @@ async fn advertise_sealed(
         Ok(Promotion::Withheld(_)) => {}
         Err(_) => log::error!("advertise_sealed: materialize failed — current_ptr stays put"),
     }
+    // Did the root move under this ship?
+    crate::build::lifecycle::root_identity::log_build_root(&mp.build_dir(), "ship", guards.build_root_identity);
     let mat_ok = matches!(promotion, Ok(Promotion::Promoted));
     let owns_shared = crate::build::ship::tail_owns_shared_state(&promotion);
 

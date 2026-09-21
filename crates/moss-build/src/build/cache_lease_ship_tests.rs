@@ -149,6 +149,7 @@ async fn advertise_sealed_drops_the_cache_lease_before_collect_build_store() {
                 SealGuards {
                     final_sweep: None,
                     cache_lease: Some(lease),
+                    ..Default::default()
                 },
             ),
         )
@@ -225,7 +226,7 @@ async fn advertise_sealed_ships_held_bytes_then_hands_deploy_a_manifest_without_
         true,
         crate::build::feeds::search_lane::Freshness::Now,
         &format!("/held-release-test-{}", uuid::Uuid::new_v4()),
-        SealGuards { final_sweep: None, cache_lease: None },
+        SealGuards::default(),
     )
     .await;
 

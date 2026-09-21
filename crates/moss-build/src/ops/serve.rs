@@ -191,6 +191,7 @@ pub(crate) fn log_preview_404(current_dir: &std::path::Path, path: &str) {
     }
     let suppressed = std::mem::take(&mut entry.1);
     entry.0 = Some(now);
+    crate::build::lifecycle::root_identity::log_build_root(root, "serve", None);
     log::warn!(
         "preview 404 {} from {} ({} more suppressed)",
         path,

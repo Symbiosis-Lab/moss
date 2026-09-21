@@ -1129,7 +1129,7 @@ fn exclude_from_cloud_sync(dir: &std::path::Path) {
 
 /// Whether `dir` carries the File Provider exclusion marker.
 #[cfg(target_os = "macos")]
-fn has_cloud_sync_marker(dir: &std::path::Path) -> bool {
+pub(crate) fn has_cloud_sync_marker(dir: &std::path::Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
     let (Ok(path), Ok(name)) = (
         std::ffi::CString::new(dir.as_os_str().as_bytes()),
@@ -1140,6 +1140,15 @@ fn has_cloud_sync_marker(dir: &std::path::Path) -> bool {
     // SAFETY: both pointers are NUL-terminated and outlive the call; a null
     // value buffer of size 0 asks only for the attribute's length.
     unsafe { libc::getxattr(path.as_ptr(), name.as_ptr(), std::ptr::null_mut(), 0, 0, 0) >= 0 }
+}
+
+/// No marker off macOS — File Provider is an Apple subsystem, so nothing
+/// here can be excluded from it. Widened alongside the macOS definition
+/// (rather than left `#[cfg(target_os = "macos")]`-only) so a caller outside
+/// this file can ask the question uniformly.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn has_cloud_sync_marker(_dir: &std::path::Path) -> bool {
+    false
 }
 
 /// No-op off macOS — File Provider is an Apple subsystem.
