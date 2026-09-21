@@ -511,9 +511,17 @@ async function iCloseOvershootSettles(browsers) {
     for (let ticks = 0; ticks < 40 && !(await page.evaluate(() => xfAt() >= 1)); ticks++) {
       await page.mouse.move(...pos); await page.mouse.wheel(0, 120); await page.waitForTimeout(20);
     }
-    await page.waitForFunction(() => Math.abs(scrollY - closingRestY()) <= 2 && !window.__landing.state().running && !window.__landing.state().settle, null, { timeout: 5000 }).catch(async (error) => {
+    // The well is one-sided at the close now (owner review, 2026-09-21,
+    // I-footer-reachable): nothing pulls scrollY back down once it's past
+    // closingRestY(), so a hard flick's own momentum is free to land past it
+    // rather than being reeled back to the exact point -- measured, this
+    // flick's own 120px ticks overshoot by 47px. The invariant this still
+    // owes is that a flick which UNDERSHOOTS still gets carried the rest of
+    // the way (the pull forward is unchanged), so the floor stays, the
+    // ceiling doesn't.
+    await page.waitForFunction(() => scrollY - closingRestY() >= -2 && !window.__landing.state().running && !window.__landing.state().settle, null, { timeout: 5000 }).catch(async (error) => {
       const info = await page.evaluate(() => ({ y: scrollY, closingRestY: closingRestY(), xf: xfAt(), state: window.__landing.state() }));
-      throw new Error(`I-gesture overshoot-close ${engineName}: a hard flick past the crossfade did not settle to the closing rest: ${JSON.stringify(info)}`, { cause: error });
+      throw new Error(`I-gesture overshoot-close ${engineName}: a hard flick past the crossfade did not settle at or past the closing rest: ${JSON.stringify(info)}`, { cause: error });
     });
     const formVisible = await page.evaluate(() => {
       const r = document.querySelector('#beta .input-row').getBoundingClientRect();
@@ -525,6 +533,57 @@ async function iCloseOvershootSettles(browsers) {
   }
 }
 
+// I-footer-reachable (owner review, 2026-09-21, after unit 4): unit 4 made
+// desktop's close commit to closingRestY() like every other boundary, which
+// is right for approaching it, but the same pull also fired on release from
+// *past* it -- and on a short window the closing composition (h2 + signup +
+// footer) is taller than the viewport, so closingRestY() itself leaves the
+// footer below the fold. A visitor who scrolls further, to the literal
+// document bottom, to actually reach the footer (Privacy/GitHub links) got
+// pulled straight back up every time, every release. Measured (scratchpad
+// footer-matrix.mjs/footer-matrix2.mjs, three locales x five viewports,
+// realistic scroll-to-bottom-then-release): unreachable at every preset
+// under 900px tall, all three locales alike -- viewport-height-driven, not a
+// locale-wrap issue (the double-wheel(10000) burst check-landing-cold-bottom
+// itself uses turned out to time out on the spring's convergence for
+// zh-hans/zh-hant at several sizes too, a separate, unresolved finding --
+// not this fix, left for its own report). Red on 3efdf3e/0b268db: at the
+// smallest preset (PRESETS.smallDesktop, 1100x700), after a hold-drag to the
+// document's literal bottom and release, the Privacy link sits ~730-780px
+// below a 700px-tall viewport.
+async function iFooterReachable(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    for (const locale of I_COMMIT_LOCALES) {
+      const page = await browser.newPage(PRESETS.smallDesktop);
+      await ready(page, locale);
+      await arm(page, [50, 400]);
+      // A scrollbar-drag straight to the literal bottom, then release --
+      // the same "native browser scrolling" path holdOn's clientX check
+      // recognizes, so it exercises the real release/settle logic rather
+      // than the wheel handler's own 1:1-while-pushed branch.
+      const vw = await page.evaluate(() => document.documentElement.clientWidth);
+      await page.mouse.move(vw + 5, 100);
+      await page.mouse.down();
+      await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+      await page.waitForTimeout(50);
+      await page.mouse.up();
+      const linkVisible = () => page.evaluate(() => {
+        const a = document.querySelector('#footer nav a:first-child'); // Privacy, localized href
+        const r = a.getBoundingClientRect();
+        const cx = Math.round((r.left + r.right) / 2), cy = Math.round((r.top + r.bottom) / 2);
+        const inViewport = r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
+        const atPoint = inViewport ? document.elementFromPoint(cx, cy) : null;
+        return inViewport && !!atPoint && (atPoint === a || a.contains(atPoint));
+      });
+      await page.waitForTimeout(600);
+      assert(await linkVisible(), `I-footer-reachable ${engineName}/${locale || 'en'}: Privacy link not in view/clickable after release at the smallest preset`);
+      await page.waitForTimeout(1000);
+      assert(await linkVisible(), `I-footer-reachable ${engineName}/${locale || 'en'}: Privacy link was reachable but got pulled out of view within 1s`);
+      console.log(`${engineName}/${locale || 'en'}: I-footer-reachable the Privacy link stays in view and clickable after scrolling to the bottom and releasing`);
+      await page.close();
+    }
+  }
+}
 // I-progress, unit 3 (review-phases-2-4.md Job 2 item 5): xfAt() must be a
 // pure function of progressAt(), not a second, independent reader of raw
 // scrollY -- the same closing-progress unification dissolve-module-design.md
@@ -1282,6 +1341,7 @@ try {
   // await iGestureSettleReleases(browsers);
   await iGestureCoastDuringHold(browsers);
   await iCloseOvershootSettles(browsers);
+  await iFooterReachable(browsers);
   await iProgressMatchesXf(browsers);
   await iRect(browsers);
   await iScene3(browsers);

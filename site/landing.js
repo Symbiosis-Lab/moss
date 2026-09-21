@@ -3461,8 +3461,18 @@ function watchScrollDesktop(now) {
   // (measured directly, 2026-09-16) — the spring itself was never the problem, the step size was.
   // Held: any held input during free motion catches it immediately, by skipping this loop the
   // very frame carryHeld goes true — nothing left to add pull to it.
+  // The closing scene's own well is one-sided (owner review, 2026-09-21): restY(SHARE) is a
+  // floor, not a point, because closingRestY() already stops short of document.scrollHeight
+  // by design, and on a short window the whole closing composition can be taller than the
+  // viewport — the footer past it is real content, reachable only by scrolling further than
+  // the designed rest. A two-sided well here pulled a reader back up every time they scrolled
+  // past it to reach that footer, on every release, measured unreachable below 900px tall in
+  // all three locales alike (I-footer-reachable). Every other scene keeps its ordinary
+  // two-sided well: only the last one has no further scene above it to protect a reader from
+  // overshooting into, so nothing past its rest needs pulling back.
   if (!carryHeld) for (let n = Math.max(1, Math.ceil(dt * 240)), h = dt / n; n-- > 0;) {
-    const a = -CARRY_K * (carryX - y) - CARRY_C * carryV;
+    const yEff = (scene === SHARE && carryX > y) ? carryX : y;
+    const a = -CARRY_K * (carryX - yEff) - CARRY_C * carryV;
     carryV += a * h; carryX += carryV * h;
   }
   const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight);
