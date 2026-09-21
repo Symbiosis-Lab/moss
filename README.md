@@ -57,6 +57,12 @@ moss deploy ~/blog/           # build and publish on every later run
 
 The desktop app (macOS and Windows) is built from a private repository; its release assets — and its bug reports — live here.
 
+## Development
+
+`cargo build -p moss-cli` builds the CLI to `target/debug/moss-cli`. `pnpm install` sets up the JS/TS tooling for the crates and packages above.
+
+Render gates are Playwright specs that assert computed styles and layout against a real page render — the published site's CSS and cascade behavior, which nothing that doesn't lay out a page (no jsdom, no snapshot diff) can verify. `bash scripts/render-gates.sh` runs all of them against `target/debug/moss-cli` (or `release/`, or `$MOSS_BIN`) on both chromium and webkit; `--group nobuild` runs only the gates that need no binary at all; `--list` prints the selected gate names; `--check` verifies every `playwright/*.config.ts` is wired into the script. See the script's own header comment for the full flag list.
+
 ## Documentation
 
 Full docs: [mosspub.com/docs](https://mosspub.com/docs). Source: [site/docs/](site/docs/). Changes: [CHANGELOG.md](CHANGELOG.md).
