@@ -540,7 +540,10 @@ void main(){
   float settle = (0.004 + 0.25 * uDrying) * pow(1.0 - wet, 3.0) * clamp(1.0 + (0.5 - pap.r) * 2.0, 0.05, 2.5);
   vec3 st = s * settle; s -= st; d += st;
   // drying: the sheet sharpens onto the print
-  l = max(l, uCure);
+  // The cure only sharpens the record where the wash actually went: outside
+  // the footprint, forcing l to 1 here erased ink the film carried past the
+  // silhouette instead of leaving it be.
+  l = max(l, uCure * foot(vUv));
   oS = vec4(min(s * (1.0 - uCure), 8.0), 0.0); oD = vec4(min(d, 8.0), l);
 }`;
 
@@ -594,7 +597,13 @@ void main(){
   // the suspended pigment shows with its hue stretched about its density: the
   // same darkness, more colour; the deposit keeps the print's own colours
   float sl = dot(s, vec3(1.0 / 3.0)); vec3 sc = max(sl + (s - sl) * 2.2, 0.0);
-  vec3 ink = min(mix(dd.rgb * g, absorb(texture(uTgt, at)), uCure) + 0.85 * sc * g, vec3(4.0));
+  // The cure settles the deposit onto the print -- correcting an over- or
+  // under-inked film to the print's own density -- but only where the film
+  // actually went. Outside the wash's own footprint it must not paint ink
+  // out of nothing, which is what made B arrive as a picture rather than as
+  // a deposit, and must not erase ink the film carried past the silhouette.
+  vec3 dep = dd.rgb * g, tgt = absorb(texture(uTgt, at));
+  vec3 ink = min(mix(dep, tgt, uCure * foot(uv)) + 0.85 * sc * g, vec3(4.0));
   A += ink * (1.0 + 0.2 * wet);
   // The darkening P*T over the known page colour P, written as a premultiplied
   // pixel so the canvas is truly clear where nothing is inked or wet: alpha is

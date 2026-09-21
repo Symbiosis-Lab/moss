@@ -131,7 +131,12 @@ const BASELINE = {
   // 250084 -> 250538. uMixHold, its link-time default and the mixGate
   // computation that damps the whole-film mean while a texel is still
   // releasing A's ink. Budget consumed so far: 1584 of 6000.
-  scriptBytes: 250538,
+  // Unit 5 step 1c (2026-09-21), unit5-physics-spec.md section 1c: rose
+  // 250538 -> 251166. The cure masks its l-clamp and its SHOW substitution
+  // by foot(), so it settles a deposit rather than painting one out of
+  // nothing outside the wash's own footprint; no new uniform. Budget
+  // consumed so far: 2212 of 6000.
+  scriptBytes: 251166,
 };
 
 function countWindowAssignments(text) {
