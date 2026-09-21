@@ -1,0 +1,32 @@
+# My Bilingual Site
+
+---
+
+## About
+
+About this site.
+
+---
+
+## My Bilingual Site
+
+Welcome to this site. This is the English homepage.
+
+---
+
+## 关于
+
+关于这个网站。
+
+---
+
+## 我的双语站点
+
+欢迎来到这个网站。这是中文主页。
+
+---
+
+## 最新消息
+
+最新消息。
+

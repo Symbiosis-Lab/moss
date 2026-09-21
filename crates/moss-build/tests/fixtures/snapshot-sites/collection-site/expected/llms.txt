@@ -1,0 +1,98 @@
+# [TEST_DIR]
+
+---
+
+## weekend cooking
+
+# Weekend Cooking Adventures
+
+Tried making homemade pasta from scratch this weekend. It was messy, fun, and surprisingly delicious.
+
+---
+
+## spring garden
+
+# Spring Garden Update
+
+The tulips are finally blooming! After a long winter, it's wonderful to see color in the garden again.
+
+---
+
+## learning rust
+
+# Learning Rust
+
+I started learning Rust last month and I'm already in love with the borrow checker. Well, sort of.
+
+---
+
+## hello world
+
+# Hello World
+
+This is my first blog post! I've finally set up my site.
+
+---
+
+## Second Blog Post
+
+# Second Blog Post
+
+This is the second blog post.
+
+## More Content
+
+Additional testing of collection features.
+
+---
+
+## First Blog Post
+
+# First Blog Post
+
+This is the first blog post in the collection.
+
+## Content
+
+Testing collection generation with frontmatter.
+
+---
+
+## Blog
+
+# Blog
+
+Welcome to my blog.
+
+---
+
+## about
+
+# About Carol
+
+I'm a developer by day and a hobby gardener by night. I live in Seattle with my two cats.
+
+---
+
+## life
+
+---
+
+## [TEST_DIR]
+
+# Collection Test Site
+
+A site with a blog collection to test folder handling.
+
+## Navigation
+
+- [Blog](/blog/)
+
+---
+
+## posts
+
+---
+
+## tech
+

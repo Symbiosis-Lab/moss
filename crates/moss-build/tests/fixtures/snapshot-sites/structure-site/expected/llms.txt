@@ -1,0 +1,54 @@
+# Structure Site
+
+---
+
+## notes 2023
+
+# Notes from 2023
+
+A collection of random thoughts and observations from throughout the year.
+
+- January: Started learning Rust
+- March: Attended my first tech conference
+- July: Moved to a new city
+
+---
+
+## Deep Nested Page
+
+A page inside a nested folder to exercise multi-level folder nesting.
+
+---
+
+## Structure Site
+
+A site with no folder index.md files to exercise moss folder-with-no-index behavior. See [notes from 2023](notes-2023.md).
+
+---
+
+## deep
+
+---
+
+## nested
+
+---
+
+## old essay
+
+# The Art of Procrastination
+
+Written back in 2021 when I had too much time on my hands.
+
+Procrastination isn't always bad. Sometimes it's your brain's way of telling you that you need more information.
+
+---
+
+## random draft
+
+# Untitled Draft
+
+This is something I started writing but never finished.
+
+The rain fell steadily on the tin roof, a rhythmic drumming that made everything else seem quieter.
+

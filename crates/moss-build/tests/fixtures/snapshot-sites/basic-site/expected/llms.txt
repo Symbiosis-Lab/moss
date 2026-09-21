@@ -1,0 +1,57 @@
+# Basic Site Homepage
+
+---
+
+## Basic Site Homepage
+
+# Basic Site Homepage
+
+Welcome to the basic test site for snapshot testing.
+
+## About
+
+This site tests basic markdown-to-HTML conversion with:
+- Headings
+- Paragraphs
+- Lists
+- Links
+
+## Links
+
+- [About Page](/about.html)
+- [Contact](/contact.html)
+
+---
+
+## about
+
+# About
+
+This is the about page.
+
+## Our Mission
+
+Testing snapshot functionality for moss compilation.
+
+## Features
+
+1. Fast compilation
+2. Deterministic output
+3. Easy testing
+
+---
+
+## contact
+
+# Contact
+
+Get in touch with us.
+
+## Email
+
+test@example.com
+
+## Address
+
+123 Test Street
+

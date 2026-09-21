@@ -1,0 +1,2041 @@
+{
+  "describe_schema_version": 4,
+  "moss_html_version": 1,
+  "moss_binary_version": "0.1.0",
+  "tokens": {
+    "color": [
+      {
+        "name": "moss-color-accent",
+        "value": "#2d5a2d",
+        "type": "color",
+        "description": "Links, highlights, accent elements"
+      },
+      {
+        "name": "moss-color-bg",
+        "value": "#faf8f5",
+        "type": "color",
+        "description": "Page background"
+      },
+      {
+        "name": "moss-color-muted",
+        "value": "#8a8580",
+        "type": "color",
+        "description": "Secondary/muted text"
+      },
+      {
+        "name": "moss-color-surface",
+        "value": "#f4f1ec",
+        "type": "color",
+        "description": "Card and surface background"
+      },
+      {
+        "name": "moss-color-text",
+        "value": "#2c2825",
+        "type": "color",
+        "description": "Primary text"
+      }
+    ],
+    "layout": [
+      {
+        "name": "moss-container-padding",
+        "value": "clamp(1rem, 5vw, 2rem)",
+        "type": "dimension",
+        "description": "Container side padding"
+      },
+      {
+        "name": "moss-content-width",
+        "value": "67ch",
+        "type": "dimension",
+        "description": "Maximum content width"
+      },
+      {
+        "name": "moss-content-width-sidebar",
+        "value": "62ch",
+        "type": "dimension",
+        "description": "Content width when sidebar is active"
+      },
+      {
+        "name": "moss-nav-width",
+        "value": "var(--moss-content-width)",
+        "type": "dimension",
+        "description": "Navigation and footer max-width"
+      },
+      {
+        "name": "moss-sidebar-width",
+        "value": "280px",
+        "type": "dimension",
+        "description": "Sidebar width"
+      },
+      {
+        "name": "moss-site-max-width",
+        "value": "1200px",
+        "type": "dimension",
+        "description": "Maximum overall site width"
+      }
+    ],
+    "spacing": [
+      {
+        "name": "moss-space-2xl",
+        "value": "4rem",
+        "type": "dimension",
+        "description": "Double extra large (64px)"
+      },
+      {
+        "name": "moss-space-lg",
+        "value": "2rem",
+        "type": "dimension",
+        "description": "Large (32px)"
+      },
+      {
+        "name": "moss-space-md",
+        "value": "1.5rem",
+        "type": "dimension",
+        "description": "Medium (24px)"
+      },
+      {
+        "name": "moss-space-sm",
+        "value": "1rem",
+        "type": "dimension",
+        "description": "Small (16px)"
+      },
+      {
+        "name": "moss-space-xl",
+        "value": "3rem",
+        "type": "dimension",
+        "description": "Extra large (48px)"
+      },
+      {
+        "name": "moss-space-xs",
+        "value": "0.5rem",
+        "type": "dimension",
+        "description": "Extra small (8px)"
+      }
+    ],
+    "typography": [
+      {
+        "name": "moss-font-body",
+        "value": "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'WenQuanYi Micro Hei', sans-serif",
+        "type": "fontFamily",
+        "description": "Body text font stack"
+      },
+      {
+        "name": "moss-font-heading",
+        "value": "'Iowan Old Style', Athelas, 'Palatino Linotype', Palatino, 'Book Antiqua', 'Songti SC', 'Songti TC', 'STSongti', 'Noto Serif CJK SC', 'Source Han Serif SC', 'NSimSun', 'SimSun', serif",
+        "type": "fontFamily",
+        "description": "Heading font stack: serif by default for editorial weight"
+      },
+      {
+        "name": "moss-font-mono",
+        "value": "ui-monospace, 'Cascadia Code', 'SF Mono', SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, 'Liberation Mono', 'Courier New', monospace",
+        "type": "fontFamily",
+        "description": "Monospace stack for code"
+      },
+      {
+        "name": "moss-reading-size",
+        "value": "var(--moss-reading-size-base)",
+        "type": "dimension",
+        "description": "Effective reading text size; defaults to --moss-reading-size-base and is adjusted by the reader font-scale control."
+      },
+      {
+        "name": "moss-reading-size-base",
+        "value": "1.125rem",
+        "type": "dimension",
+        "description": "Body / reading text size. Headings use the --moss-font-lg/-xl/-2xl scale and are unaffected by this token."
+      },
+      {
+        "name": "moss-font-weight",
+        "value": "320",
+        "type": "number",
+        "description": "Default body font weight"
+      }
+    ]
+  },
+  "components": [
+    {
+      "class": "moss-cards",
+      "kind": "container",
+      "parent": "",
+      "data_attrs": [
+        {
+          "name": "data-layout",
+          "values": [
+            "grid",
+            "list",
+            "minimal"
+          ],
+          "default": "grid",
+          "description": "Card layout density. Grid: 2-3 cols with covers. List: single column with side covers. Minimal: text-only with year groupings."
+        },
+        {
+          "name": "data-density",
+          "values": [
+            "default",
+            "compact"
+          ],
+          "default": "default",
+          "description": "Vertical spacing density."
+        },
+        {
+          "name": "data-list-axis",
+          "values": [
+            "date",
+            "weight",
+            "title"
+          ],
+          "default": "title",
+          "description": "Sort axis for the listing (mirrors the folder's `sort:` frontmatter). Drives `--moss-card-min` density tuning and decides whether each `.moss-card-meta` slot is filled (date axis) or omitted (weight/title axes)."
+        },
+        {
+          "name": "data-list-has-covers",
+          "values": [
+            ""
+          ],
+          "default": "",
+          "description": "Boolean presence flag: emitted iff any child card has a cover. Combines with `data-list-axis` to widen `--moss-card-min` for cover-led layouts. Use `[data-list-has-covers]` in CSS to target it."
+        }
+      ],
+      "example_html": "<div class=\"moss-cards-container\">\n  <div class=\"moss-cards\" data-layout=\"grid\" data-list-axis=\"date\" data-list-has-covers>\n    <a class=\"moss-card\" href=\"...\">...</a>\n    <a class=\"moss-card\" href=\"...\">...</a>\n  </div>\n</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Auto-generated listing of child pages. The single canonical container; layout density on `data-layout` (`grid` for cover-led tiles, `list` for cover+excerpt rows, `minimal` for text-only year-grouped indexes). Wrapped in `.moss-cards-container` to scope CSS container queries."
+    },
+    {
+      "class": "moss-cards-container",
+      "kind": "container",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-cards-container\">\n  <div class=\"moss-cards\" data-layout=\"grid\">...</div>\n</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Outer wrapper around `.moss-cards` that carries `container-type: inline-size` so the grid can use `@container` queries instead of viewport `@media` queries. Layout-agnostic — wraps any `data-layout` variant."
+    },
+    {
+      "class": "moss-summary-layout",
+      "kind": "container",
+      "parent": "moss-cards",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-cards moss-summary-layout\" data-layout=\"list\">...</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Additional class on `.moss-cards[data-layout=\"list\"]` to invoke summary-card styling (`children_style: summary` in frontmatter — wider gutters, larger covers). Pre-existing emission; not specific to listing-sort."
+    },
+    {
+      "class": "moss-cards-grid",
+      "kind": "container",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-cards-grid\">\n  <a class=\"moss-card-grid\" href=\"...\">...</a>\n</div>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-cards[data-layout=grid]`."
+    },
+    {
+      "class": "moss-cards-list",
+      "kind": "container",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-cards-list\">\n  <a class=\"moss-card-list\" href=\"...\">...</a>\n</div>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-cards[data-layout=list]`."
+    },
+    {
+      "class": "moss-cards-minimal-year-group",
+      "kind": "container",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<section class=\"moss-cards-minimal-year-group\">\n  <h3>2024</h3>\n  <div class=\"moss-card-minimal\">...</div>\n</section>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Year-grouped section in minimal card layout (e.g. blog index). Modifier `--summary` collapses past years."
+    },
+    {
+      "class": "moss-cards-minimal-year-group--summary",
+      "kind": "container",
+      "parent": "moss-cards-minimal-year-group",
+      "data_attrs": [],
+      "example_html": "<section class=\"moss-cards-minimal-year-group moss-cards-minimal-year-group--summary\">...</section>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "BEM modifier on `.moss-cards-minimal-year-group`. Applied to year groups that should render in collapsed summary form (e.g. past years on a blog index)."
+    },
+    {
+      "class": "moss-card",
+      "kind": "instance",
+      "parent": "moss-cards",
+      "data_attrs": [],
+      "example_html": "<a class=\"moss-card\" href=\"...\">...</a>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "v1 collapsed shape — single canonical instance class inside `.moss-cards`. Layout-specific styling targets `.moss-cards[data-layout=X] .moss-card`."
+    },
+    {
+      "class": "moss-card-cover",
+      "kind": "instance",
+      "parent": "moss-card",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-cover\"><img src=\"...\" /></div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Cover media slot inside `.moss-card`. Gets `.moss-card-no-cover` modifier when no image is present."
+    },
+    {
+      "class": "moss-card-no-cover",
+      "kind": "instance",
+      "parent": "moss-card",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-cover moss-card-no-cover\"></div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Modifier applied to `.moss-card-cover` when no cover media is available."
+    },
+    {
+      "class": "moss-card-content",
+      "kind": "instance",
+      "parent": "moss-card",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-content\">...</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Text content slot inside a grid-layout `.moss-card` (kicker + title + meta)."
+    },
+    {
+      "class": "moss-card-row",
+      "kind": "instance",
+      "parent": "moss-card",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-row\">...</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Row wrapper inside a list-layout `.moss-card` holding body + cover side-by-side."
+    },
+    {
+      "class": "moss-card-body",
+      "kind": "instance",
+      "parent": "moss-card",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-body\">...</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Text body slot of a list-layout `.moss-card`."
+    },
+    {
+      "class": "moss-card-head",
+      "kind": "instance",
+      "parent": "moss-card",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-head\">...</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Header row of a `.moss-card-body` (title + kicker + meta)."
+    },
+    {
+      "class": "moss-card-title",
+      "kind": "instance",
+      "parent": "moss-card",
+      "data_attrs": [],
+      "example_html": "<h3 class=\"moss-card-title\">Page title</h3>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Title inside `.moss-card`."
+    },
+    {
+      "class": "moss-card-meta",
+      "kind": "instance",
+      "parent": "moss-card",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-meta\">2024-01-15</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Date / count meta line inside `.moss-card`."
+    },
+    {
+      "class": "moss-card-kicker",
+      "kind": "instance",
+      "parent": "moss-card",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-card-kicker\">Category</span>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Eyebrow / overline above the title inside `.moss-card`."
+    },
+    {
+      "class": "moss-card-description",
+      "kind": "instance",
+      "parent": "moss-card",
+      "data_attrs": [],
+      "example_html": "<p class=\"moss-card-description\">Excerpt...</p>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Excerpt / description paragraph inside a list-layout `.moss-card`."
+    },
+    {
+      "class": "moss-card-count",
+      "kind": "instance",
+      "parent": "moss-card",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-count\">4 articles</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Tertiary subtitle line showing `N articles` for a folder card. Renders only on non-date listings when the folder card has no `description` to display."
+    },
+    {
+      "class": "moss-card-grid",
+      "kind": "instance",
+      "parent": "moss-cards-grid",
+      "data_attrs": [],
+      "example_html": "<a class=\"moss-card-grid\" href=\"...\">...</a>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=grid]`)."
+    },
+    {
+      "class": "moss-card-grid-cover",
+      "kind": "instance",
+      "parent": "moss-card-grid",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-grid-cover\"><img src=\"...\" /></div>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card-cover`."
+    },
+    {
+      "class": "moss-card-grid-no-cover",
+      "kind": "instance",
+      "parent": "moss-card-grid",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-grid-cover moss-card-grid-no-cover\"></div>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card-no-cover`."
+    },
+    {
+      "class": "moss-card-grid-content",
+      "kind": "instance",
+      "parent": "moss-card-grid",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-grid-content\">...</div>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card-content`."
+    },
+    {
+      "class": "moss-card-grid-kicker",
+      "kind": "instance",
+      "parent": "moss-card-grid",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-card-grid-kicker\">Category</span>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card-kicker`."
+    },
+    {
+      "class": "moss-card-grid-title",
+      "kind": "instance",
+      "parent": "moss-card-grid",
+      "data_attrs": [],
+      "example_html": "<h3 class=\"moss-card-grid-title\">Page title</h3>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card-title`."
+    },
+    {
+      "class": "moss-card-grid-meta",
+      "kind": "instance",
+      "parent": "moss-card-grid",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-grid-meta\">2024-01-15</div>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card-meta`."
+    },
+    {
+      "class": "moss-card-list",
+      "kind": "instance",
+      "parent": "moss-cards-list",
+      "data_attrs": [],
+      "example_html": "<a class=\"moss-card-list\" href=\"...\">...</a>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=list]`)."
+    },
+    {
+      "class": "moss-card-list-row",
+      "kind": "instance",
+      "parent": "moss-card-list",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-list-row\">...</div>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card-row`."
+    },
+    {
+      "class": "moss-card-list-cover",
+      "kind": "instance",
+      "parent": "moss-card-list",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-list-cover\"><img src=\"...\" /></div>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card-cover`."
+    },
+    {
+      "class": "moss-card-list-body",
+      "kind": "instance",
+      "parent": "moss-card-list",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-list-body\">...</div>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card-body`."
+    },
+    {
+      "class": "moss-card-list-head",
+      "kind": "instance",
+      "parent": "moss-card-list",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-list-head\">...</div>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card-head`."
+    },
+    {
+      "class": "moss-card-list-kicker",
+      "kind": "instance",
+      "parent": "moss-card-list",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-card-list-kicker\">Category</span>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card-kicker`."
+    },
+    {
+      "class": "moss-card-list-title",
+      "kind": "instance",
+      "parent": "moss-card-list",
+      "data_attrs": [],
+      "example_html": "<h3 class=\"moss-card-list-title\">Page title</h3>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card-title`."
+    },
+    {
+      "class": "moss-card-list-meta",
+      "kind": "instance",
+      "parent": "moss-card-list",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-list-meta\">2024-01-15</div>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card-meta`."
+    },
+    {
+      "class": "moss-card-list-description",
+      "kind": "instance",
+      "parent": "moss-card-list",
+      "data_attrs": [],
+      "example_html": "<p class=\"moss-card-list-description\">Excerpt...</p>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card-description`."
+    },
+    {
+      "class": "moss-card-minimal",
+      "kind": "instance",
+      "parent": "moss-cards-minimal-year-group",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-minimal\">\n  <a class=\"moss-prefix-link\" href=\"...\">...</a>\n</div>",
+      "example_markdown": "",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=minimal]`)."
+    },
+    {
+      "class": "moss-folder-item",
+      "kind": "instance",
+      "parent": "moss-cards-minimal-year-group",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-card-minimal moss-folder-item\">\n  <a class=\"moss-prefix-link moss-folder-link\" href=\"...\">...</a>\n  <p class=\"moss-folder-description\">...</p>\n</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Modifier on `.moss-card-minimal` for folder-type entries in minimal listings."
+    },
+    {
+      "class": "moss-folder-title",
+      "kind": "instance",
+      "parent": "moss-folder-item",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-folder-title\">Folder name</span>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Title text of a folder entry in minimal listings."
+    },
+    {
+      "class": "moss-folder-description",
+      "kind": "instance",
+      "parent": "moss-folder-item",
+      "data_attrs": [],
+      "example_html": "<p class=\"moss-folder-description\">Description...</p>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Description paragraph of a folder entry in minimal listings."
+    },
+    {
+      "class": "moss-folder-link",
+      "kind": "instance",
+      "parent": "moss-folder-item",
+      "data_attrs": [],
+      "example_html": "<a class=\"moss-prefix-link moss-folder-link\" href=\"...\">...</a>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Modifier on `.moss-prefix-link` for folder-type links in minimal listings."
+    },
+    {
+      "class": "moss-prefix-link",
+      "kind": "instance",
+      "parent": "moss-card-minimal",
+      "data_attrs": [],
+      "example_html": "<a class=\"moss-prefix-link\" href=\"...\">\n  <span class=\"moss-prefix-link-prefix\">2024-01-15</span>\n  <span class=\"moss-prefix-link-title\">Page title</span>\n</a>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Link with a prefix span (date or icon) and a title span. Used inside minimal cards."
+    },
+    {
+      "class": "moss-prefix-link-prefix",
+      "kind": "instance",
+      "parent": "moss-prefix-link",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-prefix-link-prefix\">2024-01-15</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Prefix slot of a prefix-link (typically a date)."
+    },
+    {
+      "class": "moss-prefix-link-title",
+      "kind": "instance",
+      "parent": "moss-prefix-link",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-prefix-link-title\">Page title</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Title slot of a prefix-link."
+    },
+    {
+      "class": "moss-prefix-link-suffix",
+      "kind": "instance",
+      "parent": "moss-prefix-link",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-prefix-link-suffix\">→</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Optional trailing slot of a prefix-link."
+    },
+    {
+      "class": "moss-callout",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-callout callout\" data-type=\"note\">\n  <div class=\"callout-title\">Note</div>\n  <div class=\"callout-content\">Body...</div>\n</div>",
+      "example_markdown": "> [!note]\n> Body...",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Obsidian-style callout. The Obsidian-compat `.callout` class is co-emitted; type lives on `data-type` (v1)."
+    },
+    {
+      "class": "callout",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [
+        {
+          "name": "data-type",
+          "values": [
+            "note",
+            "info",
+            "tip",
+            "warning",
+            "pending"
+          ],
+          "default": "note",
+          "description": "v1 callout type. Theme authors target `.callout[data-type=...]` to style by variant."
+        }
+      ],
+      "example_html": "<div class=\"moss-callout callout\" data-type=\"note\">...</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Obsidian-compat class co-emitted on every callout for theme parity. Type lives on `data-type` (v1)."
+    },
+    {
+      "class": "callout-title",
+      "kind": "instance",
+      "parent": "moss-callout",
+      "data_attrs": [],
+      "example_html": "<div class=\"callout-title\">Note</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Title row of a callout."
+    },
+    {
+      "class": "callout-content",
+      "kind": "instance",
+      "parent": "moss-callout",
+      "data_attrs": [],
+      "example_html": "<div class=\"callout-content\">Body...</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Body container of a callout."
+    },
+    {
+      "class": "callout-note",
+      "kind": "instance",
+      "parent": "moss-callout",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-callout callout callout-note\">...</div>",
+      "example_markdown": "> [!note]\n> Body",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — type lives on `.callout[data-type=note]`."
+    },
+    {
+      "class": "callout-info",
+      "kind": "instance",
+      "parent": "moss-callout",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-callout callout callout-info\">...</div>",
+      "example_markdown": "> [!info]\n> Body",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — type lives on `.callout[data-type=info]`."
+    },
+    {
+      "class": "callout-tip",
+      "kind": "instance",
+      "parent": "moss-callout",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-callout callout callout-tip\">...</div>",
+      "example_markdown": "> [!tip]\n> Body",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — type lives on `.callout[data-type=tip]`."
+    },
+    {
+      "class": "callout-warning",
+      "kind": "instance",
+      "parent": "moss-callout",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-callout callout callout-warning\">...</div>",
+      "example_markdown": "> [!warning]\n> Body",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — type lives on `.callout[data-type=warning]`."
+    },
+    {
+      "class": "callout-pending",
+      "kind": "instance",
+      "parent": "moss-callout",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-callout callout callout-pending\">...</div>",
+      "example_markdown": "> [!pending]\n> Body",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — type lives on `.callout[data-type=pending]`."
+    },
+    {
+      "class": "moss-embed",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [
+        {
+          "name": "data-type",
+          "values": [
+            "audio",
+            "video",
+            "pdf",
+            "notebook",
+            "table",
+            "iframe",
+            "3d"
+          ],
+          "default": "",
+          "description": "v1 embed kind. Set on the embed element. Theme authors target `.moss-embed[data-type=...]`."
+        },
+        {
+          "name": "data-width",
+          "values": [
+            "body",
+            "wide",
+            "page",
+            "screen"
+          ],
+          "default": "body",
+          "description": "Display width — text-column (body), wider than text (wide), page-width (page), or viewport-width (screen). See spec § P9."
+        }
+      ],
+      "example_html": "<div class=\"moss-embed moss-embed-pdf\"><iframe src=\"...\"></iframe></div>",
+      "example_markdown": "![[paper.pdf]]",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Base class on every typed embed. Kind on `data-type` (v1). `.moss-embed-audio` / `-video` / `-pdf` / `-notebook` / `-table` / `-iframe` / `-3d` retired in Phase 1c."
+    },
+    {
+      "class": "moss-embed-audio",
+      "kind": "instance",
+      "parent": "moss-embed",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-embed moss-embed-audio\"><audio controls src=\"...\"></audio></div>",
+      "example_markdown": "![[track.mp3]]",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed to `.moss-embed[data-type=audio]`."
+    },
+    {
+      "class": "moss-embed-video",
+      "kind": "instance",
+      "parent": "moss-embed",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-embed moss-embed-video\"><video controls src=\"...\"></video></div>",
+      "example_markdown": "![[clip.mp4]]",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed to `.moss-embed[data-type=video]`."
+    },
+    {
+      "class": "moss-embed-pdf",
+      "kind": "instance",
+      "parent": "moss-embed",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-embed moss-embed-pdf\"><iframe src=\"...\"></iframe></div>",
+      "example_markdown": "![[paper.pdf]]",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed to `.moss-embed[data-type=pdf]`."
+    },
+    {
+      "class": "moss-embed-iframe",
+      "kind": "instance",
+      "parent": "moss-embed",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-embed moss-embed-iframe\"><iframe src=\"...\"></iframe></div>",
+      "example_markdown": "![[page.html]]",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed to `.moss-embed[data-type=iframe]`."
+    },
+    {
+      "class": "moss-embed-notebook",
+      "kind": "instance",
+      "parent": "moss-embed",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-embed moss-embed-notebook\">...</div>",
+      "example_markdown": "![[analysis.ipynb]]",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed to `.moss-embed[data-type=notebook]`."
+    },
+    {
+      "class": "moss-embed-ipynb",
+      "kind": "instance",
+      "parent": "moss-embed",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-embed moss-embed-ipynb\">...</div>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Alias of `.moss-embed-notebook`; consolidation pending."
+    },
+    {
+      "class": "moss-embed-table",
+      "kind": "instance",
+      "parent": "moss-embed",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-embed moss-embed-table\"><table>...</table></div>",
+      "example_markdown": "![[data.csv]]",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed to `.moss-embed[data-type=table]`."
+    },
+    {
+      "class": "moss-embed-3d",
+      "kind": "instance",
+      "parent": "moss-embed",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-embed moss-embed-3d\">...</div>",
+      "example_markdown": "![[model.glb]]",
+      "status": "retired",
+      "since": "0",
+      "description": "Retired in Phase 1c — collapsed to `.moss-embed[data-type=3d]`."
+    },
+    {
+      "class": "moss-embed-error",
+      "kind": "instance",
+      "parent": "moss-embed",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-embed moss-embed-error\">File not found: ...</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Error state for embeds whose target cannot be resolved."
+    },
+    {
+      "class": "moss-embed-missing",
+      "kind": "instance",
+      "parent": "moss-embed",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-embed-missing\">Folder not found: journal</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "1",
+      "description": "Fallback rendered when a folder-list embed (`![[journal/]]`) targets a folder that does not exist or cannot be resolved. Distinct from `.moss-embed-error` (file/wikilink resolution failure) — this one is specifically the folder-listing path."
+    },
+    {
+      "class": "moss-hero",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [
+        {
+          "name": "data-width",
+          "values": [
+            "body",
+            "wide",
+            "page",
+            "screen"
+          ],
+          "default": "body",
+          "description": "Display width — text-column (body), wider than text (wide), page-width (page), or viewport-width (screen). See spec § P9. Phase 1c will emit this from authoring shortcode (e.g. `:::hero {full}` -> `data-width=\"screen\"`)."
+        }
+      ],
+      "example_html": "<section class=\"moss-hero\" data-width=\"page\">\n  <div class=\"moss-hero-content\">...</div>\n</section>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Hero banner section at the top of a page (cover image + title). v1 adds `data-width` for author-controlled sizing."
+    },
+    {
+      "class": "moss-hero-content",
+      "kind": "instance",
+      "parent": "moss-hero",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-hero-content\">...</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Text content slot inside `.moss-hero`."
+    },
+    {
+      "class": "moss-image",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [
+        {
+          "name": "data-aspect",
+          "values": [
+            "portrait",
+            "square",
+            "auto"
+          ],
+          "default": "auto",
+          "description": "v1 image aspect-ratio hint. Theme authors target `.moss-image[data-aspect=...]`. Emitter wiring lands in a follow-up."
+        },
+        {
+          "name": "data-width",
+          "values": [
+            "body",
+            "wide",
+            "page",
+            "screen"
+          ],
+          "default": "body",
+          "description": "Display width — text-column (body), wider than text (wide), page-width (page), or viewport-width (screen). See spec § P9."
+        }
+      ],
+      "example_html": "<figure class=\"moss-image\" data-aspect=\"portrait\" data-width=\"body\"><img src=\"...\" alt=\"...\" /></figure>",
+      "example_markdown": "![alt](image.jpg)",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Wrapper around an inline `<img>` for sizing and figure semantics. v1 adds `data-aspect` (collapses `--portrait`/`--square`/`--auto` modifiers) and `data-width` (P9)."
+    },
+    {
+      "class": "moss-visual",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-visual\">...</div>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Generic visual block (figure-like surface)."
+    },
+    {
+      "class": "moss-article-title",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<h1 class=\"moss-article-title\">Title</h1>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Article-page H1 title emitted from frontmatter."
+    },
+    {
+      "class": "moss-grid",
+      "kind": "container",
+      "parent": "",
+      "data_attrs": [
+        {
+          "name": "data-width",
+          "values": [
+            "body",
+            "wide",
+            "page",
+            "screen"
+          ],
+          "default": "body",
+          "description": "Display width — text-column (body), wider than text (wide), page-width (page), or viewport-width (screen). See spec § P9."
+        }
+      ],
+      "example_html": "<div class=\"moss-grid\" data-width=\"wide\">\n  <div class=\"moss-grid-card\">...</div>\n</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Generic grid container (used by profiles, link previews, etc.). Modifier classes: `profiles`, `featured`, `no-cards`. v1 adds `data-width` (P9)."
+    },
+    {
+      "class": "moss-grid-card",
+      "kind": "instance",
+      "parent": "moss-grid",
+      "data_attrs": [
+        {
+          "name": "data-kind",
+          "values": [
+            "link",
+            "friend",
+            "card"
+          ],
+          "default": "card",
+          "description": "v1 grid-card variant. Today expressed via co-emitted classes (`.link-card`, `.friend-card`, `.no-cards`); Phase 1c collapses to this `data-kind` attribute."
+        }
+      ],
+      "example_html": "<a class=\"moss-grid-card\" data-kind=\"link\" href=\"...\">...</a>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Card instance inside `.moss-grid`. Today emits sibling classes `link-card` / `friend-card` / `no-cards`; v1 collapses to `data-kind`."
+    },
+    {
+      "class": "moss-gridxyz",
+      "kind": "container",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-gridxyz\">...</div>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Experimental free-form grid variant. Subject to renaming."
+    },
+    {
+      "class": "moss-gallery",
+      "kind": "container",
+      "parent": "",
+      "data_attrs": [
+        {
+          "name": "data-width",
+          "values": [
+            "body",
+            "wide",
+            "page",
+            "screen"
+          ],
+          "default": "body",
+          "description": "Display width — text-column (body), wider than text (wide), page-width (page), or viewport-width (screen). See spec § P9."
+        }
+      ],
+      "example_html": "<div class=\"moss-gallery\" data-width=\"page\">\n  <figure class=\"moss-gallery-item\">...</figure>\n</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Image gallery container. v1 adds `data-width` (P9)."
+    },
+    {
+      "class": "moss-gallery-item",
+      "kind": "instance",
+      "parent": "moss-gallery",
+      "data_attrs": [],
+      "example_html": "<figure class=\"moss-gallery-item\"><img src=\"...\" /></figure>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Single image entry inside `.moss-gallery`."
+    },
+    {
+      "class": "moss-buttons",
+      "kind": "container",
+      "parent": "",
+      "data_attrs": [
+        {
+          "name": "data-style",
+          "values": [
+            "default",
+            "inverted"
+          ],
+          "default": "default",
+          "description": "v1 button-row style. Theme authors target `.moss-buttons[data-style=...]`."
+        }
+      ],
+      "example_html": "<div class=\"moss-buttons\" data-style=\"inverted\">\n  <a class=\"moss-btn\" href=\"...\">Click</a>\n</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Container for a row of `.moss-btn` buttons. v1: the inverted variant is on `data-style=\"inverted\"`."
+    },
+    {
+      "class": "moss-btn",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [
+        {
+          "name": "data-role",
+          "values": [
+            "default",
+            "primary",
+            "secondary"
+          ],
+          "default": "default",
+          "description": "v1 button role. Theme authors target `.moss-btn[data-role=...]`."
+        }
+      ],
+      "example_html": "<button class=\"moss-btn\" data-role=\"primary\">\n  <span class=\"moss-btn__label\">Submit</span>\n</button>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Generic button primitive. Role on `data-role` (v1)."
+    },
+    {
+      "class": "moss-btn__label",
+      "kind": "instance",
+      "parent": "moss-btn",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-btn__label\">Submit</span>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Label span inside `.moss-btn`."
+    },
+    {
+      "class": "moss-btn__check",
+      "kind": "instance",
+      "parent": "moss-btn",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-btn__check\">✓</span>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Success checkmark slot inside `.moss-btn`."
+    },
+    {
+      "class": "moss-btn__spinner",
+      "kind": "instance",
+      "parent": "moss-btn",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-btn__spinner\"></span>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Loading spinner slot inside `.moss-btn`."
+    },
+    {
+      "class": "moss-subscribe",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-subscribe\">\n  <form class=\"moss-subscribe-form\">...</form>\n</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Newsletter subscribe block (auto-injected into footer when email channel configured)."
+    },
+    {
+      "class": "moss-subscribe-form",
+      "kind": "instance",
+      "parent": "moss-subscribe",
+      "data_attrs": [],
+      "example_html": "<form class=\"moss-subscribe-form\">...</form>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Form element inside `.moss-subscribe`."
+    },
+    {
+      "class": "moss-subscribe-btn-slot",
+      "kind": "instance",
+      "parent": "moss-subscribe",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-subscribe-btn-slot\"><button class=\"moss-btn\">...</button></div>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Slot in the subscribe form that holds the submit button."
+    },
+    {
+      "class": "moss-subscribe-status",
+      "kind": "instance",
+      "parent": "moss-subscribe",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-subscribe-status\">\n  <span class=\"moss-subscribe-status__icon\"></span>\n  Subscribed!\n</div>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Status message shown after submit (success/error)."
+    },
+    {
+      "class": "moss-subscribe-status__icon",
+      "kind": "instance",
+      "parent": "moss-subscribe-status",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-subscribe-status__icon\"></span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Icon slot inside `.moss-subscribe-status`."
+    },
+    {
+      "class": "moss-subscribe-landing",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<section class=\"moss-subscribe-landing\">...</section>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Standalone subscribe landing page surface (larger variant)."
+    },
+    {
+      "class": "moss-series-nav",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<nav class=\"moss-series-nav\">\n  <div class=\"moss-series-nav-links\">...</div>\n</nav>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Series navigation bar (prev/next/collection) on series pages."
+    },
+    {
+      "class": "moss-series-nav-links",
+      "kind": "instance",
+      "parent": "moss-series-nav",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-series-nav-links\">...</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Row holding prev/next links in series nav."
+    },
+    {
+      "class": "moss-series-nav-link",
+      "kind": "instance",
+      "parent": "moss-series-nav",
+      "data_attrs": [],
+      "example_html": "<a class=\"moss-series-nav-link moss-series-nav-prev\" href=\"...\">...</a>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Individual link inside series nav. Modifiers: `moss-series-nav-prev`, `moss-series-nav-next`, `empty` (placeholder)."
+    },
+    {
+      "class": "moss-series-nav-prev",
+      "kind": "instance",
+      "parent": "moss-series-nav",
+      "data_attrs": [],
+      "example_html": "<a class=\"moss-series-nav-link moss-series-nav-prev\" href=\"...\">...</a>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Previous-page modifier on a series nav link."
+    },
+    {
+      "class": "moss-series-nav-next",
+      "kind": "instance",
+      "parent": "moss-series-nav",
+      "data_attrs": [],
+      "example_html": "<a class=\"moss-series-nav-link moss-series-nav-next\" href=\"...\">...</a>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Next-page modifier on a series nav link."
+    },
+    {
+      "class": "moss-series-nav-arrow",
+      "kind": "instance",
+      "parent": "moss-series-nav",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-series-nav-arrow\">→</span>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Arrow glyph inside a series-nav link."
+    },
+    {
+      "class": "moss-series-nav-title",
+      "kind": "instance",
+      "parent": "moss-series-nav",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-series-nav-title\">Next page title</span>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Title text of the destination page in a series-nav link."
+    },
+    {
+      "class": "moss-series-nav-collection",
+      "kind": "instance",
+      "parent": "moss-series-nav",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-series-nav-collection\">...</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Collection-listing slot in series nav (sibling pages)."
+    },
+    {
+      "class": "moss-series-nav-collection-row",
+      "kind": "instance",
+      "parent": "moss-series-nav-collection",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-series-nav-collection-row\">...</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Row inside the collection listing of series nav."
+    },
+    {
+      "class": "moss-collection-cover",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<section class=\"moss-collection-cover\">\n  <div class=\"moss-collection-cover-row\">...</div>\n</section>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Header surface on a collection landing page."
+    },
+    {
+      "class": "moss-collection-cover-row",
+      "kind": "instance",
+      "parent": "moss-collection-cover",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-collection-cover-row\">...</div>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Row inside `.moss-collection-cover`."
+    },
+    {
+      "class": "moss-collection-cover-body",
+      "kind": "instance",
+      "parent": "moss-collection-cover",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-collection-cover-body\">...</div>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Body content slot inside `.moss-collection-cover`."
+    },
+    {
+      "class": "moss-input",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<input class=\"moss-input\" type=\"email\" />",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Generic form input primitive."
+    },
+    {
+      "class": "moss-field",
+      "kind": "container",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-field\">\n  <label class=\"moss-label\">Email</label>\n  <input class=\"moss-input\" />\n</div>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Form field group (label + input). Modifier `--inline` for horizontal layout."
+    },
+    {
+      "class": "moss-label",
+      "kind": "instance",
+      "parent": "moss-field",
+      "data_attrs": [],
+      "example_html": "<label class=\"moss-label\">Email</label>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Label primitive for `.moss-field`. Modifier `--small` for compact form."
+    },
+    {
+      "class": "moss-link",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<a class=\"moss-link\" href=\"...\">Click me</a>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Inline-link primitive (resets `<button>` chrome too). Use `--subtle` for muted variant."
+    },
+    {
+      "class": "moss-comments",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<section class=\"moss-comments\">...</section>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Comments surface (per-site SQLite backend or Artalk legacy)."
+    },
+    {
+      "class": "moss-colophon",
+      "kind": "chrome",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<footer class=\"moss-colophon\">\n  <span class=\"moss-colophon-icon\"></span>\n  Built with moss\n</footer>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Footer colophon credit appended by moss."
+    },
+    {
+      "class": "moss-colophon-icon",
+      "kind": "instance",
+      "parent": "moss-colophon",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-colophon-icon\"></span>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Icon slot inside `.moss-colophon`."
+    },
+    {
+      "class": "moss-shell-frame",
+      "kind": "chrome",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-shell-frame\">...</div>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "App-shell frame surface (preview chrome)."
+    },
+    {
+      "class": "main-nav",
+      "kind": "chrome",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<nav class=\"main-nav container\">...</nav>",
+      "example_markdown": "",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Top site navigation bar. Legacy non-`moss-` prefix kept for theme parity."
+    },
+    {
+      "class": "moss-child-section-divider",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<hr class=\"moss-child-section-divider\" />",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Divider rule between auto-generated child sections."
+    },
+    {
+      "class": "moss-unknown-shortcode",
+      "kind": "standalone",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<div class=\"moss-unknown-shortcode\">Unknown shortcode: foo</div>",
+      "example_markdown": "{{< foo >}}",
+      "status": "confirmed",
+      "since": "0",
+      "description": "Fallback emitted when a shortcode tag is not recognised by any plugin."
+    },
+    {
+      "class": "moss-hl-keyword",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-hl-keyword\">if</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Syntax-highlight token: keyword."
+    },
+    {
+      "class": "moss-hl-string",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-hl-string\">\"hi\"</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Syntax-highlight token: string literal."
+    },
+    {
+      "class": "moss-hl-comment",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-hl-comment\">// note</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Syntax-highlight token: comment."
+    },
+    {
+      "class": "moss-hl-function",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-hl-function\">render</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Syntax-highlight token: function name."
+    },
+    {
+      "class": "moss-hl-type",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-hl-type\">String</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Syntax-highlight token: type name."
+    },
+    {
+      "class": "moss-hl-number",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-hl-number\">42</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Syntax-highlight token: numeric literal."
+    },
+    {
+      "class": "moss-hl-operator",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-hl-operator\">+</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Syntax-highlight token: operator."
+    },
+    {
+      "class": "moss-hl-builtin",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-hl-builtin\">print</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Syntax-highlight token: builtin identifier."
+    },
+    {
+      "class": "moss-hl-tag",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-hl-tag\">div</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Syntax-highlight token: markup tag name."
+    },
+    {
+      "class": "moss-hl-attr",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-hl-attr\">class</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Syntax-highlight token: attribute name."
+    },
+    {
+      "class": "moss-hl-meta",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-hl-meta\">@derive</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Syntax-highlight token: meta/annotation."
+    },
+    {
+      "class": "moss-hl-addition-bg",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-hl-addition-bg\">+ added line</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Syntax-highlight diff token: added-line background."
+    },
+    {
+      "class": "moss-hl-deletion",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-hl-deletion\">- removed line</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Syntax-highlight diff token: removed-line text."
+    },
+    {
+      "class": "moss-hl-deletion-bg",
+      "kind": "instance",
+      "parent": "",
+      "data_attrs": [],
+      "example_html": "<span class=\"moss-hl-deletion-bg\">- removed line</span>",
+      "example_markdown": "",
+      "status": "emerging",
+      "since": "0",
+      "description": "Syntax-highlight diff token: removed-line background."
+    }
+  ],
+  "frontmatter": [
+    {
+      "name": "title",
+      "type": "string",
+      "widget": "text-input",
+      "description": "Title of the page. Drives the visible heading, <title>, og:title, RSS, nav, breadcrumb, and link cards. Filename is used when this field is missing. Set to an empty string to suppress the auto-injected page heading.",
+      "group": "Common",
+      "skip_schema": false
+    },
+    {
+      "name": "description",
+      "type": "string",
+      "widget": "text-area",
+      "description": "Page excerpt for SEO meta, og:description, and list previews",
+      "group": "Common",
+      "skip_schema": false
+    },
+    {
+      "name": "date",
+      "type": "string",
+      "widget": "date-picker",
+      "description": "Publication date (YYYY-MM-DD)",
+      "group": "Common",
+      "skip_schema": false
+    },
+    {
+      "name": "tags",
+      "type": "array",
+      "widget": "tag-input",
+      "description": "Content tags for organization",
+      "group": "Common",
+      "skip_schema": false
+    },
+    {
+      "name": "draft",
+      "type": "boolean",
+      "widget": "checkbox",
+      "description": "Hidden from all listings, feeds, and navigation — still published at its direct URL",
+      "group": "Common",
+      "skip_schema": false
+    },
+    {
+      "name": "listed",
+      "type": "boolean",
+      "widget": "checkbox",
+      "default": "false",
+      "description": "When off, hidden from listings, feeds, and sitemap — but still indexed and reachable at its URL",
+      "group": "Common",
+      "skip_schema": false
+    },
+    {
+      "name": "logo",
+      "type": "string",
+      "widget": "file-picker",
+      "description": "Site logo image path (rendered before site name in nav)",
+      "group": "Occasional",
+      "skip_schema": false
+    },
+    {
+      "name": "url",
+      "type": "string",
+      "widget": "text-input",
+      "description": "Custom URL path override",
+      "group": "Occasional",
+      "skip_schema": false
+    },
+    {
+      "name": "author",
+      "type": "string",
+      "widget": "text-input",
+      "description": "Author name (or 'A and B' / 'A, B, and C' for co-authors). Captured by moss import from JSON-LD / OpenGraph.",
+      "group": "Occasional",
+      "skip_schema": false
+    },
+    {
+      "name": "publisher",
+      "type": "string",
+      "widget": "text-input",
+      "description": "Publishing outlet name. Captured by moss import from schema.org publisher (resolved via @id) or OpenGraph site_name.",
+      "group": "Occasional",
+      "skip_schema": false
+    },
+    {
+      "name": "external_url",
+      "type": "string",
+      "widget": "text-input",
+      "description": "Linkblog target: when set, internal references to this page (cards, link rewrites, canonical, sitemap) point here instead of the local URL. The page is still built locally — direct visits to its slug still work — but the canonical home is elsewhere on the web. Pattern from JSON Feed 1.1.",
+      "group": "Occasional",
+      "skip_schema": false
+    },
+    {
+      "name": "cover",
+      "type": "string",
+      "widget": "file-picker",
+      "description": "Cover image path",
+      "group": "Occasional",
+      "skip_schema": false
+    },
+    {
+      "name": "cover_type",
+      "type": "string",
+      "widget": "select",
+      "description": "Cover type override: image, video, or iframe (auto-detected if omitted)",
+      "group": "",
+      "skip_schema": true
+    },
+    {
+      "name": "lang",
+      "type": "string",
+      "widget": "text-input",
+      "description": "Language code (e.g. en, zh)",
+      "group": "Occasional",
+      "skip_schema": false
+    },
+    {
+      "name": "weight",
+      "type": "integer",
+      "widget": "number-input",
+      "description": "Sort weight for ordering",
+      "group": "Occasional",
+      "skip_schema": false
+    },
+    {
+      "name": "nav",
+      "type": "boolean",
+      "widget": "checkbox",
+      "description": "Whether to show in site navigation",
+      "group": "Occasional",
+      "skip_schema": false
+    },
+    {
+      "name": "home",
+      "type": "boolean",
+      "widget": "checkbox",
+      "description": "Mark this file as its folder's home page (survives folder rename)",
+      "group": "",
+      "skip_schema": true
+    },
+    {
+      "name": "sort",
+      "type": "string",
+      "widget": "select",
+      "enum_values": [
+        "date",
+        "weight",
+        "title"
+      ],
+      "description": "How to sort children in this folder's listing. Use date for chronological streams, weight for authored order, title for alphabetical. A list of child stems (e.g. [intro, setup]) declares explicit order.",
+      "group": "Occasional",
+      "skip_schema": false
+    },
+    {
+      "name": "series",
+      "type": "one_of",
+      "widget": "union",
+      "description": "Declares children as sequential series. Use true for weight-based ordering, or a list of wikilinks for explicit order.",
+      "group": "Occasional",
+      "skip_schema": false
+    },
+    {
+      "name": "children",
+      "type": "one_of",
+      "widget": "union",
+      "default": "true",
+      "description": "Whether to render child pages below content. Accepts true/false or a wikilink like [[News]] to render a specific folder's articles.",
+      "group": "Children",
+      "skip_schema": false
+    },
+    {
+      "name": "children_source",
+      "type": "string",
+      "widget": "text-input",
+      "description": "Internal: wikilink reference parsed from children field (e.g. [[News]])",
+      "group": "",
+      "skip_schema": true
+    },
+    {
+      "name": "children_style",
+      "type": "string",
+      "widget": "select",
+      "default": "\"list\"",
+      "enum_values": [
+        "list",
+        "summary",
+        "grid"
+      ],
+      "description": "How child pages are rendered",
+      "group": "Children",
+      "skip_schema": false
+    },
+    {
+      "name": "children_group",
+      "type": "string",
+      "widget": "select",
+      "enum_values": [
+        "year",
+        "none"
+      ],
+      "description": "How children are grouped: year (default for list) or none (default for card)",
+      "group": "Children",
+      "skip_schema": false
+    },
+    {
+      "name": "children_depth",
+      "type": "string",
+      "widget": "select",
+      "default": "\"direct\"",
+      "enum_values": [
+        "direct",
+        "all"
+      ],
+      "description": "Whether to include only immediate children or all descendants",
+      "group": "Children",
+      "skip_schema": false
+    },
+    {
+      "name": "children_in",
+      "type": "string",
+      "widget": "select",
+      "enum_values": [
+        "body",
+        "sidebar"
+      ],
+      "description": "Where to render the children feed: body (after page content, default) or sidebar (right rail).",
+      "group": "Children",
+      "skip_schema": false
+    },
+    {
+      "name": "children_limit",
+      "type": "integer",
+      "widget": "number-input",
+      "description": "Cap the feed at N items. If truncated, a 'More →' link is added. Absent = no cap.",
+      "group": "Children",
+      "skip_schema": false
+    },
+    {
+      "name": "_from_sidebar_alias",
+      "type": "boolean",
+      "widget": "checkbox",
+      "description": "Internal: marks frontmatter that came from the deprecated sidebar: alias",
+      "group": "",
+      "skip_schema": true
+    },
+    {
+      "name": "breadcrumb",
+      "type": "boolean",
+      "widget": "checkbox",
+      "description": "Override site-wide breadcrumb setting for this page",
+      "group": "Navigation & Visibility",
+      "skip_schema": false
+    },
+    {
+      "name": "footer",
+      "type": "boolean",
+      "widget": "checkbox",
+      "description": "Show as a link in the site footer",
+      "group": "Navigation & Visibility",
+      "skip_schema": false
+    },
+    {
+      "name": "slot",
+      "type": "string",
+      "widget": "text-input",
+      "description": "Named slot to inject this page into (e.g. footer-left). Recognized values are validated at build time.",
+      "group": "Navigation & Visibility",
+      "skip_schema": false
+    },
+    {
+      "name": "comments",
+      "type": "boolean",
+      "widget": "checkbox",
+      "description": "Per-page comment opt-in/out",
+      "group": "Navigation & Visibility",
+      "skip_schema": false
+    },
+    {
+      "name": "typesetting",
+      "type": "string",
+      "widget": "select",
+      "default": "\"horizontal\"",
+      "enum_values": [
+        "horizontal",
+        "vertical"
+      ],
+      "description": "Typesetting direction: horizontal (default) or vertical (right-to-left columns for CJK content)",
+      "group": "Layout & Presentation",
+      "skip_schema": false
+    },
+    {
+      "name": "content_width",
+      "type": "string",
+      "widget": "select",
+      "enum_values": [
+        "wide",
+        "full"
+      ],
+      "description": "Page width: default (67ch) for prose, wide (80ch) for grids/tables, full (site max) for dashboards",
+      "group": "Layout & Presentation",
+      "skip_schema": false
+    },
+    {
+      "name": "sidebar",
+      "type": "string",
+      "widget": "text-input",
+      "description": "Deprecated. Use children + children_in: sidebar. Wikilink to folder whose children appear in sidebar (e.g. [[News]]).",
+      "group": "Layout & Presentation",
+      "skip_schema": false
+    },
+    {
+      "name": "cascade",
+      "type": "object",
+      "widget": "code-editor",
+      "description": "Frontmatter values to push to all descendant pages",
+      "group": "Layout & Presentation",
+      "skip_schema": false
+    },
+    {
+      "name": "also_in",
+      "type": "array",
+      "widget": "tag-input",
+      "description": "Cross-list this page in other sections",
+      "group": "Cross-referencing & i18n",
+      "skip_schema": false
+    },
+    {
+      "name": "translationKey",
+      "type": "string",
+      "widget": "text-input",
+      "description": "Key to link translations of the same content",
+      "group": "Cross-referencing & i18n",
+      "skip_schema": false
+    },
+    {
+      "name": "review_of",
+      "type": "string",
+      "widget": "text-input",
+      "description": "URL of item being reviewed (activates review feature)",
+      "group": "Review Metadata",
+      "skip_schema": false
+    },
+    {
+      "name": "rating",
+      "type": "integer",
+      "widget": "number-input",
+      "description": "Author's rating of the reviewed item (1-5)",
+      "group": "Review Metadata",
+      "skip_schema": false
+    },
+    {
+      "name": "analytics",
+      "type": "object",
+      "widget": "code-editor",
+      "description": "Analytics configuration (site-level, read from homepage only)",
+      "group": "",
+      "skip_schema": true
+    },
+    {
+      "name": "uid",
+      "type": "string",
+      "widget": "text-input",
+      "description": "Stable note identity: 8 random hex chars minted at first build. NOT derived from the path or the content, and unrecoverable once lost (auto-generated)",
+      "group": "",
+      "skip_schema": true
+    },
+    {
+      "name": "layout",
+      "type": "string",
+      "widget": "select",
+      "enum_values": [
+        "page",
+        "article"
+      ],
+      "description": "Template layout override (page or article)",
+      "group": "",
+      "skip_schema": true
+    }
+  ]
+}

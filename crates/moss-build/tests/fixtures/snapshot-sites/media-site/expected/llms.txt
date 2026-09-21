@@ -1,0 +1,26 @@
+# Media demo
+
+---
+
+## Images
+
+## Markdown image syntax
+
+![A logo](logo.png)
+
+## Wikilink embed
+
+![[logo.png]]
+
+## Display control
+
+![[logo.png|contain center]]
+
+---
+
+## Media demo
+
+moss resolves images, video, and other static assets automatically.
+
+See [[images]] for image embedding examples.
+

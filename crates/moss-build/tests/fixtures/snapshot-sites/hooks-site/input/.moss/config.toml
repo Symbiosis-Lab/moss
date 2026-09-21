@@ -1,0 +1,7 @@
+schema_version = 6
+
+[hooks]
+process = ["test-hook-plugin"]
+
+[site]
+lang = "en"

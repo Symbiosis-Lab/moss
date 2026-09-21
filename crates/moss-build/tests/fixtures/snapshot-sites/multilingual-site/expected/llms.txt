@@ -1,0 +1,24 @@
+# My Blog
+
+---
+
+## About
+
+# About
+
+This is the about page in English. It describes the author and the purpose of this personal blog about software engineering.
+
+---
+
+## My Blog
+
+Welcome to my blog. This is a personal website where I share my thoughts and experiences about software engineering and web development.
+
+---
+
+## 关于
+
+# 关于
+
+这是关于页面的中文版本。本博客主要分享软件工程和网页开发方面的经验和心得体会。
+

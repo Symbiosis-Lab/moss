@@ -1,0 +1,1 @@
+{"/":{"preview":"Root index declares cascade: { sort: title }. Every descendant folder inherits sort: title unless it overrides explicitly.","title":"Cascade Site"},"/posts/":{"title":"Posts"},"/posts/apple/":{"preview":"Body.","title":"Apple Post"},"/posts/zebra/":{"preview":"Body.","title":"Zebra Post"}}

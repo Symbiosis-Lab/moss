@@ -1,0 +1,209 @@
+# Learn Rust
+
+---
+
+## Getting Started
+
+# Getting Started
+
+Installing Rust and writing your first program.
+
+---
+
+## Ownership
+
+# Ownership
+
+Understanding ownership, the core concept of Rust.
+
+---
+
+## Borrowing
+
+# Borrowing
+
+References and borrowing rules.
+
+---
+
+## Async Rust Patterns
+
+# Async Rust Patterns
+
+Exploring async/await in Rust.
+
+## Using Tokio
+
+The Tokio runtime is the most popular async runtime.
+
+---
+
+## Error Handling
+
+# Error Handling
+
+Using Result and the ? operator effectively.
+
+---
+
+## Portraits
+
+# Portraits
+
+Portrait photography collection.
+
+---
+
+## Common Traits
+
+# Common Traits
+
+Display, Debug, Clone, and other standard traits.
+
+---
+
+## Landscapes
+
+# Landscapes
+
+Mountain and valley photography.
+
+---
+
+## Primitive Types
+
+# Primitive Types
+
+Integer, float, bool, and char types.
+
+---
+
+## About
+
+# About
+
+This page has breadcrumb disabled via explicit override.
+
+---
+
+## Blog
+
+# Blog
+
+Thoughts on Rust programming.
+
+---
+
+## CLI Tool
+
+# CLI Tool
+
+Creating a command-line tool with clap.
+
+---
+
+## Cookbook
+
+# Cookbook
+
+Practical Rust recipes.
+
+---
+
+## Documentation
+
+# Documentation
+
+Reference documentation for the Rust standard library.
+
+Browse sections in the navigation.
+
+---
+
+## Gallery
+
+# Gallery
+
+Photo collections.
+
+---
+
+## HTTP Server
+
+# HTTP Server
+
+Building a simple HTTP server with hyper.
+
+---
+
+## Learn Rust
+
+# Learn Rust
+
+A site for learning the Rust programming language.
+
+## Sections
+
+- [Tutorial](/tutorial/)
+- [Cookbook](/cookbook/)
+- [Blog](/blog/)
+- [Gallery](/gallery/)
+- [Docs](/docs/)
+
+---
+
+## Reference
+
+# Reference
+
+Type system and trait reference.
+
+---
+
+## Shortcode Examples
+
+# Shortcode Examples
+
+This page demonstrates shortcodes.
+
+:::toc
+:::
+
+## Image Gallery
+
+:::gallery 2
+https://example.com/photo1.jpg
+https://example.com/photo2.jpg
+https://example.com/photo3.jpg
+:::
+
+## Important Notes
+
+:::callout warning
+This is a warning callout block.
+:::
+
+:::callout tip
+This is a helpful tip.
+:::
+
+## Further Reading
+
+See the [Tutorial](/tutorial/) for more.
+
+---
+
+## Tutorial
+
+# Tutorial
+
+Learn Rust step by step.
+
+---
+
+## Web Scraper
+
+# Web Scraper
+
+Writing a web scraper with reqwest.
+

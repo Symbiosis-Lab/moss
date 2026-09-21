@@ -1,0 +1,121 @@
+# Callouts demo
+
+---
+
+## Callouts
+
+## Default type (note)
+
+> [!note]
+> Example content.
+
+## Custom title
+
+> [!note] Custom Title Here
+> Example content.
+
+## Multi-paragraph
+
+> [!note] Long callout
+> First paragraph.
+>
+> Second paragraph with **formatting**.
+
+## Nested markdown (bold and list)
+
+> [!tip]
+> Example content with **bold text**.
+>
+> - Item one
+> - Item two
+> - Item three
+
+## Nested callout
+
+> [!note] Outer callout
+> Outer content.
+>
+> > [!tip] Inner callout
+> > Inner content.
+
+## tip
+
+> [!tip]
+> Example content.
+
+## warning
+
+> [!warning]
+> Example content.
+
+## caution
+
+> [!caution]
+> Example content.
+
+## important
+
+> [!important]
+> Example content.
+
+## info
+
+> [!info]
+> Example content.
+
+## abstract
+
+> [!abstract]
+> Example content.
+
+## todo
+
+> [!todo]
+> Example content.
+
+## success
+
+> [!success]
+> Example content.
+
+## question
+
+> [!question]
+> Example content.
+
+## failure
+
+> [!failure]
+> Example content.
+
+## danger
+
+> [!danger]
+> Example content.
+
+## bug
+
+> [!bug]
+> Example content.
+
+## example
+
+> [!example]
+> Example content.
+
+## quote
+
+> [!quote]
+> Example content.
+
+## pending
+
+> [!pending]
+> Example content.
+
+---
+
+## Callouts demo
+
+See [[callouts]] for examples.
+

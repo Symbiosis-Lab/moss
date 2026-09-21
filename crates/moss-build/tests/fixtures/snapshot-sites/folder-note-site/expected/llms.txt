@@ -1,0 +1,140 @@
+# My Site
+
+---
+
+## Website
+
+# Website
+
+Building a website with moss.
+
+---
+
+## Pasta
+
+# Pasta
+
+How to make pasta.
+
+---
+
+## Bread
+
+# Bread
+
+How to bake bread.
+
+---
+
+## Perfect Pasta
+
+# Perfect Pasta
+
+## Ingredients
+
+- 400g spaghetti
+- 2 cloves garlic
+
+## Method
+
+Boil water first. <span id="cook-tip"></span>
+
+See also: [[guide#FAQ]] for cooking questions.
+
+---
+
+## Daily Note
+
+# Daily Note
+
+Today I learned about [[guide#Setup]].
+
+Also check the [[guide#^key-point|important note]].
+
+Here's the full disclaimer:
+
+
+# Disclaimer
+
+This content is provided as-is. See [[guide]] for the complete documentation.
+
+And a callout:
+
+> [!warning] Watch Out
+> Be careful with this feature.
+
+> [!note]
+> Just a simple note.
+
+---
+
+## Disclaimer
+
+# Disclaimer
+
+This content is provided as-is. See [[guide]] for the complete documentation.
+
+---
+
+## Getting Started
+
+# Getting Started
+
+## Setup
+
+Follow these steps to get started.
+
+Important note. <span id="key-point"></span>
+
+### Advanced Configuration
+
+For power users, see [[notes/daily-note]].
+
+## FAQ
+
+Common questions answered here. <span id="faq-block"></span>
+
+---
+
+## My Obsidian Vault
+
+Welcome to my vault! Check out:
+
+- [[guide|Getting Started Guide]]
+- [[notes/daily-note]]
+- [[recipes/pasta|Pasta Recipe]]
+- An image: ![[photo.jpg]]
+
+> [!tip] Pro Tip
+> This vault tests all Obsidian features.
+
+---
+
+## My Site
+
+Welcome to my site.
+
+---
+
+## Projects
+
+My projects.
+
+---
+
+## Recipes
+
+My favorite recipes.
+
+---
+
+## assets
+
+---
+
+## notes
+
+---
+
+## recipes
+

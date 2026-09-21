@@ -1,0 +1,60 @@
+# Folder Embed Site
+
+---
+
+## Elder
+
+May entry.
+
+---
+
+## Berry
+
+April entry.
+
+---
+
+## Date
+
+March entry.
+
+---
+
+## Apple
+
+February entry.
+
+---
+
+## Cherry
+
+January entry.
+
+---
+
+## Folder Embed Site
+
+# Folder Embed Site
+
+A demo of inline folder embeds.
+
+## Recent journal (limit 3 + more)
+
+<!--MOSS_MARKER_FOLDER_LIST:path=/journal/|from=index.md|limit=3-->
+
+## Full journal
+
+<!--MOSS_MARKER_FOLDER_LIST:path=/journal/|from=index.md-->
+
+## Override sort to title
+
+<!--MOSS_MARKER_FOLDER_LIST:path=/journal/|from=index.md|limit=3|sort=title-->
+
+---
+
+## Journal
+
+# Journal
+
+A simple journal — five dated entries.
+
