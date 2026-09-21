@@ -103,12 +103,6 @@ jobs:
           VERSION: ${{ steps.target.outputs.version }}
         run: npm version "$VERSION" --no-git-tag-version --allow-same-version
 
-      # The Linux binary dynamically links webkit2gtk (until the open moss-cli
-      # replaces it — P1.5); without it the loader kills even `--version`.
-      - name: Install the runtime library the binary links
-        if: steps.target.outputs.needed == 'true'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libwebkit2gtk-4.1-0
-
       - name: The wrapper's own tests
         if: steps.target.outputs.needed == 'true'
         working-directory: packages/moss

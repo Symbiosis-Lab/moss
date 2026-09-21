@@ -32,7 +32,8 @@
     "homebrew_linux": {
       "command": "brew install symbiosis-lab/tap/moss",
       "ready_targets": ["linux-x86_64"],
-      "runtime_requirement": "libwebkit2gtk-4.1-0"
+      "runtime_requirement": "libwebkit2gtk-4.1-0",
+      "note": "Applies to v0.14.1, whose Linux CLI is the desktop app's own binary run headless. The next release ships the open moss-cli binary instead, which links no WebKit/GTK library, so this requirement drops — re-audit at that release."
     },
     "direct": {
       "darwin_universal": "https://github.com/Symbiosis-Lab/moss/releases/download/v0.14.1/moss-darwin-universal",
