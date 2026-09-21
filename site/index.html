@@ -441,15 +441,15 @@
          -- verified directly, sampling a real touch-scroll crossfade: ~1:1
          at xf about 0.5, well under readable. Flipping instead of blending:
          --hdr snaps text from the dark (xf=0) formula to the light (xf=1)
-         one over a 0.5%-of-crossfade ramp (not a true discontinuity, which
-         risks its own rendering edge cases) centred on 0.548, the xf where
+         one over a ramp a hundred-thousandth of the crossfade wide, centred
+         on 0.548, the xf where
          solving contrast(black, band) = contrast(white, band) lands --
          both sides equal 4.58:1 there, the worst case either formula can
-         see. A real touch-scroll never renders a frame inside a ramp this
-         narrow (sampled below in I-header-scrim), so the pure-black and
+         see. The ramp is narrower than a device pixel of scroll, so no
+         position lands inside it, and the pure-black and
          pure-white formulas below are the only two colours ever actually
          seen, each on the side of the band where it has the most room. */
-      --hdr: clamp(0, (var(--xf) - 0.548) * 200, 1);
+      --hdr: clamp(0, (var(--xf) - 0.548) * 100000, 1);
     }
     body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; background: linear-gradient(to bottom, var(--header-band) 0 34px, color-mix(in srgb, var(--header-band) 72%, transparent) 52px, transparent); }
     .brand { color: rgb(calc(255 * var(--hdr)), calc(255 * var(--hdr)), calc(255 * var(--hdr))); }

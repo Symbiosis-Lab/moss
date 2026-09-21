@@ -51,7 +51,7 @@ const BASELINE = {
   // contrast dip (a real defect a visitor could stop the scroll inside,
   // not new markup) -- the explanatory comment plus five colour rules
   // rewritten to use --hdr instead of --xf, mobile-scoped only.
-  htmlBytes: 51251,
+  htmlBytes: 51193,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a
