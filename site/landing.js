@@ -443,7 +443,7 @@ void main(){
 const PIG = HEAD + `
 uniform sampler2D uW, uS, uD;
 uniform sampler2D uNear, uWhole;
-uniform float uTime, uCure, uLift, uAds, uMix, uMixG, uDrying, uStir, uRelift, uLoad;
+uniform float uTime, uCure, uLift, uAds, uMix, uMixG, uDrying, uStir, uRelift, uLoad, uTakeFloor, uTakeL0, uTakeL1;
 layout(location=0) out vec4 oS; layout(location=1) out vec4 oD;
 vec4 S(vec2 t){ return texture(uS, t / uSize); }
 vec2 curlN(vec2 p){
@@ -520,7 +520,13 @@ void main(){
   // laid down back into suspension, so it can settle where the other print is
   vec3 rl = d * wet * uRelift * (1.0 - uDrying) * (0.6 + 0.8 * pap.g);
   d -= rl; s += rl;
-  vec3 ad = uAds * wet * s * max(cap * 1.6 - d, vec3(0.0));
+  // The sheet takes pigment where the film has already lifted some: uptake
+  // follows the dissolved fraction of THIS texel, so ink that has just left A
+  // is available to settle toward B instead of waiting out a clock. The floor
+  // is the old clock gate, kept because l never rises where A had no ink --
+  // a region B alone occupies would otherwise never deposit at all.
+  float take = max(uTakeFloor, smoothstep(uTakeL0, uTakeL1, l));
+  vec3 ad = uAds * take * wet * s * max(cap * 1.6 - d, vec3(0.0));
   ad = min(ad, s);
   s -= ad; d += ad;
   // nothing leaves: where the film has gone the pigment in it settles onto the
@@ -613,6 +619,13 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
     gl.useProgram(p); for (const k in UNITS) if (u[k]) gl.uniform1i(u[k], UNITS[k]);
     if (u.uSize) gl.uniform2f(u.uSize, W, H); if (u.uTint) gl.uniform3f(u.uTint, tint[0], tint[1], tint[2]);
     if (u.uPaperScale) gl.uniform1f(u.uPaperScale, paperScale);
+    // uTakeFloor defaults to 0 (pure l-gating) so a caller that never sets it
+    // per step keeps that behaviour; the main and title instances set it
+    // every step (below) to the old clock value, as a floor. uTakeL0/L1 are
+    // dimensionless fractions of the dissolved fraction l, not lengths.
+    if (u.uTakeFloor) gl.uniform1f(u.uTakeFloor, 0);
+    if (u.uTakeL0) gl.uniform1f(u.uTakeL0, 0.15);
+    if (u.uTakeL1) gl.uniform1f(u.uTakeL1, 0.55);
     return { p, u }; };
   const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
@@ -700,7 +713,10 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       // a hot-air blast: evaporation many times the rate of standing air, which
       // thins the film, drives the rim current and settles the pigment quickly
       const drying = smooth(T_DRY, T_DRY + 0.4, t);
-      // the sheet takes pigment once the film is stirred to one colour: uptake comes in with the drying current
+      // no longer the gate: PIG takes up wherever a texel's own dissolved
+      // fraction says to, so this clock is now only the floor under that --
+      // the guarantee that uptake starts at least this early even where A
+      // never had ink for `l` to track.
       const take = smooth(T_TAKE, T_TAKE + 0.45, t);
       gl.viewport(0, 0, W, H);
       common(water, fwd); gl.bindFramebuffer(gl.FRAMEBUFFER, wF[1 - wi]);
@@ -715,7 +731,8 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       common(pig, fwd); gl.bindFramebuffer(gl.FRAMEBUFFER, pF[1 - pi]);
       bind(0, wT[wi]); bind(1, pT[pi][0]); bind(2, pT[pi][1]); bind(3, nearT); bind(4, wholeT);
       gl.uniform1f(pig.u.uTime, t); gl.uniform1f(pig.u.uCure, cure);
-      gl.uniform1f(pig.u.uLift, 0.075); gl.uniform1f(pig.u.uAds, 0.18 * take);
+      gl.uniform1f(pig.u.uLift, 0.075); gl.uniform1f(pig.u.uAds, 0.18);
+      gl.uniform1f(pig.u.uTakeFloor, take);
       // the whole film is stirred by the drying current (and by the hand that scrolls), not before
       gl.uniform1f(pig.u.uMix, 0.06); gl.uniform1f(pig.u.uMixG, 0.005 + 0.025 * Math.max(drying, Math.min(1, stir)));
       gl.uniform1f(pig.u.uDrying, drying); gl.uniform1f(pig.u.uStir, stir); gl.uniform1f(pig.u.uRelift, relift);

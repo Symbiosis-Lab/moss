@@ -121,7 +121,13 @@ const BASELINE = {
   // __landing's own read side. Real new capability -- an honest per-element
   // fallback and fault reporting where there was a silent hole and a
   // session-wide throw -- not unlocked bloat.
-  scriptBytes: 248954,
+  // Unit 5 step 1a (2026-09-21), unit5-physics-spec.md section 1a: rose
+  // 248954 -> 250084. Uptake gated on the dissolved fraction with the old
+  // clock kept as a floor -- three new PIG uniforms, their link-time
+  // defaults, the take()-gated ad computation and its comment, and the
+  // per-step JS split into uAds/uTakeFloor. Within this unit's pre-approved
+  // 6000-byte rise (budget consumed so far: 1130 of 6000).
+  scriptBytes: 250084,
 };
 
 function countWindowAssignments(text) {
