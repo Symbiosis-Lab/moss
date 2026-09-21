@@ -48,7 +48,11 @@ const BASELINE = {
   // contact record (contact.wasHeld) instead, restoring the count -- the
   // ratchet's own numbers only ever go down.
   topLevelLets: 84,
-  sceneComparisons: 14,
+  // Rose 14 -> 15 on 2026-09-21: the last scene's rest is a floor, not a point,
+  // so a visitor can reach the footer on a short window. It is written as one
+  // comparison against SHARE in the desktop drive. The scene table pays this
+  // back: a floor rest becomes a property of the scene, not a literal here.
+  sceneComparisons: 15,
   // Unit 0a: rose again -- the mobile header band's fix (one shared
   // body::before band interpolating colour through --xf instead of two
   // separate .brand/.language-picker background boxes) added net new
@@ -99,7 +103,7 @@ const BASELINE = {
   // case are deleted -- desktop stays on watchScrollDesktop through the
   // close now, the DEPLOY..SHARE boundary commits the same way every other
   // one does. Locked in the same commit that earned it.
-  scriptBytes: 245300,
+  scriptBytes: 246178,
 };
 
 function countWindowAssignments(text) {
