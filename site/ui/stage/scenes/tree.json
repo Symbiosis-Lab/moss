@@ -1,0 +1,12 @@
+{
+  "steps": [
+    {
+      "click": "tree.breadcrumb",
+      "reveals": 1
+    },
+    {
+      "click": "tree.pageRow",
+      "reveals": 5
+    }
+  ]
+}
