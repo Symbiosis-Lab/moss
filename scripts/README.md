@@ -147,6 +147,8 @@ Pre-commit consistency check for the shortcode demo blocks under
 
 ## Landing animation checks
 
+These checks are timing-sensitive and must never run while another browser-heavy job runs on the same machine; concurrent runs on 2026-09-20 produced false failures (a settle spring moving the page under a drag, and a wheel gesture split into extra commits under load) that were not real bugs.
+
 One command runs the whole regression net — every check below plus `check-landing-structure.mjs` — against a single served build, printing one script/engine/pass-or-fail table:
 
 ```bash
