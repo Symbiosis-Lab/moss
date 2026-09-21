@@ -111,23 +111,29 @@ async function checkSceneTiming() {
   };
   const band = await page.evaluate(() => mobileVisualBand());
   const textHeight = await page.evaluate(() => document.querySelector('#c2 .scene-text').getBoundingClientRect().height);
-  const entranceStart = await page.evaluate(() => {
-    const col = document.getElementById('col');
-    return scrollY + col.getBoundingClientRect().top + parseFloat(getComputedStyle(col).paddingTop) + mobileVisualBand().height - innerHeight;
-  });
-  const entranceEnd = await page.evaluate(() => scrollY + document.querySelector('#c2 .scene-text').getBoundingClientRect().top - innerHeight);
   const moveTo = async y => {
     await page.mouse.wheel(0, y - await page.evaluate(() => scrollY));
     await page.waitForTimeout(300);
     return read();
   };
-  const entering = await moveTo(entranceStart - 8);
-  assert(entering.progress === 0, `first visual morphed before fully entering: ${JSON.stringify(entering)}`);
-  const entryHalf = await moveTo((entranceStart + entranceEnd) / 2);
-  assert(entryHalf.progress > .4 && entryHalf.progress < .6, `first morph did not follow entrance: ${JSON.stringify(entryHalf)}`);
-  const pinned = await moveTo(entranceEnd + 2);
+  // K (owner item 3a): "scene 1 should start dissolving after it gets into
+  // position, not before" -- progress must stay 0 until #vis's own box has
+  // actually reached its pinned top (band.top), not merely the old
+  // entranceStart (text fully entering the viewport), which on this layout
+  // lands up to 60px of scroll before the box is really pinned.
+  const pinnedStart = await page.evaluate(() => {
+    const band = mobileVisualBand();
+    return scrollY + (document.getElementById('vis').getBoundingClientRect().top - band.top);
+  });
+  const beforePinned = await moveTo(pinnedStart - 8);
+  assert(beforePinned.progress === 0, `scene 1 morphed before the visual pinned: ${JSON.stringify(beforePinned)}`);
+  const atPinned = await moveTo(pinnedStart + 2);
+  assert(atPinned.progress === 1, `scene 1 did not start once the visual pinned: ${JSON.stringify(atPinned)}`);
+  // Both directions: scrolling back up past the pin point must undo it.
+  const backBeforePinned = await moveTo(pinnedStart - 8);
+  assert(backBeforePinned.progress === 0, `reversing past the pin point did not return progress to 0: ${JSON.stringify(backBeforePinned)}`);
+  await moveTo(pinnedStart + 2);
   await page.waitForFunction(() => window.__landing.state().shown === 1 && !window.__landing.state().running, null, { timeout: 10000 });
-  assert(pinned.progress === 1, `scene 2 was not consolidated when its copy entered: ${JSON.stringify(pinned)}`);
   await page.waitForFunction(() => [0, 1, 2, 3].every(i => window.__landing.prints[i]), null, { timeout: 30000 });
   const plateauStart = await page.evaluate(() => scrollY);
   const before = await wheelTextTopTo(band.bottom + 24);
@@ -135,9 +141,21 @@ async function checkSceneTiming() {
   assert(plateau >= 100, `scene 2 solid interval too short: ${plateau}px`);
   assert(before.progress === 1 && before.state.shown === 1, `scene 2 advanced before approaching the visual: ${JSON.stringify(before)}`);
   const nextTextHeight = await page.evaluate(() => document.querySelector('#c2 .scene-text').getBoundingClientRect().height);
+  // K (owner item 3b): "scene 2 finishes consolidation a little bit before
+  // scene 2 text gets into position" -- mobileInkProgress's own denominator
+  // is shortened by 40px (site/landing.js, the earlyBy parameter) for this
+  // leg, so q===1 lands 40px of scroll before the text is fully clear of
+  // the visual (the old 100% point, text.bottom===band.top).
+  const oldRestTop = band.top - nextTextHeight;
+  const consolidatedEarly = await wheelIncomingTopTo('#c2 .scene-text', oldRestTop + 40);
+  assert(consolidatedEarly.progress >= 1.999, `scene 2 did not consolidate: ${JSON.stringify(consolidatedEarly)}`);
+  assert(consolidatedEarly.text.top - oldRestTop >= 39.5, `text is not still ~40px below its old resting line at consolidation: ${JSON.stringify(consolidatedEarly)}`);
+  const stillEarly = await wheelIncomingTopTo('#c2 .scene-text', oldRestTop + 48);
+  assert(stillEarly.progress < 2, `consolidation reached 1 more than 40px early: ${JSON.stringify(stillEarly)}`);
   const contact = await wheelIncomingTopTo('#c2 .scene-text', band.bottom + 8);
   assert(contact.progress === 1 && contact.state.shown === 1, `scene 2 advanced before next incoming text contact: ${JSON.stringify(contact)}`);
-  const nextHalfTop = band.bottom - (band.height + nextTextHeight) / 2;
+  // -40: mirrors mobileInkProgress's own shortened denominator for this leg.
+  const nextHalfTop = band.bottom - (band.height + nextTextHeight - 40) / 2;
   const half = await wheelIncomingTopTo('#c2 .scene-text', nextHalfTop);
   assert(half.progress > 1.4 && half.progress < 1.6 && Math.abs(half.state.washT - 1.05) < .05 && half.state.shown === 1,
     `scene 2 wash did not follow next incoming text: ${JSON.stringify({ contact, half })}`);
@@ -149,7 +167,7 @@ async function checkSceneTiming() {
   assert(reversed.progress < half.progress && reversed.state.washT < half.state.washT - .02 && reversed.writes === 0,
     `scene 2 wash did not reverse with upward scroll: ${JSON.stringify({ half, reversed })}`);
   await page.close();
-  return { entryHalf: entryHalf.progress, pinned: pinned.progress, before: +before.progress.toFixed(3), contact: +contact.progress.toFixed(3),
+  return { atPinned: atPinned.progress, consolidatedEarly: +consolidatedEarly.progress.toFixed(3), before: +before.progress.toFixed(3), contact: +contact.progress.toFixed(3),
     half: +half.progress.toFixed(3), halfWashT: half.state.washT, pausedWashT: paused.state.washT,
     reversed: +reversed.progress.toFixed(3), reversedWashT: reversed.state.washT, clearedShown: reversed.state.shown };
 }

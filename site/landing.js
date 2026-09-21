@@ -1688,10 +1688,16 @@ window.mossLanding = {
 // needs nothing said about it — and the join settles on whichever end the
 // reader carried it to. Only opacity changes per frame.
 // The incoming text owns contact. No dissolve begins in the gap before it.
-function mobileInkProgress(text) {
+// earlyBy shortens the far end of the span, so consolidation (q===1) lands
+// earlyBy px sooner in scroll than the text fully clearing the band -- the
+// scene1->2 leg passes 40 (owner: consolidate "a little bit before" scene
+// 2's text settles; 40px is about a line of this viewport's own body copy,
+// enough margin to read as early without the target still looking unfinished
+// when it happens). Every other leg passes 0, unchanged.
+function mobileInkProgress(text, earlyBy = 0) {
   const band = mobileVisualBand();
   const rect = text.getBoundingClientRect();
-  return clamp01((band.bottom - rect.top) / (band.height + rect.height));
+  return clamp01((band.bottom - rect.top) / (band.height + rect.height - earlyBy));
 }
 // The first visual enters with its own copy. Morph once fully visible,
 // finishing before the second scene's text arrives at the viewport edge.
@@ -1699,7 +1705,13 @@ function mobileEntranceProgress() {
   const col = document.getElementById('col'), band = mobileVisualBand();
   const top = col.getBoundingClientRect().top + parseFloat(getComputedStyle(col).paddingTop);
   const span = textTop(scenesEl[1]) - top - band.height;
-  return clamp01((innerHeight - band.height - top) / Math.max(1, span));
+  const entrance = clamp01((innerHeight - band.height - top) / Math.max(1, span));
+  // The span formula above can already read 1 while #vis's own box is still
+  // sliding toward its sticky top (measured: up to 60px of travel left) --
+  // scene 1 must not start dissolving into scene 2 before it has actually
+  // arrived, only approximately.
+  const pinned = document.getElementById('vis').getBoundingClientRect().top <= band.top ? 1 : 0;
+  return Math.min(entrance, pinned);
 }
 function mobileClosingProgress() { return mobileInkProgress(scenesEl[DEPLOY].firstElementChild); }
 function mobileVisualBand() {
@@ -3146,7 +3158,7 @@ const progressAt = () => {
     const entrance = mobileEntranceProgress();
     if (entrance < 1) return entrance;
     for (let scene = 1; scene < DEPLOY; scene++) {
-      const q = mobileInkProgress(scenesEl[scene].firstElementChild);
+      const q = mobileInkProgress(scenesEl[scene].firstElementChild, scene === 1 ? 40 : 0);
       if (q < 1) return scene + q;
     }
     return DEPLOY + mobileClosingProgress();

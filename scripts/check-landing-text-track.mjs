@@ -13,7 +13,12 @@ for (const engine of [chromium, webkit]) {
       for (const fraction of [-.01, .5, 1.01, .5, -.01]) {
         await page.evaluate(({ scene, fraction }) => {
           const text = scenesEl[scene].firstElementChild.getBoundingClientRect(), band = mobileVisualBand();
-          scrollTo(0, scrollY + text.top - band.bottom + fraction * (band.height + text.height));
+          // scene 1's own leg (c2) shortens mobileInkProgress's span by 40px
+          // (site/landing.js's earlyBy) so it consolidates a little before
+          // the text is fully clear of the visual -- match that span here so
+          // a given fraction still lands on the same progress value.
+          const earlyBy = scene === 1 ? 40 : 0;
+          scrollTo(0, scrollY + text.top - band.bottom + fraction * (band.height + text.height - earlyBy));
         }, { scene, fraction });
         const expected = scene + Math.max(0, Math.min(1, fraction));
         await page.waitForFunction(expected => Math.abs(window.__landing.state().progress - expected) < .005, expected);
