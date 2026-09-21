@@ -172,10 +172,39 @@ async function checkSceneTiming() {
     reversed: +reversed.progress.toFixed(3), reversedWashT: reversed.state.washT, clearedShown: reversed.state.shown };
 }
 
+const moveTextTo = (page, selector, desired) => (async () => {
+  const delta = await page.evaluate(({ selector, value }) => document.querySelector(selector).getBoundingClientRect().top - value, { selector, value: desired });
+  await page.mouse.wheel(0, delta);
+  await page.waitForTimeout(250);
+  return page.evaluate((selector) => ({
+    top: document.querySelector(selector).getBoundingClientRect().top,
+    band: mobileVisualBand(), progress: progressAt(), xf: +xfAt().toFixed(4),
+  }), selector);
+})();
+
+// K (owner item 4): "scene 2 into 3 ... can start dissolving a bit later,
+// after the text touched it". This leg already shares mobileInkProgress
+// with scene 1->2 (site/landing.js), whose own span is 0 until the text's
+// top edge has crossed the visual's bottom edge (band.bottom) -- this locks
+// that in for the leg the owner named, in both scroll directions, rather
+// than leaving it proven only by the scene 1->2 leg's own tests.
+async function checkScene2to3Touch() {
+  const page = await mobilePage();
+  const untouched = await moveTextTo(page, '#c3 .scene-text', 435);
+  assert(Math.abs(untouched.progress - 2) < 1e-6, `scene 2->3 advanced before #c3's text touched the visual: ${JSON.stringify(untouched)}`);
+  const touched = await moveTextTo(page, '#c3 .scene-text', 419);
+  assert(touched.progress > 2, `scene 2->3 did not start once #c3's text crossed band.bottom: ${JSON.stringify(touched)}`);
+  const back = await moveTextTo(page, '#c3 .scene-text', 435);
+  assert(Math.abs(back.progress - 2) < 1e-6, `scrolling #c3's text back below band.bottom did not undo scene 2->3: ${JSON.stringify(back)}`);
+  await page.close();
+  console.log('scene 2->3 stays put until #c3\'s text touches the visual, both directions');
+}
+
 try {
   results.opening = [];
   for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 568 }]) results.opening.push(await checkOpening(viewport));
   results.sceneTiming = await checkSceneTiming();
+  await checkScene2to3Touch();
   const page = await mobilePage();
   let state = await mobileState(page);
   assert(state.snap === 'none' && !state.mobileSnap, `mobile starts with snap enabled: ${JSON.stringify(state)}`);
