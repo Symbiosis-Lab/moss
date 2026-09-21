@@ -25,16 +25,26 @@
 //           the gesture model below existed (parked at xf~0.5, both
 //           directions, both engines), green after it.
 // I-gesture Unit 1 (2026-09-21), review-phases-2-4.md Job 1: (a) M1, a
-//           wheel hold must expire in every drive role including native --
-//           red on current HEAD (the staleness check lived only inside
+//           wheel hold must expire INTO 'coasting' in every drive role
+//           including native, asserted on state().kind rather than the
+//           weaker state().held (unit 1b review: held alone derives from
+//           contact and passes even with tickGesture's body emptied; kind
+//           additionally needs tickGesture's own release-edge write) -- red
+//           on current HEAD (the staleness check lived only inside
 //           watchScrollDesktop). (b) M3, settling->idle is a real
 //           transition, not cosmetic -- current HEAD already passes this
 //           one honestly (the bug it guards is M1, not M3), so its red
 //           comes from ablation: delete the convergence write in the new
 //           model's settleTo and state().settle sticks true forever. (c)
-//           M4, a wheel coast tick during a touch/scrollbar hold must not
-//           drop it -- red on current HEAD (the old scalar `via` let one
-//           channel overwrite the other).
+//           M4, a SHAPE GUARD not a mechanism pin: a wheel coast tick during
+//           a touch/scrollbar hold must not drop it -- red on current HEAD
+//           (the old scalar `via` let one channel overwrite the other).
+// I-gesture Unit 1b (2026-09-21), same doc, item 3: overshoot-close -- a
+//           hard flick that crosses the whole crossfade band before letting
+//           go must still settle to closingRestY() with the signup form in
+//           view. Red on 9a2f6d5/512ba4d: the closing gate's own xfAt() < 1
+//           upper bound excluded exactly this case (xfAt() reaches 1 well
+//           before closingRestY(), which also has to reveal the form).
 // I-rect    (R2) checked after EACH drag now, not only once at the end --
 //           plates first, before any card is ever touched, then again after
 //           the card. Two independent faults, each proven on its own: the
@@ -402,10 +412,17 @@ async function iGestureHeldExpires(browsers) {
     const [native, held] = await page.evaluate(() => [nativeScroll(), window.__heldAtCrossing]);
     assert(native, `I-gesture(a) ${engineName}: expected to already be in the native role`);
     assert(held, `I-gesture(a) ${engineName}: expected state().held right at the crossing frame`);
-    await page.waitForFunction(() => !window.__landing.state().held, null, { timeout: 2000 }).catch(() => {
-      throw new Error(`I-gesture(a) ${engineName}: a wheel hold never expired in the native role`);
+    // kind, not just held: held derives from contact alone and would still
+    // read false once contact.wheelUntil lapses even with tickGesture's body
+    // emptied -- kind === 'coasting' additionally needs tickGesture's own
+    // release-edge write (restOwed), the actual mechanism M1 added. The old
+    // assertion here (!state().held) passed with that body emptied -- unit 1b
+    // review, "I-gesture(a) does not pin M1."
+    await page.waitForFunction(() => window.__landing.state().kind === 'coasting', null, { timeout: 2000 }).catch(async () => {
+      const kind = await page.evaluate(() => window.__landing.state().kind);
+      throw new Error(`I-gesture(a) ${engineName}: a wheel hold never expired into 'coasting' in the native role (kind=${kind})`);
     });
-    console.log(`${engineName}: I-gesture(a) a wheel hold expires in the native role too`);
+    console.log(`${engineName}: I-gesture(a) a wheel hold expires into 'coasting' in the native role too`);
     await page.close();
   }
 }
@@ -439,14 +456,19 @@ async function iGestureSettleReleases(browsers) {
   }
 }
 
-// I-gesture (c) (M4): a wheel coast tick during a touch or scrollbar-drag
-// hold must not drop the hold -- the old scalar `via` let a wheel event
-// overwrite what a touch hold meant, so holdOff no-op'd on release and the
-// page treated the reader as let go while their finger was still down.
-// Touch and scrollbar-drag share one field (contact.direct), so a
-// synthetic touch pointerdown/up -- reliable in a headless engine, unlike
-// real scrollbar-thumb hit-testing -- covers both; the wheel handler
-// itself is what's under test, not how the hold began.
+// I-gesture (c) (M4), a SHAPE GUARD, not a mechanism pin (unit 1b review):
+// asserts the outward behaviour -- a wheel coast tick during a touch or
+// scrollbar-drag hold must not drop the hold -- via state().held, which any
+// implementation keeping the two channels independent satisfies; it does not
+// assert anything about contact.direct/wheelUntil being separate fields the
+// way I-gesture(a) now asserts on kind specifically. Still catches the
+// regression it names: the old scalar `via` let a wheel event overwrite what
+// a touch hold meant, so holdOff no-op'd on release and the page treated the
+// reader as let go while their finger was still down. Touch and
+// scrollbar-drag share one field (contact.direct), so a synthetic touch
+// pointerdown/up -- reliable in a headless engine, unlike real
+// scrollbar-thumb hit-testing -- covers both; the wheel handler itself is
+// what's under test, not how the hold began.
 async function iGestureCoastDuringHold(browsers) {
   for (const [engineName, browser] of Object.entries(browsers)) {
     const pos = gesturePos(engineName);
@@ -462,7 +484,37 @@ async function iGestureCoastDuringHold(browsers) {
     for (const mag of [30, 20, 12]) { await page.mouse.move(...pos); await page.mouse.wheel(0, mag); await page.waitForTimeout(20); }
     assert(await page.evaluate(() => window.__landing.state().held), `I-gesture(c) ${engineName}: a wheel coast tick during the touch hold dropped it`);
     await page.evaluate(() => window.dispatchEvent(new Event('pointerup')));
-    console.log(`${engineName}: I-gesture(c) a wheel coast tick during a touch hold does not drop it`);
+    console.log(`${engineName}: I-gesture(c) [shape guard] a wheel coast tick during a touch hold does not drop it`);
+    await page.close();
+  }
+}
+
+// I-gesture overshoot-close, unit 1b item 3: a hard flick out of scene 3 can
+// cross the whole crossfade band (xfAt() reaches 1) well before scrollY
+// reaches closingRestY() -- the document position that frames the title and
+// the signup form together, independent of the band's own geometry. The
+// closing gate must still settle to it once the flick lets go, not only
+// while still strictly inside the band.
+async function iCloseOvershootSettles(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const pos = gesturePos(engineName);
+    const page = await browser.newPage(PRESETS.desktop);
+    await ready(page);
+    await arm(page, pos);
+    await gotoScene(page, 3);
+    for (let ticks = 0; ticks < 40 && !(await page.evaluate(() => xfAt() >= 1)); ticks++) {
+      await page.mouse.move(...pos); await page.mouse.wheel(0, 120); await page.waitForTimeout(20);
+    }
+    await page.waitForFunction(() => Math.abs(scrollY - closingRestY()) <= 2 && !window.__landing.state().running && !window.__landing.state().settle, null, { timeout: 5000 }).catch(async (error) => {
+      const info = await page.evaluate(() => ({ y: scrollY, closingRestY: closingRestY(), xf: xfAt(), state: window.__landing.state() }));
+      throw new Error(`I-gesture overshoot-close ${engineName}: a hard flick past the crossfade did not settle to the closing rest: ${JSON.stringify(info)}`, { cause: error });
+    });
+    const formVisible = await page.evaluate(() => {
+      const r = document.querySelector('#beta .input-row').getBoundingClientRect();
+      return r.top >= 0 && r.bottom <= innerHeight;
+    });
+    assert(formVisible, `I-gesture overshoot-close ${engineName}: settled but the signup form is not in view`);
+    console.log(`${engineName}: I-gesture overshoot-close a hard flick past the crossfade still settles with the signup form in view`);
     await page.close();
   }
 }
@@ -1072,6 +1124,7 @@ try {
   await iGestureHeldExpires(browsers);
   await iGestureSettleReleases(browsers);
   await iGestureCoastDuringHold(browsers);
+  await iCloseOvershootSettles(browsers);
   await iRect(browsers);
   await iScene3(browsers);
   await iReduced(browsers);
