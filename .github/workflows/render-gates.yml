@@ -99,6 +99,10 @@ jobs:
         env:
           SKIP_RUST_INSTALL: 1
 
+      # Compiled here rather than downloaded from another workflow's release
+      # artifact: with a warm Rust cache this costs about two minutes, well
+      # under what merging workflows (or a cross-workflow run-id lookup) to
+      # share a build would be worth.
       - name: Build moss-cli
         run: cargo build -p moss-cli
 
@@ -153,6 +157,7 @@ jobs:
         env:
           SKIP_RUST_INSTALL: 1
 
+      # Compiled here rather than downloaded, same reason as the Chromium job above.
       - name: Build moss-cli
         run: cargo build -p moss-cli
 

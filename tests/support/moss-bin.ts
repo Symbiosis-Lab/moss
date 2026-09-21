@@ -1,8 +1,8 @@
 /**
  * Which `moss-cli` a render gate should drive.
  *
- * `MOSS_BIN` wins if set (CI points it at a release artifact so a gate costs
- * an artifact download rather than a second compile of the tree). Otherwise
+ * `MOSS_BIN` wins if set (CI builds the CLI once per job and points every
+ * gate at that one binary). Otherwise
  * prefer the debug binary a developer already has, and fall back to release.
  * Nothing here checks the binary is actually executable — a caller that needs
  * a build to have happened first (`buildScratchSite`, a vite harness) makes

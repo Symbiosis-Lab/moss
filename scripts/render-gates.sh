@@ -32,7 +32,7 @@
 #   bash scripts/render-gates.sh --group nobuild --list   # same, scoped to one group
 #   bash scripts/render-gates.sh --check                # every playwright/*.config.ts is classified exactly once; exit 1 and name it otherwise
 #   bash scripts/render-gates.sh comments-cascade       # one, by config name (positional args override the group)
-#   MOSS_BIN=target/release/moss-cli bash scripts/render-gates.sh   # CI: reuse the artifact
+#   MOSS_BIN=target/release/moss-cli bash scripts/render-gates.sh   # point at a release build instead of the debug default
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -219,9 +219,11 @@ for gate in "${GATES[@]}"; do
 done
 
 if [ "$needs_bin" = true ]; then
-  # CI points this at the release artifact `build-cli` already published, so
-  # these gates cost an artifact download rather than a second compile of the
-  # tree. Resolution order: MOSS_BIN env, then the debug binary, then release.
+  # CI compiles its own debug CLI right before calling this script (`cargo
+  # build -p moss-cli` in .github/workflows/render-gates.yml) rather than
+  # downloading a release artifact from another workflow — see that job's
+  # comment for why. Resolution order here: MOSS_BIN env, then the debug
+  # binary, then release.
   if [ -z "${MOSS_BIN:-}" ]; then
     if [ -x "$PWD/target/debug/moss-cli" ]; then
       export MOSS_BIN="$PWD/target/debug/moss-cli"
