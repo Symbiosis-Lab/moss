@@ -41,12 +41,13 @@ const BASELINE = {
   // object per concern instead of one let per field, with kind fully DERIVED
   // rather than written by five call sites. contact/gesture/settleAt are
   // const (only their fields mutate), so the fall is real, not a rename.
-  // Unit 1b (2026-09-21): rose 84 -> 85. Deleting the once-a-frame kind
-  // cache (a strict-review fault: production read it, state() read live, the
-  // two could disagree) needed one genuinely new binding, wasHeld -- the raw
-  // value tickGesture itself saw last call, since a per-call local can no
-  // longer carry it once there is no cached kind to read on the next call.
-  topLevelLets: 85,
+  // Unit 1b (2026-09-21): rose 84 -> 85, then fell back to 84 same day.
+  // Deleting the once-a-frame kind cache needed a binding to carry the raw
+  // value tickGesture itself saw last call across calls (wasHeld), added as
+  // its own top-level let; housekeeping folded it onto the existing const
+  // contact record (contact.wasHeld) instead, restoring the count -- the
+  // ratchet's own numbers only ever go down.
+  topLevelLets: 84,
   sceneComparisons: 14,
   // Unit 0a: rose again -- the mobile header band's fix (one shared
   // body::before band interpolating colour through --xf instead of two
@@ -78,7 +79,9 @@ const BASELINE = {
   // band from ever settling to closingRestY()), one-line pointers at the
   // gate's own duplicated geometry naming the unit that deletes it, and the
   // new overshoot-close invariant this bug needed to be caught at all.
-  scriptBytes: 245796,
+  // Unit 1b housekeeping: rose 2 bytes, 245796 -> 245798, folding wasHeld
+  // onto contact and updating the comments that named it.
+  scriptBytes: 245798,
 };
 
 function countWindowAssignments(text) {

@@ -3153,7 +3153,7 @@ let restSince = performance.now(), travel = 0;
 // on its own -- a settle can never hijack an in-flight gesture between ticks
 // (the earlier one-line park fix overshot to scene 0 under load for exactly
 // this reason) -- and a real gap lets it lapse without anyone writing a demotion.
-const contact = { direct: false, wheelUntil: 0 };
+const contact = { direct: false, wheelUntil: 0, wasHeld: false };
 let run = null, restOwed = false;
 const gestureHeld = (now) => contact.direct || now < contact.wheelUntil;
 // No cache: every reader, production and the harness alike, calls this with
@@ -3173,15 +3173,14 @@ const gesture = { reason: null };
 // check lived in watchScrollDesktop only, so a held read stuck forever once
 // nativeScroll() routed elsewhere: the 4<->5 park at xf≈0.5). Also the one
 // place that notices a hold lapsing with nothing else arriving to arm a rest
-// for it -- a flick across a boundary with no further tick. wasHeld is its
-// own local, the raw value tickGesture itself saw last time, not a read of
-// any published field -- so the edge it detects can never be masked by
-// something else's idea of what kind was between two of its own calls.
-let wasHeld = false;
+// for it -- a flick across a boundary with no further tick. contact.wasHeld
+// is the raw value tickGesture itself saw last time, not a read of any
+// derived field -- so the edge it detects can never be masked by something
+// else's idea of what kind was between two of its own calls.
 function tickGesture(now) {
   const held = gestureHeld(now);
-  if (wasHeld && !held) { restOwed = true; gesture.reason = 'release'; }
-  wasHeld = held;
+  if (contact.wasHeld && !held) { restOwed = true; gesture.reason = 'release'; }
+  contact.wasHeld = held;
 }
 // Cancels an outgoing settle itself, so no setter depends on running before
 // another to avoid orphaning a live rAF that keeps writing scrollY while direct
