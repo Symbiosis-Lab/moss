@@ -57,16 +57,6 @@ footer.container .footer-github { position: relative; display: inline-flex; alig
 footer.container .footer-github::before { content: ""; display: block; width: 1em; height: 1em; opacity: .72; background: currentColor; -webkit-mask: url("/assets/platforms/github.svg") center / contain no-repeat; mask: url("/assets/platforms/github.svg") center / contain no-repeat; }
 footer.container .footer-github::after { content: ""; position: absolute; inset: -4px; }
 
-/* Mobile: pin the icon to the right end of the footer's own content row
-   (not just the end of the text, which is shorter than the row) while the
-   text links stay put at the start. The <p> becomes a flex row spanning
-   the full row (footer.container is already a flex row itself, see
-   `:has(> .moss-subscribe)` above, so a shrink-to-fit <p> would otherwise
-   sit at whatever width its own text needs); `margin-inline-start: auto`
-   on the icon alone pushes only it to the end. */
-@media (max-width: 600px) {
-  footer.container > p:has(.footer-github) { display: flex; flex-wrap: wrap; align-items: baseline; flex: 1 1 100%; }
-  footer.container .footer-github { margin-inline-start: auto; align-self: center; }
 }
 
 .moss-grid.sc-demo { margin-block: 0; overflow: hidden; border: 1px solid var(--moss-border-light); border-radius: 6px; gap: 0; }

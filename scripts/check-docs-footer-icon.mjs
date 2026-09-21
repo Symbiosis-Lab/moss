@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Verify the docs footer's GitHub icon: on any width, its vertical center must
-// match the adjacent footer text's vertical center within 1px; on mobile
-// (<=600px) it must also sit flush against the right edge of the footer's own
-// content row, with the text links left in place; and its hit area (icon box
-// plus the ::after inset pad) must clear the accessible 24x24 CSS px minimum.
+// match the adjacent footer text's vertical center within 1px; at every width
+// it is the FIRST item of the footer line, flush with the line's left edge and
+// before the text links (owner, 2026-09-21: "GitHub should be on the left
+// before everything", which replaced the earlier right-end placement on
+// mobile); and its hit area (icon box plus the ::after inset pad) must clear
+// the accessible 24x24 CSS px minimum.
 // Screenshots of the footer region, desktop and mobile, en and zh-hans, are
 // opt-in: set SCREENSHOT_DIR to a directory to save them there for visual
 // review. Unset (the default), nothing is written.
@@ -41,9 +43,10 @@ for (const engineName of engineNames) {
             const footer = document.querySelector('footer.container');
             if (!icon || !p || !footer) return null;
             const iconRect = icon.getBoundingClientRect();
-            const footerRect = footer.getBoundingClientRect();
-            const footerStyle = getComputedStyle(footer);
-            const contentRight = footerRect.right - parseFloat(footerStyle.paddingRight || '0');
+            const pRect = p.getBoundingClientRect();
+            const contentLeft = pRect.left + parseFloat(getComputedStyle(p).paddingLeft || '0');
+            let lead = '';
+            for (let n = p.firstChild; n && n !== icon; n = n.nextSibling) lead += n.textContent;
             const textAnchor = p.querySelector('a:not(.footer-github)');
             const textRect = textAnchor.getBoundingClientRect();
             const afterInset = getComputedStyle(icon, '::after').inset;
@@ -52,7 +55,8 @@ for (const engineName of engineNames) {
               icon: { top: iconRect.top, bottom: iconRect.bottom, left: iconRect.left, right: iconRect.right, width: iconRect.width, height: iconRect.height },
               textCenterY: (textRect.top + textRect.bottom) / 2,
               textLeft: textRect.left,
-              contentRight,
+              contentLeft,
+              first: p.firstElementChild === icon && lead.trim() === '',
               hitWidth: iconRect.width - 2 * insetPx,
               hitHeight: iconRect.height - 2 * insetPx,
             };
@@ -63,14 +67,12 @@ for (const engineName of engineNames) {
           }
           const iconCenterY = (data.icon.top + data.icon.bottom) / 2;
           const centerDelta = Math.abs(iconCenterY - data.textCenterY);
-          const rightEdgeDelta = Math.abs(data.icon.right - data.contentRight);
-          const mobile = width <= 600;
-          results.push({ engine: engineName, width, locale: locale.name, centerDelta: +centerDelta.toFixed(2), rightEdgeDelta: mobile ? +rightEdgeDelta.toFixed(2) : null, hitWidth: +data.hitWidth.toFixed(2), hitHeight: +data.hitHeight.toFixed(2) });
+          const leftEdgeDelta = Math.abs(data.icon.left - data.contentLeft);
+          results.push({ engine: engineName, width, locale: locale.name, centerDelta: +centerDelta.toFixed(2), leftEdgeDelta: +leftEdgeDelta.toFixed(2), hitWidth: +data.hitWidth.toFixed(2), hitHeight: +data.hitHeight.toFixed(2) });
           if (centerDelta > 1) failures.push({ engine: engineName, width, locale: locale.name, problem: `Icon vertical center off by ${centerDelta.toFixed(2)}px (> 1px)` });
-          if (mobile) {
-            if (rightEdgeDelta > 1) failures.push({ engine: engineName, width, locale: locale.name, problem: `Icon right edge off the footer's content edge by ${rightEdgeDelta.toFixed(2)}px (> 1px)` });
-            if (data.icon.left <= data.textLeft) failures.push({ engine: engineName, width, locale: locale.name, problem: 'Icon is not to the right of the footer text' });
-          }
+          if (!data.first) failures.push({ engine: engineName, width, locale: locale.name, problem: 'Icon is not the first item of the footer line' });
+          if (leftEdgeDelta > 1) failures.push({ engine: engineName, width, locale: locale.name, problem: `Icon left edge off the footer line's left edge by ${leftEdgeDelta.toFixed(2)}px (> 1px)` });
+          if (data.icon.right > data.textLeft + 1) failures.push({ engine: engineName, width, locale: locale.name, problem: 'Icon is not before the footer text' });
           if (data.hitWidth < 24 || data.hitHeight < 24) failures.push({ engine: engineName, width, locale: locale.name, problem: `Hit area ${data.hitWidth.toFixed(1)}x${data.hitHeight.toFixed(1)} is under the 24x24 minimum` });
           if (screenshotDir && (engineName === 'chromium') && (locale.name === 'en' || locale.name === 'zh-hans')) {
             const footer = page.locator('footer.container');
