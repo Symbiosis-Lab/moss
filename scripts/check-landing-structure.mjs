@@ -56,7 +56,14 @@ const BASELINE = {
   // closure along with the rest of the gesture record -- landing.js reads
   // and writes both through the gestureModel accessor pair it destructures
   // instead of owning the bindings itself.
-  topLevelLets: 81,
+  // Intro title restoration (finding 1, 2026-09-21): rose 81 -> 86.
+  // introMaskStep (introWatercolor's own cache key), washDissolve/primeWash
+  // (the sim's renderer and its boundary-handoff snap, split out of
+  // titleDissolve so driveTitleDissolve can gate the swap instead of
+  // reassigning it directly), simArmed (arming without activating), and
+  // paperPixelsCache (the hoisted, memoized noise buffer) -- five real
+  // bindings for a real restoration, not five ways to say the same thing.
+  topLevelLets: 86,
   // Rose 14 -> 15 on 2026-09-21: the last scene's rest is a floor, not a point,
   // so a visitor can reach the footer on a short window. It is written as one
   // comparison against SHARE in the desktop drive. The scene table pays this
@@ -180,7 +187,17 @@ const BASELINE = {
   // name and window.__landing.mobileEarlyBy exposure (so
   // check-landing-text-track.mjs observes it instead of re-typing 40) are
   // real additions, not bloat.
-  scriptBytes: 254419,
+  // Intro title restoration (finding 1, 2026-09-21): rose 254419 -> 264473.
+  // introWatercolor and its cache, restored close to verbatim from the
+  // pre-refactor build (git tag landing-live-20260919); the boundary-gated
+  // handoff (primeWash, simArmed, driveTitleDissolve's own swap check) that
+  // replaces the direct titleDissolve reassignment the bug lived in;
+  // warmShaderCache (KHR_parallel_shader_compile polling) and
+  // computePaperPixels (genPaper hoisted and memoized) for the arming
+  // stall; and landing.title.trace, the check's own opt-in, zero-cost-when-
+  // off instrumentation for verifying any of it without a sampler race.
+  // Real, requested restoration and its own verification, not bloat.
+  scriptBytes: 264473,
 };
 
 function countWindowAssignments(text) {

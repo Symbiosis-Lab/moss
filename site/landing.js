@@ -3,7 +3,7 @@
 // itself sets (stepClock/stepLimit/scrollV, read where pour() drives the
 // wash; faults, honoured at each fault's own call site so an outside write
 // reaches every caller, internal or not).
-const landing = window.__landing = { title: {}, faults: { captureHang: false } };
+const landing = window.__landing = { title: { traceOn: false, trace: [] }, faults: { captureHang: false } };
 // The composition (the box width is --ed-w, in the stylesheet).
 const GEOM = { cellW: 660, cellH: 620, pad: 80 };
 // The real homepages' opening text, edited as the vault's index.md.
@@ -236,12 +236,67 @@ let SCALE = 1, baseScale = 1;
 const mobileLayout = () => innerWidth <= 900;
 const opening = document.getElementById('intro');
 const openingTitle = opening.querySelector('h1');
+// introWatercolor: a cached 2D-canvas noise mask, restored verbatim in
+// spirit from the pre-refactor build (git show landing-live-20260919:
+// site/index.html) as the title's DEFAULT renderer -- a pure function of
+// progress with no set-up, correct on frame one, unlike the WebGL wash
+// below (a second context, shader compiles, a raster) which needs real
+// time to arm. 24 discrete steps, each mask cached once on first use: most
+// frames re-hit an already-drawn step and cost one integer compare.
+let introMaskStep = -1;
+const introMaskCache = new Map();
+function introWatercolor(progress) {
+  if (reduce || progress > .94) {
+    introMaskStep = -1;
+    openingTitle.style.webkitMaskImage = openingTitle.style.maskImage = 'none';
+    return;
+  }
+  const step = Math.round((1 - progress) * 24);
+  if (step === introMaskStep) return;
+  introMaskStep = step;
+  let data = introMaskCache.get(step);
+  if (!data) {
+    const c = document.createElement('canvas'); c.width = 192; c.height = 64;
+    const x = c.getContext('2d'), im = x.createImageData(c.width, c.height);
+    const hash = (ix, iy) => { let v = Math.imul(ix + 37, 374761393) ^ Math.imul(iy + 71, 668265263) ^ 0x5f3759df; v = Math.imul(v ^ v >>> 13, 1274126177); return ((v ^ v >>> 16) >>> 0) / 4294967295; };
+    const noise = (px, py) => { const ix = Math.floor(px), iy = Math.floor(py), fx = px - ix, fy = py - iy, sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy); return (hash(ix, iy) * (1 - sx) + hash(ix + 1, iy) * sx) * (1 - sy) + (hash(ix, iy + 1) * (1 - sx) + hash(ix + 1, iy + 1) * sx) * sy; };
+    const fbm = (px, py) => .57 * noise(px / 22, py / 22) + .29 * noise(px / 10 + 19, py / 10 + 7) + .14 * noise(px / 4 + 43, py / 4 + 29);
+    const threshold = .18 + step / 24 * .72;
+    for (let py = 0; py < c.height; py++) for (let px = 0; px < c.width; px++) {
+      const value = fbm(px, py) + px / c.width * .18;
+      const t = Math.max(0, Math.min(1, (value - (threshold - .06)) / .12));
+      const a = Math.round((t * t * (3 - 2 * t)) * 255);
+      im.data[(py * c.width + px) * 4 + 3] = a;
+    }
+    x.putImageData(im, 0, 0); data = c.toDataURL(); introMaskCache.set(step, data);
+  }
+  const url = `url(${data})`;
+  openingTitle.style.webkitMaskImage = openingTitle.style.maskImage = url;
+  openingTitle.style.webkitMaskSize = openingTitle.style.maskSize = '100% 100%';
+}
 // The title's own pigment sim is set up further down (after makeSim/raster/
-// advanceWash exist); this stub is what updateOpening can safely
-// call from the very first frame, well before that setup has run. Once armed,
-// titleDissolve owns the h1's opacity and its canvas; until then the h1 is
-// left exactly as the document painted it.
-let titleDissolve = null;
+// advanceWash exist) and is an ENHANCEMENT, not a replacement that must be
+// waited for: titleDissolve starts as introWatercolor (above) and stays
+// there, correct from frame one, until setupTitleDissolve arms the wash AND
+// driveTitleDissolve below sees titleP land exactly on a boundary (1, fully
+// solid, or 0, fully gone) -- the one moment the two renderers agree pixel
+// for pixel, so the swap is never visible. washDissolve is set once the sim
+// exists; simArmed gates the swap so an in-flight scroll is never handed a
+// mid-dissolve pop.
+let titleDissolve = introWatercolor;
+let washDissolve = null;
+// Set alongside washDissolve: snaps the wash's own clock straight to
+// whichever end it is being handed off at, instead of leaving it at its
+// post-reset 0 (== "fully solid") regardless of which boundary this is.
+// Handing off at titleP===0 without this pops just as hard as the bug
+// being fixed: driven from a fresh clock, washDissolve's own goal (T_TOTAL,
+// "fully gone") is real distance away, so it would show several frames of
+// the wash animating from solid to gone while introWatercolor's mask had
+// already been sitting at gone -- primeWash makes the wash's first frame
+// match whichever boundary it is, exactly, the same way a fresh clock
+// already happens to match the titleP===1 boundary on its own.
+let primeWash = null;
+let simArmed = false;
 let pendingTitleP = 1;
 let titleSteps = 0;
 // True once setupTitleDissolve has decided the title's own fate (armed,
@@ -250,17 +305,50 @@ let titleSteps = 0;
 let titleReady = false;
 // Which mechanism owns the title: 'wash' once the real sim is driving it,
 // 'fade' for the plain-opacity fallback (no WebGL2, or a lost context), and
-// 'plain' where none of this applies at all (mobile, reduced motion) or
-// before setup has decided. A harness signal so a test can require the real
-// wash rather than silently passing on the fallback it exists to catch.
+// 'plain' where none of this applies at all (mobile and reduced motion,
+// where driveTitleDissolve/introWatercolor are never reached or always a
+// no-op, or before setup has decided). Still 'plain' while introWatercolor
+// is the active desktop renderer, same as before this restore -- the mask
+// is introWatercolor's own name for itself (h1's maskImage), not a mode a
+// harness needs to select on; only the wash needs that (below). A harness
+// signal so a test can require the real wash rather than silently passing
+// on the fallback it exists to catch.
 let titleMode = 'plain';
 function driveTitleDissolve(titleP) {
   pendingTitleP = titleP;
-  if (titleDissolve) titleDissolve(titleP);
+  if (simArmed && titleDissolve !== washDissolve && (titleP === 1 || titleP === 0)) {
+    primeWash(titleP);
+    titleDissolve = washDissolve;
+    titleMode = 'wash';
+  }
+  titleDissolve(titleP);
+  // Opt-in only (landing.title.traceOn, off by default: no array growth,
+  // no cost, on every other call): a per-frame check reading titleP/ink off
+  // its own separate requestAnimationFrame chain is not synchronized with
+  // this one, so under real CPU contention (a concurrent browser job, a
+  // loaded machine) it can miss several of this function's own calls
+  // between two of its samples and read the accumulated jump as if it were
+  // one frame's worth -- found live, chasing a false "pop" that traced back
+  // to the sampler's own gap, not this function's. Recorded here instead,
+  // synchronously with every real call, has no such gap to miss.
+  if (landing.title.traceOn) {
+    const cs = getComputedStyle(openingTitle);
+    const canvas = document.getElementById('gl-title');
+    landing.title.trace.push({
+      titleP, ink: landing.title.ink(),
+      h1mask: (cs.maskImage || cs.webkitMaskImage || 'none') !== 'none',
+      canvasVisible: !!canvas && getComputedStyle(canvas).display !== 'none',
+    });
+  }
 }
-// Overwritten once the title's own sim is ready; correct on its own for
-// mobile, reduced motion, and the brief window before that setup finishes.
-landing.title.ink = () => Number(getComputedStyle(openingTitle).opacity);
+// Overwritten once the title's own sim is armed AND handed the h1 (below);
+// correct on its own before that, and for mobile/reduced motion, where it
+// is never overwritten at all: introMaskStep < 0 is introWatercolor's own
+// "no mask, solid" state (nothing dissolving, so the h1's own opacity is
+// the whole answer), and otherwise its 24-step quantization of how much of
+// the mask's own alpha remains is a closer reading of the visible glyph
+// than the h1's opacity, which introWatercolor never touches.
+landing.title.ink = () => introMaskStep < 0 ? Number(getComputedStyle(openingTitle).opacity) : 1 - introMaskStep / 24;
 function updateOpening() {
   // On phones the opening and first scene are ordinary document flow. Their
   // geometry is established once in fit(); scrolling only moves that flow.
@@ -277,6 +365,15 @@ function updateOpening() {
   const introScale = .4 + .1 * clamp01((innerHeight - 720) / 480);
   SCALE = baseScale * (1 - (1 - introScale) * stageIntroP);
   document.documentElement.style.setProperty('--s', String(SCALE));
+  // Published for a test to read the exact value this frame drove the
+  // title with, rather than recomputing it independently and risking a
+  // one-frame mismatch against whichever scrollY this frame actually used
+  // (found live: an out-of-process sampler on its own rAF chain can read a
+  // scrollY a tick newer than this one, one frame ahead of what the mask
+  // reflects -- imperceptible to a reader, but a false "no mask" reading
+  // to a per-frame check). Restored from the pre-refactor build (git show
+  // landing-live-20260919:site/index.html), which published this too.
+  document.documentElement.style.setProperty('--intro-title-p', String(titleP));
   driveTitleDissolve(titleP);
   // CSS pins the visual from the document opening. Only the intro moves it;
   // once titleP is zero there is no scroll-position compensation to chase.
@@ -614,6 +711,68 @@ void main(){
   o = vec4(uTint * (T - (1.0 - a)), a);
 }`;
 
+// Paper noise pixels: a pure function of nothing (a0=90210 is a fixed seed,
+// not a parameter), so both makeSim() instances -- the main wash and the
+// title's own small wash -- compute the exact same 256x256 RGBA buffer.
+// Memoized here rather than redone identically per instance: this synchronous
+// noise generation is where most of the title sim's own arming stall went
+// (measured; see setupTitleDissolve's own report), and the main wash's
+// instance already runs first, so the title's second call is a cache hit.
+let paperPixelsCache = null;
+function computePaperPixels() {
+  if (paperPixelsCache) return paperPixelsCache;
+  const N = 256; let a0 = 90210;
+  const rnd = () => { a0 = (a0 + 0x6d2b79f5) | 0; let t = Math.imul(a0 ^ (a0 >>> 15), 1 | a0); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const lattice = (n) => { const g = new Float32Array(n * n); for (let i = 0; i < g.length; i++) g[i] = rnd(); return g; };
+  const sm = (t) => t * t * (3 - 2 * t);
+  const value = (g, n, x, y) => { const gx = x * n, gy = y * n, x0 = Math.floor(gx) % n, y0 = Math.floor(gy) % n, x1 = (x0 + 1) % n, y1 = (y0 + 1) % n, fx = sm(gx - Math.floor(gx)), fy = sm(gy - Math.floor(gy));
+    const a = g[y0 * n + x0], b = g[y0 * n + x1], c = g[y1 * n + x0], d = g[y1 * n + x1]; return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy; };
+  const octs = [4, 8, 16, 32, 64, 128];
+  const fbm = (lats, x, y, o0) => { let s = 0, amp = 1, tot = 0; for (let o = o0; o < octs.length; o++) { s += amp * value(lats[o], octs[o], x, y); tot += amp; amp *= 0.55; } return s / tot; };
+  const L = [0, 1, 2, 3].map(() => octs.map(lattice));
+  const ch = [0, 1, 2, 3].map(() => new Float32Array(N * N));
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const i = y * N + x, u = x / N, v = y / N;
+    ch[0][i] = fbm(L[0], u, v, 2) * 0.7 + 0.3 * rnd(); ch[1][i] = fbm(L[1], u, v, 1); ch[2][i] = fbm(L[2], u, v, 0); ch[3][i] = fbm(L[3], u, v, 3); }
+  const px = new Uint8Array(N * N * 4);
+  for (let k = 0; k < 4; k++) { let lo = 1, hi = 0; for (const t of ch[k]) { lo = Math.min(lo, t); hi = Math.max(hi, t); } for (let i = 0; i < N * N; i++) px[i * 4 + k] = ((ch[k][i] - lo) / (hi - lo)) * 255; }
+  paperPixelsCache = px;
+  return px;
+}
+// The title's own second WebGL2 context compiles the same four programs
+// makeSim's main-wash instance already compiled once, synchronously
+// (gl.compileShader followed immediately by a COMPILE_STATUS read, which
+// blocks until the driver finishes). KHR_parallel_shader_compile, where a
+// GPU exposes it, lets a driver compile in the background instead: this
+// issues the same four compiles on a throwaway context, without ever
+// reading COMPILE_STATUS/LINK_STATUS itself, and polls
+// COMPLETION_STATUS_KHR (rAF-paced, so it costs nothing while waiting)
+// before discarding that context -- most drivers cache a compiled binary by
+// source, so makeSim's own later, synchronous compile of the identical
+// source for the title's real context is then a cache hit rather than a
+// second full compile. A no-op, not a slower path, where the extension
+// does not exist: nothing here blocks on anything the browser would not
+// have blocked on anyway.
+async function warmShaderCache() {
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl2');
+  const ext = gl && gl.getExtension('KHR_parallel_shader_compile');
+  if (!gl || !ext) { gl?.getExtension('WEBGL_lose_context')?.loseContext(); return; }
+  const programs = [WATER, PIG, SHOW, MEAN].map((fs) => {
+    const p = gl.createProgram();
+    const vs = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(vs, V); gl.compileShader(vs);
+    const fss = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(fss, fs); gl.compileShader(fss);
+    gl.attachShader(p, vs); gl.attachShader(p, fss); gl.linkProgram(p);
+    return p;
+  });
+  await new Promise((resolve) => {
+    const poll = () => {
+      if (programs.every((p) => gl.getProgramParameter(p, ext.COMPLETION_STATUS_KHR))) resolve();
+      else requestAnimationFrame(poll);
+    };
+    poll();
+  });
+  gl.getExtension('WEBGL_lose_context')?.loseContext();
+}
 // One WebGL2 pigment engine per canvas: the page's main wash and the intro
 // title's own small wash are two instances of the same factory, sharing every
 // shader, constant and step. `rect` is a getter because the main instance's
@@ -675,26 +834,11 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
     draw();
   };
 
-  // Paper: r relief, g absorbency, b fibre, a pore — tileable value noise, seeded.
+  // Paper: r relief, g absorbency, b fibre, a pore — tileable value noise,
+  // seeded, computed once for both sim instances (computePaperPixels, above).
   const paper = tex(256, 256, gl.REPEAT, false);
-  (function genPaper() {
-    const N = 256; let a0 = 90210;
-    const rnd = () => { a0 = (a0 + 0x6d2b79f5) | 0; let t = Math.imul(a0 ^ (a0 >>> 15), 1 | a0); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-    const lattice = (n) => { const g = new Float32Array(n * n); for (let i = 0; i < g.length; i++) g[i] = rnd(); return g; };
-    const sm = (t) => t * t * (3 - 2 * t);
-    const value = (g, n, x, y) => { const gx = x * n, gy = y * n, x0 = Math.floor(gx) % n, y0 = Math.floor(gy) % n, x1 = (x0 + 1) % n, y1 = (y0 + 1) % n, fx = sm(gx - Math.floor(gx)), fy = sm(gy - Math.floor(gy));
-      const a = g[y0 * n + x0], b = g[y0 * n + x1], c = g[y1 * n + x0], d = g[y1 * n + x1]; return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy; };
-    const octs = [4, 8, 16, 32, 64, 128];
-    const fbm = (lats, x, y, o0) => { let s = 0, amp = 1, tot = 0; for (let o = o0; o < octs.length; o++) { s += amp * value(lats[o], octs[o], x, y); tot += amp; amp *= 0.55; } return s / tot; };
-    const L = [0, 1, 2, 3].map(() => octs.map(lattice));
-    const ch = [0, 1, 2, 3].map(() => new Float32Array(N * N));
-    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const i = y * N + x, u = x / N, v = y / N;
-      ch[0][i] = fbm(L[0], u, v, 2) * 0.7 + 0.3 * rnd(); ch[1][i] = fbm(L[1], u, v, 1); ch[2][i] = fbm(L[2], u, v, 0); ch[3][i] = fbm(L[3], u, v, 3); }
-    const px = new Uint8Array(N * N * 4);
-    for (let k = 0; k < 4; k++) { let lo = 1, hi = 0; for (const t of ch[k]) { lo = Math.min(lo, t); hi = Math.max(hi, t); } for (let i = 0; i < N * N; i++) px[i * 4 + k] = ((ch[k][i] - lo) / (hi - lo)) * 255; }
-    gl.bindTexture(gl.TEXTURE_2D, paper);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
-  })();
+  gl.bindTexture(gl.TEXTURE_2D, paper);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 256, 0, gl.RGBA, gl.UNSIGNED_BYTE, computePaperPixels());
 
   // The two prints, straight alpha, flipped so uv (0,0) is the bottom-left as in the sim.
   const prints = { src: null, tgt: null };
@@ -2309,18 +2453,22 @@ async function raster(nodes, w, h, srcDoc = document) {
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   if (document.documentElement.dataset.static) { titleReady = true; return; }
-  // atRest() can already read true the instant ready flips (restSince was set
-  // once, at script start) — before the reader's very first gesture, fired
-  // at that same instant, has reached even one watchScrollDesktop frame and
-  // moved it. Wait out a gesture's own settling window once unconditionally,
-  // then require atRest() on several checks in a row before trusting it.
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  // Arm at idle after first paint, never mid-gesture (owner: the watercolor
+  // sim is an enhancement, not something a scroll should ever have to wait
+  // out). requestIdleCallback -- a timeout fallback for engines that lack
+  // it, e.g. WebKit -- only fires once the main thread has nothing more
+  // pressing queued; atRest() is checked too, since idle can still land
+  // inside a reader's own gesture (a fling still coasting), and arming's
+  // own stall would freeze that coast dead regardless of which renderer is
+  // currently on screen.
+  await new Promise((resolve) => {
+    const schedule = typeof requestIdleCallback === 'function'
+      ? (fn) => requestIdleCallback(fn, { timeout: 2000 })
+      : (fn) => setTimeout(fn, 300);
+    const tryArm = () => { if (atRest()) resolve(); else schedule(tryArm); };
+    schedule(tryArm);
+  });
   if (document.documentElement.dataset.static) { titleReady = true; return; }
-  for (let stable = 0; stable < 3; ) {
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    if (document.documentElement.dataset.static) { titleReady = true; return; }
-    stable = atRest() ? stable + 1 : 0;
-  }
   const liveRect = openingTitle.getBoundingClientRect();
   if (!liveRect.width || !liveRect.height) { titleReady = true; return; }
   const pad = GEOM.pad;
@@ -2456,6 +2604,8 @@ async function raster(nodes, w, h, srcDoc = document) {
   // the title's smaller grid does not. A fix would need that blur (or an
   // equivalent) to become instance-aware too — a second shader change,
   // not the one this pass authorized.
+  await warmShaderCache();
+  if (document.documentElement.dataset.static) { titleReady = true; return; }
   const titleSim = makeSim({ canvas: titleCanvas, texW: gridW, texH: gridH, rect: () => box, load: TITLE_LOAD, splashAmp: TITLE_SPLASH, mistAmp: TITLE_MIST, mistHold: TITLE_MIST_HOLD, blockSize: TITLE_BLOCK, paperScale: TITLE_PAPER_SCALE });
   // Cost guard: the 4x-larger grid (TITLE_PX_PER_TEXEL halved from 2) costs
   // real GPU time now — measured (real hardware, headless:false; headless
@@ -2502,7 +2652,11 @@ async function raster(nodes, w, h, srcDoc = document) {
   };
   captureMask(print);
   landing.title.ink = () => {
-    if (broken || getComputedStyle(titleCanvas).display === 'none') return Number(getComputedStyle(openingTitle).opacity);
+    // Armed does not mean handed the h1 yet (driveTitleDissolve only swaps
+    // titleDissolve to washDissolve at a titleP boundary, above) -- the
+    // canvas stays hidden and introMaskStep keeps being the real answer
+    // until it does, same fallback as the pre-arm stub this overwrites.
+    if (broken || getComputedStyle(titleCanvas).display === 'none') return introMaskStep < 0 ? Number(getComputedStyle(openingTitle).opacity) : 1 - introMaskStep / 24;
     return titleSim.remaining(mask, maskTotal);
   };
   // Raw readbacks only — no verdict here, so a check can grade what the
@@ -2547,7 +2701,7 @@ async function raster(nodes, w, h, srcDoc = document) {
   // separate legs, no tuned knots, so there is nothing here fighting what the
   // fixed splash actually does over time.
   const titleGoal = (s) => s * T_TOTAL;
-  titleDissolve = (titleP) => {
+  washDissolve = (titleP) => {
     if (broken) return;
     const goal = titleGoal(1 - clamp01(titleP));
     // A little agitation, the way a real hand's scroll stirs the main wash's
@@ -2565,8 +2719,22 @@ async function raster(nodes, w, h, srcDoc = document) {
       openingTitle.style.opacity = '0'; titleCanvas.style.display = 'block'; shownAs = 'wash';
     }
   };
-  titleMode = 'wash';
-  titleDissolve(pendingTitleP);
+  // Called once, by driveTitleDissolve, in the same tick it swaps over --
+  // see primeWash's own declaration (above) for why a fresh clock is only
+  // right for the titleP===1 boundary on its own.
+  primeWash = (titleP) => {
+    clock.t = titleP === 1 ? 0 : T_TOTAL;
+    clock.drawn = -1;
+    shownAs = titleP === 1 ? 'solid' : 'gone';
+    titleCanvas.style.display = 'none';
+    openingTitle.style.opacity = titleP === 1 ? '1' : '0';
+  };
+  // Armed, not yet active: driveTitleDissolve swaps titleDissolve to
+  // washDissolve (and titleMode to 'wash') itself, the next time it sees
+  // titleP land on a boundary -- immediately, if pendingTitleP is already
+  // there (a cold, unscrolled load: titleP is 1 until the reader's first
+  // gesture), never mid-dissolve otherwise.
+  simArmed = true;
   titleReady = true;
   // Re-raster on resize or a language swap that changes the box: never
   // mid-dissolve unless the size actually moved, so a reader mid-scroll never

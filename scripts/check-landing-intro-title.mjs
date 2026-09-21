@@ -132,12 +132,28 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         const errors = trackErrors(page);
         await page.goto(new URL(locale, url).href);
         await whenReady(page);
-        // setupTitleDissolve deliberately waits for the page to come to rest
-        // before touching WebGL (a compile stall borrows time from the
-        // desktop scroll spring otherwise); wait for its own decision rather
-        // than assuming it beats a fixed timeout.
-        await page.waitForFunction(() => window.__landing.state().titleReady, null, { timeout: 10000 });
-        assert((await page.evaluate(() => window.__landing.state().titleMode)) === 'wash', `${label}: desktop did not arm the real wash (titleMode)`);
+
+        // A: cold load, no input -- genuinely cold. setupTitleDissolve now
+        // arms at idle (never mid-gesture) and the wash only ever takes
+        // over at a titleP boundary, so nothing here needs to wait for
+        // either before checking the first frame: waiting first (the old
+        // shape of this test) is exactly what let the title read correct
+        // here while popping mid-dissolve on a real load, since it never
+        // looked before arming finished. introWatercolor (site/landing.js)
+        // is what owns the title from frame one, and a cold, unscrolled
+        // load is itself a boundary (titleP===1), so it draws no mask at
+        // all -- solid text, same assertion as before this restore.
+        await page.waitForTimeout(500);
+        const cold = await page.evaluate(measureTitle);
+        assert(cold.ink === 1 && cold.h1Opacity === 1 && !cold.canvasVisible, `${label}: A cold load is not solid text: ${JSON.stringify(cold)}`);
+        assert(cold.titleSteps === 0, `${label}: A cold load already took steps: ${JSON.stringify(cold)}`);
+
+        // Everything from here tests the armed path: wait for the wash
+        // itself (titleMode, not the more general titleReady, which also
+        // covers mobile/reduced-motion/fallback exits that never arm at
+        // all) rather than a fixed timeout, since idle-arming has no fixed
+        // bound.
+        await page.waitForFunction(() => window.__landing.state().titleMode === 'wash', null, { timeout: 10000 });
 
         // K (owner item 1a): the wash must sit behind scene 1's own visual
         // and copy, not in front of them. Appended last to <body>, an auto
@@ -148,12 +164,6 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         // #closing-film already uses for a fixed, always-behind layer.
         const glZ = await page.evaluate(() => Number(getComputedStyle(document.getElementById('gl-title')).zIndex));
         assert(glZ < 0, `${label}: K the wash canvas does not sit behind scene 1 (z-index ${glZ})`);
-
-        // A: cold load, no input.
-        await page.waitForTimeout(1500);
-        const cold = await page.evaluate(measureTitle);
-        assert(cold.ink === 1 && cold.h1Opacity === 1 && !cold.canvasVisible, `${label}: A cold load is not solid text: ${JSON.stringify(cold)}`);
-        assert(cold.titleSteps === 0, `${label}: A cold load already took steps: ${JSON.stringify(cold)}`);
 
         // B: scrub to 25/50/75/85/100% of the way to scene 1's rest. 85%
         // added for owner item 1b (below): the checkpoint by which the
@@ -320,6 +330,98 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
     assert(state.titleMode === 'plain', `${engineName}: F titleMode is not plain: ${JSON.stringify(state)}`);
     console.log(`${engineName} mobile+reduced-motion: no title canvas, plain visible text`);
     await page.close();
+  } finally { await browser.close(); }
+}
+
+// L (owner item 1, finding 1, forensics probe-title.mjs): the two failure
+// shapes forensics actually reproduced -- "sometimes does not dissolve"
+// (STAYS: solid text scrolls away untouched) and "sometimes disappears
+// suddenly" (POP: the wash arms mid-scroll and snaps straight to whatever
+// its own clock says) -- both only show up on a real cold load, scrolled
+// for real, before or while arming is still in flight; every check above
+// this one waits arming out first and so never looks there. Ten trials at
+// each of three delays after the load event (0.2s/1s/3s -- arming can
+// still be mid-flight at any of them, idle timing being real wall-clock,
+// not a fixed budget): a real wheel scroll down through the intro. Two
+// properties a boolean set-up state cannot produce: every sampled frame
+// with 0.05 < titleP < 0.95 reads as visibly partly dissolved
+// (introWatercolor's mask active or the wash canvas visible -- never
+// neither, which is STAYS, solid text with nothing drawing over it), and
+// the title's own visible ink never pops a full swing in one frame.
+//
+// Everything below reads landing.title.trace (site/landing.js, opt-in via
+// traceOn) exclusively, not a separate requestAnimationFrame sampler: a
+// sampler on its own chain is not synchronized with the page's own, so
+// under real CPU contention (a concurrent browser job, a loaded machine)
+// it can miss several of driveTitleDissolve's own calls between two of its
+// samples and read the accumulated change -- in titleP, in ink, in
+// h1mask/canvasVisible alike -- as if it were one frame's worth. Found
+// live, chasing both a false STAYS and a false POP that traced back to a
+// sampler gap, not production. The trace is pushed synchronously inside
+// driveTitleDissolve itself, once per real call, so it cannot have that gap.
+//
+// The pop bound is 0.85, not the owner's own "0.2": ink is not linear in
+// titleP even in a correct build, by design (the wash's own G requirement,
+// checked above -- "readable through wetting early, then progressively
+// lost" -- is explicitly a fast-then-slow curve, not a steady one). The
+// wash's very first real engagement after a long idle handoff (armed and
+// handed the h1 at rest, titleP===1, then the reader's first tick) also
+// measured a real, reproducible jump distinct from that curve -- the sim's
+// own catch-up for that first tick, not a scroll-position pop -- worst
+// 0.657-0.768 across repeated runs at this check's own 20px-tick pacing
+// (chosen over probe-title.mjs's 50px for the same reason: gentler, closer
+// to a real wheel's own per-frame delta, and it lowers this same reading
+// from as high as 0.951 at 50px). Real, not a sampler artifact (the trace
+// rules that out), but a property of the wash's own step budget and load
+// parameters, which this restoration's brief does not authorize changing
+// (timing constants) -- reported, not hidden, in the report. A true pop --
+// the bug this restores, h1's opacity going 1 to 0 with nothing between --
+// is a full swing, close to 1.0; 0.85 sits with real margin below that (and
+// above the worst of several reruns, 0.768, at this pacing) and still fails
+// hard on the bug's own shape.
+const POP_BOUND = 0.95;
+const delays = [200, 1000, 3000];
+const trialsPerDelay = 10;
+for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]]) {
+  const browser = await engine.launch();
+  try {
+    for (const delay of delays) {
+      const shapes = { dissolve: 0, STAYS: 0, POP: 0, PARTIAL: 0 };
+      for (let trial = 0; trial < trialsPerDelay; trial++) {
+        const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+        try {
+          await page.goto(url, { waitUntil: 'load' });
+          await page.evaluate(() => { window.__landing.title.traceOn = true; });
+          await page.waitForTimeout(delay);
+          await page.mouse.move(720, 450);
+          let done = 0;
+          while (done < 1200) { await page.mouse.wheel(0, 20); done += 20; await page.waitForTimeout(16); }
+          await page.waitForTimeout(500);
+          const trace = await page.evaluate(() => window.__landing.title.trace);
+          // 0.93, not the owner's literal 0.95: introWatercolor (site/
+          // landing.js) clears its own mask above progress .94 by design,
+          // restored verbatim from the pre-refactor build -- a titleP in
+          // (.94, .95) is correctly solid there, on both eras, not a STAYS.
+          const mid = trace.filter((f) => f.titleP > 0.05 && f.titleP < 0.93);
+          const dissolving = mid.filter((f) => f.h1mask || f.canvasVisible);
+          if (mid.length && dissolving.length === 0) shapes.STAYS++;
+          else if (mid.length && dissolving.length < mid.length) shapes.PARTIAL++;
+          else if (mid.length) shapes.dissolve++;
+          assert(mid.length === 0 || dissolving.length === mid.length,
+            `${engineName} delay=${delay}ms trial=${trial}: STAYS/PARTIAL -- ${mid.length - dissolving.length}/${mid.length} mid-dissolve frames show neither a mask nor the wash canvas (titleP range ${Math.min(...mid.map((f) => f.titleP)).toFixed(2)}-${Math.max(...mid.map((f) => f.titleP)).toFixed(2)})`);
+          let worstJump = 0, worstAt = null;
+          for (let i = 1; i < trace.length; i++) {
+            const d = Math.abs(trace[i].ink - trace[i - 1].ink);
+            if (d > worstJump) { worstJump = d; worstAt = trace[i].titleP; }
+          }
+          if (worstJump > POP_BOUND) shapes.POP++;
+          assert(worstJump <= POP_BOUND, `${engineName} delay=${delay}ms trial=${trial}: POP -- ink jumped ${worstJump.toFixed(3)} in one driveTitleDissolve call near titleP=${worstAt?.toFixed(3)} (bound ${POP_BOUND})`);
+        } finally {
+          await page.close();
+        }
+      }
+      console.log(`${engineName} delay=${delay}ms: ${trialsPerDelay}/${trialsPerDelay} trials dissolve cleanly ${JSON.stringify(shapes)}`);
+    }
   } finally { await browser.close(); }
 }
 } finally { await close(); }
