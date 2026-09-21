@@ -434,7 +434,29 @@
        opacity to zero -- the same rgb(calc(a + b*var(--xf)), ...) pattern
        .brand/.language-picker's own color rules already use below, not
        calc() inside color-mix()'s percentage argument. */
-    body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; --header-band: rgb(calc(250 - 242 * var(--xf)), calc(248 - 238 * var(--xf)), calc(245 - 236 * var(--xf))); background: linear-gradient(to bottom, var(--header-band) 0 34px, color-mix(in srgb, var(--header-band) 72%, transparent) 52px, transparent); }
+    body { --header-band: rgb(calc(250 - 242 * var(--xf)), calc(248 - 238 * var(--xf)), calc(245 - 236 * var(--xf)));
+      /* The band and a linearly-interpolated text colour are two values
+         crossing the same grey gamut in opposite directions, so ANY
+         continuous blend between them touches near-zero contrast somewhere
+         -- verified directly, sampling a real touch-scroll crossfade: ~1:1
+         at xf about 0.5, well under readable. Flipping instead of blending:
+         --hdr snaps text from the dark (xf=0) formula to the light (xf=1)
+         one over a 0.5%-of-crossfade ramp (not a true discontinuity, which
+         risks its own rendering edge cases) centred on 0.548, the xf where
+         solving contrast(black, band) = contrast(white, band) lands --
+         both sides equal 4.58:1 there, the worst case either formula can
+         see. A real touch-scroll never renders a frame inside a ramp this
+         narrow (sampled below in I-header-scrim), so the pure-black and
+         pure-white formulas below are the only two colours ever actually
+         seen, each on the side of the band where it has the most room. */
+      --hdr: clamp(0, (var(--xf) - 0.548) * 200, 1);
+    }
+    body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; background: linear-gradient(to bottom, var(--header-band) 0 34px, color-mix(in srgb, var(--header-band) 72%, transparent) 52px, transparent); }
+    .brand { color: rgb(calc(255 * var(--hdr)), calc(255 * var(--hdr)), calc(255 * var(--hdr))); }
+    .brand svg { filter: grayscale(var(--hdr)) brightness(calc(1 + var(--hdr) * 99)); }
+    .language-picker { color: rgb(calc(93 + 162 * var(--hdr)), calc(88 + 167 * var(--hdr)), calc(83 + 172 * var(--hdr))); }
+    .language-picker a:hover { color: rgb(calc(45 + 163 * var(--hdr)), calc(90 + 165 * var(--hdr)), calc(45 + 210 * var(--hdr))); }
+    .language-picker .nav-lang-current { color: rgb(calc(44 + 211 * var(--hdr)), calc(40 + 215 * var(--hdr)), calc(37 + 218 * var(--hdr))); }
     /* Belt and suspenders on landing.js's own !mobileLayout() gate: scene 2's
        cue is a desktop-only design (the brief scopes it that way), and this
        breakpoint is the same 900px mobileLayout() itself reads. */

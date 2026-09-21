@@ -41,7 +41,11 @@ const BASELINE = {
   // body::before band interpolating colour through --xf instead of two
   // separate .brand/.language-picker background boxes) added net new
   // comment explaining why, not new markup or a new element.
-  htmlBytes: 49555,
+  // Unit 0a follow-up: rose again for the --hdr flip fixing the header
+  // contrast dip (a real defect a visitor could stop the scroll inside,
+  // not new markup) -- the explanatory comment plus five colour rules
+  // rewritten to use --hdr instead of --xf, mobile-scoped only.
+  htmlBytes: 51251,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a

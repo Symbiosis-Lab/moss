@@ -772,17 +772,27 @@ async function iWindowRadius(browsers) {
 // the "no background of its own" assertion fails immediately -- .brand
 // carries its own rgba(8,10,9,...) box again. GREEN restored.
 //
-// Finding, not fixed here (explicitly out of this item's scope): sampling
-// contrast through the actual crossfade via a real slow touch-scroll (CDP,
-// Chromium only -- Playwright cannot synthesize this in mobile WebKit,
-// same limit check-landing-mobile.mjs already lives with) shows a genuine
-// dip to ~1.1:1 near xf=0.5. The header text colour and the band colour
-// are both linear interpolations through the same grey gamut in opposite
-// directions (text: black to white; band: near-white to near-black), so
-// they cross paths near the midpoint by construction, not from a wiring
-// bug. Reported below every run, never asserted against: a fix (a
-// non-linear easing keeping the two curves apart, or a transit-only text
-// treatment) is a design decision for the owner.
+// Fixed (a follow-up, same day): a visitor can stop the scroll anywhere in
+// the crossfade, so the dip found first -- sampling contrast through the
+// actual crossfade via a real slow touch-scroll (CDP, Chromium only --
+// Playwright cannot synthesize this in mobile WebKit, same limit check-
+// landing-mobile.mjs already lives with) showed a genuine collapse to
+// ~1.1:1 near xf=0.5 -- was a real defect, not inherent. Root cause: the
+// header text colour and the band colour were both linear interpolations
+// through the same grey gamut in opposite directions (text: black to
+// white; band: near-white to near-black), crossing paths near the
+// midpoint by construction, not from a wiring bug -- no non-linear easing
+// of that same blend avoids it either (checked: even a steep linear ramp
+// between the two colour formulas still touches ~1:1 partway through its
+// own ramp, for the identical reason). site/index.html's fix instead
+// flips text between the two existing formulas with a near-instant step
+// (--hdr, a clamp() ramp 0.5% of the crossfade wide, so a real touch-
+// scroll never renders inside it) at xf=0.548, the crossover where
+// solving contrast(black, band) = contrast(white, band) lands -- both
+// sides 4.58:1 there, this function's own floor below. RED (site/
+// index.html's --hdr definition and every rule using it reverted to
+// var(--xf) directly): minimum crossfade contrast collapses back to
+// ~1:1. GREEN restored, minimum measured at 4.68:1.
 function srgbToLinear(c) { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }
 function relativeLuminance([r, g, b]) { return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b); }
 function contrastRatio(rgb1, rgb2) { const [a, b] = [relativeLuminance(rgb1), relativeLuminance(rgb2)].sort((x, y) => y - x); return (a + 0.05) / (b + 0.05); }
@@ -854,7 +864,14 @@ async function iHeaderScrim(browsers) {
   const min = Math.min(...samples.map((s) => s.cr));
   const at = samples.find((s) => s.cr === min);
   console.log(`I-header-scrim chromium: MINIMUM contrast through the crossfade is ${min.toFixed(2)}:1 at xf=${at.xf.toFixed(2)} (${samples.length} samples, real touch-scroll)`);
-  if (min < 3) console.log(`I-header-scrim: FINDING, not asserted against -- a real, visible low-contrast moment; see this function's header comment for why and whose decision fixing it is.`);
+  // A visitor can stop scrolling anywhere in the crossfade, so this is a
+  // real assertion now, not just a reported finding -- site/index.html's
+  // --hdr flip (this function's header comment has the derivation) is what
+  // makes 4.5 reachable at all; a continuous linear blend between the two
+  // text-colour formulas cannot clear it (measured: ~1:1 at the old
+  // build's own crossover, unavoidable by construction -- both curves pass
+  // through the same grey at the same moment).
+  assert(min >= 4.5, `I-header-scrim chromium: minimum crossfade contrast ${min.toFixed(2)} < 4.5 at xf=${at.xf.toFixed(2)} (${samples.length} samples)`);
   await page.close();
 }
 
