@@ -142,7 +142,9 @@ const BASELINE = {
   // advanceWash's own switch from reset()-and-replay to a keyframe
   // restore) -- reversal bounded to a 63-step replay instead of 252.
   // Budget consumed so far: 5661 of 6000.
-  scriptBytes: 254615,
+  // Rose 254615 -> 256274 on 2026-09-21 for five owner items: the title behind scene 1
+  // and its haze, the Publish carry landing with scene 4's text, and three mobile timings.
+  scriptBytes: 256274,
 };
 
 function countWindowAssignments(text) {
