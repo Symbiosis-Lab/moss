@@ -65,12 +65,22 @@
 //!
 //! **Cloud-sync friendly, minus the regenerable parts.** Config, identity,
 //! plugins and `data/` sync via iCloud, Dropbox, or Google Drive — that is the
-//! portability mechanism across machines. `build/` and `cache/` do NOT: on one
-//! iCloud vault they were 12.3 GB of a 15.6 GB folder, produced ~1700 conflict
-//! copies, and are the bytes "optimize storage" zeroes by shared inode (the
-//! 0-byte-stub class `hardlink_invariant_test` guards). moss marks both with
-//! the `com.apple.fileprovider.ignore#P` xattr at build start — see
-//! `exclude_dirs_from_cloud_sync`. No user action needed; nothing is renamed.
+//! portability mechanism across machines. `build/` is asked not to: on one
+//! iCloud vault it was 12.3 GB of a 15.6 GB folder, produced ~1700 conflict
+//! copies, and holds the bytes "optimize storage" zeroes by shared inode (the
+//! 0-byte-stub class `hardlink_invariant_test` guards). The ask is the
+//! `com.apple.fileprovider.ignore#P` xattr, set at build start by
+//! `exclude_dirs_from_cloud_sync` — and it is only an ask. File Provider
+//! extensions (Google Drive, Dropbox) read it as "do not sync". iCloud Drive
+//! reads it as "stop syncing", which on a directory it already holds deletes
+//! the cloud copy and leaves the local one under a name the cloud can still
+//! deliver: it then renames the live `build/` aside as `build N` and puts its
+//! own copy at the path, mid-build. So nothing may depend on the marker in
+//! either direction. What the code does today is name the swap when it
+//! happens (`build::lifecycle::root_identity`, the `build.root` log line);
+//! the split of `build/` into a synced content-addressed cache and a
+//! per-machine `.nosync` root — the suffix iCloud honours unconditionally —
+//! is the next change here.
 //!
 //! **Fully gitignored.** `.moss/` is not tracked by git. Cloud sync is the
 //! portability mechanism for settings across machines.
