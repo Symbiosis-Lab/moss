@@ -153,6 +153,11 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         // covers mobile/reduced-motion/fallback exits that never arm at
         // all) rather than a fixed timeout, since idle-arming has no fixed
         // bound.
+        // The armed path is an enhancement behind TITLE_WASH in landing.js. While
+        // it is off, the assertions from here to E test code that cannot run;
+        // the cold-load trials below still guard the mask path on every run.
+        const titleWash = await page.evaluate(() => window.__landing.state().titleWash);
+        if (!titleWash) { console.log(`${label}: cold solid; TITLE_WASH is off, so the wash-path assertions K..E are skipped`); await page.close(); continue; }
         await page.waitForFunction(() => window.__landing.state().titleMode === 'wash', null, { timeout: 10000 });
 
         // K (owner item 1a): the wash must sit behind scene 1's own visual

@@ -313,6 +313,12 @@ let titleReady = false;
 // harness needs to select on; only the wash needs that (below). A harness
 // signal so a test can require the real wash rather than silently passing
 // on the fallback it exists to catch.
+// The watercolor title is switched off (2026-09-21). With it armed and the
+// page idle at the top, the first scroll tick could drop the visible ink by
+// 0.98 in one frame: the sudden disappearance the owner reported. Until the
+// first-tick catch-up is fixed, introWatercolor's mask, a pure function of
+// scroll that cannot pop, draws every dissolve. Flip this to re-enable.
+const TITLE_WASH = false;
 let titleMode = 'plain';
 function driveTitleDissolve(titleP) {
   pendingTitleP = titleP;
@@ -2433,7 +2439,7 @@ async function raster(nodes, w, h, srcDoc = document) {
 // 1's rest (updateOpening, above). Desktop only, and never under reduced
 // motion — both keep the title exactly as plain scrolling text.
 (async function setupTitleDissolve() {
-  if (mobileLayout() || reduce) { titleReady = true; return; }
+  if (!TITLE_WASH || mobileLayout() || reduce) { titleReady = true; return; }
   // Wait for the page to boot AND come to rest before doing any of this: a
   // second WebGL2 context and its shader compiles are synchronous main-thread
   // work, and watchScrollDesktop's own spring clamps its per-frame dt to 0.1s
@@ -4235,7 +4241,7 @@ landing.sceneForRest = sceneForRest;   // which scene a rest carries to, the sam
 landing.printGeneration = () => printGeneration;   // a monotonic count, bumped only by applyPrintRect -- ground truth for "did the rect actually change", never a transient read of prints itself
 // settle/held/kind all call gestureKind(now) fresh, the same function every production
 // read site calls -- no cached field for this or any other reader to disagree with.
-landing.state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: gestureKind(performance.now()) === 'settling', held: gestureKind(performance.now()) === 'held', kind: gestureKind(performance.now()), reason: gesture.reason, settleSecs: settleAt.secs, settleCureLeft: settleAt.cureLeft, settleShown: settleAt.shown, settleRunning: settleAt.running, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, titleSteps, titleReady, titleMode });
+landing.state = () => ({ titleWash: TITLE_WASH, shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: gestureKind(performance.now()) === 'settling', held: gestureKind(performance.now()) === 'held', kind: gestureKind(performance.now()), reason: gesture.reason, settleSecs: settleAt.secs, settleCureLeft: settleAt.cureLeft, settleShown: settleAt.shown, settleRunning: settleAt.running, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, titleSteps, titleReady, titleMode });
 
 const when = (frame, key) => new Promise((resolve, reject) => {
   const deadline = setTimeout(() => { clearInterval(poll); reject(new Error(`Demo ${frame.id} did not initialize`)); }, 10000);

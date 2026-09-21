@@ -197,7 +197,8 @@ const BASELINE = {
   // stall; and landing.title.trace, the check's own opt-in, zero-cost-when-
   // off instrumentation for verifying any of it without a sampler race.
   // Real, requested restoration and its own verification, not bloat.
-  scriptBytes: 264473,
+  // +443 on 2026-09-21: the TITLE_WASH gate and its comment; the wash pops on the first tick after idle.
+  scriptBytes: 264916,
 };
 
 function countWindowAssignments(text) {
