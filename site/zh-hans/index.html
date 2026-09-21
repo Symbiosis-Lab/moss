@@ -38,7 +38,15 @@
     --bg: #faf8f5; --text: #2c2825; --text2: #5d5853; --border: #e5e1da; --accent: #2d5a2d;
     --heading: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
     --body: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
-    --cell-w: 660px; --cell-h: 620px; --ed-w: 520px; --pad: 80px; --s: 1; --win-r: 12px;
+    /* --win-r: 24px, not chosen here -- copied from moss-desktop's own
+       WINDOW_CORNER_RADIUS (src-tauri/src/system/utils/chrome.rs), the real
+       app's window radius. #box shares the harvested shell's own coordinate
+       space 1:1 (iframe at width/height:100%, no separate zoom), so this
+       box-local px is the same px the Publish pill is drawn in: a 36px pill
+       (--moss-pill-size) with border-radius 18px (--moss-pill-radius, half
+       the pill) -- the same 24:18 relationship the app itself draws between
+       its window and that circle. */
+    --cell-w: 660px; --cell-h: 620px; --ed-w: 520px; --pad: 80px; --s: 1; --win-r: 24px;
     /* how far the last join has run: 0 the two-column page, 1 the full-bleed
        close. It is read before the script has set anything, so it starts here. */
     --xf: 0;
@@ -218,6 +226,35 @@
   .orbit-fallback { font: 600 10px/1.05 var(--body); color: var(--text2); letter-spacing: .01em; user-select: none;
     width: 88%; text-align: center; overflow-wrap: break-word; }
   @media (prefers-reduced-motion: reduce) { #stage[data-scene="3"] #box { transition: none; } }
+
+  /* Scene 2's Publish cue (see the markup comment above #pub-cue for why this
+     layer sits at the body level). landing.js turns .on on and off and writes
+     --pub-ring-cx/cy/r0/k from the button's live screen rect; everything else
+     -- the breathing period, the hairline stroke, the fade -- is CSS alone,
+     so the two running rings cost the main thread nothing once placed. */
+  #pub-cue { position: fixed; inset: 0; z-index: 60; pointer-events: none; display: none; }
+  #pub-cue.on { display: block; }
+  /* A 2x2 CSS-px SVG so scale(r0) turns it into a circle of radius r0 -- one
+     `transform` carries both the resting size and the whole breath, and
+     vector-effect below keeps the drawn stroke at 1px regardless of that
+     scale, which a bordered box scaling up cannot do (the border thickens
+     with it). */
+  .pub-ring { position: absolute; left: 0; top: 0; width: 2px; height: 2px; animation: none; }
+  .pub-ring circle { fill: none; stroke: var(--text); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+  #pub-cue.on .pub-ring { animation: pub-ring-breathe var(--pub-ring-period, 7s) cubic-bezier(.2, .6, .35, 1) infinite; }
+  #pub-cue.on .pub-ring:nth-child(2) { animation-delay: calc(var(--pub-ring-period, 7s) * -0.5); }
+  @keyframes pub-ring-breathe {
+    0% { transform: translate(var(--pub-ring-cx), var(--pub-ring-cy)) scale(var(--pub-ring-r0, 1)); opacity: .5; }
+    55% { opacity: .16; }
+    100% { transform: translate(var(--pub-ring-cx), var(--pub-ring-cy)) scale(calc(var(--pub-ring-r0, 1) * var(--pub-ring-k, 1))); opacity: 0; }
+  }
+  /* No breath to hold still for: one ring, born at its resting size and left
+     there, is the whole cue. */
+  @media (prefers-reduced-motion: reduce) {
+    #pub-cue.on .pub-ring { animation: none; opacity: .35; transform: translate(var(--pub-ring-cx), var(--pub-ring-cy)) scale(calc(var(--pub-ring-r0, 1) * 1.3)); }
+    #pub-cue.on .pub-ring:nth-child(2) { display: none; }
+  }
+
   /* The scene the crossfade returns to arrives already standing: its targets are
      an end state, not a performance to replay each time the reader crosses back. */
   #stage.snap #box, #stage.snap .sib { transition: none; }
@@ -398,6 +435,19 @@
 
   @media (max-width: 900px) {
     body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; opacity: calc(1 - var(--xf)); background: linear-gradient(to bottom, var(--bg) 0 34px, color-mix(in srgb, var(--bg) 72%, transparent) 52px, transparent); }
+    /* The header sits outside #five, so it never inherited the closing
+       text's own scrim (#scrim is #closing-film's child, opacity var(--scrim)
+       riding on #five's own opacity var(--xf)) -- the site name and language
+       switch stayed unscrimmed over the moving film. Same two variables,
+       multiplied by hand here since this element is not one of #five's
+       descendants: at rest (xf 0) this is fully transparent, so nothing
+       shifts size or position, only opacity, which is already how --xf
+       drives every other mobile-only rule in this block. */
+    .brand, .language-picker { background: rgba(8, 10, 9, calc(var(--scrim, .72) * var(--xf))); }
+    /* Belt and suspenders on landing.js's own !mobileLayout() gate: scene 2's
+       cue is a desktop-only design (the brief scopes it that way), and this
+       breakpoint is the same 900px mobileLayout() itself reads. */
+    #pub-cue { display: none !important; }
     #intro { min-height: 0; justify-items: start; padding: 88px 34px 32px; }
     #intro h1 { position: static; text-align: left; font-size: clamp(40px, 11vw, 58px); opacity: 1; }
     .page { margin-top: 0; opacity: 1; }
@@ -509,6 +559,17 @@
     </div></section>
     <section class="scene" id="c5" aria-hidden="true"><div class="edge"></div></section>
   </div>
+</div>
+
+<!-- Scene 2's Publish cue: a body-level layer, deliberately not inside #stage,
+     so its ring can grow past #box/#cell's own overflow:hidden and is never
+     folded into a print (fold() in landing.js only ever walks #stage). Two
+     rings, phase-offset by CSS alone, so at most two are ever alive; landing.js
+     turns the layer on/off and writes its --pub-ring-* geometry, this markup
+     only draws what it is told. -->
+<div id="pub-cue" aria-hidden="true">
+  <svg class="pub-ring" viewBox="-1 -1 2 2"><circle cx="0" cy="0" r="1"/></svg>
+  <svg class="pub-ring" viewBox="-1 -1 2 2"><circle cx="0" cy="0" r="1"/></svg>
 </div>
 
 <!-- The close. Its footage is asked for from the script and never from here, so
