@@ -2348,7 +2348,8 @@ async function raster(nodes, w, h, srcDoc = document) {
   if (document.documentElement.dataset.static) { titleReady = true; return; }
   const titleCanvas = document.createElement('canvas');
   titleCanvas.id = 'gl-title';
-  titleCanvas.style.cssText = 'position:fixed; left:0; top:0; pointer-events:none; display:none;';
+  // z-index:-1 (see #closing-film): stays behind scene 1's content.
+  titleCanvas.style.cssText = 'position:fixed; left:0; top:0; z-index:-1; pointer-events:none; display:none;';
   document.body.appendChild(titleCanvas);
   const gridW = Math.round(box.w / TITLE_PX_PER_TEXEL), gridH = Math.round(box.h / TITLE_PX_PER_TEXEL);
   // A title's strokes cover a small fraction of its own box next to a
@@ -2486,8 +2487,10 @@ async function raster(nodes, w, h, srcDoc = document) {
     const c = document.createElement('canvas'); c.width = gridW; c.height = gridH;
     const g = c.getContext('2d'); g.drawImage(titleCanvas, 0, 0, titleCanvas.width, titleCanvas.height, 0, 0, gridW, gridH);
     const d = g.getImageData(0, 0, gridW, gridH).data;
+    // drawImage skips CSS opacity; fold it back in so this reads the page.
+    const op = titleCanvas.style.opacity || 1;
     const alpha = new Array(gridW * gridH);
-    for (let i = 3, p = 0; i < d.length; i += 4, p++) alpha[p] = d[i];
+    for (let i = 3, p = 0; i < d.length; i += 4, p++) alpha[p] = d[i] * op;
     return { w: gridW, h: gridH, alpha };
   };
   landing.title.mask = () => ({ w: gridW, h: gridH, mask: Array.from(mask) });
@@ -2523,6 +2526,8 @@ async function raster(nodes, w, h, srcDoc = document) {
     // speed the reader sets — spreads the bloom past single stroke edges.
     const advanced = advanceWash(titleSim, clock, { goal, fwd: true, stir: 0.8, budget: TITLE_STEP_BUDGET }, paint);
     titleSteps += advanced.count;
+    // SHOW's grain haze never fully clears; fade opacity out before the cut.
+    titleCanvas.style.opacity = String(1 - smooth(T_TOTAL * .5, T_TOTAL * .8, clock.t));
     if (clock.t <= 0) {
       if (shownAs !== 'solid') { titleCanvas.style.display = 'none'; openingTitle.style.opacity = '1'; shownAs = 'solid'; }
     } else if (clock.t >= T_TOTAL - 1e-6) {

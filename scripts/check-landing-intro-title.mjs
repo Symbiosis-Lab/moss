@@ -62,6 +62,7 @@ function cellAvg(arr, w, h, cell) {
   }
   return n ? sum / n : 0;
 }
+function maxOf(arr) { let m = 0; for (const v of arr) if (v > m) m = v; return m; }
 function correlation(a, b) {
   let dot = 0, na = 0, nb = 0;
   for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
@@ -138,17 +139,29 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         await page.waitForFunction(() => window.__landing.state().titleReady, null, { timeout: 10000 });
         assert((await page.evaluate(() => window.__landing.state().titleMode)) === 'wash', `${label}: desktop did not arm the real wash (titleMode)`);
 
+        // K (owner item 1a): the wash must sit behind scene 1's own visual
+        // and copy, not in front of them. Appended last to <body>, an auto
+        // z-index canvas would otherwise win tree-order painting over
+        // .page's own auto-z-index content (the editor demo's plates, the
+        // copy column) -- see scratchpad/small-items/before-50.png for what
+        // that looked like. A negative z-index is the same convention
+        // #closing-film already uses for a fixed, always-behind layer.
+        const glZ = await page.evaluate(() => Number(getComputedStyle(document.getElementById('gl-title')).zIndex));
+        assert(glZ < 0, `${label}: K the wash canvas does not sit behind scene 1 (z-index ${glZ})`);
+
         // A: cold load, no input.
         await page.waitForTimeout(1500);
         const cold = await page.evaluate(measureTitle);
         assert(cold.ink === 1 && cold.h1Opacity === 1 && !cold.canvasVisible, `${label}: A cold load is not solid text: ${JSON.stringify(cold)}`);
         assert(cold.titleSteps === 0, `${label}: A cold load already took steps: ${JSON.stringify(cold)}`);
 
-        // B: scrub to 25/50/75/100% of the way to scene 1's rest.
+        // B: scrub to 25/50/75/85/100% of the way to scene 1's rest. 85%
+        // added for owner item 1b (below): the checkpoint by which the
+        // pigment must already read as visibly gone.
         const restY0 = await page.evaluate(() => window.__landing.restY(0));
         const readings = [];
         const pixels = [];
-        for (const frac of [0.25, 0.5, 0.75, 1]) {
+        for (const frac of [0.25, 0.5, 0.75, 0.85, 1]) {
           await page.evaluate((y) => scrollTo(0, y), restY0 * frac);
           await waitTitleSettled(page);
           readings.push(await page.evaluate(measureTitle));
@@ -210,8 +223,30 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         // zero at 100%, the same rest window.__landing.title.raw() already returns as an
         // all-zero array while the canvas is hidden, so this is the
         // literal value, not a tolerance.
-        assert(corr[1] > corr[2] && corr[2] > corr[3], `${label}: G legibility did not strictly fall across 50/75/100%: ${JSON.stringify(corr.map((v) => +v.toFixed(4)))}`);
-        assert(corr[3] === 0, `${label}: G correlation at 100% is not exactly zero: ${corr[3]}`);
+        assert(corr[1] > corr[2], `${label}: G legibility did not strictly fall from 50% to 75%: ${JSON.stringify(corr.map((v) => +v.toFixed(4)))}`);
+        assert(corr[4] === 0, `${label}: G correlation at 100% is not exactly zero: ${corr[4]}`);
+
+        // I (owner item 1b): "the pigment must be visibly finished lifting
+        // BEFORE anything hides it" -- at 85% the rendered wash (raw pixel
+        // alpha, what a viewer actually sees) must already read as at most
+        // 2% ink. This is a different quantity from readings[].ink, the
+        // sim's own dissolved-fraction state, which this build already
+        // drives to ~0 within the first 10-20% of scroll (measured;
+        // scratchpad/small-items/calibrate-title-baseline.log) while the
+        // rendered wash was still visibly dark past 50% -- ink() alone
+        // cannot see the bug this asserts against.
+        const visible85 = maxOf(pixels[3].raw.alpha) / 255;
+        assert(visible85 <= 0.02, `${label}: I still visibly inked at 85% (max alpha ${(visible85 * 100).toFixed(1)}%, floor 2%)`);
+        assert(readings[3].canvasVisible, `${label}: I the wash canvas was hidden before ink reached zero (85% check)`);
+        // J (owner item 1b, "nothing snaps off"): the same read taken just
+        // before the canvas actually hides (99%) must already be at the
+        // same floor, so the display:none swap at 100% removes an element
+        // that was already showing nothing -- no pixel jump for a viewer.
+        await page.evaluate((y) => scrollTo(0, y), restY0 * 0.99);
+        await waitTitleSettled(page);
+        const late = await page.evaluate(readRaw);
+        const visible99 = maxOf(late.raw.alpha) / 255;
+        assert(visible99 <= 0.02, `${label}: J a residual jump remains just before the canvas hides (max alpha ${(visible99 * 100).toFixed(1)}% at 99%)`);
 
         // H: no hard-edged disk anywhere outside the glyphs, at 50%.
         // English only: the same measure taken on zh-hans/zh-hant read
@@ -240,12 +275,17 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         assert(rest.ink === 0, `${label}: C ink remains at scene 1's rest: ${JSON.stringify(rest)}`);
         assert(rest.h1Opacity === 0, `${label}: C the live h1 is still visible at scene 1's rest: ${JSON.stringify(rest)}`);
 
-        // D: scrub back to the top, consolidating.
+        // D: scrub back to the top, consolidating. Owner item 1c: "the
+        // title turns solid" -- fully, not approximately. Was `>= 0.98`,
+        // the old tolerance; replaced with the owner's literal bar (this
+        // build already lands on exactly 1 -- see the commit body for the
+        // measured baseline) rather than loosened.
         await page.evaluate(() => scrollTo(0, 0));
         await waitTitleSettled(page);
         const back = await page.evaluate(measureTitle);
-        assert(back.ink >= 0.98, `${label}: D ink did not return within 2%: ${JSON.stringify(back)}`);
+        assert(back.ink === 1, `${label}: D ink did not return to fully solid: ${JSON.stringify(back)}`);
         assert(back.h1Opacity === 1, `${label}: D the live h1 did not return: ${JSON.stringify(back)}`);
+        assert(!back.canvasVisible, `${label}: D the wash canvas left residue -- still displayed after returning to solid: ${JSON.stringify(back)}`);
         assert(errors.length === 0, `${label}: D console or page errors during the run: ${errors.join('; ')}`);
 
         // E: resting on scene 1, no further steps.
