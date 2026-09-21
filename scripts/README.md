@@ -25,10 +25,13 @@ Keep images referenced by Markdown out of `[build].passthrough`. Passthrough sub
 
 `--strict` currently turns the unpublished-site diagnostic (“no usable record of what is live yet”) into exit 1 even when the local output is complete. Keep the diagnostic visible and use the ordinary build/preview command for this repository until the site has a live deployment record; do not suppress it in a wrapper.
 
-`release-channels.json` records the release assets and install commands that
-were verified for the landing's download controls. Keep unavailable targets
-explicitly unavailable; update the record from the public GitHub release, npm,
-and Homebrew metadata whenever a new release changes platform coverage.
+`release-channels.json` records the release assets and install commands that were verified for the landing's download controls. Keep unavailable targets explicitly unavailable; update the record from the public GitHub release, npm, and Homebrew metadata whenever a new release changes platform coverage.
+
+## The stage (site/ui/stage) — player tests and a browser checker
+
+`node --test scripts/stage-player.test.mjs` (or `npm run test:stage-player`) runs player.js's own unit tests against a fake driver — no browser, no server, and fast enough to run on every change to that file.
+
+`node scripts/check-docs-stage.mjs <preview-url>` drives the built site in a real Chromium and WebKit, the same PLAYWRIGHT_MODULE convention as `check-landing-mobile.mjs` describes above. One table-driven check plays every marker on every page that has a stage (en and zh-hant "Meet the editor" and "Get Started") to `done`, with no load error and no page error, within a pace-derived time bound computed from each scene's own steps — this is what proves a scene actually runs end to end, rather than each scene needing its own bespoke assertion. Alongside it, the checks named directly in `site/ui/stage/README.md` each guard one rule on their own: rest state, reader input interrupting playback, a superseded load not navigating the shared iframe, a failed-then-retried scene load, the sticky/toolbar/pinned/narrow layout rules, the page-width theme fix, and Play not shifting the page. Two checks are specific to the refreshed harvest: the framed editor's own context-menu text follows the page's locale rather than a hard-coded translation, and en/zh-hant frame two different real projects (compared structurally — differing, non-empty, Latin vs. CJK — never against a typed "Blake"/"朱耷" literal). A last check plays "versions" and confirms its mid-scene diff view shows a snippet of the piece's own live text, not a fabricated or empty one.
 
 ## sync-reference.mjs — keep the reference docs in sync with moss
 
