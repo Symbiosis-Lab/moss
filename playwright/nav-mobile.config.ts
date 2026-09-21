@@ -1,7 +1,7 @@
 /**
  * Render gate for the narrow-viewport (<20rem) hamburger nav.
  *
- * Runs tests/render-gates/site/nav-mobile.spec.js in BOTH chromium and webkit
+ * Runs tests/render-gates/site/nav-mobile.spec.ts in BOTH chromium and webkit
  * against a scratch site with SIX nav pages. The count is the gate: the menu
  * opened to a fixed `max-height: 200px`, and `.nav-links` inherits
  * `flex-wrap: wrap` from the desktop rule, so a bounded column flex container
@@ -32,7 +32,7 @@ const serveDir = buildScratchSite(NAV_MOBILE_GATE);
 
 export default defineConfig({
   testDir: "../tests/render-gates/site",
-  testMatch: /nav-mobile\.spec\.js$/,
+  testMatch: /nav-mobile\.spec\.ts$/,
   fullyParallel: false,
   workers: 1,
   reporter: "list",

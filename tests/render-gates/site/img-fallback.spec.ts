@@ -1,4 +1,3 @@
-// @ts-check
 // Blueprint placeholder — the ONE placeholder for an <img> that fails to load,
 // whether the reference is broken for good (deleted/renamed/typo'd, never
 // registered in the AssetRegistry) or the bytes just haven't been produced yet

@@ -1,4 +1,3 @@
-// @ts-check
 // One declared light (docs/reference/design/elevation.md): every floating
 // surface in the emitted site reads a `--moss-elevation-N` token and casts the
 // way the light says; content casts nothing. Only a browser can see this:
@@ -10,7 +9,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { TOKEN_CSS } from './tokens-block.js';
+import { TOKEN_CSS } from './tokens-block';
 import { mossBuildAssets } from '../../support/crate-paths';
 
 const CSS = fs.readFileSync(

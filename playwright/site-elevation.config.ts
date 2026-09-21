@@ -18,7 +18,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "../tests/render-gates/site",
-  testMatch: /elevation\.spec\.js$/,
+  testMatch: /elevation\.spec\.ts$/,
   fullyParallel: false,
   workers: 1,
   reporter: "list",

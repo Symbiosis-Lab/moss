@@ -1,4 +1,3 @@
-// @ts-check
 // The media track of a listing grid, on both sides of the `@supports` gate.
 //
 // A grid card is cover-on-top / content-below. When a card has no cover, its

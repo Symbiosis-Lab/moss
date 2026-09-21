@@ -1,6 +1,6 @@
 /**
  * Playwright config for the vertical-rl measure gate
- * (tests/render-gates/site/vertical-measure.spec.js).
+ * (tests/render-gates/site/vertical-measure.spec.ts).
  *
  * Stylesheet-injection gate: the spec inlines site.css and vertical.css into
  * `page.setContent` and reads real boxes. No webServer, no `moss build`, no
@@ -14,7 +14,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: '../tests/render-gates/site',
-  testMatch: /vertical-measure\.spec\.js$/,
+  testMatch: /vertical-measure\.spec\.ts$/,
   fullyParallel: true,
   reporter: 'list',
   outputDir: '../target/test-tmp/playwright-vertical-measure',

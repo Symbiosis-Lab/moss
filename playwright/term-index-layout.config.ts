@@ -17,7 +17,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "../tests/render-gates/site",
-  testMatch: /term-index-layout\.spec\.js$/,
+  testMatch: /term-index-layout\.spec\.ts$/,
   fullyParallel: false,
   workers: 1,
   reporter: "list",

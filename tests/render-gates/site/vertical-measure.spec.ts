@@ -1,4 +1,3 @@
-// @ts-check
 // The reading measure and the page bands under `writing-mode: vertical-rl`.
 //
 // `--moss-content-width` is an inline-axis limit, so site.css caps every
@@ -24,14 +23,14 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { tokenBlock } from './tokens-block.js';
+import { tokenBlock } from './tokens-block';
 import { mossBuildAssets } from '../../support/crate-paths';
 
 const cssDir = path.join(mossBuildAssets(), 'css');
 const CSS = fs.readFileSync(path.join(cssDir, 'site.css'), 'utf8');
 const VERTICAL = fs.readFileSync(path.join(cssDir, 'site/vertical.css'), 'utf8');
 
-// The real @layer tokens block, generated from tokens.json (tokens-block.js)
+// The real @layer tokens block, generated from tokens.json (tokens-block.ts)
 // rather than hand-copied: a hand-copied list stayed lang-blind (no
 // --moss-reading-script-scale term) and hid the CJK divergence between the
 // fixed --moss-size-md the minimal-listing title used to pin and the

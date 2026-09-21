@@ -1,4 +1,3 @@
-// @ts-check
 // The INDEX state: `.moss-cards[data-layout="grid"]` with no cover on any card.
 //
 // A generated term root (`/authors/`, `/tags/`) is a listing of bare labels.
@@ -18,7 +17,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { tokenBlock } from './tokens-block.js';
+import { tokenBlock } from './tokens-block';
 import { mossBuildAssets } from '../../support/crate-paths';
 
 // Plain Tab does not reach a link in macOS Safari/WebKit unless the user has
@@ -31,7 +30,7 @@ const CSS = fs.readFileSync(
   path.join(mossBuildAssets(), 'css/site.css'), 'utf8');
 
 // site.css is rules-only; tokens are generated from tokens.json and prepended
-// at build time. tokens-block.js builds the same :root block from the real
+// at build time. tokens-block.ts builds the same :root block from the real
 // contract instead of a hand-kept list — a hand list drifts (it once held
 // --moss-space-2xs, which no token or rule has ever used, and --moss-space-xs/-sm
 // at values neither tokens.json nor site.css's own comments agree with) and
@@ -178,7 +177,7 @@ test('a cover anywhere restores the cover-bearing chrome (the flag is the switch
   // the rounded clip and the content padding a roster drops.
   //
   // Cover HEIGHT is deliberately not asserted here — that is the media track's
-  // business and it belongs to tests/render-gates/site/card-media-track.spec.js,
+  // business and it belongs to tests/render-gates/site/card-media-track.spec.ts,
   // which proves it on both sides of the `@supports` gate.
   await page.setContent(indexPage(860, { covers: true }));
   const style = await page.locator('.moss-cards[data-layout="grid"] .moss-card')

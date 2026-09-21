@@ -1,4 +1,3 @@
-// @ts-check
 // The footer-injected `:::subscribe` form's inline-axis anchor, under both
 // writing modes, against a real vertical-writing site's own markup shape.
 //
@@ -31,7 +30,7 @@ const CSS = fs.readFileSync(path.join(cssDir, 'site.css'), 'utf8');
 const VERTICAL = fs.readFileSync(path.join(cssDir, 'site/vertical.css'), 'utf8');
 const EMAIL = fs.readFileSync(path.join(cssDir, 'email.css'), 'utf8');
 
-// Mirrors vertical-measure.spec.js's token block: production values for the
+// Mirrors vertical-measure.spec.ts's token block: production values for the
 // layout tokens this measure reads, in @layer tokens under the production
 // layer order.
 const TOKENS = `@layer reset, tokens, base, layout, shortcodes, plugins, themes;

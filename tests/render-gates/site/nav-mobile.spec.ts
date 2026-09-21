@@ -1,4 +1,3 @@
-// @ts-check
 /**
  * Render gate: the narrow-viewport hamburger menu shows every nav link.
  *

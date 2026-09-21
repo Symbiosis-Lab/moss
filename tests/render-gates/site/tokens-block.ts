@@ -1,4 +1,3 @@
-// @ts-check
 // The site's `@layer tokens` block, built from tokens.json the way
 // crates/moss-build/src/build/emit/stylesheet.rs builds it: every token's light
 // value in `:root`, and the themed ones again in `[data-theme="dark"]`. A spec

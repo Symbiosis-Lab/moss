@@ -1,6 +1,6 @@
 /**
  * Playwright config for the grid block-rhythm gate
- * (tests/render-gates/site/grid-block-rhythm.spec.js).
+ * (tests/render-gates/site/grid-block-rhythm.spec.ts).
  *
  * Stylesheet-injection gate: the spec inlines site.css into `page.setContent`
  * and reads real computed margins. No webServer, no `moss build`, no MOSS_BIN.
@@ -13,7 +13,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: '../tests/render-gates/site',
-  testMatch: /grid-block-rhythm\.spec\.js$/,
+  testMatch: /grid-block-rhythm\.spec\.ts$/,
   fullyParallel: true,
   reporter: 'list',
   outputDir: '../target/test-tmp/playwright-grid-block-rhythm',

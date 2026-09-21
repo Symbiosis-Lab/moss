@@ -32,7 +32,7 @@ const VERTICAL = fs.readFileSync(path.join(cssDir, 'site/vertical.css'), 'utf8')
 // prefix"). Without this, `var(--moss-space-xs)` etc. are invalid at
 // computed-value time and margins/font-sizes silently collapse to 0 — which
 // made an early version of this gate pass on unfixed CSS for the wrong
-// reason. Same values as vertical-measure.spec.js's TOKENS.
+// reason. Same values as vertical-measure.spec.ts's TOKENS.
 const TOKENS = `@layer reset, tokens, base, layout, shortcodes, plugins, themes;
 @layer tokens { :root{
   --moss-reading-size-base:1.125rem;

@@ -1,4 +1,3 @@
-// @ts-check
 // `.moss-grid`'s own block-axis margin: bound tight (sm) to a heading that
 // owns it (site.css ~5989, 6322371133, 2026-07-30, unrelated to this fix and
 // unaffected by it), bound loose otherwise. 3bb545d0 (2026-08-03) took both
@@ -8,7 +7,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { tokenBlock } from './tokens-block.js';
+import { tokenBlock } from './tokens-block';
 import { openCrateDir } from '../../support/crate-paths';
 
 const CSS = fs.readFileSync(
