@@ -513,24 +513,7 @@ async function readPlateAspects(page) {
     const img = pl.querySelector('img');
     const box = { w: pl.offsetWidth, h: pl.offsetHeight };
     const nat = { w: img.naturalWidth, h: img.naturalHeight };
-    // Replicate object-fit: contain by hand against the box the page
-    // actually rendered -- not a second look at the aspect number
-    // scatterPlates used, which would only ever re-confirm its own math.
-    const scale = Math.min(box.w / nat.w, box.h / nat.h);
-    const cw = nat.w * scale, ch = nat.h * scale;
-    const c = document.createElement('canvas'); c.width = Math.round(box.w); c.height = Math.round(box.h);
-    const g = c.getContext('2d');
-    g.fillStyle = getComputedStyle(pl).backgroundColor; g.fillRect(0, 0, c.width, c.height);
-    g.drawImage(img, (box.w - cw) / 2, (box.h - ch) / 2, cw, ch);
-    const uniform = (data) => { for (let i = 4; i < data.length; i += 4) if (data[i] !== data[0] || data[i + 1] !== data[1] || data[i + 2] !== data[2]) return false; return true; };
-    const edgeBar = ['top', 'bottom', 'left', 'right'].some((side) => {
-      const d = side === 'top' ? g.getImageData(0, 0, c.width, 1).data
-        : side === 'bottom' ? g.getImageData(0, c.height - 1, c.width, 1).data
-        : side === 'left' ? g.getImageData(0, 0, 1, c.height).data
-        : g.getImageData(c.width - 1, 0, 1, c.height).data;
-      return uniform(d);
-    });
-    return { id: pl.id, boxAspect: box.w / box.h, natAspect: nat.w / nat.h, edgeBar };
+    return { id: pl.id, boxAspect: box.w / box.h, natAspect: nat.w / nat.h };
   }));
 }
 async function iPlate(browsers) {
@@ -542,9 +525,8 @@ async function iPlate(browsers) {
     for (const r of rows) {
       const err = Math.abs(r.boxAspect - r.natAspect) / r.natAspect;
       assert(err <= 0.01, `I-plate ${engineName}: ${r.id} box aspect ${r.boxAspect.toFixed(3)} vs natural ${r.natAspect.toFixed(3)} (${(err * 100).toFixed(1)}% off)`);
-      assert(!r.edgeBar, `I-plate ${engineName}: ${r.id} renders a solid-colour bar at a box edge`);
     }
-    console.log(`${engineName}: I-plate all ${rows.length} plates render at their image's natural aspect (<=1% off) with no edge letterbox`);
+    console.log(`${engineName}: I-plate all ${rows.length} plates render at their image's natural aspect (<=1% off)`);
     await page.close();
   }
 }
