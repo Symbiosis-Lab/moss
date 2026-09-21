@@ -38,7 +38,15 @@
     --bg: #faf8f5; --text: #2c2825; --text2: #5d5853; --border: #e5e1da; --accent: #2d5a2d;
     --heading: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
     --body: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
-    --cell-w: 660px; --cell-h: 620px; --ed-w: 520px; --pad: 80px; --s: 1; --win-r: 12px;
+    /* --win-r: 24px, not chosen here -- copied from moss-desktop's own
+       WINDOW_CORNER_RADIUS (src-tauri/src/system/utils/chrome.rs), the real
+       app's window radius. #box shares the harvested shell's own coordinate
+       space 1:1 (iframe at width/height:100%, no separate zoom), so this
+       box-local px is the same px the Publish pill is drawn in: a 36px pill
+       (--moss-pill-size) with border-radius 18px (--moss-pill-radius, half
+       the pill) -- the same 24:18 relationship the app itself draws between
+       its window and that circle. */
+    --cell-w: 660px; --cell-h: 620px; --ed-w: 520px; --pad: 80px; --s: 1; --win-r: 24px;
     /* how far the last join has run: 0 the two-column page, 1 the full-bleed
        close. It is read before the script has set anything, so it starts here. */
     --xf: 0;

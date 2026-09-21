@@ -581,6 +581,33 @@ async function iPubCue(browsers) {
   }
 }
 
+// I-window-radius (site owner, 2026-09-20): #box shares the harvested
+// shell's own coordinate space 1:1 (the iframe is width/height:100%, no
+// separate zoom), so its border-radius is directly comparable to the
+// Publish button's own radius measured inside that iframe. moss-desktop's
+// own tokens.css: --moss-window-radius: 24px (mirrors Rust
+// WINDOW_CORNER_RADIUS), --moss-pill-size: 36px with border-radius
+// --moss-pill-radius (half the pill) = 18px -- a 24:18 relationship. RED
+// (site/index.html's --win-r reverted to its old 12px, restored after):
+// ratio 12/18 = 0.667, nowhere near 24/18 = 1.333. GREEN at --win-r: 24px.
+async function iWindowRadius(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const page = await browser.newPage(PRESETS.desktop);
+    await ready(page);
+    await arm(page, gesturePos(engineName));
+    await gotoScene(page, LIVE);
+    const { boxRadius, btnRadius } = await page.evaluate(() => {
+      const box = document.getElementById('box');
+      const btn = document.getElementById('sh').contentDocument.querySelector('.moss-publish-button');
+      return { boxRadius: parseFloat(getComputedStyle(box).borderRadius), btnRadius: btn.getBoundingClientRect().width / 2 };
+    });
+    const ratio = boxRadius / btnRadius, want = 24 / 18;
+    assert(Math.abs(ratio - want) < 0.02, `I-window-radius ${engineName}: box radius ${boxRadius}px, button radius ${btnRadius}px, ratio ${ratio.toFixed(3)} != moss-desktop's ${want.toFixed(3)}`);
+    console.log(`${engineName}: I-window-radius box ${boxRadius}px / button ${btnRadius}px matches moss-desktop's 24:18`);
+    await page.close();
+  }
+}
+
 // I-default: every check script's own default navigation loads the
 // unflagged URL. A carry= baked into a literal .goto() call site is exactly
 // the historical bug (design doc: "the fixed driver was never made the
@@ -614,6 +641,7 @@ try {
   await iFuzzInvalidated(browsers);
   await iPlate(browsers);
   await iPubCue(browsers);
+  await iWindowRadius(browsers);
   await iDefault();
 } finally {
   await Promise.all(Object.values(browsers).map((b) => b.close()));
