@@ -18,7 +18,23 @@
 //           deletion above against the folded function -- still red on the
 //           very first combination, restored -- green, both confirming the
 //           fold didn't lose any detection power. check-landing-intent.mjs
-//           deleted.
+//           deleted. Unit 1 (2026-09-21): promoted
+//           scratchpad/phase4/commit-crossfade-release.mjs in as
+//           iCommitCrossfadeRelease, a light release mid-crossfade at the
+//           4<->5 boundary, both directions -- red on current HEAD before
+//           the gesture model below existed (parked at xf~0.5, both
+//           directions, both engines), green after it.
+// I-gesture Unit 1 (2026-09-21), review-phases-2-4.md Job 1: (a) M1, a
+//           wheel hold must expire in every drive role including native --
+//           red on current HEAD (the staleness check lived only inside
+//           watchScrollDesktop). (b) M3, settling->idle is a real
+//           transition, not cosmetic -- current HEAD already passes this
+//           one honestly (the bug it guards is M1, not M3), so its red
+//           comes from ablation: delete the convergence write in the new
+//           model's settleTo and state().settle sticks true forever. (c)
+//           M4, a wheel coast tick during a touch/scrollbar hold must not
+//           drop it -- red on current HEAD (the old scalar `via` let one
+//           channel overwrite the other).
 // I-rect    (R2) checked after EACH drag now, not only once at the end --
 //           plates first, before any card is ever touched, then again after
 //           the card. Two independent faults, each proven on its own: the
@@ -259,6 +275,46 @@ function mulberry32(seed) {
 // committed shape (below) does not have this failure mode: it does not
 // care how many bursts the dead-zone formula actually saw, only whether
 // the target it converged on is the one asked for.
+// I-commit's own 4<->5 case above never releases mid-crossfade -- by
+// design, since xf is a scrolled position with no wash of its own to wait
+// out -- so it cannot see a release left standing inside the crossfade
+// span. R3 draws no exception for this boundary: a light gesture that ends
+// there must still commit onward, both directions, not park between scenes
+// 4 and 5 (owner report, 2026-09-20). Promoted from
+// scratchpad/phase4/commit-crossfade-release.mjs, which first reproduced
+// it: real ticks into the crossfade midpoint, not a raw jump, so the
+// desktop-to-native handoff mid-gesture is exercised the way a reader
+// actually crosses it.
+async function iCommitCrossfadeRelease(browser, engineName, pos) {
+  const page = await browser.newPage(PRESETS.desktop);
+  await ready(page);
+  await arm(page, pos);
+  const midY = await page.evaluate(() => Math.round(document.getElementById('five').offsetTop - innerHeight * 0.5));
+
+  await gotoScene(page, 3);
+  for (let ticks = 0; ticks < 200 && (await page.evaluate(() => scrollY)) < midY; ticks++) {
+    await page.mouse.move(...pos); await page.mouse.wheel(0, 20); await page.waitForTimeout(20);
+  }
+  await page.waitForFunction(() => window.__landing.state().shown === 4 && window.__landing.state().target === 4 && !window.__landing.state().running, null, { timeout: 20000 }).catch(async (error) => {
+    const info = await page.evaluate(() => ({ y: scrollY, xf: xfAt(), state: window.__landing.state() }));
+    throw new Error(`I-commit-release ${engineName}: forward release mid-crossfade did not commit to scene 5: ${JSON.stringify(info)}`, { cause: error });
+  });
+  assert(await arrived(page, 4), `I-commit-release ${engineName}: forward release mid-crossfade bounced back off its rest`);
+
+  await gotoScene(page, 4);
+  for (let ticks = 0; ticks < 200 && (await page.evaluate(() => scrollY)) > midY; ticks++) {
+    await page.mouse.move(...pos); await page.mouse.wheel(0, -20); await page.waitForTimeout(20);
+  }
+  await page.waitForFunction(() => window.__landing.state().shown === 3 && window.__landing.state().target === 3 && !window.__landing.state().running, null, { timeout: 20000 }).catch(async (error) => {
+    const info = await page.evaluate(() => ({ y: scrollY, xf: xfAt(), state: window.__landing.state() }));
+    throw new Error(`I-commit-release ${engineName}: backward release mid-crossfade did not commit to scene 4: ${JSON.stringify(info)}`, { cause: error });
+  });
+  assert(await arrived(page, 3), `I-commit-release ${engineName}: backward release mid-crossfade bounced back off its rest`);
+
+  console.log(`${engineName}: I-commit-release a light gesture that ends mid-crossfade still commits, both directions`);
+  await page.close();
+}
+
 const I_COMMIT_LOCALES = ['', 'zh-hans/', 'zh-hant/'];
 const I_COMMIT_VIEWPORTS = [{ width: 1280, height: 720 }, { width: 1920, height: 1200 }];
 async function iCommit(browsers) {
@@ -278,6 +334,7 @@ async function iCommit(browsers) {
     }
     console.log(`${engineName}: I-commit every boundary intro..close commits forward and back with one light gesture`);
     await page.close();
+    await iCommitCrossfadeRelease(browser, engineName, pos);
     // check-landing-intent.mjs's own scope, never the 3<->4 scrub: its six
     // goals were all within intro/0/1 (measured: [[1,0,1],[-1,-1,1],[1,0,3],
     // [1,1,3],[-1,0,3],[-1,-1,3]] in the deleted file, goals 0/-1/0/1/0/-1
@@ -304,6 +361,109 @@ async function iCommit(browsers) {
         await p2.close();
       }
     }
+  }
+}
+
+// I-gesture (a) (M1): a wheel hold expires in every drive role, including
+// while nativeScroll() is true -- the old staleness check lived only
+// inside watchScrollDesktop, so a hold that crossed into the native region
+// mid-gesture (xfAt() going positive) never demoted, and the closing
+// settle at the 4<->5 boundary could never fire (the park I-commit-release
+// above proves at the outcome level). This checks the transition itself,
+// not the outcome: ticks into the crossfade exactly like that check, then
+// asserts state().held (M5: the record published for exactly this) goes
+// false on its own within a couple of frames of the last tick, whichever
+// role currently owns the frame.
+async function iGestureHeldExpires(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const pos = gesturePos(engineName);
+    const page = await browser.newPage(PRESETS.desktop);
+    await ready(page);
+    await arm(page, pos);
+    await gotoScene(page, 3);
+    const midY = await page.evaluate(() => Math.round(document.getElementById('five').offsetTop - innerHeight * 0.5));
+    // Capture state().held at the exact frame nativeScroll() first reads
+    // true, inside the page's own rAF loop -- a round trip back to Node
+    // between the crossing tick and the read races the very HOLD_GAP
+    // deadline under test (measured: flaked under load when the check tried
+    // to stop ticking and re-evaluate from Node instead).
+    await page.evaluate(() => {
+      window.__heldAtCrossing = undefined;
+      const capture = () => {
+        if (window.__heldAtCrossing !== undefined) return;
+        if (nativeScroll()) window.__heldAtCrossing = window.__landing.state().held;
+        else requestAnimationFrame(capture);
+      };
+      requestAnimationFrame(capture);
+    });
+    for (let ticks = 0; ticks < 200 && (await page.evaluate(() => scrollY)) < midY; ticks++) {
+      await page.mouse.move(...pos); await page.mouse.wheel(0, 20); await page.waitForTimeout(20);
+    }
+    const [native, held] = await page.evaluate(() => [nativeScroll(), window.__heldAtCrossing]);
+    assert(native, `I-gesture(a) ${engineName}: expected to already be in the native role`);
+    assert(held, `I-gesture(a) ${engineName}: expected state().held right at the crossing frame`);
+    await page.waitForFunction(() => !window.__landing.state().held, null, { timeout: 2000 }).catch(() => {
+      throw new Error(`I-gesture(a) ${engineName}: a wheel hold never expired in the native role`);
+    });
+    console.log(`${engineName}: I-gesture(a) a wheel hold expires in the native role too`);
+    await page.close();
+  }
+}
+
+// I-gesture (b) (M3): after a settle converges with no further input,
+// state().settle must go false within about SETTLE_SECS -- a real latch,
+// not cosmetic, since settleAtRest/armSettle/the closing settle all refuse
+// to fire while it reads stuck true. The closing-region settle (release
+// mid-crossfade, non-reduced) is the one path that starts a real settle
+// run rather than an instant arrival, so it is the only way to observe
+// this convergence at all.
+async function iGestureSettleReleases(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const pos = gesturePos(engineName);
+    const page = await browser.newPage(PRESETS.desktop);
+    await ready(page);
+    await arm(page, pos);
+    const midY = await page.evaluate(() => Math.round(document.getElementById('five').offsetTop - innerHeight * 0.5));
+    await gotoScene(page, 3);
+    for (let ticks = 0; ticks < 200 && (await page.evaluate(() => scrollY)) < midY; ticks++) {
+      await page.mouse.move(...pos); await page.mouse.wheel(0, 20); await page.waitForTimeout(20);
+    }
+    await page.waitForFunction(() => window.__landing.state().settle, null, { timeout: 3000 }).catch(() => {
+      throw new Error(`I-gesture(b) ${engineName}: the closing settle never started`);
+    });
+    await page.waitForFunction(() => !window.__landing.state().settle, null, { timeout: 3000 }).catch(() => {
+      throw new Error(`I-gesture(b) ${engineName}: state().settle never went false after convergence`);
+    });
+    console.log(`${engineName}: I-gesture(b) a converged settle releases state().settle`);
+    await page.close();
+  }
+}
+
+// I-gesture (c) (M4): a wheel coast tick during a touch or scrollbar-drag
+// hold must not drop the hold -- the old scalar `via` let a wheel event
+// overwrite what a touch hold meant, so holdOff no-op'd on release and the
+// page treated the reader as let go while their finger was still down.
+// Touch and scrollbar-drag share one field (contact.direct), so a
+// synthetic touch pointerdown/up -- reliable in a headless engine, unlike
+// real scrollbar-thumb hit-testing -- covers both; the wheel handler
+// itself is what's under test, not how the hold began.
+async function iGestureCoastDuringHold(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const pos = gesturePos(engineName);
+    const page = await browser.newPage(PRESETS.desktop);
+    await ready(page);
+    await arm(page, pos);
+    await gotoScene(page, 0);
+    await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch' })));
+    assert(await page.evaluate(() => window.__landing.state().held), `I-gesture(c) ${engineName}: a touch pointerdown did not read as held`);
+    // A decreasing-magnitude run classifies as momentum on the third tick
+    // (site/landing.js's own wheelCoasting heuristic) without any real
+    // release -- the fault this reproduces.
+    for (const mag of [30, 20, 12]) { await page.mouse.move(...pos); await page.mouse.wheel(0, mag); await page.waitForTimeout(20); }
+    assert(await page.evaluate(() => window.__landing.state().held), `I-gesture(c) ${engineName}: a wheel coast tick during the touch hold dropped it`);
+    await page.evaluate(() => window.dispatchEvent(new Event('pointerup')));
+    console.log(`${engineName}: I-gesture(c) a wheel coast tick during a touch hold does not drop it`);
+    await page.close();
   }
 }
 
@@ -909,6 +1069,9 @@ try {
   browsers.chromium = await playwright.chromium.launch();
   browsers.webkit = await playwright.webkit.launch();
   await iCommit(browsers);
+  await iGestureHeldExpires(browsers);
+  await iGestureSettleReleases(browsers);
+  await iGestureCoastDuringHold(browsers);
   await iRect(browsers);
   await iScene3(browsers);
   await iReduced(browsers);
