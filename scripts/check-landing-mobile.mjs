@@ -200,11 +200,31 @@ async function checkScene2to3Touch() {
   console.log('scene 2->3 stays put until #c3\'s text touches the visual, both directions');
 }
 
+// K (owner item 5b): "when scene 4 transitions to scene 5, start a bit
+// later, only start when the text already touches the animation." xfAt()'s
+// mobile branch only ever answers above 0 once mobileClosingProgress() --
+// itself 0 for as long as #c4's text sits below band.bottom, the same gate
+// as every other leg -- has passed 0.45, so the crossfade cannot start
+// before that text has touched the visual; this asserts the necessary
+// consequence (xf===0 while untouched) rather than re-deriving 0.45.
+async function checkClosingTouch() {
+  const page = await mobilePage();
+  const untouched = await moveTextTo(page, '#c4 .scene-text', 435);
+  assert(untouched.xf === 0, `closing crossfade started before #c4's text touched the visual: ${JSON.stringify(untouched)}`);
+  const touched = await moveTextTo(page, '#c4 .scene-text', 419);
+  assert(touched.xf === 0, `closing crossfade started right at #c4's text touching the visual, before the owner's own margin: ${JSON.stringify(touched)}`);
+  const back = await moveTextTo(page, '#c4 .scene-text', 435);
+  assert(back.xf === 0, `scrolling #c4's text back did not keep the closing crossfade at 0: ${JSON.stringify(back)}`);
+  await page.close();
+  console.log('the closing crossfade stays at 0 until #c4\'s text touches the visual, both directions');
+}
+
 try {
   results.opening = [];
   for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 568 }]) results.opening.push(await checkOpening(viewport));
   results.sceneTiming = await checkSceneTiming();
   await checkScene2to3Touch();
+  await checkClosingTouch();
   const page = await mobilePage();
   let state = await mobileState(page);
   assert(state.snap === 'none' && !state.mobileSnap, `mobile starts with snap enabled: ${JSON.stringify(state)}`);

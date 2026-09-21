@@ -32,6 +32,19 @@ for (const engine of [chromium, webkit]) {
       await page.waitForFunction(() => window.__landing.state().steps >= 12);
       const start = await read();
       if (!(start.cover > 0 && start.cover < 1 && Number(start.scene) === scene)) throw Error('source was replaced before the wash covered it');
+      // K (owner item 5a, scene 3->4 only): the control's own scale
+      // (pour()'s sizeProgress, applied to #cell) must ease in -- spend
+      // longer small, then grow fast -- not smoothstep's symmetric ease.
+      // 147 steps is t=1.225 (DT=1/120), the midpoint of the .35..T_TOTAL
+      // window this term runs over; scale there must be under 35% of its
+      // own 1..1.4 total change (<1.14).
+      if (scene === 2) {
+        const readScale = () => page.evaluate(() => Number(cell.style.transform.match(/scale\(([\d.]+)\)\s*$/)[1]));
+        await page.evaluate(() => { window.__landing.stepLimit = 147; });
+        await page.waitForFunction(() => window.__landing.state().steps >= 147);
+        const half = await readScale();
+        if (!(half < 1.14)) throw Error(`control did not ease in (scale ${half} at half progress, want < 1.14)`);
+      }
       await page.evaluate(() => { window.__landing.stepLimit = 240; });
       await page.waitForFunction(() => window.__landing.state().steps >= 240, null, { timeout: 15000 });
       const end = await read();

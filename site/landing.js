@@ -2047,7 +2047,10 @@ async function pour(to) {
           fanEl.style.filter = 'none';
           fanEl.style.zIndex = '101';
         }
-        const sizeProgress = smooth(.35, T_TOTAL, t);
+        // Ease-in, not smoothstep's symmetric ease: the control spends
+        // longer small, then grows fast at the end (owner: "first go slow
+        // then fast").
+        const sizeProgress = clamp01((t - .35) / (T_TOTAL - .35)) ** 2;
         const size = (from === DEPLOY ? 1.4 : 1) + ((to === DEPLOY ? 1.4 : 1) - (from === DEPLOY ? 1.4 : 1)) * sizeProgress;
         if (mobileLayout()) cell.style.transform = `scale(${SCALE}) translate(${(1 - size) * GEOM.cellW / 2}px, ${(1 - size) * GEOM.cellH / 2}px) scale(${size})`;
       }
