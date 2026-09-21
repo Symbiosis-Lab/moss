@@ -38,7 +38,11 @@ const BASELINE = {
   topLevelLets: 87,
   sceneComparisons: 14,
   htmlBytes: 49493,
-  scriptBytes: 240465,
+  // Unit 0a: rose again for landing.printGeneration(), a getter exposing
+  // the existing printGeneration counter on __landing's read side -- the
+  // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a
+  // transient read of prints itself needed a ground-truth signal instead.
+  scriptBytes: 240660,
 };
 
 function countWindowAssignments(text) {

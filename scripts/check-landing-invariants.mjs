@@ -139,6 +139,28 @@ async function arm(page, pos) { await page.mouse.move(...pos); await page.mouse.
 // intro shares scene 1's film, so shown alone cannot signal arrival there),
 // so every jump is read off scrollY against restY(), the one quantity that
 // works for every target including the intro.
+// review-phases-2-4.md, "Both flakes are racy by construction": scrollY
+// reaching its target and shown/target/running settling are not the same
+// moment as the carry spring actually coming to rest -- watchScrollDesktop's
+// integrator can still be nudging scrollY toward its well for a few more
+// frames after shown flips, which used to move a plate or card out from
+// under a drag's own boundingBox() read. gesture.kind==='settling' (state().
+// settle) is the page's own word for "still adjusting"; two consecutive
+// scrollY reads a beat apart, both unmoved, is the direct check for the
+// thing that actually matters (the drag's own read-then-click race), kept
+// as a second condition rather than trusted alone since a slow settle could
+// still be between ticks when sampled.
+async function waitForScrollSettled(page, timeout = 15000) {
+  const deadline = Date.now() + timeout;
+  let lastY = await page.evaluate(() => scrollY);
+  for (;;) {
+    await page.waitForTimeout(60);
+    const [y, settling] = await page.evaluate(() => [scrollY, window.__landing.state().settle]);
+    if (!settling && Math.abs(y - lastY) < 0.5) return;
+    if (Date.now() > deadline) throw new Error(`scroll never settled (y=${y}, settling=${settling}) after ${timeout}ms`);
+    lastY = y;
+  }
+}
 async function gotoScene(page, scene, timeout = 20000) {
   const y = await page.evaluate((s) => window.__landing.restY(s), scene);
   await page.evaluate((y) => scrollTo(0, y), y);
@@ -153,6 +175,7 @@ async function gotoScene(page, scene, timeout = 20000) {
   // changes it.
   if (scene >= 0) await page.waitForFunction((s) => window.__landing.state().shown === s && !window.__landing.state().running, scene, { timeout });
   else await page.waitForFunction(() => !window.__landing.state().running, null, { timeout });
+  await waitForScrollSettled(page, timeout);
 }
 // Committed (the dead-zone formula has picked `to`) and arrived (the wash it
 // owes has actually finished) are different moments -- sending more input
@@ -319,16 +342,45 @@ function assertContained(rect, rects, engineName, label) {
     r.x < rect.x - 0.5 || r.y < rect.y - 0.5 || r.x + r.w > rect.x + rect.w + 0.5 || r.y + r.h > rect.y + rect.h + 0.5);
   assert(outside.length === 0, `I-rect ${engineName}: ${label}: outside the print rect ${JSON.stringify(rect)}: ${JSON.stringify(outside)}`);
 }
-async function dragBy(page, sx, sy, dx, dy, steps = 4) {
-  await page.mouse.move(sx, sy);
-  await page.mouse.down();
-  await page.waitForTimeout(30);
-  await page.mouse.move(sx + dx / 2, sy + dy / 2, { steps });
-  await page.waitForTimeout(30);
-  await page.mouse.move(sx + dx, sy + dy, { steps });
-  await page.waitForTimeout(30);
-  await page.mouse.up();
-  await page.waitForTimeout(150);
+// Takes a locator, not coordinates: the caller used to read boundingBox()
+// once, some turns of the event loop before the drag actually started,
+// which is exactly the gap review-phases-2-4.md's diagnosis names -- a
+// still-settling page moves the element out from under a box read that
+// early. Waiting for scroll to settle and re-reading the box right here,
+// immediately before the first mouse.move, is what "re-read the box after
+// that wait" means; every caller gets it for free instead of having to
+// remember the sequence. A second, independent race surfaced once this one
+// closed: the plate pointerdown handler (site/landing.js) only arms a drag when
+// shown===0 && !running() at the instant mouse.down() lands -- reading that
+// once via waitForScrollSettled/gotoScene earlier is not the same guarantee,
+// since a background join (a capture finishing, maybeJoin firing) can flip
+// running() true again in the gap while this function reads a boundingBox()
+// and moves the mouse into position. When that race lands, mouse.down()
+// misses entirely: every subsequent pointermove is a no-op (`if (!held)
+// return`), so the whole gesture silently drags nothing and the element
+// never moves -- measured directly (repeat-fuzzinvalidated.mjs, unit0a): a
+// 5-10% rate, the element left exactly at its pre-drag position. Retrying
+// the mechanical gesture when the element didn't actually move is the same
+// shape as gestureCommit's own retry-until-committed, not a retry on the
+// assertion this exists to prove.
+async function dragBy(page, locator, dx, dy, steps = 4) {
+  await waitForScrollSettled(page);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const box = await locator.boundingBox();
+    const sx = box.x + box.width / 2, sy = box.y + box.height / 2;
+    await page.mouse.move(sx, sy);
+    await page.mouse.down();
+    await page.waitForTimeout(30);
+    await page.mouse.move(sx + dx / 2, sy + dy / 2, { steps });
+    await page.waitForTimeout(30);
+    await page.mouse.move(sx + dx, sy + dy, { steps });
+    await page.waitForTimeout(30);
+    await page.mouse.up();
+    await page.waitForTimeout(150);
+    const after = await locator.boundingBox();
+    if (after && (Math.abs(after.x - box.x) > 4 || Math.abs(after.y - box.y) > 4)) return;
+  }
+  throw new Error('dragBy: element never moved after 3 attempts (pointerdown kept missing its shown===0 && !running() window)');
 }
 async function iRect(browsers) {
   for (const [engineName, browser] of Object.entries(browsers)) {
@@ -339,9 +391,9 @@ async function iRect(browsers) {
     const rand = mulberry32(20260920);
     const plateIds = await page.evaluate(() => [...document.querySelectorAll('.plate')].slice(0, 2).map((el) => el.id));
     for (const id of plateIds) {
-      const box = await page.locator(`[id="${id}"]`).boundingBox(); // plate ids embed a filename (a literal dot), so #id would read as a class selector
+      // plate ids embed a filename (a literal dot), so #id would read as a class selector
       const dx = (rand() - 0.5) * 1600, dy = (rand() - 0.5) * 1200;
-      await dragBy(page, box.x + box.width / 2, box.y + box.height / 2, dx, dy);
+      await dragBy(page, page.locator(`[id="${id}"]`), dx, dy);
       // Checked here, before the scene-3 card is ever touched: the card
       // drop's own call site is a second, later chance to union this plate
       // back in, which would hide a broken plate call site entirely.
@@ -349,9 +401,8 @@ async function iRect(browsers) {
     }
     await gotoScene(page, 2);
     await page.waitForFunction(() => document.getElementById('stage').classList.contains('s3-ready'), null, { timeout: 15000 });
-    const cardBox = await page.locator('#sib-nb').boundingBox();
     const cdx = (rand() - 0.5) * 1800, cdy = (rand() - 0.5) * 1400;
-    await dragBy(page, cardBox.x + cardBox.width / 2, cardBox.y + cardBox.height / 2, cdx, cdy, 8);
+    await dragBy(page, page.locator('#sib-nb'), cdx, cdy, 8);
     await page.waitForTimeout(350);
     const rect = await readPrintRect(page);
     assertContained(rect, await readPlateRects(page), engineName, 'after dragging the card (plates)');
@@ -538,22 +589,36 @@ async function iFuzzInvalidated(browsers) {
     await ready(page);
     await arm(page, gesturePos(engineName));
     await gotoScene(page, 0);
-    const glRect = () => page.evaluate(() => { const g = document.getElementById('gl'); return `${g.style.left}/${g.style.top}/${g.style.width}/${g.style.height}`; });
-    const before = await glRect();
-    const box = await page.locator('.plate').first().boundingBox();
-    await dragBy(page, box.x + box.width / 2, box.y + box.height / 2, 1400, 900);
-    const after = await glRect();
-    // setPrintRect nulls every held print the instant the rect actually
-    // changes (sheets.fill(null)), but retakeShown() -- called unconditionally
-    // after every plate drop, not only an outside-base one -- recaptures the
-    // scene on screen right behind it, so by the time this check runs the
-    // currently shown scene's own print is legitimately back. The rect
-    // itself changing is the real signal this path fired at all; the other
-    // four scenes' prints (not the one just recaptured) still prove the
-    // invalidation reached them.
-    assert(before !== after, `I-fuzz-invalidated ${engineName}: the drag did not expand the print rect (${before}), so this variant tests nothing beyond I-fuzz`);
-    const stillCleared = await page.evaluate(() => { const shown = window.__landing.state().shown; return window.__landing.prints.every((p, i) => i === shown || p == null); });
-    assert(stillCleared, `I-fuzz-invalidated ${engineName}: a print for a scene not on screen survived the rect change`);
+    // review-phases-2-4.md: sampling window.__landing.prints here caught a
+    // transient -- retakeShown() (called unconditionally after every plate
+    // drop) and the warmer refill the array asynchronously, so a read soon
+    // after the drag could land mid-refill regardless of whether the rect
+    // ever actually changed. printGeneration is the ground truth instead:
+    // applyPrintRect bumps it exactly once, exactly when setPrintRect's own
+    // sheets.fill(null) runs, so a before/after comparison across the drag
+    // proves the invalidation path fired without caring what refills next.
+    // Scattered plates can overlap (scatterPlates() has no seed): '.plate'
+    // first() picks by DOM order, not by what a real pointerdown at its own
+    // centre would actually hit. Measured directly, 1 in 8 fresh loads:
+    // elementFromPoint at the first plate's own centre resolved to a
+    // *different*, overlapping plate, so mouse.down() there dragged that
+    // one instead -- silent when it happened to also cross outsideBase, a
+    // real ~10-30% flake (3/10 in the required proof run) when it didn't.
+    // Picking the one plate actually hit-testable at its own centre is what
+    // a real drag gesture would find anyway.
+    const plateId = await page.evaluate(() => {
+      for (const pl of document.querySelectorAll('.plate')) {
+        const r = pl.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('.plate');
+        if (hit === pl) return pl.id;
+      }
+      return null;
+    });
+    assert(plateId, `I-fuzz-invalidated ${engineName}: no plate is hit-testable at its own centre (every plate fully covered)`);
+    const genBefore = await page.evaluate(() => window.__landing.printGeneration());
+    await dragBy(page, page.locator(`[id="${plateId}"]`), 1400, 900);
+    const genAfter = await page.evaluate(() => window.__landing.printGeneration());
+    assert(genAfter > genBefore, `I-fuzz-invalidated ${engineName}: printGeneration did not advance (${genBefore} -> ${genAfter}), so the drag did not actually clear held prints`);
     const rand = mulberry32(seed);
     const minY = await page.evaluate(() => window.__landing.restY(0));
     const maxY = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);

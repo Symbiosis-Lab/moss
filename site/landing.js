@@ -3860,6 +3860,7 @@ landing.prints = sheets;
 landing.restY = restY;   // the settle's own geometry, so a rest check reads it rather than keeping a second copy
 landing.targetAt = targetAt;   // what a rested position names, read the same way the wash reads it
 landing.sceneForRest = sceneForRest;   // which scene a rest carries to, the same formula settleAtRest uses
+landing.printGeneration = () => printGeneration;   // a monotonic count, bumped only by applyPrintRect -- ground truth for "did the rect actually change", never a transient read of prints itself
 landing.state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: gesture.kind === 'settling', settleSecs, settleCureLeft, settleShown, settleRunning, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, titleSteps, titleReady, titleMode });
 
 const when = (frame, key) => new Promise((resolve, reject) => {
