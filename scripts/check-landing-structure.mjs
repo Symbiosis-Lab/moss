@@ -20,13 +20,20 @@ const LANDING_JS = resolve(SITE_DIR, 'landing.js');
 // byteSize this script used to track. Lower any of these numbers, in the
 // same commit that earns it, whenever a later phase actually reduces one —
 // see the fail message below for why leaving a lowered number unrecorded is
-// itself a failure.
+// itself a failure. The same logic runs in reverse for a real rise: the site
+// owner's five-item polish pass (2026-09-20) added scene 2's Publish cue (a
+// new `publishActivated`/`pubCue`/`syncPubCue` state machine — one more
+// top-level `let`) plus its markup, CSS and keyframes, so htmlBytes and
+// scriptBytes below are the recorded, not-quiet new floor, not a loosened
+// tolerance -- the fixes for scene 1's plate margins, the window-radius
+// match and the mobile header scrim added only inline data/CSS, no new
+// bindings.
 const BASELINE = {
   windowAssignments: 1,
-  topLevelLets: 90,
+  topLevelLets: 91,
   sceneComparisons: 14,
-  htmlBytes: 45893,
-  scriptBytes: 236965,
+  htmlBytes: 50006,
+  scriptBytes: 240517,
 };
 
 function countWindowAssignments(text) {
