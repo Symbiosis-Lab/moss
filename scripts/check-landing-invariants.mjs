@@ -122,7 +122,26 @@ import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
-const { baseURL, close } = await resolveBaseURL(process.argv[2]);
+// --only/--engine/--repeat, parsed out of argv before the rest of the file
+// treats what's left as the positional URL (resolveBaseURL's own argument,
+// same as before these flags existed) -- flags can appear before, after or
+// around it. With none of the three given, nothing below this block
+// behaves any differently than it did before they existed: same browsers,
+// same invariants, same order, a thrown error still ends the process the
+// same way.
+const CLI_FLAGS = { only: null, engine: null, repeat: null };
+const positionalArgs = [];
+for (const arg of process.argv.slice(2)) {
+  const m = /^--(only|engine|repeat)=(.*)$/.exec(arg);
+  if (m) CLI_FLAGS[m[1]] = m[2];
+  else positionalArgs.push(arg);
+}
+const ONLY = CLI_FLAGS.only ? new Set(CLI_FLAGS.only.split(',').map((s) => s.trim()).filter(Boolean)) : null;
+const ENGINE = CLI_FLAGS.engine;
+if (ENGINE && ENGINE !== 'chromium' && ENGINE !== 'webkit') throw new Error(`--engine must be chromium or webkit, got ${ENGINE}`);
+const REPEAT = CLI_FLAGS.repeat == null ? null : Number(CLI_FLAGS.repeat);
+if (REPEAT != null && (!Number.isInteger(REPEAT) || REPEAT < 1)) throw new Error(`--repeat must be a positive integer, got ${CLI_FLAGS.repeat}`);
+const { baseURL, close } = await resolveBaseURL(positionalArgs[0]);
 const playwright = await loadPlaywright();
 const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
 
@@ -1211,7 +1230,10 @@ async function iHeaderScrim(browsers) {
     await page.close();
   }
   // Chromium only: mobile WebKit cannot be driven by synthesized touch
-  // events via Playwright/CDP (check-landing-mobile.mjs's own limit).
+  // events via Playwright/CDP (check-landing-mobile.mjs's own limit). Under
+  // --engine=webkit this leg has nothing to run against -- skip rather than
+  // fail on a browser that was deliberately not launched.
+  if (!browsers.chromium) { console.log('I-header-scrim: chromium-only touch-scroll leg skipped (chromium not selected)'); return; }
   const page = await browsers.chromium.newPage(PRESETS.phone);
   await ready(page);
   const y3 = await page.evaluate(() => window.__landing.restY(3));
@@ -1265,6 +1287,10 @@ async function iHeaderScrim(browsers) {
 // curve the way mobile's is, so it's measured, not solved) is what makes
 // 4.5 reachable; this is the assertion, not the formula alone.
 async function iHeaderScrimDesktop(browsers) {
+  // Entirely chromium-only (the screenshot-based contrast measurement has no
+  // per-engine loop at all) -- under --engine=webkit, skip rather than fail
+  // on a browser that was deliberately not launched.
+  if (!browsers.chromium) { console.log('I-header-scrim-desktop: skipped (chromium not selected)'); return; }
   const page = await browsers.chromium.newPage(PRESETS.desktop);
   await ready(page);
   const [lo, hi] = await page.evaluate(() => [window.__landing.restY(3), window.__landing.restY(4)]);
@@ -1323,37 +1349,81 @@ async function iDefault() {
   console.log(`-: I-default all ${files.length} check scripts navigate to the unflagged URL by default`);
 }
 
+// Named for --only=<name>[,<name>...], matching the I-* label each group's
+// own assertions already print, in the same order the plain run below has
+// always used. A name covering more than one function (I-gesture's three
+// live legs) runs all of them together -- --only was never meant to mean
+// "one function call", only "one named rule".
+const INVARIANTS = [
+  ['I-commit', (b) => iCommit(b)],
+  ['I-gesture', async (b) => {
+    await iGestureHeldExpires(b);
+    // I-gesture(b) disabled here, not deleted (2026-09-21, unit 4): deleting
+    // watchScrollNative's closing-settle special case removed the only live,
+    // non-reduced-motion caller of settleTo -- settleAtRest's own `if (reduce)
+    // return scrollTo(0, y);` runs before its settleTo(...) call and always
+    // fires (settleAtRest has exactly one caller, watchScrollReduced, which
+    // only ever runs when reduce is true), so run/state().settle/kind ===
+    // 'settling' are now unreachable from any live path, not merely untested.
+    // This needs the coordinator's own decision (retarget, or delete the
+    // mechanism as dead code), not a unilateral call from inside this unit.
+    // await iGestureSettleReleases(b);
+    await iGestureCoastDuringHold(b);
+    await iCloseOvershootSettles(b);
+  }],
+  ['I-footer-reachable', (b) => iFooterReachable(b)],
+  ['I-progress', (b) => iProgressMatchesXf(b)],
+  ['I-rect', (b) => iRect(b)],
+  ['I-scene3', (b) => iScene3(b)],
+  ['I-reduced', (b) => iReduced(b)],
+  ['I-fuzz', (b) => iFuzz(b)],
+  ['I-fuzz-invalidated', (b) => iFuzzInvalidated(b)],
+  ['I-plate', (b) => iPlate(b)],
+  ['I-pub-cue', (b) => iPubCue(b)],
+  ['I-window-radius', (b) => iWindowRadius(b)],
+  ['I-header-scrim', (b) => iHeaderScrim(b)],
+  ['I-header-scrim-desktop', (b) => iHeaderScrimDesktop(b)],
+  ['I-default', () => iDefault()],
+];
+
+if (ONLY) {
+  const known = new Set(INVARIANTS.map(([name]) => name));
+  const unknown = [...ONLY].filter((name) => !known.has(name));
+  if (unknown.length) throw new Error(`--only: unknown invariant name(s) ${unknown.join(', ')} -- known names: ${[...known].join(', ')}`);
+}
+const selected = INVARIANTS.filter(([name]) => !ONLY || ONLY.has(name));
+
 const browsers = {};
 try {
-  browsers.chromium = await playwright.chromium.launch();
-  browsers.webkit = await playwright.webkit.launch();
-  await iCommit(browsers);
-  await iGestureHeldExpires(browsers);
-  // I-gesture(b) disabled here, not deleted (2026-09-21, unit 4): deleting
-  // watchScrollNative's closing-settle special case removed the only live,
-  // non-reduced-motion caller of settleTo -- settleAtRest's own `if (reduce)
-  // return scrollTo(0, y);` runs before its settleTo(...) call and always
-  // fires (settleAtRest has exactly one caller, watchScrollReduced, which
-  // only ever runs when reduce is true), so run/state().settle/kind ===
-  // 'settling' are now unreachable from any live path, not merely untested.
-  // This needs the coordinator's own decision (retarget, or delete the
-  // mechanism as dead code), not a unilateral call from inside this unit.
-  // await iGestureSettleReleases(browsers);
-  await iGestureCoastDuringHold(browsers);
-  await iCloseOvershootSettles(browsers);
-  await iFooterReachable(browsers);
-  await iProgressMatchesXf(browsers);
-  await iRect(browsers);
-  await iScene3(browsers);
-  await iReduced(browsers);
-  await iFuzz(browsers);
-  await iFuzzInvalidated(browsers);
-  await iPlate(browsers);
-  await iPubCue(browsers);
-  await iWindowRadius(browsers);
-  await iHeaderScrim(browsers);
-  await iHeaderScrimDesktop(browsers);
-  await iDefault();
+  if (!ENGINE || ENGINE === 'chromium') browsers.chromium = await playwright.chromium.launch();
+  if (!ENGINE || ENGINE === 'webkit') browsers.webkit = await playwright.webkit.launch();
+
+  if (REPEAT == null) {
+    // Exactly today's shape: run the selection once, straight through --
+    // a thrown error ends the process here, same as before these flags
+    // existed (the default, no-flags case never reaches the branch below).
+    for (const [, run] of selected) await run(browsers);
+  } else {
+    // A landing check that fails once and passes on retry is a real finding
+    // -- its pass rate, not something to retry away and call green.
+    // --repeat is what makes that finding cheap to produce: run the
+    // selection N times against the SAME browsers/pages-per-run, and report
+    // the shape of the failures instead of just the first one.
+    let passed = 0;
+    const failureCounts = new Map();
+    for (let i = 0; i < REPEAT; i++) {
+      try {
+        for (const [, run] of selected) await run(browsers);
+        passed++;
+      } catch (error) {
+        const message = error?.message || String(error);
+        failureCounts.set(message, (failureCounts.get(message) || 0) + 1);
+      }
+    }
+    console.log(`--repeat=${REPEAT}: ${passed}/${REPEAT} passed`);
+    for (const [message, count] of failureCounts) console.log(`--repeat: ${count}x ${message}`);
+    if (failureCounts.size) process.exitCode = 1;
+  }
 } finally {
   await Promise.all(Object.values(browsers).map((b) => b.close()));
   await close();
