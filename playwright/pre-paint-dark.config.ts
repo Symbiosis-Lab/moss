@@ -47,7 +47,7 @@ export default defineConfig({
     command: `/usr/bin/python3 -m http.server 9371`,
     cwd: serveDir,
     url: "http://localhost:9371/",
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 60_000,
   },
 });

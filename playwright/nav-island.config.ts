@@ -49,7 +49,7 @@ export default defineConfig({
     command: 'npx vite --config playwright/vite.nav-island-harness.config.ts',
     cwd: repoRoot,
     port: 5404,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 60000,
   },
 });

@@ -41,7 +41,7 @@ export default defineConfig({
     command: 'npx vite --config playwright/vite.vertical-nav-chrome-harness.config.ts',
     cwd: repoRoot,
     port: 5405,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 60000,
   },
 });

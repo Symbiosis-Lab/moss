@@ -25,14 +25,29 @@ test("user rules beat moss rules at mobile width with no !important", async ({
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("gate-test.html", { waitUntil: "domcontentloaded" });
 
-  const seen = await page.evaluate(() => {
-    const grid = document.querySelector("article footer .moss-grid");
-    const readMore = document.querySelector(".read-more");
-    return {
-      gridColumns: grid ? window.getComputedStyle(grid).gridTemplateColumns : null,
-      readMoreColor: readMore ? window.getComputedStyle(readMore).color : null,
-    };
-  });
+  const computed = () =>
+    page.evaluate(() => {
+      const grid = document.querySelector("article footer .moss-grid");
+      const readMore = document.querySelector(".read-more");
+      return {
+        gridColumns: grid ? window.getComputedStyle(grid).gridTemplateColumns : null,
+        readMoreColor: readMore ? window.getComputedStyle(readMore).color : null,
+      };
+    });
+
+  // `domcontentloaded` does not guarantee both `<link rel="stylesheet">` tags
+  // are loaded and applied, and it is the second one (layer="themes") that
+  // carries both rules this gate checks. Poll the actual cascade result
+  // instead of reading it once, so a still-loading stylesheet is never
+  // mistaken for a resolved cascade, while a real regression still fails once
+  // the poll times out.
+  await expect
+    .poll(async () => (await computed()).readMoreColor, {
+      message: "the user's .read-more colour must beat moss's accent without !important",
+    })
+    .toBe(EXPECTED_READ_MORE_COLOR);
+
+  const seen = await computed();
 
   // Two space-separated resolved lengths. If moss's mobile 1fr had won we would
   // see a single track.

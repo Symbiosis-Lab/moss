@@ -21,6 +21,12 @@ import path from 'node:path';
 import { tokenBlock } from './tokens-block.js';
 import { mossBuildAssets } from '../../support/crate-paths';
 
+// Plain Tab does not reach a link in macOS Safari/WebKit unless the user has
+// enabled System Settings' "Keyboard navigation" — Option+Tab reaches it
+// regardless of that setting, so the gate drives focus the way a Mac
+// keyboard user actually would.
+const TAB = process.platform === 'darwin' ? 'Alt+Tab' : 'Tab';
+
 const CSS = fs.readFileSync(
   path.join(mossBuildAssets(), 'css/site.css'), 'utf8');
 
@@ -223,7 +229,7 @@ test('a label keeps a hover and a keyboard-focus affordance', async ({ page }) =
     'hover leaves the label unchanged').not.toBe(resting);
 
   await page.mouse.move(0, 0);
-  await page.keyboard.press('Tab');
+  await page.keyboard.press(TAB);
   expect(await page.evaluate(() => document.activeElement?.className),
     'Tab did not reach the first card').toContain('moss-card');
   expect(await title.evaluate(el => getComputedStyle(el).color),

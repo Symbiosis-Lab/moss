@@ -47,7 +47,7 @@ export default defineConfig({
     command: 'npx vite --config playwright/vite.edge-clamp-harness.config.ts',
     cwd: repoRoot,
     port: 5405,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 60000,
   },
 });
