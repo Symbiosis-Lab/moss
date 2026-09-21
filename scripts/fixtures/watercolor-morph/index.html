@@ -1,0 +1,91 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>watercolor-morph fixture</title>
+<style>
+  :root { --bg: #ffffff; }
+  html, body { margin: 0; background: #ffffff; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<!-- The sim's own on-screen canvas: unused by this fixture (draw() is never
+     called -- every invariant reads the pigment framebuffer directly via
+     probe()), so its size does not matter. -->
+<canvas id="gl" width="16" height="16"></canvas>
+<script>
+// Two synthetic compositions, one rect, twelve 32x32-texel cells in a single
+// row: columns 0-3 both A and B carry ink (a different hue pair per cell,
+// so the hue-path clause sees more than one transition, not one lucky
+// pair), 4-7 only A does, 8-11 only B does -- unit5-physics-spec.md section
+// 4's "some cells carry ink in both, some in A only, some in B only".
+// A single row, never a second: a WebGL readback's vertical order depends
+// on the UNPACK_FLIP_Y_WEBGL / gl_FragCoord convention the sim's upload
+// path applies, and this fixture has no need to reason about that as long
+// as category membership never depends on which row a cell is in.
+const CELL = 32, COLS = 12, W = CELL * COLS, H = CELL;
+const WHITE = [255, 255, 255];
+const CELLS = [
+  { col: 0, kind: 'both', a: [210, 40, 40], b: [40, 60, 210] },
+  { col: 1, kind: 'both', a: [40, 170, 60], b: [220, 150, 20] },
+  { col: 2, kind: 'both', a: [180, 40, 180], b: [30, 180, 180] },
+  { col: 3, kind: 'both', a: [210, 180, 30], b: [120, 40, 190] },
+  { col: 4, kind: 'aOnly', a: [200, 90, 40], b: WHITE },
+  { col: 5, kind: 'aOnly', a: [50, 140, 200], b: WHITE },
+  { col: 6, kind: 'aOnly', a: [140, 200, 50], b: WHITE },
+  { col: 7, kind: 'aOnly', a: [200, 50, 140], b: WHITE },
+  { col: 8, kind: 'bOnly', a: WHITE, b: [90, 200, 40] },
+  { col: 9, kind: 'bOnly', a: WHITE, b: [200, 40, 90] },
+  { col: 10, kind: 'bOnly', a: WHITE, b: [40, 90, 200] },
+  { col: 11, kind: 'bOnly', a: WHITE, b: [200, 140, 40] },
+];
+
+function paint(field) {
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  for (const cell of CELLS) {
+    const [r, gg, b] = cell[field];
+    g.fillStyle = `rgb(${r},${gg},${b})`;
+    g.fillRect(cell.col * CELL, 0, CELL, CELL);
+  }
+  return c;
+}
+
+try {
+  const canvasA = paint('a'), canvasB = paint('b');
+  const glCanvas = document.getElementById('gl');
+  // makeSim, V/HEAD/WATER/MEAN/SHOW and T_SPLASH/T_TAKE/T_DRY arrive via an
+  // init script the check injects before this one runs (see
+  // check-watercolor-morph.mjs) -- extracted live from site/landing.js so
+  // this fixture always exercises whatever that file currently contains,
+  // never a second copy of the physics that could drift from it.
+  // 3x the grid's own texel size on screen -- draw()'s only consumer of
+  // rect(), so this is purely cosmetic (a legible filmstrip); probe() reads
+  // the simulation's FBOs directly, sized from texW/texH, not from this.
+  const sim = makeSim({ canvas: glCanvas, texW: W, texH: H, rect: () => ({ x: 0, y: 0, w: W * 3, h: H * 3 }) });
+  if (!sim) throw new Error('makeSim returned null (WebGL2 or EXT_color_buffer_float unavailable)');
+  sim.setPrints(canvasA, canvasB);
+  sim.reset();
+  window.__morphFixture = {
+    W, H, CELL, cells: CELLS,
+    step(t, cure, fwd = true) { sim.step(fwd, t, cure); },
+    // probe() is widened (by the check script's extraction step, not here)
+    // to read a whole rectangle in one call; a Float32Array does not
+    // survive Playwright's evaluate boundary as itself, so this is where it
+    // becomes a plain array, once, rather than in every caller.
+    probe(x, y, w, h) { return sim.probe(x, y, w, h).map((a) => (a instanceof Float32Array ? Array.from(a) : a)); },
+    reset() { sim.reset(); },
+    // Not read by the numeric invariant (that reads probe()'s raw texels
+    // directly) -- for a human filmstrip: renders the canvas exactly as the
+    // landing page would at this state, for a screenshot.
+    draw(cure, fwd = true) { sim.draw(fwd, cure); },
+  };
+} catch (error) {
+  window.__fixtureError = error.message;
+}
+window.__fixtureReady = true;
+</script>
+</body>
+</html>
