@@ -94,6 +94,23 @@ export async function loadPlaywright() {
   }
 }
 
+// LANDING_GPU=1 launches Chromium with hardware graphics on instead of the
+// software rasterizer headless Chromium otherwise falls back to, so a
+// pigment check (the watercolor wash renders through WebGL) can be timed
+// under real GPU compositing to see whether that's where its time goes.
+// headless: 'new' rather than the classic headless mode, which never
+// initializes a GPU process at all regardless of these flags. Default
+// (LANDING_GPU unset or not exactly '1') is unchanged: chromiumType.launch
+// with whatever options the caller passed, nothing added.
+export async function launchChromium(chromiumType, options = {}) {
+  if (process.env.LANDING_GPU !== '1') return chromiumType.launch(options);
+  return chromiumType.launch({
+    ...options,
+    headless: 'new',
+    args: [...(options.args || []), '--enable-gpu', '--use-angle=metal', '--ignore-gpu-blocklist'],
+  });
+}
+
 // Attaches the one error listener every check that cares about page errors
 // duplicated by hand. Returns the live array so a script's own assertion
 // reads it after the run, the same shape as before.

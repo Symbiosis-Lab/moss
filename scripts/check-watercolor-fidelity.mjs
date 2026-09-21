@@ -20,7 +20,7 @@
 // of every new assertion: run once with WATERCOLOR_ABLATE=img (RED, every
 // img member's cells fail because the registry can no longer capture them),
 // then unset it (GREEN).
-import { loadPlaywright } from './landing-harness.mjs';
+import { loadPlaywright, launchChromium } from './landing-harness.mjs';
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { inflateSync } from 'node:zlib';
@@ -256,7 +256,7 @@ const ablate = process.env.WATERCOLOR_ABLATE || null;
 
 const browsers = {};
 try {
-  browsers.chromium = await engines.chromium.launch();
+  browsers.chromium = await launchChromium(engines.chromium);
   browsers.webkit = await engines.webkit.launch();
   for (const [engineName, browser] of Object.entries(browsers)) {
     for (const dpr of [1, 2]) {

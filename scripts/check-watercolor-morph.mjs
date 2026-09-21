@@ -41,7 +41,7 @@
 // bound in the table fault-independent except where the corresponding sim
 // reading is the thing under test, which is what lets each clause's fault
 // flip only that clause.
-import { resolveBaseURL, loadPlaywright } from './landing-harness.mjs';
+import { resolveBaseURL, loadPlaywright, launchChromium } from './landing-harness.mjs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve as resolvePath } from 'node:path';
@@ -307,7 +307,7 @@ async function main() {
   const allProblems = [];
   try {
     for (const [engineName, engine] of [['chromium', engines.chromium], ['webkit', engines.webkit]]) {
-      const browser = await engine.launch();
+      const browser = engineName === 'chromium' ? await launchChromium(engine) : await engine.launch();
       try {
         const page = await browser.newPage();
         const pageErrors = [];

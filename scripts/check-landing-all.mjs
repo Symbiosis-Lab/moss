@@ -30,6 +30,10 @@ const CHECKS = [
   'check-landing-structure.mjs',
   'check-landing-invariants.mjs',
 ];
+// These three read the moss doc theme/media pipeline, not the landing page
+// itself -- --landing-only skips them for a faster loop while iterating on
+// the page alone, the same CHECKS list and order otherwise.
+const DOCS_CHECKS = new Set(['check-docs-footer-icon.mjs', 'check-docs-media.mjs', 'check-favicon-theme.mjs']);
 
 const ENGINE_RE = /\b(chromium|webkit)\b/g;
 function engineMentions(text) {
@@ -90,12 +94,17 @@ function attributeEngines({ code, stdout, stderr }) {
   ];
 }
 
-const { baseURL, close } = await resolveBaseURL(process.argv[2]);
-console.log(`landing-all: ${baseURL}`);
+const rawArgs = process.argv.slice(2);
+const LANDING_ONLY = rawArgs.includes('--landing-only');
+const positionalArgs = rawArgs.filter((arg) => arg !== '--landing-only');
+const selectedChecks = LANDING_ONLY ? CHECKS.filter((script) => !DOCS_CHECKS.has(script)) : CHECKS;
+
+const { baseURL, close } = await resolveBaseURL(positionalArgs[0]);
+console.log(`landing-all: ${baseURL}${LANDING_ONLY ? ' (--landing-only: docs checks skipped)' : ''}`);
 const rows = [];
 let anyFailed = false;
 try {
-  for (const script of CHECKS) {
+  for (const script of selectedChecks) {
     const result = await runOne(script, baseURL);
     if (result.code !== 0) {
       anyFailed = true;
