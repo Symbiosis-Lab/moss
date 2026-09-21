@@ -81,7 +81,13 @@ const BASELINE = {
   // new overshoot-close invariant this bug needed to be caught at all.
   // Unit 1b housekeeping: rose 2 bytes, 245796 -> 245798, folding wasHeld
   // onto contact and updating the comments that named it.
-  scriptBytes: 245798,
+  // Unit 3 (2026-09-21), closing-progress unification (review-phases-2-4.md
+  // Job 2 item 5): rose 245798 -> 246609. progressAt()'s desktop branch
+  // gained real crossfade geometry for the DEPLOY..SHARE interval instead of
+  // a text-flow gap unrelated to #five's own band; xfAt() derives from it on
+  // desktop (mobile keeps mobileClosingProgress() through its own smooth()
+  // ease, untouched). I-progress is the new invariant.
+  scriptBytes: 246609,
 };
 
 function countWindowAssignments(text) {

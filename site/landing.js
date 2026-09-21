@@ -1620,10 +1620,14 @@ function mobileVisualBand() {
   const height = visual.offsetHeight;
   return { top, bottom: top + height, height };
 }
+// Mobile keeps its own path (unit 4, review-phases-2-4.md Job 2 item 5):
+// mobileClosingProgress() through the same smooth() ease as every other
+// mobile join, not unified with desktop's crossfade band here. Desktop
+// derives from progressAt() -- the one number the crossfade, the CSS
+// --xf custom property and a scene rest all now read alike (unit 3).
 function xfAt() {
   if (mobileLayout()) return smooth(.45, 1, mobileClosingProgress());
-  const top = five.offsetTop;
-  return clamp01((scrollY - (top - innerHeight * .8)) / (innerHeight * .6));
+  return clamp01(progressAt() - DEPLOY);
 }
 function nativeScroll() {
   // At the exact first crossfade pixel xfAt() is still zero. Keep the carry
@@ -3007,10 +3011,16 @@ const progressAt = () => {
   const line = innerHeight * LINE;
   for (let i = 0; i < JOINS.length; i++) {
     if (textBottom(scenesEl[i]) >= line) return i;   // the line is still inside this text
+    // The last join is the crossfade, not a wash: its own progress is the
+    // scrub the visual paints from -- #five's own band against scrollY --
+    // not a text-flow gap. scenesEl[DEPLOY + 1] is a bare 1px marker with no
+    // crossfade geometry of its own (closing-progress unit, unit 3,
+    // review-phases-2-4.md Job 2 item 5). restY(SHARE) sits at or past
+    // where this plateaus at DEPLOY + 1, its far end.
+    if (i === DEPLOY) return DEPLOY + clamp01((scrollY - (five.offsetTop - innerHeight * .8)) / (innerHeight * .6));
     const top = textTop(scenesEl[i + 1]);
     if (top >= line) { const bot = textBottom(scenesEl[i]); return i + (line - bot) / Math.max(1, top - bot); }
   }
-  return JOINS.length;
 };
 // In the gap the position names neither scene, and what it names there is the
 // one being travelled toward. Same zero-is-not-downward rule as
