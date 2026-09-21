@@ -136,7 +136,13 @@ const BASELINE = {
   // by foot(), so it settles a deposit rather than painting one out of
   // nothing outside the wash's own footprint; no new uniform. Budget
   // consumed so far: 2212 of 6000.
-  scriptBytes: 251166,
+  // Unit 5 step 3 (2026-09-21), unit5-physics-spec.md section 2: rose
+  // 251166 -> 254615. The GPU keyframe ring (captureKeyframe/
+  // maybeCaptureKeyframe/restoreNearestKeyframe, the blit helper, and
+  // advanceWash's own switch from reset()-and-replay to a keyframe
+  // restore) -- reversal bounded to a 63-step replay instead of 252.
+  // Budget consumed so far: 5661 of 6000.
+  scriptBytes: 254615,
 };
 
 function countWindowAssignments(text) {

@@ -716,8 +716,63 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
     bind(8, paper); bind(9, S.full); bind(10, T.full); bind(11, S.lo); bind(12, T.lo); bind(13, S.ft); bind(14, T.ft);
   };
 
+  // Reversal keyframe ring: GPU-only, no readback. Four slots at p in {0,
+  // .25, .5, .75}, allocated on first capture so an instance that never
+  // reverses never pays for it.
+  const KF_PS = [0, 0.25, 0.5, 0.75];
+  let kf = null;
+  const kfEnsure = () => { if (kf) return; kf = KF_PS.map(() => {
+    const wTx = tex(W, H), pT0x = tex(W, H), pT1x = tex(W, H);
+    return { t: -1, wF: fbo([wTx]), pF0: fbo([pT0x]), pF1: fbo([pT1x]) };
+  }); };
+  // dstBuffers, given, targets one attachment of pF[pi] (which otherwise
+  // keeps both live for PIG's own MRT output); every other destination here
+  // is single-attachment already and needs no override.
+  const blit = (srcFbo, srcAttachment, dstFbo, dstBuffers) => {
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, srcFbo); gl.readBuffer(srcAttachment);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, dstFbo); if (dstBuffers) gl.drawBuffers(dstBuffers);
+    gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+  };
+
   return {
-    setPrints(src, tgt) { setPrint('src', src); setPrint('tgt', tgt); },
+    setPrints(src, tgt) { setPrint('src', src); setPrint('tgt', tgt);
+      // A new pair invalidates every stored keyframe: it belongs to the
+      // wash between these two specific prints, and setPrints always starts
+      // a new one.
+      if (kf) for (const k of kf) k.t = -1;
+    },
+    // Blits the live state into ring slot `slot`, recording it at `t`.
+    captureKeyframe(slot, t) {
+      kfEnsure();
+      const k = kf[slot];
+      blit(wF[wi], gl.COLOR_ATTACHMENT0, k.wF);
+      blit(pF[pi], gl.COLOR_ATTACHMENT0, k.pF0);
+      blit(pF[pi], gl.COLOR_ATTACHMENT1, k.pF1);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      k.t = t;
+    },
+    // Called after every forward step; captures whichever of KF_PS the sim
+    // has newly reached. Safe to call unconditionally -- a slot already at
+    // or past its own threshold is left alone.
+    maybeCaptureKeyframe(t) {
+      kfEnsure();
+      for (let i = 0; i < KF_PS.length; i++) { const at = KF_PS[i] * T_TOTAL; if (t >= at && kf[i].t < at) this.captureKeyframe(i, t); }
+    },
+    // Restores the newest keyframe at or before goal, if any qualifies, and
+    // returns the t it was captured at; null (nothing restored) tells the
+    // caller to fall back to reset().
+    restoreNearestKeyframe(goal) {
+      if (!kf) return null;
+      let best = null;
+      for (const k of kf) if (k.t >= 0 && k.t <= goal && (!best || k.t > best.t)) best = k;
+      if (!best) return null;
+      blit(best.wF, gl.COLOR_ATTACHMENT0, wF[wi]);
+      blit(best.pF0, gl.COLOR_ATTACHMENT0, pF[pi], [gl.COLOR_ATTACHMENT0, gl.NONE]);
+      blit(best.pF1, gl.COLOR_ATTACHMENT0, pF[pi], [gl.NONE, gl.COLOR_ATTACHMENT1]);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, pF[pi]); gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]); // PIG's own MRT output needs both live again
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return best.t;
+    },
     reset() {
       gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 0);
       for (const f of [...wF, ...pF, nearF, wholeF]) { gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.clear(gl.COLOR_BUFFER_BIT); }
@@ -1770,12 +1825,24 @@ async function runJoin() {
 // One mobile pigment clock. The text track supplies a position; this advances
 // or rewinds the same liquid surface, and does no GPU draw at an unchanged rest.
 function advanceWash(simInstance, state, { goal, fwd, stir = 0, tilt = 0, relift = 0, budget = STEPS_PER_FRAME }, paint) {
-  if (state.t > goal + DT) { simInstance.reset(); state.t = 0; state.drawn = -1; }
+  if (state.t > goal + DT) {
+    // A keyframe at or before goal replays forward from there instead of a
+    // full reset()-and-252-step replay from zero; reset() only when no
+    // keyframe qualifies (goal is before the first one, or none has been
+    // captured yet for this print pair) -- reset() zeroes the water field
+    // too, which visibly re-floods the sheet, so it is never used where a
+    // restore will do.
+    const kfT = simInstance.restoreNearestKeyframe && simInstance.restoreNearestKeyframe(goal);
+    if (kfT != null) state.t = kfT;
+    else { simInstance.reset(); state.t = 0; }
+    state.drawn = -1;
+  }
   let count = 0;
   while (state.t < goal && state.t < T_TOTAL && budget-- > 0) {
     simInstance.step(fwd, state.t, smooth(T_CURE, T_TOTAL, state.t), stir, tilt, relift);
     state.t += DT; count++;
   }
+  if (simInstance.maybeCaptureKeyframe) simInstance.maybeCaptureKeyframe(state.t);
   if (state.t >= goal - DT && state.t !== state.drawn) { paint(state.t); state.drawn = state.t; }
   return { caughtUp: state.t >= goal - DT, count };
 }
