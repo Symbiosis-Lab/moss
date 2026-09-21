@@ -443,7 +443,7 @@ void main(){
 const PIG = HEAD + `
 uniform sampler2D uW, uS, uD;
 uniform sampler2D uNear, uWhole;
-uniform float uTime, uCure, uLift, uAds, uMix, uMixG, uDrying, uStir, uRelift, uLoad, uTakeFloor, uTakeL0, uTakeL1;
+uniform float uTime, uCure, uLift, uAds, uMix, uMixG, uDrying, uStir, uRelift, uLoad, uTakeFloor, uTakeL0, uTakeL1, uMixHold;
 layout(location=0) out vec4 oS; layout(location=1) out vec4 oD;
 vec4 S(vec2 t){ return texture(uS, t / uSize); }
 vec2 curlN(vec2 p){
@@ -499,7 +499,13 @@ void main(){
   vec4 nr = texture(uNear, vUv), wh = texture(uWhole, vec2(0.5));
   float hn = nr.a, hw = wh.a;
   vec3 nearc = nr.rgb / max(hn, h0), wholec = wh.rgb / max(hw, h0);
-  s += uMix * agit * wet * (nearc - c) * min(hn, hc); s += uMixG * wet * (wholec - c) * min(hw, hc);
+  // The whole-film mean is held back while this texel is still releasing A's
+  // ink: a film that is still gaining fresh local pigment has not yet had
+  // time to homogenize, and letting it do so is what turned the middle of
+  // every morph into one average colour instead of A's composition becoming
+  // B's.
+  float mixGate = mix(uMixHold, 1.0, smoothstep(uTakeL1, 1.0, l));
+  s += uMix * agit * wet * (nearc - c) * min(hn, hc); s += uMixG * mixGate * wet * (wholec - c) * min(hw, hc);
   s = max(s, vec3(0.0));
   // the water re-wets the old print: its ink dissolves into the film, all of it
   vec3 Ao = absorb(texture(uSrcLo, vUv));
@@ -626,6 +632,7 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
     if (u.uTakeFloor) gl.uniform1f(u.uTakeFloor, 0);
     if (u.uTakeL0) gl.uniform1f(u.uTakeL0, 0.15);
     if (u.uTakeL1) gl.uniform1f(u.uTakeL1, 0.55);
+    if (u.uMixHold) gl.uniform1f(u.uMixHold, 0.25);
     return { p, u }; };
   const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);

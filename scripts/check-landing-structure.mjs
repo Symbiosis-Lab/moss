@@ -127,7 +127,11 @@ const BASELINE = {
   // defaults, the take()-gated ad computation and its comment, and the
   // per-step JS split into uAds/uTakeFloor. Within this unit's pre-approved
   // 6000-byte rise (budget consumed so far: 1130 of 6000).
-  scriptBytes: 250084,
+  // Unit 5 step 1b (2026-09-21), unit5-physics-spec.md section 1b: rose
+  // 250084 -> 250538. uMixHold, its link-time default and the mixGate
+  // computation that damps the whole-film mean while a texel is still
+  // releasing A's ink. Budget consumed so far: 1584 of 6000.
+  scriptBytes: 250538,
 };
 
 function countWindowAssignments(text) {
