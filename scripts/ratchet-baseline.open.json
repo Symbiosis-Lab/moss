@@ -7,45 +7,46 @@
       "disposition": "permanent",
       "armed": true,
       "value": {
-        "crates/moss-build/src/build/assets/binary_resolver.rs": 1016,
-        "crates/moss-build/src/build/cache.rs": 1606,
-        "crates/moss-build/src/build/folder_embed.rs": 1460,
-        "crates/moss-build/src/build/markdown/html_post.rs": 977,
-        "crates/moss-build/src/build/markdown/pipeline.rs": 2143,
-        "crates/moss-build/src/build/media/ffmpeg.rs": 1672,
-        "crates/moss-build/src/build/media/image.rs": 3008,
-        "crates/moss-build/src/build/media/pipeline.rs": 1804,
-        "crates/moss-build/src/build/media/video.rs": 1810,
-        "crates/moss-build/src/build/page/meta.rs": 1366,
-        "crates/moss-build/src/build/pipeline.rs": 2018,
-        "crates/moss-build/src/build/render/blocking.rs": 3591,
-        "crates/moss-build/src/build/render/html.rs": 1617,
-        "crates/moss-build/src/build/scan/scan.rs": 1487,
-        "crates/moss-build/src/build/ship.rs": 820,
-        "crates/moss-build/src/build/types.rs": 832,
-        "crates/moss-build/src/build/watch.rs": 1126,
-        "crates/moss-build/src/build.rs": 2189,
-        "crates/moss-build/src/engine.rs": 918,
-        "crates/moss-build/src/moss_paths.rs": 1197,
-        "crates/moss-build/src/plugins/manager.rs": 976,
-        "crates/moss-build/src/plugins/types.rs": 812,
-        "crates/moss-build/src/seta/client.rs": 1002,
-        "crates/moss-build/src/tasks.rs": 1393,
-        "crates/moss-build/src/vault/fs.rs": 812,
-        "crates/moss-core/src/ast/hooks.rs": 1096,
-        "crates/moss-core/src/ast/parser.rs": 2079,
-        "crates/moss-core/src/ast/render.rs": 915,
-        "crates/moss-core/src/ast/resolve_urls.rs": 963,
-        "crates/moss-core/src/ast/shortcode_extract.rs": 1531,
-        "crates/moss-core/src/contract/components.rs": 3835,
-        "crates/moss-core/src/frontmatter_typed.rs": 1081,
-        "crates/moss-core/src/render/image.rs": 982,
-        "crates/moss-core/src/resolve/embed_renderer.rs": 820,
-        "crates/moss-core/src/resolve/wikilink_dispatch.rs": 1044,
-        "crates/moss-core/src/schema_fields.rs": 873,
-        "packages/moss-api/src/testing/mock-tauri.ts": 1140,
-        "crates/moss-build/src/build/manifest.rs": 961,
-        "crates/moss-build/src/build/feeds/search_lane.rs": 801
+        "crates/moss-build/src/build/assets/binary_resolver.rs": 1100,
+        "crates/moss-build/src/build/cache.rs": 1700,
+        "crates/moss-build/src/build/folder_embed.rs": 1500,
+        "crates/moss-build/src/build/markdown/html_post.rs": 1000,
+        "crates/moss-build/src/build/markdown/pipeline.rs": 2200,
+        "crates/moss-build/src/build/media/ffmpeg.rs": 1700,
+        "crates/moss-build/src/build/media/image.rs": 3100,
+        "crates/moss-build/src/build/media/pipeline.rs": 1900,
+        "crates/moss-build/src/build/media/video.rs": 2000,
+        "crates/moss-build/src/build/page/meta.rs": 1400,
+        "crates/moss-build/src/build/pipeline.rs": 2100,
+        "crates/moss-build/src/build/render/blocking.rs": 3700,
+        "crates/moss-build/src/build/render/html.rs": 1700,
+        "crates/moss-build/src/build/scan/scan.rs": 1500,
+        "crates/moss-build/src/build/ship.rs": 1000,
+        "crates/moss-build/src/build/types.rs": 900,
+        "crates/moss-build/src/build/watch.rs": 1200,
+        "crates/moss-build/src/build.rs": 2300,
+        "crates/moss-build/src/engine.rs": 1000,
+        "crates/moss-build/src/moss_paths.rs": 1300,
+        "crates/moss-build/src/plugins/manager.rs": 1000,
+        "crates/moss-build/src/plugins/types.rs": 900,
+        "crates/moss-build/src/seta/client.rs": 1100,
+        "crates/moss-build/src/tasks.rs": 1400,
+        "crates/moss-build/src/vault/fs.rs": 900,
+        "crates/moss-core/src/ast/hooks.rs": 1100,
+        "crates/moss-core/src/ast/parser.rs": 2100,
+        "crates/moss-core/src/ast/render.rs": 1000,
+        "crates/moss-core/src/ast/resolve_urls.rs": 1000,
+        "crates/moss-core/src/ast/shortcode_extract.rs": 1600,
+        "crates/moss-core/src/contract/components.rs": 3900,
+        "crates/moss-core/src/frontmatter_typed.rs": 1100,
+        "crates/moss-core/src/render/image.rs": 1000,
+        "crates/moss-core/src/resolve/embed_renderer.rs": 900,
+        "crates/moss-core/src/resolve/wikilink_dispatch.rs": 1100,
+        "crates/moss-core/src/schema_fields.rs": 900,
+        "packages/moss-api/src/testing/mock-tauri.ts": 1200,
+        "crates/moss-build/src/build/manifest.rs": 1000,
+        "crates/moss-build/src/build/feeds/search_lane.rs": 900,
+        "crates/moss-build/src/ops/serve/invoke.rs": 900
       }
     },
     "children_per_dir": {
@@ -76,439 +77,5 @@
       "armed": true,
       "value": 43
     }
-  },
-  "accepts": [
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/assets/binary_resolver.rs": null,
-        "crates/moss-build/src/build/cache.rs": null,
-        "crates/moss-build/src/build/folder_embed.rs": null,
-        "crates/moss-build/src/build/markdown/html_post.rs": null,
-        "crates/moss-build/src/build/markdown/pipeline.rs": null,
-        "crates/moss-build/src/build/media/ffmpeg.rs": null,
-        "crates/moss-build/src/build/media/image.rs": null,
-        "crates/moss-build/src/build/media/pipeline.rs": null,
-        "crates/moss-build/src/build/media/video.rs": null,
-        "crates/moss-build/src/build/page/meta.rs": null,
-        "crates/moss-build/src/build/pipeline.rs": null,
-        "crates/moss-build/src/build/render/blocking.rs": null,
-        "crates/moss-build/src/build/render/html.rs": null,
-        "crates/moss-build/src/build/scan/scan.rs": null,
-        "crates/moss-build/src/build/ship.rs": null,
-        "crates/moss-build/src/build/types.rs": null,
-        "crates/moss-build/src/build/watch.rs": null,
-        "crates/moss-build/src/build.rs": null,
-        "crates/moss-build/src/engine.rs": null,
-        "crates/moss-build/src/moss_paths.rs": null,
-        "crates/moss-build/src/plugins/manager.rs": null,
-        "crates/moss-build/src/plugins/types.rs": null,
-        "crates/moss-build/src/seta/client.rs": null,
-        "crates/moss-build/src/tasks.rs": null,
-        "crates/moss-build/src/vault/fs.rs": null,
-        "crates/moss-core/src/ast/hooks.rs": null,
-        "crates/moss-core/src/ast/parser.rs": null,
-        "crates/moss-core/src/ast/render.rs": null,
-        "crates/moss-core/src/ast/resolve_urls.rs": null,
-        "crates/moss-core/src/ast/shortcode_extract.rs": null,
-        "crates/moss-core/src/contract/components.rs": null,
-        "crates/moss-core/src/frontmatter_typed.rs": null,
-        "crates/moss-core/src/render/image.rs": null,
-        "crates/moss-core/src/resolve/embed_renderer.rs": null,
-        "crates/moss-core/src/resolve/wikilink_dispatch.rs": null,
-        "crates/moss-core/src/schema_fields.rs": null,
-        "packages/moss-api/src/testing/mock-tauri.ts": null
-      },
-      "to": {
-        "crates/moss-build/src/build/assets/binary_resolver.rs": 1007,
-        "crates/moss-build/src/build/cache.rs": 1312,
-        "crates/moss-build/src/build/folder_embed.rs": 1460,
-        "crates/moss-build/src/build/markdown/html_post.rs": 977,
-        "crates/moss-build/src/build/markdown/pipeline.rs": 2143,
-        "crates/moss-build/src/build/media/ffmpeg.rs": 1620,
-        "crates/moss-build/src/build/media/image.rs": 2978,
-        "crates/moss-build/src/build/media/pipeline.rs": 1692,
-        "crates/moss-build/src/build/media/video.rs": 1602,
-        "crates/moss-build/src/build/page/meta.rs": 1366,
-        "crates/moss-build/src/build/pipeline.rs": 2060,
-        "crates/moss-build/src/build/render/blocking.rs": 3599,
-        "crates/moss-build/src/build/render/html.rs": 1619,
-        "crates/moss-build/src/build/scan/scan.rs": 1512,
-        "crates/moss-build/src/build/ship.rs": 808,
-        "crates/moss-build/src/build/types.rs": 824,
-        "crates/moss-build/src/build/watch.rs": 1133,
-        "crates/moss-build/src/build.rs": 2126,
-        "crates/moss-build/src/engine.rs": 918,
-        "crates/moss-build/src/moss_paths.rs": 1138,
-        "crates/moss-build/src/plugins/manager.rs": 976,
-        "crates/moss-build/src/plugins/types.rs": 812,
-        "crates/moss-build/src/seta/client.rs": 1002,
-        "crates/moss-build/src/tasks.rs": 1393,
-        "crates/moss-build/src/vault/fs.rs": 812,
-        "crates/moss-core/src/ast/hooks.rs": 1096,
-        "crates/moss-core/src/ast/parser.rs": 2079,
-        "crates/moss-core/src/ast/render.rs": 915,
-        "crates/moss-core/src/ast/resolve_urls.rs": 963,
-        "crates/moss-core/src/ast/shortcode_extract.rs": 1531,
-        "crates/moss-core/src/contract/components.rs": 3835,
-        "crates/moss-core/src/frontmatter_typed.rs": 1081,
-        "crates/moss-core/src/render/image.rs": 982,
-        "crates/moss-core/src/resolve/embed_renderer.rs": 820,
-        "crates/moss-core/src/resolve/wikilink_dispatch.rs": 1044,
-        "crates/moss-core/src/schema_fields.rs": 873,
-        "packages/moss-api/src/testing/mock-tauri.ts": 1140
-      },
-      "reason": "initial baseline: port ratchet.mjs to the public repo (landing-order step 8)",
-      "date": "2026-09-16"
-    },
-    {
-      "row": "children_per_dir",
-      "from": {
-        "crates/moss-build/src": null,
-        "crates/moss-build/src/build": null,
-        "crates/moss-build/src/build/media": null,
-        "crates/moss-build/src/deploy": null,
-        "crates/moss-build/src/js-src/bridge": null,
-        "crates/moss-build/src/js-src/site": null,
-        "crates/moss-build/src/plugins": null,
-        "crates/moss-core/src": null,
-        "crates/moss-core/src/ast": null,
-        "crates/moss-core/src/resolve": null
-      },
-      "to": {
-        "crates/moss-build/src": 40,
-        "crates/moss-build/src/build": 67,
-        "crates/moss-build/src/build/media": 16,
-        "crates/moss-build/src/deploy": 16,
-        "crates/moss-build/src/js-src/bridge": 16,
-        "crates/moss-build/src/js-src/site": 23,
-        "crates/moss-build/src/plugins": 19,
-        "crates/moss-core/src": 39,
-        "crates/moss-core/src/ast": 23,
-        "crates/moss-core/src/resolve": 16
-      },
-      "reason": "initial baseline: port ratchet.mjs to the public repo (landing-order step 8)",
-      "date": "2026-09-16"
-    },
-    {
-      "row": "mirror_markers",
-      "from": 0,
-      "to": 43,
-      "reason": "initial baseline: port ratchet.mjs to the public repo (landing-order step 8)",
-      "date": "2026-09-16"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/cache.rs": 1312,
-        "crates/moss-build/src/build/media/ffmpeg.rs": 1620,
-        "crates/moss-build/src/build/media/pipeline.rs": 1692,
-        "crates/moss-build/src/build/media/video.rs": 1602,
-        "crates/moss-build/src/build/pipeline.rs": 2060,
-        "crates/moss-build/src/build/ship.rs": 808,
-        "crates/moss-build/src/build.rs": 2126,
-        "crates/moss-build/src/moss_paths.rs": 1138
-      },
-      "to": {
-        "crates/moss-build/src/build/cache.rs": 1353,
-        "crates/moss-build/src/build/media/ffmpeg.rs": 1669,
-        "crates/moss-build/src/build/media/pipeline.rs": 1744,
-        "crates/moss-build/src/build/media/video.rs": 1639,
-        "crates/moss-build/src/build/pipeline.rs": 2069,
-        "crates/moss-build/src/build/ship.rs": 809,
-        "crates/moss-build/src/build.rs": 2177,
-        "crates/moss-build/src/moss_paths.rs": 1161
-      },
-      "reason": "lifecycle logging (design lifecycle.md §6 lines 1,3-9): one INFO/WARN per pointer move, promotion, sweep, GC and CAS failure; later steps of the same change delete ship::gc_old_generations, try_promote/PROMOTED, served_dir and the symlink sweep twins. ffmpeg.rs (+49) and moss_paths.rs (+23) were already over baseline at 39b7dec from 30499ee's logging fix, landed without an accept.",
-      "date": "2026-09-17"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/cache.rs": 1353,
-        "crates/moss-build/src/build/manifest.rs": null,
-        "crates/moss-build/src/build/media/image.rs": 2978,
-        "crates/moss-build/src/build/media/video.rs": 1639,
-        "crates/moss-build/src/build/ship.rs": 809,
-        "crates/moss-build/src/build.rs": 2177
-      },
-      "to": {
-        "crates/moss-build/src/build/cache.rs": 1389,
-        "crates/moss-build/src/build/manifest.rs": 818,
-        "crates/moss-build/src/build/media/image.rs": 3001,
-        "crates/moss-build/src/build/media/video.rs": 1665,
-        "crates/moss-build/src/build/ship.rs": 912,
-        "crates/moss-build/src/build.rs": 2193
-      },
-      "reason": "lifecycle step 2: Presence classifier, Unverified ledger and ShipVerdict gate so an unreadable build tree withholds instead of shipping an emptied generation; later lifecycle steps delete the served_dir/PROMOTED/symlink-sweep/gc twins",
-      "date": "2026-09-17"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/media/video.rs": 1665,
-        "crates/moss-build/src/build.rs": 2193
-      },
-      "to": {
-        "crates/moss-build/src/build/media/video.rs": 1723,
-        "crates/moss-build/src/build.rs": 2194
-      },
-      "reason": "lifecycle step 3: video dispatch relinks cached outputs from CAS through the shared cas_heal::rematerialize instead of queueing them behind a real encode",
-      "date": "2026-09-17"
-    },
-    {
-      "row": "children_per_dir",
-      "from": {
-        "crates/moss-build/src/build": 67
-      },
-      "to": {
-        "crates/moss-build/src/build": 69
-      },
-      "reason": "lifecycle step 3: build/lifecycle.rs + build/lifecycle/ are the ownership map's target home for output-tree invariance (04-ownership-map rows 25, 40)",
-      "date": "2026-09-17"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/media/video.rs": 1723
-      },
-      "to": {
-        "crates/moss-build/src/build/media/video.rs": 1762
-      },
-      "reason": "lifecycle step 4: dispatch joins a running encode and bumps the epoch only for new work; a run requests a rebuild only when it delivered",
-      "date": "2026-09-17"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build.rs": 2194
-      },
-      "to": {
-        "crates/moss-build/src/build.rs": 2201
-      },
-      "reason": "lifecycle step 5: run_pipeline takes the build's cache-write lease and adopts the served cell through lifecycle (the seed switch it replaces was 1 line; the lease hand-off to the retried attempt is the growth)",
-      "date": "2026-09-17"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/assets/binary_resolver.rs": 1007,
-        "crates/moss-build/src/build/cache.rs": 1389,
-        "crates/moss-build/src/build/feeds/search_lane.rs": null,
-        "crates/moss-build/src/build/media/ffmpeg.rs": 1669,
-        "crates/moss-build/src/build/media/image.rs": 2935,
-        "crates/moss-build/src/build/media/pipeline.rs": 1744,
-        "crates/moss-build/src/build/media/video.rs": 1762,
-        "crates/moss-build/src/build/pipeline.rs": 1992,
-        "crates/moss-build/src/moss_paths.rs": 1161
-      },
-      "to": {
-        "crates/moss-build/src/build/assets/binary_resolver.rs": 1012,
-        "crates/moss-build/src/build/cache.rs": 1391,
-        "crates/moss-build/src/build/feeds/search_lane.rs": 801,
-        "crates/moss-build/src/build/media/ffmpeg.rs": 1671,
-        "crates/moss-build/src/build/media/image.rs": 2937,
-        "crates/moss-build/src/build/media/pipeline.rs": 1754,
-        "crates/moss-build/src/build/media/video.rs": 1771,
-        "crates/moss-build/src/build/pipeline.rs": 1994,
-        "crates/moss-build/src/moss_paths.rs": 1166
-      },
-      "reason": "lifecycle step 6: allow:unlink markers on the 68 unlinks that are not under staging (same scale as allow:raw_write), permit parameters on the staging sweeps; the symlink sweep, remove_existing, the link_to/math temp sweeps, the favicon probe and trio removal, and ship::gc_old_generations are deleted",
-      "date": "2026-09-17"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/media/pipeline.rs": 1754,
-        "crates/moss-build/src/build/media/video.rs": 1771,
-        "crates/moss-build/src/build/pipeline.rs": 1994
-      },
-      "to": {
-        "crates/moss-build/src/build/media/pipeline.rs": 1760,
-        "crates/moss-build/src/build/media/video.rs": 1781,
-        "crates/moss-build/src/build/pipeline.rs": 1998
-      },
-      "reason": "lifecycle step 7: the sweep keeps a running or landed encode's outputs and temps, and runs record what they deliver; the shared cache/tmp wipe is gone in favour of per-run scratch",
-      "date": "2026-09-17"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/media/video.rs": 1781
-      },
-      "to": {
-        "crates/moss-build/src/build/media/video.rs": 1788
-      },
-      "reason": "lifecycle step 8: the detached encode takes an EncodeLease so cache GC skips while it stores",
-      "date": "2026-09-17"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/assets/binary_resolver.rs": 1012,
-        "crates/moss-build/src/build/media/ffmpeg.rs": 1671,
-        "crates/moss-build/src/build/render/blocking.rs": 3590,
-        "crates/moss-build/src/build.rs": 2185,
-        "crates/moss-build/src/moss_paths.rs": 1166
-      },
-      "to": {
-        "crates/moss-build/src/build/assets/binary_resolver.rs": 1016,
-        "crates/moss-build/src/build/media/ffmpeg.rs": 1672,
-        "crates/moss-build/src/build/render/blocking.rs": 3591,
-        "crates/moss-build/src/build.rs": 2189,
-        "crates/moss-build/src/moss_paths.rs": 1197
-      },
-      "reason": "cloud-safe build-tree directories: raw create/remove sites under .moss/build route through io_utils, the rest carry allow markers, and the exclusion marker is read back after it is set",
-      "date": "2026-09-17"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/pipeline.rs": 1998
-      },
-      "to": {
-        "crates/moss-build/src/build/pipeline.rs": 2018
-      },
-      "reason": "lifecycle step 5 fixup: pipeline::run stays the lease-free public entry and run_leased carries the crate-private cache lease",
-      "date": "2026-09-17"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/media/video.rs": 1788
-      },
-      "to": {
-        "crates/moss-build/src/build/media/video.rs": 1810
-      },
-      "reason": "dispatch_video_conversions back under control: the probe-and-relink of one video's staged outputs is VideoStore::stage and the output-key list is one helper shared by registration and the run ledger (dispatch 368 -> 301 lines)",
-      "date": "2026-09-17"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/media/pipeline.rs": 1760
-      },
-      "to": {
-        "crates/moss-build/src/build/media/pipeline.rs": 1804
-      },
-      "reason": "the file stood at 1821 prod lines on develop against this row's 1760 baseline before this change touched it - growth from unrelated commits that nobody accepted (ten other files in this row are in the same unaccepted-growth state and are NOT touched by this entry). copy_deferred_assets' place-blob/record-blob/preserve-link dedup lowers it to 1804, still above 1760 but below where it started; the entry is set to 1804, the final count, so the file cannot regrow past it unnoticed. Scoped to this one path deliberately — `ratchet.mjs accept` has no per-path filter.",
-      "date": "2026-09-20"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/manifest.rs": 818
-      },
-      "to": {
-        "crates/moss-build/src/build/manifest.rs": 966
-      },
-      "reason": "the file stood at 1090 prod lines on develop against this row baseline of 818 - growth nobody accepted (nine other files in this row are in the same state and are NOT touched by this entry). Moving the ship-source seam (ShipSource, ShipFingerprint, the staged_oid/ship_fingerprint/stamp_* accessors) into manifest/ship_source.rs lowers it to 966, still above 818 but 124 below where it started; the entry is set to 966, the final count, so the file cannot regrow past it unnoticed. Scoped to this one path by hand because `ratchet.mjs accept` has no per-path filter.",
-      "date": "2026-09-20"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/cache.rs": 1390,
-        "crates/moss-build/src/build/types.rs": 824
-      },
-      "to": {
-        "crates/moss-build/src/build/cache.rs": 1523,
-        "crates/moss-build/src/build/types.rs": 832
-      },
-      "reason": "both files stood exactly at their baselines on develop. The image hash index was keyed by (size, whole-second mtime), so a same-size rewrite in the same second reused the previous picture's variant; the fix gives HashIndexEntry the stat record SourceMetadata already carries (FileStat, the full-stat lookup/update/carry_forward/resolve, and the doc for why the video path keeps lookup_whole_second) = +133 in cache.rs, and moves identity_disagrees next to stat_identity in types.rs (+8) so the watcher, the frontmatter scan cache and the index share one definition (two hand copies deleted from watch.rs and frontmatter_cache.rs). The change also deletes four hand-copied (size, whole-second mtime) extractions from image.rs, cas_heal.rs, parse_cache.rs and scan.rs. Not split out: moving HashIndex to its own module adds a 70th child to build/ (baseline 69) and carries ~250 lines of its tests with it, which is a relocation to do on its own, not inside a correctness fix.",
-      "date": "2026-09-20"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/cache.rs": 1523,
-        "crates/moss-build/src/build/scan/scan.rs": 1511
-      },
-      "to": {
-        "crates/moss-build/src/build/cache.rs": 1544,
-        "crates/moss-build/src/build/scan/scan.rs": 1521
-      },
-      "reason": "cache.rs +21: HashIndex::resolve refuses to read a file that is still in the cloud (an Err before hash_file), split into resolve/resolve_with so a test can inject the hasher and the cloud predicate; the two-line guard is the fix, the rest is the seam signature and the doc saying why a provider re-materialisation makes the strict lookup miss. scan.rs +10: the evicted branch of extract_media_metadata_cached answers by the whole-second lookup again (it cannot hash) and never caches a non-answer under a hash; the growth is the comment that says why that is safe. Not split out: moving HashIndex to its own module adds a 70th child to build/ (baseline 69), a relocation to do on its own.",
-      "date": "2026-09-20"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/cache.rs": 1544,
-        "crates/moss-build/src/build/media/image.rs": 2937
-      },
-      "to": {
-        "crates/moss-build/src/build/cache.rs": 1546,
-        "crates/moss-build/src/build/media/image.rs": 2952
-      },
-      "reason": "cache.rs +2: the carry_forward doc now says why the guard is load-bearing for images (the scan's evicted branch). image.rs +15 (2937 to 2952; the file already stood at 2944 on develop, 7 over, unaccepted): compute_image_item_fingerprint is split into a stat-taking half and image_item_fingerprint, which takes a stat record already in hand, so a test can hand the fingerprint a record that differs in one field (ctime cannot be set from userland). The split goes away when the fingerprint becomes a (FileStat, params) value.",
-      "date": "2026-09-20"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/cache.rs": 1546
-      },
-      "to": {
-        "crates/moss-build/src/build/cache.rs": 1573
-      },
-      "reason": "cache.rs +27: HashIndex counts its own answers so a build can say what the index did (one info line, [cache] hash-index: N hits, M rehashed, printed once at the post-join point in await_completion). Two process-wide atomics, a count_hit wrapper on lookup and lookup_whole_second, one increment in update (every path that hashes for want of a hit records through it, so there is no per-caller increment to forget), and the report function; the reviewer of a930263 had to build probe binaries to count index hits. Not split out: moving HashIndex to its own module adds a 70th child to build/ (baseline 69), a relocation to do on its own.",
-      "date": "2026-09-20"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/media/image.rs": 2952
-      },
-      "to": {
-        "crates/moss-build/src/build/media/image.rs": 2958
-      },
-      "reason": "image.rs +6 (2952 to 2958): the image worker takes the item's fingerprint before it reads the source and records it in its teardown for an item that delivered, where the dispatch used to record it before any worker had run (the desktop gate then vouched for sources a cancelled or cloud-deferred worker never encoded). Two small fns (matches / record) replace the one check-and-update. Expected to come back down when the fingerprint becomes a (FileStat, params) value.",
-      "date": "2026-09-20"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/media/image.rs": 2937
-      },
-      "to": {
-        "crates/moss-build/src/build/media/image.rs": 2989
-      },
-      "reason": "media/image.rs: the dispatch's delivered-fingerprint map gains a pending marker beside it (ImageLedger, one lock, ~35 prod lines with docs) and a join branch, so a second dispatch before the worker ran joins it instead of spawning another; the three copies of the rung-URL derivation (worker, heal, dispatch) collapse into promised_rungs, which pays back about 30 of it",
-      "date": "2026-09-20"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/media/image.rs": 2989
-      },
-      "to": {
-        "crates/moss-build/src/build/media/image.rs": 3004
-      },
-      "reason": "media/image.rs +15 (2989 to 3004): ImageConversionItem carries the fingerprint its dispatch took (a field and an ended() method that ends the dispatch's marker and records the delivery) so the worker no longer stats the source itself; the worker's stat call, its comment and the dispatch's separate queued vec are gone, and ending a marker is now compare-and-clear, which is the ownership rule the join needs",
-      "date": "2026-09-20"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/cache.rs": 1573
-      },
-      "to": {
-        "crates/moss-build/src/build/cache.rs": 1606
-      },
-      "reason": "cache.rs +33 (1573 to 1606): HashIndex::resolve_from and the miss tail hash_and_record become the one owner of 'no read of a file in the cloud, else hash and record at the stat taken before'; the scan's resolve_content_hash (-17 in scan.rs) and the parse cache's compute_with (unratcheted) each carried a hand-rolled copy of it without the cloud guard",
-      "date": "2026-09-20"
-    },
-    {
-      "row": "prod_lines_per_file",
-      "from": {
-        "crates/moss-build/src/build/media/image.rs": 3004
-      },
-      "to": {
-        "crates/moss-build/src/build/media/image.rs": 3008
-      },
-      "reason": "media/image.rs +4 (3004 to 3008): the worker's hash-failure exit gains one arm that answers a source gone back to the cloud the way the gate does (deferred, Pending) instead of as a failed image",
-      "date": "2026-09-20"
-    }
-  ]
+  }
 }

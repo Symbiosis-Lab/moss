@@ -1,0 +1,11 @@
+#!/bin/sh
+# Enforces ratchet-spec.md §3: if the size-ratchet baseline is staged in this
+# commit and any row/key in it rose, the commit message must carry a matching
+# `Ratchet-Accept: <row> <key> — <reason>` trailer. Does nothing when the
+# baseline isn't staged, nothing on an ordinary merge commit (see
+# scripts/ratchet.mjs's isMidMerge), and nothing when node or the script
+# itself isn't there to run — a package installed from a registry tarball
+# runs this same `prepare`-installed hook with no guarantee of either.
+if command -v node >/dev/null 2>&1 && [ -f scripts/ratchet.mjs ]; then
+  exec node scripts/ratchet.mjs verify-accepts "$1"
+fi

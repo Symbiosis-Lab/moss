@@ -241,6 +241,12 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          # verify-accepts --range below walks the PR's own commit range
+          # (base.sha..head.sha) one commit at a time; a shallow (default)
+          # checkout has only the merge commit GitHub synthesizes and
+          # neither SHA is reachable from it as a real commit.
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v5
 
@@ -268,6 +274,16 @@ jobs:
 
       - name: Ratchet tool tests (accept/tighten --path)
         run: node --test scripts/__tests__/ratchet.test.mjs
+
+      # `check` goes green precisely BECAUSE a ceiling rose, so a raise with
+      # no reason is otherwise invisible in review — this audits every
+      # commit the PR actually adds (not just its final diff) for a
+      # Ratchet-Accept trailer covering each one, the retroactive
+      # counterpart to the commit-msg hook that only runs on the
+      # contributor's own machine.
+      - name: Ratchet accept-trailer audit (PR commit range)
+        if: github.event_name == 'pull_request'
+        run: node scripts/ratchet.mjs verify-accepts --range ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
 
       - name: Typecheck moss-api (source + tests)
         run: cd packages/moss-api && pnpm run typecheck

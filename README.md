@@ -44,6 +44,8 @@ moss deploy ~/blog/           # build and publish on every later run
 
 ## Repository layout
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for what each crate owns, the module map, and the size rules a change here is expected to respect.
+
 | Path | What's there |
 |---|---|
 | `crates/moss-cli` | the `moss` CLI binary |

@@ -32,21 +32,55 @@
 // Commands (same shape as desktop's):
 //   node scripts/ratchet.mjs check           exit 0 green / 1 red
 //   node scripts/ratchet.mjs tighten [--path <file>]...   lower baseline; NEVER raises
-//   node scripts/ratchet.mjs accept <row> <reason> [--path <file>]...
+//   node scripts/ratchet.mjs accept <row> <reason> --path <file> [--path <file>]...
 //                                             the ONLY way a baseline grows;
-//                                             logs {row,from,to,reason,date}
+//                                             prints the Ratchet-Accept trailer(s)
+//                                             the commit message must carry
+//   node scripts/ratchet.mjs verify-accepts <commit-msg-file>
+//                                             commit-msg hook body: every
+//                                             row/key that rose between HEAD's
+//                                             and the staged baseline must have
+//                                             a matching trailer in the message
 //
-// `--path` (repeatable) limits accept/tighten to the named entries. Without it
-// `accept` raises EVERY over-baseline entry of the row to its current count, so
-// accepting one file's growth silently accepts the unreviewed growth of every
-// other over-baseline file in the row — the reason on the log entry then covers
-// changes it never described. Two landings (d16e5ff, 4fdb3cb) hand-wrote their
-// accepts[] entries to avoid exactly that; use `--path` instead of editing the
-// baseline. A named path that is not over its baseline is an error, and
-// nothing is written. Paths are spelled as in the baseline (root-relative,
-// `/`-separated); `./` and absolute spellings under --root are folded to it.
+// `--path` (repeatable) is required by `accept` for a per-path row (a, b): it
+// names exactly which entries the reason covers. A pathless accept that swept
+// every violation in a row used to be how this worked, and it is why two
+// landings (d16e5ff, 4fdb3cb) had to hand-edit their accepts[] entries after
+// the fact — a reason written for one file's growth had silently also
+// accepted every other over-baseline file's growth in the same row. A named
+// path that is not over its baseline is an error, and nothing is written.
+// Paths are spelled as in the baseline (root-relative, `/`-separated); `./`
+// and absolute spellings under --root are folded to it.
 //
-// Baseline: scripts/ratchet-baseline.open.json, next to this script.
+// Row (a) values are CEILINGS, not raw counts: always a multiple of 100.
+// `accept`/`tighten` compute it as `ceil(lines / 100) * 100`. This absorbed
+// the accepts[] log that used to live in the baseline JSON (below) — row (a)
+// was raised 577 times in 70 days and never refused once, and the array grew
+// from 276 to ~10,000 lines doing nothing but recording that. The pressure
+// row (a) applies is real (61 files over 800 lines fell to 35 under it); the
+// per-raise JSON bookkeeping was the part not worth its cost.
+//
+// Baseline: scripts/ratchet-baseline.open.json, next to this script. Its
+// `accepts[]` array is retired as of this comment — git history keeps every
+// record already in it (last commit where the array is still written:
+// 93a9f1030bee6c08c3136c24970795e40e913058); `accept` no longer appends to it,
+// and the reason for a raise lives in the commit message's trailer instead
+// (see `verify-accepts` above).
+//
+// A reason `accept`/`verify-accepts` will actually take must clear
+// `reasonIsWeak`'s floor: >=15 characters, and not just the row name, the
+// key being raised, or one of wip/accept/fix/todo/n/a. A scalar row (no
+// per-path map, e.g. mirror_markers) has no path to key its trailer on, so
+// its trailer uses the literal key `(total)` (`SCALAR_TRAILER_KEY`).
+//
+// `verify-accepts` does nothing on an ordinary `git merge` commit
+// (`isMidMerge`) — a peer's raise was already justified on their own
+// branch, and the auto-generated "Merge branch …" message is never the
+// place to re-justify it. This machinery (the constants and every function
+// from `SCALAR_TRAILER_KEY` through `verifyAccepts`, plus `isMidMerge` and
+// `baselineFileNames`) is copied verbatim from the private repo's own copy
+// of this script (2026-09-21 joint review), so an agent moving between the
+// two repos meets one tool.
 //
 // Self-checks (run at the start of every `check`; any failure = red):
 //   1. every baseline row has a disposition, matches the row table below;
@@ -55,6 +89,10 @@
 //       reason in the baseline's children_per_dir.oversized{} (NORTH-STAR's
 //       "mandatory split" line) — ported because it is row (b)'s own machinery,
 //       not a separate row.
+//   3. row (a) stale-high: a baseline ceiling >=100 above a file's actual
+//      current lines means banding headroom has drifted into unreviewed
+//      slack — fix with `tighten`. A gap under 100 is ordinary banding
+//      headroom (the ceiling rounds UP to the next hundred), not staleness.
 //
 // Counting notes carried over verbatim from the desktop file:
 //   - Rust prod lines = total lines minus brace-matched `#[cfg(test)]`-attributed
@@ -62,10 +100,17 @@
 //   - mirror_markers is a substring count; comment mentions count. That is a
 //     feature for tripwires (forces a look), not a parser bug.
 //   - children_per_dir ignores dotfiles, __tests__ dirs and *.test.ts files.
+//
+// Row (b)'s append-only-directory exemption (ratchet-spec.md §2) is NOT
+// implemented here: this row only ever scans `crates/*/src` and
+// `packages/*/src` (see the roots below), so this baseline has never held —
+// and cannot hold — a `docs/decisions` or `docs/archive` entry for it to
+// apply to.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -185,6 +230,17 @@ export function countRustProdLines(text) {
   return Math.max(0, countLines(text) - excluded);
 }
 
+/** Production line count for one row-(a)-eligible file, `.rs` or `.ts` alike. */
+function countProdLinesFor(fileAbs) {
+  const text = read(fileAbs);
+  return fileAbs.endsWith('.rs') ? countRustProdLines(text) : countLines(text);
+}
+
+/** `ceil(n / 100) * 100` — row (a)'s banding (ratchet-spec.md §1). */
+function band100(n) {
+  return Math.ceil(n / 100) * 100;
+}
+
 function countAcross(root, files, regexes, transform) {
   let total = 0;
   const detail = {};
@@ -245,14 +301,14 @@ const collectors = {
     for (const dir of rustProdRoots(root)) {
       for (const f of walkFiles(dir)) {
         if (!f.endsWith('.rs') || isRustTestSibling(f)) continue;
-        const n = countRustProdLines(read(f));
+        const n = countProdLinesFor(f);
         if (n > 800) map[rel(root, f)] = n;
       }
     }
     for (const dir of packagesSrcRoots(root)) {
       for (const f of walkFiles(dir)) {
         if (!f.endsWith('.ts') || isExcludedTs(f)) continue;
-        const n = countLines(read(f));
+        const n = countProdLinesFor(f);
         if (n > 800) map[rel(root, f)] = n;
       }
     }
@@ -319,9 +375,14 @@ function baselinePath() {
 
 /**
  * Object keys that appear more than once in the same object — ported
- * verbatim (minus its multi-repo framing) from desktop's ratchet.mjs, whose
- * header explains why: a merge can fuse two `accepts[]` entries into one
- * object and still parse as valid JSON, silently discarding one's reason.
+ * verbatim (minus its multi-repo framing) from desktop's ratchet.mjs. Two
+ * branches that independently `accept` the SAME newly-over-baseline file
+ * each append one new `"path": ceiling` line to a row's `value` map at the
+ * same insertion point (right after the same prior last entry); a merge can
+ * keep both additions without git ever flagging a textual conflict, leaving
+ * that key written twice. `JSON.parse` silently keeps only the last one, so
+ * one branch's raise — and the trailer that justified it — would disappear
+ * without this check ever looking at it.
  */
 export function findDuplicateJsonKeys(text) {
   const dups = [];
@@ -457,6 +518,25 @@ function runSelfChecks(root, baseline, current, violations) {
       }
     }
   }
+
+  // 3. row (a) stale-high: a ceiling far above the file's real current size
+  // is unreviewed slack, not headroom. A gap under 100 is ordinary banding
+  // (the ceiling rounds UP to the next hundred); 100 or more means the file
+  // shrank since the ceiling was last set and `tighten` is overdue.
+  const pl = baseline.rows?.prod_lines_per_file;
+  if (pl?.armed) {
+    for (const [p, ceiling] of Object.entries(pl.value ?? {})) {
+      if (typeof ceiling !== 'number') continue; // self-check 1/bad-baseline territory
+      const abs = path.join(root, ...p.split('/'));
+      if (!fs.existsSync(abs)) continue; // self-check 2 already flags this
+      const lines = countProdLinesFor(abs);
+      if (ceiling - lines >= 100) {
+        violations.push(
+          `self-check(stale-high): prod_lines_per_file '${p}' ceiling ${ceiling} is >=100 above its actual ${lines} lines — run tighten`,
+        );
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -486,12 +566,12 @@ function checkRow(key, row, cur, violations) {
     let msg = null;
     if (b === undefined) {
       if (cur.threshold !== undefined) {
-        msg = `(${row.letter}) ${key}: NEW '${p}' crossed ${cur.threshold} (${n} ${cur.unit}, not in baseline) — split it, or 'accept' with a reason`;
+        msg = `(${row.letter}) ${key}: NEW '${p}' crossed ${cur.threshold} (${n} ${cur.unit}, not in baseline) — split it, or run: ratchet.mjs accept ${key} "<reason>" --path ${p}`;
       } else if (cur.newBudget !== undefined && n > cur.newBudget) {
-        msg = `(${row.letter}) ${key}: NEW dir '${p}' has ${n} ${cur.unit} > budget ${cur.newBudget}`;
+        msg = `(${row.letter}) ${key}: NEW dir '${p}' has ${n} ${cur.unit} > budget ${cur.newBudget} — run: ratchet.mjs accept ${key} "<reason>" --path ${p}`;
       }
     } else if (n > b) {
-      msg = `(${row.letter}) ${key}: '${p}' grew to ${n} ${cur.unit} (baseline ${b})`;
+      msg = `(${row.letter}) ${key}: '${p}' grew to ${n} ${cur.unit} (baseline ${b}) — run: ratchet.mjs accept ${key} "<reason>" --path ${p}`;
     }
     if (msg === null) continue;
     violations.push(msg);
@@ -528,17 +608,12 @@ function cmdCheck(root) {
   console.log('\nGREEN — all armed rows within baseline; self-checks passed.');
 }
 
-/** A `--path` value in the baseline's own spelling: root-relative, `/`-separated. */
-function repoPath(root, p) {
-  return rel(root, path.resolve(root, p));
-}
-
 function cmdTighten(root, only = []) {
   const baseline = loadBaseline();
   const current = collectCurrent(root);
   const lowered = [];
   const refused = [];
-  const wanted = only.length ? new Set(only.map((p) => repoPath(root, p))) : null;
+  const wanted = only.length ? new Set(only.map((p) => normalizePathArg(root, p))) : null;
 
   // Checked before anything is touched, so a typo never half-applies.
   for (const p of wanted ?? []) {
@@ -561,6 +636,34 @@ function cmdTighten(root, only = []) {
         row.value = cur.total;
       } else if (cur.total > row.value) {
         refused.push(`${key}: current ${cur.total} > baseline ${row.value} — tighten NEVER raises; fix the code or use 'accept ${key} <reason>'`);
+      }
+    } else if (key === 'prod_lines_per_file') {
+      // Row (a) is banded: ceil(lines / 100) * 100, never the raw count
+      // (ratchet-spec.md §1). A file at/under 800 drops out of the row
+      // entirely — it's no longer this row's concern, not merely "tight".
+      const base = row.value ?? {};
+      for (const [p, b] of Object.entries(base)) {
+        if (wanted && !wanted.has(p)) continue;
+        const n = cur.map[p];
+        const abs = path.join(root, ...p.split('/'));
+        if (!fs.existsSync(abs)) {
+          lowered.push(`${key}: dropped stale '${p}' (no longer on disk)`);
+          delete base[p];
+          continue;
+        }
+        if (n === undefined) {
+          lowered.push(`${key}: dropped '${p}' (now <= 800, at/under the floor)`);
+          delete base[p];
+          continue;
+        }
+        const c = band100(n);
+        if (c < b) {
+          lowered.push(`${key}: '${p}' ${b} -> ${c}`);
+          base[p] = c;
+        } else if (n > b) {
+          refused.push(`${key}: '${p}' current ${n} > baseline ${b} — tighten NEVER raises; fix the code or use 'accept ${key} <reason>'`);
+        }
+        // n <= b and c >= b: already tight to its band — nothing to do.
       }
     } else {
       const base = row.value ?? {};
@@ -614,20 +717,36 @@ function raiseOf(cur, base, p) {
   return overNew ? { from: null, to: n } : null;
 }
 
+/**
+ * Print the trailer line(s) the committer must include, exactly:
+ * `Ratchet-Accept: <row> <key> — <reason>` — one per raised key
+ * (ratchet-spec.md §3). No baseline write happens here; the reason lives in
+ * the commit message from now on, not in the JSON.
+ */
+function printTrailers(rowKey, keys, reason) {
+  console.log('accepted — include this in the commit message:');
+  for (const key of keys) console.log(`Ratchet-Accept: ${rowKey} ${key} — ${reason}`);
+}
+
 function cmdAccept(root, rowKey, reason, only = []) {
   if (!rowKey || !reason) {
-    console.error('usage: ratchet.mjs accept <row-key> <reason> [--path <file>]... [--root <path>]');
+    console.error('usage: ratchet.mjs accept <row-key> <reason> --path <file> [--path <file>]... [--root <path>]');
     process.exit(1);
   }
   const baseline = loadBaseline();
+  if (reasonIsWeak(reason, rowKey)) {
+    console.error(
+      `reason too weak: needs >= ${WEAK_REASON_MIN_LENGTH} characters, and can't be just the row name ` +
+      `or one of ${[...WEAK_REASON_WORDS].join(', ')} — say what changed and why.`,
+    );
+    process.exit(1);
+  }
   const row = baseline.rows?.[rowKey];
   if (!row) { console.error(`unknown row '${rowKey}'`); process.exit(1); }
   if (!row.armed) { console.error(`row '${rowKey}' is not armed — nothing to accept`); process.exit(1); }
   if (!collectors[rowKey]) { console.error(`row '${rowKey}' has no collector`); process.exit(1); }
 
   const cur = collectors[rowKey](root);
-  const date = new Date().toISOString().slice(0, 10);
-  let entry;
 
   if (cur.kind === 'scalar') {
     if (only.length) {
@@ -638,42 +757,348 @@ function cmdAccept(root, rowKey, reason, only = []) {
       console.error(`nothing to accept: current ${cur.total} <= baseline ${row.value}`);
       process.exit(1);
     }
-    entry = { row: rowKey, from: row.value, to: cur.total, reason, date };
     row.value = cur.total;
-  } else {
-    const base = row.value ?? {};
-    row.value = base;
-    const named = only.map((p) => repoPath(root, p));
-    // Validated before anything is raised: one named path that is not over its
-    // baseline fails the whole call, so a typo cannot quietly accept the rest.
-    for (const p of named) {
-      if (!raiseOf(cur, base, p)) {
-        const n = cur.map[p];
-        console.error(
-          `'${p}' is not over its '${rowKey}' baseline (current ${n ?? 'absent'}, baseline ${base[p] ?? 'none'}) — nothing to accept for it`,
-        );
-        process.exit(1);
-      }
-    }
-    const from = {};
-    const to = {};
-    for (const p of named.length ? named : Object.keys(cur.map)) {
-      const raise = raiseOf(cur, base, p);
-      if (!raise) continue;
-      from[p] = raise.from; to[p] = raise.to; base[p] = raise.to;
-    }
-    if (Object.keys(to).length === 0) {
-      console.error(`nothing to accept: no entry of '${rowKey}' exceeds its baseline`);
-      process.exit(1);
-    }
-    entry = { row: rowKey, from, to, reason, date };
+    saveBaseline(baseline);
+    printTrailers(rowKey, [SCALAR_TRAILER_KEY], reason);
+    return;
   }
 
-  baseline.accepts = baseline.accepts ?? [];
-  baseline.accepts.push(entry);
+  // Per-path rows (a, b) take --path as an argument, always — a pathless
+  // accept that sweeps every violation in the row is removed (ratchet-spec.md
+  // §1): the reason it prints would then cover growth it never looked at.
+  if (!only.length) {
+    console.error(`row '${rowKey}' takes one or more --path <file> — a pathless accept is not allowed`);
+    process.exit(1);
+  }
+
+  const base = row.value ?? {};
+  row.value = base;
+  const named = only.map((p) => normalizePathArg(root, p));
+
+  // Weak-reason check runs first, over every named path, before anything is
+  // checked against the baseline — matches the reference's order: a bad
+  // reason is worth reporting before a caller even learns whether the path
+  // itself checks out.
+  for (const p of named) {
+    if (reasonIsWeak(reason, rowKey, p)) {
+      console.error(`reason too weak for '${p}': it can't just restate the path being raised — say what changed and why.`);
+      process.exit(1);
+    }
+  }
+  // Validated before anything is raised: one named path that is not over its
+  // baseline fails the whole call, so a typo cannot quietly accept the rest.
+  for (const p of named) {
+    if (!raiseOf(cur, base, p)) {
+      const n = cur.map[p];
+      console.error(
+        `'${p}' is not over its '${rowKey}' baseline (current ${n ?? 'absent'}, baseline ${base[p] ?? 'none'}) — nothing to accept for it`,
+      );
+      process.exit(1);
+    }
+  }
+  for (const p of named) {
+    const n = cur.map[p];
+    base[p] = rowKey === 'prod_lines_per_file' ? band100(n) : n;
+  }
+
   saveBaseline(baseline);
-  console.log(`accepted raise for '${rowKey}' — logged in accepts[]:`);
-  console.log(`  ${JSON.stringify(entry)}`);
+  printTrailers(rowKey, named, reason);
+}
+
+// ---------------------------------------------------------------------------
+// verify-accepts — the commit-msg hook's body (ratchet-spec.md §3). The pure
+// core below (SCALAR_TRAILER_KEY through verifyAccepts, plus isMidMerge and
+// baselineFileNames) is copied verbatim from the private repo's own copy of
+// this script, so the two repos' agents meet one tool regardless of which
+// repo they're in (2026-09-21 joint review). Only the git/rel/path/SCRIPT_DIR
+// primitives it calls are this repo's own.
+// ---------------------------------------------------------------------------
+
+function git(root, args) {
+  const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  if (r.status !== 0 || r.error) return null;
+  return r.stdout;
+}
+
+/** The commit-message trailer's placeholder key for a scalar row, whose
+ *  baseline is a single number rather than a path-keyed map — there is no
+ *  finer-grained "key" to name, so the row's own name stands in for it. Used
+ *  identically by `cmdAccept` (prints it) and `diffRaisedEntries`/verify-
+ *  accepts (expects it), via this one shared constant. */
+const SCALAR_TRAILER_KEY = '(total)';
+
+// Reasons agents reach for under pressure that say nothing at all. Short and
+// closed on purpose (2026-09-21 joint review) — this is a floor, not a
+// score: a human reviewer reads the actual sentence, and this only blocks
+// the handful of reasons that give them literally nothing to read.
+const WEAK_REASON_WORDS = new Set(['wip', 'accept', 'fix', 'todo', 'n/a']);
+const WEAK_REASON_MIN_LENGTH = 15;
+
+/** A reason too weak to justify a raise: under WEAK_REASON_MIN_LENGTH
+ *  characters, or exactly the row name / the key being raised (ignoring case
+ *  and surrounding whitespace — restating what already grew is not a
+ *  reason), or one of WEAK_REASON_WORDS. `key` is optional (a scalar row's
+ *  check via `cmdAccept` runs before any per-path key is known). */
+export function reasonIsWeak(reason, rowKey, key) {
+  const r = (reason ?? '').trim().toLowerCase();
+  if (r.length < WEAK_REASON_MIN_LENGTH) return true;
+  if (r === String(rowKey).toLowerCase()) return true;
+  if (key !== undefined && r === String(key).toLowerCase()) return true;
+  if (WEAK_REASON_WORDS.has(r)) return true;
+  return false;
+}
+
+function normalizePathArg(root, p) {
+  const abs = path.isAbsolute(p) ? p : path.resolve(root, p);
+  return rel(root, abs);
+}
+
+/** A row's baseline `value` as a flat {key: number} map — already that shape
+ *  for a map row; a scalar row's single number is wrapped under
+ *  SCALAR_TRAILER_KEY so both shapes can be diffed by the same code. */
+function normalizeRowValue(value) {
+  if (typeof value === 'number') return { [SCALAR_TRAILER_KEY]: value };
+  if (value && typeof value === 'object') return value;
+  return {};
+}
+
+/** Every {row, key, from, to} whose STAGED value is greater than HEAD's, or
+ *  that is new in a shrink-only row (from: null) — i.e. every raise the
+ *  commit-msg hook must see a trailer for. A decrease or a removed key is
+ *  never in this list: "lowered or removed values need no trailer" (spec). */
+export function diffRaisedEntries(headJson, stagedJson) {
+  const raised = [];
+  for (const [rowKey, sRow] of Object.entries(stagedJson.rows ?? {})) {
+    const hRow = headJson.rows?.[rowKey];
+    const rowIsNew = hRow === undefined;
+    const isScalarRow = typeof sRow?.value === 'number';
+    const sEntries = normalizeRowValue(sRow?.value);
+    const hEntries = normalizeRowValue(hRow?.value);
+    for (const [key, n] of Object.entries(sEntries)) {
+      if (typeof n !== 'number') continue;
+      const h = hEntries[key];
+      const isRaise = typeof h !== 'number' || n > h;
+      if (!isRaise) continue;
+      // A brand-new SCALAR row (the row didn't exist in HEAD at all) that
+      // starts at exactly 0 is not a raise — there is nothing yet to
+      // justify, since 0 is a tripwire's natural starting line. A new row
+      // starting above 0 (grandfathering existing debt) still is, and so is
+      // a new KEY inside an already-existing shrink-only map row (rowIsNew
+      // is false there — only the entry is new, not the row).
+      if (rowIsNew && isScalarRow && n === 0) continue;
+      raised.push({ row: rowKey, key, from: typeof h === 'number' ? h : null, to: n });
+    }
+  }
+  return raised;
+}
+
+// `— ` is a real em dash (U+2014), matching the trailer format printed by
+// cmdAccept and documented in the file header — not a hyphen or `--`.
+const TRAILER_LINE_RE = /^Ratchet-Accept:\s*(.+)$/;
+
+/** Every `Ratchet-Accept: <row> <key> — <reason>` line in a commit message,
+ *  as `{row, key, reason}` (reason may be ''  — an empty reason is a real,
+ *  rejectable finding, not a parse failure). Lines that don't match the
+ *  trailer shape at all are silently not trailers. */
+export function parseTrailers(message) {
+  const out = [];
+  for (const rawLine of message.split('\n')) {
+    const m = TRAILER_LINE_RE.exec(rawLine.trim());
+    if (!m) continue;
+    const rest = m[1];
+    const dash = rest.indexOf('—');
+    if (dash === -1) continue;
+    const head = rest.slice(0, dash).trim();
+    const reason = rest.slice(dash + 1).trim();
+    const sp = head.indexOf(' ');
+    if (sp === -1) continue; // needs both <row> and <key>
+    out.push({ row: head.slice(0, sp), key: head.slice(sp + 1).trim(), reason });
+  }
+  return out;
+}
+
+/** `problems`: human-readable strings, one per raised key with no covering
+ *  trailer — empty means the commit message covers every raise. */
+export function verifyAccepts(headJson, stagedJson, commitMessage) {
+  const raised = diffRaisedEntries(headJson, stagedJson);
+  if (raised.length === 0) return [];
+  const trailers = parseTrailers(commitMessage);
+  const problems = [];
+  for (const r of raised) {
+    const hit = trailers.find((t) => t.row === r.row && t.key === r.key && !reasonIsWeak(t.reason, r.row, r.key));
+    if (!hit) {
+      const weakOne = trailers.find((t) => t.row === r.row && t.key === r.key);
+      const why = weakOne
+        ? ` (found one, but the reason is too weak — needs >= ${WEAK_REASON_MIN_LENGTH} characters and can't just restate the row/path)`
+        : '';
+      problems.push(`(${r.row}) '${r.key}' rose${r.from === null ? ' (new entry)' : ` from ${r.from} to ${r.to}`} with no 'Ratchet-Accept: ${r.row} ${r.key} — <reason>' trailer${why}`);
+    }
+  }
+  return problems;
+}
+
+/** True while `git merge` is in the middle of creating its automatic merge
+ *  commit (MERGE_HEAD exists in the git dir for exactly that commit's
+ *  duration) — a peer's raise was already justified on their own branch, and
+ *  an ordinary merge's auto-generated "Merge branch …" message is never the
+ *  place to re-justify it; commit-msg fires on that commit exactly as it
+ *  does on any other, so without this the hook blocks every ordinary merge
+ *  that brings in someone else's already-accepted raise. Resolved via
+ *  `git rev-parse --git-dir` rather than a hardcoded `<root>/.git` — a
+ *  worktree's git dir lives elsewhere (`.git/worktrees/<name>`), and a bare
+ *  `.git` guess would silently never find MERGE_HEAD there at all. */
+function isMidMerge(root) {
+  const out = git(root, ['rev-parse', '--git-dir']);
+  if (out === null) return false;
+  const gitDir = out.trim();
+  const gitDirAbs = path.isAbsolute(gitDir) ? gitDir : path.join(root, gitDir);
+  return isFile(path.join(gitDirAbs, 'MERGE_HEAD'));
+}
+
+/** Every `scripts/ratchet-baseline.*.json` this script finds beside itself —
+ *  shared by `verify-accepts` (staged vs HEAD) and `verify-accepts --range`
+ *  (each commit vs its parent). This repo arms only one such baseline
+ *  (ratchet-baseline.open.json), but the scan itself carries no repo name. */
+function baselineFileNames() {
+  try {
+    return fs.readdirSync(SCRIPT_DIR).filter((f) => /^ratchet-baseline\..+\.json$/.test(f));
+  } catch {
+    return [];
+  }
+}
+
+function cmdVerifyAccepts(root, commitMsgFile) {
+  if (!commitMsgFile) {
+    console.error('usage: ratchet.mjs verify-accepts <commit-msg-file> [--root <path>]');
+    process.exit(1);
+  }
+  if (isMidMerge(root)) return; // an ordinary merge commit — see isMidMerge
+
+  // Resolved against `root` (not the process's own cwd) so this also works
+  // spawned with an explicit --root, the way the test suite calls it; the
+  // real commit-msg hook runs with root === process.cwd() anyway, since it
+  // never passes --root.
+  const msgPath = path.isAbsolute(commitMsgFile) ? commitMsgFile : path.join(root, commitMsgFile);
+  let message;
+  try {
+    message = fs.readFileSync(msgPath, 'utf8');
+  } catch (e) {
+    console.error(`verify-accepts: cannot read commit message file '${commitMsgFile}': ${e.message}`);
+    process.exit(1);
+  }
+
+  const baselineFiles = baselineFileNames();
+  const problems = [];
+  for (const name of baselineFiles) {
+    const abs = path.join(SCRIPT_DIR, name);
+    const relPath = rel(root, abs);
+    // "If the baseline file is not staged, the hook does nothing" — `git show
+    // :<path>` returns null when the path isn't in the index at all (can't
+    // happen for a tracked baseline) or when `root` isn't a usable git
+    // checkout (e.g. a throwaway test tree with no .git) — either way,
+    // nothing to compare.
+    const staged = git(root, ['show', `:${relPath}`]);
+    if (staged === null) continue;
+    const headText = git(root, ['show', `HEAD:${relPath}`]);
+    let stagedJson;
+    try {
+      stagedJson = JSON.parse(staged);
+    } catch {
+      continue; // `check` (via loadBaseline) is what guards baseline JSON integrity
+    }
+    let headJson = { rows: {} };
+    if (headText !== null) {
+      try { headJson = JSON.parse(headText); } catch { headJson = { rows: {} }; }
+    }
+    if (headText === staged) continue;
+    for (const p of verifyAccepts(headJson, stagedJson, message)) problems.push(`${name}: ${p}`);
+  }
+
+  if (problems.length) {
+    console.error('commit-msg: baseline raise(s) with no matching Ratchet-Accept trailer:');
+    for (const p of problems) console.error(`  ${p}`);
+    console.error('If this is a SQUASH landing a branch that already justified these raises, the squash rewrote the message and dropped them — copy every Ratchet-Accept: line from the branch\'s own commits into this one.');
+    console.error('Otherwise: run `node scripts/ratchet.mjs accept <row> "<reason>" [--path <path>]...` and paste the printed trailer(s) into this commit message.');
+    process.exit(1);
+  }
+}
+
+// verify-accepts --range <A>..<B> (copied verbatim from the private repo's
+// ratchet.mjs, 2026-09-21 joint review, item 8): a retroactive audit over a
+// COMMIT RANGE, for exactly the gap the live commit-msg hook cannot close on
+// its own — the hook was only added 2026-09-21, `check` is green precisely
+// BECAUSE a baseline raise succeeded, so nothing else in CI or review would
+// ever flag a trailerless raise that either predates the hook or slipped
+// past it (a `--no-verify` commit, a repo this hook was never installed in).
+// For each commit in the range that changed a baseline file, this runs the
+// exact same `verifyAccepts` pure function against THAT commit's message and
+// THAT commit's parent — so a historical audit and the live hook can never
+// disagree about what counts as a raise. Ships as a command only; wiring it
+// into a CI workflow is a per-repo decision this script doesn't make.
+function cmdVerifyAcceptsRange(root, rangeArg) {
+  if (!rangeArg || !rangeArg.includes('..')) {
+    console.error('usage: ratchet.mjs verify-accepts --range <A>..<B>');
+    process.exit(1);
+  }
+  const commitsOut = git(root, ['rev-list', '--reverse', rangeArg]);
+  if (commitsOut === null) {
+    console.error(`verify-accepts --range: could not resolve range '${rangeArg}'`);
+    process.exit(1);
+  }
+  const commits = commitsOut.split('\n').map((l) => l.trim()).filter(Boolean);
+  const baselineFiles = baselineFileNames();
+  const relBaselinePaths = baselineFiles.map((name) => rel(root, path.join(SCRIPT_DIR, name)));
+
+  const problems = [];
+  for (const commit of commits) {
+    const parentsOut = git(root, ['rev-list', '--parents', '-1', commit]);
+    const parents = (parentsOut ?? '').trim().split(/\s+/).slice(1);
+
+    // `git diff-tree` with neither `-m` nor `-c` — deliberately not passed —
+    // reports NO paths at all for a merge commit, by git's own documented
+    // default (verified: true for a clean merge AND for one resolved through
+    // a real conflict, with content matching neither parent). That is this
+    // audit's merge exemption, the historical counterpart to isMidMerge's
+    // live one: a merge commit is never individually re-litigated here, on
+    // the same "already justified on its own branch" theory. It is also
+    // this audit's known blind spot — a raise entering ONLY through a merge
+    // resolution, never as its own commit anywhere in the range, is invisible
+    // to it; `-c`/`-m` would see it but would also re-flag every ordinary
+    // clean merge, which is the tradeoff `isMidMerge` makes the same way live.
+    const changedOut = git(root, ['diff-tree', '--no-commit-id', '--name-only', '-r', commit]);
+    const changed = new Set((changedOut ?? '').split('\n').map((l) => l.trim()).filter(Boolean));
+    const touchedBaselines = relBaselinePaths.filter((p) => changed.has(p));
+    if (touchedBaselines.length === 0) continue;
+
+    const message = git(root, ['log', '-1', '--format=%B', commit]) ?? '';
+    const parentRef = parents[0]; // undefined for a root commit (no parent at all)
+
+    for (const relPath of touchedBaselines) {
+      const stagedText = git(root, ['show', `${commit}:${relPath}`]);
+      if (stagedText === null) continue; // deleted in this commit — nothing to verify
+      let stagedJson;
+      try { stagedJson = JSON.parse(stagedText); } catch { continue; }
+
+      let headJson = { rows: {} };
+      if (parentRef) {
+        const headText = git(root, ['show', `${parentRef}:${relPath}`]);
+        if (headText !== null) {
+          try { headJson = JSON.parse(headText); } catch { headJson = { rows: {} }; }
+        }
+      }
+
+      for (const p of verifyAccepts(headJson, stagedJson, message)) {
+        problems.push(`${commit.slice(0, 9)} ${relPath}: ${p}`);
+      }
+    }
+  }
+
+  if (problems.length) {
+    console.error(`verify-accepts --range ${rangeArg}: baseline raise(s) with no matching Ratchet-Accept trailer:`);
+    for (const p of problems) console.error(`  ${p}`);
+    process.exit(1);
+  }
+  console.log(`verify-accepts --range ${rangeArg}: OK — every baseline raise in range is covered by a trailer.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -685,6 +1110,7 @@ function main(argv) {
   const positional = [];
   const only = [];
   let root = process.cwd();
+  let range;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--root') root = path.resolve(args[++i]);
     else if (args[i] === '--path') {
@@ -693,14 +1119,18 @@ function main(argv) {
         process.exit(1);
       }
       only.push(args[++i]);
-    } else positional.push(args[i]);
+    } else if (args[i] === '--range') range = args[++i];
+    else positional.push(args[i]);
   }
   const cmd = positional[0];
   if (cmd === 'check') cmdCheck(root);
   else if (cmd === 'tighten') cmdTighten(root, only);
   else if (cmd === 'accept') cmdAccept(root, positional[1], positional.slice(2).join(' '), only);
-  else {
-    console.error('usage: ratchet.mjs <check|tighten|accept> [args] [--path <file>]... [--root <path>]');
+  else if (cmd === 'verify-accepts') {
+    if (range) cmdVerifyAcceptsRange(root, range);
+    else cmdVerifyAccepts(root, positional[1]);
+  } else {
+    console.error('usage: ratchet.mjs <check|tighten|accept|verify-accepts> [args] [--path <file>]... [--range <A>..<B>] [--root <path>]');
     process.exit(1);
   }
 }
