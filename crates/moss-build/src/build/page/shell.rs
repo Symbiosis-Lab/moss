@@ -253,10 +253,10 @@ pub struct ShellVars {
     /// Used by Task 3 to add `class="has-sidebar-layout"` on the `<html>` element
     /// for content width adjustments.
     pub has_sidebar_layout: bool,
-    /// HTML to inject at the `<!-- slot:head-end -->` slot from typed embed
-    /// renderers that declared `head_assets` (e.g., `<model-viewer>`'s
-    /// `<script type=module>`). One string per asset, pre-joined. Empty string
-    /// when no embed on the page needs page-level assets.
+    /// HTML to inject at the `<!-- slot:head-end -->` slot: the
+    /// `<model-viewer>` `<script type=module>` tag when the page's rendered
+    /// HTML contains a 3D embed (`render::model::page_needs_model_viewer_script`),
+    /// empty string otherwise.
     pub embed_head_assets: String,
     /// HTML for native post-article modules (currently series-nav for ordered
     /// folders) that render as siblings of `<article>` inside `<main>`,

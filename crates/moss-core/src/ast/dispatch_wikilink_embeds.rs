@@ -346,7 +346,7 @@ mod tests {
     }
 
     fn empty_registry() -> RendererRegistry {
-        RendererRegistry::builtin().build()
+        RendererRegistry::empty().build()
     }
 
     #[test]

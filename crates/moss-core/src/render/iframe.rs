@@ -11,8 +11,8 @@
 //!    has no pulldown-cmark involvement and calls this synthesizer directly
 //!    with an empty `TitleParams`.
 //!
-//! The pre-Phase-1 moss-core `IframeRenderer::render_to_html` escape valve
-//! retired once folder_embed migrated (P2E prereq #2, 2026-05-25).
+//! A pre-Phase-1 moss-core escape valve for this same call site retired once
+//! folder_embed migrated (P2E prereq #2, 2026-05-25).
 
 use crate::asset_snapshot::AssetSnapshot;
 use crate::resolve::embed_renderer::html_escape_attr;

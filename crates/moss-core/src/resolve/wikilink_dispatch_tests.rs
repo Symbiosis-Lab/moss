@@ -427,7 +427,7 @@ fn dispatch_video_extension_routes_to_synth() {
 #[test]
 fn dispatch_pdf_extension_routes_to_synth() {
     // See `dispatch_video_extension_routes_to_synth` for the PR4.5
-    // routing rationale. PdfRenderer emits an `<object type="application/pdf">`.
+    // routing rationale. The pdf synthesizer emits an `<object type="application/pdf">`.
     let graph = build_graph(&["report.pdf"]);
     let emit = dispatch_wikilink_embed(
         "report.pdf",

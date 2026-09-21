@@ -6,8 +6,6 @@
 
 use super::Sizing;
 
-pub(super) use crate::path_ext::path_extension_lower;
-
 /// Build a `src` URL for embed elements: `path?query#fragment` (URL order,
 /// independent of authoring order).
 ///
@@ -148,13 +146,6 @@ mod tests {
         assert_eq!(file_stem("dir/photo.jpg"), "photo");
         assert_eq!(file_stem("noext"), "noext");
         assert_eq!(file_stem(".dotfile"), ".dotfile");
-    }
-
-    #[test]
-    fn test_path_extension_lower() {
-        assert_eq!(path_extension_lower("photo.JPG"), "jpg");
-        assert_eq!(path_extension_lower("dir/file.mp4"), "mp4");
-        assert_eq!(path_extension_lower("noext"), "");
     }
 
     #[test]

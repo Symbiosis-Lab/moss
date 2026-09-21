@@ -1,8 +1,8 @@
 //! Pure CSV/TSV → HTML table renderer.
 //!
 //! No I/O: caller supplies the file content as a string. Called from
-//! src-tauri's Deferred-marker resolver for `![[data.csv]]` embeds via
-//! [`TableRenderer`](crate::resolve::embed_renderer::TableRenderer).
+//! moss-build's marker resolver for `![[data.csv]]`/`![[data.tsv]]` embeds
+//! (the `moss-embed-table:` deferred marker `resolve.rs`'s pre-pass emits).
 
 /// Options controlling how a CSV/TSV payload is rendered as an HTML table.
 pub struct CsvTableOptions {

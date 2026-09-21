@@ -2,11 +2,12 @@
 //!
 //! Receives a [`TitleParams`] (Stage 2 dispatcher already parsed it), the
 //! source URL, and an [`AssetSnapshot`]. Emits final `<model-viewer>` HTML —
-//! preserving the shape moss-core's `ModelViewerRenderer` used to emit
-//! before Phase 0's Stage 1 migration.
+//! preserving the shape moss-core's pre-Phase-0 3D-model renderer used to
+//! emit before Phase 0's Stage 1 migration (that renderer's own `render()`
+//! was unreachable dead code by the time it was removed; the byte shape
+//! lives on here, which is the actual live path).
 //!
-//! Source byte shape (pre-Phase-0, see commit `689d975e9^`,
-//! `crates/moss-core/src/resolve/embed_renderer.rs:723`):
+//! Source byte shape (pre-Phase-0, see commit `689d975e9^`):
 //!
 //! ```text
 //! <model-viewer class="moss-embed" data-type="3d"{data-width} src="{src}"
@@ -31,10 +32,25 @@ use crate::resolve::title_params::TitleParams;
 /// Mirrors `CLASS_EMBED` in `crates/moss-core/src/resolve/embed_renderer.rs`.
 const CLASS_EMBED: &str = "moss-embed";
 
+/// Page-level script import needed for `<model-viewer>` to work.
+///
+/// Loaded from Google's CDN. Pinned to a major version for stability.
+/// If this URL becomes unavailable, self-host and update this constant.
+pub const MODEL_VIEWER_SCRIPT: &str = "<script type=\"module\" src=\"https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js\"></script>";
+
+/// Whether a rendered page needs [`MODEL_VIEWER_SCRIPT`] injected into its
+/// `<head>`. `synthesize_model_html` always stamps `data-type="3d"` on its
+/// `<model-viewer>` element, so a substring check on the already-rendered
+/// page is enough to detect one without re-parsing or re-walking a renderer
+/// registry.
+pub fn page_needs_model_viewer_script(page_html: &str) -> bool {
+    page_html.contains("data-type=\"3d\"")
+}
+
 /// Synthesize 3D model-viewer embed HTML for `Tag::Link` with `moss:kind=3d` title.
 ///
-/// Byte shape matches the pre-Phase-0 `ModelViewerRenderer::render` emission
-/// in moss-core: `camera-controls` and `auto-rotate` are emitted by default
+/// Byte shape matches the pre-Phase-0 3D-model renderer's emission in
+/// moss-core: `camera-controls` and `auto-rotate` are emitted by default
 /// (suppress with `param=false`), and `ar` is opt-in (`ar=true`). This
 /// preserves the implicit defaults of existing `![[scene.glb]]` wikilinks
 /// while still allowing explicit override via title params.
@@ -65,7 +81,7 @@ pub fn synthesize_model_html(
 /// Concatenate the boolean-flag attribute fragment.
 ///
 /// `camera-controls` and `auto-rotate` default ON to match the pre-Phase-0
-/// `ModelViewerRenderer` byte shape — they emit unless `param=false` opts
+/// 3D-model renderer's byte shape — they emit unless `param=false` opts
 /// out. `ar` defaults OFF (opt-in only). Each flag becomes a bare HTML
 /// attribute (`camera-controls`, not `camera-controls="true"`).
 fn collect_flag_attrs(params: &TitleParams) -> String {
@@ -167,7 +183,7 @@ mod tests {
         );
     }
 
-    // --- Additional byte-shape pins (preserve pre-Phase-0 ModelViewerRenderer shape) ---
+    // --- Additional byte-shape pins (preserve the pre-Phase-0 3D-model renderer's shape) ---
 
     #[test]
     fn model_emits_moss_embed_class_and_data_type() {
@@ -192,8 +208,9 @@ mod tests {
 
     #[test]
     fn model_emits_width_style() {
-        // Stage 1's `model_viewer_extra_params` folds `|400` aliases into
-        // `width=400px`; Stage 2 re-projects to inline CSS.
+        // The dispatcher's `build_synth_params` folds a `|400` alias into
+        // `width=400px` (via `Sizing::parse`); this synthesizer re-projects
+        // it to inline CSS.
         let p = params_with(&[("kind", "3d"), ("width", "400px")]);
         let out = synthesize_model_html(&p, "x.glb", &empty_snapshot());
         assert!(out.contains(r#"style="width:400px""#), "got: {}", out);
@@ -245,5 +262,19 @@ mod tests {
         let p = params_with(&[("kind", "3d")]);
         let out = synthesize_model_html(&p, "x.glb", &empty_snapshot());
         assert!(out.ends_with("></model-viewer>"), "got: {}", out);
+    }
+
+    #[test]
+    fn page_needs_model_viewer_script_detects_rendered_model() {
+        let p = params_with(&[("kind", "3d")]);
+        let page = synthesize_model_html(&p, "x.glb", &empty_snapshot());
+        assert!(page_needs_model_viewer_script(&page));
+    }
+
+    #[test]
+    fn page_needs_model_viewer_script_false_without_a_model() {
+        assert!(!page_needs_model_viewer_script(
+            "<article><p>No embeds here.</p></article>"
+        ));
     }
 }

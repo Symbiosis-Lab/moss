@@ -608,7 +608,7 @@ pub fn generate_blocking_content(
             .markdown_files
             .par_iter()
             .map_init(
-                || moss_core::resolve::registry::RendererRegistry::builtin().build(),
+                || moss_core::resolve::registry::RendererRegistry::empty().build(),
                 |resolve_registry, file_info| {
                     // Localize embed-error diagnostics (missing notebook/table)
                     // in the page's own language. The language folder is
@@ -2377,8 +2377,8 @@ pub fn generate_blocking_content(
                 },
                 has_sidebar_layout, // Use site-wide flag (true if any doc has sidebar)
                 // Auto-generated folder indexes don't contain typed embeds,
-                // so no head_assets injection is needed. Keep empty for
-                // consistency with the struct contract.
+                // so they never need the <model-viewer> head script. Keep
+                // empty for consistency with the struct contract.
                 embed_head_assets: String::new(),
                 // Folder indexes are not article pages, so they never carry
                 // series-nav (or other native post-article modules).

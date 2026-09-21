@@ -2,11 +2,12 @@
 //!
 //! Receives a [`TitleParams`] (Stage 2 dispatcher already parsed it), the
 //! source URL, and an [`AssetSnapshot`]. Emits the final `<object>`-based
-//! PDF embed HTML — preserving the exact byte shape moss-core's `PdfRenderer`
-//! used to emit before Phase 0's Stage 1 migration.
+//! PDF embed HTML — preserving the exact byte shape moss-core's pre-Phase-0
+//! PDF renderer used to emit before Phase 0's Stage 1 migration (that
+//! renderer's own `render()` was unreachable dead code by the time it was
+//! removed; the byte shape lives on here, which is the actual live path).
 //!
-//! Pre-Phase-0 byte shape (extracted from `crates/moss-core/src/resolve/
-//! embed_renderer.rs` at commit `689d975e9^`):
+//! Pre-Phase-0 byte shape:
 //!
 //! ```text
 //! <object class="moss-embed" data-type="pdf"{data-width?} type="application/pdf"
@@ -16,8 +17,8 @@
 //! ```
 //!
 //! The `<object>` element (rather than `<iframe>`) was chosen by the original
-//! `PdfRenderer` for keyboard-navigation parity and an inline download
-//! fallback in browsers that can't render PDFs natively.
+//! renderer for keyboard-navigation parity and an inline download fallback
+//! in browsers that can't render PDFs natively.
 
 use crate::asset_snapshot::AssetSnapshot;
 use crate::resolve::embed_renderer::{file_stem, html_escape_attr};
@@ -73,7 +74,7 @@ pub fn synthesize_pdf_html(
     let name = file_stem(src);
 
     // <object> with inline download fallback for browsers that can't render PDFs.
-    // Attribute order matches the pre-Phase-0 PdfRenderer byte shape exactly.
+    // Attribute order matches the pre-Phase-0 PDF renderer's byte shape exactly.
     format!(
         "<object class=\"moss-embed\" data-type=\"pdf\"{} type=\"application/pdf\" data=\"{}\"{}{}><a href=\"{}\">Download {}</a></object>",
         data_width_attr,

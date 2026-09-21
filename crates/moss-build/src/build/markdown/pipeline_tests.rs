@@ -3522,7 +3522,7 @@ fn parse_with_graph_cfg(
         b.add_file(p, slug);
     }
     let graph = b.build();
-    let registry = moss_core::resolve::registry::RendererRegistry::builtin().build();
+    let registry = moss_core::resolve::registry::RendererRegistry::empty().build();
     process_markdown_file(
         "test.md",
         md,

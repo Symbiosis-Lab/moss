@@ -19,8 +19,9 @@
 //!   regex pass (preserved until PR3 of Phase 2E). The regex's skip guard
 //!   at `placeholder.rs:435` triggers on `data-placeholder-src`, making
 //!   the post-pass a no-op for synthesizer-emitted videos.
-//!   Source: moss-core pre-Phase-0 `VideoRenderer` at
-//!   `crates/moss-core/src/resolve/embed_renderer.rs:509-571` (commit `efb834a3e`).
+//!   Source: moss-core's pre-Phase-0 video renderer (that renderer's own
+//!   `render()` was unreachable dead code by the time it was removed; the
+//!   byte shape lives on here, which is the actual live path).
 //! - `controls playsinline preload="metadata"` emitted on the **default**
 //!   branch. `playsinline` keeps playback in the page on iOS instead of
 //!   handing the video to the fullscreen AVKit player; both branches carry
@@ -226,7 +227,7 @@ mod tests {
         p
     }
 
-    // --- byte-shape parity with pre-Phase-0 VideoRenderer ---
+    // --- byte-shape parity with the pre-Phase-0 video renderer ---
 
     #[test]
     fn video_basic_shape() {
@@ -249,7 +250,7 @@ mod tests {
 
     #[test]
     fn video_emits_closing_tag() {
-        // Pre-Phase-0 VideoRenderer ended with `</video>` (not self-closing).
+        // The pre-Phase-0 video renderer ended with `</video>` (not self-closing).
         // The downstream rewriter regex matches `<video … src="…">` and
         // expects a separate closing tag.
         let p = params_with(&[("kind", "video")]);
@@ -286,8 +287,8 @@ mod tests {
         // too narrow for a ladder. Load-bearing: the surviving
         // add_video_placeholder_attributes regex matches `<video\s+[^>]*?src="…">`,
         // and the iframe-bridge's transcode-pending hydration swaps that `src`.
-        // With a nested <source> and no `src`, both silently drop. See
-        // pre-Phase-0 VideoRenderer doc comment at embed_renderer.rs:519-545.
+        // With a nested <source> and no `src`, both silently drop. See the
+        // module doc's "Authoritative byte shape" section above.
         let p = params_with(&[("kind", "video")]);
         let out = synthesize_video_html(&p, "clip.mp4", &empty_snapshot());
         assert!(!out.contains("<source"), "must not emit <source>: {}", out);

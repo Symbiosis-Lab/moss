@@ -19,9 +19,7 @@ use std::path::{Path, PathBuf};
 
 use moss_core::resolve::embed_renderer::{CLASS_EMBED, CLASS_EMBED_NOTEBOOK, CLASS_EMBED_TABLE};
 use moss_core::resolve::embeds::{MarkerHandler, MarkerHandlers};
-use moss_core::resolve::registry::RendererRegistry;
 use moss_core::resolve::Diagnostic;
-use std::collections::HashSet;
 
 /// Construct a [`MarkerHandlers`] seeded with the built-in notebook and
 /// table resolvers.
@@ -155,72 +153,6 @@ fn render_table_embed(target: &str, site_root: &Path, lang: crate::i18n::Languag
         data_type: Some("table".to_string()),
     };
     moss_core::csv_table::render(&content, &options)
-}
-
-// ---------------------------------------------------------------------------
-// head_assets collection
-// ---------------------------------------------------------------------------
-
-/// Collect and deduplicate `head_assets` fragments from every renderer in
-/// `registry` whose output appears in `page_html`.
-///
-/// Detection is classname-based: each renderer declares exactly one
-/// classname in its output (via the `moss-embed-*` contract), so we look
-/// for any built-in class substring. When present, we take the renderer's
-/// `head_assets` and add them to the return set.
-///
-/// The output is a single HTML string (one asset per line) ready to splice
-/// into the `<!-- slot:head-end -->` slot of the page template. Empty when
-/// no renderer on the page needs page-level assets.
-///
-/// **Complexity:** `O(registry.len() * page_html.len())` per page. Fast in
-/// practice: the registry is tiny (~10 renderers) and `contains` is an
-/// optimized substring search.
-pub fn collect_head_assets(registry: &RendererRegistry, page_html: &str) -> String {
-    let mut seen: HashSet<&'static str> = HashSet::new();
-    let mut out: Vec<&'static str> = Vec::new();
-
-    for renderer in registry.all() {
-        let assets = renderer.head_assets();
-        if assets.is_empty() {
-            continue;
-        }
-        // Each renderer emits a class from the moss-embed-* namespace — if
-        // none of its classes appear in the page, its assets aren't needed.
-        // We rely on the convention that a renderer's extensions map 1:1
-        // to a specific class; checking by class substring is cheap.
-        if !renderer_appears_in_page(renderer.extensions(), page_html) {
-            continue;
-        }
-        for asset in assets {
-            if seen.insert(*asset) {
-                out.push(*asset);
-            }
-        }
-    }
-
-    out.join("\n")
-}
-
-/// Heuristic: given a renderer's claimed extensions, return true if the
-/// corresponding embed class appears in the page. Each built-in renderer
-/// owns one class; the mapping is stable and small enough to keep inline.
-fn renderer_appears_in_page(extensions: &[&'static str], page_html: &str) -> bool {
-    // Map from any one claimed extension to the renderer's class marker.
-    // Add a row when adding a new renderer with head_assets.
-    for ext in extensions {
-        let class_marker = match *ext {
-            "glb" | "gltf" => "data-type=\"3d\"",
-            // Future head_assets consumers (if any) register here.
-            // Built-ins without head_assets don't need entries — they're
-            // filtered out above because head_assets() returns empty.
-            _ => continue,
-        };
-        if page_html.contains(class_marker) {
-            return true;
-        }
-    }
-    false
 }
 
 // ---------------------------------------------------------------------------
@@ -387,45 +319,6 @@ mod tests {
         assert!(!handlers.is_empty());
     }
 
-    #[test]
-    fn test_collect_head_assets_empty_when_no_embeds() {
-        let registry = RendererRegistry::builtin().build();
-        let page = "<article><p>Plain text, no embeds.</p></article>";
-        assert_eq!(collect_head_assets(&registry, page), "");
-    }
-
-    #[test]
-    fn test_collect_head_assets_empty_when_only_image_embed() {
-        // Image renderer declares no head_assets.
-        let registry = RendererRegistry::builtin().build();
-        let page = r#"<p><img src="photo.jpg"></p>"#;
-        assert_eq!(collect_head_assets(&registry, page), "");
-    }
-
-    #[test]
-    fn test_collect_head_assets_emits_model_viewer_script() {
-        // ModelViewerRenderer emits class="moss-embed" data-type="3d" and
-        // declares the model-viewer script as a head asset.
-        let registry = RendererRegistry::builtin().build();
-        let page = r#"<model-viewer class="moss-embed" data-type="3d" src="x.glb"></model-viewer>"#;
-        let out = collect_head_assets(&registry, page);
-        assert!(out.contains("model-viewer"), "got: {}", out);
-        assert!(out.contains("<script"), "got: {}", out);
-    }
-
-    #[test]
-    fn test_collect_head_assets_dedupes_identical_assets() {
-        // Two <model-viewer> elements on the same page → one script import.
-        let registry = RendererRegistry::builtin().build();
-        let page = r#"
-            <model-viewer class="moss-embed" data-type="3d" src="a.glb"></model-viewer>
-            <model-viewer class="moss-embed" data-type="3d" src="b.glb"></model-viewer>
-        "#;
-        let out = collect_head_assets(&registry, page);
-        let script_count = out.matches("<script").count();
-        assert_eq!(script_count, 1, "expected 1 script, got {}: {}", script_count, out);
-    }
-
     // -------------------------------------------------------------------------
     // End-to-end integration: real markdown → resolved HTML via the full pipeline
     // -------------------------------------------------------------------------
@@ -466,7 +359,7 @@ mod tests {
         let graph = builder.build();
 
         let md = "# Analysis\n\n![[minimal.ipynb]]\n";
-        let registry = RendererRegistry::builtin().build();
+        let registry = RendererRegistry::empty().build();
         let handlers = builtin_marker_handlers(root.clone(), crate::i18n::Language::En);
         let file_reader = |path: &str| std::fs::read_to_string(root.join(path)).ok();
 
@@ -512,7 +405,7 @@ mod tests {
         let graph = builder.build();
 
         let md = "# Data\n\n![[minimal.csv]]\n";
-        let registry = RendererRegistry::builtin().build();
+        let registry = RendererRegistry::empty().build();
         let handlers = builtin_marker_handlers(root.clone(), crate::i18n::Language::En);
         let file_reader = |path: &str| std::fs::read_to_string(root.join(path)).ok();
 
@@ -561,7 +454,7 @@ mod tests {
         let graph = builder.build();
 
         let md = "# Test\n\n![[minimal.ipynb]]\n";
-        let registry = RendererRegistry::builtin().build();
+        let registry = RendererRegistry::empty().build();
         // Handlers WITHOUT notebook support — marker must survive.
         let handlers = MarkerHandlers::new();
         let file_reader = |path: &str| std::fs::read_to_string(root.join(path)).ok();
@@ -605,7 +498,7 @@ mod tests {
         let graph = builder.build();
 
         let md = "# Real notebook\n\n![[habitable-zone.ipynb]]\n";
-        let registry = RendererRegistry::builtin().build();
+        let registry = RendererRegistry::empty().build();
         let handlers = builtin_marker_handlers(root.clone(), crate::i18n::Language::En);
         let file_reader = |path: &str| std::fs::read_to_string(root.join(path)).ok();
 

@@ -695,6 +695,14 @@ fn snapshot_embed_depth_all() {
     run_snapshot_test("embed-depth-all");
 }
 
+/// A single page with a `.glb` wikilink embed, on otherwise-unmodified
+/// code, so the `<model-viewer>` head script is byte-pinned before the
+/// head-asset plumbing that decides whether to inject it moves anywhere.
+#[test]
+fn snapshot_model_embed_site() {
+    run_snapshot_test("model-embed-site");
+}
+
 #[test]
 fn snapshot_children_limit_more() {
     run_snapshot_test("children-limit-more");

@@ -412,38 +412,12 @@ fn dispatch_embed_form(
         };
     }
 
-    // Phase 3 PR2: trailing-slash dispatch is the folder-list embed
-    // (`![[/journal/]]`). We must check this BEFORE `resolve_reference`
-    // because ContentGraph::resolve_path normalizes trailing slashes
-    // away — running it first would always discard the folder-embed
-    // signal. The actual listing is rendered by the src-tauri marker
-    // resolver (Task 16) which has `all_docs` available; here we just
-    // emit a marker carrying the user-written path + the source file
-    // path (for relative resolution).
-    //
-    // Pothole text after `|` becomes the folder-list params string
-    // (e.g. `limit:5,more,sort:date`). We parse it back from whatever
-    // pothole shape pulldown-cmark gave us.
-    if !split.file.is_empty() && split.file.ends_with('/') {
-        let pothole_raw = match &pothole {
-            PotholeContent::Empty => String::new(),
-            PotholeContent::WidthToken { rest_alias, .. } => rest_alias.clone(),
-            PotholeContent::Params(_) => String::new(),
-            PotholeContent::Alias(s) => s.clone(),
-        };
-        let params = super::embed_renderer::folder_list::parse_params(&pothole_raw);
-        let marker =
-            super::embed_renderer::folder_list::emit_marker(split.file, from_path, &params);
-        return WikilinkEmit {
-            output: EmitKind::Html(marker),
-            outgoing_link: Some(OutgoingLink {
-                target_path: split.file.to_string(),
-                display_text: split.file.to_string(),
-                link_type: LinkType::Embed,
-            }),
-            diagnostics,
-        };
-    }
+    // A trailing-slash embed (`![[/journal/]]`, the folder-list form) never
+    // reaches this dispatcher for a real document: `resolve.rs`'s pre-pass
+    // (`lower_transclusion_and_folder_wikilinks`) claims and emits the
+    // folder-list marker itself, before pulldown-cmark — and therefore this
+    // function — ever sees the document. This branch used to duplicate that
+    // handling here as dead code; deleted rather than kept unreachable.
 
     // Resolve. Same logic as resolve_embed: empty file → same file;
     // non-empty → fuzzy resolve.
@@ -903,10 +877,9 @@ enum SynthKind {
 /// which keeps its inline-markdown round-trip — and for deferred kinds
 /// (`md`/`ipynb`/`csv`/`tsv`) which still need src-tauri post-passes.
 ///
-/// The extension table now lives in `ext_kind::reference_kind_for_ext` (the
-/// single source of truth). The `EmbedRenderer::extensions()` slices in
-/// `embed_renderer.rs` still exist and are still used by the renderer
-/// registry — do NOT delete them.
+/// The built-in renderers and their `EmbedRenderer::extensions()` slices
+/// were deleted as unreachable; `ext_kind::reference_kind_for_ext` is the
+/// single source of truth for this table now.
 fn synth_kind_for_ext(ext: &str) -> Option<SynthKind> {
     use crate::resolve::ext_kind::{reference_kind_for_ext, ExtKind};
     match reference_kind_for_ext(ext) {
@@ -921,9 +894,12 @@ fn synth_kind_for_ext(ext: &str) -> Option<SynthKind> {
 
 /// Build the [`TitleParams`] handed to a per-kind synthesizer.
 ///
-/// Mirrors the `*_extra_params` helpers in `embed_renderer.rs` (which fed
-/// the legacy `moss:title` round-trip) — they are the canonical reference
-/// for which params each synth function reads. Notable shape:
+/// This is the canonical reference for which params each synth function
+/// reads. It once mirrored a set of per-kind `*_extra_params` helpers in
+/// `embed_renderer.rs` that fed the retired `moss:title` round-trip; the
+/// iframe/pdf/audio/video ones were deleted as dead code (their `render()`
+/// was unreachable from the live dispatch path this function actually
+/// serves). Notable shape:
 ///
 /// - **`data-width`** carries the canonical wrapper width (`body | wide |
 ///   page | screen`) when the pothole was an Obsidian width-token. Synth

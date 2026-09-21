@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`sort::cmp_labels`** — the one comparator for ordering user-visible listing labels by title. Case is a tiebreak, not a primary key, so `mao` now sorts between `Kayla` and `Scarly` instead of after every capitalised name. All title-axis and dateless-tiebreak label sorts now route through it.
 - **`:::grid N {scroll}`** — keeps a grid's row on one line instead of it wrapping or collapsing; `N` becomes how many cards fit in view at once, with a slice of the next one showing as the cue to scroll. `label="…"` names the row for assistive technology. `.summary` still replaces the whole container when both are written on one fence, so `scroll` never reaches the page in that case.
 
+### Removed
+
+- **BREAKING:** **`RendererRegistry::builtin`, `RendererRegistry::all`, `EmbedRenderer::head_assets`, and the eight built-in `EmbedRenderer` structs (`MarkdownEmbedRenderer`, `IframeRenderer`, `PdfRenderer`, `AudioRenderer`, `VideoRenderer`, `NotebookRenderer`, `ModelViewerRenderer`, `TableRenderer`) are gone.** Every one of them was unreachable in a real build: the resolve pre-pass claims folder, markdown, notebook and table embeds before pulldown-cmark ever runs, and the wikilink dispatcher's `synth_kind_for_ext` claims image, video, pdf, audio and 3D extensions and routes straight to a synthesizer, so the registry these structs sat behind never got a chance to dispatch to them. A caller building a registry now starts from `RendererRegistry::empty()` — the same, empty result `builtin()` already produced, since nothing it seeded was ever reached — and the `<model-viewer>` `<script>` a page needs is now decided by `render::model::page_needs_model_viewer_script` rather than by walking a registry for a `head_assets()` answer.
+
 ### Fixed
 
 - **`cover` picker offers `.html`/`.htm`.** `cover`'s `file_kinds` now includes `Iframe`, so the chip-bar search dropdown and the OS Browse dialog stop excluding files the build has rendered as iframe covers since 2026-03-09 — an author no longer has to hand-type `cover: "[[page.html]]"` to get what the picker wouldn't offer.

@@ -113,7 +113,7 @@ pub fn resolve_content(
     file_reader: &dyn Fn(&str) -> Option<String>,
 ) -> ResolveResult {
     let handlers = embeds::MarkerHandlers::new();
-    let registry = registry::RendererRegistry::builtin().build();
+    let registry = registry::RendererRegistry::empty().build();
     resolve_content_with_handlers(
         source_path,
         raw_markdown,
@@ -411,7 +411,9 @@ fn lower_transclusion_and_folder_wikilinks(
                     Some(a) => format!("{}#{}", target_path, a),
                     None => target_path,
                 };
-                rewritten.push_str("<!-- moss-embed:");
+                rewritten.push_str("<!-- ");
+                rewritten.push_str(embed_renderer::MARKER_MARKDOWN);
+                rewritten.push(':');
                 rewritten.push_str(&target_with_anchor);
                 rewritten.push_str(" -->");
                 rest = remainder;
@@ -424,8 +426,8 @@ fn lower_transclusion_and_folder_wikilinks(
             // `resolve_deferred_markers`, so pre-converting here keeps
             // the existing marker-handler pipeline working.
             let marker_prefix = match ext.as_str() {
-                "ipynb" => Some("moss-embed-ipynb"),
-                "csv" | "tsv" => Some("moss-embed-table"),
+                "ipynb" => Some(embed_renderer::MARKER_IPYNB),
+                "csv" | "tsv" => Some(embed_renderer::MARKER_TABLE),
                 _ => None,
             };
             if let Some(prefix) = marker_prefix {

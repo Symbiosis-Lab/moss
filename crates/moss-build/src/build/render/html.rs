@@ -1082,11 +1082,12 @@ fn generate_html_inner(
         (None, String::new())
     };
 
-    // Collect typed-embed head_assets (e.g., <model-viewer> script) before
+    // Decide whether this page needs the <model-viewer> head script, before
     // homepage_content is moved into ShellVars::content below.
-    let embed_head_assets = {
-        let registry = moss_core::resolve::registry::RendererRegistry::builtin().build();
-        crate::build::embed_handlers::collect_head_assets(&registry, &homepage_content)
+    let embed_head_assets = if moss_core::render::model::page_needs_model_viewer_script(&homepage_content) {
+        moss_core::render::model::MODEL_VIEWER_SCRIPT.to_string()
+    } else {
+        String::new()
     };
 
     // Resolve the homepage doc the current page's DESCRIPTION cascades from.

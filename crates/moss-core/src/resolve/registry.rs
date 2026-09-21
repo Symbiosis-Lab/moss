@@ -1,10 +1,10 @@
 //! Extensible registry for embed renderers.
 //!
-//! Built-ins come from moss-core; plugins register at pipeline init via
-//! [`RendererRegistryBuilder::with_boxed`]. The default lookup in
-//! [`super::embed_renderer::lookup_renderer`] uses the built-in-only
-//! registry; pipelines with plugin renderers build their own registry and
-//! thread it through
+//! Plugins register at pipeline init via [`RendererRegistryBuilder::with_boxed`].
+//! moss-core shipped no built-in `EmbedRenderer` here as of the dead-code
+//! sweep that removed the last one (see "No more built-ins," below) — every
+//! call site now starts from [`RendererRegistry::empty`]. Pipelines with
+//! plugin renderers build their own registry and thread it through
 //! [`super::wikilink_dispatch::dispatch_wikilink_embed_with_registry`]
 //! (Phase 3 PR2 retired the older Stage 1 `resolve_wikilinks_with_registry`
 //! string-rewriter that consumed this registry).
@@ -32,44 +32,52 @@
 //! The first pass stays pure; the second pass does I/O. Plugin author
 //! writes one JS function; they never touch Rust.
 //!
-//! # Built-ins-win-on-collision
+//! # No more built-ins — what actually stops a plugin shadowing a core kind
 //!
-//! Built-ins are registered first in [`RendererRegistry::builtin`]. Lookup
-//! is first-match-wins, so a plugin declaring an extension that clashes
-//! with a built-in (e.g., `.html`) can't shadow the built-in — its
-//! renderer is registered in the registry but never dispatched. This is a
-//! deliberate safety property; override policy (allow plugin to replace
-//! built-in) is a future extension.
+//! This registry used to seed itself with the built-in `EmbedRenderer`
+//! impls first specifically so a plugin claiming a colliding extension
+//! (e.g. `.html`) couldn't shadow one — first-match-wins lookup meant the
+//! built-in, registered first, always won. That mechanism was **removed**,
+//! not merely unused: the last built-in `EmbedRenderer` struct was deleted
+//! as dead code (each one's `render()` was unreachable — the live pipeline
+//! never dispatched an embed through this registry to reach it), and
+//! `RendererRegistry::builtin()`/`RendererRegistryBuilder::with_builtins`
+//! were deleted with it. `empty()` is the only constructor left.
+//!
+//! A plugin still can't shadow a core embed kind — three other, earlier
+//! mechanisms claim those extensions before this registry's `lookup(ext)`
+//! fallback is ever reached:
+//!
+//! 1. `resolve.rs`'s pre-pass (`lower_transclusion_and_folder_wikilinks`)
+//!    claims folder / `.md` / `.ipynb` / `.csv` / `.tsv` before
+//!    pulldown-cmark ever parses the document.
+//! 2. `wikilink_dispatch.rs`'s `synth_kind_for_ext` claims image / video /
+//!    pdf / audio / 3D extensions and routes straight to a synthesizer.
+//! 3. The dispatcher's separate `IMAGE_EXTENSIONS` branch claims image
+//!    extensions ahead of everything else.
 //!
 //! # When to use which API
 //!
 //! | Pipeline type | Function | Registry used |
 //! |---|---|---|
-//! | No plugins | [`super::wikilink_dispatch::dispatch_wikilink_embed`] | built-in only (via `lookup_renderer`) |
+//! | No plugins | [`super::wikilink_dispatch::dispatch_wikilink_embed`] | empty (via `lookup_renderer`) |
 //! | With plugins | [`super::wikilink_dispatch::dispatch_wikilink_embed_with_registry`] | custom registry built at init |
 
-use super::embed_renderer::{
-    AudioRenderer, EmbedRenderer, IframeRenderer, MarkdownEmbedRenderer,
-    ModelViewerRenderer, NotebookRenderer, PdfRenderer, TableRenderer, VideoRenderer,
-};
+use super::embed_renderer::EmbedRenderer;
 
-/// A registry of embed renderers, built from the built-in set plus any custom
-/// renderers (typically plugin adapters) added at construction time.
+/// A registry of embed renderers, built from any custom renderers (typically
+/// plugin adapters) added at construction time — see the module doc's
+/// "No more built-ins" section for why there is no built-in set to seed it
+/// with any more.
 ///
 /// Built in one pass at pipeline init and then treated as immutable. Lookup
-/// is first-match-wins by extension; built-ins come first so plugins can't
-/// shadow them.
+/// is first-match-wins by extension.
 pub struct RendererRegistry {
     renderers: Vec<&'static dyn EmbedRenderer>,
 }
 
 impl RendererRegistry {
-    /// Start a builder seeded with the built-in renderers.
-    pub fn builtin() -> RendererRegistryBuilder {
-        RendererRegistryBuilder::new().with_builtins()
-    }
-
-    /// Empty builder (for tests).
+    /// Empty builder.
     pub fn empty() -> RendererRegistryBuilder {
         RendererRegistryBuilder::new()
     }
@@ -84,11 +92,6 @@ impl RendererRegistry {
             .copied()
             .find(|r| r.extensions().iter().any(|e| e.eq_ignore_ascii_case(ext)))
     }
-
-    /// All renderers in registration order (for diagnostics + head-asset walk).
-    pub fn all(&self) -> &[&'static dyn EmbedRenderer] {
-        &self.renderers
-    }
 }
 
 /// Builder for [`RendererRegistry`].
@@ -101,20 +104,6 @@ impl RendererRegistryBuilder {
         Self {
             renderers: Vec::new(),
         }
-    }
-
-    fn with_builtins(mut self) -> Self {
-        // Order matches embed_renderer::registry() — built-ins first so they
-        // win on extension collision with plugins.
-        self.renderers.push(&MarkdownEmbedRenderer);
-        self.renderers.push(&IframeRenderer);
-        self.renderers.push(&PdfRenderer);
-        self.renderers.push(&AudioRenderer);
-        self.renderers.push(&VideoRenderer);
-        self.renderers.push(&NotebookRenderer);
-        self.renderers.push(&ModelViewerRenderer);
-        self.renderers.push(&TableRenderer);
-        self
     }
 
     /// Add a `'static` renderer (zero-size unit struct).
@@ -144,7 +133,7 @@ impl RendererRegistryBuilder {
 
 impl Default for RendererRegistry {
     fn default() -> Self {
-        RendererRegistry::builtin().build()
+        RendererRegistry::empty().build()
     }
 }
 
@@ -165,66 +154,11 @@ mod tests {
     }
 
     #[test]
-    fn test_builtin_registry_has_core_renderers() {
-        let reg = RendererRegistry::builtin().build();
-        // Image extensions ("jpg"/"png") deliberately NOT here: the
-        // image-embed synth-collapse removed ImageRenderer; image embeds
-        // route to the dispatcher's Block::Figure arm, not the registry.
-        for ext in ["md", "html", "pdf", "mp3", "mp4", "ipynb", "glb", "csv"] {
-            assert!(
-                reg.lookup(ext).is_some(),
-                "builtin missing renderer for .{}",
-                ext
-            );
-        }
-        assert!(reg.lookup("xyz").is_none());
-    }
-
-    #[test]
     fn test_builder_adds_custom_renderer() {
-        let reg = RendererRegistry::builtin()
+        let reg = RendererRegistry::empty()
             .with_boxed(Box::new(CustomRenderer))
             .build();
         assert!(reg.lookup("xyz").is_some());
-        assert!(reg.lookup("md").is_some(), "built-ins still present");
-    }
-
-    #[test]
-    fn test_builtin_wins_on_collision() {
-        // If a plugin tried to claim .html, the built-in IframeRenderer (added
-        // first) wins because lookup is first-match.
-        #[derive(Debug)]
-        struct FakeHtmlRenderer;
-        impl EmbedRenderer for FakeHtmlRenderer {
-            fn extensions(&self) -> &[&'static str] {
-                &["html"]
-            }
-            fn render(&self, _: &ParsedEmbed<'_>) -> RenderedEmbed {
-                RenderedEmbed::Html("<fake></fake>".to_string())
-            }
-        }
-        let reg = RendererRegistry::builtin()
-            .with_boxed(Box::new(FakeHtmlRenderer))
-            .build();
-        let r = reg.lookup("html").expect("has renderer");
-        let out = r.render(&ParsedEmbed {
-            resolved_path: "x.html",
-            from_path: "post.md",
-            pinned_url: "x.html",
-            query: None,
-            section: None,
-            alias: None,
-            width: None,
-            attrs: None,
-        });
-        // Phase 3 PR4 (2026-05-27): built-in IframeRenderer emits bare
-        // CommonMark `[name](url)` markdown — the `moss:kind=iframe`
-        // title channel retired. Identity is established by the bare
-        // shape; the fake plugin's `<fake></fake>` raw HTML never appears.
-        match out {
-            RenderedEmbed::Inline(s) => assert_eq!(s, "[x](x.html)"),
-            _ => panic!("expected Inline (Stage 1 markdown) from built-in IframeRenderer"),
-        }
     }
 
     #[test]
@@ -235,17 +169,14 @@ mod tests {
 
     #[test]
     fn test_lookup_case_insensitive() {
-        let reg = RendererRegistry::builtin().build();
-        // jpg no longer resolves via the registry (synth-collapse); use a
-        // surviving registry-resolved extension to test case-insensitivity.
-        assert!(reg.lookup("MD").is_some());
-        assert!(reg.lookup("Md").is_some());
-    }
-
-    #[test]
-    fn test_all_returns_registered_renderers() {
-        let reg = RendererRegistry::builtin().build();
-        // 8 built-ins after the image-embed synth-collapse removed ImageRenderer.
-        assert_eq!(reg.all().len(), 8);
+        // No built-in extension exists to test this against (the registry
+        // has none left; see the module doc), so exercise the still-live
+        // mechanism — RendererRegistry::lookup's case folding — through a
+        // boxed (plugin-shaped) renderer instead.
+        let reg = RendererRegistry::empty()
+            .with_boxed(Box::new(CustomRenderer))
+            .build();
+        assert!(reg.lookup("XYZ").is_some());
+        assert!(reg.lookup("Xyz").is_some());
     }
 }

@@ -2,11 +2,12 @@
 //!
 //! Receives a [`TitleParams`] (Stage 2 dispatcher already parsed it), the
 //! source URL, and an [`AssetSnapshot`]. Emits final `<audio>` HTML —
-//! preserving the shape moss-core's `AudioRenderer` used to emit before
-//! Phase 0's Stage 1 migration.
+//! preserving the shape moss-core's pre-Phase-0 audio renderer used to emit
+//! before Phase 0's Stage 1 migration (that renderer's own `render()` was
+//! unreachable dead code by the time it was removed; the byte shape lives
+//! on here, which is the actual live path).
 //!
-//! Pre-Phase-0 reference shape (from `crates/moss-core/src/resolve/embed_renderer.rs`
-//! at commit `8f9b6b55a`):
+//! Pre-Phase-0 reference shape:
 //!
 //! ```html
 //! <audio class="moss-embed moss-embed-audio" controls preload="metadata">
@@ -15,7 +16,7 @@
 //! </audio>
 //! ```
 //!
-//! The `AudioRenderer` always emitted `controls` and `preload="metadata"`,
+//! The pre-Phase-0 renderer always emitted `controls` and `preload="metadata"`,
 //! with a `<source type="{mime}">` derived from the asset extension. Phase 1
 //! preserves that exact byte shape; `TitleParams` (`controls`, `loop`,
 //! `autoplay`, `muted`, `preload`) currently surface no behavioral overrides
@@ -31,7 +32,7 @@ use crate::resolve::title_params::TitleParams;
 ///
 /// Always emits a `<audio>` element with `controls preload="metadata"` and
 /// a `<source>` child carrying the URL and a MIME type derived from the
-/// extension. Matches the pre-Phase-0 `AudioRenderer` byte shape one-for-one
+/// extension. Matches the pre-Phase-0 audio renderer's byte shape one-for-one
 /// so existing snapshot tests / fixtures remain valid after the Stage 2
 /// dispatcher routes here.
 ///
@@ -59,7 +60,7 @@ pub fn synthesize_audio_html(
 
 /// Map a lowercased audio extension to the MIME emitted on `<source type="…">`.
 ///
-/// Mirrors the table in moss-core's pre-Phase-0 `AudioRenderer` so the byte
+/// Mirrors the table in moss-core's pre-Phase-0 audio renderer so the byte
 /// shape of `type="…"` stays identical. Unknown extensions fall back to
 /// `application/octet-stream` (browsers ignore the unknown type and probe
 /// the response Content-Type — graceful degradation).

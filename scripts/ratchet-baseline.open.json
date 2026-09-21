@@ -40,7 +40,6 @@
         "crates/moss-core/src/contract/components.rs": 3900,
         "crates/moss-core/src/frontmatter_typed.rs": 1100,
         "crates/moss-core/src/render/image.rs": 1000,
-        "crates/moss-core/src/resolve/embed_renderer.rs": 900,
         "crates/moss-core/src/resolve/wikilink_dispatch.rs": 1100,
         "crates/moss-core/src/schema_fields.rs": 900,
         "packages/moss-api/src/testing/mock-tauri.ts": 1200,
