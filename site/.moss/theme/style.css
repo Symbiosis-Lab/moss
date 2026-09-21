@@ -57,8 +57,6 @@ footer.container .footer-github { position: relative; display: inline-flex; alig
 footer.container .footer-github::before { content: ""; display: block; width: 1em; height: 1em; opacity: .72; background: currentColor; -webkit-mask: url("/assets/platforms/github.svg") center / contain no-repeat; mask: url("/assets/platforms/github.svg") center / contain no-repeat; }
 footer.container .footer-github::after { content: ""; position: absolute; inset: -4px; }
 
-}
-
 .moss-grid.sc-demo { margin-block: 0; overflow: hidden; border: 1px solid var(--moss-border-light); border-radius: 6px; gap: 0; }
 .moss-grid.sc-demo > .moss-grid-card { padding: 1.25rem; }
 .moss-grid.sc-demo > .moss-grid-card:first-child { position: relative; background: var(--moss-code-background, var(--moss-color-surface)); }
