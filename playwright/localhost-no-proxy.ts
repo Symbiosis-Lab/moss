@@ -1,4 +1,7 @@
 /**
+ * This file has a twin in the desktop repo (pnpm's git dependency exposes
+ * only `packages/*`, so that repo cannot import this one) — change both.
+ *
  * Exempt localhost from any HTTP proxy, for every Playwright config that
  * starts a `webServer`.
  *
