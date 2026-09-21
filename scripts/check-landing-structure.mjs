@@ -57,7 +57,14 @@ const BASELINE = {
   // contrast dip (a real defect a visitor could stop the scroll inside,
   // not new markup) -- the explanatory comment plus five colour rules
   // rewritten to use --hdr instead of --xf, mobile-scoped only.
-  htmlBytes: 51193,
+  // Unit 4 (2026-09-21), the pin: rose again, 51193 -> 54304. #c5's own
+  // margin-bottom (the pin fix, real new geometry) and #five's compensating
+  // margin-top, plus desktop's own --hdr flip (item d, a real contrast
+  // regression the pin fix itself causes) and its own measured derivation,
+  // each with the comment this file's style expects; the dead position/
+  // inset deleted from #five's base rule is what kept this from rising
+  // further still.
+  htmlBytes: 54304,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a
@@ -87,7 +94,12 @@ const BASELINE = {
   // a text-flow gap unrelated to #five's own band; xfAt() derives from it on
   // desktop (mobile keeps mobileClosingProgress() through its own smooth()
   // ease, untouched). I-progress is the new invariant.
-  scriptBytes: 246609,
+  // Unit 4 (2026-09-21), the pin: fell 246609 -> 245300. nativeScroll()'s
+  // xfAt() > 0 clause and watchScrollNative's whole closing-settle special
+  // case are deleted -- desktop stays on watchScrollDesktop through the
+  // close now, the DEPLOY..SHARE boundary commits the same way every other
+  // one does. Locked in the same commit that earned it.
+  scriptBytes: 245300,
 };
 
 function countWindowAssignments(text) {

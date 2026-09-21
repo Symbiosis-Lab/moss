@@ -1630,11 +1630,13 @@ function xfAt() {
   return clamp01(progressAt() - DEPLOY);
 }
 function nativeScroll() {
-  // At the exact first crossfade pixel xfAt() is still zero. Keep the carry
-  // integrator for that boundary frame so its release velocity moves into the
-  // join; handing off there would clear carryV while watchScrollNative still has
-  // no positive crossfade to finish, leaving the page parked on the seam.
-  return mobileLayout() || xfAt() > 0;
+  // Desktop stays on watchScrollDesktop through the close now (unit 4,
+  // review-phases-2-4.md Job 2 item 5): the DEPLOY..SHARE boundary is a
+  // scene-shaped progress like every other since unit 3, so the carry
+  // integrator (or settleAtRest, under reduced motion) commits it the same
+  // way it commits every other boundary, and watchScrollNative's own
+  // closing-settle special case is deleted rather than kept in sync with it.
+  return mobileLayout();
 }
 // The scene on the far side of this join arrives already standing rather than
 // drawing itself under the fade: the fan is scene 4's end state, not a
@@ -3563,27 +3565,11 @@ function watchScrollNative(now) {
   if (dy) { travel = Math.sign(dy); restSince = now; }
   onScroll(dy);
   updateFinalDissolve();
-  // Desktop's closing section shares the release spring, gated on being inside the crossfade
-  // band and on the gesture -- never on the sign of the last delta (M1's second defect: a
-  // release with travel === 0, a reload restored mid-crossfade or a settle's own last frame
-  // zeroing it, used to park just the same). travel still says which side to carry to.
-  // No xfAt() < 1 upper bound: closingRestY() also has to reveal the signup form below
-  // the title, more scroll than just crossing the band, so xfAt() reaches 1 well before
-  // a hard flick reaches its own rest -- gating on the band's completion parked that
-  // flick short of the form (unit 1b review). Nothing here re-fires once arrived: firing
-  // clears restOwed and starts a run, so kind reads 'settling' then 'idle', never
-  // 'coasting' again without a fresh hold-then-release. Mobile stays observational.
-  if (!mobileLayout() && xfAt() > 0 && gestureKind(now) === 'coasting' && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
-    restOwed = false; gesture.reason = 'close';
-    // travel === 0's tie-break duplicates sceneForRest's own DEAD-zone rounding, and
-    // five.offsetTop - innerHeight * .8 duplicates xfAt()'s band geometry -- both
-    // collapse into progressAt()/restY() once the closing-progress unit (Job 2 unit 2)
-    // extends them over this boundary; not refactored here.
-    const forward = travel > 0 || (travel === 0 && xfAt() >= 0.5);
-    const destination = forward ? Math.max(scrollY, closingRestY()) : Math.min(scrollY, five.offsetTop - innerHeight * .8);
-    if (reduce) scrollTo(0, destination);
-    else { const v = scrollV * innerHeight; settleTo(destination, Math.sign(destination - scrollY) === Math.sign(v) ? v : 0, SETTLE_SECS); }
-  }
+  // The closing-settle special case that used to live here is deleted (unit
+  // 4, review-phases-2-4.md Job 2 item 5): nativeScroll() no longer routes
+  // desktop here for the DEPLOY..SHARE boundary at all, so this function is
+  // reached only for mobile now, which stays purely observational -- the
+  // browser drives scrollY, this just watches it.
   const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
   scrollV *= Math.exp(-dt / V_TAU);
 }
