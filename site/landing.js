@@ -45,7 +45,7 @@ function flushPrintRect() { if (pendingPrintRect && !running()) { const next = p
 // them re-wets the sheet today, but a join is not a wash by definition, and a
 // later boundary can carry a different mechanism without touching the trigger.
 const PHASE = ['write', 'live', 'ships', 'deploy', 'share'];
-const SHIPS = PHASE.indexOf('ships'), DEPLOY = PHASE.indexOf('deploy'), SHARE = PHASE.indexOf('share');
+const LIVE = PHASE.indexOf('live'), SHIPS = PHASE.indexOf('ships'), DEPLOY = PHASE.indexOf('deploy'), SHARE = PHASE.indexOf('share');
 // The box's leftward spill in the widened shape, as the stylesheet's own
 // calc(100% + 32px): scene 4 measures against that shape whatever is on screen.
 const SPILL = 32;
@@ -139,7 +139,17 @@ const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const PLATE_SET = window.__LANG === 'zh'
   ? {"dir": "zhuda/plates", "images": ["376d25daf9aa.jpg", "3926a51d36d5.jpg", "9e4725e1101e.jpg", "e265c76d268f.jpg", "e4772754b3b1.jpg", "e65a0ba027e5.jpg", "eab0bc5785fa.jpg"]}
   : {"dir": "blake/plates", "images": ["3b119ebffab3.jpg", "b8dcbfe35cbd.jpg", "38211f928ad5.jpg", "171a382c9cc2.jpg", "771aaf08cedb.jpg", "f34b78575d36.jpg", "50e62b346c5f.jpg", "5ac4f7fb652f.jpg", "0bb22b56b263.jpg"]};
-const PLATE_ASPECT = window.__LANG === 'zh' ? {'376d25daf9aa.jpg': 280 / 640, '3926a51d36d5.jpg': 640 / 622, '9e4725e1101e.jpg': 640 / 472, 'e265c76d268f.jpg': 426 / 640, 'e4772754b3b1.jpg': 337 / 640, 'e65a0ba027e5.jpg': 426 / 640, 'eab0bc5785fa.jpg': 318 / 640} : {};
+// Natural width/height for every plate file, both sets: scatterPlates needs
+// each plate's real aspect before its <img> has loaded (the box is sized and
+// placed up front, the pixels fade in after), so this can't be read from the
+// DOM. The English set had none until 2026-09-20 — PLATE_ASPECT's ternary
+// only ever filled in zh — so every English plate defaulted to a square box
+// (`|| 1` below) regardless of its real shape, and object-fit: contain then
+// painted the box's own background into the leftover margin on both sides
+// of whichever axis the real image was narrower on.
+const PLATE_ASPECT = window.__LANG === 'zh'
+  ? {'376d25daf9aa.jpg': 280 / 640, '3926a51d36d5.jpg': 640 / 622, '9e4725e1101e.jpg': 640 / 472, 'e265c76d268f.jpg': 426 / 640, 'e4772754b3b1.jpg': 337 / 640, 'e65a0ba027e5.jpg': 426 / 640, 'eab0bc5785fa.jpg': 318 / 640}
+  : {'3b119ebffab3.jpg': 475 / 640, 'b8dcbfe35cbd.jpg': 640 / 490, '38211f928ad5.jpg': 534 / 640, '171a382c9cc2.jpg': 531 / 640, '771aaf08cedb.jpg': 640 / 456, 'f34b78575d36.jpg': 640 / 326, '50e62b346c5f.jpg': 492 / 640, '5ac4f7fb652f.jpg': 640 / 237, '0bb22b56b263.jpg': 468 / 640};
 // Where a plate may live, in #cell's own coordinates. The viewport-aware
 // bounds let a reader drag beyond the resting sheet while the print rectangle
 // grows to include the visible domain; the state textures remain bounded.
@@ -180,9 +190,16 @@ function scatterPlates(plates) {
   const rects = [];
   for (const pl of plates) {
     const aspect = PLATE_ASPECT[pl.dataset.lqip] || 1;
-    const long = Math.round(rand(190, 280));
-    const w = aspect >= 1 ? long : Math.max(96, Math.round(long * aspect));
-    const h = aspect >= 1 ? Math.max(96, Math.round(long / aspect)) : long;
+    // The 96px floor is on the SHORT side, so it has to raise `long` (both
+    // sides together) rather than clamp the short side alone: clamping only
+    // the short side is what used to paint a black bar on the very-wide and
+    // very-tall plates (e.g. blake's 640x237) whenever the random draw put
+    // long near 190 -- the box kept long's width but forced height up to 96,
+    // which is no longer this image's own ratio.
+    const longAspect = Math.max(aspect, 1 / aspect);
+    const long = Math.round(Math.max(rand(190, 280), 96 * longAspect));
+    const w = aspect >= 1 ? long : Math.round(long * aspect);
+    const h = aspect >= 1 ? Math.round(long / aspect) : long;
     const xHi = Math.max(b.xMin, b.xMax - w), yHi = Math.max(b.yMin, b.yMax - h);
     let bx = b.xMin, by = b.yMin, best = Infinity;
     for (let t = 0; t < 40 && best > 0; t++) {
@@ -819,9 +836,6 @@ const sim = makeSim({ canvas, texW: Math.round(BASE_TEX_W / (mobileLayout() ? 4 
       doc.head.appendChild(style);
     }
     if (fe && fe.id === 'sh') {
-      const style = doc.createElement('style');
-      style.textContent = '.moss-publish-button:not(:disabled)::after { content: ""; position: absolute; inset: -5px; border: 1px solid currentColor; border-radius: 999px; opacity: 0; pointer-events: none; animation: landing-publish-cue 5.6s ease-out infinite; } @keyframes landing-publish-cue { 0%, 62% { opacity: 0; transform: scale(.96); } 68% { opacity: .42; transform: scale(1); } 78%, 100% { opacity: 0; transform: scale(1.05); } } @media (prefers-reduced-motion: reduce) { .moss-publish-button:not(:disabled)::after { animation: none; opacity: .28; } }';
-      doc.head.appendChild(style);
       const preview = doc.getElementById('moss-preview-iframe');
       const suppressPreviewLinks = () => {
         const previewDoc = preview && preview.contentDocument;
@@ -1002,6 +1016,71 @@ function measurePub() {
     '--pub-dx': (GEOM.cellW / 2 + SPILL - cx) + 'px', '--pub-dy': (GEOM.cellH / 2 - cy) + 'px' }))
     stage.style.setProperty(k, v);
   return true;
+}
+
+// ── Scene 2's Publish cue: a ring that leaves the window ──────────────────
+// Replaces the old cue (site owner, 2026-09-20): a small pulsing ring plus a
+// "Try publishing" label, both injected into shell.html's own document and
+// clipped by #box's overflow:hidden long before they could read as "the
+// whole periodical radiates outward". This version lives in a body-level
+// fixed layer -- a sibling of #stage, never a descendant -- so it can grow
+// past every ancestor's overflow:hidden on its way to and past the window
+// edge, and so it is never folded into a print (fold() only walks #stage).
+// Event-driven, not polled (R8: nothing runs at rest): synced from scenes()'s
+// own dispatch (2026-09-21, dropping an earlier setInterval(...,250) that
+// worked but ran forever) plus resize, a reduced-motion change, and the
+// button's own click -- never a timer or a rAF loop of its own, so there is
+// nothing left running once the reader is actually at rest. `phase` is
+// scenes()'s own state, already exactly "which named scene is current",
+// true for the whole of scene 2's own idle animation and false the instant a
+// wash to elsewhere starts (scenes('morph') runs before that wash's first
+// frame) -- a more precise signal than the shown/target/running() this cue
+// used to poll, and one this cue only ever reads. "Activated" lives as a
+// dataset flag on #pub-cue itself rather than a new top-level binding.
+const pubCue = $('pub-cue');
+function pubCueButton() {
+  const doc = shFrame.contentDocument;
+  const btn = doc && doc.querySelector('.moss-publish-button');
+  if (!btn) return null;
+  if (!btn.dataset.pubCueBound) {
+    btn.dataset.pubCueBound = '1';
+    btn.addEventListener('click', () => { pubCue.dataset.activated = '1'; syncPubCue(); });
+    // "nothing to publish on a cold boot" starts this button disabled;
+    // liveLoop's own breathe/growTo cycle enables and disables it again as
+    // the mock edits it drives come and go. Not a scene change, a resize, or
+    // a click -- a MutationObserver is the event-driven way to notice it
+    // rather than a poll.
+    new MutationObserver(syncPubCue).observe(btn, { attributes: true, attributeFilter: ['disabled', 'class'] });
+  }
+  return btn.disabled ? null : btn;
+}
+function syncPubCue() {
+  if (!pubCue) return;
+  const btn = !mobileLayout() && !pubCue.dataset.activated && phase === 'live' && !document.hidden ? pubCueButton() : null;
+  if (!btn) { pubCue.classList.remove('on'); return; }
+  // The button lives in an iframe with its own layout viewport; its own
+  // getBoundingClientRect() is in THAT viewport, not this fixed layer's.
+  // shFrame's own rect (in this document) versus its unscaled layout size
+  // gives the one ratio that maps iframe-local px onto real screen px,
+  // whatever #cell's own --s scale currently is.
+  const outer = shFrame.getBoundingClientRect();
+  const scale = outer.width / (shFrame.offsetWidth || 1);
+  const r = btn.getBoundingClientRect();
+  const cx = outer.left + (r.left + r.width / 2) * scale, cy = outer.top + (r.top + r.height / 2) * scale;
+  const r0 = Math.max(1, (r.width / 2) * scale);
+  pubCue.style.setProperty('--pub-ring-cx', cx + 'px');
+  pubCue.style.setProperty('--pub-ring-cy', cy + 'px');
+  pubCue.style.setProperty('--pub-ring-r0', String(r0));
+  // The scale that carries the ring's own radius past every one of the four
+  // edges: the farthest one from the button's own screen position, plus one
+  // more radius so the ring's stroke itself has fully crossed it too.
+  pubCue.style.setProperty('--pub-ring-k', String(Math.max(cx, innerWidth - cx, cy, innerHeight - cy) / r0 + 1));
+  pubCue.classList.add('on');
+}
+if (pubCue) {
+  addEventListener('resize', syncPubCue);
+  addEventListener('visibilitychange', syncPubCue);
+  matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', syncPubCue);
 }
 
 // ── Scene 4's targets: one circle per deploy target, run by d3-force ──────
@@ -3757,6 +3836,12 @@ function scenes(next) {
   if (next === 'write') writeLoop(from === 'morph');
   else if (next === 'live') liveLoop();
   else if (next === 'ships') enterScene3();
+  // Scene 2's Publish cue: this is its own dispatch, both ways -- 'live'
+  // starting is the only moment it may turn on, and 'live' ending (a wash
+  // to elsewhere sets phase to 'morph' before that wash's first frame) is
+  // the moment it must turn off, not up to 2+ seconds later when that wash
+  // finally lands.
+  syncPubCue();
 }
 
 // For the harness.

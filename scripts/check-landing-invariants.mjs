@@ -64,6 +64,11 @@
 //           an exit test.
 // I-default (checks, not the page) fault: a scratch script with
 //           `page.goto(base + '?carry=intent')` -- the static scan catches it.
+// I-plate, I-window-radius, I-pub-cue, I-header-scrim: added 2026-09-20 for
+//           the site owner's four visual-polish requests (scene 1 plate
+//           margins, scene 2's Publish cue, the preview window's corner
+//           radius, mobile scene 5's header contrast). Each function's own
+//           header comment carries its RED/GREEN record.
 //
 // Rules: every scene reach uses a real armed gesture plus window.__landing's
 // own restY()/state(), never a fixed sleep or a per-frame poll of the canvas.
@@ -78,6 +83,10 @@ const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
 
 // Scene boundaries in code-index terms; -1 is the intro (restY(-1) === 0).
 const SCENES = [-1, 0, 1, 2, 3, 4];
+// site/landing.js's own PHASE names for the two indices this file's new
+// checks read by name rather than a bare number -- PHASE itself lives in
+// that module's scope, not this process's, so the names are repeated here.
+const LIVE = 1, SHIPS = 2;
 
 // landing-harness.mjs's whenReady() is what found and closed this file's own
 // I-fuzz race (see the header above): state().ready can go true while boot's
@@ -486,6 +495,185 @@ async function iFuzzInvalidated(browsers) {
   }
 }
 
+// I-plate (site owner, 2026-09-20) fault: PLATE_ASPECT's ternary (site/
+// landing.js) only ever filled in the zh set -- the English (blake) set
+// defaulted every plate to aspect 1, `|| 1` -- so scatterPlates sized a
+// square box for an image of any real shape, and object-fit: contain then
+// painted the box's own #d9d2c4 background into whatever the square left
+// over. RED on that state (restored below, one line): every blake plate's
+// boxAspect/natAspect ratio was off by double digits, not 1%. GREEN once
+// PLATE_ASPECT carried real per-file ratios for both sets. A second,
+// independent fault was found composing the fix: the 96px short-side floor
+// clamped only the short side, so a very wide or very tall image (blake's
+// 640x237, aspect 2.7) still got a distorted box whenever the random draw
+// put `long` under ~short-floor*aspect -- fixed by raising `long` itself
+// instead of clamping the side computed from it.
+async function readPlateAspects(page) {
+  return page.evaluate(() => [...document.querySelectorAll('.plate')].map((pl) => {
+    const img = pl.querySelector('img');
+    const box = { w: pl.offsetWidth, h: pl.offsetHeight };
+    const nat = { w: img.naturalWidth, h: img.naturalHeight };
+    // Replicate object-fit: contain by hand against the box the page
+    // actually rendered -- not a second look at the aspect number
+    // scatterPlates used, which would only ever re-confirm its own math.
+    const scale = Math.min(box.w / nat.w, box.h / nat.h);
+    const cw = nat.w * scale, ch = nat.h * scale;
+    const c = document.createElement('canvas'); c.width = Math.round(box.w); c.height = Math.round(box.h);
+    const g = c.getContext('2d');
+    g.fillStyle = getComputedStyle(pl).backgroundColor; g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(img, (box.w - cw) / 2, (box.h - ch) / 2, cw, ch);
+    const uniform = (data) => { for (let i = 4; i < data.length; i += 4) if (data[i] !== data[0] || data[i + 1] !== data[1] || data[i + 2] !== data[2]) return false; return true; };
+    const edgeBar = ['top', 'bottom', 'left', 'right'].some((side) => {
+      const d = side === 'top' ? g.getImageData(0, 0, c.width, 1).data
+        : side === 'bottom' ? g.getImageData(0, c.height - 1, c.width, 1).data
+        : side === 'left' ? g.getImageData(0, 0, 1, c.height).data
+        : g.getImageData(c.width - 1, 0, 1, c.height).data;
+      return uniform(d);
+    });
+    return { id: pl.id, boxAspect: box.w / box.h, natAspect: nat.w / nat.h, edgeBar };
+  }));
+}
+async function iPlate(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const page = await browser.newPage(PRESETS.desktop);
+    await ready(page);
+    await page.waitForFunction(() => [...document.querySelectorAll('.plate img')].every((im) => im.classList.contains('in')), null, { timeout: 15000 });
+    const rows = await readPlateAspects(page);
+    for (const r of rows) {
+      const err = Math.abs(r.boxAspect - r.natAspect) / r.natAspect;
+      assert(err <= 0.01, `I-plate ${engineName}: ${r.id} box aspect ${r.boxAspect.toFixed(3)} vs natural ${r.natAspect.toFixed(3)} (${(err * 100).toFixed(1)}% off)`);
+      assert(!r.edgeBar, `I-plate ${engineName}: ${r.id} renders a solid-colour bar at a box edge`);
+    }
+    console.log(`${engineName}: I-plate all ${rows.length} plates render at their image's natural aspect (<=1% off) with no edge letterbox`);
+    await page.close();
+  }
+}
+
+// I-pub-cue (site owner, 2026-09-20; made event-driven 2026-09-21): the old
+// "Try publishing" label plus a small pulsing ring (site/ui/shell.html) is
+// replaced by a body-level ring layer (site/index.html #pub-cue), synced
+// from scenes()'s own dispatch rather than a poll -- R8 says the page does
+// no periodic work at rest. RED (#pub-cue's `phase === 'live'` condition in
+// syncPubCue changed to always-true, restored after): the ring stays on in
+// scene 3 too, where this asserts it must not. GREEN restored. A second RED,
+// for the timer assertion specifically (site/landing.js's own prior
+// `setInterval(syncPubCue, 250)`, before it was replaced by the scenes()/
+// resize/reduced-motion/click listeners below, restored after removing the
+// interval): 7-8 setInterval ticks over the 2s window instead of 0.
+async function iPubCue(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const page = await browser.newPage(PRESETS.desktop);
+    // Wraps every setInterval callback (registered at any time, including
+    // during boot) so a tick anywhere is visible -- counting calls to
+    // setInterval itself would miss an interval registered once at load and
+    // still firing, which is exactly the fault this exists to catch.
+    await page.addInitScript(() => {
+      window.__intervalTicks = 0;
+      const real = window.setInterval;
+      window.setInterval = function (fn, ms, ...rest) {
+        return real.call(this, (...args) => { window.__intervalTicks++; return fn(...args); }, ms, ...rest);
+      };
+    });
+    await ready(page);
+    await arm(page, gesturePos(engineName));
+    const anyTryPublishing = await page.evaluate(() => {
+      const docs = [document, document.getElementById('sh')?.contentDocument, document.getElementById('vd')?.contentDocument].filter(Boolean);
+      return docs.some((d) => d.body && d.body.innerText.includes('Try publishing') || d.body && (d.body.innerText.includes('試試發布') || d.body.innerText.includes('试试发布')));
+    });
+    assert(!anyTryPublishing, `I-pub-cue ${engineName}: "Try publishing" (or its zh strings) still appears in the DOM`);
+    await gotoScene(page, LIVE);
+    const atRest = await page.evaluate(() => {
+      const el = document.getElementById('pub-cue');
+      const cs = getComputedStyle(el);
+      return { on: el.classList.contains('on'), cx: parseFloat(cs.getPropertyValue('--pub-ring-cx')), cy: parseFloat(cs.getPropertyValue('--pub-ring-cy')), r0: parseFloat(cs.getPropertyValue('--pub-ring-r0')), k: parseFloat(cs.getPropertyValue('--pub-ring-k')) };
+    });
+    assert(atRest.on, `I-pub-cue ${engineName}: cue is off at rest in scene 2 (LIVE)`);
+    const rFinal = atRest.r0 * atRest.k;
+    const vp = page.viewportSize();
+    const exceeds = atRest.cx - rFinal < 0 && atRest.cx + rFinal > vp.width && atRest.cy - rFinal < 0 && atRest.cy + rFinal > vp.height;
+    assert(exceeds, `I-pub-cue ${engineName}: a ring's end-of-life box (${JSON.stringify(atRest)}, rFinal ${rFinal}) does not clear all four viewport edges (${vp.width}x${vp.height})`);
+    // Reset here, after settling at rest (boot's own short-lived polls, e.g.
+    // waiting for each iframe's window API, have already ticked and
+    // cleared by now) -- what is asserted is silence from THIS point.
+    await page.evaluate(() => { window.__intervalTicks = 0; });
+    await page.waitForTimeout(2000);
+    const ticks = await page.evaluate(() => window.__intervalTicks);
+    assert(ticks === 0, `I-pub-cue ${engineName}: ${ticks} setInterval tick(s) fired in 2s at rest in scene 2 (LIVE) -- R8 forbids periodic work at rest`);
+    await gotoScene(page, SHIPS);
+    const animCount = await page.evaluate(() => document.getElementById('pub-cue').getAnimations({ subtree: true }).length);
+    assert(animCount === 0, `I-pub-cue ${engineName}: ${animCount} ring animation(s) still running in scene 3, where the cue must be off`);
+    console.log(`${engineName}: I-pub-cue no "Try publishing" text; ring at rest clears the viewport on all four sides; zero animating outside scene 2; zero interval ticks in 2s at rest`);
+    await page.close();
+  }
+}
+
+// I-window-radius (site owner, 2026-09-20): #box shares the harvested
+// shell's own coordinate space 1:1 (the iframe is width/height:100%, no
+// separate zoom), so its border-radius is directly comparable to the
+// Publish button's own radius measured inside that iframe. moss-desktop's
+// own tokens.css: --moss-window-radius: 24px (mirrors Rust
+// WINDOW_CORNER_RADIUS), --moss-pill-size: 36px with border-radius
+// --moss-pill-radius (half the pill) = 18px -- a 24:18 relationship. RED
+// (site/index.html's --win-r reverted to its old 12px, restored after):
+// ratio 12/18 = 0.667, nowhere near 24/18 = 1.333. GREEN at --win-r: 24px.
+async function iWindowRadius(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const page = await browser.newPage(PRESETS.desktop);
+    await ready(page);
+    await arm(page, gesturePos(engineName));
+    await gotoScene(page, LIVE);
+    const { boxRadius, btnRadius } = await page.evaluate(() => {
+      const box = document.getElementById('box');
+      const btn = document.getElementById('sh').contentDocument.querySelector('.moss-publish-button');
+      return { boxRadius: parseFloat(getComputedStyle(box).borderRadius), btnRadius: btn.getBoundingClientRect().width / 2 };
+    });
+    const ratio = boxRadius / btnRadius, want = 24 / 18;
+    assert(Math.abs(ratio - want) < 0.02, `I-window-radius ${engineName}: box radius ${boxRadius}px, button radius ${btnRadius}px, ratio ${ratio.toFixed(3)} != moss-desktop's ${want.toFixed(3)}`);
+    console.log(`${engineName}: I-window-radius box ${boxRadius}px / button ${btnRadius}px matches moss-desktop's 24:18`);
+    await page.close();
+  }
+}
+
+// I-header-scrim (site owner, 2026-09-20): mobile scene 5's header (.brand,
+// .language-picker) sits over the moving closing film with no dark backing
+// of its own -- unlike the closing text, which gets #scrim (opacity var(
+// --scrim), itself riding on #five's own var(--xf)). Contrast is checked
+// against the worst case ANY frame could show behind a translucent
+// background: literal white, not a sampled frame -- provably safe rather
+// than dependent on this one clip (measured separately with ffmpeg's
+// signalstats over the whole loop: peak luma 215/255, well under white, so
+// real footage has more margin than this check demands). RED (the
+// site/index.html .brand/.language-picker background rule's own call site
+// deleted, restored after): contrast collapses to that of a fully
+// transparent background (~1:1, alpha 0). GREEN restored.
+function srgbToLinear(c) { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }
+function relativeLuminance([r, g, b]) { return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b); }
+function contrastRatio(rgb1, rgb2) { const [a, b] = [relativeLuminance(rgb1), relativeLuminance(rgb2)].sort((x, y) => y - x); return (a + 0.05) / (b + 0.05); }
+function parseRGBA(str) { const m = str.match(/[\d.]+/g).map(Number); return { r: m[0], g: m[1], b: m[2], a: m[3] ?? 1 }; }
+function compositeOverWhite({ r, g, b, a }) { return [r * a + 255 * (1 - a), g * a + 255 * (1 - a), b * a + 255 * (1 - a)]; }
+async function iHeaderScrim(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const page = await browser.newPage(PRESETS.phone);
+    await ready(page);
+    await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForFunction(() => window.__landing.state().xf === 1 && document.getElementById('five').classList.contains('on'), null, { timeout: 20000 });
+    const style = await page.evaluate(() => ({
+      brandBg: getComputedStyle(document.querySelector('.brand')).backgroundColor,
+      brandFg: getComputedStyle(document.querySelector('.brand .moss-wordmark')).color,
+      langBg: getComputedStyle(document.querySelector('.language-picker')).backgroundColor,
+      langFg: getComputedStyle(document.querySelector('.language-picker .nav-lang-current')).color,
+    }));
+    for (const [label, bgStr, fgStr] of [['brand', style.brandBg, style.brandFg], ['language-picker', style.langBg, style.langFg]]) {
+      const bg = parseRGBA(bgStr), fg = parseRGBA(fgStr);
+      assert(bg.a > 0.3, `I-header-scrim ${engineName}: .${label} background did not darken at xf=1 (${bgStr})`);
+      const cr = contrastRatio([fg.r, fg.g, fg.b], compositeOverWhite(bg));
+      assert(cr >= 4.5, `I-header-scrim ${engineName}: .${label} contrast ${cr.toFixed(2)} < 4.5 against a worst-case white frame (fg ${fgStr}, bg ${bgStr})`);
+      console.log(`${engineName}: I-header-scrim .${label} ${cr.toFixed(2)}:1 against a worst-case white frame`);
+    }
+    await page.close();
+  }
+}
+
 // I-default: every check script's own default navigation loads the
 // unflagged URL. A carry= baked into a literal .goto() call site was exactly
 // the historical bug (design doc: "the fixed driver was never made the
@@ -516,6 +704,10 @@ try {
   await iReduced(browsers);
   await iFuzz(browsers);
   await iFuzzInvalidated(browsers);
+  await iPlate(browsers);
+  await iPubCue(browsers);
+  await iWindowRadius(browsers);
+  await iHeaderScrim(browsers);
   await iDefault();
 } finally {
   await Promise.all(Object.values(browsers).map((b) => b.close()));
