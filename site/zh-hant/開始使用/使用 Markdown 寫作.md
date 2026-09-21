@@ -13,9 +13,10 @@ Markdown 格式是純文字加上少量符號：`#` 是標題，`**` 是粗體�
 
 ## 基礎語法
 
-在下方的真實編輯器中試試這些語法。範例已經填好，在你動手編輯之前不會自行播放。
+在下方的真實編輯器中試試這些語法，直接輸入即可。
 
-<moss-ui-demo lang="zh-hant" static></moss-ui-demo>
+<moss-stage>
+</moss-stage>
 
 需要完整的語法速查，可參考 [Markdown 語法速查表](https://www.markdownguide.org/basic-syntax/)，或 [Obsidian 的基礎格式語法](https://help.obsidian.md/syntax)。
 

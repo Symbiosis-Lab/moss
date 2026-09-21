@@ -8,6 +8,9 @@ children: false
 ---
 moss packs the markdown files and other media in your folder into a website. You can use any markdown editor, such as [Obsidian](https://obsidian.md/), or moss's built-in editor, to write and add other material. moss is macOS-only for now; Linux and Windows are coming in later releases.
 
+<moss-stage>
+</moss-stage>
+
 Please submit bugs and feature suggestions [on Github](https://github.com/Symbiosis-Lab/moss-releases/issues).
 
 ## Create your site
@@ -36,7 +39,7 @@ You can also control formatting from the keyboard:
 
 Your site's structure is your folder structure: every folder and markdown file becomes a page, and moss builds the top navigation from the file paths automatically. A folder page renders its child files and folders by default, and the home page renders every file.
 
-Create new folders and files in the editor and each becomes a new page. Above every page is a "+" — click it to [[Define pages with frontmatter|add properties]] such as a cover image, date, and subpage style.
+Create new folders and files in the editor and each becomes a new page: click **New Page** above the tree. Above every page is a **+** — click it and search for a property, such as **Cover**, to [[Define pages with frontmatter|add it]]; date and subpage style work the same way.<moss-scene name="add-and-edit-pages"></moss-scene>
 
 ![[editing.gif|Add and edit pages]]
 

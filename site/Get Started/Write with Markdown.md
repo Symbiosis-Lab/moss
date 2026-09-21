@@ -11,9 +11,10 @@ Because it's plain text, you can write in any editor, and your files always stay
 
 ## Basic syntax
 
-Try the syntax in the real editor below. The example is already filled in and stays still until you edit it.
+Try the syntax in the real editor below — just type into it directly.
 
-<moss-ui-demo lang="en" static></moss-ui-demo>
+<moss-stage>
+</moss-stage>
 
 For a full syntax reference, see the [Markdown cheat sheet](https://www.markdownguide.org/basic-syntax/) or [Obsidian's basic formatting syntax](https://help.obsidian.md/syntax).
 
