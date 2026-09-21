@@ -37,7 +37,11 @@ const BASELINE = {
   windowAssignments: 1,
   topLevelLets: 87,
   sceneComparisons: 14,
-  htmlBytes: 49493,
+  // Unit 0a: rose again -- the mobile header band's fix (one shared
+  // body::before band interpolating colour through --xf instead of two
+  // separate .brand/.language-picker background boxes) added net new
+  // comment explaining why, not new markup or a new element.
+  htmlBytes: 49555,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a

@@ -425,16 +425,16 @@
   }
 
   @media (max-width: 900px) {
-    body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; opacity: calc(1 - var(--xf)); background: linear-gradient(to bottom, var(--bg) 0 34px, color-mix(in srgb, var(--bg) 72%, transparent) 52px, transparent); }
-    /* The header sits outside #five, so it never inherited the closing
-       text's own scrim (#scrim is #closing-film's child, opacity var(--scrim)
-       riding on #five's own opacity var(--xf)) -- the site name and language
-       switch stayed unscrimmed over the moving film. Same two variables,
-       multiplied by hand here since this element is not one of #five's
-       descendants: at rest (xf 0) this is fully transparent, so nothing
-       shifts size or position, only opacity, which is already how --xf
-       drives every other mobile-only rule in this block. */
-    .brand, .language-picker { background: rgba(8, 10, 9, calc(var(--scrim, .72) * var(--xf))); }
+    /* One band through every scene, including 5, not a paper-coloured band
+       plus two separate dark boxes behind .brand/.language-picker (the
+       previous shape, which the owner found ugly). Same geometry, same
+       solid-then-fade gradient shape as scenes 1-4; only its colour now
+       rides --xf from --bg (#faf8f5, 250/248/245) to the closing film's own
+       dark tone (#080a09, 8/10/9) instead of fading the whole band's
+       opacity to zero -- the same rgb(calc(a + b*var(--xf)), ...) pattern
+       .brand/.language-picker's own color rules already use below, not
+       calc() inside color-mix()'s percentage argument. */
+    body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; --header-band: rgb(calc(250 - 242 * var(--xf)), calc(248 - 238 * var(--xf)), calc(245 - 236 * var(--xf))); background: linear-gradient(to bottom, var(--header-band) 0 34px, color-mix(in srgb, var(--header-band) 72%, transparent) 52px, transparent); }
     /* Belt and suspenders on landing.js's own !mobileLayout() gate: scene 2's
        cue is a desktop-only design (the brief scopes it that way), and this
        breakpoint is the same 900px mobileLayout() itself reads. */

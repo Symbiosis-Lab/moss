@@ -750,44 +750,112 @@ async function iWindowRadius(browsers) {
   }
 }
 
-// I-header-scrim (site owner, 2026-09-20): mobile scene 5's header (.brand,
-// .language-picker) sits over the moving closing film with no dark backing
-// of its own -- unlike the closing text, which gets #scrim (opacity var(
-// --scrim), itself riding on #five's own var(--xf)). Contrast is checked
-// against the worst case ANY frame could show behind a translucent
-// background: literal white, not a sampled frame -- provably safe rather
-// than dependent on this one clip (measured separately with ffmpeg's
-// signalstats over the whole loop: peak luma 215/255, well under white, so
-// real footage has more margin than this check demands). RED (the
-// site/index.html .brand/.language-picker background rule's own call site
-// deleted, restored after): contrast collapses to that of a fully
-// transparent background (~1:1, alpha 0). GREEN restored.
+// I-header-scrim (site owner, 2026-09-20; rewritten unit0a for the owner's
+// actual complaint: "the current dark background behind site name and
+// language picker in scene 5 on mobile is ugly; it should use at least a
+// band as the first 4 scene"). The previous shape gave .brand and
+// .language-picker each their own rgba(8,10,9,...) box -- two separate dark
+// boxes, exactly what read as ugly. Fixed (site/index.html) by deleting
+// that rule and letting the ONE shared header band (body::before, already
+// used by scenes 1-4) carry colour through scene 5 too, interpolating from
+// --bg to the closing film's own #080a09 as --xf rises instead of fading
+// the band's own opacity to zero -- same geometry, same solid-then-fade
+// gradient shape, so scene 5's header reads as the same band, only dark.
+// This invariant asserts that requirement directly: no background of
+// .brand/.language-picker's own, the band's own box identical between
+// scene 1 and scene 5 (no new element, no layout shift), and contrast
+// against the band's own colour at rest (xf=1) -- the band is opaque for
+// its first 34px, where the header sits, so there is no translucent frame
+// behind it left to composite against the way the old two-box rule needed.
+// RED (site/index.html's .brand,.language-picker background rule restored,
+// body::before's colour interpolation reverted to the old opacity fade):
+// the "no background of its own" assertion fails immediately -- .brand
+// carries its own rgba(8,10,9,...) box again. GREEN restored.
+//
+// Finding, not fixed here (explicitly out of this item's scope): sampling
+// contrast through the actual crossfade via a real slow touch-scroll (CDP,
+// Chromium only -- Playwright cannot synthesize this in mobile WebKit,
+// same limit check-landing-mobile.mjs already lives with) shows a genuine
+// dip to ~1.1:1 near xf=0.5. The header text colour and the band colour
+// are both linear interpolations through the same grey gamut in opposite
+// directions (text: black to white; band: near-white to near-black), so
+// they cross paths near the midpoint by construction, not from a wiring
+// bug. Reported below every run, never asserted against: a fix (a
+// non-linear easing keeping the two curves apart, or a transit-only text
+// treatment) is a design decision for the owner.
 function srgbToLinear(c) { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }
 function relativeLuminance([r, g, b]) { return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b); }
 function contrastRatio(rgb1, rgb2) { const [a, b] = [relativeLuminance(rgb1), relativeLuminance(rgb2)].sort((x, y) => y - x); return (a + 0.05) / (b + 0.05); }
 function parseRGBA(str) { const m = str.match(/[\d.]+/g).map(Number); return { r: m[0], g: m[1], b: m[2], a: m[3] ?? 1 }; }
-function compositeOverWhite({ r, g, b, a }) { return [r * a + 255 * (1 - a), g * a + 255 * (1 - a), b * a + 255 * (1 - a)]; }
+function readBandRgb(bgImageStr) {
+  const m = bgImageStr.match(/rgb\(([\d.]+),\s*([\d.]+),\s*([\d.]+)\)/);
+  return m ? [1, 2, 3].map((i) => Number(m[i])) : null;
+}
 async function iHeaderScrim(browsers) {
   for (const [engineName, browser] of Object.entries(browsers)) {
     const page = await browser.newPage(PRESETS.phone);
     await ready(page);
+    const geomAt = () => page.evaluate(() => {
+      const cs = getComputedStyle(document.body, '::before');
+      return { top: cs.top, left: cs.left, right: cs.right, width: cs.width, height: cs.height, zIndex: cs.zIndex, display: cs.display };
+    });
+    const geomScene1 = await geomAt();
     await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
     await page.waitForFunction(() => window.__landing.state().xf === 1 && document.getElementById('five').classList.contains('on'), null, { timeout: 20000 });
+    const geomScene5 = await geomAt();
+    assert(JSON.stringify(geomScene1) === JSON.stringify(geomScene5), `I-header-scrim ${engineName}: header band's own box differs between scene 1 (${JSON.stringify(geomScene1)}) and scene 5 (${JSON.stringify(geomScene5)})`);
     const style = await page.evaluate(() => ({
       brandBg: getComputedStyle(document.querySelector('.brand')).backgroundColor,
       brandFg: getComputedStyle(document.querySelector('.brand .moss-wordmark')).color,
       langBg: getComputedStyle(document.querySelector('.language-picker')).backgroundColor,
       langFg: getComputedStyle(document.querySelector('.language-picker .nav-lang-current')).color,
+      bandImage: getComputedStyle(document.body, '::before').backgroundImage,
     }));
-    for (const [label, bgStr, fgStr] of [['brand', style.brandBg, style.brandFg], ['language-picker', style.langBg, style.langFg]]) {
-      const bg = parseRGBA(bgStr), fg = parseRGBA(fgStr);
-      assert(bg.a > 0.3, `I-header-scrim ${engineName}: .${label} background did not darken at xf=1 (${bgStr})`);
-      const cr = contrastRatio([fg.r, fg.g, fg.b], compositeOverWhite(bg));
-      assert(cr >= 4.5, `I-header-scrim ${engineName}: .${label} contrast ${cr.toFixed(2)} < 4.5 against a worst-case white frame (fg ${fgStr}, bg ${bgStr})`);
-      console.log(`${engineName}: I-header-scrim .${label} ${cr.toFixed(2)}:1 against a worst-case white frame`);
+    for (const [label, bgStr] of [['brand', style.brandBg], ['language-picker', style.langBg]]) {
+      assert(parseRGBA(bgStr).a === 0, `I-header-scrim ${engineName}: .${label} has a background of its own (${bgStr}) -- one shared band was the ask, not per-element boxes`);
+    }
+    const bandRgb = readBandRgb(style.bandImage);
+    assert(bandRgb, `I-header-scrim ${engineName}: could not read the shared band's own colour from body::before`);
+    for (const [label, fgStr] of [['brand', style.brandFg], ['language-picker', style.langFg]]) {
+      const fg = parseRGBA(fgStr);
+      const cr = contrastRatio([fg.r, fg.g, fg.b], bandRgb);
+      assert(cr >= 4.5, `I-header-scrim ${engineName}: .${label} contrast ${cr.toFixed(2)} < 4.5 against the band's own colour (fg ${fgStr}, band ${JSON.stringify(bandRgb)})`);
+      console.log(`${engineName}: I-header-scrim .${label} ${cr.toFixed(2)}:1 against the shared band, at rest (xf=1)`);
     }
     await page.close();
   }
+  // Chromium only: mobile WebKit cannot be driven by synthesized touch
+  // events via Playwright/CDP (check-landing-mobile.mjs's own limit).
+  const page = await browsers.chromium.newPage(PRESETS.phone);
+  await ready(page);
+  const y3 = await page.evaluate(() => window.__landing.restY(3));
+  await page.evaluate((y) => scrollTo(0, y), y3);
+  await page.waitForFunction((s) => window.__landing.state().shown === s && !window.__landing.state().running, 3, { timeout: 20000 });
+  const cdp = await page.context().newCDPSession(page);
+  const samples = [];
+  let touchY = 700;
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 195, y: touchY }] });
+  for (let i = 0; i < 220; i++) {
+    touchY -= 6;
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 195, y: touchY }] });
+    await page.waitForTimeout(15);
+    const raw = await page.evaluate(() => ({ xf: window.__landing.state().xf, bandImage: getComputedStyle(document.body, '::before').backgroundImage, brandFg: getComputedStyle(document.querySelector('.brand .moss-wordmark')).color }));
+    const bandRgb = readBandRgb(raw.bandImage);
+    if (!bandRgb) continue;
+    const fg = parseRGBA(raw.brandFg);
+    samples.push({ xf: raw.xf, cr: contrastRatio([fg.r, fg.g, fg.b], bandRgb) });
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  assert(samples.length > 20, `I-header-scrim chromium: too few crossfade samples (${samples.length}) to judge the mid-transit minimum`);
+  for (const target of [0, 0.25, 0.5, 0.75, 1]) {
+    const nearest = samples.reduce((best, s) => Math.abs(s.xf - target) < Math.abs(best.xf - target) ? s : best);
+    console.log(`I-header-scrim chromium: xf~=${target} (actual ${nearest.xf.toFixed(2)}): contrast ${nearest.cr.toFixed(2)}:1`);
+  }
+  const min = Math.min(...samples.map((s) => s.cr));
+  const at = samples.find((s) => s.cr === min);
+  console.log(`I-header-scrim chromium: MINIMUM contrast through the crossfade is ${min.toFixed(2)}:1 at xf=${at.xf.toFixed(2)} (${samples.length} samples, real touch-scroll)`);
+  if (min < 3) console.log(`I-header-scrim: FINDING, not asserted against -- a real, visible low-contrast moment; see this function's header comment for why and whose decision fixing it is.`);
+  await page.close();
 }
 
 // I-default: every check script's own default navigation loads the
