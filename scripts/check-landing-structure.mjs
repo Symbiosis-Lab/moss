@@ -47,7 +47,11 @@ const BASELINE = {
   // its own top-level let; housekeeping folded it onto the existing const
   // contact record (contact.wasHeld) instead, restoring the count -- the
   // ratchet's own numbers only ever go down.
-  topLevelLets: 84,
+  // Unit 2 (2026-09-21), dissolve step C: fell 84 -> 83. The printable
+  // latch (set false on any capture failure, never reset) is deleted --
+  // every failure site now reports the fault and lets the existing retake
+  // loop try again instead of disabling washes for the rest of the session.
+  topLevelLets: 83,
   // Rose 14 -> 15 on 2026-09-21: the last scene's rest is a floor, not a point,
   // so a visitor can reach the footer on a short window. It is written as one
   // comparison against SHARE in the desktop drive. The scene table pays this
@@ -68,7 +72,11 @@ const BASELINE = {
   // each with the comment this file's style expects; the dead position/
   // inset deleted from #five's base rule is what kept this from rising
   // further still.
-  htmlBytes: 54304,
+  // Unit 2 (2026-09-21), dissolve step B: rose 54304 -> 54350. One
+  // <script src="watercolor-capture.js"> tag: the painter registry
+  // landing.js's own capture now routes the Mandelbrot's two capture sites
+  // through, instead of each inlining its own blind-toDataURL fallback.
+  htmlBytes: 54350,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a
@@ -103,7 +111,17 @@ const BASELINE = {
   // case are deleted -- desktop stays on watchScrollDesktop through the
   // close now, the DEPLOY..SHARE boundary commits the same way every other
   // one does. Locked in the same commit that earned it.
-  scriptBytes: 246178,
+  // Unit 2 (2026-09-21), dissolve steps B/C: rose 246178 -> 248954. fold()'s
+  // canvas branch and rasterScene3Artifact's 'sk' branch (the only two
+  // sites that ever captured the Mandelbrot canvas) now call
+  // WatercolorCapture.painters.webgl instead of inlining
+  // mossCaptureFrame()-or-blind-toDataURL; a missing scene 3 artifact
+  // degrades to its own gap instead of throwing the whole print away; the
+  // new captureFaults/reportCaptureFault report every degrade on
+  // __landing's own read side. Real new capability -- an honest per-element
+  // fallback and fault reporting where there was a silent hole and a
+  // session-wide throw -- not unlocked bloat.
+  scriptBytes: 248954,
 };
 
 function countWindowAssignments(text) {

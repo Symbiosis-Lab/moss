@@ -2054,13 +2054,23 @@ async function fold(doc, liveRoot, options = {}) {
     // all, so the source is redundant for a print and safe to drop.
     if (tag === 'SOURCE') { drop.push(C); continue; }
     if (tag === 'IFRAME' || tag === 'CANVAS') {
+      // Only ever the Mandelbrot's live WebGL2 field (the 'nb' card; 'sk'
+      // is captured directly, in rasterScene3Artifact). Named explicitly as
+      // 'webgl' rather than left to classify()'s tag-based default (which
+      // is the 2D painter) -- that default would reintroduce the blind
+      // toDataURL this routing exists to remove.
       if (tag === 'CANVAS' && options.snapshotCanvases && L.width && L.height) {
-        try {
+        const hole = doc.createElement('div'); hole.setAttribute('style', `display:block;width:${L.clientWidth || L.width}px;height:${L.clientHeight || L.height}px;`); if (L.id) hole.id = L.id; hole.className = L.className;
+        C.replaceWith(hole);
+        work.push(capped(WatercolorCapture.painters.webgl(L, { w: L.width, h: L.height, dpr: 1 }), FETCH_MS, 'canvas capture timed out').then((r) => {
+          if (!r.ok) { reportCaptureFault(`canvas ${L.id || 'webgl'}: ${r.reason}`); return; } // hole already placed: the same fallback this branch always showed on failure
           const im = doc.createElement('img');
           im.setAttribute('style', `display:block;width:${L.clientWidth || L.width}px;height:${L.clientHeight || L.height}px;`);
           im.id = L.id; im.className = L.className;
-          im.src = L.mossCaptureFrame ? L.mossCaptureFrame() : L.toDataURL('image/png'); C.replaceWith(im); continue;
-        } catch (e) { /* a tainted sketch canvas falls back to its sized hole */ }
+          im.src = r.canvas.toDataURL('image/png');
+          hole.replaceWith(im);
+        }).catch((e) => reportCaptureFault(`canvas ${L.id || 'webgl'}: ${e.message}`)));
+        continue;
       }
       const hole = doc.createElement('div'); hole.setAttribute('style', `display:block;width:${L.clientWidth}px;height:${L.clientHeight}px;` + (L.getAttribute('style') || '')); if (L.id) hole.id = L.id; hole.className = L.className; C.replaceWith(hole); continue;
     }
@@ -2566,9 +2576,17 @@ async function rasterScene3Artifact(id) {
   if (id === 'sk') {
     const canvas = doc.querySelector('canvas');
     if (!canvas) return null;
-    const image = new Image(); image.src = canvas.mossCaptureFrame ? canvas.mossCaptureFrame() : canvas.toDataURL();
-    await capped(image.decode(), FETCH_MS, 'sketch frame timed out');
-    return image;
+    // mandelbrot-renderer.js's own field, via the registry's webgl painter:
+    // same mossCaptureFrame hook, no blind toDataURL fallback. drawImage
+    // accepts its canvas the same as it accepted the Image this returned
+    // before. A timeout/declared failure degrades to a missing artifact
+    // (takePrint's own artifactImages check), never a rejection that would
+    // take the whole print down with it.
+    try {
+      const r = await capped(WatercolorCapture.painters.webgl(canvas, { w: canvas.width, h: canvas.height, dpr: 1 }), FETCH_MS, 'sketch frame timed out');
+      if (!r.ok) reportCaptureFault(`sk: ${r.reason}`);
+      return r.ok ? r.canvas : null;
+    } catch (e) { reportCaptureFault(`sk: ${e.message}`); return null; }
   }
   try { return await rasterDoc(doc, Math.round(c.width), Math.round(c.height), { snapshotCanvases: true }); }
   catch (e) { console.warn(`Artifact ${id}: ${e.message}`); return null; }
@@ -2633,6 +2651,11 @@ let captures = 0, inFlight = 0, peakInFlight = 0;
 // image that slips into a print despite the .sib/.plate exclusions shows up
 // here as a byte count instead of as an intermittent drag failure.
 let maxPrintImgBytes = 0;
+// A painter or artifact a print degraded past rather than threw away.
+// Bounded so a fault firing every tick cannot grow this unbounded.
+const captureFaults = [];
+function reportCaptureFault(where) { captureFaults.push({ t: performance.now(), where }); if (captureFaults.length > 20) captureFaults.shift(); }
+landing.captureFaults = () => captureFaults.slice();
 async function capture(scene) {
   // Checked here, not by letting an outside caller replace this function's
   // export, so it reaches every caller of capture() including the ones
@@ -2692,7 +2715,12 @@ async function takePrint(scene) {
   ];
   const artifactJobs = artifactIds.map((id) => rasterScene3Artifact(id));
   const [stageImg, shell, ...artifactImages] = await Promise.all([...jobs, ...artifactJobs]);
-  if (artifactIds.some((_, i) => !artifactImages[i])) throw new Error('scene 3 artifact raster failed: ' + artifactIds.filter((_, i) => !artifactImages[i]).join(', '));
+  // A missing artifact degrades to its own honest gap -- drawScene3Artifacts
+  // already skips an id with no image (its `if (!im || !p) continue`) --
+  // rather than throwing the whole print away, which used to take every
+  // other scene's wash down with it for the rest of the session (capture()'s
+  // callers latch printable=false on any throw here).
+  artifactIds.forEach((id, i) => { if (!artifactImages[i]) reportCaptureFault(`scene3 artifact ${id}`); });
   const { frameImg, innerImg, innerRadius } = shell;
   // The inner frame's own rect (rasterFrame's, local to the shell) is
   // shifted onto the box's, in the cell's coordinates: the shell's viewport
@@ -2748,11 +2776,13 @@ const setSheet = (scene, c) => {
   if (!c || c.__printGeneration !== printGeneration) return false;
   sheets[scene] = c; shownAt = performance.now(); shownSeq++; return true;
 };
-// Prints are the wash's. Reduced motion cuts, a machine without float render
-// targets cuts, and a scene whose print has proved impossible cuts too; none of
-// them needs a capture, and the retake loop was taking one every second anyway.
-let printable = true;
-const washing = () => !!sim && !reduce && printable;
+// Prints are the wash's. Reduced motion cuts and a machine without float
+// render targets cuts (sim is then never created); neither needs a capture.
+// A scene whose capture failed once used to cut for the rest of the session
+// too (a `printable` latch, set false and never reset) -- deleted: every
+// site of a capture failure now reports the fault and lets the existing
+// retake loop try again, instead of disabling washes for good.
+const washing = () => !!sim && !reduce;
 const primed = () => !washing() || needed(shown).every((n) => sheets[n]);   // a cut needs no prints
 // The article iframe nested inside a scene's own shell (the preview pane),
 // if this scene has one, and its offscreen `<img>`s by the same on-screen
@@ -2848,7 +2878,11 @@ async function takeOthers(list = neighbours(shown)) {
     // and repeatedly switch the live stage while retrying. Use the existing
     // cut fallback for this visit, then restore the visible scene below.
     try { setSheet(other, await capture(other)); }
-    catch (e) { printable = false; console.warn('Watercolor unavailable:', e.message); break; }
+    // A capture failure here is this visit's, not the session's: report it
+    // and stop this tick's loop (the comment above already covers why not
+    // retrying immediately matters) rather than latching printable=false,
+    // which used to disable every wash for good after one bad capture.
+    catch (e) { reportCaptureFault(`takeOthers ${other}: ${e.message}`); break; }
     finally { restoreImgs(); }
   }
   // The reader may have crossed a boundary while the foreignObject capture was
@@ -3956,8 +3990,11 @@ async function ready() {
   placeScene3Artifacts(); s3Initialized = true;
   printExpanded = true; setPrintRect(currentPrintRect());
   // a print that never arrives must not hold the page shut: with none, the
-  // scenes cut, which is the path reduced motion already takes
-  if (washing() && needed(shown).length) { try { setSheet(shown, await capture(shown)); await takeOthers(mobileLayout() ? neighbours(shown) : washable.filter((scene) => scene !== shown)); } catch (e) { printable = false; console.warn('no prints:', e.message); } }
+  // scenes cut, which is the path reduced motion already takes. Reported
+  // rather than latched permanently unprintable -- retakeShown's own tick
+  // (below) already retries a late/failed print gracefully; boot's first
+  // attempt failing is this attempt's problem, not the rest of the session's.
+  if (washing() && needed(shown).length) { try { setSheet(shown, await capture(shown)); await takeOthers(mobileLayout() ? neighbours(shown) : washable.filter((scene) => scene !== shown)); } catch (e) { reportCaptureFault(`boot: ${e.message}`); } }
   booted = true;
   onScroll(0); if (target !== shown && primed()) runJoin(); else still(shown);
   document.documentElement.dataset.ready = '1';
