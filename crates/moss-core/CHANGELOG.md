@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`sort::cmp_labels`** — the one comparator for ordering user-visible listing labels by title. Case is a tiebreak, not a primary key, so `mao` now sorts between `Kayla` and `Scarly` instead of after every capitalised name. All title-axis and dateless-tiebreak label sorts now route through it.
+- **`:::grid N {scroll}`** — keeps a grid's row on one line instead of it wrapping or collapsing; `N` becomes how many cards fit in view at once, with a slice of the next one showing as the cue to scroll. `label="…"` names the row for assistive technology. `.summary` still replaces the whole container when both are written on one fence, so `scroll` never reaches the page in that case.
 
 ### Fixed
 

@@ -2103,6 +2103,8 @@ mod tests {
             classes: String::new(),
             cells: vec![vec![figure_block(None)]],
             width: Some("page".to_string()),
+            scroll: false,
+            label: None,
         });
         let mut out = String::new();
         hooks.render_shortcode(&mut out, &grid, None);
@@ -2131,6 +2133,8 @@ mod tests {
             classes: String::new(),
             cells: vec![vec![figure_block(Some("screen"))]],
             width: None,
+            scroll: false,
+            label: None,
         });
         let mut out = String::new();
         hooks.render_shortcode(&mut out, &grid, None);

@@ -3878,11 +3878,14 @@ article.container > hr {
   --moss-table-shadow: rgba(0, 0, 0, 0.55);
 }
 
-.moss-table-scroll:focus-visible {
+.moss-table-scroll:focus-visible,
+.moss-grid[data-scroll]:focus-visible {
   /* ui-accent, like every other focus ring in this file. accent-quiet is an
      ambient hairline color: in dark mode it composites to 1.19:1 against the
      page, so the one indicator telling a keyboard user they are inside a
-     scrollable table was effectively invisible (WCAG 1.4.11, moss#1047). */
+     scrollable table was effectively invisible (WCAG 1.4.11, moss#1047).
+     Shared verbatim with `:::grid N {scroll}`'s scrolling row — same
+     affordance, same ring, one declaration. */
   outline: 2px solid var(--moss-color-ui-accent);
   outline-offset: 2px;
 }
@@ -6198,6 +6201,88 @@ a.moss-grid-card:hover {
   }
 }
 
+/* Scrolling row (`:::grid N {scroll}`): the row stays on ONE line and the
+   reader drags it sideways, with a slice of the next card as the cue —
+   `data-columns` reads as "how many fit in view" rather than "how many per
+   row". Keyed on `.moss-grid[data-scroll]` alone, never a parent selector
+   or `article.container >`: a scroll grid can sit nested inside a fenced
+   div or an embed wrapper, and the mechanics must not depend on what
+   contains it. No JS, no `scroll-behavior: smooth`, no hidden scrollbar. */
+.moss-grid[data-scroll] {
+  grid-auto-flow: column;
+  overflow-x: auto;
+  scroll-snap-type: inline proximity;
+  overscroll-behavior-inline: contain;
+  /* CSS Overflow §3: once one axis is non-`visible`, the other computes to
+     `auto` too — so this box clips the BLOCK axis as a side effect of
+     scrolling the inline one. Without this, a card's focus ring near the
+     row's top/bottom edge would be cut by the same box that clips the
+     scroll. */
+  padding-block: 4px;
+}
+
+/* `[data-columns]` (present, any value) matches the same specificity as the
+   per-count `.moss-grid[data-columns="N"]` rules above (one class + two
+   attributes each) and sits later in the file, so it wins regardless of N —
+   an ordinary `.moss-grid[data-scroll]` selector is one attribute lighter
+   and would lose every one of them. Sizing comes from `grid-auto-columns`
+   below instead. */
+.moss-grid[data-scroll][data-columns] {
+  grid-template-columns: none;
+}
+
+.moss-grid[data-scroll] > .moss-grid-card {
+  min-width: 0;
+  scroll-snap-align: start;
+}
+
+/* Every track is the same size, including the one peeking past the edge, so
+   `.moss-grid-card` widths stay uniform whether a card is fully visible or
+   half cut off: `grid-auto-columns` applies to ALL columns alike under
+   `grid-auto-flow: column`, not just the ones a fixed template would have
+   named. Discrete per-count rules — not a `calc()` division reading
+   `data-columns` through a custom property — to match the existing
+   `.moss-grid[data-columns="N"]` rules this counters.
+
+   N visible cards need N gaps subtracted, not N-1: one between each pair of
+   the N cards, PLUS one more between the Nth card and the peeking card after
+   it. Solving N·card + N·gap + peek = 100% for card gives
+   `card = (100% - peek - N·gap) / N` — drop a gap and the peek promised by
+   `--moss-grid-scroll-peek` silently shrinks by one gap's width, because the
+   peeking card starts a whole gap earlier than the formula assumed. */
+.moss-grid[data-scroll][data-columns="1"] {
+  grid-auto-columns: calc(
+    100% - var(--moss-grid-scroll-peek, 2.5rem) - var(--moss-space-md)
+  );
+}
+.moss-grid[data-scroll][data-columns="2"] {
+  grid-auto-columns: calc(
+    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 2 * var(--moss-space-md)) / 2
+  );
+}
+.moss-grid[data-scroll][data-columns="3"] {
+  grid-auto-columns: calc(
+    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 3 * var(--moss-space-md)) / 3
+  );
+}
+.moss-grid[data-scroll][data-columns="4"] {
+  grid-auto-columns: calc(
+    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 4 * var(--moss-space-md)) / 4
+  );
+}
+
+/* The wrapping-grid collapse above is wrong for a scroll row — collapsing to
+   `1fr` would leave one full-width card per implicit column, so a keyboard
+   or trackpad drag away from it. It stays a scroller, just showing less: a
+   card and a third, the same "there's more" cue at a size a phone can read.
+   `[data-scroll][data-columns]` (presence) ties the desktop per-count rules'
+   specificity and sits later in the file, so it overrides all four. */
+@media (max-width: 768px) {
+  .moss-grid[data-scroll][data-columns] {
+    grid-auto-columns: calc(100% / 1.3);
+  }
+}
+
 /* Gallery Shortcode
  *
  * Two sizing modes, and they are NOT one rule with a different first argument
@@ -7272,6 +7357,26 @@ body:not(.immersive-fs-active) main > article.container > *:not(.immersive-ifram
 
   .moss-colophon {
     display: none;
+  }
+
+  /* `scroll` has no reader to drag it on paper: unwrap to the ordinary
+     wrapping grid so cards flow onto as many printed pages as they need,
+     rather than being cropped to whatever was on screen when print fired. */
+  .moss-grid[data-scroll] {
+    grid-auto-flow: row;
+    overflow: visible;
+  }
+  .moss-grid[data-scroll][data-columns="1"] {
+    grid-template-columns: var(--moss-grid-ratio, minmax(0, 1fr));
+  }
+  .moss-grid[data-scroll][data-columns="2"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(2, minmax(0, 1fr)));
+  }
+  .moss-grid[data-scroll][data-columns="3"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(3, minmax(0, 1fr)));
+  }
+  .moss-grid[data-scroll][data-columns="4"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(4, minmax(0, 1fr)));
   }
 }
 

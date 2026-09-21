@@ -139,6 +139,14 @@ describe('parseAttrKvSpans', () => {
     expect(kvs.map((k) => k.key)).toEqual(['image']);
   });
 
+  test('the `scroll` bare flag is consumed, not an error', () => {
+    // MIRROR of moss-core attrs.rs: `scroll` is recognized the same way the
+    // width tokens are, so a `:::grid {scroll label="…"}` line still gets
+    // `label=` highlighted instead of the whole block going dark.
+    const kvs = parseAttrKvSpans('{scroll label="Related articles"}')!;
+    expect(kvs.map((k) => k.key)).toEqual(['label']);
+  });
+
   test('a malformed item discards the WHOLE block, as Rust does', () => {
     // `!` is not a key start → InvalidKey, which aborts. `image` parsed fine
     // and is still dropped: matching `.unwrap_or_default()` at every Rust

@@ -48,6 +48,13 @@ pub struct AttrBlock {
     /// not specify a width — emitters should omit `data-width` in that
     /// case so the HTML stays sparse and themes can target the absence.
     pub width: Option<&'static str>,
+    /// `scroll` bare flag. Recognized here — alongside the width tokens —
+    /// so the attribute parser doesn't reject a block on an unrelated
+    /// `AttrError::InvalidKey` just because a shortcode's fence carries this
+    /// keyword. Only `:::grid` reads it (a horizontally scrolling row);
+    /// every other shortcode that shares this parser leaves it unread, so
+    /// writing `scroll` on one is inert rather than an error.
+    pub scroll: bool,
 }
 
 impl AttrBlock {
@@ -56,6 +63,7 @@ impl AttrBlock {
             && self.id.is_none()
             && self.kvs.is_empty()
             && self.width.is_none()
+            && !self.scroll
     }
 
     /// Convenience for renderers: get the value for a key.
@@ -210,9 +218,14 @@ pub fn parse_attrs_spanned(input: &str) -> Result<(AttrBlock, Vec<KvSpan>), Attr
                         // width tokens (`body | wide | page | screen`) plus
                         // the alias `full` (→ `screen`) as bare flags for
                         // hero / gallery / grid / embed / image-wrapper
-                        // sizing. Any other bare keyword is still an error.
+                        // sizing. `scroll` is a second bare flag, grid-only
+                        // in practice but recognized generically here for the
+                        // same reason the width tokens are. Any other bare
+                        // keyword is still an error.
                         if let Some(width) = match_width_token(&key) {
                             block.width = Some(width);
+                        } else if key == "scroll" {
+                            block.scroll = true;
                         } else {
                             return Err(AttrError::InvalidKey { token: key });
                         }

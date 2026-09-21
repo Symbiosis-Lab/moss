@@ -322,6 +322,43 @@ fn key_starting_with_digit_is_invalid_token() {
     assert!(matches!(e, AttrError::InvalidKey { .. }));
 }
 
+// ── `scroll` bare flag ───────────────────────────────────────────
+
+#[test]
+fn scroll_bare_flag_is_recognized() {
+    let b = ok("{scroll}");
+    assert!(b.scroll);
+    assert!(b.classes.is_empty());
+    assert!(b.width.is_none());
+}
+
+#[test]
+fn scroll_flag_makes_block_non_empty() {
+    let b = ok("{scroll}");
+    assert!(!b.is_empty());
+}
+
+#[test]
+fn scroll_flag_with_other_attrs() {
+    let b = ok(r#"{cols=3 scroll label="Related"}"#);
+    assert!(b.scroll);
+    assert_eq!(b.get("cols"), Some("3"));
+    assert_eq!(b.get("label"), Some("Related"));
+}
+
+#[test]
+fn scroll_flag_coexists_with_width_token() {
+    let b = ok("{wide scroll}");
+    assert_eq!(b.width, Some("wide"));
+    assert!(b.scroll);
+}
+
+#[test]
+fn scroll_flag_does_not_become_class() {
+    let b = ok("{scroll}");
+    assert!(b.classes.is_empty());
+}
+
 #[test]
 fn lonely_equals_is_invalid_token() {
     let e = err("{=foo}");

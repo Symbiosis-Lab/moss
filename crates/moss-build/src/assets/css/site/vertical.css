@@ -279,6 +279,20 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   grid-template-columns: var(--moss-grid-ratio, repeat(4, minmax(0, 1fr)));
 }
 
+/* A wrapping grid's overflow cards already stack along the BLOCK axis under
+   vertical-rl — the same axis the page itself scrolls (horizontally, between
+   reading columns) — so they ride the page's own scroll for free. `scroll`
+   would instead need to scroll the INLINE axis (vertically, within one
+   column), a second scroller perpendicular to the page's; it is a no-op
+   here and falls back to the wrapping layout. Does not touch
+   `grid-template-columns` — the per-count rules just above already restore
+   it for this same `.moss-grid[data-columns="N"]` selector, scroll or not. */
+[data-typesetting="vertical"] .moss-grid[data-scroll] {
+  grid-auto-flow: row;
+  overflow: visible;
+  scroll-snap-type: none;
+}
+
 /* ── Child summary cards (vertical mode) ── */
 /* The list card is site.css's card rotated, nothing else: `.moss-card-row`'s
    flex row already runs along the inline axis, which vertical-rl turns

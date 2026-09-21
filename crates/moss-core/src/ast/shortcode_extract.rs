@@ -182,6 +182,8 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
     };
     let classes = parsed.class_string();
     let width = parsed.width.map(str::to_string);
+    let scroll = parsed.scroll;
+    let label = parsed.get("label").map(str::to_string);
 
     let mut columns: u32 = 1;
     let mut ratio: Option<String> = None;
@@ -244,6 +246,8 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
             classes,
             cells,
             width,
+            scroll,
+            label,
         },
         found_legacy_dash,
         fragment_warnings,

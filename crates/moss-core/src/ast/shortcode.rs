@@ -179,6 +179,18 @@ pub struct GridShortcode {
     /// a width — the emitter omits `data-width` so the HTML stays sparse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<String>,
+    /// From the bare `scroll` keyword: the row stays on one line and the
+    /// reader scrolls it sideways instead of it wrapping/collapsing.
+    /// `data-columns` then reads as "how many cards fit in view at once"
+    /// rather than "how many per row".
+    #[serde(default)]
+    pub scroll: bool,
+    /// Accessible name for the scrolling row (`label="…"`). Only meaningful
+    /// alongside `scroll` — rendered as `aria-label` (with `role="region"`)
+    /// on the wrapping element; `None` when the author did not set it, or
+    /// when the grid never became a scroll region in the first place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// Arguments for [`Shortcode::Hero`].

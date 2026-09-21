@@ -87,7 +87,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-align-right` | standalone | Floats an image to the right of body text (editorial runaround). Symmetric counterpart to `.moss-align-left`. Mirrors WordPress's `alignright` convention. |
 | `.moss-article-title` | instance | Article-page H1 title emitted from frontmatter. |
 | `.moss-heading-anchor` | instance | Clickable permalink appended inside every author-written body heading that carries a slug id; links to the heading's `#`-fragment. The auto-injected `moss-article-title` H1 is emitted separately and gets no anchor. |
-| `.moss-grid` | container | Generic grid container (used by profiles, link previews, etc.). Modifier classes: `profiles`, `featured`, `no-cards`. v1 adds `data-width` (P9). |
+| `.moss-grid` | container | Generic grid container (used by profiles, link previews, etc.). Modifier classes: `profiles`, `featured`, `no-cards`, `summary`. `summary` REPLACES this container rather than decorating it: the fence emits `.moss-cards-container > .moss-cards[data-layout="list"]` instead, so a `.moss-grid` never reaches the page and a column count is dropped — `scroll` is dropped the same way when both are written on one fence. v1 adds `data-width` (P9); a later release adds `data-scroll`. |
 | `.moss-grid-card` | instance | Card instance inside `.moss-grid`. Today emits sibling classes `link-card` / `friend-card` / `no-cards`; v1 collapses to `data-kind`. |
 | `.moss-gallery` | container | Image gallery container. v1 adds `data-width` (P9). |
 | `.moss-gallery-item` | instance | Single image entry inside `.moss-gallery`. |

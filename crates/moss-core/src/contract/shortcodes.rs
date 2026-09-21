@@ -26,6 +26,10 @@ pub struct ShortcodeAttrSpec {
     /// scope asset search to these kinds. Empty for plain attrs
     /// (`cols=`, `button=`, …).
     pub asset_kinds: &'static [ExtKind],
+    /// True for a bare keyword inserted WITHOUT `=` (`{scroll}`). False (the
+    /// default shape of every attr in this catalog before this field
+    /// existed) is an ordinary `key=value` attr.
+    pub flag: bool,
 }
 
 /// The full authoring contract for one shortcode.
@@ -59,8 +63,8 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
     ) = match kind {
         ShortcodeKind::Subscribe => (
             &[
-                ShortcodeAttrSpec { name: "button", asset_kinds: &[] },
-                ShortcodeAttrSpec { name: "placeholder", asset_kinds: &[] },
+                ShortcodeAttrSpec { name: "button", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "placeholder", asset_kinds: &[], flag: false },
             ],
             None,
             "subscribe {button=\"${1:Subscribe}\"}\n:::",
@@ -71,7 +75,7 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
             "buttons\n[${1:Get started}](${2:/})\n:::",
         ),
         ShortcodeKind::Gallery => (
-            &[ShortcodeAttrSpec { name: "cols", asset_kinds: &[] }],
+            &[ShortcodeAttrSpec { name: "cols", asset_kinds: &[], flag: false }],
             None,
             "gallery {cols=${1:3}}\n![](${2:photo.jpg})\n:::",
         ),
@@ -80,33 +84,36 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
                 ShortcodeAttrSpec {
                     name: "image",
                     asset_kinds: &[ExtKind::Image, ExtKind::Video],
+                    flag: false,
                 },
-                ShortcodeAttrSpec { name: "wide", asset_kinds: &[] },
+                ShortcodeAttrSpec { name: "wide", asset_kinds: &[], flag: false },
             ],
             Some("image"),
             "hero {image=${1:photo.jpg}}\n# ${2:Title}\n${3:Subtitle}\n:::",
         ),
         ShortcodeKind::Grid => (
             &[
-                ShortcodeAttrSpec { name: "cols", asset_kinds: &[] },
-                ShortcodeAttrSpec { name: "wide", asset_kinds: &[] },
+                ShortcodeAttrSpec { name: "cols", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "wide", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "scroll", asset_kinds: &[], flag: true },
+                ShortcodeAttrSpec { name: "label", asset_kinds: &[], flag: false },
             ],
             None,
             "grid {cols=${1:2}}\n${2:cell one}\n+++\n${3:cell two}\n:::",
         ),
         ShortcodeKind::Recent => (
             &[
-                ShortcodeAttrSpec { name: "count", asset_kinds: &[] },
-                ShortcodeAttrSpec { name: "since", asset_kinds: &[] },
-                ShortcodeAttrSpec { name: "last", asset_kinds: &[] },
+                ShortcodeAttrSpec { name: "count", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "since", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "last", asset_kinds: &[], flag: false },
             ],
             None,
             "recent {count=${1:5}}\n${2:No posts yet.}\n:::",
         ),
         ShortcodeKind::Apply => (
             &[
-                ShortcodeAttrSpec { name: "placeholder", asset_kinds: &[] },
-                ShortcodeAttrSpec { name: "button", asset_kinds: &[] },
+                ShortcodeAttrSpec { name: "placeholder", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "button", asset_kinds: &[], flag: false },
             ],
             None,
             "apply {button=\"${1:Apply}\"}\n:::",
@@ -197,5 +204,17 @@ mod tests {
                 e.name
             );
         }
+    }
+
+    #[test]
+    fn grid_scroll_is_a_flag_attr_label_is_not() {
+        let grid = catalog()
+            .into_iter()
+            .find(|e| e.kind == ShortcodeKind::Grid)
+            .expect("grid entry");
+        let scroll = grid.attrs.iter().find(|a| a.name == "scroll").expect("scroll attr");
+        assert!(scroll.flag, "`scroll` inserts without `=`, editors need `flag: true`");
+        let label = grid.attrs.iter().find(|a| a.name == "label").expect("label attr");
+        assert!(!label.flag, "`label` takes a value; it is not a bare flag");
     }
 }

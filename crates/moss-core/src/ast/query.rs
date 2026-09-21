@@ -483,6 +483,8 @@ mod tests {
             classes: String::new(),
             cells: vec![cell],
             width: None,
+            scroll: false,
+            label: None,
         }))]);
         match find_first_block_image(&doc) {
             Some(Inline::Image { src, .. }) => {

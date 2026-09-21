@@ -1313,7 +1313,13 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-columns",
                 values: &["1", "2", "3", "4"],
                 default: "",
-                description: "How many cards sit on one line of the grid, from `:::grid N`. Same track count at every viewport width — there is no mobile collapse to a single column, so a grid of cards and a grid of short text lines both keep their authored count on a phone. A ratio (`:::grid 2 1:2`) arrives as the custom property `--moss-grid-ratio` on the element, so it stays overridable at every width.",
+                description: "How many cards sit on one line of the grid, from `:::grid N`. Same track count at every viewport width — there is no mobile collapse to a single column, so a grid of cards and a grid of short text lines both keep their authored count on a phone. A ratio (`:::grid 2 1:2`) arrives as the custom property `--moss-grid-ratio` on the element, so it stays overridable at every width. Under `data-scroll`, this instead reads as how many cards fit in view at once — the row scrolls rather than wraps.",
+            },
+            DataAttr {
+                name: "data-scroll",
+                values: &[],
+                default: "",
+                description: "Presence flag: emitted from the bare `scroll` keyword (`:::grid N {scroll}`). Keeps the row on one line — the reader drags it sideways instead of it wrapping or collapsing. Always paired with `tabindex=\"0\"` (keyboard-scrollable, same affordance as `.moss-table-scroll`); a `label=\"…\"` attribute alongside `scroll` adds `role=\"region\"` and an escaped `aria-label` naming the row for assistive tech.",
             },
         ],
         example_html: r#"<div class="moss-grid" data-width="wide">
@@ -1322,7 +1328,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: ":::grid {cols=2}\nLeft cell\n+++\nRight cell\n:::\n",
         status: Status::Confirmed,
         since: "0",
-        description: "Generic grid container (used by profiles, link previews, etc.). Modifier classes: `profiles`, `featured`, `no-cards`, `summary`. `summary` REPLACES this container rather than decorating it: the fence emits `.moss-cards-container > .moss-cards[data-layout=\"list\"]` instead, so a `.moss-grid` never reaches the page and a column count is dropped. v1 adds `data-width` (P9).",
+        description: "Generic grid container (used by profiles, link previews, etc.). Modifier classes: `profiles`, `featured`, `no-cards`, `summary`. `summary` REPLACES this container rather than decorating it: the fence emits `.moss-cards-container > .moss-cards[data-layout=\"list\"]` instead, so a `.moss-grid` never reaches the page and a column count is dropped — `scroll` is dropped the same way when both are written on one fence. v1 adds `data-width` (P9); a later release adds `data-scroll`.",
     },
     ComponentEntry {
         class: "moss-grid-card",

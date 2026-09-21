@@ -159,6 +159,13 @@ const isBareword = (c: string): boolean => /[:/._-]/.test(c) || /[\p{Alphabetic}
 
 /** MIRROR of `attrs::match_width_token` — the bare keywords that are NOT an error. */
 const WIDTH_TOKENS = new Set(['body', 'wide', 'page', 'screen', 'full']);
+/**
+ * MIRROR of the `scroll` branch in `attrs.rs`'s bare-keyword match: a second
+ * bare flag, recognized the same way as the width tokens but not one of
+ * them (grid-only semantics, checked separately rather than folded into
+ * `WIDTH_TOKENS`).
+ */
+const SCROLL_FLAG = 'scroll';
 
 /**
  * Read every `key=value` item out of an attribute block.
@@ -203,9 +210,9 @@ export function parseAttrKvSpans(input: string): AttrKvSpan[] | null {
 
     skipWs();
     if (input[i] !== '=') {
-      // A bare keyword is legal only for the width tokens; anything else is
-      // `InvalidKey`, which aborts the block.
-      if (WIDTH_TOKENS.has(key)) continue;
+      // A bare keyword is legal only for the width tokens and `scroll`;
+      // anything else is `InvalidKey`, which aborts the block.
+      if (WIDTH_TOKENS.has(key) || key === SCROLL_FLAG) continue;
       return null;
     }
     i++;

@@ -66,6 +66,42 @@ Xinlei focuses on emissions from wildfires and combines field observations with 
 ::::
 :::
 
+## Scrolling row
+
+Add `scroll` to keep the row on one line and let the reader drag it sideways, with part of the next card showing as a cue to keep going. `N` still sets the column count, but under `scroll` it means how many cards fit in view at once rather than how many sit per row.
+
+Use it for a "related articles" or "more like this" strip where order matters more than seeing every card at once. Skip it when every card must be visible without scrolling — a small comparison set the reader should scan as a whole — and use the plain wrapping grid instead.
+
+:::grid 2 {.sc-demo}
+```markdown
+:::grid 3 {scroll label="Related articles"}
+Urban Heat & Environmental Justice
++++
+Ecosystem Resilience
++++
+Emissions Modeling
++++
+Wildfire Recovery
+:::
+```
++++
+::::grid 3 {scroll label="Related articles"}
+Urban Heat & Environmental Justice
++++
+Ecosystem Resilience
++++
+Emissions Modeling
++++
+Wildfire Recovery
+::::
+:::
+
+`label="..."` names the row for assistive technology (`role="region"` plus an `aria-label`) — add it whenever the surrounding heading doesn't already say what the row is. Without a label the row is still keyboard-scrollable (focus it and press the arrow keys) but has no accessible name of its own.
+
+Set the `--moss-grid-scroll-peek` custom property to control exactly how many pixels of the next card show at the row's edge (default `2.5rem`, so with the defaults that's 40px of the next card, not an approximation); lower it toward `0` to hide the cue, or raise it for a more insistent one.
+
+Under vertical (right-to-left column) typesetting, `scroll` has no effect: extra cards already advance along the page's own horizontal scroll, so the row renders as the ordinary wrapping grid instead.
+
 ## Cell content
 
 Cells are full markdown: headings, paragraphs, lists, images, and links all work. Cells also recognize:

@@ -1,5 +1,6 @@
 use super::super::hooks::DefaultHooks;
 use super::super::node::Inline;
+use super::super::shortcode::{GridShortcode, Shortcode};
 use super::super::url::{Url, UrlKind};
 use super::*;
 
@@ -1181,4 +1182,65 @@ fn end_to_end_parse_with_config_emits_data_source_line() {
         html.contains(r#"<p data-source-line="7">second paragraph</p>"#),
         "second paragraph should carry data-source-line=7: {html}"
     );
+}
+
+// ── Grid `scroll` emission ───────────────────────────────────────
+
+fn grid(scroll: bool, label: Option<&str>) -> Block {
+    Block::Shortcode(Shortcode::Grid(GridShortcode {
+        columns: 3,
+        scroll,
+        label: label.map(str::to_string),
+        cells: vec![vec![Block::Paragraph(vec![Inline::Text("A".into())])]],
+        ..Default::default()
+    }))
+}
+
+#[test]
+fn grid_scroll_emits_data_scroll_and_tabindex() {
+    let html = render(vec![grid(true, None)]);
+    assert!(
+        html.contains(r#"<div class="moss-grid" data-columns="3" data-scroll tabindex="0">"#),
+        "got: {html}"
+    );
+    assert!(!html.contains("role="), "no label -> no role: {html}");
+    assert!(!html.contains("aria-label"), "no label -> no aria-label: {html}");
+}
+
+#[test]
+fn grid_scroll_with_label_emits_region_and_aria_label() {
+    let html = render(vec![grid(true, Some("Related articles"))]);
+    assert!(
+        html.contains(
+            r#"<div class="moss-grid" data-columns="3" data-scroll tabindex="0" role="region" aria-label="Related articles">"#
+        ),
+        "got: {html}"
+    );
+}
+
+#[test]
+fn grid_scroll_label_is_html_escaped() {
+    let html = render(vec![grid(true, Some(r#"A & B <c>"#))]);
+    assert!(
+        html.contains(r#"aria-label="A &amp; B &lt;c&gt;""#),
+        "got: {html}"
+    );
+}
+
+#[test]
+fn grid_without_scroll_emits_no_scroll_attrs() {
+    let html = render(vec![grid(false, None)]);
+    assert!(!html.contains("data-scroll"), "got: {html}");
+    assert!(!html.contains("tabindex"), "got: {html}");
+}
+
+#[test]
+fn grid_label_without_scroll_emits_nothing_extra() {
+    // `label` only means something alongside `scroll`; on its own it must
+    // not leak an aria-label/role onto a grid that never becomes a scroll
+    // region.
+    let html = render(vec![grid(false, Some("Ignored"))]);
+    assert!(!html.contains("aria-label"), "got: {html}");
+    assert!(!html.contains("role="), "got: {html}");
+    assert!(!html.contains("data-scroll"), "got: {html}");
 }

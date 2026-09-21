@@ -8,6 +8,8 @@ export interface ShortcodeAttrInfo {
   readonly name: string;
   /** Present when this attr's VALUE names an asset file; editors scope asset search to these kinds. */
   readonly assetKinds?: readonly string[];
+  /** True for a bare keyword inserted WITHOUT `=` (e.g. `{scroll}`). Omitted (false) is an ordinary `key=value` attr. */
+  readonly flag?: boolean;
 }
 
 export interface ShortcodeInfo {
@@ -61,6 +63,8 @@ export const SHORTCODES: readonly ShortcodeInfo[] = [
     attrs: [
       { name: "cols" },
       { name: "wide" },
+      { name: "scroll", flag: true },
+      { name: "label" },
     ],
     canonicalTemplate: "grid {cols=${1:2}}\n${2:cell one}\n+++\n${3:cell two}\n:::",
     authorable: true,

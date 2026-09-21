@@ -543,6 +543,8 @@ mod tests {
                 classes: String::new(),
                 cells: vec![cell],
                 width: None,
+                scroll: false,
+                label: None,
             }))]);
         let snap = empty_snapshot();
         let graph = empty_graph();

@@ -106,6 +106,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Track widths for a `:::grid`, as a `grid-template-columns` value. moss sets it on the element when the author writes a ratio (`:::grid 2 1:2` → `2fr 1fr`); the fallback is the even split for whatever `data-columns` says, and a ratio-less grid with no `data-columns` falls back to `initial`. It is a property rather than an inline `grid-template-columns` on purpose: an inline declaration beats every stylesheet rule, so a theme rule could never override it if it arrived inline. A theme setting this custom property by hand overrides the author's ratio at every width, same as any other cascade value.",
     },
     CustomProp {
+        name: "--moss-grid-scroll-peek",
+        owner: "moss-grid",
+        default: "2.5rem",
+        description: "Exact width of the next card's visible slice at the edge of a scrolling row (`:::grid N {scroll}`) — how much of it shows, not an approximation. moss solves the row's `grid-auto-columns` so `data-columns` cards fit fully and precisely this much of the next one peeks past the edge. Raise it for a more insistent hint, lower it toward `0` to hide the cue.",
+    },
+    CustomProp {
         name: "--moss-grid-image-ratio",
         owner: "moss-grid-card",
         default: "1 / 1",

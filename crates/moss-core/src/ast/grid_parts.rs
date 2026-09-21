@@ -152,6 +152,21 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
             open_tag.push_str(&cols);
             open_tag.push('"');
         }
+        // `scroll` keeps the row on one line and lets the reader drag it
+        // sideways instead of it wrapping/collapsing; `tabindex="0"` makes
+        // an overflowing row keyboard-scrollable, the same affordance
+        // `.moss-table-scroll` already gives a wide table. `label` only
+        // means something once the row IS a scroll region, so it emits
+        // `role`/`aria-label` only alongside `scroll` — set on its own it
+        // would name a landmark that was never created.
+        if args.scroll {
+            open_tag.push_str(r#" data-scroll tabindex="0""#);
+            if let Some(label) = &args.label {
+                open_tag.push_str(r#" role="region" aria-label=""#);
+                open_tag.push_str(&escape_attr(label));
+                open_tag.push('"');
+            }
+        }
         if let Some(w) = &args.width {
             open_tag.push_str(r#" data-width=""#);
             open_tag.push_str(w);

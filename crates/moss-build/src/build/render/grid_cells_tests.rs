@@ -990,6 +990,20 @@ fn a_column_count_does_not_survive_the_summary_variant() {
     assert!(!html.contains("moss-grid"), "got: {html}");
 }
 
+/// `scroll`'s attributes live on the opener the summary variant discards
+/// entirely (it becomes a `.moss-cards-container` `BodySegment::Html`, not a
+/// `.moss-grid`), so `.summary` wins over `scroll` the same way it already
+/// wins over a column count: nothing downstream ever sees `data-scroll`.
+#[test]
+fn scroll_does_not_survive_the_summary_variant() {
+    let docs = vec![make_page_doc("Ink Study", "works/ink-study/index.html", "2024-03-02", "A study.")];
+    let page = Page::new("index.html", &docs);
+    let html = page.summary(":::grid 3 {.summary scroll}\n[Ink Study](works/ink-study/)\n:::\n");
+
+    assert!(!html.contains("data-scroll"), "got: {html}");
+    assert!(!html.contains("moss-grid"), "got: {html}");
+}
+
 /// Token-exact on the typed class list, the way `no-cards` is — `.summary-cards`
 /// is a different class and renders an ordinary grid.
 #[test]

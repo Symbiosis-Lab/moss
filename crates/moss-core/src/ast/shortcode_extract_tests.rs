@@ -1942,6 +1942,85 @@ fn grid_without_width_flag_leaves_width_none() {
     }
 }
 
+// ---- Grid `scroll` (horizontally scrolling row) ----
+
+#[test]
+fn grid_with_scroll_flag_sets_scroll_true() {
+    let md = ":::grid 3 {scroll}\ncell A\n+++\ncell B\n:::\n";
+    match first_extracted(md) {
+        Shortcode::Grid(g) => assert!(g.scroll),
+        other => panic!("expected Grid, got {other:?}"),
+    }
+}
+
+#[test]
+fn grid_without_scroll_flag_leaves_scroll_false() {
+    let md = ":::grid 3\ncell A\n+++\ncell B\n:::\n";
+    match first_extracted(md) {
+        Shortcode::Grid(g) => assert!(!g.scroll),
+        other => panic!("expected Grid, got {other:?}"),
+    }
+}
+
+#[test]
+fn grid_scroll_with_label_sets_both() {
+    let md = ":::grid 3 {scroll label=\"Related articles\"}\ncell A\n:::\n";
+    match first_extracted(md) {
+        Shortcode::Grid(g) => {
+            assert!(g.scroll);
+            assert_eq!(g.label.as_deref(), Some("Related articles"));
+        }
+        other => panic!("expected Grid, got {other:?}"),
+    }
+}
+
+#[test]
+fn grid_label_without_scroll_still_parses() {
+    // `label` is an ordinary kv attr independent of `scroll`'s bare flag —
+    // parsing sets it either way. It is emission (grid_parts.rs) that only
+    // acts on it when `scroll` is also set.
+    let md = ":::grid 3 {label=\"Ignored\"}\ncell A\n:::\n";
+    match first_extracted(md) {
+        Shortcode::Grid(g) => {
+            assert!(!g.scroll);
+            assert_eq!(g.label.as_deref(), Some("Ignored"));
+        }
+        other => panic!("expected Grid, got {other:?}"),
+    }
+}
+
+#[test]
+fn grid_with_summary_class_and_scroll_flag_parses_both() {
+    // Parsing keeps both facts; it is the BUILD-side `.summary` container
+    // swap (`apply_summary_grids`) that discards `scroll` by replacing the
+    // whole container. See `scroll_does_not_survive_the_summary_variant`
+    // in moss-build's grid_cells_tests.rs.
+    let md = ":::grid 3 {.summary scroll}\ncell\n:::\n";
+    match first_extracted(md) {
+        Shortcode::Grid(g) => {
+            assert!(g.scroll);
+            assert_eq!(g.classes, "summary");
+        }
+        other => panic!("expected Grid, got {other:?}"),
+    }
+}
+
+#[test]
+fn scroll_flag_on_gallery_is_recognized_but_inert() {
+    // `scroll` is a generic bare flag (attrs.rs), not grid-specific — any
+    // shortcode may write it without an `AttrError`. Gallery has no field
+    // to read it into, so parsing succeeds and nothing else about the
+    // parse changes.
+    let md = ":::gallery 3 {scroll}\nphoto.jpg\n:::\n";
+    match first_extracted(md) {
+        Shortcode::Gallery(g) => {
+            assert_eq!(g.columns, Some(3));
+            assert!(g.classes.is_empty());
+        }
+        other => panic!("expected Gallery, got {other:?}"),
+    }
+}
+
 // ---- Recent (Phase B / Task 4.2) ----
 
 #[test]
