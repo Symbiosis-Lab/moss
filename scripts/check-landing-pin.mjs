@@ -39,3 +39,37 @@ for (const name of ['chromium', 'webkit']) {
   } finally { await browser.close(); }
 }
 } finally { await close(); }
+
+// I-pin closing (unit 4, review-phases-2-4.md Job 2 item 5; owner: "the
+// publish button should not scroll up"): on desktop, #vis's box must not
+// move as xf runs 0 to 1 -- the same CSS-pinned-visual invariant as above,
+// applied to the one boundary it used to break for. #vis's sticky range is
+// #col's own stretched height (set by #copy's content) minus #vis's own
+// height; #copy's content alone used to end right where #five's offsetTop
+// falls, so the pin broke there, hundreds of px before the crossfade band
+// even starts.
+try {
+for (const name of ['chromium', 'webkit']) {
+  const browser = await engines[name].launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await installPageOverride(page, baseURL, { html: overrideHtml, jsOverridePath: process.env.LANDING_JS_OVERRIDE });
+    await page.goto(baseURL);
+    await whenReady(page);
+    const bandNear = await page.evaluate(() => document.getElementById('five').offsetTop - innerHeight * 0.8);
+    const samples = [];
+    for (const xf of [0, 0.25, 0.5, 0.75, 1]) {
+      const y = Math.round(bandNear + xf * (900 * 0.6));
+      await page.evaluate((y) => scrollTo(0, y), y);
+      await page.waitForTimeout(150);
+      const vis = await page.evaluate(() => document.getElementById('vis').getBoundingClientRect());
+      samples.push({ xf, y, top: vis.top });
+    }
+    if (samples.some((s) => Math.abs(s.top) > .5)) {
+      throw new Error(`${name}: I-pin closing -- #vis moved during the crossfade: ${JSON.stringify(samples)}`);
+    }
+    console.log(`${name}: I-pin closing #vis's box does not move between xf 0 and 1`);
+    await page.close();
+  } finally { await browser.close(); }
+}
+} finally { await close(); }
