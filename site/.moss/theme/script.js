@@ -1,8 +1,15 @@
-if (document.querySelector('moss-ui-demo')) {
-  const demoModule = new URL('../../ui/moss-ui-demo.js', window.mossTheme.base);
-  import(demoModule.href).catch((error) => {
-    console.error('Could not load the moss interface demo', error);
-  });
+if (document.querySelector('moss-stage')) {
+  const stageModule = new URL('../../ui/stage/moss-stage.js', window.mossTheme.base);
+  const sceneModule = new URL('../../ui/stage/moss-scene.js', window.mossTheme.base);
+  // Sequenced, not parallel: a marker's click dispatches `moss-scene-play`, which only reaches
+  // the stage if the stage's document-level listener is already attached — so moss-stage.js must
+  // finish defining its element, and therefore attaching that listener, before moss-scene.js can
+  // upgrade any marker.
+  import(stageModule.href)
+    .then(() => import(sceneModule.href))
+    .catch((error) => {
+      console.error('Could not load the moss stage', error);
+    });
 }
 
 // Favicon dark-mode swap. The moss mark's SVG favicon (site/assets/brand/favicon.svg,

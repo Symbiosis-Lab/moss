@@ -72,3 +72,86 @@ footer.container .footer-github::after { content: ""; position: absolute; inset:
   .moss-grid.sc-demo > .moss-grid-card:first-child { border-bottom: 1px solid var(--moss-border-light); }
   .moss-grid.sc-demo > .moss-grid-card:last-child { align-self: unset; border-left: 0; }
 }
+
+/* moss-stage layout: sticky beside the prose, full article height, on viewports wide enough for
+   both the reading column and the stage to fit. moss-stage.css owns the component's own chrome;
+   this file only places it — see site/ui/stage/README.md's module table.
+
+   Tried first: a plain right float + position: sticky, the same idiom
+   crates/moss-build/src/assets/css/site/sidenotes.css uses for `.moss-sidenote`. It measured
+   correctly at rest, but once the stage was actually stuck (mid-scroll, not at its natural flow
+   position) Chromium and WebKit both kept wrapping prose around the float's ORIGINAL flow
+   rectangle rather than its stuck one — paragraphs below that point rendered full-width and the
+   stuck stage painted over them. That is the "misbehaves" case stage/README.md names; a grid
+   sidesteps it entirely, since a track's box is never something another track's content can be
+   drawn under. */
+:root {
+  --moss-stage-width: 600px;
+}
+
+@media screen and (min-width: 1400px) {
+  /* Header, article, footer, and the series-nav divider share one width on a page with a stage.
+     moss's `.container` reads one variable, --moss-site-max-width (crates/moss-build/src/assets/
+     css/site.css ~L722) — but the nav, the article, the footer, and the series-nav each carry a
+     MORE specific site.css rule of their own (`.main-nav`, `main > article.container`,
+     `footer.container`, `.moss-series-nav`) that reads --moss-content-width instead, so a plain
+     --moss-site-max-width override reaches none of them. This file's own declarations are
+     unlayered, so they already win over site.css's `@layer shortcodes` — they still have to name
+     the property explicitly for each element, just via this one shared variable instead of four
+     copies (or, for the article, two copies) of the formula. */
+  :root:has(article > moss-stage) {
+    /* Wide enough to hold the normal reading measure AND the stage side by side — same idea as
+       `main.has-sidebar` (site.css) holding its narrower article next to `.latest-sidebar`, just
+       expressed as one extra column of this same box instead of a flex sibling. */
+    --moss-site-max-width: min(
+      calc(var(--moss-content-width) + var(--moss-space-lg) + var(--moss-stage-width)),
+      calc(100vw - 2 * var(--moss-container-padding))
+    );
+  }
+
+  body:has(article > moss-stage) :is(.main-nav, footer.container, .moss-series-nav) {
+    max-inline-size: var(--moss-site-max-width);
+  }
+
+  article:has(> moss-stage) {
+    max-inline-size: var(--moss-site-max-width);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--moss-stage-width);
+    column-gap: var(--moss-space-lg);
+    align-items: start;
+  }
+
+  /* One rule for every prose child, not one per tag: everything that isn't the stage stays in
+     the reading column. */
+  article:has(> moss-stage) > :not(moss-stage) {
+    grid-column: 1;
+  }
+
+  article:has(> moss-stage) > moss-stage {
+    grid-column: 2;
+    /* `1 / -1` (span to the true last row) measurably pushes Chromium and WebKit alike to put
+       the stage's ENTIRE height requirement into row 1 alone — row 1 grows to the stage's own
+       height and every later row (the actual prose) is shoved down by that much, opening a gap
+       under the first heading. A fixed span past the real row count (no stage-bearing page here
+       has more than ~25 direct children) gives the track-sizing algorithm slack rows with
+       nothing in them to grow into instead, and the stage settles into the prose's real total
+       height with no row conscripted. */
+    grid-row: 1 / span 200;
+    position: sticky;
+    /* --moss-space-lg (32px) read as flush against the viewport edge once the header had
+       scrolled away — bumped to --moss-space-xl (48px) for real breathing room above the stage.
+       Fits a 1440×800 viewport with room to spare: 48px top + min(70vh, 640px) never exceeds
+       800px at any width this layout applies at. */
+    top: var(--moss-space-xl);
+    margin-block-end: var(--moss-space-lg);
+  }
+}
+
+@media screen and (max-width: 1399.98px) {
+  /* Below the width where both fit, the stage is simply inline where authored — no sheet, no
+     docked bar. An explicit play request (site/ui/stage/moss-stage.js) scrolls it into view. */
+  article:has(> moss-stage) > moss-stage {
+    display: block;
+    margin-block-end: var(--moss-space-lg);
+  }
+}
