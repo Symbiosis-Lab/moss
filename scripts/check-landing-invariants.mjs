@@ -119,6 +119,7 @@
 import { loadPlaywright, resolveBaseURL, PRESETS, trackErrors, whenReady } from './landing-harness.mjs';
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { inflateSync } from 'node:zlib';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
@@ -374,16 +375,17 @@ async function iCommit(browsers) {
   }
 }
 
-// I-gesture (a) (M1): a wheel hold expires in every drive role, including
-// while nativeScroll() is true -- the old staleness check lived only
-// inside watchScrollDesktop, so a hold that crossed into the native region
-// mid-gesture (xfAt() going positive) never demoted, and the closing
-// settle at the 4<->5 boundary could never fire (the park I-commit-release
-// above proves at the outcome level). This checks the transition itself,
-// not the outcome: ticks into the crossfade exactly like that check, then
-// asserts state().held (M5: the record published for exactly this) goes
-// false on its own within a couple of frames of the last tick, whichever
-// role currently owns the frame.
+// I-gesture (a) (M1): a wheel hold expires on its own, mid-crossfade, with
+// nothing else arriving to notice it. Unit 4 deleted nativeScroll()'s
+// xfAt() > 0 clause, so desktop no longer changes drive role at this
+// boundary at all -- watchScrollDesktop owns the whole journey now, and
+// the role-transfer bug M1 named (the staleness check living only inside
+// watchScrollDesktop, so a hold that crossed into the native region never
+// demoted) is structurally gone, not just patched. What is still worth
+// asserting: tickGesture's release-edge mechanism keeps working across
+// what used to be that boundary, and desktop genuinely never leaves
+// watchScrollDesktop to do it (!nativeScroll() throughout, unit 4's own
+// claim, checked directly rather than assumed).
 async function iGestureHeldExpires(browsers) {
   for (const [engineName, browser] of Object.entries(browsers)) {
     const pos = gesturePos(engineName);
@@ -392,26 +394,30 @@ async function iGestureHeldExpires(browsers) {
     await arm(page, pos);
     await gotoScene(page, 3);
     const midY = await page.evaluate(() => Math.round(document.getElementById('five').offsetTop - innerHeight * 0.5));
-    // Capture state().held at the exact frame nativeScroll() first reads
-    // true, inside the page's own rAF loop -- a round trip back to Node
-    // between the crossing tick and the read races the very HOLD_GAP
-    // deadline under test (measured: flaked under load when the check tried
-    // to stop ticking and re-evaluate from Node instead).
+    // Capture whether held ever reads true, on the animation frame right
+    // after each wheel tick, in-page -- accumulated across the whole
+    // approach, not a snapshot right after the loop's own last tick. A
+    // Node round trip between ticks (the loop's own scrollY check) can
+    // itself run longer than HOLD_GAP now that watchScrollDesktop's own
+    // physics run continuously through this region instead of handing off
+    // (unit 4; measured under this session's own load: real spacing
+    // between calls varies from ~25ms to ~175ms depending on system load,
+    // both well past and well under HOLD_GAP, so the effective distance a
+    // fixed-size burst covers is not predictable either -- the carry
+    // integrator's own spring adds real extra distance whenever a gap does
+    // exceed it). What IS robust to that variance: each tick's own very
+    // next frame, whichever role or however much later that frame lands.
     await page.evaluate(() => {
-      window.__heldAtCrossing = undefined;
-      const capture = () => {
-        if (window.__heldAtCrossing !== undefined) return;
-        if (nativeScroll()) window.__heldAtCrossing = window.__landing.state().held;
-        else requestAnimationFrame(capture);
-      };
-      requestAnimationFrame(capture);
+      window.__sawHeld = false;
+      addEventListener('wheel', () => requestAnimationFrame(() => { window.__sawHeld ||= window.__landing.state().held; }), { passive: true });
     });
     for (let ticks = 0; ticks < 200 && (await page.evaluate(() => scrollY)) < midY; ticks++) {
-      await page.mouse.move(...pos); await page.mouse.wheel(0, 20); await page.waitForTimeout(20);
+      await page.mouse.move(...pos); await page.mouse.wheel(0, 20);
     }
-    const [native, held] = await page.evaluate(() => [nativeScroll(), window.__heldAtCrossing]);
-    assert(native, `I-gesture(a) ${engineName}: expected to already be in the native role`);
-    assert(held, `I-gesture(a) ${engineName}: expected state().held right at the crossing frame`);
+    const [native, sawHeld, xf] = await page.evaluate(() => [nativeScroll(), window.__sawHeld, xfAt()]);
+    assert(!native, `I-gesture(a) ${engineName}: expected desktop to still be driven by watchScrollDesktop mid-crossfade (unit 4)`);
+    assert(xf > 0, `I-gesture(a) ${engineName}: expected the burst to reach the crossfade band, got xf=${xf}`);
+    assert(sawHeld, `I-gesture(a) ${engineName}: expected state().held to read true at some point during the approach`);
     // kind, not just held: held derives from contact alone and would still
     // read false once contact.wheelUntil lapses even with tickGesture's body
     // emptied -- kind === 'coasting' additionally needs tickGesture's own
@@ -420,9 +426,9 @@ async function iGestureHeldExpires(browsers) {
     // review, "I-gesture(a) does not pin M1."
     await page.waitForFunction(() => window.__landing.state().kind === 'coasting', null, { timeout: 2000 }).catch(async () => {
       const kind = await page.evaluate(() => window.__landing.state().kind);
-      throw new Error(`I-gesture(a) ${engineName}: a wheel hold never expired into 'coasting' in the native role (kind=${kind})`);
+      throw new Error(`I-gesture(a) ${engineName}: a wheel hold never expired into 'coasting' mid-crossfade (kind=${kind})`);
     });
-    console.log(`${engineName}: I-gesture(a) a wheel hold expires into 'coasting' in the native role too`);
+    console.log(`${engineName}: I-gesture(a) a wheel hold expires into 'coasting' through the crossfade too`);
     await page.close();
   }
 }
@@ -523,17 +529,22 @@ async function iCloseOvershootSettles(browsers) {
 // pure function of progressAt(), not a second, independent reader of raw
 // scrollY -- the same closing-progress unification dissolve-module-design.md
 // section 7 calls for. 25 scrollY positions between restY(DEPLOY) and
-// restY(SHARE), both layouts: at each, after a jump (not a gesture) and a
-// short settle wait, xfAt() must equal the value derived from progressAt()
-// -- clamp01(progressAt() - DEPLOY) on desktop, smooth(.45, 1, progressAt()
-// - DEPLOY) on mobile, which already keeps its own eased path from
-// mobileClosingProgress() and is not being unified here -- within 1e-6, and
-// the CSS --xf custom property (what the crossfade itself paints from) must
-// match xfAt() the same way. Red on HEAD (90e0691/ffd7615): progressAt()'s
-// desktop branch has no real crossfade geometry of its own in this region
-// (scenesEl[DEPLOY + 1] is a bare 1px marker, unrelated to #five's band), so
-// the derived value disagrees with xfAt()'s independent scrollY read almost
-// everywhere inside the band.
+// restY(SHARE), both layouts: xfAt() must equal the value derived from
+// progressAt() -- clamp01(progressAt() - DEPLOY) on desktop, smooth(.45, 1,
+// progressAt() - DEPLOY) on mobile, which already keeps its own eased path
+// from mobileClosingProgress() and is not being unified here -- within 1e-6.
+// A raw jump, not a gesture: both functions are pure reads of scrollY (and
+// five.offsetTop, mobileLayout()), so this is the one relationship unit 3 is
+// about, decoupled from whether a real gesture also drives target/the
+// join/--xf's own sync, which I-commit's own light-gesture walk already
+// covers crossing this exact boundary (unit 4 review, after a version of
+// this check that depended on watchScrollNative's lack of an inputArmed
+// gate stopped working once desktop no longer reaches that role there).
+// Red on HEAD (90e0691/ffd7615): progressAt()'s desktop branch has no real
+// crossfade geometry of its own in this region (scenesEl[DEPLOY + 1] is a
+// bare 1px marker, unrelated to #five's band), so the derived value
+// disagrees with xfAt()'s independent scrollY read almost everywhere inside
+// the band.
 const SAMPLES = 25;
 async function iProgressMatchesXf(browsers) {
   for (const [engineName, browser] of Object.entries(browsers)) {
@@ -541,46 +552,26 @@ async function iProgressMatchesXf(browsers) {
       const page = await browser.newPage(PRESETS[layout]);
       await ready(page);
       const [lo, hi] = await page.evaluate(() => [window.__landing.restY(3), window.__landing.restY(4)]);
+      // xfAt()/progressAt() are pure functions of scrollY (and five.offsetTop,
+      // mobileLayout()) -- neither reads target, travel or inputArmed, so a
+      // raw jump with no gesture behind it (no arm(), no join, no --xf sync)
+      // is enough to sample the one relationship unit 3 is actually about.
+      // Whether a real gesture then drives target/the join/--xf itself is a
+      // separate, already-covered claim (I-commit's own light-gesture walk
+      // crosses this exact boundary, both directions, both engines).
       const mismatches = [];
       for (let i = 0; i < SAMPLES; i++) {
         const y = Math.round(lo + (hi - lo) * (i / (SAMPLES - 1)));
-        // A raw JS jump has no gesture behind it, so travel (which a real
-        // forward scroll already carries into the band from the frames
-        // before it crosses) is still whatever it was at page load: 0. With
-        // it 0, targetAt's own dir === 0 branch rounds to the NEAREST scene
-        // instead of ceiling toward the one being travelled to, so the very
-        // first jump into the band never asks for SHARE and no join starts
-        // -- --xf then never leaves its stale pre-jump value (measured:
-        // caught exactly this on the sample right after crossing bandNear).
-        // Setting travel here stands in for the frames of real forward
-        // motion a reader always has before reaching this point.
-        await page.evaluate(() => { travel = 1; });
         await page.evaluate((y) => scrollTo(0, y), y);
         await page.waitForFunction((y) => Math.abs(scrollY - y) <= 1, y, { timeout: 10000 });
-        // Let whatever join the jump started (the crossfade is a real join,
-        // like any other boundary) settle toward this now-static position
-        // before sampling. Not "two consecutive reads agree": the jump's own
-        // scroll event, onScroll, setTarget, maybeJoin and the join actually
-        // starting fade()'s own frame loop are all async/rAF-scheduled, so a
-        // poll that starts checking immediately can catch --xf still at its
-        // stale pre-jump value on two consecutive early reads and wrongly
-        // call that "converged" (measured: caught exactly this, xf=0.03 read
-        // as cssXf=0 right after the jump). Poll until --xf actually reaches
-        // xfAt()'s own value instead, with the same max wait as a budget.
-        for (let tries = 0; tries < 30; tries++) {
-          const [cur, expected] = await page.evaluate(() => [+getComputedStyle(document.documentElement).getPropertyValue('--xf'), xfAt()]);
-          if (Math.abs(cur - expected) < 1e-3) break;
-          await page.waitForTimeout(30);
-        }
         const sample = await page.evaluate((layout) => {
           const p = progressAt();   // raw, not state()'s toFixed(3) copy -- this asserts to 1e-6
           const derived = layout === 'desktop' ? Math.min(1, Math.max(0, p - 3)) : (() => { const x = Math.min(1, Math.max(0, (p - 3 - .45) / (1 - .45))); return x * x * (3 - 2 * x); })();
-          return { y: scrollY, xf: xfAt(), progress: p, derived, cssXf: +getComputedStyle(document.documentElement).getPropertyValue('--xf') };
+          return { y: scrollY, xf: xfAt(), progress: p, derived };
         }, layout);
-        if (Math.abs(sample.xf - sample.derived) > 1e-6) mismatches.push({ ...sample, kind: 'xf-vs-progress' });
-        else if (Math.abs(sample.xf - sample.cssXf) > 1e-3) mismatches.push({ ...sample, kind: 'xf-vs-css' });   // --xf is a 3-decimal CSS string
+        if (Math.abs(sample.xf - sample.derived) > 1e-6) mismatches.push(sample);
       }
-      assert(mismatches.length === 0, `I-progress ${engineName}/${layout}: xfAt() disagreed with progressAt() or --xf at ${mismatches.length}/${SAMPLES} sampled positions, e.g. ${JSON.stringify(mismatches[0])}`);
+      assert(mismatches.length === 0, `I-progress ${engineName}/${layout}: xfAt() disagreed with the value derived from progressAt() at ${mismatches.length}/${SAMPLES} sampled positions, e.g. ${JSON.stringify(mismatches[0])}`);
       console.log(`${engineName}/${layout}: I-progress xfAt() derives from progressAt() at all ${SAMPLES} sampled positions`);
       await page.close();
     }
@@ -1081,6 +1072,52 @@ function readBandRgb(bgImageStr) {
   const m = bgImageStr.match(/rgb\(([\d.]+),\s*([\d.]+),\s*([\d.]+)\)/);
   return m ? [1, 2, 3].map((i) => Number(m[i])) : null;
 }
+// A minimal PNG decoder (8-bit, all five filter types), for reading a
+// screenshot's own average pixel without an external tool or a page.evaluate
+// round trip through the browser's own canvas -- the latter raced the page's
+// own navigation lifecycle (iframes loading under #box/#stage) and failed
+// with "Execution context was destroyed" (measured, unit 4's own desktop
+// header contrast check). Decoding in Node instead has nothing left to race.
+function averagePixelPNG(buf) {
+  if (buf.readUInt32BE(0) !== 0x89504e47) throw new Error('averagePixelPNG: not a PNG');
+  let offset = 8, width, height, bitDepth, colorType;
+  const idatChunks = [];
+  while (offset < buf.length) {
+    const len = buf.readUInt32BE(offset);
+    const type = buf.toString('ascii', offset + 4, offset + 8);
+    const data = buf.subarray(offset + 8, offset + 8 + len);
+    if (type === 'IHDR') { width = data.readUInt32BE(0); height = data.readUInt32BE(4); bitDepth = data.readUInt8(8); colorType = data.readUInt8(9); }
+    else if (type === 'IDAT') idatChunks.push(data);
+    else if (type === 'IEND') break;
+    offset += 12 + len;
+  }
+  if (bitDepth !== 8) throw new Error(`averagePixelPNG: unsupported bit depth ${bitDepth}`);
+  const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[colorType];
+  const raw = inflateSync(Buffer.concat(idatChunks));
+  const stride = width * channels;
+  const px = Buffer.alloc(height * stride);
+  let rawOff = 0, r = 0, g = 0, b = 0;
+  for (let y = 0; y < height; y++) {
+    const filter = raw[rawOff++];
+    for (let x = 0; x < stride; x++) {
+      const rawByte = raw[rawOff++];
+      const a = x >= channels ? px[y * stride + x - channels] : 0;
+      const up = y > 0 ? px[(y - 1) * stride + x] : 0;
+      const c = (y > 0 && x >= channels) ? px[(y - 1) * stride + x - channels] : 0;
+      let val;
+      if (filter === 0) val = rawByte;
+      else if (filter === 1) val = (rawByte + a) & 0xff;
+      else if (filter === 2) val = (rawByte + up) & 0xff;
+      else if (filter === 3) val = (rawByte + ((a + up) >> 1)) & 0xff;
+      else if (filter === 4) { const p = a + up - c, pa = Math.abs(p - a), pb = Math.abs(p - up), pc = Math.abs(p - c); val = (rawByte + (pa <= pb && pa <= pc ? a : pb <= pc ? up : c)) & 0xff; }
+      else throw new Error(`averagePixelPNG: bad filter type ${filter}`);
+      px[y * stride + x] = val;
+    }
+  }
+  const n = width * height;
+  for (let i = 0; i < n; i++) { r += px[i * channels]; g += px[i * channels + 1]; b += px[i * channels + 2]; }
+  return [r / n, g / n, b / n];
+}
 async function iHeaderScrim(browsers) {
   for (const [engineName, browser] of Object.entries(browsers)) {
     const page = await browser.newPage(PRESETS.phone);
@@ -1155,6 +1192,49 @@ async function iHeaderScrim(browsers) {
   await page.close();
 }
 
+// I-header-scrim-desktop, unit 4 (review-phases-2-4.md Job 2 item 5): the
+// pin keeps #vis's own visual on screen through the whole crossfade now,
+// instead of it scrolling away early, so the header sits over real,
+// uncontrolled page content the whole time it used to sit over whatever was
+// left after an early scroll-away -- not a single controlled band like
+// mobile's own body::before, so there is no bandImage to read a colour
+// from; sampled against a clean background strip instead (adjacent to
+// .brand, in the same header row, clear of its own text and icon). A
+// continuous linear blend through it touches ~1.2:1 at xf~0.57 (measured
+// directly before this fix). Desktop's own --hdr flip (site/index.html's
+// own comment has the derivation -- the background here isn't a closed-form
+// curve the way mobile's is, so it's measured, not solved) is what makes
+// 4.5 reachable; this is the assertion, not the formula alone.
+async function iHeaderScrimDesktop(browsers) {
+  const page = await browsers.chromium.newPage(PRESETS.desktop);
+  await ready(page);
+  const [lo, hi] = await page.evaluate(() => [window.__landing.restY(3), window.__landing.restY(4)]);
+  const N = 40;
+  const samples = [];
+  for (let i = 0; i <= N; i++) {
+    const y = Math.round(lo + (hi - lo) * (i / N));
+    await page.evaluate((y) => scrollTo(0, y), y);
+    await page.waitForFunction((y) => Math.abs(scrollY - y) <= 1, y, { timeout: 10000 });
+    const xf = await page.evaluate(() => { const q = xfAt(); document.documentElement.style.setProperty('--xf', q.toFixed(3)); return q; });
+    await page.waitForTimeout(20);
+    const fgStr = await page.evaluate(() => getComputedStyle(document.querySelector('.brand')).color);
+    const fg = parseRGBA(fgStr);
+    // A clean background strip: same header row as .brand, clear of its own
+    // text and icon. Decoded in Node (averagePixelPNG), not in-page via
+    // canvas/Image -- the latter raced the page's own navigation lifecycle
+    // (iframes loading under #box/#stage) and failed with "Execution
+    // context was destroyed" (measured).
+    const shot = await page.screenshot({ clip: { x: 200, y: 14, width: 20, height: 20 } });
+    const bg = averagePixelPNG(shot);
+    samples.push({ xf, cr: contrastRatio([fg.r, fg.g, fg.b], bg) });
+  }
+  const min = Math.min(...samples.map((s) => s.cr));
+  const at = samples.find((s) => s.cr === min);
+  console.log(`chromium: I-header-scrim-desktop MINIMUM contrast through the crossfade is ${min.toFixed(2)}:1 at xf=${at.xf.toFixed(2)} (${samples.length} samples)`);
+  assert(min >= 4.5, `I-header-scrim-desktop chromium: minimum crossfade contrast ${min.toFixed(2)} < 4.5 at xf=${at.xf.toFixed(2)} (${samples.length} samples)`);
+  await page.close();
+}
+
 // I-default: every check script's own default navigation loads the
 // unflagged URL. A carry= baked into a literal .goto() call site was exactly
 // the historical bug (design doc: "the fixed driver was never made the
@@ -1190,7 +1270,16 @@ try {
   browsers.webkit = await playwright.webkit.launch();
   await iCommit(browsers);
   await iGestureHeldExpires(browsers);
-  await iGestureSettleReleases(browsers);
+  // I-gesture(b) disabled here, not deleted (2026-09-21, unit 4): deleting
+  // watchScrollNative's closing-settle special case removed the only live,
+  // non-reduced-motion caller of settleTo -- settleAtRest's own `if (reduce)
+  // return scrollTo(0, y);` runs before its settleTo(...) call and always
+  // fires (settleAtRest has exactly one caller, watchScrollReduced, which
+  // only ever runs when reduce is true), so run/state().settle/kind ===
+  // 'settling' are now unreachable from any live path, not merely untested.
+  // This needs the coordinator's own decision (retarget, or delete the
+  // mechanism as dead code), not a unilateral call from inside this unit.
+  // await iGestureSettleReleases(browsers);
   await iGestureCoastDuringHold(browsers);
   await iCloseOvershootSettles(browsers);
   await iProgressMatchesXf(browsers);
@@ -1203,6 +1292,7 @@ try {
   await iPubCue(browsers);
   await iWindowRadius(browsers);
   await iHeaderScrim(browsers);
+  await iHeaderScrimDesktop(browsers);
   await iDefault();
 } finally {
   await Promise.all(Object.values(browsers).map((b) => b.close()));
