@@ -43,9 +43,9 @@ export const SHORTCODES: readonly ShortcodeInfo[] = [
   {
     name: "gallery",
     attrs: [
-      { name: "cols" },
+      { name: "per-line" },
     ],
-    canonicalTemplate: "gallery {cols=${1:3}}\n![](${2:photo.jpg})\n:::",
+    canonicalTemplate: "gallery ${1:3}\n![](${2:photo.jpg})\n:::",
     authorable: true,
   },
   {
@@ -61,12 +61,12 @@ export const SHORTCODES: readonly ShortcodeInfo[] = [
   {
     name: "grid",
     attrs: [
-      { name: "cols" },
+      { name: "per-line" },
       { name: "wide" },
       { name: "scroll", flag: true },
       { name: "label" },
     ],
-    canonicalTemplate: "grid {cols=${1:2}}\n${2:cell one}\n+++\n${3:cell two}\n:::",
+    canonicalTemplate: "grid ${1:2}\n${2:cell one}\n+++\n${3:cell two}\n:::",
     authorable: true,
   },
   {

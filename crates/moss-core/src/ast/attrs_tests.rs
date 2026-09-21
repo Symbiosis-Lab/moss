@@ -322,6 +322,33 @@ fn key_starting_with_digit_is_invalid_token() {
     assert!(matches!(e, AttrError::InvalidKey { .. }));
 }
 
+// ── hyphenated keys (`per-line=`) ────────────────────────────────
+
+#[test]
+fn hyphenated_key_parses() {
+    // `per-line=` needs a hyphen inside a key. The grammar already allows
+    // one via `is_key_continue` (`-` is a continue char, same as `_`), so
+    // this pins that fact rather than extending anything.
+    let b = ok("{per-line=3}");
+    assert_eq!(b.get("per-line"), Some("3"));
+}
+
+#[test]
+fn hyphenated_key_alongside_a_plain_key() {
+    let b = ok("{per-line=3 cols=2}");
+    assert_eq!(b.get("per-line"), Some("3"));
+    assert_eq!(b.get("cols"), Some("2"));
+}
+
+#[test]
+fn key_cannot_start_with_a_hyphen() {
+    // `is_key_start` only accepts an ASCII letter; a leading `-` is not a
+    // key character at all, so the item falls to the generic "anything
+    // else at item-start" branch and reports the run as an invalid token.
+    let e = err("{-per-line=3}");
+    assert!(matches!(e, AttrError::InvalidKey { .. }));
+}
+
 // ── `scroll` bare flag ───────────────────────────────────────────
 
 #[test]

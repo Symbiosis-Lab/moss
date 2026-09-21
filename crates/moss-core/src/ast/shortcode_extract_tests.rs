@@ -556,6 +556,50 @@ fn extracts_gallery_with_columns_arg() {
         Shortcode::Gallery(args) => assert_eq!(args.columns, Some(4)),
         _ => panic!("expected Gallery"),
     }
+    assert!(result.warnings.is_empty(), "positional form should not warn: {:?}", result.warnings);
+}
+
+// ---- Gallery `per-line` (renamed from `cols`) ----
+
+#[test]
+fn gallery_per_line_attr_sets_columns() {
+    let md = ":::gallery {per-line=3}\na.jpg\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Gallery(g) => assert_eq!(g.columns, Some(3)),
+        other => panic!("expected Gallery, got {other:?}"),
+    }
+    assert!(result.warnings.is_empty(), "per-line= should not warn: {:?}", result.warnings);
+}
+
+#[test]
+fn gallery_cols_alias_still_sets_columns_and_warns() {
+    let md = ":::gallery {cols=3}\na.jpg\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Gallery(g) => assert_eq!(g.columns, Some(3)),
+        other => panic!("expected Gallery, got {other:?}"),
+    }
+    assert!(
+        result.warnings.iter().any(|w| w.contains("cols=") && w.contains("deprecated")),
+        "expected a cols= deprecation warning, got {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn gallery_per_line_wins_over_cols_but_cols_still_warns() {
+    let md = ":::gallery {cols=2 per-line=5}\na.jpg\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Gallery(g) => assert_eq!(g.columns, Some(5), "per-line wins"),
+        other => panic!("expected Gallery, got {other:?}"),
+    }
+    assert!(
+        result.warnings.iter().any(|w| w.contains("cols=") && w.contains("deprecated")),
+        "cols= was still written, so it should still warn: {:?}",
+        result.warnings
+    );
 }
 
 #[test]
@@ -1616,6 +1660,61 @@ fn grid_legacy_dash_emits_deprecation_warning() {
     assert!(result.warnings[0].contains("+++"));
 }
 
+// ---- `per-line` (renamed from `cols`) ----
+
+#[test]
+fn grid_per_line_attr_sets_columns() {
+    let md = ":::grid {per-line=3}\ncell A\n+++\ncell B\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Grid(g) => assert_eq!(g.columns, 3),
+        other => panic!("expected Grid, got {other:?}"),
+    }
+    assert!(result.warnings.is_empty(), "per-line= should not warn: {:?}", result.warnings);
+}
+
+#[test]
+fn grid_ratio_still_works_through_per_line() {
+    let md = ":::grid {per-line=1:2}\ncell A\n+++\ncell B\n:::\n";
+    match first_extracted(md) {
+        Shortcode::Grid(g) => {
+            assert_eq!(g.columns, 2);
+            assert_eq!(g.ratio.as_deref(), Some("1:2"));
+        }
+        other => panic!("expected Grid, got {other:?}"),
+    }
+}
+
+#[test]
+fn grid_cols_alias_still_sets_columns_and_warns() {
+    let md = ":::grid {cols=3}\ncell A\n+++\ncell B\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Grid(g) => assert_eq!(g.columns, 3),
+        other => panic!("expected Grid, got {other:?}"),
+    }
+    assert!(
+        result.warnings.iter().any(|w| w.contains("cols=") && w.contains("deprecated")),
+        "expected a cols= deprecation warning, got {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn grid_per_line_wins_over_cols_but_cols_still_warns() {
+    let md = ":::grid {cols=2 per-line=4}\ncell A\n+++\ncell B\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Grid(g) => assert_eq!(g.columns, 4, "per-line wins"),
+        other => panic!("expected Grid, got {other:?}"),
+    }
+    assert!(
+        result.warnings.iter().any(|w| w.contains("cols=") && w.contains("deprecated")),
+        "cols= was still written, so it should still warn: {:?}",
+        result.warnings
+    );
+}
+
 // ---- Same-arity nesting warns (#1014) ----
 //
 // A `:::` fence nested inside another `:::` fence steals the outer
@@ -2497,7 +2596,7 @@ fn gallery_prose_line_emits_no_span() {
     let s = spans(src);
     assert_eq!(s.len(), 1, "only the media line, got {s:?}");
     assert_eq!(s[0].path, "photo.jpg");
-    let g = parse_gallery_body("", "Just some prose here\nphoto.jpg");
+    let (g, _) = parse_gallery_body("", "Just some prose here\nphoto.jpg");
     assert_eq!(g.items.len(), 2, "the parser still yields both items");
 }
 
@@ -2670,7 +2769,7 @@ fn spans_agree_with_parsers() {
     ];
     for src in gallery_cases {
         let body: Vec<&str> = src.lines().skip(1).take_while(|l| l.trim() != ":::").collect();
-        let parsed = parse_gallery_body("", &body.join("\n"));
+        let (parsed, _) = parse_gallery_body("", &body.join("\n"));
         let want: Vec<String> = parsed
             .items
             .iter()

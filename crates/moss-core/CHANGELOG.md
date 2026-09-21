@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`date:` accepts a year or a year and month**, not only a full `YYYY-MM-DD`. A page datable to 1697, or to its eighth month but no further, takes `date: "1697"` or `date: 1697-09` and is no longer warned about. Listings print what was given ("1697 · 09", or bare "1697") and sort mixed precision by year, so the previous workaround — padding the unknown part to `-01-01` — is no longer needed to keep the validator quiet; it was never a vaguer claim than the truth, just a different one that cards printed as a real month.
+- **`:::grid`/`:::gallery`'s named column-count attribute is `per-line=`, not `cols=`.** "Columns" is the wrong word under vertical typesetting, where the tracks run along the line rather than down a column — "N per line" is true in both writing modes. The positional form (`:::grid 3`, `:::gallery 3`) is unchanged. `cols=` still works and sets the same value, but is deprecated and produces a build warning; when both are written, `per-line=` wins and the warning still fires.
 
 ### Added
 

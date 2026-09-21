@@ -200,6 +200,24 @@ describe('shortcodeAssetRef', () => {
   });
 });
 
+describe('per-line replaces cols in the catalog', () => {
+  test('grid and gallery name the column-count attr per-line, not cols', () => {
+    for (const name of ['grid', 'gallery']) {
+      const info = SHORTCODES.find((s) => s.name === name)!;
+      expect(info.attrs.some((a) => a.name === 'per-line')).toBe(true);
+      expect(info.attrs.some((a) => a.name === 'cols')).toBe(false);
+    }
+  });
+
+  test('grid and gallery canonical templates teach the positional form', () => {
+    for (const name of ['grid', 'gallery']) {
+      const info = SHORTCODES.find((s) => s.name === name)!;
+      expect(info.canonicalTemplate).not.toContain('cols=');
+      expect(info.canonicalTemplate).not.toContain('per-line=');
+    }
+  });
+});
+
 describe('agreement with the generated catalog', () => {
   test('every asset-valued attr in the artifact is one this module reads', () => {
     // `shortcodeAssetRef` derives its attr map from the generated catalog

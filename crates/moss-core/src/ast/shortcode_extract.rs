@@ -88,7 +88,10 @@ fn parse_shortcode_block(
     match name {
         "subscribe" => (Some(Shortcode::Subscribe(parse_subscribe_args(args))), vec![]),
         "buttons" => (Some(Shortcode::Buttons(parse_buttons_body(args, body))), vec![]),
-        "gallery" => (Some(Shortcode::Gallery(parse_gallery_body(args, body))), vec![]),
+        "gallery" => {
+            let (sc, warns) = parse_gallery_body(args, body);
+            (Some(Shortcode::Gallery(sc)), warns)
+        }
         "hero" => {
             // Body media lines are the CANONICAL multi-slide grammar (the
             // only way to express a crossfading hero), not a deprecated
@@ -146,14 +149,40 @@ pub fn parse_recent_args(args: &str, body: &str) -> RecentShortcode {
     }
 }
 
+/// Reads the `per-line=` column-count attribute, with the deprecated
+/// `cols=` spelling as a fallback. Shared between `:::grid` and
+/// `:::gallery` so the alias and its warning exist in exactly one place.
+///
+/// `per-line` is the current name — under vertical typesetting the grid's
+/// tracks run along the line, not down a "column", so "N per line" is true
+/// in both writing modes where "N columns" is not. When both are written,
+/// `per-line` wins, but the second element is still `true` — the author
+/// wrote the deprecated key, so they still see the warning even though it
+/// lost the value.
+fn per_line_attr<'a>(parsed: &'a super::attrs::AttrBlock) -> (Option<&'a str>, bool) {
+    let cols = parsed.get("cols");
+    (parsed.get("per-line").or(cols), cols.is_some())
+}
+
+/// Deprecation warning for the `cols=` alias, shared between `:::grid` and
+/// `:::gallery` so the message can't drift between the two shortcodes.
+fn cols_alias_warning(shortcode_name: &str) -> String {
+    format!(
+        "shortcode `:::{shortcode_name}` uses `cols=` (deprecated). \
+         Use `per-line=` or the positional form `:::{shortcode_name} 3`."
+    )
+}
+
 /// Parse a `:::grid` block.
 ///
 /// Args parsing supports both:
 /// - **Positional** (legacy moss-releases): `:::grid 2 1:2 {.classes}` —
 ///   first token is column count, second optional token is the ratio.
-/// - **Attribute** (new grammar): `:::grid {cols=2}` or `:::grid {cols=1:1:2}` —
-///   `cols=integer` sets the column count; `cols=ratio` sets both the
-///   ratio and the count (= ratio length).
+/// - **Attribute** (current grammar): `:::grid {per-line=2}` or
+///   `:::grid {per-line=1:1:2}` — `per-line=integer` sets the column
+///   count; `per-line=ratio` sets both the ratio and the count (= ratio
+///   length). `cols=` is a deprecated alias for `per-line=` — see
+///   [`per_line_attr`].
 ///
 /// Cells are split on lines containing only `+++` (new grammar) or
 /// `---` (legacy moss-releases). Step 3 of #613 rewrites `---` to `+++`
@@ -164,7 +193,8 @@ pub fn parse_recent_args(args: &str, body: &str) -> RecentShortcode {
 /// when any `---` legacy divider was encountered (triggers a deprecation
 /// warning), and the `Vec<String>` carries warnings collected while
 /// re-parsing cell bodies as fragments (e.g. a misspelled shortcode nested
-/// inside a cell) — see [`parse_cell_to_blocks`].
+/// inside a cell) — see [`parse_cell_to_blocks`] — plus the `cols=`
+/// deprecation warning when that alias was written.
 fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, bool, Vec<String>) {
     let trimmed = args.trim();
     let (positional, attr_block): (&str, &str) = if let Some(pos) = trimmed.find('{') {
@@ -187,8 +217,9 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
 
     let mut columns: u32 = 1;
     let mut ratio: Option<String> = None;
+    let (per_line_value, used_cols_alias) = per_line_attr(&parsed);
 
-    if let Some(cols_value) = parsed.get("cols") {
+    if let Some(cols_value) = per_line_value {
         if cols_value.contains(':') {
             ratio = Some(cols_value.to_string());
             columns = cols_value.split(':').count() as u32;
@@ -238,6 +269,9 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
             blocks
         })
         .collect();
+    if used_cols_alias {
+        fragment_warnings.push(cols_alias_warning("grid"));
+    }
 
     (
         GridShortcode {
@@ -868,16 +902,23 @@ pub(crate) fn gallery_item_span(line: &str) -> Option<MediaLineSpan> {
     }
 }
 
-fn parse_gallery_body(args: &str, body: &str) -> GalleryShortcode {
-    // Args: `N {.classes width}` where N is optional columns count and
-    // `width` is one of the spec § P9 width tokens (handled inside
-    // `split_positional_and_classes`).
-    let (positional, classes, width) = split_positional_classes_and_width(args);
-    let columns = if positional.is_empty() {
-        None
-    } else {
-        positional.parse::<u32>().ok()
-    };
+/// Parse a `:::gallery` block.
+///
+/// Args: `N {.classes width per-line=N}` where `N` is optional column
+/// count and `width` is one of the spec § P9 width tokens (handled inside
+/// [`split_positional_classes_width_and_per_line`]). `per-line=` wins over
+/// a positional `N` when both are present; `cols=` is a deprecated alias
+/// for `per-line=` — see [`per_line_attr`].
+///
+/// Returns the shortcode plus any deprecation warnings (currently just the
+/// `cols=` alias warning, when that key was written).
+fn parse_gallery_body(args: &str, body: &str) -> (GalleryShortcode, Vec<String>) {
+    let attrs = split_positional_classes_width_and_per_line(args);
+    let columns = attrs
+        .per_line
+        .as_deref()
+        .or(if attrs.positional.is_empty() { None } else { Some(attrs.positional.as_str()) })
+        .and_then(|v| v.parse::<u32>().ok());
     let mut items: Vec<GalleryItem> = Vec::new();
     for line in body.lines() {
         if let Some(it) = gallery_item_span(line) {
@@ -888,22 +929,45 @@ fn parse_gallery_body(args: &str, body: &str) -> GalleryShortcode {
             });
         }
     }
-    GalleryShortcode {
-        columns,
-        classes,
-        items,
-        width,
+    let mut warnings = Vec::new();
+    if attrs.used_cols_alias {
+        warnings.push(cols_alias_warning("gallery"));
     }
+    (
+        GalleryShortcode {
+            columns,
+            classes: attrs.classes,
+            items,
+            width: attrs.width,
+        },
+        warnings,
+    )
 }
 
-/// Split `args` into `(positional_text, classes, width)`.
+/// [`split_positional_classes_width_and_per_line`]'s result.
+struct GalleryPositionalAttrs {
+    positional: String,
+    classes: String,
+    width: Option<String>,
+    /// Resolved `per-line=` value, with `cols=` as a fallback — see
+    /// [`per_line_attr`].
+    per_line: Option<String>,
+    /// Whether `cols=` was written (whichever value won), so the caller
+    /// knows to emit the deprecation warning.
+    used_cols_alias: bool,
+}
+
+/// Split `args` into positional text, classes, the spec § P9 width token,
+/// and the resolved `per-line=`/`cols=` column count.
 ///
-/// Same routing as [`split_positional_and_classes`], but also surfaces the
-/// spec § P9 width token (`body | wide | page | screen`, with `full`
-/// aliased to `screen`). Returns `width = None` when the author did not
-/// set one, or when the legacy fallback path fires (malformed attrs
-/// where the structured parser bailed).
-fn split_positional_classes_and_width(args: &str) -> (String, String, Option<String>) {
+/// Same routing as [`split_positional_and_classes`]. `width` and `per_line`
+/// are `None` when the author did not set them, or when the legacy
+/// fallback path fires (malformed attrs where the structured parser
+/// bailed) — that path only recovers `.class` tokens, on the same
+/// reasoning the width token already skipped: malformed enough to bail
+/// means the author's intent is unclear, and omitting is safer than
+/// guessing.
+fn split_positional_classes_width_and_per_line(args: &str) -> GalleryPositionalAttrs {
     let trimmed = args.trim();
     if let Some(brace_start) = trimmed.find('{') {
         #[allow(clippy::string_slice)]
@@ -914,16 +978,15 @@ fn split_positional_classes_and_width(args: &str) -> (String, String, Option<Str
             #[allow(clippy::string_slice)]
             let attr_block_str = &trimmed[brace_start..=brace_start + brace_end];
             if let Ok(parsed) = super::attrs::parse_attrs(attr_block_str) {
-                return (
+                let (per_line, used_cols_alias) = per_line_attr(&parsed);
+                return GalleryPositionalAttrs {
                     positional,
-                    parsed.class_string(),
-                    parsed.width.map(str::to_string),
-                );
+                    classes: parsed.class_string(),
+                    width: parsed.width.map(str::to_string),
+                    per_line: per_line.map(str::to_string),
+                    used_cols_alias,
+                };
             }
-            // Legacy fallback for malformed inputs: scan only for `.class`.
-            // Width tokens are skipped here on purpose — if attrs are
-            // malformed enough to bail, the author's intent is unclear and
-            // omitting the width is safer than guessing.
             #[allow(clippy::string_slice)]
             let inner = &trimmed[brace_start + 1..brace_start + brace_end];
             let mut classes = Vec::new();
@@ -934,10 +997,22 @@ fn split_positional_classes_and_width(args: &str) -> (String, String, Option<Str
                     }
                 }
             }
-            return (positional, classes.join(" "), None);
+            return GalleryPositionalAttrs {
+                positional,
+                classes: classes.join(" "),
+                width: None,
+                per_line: None,
+                used_cols_alias: false,
+            };
         }
     }
-    (trimmed.to_string(), String::new(), None)
+    GalleryPositionalAttrs {
+        positional: trimmed.to_string(),
+        classes: String::new(),
+        width: None,
+        per_line: None,
+        used_cols_alias: false,
+    }
 }
 
 /// Split `args` into `(positional_text, classes)` from `{...}` syntax.

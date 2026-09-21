@@ -75,9 +75,9 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
             "buttons\n[${1:Get started}](${2:/})\n:::",
         ),
         ShortcodeKind::Gallery => (
-            &[ShortcodeAttrSpec { name: "cols", asset_kinds: &[], flag: false }],
+            &[ShortcodeAttrSpec { name: "per-line", asset_kinds: &[], flag: false }],
             None,
-            "gallery {cols=${1:3}}\n![](${2:photo.jpg})\n:::",
+            "gallery ${1:3}\n![](${2:photo.jpg})\n:::",
         ),
         ShortcodeKind::Hero => (
             &[
@@ -93,13 +93,13 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
         ),
         ShortcodeKind::Grid => (
             &[
-                ShortcodeAttrSpec { name: "cols", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "per-line", asset_kinds: &[], flag: false },
                 ShortcodeAttrSpec { name: "wide", asset_kinds: &[], flag: false },
                 ShortcodeAttrSpec { name: "scroll", asset_kinds: &[], flag: true },
                 ShortcodeAttrSpec { name: "label", asset_kinds: &[], flag: false },
             ],
             None,
-            "grid {cols=${1:2}}\n${2:cell one}\n+++\n${3:cell two}\n:::",
+            "grid ${1:2}\n${2:cell one}\n+++\n${3:cell two}\n:::",
         ),
         ShortcodeKind::Recent => (
             &[
@@ -195,6 +195,21 @@ mod tests {
     }
 
     #[test]
+    fn grid_and_gallery_templates_teach_the_positional_form() {
+        // Docs lead with `:::grid 2` / `:::gallery 3`; the insertion snippet
+        // should teach the same shape rather than the named `per-line=`
+        // attribute, and must never regress to the deprecated `cols=`.
+        for name in ["grid", "gallery"] {
+            let e = catalog().into_iter().find(|e| e.name == name).expect("entry");
+            assert!(
+                !e.canonical_template.contains("cols=") && !e.canonical_template.contains("per-line="),
+                "{name}: canonical template should teach the positional form, got {:?}",
+                e.canonical_template
+            );
+        }
+    }
+
+    #[test]
     fn only_apply_is_hidden() {
         for e in catalog() {
             assert_eq!(
@@ -216,5 +231,26 @@ mod tests {
         assert!(scroll.flag, "`scroll` inserts without `=`, editors need `flag: true`");
         let label = grid.attrs.iter().find(|a| a.name == "label").expect("label attr");
         assert!(!label.flag, "`label` takes a value; it is not a bare flag");
+    }
+
+    #[test]
+    fn grid_and_gallery_name_the_column_count_attr_per_line() {
+        // `cols` was renamed: "columns" is the wrong word under vertical
+        // typesetting, where the grid's tracks run along the line rather
+        // than down a column. `cols=` still parses (deprecated alias) but
+        // is not the catalog's own name for the attribute any more.
+        for kind in [ShortcodeKind::Grid, ShortcodeKind::Gallery] {
+            let e = catalog().into_iter().find(|e| e.kind == kind).expect("entry");
+            assert!(
+                e.attrs.iter().any(|a| a.name == "per-line"),
+                "{}: catalog should name the attr `per-line`",
+                e.name
+            );
+            assert!(
+                !e.attrs.iter().any(|a| a.name == "cols"),
+                "{}: catalog should not advertise the deprecated `cols` name",
+                e.name
+            );
+        }
     }
 }

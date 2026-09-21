@@ -263,8 +263,15 @@ const WIDTH_RE = /\b(wide|page|screen|full|body)\b/;
 /** Params shown in the tag (on hover), for layout-ambiguous types. */
 export function tagParams(attrs: string): string {
   const parts: string[] = [];
+  // `per-line=` is the current name (renamed from `cols=`, which is now a
+  // deprecated alias); checked first so it wins the same way it does in
+  // the backend grammar (attrs.rs's `per_line_attr`), regardless of which
+  // one appears earlier in the source text.
+  const perLine = /\bper-line=([^\s"'{}]+)/.exec(attrs);
   const cols = /\bcols=([^\s"'{}]+)/.exec(attrs);
-  if (cols) {
+  if (perLine) {
+    parts.push(`per-line ${perLine[1]}`);
+  } else if (cols) {
     parts.push(`cols ${cols[1]}`);
   } else {
     // Positional form (`:::grid 3`): echo the leading bare token verbatim

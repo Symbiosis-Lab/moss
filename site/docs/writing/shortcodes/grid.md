@@ -66,6 +66,8 @@ Xinlei focuses on emissions from wildfires and combines field observations with 
 ::::
 :::
 
+The column count is also settable by name — `:::grid {per-line=2}` — for when it needs to sit alongside other attributes on the same line, such as `scroll` below. "Per line" is how many cards fit along one line, and a line runs the way your text runs, so on a vertical page the cards stack downward instead of across. The older `cols=` spelling still works but is deprecated.
+
 ## Scrolling row
 
 Add `scroll` to keep the row on one line and let the reader drag it sideways, with part of the next card showing as a cue to keep going. `N` still sets the column count, but under `scroll` it means how many cards fit in view at once rather than how many sit per row.

@@ -232,6 +232,12 @@ describe('tagParams (micro-tag hint)', () => {
   test('keyword form takes precedence over positional echo', () => {
     expect(tagParams('{cols=2}')).toBe('cols 2');
   });
+  test('per-line attr (renamed from cols) → "per-line N"', () => {
+    expect(tagParams('{per-line=3}')).toBe('per-line 3');
+  });
+  test('per-line takes precedence over the deprecated cols alias, same as the backend', () => {
+    expect(tagParams('{cols=2 per-line=4}')).toBe('per-line 4');
+  });
   test('width keyword still surfaces', () => {
     expect(tagParams('wide')).toBe('wide');
   });

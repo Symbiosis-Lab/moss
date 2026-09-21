@@ -45,3 +45,5 @@ Pass a number after `gallery` to set the column count.
 ![](/assets/animations/first time publish.gif)
 ::::
 :::
+
+The same count is also settable by name — `:::gallery {per-line=3}` — for when it needs to sit alongside other attributes on the same line. "Per line" is how many images fit along one line, and a line runs the way your text runs, so on a vertical page the images stack downward instead of across. The older `cols=` spelling still works but is deprecated.
