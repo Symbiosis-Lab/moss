@@ -20,23 +20,11 @@
  * question: what does the engine actually paint.
  *
  * Run via: pnpm run test:render-gates img-fallback
- * Test-artifact policy: outputDir inside repo under target/test-tmp/ (gitignored).
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from '@playwright/test';
+import { defineGateConfig } from './define-gate-config';
 
-export default defineConfig({
-  testDir: '../tests/render-gates/site',
-  testMatch: /img-fallback\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: 'list',
-  outputDir: '../target/test-tmp/playwright-img-fallback',
-  use: {
-    reducedMotion: 'reduce',
-  },
-  projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
-  ],
+export default defineGateConfig({
+  gate: 'img-fallback',
+  use: { reducedMotion: 'reduce' },
 });

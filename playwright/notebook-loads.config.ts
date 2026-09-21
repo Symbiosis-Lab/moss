@@ -17,30 +17,17 @@
  *   npx playwright test -c playwright/notebook-loads.config.ts
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from "@playwright/test";
-import { buildScratchSite } from "../tests/e2e/helpers/scratch-site";
-import { NOTEBOOK_GATE } from "../tests/e2e/helpers/gate-sites";
+import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
+import { NOTEBOOK_GATE } from '../tests/e2e/helpers/gate-sites';
+import { defineGateConfig } from './define-gate-config';
 
+const PORT = 9378;
 const serveDir = buildScratchSite(NOTEBOOK_GATE);
 
-export default defineConfig({
-  testDir: "../tests/render-gates/site",
-  testMatch: /notebook-loads\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: "list",
-  outputDir: "../target/test-tmp/playwright-notebook-loads",
+export default defineGateConfig({
+  gate: 'notebook-loads',
+  engines: ['chromium'],
   timeout: 120_000,
-  use: {
-    baseURL: "http://localhost:9378/",
-    colorScheme: "light",
-  },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-  webServer: {
-    command: `/usr/bin/python3 -m http.server 9378`,
-    cwd: serveDir,
-    url: "http://localhost:9378/",
-    reuseExistingServer: false,
-    timeout: 60_000,
-  },
+  use: { baseURL: `http://localhost:${PORT}/`, colorScheme: 'light' },
+  webServer: { serveDir, port: PORT },
 });

@@ -20,35 +20,23 @@
  *   npx playwright test -c playwright/dark-layer-order.config.ts
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from "@playwright/test";
-import { buildScratchSite } from "../tests/e2e/helpers/scratch-site";
-import { DARK_LAYER_ORDER_GATE } from "../tests/e2e/helpers/gate-sites";
+import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
+import { DARK_LAYER_ORDER_GATE } from '../tests/e2e/helpers/gate-sites';
+import { defineGateConfig } from './define-gate-config';
 
+const PORT = 9372;
 const serveDir = buildScratchSite(DARK_LAYER_ORDER_GATE);
 
-export default defineConfig({
-  testDir: "../tests/render-gates/cascade",
-  testMatch: /dark-layer-order\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: "list",
-  outputDir: "../target/test-tmp/playwright-dark-layer-order-gate",
+export default defineGateConfig({
+  gate: 'dark-layer-order',
+  testDir: 'cascade',
+  outputDir: '../target/test-tmp/playwright-dark-layer-order-gate',
   use: {
-    baseURL: "http://localhost:9372/",
-    colorScheme: "dark",
+    baseURL: `http://localhost:${PORT}/`,
+    colorScheme: 'dark',
     // The spec ALSO sets localStorage["moss-theme"]="dark" (the explicit
     // toggle), which the pre-paint script prefers. Matching colorScheme here
     // just keeps the system preference from fighting the assertion.
   },
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
-  ],
-  webServer: {
-    command: `/usr/bin/python3 -m http.server 9372`,
-    cwd: serveDir,
-    url: "http://localhost:9372/",
-    reuseExistingServer: false,
-    timeout: 60_000,
-  },
+  webServer: { serveDir, port: PORT },
 });

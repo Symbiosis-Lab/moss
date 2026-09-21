@@ -7,21 +7,11 @@
  * Both engines: margin-collapse and @layer precedence are invisible to jsdom.
  *
  * Run via: pnpm run test:render-gates grid-block-rhythm
- * Test-artifact policy: outputDir inside repo under target/test-tmp/ (gitignored).
  */
-import { defineConfig, devices } from '@playwright/test';
+import { defineGateConfig } from './define-gate-config';
 
-export default defineConfig({
-  testDir: '../tests/render-gates/site',
-  testMatch: /grid-block-rhythm\.spec\.ts$/,
+export default defineGateConfig({
+  gate: 'grid-block-rhythm',
   fullyParallel: true,
-  reporter: 'list',
-  outputDir: '../target/test-tmp/playwright-grid-block-rhythm',
-  use: {
-    reducedMotion: 'reduce',
-  },
-  projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
-  ],
+  use: { reducedMotion: 'reduce' },
 });

@@ -16,18 +16,9 @@
  * assertions are made against the real rules, not a hand-written copy.
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from "@playwright/test";
+import { defineGateConfig } from './define-gate-config';
 
-export default defineConfig({
-  testDir: "../tests/render-gates/site",
-  testMatch: /card-media-track\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: "list",
-  outputDir: "../target/test-tmp/playwright-card-media-track",
-  use: { colorScheme: "light" },
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
-  ],
+export default defineGateConfig({
+  gate: 'card-media-track',
+  use: { colorScheme: 'light' },
 });

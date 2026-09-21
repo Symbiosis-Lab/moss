@@ -24,32 +24,15 @@
  *   npx playwright test -c playwright/nav-mobile.config.ts
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from "@playwright/test";
-import { buildScratchSite } from "../tests/e2e/helpers/scratch-site";
-import { NAV_MOBILE_GATE } from "../tests/e2e/helpers/gate-sites";
+import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
+import { NAV_MOBILE_GATE } from '../tests/e2e/helpers/gate-sites';
+import { defineGateConfig } from './define-gate-config';
 
+const PORT = 9377;
 const serveDir = buildScratchSite(NAV_MOBILE_GATE);
 
-export default defineConfig({
-  testDir: "../tests/render-gates/site",
-  testMatch: /nav-mobile\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: "list",
-  outputDir: "../target/test-tmp/playwright-nav-mobile",
-  use: {
-    baseURL: "http://localhost:9377/",
-    colorScheme: "light",
-  },
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
-  ],
-  webServer: {
-    command: `/usr/bin/python3 -m http.server 9377`,
-    cwd: serveDir,
-    url: "http://localhost:9377/",
-    reuseExistingServer: false,
-    timeout: 60_000,
-  },
+export default defineGateConfig({
+  gate: 'nav-mobile',
+  use: { baseURL: `http://localhost:${PORT}/`, colorScheme: 'light' },
+  webServer: { serveDir, port: PORT },
 });

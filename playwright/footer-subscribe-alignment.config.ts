@@ -9,21 +9,11 @@
  * disagree.
  *
  * Run via: pnpm run test:render-gates footer-subscribe-alignment
- * Test-artifact policy: outputDir inside repo under target/test-tmp/ (gitignored).
  */
-import { defineConfig, devices } from '@playwright/test';
+import { defineGateConfig } from './define-gate-config';
 
-export default defineConfig({
-  testDir: '../tests/render-gates/site',
-  testMatch: /footer-subscribe-alignment\.spec\.ts$/,
+export default defineGateConfig({
+  gate: 'footer-subscribe-alignment',
   fullyParallel: true,
-  reporter: 'list',
-  outputDir: '../target/test-tmp/playwright-footer-subscribe-alignment',
-  use: {
-    reducedMotion: 'reduce',
-  },
-  projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
-  ],
+  use: { reducedMotion: 'reduce' },
 });

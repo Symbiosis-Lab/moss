@@ -22,34 +22,20 @@
  * scripts, so a rebuilt bundle invalidates the cached site on its own.
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from "@playwright/test";
-import { buildScratchSite } from "../tests/e2e/helpers/scratch-site";
-import { SHARE_CARD_GATE } from "../tests/e2e/helpers/gate-sites";
+import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
+import { SHARE_CARD_GATE } from '../tests/e2e/helpers/gate-sites';
+import { defineGateConfig } from './define-gate-config';
 
+const PORT = 8757;
 const serveDir = buildScratchSite(SHARE_CARD_GATE);
 
-export default defineConfig({
-  testDir: "../tests/render-gates/site",
-  testMatch: /share-card\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: "list",
-  outputDir: "../target/test-tmp/playwright-share-card",
+export default defineGateConfig({
+  gate: 'share-card',
   use: {
-    baseURL: "http://localhost:8757/",
+    baseURL: `http://localhost:${PORT}/`,
     // The card's paper background is the light palette's `#f5f0e6`; the
     // "no strip" assertion samples for exactly that, so the scheme is pinned.
-    colorScheme: "light",
+    colorScheme: 'light',
   },
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
-  ],
-  webServer: {
-    command: `/usr/bin/python3 -m http.server 8757`,
-    cwd: serveDir,
-    url: "http://localhost:8757/",
-    reuseExistingServer: false,
-    timeout: 60_000,
-  },
+  webServer: { serveDir, port: PORT },
 });

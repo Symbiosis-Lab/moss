@@ -14,18 +14,10 @@
  * behind a token block built from tokens.json, straight into `page.setContent`.
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from "@playwright/test";
+import { defineGateConfig } from './define-gate-config';
 
-export default defineConfig({
-  testDir: "../tests/render-gates/site",
-  testMatch: /elevation\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: "list",
-  outputDir: "../target/test-tmp/playwright-site-elevation",
-  use: { colorScheme: "light" },
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
-  ],
+export default defineGateConfig({
+  gate: 'site-elevation',
+  specName: 'elevation',
+  use: { colorScheme: 'light' },
 });

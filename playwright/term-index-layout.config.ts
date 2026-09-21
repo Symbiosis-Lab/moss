@@ -13,18 +13,9 @@
  * straight into `page.setContent`.
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from "@playwright/test";
+import { defineGateConfig } from './define-gate-config';
 
-export default defineConfig({
-  testDir: "../tests/render-gates/site",
-  testMatch: /term-index-layout\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: "list",
-  outputDir: "../target/test-tmp/playwright-term-index-layout",
-  use: { colorScheme: "light" },
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
-  ],
+export default defineGateConfig({
+  gate: 'term-index-layout',
+  use: { colorScheme: 'light' },
 });

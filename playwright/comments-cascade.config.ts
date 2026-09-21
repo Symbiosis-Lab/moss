@@ -21,32 +21,16 @@
  *   npx playwright test -c playwright/comments-cascade.config.ts
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from "@playwright/test";
-import { buildScratchSite } from "../tests/e2e/helpers/scratch-site";
-import { COMMENTS_CASCADE_GATE } from "../tests/e2e/helpers/gate-sites";
+import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
+import { COMMENTS_CASCADE_GATE } from '../tests/e2e/helpers/gate-sites';
+import { defineGateConfig } from './define-gate-config';
 
+const PORT = 8744;
 const serveDir = buildScratchSite(COMMENTS_CASCADE_GATE);
 
-export default defineConfig({
-  testDir: "../tests/render-gates/cascade",
-  testMatch: /comments-cascade\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: "list",
-  outputDir: "../target/test-tmp/playwright-comments-cascade",
-  use: {
-    baseURL: "http://localhost:8744/",
-    colorScheme: "light"
-  },
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
-  ],
-  webServer: {
-    command: `/usr/bin/python3 -m http.server 8744`,
-    cwd: serveDir,
-    url: "http://localhost:8744/",
-    reuseExistingServer: false,
-    timeout: 60_000,
-  },
+export default defineGateConfig({
+  gate: 'comments-cascade',
+  testDir: 'cascade',
+  use: { baseURL: `http://localhost:${PORT}/`, colorScheme: 'light' },
+  webServer: { serveDir, port: PORT },
 });

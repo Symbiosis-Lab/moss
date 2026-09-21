@@ -8,21 +8,11 @@
  * vertical writing modes are where engines historically disagree.
  *
  * Run via: pnpm run test:render-gates vertical-measure
- * Test-artifact policy: outputDir inside repo under target/test-tmp/ (gitignored).
  */
-import { defineConfig, devices } from '@playwright/test';
+import { defineGateConfig } from './define-gate-config';
 
-export default defineConfig({
-  testDir: '../tests/render-gates/site',
-  testMatch: /vertical-measure\.spec\.ts$/,
+export default defineGateConfig({
+  gate: 'vertical-measure',
   fullyParallel: true,
-  reporter: 'list',
-  outputDir: '../target/test-tmp/playwright-vertical-measure',
-  use: {
-    reducedMotion: 'reduce',
-  },
-  projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
-  ],
+  use: { reducedMotion: 'reduce' },
 });

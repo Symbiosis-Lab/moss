@@ -20,32 +20,20 @@
  *   npx playwright test -c playwright/no-important-cascade.config.ts
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from "@playwright/test";
-import { buildScratchSite } from "../tests/e2e/helpers/scratch-site";
-import { NO_IMPORTANT_GATE } from "../tests/e2e/helpers/gate-sites";
+import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
+import { NO_IMPORTANT_GATE } from '../tests/e2e/helpers/gate-sites';
+import { defineGateConfig } from './define-gate-config';
 
+const PORT = 8792;
 const serveDir = buildScratchSite(NO_IMPORTANT_GATE);
 
-export default defineConfig({
-  testDir: "../tests/render-gates/cascade",
-  testMatch: /no-important-cascade\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: "list",
-  outputDir: "../target/test-tmp/playwright-no-important-gate",
+export default defineGateConfig({
+  gate: 'no-important-cascade',
+  testDir: 'cascade',
+  outputDir: '../target/test-tmp/playwright-no-important-gate',
   use: {
-    baseURL: "http://localhost:8792/",
-    colorScheme: "light", // pin light so dark-mode :root vars do not interfere
+    baseURL: `http://localhost:${PORT}/`,
+    colorScheme: 'light', // pin light so dark-mode :root vars do not interfere
   },
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
-  ],
-  webServer: {
-    command: `/usr/bin/python3 -m http.server 8792`,
-    cwd: serveDir,
-    url: "http://localhost:8792/",
-    reuseExistingServer: false,
-    timeout: 60_000,
-  },
+  webServer: { serveDir, port: PORT },
 });

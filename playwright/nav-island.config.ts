@@ -21,35 +21,12 @@
  * produces (pinned by `nav_island_harness_matches_the_emitter`).
  *
  * Run via: pnpm run test:render-gates nav-island
- * Test-artifact policy: outputDir inside repo under target/test-tmp/ (gitignored).
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from '@playwright/test';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { defineGateConfig } from './define-gate-config';
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-
-export default defineConfig({
-  testDir: '../tests/render-gates/site',
-  testMatch: /nav-island\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: 'list',
-  outputDir: '../target/test-tmp/playwright-nav-island',
-  use: {
-    baseURL: 'http://localhost:5404',
-    reducedMotion: 'reduce',
-  },
-  projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
-  ],
-  webServer: {
-    command: 'npx vite --config playwright/vite.nav-island-harness.config.ts',
-    cwd: repoRoot,
-    port: 5404,
-    reuseExistingServer: false,
-    timeout: 60000,
-  },
+export default defineGateConfig({
+  gate: 'nav-island',
+  use: { baseURL: 'http://localhost:5404', reducedMotion: 'reduce' },
+  webServer: { configFile: 'playwright/vite.nav-island-harness.config.ts', port: 5404 },
 });

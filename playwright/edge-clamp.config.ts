@@ -19,35 +19,12 @@
  * plus the production placement modules, served through vite.
  *
  * Run via: pnpm run test:render-gates edge-clamp
- * Test-artifact policy: outputDir inside repo under target/test-tmp/ (gitignored).
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from '@playwright/test';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { defineGateConfig } from './define-gate-config';
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-
-export default defineConfig({
-  testDir: '../tests/render-gates/site',
-  testMatch: /edge-clamp\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: 'list',
-  outputDir: '../target/test-tmp/playwright-edge-clamp',
-  use: {
-    baseURL: 'http://localhost:5405',
-    reducedMotion: 'reduce',
-  },
-  projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
-  ],
-  webServer: {
-    command: 'npx vite --config playwright/vite.edge-clamp-harness.config.ts',
-    cwd: repoRoot,
-    port: 5405,
-    reuseExistingServer: false,
-    timeout: 60000,
-  },
+export default defineGateConfig({
+  gate: 'edge-clamp',
+  use: { baseURL: 'http://localhost:5405', reducedMotion: 'reduce' },
+  webServer: { configFile: 'playwright/vite.edge-clamp-harness.config.ts', port: 5405 },
 });

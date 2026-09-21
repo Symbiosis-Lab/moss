@@ -19,32 +19,17 @@
  *   npx playwright test -c playwright/heading-weight.config.ts
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from "@playwright/test";
-import { buildScratchSite } from "../tests/e2e/helpers/scratch-site";
-import { HEADING_WEIGHT_GATE } from "../tests/e2e/helpers/gate-sites";
+import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
+import { HEADING_WEIGHT_GATE } from '../tests/e2e/helpers/gate-sites';
+import { defineGateConfig } from './define-gate-config';
 
+const PORT = 8745;
 const serveDir = buildScratchSite(HEADING_WEIGHT_GATE);
 
-export default defineConfig({
-  testDir: "../tests/render-gates/cascade",
-  testMatch: /heading-weight\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: "list",
-  outputDir: "../target/test-tmp/playwright-heading-weight-gate",
-  use: {
-    baseURL: "http://localhost:8745/",
-    colorScheme: "light"
-  },
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
-  ],
-  webServer: {
-    command: `/usr/bin/python3 -m http.server 8745`,
-    cwd: serveDir,
-    url: "http://localhost:8745/",
-    reuseExistingServer: false,
-    timeout: 60_000,
-  },
+export default defineGateConfig({
+  gate: 'heading-weight',
+  testDir: 'cascade',
+  outputDir: '../target/test-tmp/playwright-heading-weight-gate',
+  use: { baseURL: `http://localhost:${PORT}/`, colorScheme: 'light' },
+  webServer: { serveDir, port: PORT },
 });

@@ -9,19 +9,10 @@
  *
  * Run via: pnpm run test:render-gates article-date-alignment
  */
-import { defineConfig, devices } from '@playwright/test';
+import { defineGateConfig } from './define-gate-config';
 
-export default defineConfig({
-  testDir: '../tests/render-gates/site',
-  testMatch: /article-date-alignment\.spec\.ts$/,
+export default defineGateConfig({
+  gate: 'article-date-alignment',
   fullyParallel: true,
-  reporter: 'list',
-  outputDir: '../target/test-tmp/playwright-article-date-alignment',
-  use: {
-    reducedMotion: 'reduce',
-  },
-  projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
-  ],
+  use: { reducedMotion: 'reduce' },
 });

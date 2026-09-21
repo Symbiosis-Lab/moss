@@ -18,36 +18,24 @@
  *   npx playwright test -c playwright/pre-paint-dark.config.ts
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from "@playwright/test";
-import { buildScratchSite } from "../tests/e2e/helpers/scratch-site";
-import { PRE_PAINT_DARK_GATE } from "../tests/e2e/helpers/gate-sites";
+import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
+import { PRE_PAINT_DARK_GATE } from '../tests/e2e/helpers/gate-sites';
+import { defineGateConfig } from './define-gate-config';
 
+const PORT = 9371;
 const serveDir = buildScratchSite(PRE_PAINT_DARK_GATE);
 
-export default defineConfig({
-  testDir: "../tests/render-gates/cascade",
-  testMatch: /pre-paint-dark\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: "list",
-  outputDir: "../target/test-tmp/playwright-pre-paint-dark-gate",
+export default defineGateConfig({
+  gate: 'pre-paint-dark',
+  testDir: 'cascade',
+  outputDir: '../target/test-tmp/playwright-pre-paint-dark-gate',
   use: {
-    baseURL: "http://localhost:9371/",
-    colorScheme: "dark",
+    baseURL: `http://localhost:${PORT}/`,
+    colorScheme: 'dark',
     // A dark-preference OS with empty localStorage: the pre-paint script must
     // read matchMedia("(prefers-color-scheme: dark)") and set data-theme="dark"
     // before first paint. The fixture has no @media dark block, so nothing else
     // can produce the dark background.
   },
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
-  ],
-  webServer: {
-    command: `/usr/bin/python3 -m http.server 9371`,
-    cwd: serveDir,
-    url: "http://localhost:9371/",
-    reuseExistingServer: false,
-    timeout: 60_000,
-  },
+  webServer: { serveDir, port: PORT },
 });

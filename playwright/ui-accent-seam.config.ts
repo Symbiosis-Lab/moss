@@ -29,44 +29,24 @@
  *   npx playwright test -c playwright/ui-accent-seam.config.ts
  */
 import './localhost-no-proxy';
-import { defineConfig, devices } from "@playwright/test";
-import { buildScratchSite } from "../tests/e2e/helpers/scratch-site";
+import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
 import {
   UI_ACCENT_SEAM_DEFAULT,
   UI_ACCENT_SEAM_OVERRIDE,
-} from "../tests/e2e/helpers/gate-sites";
+} from '../tests/e2e/helpers/gate-sites';
+import { defineGateConfig } from './define-gate-config';
 
 const defaultServeDir = buildScratchSite(UI_ACCENT_SEAM_DEFAULT);
 const overrideServeDir = buildScratchSite(UI_ACCENT_SEAM_OVERRIDE);
 
-export default defineConfig({
-  testDir: "../tests/render-gates/cascade",
-  testMatch: /ui-accent-seam\.spec\.ts$/,
-  fullyParallel: false,
-  workers: 1,
-  reporter: "list",
-  outputDir: "../target/test-tmp/playwright-ui-accent-seam",
+export default defineGateConfig({
+  gate: 'ui-accent-seam',
+  testDir: 'cascade',
   use: {
-    colorScheme: "light", // pin light so dark-mode vars do not interfere
+    colorScheme: 'light', // pin light so dark-mode vars do not interfere
   },
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
-  ],
   webServer: [
-    {
-      command: `/usr/bin/python3 -m http.server 9373`,
-      cwd: defaultServeDir,
-      url: "http://localhost:9373/",
-      reuseExistingServer: false,
-      timeout: 60_000,
-    },
-    {
-      command: `/usr/bin/python3 -m http.server 9374`,
-      cwd: overrideServeDir,
-      url: "http://localhost:9374/",
-      reuseExistingServer: false,
-      timeout: 60_000,
-    },
+    { serveDir: defaultServeDir, port: 9373 },
+    { serveDir: overrideServeDir, port: 9374 },
   ],
 });
