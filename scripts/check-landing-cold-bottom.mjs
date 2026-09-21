@@ -38,9 +38,33 @@ try {
       await page.mouse.wheel(0, 10000);
       await page.mouse.wheel(0, 10000);
     }
-    await page.waitForTimeout(250);
+    if (test.mobile) {
+      // Mobile's nativeScroll() stays true through the close (unit 4 left it
+      // untouched), so a real wheel/scroll burst still lands on the browser's
+      // own document edge synchronously -- the old fixed wait is still enough.
+      await page.waitForTimeout(250);
+    } else {
+      // Desktop now commits the DEPLOY..SHARE boundary the same way as every
+      // other scene boundary (unit 4, review-phases-2-4.md Job 2 item 5): a
+      // release pulls back to restY(4)/closingRestY(), which by design sits
+      // short of document.scrollHeight itself (closingRestY()'s own docblock:
+      // "the footer remains a natural scroll away") -- a burst no longer rests
+      // on the literal max. The pull also takes measurably longer than the old
+      // synchronous native jump (measured 2026-09-21: still 39px short at
+      // 250ms, exactly on restY(4) by ~1.5s), so wait for the spring to say
+      // it's actually arrived rather than reusing the old fixed delay.
+      await page.waitForFunction(() => {
+        const s = window.__landing.state();
+        return !s.running && Math.abs(scrollY - window.__landing.restY(4)) <= 2;
+      }, null, { timeout: 2500 }).catch(async error => { throw new Error(`${test.name}: never settled at its committed rest: ${JSON.stringify(await state(page))}`, { cause: error }); });
+    }
     const cold = await state(page);
-    assert(!cold.ready && cold.y === cold.max, `${test.name}: fixture delay did not hold cold load at bottom: ${JSON.stringify(cold)}`);
+    if (test.mobile) {
+      assert(!cold.ready && cold.y === cold.max, `${test.name}: fixture delay did not hold cold load at bottom: ${JSON.stringify(cold)}`);
+    } else {
+      const restShare = await page.evaluate(() => window.__landing.restY(4));
+      assert(!cold.ready && Math.abs(cold.y - restShare) <= 2, `${test.name}: fixture delay did not hold cold load at its committed rest: ${JSON.stringify({ ...cold, restShare })}`);
+    }
     assert(cold.shown === 4 && cold.xf === 1 && cold.closing, `${test.name}: closing missing before capture readiness`);
 
     await page.mouse.move(10, 100);
