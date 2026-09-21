@@ -3154,25 +3154,34 @@ let restSince = performance.now(), travel = 0;
 // (the earlier one-line park fix overshot to scene 0 under load for exactly
 // this reason) -- and a real gap lets it lapse without anyone writing a demotion.
 const contact = { direct: false, wheelUntil: 0 };
-let run = null, armed = false;
+let run = null, restOwed = false;
 const gestureHeld = (now) => contact.direct || now < contact.wheelUntil;
-const gestureKind = (now) => run ? 'settling' : gestureHeld(now) ? 'held' : armed ? 'coasting' : 'idle';
-// The one published, cached read (landing.state() below): `reason` is
-// written immediately by whichever setter changes something, `kind` only by
-// tickGesture, so a reader never sees a reason newer than the kind it
-// explains.
-const gesture = { kind: 'idle', reason: null };
+// No cache: every reader, production and the harness alike, calls this with
+// its own `now` rather than trusting a value some earlier frame wrote. Unit 1
+// cached this once a frame and read the cache everywhere but state(), which
+// brought M1's own staleness bug back on the other side -- production and
+// state() could disagree about what the hand was doing right now (unit 1b
+// review). Two comparisons is cheap enough to just run again.
+const gestureKind = (now) => run ? 'settling' : gestureHeld(now) ? 'held' : restOwed ? 'coasting' : 'idle';
+// `reason` is the only thing still published as a single cached field --
+// written immediately by whichever setter changes something, nothing else
+// depends on its timing the way kind's callers did.
+const gesture = { reason: null };
 // Run unconditionally from the one watchScroll loop, before it dispatches to
 // any role, so a wheel hold expires the same way in watchScrollDesktop,
 // watchScrollNative or watchScrollReduced alike (M1 -- the old staleness
-// check lived in watchScrollDesktop only, so `kind` stayed `held` forever
-// once nativeScroll() routed elsewhere: the 4<->5 park at xf≈0.5). Also the
-// one place that notices a hold lapsing with nothing else arriving to arm a
-// rest for it -- a flick across a boundary with no further tick.
+// check lived in watchScrollDesktop only, so a held read stuck forever once
+// nativeScroll() routed elsewhere: the 4<->5 park at xf≈0.5). Also the one
+// place that notices a hold lapsing with nothing else arriving to arm a rest
+// for it -- a flick across a boundary with no further tick. wasHeld is its
+// own local, the raw value tickGesture itself saw last time, not a read of
+// any published field -- so the edge it detects can never be masked by
+// something else's idea of what kind was between two of its own calls.
+let wasHeld = false;
 function tickGesture(now) {
-  const wasHeld = gesture.kind === 'held';
-  if (wasHeld && !gestureHeld(now)) { armed = true; gesture.reason = 'release'; }
-  gesture.kind = gestureKind(now);
+  const held = gestureHeld(now);
+  if (wasHeld && !held) { restOwed = true; gesture.reason = 'release'; }
+  wasHeld = held;
 }
 // Cancels an outgoing settle itself, so no setter depends on running before
 // another to avoid orphaning a live rAF that keeps writing scrollY while direct
@@ -3185,7 +3194,7 @@ function cancelRun() { if (run) { run.cancel = true; run = null; } }
 // as momentum. `coasting` is this, renamed and derived rather than set directly.
 function armSettle(reason) {
   const now = performance.now();
-  if (!gestureHeld(now) && !run) { armed = true; gesture.reason = reason; }
+  if (!gestureHeld(now) && !run) { restOwed = true; gesture.reason = reason; }
 }
 // The opening is a held first frame. A rest target is allowed to move the page
 // only after a real gesture has armed the carry, so a loaded page never pages
@@ -3252,7 +3261,10 @@ function settleTo(y, v0, secs) {
     const dt = Math.min(0.25, Math.max(0, (now - last) / 1000)) * rate; last = now;
     [x, v] = springStep(x, v, dt, SETTLE_K);
     if (Math.abs(x) < 0.5 && Math.abs(v) < 4) {
-      if (run === thisRun) { run = null; armed = false; gesture.reason = 'done'; }
+      // Not restOwed = false here: both callers that ever start a run
+      // (settleAtRest, the closing gate) already clear it before calling
+      // settleTo -- dead in both paths (unit 1b review).
+      if (run === thisRun) { run = null; gesture.reason = 'done'; }
       scrollTo(0, y);
       return;
     }
@@ -3293,8 +3305,8 @@ const sceneForRest = (p, dir) => (dir === 0 ? Math.round(p) : dir < 0 ? Math.flo
 // top; a downward gesture at the same position still selects scene 1.
 const restSceneAt = (p, dir) => dir <= 0 && scrollY < restY(0) ? -1 : sceneForRest(p, dir);
 function settleAtRest(now) {
-  if (!inputArmed || gesture.kind !== 'coasting' || now - restSince < REST_MS) return;
-  armed = false; gesture.reason = 'fire';
+  if (!inputArmed || gestureKind(now) !== 'coasting' || now - restSince < REST_MS) return;
+  restOwed = false; gesture.reason = 'fire';
   const scene = restSceneAt(progressAt(), travel);
   const visualScene = Math.max(0, scene);
   // A wash owed or already running lends its clock; with none, the spring
@@ -3411,11 +3423,12 @@ function watchScrollDesktop(now) {
   const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
   if (carryX == null) carryX = scrollY;
   if (!inputArmed) { carryX = scrollY; carryV = 0; return; }
-  // A wheel hold goes stale on its own once contact.wheelUntil lapses; tickGesture
-  // re-derives `held` from it once a frame, ahead of every role (M1), not a check this
-  // role alone used to run. A direct hold needs none, pointerup/touchend/touchcancel
-  // already turn it off.
-  const carryHeld = gesture.kind === 'held';
+  // A wheel hold goes stale on its own once contact.wheelUntil lapses -- read fresh
+  // here with this frame's own `now`, not a value some earlier frame cached (M1/unit
+  // 1b: acting on a stale cached kind while state() read live was the same class of
+  // bug M1 fixed, just moved). A direct hold needs no staleness check at all,
+  // pointerup/touchend/touchcancel already turn it off.
+  const carryHeld = gestureKind(now) === 'held';
   if (carryHeld) {
     // Direct manipulation: no pull. scrollY is the ground truth of what actually moved the
     // page this frame — native touch/scrollbar-drag scrolling, or the wheel listener's own
@@ -3545,9 +3558,18 @@ function watchScrollNative(now) {
   // band and on the gesture -- never on the sign of the last delta (M1's second defect: a
   // release with travel === 0, a reload restored mid-crossfade or a settle's own last frame
   // zeroing it, used to park just the same). travel still says which side to carry to.
-  // Mobile stays on the observational path above through the whole close.
-  if (!mobileLayout() && xfAt() > 0 && xfAt() < 1 && gesture.kind === 'coasting' && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
-    armed = false; gesture.reason = 'close';
+  // No xfAt() < 1 upper bound: closingRestY() also has to reveal the signup form below
+  // the title, more scroll than just crossing the band, so xfAt() reaches 1 well before
+  // a hard flick reaches its own rest -- gating on the band's completion parked that
+  // flick short of the form (unit 1b review). Nothing here re-fires once arrived: firing
+  // clears restOwed and starts a run, so kind reads 'settling' then 'idle', never
+  // 'coasting' again without a fresh hold-then-release. Mobile stays observational.
+  if (!mobileLayout() && xfAt() > 0 && gestureKind(now) === 'coasting' && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
+    restOwed = false; gesture.reason = 'close';
+    // travel === 0's tie-break duplicates sceneForRest's own DEAD-zone rounding, and
+    // five.offsetTop - innerHeight * .8 duplicates xfAt()'s band geometry -- both
+    // collapse into progressAt()/restY() once the closing-progress unit (Job 2 unit 2)
+    // extends them over this boundary; not refactored here.
     const forward = travel > 0 || (travel === 0 && xfAt() >= 0.5);
     const destination = forward ? Math.max(scrollY, closingRestY()) : Math.min(scrollY, five.offsetTop - innerHeight * .8);
     if (reduce) scrollTo(0, destination);
@@ -3912,11 +3934,9 @@ landing.restY = restY;   // the settle's own geometry, so a rest check reads it 
 landing.targetAt = targetAt;   // what a rested position names, read the same way the wash reads it
 landing.sceneForRest = sceneForRest;   // which scene a rest carries to, the same formula settleAtRest uses
 landing.printGeneration = () => printGeneration;   // a monotonic count, bumped only by applyPrintRect -- ground truth for "did the rect actually change", never a transient read of prints itself
-landing.state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, // held/settle read the raw state live, not the once-a-frame gesture.kind cache: a
-// synchronous external read (this harness call itself, the test suite) can land
-// between a direct-manipulation event and the next tickGesture, and the record
-// it asks about is exactly the one the event just changed.
-settle: run !== null, held: !run && gestureHeld(performance.now()), reason: gesture.reason, settleSecs: settleAt.secs, settleCureLeft: settleAt.cureLeft, settleShown: settleAt.shown, settleRunning: settleAt.running, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, titleSteps, titleReady, titleMode });
+// settle/held/kind all call gestureKind(now) fresh, the same function every production
+// read site calls -- no cached field for this or any other reader to disagree with.
+landing.state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: gestureKind(performance.now()) === 'settling', held: gestureKind(performance.now()) === 'held', kind: gestureKind(performance.now()), reason: gesture.reason, settleSecs: settleAt.secs, settleCureLeft: settleAt.cureLeft, settleShown: settleAt.shown, settleRunning: settleAt.running, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, titleSteps, titleReady, titleMode });
 
 const when = (frame, key) => new Promise((resolve, reject) => {
   const deadline = setTimeout(() => { clearInterval(poll); reject(new Error(`Demo ${frame.id} did not initialize`)); }, 10000);

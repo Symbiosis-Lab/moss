@@ -41,7 +41,12 @@ const BASELINE = {
   // object per concern instead of one let per field, with kind fully DERIVED
   // rather than written by five call sites. contact/gesture/settleAt are
   // const (only their fields mutate), so the fall is real, not a rename.
-  topLevelLets: 84,
+  // Unit 1b (2026-09-21): rose 84 -> 85. Deleting the once-a-frame kind
+  // cache (a strict-review fault: production read it, state() read live, the
+  // two could disagree) needed one genuinely new binding, wasHeld -- the raw
+  // value tickGesture itself saw last call, since a per-call local can no
+  // longer carry it once there is no cached kind to read on the next call.
+  topLevelLets: 85,
   sceneComparisons: 14,
   // Unit 0a: rose again -- the mobile header band's fix (one shared
   // body::before band interpolating colour through --xf instead of two
@@ -65,7 +70,15 @@ const BASELINE = {
   // once-a-frame gesture.kind cache, caught by I-gesture(c) itself -- a
   // synchronous pointerdown-then-read from the harness landed between the
   // event and the next tickGesture and saw the stale cached kind.
-  scriptBytes: 244161,
+  // Unit 1b (2026-09-21): rose again, 244161 -> 245796, for a strict
+  // re-review's four MUST fixes: deleting the kind cache (every production
+  // read site now calls gestureKind(now) itself, replacing one field read
+  // with a short comment at each site), the closing gate's xfAt() < 1 upper
+  // bound deleted (a real regression -- it excluded a hard flick past the
+  // band from ever settling to closingRestY()), one-line pointers at the
+  // gate's own duplicated geometry naming the unit that deletes it, and the
+  // new overshoot-close invariant this bug needed to be caught at all.
+  scriptBytes: 245796,
 };
 
 function countWindowAssignments(text) {
