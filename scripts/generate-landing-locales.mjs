@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
 
 const source = new URL('../site/index.html', import.meta.url);
 const html = await readFile(source, 'utf8');
@@ -69,6 +70,17 @@ async function emit(url, contents) {
   }
   await writeFile(url, contents);
 }
+// Same contract as emit(), for a binary target (favicon.ico): --check
+// compares bytes instead of decoding as UTF-8, which would corrupt a PNG's
+// own bytes into an unequal string on the read alone.
+async function emitBinary(url, buffer) {
+  if (process.argv.includes('--check')) {
+    const current = await readFile(url).catch(() => null);
+    if (!current || !current.equals(buffer)) throw new Error(`${url.pathname} is stale; run node scripts/generate-landing-locales.mjs`);
+    return;
+  }
+  await writeFile(url, buffer);
+}
 
 for (const locale of ['zh-hans', 'zh-hant']) {
   const directory = new URL(`../site/${locale}/`, import.meta.url);
@@ -103,3 +115,48 @@ await emit(new URL('../site/assets/brand/favicon.svg', import.meta.url), favicon
 // symlinks are one more thing a deploy path has to preserve faithfully, and
 // this file changes only when the mark itself does.
 await emit(new URL('../site/assets/favicon.svg', import.meta.url), favicon);
+
+// A real /favicon.ico (site owner finding 6, 2026-09-21): browsers request
+// this path directly, by convention, regardless of what a page's own <link
+// rel="icon"> says, and this site never had one -- 404 in both eras. The
+// docs pages already get PNG fallbacks (apple-touch-icon 180, 32, 16) for
+// free: crates/moss-build's resolve_favicon rasterizes them at build time
+// from this same assets/favicon.svg (never assets/brand/), so nothing here
+// needs to duplicate that. An .ico is not among what it produces, and it
+// runs after this script (moss-cli build site, not generate-landing-
+// locales.mjs), so it cannot supply one either -- generated here instead,
+// straight from the tightened SVG above, with rsvg-convert (the same tool
+// used to spot-check this crop while it was being measured). #faf8f5
+// matches crates/moss-build/src/build/site_meta/favicon.rs's own paper()
+// background, so this and the build-time PNGs read as one consistent icon
+// rather than two different crops or grounds.
+function rasterizePNG(svg, size) {
+  return execFileSync('rsvg-convert', ['-w', String(size), '-h', String(size), '-b', '#faf8f5'], { input: svg, maxBuffer: 1024 * 1024 });
+}
+// A minimal ICO container: a 6-byte header, one 16-byte directory entry per
+// image, then the images themselves verbatim -- modern ICO readers (every
+// browser; Windows since Vista) accept PNG-encoded entries directly, so
+// this packs the same PNG bytes rsvg-convert already produced rather than
+// re-encoding through BMP.
+function packICO(images) {
+  const count = images.length;
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0); header.writeUInt16LE(1, 2); header.writeUInt16LE(count, 4);
+  let offset = 6 + count * 16;
+  const dir = Buffer.alloc(count * 16);
+  images.forEach(({ size, data }, i) => {
+    const e = i * 16;
+    dir.writeUInt8(size >= 256 ? 0 : size, e); dir.writeUInt8(size >= 256 ? 0 : size, e + 1);
+    dir.writeUInt8(0, e + 2); dir.writeUInt8(0, e + 3);
+    dir.writeUInt16LE(1, e + 4); dir.writeUInt16LE(32, e + 6);
+    dir.writeUInt32LE(data.length, e + 8); dir.writeUInt32LE(offset, e + 12);
+    offset += data.length;
+  });
+  return Buffer.concat([header, dir, ...images.map((im) => im.data)]);
+}
+try {
+  const ico = packICO([16, 32].map((size) => ({ size, data: rasterizePNG(favicon, size) })));
+  await emitBinary(new URL('../site/favicon.ico', import.meta.url), ico);
+} catch (e) {
+  throw new Error(`favicon.ico generation needs rsvg-convert on PATH (brew install librsvg / apt install librsvg2-bin): ${e.message}`);
+}

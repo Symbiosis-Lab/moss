@@ -4,7 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <base href="/">
+<!-- apple-touch-icon + PNG fallbacks: rasterized at build time by
+     crates/moss-build's resolve_favicon from assets/favicon.svg (not this
+     page's own assets/brand/ copy) -- the docs pages already declare the
+     same three; repeated here since this page never loads moss's own
+     template. One ground (#faf8f5): a raster has no @media rule to swap. -->
+<link rel="apple-touch-icon" sizes="180x180" href="/assets/favicon-180.png">
 <link rel="icon" type="image/svg+xml" href="/assets/brand/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16.png">
 <script>
 // Favicon dark-mode swap — kept identical in spirit to site/.moss/theme/script.js,
 // but duplicated here because this page is a verbatim passthrough (see

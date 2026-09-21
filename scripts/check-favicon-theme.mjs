@@ -16,6 +16,8 @@ const engines = await loadPlaywright();
 const engineNames = (process.env.ENGINE || 'chromium,webkit').split(',');
 const pages = [
   { path: '', name: 'landing-en' },
+  { path: 'zh-hans/', name: 'landing-zh-hans' },
+  { path: 'zh-hant/', name: 'landing-zh-hant' },
   { path: 'zh-hans/开始使用/', name: 'docs-zh-hans' },
   { path: 'zh-hant/開始使用/', name: 'docs-zh-hant' },
   { path: 'get-started/', name: 'docs-en' },
@@ -37,6 +39,24 @@ for (const engineName of engineNames) {
             await page.goto(new URL(path, base).href, { waitUntil: 'load' });
             await page.waitForTimeout(200); // let the matchMedia listener's initial apply() run
             const icons = await page.evaluate(() => [...document.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"]')].map(l => ({ rel: l.getAttribute('rel'), sizes: l.getAttribute('sizes'), href: l.getAttribute('href') })));
+            // Site owner finding 6, 2026-09-21: the landing page declared
+            // only an SVG icon (no apple-touch-icon, no PNG, no manifest)
+            // and /favicon.ico was 404 -- a phone's tab switcher fell back
+            // to moss's own OLD bundled mark. Every declared icon href, plus
+            // /favicon.ico (browsers request it directly, by convention,
+            // regardless of what a page's <link> says), must resolve with
+            // the current mark. The set does not depend on colour scheme,
+            // so this runs once per page rather than once per scheme too.
+            if (scheme === 'light') {
+              const urls = [...new Set([...icons.map((i) => i.href), '/favicon.ico'])];
+              for (const href of urls) {
+                const abs = new URL(href, page.url()).href;
+                const res = await page.evaluate((u) => fetch(u).then((r) => ({ ok: r.ok, status: r.status, type: r.headers.get('content-type') })), abs);
+                if (!res.ok || !res.type?.startsWith('image/')) {
+                  failures.push({ engine: engineName, page: name, problem: `${href} -> status ${res.status}, content-type ${res.type}` });
+                }
+              }
+            }
             const svgIcon = icons.find(i => i.href?.endsWith('.svg'));
             if (!svgIcon) { failures.push({ engine: engineName, scheme, page: name, problem: 'No SVG <link rel="icon"> found' }); continue; }
             if (scheme === 'dark' && !svgIcon.href.includes('favicon-dark')) failures.push({ engine: engineName, scheme, page: name, problem: `Dark scheme did not swap to a dark icon: ${svgIcon.href}` });

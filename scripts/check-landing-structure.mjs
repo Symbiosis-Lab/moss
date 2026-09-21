@@ -94,7 +94,11 @@ const BASELINE = {
   // vector-effect works "regardless of scale", the false premise that let
   // the bug ship -- is shorter than what it replaced by more than the code
   // grew.
-  htmlBytes: 54391,
+  // Icons (finding 6, 2026-09-21): rose 54391 -> 54990. Four new <link>
+  // tags (apple-touch-icon, PNG 32, PNG 16, plus the existing SVG) and the
+  // comment explaining why this page repeats what the docs template
+  // already declares -- real markup, not bloat.
+  htmlBytes: 54990,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a
