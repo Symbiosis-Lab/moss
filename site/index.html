@@ -243,15 +243,15 @@
      so the two running rings cost the main thread nothing once placed. */
   #pub-cue { position: fixed; inset: 0; z-index: 60; pointer-events: none; display: none; }
   #pub-cue.on { display: block; }
-  /* A 2x2 CSS-px SVG so scale(r0) turns it into a circle of radius r0 -- one
-     `transform` carries both the resting size and the whole breath, and
-     vector-effect below keeps the drawn stroke at 1px regardless of that
-     scale, which a bordered box scaling up cannot do (the border thickens
-     with it). */
-  .pub-ring { position: absolute; left: 0; top: 0; width: 2px; height: 2px; animation: none; }
+  /* A 2x2 CSS-px SVG; the transform lives on the inner <g>, so
+     vector-effect (which only cancels a transform inside the SVG) can
+     apply. overflow:visible: an SVG clips to its own box by default,
+     and the <g> alone would clip the ring away. */
+  .pub-ring { position: absolute; left: 0; top: 0; width: 2px; height: 2px; overflow: visible; }
+  .pub-ring g { animation: none; }
   .pub-ring circle { fill: none; stroke: var(--text); stroke-width: 1px; vector-effect: non-scaling-stroke; }
-  #pub-cue.on .pub-ring { animation: pub-ring-breathe var(--pub-ring-period, 7s) cubic-bezier(.2, .6, .35, 1) infinite; }
-  #pub-cue.on .pub-ring:nth-child(2) { animation-delay: calc(var(--pub-ring-period, 7s) * -0.5); }
+  #pub-cue.on .pub-ring g { animation: pub-ring-breathe var(--pub-ring-period, 7s) cubic-bezier(.2, .6, .35, 1) infinite; }
+  #pub-cue.on .pub-ring:nth-child(2) g { animation-delay: calc(var(--pub-ring-period, 7s) * -0.5); }
   @keyframes pub-ring-breathe {
     0% { transform: translate(var(--pub-ring-cx), var(--pub-ring-cy)) scale(var(--pub-ring-r0, 1)); opacity: .5; }
     55% { opacity: .16; }
@@ -260,8 +260,8 @@
   /* No breath to hold still for: one ring, born at its resting size and left
      there, is the whole cue. */
   @media (prefers-reduced-motion: reduce) {
-    #pub-cue.on .pub-ring { animation: none; opacity: .35; transform: translate(var(--pub-ring-cx), var(--pub-ring-cy)) scale(calc(var(--pub-ring-r0, 1) * 1.3)); }
-    #pub-cue.on .pub-ring:nth-child(2) { display: none; }
+    #pub-cue.on .pub-ring g { animation: none; opacity: .35; transform: translate(var(--pub-ring-cx), var(--pub-ring-cy)) scale(calc(var(--pub-ring-r0, 1) * 1.3)); }
+    #pub-cue.on .pub-ring:nth-child(2) g { display: none; }
   }
 
   /* The scene the crossfade returns to arrives already standing: its targets are
@@ -624,8 +624,8 @@
      turns the layer on/off and writes its --pub-ring-* geometry, this markup
      only draws what it is told. -->
 <div id="pub-cue" aria-hidden="true">
-  <svg class="pub-ring" viewBox="-1 -1 2 2"><circle cx="0" cy="0" r="1"/></svg>
-  <svg class="pub-ring" viewBox="-1 -1 2 2"><circle cx="0" cy="0" r="1"/></svg>
+  <svg class="pub-ring" viewBox="-1 -1 2 2"><g><circle cx="0" cy="0" r="1"/></g></svg>
+  <svg class="pub-ring" viewBox="-1 -1 2 2"><g><circle cx="0" cy="0" r="1"/></g></svg>
 </div>
 
 <!-- The close. Its footage is asked for from the script and never from here, so

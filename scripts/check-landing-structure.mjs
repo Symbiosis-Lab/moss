@@ -85,7 +85,16 @@ const BASELINE = {
   // shape as the one above: <script src="landing-gesture.js"></script>,
   // loaded immediately before landing.js so the extracted gesture record is
   // defined before landing.js calls window.LandingGesture().
-  htmlBytes: 54393,
+  // Publish-ring restoration (finding 3, 2026-09-21): fell 54393 -> 54391.
+  // The stroke-thickness fix wraps each ring's <circle> in a <g>, moves the
+  // breathing transform onto it, and adds overflow:visible (the <g>'s own
+  // growth needs it spelled out -- an <svg> clips to its own box by
+  // default, which cost nothing while the host itself carried the scale).
+  // The corrected comment above .pub-ring -- the old one asserted
+  // vector-effect works "regardless of scale", the false premise that let
+  // the bug ship -- is shorter than what it replaced by more than the code
+  // grew.
+  htmlBytes: 54391,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a

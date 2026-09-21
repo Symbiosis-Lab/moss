@@ -1072,6 +1072,55 @@ async function iPubCue(browsers) {
     await page.waitForTimeout(2000);
     const ticks = await page.evaluate(() => window.__intervalTicks);
     assert(ticks === 0, `I-pub-cue ${engineName}: ${ticks} setInterval tick(s) fired in 2s at rest in scene 2 (LIVE) -- R8 forbids periodic work at rest`);
+    // Stroke thickness (site owner finding 3, 2026-09-21, forensics
+    // probe-pubring.mjs): the breathe transform used to sit on <svg
+    // class="pub-ring"> itself, and vector-effect: non-scaling-stroke only
+    // cancels a transform WITHIN the SVG's own coordinate system -- a
+    // transform on the SVG host sits outside that system, so it still
+    // scaled the painted stroke. getScreenCTM() on the CIRCLE cannot tell a
+    // working fix from a broken one (it reports the circle's own geometry,
+    // which is meant to grow either way) -- a first draft of this assertion
+    // read it directly and stayed red after the fix landed. getScreenCTM()
+    // on the RING'S OWN <svg> HOST is the right element: measured live,
+    // ring.getScreenCTM().a is exactly 1 in the fixed shape (the <g>'s
+    // scale never reaches the host) and equals circle.getScreenCTM().a in
+    // the broken one (nothing sits between the scale and the host), at
+    // every sampled fraction, both engines -- precisely the "outside the
+    // SVG's own coordinate system" distinction vector-effect draws. No
+    // wall-clock wait: the ring's own Web Animations timeline is paused and
+    // currentTime set directly, so five points across a 7s breathe cost
+    // nothing and never race. RED (site/index.html reverted to the bare
+    // host-transform shape via a scratch edit, see report): ring.
+    // getScreenCTM().a matched the circle's, 15 to 717 CSS px of stroke.
+    // GREEN restored below.
+    const setup = await page.evaluate(() => {
+      const cue = document.getElementById('pub-cue');
+      const ring = cue.querySelector('.pub-ring');
+      const circle = ring.querySelector('circle');
+      const anim = ring.getAnimations({ subtree: true })[0];
+      if (!anim) return { error: 'no animation found on the first ring' };
+      anim.pause();
+      const duration = anim.effect.getComputedTiming().duration;
+      const strokeWidthUser = parseFloat(getComputedStyle(circle).strokeWidth);
+      window.__ringTest = { anim, ring, strokeWidthUser, duration };
+      return { duration, strokeWidthUser };
+    });
+    assert(!setup.error, `I-pub-cue ${engineName}: ${setup.error}`);
+    const fractions = [0, 0.15, 0.3, 0.45, 0.6];
+    const strokes = [];
+    for (const f of fractions) {
+      const cssPxStroke = await page.evaluate((frac) => {
+        const t = window.__ringTest;
+        t.anim.currentTime = t.duration * frac;
+        return t.ring.getScreenCTM().a * t.strokeWidthUser;
+      }, f);
+      strokes.push({ f, cssPxStroke });
+    }
+    await page.evaluate(() => { window.__ringTest.anim.play(); delete window.__ringTest; });
+    for (const s of strokes) {
+      assert(s.cssPxStroke <= 2, `I-pub-cue ${engineName}: at ${(s.f * 100).toFixed(0)}% of the ring's life the painted stroke is ${s.cssPxStroke.toFixed(2)} CSS px thick (want <=2)`);
+    }
+    console.log(`${engineName}: I-pub-cue ring stroke stays <=2 CSS px across its life (max ${Math.max(...strokes.map((s) => s.cssPxStroke)).toFixed(2)}px)`);
     await gotoScene(page, SHIPS);
     const animCount = await page.evaluate(() => document.getElementById('pub-cue').getAnimations({ subtree: true }).length);
     assert(animCount === 0, `I-pub-cue ${engineName}: ${animCount} ring animation(s) still running in scene 3, where the cue must be off`);
