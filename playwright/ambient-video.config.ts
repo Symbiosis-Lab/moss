@@ -1,5 +1,5 @@
 import './localhost-no-proxy';
-import { defineConfig, devices } from "@playwright/test";
+import { defineGateConfig } from './define-gate-config';
 
 /**
  * Render gate for `![[clip.mp4|loop]]` ambient video feature.
@@ -12,20 +12,15 @@ import { defineConfig, devices } from "@playwright/test";
  *   - wrapper injection, toggle presence, aria-label state
  *   - prefers-reduced-motion: reduce guard removes autoplay + shows toggle
  *
- * Kept hand-written rather than built on define-gate-config.ts's
- * defineGateConfig(): every other gate declares named `projects` (one per
- * engine), which is what makes `--project` filtering meaningful. This one
- * spreads the device straight into the top-level `use` with no `projects` at
- * all, which is a different, unfiltered shape — see scripts/render-gates.sh's
- * `--project` comment for the "Available projects: """ case this produces.
+ * Chromium only: the gate is about wrapper/toggle/attribute behaviour, not
+ * video decode, so one engine answers it. Naming that engine as a project
+ * (rather than spreading the device into a bare top-level `use`, which this
+ * config used to do) is what lets `--project` skip it correctly on a runner
+ * that only has WebKit installed — the previous, project-less shape ran
+ * unfiltered instead and tried to launch a Chromium that was not there.
  */
-export default defineConfig({
-  testDir: "../tests/render-gates/site",
-  testMatch: /ambient-video\.spec\.ts$/,
+export default defineGateConfig({
+  gate: 'ambient-video',
+  engines: ['chromium'],
   fullyParallel: true,
-  reporter: "list",
-  outputDir: "../target/test-tmp/playwright-ambient-video",
-  use: {
-    ...devices["Desktop Chrome"],
-  },
 });

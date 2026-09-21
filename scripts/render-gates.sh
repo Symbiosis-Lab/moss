@@ -27,7 +27,7 @@
 #   bash scripts/render-gates.sh                       # everything (build + nobuild)
 #   bash scripts/render-gates.sh --group nobuild        # only the gates that open no binary — no MOSS_BIN needed
 #   bash scripts/render-gates.sh --group build          # only the gates that need MOSS_BIN
-#   bash scripts/render-gates.sh --project chromium     # only each gate's chromium project (unfiltered if it defines none; SKIP if it defines projects but not this one)
+#   bash scripts/render-gates.sh --project chromium     # only each gate's chromium project (SKIP for a gate that doesn't run this engine)
 #   bash scripts/render-gates.sh --list                 # print the selected gate names, one per line, and exit
 #   bash scripts/render-gates.sh --group nobuild --list   # same, scoped to one group
 #   bash scripts/render-gates.sh --check                # every playwright/*.config.ts is classified exactly once; exit 1 and name it otherwise
@@ -249,19 +249,12 @@ for gate in "${GATES[@]}"; do
     # A config's project set decides how --project applies to it, and the
     # only reliable way to read that set is to ask Playwright, not to grep
     # the config: `--list --project=<name>` exits 0 when the config defines
-    # that project, and its failure message on a miss names every project
-    # the config DOES define — `Available projects: ""` for a config with no
-    # named projects at all (this gate runs unfiltered, on whatever engine
-    # its own `use:` picks), or a quoted list that does not include ours
-    # (this gate has nothing to say about this engine — skip it).
-    set +e
-    probe="$(npx playwright test -c "$cfg" --list --project="$PROJECT" 2>&1)"
-    probe_status=$?
-    set -e
-    if [ "$probe_status" -eq 0 ]; then
+    # that project and non-zero otherwise. Every gate here declares named
+    # projects, one per engine it runs (see define-gate-config.ts) — there is
+    # no gate left with an empty project set to run unfiltered, so a miss
+    # always means "this gate has nothing to say about this engine — skip it".
+    if npx playwright test -c "$cfg" --list --project="$PROJECT" >/dev/null 2>&1; then
       npx playwright test -c "$cfg" --project="$PROJECT" --reporter=line || status=1
-    elif printf '%s' "$probe" | grep -q 'Available projects: ""'; then
-      npx playwright test -c "$cfg" --reporter=line || status=1
     else
       echo "SKIP $gate: no $PROJECT project"
     fi

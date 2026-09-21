@@ -1,16 +1,16 @@
 // Shared wrapper for the render-gate Playwright configs (playwright/*.config.ts,
-// one per gate). The 29 gates that fit this shape differ only in a handful of
-// values — spec location, engines, a `use` block, whether and how a server is
-// spun up — so this holds the repeated wiring (reporter, outputDir naming,
-// project construction, webServer defaults) once, and each config states only
-// what is particular to its gate. outputDir always lands under
-// target/test-tmp/ (gitignored, inside the repo rather than Playwright's
-// default of a sibling directory), by construction.
+// one per gate). All 30 gates differ only in a handful of values — spec
+// location, engines, a `use` block, whether and how a server is spun up — so
+// this holds the repeated wiring (reporter, outputDir naming, project
+// construction, webServer defaults) once, and each config states only what
+// is particular to its gate. outputDir always lands under target/test-tmp/
+// (gitignored, inside the repo rather than Playwright's default of a sibling
+// directory), by construction.
 //
-// ambient-video.config.ts is the one gate that does NOT call this: it defines
-// no named `projects` at all (a bare `use` with the device spread), which is a
-// different shape from every other gate's `--project`-filterable one — see its
-// own file for why forcing it into this helper would change that.
+// `projects` is always built from `engines` (never omitted), so every gate
+// declares named projects — no gate here runs "unfiltered" the way a bare
+// `use` with a device spread and no `projects` array would (ambient-video
+// used to be that shape; see its own file for what that broke).
 import { defineConfig, devices, type PlaywrightTestConfig } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
