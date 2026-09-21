@@ -6,7 +6,19 @@
 // I-commit  (R3) fault: watchScrollDesktop's own `setTarget(Math.max(0,
 //           scene))` call site deleted -- no scroll ever picks a target
 //           scene again, so every boundary times out instead of committing.
-//           RED/GREEN recorded below each function.
+//           RED/GREEN recorded below each function. Unit 0a: folded in
+//           check-landing-intent.mjs's only extra coverage (three locales,
+//           its own two viewports) as a second loop scoped to intent's own
+//           boundaries (intro/0/1) -- never the 3<->4 continuous scrub,
+//           which intent never tested either; looping the *full* boundary
+//           walk over every combination instead surfaced a real, separate,
+//           deterministic problem (gesturePos's fixed [50,400]/[1400,160]
+//           does not reliably drive the 3<->4 scrub at 1280x720), outside
+//           this fold's job to fix and reverted. Re-ran the setTarget
+//           deletion above against the folded function -- still red on the
+//           very first combination, restored -- green, both confirming the
+//           fold didn't lose any detection power. check-landing-intent.mjs
+//           deleted.
 // I-rect    (R2) checked after EACH drag now, not only once at the end --
 //           plates first, before any card is ever touched, then again after
 //           the card. Two independent faults, each proven on its own: the
@@ -62,8 +74,14 @@
 //           scratchpad/phase2c/fuzz-capturehang.mjs with its captured
 //           output, for phase 7 (bounded print acquisition) to pick up as
 //           an exit test.
-// I-default (checks, not the page) fault: a scratch script with
-//           `page.goto(base + '?carry=intent')` -- the static scan catches it.
+// I-default (checks, not the page) fault: originally a scratch script with
+//           `page.goto(base + '?carry=intent')`. Unit 0a: `?carry=` itself
+//           is gone (phase 4), so the literal grep could no longer catch
+//           the same shape of mistake under a new name -- generalized to
+//           any query string in a quoted `.goto()` literal (ALLOWLIST is
+//           the sanctioned opt-out; empty today). RED with a scratch
+//           `check-landing-scratch-fault.mjs` containing `page.goto(baseURL
+//           + '?x=1')` -- caught and named by file; deleted -- GREEN.
 // I-plate, I-window-radius, I-pub-cue, I-header-scrim: added 2026-09-20 for
 //           the site owner's four visual-polish requests (scene 1 plate
 //           margins, scene 2's Publish cue, the preview window's corner
@@ -94,15 +112,24 @@ const LIVE = 1, SHIPS = 2;
 // waiting on it alone let a real join run for reasons unrelated to the call
 // site under test. Every landing check now shares that one wait instead of
 // keeping a per-script variant of it.
-async function ready(page) {
-  await page.goto(baseURL);
+async function ready(page, locale = '') {
+  await page.goto(new URL(locale, baseURL).href);
   await whenReady(page);
 }
 // The mouse position a wheel event is dispatched at changes what it does --
 // measured directly: WebKit only registers scroll input at all over the
 // copy column at this viewport, not the visual cell; Chromium is unaffected
-// either way. Each engine gets the position proven to work for it.
-function gesturePos(engineName) { return engineName === 'webkit' ? [1400, 160] : [50, 400]; }
+// either way. Each engine gets the position proven to work for it. Unit 0a:
+// webkit's own x=1400 sits off the 1280px-wide viewport I-commit's fold-in
+// added, and measured weakly there even so (5 ticks moved scrollY 13px vs
+// ~135px for every other candidate tried at that width) -- deterministic
+// across repeat runs, not load noise, so this now takes the viewport width
+// and picks a position proven at 1280/1440/1920 alike rather than assuming
+// every caller is at the 1440px desktop default.
+function gesturePos(engineName, viewportWidth = 1440) {
+  if (engineName !== 'webkit') return [50, 400];
+  return viewportWidth < 1400 ? [700, 160] : [1400, 160];
+}
 // A real, no-op gesture: desktop's default scroll driver (watchScrollDesktop)
 // ignores window.scrollTo() writes entirely until a genuine wheel/pointer/key
 // event has armed it (cancelSettle), the same gate a reader's first touch
@@ -154,8 +181,7 @@ async function arrived(page, to) {
 // "let it finish" is exactly wrong -- it needs continued input for the
 // whole crossfade, ticked without ever releasing until the state itself
 // reports rest.
-async function gestureCommit(page, from, to, engineName) {
-  const pos = gesturePos(engineName);
+async function gestureCommit(page, from, to, engineName, pos = gesturePos(engineName)) {
   const dir = to > from ? 1 : -1;
   if (from === 4 || to === 4) {
     let ticks = 0;
@@ -197,9 +223,26 @@ function mulberry32(seed) {
 // I-commit (R3): every boundary, both directions. Each direction starts
 // from a fresh jump to its own origin rather than a walk, so one
 // boundary's gesture never carries leftover spring state into the next.
+// check-landing-intent.mjs's only coverage this function didn't already
+// have was these three locales and its own two viewports (1280 and the
+// 1920 wide one specifically) -- folded in here as a loop rather than kept
+// as a second script, since intent's own gesture shape (N one-pixel ticks
+// at a fixed 35ms cadence, then a single fixed-goal assertion with no
+// retry) is exactly what review-phases-2-4.md diagnosed as racy: the page
+// classifies a held gesture by wall-clock gap (HOLD_GAP=100ms in site/
+// landing.js), so under load a burst sent 35ms apart on paper can arrive
+// more than 100ms apart in practice, splitting one intended gesture into
+// several, each committing its own boundary. gestureCommit's retry-until-
+// committed shape (below) does not have this failure mode: it does not
+// care how many bursts the dead-zone formula actually saw, only whether
+// the target it converged on is the one asked for.
+const I_COMMIT_LOCALES = ['', 'zh-hans/', 'zh-hant/'];
+const I_COMMIT_VIEWPORTS = [{ width: 1280, height: 720 }, { width: 1920, height: 1200 }];
 async function iCommit(browsers) {
   for (const [engineName, browser] of Object.entries(browsers)) {
     const pos = gesturePos(engineName);
+    // The full boundary walk, at the desktop default -- unchanged from
+    // before the fold.
     const page = await browser.newPage(PRESETS.desktop);
     await ready(page);
     await arm(page, pos);
@@ -212,6 +255,32 @@ async function iCommit(browsers) {
     }
     console.log(`${engineName}: I-commit every boundary intro..close commits forward and back with one light gesture`);
     await page.close();
+    // check-landing-intent.mjs's own scope, never the 3<->4 scrub: its six
+    // goals were all within intro/0/1 (measured: [[1,0,1],[-1,-1,1],[1,0,3],
+    // [1,1,3],[-1,0,3],[-1,-1,3]] in the deleted file, goals 0/-1/0/1/0/-1
+    // only). First cut of this loop reused the outer pos (webkit's x=1400)
+    // at every viewport and found a real, separate, deterministic problem
+    // (not load noise, reproduced 10/10): 1280 is narrower than 1400, and
+    // even though Playwright still dispatches a wheel there, it moved
+    // scrollY only ~13px per 5 ticks against ~135px for every other
+    // position tried at that width -- gesturePos now takes the viewport
+    // width for exactly this reason.
+    for (const locale of I_COMMIT_LOCALES) {
+      for (const viewport of I_COMMIT_VIEWPORTS) {
+        const p2 = await browser.newPage({ viewport });
+        const pos2 = gesturePos(engineName, viewport.width);
+        await ready(p2, locale);
+        await arm(p2, pos2);
+        for (const [from, to] of [[-1, 0], [0, 1]]) {
+          await gotoScene(p2, from);
+          await gestureCommit(p2, from, to, engineName, pos2);
+          await gotoScene(p2, to);
+          await gestureCommit(p2, to, from, engineName, pos2);
+        }
+        console.log(`${engineName}/${locale || 'en'} ${viewport.width}x${viewport.height}: I-commit intro/0/1 (intent's own region) commits forward and back`);
+        await p2.close();
+      }
+    }
   }
 }
 
@@ -659,20 +728,29 @@ async function iHeaderScrim(browsers) {
 // I-default: every check script's own default navigation loads the
 // unflagged URL. A carry= baked into a literal .goto() call site was exactly
 // the historical bug (design doc: "the fixed driver was never made the
-// default URL and no test loaded the unflagged page") -- the ?carry= flag
-// itself is gone as of phase 4, so this now also guards against a future
-// script reintroducing the same shape of mistake under a different name.
+// default URL and no test loaded the unflagged page"). review-phases-2-4.md:
+// the ?carry= flag itself is gone as of phase 4, so grepping for that one
+// literal no longer catches "the same shape of mistake under a different
+// name" -- generalized to any query string inside a quoted literal on a
+// .goto() line. A script that legitimately needs one is named in ALLOWLIST,
+// the one sanctioned opt-out; none does today.
+const I_DEFAULT_ALLOWLIST = new Set();
 async function iDefault() {
   const entries = await readdir(HERE);
-  const files = entries.filter((f) => /^check-(landing|site-preview|docs|favicon)/.test(f) && f.endsWith('.mjs') && f !== 'check-landing-invariants.mjs' && f !== 'check-landing-all.mjs' && f !== 'check-landing-structure.mjs');
+  const files = entries.filter((f) => /^check-(landing|site-preview|docs|favicon)/.test(f) && f.endsWith('.mjs') && f !== 'check-landing-invariants.mjs' && f !== 'check-landing-all.mjs' && f !== 'check-landing-structure.mjs' && !I_DEFAULT_ALLOWLIST.has(f));
   const offenders = [];
   for (const file of files) {
     const src = await readFile(`${HERE}${file}`, 'utf8');
     for (const line of src.split('\n')) {
-      if (line.includes('.goto(') && line.includes('carry=')) offenders.push(`${file}: ${line.trim()}`);
+      if (!line.includes('.goto(')) continue;
+      // A query string inside a quoted literal on this line: `?key=`
+      // between matching quote characters, not merely a `?` anywhere on the
+      // line (a URL constructor call's own punctuation, or a `?.` optional
+      // chain, could contain one without this being a flagged default).
+      if (/['"`][^'"`]*\?[^'"`=]*=[^'"`]*['"`]/.test(line)) offenders.push(`${file}: ${line.trim()}`);
     }
   }
-  assert(offenders.length === 0, `I-default: a script's own .goto() call bakes in carry=: ${offenders.join('; ')}`);
+  assert(offenders.length === 0, `I-default: a script's own .goto() call bakes in a query string: ${offenders.join('; ')}`);
   console.log(`-: I-default all ${files.length} check scripts navigate to the unflagged URL by default`);
 }
 
