@@ -3145,15 +3145,48 @@ const restY = (scene) => {
 const spanLeft = (a, b, t) => Math.max(0, b - Math.max(a, t));
 const cureLeft = (t) => spanLeft(0, T_TAKE, t) / ARRIVE + spanLeft(T_TAKE, T_WET, t) / ARRIVE_SMEAR + spanLeft(T_WET, T_TOTAL, t) / ARRIVE;
 let restSince = performance.now(), travel = 0;
-// What the hand is doing: idle, held, coasting (released or wheel momentum) or settling
-// (`run` reaching rest). All via setGesture: */held, held->coasting,
-// coasting->settling (REST_MS), settling->idle/coasting.
-let gesture = { kind: 'idle', via: null, run: null };
-// `via` ('direct'|'wheel') is the held channel; null otherwise.
-function setGesture(kind, reason, via, run) {
-  gesture = { kind, via: kind === 'held' ? via : null, run: kind === 'settling' ? run : null };
+// What the hand is doing, entirely DERIVED from the raw state directly below --
+// no caller sets `kind` itself, so two input channels can no longer overwrite
+// what the other means (M4: a wheel coast tick used to clear `via` and drop a
+// live touch hold). `contact.wheelUntil` is a deadline, not a flag: a push
+// extends it to now+HOLD_GAP, so a continuous wheel stream keeps `held` true
+// on its own -- a settle can never hijack an in-flight gesture between ticks
+// (the earlier one-line park fix overshot to scene 0 under load for exactly
+// this reason) -- and a real gap lets it lapse without anyone writing a demotion.
+const contact = { direct: false, wheelUntil: 0 };
+let run = null, armed = false;
+const gestureHeld = (now) => contact.direct || now < contact.wheelUntil;
+const gestureKind = (now) => run ? 'settling' : gestureHeld(now) ? 'held' : armed ? 'coasting' : 'idle';
+// The one published, cached read (landing.state() below): `reason` is
+// written immediately by whichever setter changes something, `kind` only by
+// tickGesture, so a reader never sees a reason newer than the kind it
+// explains.
+const gesture = { kind: 'idle', reason: null };
+// Run unconditionally from the one watchScroll loop, before it dispatches to
+// any role, so a wheel hold expires the same way in watchScrollDesktop,
+// watchScrollNative or watchScrollReduced alike (M1 -- the old staleness
+// check lived in watchScrollDesktop only, so `kind` stayed `held` forever
+// once nativeScroll() routed elsewhere: the 4<->5 park at xf≈0.5). Also the
+// one place that notices a hold lapsing with nothing else arriving to arm a
+// rest for it -- a flick across a boundary with no further tick.
+function tickGesture(now) {
+  const wasHeld = gesture.kind === 'held';
+  if (wasHeld && !gestureHeld(now)) { armed = true; gesture.reason = 'release'; }
+  gesture.kind = gestureKind(now);
 }
-const armSettle = (reason) => { if (gesture.kind !== 'held' && gesture.kind !== 'settling') setGesture('coasting', reason); };
+// Cancels an outgoing settle itself, so no setter depends on running before
+// another to avoid orphaning a live rAF that keeps writing scrollY while direct
+// manipulation reads it back as the reader's own motion (M2 -- cancelSettle
+// used to be the only place this happened, correct only because it ran ahead
+// of holdOn/the wheel listener by listener order, an undocumented dependency).
+function cancelRun() { if (run) { run.cancel = true; run = null; } }
+// Arms a settle without disturbing a hold or a running one -- for a caller with
+// no gesture of its own to report (fiveOn, reduced motion) or a wheel tick read
+// as momentum. `coasting` is this, renamed and derived rather than set directly.
+function armSettle(reason) {
+  const now = performance.now();
+  if (!gestureHeld(now) && !run) { armed = true; gesture.reason = reason; }
+}
 // The opening is a held first frame. A rest target is allowed to move the page
 // only after a real gesture has armed the carry, so a loaded page never pages
 // itself into scene 1 while the reader is still looking at the title.
@@ -3164,26 +3197,25 @@ let inputArmed = false;
 // first tick, so a reload that restores mid-gap is picked up wherever the browser left it.
 let carryX = null, carryV = 0, carryGoal = null;
 // Trackpad-contact heuristic state (used only where WheelEvent.momentum is unavailable): the
-// last three tick magnitudes, oldest first, and the previous tick's own timestamp.
+// last three tick magnitudes, oldest first, and the previous tick's own timestamp. wheelCoasting
+// stays out of the gesture record: it is the wheel channel's own momentum classifier across
+// ticks, not a state of the hand (review-phases-2-4.md; belongs with wheelMags/lastWheelT as
+// one channel record later).
 let wheelMags = [], lastWheelT = 0, lastWheelStamp = 0, wheelCoasting = false;
 let wheelOrigin = 0, wheelDistance = 0;
 // What settleAtRest chose, frozen at the moment it fires rather than re-read
-// later. settleCureLeft is cureLeft(washT), and settleShown/settleRunning are
-// shown/running() themselves — all three on their own line, unconditionally,
-// so they are the ternary's raw inputs rather than its output, and the
-// harness can recompute the branch (scene === settleShown && !settleRunning
-// ? SETTLE_SECS : settleCureLeft) itself and compare that against settleSecs,
-// the duration actually handed to the spring. This used to expose
-// settleExpected instead — the same branch, pre-computed here — which meant a
-// defect inside the branch itself (a swapped arm, a flipped condition) would
-// corrupt settleExpected identically to settleSecs and the two would still
-// agree (caught by review of b0df986 before it shipped, 2026-09-15).
-// settleShown/settleRunning can't be read live off the page after the fact:
-// shown only becomes the new scene once the wash itself finishes, well after
-// the settle that used its old value has also finished, so anything read
-// post-settle is the wrong instant. For the harness only — see
-// landing.state below.
-let settleSecs = null, settleCureLeft = null, settleShown = null, settleRunning = null;
+// later, grouped in one record (2026-09-21) rather than four top-level
+// names, the shape the structure ratchet counts. secs is the duration
+// actually handed to the spring; cureLeft/shown/running are its raw inputs,
+// each its own field unconditionally so a defect inside the branch that
+// picks between them (a swapped arm, a flipped condition) cannot also
+// corrupt the value it should have disagreed with (caught by review of
+// b0df986 before it shipped, 2026-09-15, when this was one pre-computed
+// settleExpected instead). shown/running can't be read live off the page
+// after the fact: shown only becomes the new scene once the wash itself
+// finishes, well after the settle that used its old value has also
+// finished. For the harness only — see landing.state below.
+const settleAt = { secs: null, cureLeft: null, shown: null, running: null };
 // One substep of a critically damped spring (c = 2*sqrt(k) is always
 // critical): given the current displacement from target and velocity, the
 // next of each after dt seconds. Substepped at 240Hz regardless of the
@@ -3205,17 +3237,25 @@ function settleTo(y, v0, secs) {
   let x = scrollY - y, v = v0 / rate;
   if (!x && !v) return;
   let last = performance.now();
-  const run = { cancel: false };
-  setGesture('settling', 'run', null, run);
+  // Cancels whatever settle it replaces itself (M2), not by depending on
+  // cancelSettle having already run ahead of it by listener order.
+  cancelRun();
+  const thisRun = { cancel: false };
+  run = thisRun;
+  gesture.reason = 'run';
   const f = (now) => {
-    if (run.cancel) return;
+    if (thisRun.cancel) return;
     // Real time, substepped at 240Hz — the substep is what keeps the integration
     // stable, so the frame itself need not be short. A frame longer than a
     // quarter second is a stall rather than a slow machine, and the spring does
     // not swallow the whole gap for it.
     const dt = Math.min(0.25, Math.max(0, (now - last) / 1000)) * rate; last = now;
     [x, v] = springStep(x, v, dt, SETTLE_K);
-    if (Math.abs(x) < 0.5 && Math.abs(v) < 4) { setGesture('idle', 'done'); scrollTo(0, y); return; }
+    if (Math.abs(x) < 0.5 && Math.abs(v) < 4) {
+      if (run === thisRun) { run = null; armed = false; gesture.reason = 'done'; }
+      scrollTo(0, y);
+      return;
+    }
     scrollTo(0, Math.round(y + x));
     requestAnimationFrame(f);
   };
@@ -3229,8 +3269,8 @@ function settleTo(y, v0, secs) {
 // wherever the spring had got to.
 const cancelSettle = () => {
   inputArmed = true;
-  if (gesture.run) gesture.run.cancel = true;
-  if (gesture.kind !== 'held') setGesture('coasting', 'cancel');
+  cancelRun();
+  armSettle('cancel');
   restSince = performance.now();
 };
 // Watched, not taken: passive, and on the bubble phase, so nothing the page
@@ -3254,7 +3294,7 @@ const sceneForRest = (p, dir) => (dir === 0 ? Math.round(p) : dir < 0 ? Math.flo
 const restSceneAt = (p, dir) => dir <= 0 && scrollY < restY(0) ? -1 : sceneForRest(p, dir);
 function settleAtRest(now) {
   if (!inputArmed || gesture.kind !== 'coasting' || now - restSince < REST_MS) return;
-  setGesture('idle', 'fire');
+  armed = false; gesture.reason = 'fire';
   const scene = restSceneAt(progressAt(), travel);
   const visualScene = Math.max(0, scene);
   // A wash owed or already running lends its clock; with none, the spring
@@ -3264,7 +3304,7 @@ function settleAtRest(now) {
   const washCureLeft = cureLeft(phase === 'morph' ? washT : 0);
   const expected = visualScene === shown && !running() ? SETTLE_SECS : washCureLeft;
   const secs = expected;
-  settleSecs = secs; settleCureLeft = washCureLeft; settleShown = shown; settleRunning = running();
+  settleAt.secs = secs; settleAt.cureLeft = washCureLeft; settleAt.shown = shown; settleAt.running = running();
   const v = scrollV * innerHeight;          // the reader's own speed, in pixels a second
   const y = restY(scene);
   setTarget(visualScene);   // the intro shares scene 1's film but owns scroll rest 0
@@ -3285,10 +3325,13 @@ function settleAtRest(now) {
 // set. clientX at or beyond the layout viewport's width is the scrollbar track, the one
 // place a pointerdown is a drag on the thumb rather than a touch on the content; touchstart
 // needs no such check, only touch fires it.
-const holdOn = (e) => { if (e.pointerType === 'touch' || e.clientX >= document.documentElement.clientWidth) setGesture('held', 'hold', 'direct'); };
-const holdOff = () => { if (gesture.via === 'direct') setGesture('coasting', 'end'); };
+// contact.direct is its own field, untouched by the wheel channel, so a coast
+// tick mid-hold (M4) has nothing shared to clobber -- holdOff needs no guard.
+function holdDirect() { cancelRun(); contact.direct = true; gesture.reason = 'hold'; }
+const holdOn = (e) => { if (e.pointerType === 'touch' || e.clientX >= document.documentElement.clientWidth) holdDirect(); };
+const holdOff = () => { contact.direct = false; };
 addEventListener('pointerdown', holdOn);
-addEventListener('touchstart', () => setGesture('held', 'hold', 'direct'), { passive: true });
+addEventListener('touchstart', holdDirect, { passive: true });
 addEventListener('pointerup', holdOff);
 addEventListener('touchend', holdOff);
 addEventListener('touchcancel', holdOff);
@@ -3339,7 +3382,11 @@ addEventListener('wheel', (e) => {
   const pushed = !wheelCoasting && now - lastWheelT <= HOLD_GAP;
   lastWheelT = now; lastWheelStamp = e.timeStamp;
   if (!wheelCoasting) wheelDistance += e.deltaY;
-  setGesture(pushed ? 'held' : 'coasting', pushed ? 'push' : 'coast', 'wheel');
+  // A push extends the deadline and cancels any outgoing settle itself (M2);
+  // a momentum tick drops the deadline to now instead of waiting for it to
+  // lapse, so the classifier's release verdict isn't delayed behind its own
+  // timing -- tickGesture is what notices and arms the coast that follows.
+  if (pushed) { cancelRun(); contact.wheelUntil = now + HOLD_GAP; gesture.reason = 'push'; } else contact.wheelUntil = 0;
   if (pushed) {
     // 1:1, no pull: the tick moves the page by its own delta and nothing more.
     const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight);
@@ -3364,11 +3411,10 @@ function watchScrollDesktop(now) {
   const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
   if (carryX == null) carryX = scrollY;
   if (!inputArmed) { carryX = scrollY; carryV = 0; return; }
-  // A trackpad's own contact has no release event, only a pause: past HOLD_GAP since the last
-  // tick with nothing new arriving, a wheel hold has gone stale, and this is the one place
-  // with a per-frame clock to notice it — a direct hold needs no such check, it already has
-  // pointerup/touchend/touchcancel to turn it off directly.
-  if (gesture.kind === 'held' && gesture.via === 'wheel' && now - lastWheelT > HOLD_GAP) setGesture('coasting', 'stale');
+  // A wheel hold goes stale on its own once contact.wheelUntil lapses; tickGesture
+  // re-derives `held` from it once a frame, ahead of every role (M1), not a check this
+  // role alone used to run. A direct hold needs none, pointerup/touchend/touchcancel
+  // already turn it off.
   const carryHeld = gesture.kind === 'held';
   if (carryHeld) {
     // Direct manipulation: no pull. scrollY is the ground truth of what actually moved the
@@ -3379,7 +3425,7 @@ function watchScrollDesktop(now) {
     carryX = scrollY;
     carryV = dt > 0 ? (carryX - prevX) / dt : carryV;
     if (carryV) travel = Math.sign(carryV);
-    if (gesture.via === 'direct') carryGoal = null;
+    if (contact.direct) carryGoal = null;
   } else if (Math.abs(scrollY - carryX) > CARRY_EPS) { carryX = scrollY; carryV = 0; carryGoal = null; }   // a foreign write hands control back
   const scene = carryGoal == null ? restSceneAt(progressAt(), travel) : carryGoal;
   const y = restY(scene);
@@ -3495,13 +3541,17 @@ function watchScrollNative(now) {
   if (dy) { travel = Math.sign(dy); restSince = now; }
   onScroll(dy);
   updateFinalDissolve();
-  // Desktop's closing section shares the release spring. Mobile remains on the
-  // observational path above through the whole close.
-  if (!mobileLayout() && xfAt() > 0 && travel > 0 && gesture.kind === 'coasting' && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
-    setGesture('idle', 'close');
-    const destination = Math.max(scrollY, closingRestY());
+  // Desktop's closing section shares the release spring, gated on being inside the crossfade
+  // band and on the gesture -- never on the sign of the last delta (M1's second defect: a
+  // release with travel === 0, a reload restored mid-crossfade or a settle's own last frame
+  // zeroing it, used to park just the same). travel still says which side to carry to.
+  // Mobile stays on the observational path above through the whole close.
+  if (!mobileLayout() && xfAt() > 0 && xfAt() < 1 && gesture.kind === 'coasting' && now - restSince >= REST_MS && !five.contains(document.activeElement)) {
+    armed = false; gesture.reason = 'close';
+    const forward = travel > 0 || (travel === 0 && xfAt() >= 0.5);
+    const destination = forward ? Math.max(scrollY, closingRestY()) : Math.min(scrollY, five.offsetTop - innerHeight * .8);
     if (reduce) scrollTo(0, destination);
-    else settleTo(destination, Math.max(0, scrollV * innerHeight), SETTLE_SECS);
+    else { const v = scrollV * innerHeight; settleTo(destination, Math.sign(destination - scrollY) === Math.sign(v) ? v : 0, SETTLE_SECS); }
   }
   const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
   scrollV *= Math.exp(-dt / V_TAU);
@@ -3529,6 +3579,7 @@ function watchScrollReduced(now) {
   // path's own instant arrival (settleAtRest's own `if (reduce)`), so there is nothing for
   // watchScrollDesktop to do differently under it.
   updateOpening();
+  tickGesture(now);
   if (nativeScroll()) { carryX = null; carryV = 0; carryGoal = null; watchScrollNative(now); }
   else if (reduce) watchScrollReduced(now);
   else watchScrollDesktop(now);
@@ -3861,7 +3912,11 @@ landing.restY = restY;   // the settle's own geometry, so a rest check reads it 
 landing.targetAt = targetAt;   // what a rested position names, read the same way the wash reads it
 landing.sceneForRest = sceneForRest;   // which scene a rest carries to, the same formula settleAtRest uses
 landing.printGeneration = () => printGeneration;   // a monotonic count, bumped only by applyPrintRect -- ground truth for "did the rect actually change", never a transient read of prints itself
-landing.state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: gesture.kind === 'settling', settleSecs, settleCureLeft, settleShown, settleRunning, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, titleSteps, titleReady, titleMode });
+landing.state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, // held/settle read the raw state live, not the once-a-frame gesture.kind cache: a
+// synchronous external read (this harness call itself, the test suite) can land
+// between a direct-manipulation event and the next tickGesture, and the record
+// it asks about is exactly the one the event just changed.
+settle: run !== null, held: !run && gestureHeld(performance.now()), reason: gesture.reason, settleSecs: settleAt.secs, settleCureLeft: settleAt.cureLeft, settleShown: settleAt.shown, settleRunning: settleAt.running, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, titleSteps, titleReady, titleMode });
 
 const when = (frame, key) => new Promise((resolve, reject) => {
   const deadline = setTimeout(() => { clearInterval(poll); reject(new Error(`Demo ${frame.id} did not initialize`)); }, 10000);

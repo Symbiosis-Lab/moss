@@ -35,7 +35,13 @@ const LANDING_JS = resolve(SITE_DIR, 'landing.js');
 // with that rewrite's own comments and listeners.
 const BASELINE = {
   windowAssignments: 1,
-  topLevelLets: 87,
+  // Unit 1 (2026-09-21): fell 87 -> 84. review-phases-2-4.md's M1/M2/M4/M5:
+  // the gesture record's six-ish scattered names (gesture/inputArmed/the four
+  // settle* diagnostics) become contact/run/armed/gesture/settleAt, one
+  // object per concern instead of one let per field, with kind fully DERIVED
+  // rather than written by five call sites. contact/gesture/settleAt are
+  // const (only their fields mutate), so the fall is real, not a rename.
+  topLevelLets: 84,
   sceneComparisons: 14,
   // Unit 0a: rose again -- the mobile header band's fix (one shared
   // body::before band interpolating colour through --xf instead of two
@@ -50,7 +56,16 @@ const BASELINE = {
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a
   // transient read of prints itself needed a ground-truth signal instead.
-  scriptBytes: 240660,
+  // Unit 1 (2026-09-21): rose again, 240660 -> 244161. tickGesture, the
+  // derived gestureKind/gestureHeld, holdDirect and the position-gated
+  // closing trigger are real new logic (M1/M2/M4), each with the comment
+  // this file's own style expects; topLevelLets above is what this unit
+  // was sent to lower, and it did. Includes a follow-up within the same
+  // unit: state()'s held/settle read gestureHeld/run live rather than the
+  // once-a-frame gesture.kind cache, caught by I-gesture(c) itself -- a
+  // synchronous pointerdown-then-read from the harness landed between the
+  // event and the next tickGesture and saw the stale cached kind.
+  scriptBytes: 244161,
 };
 
 function countWindowAssignments(text) {
