@@ -1,0 +1,178 @@
+# Site/cascade render gates — published-page CSS and cascade behavior,
+# ported from the private desktop repo per
+# docs/archive/2026-09-20-ci-cost-cut-plan.md (C2a/C2b).
+#
+# A separate workflow rather than a job in pr.yml: pr.yml has no
+# detect-changes/path-filtering machinery today (every job in it runs on
+# every PR — see its own header comment), so adding a `push: branches:
+# [develop]` trigger there would start running ALL of its jobs — Rust Tests,
+# Clippy, cargo-audit, the moss-core packaging check, the CLI build, Packages
+# Tests — on every push to develop, not just these two. A dedicated,
+# path-filtered workflow file avoids that side effect entirely.
+#
+# Two legs, same gates, different engine: Chromium on Linux (cheap) and
+# WebKit on macOS (also free here, and it is the engine Safari readers
+# actually run — WebKit on Linux is a GTK port whose timing and font
+# substitution produce false failures unrelated to any real regression).
+#
+# Gates nothing yet: this workflow is not wired into branch protection or any
+# required-checks aggregator. It becomes required after running green for a
+# while.
+
+name: Render gates
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tests/render-gates/**'
+      - 'tests/e2e/helpers/**'
+      - 'tests/support/**'
+      - 'playwright/**'
+      - 'scripts/render-gates.sh'
+      - 'crates/moss-build/**'
+      - 'crates/moss-core/**'
+      - 'crates/moss-cli/**'
+      - 'packages/moss-syntax/**'
+      - 'Cargo.lock'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/render-gates.yml'
+  push:
+    branches: [develop]
+    paths:
+      - 'tests/render-gates/**'
+      - 'tests/e2e/helpers/**'
+      - 'tests/support/**'
+      - 'playwright/**'
+      - 'scripts/render-gates.sh'
+      - 'crates/moss-build/**'
+      - 'crates/moss-core/**'
+      - 'crates/moss-cli/**'
+      - 'packages/moss-syntax/**'
+      - 'Cargo.lock'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/render-gates.yml'
+
+concurrency:
+  group: render-gates-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  render-gates-chromium:
+    name: Render gates (Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+          shared-key: render-gates-chromium
+
+      # The gates lay out CJK text (e.g. term-index-layout's label-wrap
+      # assertions depend on CJK glyph advance); the ubuntu-latest image
+      # ships no CJK-capable font, so without this package a CJK heading
+      # falls back to a font with different metrics and the width-band
+      # assertions land on the wrong side of a wrap.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          SKIP_RUST_INSTALL: 1
+
+      - name: Build moss-cli
+        run: cargo build -p moss-cli
+
+      # Playwright browser cache. A cache hit means the browsers are present
+      # but system packages may not be, so install-deps runs without a full
+      # download; a miss downloads the browser and its dependencies together.
+      - uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Playwright browsers
+        run: |
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" == "true" ]; then
+            pnpm exec playwright install-deps
+          else
+            npx playwright install --with-deps chromium
+          fi
+
+      - name: Check render-gates classification
+        run: bash scripts/render-gates.sh --check
+
+      - name: Run render gates (Chromium)
+        run: bash scripts/render-gates.sh --project chromium
+
+  render-gates-webkit:
+    name: Render gates (WebKit)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+          shared-key: render-gates-webkit
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          SKIP_RUST_INSTALL: 1
+
+      - name: Build moss-cli
+        run: cargo build -p moss-cli
+
+      # Same cache mechanics as the Chromium job; the path is macOS's own
+      # Playwright cache location, not Linux's.
+      - uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      # No install-deps step: that command satisfies Linux system-package
+      # requirements that the macOS runner image does not have in the first
+      # place.
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install webkit
+
+      - name: Check render-gates classification
+        run: bash scripts/render-gates.sh --check
+
+      - name: Run render gates (WebKit)
+        run: bash scripts/render-gates.sh --project webkit
