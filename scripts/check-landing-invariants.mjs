@@ -519,6 +519,74 @@ async function iCloseOvershootSettles(browsers) {
   }
 }
 
+// I-progress, unit 3 (review-phases-2-4.md Job 2 item 5): xfAt() must be a
+// pure function of progressAt(), not a second, independent reader of raw
+// scrollY -- the same closing-progress unification dissolve-module-design.md
+// section 7 calls for. 25 scrollY positions between restY(DEPLOY) and
+// restY(SHARE), both layouts: at each, after a jump (not a gesture) and a
+// short settle wait, xfAt() must equal the value derived from progressAt()
+// -- clamp01(progressAt() - DEPLOY) on desktop, smooth(.45, 1, progressAt()
+// - DEPLOY) on mobile, which already keeps its own eased path from
+// mobileClosingProgress() and is not being unified here -- within 1e-6, and
+// the CSS --xf custom property (what the crossfade itself paints from) must
+// match xfAt() the same way. Red on HEAD (90e0691/ffd7615): progressAt()'s
+// desktop branch has no real crossfade geometry of its own in this region
+// (scenesEl[DEPLOY + 1] is a bare 1px marker, unrelated to #five's band), so
+// the derived value disagrees with xfAt()'s independent scrollY read almost
+// everywhere inside the band.
+const SAMPLES = 25;
+async function iProgressMatchesXf(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    for (const layout of ['desktop', 'phone']) {
+      const page = await browser.newPage(PRESETS[layout]);
+      await ready(page);
+      const [lo, hi] = await page.evaluate(() => [window.__landing.restY(3), window.__landing.restY(4)]);
+      const mismatches = [];
+      for (let i = 0; i < SAMPLES; i++) {
+        const y = Math.round(lo + (hi - lo) * (i / (SAMPLES - 1)));
+        // A raw JS jump has no gesture behind it, so travel (which a real
+        // forward scroll already carries into the band from the frames
+        // before it crosses) is still whatever it was at page load: 0. With
+        // it 0, targetAt's own dir === 0 branch rounds to the NEAREST scene
+        // instead of ceiling toward the one being travelled to, so the very
+        // first jump into the band never asks for SHARE and no join starts
+        // -- --xf then never leaves its stale pre-jump value (measured:
+        // caught exactly this on the sample right after crossing bandNear).
+        // Setting travel here stands in for the frames of real forward
+        // motion a reader always has before reaching this point.
+        await page.evaluate(() => { travel = 1; });
+        await page.evaluate((y) => scrollTo(0, y), y);
+        await page.waitForFunction((y) => Math.abs(scrollY - y) <= 1, y, { timeout: 10000 });
+        // Let whatever join the jump started (the crossfade is a real join,
+        // like any other boundary) settle toward this now-static position
+        // before sampling. Not "two consecutive reads agree": the jump's own
+        // scroll event, onScroll, setTarget, maybeJoin and the join actually
+        // starting fade()'s own frame loop are all async/rAF-scheduled, so a
+        // poll that starts checking immediately can catch --xf still at its
+        // stale pre-jump value on two consecutive early reads and wrongly
+        // call that "converged" (measured: caught exactly this, xf=0.03 read
+        // as cssXf=0 right after the jump). Poll until --xf actually reaches
+        // xfAt()'s own value instead, with the same max wait as a budget.
+        for (let tries = 0; tries < 30; tries++) {
+          const [cur, expected] = await page.evaluate(() => [+getComputedStyle(document.documentElement).getPropertyValue('--xf'), xfAt()]);
+          if (Math.abs(cur - expected) < 1e-3) break;
+          await page.waitForTimeout(30);
+        }
+        const sample = await page.evaluate((layout) => {
+          const p = progressAt();   // raw, not state()'s toFixed(3) copy -- this asserts to 1e-6
+          const derived = layout === 'desktop' ? Math.min(1, Math.max(0, p - 3)) : (() => { const x = Math.min(1, Math.max(0, (p - 3 - .45) / (1 - .45))); return x * x * (3 - 2 * x); })();
+          return { y: scrollY, xf: xfAt(), progress: p, derived, cssXf: +getComputedStyle(document.documentElement).getPropertyValue('--xf') };
+        }, layout);
+        if (Math.abs(sample.xf - sample.derived) > 1e-6) mismatches.push({ ...sample, kind: 'xf-vs-progress' });
+        else if (Math.abs(sample.xf - sample.cssXf) > 1e-3) mismatches.push({ ...sample, kind: 'xf-vs-css' });   // --xf is a 3-decimal CSS string
+      }
+      assert(mismatches.length === 0, `I-progress ${engineName}/${layout}: xfAt() disagreed with progressAt() or --xf at ${mismatches.length}/${SAMPLES} sampled positions, e.g. ${JSON.stringify(mismatches[0])}`);
+      console.log(`${engineName}/${layout}: I-progress xfAt() derives from progressAt() at all ${SAMPLES} sampled positions`);
+      await page.close();
+    }
+  }
+}
+
 // I-rect (R2): seeded drags of two scene-1 plates and one scene-3 card must
 // all stay inside the print rectangle #gl reports in its own inline style --
 // checked right after EACH drag, not only once at the end. A plate's own
@@ -1125,6 +1193,7 @@ try {
   await iGestureSettleReleases(browsers);
   await iGestureCoastDuringHold(browsers);
   await iCloseOvershootSettles(browsers);
+  await iProgressMatchesXf(browsers);
   await iRect(browsers);
   await iScene3(browsers);
   await iReduced(browsers);
