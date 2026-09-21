@@ -133,19 +133,19 @@ export async function whenReady(page, { timeout = 30000 } = {}) {
 // inline in that same HTML. Since phase 3 moved it to site/landing.js, an
 // HTML-only override substitutes markup while the live build's landing.js
 // still runs underneath it -- a script-side regression in the overridden
-// page is never exercised, and the check passes on a page that was never
-// actually served. LANDING_JS_OVERRIDE is the explicit, symmetric second
-// half: set both env vars for a real full-page regression test. Setting
-// only LANDING_HTML_OVERRIDE now warns instead of silently covering half
-// the page.
+// page is never exercised, and the check would pass on a page that was
+// never actually served. LANDING_JS_OVERRIDE is the explicit, symmetric
+// second half. review-phases-2-4.md: a warning here was not enough -- a
+// half-substituted page still ran and could still pass, and a warning
+// printed to stdout is easy to miss in a long check-landing-all run. Set
+// both env vars or neither; setting exactly one throws.
 export async function installPageOverride(page, baseURL, { html, jsOverridePath } = {}) {
-  if (!html) return;
+  if (!html && !jsOverridePath) return;
+  if (!html || !jsOverridePath) {
+    throw new Error('installPageOverride: LANDING_HTML_OVERRIDE (or stdin) and LANDING_JS_OVERRIDE must both be set or both be unset -- a half-substituted page (markup from one source, the runtime from another) must never silently pass.');
+  }
   const base = new URL(baseURL);
   await page.route(base.href, (route) => route.fulfill({ status: 200, contentType: 'text/html', body: html }));
-  if (jsOverridePath) {
-    const script = await readFile(jsOverridePath, 'utf8');
-    await page.route(new URL('landing.js', base).href, (route) => route.fulfill({ status: 200, contentType: 'text/javascript', body: script }));
-  } else {
-    console.warn('LANDING_HTML_OVERRIDE is set without LANDING_JS_OVERRIDE: landing.js is served from the live build, not the override -- a script-side regression will not be caught.');
-  }
+  const script = await readFile(jsOverridePath, 'utf8');
+  await page.route(new URL('landing.js', base).href, (route) => route.fulfill({ status: 200, contentType: 'text/javascript', body: script }));
 }
