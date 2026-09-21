@@ -158,8 +158,15 @@ function covRef(rgb255) {
   const ch = absorbChannels(rgb255);
   return 1 - Math.exp(-(ch[0] + ch[1] + ch[2]));
 }
+// SHOW's own transmittance step, T = clamp(exp(-A), 0, 1) -- exp(-x), not
+// its complement: a channel with LESS absorbance reflects MORE of that
+// channel's light, so a high-absorbance red channel (a blue print, mostly)
+// must read as a LOW shown-red, not a high one. cov above is deliberately
+// the opposite direction (1 - exp(-x): more density is more coverage) --
+// conflating the two here previously read every saturated cell as a
+// washed-out near-white regardless of its real hue.
 function shownRef(rgb255) {
-  return absorbChannels(rgb255).map((v) => 1 - Math.exp(-v));
+  return absorbChannels(rgb255).map((v) => Math.exp(-v));
 }
 function hueChroma([r, g, b]) {
   const max = Math.max(r, g, b), min = Math.min(r, g, b), chroma = max - min;
@@ -192,7 +199,8 @@ function reduceRegion(sArr, dArr, W, H, x0, x1) {
     }
   }
   const mean = sumTotal / n;
-  const shown = [1 - Math.exp(-(sR / n + dR / n)), 1 - Math.exp(-(sG / n + dG / n)), 1 - Math.exp(-(sB / n + dB / n))];
+  // exp(-x), matching shownRef's own fix above -- not 1 - exp(-x).
+  const shown = [Math.exp(-(sR / n + dR / n)), Math.exp(-(sG / n + dG / n)), Math.exp(-(sB / n + dB / n))];
   return { cov: 1 - Math.exp(-mean), mass: sumTotal, shown };
 }
 
