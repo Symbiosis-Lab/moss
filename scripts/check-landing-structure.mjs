@@ -51,7 +51,12 @@ const BASELINE = {
   // latch (set false on any capture failure, never reset) is deleted --
   // every failure site now reports the fault and lets the existing retake
   // loop try again instead of disabling washes for the rest of the session.
-  topLevelLets: 83,
+  // Speedups item 1 (2026-09-21): fell 83 -> 81. `let run = null, restOwed
+  // = false;` moved into site/landing-gesture.js's createLandingGesture()
+  // closure along with the rest of the gesture record -- landing.js reads
+  // and writes both through the gestureModel accessor pair it destructures
+  // instead of owning the bindings itself.
+  topLevelLets: 81,
   // Rose 14 -> 15 on 2026-09-21: the last scene's rest is a floor, not a point,
   // so a visitor can reach the footer on a short window. It is written as one
   // comparison against SHARE in the desktop drive. The scene table pays this
@@ -76,7 +81,11 @@ const BASELINE = {
   // <script src="watercolor-capture.js"> tag: the painter registry
   // landing.js's own capture now routes the Mandelbrot's two capture sites
   // through, instead of each inlining its own blind-toDataURL fallback.
-  htmlBytes: 54350,
+  // Speedups item 1 (2026-09-21): rose 54350 -> 54393. One more tag, same
+  // shape as the one above: <script src="landing-gesture.js"></script>,
+  // loaded immediately before landing.js so the extracted gesture record is
+  // defined before landing.js calls window.LandingGesture().
+  htmlBytes: 54393,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a
@@ -144,7 +153,14 @@ const BASELINE = {
   // Budget consumed so far: 5661 of 6000.
   // Rose 254615 -> 256274 on 2026-09-21 for five owner items: the title behind scene 1
   // and its haze, the Publish carry landing with scene 4's text, and three mobile timings.
-  scriptBytes: 256274,
+  // Speedups item 1 (2026-09-21): fell 256274 -> 253580. The gesture record
+  // (contact, run, restOwed, gestureHeld, gestureKind, tickGesture,
+  // cancelRun, armSettle, holdDirect, holdOff and their comments) moved
+  // verbatim to site/landing-gesture.js, which this script does not count --
+  // it measures site/landing.js only, by design (SITE_DIR/LANDING_JS
+  // above); the new file is scripted separately if a future phase wants a
+  // ratchet on it too.
+  scriptBytes: 253580,
 };
 
 function countWindowAssignments(text) {

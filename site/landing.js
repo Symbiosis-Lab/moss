@@ -3314,56 +3314,14 @@ const restY = (scene) => {
 const spanLeft = (a, b, t) => Math.max(0, b - Math.max(a, t));
 const cureLeft = (t) => spanLeft(0, T_TAKE, t) / ARRIVE + spanLeft(T_TAKE, T_WET, t) / ARRIVE_SMEAR + spanLeft(T_WET, T_TOTAL, t) / ARRIVE;
 let restSince = performance.now(), travel = 0;
-// What the hand is doing, entirely DERIVED from the raw state directly below --
-// no caller sets `kind` itself, so two input channels can no longer overwrite
-// what the other means (M4: a wheel coast tick used to clear `via` and drop a
-// live touch hold). `contact.wheelUntil` is a deadline, not a flag: a push
-// extends it to now+HOLD_GAP, so a continuous wheel stream keeps `held` true
-// on its own -- a settle can never hijack an in-flight gesture between ticks
-// (the earlier one-line park fix overshot to scene 0 under load for exactly
-// this reason) -- and a real gap lets it lapse without anyone writing a demotion.
-const contact = { direct: false, wheelUntil: 0, wasHeld: false };
-let run = null, restOwed = false;
-const gestureHeld = (now) => contact.direct || now < contact.wheelUntil;
-// No cache: every reader, production and the harness alike, calls this with
-// its own `now` rather than trusting a value some earlier frame wrote. Unit 1
-// cached this once a frame and read the cache everywhere but state(), which
-// brought M1's own staleness bug back on the other side -- production and
-// state() could disagree about what the hand was doing right now (unit 1b
-// review). Two comparisons is cheap enough to just run again.
-const gestureKind = (now) => run ? 'settling' : gestureHeld(now) ? 'held' : restOwed ? 'coasting' : 'idle';
-// `reason` is the only thing still published as a single cached field --
-// written immediately by whichever setter changes something, nothing else
-// depends on its timing the way kind's callers did.
-const gesture = { reason: null };
-// Run unconditionally from the one watchScroll loop, before it dispatches to
-// any role, so a wheel hold expires the same way in watchScrollDesktop,
-// watchScrollNative or watchScrollReduced alike (M1 -- the old staleness
-// check lived in watchScrollDesktop only, so a held read stuck forever once
-// nativeScroll() routed elsewhere: the 4<->5 park at xf≈0.5). Also the one
-// place that notices a hold lapsing with nothing else arriving to arm a rest
-// for it -- a flick across a boundary with no further tick. contact.wasHeld
-// is the raw value tickGesture itself saw last time, not a read of any
-// derived field -- so the edge it detects can never be masked by something
-// else's idea of what kind was between two of its own calls.
-function tickGesture(now) {
-  const held = gestureHeld(now);
-  if (contact.wasHeld && !held) { restOwed = true; gesture.reason = 'release'; }
-  contact.wasHeld = held;
-}
-// Cancels an outgoing settle itself, so no setter depends on running before
-// another to avoid orphaning a live rAF that keeps writing scrollY while direct
-// manipulation reads it back as the reader's own motion (M2 -- cancelSettle
-// used to be the only place this happened, correct only because it ran ahead
-// of holdOn/the wheel listener by listener order, an undocumented dependency).
-function cancelRun() { if (run) { run.cancel = true; run = null; } }
-// Arms a settle without disturbing a hold or a running one -- for a caller with
-// no gesture of its own to report (fiveOn, reduced motion) or a wheel tick read
-// as momentum. `coasting` is this, renamed and derived rather than set directly.
-function armSettle(reason) {
-  const now = performance.now();
-  if (!gestureHeld(now) && !run) { restOwed = true; gesture.reason = reason; }
-}
+// The scroll gesture record -- what the hand is doing, derived from the raw
+// contact/run/restOwed state and release-edge detection -- lives in
+// site/landing-gesture.js now, with no DOM access of its own, so it can run
+// under plain node:test (scripts/gesture-model.test.mjs). This is the one
+// call that creates it; everything below reads it through this reference,
+// same functions, same fields, moved verbatim.
+const gestureModel = window.LandingGesture();
+const { contact, gesture, gestureHeld, gestureKind, tickGesture, cancelRun, armSettle, holdDirect, holdOff } = gestureModel;
 // The opening is a held first frame. A rest target is allowed to move the page
 // only after a real gesture has armed the carry, so a loaded page never pages
 // itself into scene 1 while the reader is still looking at the title.
@@ -3418,7 +3376,7 @@ function settleTo(y, v0, secs) {
   // cancelSettle having already run ahead of it by listener order.
   cancelRun();
   const thisRun = { cancel: false };
-  run = thisRun;
+  gestureModel.run = thisRun;
   gesture.reason = 'run';
   const f = (now) => {
     if (thisRun.cancel) return;
@@ -3432,7 +3390,7 @@ function settleTo(y, v0, secs) {
       // Not restOwed = false here: both callers that ever start a run
       // (settleAtRest, the closing gate) already clear it before calling
       // settleTo -- dead in both paths (unit 1b review).
-      if (run === thisRun) { run = null; gesture.reason = 'done'; }
+      if (gestureModel.run === thisRun) { gestureModel.run = null; gesture.reason = 'done'; }
       scrollTo(0, y);
       return;
     }
@@ -3474,7 +3432,7 @@ const sceneForRest = (p, dir) => (dir === 0 ? Math.round(p) : dir < 0 ? Math.flo
 const restSceneAt = (p, dir) => dir <= 0 && scrollY < restY(0) ? -1 : sceneForRest(p, dir);
 function settleAtRest(now) {
   if (!inputArmed || gestureKind(now) !== 'coasting' || now - restSince < REST_MS) return;
-  restOwed = false; gesture.reason = 'fire';
+  gestureModel.restOwed = false; gesture.reason = 'fire';
   const scene = restSceneAt(progressAt(), travel);
   const visualScene = Math.max(0, scene);
   // A wash owed or already running lends its clock; with none, the spring
@@ -3507,9 +3465,9 @@ function settleAtRest(now) {
 // needs no such check, only touch fires it.
 // contact.direct is its own field, untouched by the wheel channel, so a coast
 // tick mid-hold (M4) has nothing shared to clobber -- holdOff needs no guard.
-function holdDirect() { cancelRun(); contact.direct = true; gesture.reason = 'hold'; }
+// holdDirect/holdOff themselves live in the gesture model now (destructured
+// above); this listener is the DOM-reading part that decides WHEN to call them.
 const holdOn = (e) => { if (e.pointerType === 'touch' || e.clientX >= document.documentElement.clientWidth) holdDirect(); };
-const holdOff = () => { contact.direct = false; };
 addEventListener('pointerdown', holdOn);
 addEventListener('touchstart', holdDirect, { passive: true });
 addEventListener('pointerup', holdOff);
