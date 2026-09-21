@@ -691,45 +691,53 @@ function assertContained(rect, rects, engineName, label) {
     r.x < rect.x - 0.5 || r.y < rect.y - 0.5 || r.x + r.w > rect.x + rect.w + 0.5 || r.y + r.h > rect.y + rect.h + 0.5);
   assert(outside.length === 0, `I-rect ${engineName}: ${label}: outside the print rect ${JSON.stringify(rect)}: ${JSON.stringify(outside)}`);
 }
-// Takes a locator, not coordinates: the caller used to read boundingBox()
-// once, some turns of the event loop before the drag actually started,
-// which is exactly the gap review-phases-2-4.md's diagnosis names -- a
-// still-settling page moves the element out from under a box read that
-// early. Waiting for scroll to settle and re-reading the box right here,
-// immediately before the first mouse.move, is what "re-read the box after
-// that wait" means; every caller gets it for free instead of having to
-// remember the sequence. A second, independent race surfaced once this one
-// closed: the plate pointerdown handler (site/landing.js) only arms a drag when
-// shown===0 && !running() at the instant mouse.down() lands -- reading that
-// once via waitForScrollSettled/gotoScene earlier is not the same guarantee,
-// since a background join (a capture finishing, maybeJoin firing) can flip
-// running() true again in the gap while this function reads a boundingBox()
-// and moves the mouse into position. When that race lands, mouse.down()
-// misses entirely: every subsequent pointermove is a no-op (`if (!held)
-// return`), so the whole gesture silently drags nothing and the element
-// never moves -- measured directly (repeat-fuzzinvalidated.mjs, unit0a): a
-// 5-10% rate, the element left exactly at its pre-drag position. Retrying
-// the mechanical gesture when the element didn't actually move is the same
-// shape as gestureCommit's own retry-until-committed, not a retry on the
-// assertion this exists to prove.
+// Takes a locator, not coordinates, and drives the whole gesture from
+// inside the page in one page.evaluate -- reading the element's box and
+// pressing used to be separate Node<->browser round trips (mouse.move,
+// mouse.down, mouse.move x2, mouse.up), and a still-settling page moved a
+// plate or card out from under a box read that early, missing about one
+// drag in sixty (measured, review-phases-2-4.md's diagnosis). Waiting for
+// scroll to settle stays a separate step first (waitForScrollSettled
+// itself polls over real time, which a single synchronous task in the page
+// can't replace); the box read and every event of the drag itself now
+// happen in the same task, so nothing between them can move the element.
+// The events match what the plate handler (stage pointerdown/pointermove/
+// pointerup, site/landing.js) and the scene-3 card handler (the same three
+// on stage, plus pointercancel/lostpointercapture reverting the drag) both
+// listen for: a single consistent pointerId, isPrimary/button/buttons set
+// the way a real primary mouse button down/drag/up reports them, and
+// setPointerCapture called the same way a trusted pointerdown would let it
+// succeed -- both handlers call it unguarded (no try/catch), and the card
+// handler's own requestAnimationFrame(updateDrag) that actually moves the
+// card never gets scheduled if that call throws. The intermediate moves
+// are paced on the page's own requestAnimationFrame instead of a fixed
+// delay, so the handler sees exactly the same shape of gesture a still,
+// unhooked page would produce, with no chance for a background join or a
+// running() flip to land in a gap this function no longer has.
 async function dragBy(page, locator, dx, dy, steps = 4) {
   await waitForScrollSettled(page);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const box = await locator.boundingBox();
-    const sx = box.x + box.width / 2, sy = box.y + box.height / 2;
-    await page.mouse.move(sx, sy);
-    await page.mouse.down();
-    await page.waitForTimeout(30);
-    await page.mouse.move(sx + dx / 2, sy + dy / 2, { steps });
-    await page.waitForTimeout(30);
-    await page.mouse.move(sx + dx, sy + dy, { steps });
-    await page.waitForTimeout(30);
-    await page.mouse.up();
-    await page.waitForTimeout(150);
-    const after = await locator.boundingBox();
-    if (after && (Math.abs(after.x - box.x) > 4 || Math.abs(after.y - box.y) > 4)) return;
+  const handle = await locator.elementHandle();
+  try {
+    await page.evaluate(async ([el, dx, dy, steps]) => {
+      const rect = el.getBoundingClientRect();
+      const sx = rect.left + rect.width / 2, sy = rect.top + rect.height / 2;
+      const pointerId = 1;
+      const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+      const fire = (type, x, y) => el.dispatchEvent(new PointerEvent(type, {
+        pointerId, pointerType: 'mouse', isPrimary: true, button: 0, buttons: type === 'pointerup' ? 0 : 1,
+        bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y,
+      }));
+      fire('pointerdown', sx, sy);
+      await nextFrame();
+      for (let i = 1; i <= steps; i++) {
+        fire('pointermove', sx + (dx * i) / steps, sy + (dy * i) / steps);
+        await nextFrame();
+      }
+      fire('pointerup', sx + dx, sy + dy);
+    }, [handle, dx, dy, steps]);
+  } finally {
+    await handle.dispose();
   }
-  throw new Error('dragBy: element never moved after 3 attempts (pointerdown kept missing its shown===0 && !running() window)');
 }
 async function iRect(browsers) {
   for (const [engineName, browser] of Object.entries(browsers)) {
