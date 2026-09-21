@@ -139,7 +139,17 @@ const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const PLATE_SET = window.__LANG === 'zh'
   ? {"dir": "zhuda/plates", "images": ["376d25daf9aa.jpg", "3926a51d36d5.jpg", "9e4725e1101e.jpg", "e265c76d268f.jpg", "e4772754b3b1.jpg", "e65a0ba027e5.jpg", "eab0bc5785fa.jpg"]}
   : {"dir": "blake/plates", "images": ["3b119ebffab3.jpg", "b8dcbfe35cbd.jpg", "38211f928ad5.jpg", "171a382c9cc2.jpg", "771aaf08cedb.jpg", "f34b78575d36.jpg", "50e62b346c5f.jpg", "5ac4f7fb652f.jpg", "0bb22b56b263.jpg"]};
-const PLATE_ASPECT = window.__LANG === 'zh' ? {'376d25daf9aa.jpg': 280 / 640, '3926a51d36d5.jpg': 640 / 622, '9e4725e1101e.jpg': 640 / 472, 'e265c76d268f.jpg': 426 / 640, 'e4772754b3b1.jpg': 337 / 640, 'e65a0ba027e5.jpg': 426 / 640, 'eab0bc5785fa.jpg': 318 / 640} : {};
+// Natural width/height for every plate file, both sets: scatterPlates needs
+// each plate's real aspect before its <img> has loaded (the box is sized and
+// placed up front, the pixels fade in after), so this can't be read from the
+// DOM. The English set had none until 2026-09-20 — PLATE_ASPECT's ternary
+// only ever filled in zh — so every English plate defaulted to a square box
+// (`|| 1` below) regardless of its real shape, and object-fit: contain then
+// painted the box's own background into the leftover margin on both sides
+// of whichever axis the real image was narrower on.
+const PLATE_ASPECT = window.__LANG === 'zh'
+  ? {'376d25daf9aa.jpg': 280 / 640, '3926a51d36d5.jpg': 640 / 622, '9e4725e1101e.jpg': 640 / 472, 'e265c76d268f.jpg': 426 / 640, 'e4772754b3b1.jpg': 337 / 640, 'e65a0ba027e5.jpg': 426 / 640, 'eab0bc5785fa.jpg': 318 / 640}
+  : {'3b119ebffab3.jpg': 475 / 640, 'b8dcbfe35cbd.jpg': 640 / 490, '38211f928ad5.jpg': 534 / 640, '171a382c9cc2.jpg': 531 / 640, '771aaf08cedb.jpg': 640 / 456, 'f34b78575d36.jpg': 640 / 326, '50e62b346c5f.jpg': 492 / 640, '5ac4f7fb652f.jpg': 640 / 237, '0bb22b56b263.jpg': 468 / 640};
 // Where a plate may live, in #cell's own coordinates. The viewport-aware
 // bounds let a reader drag beyond the resting sheet while the print rectangle
 // grows to include the visible domain; the state textures remain bounded.
@@ -180,9 +190,16 @@ function scatterPlates(plates) {
   const rects = [];
   for (const pl of plates) {
     const aspect = PLATE_ASPECT[pl.dataset.lqip] || 1;
-    const long = Math.round(rand(190, 280));
-    const w = aspect >= 1 ? long : Math.max(96, Math.round(long * aspect));
-    const h = aspect >= 1 ? Math.max(96, Math.round(long / aspect)) : long;
+    // The 96px floor is on the SHORT side, so it has to raise `long` (both
+    // sides together) rather than clamp the short side alone: clamping only
+    // the short side is what used to paint a black bar on the very-wide and
+    // very-tall plates (e.g. blake's 640x237) whenever the random draw put
+    // long near 190 -- the box kept long's width but forced height up to 96,
+    // which is no longer this image's own ratio.
+    const longAspect = Math.max(aspect, 1 / aspect);
+    const long = Math.round(Math.max(rand(190, 280), 96 * longAspect));
+    const w = aspect >= 1 ? long : Math.round(long * aspect);
+    const h = aspect >= 1 ? Math.round(long / aspect) : long;
     const xHi = Math.max(b.xMin, b.xMax - w), yHi = Math.max(b.yMin, b.yMax - h);
     let bx = b.xMin, by = b.yMin, best = Infinity;
     for (let t = 0; t < 40 && best > 0; t++) {

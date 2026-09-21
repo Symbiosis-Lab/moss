@@ -486,6 +486,60 @@ async function iFuzzInvalidated(browsers) {
   }
 }
 
+// I-plate (site owner, 2026-09-20) fault: PLATE_ASPECT's ternary (site/
+// landing.js) only ever filled in the zh set -- the English (blake) set
+// defaulted every plate to aspect 1, `|| 1` -- so scatterPlates sized a
+// square box for an image of any real shape, and object-fit: contain then
+// painted the box's own #d9d2c4 background into whatever the square left
+// over. RED on that state (restored below, one line): every blake plate's
+// boxAspect/natAspect ratio was off by double digits, not 1%. GREEN once
+// PLATE_ASPECT carried real per-file ratios for both sets. A second,
+// independent fault was found composing the fix: the 96px short-side floor
+// clamped only the short side, so a very wide or very tall image (blake's
+// 640x237, aspect 2.7) still got a distorted box whenever the random draw
+// put `long` under ~short-floor*aspect -- fixed by raising `long` itself
+// instead of clamping the side computed from it.
+async function readPlateAspects(page) {
+  return page.evaluate(() => [...document.querySelectorAll('.plate')].map((pl) => {
+    const img = pl.querySelector('img');
+    const box = { w: pl.offsetWidth, h: pl.offsetHeight };
+    const nat = { w: img.naturalWidth, h: img.naturalHeight };
+    // Replicate object-fit: contain by hand against the box the page
+    // actually rendered -- not a second look at the aspect number
+    // scatterPlates used, which would only ever re-confirm its own math.
+    const scale = Math.min(box.w / nat.w, box.h / nat.h);
+    const cw = nat.w * scale, ch = nat.h * scale;
+    const c = document.createElement('canvas'); c.width = Math.round(box.w); c.height = Math.round(box.h);
+    const g = c.getContext('2d');
+    g.fillStyle = getComputedStyle(pl).backgroundColor; g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(img, (box.w - cw) / 2, (box.h - ch) / 2, cw, ch);
+    const uniform = (data) => { for (let i = 4; i < data.length; i += 4) if (data[i] !== data[0] || data[i + 1] !== data[1] || data[i + 2] !== data[2]) return false; return true; };
+    const edgeBar = ['top', 'bottom', 'left', 'right'].some((side) => {
+      const d = side === 'top' ? g.getImageData(0, 0, c.width, 1).data
+        : side === 'bottom' ? g.getImageData(0, c.height - 1, c.width, 1).data
+        : side === 'left' ? g.getImageData(0, 0, 1, c.height).data
+        : g.getImageData(c.width - 1, 0, 1, c.height).data;
+      return uniform(d);
+    });
+    return { id: pl.id, boxAspect: box.w / box.h, natAspect: nat.w / nat.h, edgeBar };
+  }));
+}
+async function iPlate(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const page = await browser.newPage(PRESETS.desktop);
+    await ready(page);
+    await page.waitForFunction(() => [...document.querySelectorAll('.plate img')].every((im) => im.classList.contains('in')), null, { timeout: 15000 });
+    const rows = await readPlateAspects(page);
+    for (const r of rows) {
+      const err = Math.abs(r.boxAspect - r.natAspect) / r.natAspect;
+      assert(err <= 0.01, `I-plate ${engineName}: ${r.id} box aspect ${r.boxAspect.toFixed(3)} vs natural ${r.natAspect.toFixed(3)} (${(err * 100).toFixed(1)}% off)`);
+      assert(!r.edgeBar, `I-plate ${engineName}: ${r.id} renders a solid-colour bar at a box edge`);
+    }
+    console.log(`${engineName}: I-plate all ${rows.length} plates render at their image's natural aspect (<=1% off) with no edge letterbox`);
+    await page.close();
+  }
+}
+
 // I-default: every check script's own default navigation loads the
 // unflagged URL. A carry= baked into a literal .goto() call site is exactly
 // the historical bug (design doc: "the fixed driver was never made the
@@ -517,6 +571,7 @@ try {
   await iReduced(browsers);
   await iFuzz(browsers);
   await iFuzzInvalidated(browsers);
+  await iPlate(browsers);
   await iDefault();
 } finally {
   await Promise.all(Object.values(browsers).map((b) => b.close()));
