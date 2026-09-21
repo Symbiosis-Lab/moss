@@ -77,5 +77,29 @@ for (const locale of ['zh-hans', 'zh-hant']) {
 }
 
 const icon = await readFile(new URL('../crates/moss-build/icons/icon.svg', import.meta.url), 'utf8');
-const favicon = icon.replace('viewBox="-647 -373 3145 3145"', 'viewBox="-411 -244 2608 2608"');
+// moss's own crate ships icon.svg at its full, roomy viewBox (see that
+// file's header: never rescaled there, since mark.css's proportion table
+// keys off it for every other consumer of the mark). crates/moss-build's
+// own favicon rasterizer tightens a COPY of that box for its bundled
+// default favicon -- see tighten_default_favicon_viewbox's own comment for
+// how -411 -244 2608 2608 was measured (an even ~12%-of-side margin,
+// deliberately less aggressive than the crop below). This script does the
+// same kind of crop for the landing site's OWN favicon.svg, which moss's
+// Rust-side tightening never touches (it only fires for its own bundled
+// default, never for a vault-supplied assets/favicon.svg). Measured
+// 2026-09-20 by rendering icon.svg at 4000x4000 and scanning alpha for the
+// ink's own pixel bounding box: x=[8.9,1777.1] y=[7.7,2112.3] within the
+// shipped box, content 1768x2105 -- a tight SQUARE window built from that
+// (side = the taller dimension, so the mark touches the box on its own
+// longer axis with zero margin there, and only the unavoidable letterboxing
+// a portrait mark needs to become square on the other).
+const favicon = icon.replace('viewBox="-647 -373 3145 3145"', 'viewBox="-182 -15 2150 2150"');
 await emit(new URL('../site/assets/brand/favicon.svg', import.meta.url), favicon);
+// moss's own build (crates/moss-build/src/build/render/blocking.rs,
+// resolve_favicon) looks for a user favicon at exactly assets/favicon.{svg,
+// png,ico} -- never assets/brand/ -- so every moss-built docs page (Get
+// Started, etc.) falls back to its own bundled default mark without this
+// copy. Kept identical to the one above rather than symlinked: git-tracked
+// symlinks are one more thing a deploy path has to preserve faithfully, and
+// this file changes only when the mark itself does.
+await emit(new URL('../site/assets/favicon.svg', import.meta.url), favicon);
