@@ -1030,21 +1030,37 @@ function measurePub() {
 // fixed layer -- a sibling of #stage, never a descendant -- so it can grow
 // past every ancestor's overflow:hidden on its way to and past the window
 // edge, and so it is never folded into a print (fold() only walks #stage).
-// It re-measures the button's live screen rect on its own poll instead of
-// hooking any scene-transition call site, which keeps it decoupled from
-// watchScroll*/settle*, under restructuring on another branch.
+// Event-driven, not polled (R8: nothing runs at rest): synced from scenes()'s
+// own dispatch (2026-09-21, dropping an earlier setInterval(...,250) that
+// worked but ran forever) plus resize, a reduced-motion change, and the
+// button's own click -- never a timer or a rAF loop of its own, so there is
+// nothing left running once the reader is actually at rest. `phase` is
+// scenes()'s own state, already exactly "which named scene is current",
+// true for the whole of scene 2's own idle animation and false the instant a
+// wash to elsewhere starts (scenes('morph') runs before that wash's first
+// frame) -- a more precise signal than the shown/target/running() this cue
+// used to poll, and one this cue only ever reads. "Activated" lives as a
+// dataset flag on #pub-cue itself rather than a new top-level binding.
 const pubCue = $('pub-cue');
-let publishActivated = false;
 function pubCueButton() {
   const doc = shFrame.contentDocument;
   const btn = doc && doc.querySelector('.moss-publish-button');
-  if (!btn || btn.disabled) return null;
-  if (!btn.dataset.pubCueBound) { btn.dataset.pubCueBound = '1'; btn.addEventListener('click', () => { publishActivated = true; syncPubCue(); }); }
-  return btn;
+  if (!btn) return null;
+  if (!btn.dataset.pubCueBound) {
+    btn.dataset.pubCueBound = '1';
+    btn.addEventListener('click', () => { pubCue.dataset.activated = '1'; syncPubCue(); });
+    // "nothing to publish on a cold boot" starts this button disabled;
+    // liveLoop's own breathe/growTo cycle enables and disables it again as
+    // the mock edits it drives come and go. Not a scene change, a resize, or
+    // a click -- a MutationObserver is the event-driven way to notice it
+    // rather than a poll.
+    new MutationObserver(syncPubCue).observe(btn, { attributes: true, attributeFilter: ['disabled', 'class'] });
+  }
+  return btn.disabled ? null : btn;
 }
 function syncPubCue() {
   if (!pubCue) return;
-  const btn = !mobileLayout() && !publishActivated && !running() && shown === LIVE && !document.hidden ? pubCueButton() : null;
+  const btn = !mobileLayout() && !pubCue.dataset.activated && phase === 'live' && !document.hidden ? pubCueButton() : null;
   if (!btn) { pubCue.classList.remove('on'); return; }
   // The button lives in an iframe with its own layout viewport; its own
   // getBoundingClientRect() is in THAT viewport, not this fixed layer's.
@@ -1065,7 +1081,11 @@ function syncPubCue() {
   pubCue.style.setProperty('--pub-ring-k', String(Math.max(cx, innerWidth - cx, cy, innerHeight - cy) / r0 + 1));
   pubCue.classList.add('on');
 }
-if (pubCue) { setInterval(syncPubCue, 250); addEventListener('resize', syncPubCue); addEventListener('visibilitychange', syncPubCue); }
+if (pubCue) {
+  addEventListener('resize', syncPubCue);
+  addEventListener('visibilitychange', syncPubCue);
+  matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', syncPubCue);
+}
 
 // ── Scene 4's targets: one circle per deploy target, run by d3-force ──────
 // The deploy target list itself is never hardcoded here: scene4/logos/ is a
@@ -3830,6 +3850,12 @@ function scenes(next) {
   if (next === 'write') writeLoop(from === 'morph');
   else if (next === 'live') liveLoop();
   else if (next === 'ships') enterScene3();
+  // Scene 2's Publish cue: this is its own dispatch, both ways -- 'live'
+  // starting is the only moment it may turn on, and 'live' ending (a wash
+  // to elsewhere sets phase to 'morph' before that wash's first frame) is
+  // the moment it must turn off, not up to 2+ seconds later when that wash
+  // finally lands.
+  syncPubCue();
 }
 
 // For the harness.
