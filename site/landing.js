@@ -1879,7 +1879,10 @@ function publishBridge(from, to, prints) {
   }
   return {
     draw(t) {
-      const q = smooth(0, T_TOTAL, t), p = from === SHIPS ? q : 1 - q;
+      // Forward finishes at T_WET, where the reading line reaches scene 4's
+      // text, instead of drifting into the cure tail after text has stopped.
+      const forward = from === SHIPS;
+      const q = smooth(0, forward ? T_WET : T_TOTAL, t), p = forward ? q : 1 - q;
       const cx = (x + (GEOM.cellW / 2 - x) * p) * SCALE;
       const cy = (y + (GEOM.cellH / 2 - y) * p) * SCALE + (mobileLayout() ? 0 : (1 - SCALE) * GEOM.cellH / 2);
       const scale = SCALE * (1 + (PUB_SCALE * (mobileLayout() ? 1.4 : 1) - 1) * p);

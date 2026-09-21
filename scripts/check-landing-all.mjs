@@ -17,6 +17,7 @@ const CHECKS = [
   'check-landing-mobile-handoff.mjs',
   'check-landing-mobile.mjs',
   'check-landing-pin.mjs',
+  'check-landing-publish-bridge.mjs',
   'check-landing-readiness.mjs',
   'check-landing-subscription.mjs',
   'check-landing-text-track.mjs',
