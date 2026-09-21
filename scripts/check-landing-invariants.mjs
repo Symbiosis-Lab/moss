@@ -64,6 +64,11 @@
 //           an exit test.
 // I-default (checks, not the page) fault: a scratch script with
 //           `page.goto(base + '?carry=intent')` -- the static scan catches it.
+// I-plate, I-window-radius, I-pub-cue, I-header-scrim: added 2026-09-20 for
+//           the site owner's four visual-polish requests (scene 1 plate
+//           margins, scene 2's Publish cue, the preview window's corner
+//           radius, mobile scene 5's header contrast). Each function's own
+//           header comment carries its RED/GREEN record.
 //
 // Rules: every scene reach uses a real armed gesture plus window.__landing's
 // own restY()/state(), never a fixed sleep or a per-frame poll of the canvas.
@@ -608,6 +613,46 @@ async function iWindowRadius(browsers) {
   }
 }
 
+// I-header-scrim (site owner, 2026-09-20): mobile scene 5's header (.brand,
+// .language-picker) sits over the moving closing film with no dark backing
+// of its own -- unlike the closing text, which gets #scrim (opacity var(
+// --scrim), itself riding on #five's own var(--xf)). Contrast is checked
+// against the worst case ANY frame could show behind a translucent
+// background: literal white, not a sampled frame -- provably safe rather
+// than dependent on this one clip (measured separately with ffmpeg's
+// signalstats over the whole loop: peak luma 215/255, well under white, so
+// real footage has more margin than this check demands). RED (the
+// site/index.html .brand/.language-picker background rule's own call site
+// deleted, restored after): contrast collapses to that of a fully
+// transparent background (~1:1, alpha 0). GREEN restored.
+function srgbToLinear(c) { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }
+function relativeLuminance([r, g, b]) { return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b); }
+function contrastRatio(rgb1, rgb2) { const [a, b] = [relativeLuminance(rgb1), relativeLuminance(rgb2)].sort((x, y) => y - x); return (a + 0.05) / (b + 0.05); }
+function parseRGBA(str) { const m = str.match(/[\d.]+/g).map(Number); return { r: m[0], g: m[1], b: m[2], a: m[3] ?? 1 }; }
+function compositeOverWhite({ r, g, b, a }) { return [r * a + 255 * (1 - a), g * a + 255 * (1 - a), b * a + 255 * (1 - a)]; }
+async function iHeaderScrim(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const page = await browser.newPage(PRESETS.phone);
+    await ready(page);
+    await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForFunction(() => window.__landing.state().xf === 1 && document.getElementById('five').classList.contains('on'), null, { timeout: 20000 });
+    const style = await page.evaluate(() => ({
+      brandBg: getComputedStyle(document.querySelector('.brand')).backgroundColor,
+      brandFg: getComputedStyle(document.querySelector('.brand .moss-wordmark')).color,
+      langBg: getComputedStyle(document.querySelector('.language-picker')).backgroundColor,
+      langFg: getComputedStyle(document.querySelector('.language-picker .nav-lang-current')).color,
+    }));
+    for (const [label, bgStr, fgStr] of [['brand', style.brandBg, style.brandFg], ['language-picker', style.langBg, style.langFg]]) {
+      const bg = parseRGBA(bgStr), fg = parseRGBA(fgStr);
+      assert(bg.a > 0.3, `I-header-scrim ${engineName}: .${label} background did not darken at xf=1 (${bgStr})`);
+      const cr = contrastRatio([fg.r, fg.g, fg.b], compositeOverWhite(bg));
+      assert(cr >= 4.5, `I-header-scrim ${engineName}: .${label} contrast ${cr.toFixed(2)} < 4.5 against a worst-case white frame (fg ${fgStr}, bg ${bgStr})`);
+      console.log(`${engineName}: I-header-scrim .${label} ${cr.toFixed(2)}:1 against a worst-case white frame`);
+    }
+    await page.close();
+  }
+}
+
 // I-default: every check script's own default navigation loads the
 // unflagged URL. A carry= baked into a literal .goto() call site is exactly
 // the historical bug (design doc: "the fixed driver was never made the
@@ -642,6 +687,7 @@ try {
   await iPlate(browsers);
   await iPubCue(browsers);
   await iWindowRadius(browsers);
+  await iHeaderScrim(browsers);
   await iDefault();
 } finally {
   await Promise.all(Object.values(browsers).map((b) => b.close()));
