@@ -12,6 +12,7 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 
 const CHECKS = [
   'check-landing-cold-bottom.mjs',
+  'check-watercolor-fidelity.mjs',
   'check-landing-intro-title.mjs',
   'check-landing-mobile-handoff.mjs',
   'check-landing-mobile.mjs',

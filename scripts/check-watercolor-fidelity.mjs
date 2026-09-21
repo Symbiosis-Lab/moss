@@ -240,9 +240,15 @@ function judge(run, engineName) {
   return { byId, failingCells, maxDiff, tolerance };
 }
 
-const { baseURL, close } = process.argv[2]
-  ? { baseURL: process.argv[2].endsWith('/') ? process.argv[2] : process.argv[2] + '/', close: async () => {} }
-  : await serveWorktree(WORKTREE_ROOT);
+// Unlike every other check-landing-*.mjs, this one does not accept a URL
+// override on argv[2]: the other scripts' override means "run this same
+// check against an already-served copy of the compiled SITE" (a deployed
+// URL, or check-landing-all.mjs's own shared server for the build) -- there
+// is no compiled-site analogue for a repo-local module fixture, and
+// check-landing-all.mjs passes its build server's URL to every script in
+// its list regardless, which would resolve scripts/fixtures/... against
+// the wrong root entirely. Always self-serves the worktree root instead.
+const { baseURL, close } = await serveWorktree(WORKTREE_ROOT);
 const fixtureURL = new URL('scripts/fixtures/watercolor-capture/index.html', baseURL).href;
 const engines = await loadPlaywright();
 const measure = !!process.env.WATERCOLOR_FIDELITY_MEASURE;
