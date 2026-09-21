@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Floating nav island harness — production site.css + nav-island.ts</title>
+
+  <!-- The production stylesheet, unmodified, served from the repo root by
+       playwright/vite.nav-island-harness.config.ts. `/__moss-tokens.css` is
+       that same config's virtual route: it shells out to `moss describe
+       --json` and lowers the result into a `:root` block, so the token VALUES
+       here come from tokens.json rather than being re-typed. site.css itself
+       is rules-only and cannot be loaded without them. -->
+  <link rel="stylesheet" href="/__moss-tokens.css">
+  <link rel="stylesheet" href="/moss-build-assets/assets/css/site.css">
+  <style>
+    /* The @layer order `build/emit/stylesheet.rs::assemble` prepends. One
+       line, and it has to be here: without it the layers order by first
+       appearance, which puts `base` after `shortcodes` and inverts the
+       cascade site.css is written against. */
+    @layer reset, tokens, base, layout, shortcodes, plugins, themes;
+    body { margin: 0; }
+    /* Enough page to scroll through, with the masthead's own height above it. */
+    main { padding-block: var(--moss-space-xl) 40vh; }
+  </style>
+</head>
+<body>
+
+<!-- ==========================================================================
+     The island, byte-for-byte as `NavigationBuilder::generate_nav_island`
+     emits it for a five-level trail.
+
+     This is not maintained by eye: a Rust test re-runs the same emitter over
+     the same segments and asserts the result appears in this file verbatim.
+     Change the emitter and that test tells you to change this line.
+     ========================================================================== -->
+<div class="moss-nav-island"><div class="moss-nav-island-bar"><nav class="moss-nav-island-trail" aria-label="Breadcrumb"><a href="/" class="site-name" data-island-crumb>示例 · 報導站</a><span class="breadcrumb-separator">/</span><button type="button" class="moss-nav-island-more" hidden aria-expanded="false" aria-label="Show hidden levels">…</button><span class="breadcrumb-separator" data-trail-more-separator hidden>/</span><a href="/awards/" class="breadcrumb-segment" data-island-crumb><span class="breadcrumb-label">分類</span></a><span class="breadcrumb-separator">/</span><a href="/awards/writing/" class="breadcrumb-segment" data-island-crumb><span class="breadcrumb-label">子分類</span></a><span class="breadcrumb-separator">/</span><a href="/awards/writing/s1/" class="breadcrumb-segment" data-island-crumb><span class="breadcrumb-label">示例組</span></a><span class="breadcrumb-separator">/</span><span class="breadcrumb-segment moss-nav-island-current" aria-current="page" data-island-crumb data-hint-label="地方誌調查報導範例標題"><span class="breadcrumb-label">地方誌調查報導範例標題</span></span></nav><span class="moss-nav-island-actions"><button type="button" class="moss-nav-island-sections" aria-expanded="false" aria-label="Sections on this page"><svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h10M4 12h16M4 18h12"/></svg></button></span><span class="moss-nav-island-progress"><span class="moss-nav-island-progress-fill"></span></span></div><div class="moss-nav-island-menu" data-island-menu="levels" hidden></div><div class="moss-nav-island-menu" data-island-menu="sections" hidden></div></div>
+
+<!-- The masthead, as shell.html + generate_navigation emit it. Present for two
+     reasons: the island's reveal threshold is the masthead's own bottom edge,
+     and the masthead trail now folds through the same module the island does,
+     so this gate is the only place either fold is measured.
+
+     The `.nav-left` line below is pinned by the same Rust test that pins the
+     island. Do not hand-edit it. -->
+<header>
+  <nav class="main-nav container">
+    <div class="nav-content">
+      <div class="nav-left"><a href="/" class="site-name" data-trail-crumb>示例 · 報導站</a><span class="breadcrumb-separator">/</span><button type="button" class="moss-breadcrumb-more" hidden aria-expanded="false" aria-label="Show hidden levels">…</button><span class="breadcrumb-separator" data-trail-more-separator hidden>/</span><a href="/awards/" class="breadcrumb-segment" data-trail-crumb data-hint-label="分類"><span class="breadcrumb-label">分類</span></a><span class="breadcrumb-separator">/</span><a href="/awards/writing/" class="breadcrumb-segment" data-trail-crumb data-hint-label="子分類"><span class="breadcrumb-label">子分類</span></a><span class="breadcrumb-separator">/</span><a href="/awards/writing/s1/" class="breadcrumb-segment" data-trail-crumb data-hint-label="示例組"><span class="breadcrumb-label">示例組</span></a></div><div class="moss-breadcrumb-menu" hidden></div>
+      <div class="nav-right"><div class="nav-icons"><button class="nav-theme-btn" type="button" aria-label="切換主題">☀</button></div></div>
+    </div>
+  </nav>
+</header>
+
+<main class="container">
+  <article class="container">
+    <h1>地方誌調查報導範例標題</h1>
+
+    <h2 id="sec-1">一、測試小節標題之一</h2>
+    <p>這是用於排版測試的範例內文第一段，內容純屬虛構，僅用來驗證多行文字在窗口寬度變化時的折行與間距表現，字數與真實文章的段落大致相當。</p>
+    <p>第二段延續同樣的目的，加入更多虛構的細節與描述，讓段落長度貼近一般文章的閱讀節奏，藉此測試標題錨點與段落之間的垂直間距是否穩定。</p>
+    <p>「這是一段用於排版測試的引用文字，」範例角色說，「目的是確認引號與標點在不同字級下仍然對齊。」這類細節不寫在任何規格文件裡，只能靠實際渲染來驗證。</p>
+
+    <h2 id="sec-2">二、測試小節標題之二</h2>
+    <p>本段用於驗證章節之間的間距與清單式敘述的折行表現，內容同樣為排版測試所編寫的虛構文字，不對應任何真實事件或真實人物。</p>
+    <p>另一段虛構描述，補足這一節所需要的文字長度，確保這個小節與前後小節在版面上有足夠的差異可供比對。</p>
+    <p>範例段落的最後一句，用來收束這個小節，並為下一個標題錨點留出正常的段落間距。</p>
+
+    <h2 id="sec-3">三、測試小節標題之三</h2>
+    <p>第三個小節同樣是虛構內容，描述一個完全杜撰的場景，純粹用來檢查多層標題結構下的錨點定位是否正確。</p>
+    <p>「這一句同樣是引用格式的範例，」範例角色又說，「用來確認引號樣式在不同小節之間保持一致。」這句話重複出現，是為了測試而非敘事需要。</p>
+    <p>補充一段虛構描述，讓這個小節的長度與其他小節相近，避免因段落長短差異影響版面比對的準確性。</p>
+
+    <h2 id="sec-4">四、測試小節標題之四</h2>
+    <p>第四小節描述兩個虛構的比較項目，純粹作為排版測試素材，前者容易處理，後者則需要更多篇幅才能說明清楚。</p>
+    <p>延伸段落用來補足這一節應有的長度，內容依然是虛構描述，不涉及任何真實資料或真實地點。</p>
+    <p>結尾一句話用來收束第四小節，維持每個小節結尾都有一個簡短總結句的版面節奏。</p>
+
+    <h2 id="sec-5">五、測試小節標題之五</h2>
+    <p>最後一個小節描述一個虛構的收尾場景，純粹為了測試而編寫，不對應任何真實地點或真實情節。</p>
+    <p>補充一句虛構的對話，用來維持與前面小節相近的段落結構。</p>
+    <p>再補充一段描述性文字，確保這個小節與其他小節的長度大致相當。</p>
+    <p>倒數第二段用來延長本節內容，純屬排版測試所需，不具備任何敘事意義。</p>
+    <p>最後一段作為整篇範例文章的結尾，用來確認頁面捲動到底部時的版面表現是否正常。</p>
+  </article>
+</main>
+
+<!-- The production modules, transpiled on the fly by the vite harness. Nothing
+     about either trail's behaviour is re-implemented here.
+
+     All four, not just the island: the two bars fold through one shared module
+     and the hover hints are placed by a third, so loading only the island would
+     leave the masthead unmanaged and every hint at its CSS resting position —
+     which is exactly the state this file was silently in after the modules
+     moved into `nav/` and this src went stale. `theme.ts` is what the built
+     site loads; these are the nav slice of it, listed explicitly so a broken
+     path fails loudly here rather than degrading into a no-script page that
+     still passes the assertions that do not need script. -->
+<script type="module" src="/moss-build-assets/js-src/site/nav/nav-island.ts"></script>
+<script type="module" src="/moss-build-assets/js-src/site/nav/masthead-fold.ts"></script>
+<script type="module" src="/moss-build-assets/js-src/site/nav/breadcrumb-hint.ts"></script>
+<script type="module" src="/moss-build-assets/js-src/site/nav/hint-place.ts"></script>
+</body>
+</html>

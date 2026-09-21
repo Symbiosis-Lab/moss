@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Edge-clamp harness — production site.css + the three floating surfaces</title>
+
+  <!-- Same arrangement as the nav-island harness: the production stylesheet
+       unmodified, plus `/__moss-tokens.css`, the vite config's virtual route
+       that lowers `moss describe --json` into a `:root` block. site.css is
+       rules-only and cannot be loaded without it. -->
+  <link rel="stylesheet" href="/__moss-tokens.css">
+  <link rel="stylesheet" href="/moss-build-assets/assets/css/site.css">
+  <style>
+    @layer reset, tokens, base, layout, shortcodes, plugins, themes;
+    body { margin: 0; }
+    /* No horizontal padding anywhere: the point of this gate is anchors that
+       sit AT the viewport edges, and a container that inset them would hide
+       exactly the case being tested. */
+    main, article { max-width: none; margin: 0; padding: 0; }
+    p { margin: 0 0 1rem; }
+    /* Enough page below the fold for a "near the bottom of the window" anchor
+       to have somewhere to be. */
+    .tall { height: 200vh; }
+    /* Anchors pinned to known positions, so the spec can hover an element that
+       is definitely at an edge rather than hoping the text wrapped that way. */
+    .at-left  { position: fixed; left: 0; }
+    .at-right { position: fixed; right: 0; }
+  </style>
+</head>
+<body>
+
+<!-- A hint host hard against the right edge. `data-tooltip` is what
+     hint-place.ts binds to; in production it is promoted onto a truncated
+     breadcrumb crumb by breadcrumb-hint.ts, but the placement module neither
+     knows nor cares who promoted it. -->
+<button type="button" class="at-right" style="top: 8px"
+        data-tooltip="測試用長標題：一段用於驗證邊界裁切定位的範例文字說明">標題</button>
+
+<!-- The same, at the left edge, where a start-anchored pill runs the other way. -->
+<button type="button" class="at-left" style="top: 48px"
+        data-tooltip="測試用長標題：一段用於驗證邊界裁切定位的範例文字說明">全文</button>
+
+<main class="container">
+  <article class="container" style="padding-top: 96px">
+    <h1>地方誌調查報導範例標題</h1>
+
+    <!-- Selection anchors. Each `span` is addressable from the spec so a Range
+         can be built over a word at a known place on screen. -->
+    <p><span id="sel-left">全文</span>——一段用於選取測試的範例內文，字數足以覆蓋左側錨點的選取範圍。</p>
+    <p style="text-align: right"><span id="sel-right">分享</span></p>
+    <p><a class="wikilink at-left" style="top: 300px" href="/docs/example-import/">導入</a></p>
+    <p><a class="wikilink at-right" style="top: 340px" href="/docs/example-import/">導入</a></p>
+    <p><a class="wikilink at-left" id="link-bottom" style="bottom: 4px" href="/docs/example-import/">導入</a></p>
+    <div class="tall"></div>
+    <p><span id="sel-top">首行</span> — 一個貼著視窗頂端的選取。</p>
+  </article>
+</main>
+
+<!-- The production modules. `link-preview.ts` is a self-registering IIFE;
+     `selection-actions.ts` exports an init the site's theme bundle calls, so
+     the harness calls the same one. Nothing about placement is re-implemented
+     here — that is the whole point of serving through vite rather than a static
+     server. -->
+<script type="module" src="/moss-build-assets/js-src/site/nav/hint-place.ts"></script>
+<script type="module" src="/moss-build-assets/js-src/site/link-preview.ts"></script>
+<script type="module">
+  import { initSelectionActions } from "/moss-build-assets/js-src/site/selection-actions.ts";
+  initSelectionActions();
+  window.__harnessReady = true;
+</script>
+</body>
+</html>

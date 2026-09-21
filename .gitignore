@@ -11,3 +11,6 @@ site/.moss/*.bak-*
 target/
 .DS_Store
 .worktrees/
+
+# Playwright default output dir (render-gate configs pin outputDir to target/test-tmp)
+test-results/

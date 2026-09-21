@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vertical nav chrome harness — production site.css + vertical.css + theme.ts</title>
+
+  <!-- Production stylesheets, unmodified, served from the repo root by
+       playwright/vite.vertical-nav-chrome-harness.config.ts. `/__moss-tokens.css`
+       is that config's virtual route — see its comment for why site.css cannot
+       be loaded without it. -->
+  <link rel="stylesheet" href="/__moss-tokens.css">
+  <link rel="stylesheet" href="/moss-build-assets/assets/css/site.css">
+  <link rel="stylesheet" href="/moss-build-assets/assets/css/site/vertical.css">
+  <style>
+    /* The @layer order `build/emit/stylesheet.rs::assemble` prepends. */
+    @layer reset, tokens, base, layout, shortcodes, plugins, themes;
+    body { margin: 0; }
+    main { padding-block: var(--moss-space-xl) 40vh; }
+  </style>
+</head>
+<body data-typesetting="vertical">
+
+<!-- The masthead, as shell.html + generate_navigation emit it — the same
+     `.nav-left` shape nav-island's own fixture pins against a Rust test that
+     re-runs the emitter and asserts the result appears verbatim. -->
+<header>
+  <nav class="main-nav container">
+    <div class="nav-content">
+      <div class="nav-left"><a href="/" class="site-name" data-trail-crumb>示例 · 報導站</a><span class="breadcrumb-separator">/</span><button type="button" class="moss-breadcrumb-more" hidden aria-expanded="false" aria-label="Show hidden levels">…</button><span class="breadcrumb-separator" data-trail-more-separator hidden>/</span><a href="/awards/" class="breadcrumb-segment" data-trail-crumb data-hint-label="分類"><span class="breadcrumb-label">分類</span></a><span class="breadcrumb-separator">/</span><a href="/awards/writing/" class="breadcrumb-segment" data-trail-crumb data-hint-label="子分類"><span class="breadcrumb-label">子分類</span></a></div><div class="moss-breadcrumb-menu" hidden></div>
+      <div class="nav-right"><div class="nav-icons"><button class="nav-theme-btn" type="button" aria-label="切換主題">☀</button></div></div>
+    </div>
+  </nav>
+</header>
+
+<main class="container">
+  <article class="container">
+    <h1>試題長卷範例</h1>
+
+    <!-- The date-line/font-anchor/font-pill HTML, byte-for-byte as
+         html.rs (~line 1142) emits it for an article page with a date. -->
+    <div class="date-line"><span class="date">一七〇五</span><div class="font-anchor"><button class="font-trigger size-std" aria-label="Reading preferences" aria-expanded="false" type="button"></button><div class="font-pill" id="fontPill"><button data-scale="small" aria-label="Small"></button><button data-scale="" class="active" aria-label="Standard"></button><button data-scale="large" aria-label="Large"></button><button data-scale="xlarge" aria-label="X-Large"></button></div></div></div>
+
+    <p id="p1">此為直式書寫測試用的範例段落，內容純屬虛構。</p>
+    <p>文字排列由上而下，行序由右而左，用以驗證直書版面。</p>
+    <p>本段落僅供版面測試之用，不涉及任何真實文獻或真實人物。</p>
+  </article>
+</main>
+
+<script type="module" src="/moss-build-assets/js-src/site/theme.ts"></script>
+</body>
+</html>
