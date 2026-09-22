@@ -158,6 +158,51 @@ pub fn site_audience_list(
     out
 }
 
+/// The raw scope ids of the site's language sections: the one list the footer
+/// form, the inline form and the email picker all tag subscribers with.
+pub fn site_scopes(pages: &[crate::build::types::ParsedDocument]) -> Vec<String> {
+    derive_language_sections(pages).into_iter().map(|a| a.scope).collect()
+}
+
+/// Give every inline `:::subscribe` form its page's scope.
+///
+/// The parse phase renders the form with `scope=""` because the site's
+/// language sections are unknown until every page has parsed; this runs in the
+/// Reduce phase, the first point where they are. It re-renders from the
+/// form's typed arguments rather than editing emitted HTML, so running it
+/// again (a replayed parse-cache entry, a section list that has changed)
+/// always converges on the right value.
+pub fn stamp_inline_subscribe_scopes(
+    documents: &mut [crate::build::types::ParsedDocument],
+    site_id: Option<&str>,
+    seta_base: &str,
+) {
+    let scopes = site_scopes(documents);
+    if scopes.is_empty() {
+        return;
+    }
+    for doc in documents.iter_mut() {
+        let scope = detect_page_scope(&doc.url_path, &scopes);
+        let lang = doc.lang;
+        let Some(plan) = doc.body_plan.as_mut() else { continue };
+        let mut stamped = false;
+        for form in plan.subscribe_forms_mut() {
+            form.html = render_hosted_subscribe_form(
+                site_id,
+                lang,
+                &scope,
+                form.args.placeholder.as_deref(),
+                form.args.button.as_deref(),
+                seta_base,
+            );
+            stamped = true;
+        }
+        if stamped {
+            doc.html_content = plan.to_html();
+        }
+    }
+}
+
 /// The audience list the last build persisted at
 /// `.moss/build.nosync/site-languages.json`, or `None` when no build has written
 /// one (or it is unreadable). The root entry's `lang` is the language the
@@ -296,9 +341,8 @@ fn moss_subscribe_copy(lang: Language) -> MossSubscribeCopy {
 
 /// Render the input/button/status spans that go inside the subscribe form.
 ///
-/// Shared by both the footer renderer (`render_moss_subscribe_form`) and the
-/// inline shortcode renderer (`render_inline_subscribe_form`). Returns the
-/// inner HTML only — the caller wraps it in a `<form>` element.
+/// Used by [`render_hosted_subscribe_form`]. Returns the inner HTML only — the
+/// caller wraps it in a `<form>` element.
 ///
 /// `placeholder_override` and `button_override`, when `Some` and non-empty,
 /// replace the language-default copy. Empty strings fall back to the default.
@@ -526,9 +570,10 @@ fn apply_form_inner(
 ///
 /// Wraps the shared `apply_form_inner` HTML in a `<div class="moss-apply">` plus
 /// inner `<form>`. The form POSTs `application/x-www-form-urlencoded` to
-/// `{seta_base}/apply?lang={lang}` with fields `email`, `matters`, `scope`,
-/// and `website` (honeypot). No `ts`/`token` — the no-JS native form
-/// can't mint them (see Task 0 in the plan).
+/// `{seta_base}/apply?lang={lang}` with fields `email`, `matters` and
+/// `website` (honeypot). No `ts`/`token` — the no-JS native form can't mint
+/// them. No `scope` and no site id either: the apply endpoint serves one site
+/// and derives the subscriber's scope from `?lang`.
 ///
 /// `data-revert="false"` tells subscribe.ts to use the terminal (non-reverting)
 /// success flow — label stays as `申请已提交` ink pill, no auto-reset.
@@ -539,9 +584,7 @@ fn apply_form_inner(
 /// - data-revert: `"false"`
 /// - data-moss-hosted: `"true"`
 pub fn render_inline_apply_form(
-    _site_id: &str,
     lang: Language,
-    scope: &str,
     placeholder_override: Option<&str>,
     button_override: Option<&str>,
     seta_base: &str,
@@ -555,13 +598,11 @@ pub fn render_inline_apply_form(
     format!(
         r#"<div class="moss-apply" data-state="idle">
   <form class="moss-subscribe-form moss-apply-form" data-position="apply" data-moss-hosted="true" data-revert="false" data-state="idle" method="post" action="{seta_base}/apply?lang={lang_str}">
-    <input type="hidden" name="scope" value="{scope}">
     {inner}
   </form>
 </div>"#,
         seta_base = seta_base,
         lang_str = lang_str,
-        scope = html_escape(scope),
         inner = inner,
     )
 }
@@ -1331,11 +1372,15 @@ mod scope_detection_tests {
     #[test]
     fn test_render_inline_apply_form_basic_zh_hans() {
         let html = render_inline_apply_form(
-            "landing", Language::ZhHans, "", None, None, "https://api.mosspub.com",
+            Language::ZhHans, None, None, "https://api.mosspub.com",
         );
         assert!(
             html.contains(r#"class="moss-subscribe-form moss-apply-form""#),
             "must carry both form classes: {html}"
+        );
+        assert!(
+            !html.contains(r#"name="scope""#),
+            "the apply endpoint derives scope from ?lang, so the form must not carry one: {html}"
         );
         assert!(
             html.contains(r#"data-position="apply""#),
@@ -1392,7 +1437,7 @@ mod scope_detection_tests {
     #[test]
     fn test_render_inline_apply_form_zh_hant() {
         let html = render_inline_apply_form(
-            "landing", Language::ZhHant, "", None, None, "https://api.mosspub.com",
+            Language::ZhHant, None, None, "https://api.mosspub.com",
         );
         assert!(
             html.contains(r#"action="https://api.mosspub.com/apply?lang=zh-hant""#),
@@ -1404,7 +1449,7 @@ mod scope_detection_tests {
     #[test]
     fn test_render_inline_apply_form_en() {
         let html = render_inline_apply_form(
-            "landing", Language::En, "", None, None, "https://api.mosspub.com",
+            Language::En, None, None, "https://api.mosspub.com",
         );
         assert!(
             html.contains(r#"action="https://api.mosspub.com/apply?lang=en""#),
@@ -1436,9 +1481,7 @@ mod scope_detection_tests {
     #[test]
     fn test_render_inline_apply_form_html_escape_overrides() {
         let html = render_inline_apply_form(
-            "landing",
             Language::En,
-            "",
             Some("<script>xss</script>"),
             Some("<b>Click</b>"),
             "https://api.mosspub.com",
@@ -1446,18 +1489,6 @@ mod scope_detection_tests {
         assert!(!html.contains("<script>xss</script>"), "placeholder must be escaped: {html}");
         assert!(!html.contains("<b>Click</b>"), "button override must be escaped: {html}");
         assert!(html.contains("&lt;script&gt;"), "escaped placeholder must appear: {html}");
-    }
-
-    #[test]
-    fn test_render_inline_apply_form_no_site_id_in_action() {
-        // The apply endpoint does NOT use the site_id in its URL (unlike subscribe).
-        let html = render_inline_apply_form(
-            "my-site-id", Language::En, "", None, None, "https://api.mosspub.com",
-        );
-        assert!(
-            !html.contains("my-site-id"),
-            "apply action must NOT embed site_id: {html}"
-        );
     }
 }
 

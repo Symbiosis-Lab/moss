@@ -575,14 +575,14 @@ fn preview_markup(
 fn grids(plan: &BodyPlan) -> impl Iterator<Item = &GridEmission> {
     plan.segments.iter().filter_map(|s| match s {
         BodySegment::Grid(g) => Some(g),
-        BodySegment::Html(_) => None,
+        BodySegment::Html(_) | BodySegment::Subscribe(_) => None,
     })
 }
 
 fn grids_mut(plan: &mut BodyPlan) -> impl Iterator<Item = &mut GridEmission> {
     plan.segments.iter_mut().filter_map(|s| match s {
         BodySegment::Grid(g) => Some(g),
-        BodySegment::Html(_) => None,
+        BodySegment::Html(_) | BodySegment::Subscribe(_) => None,
     })
 }
 

@@ -13,7 +13,7 @@
 //! whole-corpus "Reduce" pass (`uid_dedup::resolve_duplicate_uids`,
 //! `resolve_duplicate_slugs_with_lang`, `apply_cascade`,
 //! `populate_direct_children_sorts`, `folder_embed::expand_markers_in_documents`,
-//! translation-linking). Those passes then run over the assembled vector —
+//! `email::stamp_inline_subscribe_scopes`, translation-linking). Those passes then run over the assembled vector —
 //! some entries replayed, some fresh — unchanged in shape, every build, exactly
 //! as today. Caching a POST-Reduce document would carry another page's
 //! inherited cascade/translation state forward, which is why the boundary is

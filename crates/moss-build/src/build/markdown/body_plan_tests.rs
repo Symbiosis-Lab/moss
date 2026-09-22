@@ -64,6 +64,10 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
             "Intro.\n\n:::grid 1\n[A](a/)\n:::\n\nBetween.\n\n:::grid 3 1:2:1 {.no-cards}\n[B](b/)\n:::\n",
         ),
         (
+            "subscribe between paragraphs",
+            "Intro.\n\n:::subscribe {button=\"Join\"}\n:::\n\nAfter.\n",
+        ),
+        (
             "headings and lede",
             "# Title\n\nIntro paragraph.\n\n## Section\n\nBody text.\n\n### Deeper\n\nMore.\n",
         ),

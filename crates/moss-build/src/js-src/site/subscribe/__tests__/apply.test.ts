@@ -14,7 +14,6 @@ function mountApplyForm(lang = 'zh-hans'): HTMLFormElement {
     <form class="moss-subscribe-form moss-apply-form" data-position="apply"
           data-moss-hosted="true" data-revert="false" data-state="idle"
           method="post" action="https://api.mosspub.com/apply?lang=zh-hans">
-      <input type="hidden" name="scope" value="">
       <input type="email" name="email" class="moss-input" required aria-label="邮箱" aria-describedby="moss-apply-email-help" />
       <p class="moss-apply-helper" id="moss-apply-email-help">用于获取邀请及免费托管服务</p>
       <input type="text" name="matters" class="moss-input moss-apply-matters" placeholder="Matters 用户名" aria-label="Matters 用户名" aria-describedby="moss-apply-matters-help">
@@ -156,7 +155,7 @@ describe('FormData body — extra fields ride along', () => {
     document.body.innerHTML = '';
   });
 
-  test('apply form POSTs all fields (email, matters, scope, website, etc.)', async () => {
+  test('apply form POSTs all fields (email, matters, website)', async () => {
     const form = mountApplyForm();
     hydrateSubscribeForm(form);
     form.querySelector<HTMLInputElement>('input[type="email"]')!.value = 'a@b.com';
@@ -178,7 +177,7 @@ describe('FormData body — extra fields ride along', () => {
     const params = new URLSearchParams(bodyStr);
     expect(params.get('email')).toBe('a@b.com');
     expect(params.get('matters')).toBe('@guo');
-    // website honeypot + scope always serialised even when empty
+    // the website honeypot is serialised even when empty
     expect(params.has('website')).toBe(true);
     const headers = init.headers as Record<string, string>;
     expect(headers['Content-Type']).toBe('application/x-www-form-urlencoded');

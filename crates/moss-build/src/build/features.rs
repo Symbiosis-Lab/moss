@@ -204,10 +204,7 @@ pub fn generate_native_slots(
     // root home's translationKey. /about/ is neither, so it is not a scope. The
     // picker reads the build-persisted result of this SAME judge, so the
     // subscribe form and the modal can never disagree.
-    let supported_scopes: Vec<String> = email::derive_language_sections(pages)
-        .into_iter()
-        .map(|a| a.scope)
-        .collect();
+    let supported_scopes: Vec<String> = email::site_scopes(pages);
 
     // Analytics → head-end (static, all pages). Mode-INDEPENDENT: injected in
     // every build mode so the published artifact is deterministic. Preview

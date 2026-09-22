@@ -1992,25 +1992,10 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
     ) {
         match sc {
             moss_core::ast::Shortcode::Subscribe(args) => {
-                // Task 1.7 deferred-inline-scope follow-up:
-                //
-                // The footer auto-injected form (in `generate_native_slots`)
-                // ships per-page scope tagging in this commit. The inline
-                // `:::subscribe` shortcode below still emits scope="" — the
-                // legacy v0 behavior — because deriving the page's scope
-                // here requires both `page_url_path` (per-file, available)
-                // AND `supported_scopes` (per-build, derived from the full
-                // ParsedDocument set, NOT in scope at `process_markdown_file`
-                // time per the v1 plan's architectural note). Threading
-                // `supported_scopes` into `process_markdown_file` would touch
-                // every caller (footer.rs, tests, etc.) for a payload that
-                // a small minority of sites use. Footer covers the v1 happy
-                // path; inline `:::subscribe` users get scope="" until the
-                // follow-up restructures the pipeline to mint
-                // `supported_scopes` once per build and pass it through.
-                //
-                // See docs/archive/2026-05-27-newsletter-v1-implementation-v2.md
-                // Task 1.7 Step 4 for the deferral discussion.
+                // Scope is "" here: the site's language sections are not known
+                // until every page has parsed. `render_segmented` keeps this
+                // form as its own segment and the Reduce phase re-renders it
+                // with the page's scope (`email::stamp_inline_subscribe_scopes`).
                 // Unpublished sites (empty site_id) render the pending form,
                 // consistent with the auto-injected footer form.
                 let html = crate::build::features::email::render_hosted_subscribe_form(
@@ -2090,12 +2075,8 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
                 ));
             }
             moss_core::ast::Shortcode::Apply(args) => {
-                // Empty scope ("") is an intentional Task-1.7 deferral — mirroring
-                // the Subscribe arm above. See the comment there for the full rationale.
                 let html = crate::build::features::email::render_inline_apply_form(
-                    self.site_id,
                     self.lang,
-                    "",
                     args.placeholder.as_deref(),
                     args.button.as_deref(),
                     self.seta_base,

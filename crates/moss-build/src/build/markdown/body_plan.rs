@@ -37,6 +37,7 @@
 
 use moss_core::ast::{
     Block, Document, GridCellParts, GridParts, GridShortcode, RenderHooks, Shortcode,
+    SubscribeShortcode,
 };
 
 /// A page's emitted body, kept in the pieces the serializer produced it in.
@@ -63,6 +64,18 @@ pub enum BodySegment {
     /// One `:::grid` block, kept typed so cell enhancement is a match on
     /// `Vec<Block>` rather than a pattern-match on markup.
     Grid(GridEmission),
+    /// One inline `:::subscribe` form, kept typed because its hidden `scope`
+    /// depends on the site's language sections, which exist only after every
+    /// page has parsed. `email::stamp_inline_subscribe_scopes` re-renders it.
+    Subscribe(SubscribeEmission),
+}
+
+/// An inline `:::subscribe` form as its typed arguments and the HTML they
+/// rendered to.
+#[derive(Debug, Clone)]
+pub struct SubscribeEmission {
+    pub args: SubscribeShortcode,
+    pub html: String,
 }
 
 /// A `:::grid` block as both the HTML that was emitted and the typed cells it
@@ -150,6 +163,7 @@ impl BodySegment {
         match self {
             BodySegment::Html(s) => std::borrow::Cow::Borrowed(s),
             BodySegment::Grid(g) => std::borrow::Cow::Owned(g.to_html()),
+            BodySegment::Subscribe(s) => std::borrow::Cow::Borrowed(&s.html),
         }
     }
 }
@@ -208,8 +222,18 @@ impl BodyPlan {
                         cell.parts.inner = f(&cell.parts.inner);
                     }
                 }
+                BodySegment::Subscribe(s) => s.html = f(&s.html),
             }
         }
+    }
+
+    /// Every inline subscribe form in the body, for the Reduce pass that
+    /// stamps their scope.
+    pub fn subscribe_forms_mut(&mut self) -> impl Iterator<Item = &mut SubscribeEmission> {
+        self.segments.iter_mut().filter_map(|s| match s {
+            BodySegment::Subscribe(e) => Some(e),
+            _ => None,
+        })
     }
 
     /// Put `html` in front of the body, inside the cover column.
@@ -292,6 +316,12 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
                 flush(&mut buf, &mut segments);
                 let parts = hooks.render_grid_parts(args, meta.source_line);
                 segments.push(BodySegment::Grid(emission(args, parts)));
+            }
+            Block::Shortcode(Shortcode::Subscribe(args)) => {
+                flush(&mut buf, &mut segments);
+                let mut html = String::new();
+                moss_core::ast::render_block_with_meta(hooks, &mut html, block, &meta, &mut fnotes);
+                segments.push(BodySegment::Subscribe(SubscribeEmission { args: args.clone(), html }));
             }
             _ => moss_core::ast::render_block_with_meta(hooks, &mut buf, block, &meta, &mut fnotes),
         }

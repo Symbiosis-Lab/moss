@@ -1110,6 +1110,14 @@ pub fn generate_blocking_content(
         );
         log::debug!(target: "timing", "[reduce] expand_markers_in_documents: {:?}", reduce_start.elapsed());
 
+        // Inline `:::subscribe` forms get their page's language scope, judged
+        // the same way the footer form's is, now that every page has parsed.
+        crate::build::features::email::stamp_inline_subscribe_scopes(
+            &mut documents,
+            site_id.as_deref(),
+            &seta_url_for_build,
+        );
+
         super::lang_roots::fill_missing_lang_tags(&mut documents, &site_config.lang);
 
         // Build translation links between documents sharing the same stem or translationKey
