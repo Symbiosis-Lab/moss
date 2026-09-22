@@ -1,4 +1,4 @@
-import { a as shortcodeAssetRef, i as parseAttrKvSpans, r as isOpenMatch, t as SHORTCODE_OPEN_RE } from "../shortcode-BvIGBw1f.mjs";
+import { a as shortcodeAssetRef, i as parseAttrKvSpans, r as isOpenMatch, t as SHORTCODE_OPEN_RE } from "../shortcode-CNckZosN.mjs";
 import { RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
@@ -1068,8 +1068,10 @@ const WIDTH_RE = /\b(wide|page|screen|full|body)\b/;
 /** Params shown in the tag (on hover), for layout-ambiguous types. */
 function tagParams(attrs) {
 	const parts = [];
+	const perLine = /\bper-line=([^\s"'{}]+)/.exec(attrs);
 	const cols = /\bcols=([^\s"'{}]+)/.exec(attrs);
-	if (cols) parts.push(`cols ${cols[1]}`);
+	if (perLine) parts.push(`per-line ${perLine[1]}`);
+	else if (cols) parts.push(`cols ${cols[1]}`);
 	else {
 		const positional = /^([^\s{][^\s]*)/.exec(attrs.trim());
 		if (positional && !WIDTH_RE.test(positional[1])) parts.push(positional[1]);

@@ -1,4 +1,4 @@
-import { a as shortcodeAssetRef, i as parseAttrKvSpans, n as isCloseFence, o as shortcodeBlockConfig, r as isOpenMatch, s as SHORTCODES, t as SHORTCODE_OPEN_RE } from "./shortcode-BvIGBw1f.mjs";
+import { a as shortcodeAssetRef, i as parseAttrKvSpans, n as isCloseFence, o as shortcodeBlockConfig, r as isOpenMatch, s as SHORTCODES, t as SHORTCODE_OPEN_RE } from "./shortcode-CNckZosN.mjs";
 
 //#region src/wikilink-grammar.ts
 const BANG = 33;

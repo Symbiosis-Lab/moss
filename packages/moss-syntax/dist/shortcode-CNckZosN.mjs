@@ -14,8 +14,8 @@ const SHORTCODES = [
 	},
 	{
 		name: "gallery",
-		attrs: [{ name: "cols" }],
-		canonicalTemplate: "gallery {cols=${1:3}}\n![](${2:photo.jpg})\n:::",
+		attrs: [{ name: "per-line" }],
+		canonicalTemplate: "gallery ${1:3}\n![](${2:photo.jpg})\n:::",
 		authorable: true
 	},
 	{
@@ -30,8 +30,16 @@ const SHORTCODES = [
 	},
 	{
 		name: "grid",
-		attrs: [{ name: "cols" }, { name: "wide" }],
-		canonicalTemplate: "grid {cols=${1:2}}\n${2:cell one}\n+++\n${3:cell two}\n:::",
+		attrs: [
+			{ name: "per-line" },
+			{ name: "wide" },
+			{
+				name: "scroll",
+				flag: true
+			},
+			{ name: "label" }
+		],
+		canonicalTemplate: "grid ${1:2}\n${2:cell one}\n+++\n${3:cell two}\n:::",
 		authorable: true
 	},
 	{
@@ -129,6 +137,13 @@ const WIDTH_TOKENS = new Set([
 	"full"
 ]);
 /**
+* MIRROR of the `scroll` branch in `attrs.rs`'s bare-keyword match: a second
+* bare flag, recognized the same way as the width tokens but not one of
+* them (grid-only semantics, checked separately rather than folded into
+* `WIDTH_TOKENS`).
+*/
+const SCROLL_FLAG = "scroll";
+/**
 * Read every `key=value` item out of an attribute block.
 *
 * `input` must start (after whitespace) with `{`. Returns `null` for any
@@ -166,7 +181,7 @@ function parseAttrKvSpans(input) {
 		const key = input.slice(keyFrom, keyTo);
 		skipWs();
 		if (input[i] !== "=") {
-			if (WIDTH_TOKENS.has(key)) continue;
+			if (WIDTH_TOKENS.has(key) || key === SCROLL_FLAG) continue;
 			return null;
 		}
 		i++;

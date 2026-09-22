@@ -457,6 +457,8 @@ interface ShortcodeAttrInfo {
   readonly name: string;
   /** Present when this attr's VALUE names an asset file; editors scope asset search to these kinds. */
   readonly assetKinds?: readonly string[];
+  /** True for a bare keyword inserted WITHOUT `=` (e.g. `{scroll}`). Omitted (false) is an ordinary `key=value` attr. */
+  readonly flag?: boolean;
 }
 interface ShortcodeInfo {
   /** Fence name: `:::name`. */
