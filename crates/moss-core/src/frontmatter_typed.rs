@@ -183,6 +183,37 @@ pub struct FrontMatter {
         serialize_with = "serialize_term_claim"
     )]
     pub tag_page: Option<crate::terms::TermClaim>,
+    /// Editor name(s), field-agnostic sibling of `author` — same shapes and
+    /// normalizer, feeding whichever term kind's `fields` names "editor".
+    #[serde(
+        default,
+        deserialize_with = "deserialize_name_list",
+        serialize_with = "serialize_name_list"
+    )]
+    pub editor: Option<Vec<String>>,
+    /// Jury member name(s), same shapes and normalizer as `author`/`editor`.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_name_list",
+        serialize_with = "serialize_name_list"
+    )]
+    pub jury: Option<Vec<String>>,
+    /// Term-page claim for the `editor` field — same shapes and behaviour as
+    /// `author_page`, in whichever kind carries `editor`.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_term_claim",
+        serialize_with = "serialize_term_claim"
+    )]
+    pub editor_page: Option<crate::terms::TermClaim>,
+    /// Term-page claim for the `jury` field — same shapes and behaviour as
+    /// `author_page`, in whichever kind carries `jury`.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_term_claim",
+        serialize_with = "serialize_term_claim"
+    )]
+    pub jury_page: Option<crate::terms::TermClaim>,
     /// Byline shown under the article title: the credit lines a reader sees,
     /// as the author wrote them. One row per list entry, or per line of a
     /// block scalar:
@@ -1462,6 +1493,30 @@ mod tests {
         assert_eq!(flag.listed, Some(true));
         let (none, _) = parse_simplified_frontmatter("nav\n---\nbody\n");
         assert_eq!(none.listed, None);
+    }
+
+    #[test]
+    fn editor_and_jury_round_trip_like_author() {
+        // Name lists: single-string and list forms deserialize into
+        // Vec<String>, same contract as `author` — `editor`/`jury` share its
+        // deserializer/serializer, field-agnostically.
+        let fm: FrontMatter =
+            serde_yaml::from_str("editor: Ada Lin\njury:\n  - Kane\n  - Kaneda\n").expect("parse");
+        assert_eq!(fm.editor.as_deref(), Some(&["Ada Lin".to_string()][..]));
+        assert_eq!(fm.jury.as_deref(), Some(&["Kane".to_string(), "Kaneda".to_string()][..]));
+
+        let single = FrontMatter { editor: Some(vec!["Ada Lin".to_string()]), ..Default::default() };
+        let yaml = serde_yaml::to_string(&single).expect("serialize");
+        assert!(
+            yaml.contains("editor: Ada Lin\n"),
+            "a single editor name serializes as a plain string, like author: {yaml}"
+        );
+
+        // Term claims: same shapes as author_page/tag_page.
+        let fm: FrontMatter =
+            serde_yaml::from_str("editor_page: true\njury_page: Kane\n").expect("parse");
+        assert_eq!(fm.editor_page, Some(crate::terms::TermClaim::UseTitle));
+        assert_eq!(fm.jury_page, Some(crate::terms::TermClaim::Name("Kane".to_string())));
     }
 }
 

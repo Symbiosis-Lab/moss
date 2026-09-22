@@ -58,6 +58,14 @@ Testing collection generation with frontmatter.
 
 ---
 
+## Alex Rivera
+
+# Alex Rivera
+
+Writes about gardening and software.
+
+---
+
 ## Blog
 
 # Blog
@@ -66,11 +74,27 @@ Welcome to my blog.
 
 ---
 
+## Sam Okafor
+
+---
+
 ## about
 
 # About Carol
 
 I'm a developer by day and a hobby gardener by night. I live in Seattle with my two cats.
+
+---
+
+## announcements
+
+---
+
+## cooking
+
+---
+
+## garden
 
 ---
 
@@ -91,6 +115,14 @@ A site with a blog collection to test folder handling.
 ---
 
 ## posts
+
+---
+
+## review
+
+---
+
+## rust
 
 ---
 

@@ -108,6 +108,13 @@ pub struct BuiltinField {
     /// `None` means unrestricted. This is the schema-side SSOT the chip bar reads instead
     /// of hardcoding a `key -> ExtKind[]` switch.
     pub file_kinds: Option<&'static [ExtKind]>,
+    /// Whether this field feeds a term kind's derivation loop (`author`,
+    /// `tags`, `editor`, `jury`): a name/tag list a term-kind's `fields`
+    /// entry can name. `false` for every other field. Schema-derived rather
+    /// than inferred from `one_of_members` identity — `tags` has no
+    /// `one_of_members` at all, so a predicate keyed on that would silently
+    /// exclude it. Read by `name_list_fields()`.
+    pub name_list: bool,
 }
 
 /// Default values for optional `BuiltinField` fields. Used with struct update
@@ -129,6 +136,7 @@ const FIELD_DEFAULTS: BuiltinField = BuiltinField {
     skip_schema: false,
     group: "",
     file_kinds: None,
+    name_list: false,
 };
 
 /// Union members for `children`: a boolean toggle OR a single wikilink/path
@@ -302,17 +310,18 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
     BuiltinField {
         name: "author",
         // OneOf like `byline` (see the note there): a name string OR a list of
-        // names for co-authors. Widget stays a plain text input — the string
-        // form is the dominant authored shape; the list form exists so
-        // co-authors are structural, not prose to split.
+        // names for co-authors. Chip-list widget (the list form is structural,
+        // not prose to split) — shared with every other name-list field
+        // (`editor`, `jury`, `tags`).
         field_type: FieldType::OneOf,
-        widget: Widget::TextInput,
+        widget: Widget::TagInput,
         one_of_members: Some(NAME_LIST_MEMBERS),
         // Frequency=3, Importance=3 → score = 100 - (3*6 + 3*4) = 100 - 30 = 70
         score: 70,
-        description: "Author name, or a list of names for co-authors. A single string is kept verbatim ('A and B' stays one entry). Each name gets a generated /authors/<slug>/ page listing their works (claimable with author_page:), and names repeated in byline: become links to it. Turn the pages off with [terms].author = false. Captured by moss import from JSON-LD / OpenGraph.",
+        description: "Author name, or a list of names for co-authors. A single string is kept verbatim ('A and B' stays one entry). Each name gets a page in its term kind's namespace listing their works (default /authors/<slug>/, claimable with author_page:), and names repeated in byline: become links to it. Turn the built-in pages off with [terms].author = false, or move the field into a declared [terms.<key>] kind. Captured by moss import from JSON-LD / OpenGraph.",
         label_key: "chip.author.label",
         group: "This Page",
+        name_list: true,
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -384,9 +393,10 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         items_type: Some(FieldType::String),
         // Frequency=4, Importance=3 → score = 100 - (4*6 + 3*4) = 100 - 36 = 64
         score: 64,
-        description: "Content tags. Every frontmatter tag gets a generated /tags/<slug>/ page listing the pages that carry it (a page anywhere can claim the tag with tag_page: and replace the generated one); turn the pages off with [terms].tags = false. Inline #hashtags written in the body merge into the emitted article:tag metadata and JSON-LD keywords but derive no pages - they are prose, not cataloguing.",
+        description: "Content tags. Every frontmatter tag gets a page in its term kind's namespace listing the pages that carry it (default /tags/<slug>/; a page anywhere can claim the tag with tag_page: and replace the generated one); turn the built-in pages off with [terms].tags = false, or move the field into a declared [terms.<key>] kind. Inline #hashtags written in the body merge into the emitted article:tag metadata and JSON-LD keywords but derive no pages - they are prose, not cataloguing.",
         label_key: "chip.tags.label",
         group: "This Page",
+        name_list: true,
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -399,7 +409,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         one_of_members: Some(TERM_CLAIM_MEMBERS),
         // Frequency=0, Importance=2 → score = 100 - (0*6 + 2*4) = 92
         score: 92,
-        description: "This page IS the author page for a name: true claims the page's own title, a string claims that name. It hosts the author's works listing, replaces the generated /authors/<slug>/ page, and author mentions site-wide link here.",
+        description: "This page IS the author page for a name: true claims the page's own title, a string claims that name. It hosts the author's works listing, replaces the generated page in the kind's own namespace, and author mentions site-wide link here.",
         label_key: "chip.author_page.label",
         group: "This Page",
         ..FIELD_DEFAULTS
@@ -412,8 +422,68 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         one_of_members: Some(TERM_CLAIM_MEMBERS),
         // Frequency=0, Importance=2 → score = 92; +1 keeps scores unique (author_page tier)
         score: 93,
-        description: "This page IS the tag page for a tag: true claims the page's own title, a string claims that tag. It hosts the tag's listing, replaces the generated /tags/<slug>/ page, and tag links site-wide point here.",
+        description: "This page IS the tag page for a tag: true claims the page's own title, a string claims that tag. It hosts the tag's listing, replaces the generated page in the kind's own namespace, and tag links site-wide point here.",
         label_key: "chip.tag_page.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "editor",
+        // Same union shape as `author`: one name string, or a list for
+        // co-editors. A declared [terms.<key>] kind naming "editor" moves it
+        // out of the built-in `editors` namespace into that kind's own.
+        field_type: FieldType::OneOf,
+        widget: Widget::TagInput,
+        one_of_members: Some(NAME_LIST_MEMBERS),
+        // 70 is author; 74-78 are taken; 71 is free.
+        score: 71,
+        description: "Editor name, or a list of names for co-editors, feeding whichever term kind's `fields` names \"editor\" ([terms.<key>] fields = [\"editor\", ...] in .moss/config.toml). Same shapes and behaviour as author:.",
+        label_key: "chip.editor.label",
+        group: "This Page",
+        name_list: true,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "jury",
+        // Same union shape as `author`/`editor`.
+        field_type: FieldType::OneOf,
+        widget: Widget::TagInput,
+        one_of_members: Some(NAME_LIST_MEMBERS),
+        // 72 is the next free integer after editor's 71.
+        score: 72,
+        description: "Jury member name, or a list of names, feeding whichever term kind's `fields` names \"jury\" ([terms.<key>] fields = [\"jury\", ...] in .moss/config.toml). Same shapes and behaviour as author:.",
+        label_key: "chip.jury.label",
+        group: "This Page",
+        name_list: true,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "editor_page",
+        // Same union as `author_page`, claiming a name in the kind that
+        // carries the `editor` field.
+        field_type: FieldType::OneOf,
+        widget: Widget::Checkbox,
+        one_of_members: Some(TERM_CLAIM_MEMBERS),
+        // 95 is the only free integer below 100 in this group (92/93 are
+        // author_page/tag_page, 94 is translationKey, 96 is slot).
+        score: 95,
+        description: "This page IS the editor page for a name: true claims the page's own title, a string claims that name. It hosts the editor's works listing, replaces the generated page in the kind's own namespace, and editor mentions site-wide link here.",
+        label_key: "chip.editor_page.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "jury_page",
+        // Same union as `editor_page`, for the `jury` field.
+        field_type: FieldType::OneOf,
+        widget: Widget::Checkbox,
+        one_of_members: Some(TERM_CLAIM_MEMBERS),
+        // One past the documented "typical" ceiling (100) — the group's own
+        // integers below it are all taken; harmless, `score` is only read at
+        // schema.rs:258 and a bare `> 0` check in schema_fields_tests.rs.
+        score: 101,
+        description: "This page IS the jury page for a name: true claims the page's own title, a string claims that name. It hosts the juror's works listing, replaces the generated page in the kind's own namespace, and jury mentions site-wide link here.",
+        label_key: "chip.jury_page.label",
         group: "This Page",
         ..FIELD_DEFAULTS
     },
@@ -869,6 +939,14 @@ pub fn asset_field_names() -> impl Iterator<Item = &'static str> {
         .iter()
         .filter(|f| matches!(f.widget, Widget::FilePicker))
         .map(|f| f.name)
+}
+
+/// Frontmatter fields that feed a term kind's derivation loop: `author`,
+/// `tags`, `editor`, `jury`. The SSOT `build::terms::term_kinds` filters a
+/// declared `[terms.<key>] fields = [...]` list through this, so an
+/// unrecognized name is a diagnostic rather than a silent no-op.
+pub fn name_list_fields() -> impl Iterator<Item = &'static str> {
+    BUILTIN_FIELDS.iter().filter(|f| f.name_list).map(|f| f.name)
 }
 
 #[cfg(test)]

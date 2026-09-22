@@ -1,0 +1,73 @@
+# Term Kinds Site
+
+---
+
+## Season One
+
+# Season One
+
+Named through `jury:`.
+
+---
+
+## field notes
+
+# Field Notes
+
+A second page for the shared tag, and 陳小華's only authored one.
+
+---
+
+## second look
+
+# Second Look
+
+Two people, two fields, one namespace.
+
+---
+
+## first look
+
+# First Look
+
+Named through `author:`.
+
+---
+
+## Ada Lin
+
+# Ada Lin
+
+Claims the `people/ada-lin` page, so the three field sections render here
+rather than on a generated one.
+
+---
+
+## Sam Okafor
+
+---
+
+## Seasons
+
+# Seasons
+
+---
+
+## Term Kinds Site
+
+# Term Kinds Site
+
+One namespace, three fields.
+
+---
+
+## craft
+
+---
+
+## posts
+
+---
+
+## 陳小華
+

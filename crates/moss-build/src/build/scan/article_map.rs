@@ -13,7 +13,7 @@
 //! - Preview system to determine if current page is syndicatable
 //! - Syndication system to get article info for current preview URL
 
-use crate::build::terms::{TermIndex, TermSite};
+use crate::build::terms::{TermIndex, TermKind, TermSite};
 use crate::moss_paths::MossPaths;
 use crate::build::scan::slug::UrlCollision;
 use crate::build::types::ParsedDocument;
@@ -163,6 +163,23 @@ pub struct ArticleMap {
     /// resolves against this record.
     #[serde(default)]
     pub terms: std::collections::BTreeMap<String, TermSite>,
+
+    /// The kinds table this build derived its terms from, in declaration
+    /// order. Persisted so the editor's takeover resolver answers "what
+    /// namespace is this, and what is it called" from the build's own
+    /// answer instead of re-reading `.moss/config.toml` and risking a
+    /// different one. Empty in a map written before term kinds existed.
+    #[serde(default)]
+    pub kinds: Vec<TermKind>,
+
+    /// Term key (`people/ada-lin`) → the subset of its kind's `fields`, in
+    /// `kind.fields` order, that claim at least one member of THAT term. A
+    /// derived summary of `derive_terms`'s per-field membership, not the
+    /// member URLs themselves: the editor needs to know which field to
+    /// write when offering to claim a term, and that is the only question
+    /// it asks. A term with no members has no entry at all.
+    #[serde(default)]
+    pub fields_with_members: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl ArticleMap {
@@ -176,6 +193,8 @@ impl ArticleMap {
             url_collisions: HashMap::new(),
             generated: Vec::new(),
             terms: std::collections::BTreeMap::new(),
+            kinds: Vec::new(),
+            fields_with_members: std::collections::BTreeMap::new(),
         }
     }
 
@@ -402,6 +421,30 @@ pub fn build_article_map(
     let mut map = ArticleMap::new();
     map.generated = generated.to_vec();
     map.terms = terms.sites().clone();
+    map.kinds = terms.kinds().to_vec();
+    // Term key → the subset of that term's owning kind's fields with at
+    // least one member of THIS term specifically — a derived summary of
+    // `members_by_field`, not the full member-URL lists. Empty when no
+    // field has a member, rather than an empty Vec, so a reader's `.get()`
+    // and a fallback-to-`fields[0]` branch agree on "no members" either way.
+    for term_key in terms.sites().keys() {
+        let Some((ns, _)) = term_key.split_once('/') else { continue };
+        let Some(kind) = terms.kinds().iter().find(|k| k.key == ns) else { continue };
+        let fields_with_a_member: Vec<String> = kind
+            .fields
+            .iter()
+            .filter(|field| {
+                terms
+                    .members_by_field()
+                    .get(&(term_key.clone(), (*field).clone()))
+                    .is_some_and(|members| !members.is_empty())
+            })
+            .cloned()
+            .collect();
+        if !fields_with_a_member.is_empty() {
+            map.fields_with_members.insert(term_key.clone(), fields_with_a_member);
+        }
+    }
 
     for doc in documents {
         // Slot files (`footer.md`) fill layout chrome on every page and emit

@@ -2,6 +2,8 @@
 title: About
 uid: b3e5fac4
 lang: en
+author: Alex Rivera
+tags: [essays]
 ---
 
 # About

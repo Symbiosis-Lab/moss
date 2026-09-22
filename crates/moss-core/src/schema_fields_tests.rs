@@ -162,3 +162,12 @@ fn asset_field_names_is_exactly_cover_and_logo() {
     let names: Vec<&str> = asset_field_names().collect();
     assert_eq!(names, vec!["cover", "logo"]);
 }
+
+/// Per round-2 review R3: set equality against the exact four, not merely
+/// non-empty — a wildcard match arm elsewhere (`_ => &[]`) would otherwise
+/// pass as a real accessor for a name the set silently dropped.
+#[test]
+fn name_list_fields_is_exactly_the_four_name_list_fields() {
+    let names: std::collections::HashSet<&str> = name_list_fields().collect();
+    assert_eq!(names, std::collections::HashSet::from(["author", "tags", "editor", "jury"]));
+}

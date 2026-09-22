@@ -32,8 +32,9 @@ pub enum TemplateKind {
 /// `date` the template carries is re-stamped to `now`, and every field that
 /// names THIS page rather than describes it is dropped — `uid` (the
 /// comments/redirects join key), `url` (the pinned address), `author_page` /
-/// `tag_page` (a term claim; two claimants resolve to the first `url_path`,
-/// so a copy could steal the original's term page), `translationKey` (a copy
+/// `tag_page` / `editor_page` / `jury_page` (a term claim; two claimants
+/// resolve to the first `url_path`, so a copy could steal the original's
+/// term page), `translationKey` (a copy
 /// makes the pair "one page's translations" and links them), and
 /// `syndicated` (where the captured page was published, written by the
 /// matters plugin). Every other field — layout, tags, cascade, and anything
@@ -59,7 +60,7 @@ pub fn instantiate_template_frontmatter(
     // the preview waits on the path-derived URL that never arrives (seen in
     // the 2026-09-05 log: `測試獎.md` sent to /awards/writing-2/).
     frontmatter.remove("url");
-    for claim in ["author_page", "tag_page", "translationKey", "syndicated"] {
+    for claim in ["author_page", "tag_page", "editor_page", "jury_page", "translationKey", "syndicated"] {
         frontmatter.remove(claim);
     }
     if frontmatter.contains_key("date") {
@@ -81,6 +82,8 @@ mod tests {
             ("url", "writing"),
             ("author_page", "guo"),
             ("tag_page", "essays"),
+            ("editor_page", "ada"),
+            ("jury_page", "kane"),
             ("translationKey", "about"),
             ("date", "2020-01-01"),
         ] {
@@ -90,7 +93,7 @@ mod tests {
 
         let out = instantiate_template_frontmatter(fm, "2026-09-03");
 
-        for identity in ["title", "uid", "url", "author_page", "tag_page", "translationKey", "syndicated"] {
+        for identity in ["title", "uid", "url", "author_page", "tag_page", "editor_page", "jury_page", "translationKey", "syndicated"] {
             assert_eq!(out.get(identity), None, "`{identity}` names the captured page, not the instance");
         }
         assert_eq!(out.get("date"), Some(&Value::String("2026-09-03".to_string())));

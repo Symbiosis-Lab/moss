@@ -3,6 +3,8 @@ title: 关于
 uid: cc543b7d
 lang: zh-hans
 slug: guanyu
+author: 陳小華
+tags: [随笔]
 ---
 
 # 关于

@@ -1333,11 +1333,15 @@ fn build_inner(
         search: site_bool("search").unwrap_or(false),
         // Default-on by key absence, same story as `math`: nothing has ever
         // written `[terms]`, so absence means "the author never said" — and
-        // the answer is yes, `author:`/`tags:` values get term pages. Explicit
-        // `[terms].author = false` / `[terms].tags = false` turns a dimension
-        // off for sites that use those fields as pure metadata.
-        terms_author: cfg.as_ref().and_then(|c| c.terms_bool("author")).unwrap_or(true),
-        terms_tags: cfg.as_ref().and_then(|c| c.terms_bool("tags")).unwrap_or(true),
+        // the answer is yes, every name-list field gets term pages. Explicit
+        // `[terms].author = false` / `[terms].tags = false`, or moving a
+        // field into a declared `[terms.<key>]` kind, changes that.
+        // `Language::from_code` is the same conversion `blocking.rs:451`
+        // already performs on this same `site_lang` value.
+        term_kinds: crate::build::terms::term_kinds(
+            cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
+            crate::i18n::Language::from_code(&site_lang).unwrap_or(crate::i18n::Language::En),
+        ),
         incremental,
     };
     log::debug!(target: "timing", "[build] staging: config_reads (1 parse) took {:?}", t_config.elapsed());

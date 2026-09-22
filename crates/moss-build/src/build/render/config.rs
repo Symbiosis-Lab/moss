@@ -101,14 +101,11 @@ pub struct SiteConfig {
     /// phase ANDs it with `site_url.is_deployed()` (the same condition RSS
     /// uses) so preview/dev builds neither index nor show the nav button.
     pub search: bool,
-    /// `[terms].author` — generated author term pages (`/authors/<slug>/`) and
-    /// author-mention links. Default ON by key absence, resolved at the
-    /// construction site like `math`; explicit `[terms].author = false` turns
-    /// the dimension off for sites using `author:` as pure metadata.
-    pub terms_author: bool,
-    /// `[terms].tags` — generated tag term pages (`/tags/<slug>/`) and tag
-    /// links. Same default-on-by-absence story as `terms_author`.
-    pub terms_tags: bool,
+    /// The kinds table `build::terms::term_kinds` resolves from
+    /// `.moss/config.toml`'s `[terms]` section — every name-list field's
+    /// namespace, built-in (`authors`, `tags`) and declared alike. The one
+    /// thing `build::terms::derive_terms` reads to decide term membership.
+    pub term_kinds: Vec<crate::build::terms::TermKind>,
     /// moss#922 — what this build may reuse from the last one. Both bits are
     /// resolved at the entry point (ADR-010: the render phase reads neither the
     /// build trigger nor the environment). See [`IncrementalGates`].
@@ -140,8 +137,7 @@ impl Default for SiteConfig {
             site_url_override: None,
             ai_policy: None,
             search: false,
-            terms_author: false,
-            terms_tags: false,
+            term_kinds: Vec::new(),
             incremental: IncrementalGates::default(),
         }
     }

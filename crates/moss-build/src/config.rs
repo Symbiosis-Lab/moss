@@ -131,16 +131,6 @@ impl ConfigFile {
             .and_then(|v| v.as_bool())
     }
 
-    /// A boolean field under `[terms]`, e.g. `author`, `tags`. Same
-    /// absent-is-not-false contract as [`Self::site_bool`]; both term
-    /// dimensions default ON at the construction site.
-    pub fn terms_bool(&self, field: &str) -> Option<bool> {
-        self.root
-            .get("terms")
-            .and_then(|terms| terms.get(field))
-            .and_then(|v| v.as_bool())
-    }
-
     /// The top-level `environment` key. Top-level rather than under `[site]`
     /// so it never collides with `state.toml`'s `[deployment]` section.
     pub fn environment(&self) -> Option<&str> {
@@ -210,6 +200,98 @@ impl ConfigFile {
         Some(cursor)
     }
 
+    /// Every `[terms.<key>]` table, plus a built-in `RawKind` for each of
+    /// `authors`/`tags` that NO declared table already used — the one
+    /// unified config read `build::terms::term_kinds` turns into
+    /// `TermKind`s. Raw here: `fields` is not yet filtered through
+    /// `moss_core::schema_fields::name_list_fields()`, and `title` is not
+    /// yet resolved — both happen exactly once, in `term_kinds`, not here.
+    ///
+    /// A declared `[terms.authors]` or `[terms.tags]` table IS that kind —
+    /// its own `fields` and `title` win outright, not just its own
+    /// declared fields layered on top of the built-in default. Reading the
+    /// sub-tables first and skipping the matching built-in is what makes
+    /// that true: the old order (built-ins unconditionally, then every
+    /// declared table appended) produced two `RawKind`s sharing one key
+    /// whenever an author declared `[terms.tags]` or `[terms.authors]`,
+    /// which `term_kinds` had no way to reconcile — `roots_in_use` and
+    /// `synthetic_folder_keys` would seed the same pseudo-folder twice, and
+    /// `members_by_field` would double-count every member.
+    ///
+    /// A `[terms.<key>]` table with no `fields` array is skipped with a
+    /// diagnostic — a kind that names no fields would derive nothing anyway,
+    /// and is more likely a typo (`field = [...]`) than an intentional
+    /// no-op.
+    pub fn terms_kinds(&self) -> Vec<RawKind> {
+        let mut declared: Vec<RawKind> = Vec::new();
+        if let Some(terms) = self.root.get("terms").and_then(|v| v.as_table()) {
+            for (key, value) in terms {
+                // The legacy `author`/`tags` booleans live in this same
+                // table but are not sub-tables, so `as_table()` already
+                // excludes them here — no separate key check needed.
+                let Some(table) = value.as_table() else { continue };
+                let Some(fields) = table.get("fields").and_then(|v| v.as_array()) else {
+                    crate::build::cli_output::log_warn_problem!(
+                        "[terms.{key}] has no `fields` array; skipping"
+                    );
+                    continue;
+                };
+                let fields: Vec<String> =
+                    fields.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+                let title = table.get("title").and_then(|v| v.as_str()).map(str::to_string);
+                declared.push(RawKind { key: key.clone(), fields, title });
+            }
+        }
+        let declared_keys: std::collections::HashSet<&str> =
+            declared.iter().map(|k| k.key.as_str()).collect();
+
+        let mut kinds = Vec::with_capacity(declared.len() + 2);
+        for (ns, field) in crate::build::terms::BUILTIN_DEFAULT_FIELDS {
+            if declared_keys.contains(ns) {
+                continue;
+            }
+            kinds.push(RawKind {
+                key: ns.to_string(),
+                fields: if self.legacy_terms_flag(field).unwrap_or(true) {
+                    vec![field.to_string()]
+                } else {
+                    Vec::new()
+                },
+                title: None,
+            });
+        }
+        kinds.extend(declared);
+        kinds
+    }
+
+    /// A boolean field under `[terms]`, e.g. `author`, `tags`: the legacy,
+    /// pre-kinds toggle `terms_kinds` folds into the two built-ins' `fields`.
+    /// `None` means the key is absent, which is not the same as `false` —
+    /// `terms_kinds` supplies the default (on). Private: nothing outside
+    /// `terms_kinds` reads a raw per-field `[terms]` boolean any more.
+    fn legacy_terms_flag(&self, field: &str) -> Option<bool> {
+        self.root
+            .get("terms")
+            .and_then(|terms| terms.get(field))
+            .and_then(|v| v.as_bool())
+    }
+}
+
+/// One `[terms.<key>]` table before `build::terms::term_kinds` filters its
+/// `fields` and resolves its `title` into a `TermKind`. See
+/// [`ConfigFile::terms_kinds`].
+#[derive(Debug, Clone)]
+pub struct RawKind {
+    /// URL namespace / pseudo-folder prefix (`authors`, `tags`, or a
+    /// declared key like `people`).
+    pub key: String,
+    /// Frontmatter field names as configured, not yet checked against
+    /// `moss_core::schema_fields::name_list_fields()`.
+    pub fields: Vec<String>,
+    /// Explicit `title` from the table, when the author set one. `None` for
+    /// the two built-ins (their title comes from `i18n::term_root_title`)
+    /// and for a declared kind that didn't set one (its title is its key).
+    pub title: Option<String>,
 }
 
 #[cfg(test)]

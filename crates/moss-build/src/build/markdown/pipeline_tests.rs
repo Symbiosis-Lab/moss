@@ -193,6 +193,40 @@ fn short_doc_with_no_signal_uses_site_default_lang() {
     assert_eq!(doc.lang, Language::ZhHans);
 }
 
+/// `author:` already lowers into `ParsedDocument.author`; `editor:`/`jury:`
+/// are new fields added beside it in the same struct literal (task A3) and
+/// must lower the same way, through the same field-agnostic
+/// `deserialize_name_list`/`serialize_name_list` normalizer.
+#[test]
+fn editor_and_jury_frontmatter_lower_into_parsed_document_beside_author() {
+    let md = "---\ntitle: Committee Notes\nauthor: Ada Lin\neditor: Kane\njury:\n  - Kane\n  - Kaneda\n---\n\nBody.\n";
+    let empty_map = HashMap::new();
+    let doc = process_markdown_file(
+        "posts/committee-notes.md",
+        md,
+        "site",
+        &empty_map,
+        false,
+        Language::En,
+        None,
+        false,
+        true, // math: [site].math default (ADR-030)
+        true, // hard_line_breaks: [site] default (Obsidian parity)
+        true, // heading_anchors: [site] default (unconditional today)
+        None,
+        None,
+        None,
+        None,
+        false,
+        None, // seta_url
+        None, // folder_lang
+    )
+    .expect("should parse");
+    assert_eq!(doc.author, vec!["Ada Lin".to_string()]);
+    assert_eq!(doc.editor, vec!["Kane".to_string()]);
+    assert_eq!(doc.jury, vec!["Kane".to_string(), "Kaneda".to_string()]);
+}
+
 /// Step 5: `transform_events` captures the first markdown-origin
 /// `![]()` image and exposes it on the `ParsedDocument` for the
 /// cover-resolution chain to consume. Replaces the prior regex

@@ -1273,21 +1273,40 @@ fn render_one(
     let all_docs_refs: Vec<&ParsedDocument> = all_docs.iter().collect();
 
     // Dispatch rendering based on style.
-    let listing = generate_children(
-        &limited,
-        &all_docs_refs,
-        project,
-        &children_style,
-        &effective_group,
-        site_lang,
-        skip_resort,
-        dir_overrides,
-        typesetting,
-        media_lookup,
-        Some(resolved.presentation_axis()),
-        math,
-        is_embed,
-    );
+    let render_group = |docs: &[&ParsedDocument]| {
+        generate_children(
+            docs,
+            &all_docs_refs,
+            project,
+            &children_style,
+            &effective_group,
+            site_lang,
+            skip_resort,
+            dir_overrides,
+            typesetting,
+            media_lookup,
+            Some(resolved.presentation_axis()),
+            math,
+            is_embed,
+        )
+    };
+    // A page that won a term claim splits its listing by the field each
+    // member was named through — one group under "Author", another under
+    // "Editor". The split is read off the claiming page, where
+    // `build::terms::derive_terms` resolved it; this file has no `TermIndex`
+    // and re-deriving it here is exactly the drift that would let the
+    // claimed and generated pages of one term disagree. `folder_id_slug` is
+    // the term key on this path, so the claimant is the one document whose
+    // `term_listing` names it. Every other listing — and a term whose
+    // members all came through one field — gets `None` and renders as one
+    // unlabelled listing, byte for byte as before.
+    let term_sections = all_docs
+        .iter()
+        .find(|d| d.term_listing.as_deref() == Some(folder_id_slug.as_str()))
+        .and_then(|d| d.term_sections.as_deref());
+    let listing =
+        crate::build::terms::render_term_sections(term_sections, &limited, site_lang, render_group)
+            .unwrap_or_else(|| render_group(&limited));
 
     // Suppress the More link when the embed is on the folder's own index page
     // (self-referential listing). A "More →" link pointing to the page the

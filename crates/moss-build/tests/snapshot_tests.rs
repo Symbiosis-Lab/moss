@@ -585,6 +585,15 @@ fn snapshot_empty_site() {
     run_snapshot_test("empty-site");
 }
 
+/// One declared term kind over three frontmatter fields — the only fixture
+/// where a term page's listing is split into per-field sections, and the
+/// only witness that `moss-term-role` is emitted at all (the contract
+/// table's sync test does not scan this crate).
+#[test]
+fn snapshot_term_kinds_site() {
+    run_snapshot_test("term-kinds-site");
+}
+
 /// A site with no home file at the root, and image directories the
 /// `[editor].attachment_folder` setting names as storage.
 ///

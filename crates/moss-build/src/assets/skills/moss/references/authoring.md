@@ -197,18 +197,32 @@ Extract repeated blocks to a partial file and transclude with
 `![[partial-name]]`. Partials are content reuse, not styling — they live outside
 the styling rungs.
 
-### Authors and tags
+### Term kinds
 
-`author:` and `tags:` are listable dimensions, not just metadata. Every value generates a page listing what carries it: `author: 趙雲` gives `/authors/趙雲/`, `tags: [城市]` gives `/tags/城市/`. Nothing to set up, and a link to a term page never 404s.
+Name-list fields are listable dimensions, not just metadata. Every value generates a page listing what carries it: `author: 趙雲` gives `/authors/趙雲/`, `tags: [城市]` gives `/tags/城市/`. Nothing to set up, and a link to a term page never 404s.
 
-Any real page can take a generated one's place. `author_page: 趙雲` — or `true`, meaning "the name is my title" — makes that page the author's page: its body is the bio, its `url:` is wherever you want it, and the works listing attaches below. `tag_page:` does the same for a tag. Term mentions site-wide then link there instead of at the generated URL.
+Four fields work this way: `author:`, `tags:`, `editor:`, `jury:`. Out of the box `author:` feeds `/authors/` and `tags:` feeds `/tags/`; `editor:` and `jury:` feed nothing until a site says where they go.
+
+A **term kind** is one namespace fed by one or more of those fields. Declare one in `.moss/config.toml`:
+
+```toml
+[terms.people]
+fields = ["author", "editor", "jury"]
+title = "People"
+```
+
+Now all three fields feed one namespace: someone who wrote one piece and edited another has a single page at `/people/<name>/`, not two. That page lists their works in sections — "Author", then "Editor", then "Jury", in the order `fields` gives — so the listing says what each credit was. A person reached through only one of the fields gets a plain listing with no section headings.
+
+Naming a field in a declared kind takes it out of its built-in namespace: with the block above, `author:` no longer feeds `/authors/`. The old `/authors/<name>/` URLs keep working — moss emits a redirect to the new page for as long as the field belongs elsewhere.
+
+Any real page can take a generated one's place. `author_page: 趙雲` — or `true`, meaning "the name is my title" — makes that page the author's page: its body is the bio, its `url:` is wherever you want it, and the works listing attaches below. Every field has its claim: `tag_page:`, `editor_page:`, `jury_page:`. Any of a kind's claims takes over that kind's page, so in the `people` example above a bio page claims with whichever credit fits. Term mentions site-wide then link there instead of at the generated URL.
 
 Two things that surprise people:
 
 - **Inline `#hashtags` derive no pages** — only frontmatter `tags:` do. An inline tag still reaches `article:tag` metadata and JSON-LD keywords; it is prose, not cataloguing.
-- **`/authors/` and `/tags/` are not in nav and not listed by their parent.** A folder holding every author name is wrong as a nav item on most sites, so the roots stay reachable through term links, sitemap and search instead.
+- **Namespace roots are not in nav and not listed by their parent.** A folder holding every author name is wrong as a nav item on most sites, so `/authors/`, `/tags/` and any declared kind's root stay reachable through term links, sitemap and search instead.
 
-Turn a dimension off with `[terms].author = false` or `[terms].tags = false` in `.moss/config.toml`.
+To stop a dimension generating pages, either switch the built-in off — `[terms].author = false` or `[terms].tags = false` — or drop the field from the `fields` list of the kind that claims it.
 
 ### Long archives
 

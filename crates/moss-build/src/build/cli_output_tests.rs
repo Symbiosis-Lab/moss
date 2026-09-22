@@ -44,6 +44,87 @@ fn cli_warn_increments_the_problem_counter() {
     assert_eq!(take_cli_problems(), 2);
 }
 
+/// `link_terms_in_bylines`'s guard 6, first half: a name declared through
+/// two different fields (author: and editor:, both landing in one declared
+/// kind) still links exactly once from a byline row, but warns once too —
+/// this counter is the only thing that can see the warning actually fired,
+/// since `terms.rs`'s own tests can't take `PROBLEMS_TEST_LOCK`.
+#[test]
+fn duplicate_name_in_one_row_warns() {
+    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
+    take_cli_problems();
+    let kinds = vec![crate::build::terms::TermKind {
+        key: "people".to_string(),
+        fields: vec!["author".to_string(), "editor".to_string()],
+        title: "People".to_string(),
+    }];
+    let mut docs = vec![crate::build::types::ParsedDocument {
+        url_path: "posts/a/index.html".to_string(),
+        title: "A".to_string(),
+        author: vec!["Ada Lin".to_string()],
+        editor: vec!["Ada Lin".to_string()],
+        byline: vec!["文｜Ada Lin".to_string()],
+        ..Default::default()
+    }];
+    let index = crate::build::terms::derive_terms(&mut docs, kinds);
+    crate::build::terms::link_terms_in_bylines(&mut docs, &index);
+    assert_eq!(take_cli_problems(), 1, "the duplicate declaration warns exactly once, not twice");
+    assert_eq!(
+        docs[0].byline[0], "文｜[Ada Lin](/people/ada-lin/)",
+        "still links exactly once despite the duplicate declaration"
+    );
+}
+
+/// Task A6: every remaining `log::warn!` in `derive_terms`/`claimed_key`
+/// renamed to `log_warn_problem!`, so a claimed term with no member pages
+/// (a likely typo between the claim and the name authors actually wrote)
+/// counts toward `--strict`'s exit code, not just the log stream.
+#[test]
+fn unclaimed_typo_diagnostic_counts_as_a_cli_problem() {
+    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
+    take_cli_problems();
+    let kinds = vec![crate::build::terms::TermKind {
+        key: "authors".to_string(),
+        fields: vec!["author".to_string()],
+        title: "Authors".to_string(),
+    }];
+    let mut docs = vec![crate::build::types::ParsedDocument {
+        url_path: "about/kane/index.html".to_string(),
+        title: "Kane".to_string(),
+        author_page: Some(moss_core::terms::TermClaim::UseTitle),
+        ..Default::default()
+    }];
+    crate::build::terms::derive_terms(&mut docs, kinds);
+    assert_eq!(take_cli_problems(), 1, "a claim with zero member pages is a --strict problem");
+}
+
+/// `link_terms_in_bylines`'s guard 6, second half: a declared name that
+/// never appears in any byline row warns once — the typo-catcher this
+/// guard exists for.
+#[test]
+fn declared_name_absent_from_any_byline_row_warns() {
+    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
+    take_cli_problems();
+    let kinds = vec![crate::build::terms::TermKind {
+        key: "authors".to_string(),
+        fields: vec!["author".to_string()],
+        title: "Authors".to_string(),
+    }];
+    let mut docs = vec![crate::build::types::ParsedDocument {
+        url_path: "posts/a/index.html".to_string(),
+        title: "A".to_string(),
+        author: vec!["Kaneda".to_string()],
+        byline: vec!["文｜某人".to_string()],
+        ..Default::default()
+    }];
+    let index = crate::build::terms::derive_terms(&mut docs, kinds);
+    crate::build::terms::link_terms_in_bylines(&mut docs, &index);
+    assert_eq!(
+        take_cli_problems(), 1,
+        "a declared name absent from every byline row warns once"
+    );
+}
+
 /// The plugin manager reports headless through `CarrierReporter`, never
 /// `StdoutReporter` — so the counted "not connected" line has to reach the
 /// `--strict` counter from THERE, or a plugin-bearing build with a plugin that

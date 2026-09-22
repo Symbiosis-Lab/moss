@@ -1,6 +1,8 @@
 ---
 date: 2025-02-10
 uid: 328ac5ab
+author: Alex Rivera
+tags: [rust]
 ---
 # Learning Rust
 

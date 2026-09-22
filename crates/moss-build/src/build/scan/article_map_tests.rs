@@ -963,6 +963,73 @@ fn test_build_article_map_resolves_cover_paths_through_dir_overrides() {
 }
 
 #[test]
+fn article_map_persists_kinds_and_fields_with_members() {
+    // A three-field kind where one term is reached through two of the three
+    // fields: the persisted summary must name exactly those two, in the
+    // kind's own field order, so the editor can pick a claim field without
+    // re-deriving anything.
+    use crate::build::terms::{derive_terms, TermKind};
+
+    let kinds = vec![TermKind {
+        key: "people".to_string(),
+        fields: vec![
+            "author".to_string(),
+            "editor".to_string(),
+            "jury".to_string(),
+        ],
+        title: "People".to_string(),
+    }];
+
+    let mut documents = vec![
+        make_doc("A Piece", "posts/a-piece/index.html", false),
+        make_doc("A Season", "seasons/one/index.html", false),
+    ];
+    documents[0].author = vec!["Ada Lin".to_string()];
+    documents[1].jury = vec!["Ada Lin".to_string()];
+
+    let terms = derive_terms(&mut documents, kinds.clone());
+    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &terms);
+
+    assert_eq!(map.kinds, kinds, "the kinds table must be persisted as-is");
+    assert_eq!(
+        map.fields_with_members.get("people/ada-lin").map(Vec::as_slice),
+        Some(["author".to_string(), "jury".to_string()].as_slice()),
+        "only the fields with a member, in kind.fields order: {:?}",
+        map.fields_with_members
+    );
+}
+
+#[test]
+fn article_map_omits_a_term_no_field_claims_a_member_for() {
+    // A claimed term page whose person is named nowhere else has no member
+    // through any field. No entry at all, so the editor's `.get()` miss and
+    // its fallback-to-`fields[0]` branch agree.
+    use crate::build::terms::{derive_terms, TermKind};
+
+    let kinds = vec![TermKind {
+        key: "people".to_string(),
+        fields: vec!["author".to_string(), "editor".to_string()],
+        title: "People".to_string(),
+    }];
+
+    let mut documents = vec![make_doc("Sam Okafor", "people/sam-okafor/index.html", false)];
+    documents[0].author_page = Some(moss_core::terms::TermClaim::UseTitle);
+
+    let terms = derive_terms(&mut documents, kinds);
+    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &terms);
+
+    assert!(
+        map.terms.contains_key("people/sam-okafor"),
+        "the term itself still exists: {:?}",
+        map.terms.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !map.fields_with_members.contains_key("people/sam-okafor"),
+        "a term whose only page is its own self-reference has no member field"
+    );
+}
+
+#[test]
 fn test_build_article_map_leaves_http_covers_unchanged() {
     // HTTP/HTTPS cover URLs should not be modified by dir_overrides
     let mut doc = make_doc("Post", "blog/post/index.html", false);

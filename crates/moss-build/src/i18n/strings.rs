@@ -252,6 +252,30 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHant => "標籤",
         },
 
+        // Per-field section headings on a term page (`moss-term-role`,
+        // task A9), looked up by frontmatter field name.
+        "term_role_author" => match lang {
+            Language::En => "Author",
+            Language::ZhHans | Language::ZhHant => "作者",
+        },
+        // A declared kind may list `tags` beside a person field; the heading
+        // is the dimension's own name, same as its namespace root.
+        "term_role_tags" => match lang {
+            Language::En => "Tags",
+            Language::ZhHans => "标签",
+            Language::ZhHant => "標籤",
+        },
+        "term_role_editor" => match lang {
+            Language::En => "Editor",
+            Language::ZhHans => "编辑",
+            Language::ZhHant => "編輯",
+        },
+        "term_role_jury" => match lang {
+            Language::En => "Jury",
+            Language::ZhHans => "评审",
+            Language::ZhHant => "評審",
+        },
+
         // RSS / Subscribe
         "subscribe" => match lang {
             Language::En => "Subscribe",
@@ -494,5 +518,14 @@ mod tests {
     #[test]
     fn test_published_with_moss_zh_hant() {
         assert_eq!(t(Language::ZhHant, "published_with_moss"), "青苔發佈");
+    }
+
+    /// Regression: `term_role_jury` copy-pasted `term_role_author`'s
+    /// `ZhHans | ZhHant` shared arm, which happens to be right for 作者 but
+    /// wrong for jury — Simplified is 评审, not Traditional's 評審.
+    #[test]
+    fn test_term_role_jury_simplified_and_traditional_glyphs_differ() {
+        assert_eq!(t(Language::ZhHans, "term_role_jury"), "评审");
+        assert_eq!(t(Language::ZhHant, "term_role_jury"), "評審");
     }
 }

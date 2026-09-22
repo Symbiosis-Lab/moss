@@ -258,3 +258,35 @@ fn claimed_term_url_is_moved_to_the_claiming_page() {
     assert_eq!(idx.lookup_moved("/authors/scarly/"), None);
     assert!(idx.lookup_exact("/authors/scarly/"));
 }
+
+/// A declared kind's namespace is not special here, and this file needs no
+/// production change to serve one: it reads `generated` and `terms` as
+/// opaque strings, with no `authors`/`tags` branch anywhere. Pinned as a
+/// test so the next person adding a namespace can see that, rather than
+/// inferring it from the absence of a branch.
+#[test]
+fn people_url_classifies_the_way_authors_url_does() {
+    use crate::build::terms::TermSite;
+    let mut m = ArticleMap::new();
+    m.articles.insert("ada-lin/".into(), make_article("ada-lin.md", "ada-lin/"));
+    m.generated = vec![
+        "authors/".into(),
+        "authors/sam-okafor/".into(),
+        "people/".into(),
+        "people/sam-okafor/".into(),
+    ];
+    m.terms.insert("authors/ada-lin".into(), TermSite { display: "Ada Lin".into(), claimed_by: Some("ada-lin/".into()) });
+    m.terms.insert("people/ada-lin".into(), TermSite { display: "Ada Lin".into(), claimed_by: Some("ada-lin/".into()) });
+    m.terms.insert("authors/sam-okafor".into(), TermSite { display: "Sam Okafor".into(), claimed_by: None });
+    m.terms.insert("people/sam-okafor".into(), TermSite { display: "Sam Okafor".into(), claimed_by: None });
+    let idx = ArticleMapIndex::from_map(&m);
+
+    assert_eq!(idx.lookup_moved("/people/ada-lin/"), idx.lookup_moved("/authors/ada-lin/"));
+    assert_eq!(idx.lookup_moved("/people/ada-lin/"), Some("/ada-lin/".into()));
+    assert_eq!(
+        idx.lookup_exact("/people/sam-okafor/"),
+        idx.lookup_exact("/authors/sam-okafor/")
+    );
+    assert!(idx.lookup_exact("/people/sam-okafor/"));
+    assert!(idx.lookup_exact("/people/"));
+}

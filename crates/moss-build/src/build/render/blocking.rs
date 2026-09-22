@@ -175,8 +175,8 @@ fn synthetic_folder_doc(
     let term_root = term_index.roots_in_use().any(|ns| ns == folder);
     let title = if let Some(term_display) = term_index.display(folder) {
         term_display.to_string()
-    } else if term_root {
-        crate::i18n::term_root_title(lang, folder).to_string()
+    } else if let Some(kind_title) = term_index.kind_for(folder).map(|k| k.title.clone()) {
+        kind_title
     } else if let Some(endonym) = (!folder.contains('/')).then(|| moss_core::home::endonym(folder)).flatten() {
         // A language tree's synthesized home (`zh-hans/`, no `index.zh-hans.md`)
         // is titled by the language's own name, not its code's filename text.
@@ -1437,27 +1437,24 @@ pub fn generate_blocking_content(
     let folder_display = folder_display_leaves(&project_structure.dirs, &dir_overrides);
 
     // Term derivation (docs/archive/2026-09-01-tags-and-authors-design.md):
-    // `author:`/`tags:` values become membership claims in term pseudo-folders
-    // (`authors/<slug>`, `tags/<slug>`) via the `also_in` slot, and
-    // `author_page:`/`tag_page:` claims resolve into `term_listing`. Runs
-    // BEFORE the synthetic-index blocks (which seed the unclaimed term keys)
-    // and before the incremental verdict (so listing digests see the derived
-    // membership). Both loops below consult `term_index` for term-page titles.
+    // every declared kind's fields become membership claims in term
+    // pseudo-folders (`authors/<slug>`, `tags/<slug>`, or a declared kind's
+    // own namespace) via the `also_in` slot, and their `*_page:` claims
+    // resolve into `term_listing`. Runs BEFORE the synthetic-index blocks
+    // (which seed the unclaimed term keys) and before the incremental
+    // verdict (so listing digests see the derived membership). Both loops
+    // below consult `term_index` for term-page titles.
     // URL keys of every index page the auto-index loop below synthesizes, for
     // `ArticleMap::generated`: the editor's URL index has no other way to learn
     // those pages exist (no source document).
     let mut generated_index_urls: Vec<String> = Vec::new();
-    let term_index = crate::build::terms::derive_terms(
-        &mut documents,
-        site_config.terms_author,
-        site_config.terms_tags,
-    );
-    // Design rule 3, byline surface: `author:` names the author also typed in
-    // a `byline:` row become markdown links to their term page. Before the
-    // verdict for the same reason as above — the linked URL is part of each
-    // page's surface, so a claim appearing elsewhere re-renders the bylines
-    // that point at it.
-    crate::build::terms::link_authors_in_bylines(&mut documents, &term_index);
+    let term_index = crate::build::terms::derive_terms(&mut documents, site_config.term_kinds.clone());
+    // Design rule 3, byline surface: a name-list field's value that the
+    // author also typed in a `byline:` row becomes a markdown link to its
+    // term page. Before the verdict for the same reason as above — the
+    // linked URL is part of each page's surface, so a claim appearing
+    // elsewhere re-renders the bylines that point at it.
+    crate::build::terms::link_terms_in_bylines(&mut documents, &term_index);
 
     // Synthesize folder index entries for folders that have child documents but
     // no explicit index file. This completes the page tree so parent folder pages
@@ -2181,8 +2178,8 @@ pub fn generate_blocking_content(
             // group_was_explicit always false when passing None — no override gate
             // needed; the synthetic index always lets Date-axis year grouping fire.
 
-            let article_list = generate_children(
-                &folder_docs,
+            let render_group = |docs: &[&ParsedDocument]| generate_children(
+                docs,
                 &all_docs_refs,
                 project_structure,
                 &children_style,
@@ -2198,6 +2195,22 @@ pub fn generate_blocking_content(
                 None,
                 site_config.math, false,
             );
+            // The generated half of the same split the claimed term page gets
+            // in `folder_embed`, through the same function: a term no page
+            // claims still lists its members under the field each was named
+            // through. `folder` is the term key here, and the sections come
+            // from the index that derived them — `None` for every ordinary
+            // folder, and for a term reached through one field only, which
+            // then renders exactly as it did before. `site_lang`, not
+            // `folder_lang`: a role heading is term chrome, and the term's
+            // two pages have to say the same word.
+            let article_list = crate::build::terms::render_term_sections(
+                term_index.sections(folder),
+                &folder_docs,
+                site_lang,
+                render_group,
+            )
+            .unwrap_or_else(|| render_group(&folder_docs));
             // Synthetic folder index: no markdown source, so prepend the shared
             // <h1 class="moss-folder-title"> via folder_title::render. Same
             // helper used by folder_cover::render (cover branch) and
@@ -2813,6 +2826,34 @@ pub fn generate_blocking_content(
             }
         }
         Err(e) => log::warn!("Failed to emit redirect stubs: {}", e),
+    }
+
+    // A term whose namespace moved (`author` declared under `[terms.people]`)
+    // keeps serving its old `authors/<slug>/` URL. Separate from the block
+    // above because the two answer different questions from different
+    // sources: that one merges a persisted rename history keyed on note UIDs,
+    // this one is recomputed from the kinds table every build and stored
+    // nowhere. Same emit pattern, so both land in `pending` and the seal
+    // covers them.
+    {
+        use crate::build::context::BuildContext;
+        use crate::build::feeds::redirects::{generate_redirect_html, pretty_url_to_fs_path};
+        use crate::build::manifest::HashBucket;
+        use crate::build::served_path::ServedPath;
+        for (old_url, new_url) in crate::build::terms::kind_move_stubs(&term_index) {
+            let fs_path = pretty_url_to_fs_path(&old_url);
+            let html = generate_redirect_html(&new_url);
+            match ServedPath::from_source(&fs_path) {
+                Ok(sp) => {
+                    if let Err(e) = BuildContext::for_render(output_dir, pending)
+                        .emit(&sp, html.as_bytes(), HashBucket::Files)
+                    {
+                        log::warn!("Failed to emit kind-move stub '{}': {}", fs_path, e);
+                    }
+                }
+                Err(e) => log::warn!("Invalid kind-move stub path '{}': {}", fs_path, e),
+            }
+        }
     }
 
     // Generate _previews.json for hover link previews

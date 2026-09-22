@@ -339,7 +339,10 @@ mod tests {
         // (`children_more` added 2026-09 — names the More link's target when
         // `children_limit` truncates a listing, even on a self-listing.)
         // (`children_covers` added 2026-09 — "only" keeps pages with a cover.)
-        assert_eq!(schema.frontmatter.fields.len(), 42);
+        // (`editor`/`jury`/`editor_page`/`jury_page` added 2026-09 — the
+        // term-kinds generalization of `author`/`author_page` beyond the two
+        // built-in namespaces; see moss_core::terms and build::terms.)
+        assert_eq!(schema.frontmatter.fields.len(), 46);
     }
 
     #[test]

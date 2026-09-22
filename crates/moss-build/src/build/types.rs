@@ -210,6 +210,16 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub author: Vec<String>,
+    /// Editor names from frontmatter `editor:` — field-agnostic sibling of
+    /// `author`, feeding whichever term kind's `fields` names "editor".
+    /// Unread until `build::terms::derive_terms` is rewritten over kinds.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub editor: Vec<String>,
+    /// Jury member names from frontmatter `jury:` — same story as `editor`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub jury: Vec<String>,
     /// Term-page claim from `author_page:` — this page is the author page
     /// for the claimed name (see `moss_core::terms::TermClaim`). Resolved by
     /// `build::terms::derive_terms` into [`Self::term_listing`] on the
@@ -221,6 +231,16 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub tag_page: Option<moss_core::terms::TermClaim>,
+    /// Term-page claim from `editor_page:` — same as `author_page`, for
+    /// whichever kind carries the `editor` field.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub editor_page: Option<moss_core::terms::TermClaim>,
+    /// Term-page claim from `jury_page:` — same as `author_page`, for
+    /// whichever kind carries the `jury` field.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub jury_page: Option<moss_core::terms::TermClaim>,
     /// The term pseudo-folder key (`authors/<slug>`, `tags/<slug>`) whose
     /// member listing this page hosts. Set by `build::terms::derive_terms`
     /// on the page that WINS a term claim — and only when the author didn't
@@ -230,6 +250,17 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub term_listing: Option<String>,
+    /// The claiming page's listing, split by field: for each of the term
+    /// kind's `fields` (in kind order), the member `url_path`s that field
+    /// claims; plus a trailing `(None, urls)` group for members reachable
+    /// only through a hand-authored `also_in:` cross-list. `None` unless
+    /// this page hosts a term listing (`term_listing.is_some()`). Set by
+    /// `build::terms::derive_terms` in the same pass as `term_listing`, so
+    /// the render layer — which cannot see `TermIndex` — reads one resolved
+    /// field instead of re-deriving the split.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub term_sections: Option<Vec<(Option<String>, Vec<String>)>>,
     /// Whether to render child pages below content.
     /// Accepts bool or wikilink in frontmatter (e.g. `children: "[[News]]"`).
     /// true = render children, false = hide, None = default to true.

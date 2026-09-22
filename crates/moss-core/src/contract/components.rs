@@ -3800,6 +3800,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         since: "0",
         description: "Marks a link that came from `[[wikilink]]` syntax rather than a markdown link, so a theme can distinguish internal cross-references from ordinary links.",
     },
+    ComponentEntry {
+        class: "moss-term-role",
+        kind: "instance",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<h2 class="moss-term-role">編輯</h2>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "0",
+        description: "Section heading on a term page (e.g. /people/<name>/) for one name-list field's group of works, when the kind names more than one field.",
+    },
 ];
 
 /// Implementation classes that are emitted by moss for internal functionality
