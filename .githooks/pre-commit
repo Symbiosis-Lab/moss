@@ -1,0 +1,16 @@
+#!/bin/sh
+# Refuses a commit that stages a change under packages/moss-syntax/src or
+# packages/moss-api/src (or their build config) without also rebuilding the
+# committed dist/ that ships from it. pr.yml's "Package artifacts are up to
+# date" step catches the same drift, but only on a pull request to main —
+# a develop landing bypasses it entirely, which is how dist/ went stale
+# under a src change that landed straight on develop.
+#
+# node is assumed present for anyone developing this repo, but these hooks
+# also install for a plain `pnpm install` in contexts that don't have it
+# wired the same way — never block a commit over a missing interpreter.
+if ! command -v node >/dev/null 2>&1; then
+  exit 0
+fi
+
+exec node scripts/check-dist-freshness.mjs

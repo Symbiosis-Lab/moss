@@ -66,8 +66,8 @@ entry until the mirror pipeline publishes it.
 
 ## Fixtures
 
-`fixtures/` holds copies of the cross-language golden vectors whose source of
-truth is Rust (`crates/moss-core/tests/fixtures/` + `tests/fixtures/`). They
-are written by the same codegen run that emits `contract/shortcodes.generated.ts`
-(`cargo run --bin generate-artifacts --features dev-tools -- shortcode-catalog`)
-and CI fails on a diff, so a fixture edited here and not in Rust cannot survive.
+`fixtures/` holds copies of the cross-language golden vectors whose source of truth is Rust (`crates/moss-core/tests/fixtures/` + `tests/fixtures/`). They are written by the same codegen run that emits `contract/shortcodes.generated.ts` (`cargo run --bin generate-artifacts --features dev-tools -- shortcode-catalog`) and CI fails on a diff, so a fixture edited here and not in Rust cannot survive.
+
+## Build output
+
+`dist/` is committed, so any change under `src/` (or to `tsdown.config.ts` / `tsconfig.json`) needs `pnpm --filter @symbiosis-lab/moss-syntax run build` run and its output staged in the same commit; a local pre-commit hook (`.githooks/pre-commit`, `scripts/check-dist-freshness.mjs`) checks this and refuses a commit that skips it.
