@@ -277,23 +277,37 @@ where
     true
 }
 
+/// Core of every single-predicate `has_*_recursive` query below: true if any
+/// block in the document (recursive, via [`visit_blocks`]) matches `pred`.
+/// `has_callout_recursive` stays separate — its predicate is a multi-arm
+/// match over several block shapes, not a single test, so folding it in here
+/// would hide that shape rather than share it.
+fn any_block(doc: &Document, pred: impl Fn(&Block) -> bool) -> bool {
+    let mut found = false;
+    visit_blocks(doc, |block| {
+        if pred(block) {
+            found = true;
+            return false; // short-circuit
+        }
+        true
+    });
+    found
+}
+
 /// True if any block in the document is a shortcode of the given kind
 /// (recursive — descends into callouts, blockquotes, list items).
 ///
 /// Replaces the `project_has_inline_subscribe` filesystem scan once
 /// shortcodes migrate to typed AST in Phase B.
 pub fn has_shortcode_recursive(doc: &Document, kind: ShortcodeKind) -> bool {
-    let mut found = false;
-    visit_blocks(doc, |block| {
-        if let Block::Shortcode(sc) = block {
-            if sc.kind() == kind {
-                found = true;
-                return false; // short-circuit
-            }
-        }
-        true
-    });
-    found
+    any_block(doc, |block| matches!(block, Block::Shortcode(sc) if sc.kind() == kind))
+}
+
+/// True if any `:::grid` in the document carries the `scroll` flag
+/// (recursive, like [`has_shortcode_recursive`]). Gates the scroll-row
+/// runtime script, so a site with no scroll row ships none of it.
+pub fn has_scroll_row_recursive(doc: &Document) -> bool {
+    any_block(doc, |block| matches!(block, Block::Shortcode(Shortcode::Grid(grid)) if grid.scroll))
 }
 
 /// True if any block in the document is a callout (recursive — a callout

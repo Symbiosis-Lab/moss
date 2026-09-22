@@ -71,4 +71,4 @@ pub use shortcode::{
 };
 pub use tags::extract_inline_tags;
 pub use url::{ResolvedUrl, Url, UrlKind};
-pub use visit::{has_callout_recursive, has_shortcode_recursive, visit_blocks, visit_urls_mut};
+pub use visit::{has_callout_recursive, has_scroll_row_recursive, has_shortcode_recursive, visit_blocks, visit_urls_mut};

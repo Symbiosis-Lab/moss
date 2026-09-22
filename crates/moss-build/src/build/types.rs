@@ -664,6 +664,10 @@ pub struct PageFeatures {
     /// (`moss_core::ast::footnotes::FootnoteIndex::build`), never from
     /// emitted HTML.
     pub footnotes: bool,
+    /// True if the page has a `:::grid N {scroll}` row. Gates the scroll-row
+    /// runtime script via [`SiteAssets`]. Read from the typed AST
+    /// (`moss_core::ast::has_scroll_row_recursive`).
+    pub scroll_rows: bool,
 }
 
 impl PageFeatures {
@@ -675,6 +679,7 @@ impl PageFeatures {
             inline_apply: self.inline_apply || other.inline_apply,
             callouts: self.callouts || other.callouts,
             footnotes: self.footnotes || other.footnotes,
+            scroll_rows: self.scroll_rows || other.scroll_rows,
         }
     }
 }
@@ -714,6 +719,8 @@ pub struct SiteAssets {
     /// is why it is named `has_footnotes` rather than `footnotes`: it reads
     /// at the `SITE_SCRIPTS` gate as a question, not as a partial name.
     pub has_footnotes: bool,
+    /// Any page has a `:::grid N {scroll}` row. Gates `scroll-row.js`.
+    pub scroll_rows: bool,
     /// `[site].link_preview` — hover link previews. Defaults ON.
     pub link_preview: bool,
     /// `[site].heading_anchors` — click-to-copy section permalinks. Defaults ON.
@@ -768,6 +775,7 @@ impl SiteAssets {
         let mut out = Self {
             callouts: false,
             has_footnotes: false,
+            scroll_rows: false,
             vertical: site_typesetting == Some("vertical"),
             ..from_config
         };
@@ -775,6 +783,7 @@ impl SiteAssets {
             out.callouts |= page.features.callouts;
             out.vertical |= page.typesetting.as_deref() == Some("vertical");
             out.has_footnotes |= page.features.footnotes;
+            out.scroll_rows |= page.features.scroll_rows;
         }
         out
     }

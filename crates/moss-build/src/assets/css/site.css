@@ -6259,7 +6259,8 @@ a.moss-grid-card:hover {
    row". Keyed on `.moss-grid[data-scroll]` alone, never a parent selector
    or `article.container >`: a scroll grid can sit nested inside a fenced
    div or an embed wrapper, and the mechanics must not depend on what
-   contains it. No JS, no `scroll-behavior: smooth`, no hidden scrollbar. */
+   contains it. The row scrolls without JS; `scroll-row.js` adds dots and
+   wheel scrolling on top. No `scroll-behavior: smooth`, no hidden scrollbar. */
 .moss-grid[data-scroll] {
   grid-auto-flow: column;
   overflow-x: auto;
@@ -6332,6 +6333,55 @@ a.moss-grid-card:hover {
 @media (max-width: 768px) {
   .moss-grid[data-scroll][data-columns] {
     grid-auto-columns: calc(100% / 1.3);
+  }
+}
+
+/* Position dots under a scroll row (`scroll-row.js` adds them; without the
+   script the row still scrolls). The dot is drawn 8px but the button is a
+   24px target, the WCAG 2.5.8 minimum. Cards in view are lit; the first of
+   them is also `aria-current` and a touch larger. `currentColor` keeps the
+   dots right on any theme's ground. */
+.moss-scroll-dots {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-block-start: var(--moss-space-xs);
+  color: var(--moss-color-text);
+}
+.moss-scroll-dots button {
+  display: grid;
+  place-items: center;
+  inline-size: 24px;
+  block-size: 24px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.moss-scroll-dots button::before {
+  content: "";
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.25;
+  transition: opacity 0.2s, transform 0.2s;
+}
+.moss-scroll-dots button.is-visible::before {
+  opacity: 0.85;
+}
+.moss-scroll-dots button[aria-current="true"]::before {
+  transform: scale(1.25);
+}
+.moss-scroll-dots button:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: -2px;
+  border-radius: 50%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .moss-scroll-dots button::before {
+    transition: none;
   }
 }
 
@@ -7417,6 +7467,10 @@ body:not(.immersive-fs-active) main > article.container > *:not(.immersive-ifram
   .moss-grid[data-scroll] {
     grid-auto-flow: row;
     overflow: visible;
+  }
+
+  .moss-scroll-dots {
+    display: none;
   }
   .moss-grid[data-scroll][data-columns="1"] {
     grid-template-columns: var(--moss-grid-ratio, minmax(0, 1fr));

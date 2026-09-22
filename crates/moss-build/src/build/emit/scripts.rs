@@ -115,6 +115,13 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
         load: Load::Shell { defer: false },
     },
     SiteScript {
+        name: "scroll-row",
+        dev_path: "src/assets/js/scroll-row.js",
+        source: || include_str!("../../assets/js/scroll-row.js"),
+        gate: |a| a.scroll_rows,
+        load: Load::Shell { defer: false },
+    },
+    SiteScript {
         name: "search",
         dev_path: "src/assets/js/search.js",
         source: || include_str!("../../assets/js/search.js"),

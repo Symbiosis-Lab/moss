@@ -62,6 +62,7 @@ export const BUNDLES = [
   { entry: "crates/moss-build/src/js-src/site/hls-player.ts", out: "crates/moss-build/src/assets/js/hls.js", format: "esm" },
   { entry: "crates/moss-build/src/js-src/site/sidenotes.ts", out: "crates/moss-build/src/assets/js/sidenotes.js" },
   { entry: "crates/moss-build/src/js-src/site/math-copy.ts", out: "crates/moss-build/src/assets/js/math-copy.js" },
+  { entry: "crates/moss-build/src/js-src/site/scroll-row.ts", out: "crates/moss-build/src/assets/js/scroll-row.js" },
 ];
 
 /** The directories BUNDLES writes into — derived, never restated. */

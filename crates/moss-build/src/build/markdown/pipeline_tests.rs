@@ -1795,6 +1795,40 @@ fn test_pipeline_features_default_false_without_shortcode() {
     .expect("pipeline should succeed");
     assert!(!doc.features.inline_subscribe);
     assert!(!doc.features.inline_apply);
+    assert!(!doc.features.scroll_rows);
+}
+
+/// `scroll_rows` gates `scroll-row.js`: set by a `{scroll}` grid, including
+/// one nested in a fenced div (the embed/wrapper shape), never by a plain grid.
+#[test]
+fn test_pipeline_sets_scroll_rows_only_for_a_scrolling_grid() {
+    let parse = |content: &str| {
+        process_markdown_file(
+            "test.md",
+            content,
+            "root",
+            &std::collections::HashMap::new(),
+            false,
+            crate::i18n::Language::En,
+            Some("test-site"),
+            false,
+            true,
+            true,
+            true,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+        )
+        .expect("pipeline should succeed")
+    };
+    let nested = parse("::::{.wrap}\n:::grid 3 {scroll}\na\n+++\nb\n:::\n::::\n");
+    assert!(nested.features.scroll_rows, "nested scroll row must set the flag");
+    let plain = parse(":::grid 3\na\n+++\nb\n:::\n");
+    assert!(!plain.features.scroll_rows, "a wrapping grid must not set it");
 }
 
 #[test]

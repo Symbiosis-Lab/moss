@@ -3035,6 +3035,21 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "Horizontal-scroll wrapper the renderer emits around every Markdown table and every CSV/TSV embed (`.moss-embed[data-type=\"table\"]`). Keeps the `<table>` semantically intact (unlike a `display:block` table, which breaks column layout and assistive-tech table semantics) while letting a wide table scroll inside its own box instead of pushing the page into horizontal overflow. `tabindex=\"0\"` makes an overflowing table keyboard-scrollable.",
     },
     ComponentEntry {
+        class: "moss-scroll-dots",
+        kind: "container",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<div class="moss-scroll-dots" role="group" aria-label="Related articles">
+  <button type="button" aria-label="1 / 8" class="is-visible" aria-current="true"></button>
+  <button type="button" aria-label="2 / 8" class="is-visible"></button>
+  …
+</div>"#,
+        example_markdown: ":::grid 3 {scroll label=\"Related articles\"}\n…\n:::",
+        status: Status::Emerging,
+        since: "1",
+        description: "Position dots after a `:::grid N {scroll}` row, one per card. Added by the `scroll-row` runtime script, never by the build, so a page without scripts keeps the plain scrolling row. Cards in view carry `.is-visible`; the first of them is `aria-current`. Hidden when the row has nothing to scroll, and in print.",
+    },
+    ComponentEntry {
         class: "moss-col-right",
         kind: "instance",
         parent: "moss-table-scroll",

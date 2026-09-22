@@ -1027,6 +1027,7 @@ pub fn process_markdown_file(
     // Footnote presence: same mechanism again, but this one gates a runtime
     // SCRIPT (the sidenotes bundle) rather than a stylesheet partial.
     let has_footnotes = !moss_core::ast::footnotes::FootnoteIndex::build(&doc.blocks).is_empty();
+    let has_scroll_row = moss_core::ast::has_scroll_row_recursive(&doc);
 
     // Defensive sweep: `Block::Other` raw HTML (e.g. `<div class="callout">`
     // from upstream Stage 1) may still contain `href="moss-resolved:..."` /
@@ -1386,6 +1387,7 @@ pub fn process_markdown_file(
             inline_apply: has_inline_apply,
             callouts: has_callout,
             footnotes: has_footnotes,
+            scroll_rows: has_scroll_row,
         },
         slot: frontmatter.slot.clone(),
         // Reserved-name convention: `footer.md` at the project root parses
