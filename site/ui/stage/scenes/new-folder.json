@@ -1,0 +1,22 @@
+{
+  "steps": [
+    {
+      "click": "create.caret",
+      "reveals": 2
+    },
+    {
+      "click": "create.newFolderAction",
+      "reveals": 1
+    },
+    {
+      "typeInto": {
+        "target": "tree.renameInput",
+        "text": {
+          "en": "Poems",
+          "zh-hant": "詩作",
+          "zh-hans": "诗作"
+        }
+      }
+    }
+  ]
+}

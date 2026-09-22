@@ -49,6 +49,13 @@ const TARGETS = {
   // The ▾ beside it (gestures.md, "New from template"): opens the "New Page options" menu (New
   // Page, New Folder, one row per saved template, Manage Templates… once any exist).
   'create.caret': (doc) => doc.querySelector('#editor-create-caret'),
+  // The caret menu's own "New Folder" row (`id: "new-folder"` in the menu's own item list, so
+  // `data-action="new-folder"` — same ctx-menu.ts convention as every other row below).
+  'create.newFolderAction': (doc) => doc.querySelector('.ctx-menu [data-action="new-folder"]'),
+  // The inline rename/create `<input>` a plain "New Page"/"New Folder" context-menu action opens
+  // in the tree (gestures.md, "Input-typing events") — REPLACES the placeholder row rather than
+  // sitting beside it, so this is the only element to find once it appears.
+  'tree.renameInput': (doc) => doc.querySelector('input.moss-tree-rename-input'),
 
   // Every ctx-menu row now carries `data-action`, the row's own i18n key rendered as a DOM
   // attribute (gestures.md) — stable across locales, unlike matching a row's translated text or
