@@ -116,8 +116,6 @@
         event.preventDefault();
         if (!form.reportValidity() || button.disabled) return;
         button.disabled = true;
-        const languageSelect = document.querySelector('#language-select');
-        if (languageSelect) languageSelect.disabled = true;
         button.setAttribute('aria-busy', 'true');
         button.textContent = window.__landingI18n?.t('sending') || 'Sending…';
         status.textContent = '';
@@ -145,11 +143,18 @@
           input.focus();
         } finally {
           button.disabled = false;
-          if (languageSelect) languageSelect.disabled = false;
           button.removeAttribute('aria-busy');
           button.textContent = window.__landingI18n?.t('request') || initialLabel;
         }
       });
+    };
+
+    // The subscriber's newsletter is the language they signed up in: the root
+    // (English) is scope '', each language folder is its own scope. Keep the
+    // folder list in step with scripts/generate-landing-locales.mjs.
+    const subscriptionScope = () => {
+      const locale = window.__landingI18n?.locale() || document.documentElement.lang;
+      return locale === 'zh-hans' || locale === 'zh-hant' ? locale : '';
     };
 
     submit(
@@ -157,7 +162,7 @@
       (email) => fetch('https://api.mosspub.com/api/sites/landing/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ email, scope: '' }),
+        body: JSON.stringify({ email, scope: subscriptionScope() }),
       }),
       (payload) => payload.alreadySubscribed
         ? (window.__landingI18n?.t('alreadySubscribed') || 'You’re already subscribed.')

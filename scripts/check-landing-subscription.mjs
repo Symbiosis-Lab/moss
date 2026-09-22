@@ -22,7 +22,7 @@ for (const engine of [chromium, webkit]) {
     if(!await message.textContent())throw Error('No status');
     if((await input.inputValue()==='')!==good)throw Error('Address retention');
    }
-   if(calls.some(c=>c.url!=='https://api.mosspub.com/api/sites/landing/subscribe'||c.body.scope!==''||c.body.email!=='verification@example.invalid'))throw Error('Wrong subscription contract');
+   if(calls.some(c=>c.url!=='https://api.mosspub.com/api/sites/landing/subscribe'||c.body.scope!==locale.replace('/','')||c.body.email!=='verification@example.invalid'))throw Error('Wrong subscription contract');
    console.log(engine.name(),locale||'en','focus, validation, new/existing subscriber, malformed/server error: PASS (mocked; no subscriber created)');
    await page.close();
   }
