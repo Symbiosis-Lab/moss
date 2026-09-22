@@ -243,6 +243,19 @@ pub struct ContentGraph {
     /// installed them via [`Self::with_output_overrides`]; an empty map still
     /// yields base slugification, which is what every case-fold bug needed.
     output_overrides: HashMap<String, String>,
+
+    /// Directories the scan marked as getting an auto-generated folder-index
+    /// page (no `index.md` of their own): normalized key -> original-case
+    /// directory. Consulted only after both file-backed folder-note checks
+    /// miss, inside `resolve_path`'s `folder_note` closure — so a `[[Folder]]`
+    /// wikilink can resolve to that folder's SYNTHETIC index, the same page
+    /// the renderer's auto-index loop emits. Registered by the host (once,
+    /// alongside the scan) via [`ContentGraphBuilder::register_auto_index_dir`]
+    /// from the same source the renderer itself reads its folder set from —
+    /// so this graph never resolves a folder the renderer does not actually
+    /// generate a page for. Empty unless the host registers anything, which
+    /// keeps every existing caller (tests included) unaffected.
+    auto_index_dirs: HashMap<String, String>,
 }
 
 impl ContentGraph {
@@ -294,7 +307,10 @@ impl ContentGraph {
     /// 2. Exact + `.md`
     /// 3. Filename match (case-insensitive, without extension)
     /// 4. Filename + `.md` match
-    /// 5. Folder note: `reference/index.md` or `reference/<reference>.md`
+    /// 5. Folder note: `reference/index.md` or `reference/<reference>.md`,
+    ///    else — if the host registered it via [`ContentGraphBuilder::register_auto_index_dir`] —
+    ///    the directory's synthetic `<dir>/index.md`, for a folder with no
+    ///    note of its own
     ///
     /// Ambiguity tiebreakers, applied in order:
     /// candidates whose extension matches the reference's extension win first
@@ -491,9 +507,21 @@ impl ContentGraph {
             }
             let leaf = base.rsplit('/').next().unwrap_or(base);
             let self_named = format!("{}/{}.md", base, leaf);
-            self.path_index
-                .get(&self_named)
-                .map(|&idx| self.files[idx].clone())
+            if let Some(&idx) = self.path_index.get(&self_named) {
+                return Some(self.files[idx].clone());
+            }
+            // No real file backs this folder. If the scan registered it as
+            // getting a synthetic index page (a folder with content, or no
+            // content at all, but no explicit note of its own), resolve to
+            // that synthetic source path — `<original-case dir>/index.md` —
+            // so a bare top-level `[[Folder]]` reaches the same page the
+            // renderer generates instead of reporting unresolved. `base` is
+            // already normalized; `auto_index_dirs` is keyed the same way
+            // and carries the original case as its value, which is what lets
+            // the H1/breadcrumb keep the author's directory casing.
+            self.auto_index_dirs
+                .get(base)
+                .map(|orig_case_dir| format!("{orig_case_dir}/index.md"))
         };
 
         // 5a. Language-tree-scoped folder note: a bare folder reference like
@@ -589,6 +617,7 @@ pub struct ContentGraphBuilder {
     slug_map: HashMap<String, String>,
     asset_exact: HashSet<String>,
     asset_ci: HashMap<String, Vec<String>>,
+    auto_index_dirs: HashMap<String, String>,
 }
 
 impl ContentGraphBuilder {
@@ -633,6 +662,17 @@ impl ContentGraphBuilder {
             .push(relative_path.to_string());
     }
 
+    /// Register a directory that gets an auto-generated folder-index page —
+    /// the input to `resolve_path`'s synthetic-folder-note fallback (see the
+    /// field doc on [`ContentGraph::auto_index_dirs`]). `dir` is the
+    /// original-case, project-relative directory path; the graph keys by its
+    /// normalized form so a reference in any case still matches, and keeps
+    /// `dir` verbatim as the value so the resolved page's H1/breadcrumb can
+    /// show the author's own casing.
+    pub fn register_auto_index_dir(&mut self, dir: &str) {
+        self.auto_index_dirs.insert(normalize_path(dir), dir.to_string());
+    }
+
     /// Consume the builder and produce an immutable [`ContentGraph`].
     pub fn build(self) -> ContentGraph {
         ContentGraph {
@@ -642,6 +682,7 @@ impl ContentGraphBuilder {
             slug_map: self.slug_map,
             asset_exact: self.asset_exact,
             asset_ci: self.asset_ci,
+            auto_index_dirs: self.auto_index_dirs,
             // Installed by the host via `with_output_overrides` once the build's
             // page map is known; the builder itself is scan-time and has none.
             output_overrides: HashMap::new(),
@@ -810,6 +851,44 @@ mod tests {
             g.resolve_path("archive", ""),
             Some("archive/archive.md".into())
         );
+    }
+
+    // 7d. Auto-index folder note: a folder registered via
+    // `register_auto_index_dir` (no `index.md`, no self-named note of its
+    // own) resolves to its synthetic `<dir>/index.md`, case-insensitively.
+    #[test]
+    fn test_auto_index_dir_resolves_when_no_real_note_exists() {
+        let mut b = ContentGraphBuilder::new();
+        b.add_file("essays/entry.md", "/essays/entry");
+        b.register_auto_index_dir("Essays");
+        let g = b.build();
+
+        assert_eq!(g.resolve_path("essays", ""), Some("Essays/index.md".into()));
+        assert_eq!(g.resolve_path("Essays", ""), Some("Essays/index.md".into()));
+    }
+
+    // 7e. A real folder note (self-named or an index stem) wins over the
+    // registered auto-index dir — steps 1-4 and the file-backed checks
+    // inside `folder_note` all run before the auto-index fallback.
+    #[test]
+    fn test_real_folder_note_wins_over_auto_index_registration() {
+        let mut b = ContentGraphBuilder::new();
+        b.add_file("news/index.md", "/news");
+        b.register_auto_index_dir("news");
+        let g = b.build();
+
+        assert_eq!(g.resolve_path("news", ""), Some("news/index.md".into()));
+    }
+
+    // 7f. A directory that was never registered does not resolve through
+    // this fallback — an unregistered folder must not silently match.
+    #[test]
+    fn test_unregistered_dir_does_not_resolve_via_auto_index_fallback() {
+        let mut b = ContentGraphBuilder::new();
+        b.add_file("essays/entry.md", "/essays/entry");
+        let g = b.build();
+
+        assert_eq!(g.resolve_path("essays", ""), None);
     }
 
     // 8. Unresolved returns None

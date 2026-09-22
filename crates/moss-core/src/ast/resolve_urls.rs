@@ -243,8 +243,23 @@ fn resolve_asset_url(
             // Keep the author's bytes (an unresolved asset ref never fails the
             // build) and say so. Synthesizing a plausible-looking path is what
             // shipped a 404 that looked like a working link.
+            //
+            // A target containing `[[` or a raw newline can't legitimately be
+            // a filename — both are signs the target is itself embed syntax,
+            // almost always a paste landing inside an already-open `![[ ]]`.
+            // Name the cause and the fix rather than the generic message.
+            let message = if raw.contains("[[") || raw.contains('\n') {
+                format!(
+                    "Nested embed target — \"{raw}\" contains embed syntax \
+                     instead of a filename, most likely from pasting an image \
+                     inside empty `![[ ]]` brackets. Remove the outer `![[ ]]` \
+                     and keep only the inner filename."
+                )
+            } else {
+                format!("Unresolved asset reference: {raw}")
+            };
             found.diagnostics.push(Diagnostic {
-                message: format!("Unresolved asset reference: {raw}"),
+                message,
                 source_path: source_path.to_string(),
                 reference: raw.clone(),
                 // The one blocking kind. `raw` is the author's literal

@@ -1485,6 +1485,8 @@ pub fn build_content_graph(project_structure: &ProjectStructure) -> ContentGraph
     // etc.) so their files are already indexed above. Bare-filename wikilink
     // resolution like `![](photo.jpg)` works through the same index.
 
+    crate::build::scan::classify::register_auto_index_dirs(&mut builder, &project_structure.dirs);
+
     builder.build()
 }
 

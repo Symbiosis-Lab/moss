@@ -15,6 +15,13 @@ pub struct ArticleMapIndex {
     normalized: HashMap<String, Option<String>>,    // norm_key -> Some(/canonical/)|None(ambiguous)
     by_stem: HashMap<String, Option<String>>,       // lowercased filename stem -> Some(/url/)|None
     moved: HashMap<String, String>,                 // norm_key of a gone URL -> /canonical/ it lives at
+    // Folder-index pages, keyed by their normalized SOURCE directory (not a
+    // stem — a full path, so a bare leaf never matches a nested folder) ->
+    // canonical /url/. A separate tier from `by_stem`, consulted only after
+    // it misses, so a same-name page (which IS in `by_stem`) always wins and
+    // `by_stem`'s own ambiguity-collapsing construction is never touched by
+    // this. See `ArticleMap::folder_indexes`.
+    folder_indexes: HashMap<String, String>,
 }
 
 fn norm(u: &str) -> String { u.trim_matches('/').to_lowercase() }
@@ -56,7 +63,24 @@ impl ArticleMapIndex {
                 .map(|(k, mut v)| { v.sort(); v.dedup(); (k, if v.len() == 1 { Some(v.remove(0)) } else { None }) })
                 .collect()
         };
-        ArticleMapIndex { exact, normalized: collapse(normalized), by_stem: collapse(stems), moved }
+        // Folder-index pages, from the typed field the build populates
+        // directly (never by eliminating `generated`/`terms`/`kinds` — see
+        // the field doc). Keyed by the normalized full source directory, so
+        // an exact match is required; there is no leaf/stem search over this
+        // map, which is what keeps a bare `[[notes]]` from matching a nested
+        // `obsidian/notes/` (out of scope in this version, on both sides).
+        let folder_indexes = m
+            .folder_indexes
+            .iter()
+            .map(|(dir, url)| (norm(dir), format!("/{}/", url.trim_matches('/'))))
+            .collect();
+        ArticleMapIndex {
+            exact,
+            normalized: collapse(normalized),
+            by_stem: collapse(stems),
+            moved,
+            folder_indexes,
+        }
     }
 }
 
@@ -65,8 +89,16 @@ impl UrlIndex for ArticleMapIndex {
     fn lookup_normalized(&self, url_path: &str) -> Option<String> { self.normalized.get(&norm(url_path)).cloned().flatten() }
     fn lookup_moved(&self, url_path: &str) -> Option<String> { self.moved.get(&norm(url_path)).cloned() }
     // from_source ignored in v1 — stem lookup is global; relative-path refs are a future pass.
+    //
+    // A page always wins: `by_stem` is tried first and `folder_indexes` is
+    // only ever consulted on a miss, so a same-named page and its folder can
+    // never race — if the page exists, `by_stem`'s bucket for that stem is a
+    // singleton and this returns at the first check.
     fn resolve_reference_to_url(&self, reference: &str, _from: &str) -> Option<String> {
-        self.by_stem.get(&stem(reference)).cloned().flatten()
+        if let Some(found) = self.by_stem.get(&stem(reference)).cloned().flatten() {
+            return Some(found);
+        }
+        self.folder_indexes.get(&reference.trim_matches('/').to_lowercase()).cloned()
     }
 }
 

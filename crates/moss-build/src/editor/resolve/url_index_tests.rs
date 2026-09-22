@@ -259,6 +259,70 @@ fn claimed_term_url_is_moved_to_the_claiming_page() {
     assert!(idx.lookup_exact("/authors/scarly/"));
 }
 
+// ── Folder-index wikilinks (ArticleMap::folder_indexes) ────────────────
+
+/// The reported bug: a bare top-level folder with children but no index of
+/// its own now resolves through `folder_indexes`, case-insensitively —
+/// unlike `generated`, which deliberately never joins the stem set (see
+/// `generated_pages_resolve_without_a_source` above).
+#[test]
+fn folder_index_resolves_bare_and_case_insensitively() {
+    let mut m = ArticleMap::new();
+    m.folder_indexes.insert("writings".into(), "writings".into());
+    let idx = ArticleMapIndex::from_map(&m);
+    assert_eq!(idx.resolve_reference_to_url("writings", "main.md"), Some("/writings/".into()));
+    assert_eq!(idx.resolve_reference_to_url("Writings", "main.md"), Some("/writings/".into()));
+}
+
+/// A page whose filename stem collides with a folder name wins — `by_stem`
+/// is checked first and `folder_indexes` is a fallback, so the two maps
+/// never merge into one ambiguous bucket the way eliminating by `terms`/
+/// `kinds` membership would have (that approach collapsed precedence here).
+#[test]
+fn a_same_named_page_wins_over_its_folder() {
+    let mut m = ArticleMap::new();
+    m.folder_indexes.insert("writings".into(), "writings".into());
+    m.articles
+        .insert("other/writings".into(), make_article("Other/Writings.md", "other/writings"));
+    let idx = ArticleMapIndex::from_map(&m);
+    assert_eq!(
+        idx.resolve_reference_to_url("Writings", "main.md"),
+        Some("/other/writings/".into()),
+        "the page must win, not the folder"
+    );
+}
+
+/// A bare leaf must not match a nested folder — nesting is out of scope in
+/// this version, on both the editor and the build (an elimination-based
+/// approach would leak past a folder's actual nesting depth, because
+/// `by_stem`'s lookup ignores path). The full path still resolves,
+/// case-insensitively.
+#[test]
+fn a_bare_leaf_does_not_match_a_nested_folder_but_the_full_path_does() {
+    let mut m = ArticleMap::new();
+    m.folder_indexes.insert("obsidian/notes".into(), "obsidian/notes".into());
+    let idx = ArticleMapIndex::from_map(&m);
+    assert_eq!(idx.resolve_reference_to_url("notes", "main.md"), None);
+    assert_eq!(
+        idx.resolve_reference_to_url("obsidian/notes", "main.md"),
+        Some("/obsidian/notes/".into())
+    );
+    assert_eq!(
+        idx.resolve_reference_to_url("Obsidian/NOTES", "main.md"),
+        Some("/obsidian/notes/".into())
+    );
+}
+
+/// The value is the URL a `url:` override produced, taken verbatim — not
+/// re-derived from the directory's own on-disk name.
+#[test]
+fn folder_index_value_carries_the_override_not_the_directory_name() {
+    let mut m = ArticleMap::new();
+    m.folder_indexes.insert("獎項".into(), "awards".into());
+    let idx = ArticleMapIndex::from_map(&m);
+    assert_eq!(idx.resolve_reference_to_url("獎項", "main.md"), Some("/awards/".into()));
+}
+
 /// A declared kind's namespace is not special here, and this file needs no
 /// production change to serve one: it reads `generated` and `terms` as
 /// opaque strings, with no `authors`/`tags` branch anywhere. Pinned as a

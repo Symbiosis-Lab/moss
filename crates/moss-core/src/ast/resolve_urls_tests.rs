@@ -892,6 +892,39 @@ fn unresolvable_image_ref_reports_instead_of_guessing() {
 }
 
 #[test]
+fn nested_embed_target_gets_a_specific_message_but_still_blocks() {
+    // A paste landing inside an already-open `![[ ]]` (image paste with the
+    // caret between the brackets) produces a target that is itself embed
+    // syntax: `![[![[pasted-20260920-193056.png]]\n]]`. The inner `![[...]]`
+    // parses as an `Inline::Image` whose `src` is the nested target
+    // (wrapper and trailing newline intact) — the node stays an image, so
+    // this still reaches `resolve_asset_url`'s `NotFound` arm and is still
+    // `DiagnosticKind::MissingAsset`, "the one blocking kind": a page
+    // carrying this corruption must not publish silently. Only the
+    // message changes, to name the cause instead of the generic wording.
+    let graph = graph_with(&["post.md"]);
+    let mut doc = parse("Text.\n\n![[![[pasted-20260920-193056.png]]\n]]\n");
+    let found = resolve_urls(&mut doc, &graph, "post.md");
+    assert_eq!(found.diagnostics.len(), 1, "{:?}", found.diagnostics);
+    let d = &found.diagnostics[0];
+    assert_eq!(
+        d.kind,
+        DiagnosticKind::MissingAsset,
+        "blocking behavior must be preserved regardless of message wording"
+    );
+    assert!(
+        d.message.contains("Nested embed target"),
+        "message should name the cause: {:?}",
+        d.message
+    );
+    assert!(
+        !d.message.starts_with("Unresolved asset reference: ![["),
+        "the old, confusing generic wording must be gone for this shape: {:?}",
+        d.message
+    );
+}
+
+#[test]
 fn every_kind_of_missing_media_is_reported_as_blocking() {
     // "Media" is not just images. A video, an audio file, a PDF and a bare
     // wikilink embed all reach the reader as a hole in the page, so all four

@@ -20,6 +20,7 @@ use crate::build::pipeline::send_progress;
 
 // Generator submodule imports
 use crate::build::scan::article_map::build_article_map;
+use crate::build::scan::classify::folder_index_keys;
 use crate::build::components::nav::{NavigationBuilder, compute_breadcrumb_segments};
 use crate::build::page::layout::LayoutConfig;
 use crate::build::markdown::{process_markdown_file, resolve_duplicate_slugs_with_lang};
@@ -92,30 +93,6 @@ fn folder_display_leaves(
     folder_index_keys(dirs, dir_overrides)
         .map(|(dir, key)| (key, dir.rsplit('/').next().unwrap_or(dir).to_string()))
         .collect()
-}
-
-/// Each scanned directory that gets a folder-index page, paired with the
-/// page-tree key that index lives at.
-///
-/// Appending `/index.html` runs every directory segment through the same
-/// slug/override resolver the page-tree keys use and then drops the leaf,
-/// which is what makes these keys comparable with the doc-derived prefixes.
-/// A directory mapping to the empty key is skipped — the site's homepage is
-/// not a folder index.
-///
-/// `dirs` is already narrowed by the scan to the directories that should have
-/// a page at all (`classify::gets_index_page`); the one filter left, a folder
-/// slugging to a Windows reserved device name, lives in `slug.rs`. This is the
-/// one place that mapping is written; its three callers used to each carry a copy.
-fn folder_index_keys<'a>(
-    dirs: &'a [String],
-    dir_overrides: &'a std::collections::HashMap<String, String>,
-) -> impl Iterator<Item = (&'a String, String)> + 'a {
-    dirs.iter().filter_map(move |dir| {
-        let mapped = resolve_path_with_overrides(&format!("{dir}/index.html"), dir_overrides);
-        let key = mapped.strip_suffix("/index.html").filter(|_| !crate::build::scan::slug::warn_reserved_folder(dir, &mapped))?;
-        (!key.is_empty()).then(|| (dir, key.to_string()))
-    })
 }
 
 /// The language a synthetic folder index speaks: its path (`en/` → `En`),
@@ -2764,6 +2741,7 @@ pub fn generate_blocking_content(
     generated_index_urls.sort(); // HashMap iteration order above; the persisted map must be stable
     let article_map = build_article_map(
         &documents,
+        &project_structure.dirs,
         &dir_overrides,
         &url_collisions,
         &generated_index_urls,

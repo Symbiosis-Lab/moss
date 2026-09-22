@@ -180,6 +180,26 @@ pub struct ArticleMap {
     /// it asks. A term with no members has no entry at all.
     #[serde(default)]
     pub fields_with_members: std::collections::BTreeMap<String, Vec<String>>,
+
+    /// Every directory that gets an index page — real (an authored
+    /// `index.md`) or synthesized — keyed by its SOURCE directory, not its
+    /// URL slug (see `folder_index_keys`, the single place this mapping is
+    /// written). A directory with a real index is included too: the value
+    /// still names the same URL the build serves that page at, which is
+    /// what lets `ArticleMapIndex::resolve_reference_to_url` fall through to
+    /// it for a folder whose index file isn't stem-matchable (e.g. a bare
+    /// `news/index.md`, whose filename stem is `index`, not `news`).
+    /// `#[serde(default)]` so an older persisted map still loads.
+    ///
+    /// Kept apart from `generated`: that set mixes an index-less content
+    /// folder's auto-generated page with term/namespace-root pages, and
+    /// neither its URL-keyed shape nor `ArticleMapIndex::by_stem`'s
+    /// ambiguity-collapsing construction can tell them apart safely. This
+    /// field exists so `ArticleMapIndex::resolve_reference_to_url` can
+    /// resolve a bare folder wikilink to a folder's index page without ever
+    /// reading `generated`/`terms`/`kinds` for that purpose.
+    #[serde(default)]
+    pub folder_indexes: std::collections::BTreeMap<String, String>,
 }
 
 impl ArticleMap {
@@ -195,6 +215,7 @@ impl ArticleMap {
             terms: std::collections::BTreeMap::new(),
             kinds: Vec::new(),
             fields_with_members: std::collections::BTreeMap::new(),
+            folder_indexes: std::collections::BTreeMap::new(),
         }
     }
 
@@ -407,12 +428,16 @@ pub fn extract_tags(frontmatter: &std::collections::BTreeMap<String, Value>) -> 
 ///
 /// # Arguments
 /// * `documents` - Parsed documents from site generation
+/// * `dirs` - Every directory the scan narrowed to "gets an index page"
+///   (`ProjectStructure.dirs`), the input `folder_index_keys` turns into
+///   `folder_indexes` below
 /// * `url_collisions` - Duplicated `url:` values this build had to move
 ///
 /// # Returns
 /// An ArticleMap containing metadata for all articles
 pub fn build_article_map(
     documents: &[ParsedDocument],
+    dirs: &[String],
     dir_overrides: &std::collections::HashMap<String, String>,
     url_collisions: &[UrlCollision],
     generated: &[String],
@@ -422,6 +447,12 @@ pub fn build_article_map(
     map.generated = generated.to_vec();
     map.terms = terms.sites().clone();
     map.kinds = terms.kinds().to_vec();
+    // The single producer of the source-directory→URL mapping (see the field
+    // doc on `ArticleMap::folder_indexes`) — reused here, not re-derived, so
+    // this can never disagree with the render's own folder-index synthesis.
+    map.folder_indexes = crate::build::scan::classify::folder_index_keys(dirs, dir_overrides)
+        .map(|(dir, url)| (dir.clone(), url))
+        .collect();
     // Term key → the subset of that term's owning kind's fields with at
     // least one member of THIS term specifically — a derived summary of
     // `members_by_field`, not the full member-URL lists. Empty when no

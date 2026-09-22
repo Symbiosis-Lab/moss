@@ -256,6 +256,69 @@ pub fn gets_index_page(
         && !moss_core::attachment::is_attachment_dir(attachment_folder, relative_path)
 }
 
+/// Each scanned directory that gets a folder-index page, paired with the
+/// page-tree key that index lives at.
+///
+/// Appending `/index.html` runs every directory segment through the same
+/// slug/override resolver the page-tree keys use and then drops the leaf,
+/// which is what makes these keys comparable with the doc-derived prefixes.
+/// A directory mapping to the empty key is skipped — the site's homepage is
+/// not a folder index. A directory under a language-prefix root (bare, or
+/// nested — `zh-hans/`, `zh-hans/docs/`) is skipped too, by the same
+/// `resolve_language_from_folder` predicate the render's own auto-index loop
+/// applies to its combined folder set (`render/blocking.rs`): a folder under
+/// a language tree never gets an auto-generated index there, so admitting it
+/// here would hand a caller a key the render never emits a page for.
+///
+/// `dirs` is already narrowed by the scan to the directories that should have
+/// a page at all (`gets_index_page`, above); the reserved-device-name filter
+/// lives in `slug.rs`. This is the one place the source-directory-to-key
+/// mapping is written — its callers (the render's two folder-index synthesis
+/// blocks, plus `build_article_map`'s `folder_indexes` field and the content
+/// graph's auto-index registration) all read it from here so they can never
+/// drift from each other or from what the renderer actually emits.
+pub(crate) fn folder_index_keys<'a>(
+    dirs: &'a [String],
+    dir_overrides: &'a std::collections::HashMap<String, String>,
+) -> impl Iterator<Item = (&'a String, String)> + 'a {
+    dirs.iter().filter_map(move |dir| {
+        let top_segment = dir.split('/').next().unwrap_or(dir);
+        if crate::i18n::path::resolve_language_from_folder(top_segment).is_some() {
+            return None;
+        }
+        let mapped = crate::build::scan::page_map::resolve_path_with_overrides(
+            &format!("{dir}/index.html"),
+            dir_overrides,
+        );
+        let key = mapped
+            .strip_suffix("/index.html")
+            .filter(|_| !crate::build::scan::slug::warn_reserved_folder(dir, &mapped))?;
+        (!key.is_empty()).then(|| (dir, key.to_string()))
+    })
+}
+
+/// Register every directory that gets an auto-generated folder-index page on
+/// a [`moss_core::content_graph::ContentGraphBuilder`], so `resolve_path`'s
+/// folder-note fallback can answer a bare top-level `[[Folder]]` wikilink.
+/// Reuses [`folder_index_keys`] — the same function the render loop calls to
+/// decide which folders actually get a synthetic index — so this can never
+/// register a folder the renderer does not generate a page for.
+///
+/// An empty override map is safe here: overrides only rename a folder's URL,
+/// which `pinned_url` applies later once the real `dir_overrides` is
+/// installed (`with_output_overrides`); they never add or remove which
+/// directories are eligible. Only the computed URL half of each pair is
+/// discarded — `resolve_path` recomputes it via `pinned_url` at lookup time,
+/// so a stale unoverridden URL is never cached into the graph.
+pub(crate) fn register_auto_index_dirs(
+    builder: &mut moss_core::content_graph::ContentGraphBuilder,
+    dirs: &[String],
+) {
+    for (dir, _url_key) in folder_index_keys(dirs, &std::collections::HashMap::new()) {
+        builder.register_auto_index_dir(dir);
+    }
+}
+
 // ── Not the site's content: the shared tree/watch filter ───────────────────
 //
 // `is_hidden` answers "is this entry the author's material, or moss's own?"

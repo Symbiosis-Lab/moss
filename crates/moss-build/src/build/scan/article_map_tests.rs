@@ -270,7 +270,7 @@ All posts"#,
         make_doc("Posts", "posts/index.html", true), // folder index (is_index=true)
     ];
 
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
 
     // Should include article with PRETTY URL key (not file path!)
     // "posts/my-article/index.html" -> key is "posts/my-article/"
@@ -319,7 +319,7 @@ fn test_build_article_map_includes_html_content() {
         ..Default::default()
     }];
 
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     let article = map.articles.get("posts/hello/").unwrap();
 
     // html_content should be populated from ParsedDocument.html_content
@@ -485,7 +485,7 @@ fn test_build_article_map_propagates_uid_from_parsed_document() {
         ..Default::default()
     }];
 
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     let article = map.articles.get("posts/my-article/").unwrap();
 
     // uid should be propagated from ParsedDocument
@@ -503,7 +503,7 @@ fn test_slot_only_doc_excluded_from_article_map() {
     doc.slot_only = true;
     doc.source_path = Some("footer.md".to_string());
 
-    let map = build_article_map(&[doc], &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&[doc], &[], &HashMap::new(), &[], &[], &Default::default());
 
     assert!(
         !map.is_article("footer/"),
@@ -523,7 +523,7 @@ fn test_non_slot_doc_still_included_alongside_slot_file() {
     footer.source_path = Some("footer.md".to_string());
     let about = make_doc("About", "about/index.html", false);
 
-    let map = build_article_map(&[footer, about], &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&[footer, about], &[], &HashMap::new(), &[], &[], &Default::default());
 
     assert!(map.is_article("about/"), "normal page must survive the gate");
     assert!(!map.is_article("footer/"), "slot file must not");
@@ -551,7 +551,7 @@ fn make_doc(title: &str, url_path: &str, is_index: bool) -> ParsedDocument {
 fn test_root_level_article_included_in_article_map() {
     // 友链.md builds to 友链/index.html with is_index=false (it's an article, not a folder note)
     let documents = vec![make_doc("友链", "友链/index.html", false)];
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     assert!(
         map.is_article("友链/"),
         "Root-level article should be included in article-map"
@@ -562,7 +562,7 @@ fn test_root_level_article_included_in_article_map() {
 fn test_folder_index_excluded_from_article_map() {
     // 文字/纽约诸法门/index.md is a folder note (is_index=true)
     let documents = vec![make_doc("纽约诸法门", "文字/纽约诸法门/index.html", true)];
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     assert!(
         !map.is_article("文字/纽约诸法门/"),
         "Folder index page should NOT be in article-map"
@@ -573,7 +573,7 @@ fn test_folder_index_excluded_from_article_map() {
 fn test_top_level_folder_index_excluded() {
     // 文字/index.md is a top-level folder index (is_index=true)
     let documents = vec![make_doc("文字", "文字/index.html", true)];
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     assert!(
         !map.is_article("文字/"),
         "Top-level folder index should NOT be in article-map"
@@ -584,7 +584,7 @@ fn test_top_level_folder_index_excluded() {
 fn test_deep_article_included() {
     // A deep article like 文字/游记/某篇/index.html with is_index=false
     let documents = vec![make_doc("某篇", "文字/游记/某篇/index.html", false)];
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     assert!(
         map.is_article("文字/游记/某篇/"),
         "Deep article should be included in article-map"
@@ -642,7 +642,7 @@ fn test_build_article_map_special_character_filenames() {
         },
     ];
 
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
 
     // Both articles MUST be in the map even though no source .md files
     // exist at the slug-derived paths
@@ -847,7 +847,7 @@ fn test_build_article_map_populates_source_path() {
         ..Default::default()
     }];
 
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     let article = map.articles.get("posts/test/").unwrap();
     assert_eq!(article.source_path, "posts/test-article.md");
 }
@@ -856,7 +856,7 @@ fn test_build_article_map_populates_source_path() {
 fn test_build_article_map_source_path_defaults_to_empty() {
     // When source_path is None, should default to empty string
     let documents = vec![make_doc("Test", "posts/test/index.html", false)];
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     let article = map.articles.get("posts/test/").unwrap();
     assert_eq!(article.source_path, "");
 }
@@ -901,7 +901,7 @@ fn test_build_article_map_populates_frontmatter_and_tags() {
         ..Default::default()
     }];
 
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     let article = map.articles.get("posts/my-post/").unwrap();
 
     // source_path should be populated
@@ -931,7 +931,7 @@ fn test_build_article_map_populates_frontmatter_and_tags() {
 fn test_build_article_map_empty_frontmatter_gives_empty_tags() {
     // When raw_frontmatter is empty, tags should be empty
     let documents = vec![make_doc("Test", "posts/test/index.html", false)];
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &Default::default());
     let article = map.articles.get("posts/test/").unwrap();
     assert!(article.tags.is_empty());
     assert!(article.frontmatter.is_empty());
@@ -952,7 +952,7 @@ fn test_build_article_map_resolves_cover_paths_through_dir_overrides() {
     dir_overrides.insert("图片/配图".to_string(), "assets".to_string());
 
     let documents = vec![doc];
-    let map = build_article_map(&documents, &dir_overrides, &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &dir_overrides, &[], &[], &Default::default());
     let article = map.articles.get("writings/reviews/tools/").unwrap();
 
     assert_eq!(
@@ -988,7 +988,7 @@ fn article_map_persists_kinds_and_fields_with_members() {
     documents[1].jury = vec!["Ada Lin".to_string()];
 
     let terms = derive_terms(&mut documents, kinds.clone());
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &terms);
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &terms);
 
     assert_eq!(map.kinds, kinds, "the kinds table must be persisted as-is");
     assert_eq!(
@@ -1016,7 +1016,7 @@ fn article_map_omits_a_term_no_field_claims_a_member_for() {
     documents[0].author_page = Some(moss_core::terms::TermClaim::UseTitle);
 
     let terms = derive_terms(&mut documents, kinds);
-    let map = build_article_map(&documents, &HashMap::new(), &[], &[], &terms);
+    let map = build_article_map(&documents, &[], &HashMap::new(), &[], &[], &terms);
 
     assert!(
         map.terms.contains_key("people/sam-okafor"),
@@ -1040,7 +1040,7 @@ fn test_build_article_map_leaves_http_covers_unchanged() {
 
     let dir_overrides = HashMap::new();
     let documents = vec![doc];
-    let map = build_article_map(&documents, &dir_overrides, &[], &[], &Default::default());
+    let map = build_article_map(&documents, &[], &dir_overrides, &[], &[], &Default::default());
     let article = map.articles.get("blog/post/").unwrap();
 
     assert_eq!(
