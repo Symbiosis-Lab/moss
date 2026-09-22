@@ -6101,9 +6101,9 @@ article a:where(:not(.moss-btn)):focus {
    whose edges carry meaning (typographic posters); `cover` suits photography.
 
    Note `.link-preview img.link-preview-favicon` (0,2,1) already overrides this
-   rule for favicons and resets aspect-ratio to auto — unaffected by the hooks. */
+   rule for favicons and resets aspect-ratio to auto — unaffected by the hooks.
+   The image's inline size is set by the `:is()` rule below, not here. */
 .moss-grid-card img {
-  width: 100%;
   aspect-ratio: var(--moss-grid-image-ratio, 1 / 1);
   border-radius: var(--moss-grid-image-radius, 8px);
   object-fit: var(--moss-grid-image-fit, cover);
@@ -6124,6 +6124,18 @@ article a:where(:not(.moss-btn)):focus {
    any one-class-plus-type-selectors competitor) resets it. */
 .moss-grid-card .moss-image {
   margin: 0;
+}
+
+/* The card settles its image's inline size. A lazy image's `sizes="auto, …"`
+   (contract/sizes.rs) sizes the source from the image's own layout width, and
+   an external-link card is a flex column whose figure carries
+   `margin-inline: auto`, so nothing else stretches it: the figure shrank to
+   its caption's width and the image followed. One `:is()` rule (0,2,0) so it
+   outranks `article figure:not(.video-figure) img` (0,1,3), whose physical
+   `height: auto` is the inline axis under vertical-rl and would otherwise win
+   there and collapse the image to zero. */
+.moss-grid-card :is(.moss-image, picture, img) {
+  inline-size: 100%;
 }
 
 .moss-grid-card h1,

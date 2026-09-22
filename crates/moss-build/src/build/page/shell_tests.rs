@@ -3521,6 +3521,24 @@ fn a_hint_pill_is_reachable_when_shown_and_inert_when_not() {
     }
 }
 
+// ── grid card images fill the card's inline size ─────────────────────
+
+#[test]
+fn grid_card_figure_picture_and_image_fill_the_cards_inline_size() {
+    // `sizes="auto, …"` sizes a lazy image's source from its layout width,
+    // so the card has to settle that width: a flex-column card otherwise
+    // lets a figure with `margin-inline: auto` shrink to its caption. One
+    // `:is()` rule, so its specificity beats the base figure rule whose
+    // physical `height: auto` is the inline axis under vertical typesetting.
+    let selector = ".moss-grid-card :is(.moss-image, picture, img)";
+    let rule = get_css_rule(DEFAULT_CSS, selector)
+        .unwrap_or_else(|| panic!("{selector} CSS rule should exist"));
+    assert!(rule.contains("inline-size: 100%"), "got: {rule}");
+    let img = get_css_rule(DEFAULT_CSS, ".moss-grid-card img")
+        .expect(".moss-grid-card img CSS rule should exist");
+    assert!(!img.contains("width: 100%"), "physical width is back: {img}");
+}
+
 // ── `:::grid N {scroll}` — horizontally scrolling row ──────────────
 
 #[test]
