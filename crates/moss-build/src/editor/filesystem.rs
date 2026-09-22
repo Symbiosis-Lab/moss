@@ -76,6 +76,7 @@ pub struct TreeNode {
     pub is_home: bool,
     /// Children of this directory. `None` for files.
     pub children: Option<Vec<TreeNode>>,
+    pub hidden: u32,
     /// See `DirEntry::file_id`.
     pub file_id: Option<String>,
 }
@@ -197,17 +198,18 @@ pub fn walk_source_files(dir: &str, project_path: &str, visit: &mut dyn FnMut(&D
     }
 }
 
-/// Inner implementation of `list_directory` for testability (no Tauri State
-/// dependency).
+/// Inner implementation of `list_directory` for testability (no Tauri State dependency).
 pub fn list_directory_inner(
     path: &str,
     project_path: &str,
     show_internal: bool,
 ) -> Result<Vec<DirEntry>, String> {
+    Ok(list_directory_counted(path, project_path, show_internal)?.0)
+}
+
+fn list_directory_counted(path: &str, project_path: &str, show_internal: bool) -> Result<(Vec<DirEntry>, u32), String> {
     let dir = std::path::Path::new(path);
-    if !dir.is_dir() {
-        return Err(format!("'{}' is not a directory", path));
-    }
+    if !dir.is_dir() { return Err(format!("'{}' is not a directory", path)); }
 
     // Compute this directory's path relative to the project root ("" for root,
     // ".moss" when listing .moss/ itself, ".moss/theme" when listing
@@ -221,12 +223,14 @@ pub fn list_directory_inner(
         .map_err(|e| format!("Failed to read directory '{}': {}", path, e))?;
 
     let mut entries: Vec<DirEntry> = Vec::new();
+    let mut hidden: u32 = 0;
 
     for entry in read_dir {
         let entry = entry.map_err(|e| format!("Error reading entry: {}", e))?;
         let name = entry.file_name().to_string_lossy().to_string();
 
-        if crate::build::scan::classify::is_hidden(&name, &parent_relative, show_internal) {
+        if let Some(reason) = crate::build::scan::classify::is_hidden_reason(&name, &parent_relative, show_internal) {
+            hidden += reason.is_curated() as u32;
             continue;
         }
 
@@ -253,7 +257,7 @@ pub fn list_directory_inner(
 
     entries.sort_by(cmp_dir_entry);
 
-    Ok(entries)
+    Ok((entries, hidden))
 }
 
 /// Per-project publish-date cache passed to `list_tree_inner_cached`.
@@ -301,7 +305,7 @@ pub fn list_tree_inner_cached(
     show_internal: bool,
     cache: &PublishDateCacheView<'_>,
 ) -> Result<TreeNode, String> {
-    let entries = list_directory_inner(path, project_path, show_internal)?;
+    let (entries, hidden) = list_directory_counted(path, project_path, show_internal)?;
 
     // Basenames of md children whose frontmatter carries the `home: true`
     // marker — collected from the same cached frontmatter read that resolves
@@ -332,6 +336,7 @@ pub fn list_tree_inner_cached(
                     date_source,
                     is_home: false,
                     children: None,
+                    hidden: 0,
                     file_id: entry.file_id,
                 })
             }
@@ -433,6 +438,7 @@ pub fn list_tree_inner_cached(
         date_source: DateSource::None,
         is_home: false,
         children: Some(children),
+        hidden,
         file_id: dir_file_id,
     };
     folder_node.publish_date = compute_folder_recency(&folder_node);
@@ -828,6 +834,7 @@ mod tests {
             date_source: source,
             is_home: false,
             children: None,
+            hidden: 0,
             file_id: None,
         }
     }
@@ -842,6 +849,7 @@ mod tests {
             date_source: DateSource::None,
             is_home: false,
             children: Some(vec![]),
+            hidden: 0,
             file_id: None,
         }
     }
@@ -856,6 +864,7 @@ mod tests {
             date_source: DateSource::None,
             is_home: false,
             children: None,
+            hidden: 0,
             file_id: None,
         }
     }
@@ -913,6 +922,7 @@ mod tests {
                 node_md("article.md", Some("2025-11-15"), DateSource::Frontmatter, 80.0),
                 node_file("photo.png", 999_999_999.0), // very recent image, must NOT win
             ]),
+            hidden: 0,
             file_id: None,
         };
         assert_eq!(
@@ -935,6 +945,7 @@ mod tests {
                 node_md("a.md", None, DateSource::None, 100.0),
                 node_md("b.md", None, DateSource::None, 200.0),
             ]),
+            hidden: 0,
             file_id: None,
         };
         assert!(compute_folder_recency(&folder).is_some());
@@ -951,6 +962,7 @@ mod tests {
             date_source: DateSource::None,
             is_home: false,
             children: Some(vec![node_file("photo.png", 200.0)]),
+            hidden: 0,
             file_id: None,
         };
         assert!(compute_folder_recency(&folder).is_some());
@@ -963,6 +975,49 @@ mod tests {
     }
 
     // --- list_tree_inner integration ---
+
+    #[test]
+    fn list_tree_counts_hidden_moss_internal_entries() {
+        // `.moss/` holds only non-allowlisted entries: `agents/SKILL.md` and
+        // `state.toml`, no `config.toml`, no `theme/`. The listing of `.moss/`
+        // itself sees two entries (`agents`, `state.toml`), both filtered by
+        // `HiddenReason::MossInternal` — `children` reads empty, same as
+        // before this change, but `hidden` must now say why.
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path();
+        let moss_dir = proj.join(".moss");
+        let agents_dir = moss_dir.join("agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::fs::write(agents_dir.join("SKILL.md"), "# agent skill").unwrap();
+        std::fs::write(moss_dir.join("state.toml"), "").unwrap();
+
+        let tree = list_tree_inner(proj.to_str().unwrap(), proj.to_str().unwrap(), true).unwrap();
+        let moss_node = tree
+            .children
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|c| c.name == ".moss")
+            .expect(".moss must be listed when show_internal is on");
+
+        assert_eq!(moss_node.children.as_ref().unwrap().len(), 0);
+        assert_eq!(moss_node.hidden, 2);
+    }
+
+    #[test]
+    fn list_tree_does_not_count_os_junk_as_hidden() {
+        // A folder holding nothing but a `.DS_Store` — the almost-universal
+        // macOS case — must still read as genuinely empty: `hidden == 0`,
+        // not "moss filtered something here."
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path();
+        std::fs::write(proj.join(".DS_Store"), b"junk").unwrap();
+
+        let tree = list_tree_inner(proj.to_str().unwrap(), proj.to_str().unwrap(), false).unwrap();
+
+        assert_eq!(tree.children.as_ref().unwrap().len(), 0);
+        assert_eq!(tree.hidden, 0);
+    }
 
     #[test]
     fn list_tree_populates_publish_date_for_md() {

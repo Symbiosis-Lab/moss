@@ -296,24 +296,54 @@ pub const HIDDEN_ENTRIES: &[&str] = &[".git", "node_modules", "target"];
 /// See `docs/archive/2026-09-03-moss-folder-in-the-file-tree-audit-and-design.md`.
 pub const MOSS_INTERNAL_ALLOWLIST: &[&str] = &[".moss/config.toml", ".moss/theme"];
 
+/// Why `is_hidden_reason` filtered an entry out of the file tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HiddenReason {
+    /// OS/VCS/tooling noise nobody authored: junk files, `HIDDEN_ENTRIES`,
+    /// the root `.moss`/dotfile gate.
+    OsOrVcsNoise,
+    /// A root `AGENTS.md`/`CLAUDE.md`/`GEMINI.md`-shaped file.
+    AgentConfig,
+    /// An entry inside `.moss/` not on `MOSS_INTERNAL_ALLOWLIST`.
+    MossInternal,
+}
+
+impl HiddenReason {
+    /// True for a reason that means "moss's curated view chose not to show
+    /// real content", as opposed to OS/VCS noise. The one place a caller
+    /// decides what counts toward a "something is filtered here" total —
+    /// see `TreeNode::hidden`.
+    pub fn is_curated(self) -> bool {
+        matches!(self, HiddenReason::AgentConfig | HiddenReason::MossInternal)
+    }
+}
+
 /// Return true when an entry should be filtered out of the file tree.
 ///
 /// `parent_relative` is the path of the containing directory relative to the
 /// project root ("" for root, ".moss" when filtering children of `.moss/`).
 pub fn is_hidden(name: &str, parent_relative: &str, show_internal: bool) -> bool {
+    is_hidden_reason(name, parent_relative, show_internal).is_some()
+}
+
+/// Same predicate as [`is_hidden`], naming *which* rule fired instead of a
+/// bare bool — same branches, same order, no second list. Lets a caller (the
+/// tree listing's hidden-count) tell "moss's own curated filter" apart from
+/// OS/VCS noise, instead of merging every filtered entry into one number.
+pub fn is_hidden_reason(name: &str, parent_relative: &str, show_internal: bool) -> Option<HiddenReason> {
     // Always hide these regardless of show_internal
     if HIDDEN_ENTRIES.contains(&name) || is_os_junk_file(name) {
-        return true;
+        return Some(HiddenReason::OsOrVcsNoise);
     }
 
     // At the project root, .moss is surfaced only when show_internal is on
     if parent_relative.is_empty() {
         if name == ".moss" {
-            return !show_internal;
+            return if show_internal { None } else { Some(HiddenReason::OsOrVcsNoise) };
         }
         // All other dotfiles are hidden at the project root
         if name.starts_with('.') {
-            return true;
+            return Some(HiddenReason::OsOrVcsNoise);
         }
         // Agent-instruction files (AGENTS.md, CLAUDE.md, GEMINI.md) are the one
         // category that reads as prose and isn't. The scan already refuses to
@@ -327,23 +357,24 @@ pub fn is_hidden(name: &str, parent_relative: &str, show_internal: bool) -> bool
         // an author takes it over — sealing it would leave no way to do that
         // from inside moss.
         if is_agent_config_name(name) {
-            return !show_internal;
+            return if show_internal { None } else { Some(HiddenReason::AgentConfig) };
         }
-        return false;
+        return None;
     }
 
     // Inside .moss/ (only reached with show_internal on, since `.moss` itself
     // is hidden otherwise): listed, below a listed path, or an ancestor of one.
     if parent_relative == ".moss" || parent_relative.starts_with(".moss/") {
         let full = format!("{parent_relative}/{name}");
-        return !MOSS_INTERNAL_ALLOWLIST.iter().any(|allowed| {
+        let allowed = MOSS_INTERNAL_ALLOWLIST.iter().any(|allowed| {
             full == *allowed
                 || full.starts_with(&format!("{allowed}/"))
                 || allowed.starts_with(&format!("{full}/"))
         });
+        return if allowed { None } else { Some(HiddenReason::MossInternal) };
     }
 
-    false
+    None
 }
 
 
