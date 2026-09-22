@@ -27,9 +27,19 @@ for (const engine of [chromium, webkit]) {
         await page.waitForFunction(expected => Math.abs(window.__landing.state().progress - expected) < .005, expected);
         await page.waitForTimeout(300);
         if (fraction === .5) {
+          // state.running used to be part of this condition, to catch the
+          // wash mid-flight rather than idle. renderMorphAt (site/landing.js)
+          // now reaches its goal in a handful of real frames rather than
+          // pour()'s old real-time creep past "arrived", so by the time this
+          // waitForFunction starts polling the wash has typically already
+          // caught up and driving (running's other half) has already gone
+          // false -- running stays false forever after that, and the old
+          // conjunction could never observe both at once. A fresh leg always
+          // mounts at t=0 (mountLeg), so washT landing on T_TOTAL*fraction
+          // is still proof this scroll drove it there, not a stale carry-over.
           await page.waitForFunction(scene => {
             const state = window.__landing.state();
-            return scene === 3 ? Math.abs(finalDissolve - .5) < .01 : state.running && Math.abs(state.washT - 1.05) < .06;
+            return scene === 3 ? Math.abs(finalDissolve - .5) < .01 : Math.abs(state.washT - 1.05) < .06;
           }, scene, { timeout: 15000 });
         }
         const visible = await page.evaluate(scene => {

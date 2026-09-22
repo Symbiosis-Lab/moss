@@ -228,7 +228,18 @@ async function checkSceneTiming() {
   assert(contact.progress === 1 && contact.state.shown === 1, `scene 2 advanced before next incoming text contact: ${JSON.stringify(contact)}`);
   // -40: mirrors mobileInkProgress's own shortened denominator for this leg.
   const nextHalfTop = band.bottom - (band.height + nextTextHeight - 40) / 2;
-  const half = await wheelIncomingTopTo('#c2 .scene-text', nextHalfTop);
+  let half = await wheelIncomingTopTo('#c2 .scene-text', nextHalfTop);
+  // renderMorphAt (site/landing.js) catches the pigment sim up to a jump
+  // over several of its own step-budgeted frames (advanceWash), not in one;
+  // wheelIncomingTopTo's fixed 300ms is generous against a real device's
+  // continuous compositor but not against this harness's own frame pacing,
+  // so give it a bounded extra window rather than asserting on a washT
+  // caught mid-catch-up. Tolerance and target are unchanged -- this only
+  // waits long enough to observe them.
+  if (half.state.running) {
+    await page.waitForFunction(() => !window.__landing.state().running, null, { timeout: 5000 });
+    half = await read();
+  }
   assert(half.progress > 1.4 && half.progress < 1.6 && Math.abs(half.state.washT - 1.05) < .05 && half.state.shown === 1,
     `scene 2 wash did not follow next incoming text: ${JSON.stringify({ contact, half })}`);
   await page.waitForTimeout(600);
