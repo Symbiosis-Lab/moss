@@ -2202,6 +2202,7 @@ fn test_gc_removes_orphaned_transform() {
 
     put_transform(&transforms_dir, &live_record);
     put_transform(&transforms_dir, &orphan_record);
+    age_past_ttl(&transforms_dir, &orphan_record.source_oid);
 
     // Put objects for all OIDs
     put_object(&objects_dir, &live_oid, b"live source");
@@ -2382,6 +2383,77 @@ fn test_gc_preserves_objects_referenced_by_transforms() {
         !store.blob_path(&orphan_oid).exists(),
         "orphan should be removed"
     );
+}
+
+/// Back-date a transform record past `RECORD_TTL`, as GC finds one a machine
+/// wrote a season ago.
+fn age_past_ttl(transforms_dir: &Path, source_oid: &str) {
+    let path = transforms_dir
+        .join(&source_oid[..2])
+        .join(&source_oid[2..4])
+        .join(format!("{source_oid}.json"));
+    let record = fs::OpenOptions::new().write(true).open(&path).expect("record exists");
+    let a_day = std::time::Duration::from_secs(24 * 60 * 60);
+    record
+        .set_modified(std::time::SystemTime::now() - RECORD_TTL - a_day)
+        .expect("set mtime");
+}
+
+fn record_with(source_oid: &str, output_oid: &str) -> TransformRecord {
+    let mut transforms = HashMap::new();
+    transforms.insert(
+        "webp".to_string(),
+        TransformEntry { oid: output_oid.to_string(), size: 300, params: serde_json::json!({}) },
+    );
+    TransformRecord { source_oid: source_oid.to_string(), source_size: 500, transforms }
+}
+
+/// The cache is shared between machines, and this machine's hash index only
+/// names the sources IT scanned. A record for a source it never saw is another
+/// machine's live work until it has aged past the TTL; its outputs stay with it.
+#[test]
+fn gc_keeps_another_machines_record_and_its_blobs_until_the_record_ages_out() {
+    let (build_dir, objects_dir, transforms_dir) = make_gc_test_dir("gc_shared_records");
+    let fresh = record_with(&"aaaa".repeat(16), &"bbbb".repeat(16));
+    let aged = record_with(&"cccc".repeat(16), &"dddd".repeat(16));
+    put_transform(&transforms_dir, &fresh);
+    put_transform(&transforms_dir, &aged);
+    age_past_ttl(&transforms_dir, &aged.source_oid);
+    for oid in ["aaaa", "bbbb", "cccc", "dddd"] {
+        put_object(&objects_dir, &oid.repeat(16), oid.as_bytes());
+    }
+    // No hash index at all: nothing is live on this machine.
+
+    let result = gc(&build_dir, &crate::build::lifecycle::gc_token_for_test()).expect("readable");
+
+    let store = ObjectStore::new(objects_dir);
+    assert_eq!(result.transforms_removed, 1, "only the aged record is condemned");
+    assert!(store.blob_path(&"bbbb".repeat(16)).exists(), "the fresh record's output survives");
+    assert!(store.blob_path(&"aaaa".repeat(16)).exists(), "and so does its source");
+    assert!(!store.blob_path(&"dddd".repeat(16)).exists(), "the aged record's output goes with it");
+    assert_eq!(result.objects_removed, 2);
+}
+
+/// A blob the cloud holds is waited for and trusted only once it hashes to its
+/// own name; one that arrives as other bytes is removed so the miss regenerates.
+#[test]
+fn find_cached_output_trusts_a_cloud_blob_only_when_it_hashes_to_its_oid() {
+    let (_build_dir, objects_dir, transforms_dir) = make_gc_test_dir("cache_cloud_blob_ladder");
+    let store = ObjectStore::new(objects_dir.clone());
+    let cache = TransformCache::new(transforms_dir, ObjectStore::new(objects_dir.clone()));
+    let params = serde_json::json!({});
+
+    let good = store.store_bytes(b"the bytes the oid names").expect("stored");
+    cache.put(&record_with(&"1111".repeat(16), &good)).expect("record");
+    let _in_cloud = crate::build::icloud::pretend::evicted(&store.blob_path(&good));
+    assert_eq!(cache.find_cached_output(&"1111".repeat(16), "webp", &params).as_deref(), Some(good.as_str()));
+
+    let forged = "ffff".repeat(16);
+    put_object(&objects_dir, &forged, b"not what its name says");
+    cache.put(&record_with(&"2222".repeat(16), &forged)).expect("record");
+    let _also_in_cloud = crate::build::icloud::pretend::evicted(&store.blob_path(&forged));
+    assert_eq!(cache.find_cached_output(&"2222".repeat(16), "webp", &params), None);
+    assert!(!store.blob_path(&forged).exists(), "a blob that fails its checksum is removed");
 }
 
 /// A GC mark input that exists but cannot be read marks less, and marking less

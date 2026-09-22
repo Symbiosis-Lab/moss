@@ -283,6 +283,43 @@ impl ObjectStore {
         None
     }
 
+    /// A cached output the read path may use now: the blob's path for a hit,
+    /// `None` for a miss the caller fills by regenerating and storing.
+    ///
+    /// Present ⇒ hit. In the cloud ⇒ its download is requested and waited
+    /// for, bounded by the blob's size, and the arrival is hashed once ⇒ hit,
+    /// or removed as corrupt ⇒ miss. Absent, or not arrived in time ⇒ miss.
+    /// This is the one read that inverts "dataless is absent": a blob is the
+    /// same bytes on every machine that shares the cache and carries its own
+    /// checksum, so waiting for it is correct in a way waiting for `staging/`
+    /// never is. The hash runs only on an arrival, never on an ordinary hit.
+    pub fn ready_blob(&self, oid: &str) -> Option<PathBuf> {
+        let p = self.blob_path(oid);
+        if crate::build::io_utils::output_present(&p) {
+            return Some(p);
+        }
+        if !crate::build::icloud::is_still_in_the_cloud(&p) {
+            return self.get_path(oid);
+        }
+        let size = fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+        let arrived = crate::build::cloud_readiness::retry_after_materialize(&p, download_deadline(size), || {
+            Self::hash_file_once(&p)
+        });
+        match arrived {
+            Ok(hash) if hash == oid => Some(p),
+            Ok(hash) => {
+                log::warn!("[CAS] blob {} arrived from the cloud hashing to {} — removed, regenerating", oid, hash);
+                // allow:unlink a blob that fails its own checksum under cache/objects, not staging
+                let _ = fs::remove_file(&p);
+                None
+            }
+            Err(e) => {
+                log::info!("[CAS] blob {} is in the cloud and did not arrive in time ({}) — regenerating", oid, e);
+                None
+            }
+        }
+    }
+
     /// Validate a stored blob's size against the expected source size.
     ///
     /// If the source was non-empty but the blob is not a usable output (a
@@ -636,8 +673,8 @@ impl TransformCache {
     /// 2. That record contains an entry for the given `transform` name.
     /// 3. The entry's `params` match `current_params` exactly (deep
     ///    equality on `serde_json::Value`).
-    /// 4. The output blob (identified by the entry's OID) still exists
-    ///    in the [`ObjectStore`].
+    /// 4. The output blob is usable now, or is in the cloud and arrives within
+    ///    its deadline hashing to its OID ([`ObjectStore::ready_blob`]).
     ///
     /// If any check fails, `None` is returned and the caller should
     /// re-run the transform.
@@ -658,10 +695,8 @@ impl TransformCache {
             return None;
         }
 
-        // 4. Output blob still exists on disk?
-        if self.objects.get_path(&entry.oid).is_none() {
-            return None;
-        }
+        // 4. Output blob usable, or arriving?
+        self.objects.ready_blob(&entry.oid)?;
 
         Some(entry.oid.clone())
     }
@@ -1453,6 +1488,15 @@ pub struct GcResult {
 static LAST_GC: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, (std::time::Instant, usize)>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
+/// How long to wait for a blob the cloud holds: ten seconds plus one per MiB,
+/// capped at ten minutes. A video-sized blob's download wins by construction
+/// against a minutes-long re-encode; a small blob resolves either way in
+/// seconds.
+fn download_deadline(size: u64) -> std::time::Duration {
+    let per_mib = std::time::Duration::from_secs(size / (1024 * 1024));
+    (std::time::Duration::from_secs(10) + per_mib).min(std::time::Duration::from_secs(600))
+}
+
 fn record_gc(objects_dir: &Path, objects_removed: usize) {
     if let Ok(mut map) = LAST_GC.lock() {
         map.insert(objects_dir.to_path_buf(), (std::time::Instant::now(), objects_removed));
@@ -1470,9 +1514,12 @@ fn last_gc_summary(objects_dir: &Path) -> String {
 ///
 /// The whole mark phase runs before anything is deleted:
 ///
-/// 0. **Load the HashIndex** to determine live source OIDs.
-/// 1. **Mark transform records**: a record whose source OID is in the index is
-///    live and contributes its output OIDs; any other is condemned.
+/// 0. **Load the HashIndex** to determine the source OIDs live on this machine.
+/// 1. **Mark transform records**: every record contributes its output OIDs. A
+///    record whose source is not live here is condemned only once it is older
+///    than [`RECORD_TTL`]: the cache is shared by every machine that opens the
+///    folder, and a source this machine never scanned is live on the one that
+///    stored the record. This machine cannot tell, so until then it keeps it.
 /// 2. **Mark `hashes.json`**'s file hashes.
 ///
 /// Then the sweep deletes the condemned records and every blob no mark reached.
@@ -1535,7 +1582,7 @@ pub(crate) fn gc(build_dir: &Path, _token: &crate::build::lifecycle::CacheGcToke
                 let Some(source_oid) = filename.strip_suffix(".json") else {
                     continue; // not a transform record
                 };
-                if !live_source_oids.contains(source_oid) {
+                if !live_source_oids.contains(source_oid) && older_than(&file_path, RECORD_TTL) {
                     condemned_records.push(file_path);
                     continue;
                 }
@@ -1543,6 +1590,10 @@ pub(crate) fn gc(build_dir: &Path, _token: &crate::build::lifecycle::CacheGcToke
                 let record = serde_json::from_str::<TransformRecord>(&data).map_err(|e| {
                     unreadable(&file_path, std::io::Error::new(std::io::ErrorKind::InvalidData, e))
                 })?;
+                // A surviving record keeps everything it names, its source
+                // included: the machine that stored it may hold that source
+                // only here.
+                referenced_oids.insert(record.source_oid);
                 referenced_oids.extend(record.transforms.into_values().map(|entry| entry.oid));
             }
             shard_dirs.push(p2);
@@ -1629,6 +1680,24 @@ pub(crate) fn gc(build_dir: &Path, _token: &crate::build::lifecycle::CacheGcToke
         objects_removed,
         bytes_freed,
     })
+}
+
+/// How long a transform record nothing on this machine references is kept
+/// before GC condemns it. Ninety days bounds the cost of another machine's
+/// record being condemned here — one regeneration per record per quarter,
+/// paid on that machine — without letting records for deleted sources live
+/// forever.
+pub(crate) const RECORD_TTL: std::time::Duration = std::time::Duration::from_secs(90 * 24 * 60 * 60);
+
+/// Whether `path` was last written more than `ttl` ago. An unreadable or
+/// future mtime answers no: condemning on a guess is what the TTL exists to
+/// prevent.
+fn older_than(path: &Path, ttl: std::time::Duration) -> bool {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|written| written.elapsed().ok())
+        .is_some_and(|age| age > ttl)
 }
 
 /// Directory entries for a GC mark input: an absent directory has none, an
