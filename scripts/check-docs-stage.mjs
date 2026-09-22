@@ -30,14 +30,14 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 const STAGE_PAGES = [
   {
     path: '/get-started/editor/',
-    markers: ['tree', 'create-page', 'collapse-tree', 'save-as-template', 'new-from-template', 'properties', 'versions'],
+    markers: ['tree', 'create-page', 'new-folder', 'from-template', 'collapse-tree', 'save-as-template', 'new-from-template', 'properties', 'versions'],
   },
   {
     path: '/zh-hant/開始使用/editor/',
-    markers: ['tree', 'create-page', 'collapse-tree', 'save-as-template', 'new-from-template', 'properties', 'versions'],
+    markers: ['tree', 'create-page', 'new-folder', 'from-template', 'collapse-tree', 'save-as-template', 'new-from-template', 'properties', 'versions'],
   },
-  { path: '/get-started/', markers: ['add-and-edit-pages'] },
-  { path: '/zh-hant/開始使用/', markers: ['add-and-edit-pages'] },
+  { path: '/get-started/', markers: ['create-page', 'properties'] },
+  { path: '/zh-hant/開始使用/', markers: ['create-page', 'properties'] },
 ];
 
 const sceneCache = new Map();

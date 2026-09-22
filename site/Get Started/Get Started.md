@@ -39,7 +39,10 @@ You can also control formatting from the keyboard:
 
 Your site's structure is your folder structure: every folder and markdown file becomes a page, and moss builds the top navigation from the file paths automatically. A folder page renders its child files and folders by default, and the home page renders every file.
 
-Create new folders and files in the editor and each becomes a new page: click **New Page** above the tree. Above every page is a **+** — click it and search for a property, such as **Cover**, to [[Define pages with frontmatter|add it]]; date and subpage style work the same way.<moss-scene name="add-and-edit-pages"></moss-scene>
+Create new folders and files in the editor and each becomes a new page:
+
+- Click **New Page** above the tree.<moss-scene name="create-page"></moss-scene>
+- Above every page is a **+** — click it and search for a property, such as **Cover**, to [[Define pages with frontmatter|add it]]; date and subpage style work the same way.<moss-scene name="properties"></moss-scene>
 
 ![[editing.gif|Add and edit pages]]
 

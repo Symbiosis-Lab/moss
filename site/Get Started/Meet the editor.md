@@ -15,13 +15,15 @@ The editor keeps your site folder above the page you are writing. The path at th
 
 ## Find and create pages
 
-Click the site root in the breadcrumb to expand the file tree, then click a page to open it.<moss-scene name="tree"><noscript><img width="520" height="520" loading="lazy" src="../assets/guides/choose-page-source.png" alt="The real moss file tree expanded from the breadcrumb, with The Tyger selected"></noscript></moss-scene>
+The breadcrumb at the top doubles as a file tree, with controls of its own for finding and creating pages.
 
-To add a page beside the current one, click **New Page** above the tree. Its **▾** also creates a **New Folder** or a page from a saved template.<moss-scene name="create-page"></moss-scene>
+- Click the site root in the breadcrumb to expand the file tree, then click a page to open it.<moss-scene name="tree"><noscript><img width="520" height="520" loading="lazy" src="../assets/guides/choose-page-source.png" alt="The real moss file tree expanded from the breadcrumb, with The Tyger selected"></noscript></moss-scene>
+- Click **New Page** above the tree to add a page beside the current one.<moss-scene name="create-page"></moss-scene>
+- Open its **▾** and choose **New Folder**, type a name, and press Return to create it.<moss-scene name="new-folder"></moss-scene>
+- Or choose a saved template under **From template** to create a page seeded with its content.<moss-scene name="from-template"></moss-scene>
+- Double-click the tree's bottom border to collapse it; double-click again to reopen it.<moss-scene name="collapse-tree"></moss-scene>
 
-Drag the tree's bottom border to show more or fewer files. Double-click that border to collapse the tree; double-click it again to reopen it.<moss-scene name="collapse-tree"></moss-scene>
-
-Your folder structure is also your site structure. A new folder becomes a section, and a Markdown file becomes a page. See [Site structure](/docs/writing/structure/) for the exact file-to-URL rules.
+Drag the tree's bottom border to show more or fewer files. Your folder structure is also your site structure: a new folder becomes a section, and a Markdown file becomes a page. See [Site structure](/docs/writing/structure/) for the exact file-to-URL rules.
 
 ## Start from a template
 
