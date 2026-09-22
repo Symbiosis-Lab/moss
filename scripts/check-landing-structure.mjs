@@ -211,7 +211,10 @@ const BASELINE = {
   // showMobileScene left this unrecorded at 274239; the mob-record
   // consolidation (real new logic plus its own explanatory comments)
   // brings it to 276392.
-  scriptBytes: 276392,
+  // 276392 -> 276643 (2026-09-22): standAtTerminalClose's mob.scene = SHARE
+  // fix (and its comment) for the reverse-latch bug that stranded shown at
+  // SHARE on mobile.
+  scriptBytes: 276643,
 };
 
 function countWindowAssignments(text) {

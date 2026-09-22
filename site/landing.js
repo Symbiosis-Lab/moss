@@ -3493,6 +3493,10 @@ function setTarget(t) {
 // onScroll keeps the new target and ready() drives the ordinary joins back.
 function standAtTerminalClose() {
   shown = target = SHARE;
+  // mob.scene is showMobileScene's own dedup key; left at DEPLOY here it
+  // strands shown at SHARE forever on a mobile reversal, since renderMorphAt
+  // then finds mob.scene already equal to the `to` it would show and no-ops.
+  mob.scene = SHARE;
   still(SHARE);
   mountLoop();
   setCross(1);
