@@ -43,7 +43,7 @@ const INSTALL_SAMPLER = () => {
 // steps. onScroll(dy) and progressAt() read scrollY alone -- neither cares
 // how it got there -- so this exercises the identical code path a wheel or
 // touch-driven scroll would.
-async function scrollTicks(page, { from, total, tick = 40, gapMs = 16 }) {
+async function scrollTicks(page, { from, total, tick = 20, gapMs = 16 }) {
   let done = 0;
   const step = Math.sign(total) * Math.abs(tick);
   while (Math.abs(done) < Math.abs(total)) {
@@ -149,6 +149,19 @@ for (const name of ['chromium', 'webkit']) {
     const errors = trackErrors(page);
     await page.goto(baseURL);
     await whenReady(page, { timeout: 60000 });
+    // The bug this probes is a flicker while reading an already-loaded
+    // page, not a cold-load race (that is check-landing-cold-bottom.mjs's
+    // job): the ambient warmer that captures a scene's print is throttled
+    // to roughly one a second and only runs once the page is briefly still,
+    // so a scroll that never pauses can outrun it and leave a leg "cut" --
+    // no print, no cover -- for the length of that race, a real but
+    // different failure mode from the one under test here. A nudge past
+    // the opening first, same as check-landing-mobile-handoff.mjs: resting
+    // at y=0 (scene 0 only) does not prioritize the far scenes' prints the
+    // way landing on scene 1 does, and this wait alone timed out without it.
+    await page.evaluate(() => scrollTo(0, window.__landing.restY(1) + 24));
+    await page.waitForFunction(() => [0, 1, 2, 3].every((i) => window.__landing.prints[i]), null, { timeout: 30000 });
+    await page.evaluate(() => scrollTo(0, 0));
     const height = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
     await page.evaluate(INSTALL_SAMPLER);
 
