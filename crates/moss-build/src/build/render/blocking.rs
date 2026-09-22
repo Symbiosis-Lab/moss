@@ -2751,7 +2751,7 @@ pub fn generate_blocking_content(
         log::warn!("⚠️ Failed to save article map: {}", e);
     }
 
-    // `.moss/build/inventory.json` — what `moss list` reads back. Written here
+    // `.moss/build.nosync/inventory.json` — what `moss list` reads back. Written here
     // rather than derived from the article map because the signals that answer
     // "why is this page not in the listing?" (draft / listed / nav-item /
     // slot_only) exist together only on `ParsedDocument`, and the article map
@@ -3548,7 +3548,7 @@ pub(super) fn resolve_favicon(
 
     // Both writes go through `io_utils` — see ADR-043. The default-favicon
     // write below is the pipeline's FIRST output write, which is why an evicted
-    // `.moss/build/` surfaced here first (moss#964 §3): it failed `EDEADLK`, the
+    // `.moss/build.nosync/` surfaced here first (moss#964 §3): it failed `EDEADLK`, the
     // `?` returned from the whole pipeline, and the cloud gate four hundred
     // lines below never got to speak. The read above already guarded that
     // hazard for the user's favicon; the write did not.

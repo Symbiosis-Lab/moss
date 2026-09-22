@@ -142,7 +142,7 @@ fn moss_health_body() -> String {
 /// `/__moss/source/*path` — serve a project-scoped SOURCE file over HTTP.
 ///
 /// The vault root is derived from the served site directory rather than passed
-/// in: the site dir is `<vault>/.moss/build/…`, and `VaultRoot::find_containing`
+/// in: the site dir is `<vault>/.moss/build.nosync/…`, and `VaultRoot::find_containing`
 /// walks up to the nearest ancestor owning a `.moss/`. The `find_` variant is
 /// deliberate — it returns `None` instead of falling back to the starting
 /// directory, so a server pointed somewhere unexpected 404s rather than
@@ -205,7 +205,7 @@ async fn moss_health_handler() -> Response<Body> {
 /// are still in the cloud. `None` for every other failure — the caller then
 /// passes `ServeDir`'s own response through unchanged.
 ///
-/// `.moss/build/` lives inside the user's vault, so the sync client is free to
+/// `.moss/build.nosync/` lives inside the user's vault, so the sync client is free to
 /// evict moss's own output. When it does, `ServeDir`'s read fails with
 /// `EDEADLK` and tower-http renders that as a bodyless 500: a white void, and
 /// no `<html>` for `inject_iframe_bridge` to attach the navigation bridge to.
@@ -366,7 +366,7 @@ pub async fn start_server(
     // One implementation, two carriers — not two implementations kept in step by a test.
     // It exists so a host with no custom-scheme support (a browser, an Obsidian
     // pane) can still render the editor's SOURCE assets, which ADR-022 requires
-    // come from the vault rather than from `.moss/build`.
+    // come from the vault rather than from `.moss/build.nosync`.
     //
     // Internal moss endpoints live under the `/__moss_*` namespace. They MUST
     // be registered as explicit `.route(...)` entries BEFORE the
@@ -666,7 +666,7 @@ pub async fn start_server(
                                 // `ServeDir` turns every non-NotFound io error into a
                                 // bodyless 500 — including the `EDEADLK` a page gets when
                                 // the cloud has evicted moss's own build output, which is
-                                // possible because `.moss/build/` lives inside the user's
+                                // possible because `.moss/build.nosync/` lives inside the user's
                                 // vault. A bodyless 500 renders as a white void with no
                                 // bridge script injected, so navigation dies with it.
                                 match cloud_offline_response(&current_dir, &path, response.status()) {

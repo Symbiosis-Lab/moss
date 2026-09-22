@@ -29,7 +29,7 @@ Run from the repo root:
 ```bash
 cargo build -p moss-cli
 ./target/debug/moss-cli build crates/moss-build/tests/fixtures/snapshot-sites/navigation-site/input --no-plugins
-# then diff .moss/build/staging vs expected/; if the diff is justified, replace expected/.
+# then diff .moss/build.nosync/staging vs expected/; if the diff is justified, replace expected/.
 ```
 
 See `basic-site/README.md` for the regeneration procedure.

@@ -1216,7 +1216,7 @@ mod tests {
         std::fs::create_dir_all(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp")).unwrap();
         let container = tempfile::TempDir::new_in(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp")).unwrap();
         let proj = container.path().join("project");
-        // Write a fake built asset under .moss/build/current (what current_ptr resolves to).
+        // Write a fake built asset under .moss/build.nosync/current (what current_ptr resolves to).
         let current = crate::infra::moss_paths::MossPaths::new(&proj).current_ptr();
         std::fs::create_dir_all(current.join("image/photography")).unwrap();
         std::fs::write(current.join("image/photography/x.bin"), [0xFFu8, 0xD8, 0x00, 0x10]).unwrap();

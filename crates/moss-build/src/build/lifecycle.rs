@@ -15,6 +15,7 @@
 
 pub(crate) mod cas_heal;
 pub(crate) mod root_identity;
+pub(crate) mod tree_migration;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -46,7 +47,7 @@ struct FolderLifecycle {
     encode_writers: usize,
     /// A [`CacheGcToken`] is out.
     gc_running: bool,
-    /// This build's handle on `.moss/build`, opened by
+    /// This build's handle on `.moss/build.nosync`, opened by
     /// [`open_build_root_handle`] once at build start. `MossPaths::build_dir()`
     /// answers from it, through [`held_build_root_path`], for every
     /// `MossPaths` built from this folder's root — not just the instance that
@@ -117,7 +118,7 @@ pub(crate) fn lock_for(mp: &MossPaths) -> Arc<LifecycleCell> {
     record
 }
 
-/// Open a handle on `mp`'s `.moss/build` and make it the answer every
+/// Open a handle on `mp`'s `.moss/build.nosync` and make it the answer every
 /// `MossPaths` for this folder's `build_dir()` gives from now on. Opens by
 /// the plain joined path, deliberately not through `build_dir()` itself — a
 /// build must look at whatever is actually at the canonical location right
@@ -128,7 +129,7 @@ pub(crate) fn lock_for(mp: &MossPaths) -> Arc<LifecycleCell> {
 /// cannot open falls back to today's by-path resolution, logged once so a
 /// swap it then cannot see is not a silent failure.
 pub(crate) fn open_build_root_handle(mp: &MossPaths) {
-    let joined = mp.root().join("build");
+    let joined = mp.root().join("build.nosync");
     match root_identity::BuildRootHandle::open(&joined) {
         Ok(handle) => lock_for(mp).state().build_root_handle = Some(Arc::new(handle)),
         Err(e) if e.kind() == std::io::ErrorKind::Unsupported => {}
@@ -181,7 +182,7 @@ fn read(cell: &ServedCell) -> PathBuf {
 pub(crate) fn adopt_server(mp: &MossPaths, cell: &ServedCell) {
     let target = mp.initial_serve_dir();
     let build_dir = mp.build_dir();
-    root_identity::log_build_root(&mp.root().join("build"), "serve", None);
+    root_identity::log_build_root(&mp.root().join("build.nosync"), "serve", None);
     let record = lock_for(mp);
     let mut st = record.state();
     st.served = Some(cell.clone());

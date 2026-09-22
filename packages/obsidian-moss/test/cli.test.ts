@@ -17,7 +17,7 @@ import {
 const REAL_STDERR = `Building website from: /tmp/moss-smoke-vault
 [ 10%] build: Building site...
 [done] Build complete
-📁 'moss-smoke-vault': Site generated at /tmp/moss-smoke-vault/.moss/build/current
+📁 'moss-smoke-vault': Site generated at /tmp/moss-smoke-vault/.moss/build.nosync/current
 🌐 Preview server ready! Access at http://localhost:8080
 🤖 Coding agent: read /tmp/moss-smoke-vault/.claude/skills/moss/SKILL.md for how to author and theme this site.
 Press Ctrl+C to stop the server

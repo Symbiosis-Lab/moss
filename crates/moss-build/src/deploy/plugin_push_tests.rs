@@ -79,7 +79,7 @@ fn success_with_no_deployment_has_no_address_to_print() {
 }
 
 /// The mismatch no cheaper layer can see: the deploy context enumerates a
-/// directory and the plugin reads bytes through `.moss/build/current`. If the
+/// directory and the plugin reads bytes through `.moss/build.nosync/current`. If the
 /// build's generation is not the active one, publishing would ship one tree
 /// and describe another.
 #[test]

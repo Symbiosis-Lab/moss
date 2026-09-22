@@ -558,9 +558,9 @@ pub fn persist_editor_content(
     coerce_union_fields(&mut fm_map);
     let content = moss_core::frontmatter::serialize(&fm_map, body)?;
     // The destination is the author's SOURCE file (the one open in the
-    // editor), not regenerable output under `.moss/build/` — its bytes were
+    // editor), not regenerable output under `.moss/build.nosync/` — its bytes were
     // just read to populate the buffer, so it is materialized.
-    // allow:raw_write vault user state, not .moss/build output
+    // allow:raw_write vault user state, not .moss/build.nosync output
     std::fs::write(file_path, &content)
         .map_err(|e| format!("Failed to write file '{}': {}", file_path, e))?;
     let meta = std::fs::metadata(file_path)

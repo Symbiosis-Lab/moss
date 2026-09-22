@@ -17,7 +17,7 @@
 //!
 //! # Why not `build::io_utils`
 //!
-//! `io_utils` exists for `.moss/build/**`, where ADR-043's "regenerable output:
+//! `io_utils` exists for `.moss/build.nosync/**`, where ADR-043's "regenerable output:
 //! dataless is absent" rule applies — moss always holds the replacement bytes,
 //! so it may truncate freely. This record is the opposite: it is durable and
 //! cannot be regenerated from the project (ADR-062). Losing it costs a

@@ -43,7 +43,7 @@ fn test_file_watching_should_watch_file() {
     // Generated/system files that should be ignored
     // Note: .html files are not in the watch list, so generated HTML is ignored
     assert!(
-        !should_watch_file(".moss/build/current/index.html"),
+        !should_watch_file(".moss/build.nosync/current/index.html"),
         "Should ignore generated HTML files"
     );
     // Note: node_modules filtering happens at gitignore level, not in should_watch_file
@@ -145,7 +145,7 @@ fn test_file_watching_should_watch_directory() {
         "should_watch_file returns true - gitignore filters it"
     );
     assert!(
-        should_watch_file(".moss/build/current/"),
+        should_watch_file(".moss/build.nosync/current/"),
         "should_watch_file returns true - gitignore filters it"
     );
 
@@ -1188,8 +1188,8 @@ fn path_to_relative_key_returns_none_for_path_outside_folder() {
 
 fn gate_write_manifest(folder: &std::path::Path, hashes: &crate::types::content::SiteHashes) {
     // load_previous_hashes reads from MossPaths::hashes(folder), which is
-    // .moss/build/hashes.json. Mirror that layout in tests.
-    let build = folder.join(".moss").join("build");
+    // .moss/build.nosync/hashes.json. Mirror that layout in tests.
+    let build = folder.join(".moss").join("build.nosync");
     fs::create_dir_all(&build).unwrap();
     fs::write(
         build.join("hashes.json"),
@@ -1271,7 +1271,7 @@ fn gate_passes_when_manifest_file_absent() {
     let dir = tempfile::tempdir().unwrap();
     let folder = dir.path();
     let p = gate_write_file(folder, "a.md", b"hello");
-    // No .moss/build/hashes.json at all.
+    // No .moss/build.nosync/hashes.json at all.
     assert!(should_rebuild_for_paths(folder.to_str().unwrap(), &[p], None));
 }
 
@@ -1693,9 +1693,9 @@ fn decide_rebuild_event_fallback_to_disk_when_no_stash() {
     let folder = dir.path().to_str().unwrap();
 
     // Write a hashes.json so load_previous_hashes finds something.
-    // (.moss/build/staging/ is not required by load_previous_hashes — only hashes.json is.)
-    let hashes_path = dir.path().join(".moss/build/hashes.json");
-    std::fs::create_dir_all(dir.path().join(".moss/build")).unwrap();
+    // (.moss/build.nosync/staging/ is not required by load_previous_hashes — only hashes.json is.)
+    let hashes_path = dir.path().join(".moss/build.nosync/hashes.json");
+    std::fs::create_dir_all(dir.path().join(".moss/build.nosync")).unwrap();
     let mut disk_hashes = SiteHashes::new();
     disk_hashes.insert("index.html".into(), "disk-hash".into());
     std::fs::write(&hashes_path, serde_json::to_string(&disk_hashes).unwrap()).unwrap();
@@ -1753,13 +1753,13 @@ fn baseline_for_rebuild_prefers_in_memory_over_poisoned_disk() {
     // therefore make the edited page look unchanged.
     let tmp = tempfile::tempdir().unwrap();
     let folder = tmp.path();
-    std::fs::create_dir_all(folder.join(".moss/build/staging")).unwrap();
+    std::fs::create_dir_all(folder.join(".moss/build.nosync/staging")).unwrap();
     std::fs::write(
-        folder.join(".moss/build/hashes.json"),
+        folder.join(".moss/build.nosync/hashes.json"),
         r#"{"files":{"research/index.html":"100644:v2"}}"#,
     )
     .unwrap();
-    let output = folder.join(".moss/build/staging");
+    let output = folder.join(".moss/build.nosync/staging");
 
     // The race-free in-memory baseline holds the TRUE previous value ("v1").
     let mut in_mem = SiteHashes::new();
@@ -1782,13 +1782,13 @@ fn baseline_for_rebuild_prefers_in_memory_over_poisoned_disk() {
 fn baseline_for_rebuild_falls_back_to_disk_when_no_in_memory() {
     let tmp = tempfile::tempdir().unwrap();
     let folder = tmp.path();
-    std::fs::create_dir_all(folder.join(".moss/build/staging")).unwrap();
+    std::fs::create_dir_all(folder.join(".moss/build.nosync/staging")).unwrap();
     std::fs::write(
-        folder.join(".moss/build/hashes.json"),
+        folder.join(".moss/build.nosync/hashes.json"),
         r#"{"files":{"index.html":"100644:disk"}}"#,
     )
     .unwrap();
-    let output = folder.join(".moss/build/staging");
+    let output = folder.join(".moss/build.nosync/staging");
 
     let baseline = baseline_for_rebuild(None, folder.to_str().unwrap(), &output);
     assert_eq!(
@@ -2656,15 +2656,15 @@ fn previous_hashes_for_diff_loads_from_disk_when_output_exists() {
     // into the rebuild's pre/post diff baseline.
     let tmp = tempfile::tempdir().unwrap();
     let folder = tmp.path();
-    std::fs::create_dir_all(folder.join(".moss/build/staging")).unwrap();
-    std::fs::create_dir_all(folder.join(".moss/build")).unwrap();
+    std::fs::create_dir_all(folder.join(".moss/build.nosync/staging")).unwrap();
+    std::fs::create_dir_all(folder.join(".moss/build.nosync")).unwrap();
     std::fs::write(
-        folder.join(".moss/build/hashes.json"),
+        folder.join(".moss/build.nosync/hashes.json"),
         r#"{"files":{"index.html":"100644:deadbeef"}}"#,
     )
     .unwrap();
 
-    let output = folder.join(".moss/build/staging");
+    let output = folder.join(".moss/build.nosync/staging");
     let h = previous_hashes_for_diff(folder.to_str().unwrap(), &output);
     assert_eq!(
         h.files.get("index.html").map(String::as_str),
@@ -2683,15 +2683,15 @@ fn previous_hashes_for_diff_returns_empty_when_output_missing() {
     // so the post-diff sees all files as new and emits FileChanged.
     let tmp = tempfile::tempdir().unwrap();
     let folder = tmp.path();
-    std::fs::create_dir_all(folder.join(".moss/build")).unwrap();
+    std::fs::create_dir_all(folder.join(".moss/build.nosync")).unwrap();
     // hashes.json present, claims files exist…
     std::fs::write(
-        folder.join(".moss/build/hashes.json"),
+        folder.join(".moss/build.nosync/hashes.json"),
         r#"{"files":{"index.html":"100644:deadbeef"}}"#,
     )
     .unwrap();
     // …but staging/ does not.
-    let output = folder.join(".moss/build/staging");
+    let output = folder.join(".moss/build.nosync/staging");
     assert!(!output.exists(), "test setup: staging/ should be missing");
 
     let h = previous_hashes_for_diff(folder.to_str().unwrap(), &output);
@@ -3179,13 +3179,13 @@ fn source_image_request_path_css_not_image() {
 fn source_image_request_path_excludes_moss_build_outputs() {
     let root = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let p = root.path();
-    std::fs::create_dir_all(p.join(".moss/build/staging/assets")).unwrap();
-    std::fs::write(p.join(".moss/build/staging/assets/x.webp"), b"o").unwrap();
+    std::fs::create_dir_all(p.join(".moss/build.nosync/staging/assets")).unwrap();
+    std::fs::write(p.join(".moss/build.nosync/staging/assets/x.webp"), b"o").unwrap();
     std::fs::create_dir_all(p.join("图片")).unwrap();
     std::fs::write(p.join("图片/x.webp"), b"o").unwrap();
     // build output is excluded
     assert_eq!(
-        source_image_request_path(p, &p.join(".moss/build/staging/assets/x.webp")),
+        source_image_request_path(p, &p.join(".moss/build.nosync/staging/assets/x.webp")),
         None
     );
     // real source still works
@@ -3273,9 +3273,9 @@ fn source_asset_request_paths_markdown_never_emits() {
 fn source_asset_request_paths_excludes_moss_outputs() {
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
-    std::fs::create_dir_all(root.join(".moss/build/staging/assets")).unwrap();
+    std::fs::create_dir_all(root.join(".moss/build.nosync/staging/assets")).unwrap();
     let kind = EventKind::Create(notify::event::CreateKind::Folder);
-    let out = source_asset_request_paths(&root, kind, &[root.join(".moss/build/staging/assets")]);
+    let out = source_asset_request_paths(&root, kind, &[root.join(".moss/build.nosync/staging/assets")]);
     assert!(out.is_empty(), ".moss build outputs must never notify the editor");
 }
 

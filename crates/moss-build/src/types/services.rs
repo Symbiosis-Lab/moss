@@ -50,7 +50,7 @@ pub struct BackgroundContext {
     /// Source folder path (for resolving relative video paths)
     pub source_path: String,
     /// Staging directory where blocking phase builds output.
-    /// In a real build, `.moss/build/staging/` (`MossPaths::staging_dir`); it
+    /// In a real build, `.moss/build.nosync/staging/` (`MossPaths::staging_dir`); it
     /// persists between rebuilds, and the generation is derived from it after
     /// the seal.
     pub staging_dir: std::path::PathBuf,
@@ -676,7 +676,7 @@ mod tests {
             video_items: vec![],
             image_items: Vec::new(),
             source_path: "/test".to_string(),
-            staging_dir: std::path::PathBuf::from("/test/.moss/build/staging"),
+            staging_dir: std::path::PathBuf::from("/test/.moss/build.nosync/staging"),
             moss_dir: std::path::PathBuf::from("/test/.moss"),
             previous_hashes: SiteHashes::default(),
             start_time: std::time::Instant::now(),

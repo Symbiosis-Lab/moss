@@ -42,7 +42,7 @@
 //!
 //! ## `Deferred` has no live producer today, and that is the good state
 //!
-//! Every converted call site reads back a file under `.moss/build/staging/`, so
+//! Every converted call site reads back a file under `.moss/build.nosync/staging/`, so
 //! every one of them takes the `Discard` arm. Nothing in the pipeline currently
 //! returns `Deferred`.
 //!
@@ -242,7 +242,13 @@ pub fn io_stop(root: &Path, context: &str, path: &Path, e: std::io::Error) -> Bu
 /// What to do about a file the cloud has not handed back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Disposition {
-    /// **Anything under `build/staging/` or `build/cache/`.** Delete it and
+    /// **Anything under `build.nosync/staging/`, `build.nosync/cache/` or the
+    /// store at `cache/`** — never a sealed generation, which the preview may
+    /// be serving. A store
+    /// blob is waited for deliberately, once, by `ObjectStore::ready_blob`;
+    /// a read that still stops on it has already lost that wait, and a
+    /// `Report` here would raise a waiting screen nothing lowers (the
+    /// supervisor never sweeps the store). Delete it and
     /// fail; the caller re-runs the build once and it is written fresh. Per
     /// ADR-043 a dataless file in the stage is absent — moss regenerates it
     /// from source and does not want the bytes back, so waiting is pure delay.
@@ -307,7 +313,9 @@ enum Disposition {
 /// the vault-relative path.
 fn disposition(root: &Path, path: &Path) -> Disposition {
     let regenerable = moss_relative_tail(path).is_some_and(|rel| {
-        rel.starts_with("build/staging/") || rel.starts_with("build/cache/")
+        rel.starts_with("build.nosync/staging/")
+            || rel.starts_with("build.nosync/cache/")
+            || rel.starts_with("cache/")
     });
     if regenerable {
         return Disposition::Discard;

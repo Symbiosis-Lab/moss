@@ -515,7 +515,7 @@ fn write_new_page(path: &Path, content: &str) -> Result<String, String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create folder '{}': {}", parent.display(), e))?;
     }
-    // allow:raw_write creates a brand-new note in the vault content tree — never .moss/build/, and the path was just uniqueness-checked
+    // allow:raw_write creates a brand-new note in the vault content tree — never .moss/build.nosync/, and the path was just uniqueness-checked
     std::fs::write(path, content)
         .map_err(|e| format!("Failed to create file '{}': {}", path.display(), e))?;
     Ok(path.to_string_lossy().to_string())

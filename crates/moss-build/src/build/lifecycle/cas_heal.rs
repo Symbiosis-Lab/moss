@@ -1,7 +1,7 @@
 //! Put a cached output back into staging from the object store.
 //!
 //! A staged output can go missing while its bytes are safe in the CAS: a
-//! staging sweep, an iCloud eviction of `.moss/build`, or a batch that
+//! staging sweep, an iCloud eviction of `.moss/build.nosync`, or a batch that
 //! registers long after it linked. The encode is what the fingerprint skip
 //! saves; the file's presence in staging is not, so every skip path relinks
 //! the blob it already owns instead of sending the source back to the encoder.

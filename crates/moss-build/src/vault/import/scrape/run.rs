@@ -355,7 +355,7 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
             let hash = hash_url(media_url);
             let extension = content_type_to_extension(&res.content_type);
             let filename = format!("{}.{}", hash, extension);
-            // allow:raw_write the author's own source content, not `.moss/build/` output — an imported media file under `assets/imported/`
+            // allow:raw_write the author's own source content, not `.moss/build.nosync/` output — an imported media file under `assets/imported/`
             fs::write(assets_dir.join(&filename), &res.bytes)
                 .map_err(|e| format!("Failed to write asset: {}", e))?;
             remote_to_local.insert(
@@ -667,7 +667,7 @@ async fn download_asset(
             .map_err(|e| format!("Failed to read asset: {}", e))?;
 
         let file_path = assets_dir.join(&filename);
-        // allow:raw_write the author's own source content, not `.moss/build/` output — a downloaded media file
+        // allow:raw_write the author's own source content, not `.moss/build.nosync/` output — a downloaded media file
         fs::write(&file_path, &bytes).map_err(|e| format!("Failed to write asset: {}", e))?;
 
         Ok(filename)
@@ -703,7 +703,7 @@ fn write_note(output_dir: &Path, relative: &str, content: &str) -> Result<(), St
     if let Some(dir) = file_path.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory: {}", e))?;
     }
-    // allow:raw_write the author's own source content, not `.moss/build/` output — an imported note
+    // allow:raw_write the author's own source content, not `.moss/build.nosync/` output — an imported note
     fs::write(&file_path, content).map_err(|e| format!("Failed to write file: {}", e))
 }
 

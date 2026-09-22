@@ -1383,7 +1383,7 @@ async fn test_bind_dual_stack_scan_skips_v6_collision() {
 /// for a directory, so checking the joined path answered "not evicted" for
 /// every page on the site — including `/` — and let tower-http's bodyless 500
 /// through. That is the single most likely way a user meets this code path:
-/// the sync client evicting moss's own `index.html` out of `.moss/build/`.
+/// the sync client evicting moss's own `index.html` out of `.moss/build.nosync/`.
 #[cfg(target_os = "macos")]
 #[test]
 fn a_directory_url_is_resolved_to_its_index_before_the_cloud_check() {
@@ -1430,7 +1430,7 @@ async fn source_route_serves_vault_bytes_not_build_output() {
     let vault_path = vault.path();
 
     // `.moss/` is the vault marker VaultRoot::find_containing walks up to.
-    let site_dir = vault_path.join(".moss/build/current");
+    let site_dir = vault_path.join(".moss/build.nosync/current");
     std::fs::create_dir_all(site_dir.join("assets")).unwrap();
     std::fs::create_dir_all(vault_path.join("assets")).unwrap();
     std::fs::write(vault_path.join("assets/photo.txt"), b"SOURCE").unwrap();
@@ -1478,7 +1478,7 @@ async fn source_route_rejects_escape_above_the_vault() {
     std::fs::write(parent.path().join("secret.txt"), b"SECRET").unwrap();
 
     let vault_path = parent.path().join("vault");
-    let site_dir = vault_path.join(".moss/build/current");
+    let site_dir = vault_path.join(".moss/build.nosync/current");
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(vault_path.join("inside.txt"), b"INSIDE").unwrap();
 
@@ -1639,7 +1639,7 @@ async fn invoke_carrier_runs_a_read_only_command_over_http() {
 }
 
 /// A `State<'_, AppState>` command works over the carrier too: the project root
-/// is derived from the server's live `site_dir` (`<vault>/.moss/build/current`),
+/// is derived from the server's live `site_dir` (`<vault>/.moss/build.nosync/current`),
 /// so `editor_resolve_asset` resolves an asset that lives in the vault — proving
 /// the InvokeCtx project-root threading, not just pure-args plumbing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1649,7 +1649,7 @@ async fn invoke_carrier_resolves_an_asset_using_the_derived_project_root() {
     // Rooted in the crate dir (not /tmp): resolve_asset canonicalizes, and on
     // macOS /tmp is a symlink — the sibling source-route test does the same.
     let vault = TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let site_dir = vault.path().join(".moss/build/current");
+    let site_dir = vault.path().join(".moss/build.nosync/current");
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::create_dir_all(vault.path().join("assets")).unwrap();
     std::fs::write(vault.path().join("assets/hero.jpg"), b"JPGBYTES").unwrap();
@@ -1742,7 +1742,7 @@ async fn invoke_carrier_is_behind_the_trust_boundary() {
 
 // ===== Token-gated HTTP mutation carrier: POST /__moss/mutate/<cmd> =====
 
-/// Stand up a vault fixture whose site dir is `<vault>/.moss/build/current`, so
+/// Stand up a vault fixture whose site dir is `<vault>/.moss/build.nosync/current`, so
 /// `VaultRoot::find_containing` (walked up by the carrier to derive the project
 /// root) resolves to the vault. Returns the TempDir (kept alive by the caller)
 /// and the site_dir path. Rooted in the crate dir, not /tmp: create_files /
@@ -1751,7 +1751,7 @@ async fn invoke_carrier_is_behind_the_trust_boundary() {
 #[cfg(test)]
 fn served_vault() -> (tempfile::TempDir, std::path::PathBuf) {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let site_dir = vault.path().join(".moss/build/current");
+    let site_dir = vault.path().join(".moss/build.nosync/current");
     std::fs::create_dir_all(&site_dir).unwrap();
     (vault, site_dir)
 }
@@ -1859,7 +1859,7 @@ async fn mutate_carrier_without_or_with_wrong_token_is_401() {
 /// SAME server at a second vault — the reused-server folder switch the app
 /// performs by rewriting `site_dir` — and the first vault's token is 401 on the
 /// very next request, while the token the switch published under the second
-/// vault's `.moss/build/` is accepted. Before this, the token was minted once
+/// vault's `.moss/build.nosync/` is accepted. Before this, the token was minted once
 /// per server while the root moved underneath it, so a forgotten tab followed
 /// the server into whatever folder it was next pointed at.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2317,7 +2317,7 @@ fn confinement_vault() -> (tempfile::TempDir, std::path::PathBuf, std::path::Pat
         .unwrap();
 
     let vault_path = parent.path().join("vault");
-    let site_dir = vault_path.join(".moss/build/current");
+    let site_dir = vault_path.join(".moss/build.nosync/current");
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(vault_path.join("inside.md"), "---\ntitle: INSIDE\n---\nin the vault\n")
         .unwrap();

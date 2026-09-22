@@ -385,7 +385,7 @@ async fn push_site_inner_impl(
                                 if e.kind() == std::io::ErrorKind::NotFound {
                                     format!(
                                         "Manifest claims '{}' exists but it's missing on disk. \
-                                         Your build cache (.moss/build/hashes.json) may be stale. \
+                                         Your build cache (.moss/build.nosync/hashes.json) may be stale. \
                                          Try rebuilding the site. Underlying error: {}",
                                         file_path, e
                                     )

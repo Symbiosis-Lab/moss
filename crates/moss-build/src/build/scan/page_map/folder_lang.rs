@@ -53,7 +53,7 @@ pub(super) struct FolderLangEntry {
     lang: Option<String>,
 }
 
-/// Persisted `.moss/build/cache/folder-lang.json`. See the module doc for
+/// Persisted `.moss/build.nosync/cache/folder-lang.json`. See the module doc for
 /// why membership, not content, is the cache key.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FolderLangCache {
@@ -71,7 +71,7 @@ impl FolderLangCache {
     }
 
     /// Persist to disk. Goes through `io_utils` because this file lives
-    /// under `.moss/build/` (ADR-043 — dataless is absent there).
+    /// under `.moss/build.nosync/` (ADR-043 — dataless is absent there).
     pub(crate) fn save(&self, path: &Path) -> std::io::Result<()> {
         let json = serde_json::to_vec_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;

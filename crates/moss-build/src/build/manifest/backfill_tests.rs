@@ -8,7 +8,7 @@ use crate::types::content::SiteHashes;
 /// `gen_id`. Mirrors the real layout: the pointer lives in the machine-managed
 /// state file under the active target's record (`site_id` alone selects moss
 /// hosting, so `moss:site-1` is the slot the flat view reads), the tree under
-/// `.moss/build/generations/<id>/`.
+/// `.moss/build.nosync/generations/<id>/`.
 fn project_with_pointer(gen_id: &str) -> (tempfile::TempDir, MossPaths) {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
     std::fs::create_dir_all(&base).expect("create target/test-tmp");
@@ -63,7 +63,7 @@ fn a_manifest_entry_hashes_the_shipped_page_not_the_staged_one() {
 
     let (dir, mp) = project_with_pointer("gen-shipped");
     let staged: &[u8] = br#"<p data-source-line="3">home</p>"#;
-    let stage_dir = dir.path().join(".moss/build/staging");
+    let stage_dir = dir.path().join(".moss/build.nosync/staging");
     std::fs::create_dir_all(&stage_dir).unwrap();
     std::fs::write(stage_dir.join("index.html"), staged).unwrap();
 

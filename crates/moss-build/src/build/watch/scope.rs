@@ -26,7 +26,7 @@
 //! - `RecursiveMode::NonRecursive` does **not** narrow the macOS kernel
 //!   stream. `fsevent.rs` registers the path either way and filters recursion
 //!   in its callback, so a non-recursive root watch still buffers every
-//!   `.moss/build` event and still overflows. On macOS the root must not be
+//!   `.moss/build.nosync` event and still overflows. On macOS the root must not be
 //!   registered **at all**.
 //! - Linux (inotify) and Windows (`ReadDirectoryChangesW`) do narrow, so there
 //!   the root is registered non-recursively — which is also what keeps

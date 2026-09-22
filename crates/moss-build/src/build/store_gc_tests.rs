@@ -181,7 +181,7 @@ fn the_object_store_is_swept_only_when_no_build_holds_a_cache_lease() {
     let tmp = tempfile::tempdir().unwrap();
     let mp = crate::moss_paths::MossPaths::new(tmp.path());
     let _record = crate::build::lifecycle::lock_for(&mp);
-    let cache = mp.build_dir().join("cache");
+    let cache = mp.store_dir();
     // Big enough to be worth sweeping.
     for i in 0..CACHE_GC_MIN_OBJECTS {
         std::fs::create_dir_all(cache.join("objects").join("zz").join(format!("{i:04}"))).unwrap();
@@ -234,7 +234,7 @@ fn count_objects_walks_the_fanout() {
             std::fs::write(d.join(format!("blob{i}")), b"x").unwrap();
         }
     }
-    assert_eq!(count_objects(tmp.path()), 6);
+    assert_eq!(count_objects(&objects), 6);
 }
 
 // ---------------------------------------------------------------------------

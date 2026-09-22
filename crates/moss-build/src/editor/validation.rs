@@ -147,7 +147,7 @@ mod url_collision_tests {
     fn vault_with_collision() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let moss = dir.path().join(".moss");
-        std::fs::create_dir_all(moss.join("build")).unwrap();
+        std::fs::create_dir_all(moss.join("build.nosync")).unwrap();
         let mut map = ArticleMap::new();
         map.url_collisions.insert(
             "獎項/記憶獎/記憶獎.md".to_string(),

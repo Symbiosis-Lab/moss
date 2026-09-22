@@ -45,7 +45,7 @@ pub struct FolderSession {
     /// genuinely-old site-sized work by a 300 s settle timer — an I1
     /// violation. The freeze removes the premise; do not reintroduce them.
     ui_bound: AtomicU32,
-    /// Serializes access to the folder's mutable `.moss/build/staging/`
+    /// Serializes access to the folder's mutable `.moss/build.nosync/staging/`
     /// directory between (a) a build's synchronous stage-writing span
     /// (`generate_blocking_content` through notebook processing, in
     /// `build/pipeline.rs::build_inner`) and (b) a PRIOR generation's

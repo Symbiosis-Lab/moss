@@ -20,7 +20,7 @@ case "$cmd" in
     echo "Building website from: $folder" >&2
     echo "[ 10%] build: Building site..." >&2
     echo "[done] Build complete" >&2
-    echo "📁 'shim-vault': Site generated at $folder/.moss/build/current" >&2
+    echo "📁 'shim-vault': Site generated at $folder/.moss/build.nosync/current" >&2
     python3 -m http.server "$port" --bind 127.0.0.1 --directory "$DIR/site" >/dev/null 2>&1 &
     server=$!
     trap 'kill "$server" 2>/dev/null || true' TERM INT EXIT

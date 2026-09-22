@@ -29,8 +29,8 @@ fn find<'a>(rows: &'a [WikilinkCompletion], insert: &str) -> &'a WikilinkComplet
 
 /// A map as the build would write it for `about.md` (titled) and a tag page.
 fn write_map(root: &Path, json: &str) {
-    fs::create_dir_all(root.join(".moss/build")).unwrap();
-    fs::write(root.join(".moss/build/article-map.json"), json).unwrap();
+    fs::create_dir_all(root.join(".moss/build.nosync")).unwrap();
+    fs::write(root.join(".moss/build.nosync/article-map.json"), json).unwrap();
 }
 
 #[test]

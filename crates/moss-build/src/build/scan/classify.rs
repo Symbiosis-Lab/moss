@@ -431,7 +431,7 @@ mod tests {
         for name in ["config.toml", "theme"] {
             assert!(!is_hidden(name, ".moss", true), "{name} is the user's to edit");
         }
-        for name in ["state.toml", "build", "identity", "plugins", "hashes.json", "data", "assets"] {
+        for name in ["state.toml", "build.nosync", "cache", "identity", "plugins", "hashes.json", "data", "assets"] {
             assert!(is_hidden(name, ".moss", true), "{name} is moss's own, not the author's");
         }
         // `data/` is gone as a row, so nothing below it can be reached either.

@@ -16,7 +16,7 @@
 //!                                                               │ debounce
 //!                                                               │ index generations/<N>/
 //!                                                               ▼
-//!                                          .moss/build/index/<fp_N>/  +  receipt.json
+//!                                          .moss/build.nosync/index/<fp_N>/  +  receipt.json
 //!   build N+1 ──adopt_into(receipt)──► staging + PendingManifest
 //! ```
 //!
@@ -186,7 +186,7 @@ fn read_receipt(index_dir: &Path) -> Option<BundleReceipt> {
 
 /// Token proving its holder owns the holding area for one folder.
 ///
-/// Every function that mutates `.moss/build/index/` — or reads the receipt and
+/// Every function that mutates `.moss/build.nosync/index/` — or reads the receipt and
 /// then acts on it — takes one. Without it the lane and a build interleave: the
 /// lane's [`gc_holding`] deletes `<fpA>/` while a build is halfway through
 /// copying it into staging, the build then registers nothing *and* deletes the
@@ -237,7 +237,7 @@ fn staged_fp_path(index_dir: &Path) -> PathBuf {
 /// the live site, with nothing scheduled to re-index.
 ///
 /// Both halves are needed. `skipped > 0` catches a page moss could not read (an
-/// iCloud-evicted `.html` under `.moss/build/`); `pages < want.pages` catches a
+/// iCloud-evicted `.html` under `.moss/build.nosync/`); `pages < want.pages` catches a
 /// tree that is not there at all — a generation GC'd mid-debounce walks to zero
 /// pages, indistinguishable from "this site has no indexable content".
 ///
@@ -286,7 +286,7 @@ fn publish_bundle(
         .map_err(|e| format!("failed to write search receipt: {}", e))?;
     // The staged marker names a bundle that is no longer the receipt's, so the
     // next adoption must re-lay every file rather than trust its stats.
-    // allow:unlink the search index under .moss/build/index, not staging
+    // allow:unlink the search index under .moss/build.nosync/index, not staging
     let _ = std::fs::remove_file(staged_fp_path(index_dir));
     gc_holding(index_dir, fp);
     Ok(receipt)
@@ -304,7 +304,7 @@ fn gc_holding(index_dir: &Path, keep: PageSetFp) {
         if name == keep || !entry.path().is_dir() {
             continue;
         }
-        // allow:unlink the search index under .moss/build/index, not staging
+        // allow:unlink the search index under .moss/build.nosync/index, not staging
         let _ = crate::build::io_utils::remove_output_dir_all(&entry.path());
     }
 }
@@ -323,7 +323,7 @@ pub enum Adoption {
     Disabled,
     /// The receipt's files were verified on disk and registered.
     Adopted(usize),
-    /// No receipt existed (search just enabled, or `.moss/build/index` was
+    /// No receipt existed (search just enabled, or `.moss/build.nosync/index` was
     /// deleted). Indexed synchronously so this build still ships a search box.
     Indexed(usize),
     /// The receipt named files that are not on disk. Registered nothing,
@@ -464,7 +464,7 @@ pub fn adopt_into(
 /// deleting by path alone would destroy a receipt this build never read.
 fn drop_receipt_if_still(_holding: &Holding, index_dir: &Path, diverged: &BundleReceipt) {
     if read_receipt(index_dir).map(|r| r.fp) == Some(diverged.fp.clone()) {
-        // allow:unlink the search index under .moss/build/index, not staging
+        // allow:unlink the search index under .moss/build.nosync/index, not staging
         let _ = std::fs::remove_file(index_dir.join("receipt.json"));
     }
 }

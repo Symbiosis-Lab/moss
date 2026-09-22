@@ -64,7 +64,7 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
     // that pays for it: it holds deploy state nothing regenerates.
     {
         use std::io::Write;
-        // allow:raw_write writes a sibling temp file then renames; callers are app-data and vault state, never .moss/build/
+        // allow:raw_write writes a sibling temp file then renames; callers are app-data and vault state, never .moss/build.nosync/
         let mut f = std::fs::File::create(&tmp)
             .map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;
         f.write_all(contents.as_bytes())

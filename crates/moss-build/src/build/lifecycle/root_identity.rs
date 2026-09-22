@@ -1,6 +1,6 @@
 //! Observes the build root's on-disk identity, for the log only.
 //!
-//! A cloud sync client can rename the live `.moss/build` aside — to `build 2`,
+//! A cloud sync client can rename the live `.moss/build.nosync` aside — to `build 2`,
 //! `build 31`, … — and put a fresh directory at the original path, while a
 //! build is writing to it and the preview server is serving it. The rename
 //! preserves the inode, so the OLD directory keeps existing (just under a new
@@ -62,7 +62,7 @@ pub(crate) struct BuildRootHandle {
 }
 
 impl BuildRootHandle {
-    /// Open `path` (`.moss/build`) as a directory file descriptor.
+    /// Open `path` (`.moss/build.nosync`) as a directory file descriptor.
     #[cfg(unix)]
     pub(crate) fn open(path: &Path) -> std::io::Result<Self> {
         use std::fs::OpenOptions;
@@ -171,7 +171,7 @@ fn count_renamed_aside_siblings(build_root: &Path) -> usize {
         .count()
 }
 
-fn is_renamed_aside(candidate: &str, name: &str) -> bool {
+pub(crate) fn is_renamed_aside(candidate: &str, name: &str) -> bool {
     candidate
         .strip_prefix(name)
         .and_then(|rest| rest.strip_prefix(' '))

@@ -93,11 +93,11 @@ fn every_path_gets_the_disposition_whose_wait_can_actually_end() {
     // notebook asset and a cache blob are all regenerable, and the `.html`
     // special case that used to be here left them reported instead.
     for p in [
-        "/Users/x/Vault/.moss/build/staging/index.html",
-        "/Users/x/Vault/.moss/build/staging/posts/hello/index.html",
-        "/Users/x/Vault/.moss/build/staging/_moss/og/abc123.png",
-        "/Users/x/Vault/.moss/build/staging/jupyter/jupyter-lite.json",
-        "/Users/x/Vault/.moss/build/cache/objects/ab/cd1234",
+        "/Users/x/Vault/.moss/build.nosync/staging/index.html",
+        "/Users/x/Vault/.moss/build.nosync/staging/posts/hello/index.html",
+        "/Users/x/Vault/.moss/build.nosync/staging/_moss/og/abc123.png",
+        "/Users/x/Vault/.moss/build.nosync/staging/jupyter/jupyter-lite.json",
+        "/Users/x/Vault/.moss/cache/objects/ab/cd1234",
     ] {
         assert_eq!(disposition(root(), std::path::Path::new(p)), Disposition::Discard, "{p}");
     }
@@ -126,7 +126,7 @@ fn every_path_gets_the_disposition_whose_wait_can_actually_end() {
     // raise a screen nothing can lower; discarding one would destroy the
     // generation the preview server is serving right now.
     for p in [
-        "/Users/x/Vault/.moss/build/generations/ab12/index.html",
+        "/Users/x/Vault/.moss/build.nosync/generations/ab12/index.html",
         "/Users/x/Vault/.moss/data/redirects.json",
         "/Users/x/Vault/.moss/plugins/github/main.js",
         // A file whose extension nothing consumes. Its arrival schedules no
@@ -167,7 +167,7 @@ fn a_relocated_vault_gets_the_same_disposition() {
             );
         }
         assert_eq!(
-            disposition(root, &mount_join(mount, ".moss/build/staging/index.html")),
+            disposition(root, &mount_join(mount, ".moss/build.nosync/staging/index.html")),
             Disposition::Discard,
             "a staged page under {shape}"
         );
@@ -187,7 +187,7 @@ fn a_relocated_vault_gets_the_same_disposition() {
 #[test]
 fn a_present_output_file_is_not_discarded() {
     let dir = tempfile::tempdir().unwrap();
-    let staged = dir.path().join(".moss/build/staging/index.html");
+    let staged = dir.path().join(".moss/build.nosync/staging/index.html");
     std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
     std::fs::write(&staged, b"<html>").unwrap();
 

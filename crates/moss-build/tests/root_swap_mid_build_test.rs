@@ -1,4 +1,4 @@
-//! Whether a cloud sync client renaming `.moss/build` aside — to `build 2` —
+//! Whether a cloud sync client renaming `.moss/build.nosync` aside — to `build 2` —
 //! mid-build survives the build: the output still lands under the RENAMED
 //! directory (not the fresh, empty one the client puts back at the old
 //! path), the generation still gets promoted, and a preview request
@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 struct Capture {
     lines: Mutex<Vec<String>>,
-    /// The `.moss/build` directory to swap aside the moment `phase=start` is
+    /// The `.moss/build.nosync` directory to swap aside the moment `phase=start` is
     /// logged, taken once so nothing can trigger it a second time.
     swap_at_start: Mutex<Option<PathBuf>>,
 }
@@ -103,7 +103,7 @@ async fn a_rename_aside_mid_build_still_promotes_under_the_renamed_directory() {
     std::fs::write(folder.join("index.md"), "---\ntitle: Home\n---\n\nHello.\n").unwrap();
     let folder_str = folder.to_string_lossy().to_string();
 
-    let build_dir = folder.join(".moss").join("build");
+    let build_dir = folder.join(".moss").join("build.nosync");
     let renamed_dir = build_dir.with_file_name("build 2");
     *CAPTURE.swap_at_start.lock().unwrap() = Some(build_dir.clone());
 
@@ -154,7 +154,7 @@ async fn a_rename_aside_mid_build_still_promotes_under_the_renamed_directory() {
     assert_ne!(
         field(&start[0], "ino="),
         field(&ship[0], "ino="),
-        "the naive `.moss/build` path now names the decoy, a different inode"
+        "the naive `.moss/build.nosync` path now names the decoy, a different inode"
     );
 
     // The build's actual output — the promoted generation — lands under the
@@ -172,7 +172,7 @@ async fn a_rename_aside_mid_build_still_promotes_under_the_renamed_directory() {
     );
 
     // Scan's own cache write (the hash index) must also follow the renamed
-    // root — the one hand-joined `.moss/build/cache` path this increment
+    // root — the one hand-joined `.moss/build.nosync/cache` path this increment
     // routes through `MossPaths` instead of a bare join.
     assert!(
         renamed_dir.join("cache").join("hash-index.json").exists(),

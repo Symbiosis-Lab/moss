@@ -87,7 +87,7 @@ fn watch_targets_exclude_build_output_dotdirs_and_node_modules() {
     let root = dir.path();
     let targets = targets_of(root);
 
-    for excluded in [".moss", ".moss/build", ".moss/identity", ".git", "node_modules", "AGENTS.md"]
+    for excluded in [".moss", ".moss/build.nosync", ".moss/identity", ".git", "node_modules", "AGENTS.md"]
     {
         assert!(
             !targets.contains(&root.join(excluded)),
@@ -171,7 +171,7 @@ fn watch_targets_pick_up_a_new_top_level_folder() {
 fn root_agent_files_are_recognised_as_moss_written() {
     let root = Path::new("/site");
     assert!(all_paths_moss_written(root, &[root.join("AGENTS.md")]));
-    assert!(all_paths_moss_written(root, &[root.join(".moss/build/staging/i.html")]));
+    assert!(all_paths_moss_written(root, &[root.join(".moss/build.nosync/staging/i.html")]));
 
     // …but the same name one directory down is ordinary content, which is what
     // `editor::filesystem::a_nested_agents_md_is_an_ordinary_file` pins.
@@ -383,8 +383,8 @@ const FILES: &[(&str, bool, bool)] = &[
     ("posts/.secret.md", false, false),
     (".DS_Store", false, false),
     // moss's own output: never an input, whatever it is named.
-    (".moss/build/staging/index.html", false, false),
-    (".moss/build/cache/objects/ab/cd1234", false, false),
+    (".moss/build.nosync/staging/index.html", false, false),
+    (".moss/cache/objects/ab/cd1234", false, false),
     // Watchable, but nothing consumes the extension.
     ("report.docx", true, false),
 ];

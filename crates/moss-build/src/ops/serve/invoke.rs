@@ -796,7 +796,7 @@ fn dispatch_outcome_to_response(cmd: &str, outcome: Option<ArmResult>) -> Respon
 
 /// Route handler for `POST /__moss/invoke/*cmd` — the READ-ONLY carrier.
 ///
-/// `site_dir` is the server's live directory pointer (`<vault>/.moss/build/…`);
+/// `site_dir` is the server's live directory pointer (`<vault>/.moss/build.nosync/…`);
 /// the vault root walked up from it is the project root the `State` commands
 /// would read. It is threaded in from `build_router` exactly as `asset_registry`
 /// is. Token-free, so no gate has bound for it: it binds, then dispatches

@@ -7,7 +7,7 @@
 // `cli_eprintln!` (src-tauri/src/diagnostics.rs). The lines that matter:
 //
 //   Building website from: /path/to/vault
-//   📁 'name': Site generated at /path/.moss/build/current
+//   📁 'name': Site generated at /path/.moss/build.nosync/current
 //   🌐 Preview server ready! Access at http://localhost:8080
 //   moss: 2 problems reported above — the site was still generated.
 //   Build failed: <reason>

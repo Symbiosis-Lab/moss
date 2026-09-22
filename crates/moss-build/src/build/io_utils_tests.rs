@@ -223,7 +223,7 @@ fn a_non_cloud_error_is_reported_not_worked_around() {
 #[test]
 fn a_scratch_dir_under_a_cache_tmp_the_provider_refuses_is_made_by_replacing_it() {
     let dir = tempdir().unwrap();
-    let tmp_root = dir.path().join(".moss/build/cache/tmp");
+    let tmp_root = dir.path().join(".moss/build.nosync/cache/tmp");
     fs::create_dir_all(&tmp_root).unwrap();
     fs::write(tmp_root.join("left-dataless"), b"x").unwrap();
     fault::refuse_dataless(&tmp_root);
@@ -243,8 +243,8 @@ fn a_scratch_dir_under_a_cache_tmp_the_provider_refuses_is_made_by_replacing_it(
 #[test]
 fn only_paths_below_moss_build_are_regenerable() {
     let yes = [
-        "/Users/x/Google Drive/site/.moss/build/staging",
-        "/Users/x/site/.moss/build/generations/7/assets",
+        "/Users/x/Google Drive/site/.moss/build.nosync/staging",
+        "/Users/x/site/.moss/build.nosync/generations/7/assets",
     ];
     for p in yes {
         assert!(is_regenerable_output(Path::new(p)), "{p} is output moss can remake");
@@ -252,7 +252,7 @@ fn only_paths_below_moss_build_are_regenerable() {
 }
 
 /// Every one of these is an ancestor of some output path, so a walk from the
-/// filesystem root reaches them all before it reaches `.moss/build`. If any
+/// filesystem root reaches them all before it reaches `.moss/build.nosync`. If any
 /// answered `true`, one refused `create_dir` would `remove_dir_all` the user's
 /// vault to fix a staging directory.
 #[test]
@@ -272,12 +272,12 @@ fn a_vault_and_its_content_are_never_regenerable() {
     }
 }
 
-/// `.moss/build` itself is excluded deliberately, not by accident of the
+/// `.moss/build.nosync` itself is excluded deliberately, not by accident of the
 /// boundary: remaking it drops every sealed generation at once, and a sealed
 /// generation is what keeps a site being read from going dark.
 #[test]
 fn the_build_root_itself_is_not_replaceable() {
-    assert!(!is_regenerable_output(Path::new("/Users/x/site/.moss/build")));
+    assert!(!is_regenerable_output(Path::new("/Users/x/site/.moss/build.nosync")));
 }
 
 /// The four states a presence check has to tell apart. "Empty" and "dataless"

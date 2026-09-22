@@ -1059,7 +1059,7 @@ fn test_video_scan_skips_hash_on_stat_miss() {
     fs::write(&video_path, b"fake video data for testing").unwrap();
 
     // Set up empty caches — simulates first-ever scan.
-    let cache_dir = temp_dir.join(".moss/build/cache");
+    let cache_dir = temp_dir.join(".moss/build.nosync/cache");
     fs::create_dir_all(cache_dir.join("objects")).unwrap();
     fs::create_dir_all(cache_dir.join("transforms")).unwrap();
     let objects = ObjectStore::new(cache_dir.join("objects"));
@@ -1116,7 +1116,7 @@ fn test_video_scan_uses_hash_when_index_hits() {
     fs::write(&video_path, b"fake video").unwrap();
 
     // Set up caches.
-    let cache_dir = temp_dir.join(".moss/build/cache");
+    let cache_dir = temp_dir.join(".moss/build.nosync/cache");
     fs::create_dir_all(cache_dir.join("objects")).unwrap();
     fs::create_dir_all(cache_dir.join("transforms")).unwrap();
     let objects = ObjectStore::new(cache_dir.join("objects"));
@@ -1198,7 +1198,7 @@ fn test_image_scan_defers_expensive_work_on_stat_miss() {
     let file_size = fs::metadata(&png_path).unwrap().len();
 
     // Set up empty caches — simulates a first-ever (cold) scan.
-    let cache_dir = temp_dir.join(".moss/build/cache");
+    let cache_dir = temp_dir.join(".moss/build.nosync/cache");
     fs::create_dir_all(cache_dir.join("objects")).unwrap();
     fs::create_dir_all(cache_dir.join("transforms")).unwrap();
     let objects = ObjectStore::new(cache_dir.join("objects"));
@@ -1288,7 +1288,7 @@ fn test_scan_carries_is_animated_for_animated_webp() {
     fs::write(&webp_path, animated_webp_bytes()).unwrap();
     let file_size = fs::metadata(&webp_path).unwrap().len();
 
-    let cache_dir = temp_dir.join(".moss/build/cache");
+    let cache_dir = temp_dir.join(".moss/build.nosync/cache");
     fs::create_dir_all(cache_dir.join("objects")).unwrap();
     fs::create_dir_all(cache_dir.join("transforms")).unwrap();
     let objects = ObjectStore::new(cache_dir.join("objects"));
@@ -1360,7 +1360,7 @@ fn test_scan_static_webp_is_not_animated() {
     fs::write(&webp_path, &bytes).unwrap();
     let file_size = fs::metadata(&webp_path).unwrap().len();
 
-    let cache_dir = temp_dir.join(".moss/build/cache");
+    let cache_dir = temp_dir.join(".moss/build.nosync/cache");
     fs::create_dir_all(cache_dir.join("objects")).unwrap();
     fs::create_dir_all(cache_dir.join("transforms")).unwrap();
     let objects = ObjectStore::new(cache_dir.join("objects"));
@@ -1439,7 +1439,7 @@ fn test_video_scan_stat_cache_hit_on_second_call() {
     let video_path = temp_dir.join("repeat.mp4");
     fs::write(&video_path, b"fake video data").unwrap();
 
-    let cache_dir = temp_dir.join(".moss/build/cache");
+    let cache_dir = temp_dir.join(".moss/build.nosync/cache");
     fs::create_dir_all(cache_dir.join("objects")).unwrap();
     fs::create_dir_all(cache_dir.join("transforms")).unwrap();
     let objects = ObjectStore::new(cache_dir.join("objects"));
@@ -1512,7 +1512,7 @@ impl ScanFixture {
     fn new(name: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("moss_scan_{name}_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        let cache = dir.join(".moss/build/cache");
+        let cache = dir.join(".moss/build.nosync/cache");
         fs::create_dir_all(cache.join("objects")).unwrap();
         fs::create_dir_all(cache.join("transforms")).unwrap();
         let png = dir.join("photo.png");
@@ -1798,7 +1798,7 @@ impl ScannedVault {
     }
 
     fn index_path(&self) -> std::path::PathBuf {
-        self.dir.path().join(".moss/build/cache/hash-index.json")
+        self.dir.path().join(".moss/build.nosync/cache/hash-index.json")
     }
 
     /// Scan, and return `photo.png`'s entry in the index the scan persisted.

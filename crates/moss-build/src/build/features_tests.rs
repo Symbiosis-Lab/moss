@@ -2244,7 +2244,7 @@ fn beacon_url_is_absolute_https_and_fetch_failure_is_swallowed() {
 }
 
 /// Ship output served outside the preview server (python -m http.server
-/// on .moss/build/current, file:// opens) is ship-stripped AND
+/// on .moss/build.nosync/current, file:// opens) is ship-stripped AND
 /// un-middlewared, so neither the marker strip nor the re-guaranteed
 /// data-moss-preview attribute applies — with an absolute https URL the
 /// beacon would silently record real pageviews from a dev machine. The

@@ -377,7 +377,7 @@ pub fn encode_ladder(
         // The encode that just finished wrote this file into its own scratch
         // directory; the object store copies it out afterwards. Never a vault
         // path, so never evictable.
-        // allow:raw_write ffmpeg scratch directory, not .moss/build/
+        // allow:raw_write ffmpeg scratch directory, not .moss/build.nosync/
         std::fs::write(&master_path, patched)
             .map_err(|e| format!("Failed to write master playlist: {}", e))?;
     }

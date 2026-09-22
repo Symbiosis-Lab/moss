@@ -1,4 +1,4 @@
-//! Retention and garbage collection for the local build store (`.moss/build/`).
+//! Retention and garbage collection for the local build store (`.moss/build.nosync/`).
 //!
 //! **Pure I/O, no `tauri`, no app-side singletons** — every entry point takes
 //! plain paths and plain data, so this module moves into `crates/moss-build`
@@ -236,7 +236,7 @@ fn save_watermark(build_dir: &Path, objects_after_gc: usize) {
     let Ok(json) = serde_json::to_string(&GcWatermark { objects_after_gc }) else {
         return;
     };
-    // `.moss/build/**` is regenerable output, so this goes through io_utils:
+    // `.moss/build.nosync/**` is regenerable output, so this goes through io_utils:
     // a cloud-evicted destination is *absent*, not something to materialize
     // (ADR-043). A raw `fs::write` here would `EDEADLK` the build.
     if let Err(e) = super::io_utils::write_output(&watermark_path(build_dir), json.as_bytes()) {
@@ -248,8 +248,8 @@ fn save_watermark(build_dir: &Path, objects_after_gc: usize) {
 ///
 /// The store is one fanout level deep (`objects/ab/cdef…`), so this walks the
 /// fanout directories rather than recursing arbitrarily.
-fn count_objects(build_dir: &Path) -> usize {
-    let Ok(fanout) = std::fs::read_dir(build_dir.join("cache").join("objects")) else {
+fn count_objects(objects_dir: &Path) -> usize {
+    let Ok(fanout) = std::fs::read_dir(objects_dir) else {
         return 0;
     };
     fanout
@@ -290,7 +290,7 @@ fn should_gc_cache(objects_on_disk: usize, watermark: Option<usize>) -> bool {
 /// Blocking — walks and unlinks. Async callers wrap it in `spawn_blocking`.
 pub fn maybe_gc_cache(mp: &crate::moss_paths::MossPaths) -> Option<cache::GcResult> {
     let build_dir = &mp.build_dir();
-    let before = count_objects(build_dir);
+    let before = count_objects(&mp.cache_objects());
     if !should_gc_cache(before, load_watermark(build_dir)) {
         return None;
     }
@@ -302,7 +302,7 @@ pub fn maybe_gc_cache(mp: &crate::moss_paths::MossPaths) -> Option<cache::GcResu
         }
     };
 
-    let result = match cache::gc(build_dir, &token) {
+    let result = match cache::gc(mp, &token) {
         Ok(result) => result,
         Err(input) => {
             log::warn!("cache GC aborted: {} — nothing deleted", input);

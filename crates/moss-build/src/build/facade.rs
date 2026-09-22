@@ -12,7 +12,7 @@
 //! facade silently to include it.
 //!
 //! `FacadeCache` persists the previous build's facades to
-//! `.moss/build/cache/dep-cache.json` (`MossPaths::cache_dep_graph`) so a
+//! `.moss/build.nosync/cache/dep-cache.json` (`MossPaths::cache_dep_graph`) so a
 //! save-triggered rebuild can diff against them — mirrors `HashIndex`
 //! (`cache.rs`) for load/save shape, simplified because a facade IS the
 //! content signature (no separate stat-based skip-hashing needed the way

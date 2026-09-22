@@ -573,7 +573,7 @@ fn register_source_mapping_populates_after_clear() {
 /// Regression guard. Three separate bugs (ImageOutputs/ImageVariants 2026-05-15,
 /// VideoOutputs 2026-06-11) all had the same root cause: a HashBucket variant
 /// that forgot to call `inner.files.insert()`, so the path existed locally in
-/// `.moss/build/current/` but the deploy wire manifest never included it, and seta
+/// `.moss/build.nosync/current/` but the deploy wire manifest never included it, and seta
 /// never uploaded it.  This test catches any future bucket with the same omission.
 #[test]
 fn every_bucket_variant_produces_files_membership() {

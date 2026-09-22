@@ -18,7 +18,7 @@
 //! ## Layout on disk
 //!
 //! ```text
-//! .moss/build/cache/
+//! .moss/build.nosync/cache/
 //! ├── objects/          # ObjectStore — raw blobs keyed by SHA-256
 //! │   └── ab/cd/<full_hash>
 //! └── transforms/       # TransformCache — JSON records keyed by source hash
@@ -59,14 +59,14 @@ const HASH_BUF_SIZE: usize = 64 * 1024;
 /// repositories with hundreds of thousands of objects (the same strategy
 /// git uses).
 pub struct ObjectStore {
-    /// Root directory — typically `.moss/build/cache/objects/`.
+    /// Root directory — typically `.moss/cache/objects/`.
     base: PathBuf,
 }
 
 impl ObjectStore {
     /// Create a new `ObjectStore` rooted at `base`.
     ///
-    /// `base` is typically `.moss/build/cache/objects/`. The directory is created
+    /// `base` is typically `.moss/cache/objects/`. The directory is created
     /// lazily (on first write), not here.
     pub fn new(base: PathBuf) -> Self {
         Self { base }
@@ -553,7 +553,7 @@ pub struct TransformEntry {
 /// <base>/<oid[0..2]>/<oid[2..4]>/<source_oid>.json
 /// ```
 pub struct TransformCache {
-    /// Root directory — typically `.moss/build/cache/transforms/`.
+    /// Root directory — typically `.moss/cache/transforms/`.
     base: PathBuf,
     /// Reference to the object store, used to verify that output blobs
     /// still exist on disk.
@@ -564,7 +564,7 @@ impl TransformCache {
     /// Create a new `TransformCache`.
     ///
     /// - `base` — root directory for transform JSON files (e.g.,
-    ///   `.moss/build/cache/transforms/`).
+    ///   `.moss/cache/transforms/`).
     /// - `objects` — the [`ObjectStore`] that holds the actual blobs;
     ///   needed by [`find_cached_output`](Self::find_cached_output) to
     ///   verify blob existence.
@@ -961,7 +961,7 @@ impl HashIndex {
             .map_err(|e| format!("Failed to write {}: {}", tmp.display(), e))?;
 
         // Rename is atomic on the same filesystem. No cross-device fallback needed
-        // because tmp and target share the same parent directory (.moss/build/cache/).
+        // because tmp and target share the same parent directory (.moss/build.nosync/cache/).
         // allow:unlink rename into place for cache/hash-index.json, not staging
         if let Err(first_err) = fs::rename(&tmp, path) {
             if first_err.kind() == std::io::ErrorKind::NotFound {
@@ -1532,19 +1532,18 @@ fn last_gc_summary(objects_dir: &Path) -> String {
 ///
 /// ## Arguments
 ///
-/// - `build_dir` — the `.moss/build/` directory containing `cache/`, `hashes.json`,
-///   and `cache/hash-index.json`.
+/// - `mp` — names the store (`cache_objects`, `cache_transforms`) and the two
+///   per-machine mark inputs (`cache_hash_index`, `hashes`).
 ///
 /// `_token` proves no build or detached encode of this folder holds a cache
 /// lease (`lifecycle::try_begin_cache_gc`): a writer stores its blobs and
 /// transform records before the hash index that marks them live is saved, so a
 /// sweep beside one deletes what it just wrote.
-pub(crate) fn gc(build_dir: &Path, _token: &crate::build::lifecycle::CacheGcToken) -> Result<GcResult, String> {
-    let cache_dir = build_dir.join("cache");
-    let objects_dir = cache_dir.join("objects");
-    let transforms_dir = cache_dir.join("transforms");
-    let hash_index_path = cache_dir.join("hash-index.json");
-    let hashes_path = build_dir.join("hashes.json");
+pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifecycle::CacheGcToken) -> Result<GcResult, String> {
+    let objects_dir = mp.cache_objects();
+    let transforms_dir = mp.cache_transforms();
+    let hash_index_path = mp.cache_hash_index();
+    let hashes_path = mp.hashes();
     let unreadable = |input: &Path, e: std::io::Error| format!("{} unreadable ({})", input.display(), e);
 
     // Phase 0: the HashIndex names the live source OIDs.

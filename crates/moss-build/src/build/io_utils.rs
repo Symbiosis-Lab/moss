@@ -1,7 +1,7 @@
-//! THE write primitive for moss's regenerable output tree (`.moss/build/**`).
+//! THE write primitive for moss's regenerable output tree (`.moss/build.nosync/**`).
 //!
 //! Per ADR-043 (`docs/decisions/ADR-043-regenerable-output-dataless-is-absent.md`):
-//! **under `.moss/build/`, a dataless destination is absent.** Nothing here
+//! **under `.moss/build.nosync/`, a dataless destination is absent.** Nothing here
 //! reads the destination's bytes, waits for them, or asks the cloud provider
 //! for them — the file is regenerable by definition and moss already holds the
 //! replacement in memory.
@@ -17,7 +17,7 @@
 //! So every write here is **temp + `rename(2)`**. `rename` does not touch data
 //! extents, so it cannot materialize and cannot `EDEADLK`; it is also atomic
 //! within a directory, which matters because the preview server serves
-//! `.moss/build/staging/` live while the build writes into it. A concurrent
+//! `.moss/build.nosync/staging/` live while the build writes into it. A concurrent
 //! reader sees the old file or the new one, never a torn one.
 //!
 //! The temp suffix is `.pending.<uuid>`, not `.tmp` — iCloud Drive excludes
@@ -58,7 +58,7 @@ fn ensure_parent(path: &Path) -> io::Result<()> {
 ///
 /// Every *file* write here already treats a dataless destination as absent. The
 /// directories those files live in had no such rule, and a plain
-/// `fs::create_dir_all` under `.moss/build/` can fail `EDEADLK` — "Resource
+/// `fs::create_dir_all` under `.moss/build.nosync/` can fail `EDEADLK` — "Resource
 /// deadlock avoided (os error 11)" — when the provider will not hand back a
 /// directory entry it is managing. That is the same fail-fast policy
 /// (`platform::macos::iopolicy`) that `write_output` exists to route around,
@@ -72,7 +72,7 @@ fn ensure_parent(path: &Path) -> io::Result<()> {
 /// **Why replace rather than wait.** A regenerable directory is absent when it
 /// is unreadable, exactly as a regenerable file is. Waiting is not merely slow
 /// here, it is unreachable: `build_shell::watch::sweep::should_descend` refuses to
-/// descend into `.moss/build` and `watch::path_is_watchable` refuses to watch
+/// descend into `.moss/build.nosync` and `watch::path_is_watchable` refuses to watch
 /// it, so nothing would ever request the download and no arrival would ever
 /// schedule the rebuild that lowers a gate. A waiting screen raised over this
 /// path could never come down — the hazard `build::outcome::Disposition::Report`
@@ -83,11 +83,11 @@ fn ensure_parent(path: &Path) -> io::Result<()> {
 /// `Disposition::Discard` relies on). The cost of removing is one non-incremental
 /// build, which is the same cost the `Discard` arm already accepts.
 ///
-/// **Only `.moss/build/` may be replaced.** The walk starts at the filesystem
+/// **Only `.moss/build.nosync/` may be replaced.** The walk starts at the filesystem
 /// root, so without [`is_regenerable_output`] the destructive arm could fire on
 /// an ancestor — and the vault directory itself is an ancestor of every output
 /// path moss writes. Deleting it would destroy the user's site to fix a
-/// scratch directory. Everything above `.moss/build/` reports the error
+/// scratch directory. Everything above `.moss/build.nosync/` reports the error
 /// unchanged: nothing there is regenerable, so "unreadable is not absent" is
 /// still the rule.
 pub fn create_output_dir_all(dir: &Path) -> io::Result<()> {
@@ -187,20 +187,20 @@ pub(crate) mod fault {
     }
 }
 
-/// Is `dir` at or below some `.moss/build/`?
+/// Is `dir` at or below some `.moss/build.nosync/`?
 ///
 /// The one question that licenses deleting a directory. Matched on the path's
 /// own components rather than against a folder root, because `ensure_parent`'s
 /// callers hold an output path and nothing else — the same reason
-/// `cloud_ledger` is keyed by path. `.moss/build` itself does **not** qualify:
+/// `cloud_ledger` is keyed by path. `.moss/build.nosync` itself does **not** qualify:
 /// remaking it would drop every sealed generation at once, and the gate that
 /// keeps a served site up depends on one surviving.
 fn is_regenerable_output(dir: &Path) -> bool {
     let parts: Vec<_> = dir.components().map(|c| c.as_os_str()).collect();
     parts
         .windows(2)
-        .position(|w| w[0] == ".moss" && w[1] == "build")
-        // `+ 2` is the `.moss/build` pair itself; a qualifying path has at
+        .position(|w| w[0] == ".moss" && w[1] == "build.nosync")
+        // `+ 2` is the `.moss/build.nosync` pair itself; a qualifying path has at
         // least one component below it.
         .is_some_and(|at| parts.len() > at + 2)
 }
@@ -279,7 +279,7 @@ pub fn write_output_if_changed(path: &Path, bytes: &[u8]) -> io::Result<bool> {
 
 /// `remove_dir_all` for the output tree, with an absent directory as success.
 ///
-/// The one door for removing a directory under `.moss/build/`, beside
+/// The one door for removing a directory under `.moss/build.nosync/`, beside
 /// [`create_output_dir_all`] for making one. Unlinking does not touch data
 /// extents, so it cannot materialize a dataless child.
 pub fn remove_output_dir_all(dir: &Path) -> io::Result<()> {
@@ -341,7 +341,7 @@ pub fn replace_with_symlink(target: &Path, dest: &Path) -> io::Result<()> {
 /// What a presence check on regenerable output could actually learn.
 ///
 /// `Absent` and `Evicted` are answers; `Unverified` is the absence of one. The
-/// distinction is the whole point: under `.moss/build/` a dataless or 0-byte
+/// distinction is the whole point: under `.moss/build.nosync/` a dataless or 0-byte
 /// output is regenerable and counts as gone (ADR-043), but an I/O error other
 /// than a positive `NotFound` says nothing about whether the bytes are there.
 /// On a cloud-managed build tree `EDEADLK`, `EACCES` and a `NotFound` with a

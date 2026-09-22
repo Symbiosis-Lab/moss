@@ -339,7 +339,7 @@ const FORMAT_PROBE_TRANSFORM: &str = "format-probe";
 /// `image/sized-raster` caches — whose entire behavior is parameterized by
 /// `ImageCompressionConfig`, so a config change is already a cache miss —
 /// this cache's verdict also depends on Rust code that isn't expressed as a
-/// config value. `.moss/build/cache/transforms/` persists across moss
+/// config value. `.moss/cache/transforms/` persists across moss
 /// upgrades, so without a version in the key, a future logic change would
 /// silently keep serving the OLD verdict for every unchanged file, forever.
 /// Folded into `params` below so a version bump is an ordinary cache miss,
@@ -1286,7 +1286,7 @@ pub(crate) fn convert_single_image(
     //   skips emit), but the variant is also unavailable for any other
     //   consumer (preview HTTP server, ship phase).
     //
-    // * The sealed generation (the eventual `.moss/build/current` symlink) is what the deploy
+    // * The sealed generation (the eventual `.moss/build.nosync/current` symlink) is what the deploy
     //   reads via `canonicalize(site_dir / key)`. The blocking-phase
     //   `ship_phase` runs at `build/pipeline.rs:1020`, BEFORE the deferred
     //   image worker runs, so it cannot recover a missed canonical link.
@@ -2583,11 +2583,11 @@ fn summarize_coherence_violations(
 /// the bytes survive to registration: `run_image_conversion` registers the
 /// whole batch's `produced_webp_paths` only ONCE, after every item in the
 /// batch finishes, so an early-finished item's `.webp` sits in
-/// `.moss/build/staging` for as long as the rest of the batch takes. On a
+/// `.moss/build.nosync/staging` for as long as the rest of the batch takes. On a
 /// cloud-synced vault (iCloud / Google Drive) that staging directory's
 /// exclusion marker (`moss_paths::exclude_from_cloud_sync`,
 /// `com.apple.fileprovider.ignore#P`) can silently fail to stick — moss#964
-/// measured it ABSENT on `.moss/build` while present on `.moss/cache` on a
+/// measured it ABSENT on `.moss/build.nosync` while present on `.moss/cache` on a
 /// real vault — so the provider can evict a just-staged `.webp` before this
 /// batch's own registration pass reads it back:
 /// `emit_image_outputs_via_channel`'s `output_present` check then finds it

@@ -140,25 +140,25 @@ fn paths(source: &str, output: &str) -> (PathBuf, PathBuf) {
 
 #[test]
 fn resolve_video_cover_uses_thumbnail_in_output_root() {
-    let (src, out) = paths("/site", "/site/.moss/build/current");
+    let (src, out) = paths("/site", "/site/.moss/build.nosync/current");
     let resolved = resolve_color_source_path("音乐/cover.mp4", &src, &out)
         .expect("video cover should resolve");
     assert_eq!(
         resolved,
-        PathBuf::from("/site/.moss/build/current/音乐/cover.thumb.jpg")
+        PathBuf::from("/site/.moss/build.nosync/current/音乐/cover.thumb.jpg")
     );
 }
 
 #[test]
 fn resolve_video_cover_handles_uppercase_extensions() {
     // iPhone .MOV, GoPro .MP4 — case must not matter.
-    let (src, out) = paths("/site", "/site/.moss/build/current");
+    let (src, out) = paths("/site", "/site/.moss/build.nosync/current");
     for cover in ["clip.MOV", "clip.MP4", "clip.Mp4", "clip.WEBM"] {
         let resolved = resolve_color_source_path(cover, &src, &out)
             .unwrap_or_else(|| panic!("uppercase {cover} should resolve"));
         assert_eq!(
             resolved,
-            PathBuf::from("/site/.moss/build/current/clip.thumb.jpg"),
+            PathBuf::from("/site/.moss/build.nosync/current/clip.thumb.jpg"),
             "{cover} should map to .thumb.jpg",
         );
     }
@@ -167,12 +167,12 @@ fn resolve_video_cover_handles_uppercase_extensions() {
 #[test]
 fn resolve_video_cover_strips_leading_slash() {
     // Cover URLs from frontmatter often start with "/" (root-relative).
-    let (src, out) = paths("/site", "/site/.moss/build/current");
+    let (src, out) = paths("/site", "/site/.moss/build.nosync/current");
     let resolved = resolve_color_source_path("/videos/clip.mov", &src, &out)
         .expect("leading-slash video should resolve");
     assert_eq!(
         resolved,
-        PathBuf::from("/site/.moss/build/current/videos/clip.thumb.jpg")
+        PathBuf::from("/site/.moss/build.nosync/current/videos/clip.thumb.jpg")
     );
 }
 
@@ -183,7 +183,7 @@ fn resolve_image_cover_prefers_source_root_when_present() {
     let src = tmp.path();
     std::fs::create_dir_all(src.join("assets")).unwrap();
     std::fs::write(src.join("assets/cover.jpg"), b"fake").unwrap();
-    let out = src.join(".moss/build/current");
+    let out = src.join(".moss/build.nosync/current");
 
     let resolved = resolve_color_source_path("assets/cover.jpg", src, &out)
         .expect("image cover should resolve");
@@ -196,7 +196,7 @@ fn resolve_image_cover_falls_back_to_output_when_source_missing() {
     // build hook into output only), fall back to the output root.
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path();
-    let out = src.join(".moss/build/current");
+    let out = src.join(".moss/build.nosync/current");
 
     let resolved = resolve_color_source_path("assets/missing.jpg", src, &out)
         .expect("image cover should resolve to fallback");
@@ -205,7 +205,7 @@ fn resolve_image_cover_falls_back_to_output_when_source_missing() {
 
 #[test]
 fn resolve_external_url_returns_none() {
-    let (src, out) = paths("/site", "/site/.moss/build/current");
+    let (src, out) = paths("/site", "/site/.moss/build.nosync/current");
     assert_eq!(
         resolve_color_source_path("https://example.com/cover.jpg", &src, &out),
         None,
@@ -226,7 +226,7 @@ fn resolve_cover_decodes_a_percent_encoded_url_back_to_the_on_disk_name() {
     let src = tmp.path();
     std::fs::create_dir_all(src.join("獎項")).unwrap();
     std::fs::write(src.join("獎項/封面.jpg"), b"fake").unwrap();
-    let out = src.join(".moss/build/current");
+    let out = src.join(".moss/build.nosync/current");
 
     let resolved =
         resolve_color_source_path("/%E7%8D%8E%E9%A0%85/%E5%B0%81%E9%9D%A2.jpg", src, &out)
@@ -237,7 +237,7 @@ fn resolve_cover_decodes_a_percent_encoded_url_back_to_the_on_disk_name() {
 #[test]
 fn resolve_cover_decode_leaves_a_literal_percent_filename_alone() {
     // A lone `%` is a legal filename byte, not a truncated escape.
-    let (src, out) = paths("/site", "/site/.moss/build/current");
+    let (src, out) = paths("/site", "/site/.moss/build.nosync/current");
     let resolved =
         resolve_color_source_path("assets/100%.jpg", &src, &out).expect("should resolve");
     assert_eq!(resolved, out.join("assets/100%.jpg"));
@@ -384,7 +384,7 @@ fn video_cover_resolves_and_extracts_end_to_end() {
     // alone wouldn't catch a renaming of `.thumb.jpg`.
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path();
-    let out_videos = src.join(".moss/build/current/videos");
+    let out_videos = src.join(".moss/build.nosync/current/videos");
     std::fs::create_dir_all(&out_videos).unwrap();
 
     // Synthesize a 4×4 solid-blue JPEG at the conventional .thumb.jpg
@@ -392,13 +392,13 @@ fn video_cover_resolves_and_extracts_end_to_end() {
     // upscale), averages, darkens for WCAG — the result must be a
     // blue HSL string.
     let img = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([0u8, 0, 255]));
-    let thumb_path = src.join(".moss/build/current/videos/clip.thumb.jpg");
+    let thumb_path = src.join(".moss/build.nosync/current/videos/clip.thumb.jpg");
     image::DynamicImage::ImageRgb8(img)
         .save_with_format(&thumb_path, image::ImageFormat::Jpeg)
         .unwrap();
 
     let resolved =
-        resolve_color_source_path("/videos/clip.mp4", src, &src.join(".moss/build/current"))
+        resolve_color_source_path("/videos/clip.mp4", src, &src.join(".moss/build.nosync/current"))
             .expect("video cover should resolve");
     assert_eq!(resolved, thumb_path);
 
@@ -422,7 +422,7 @@ fn resolve_video_cover_never_falls_back_to_source_root() {
     let src = tmp.path();
     std::fs::create_dir_all(src.join("音乐")).unwrap();
     std::fs::write(src.join("音乐/cover.mp4"), b"fake mp4 bytes").unwrap();
-    let out = src.join(".moss/build/current");
+    let out = src.join(".moss/build.nosync/current");
 
     let resolved =
         resolve_color_source_path("音乐/cover.mp4", src, &out).expect("video should resolve");
@@ -835,7 +835,7 @@ fn card_color_video_resolves_thumbnail_through_ladder() {
     // same pin as video_cover_resolves_and_extracts_end_to_end, but
     // through resolve_card_color.
     let tmp = repo_tmp();
-    let out_dir = tmp.path().join(".moss/build/current/videos");
+    let out_dir = tmp.path().join(".moss/build.nosync/current/videos");
     std::fs::create_dir_all(&out_dir).unwrap();
     let img = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([0u8, 0, 255]));
     image::DynamicImage::ImageRgb8(img)
@@ -868,7 +868,7 @@ fn card_color_video_resolves_thumbnail_through_ladder() {
 #[test]
 fn card_color_video_self_heals_once_the_poster_lands() {
     let tmp = repo_tmp();
-    let out_dir = tmp.path().join(".moss/build/current/videos");
+    let out_dir = tmp.path().join(".moss/build.nosync/current/videos");
     std::fs::create_dir_all(&out_dir).unwrap();
 
     // Before: background video conversion hasn't produced the thumbnail yet —

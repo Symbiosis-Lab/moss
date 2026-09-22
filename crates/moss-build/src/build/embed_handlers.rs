@@ -55,7 +55,7 @@ pub fn builtin_marker_handlers(site_root: PathBuf, lang: crate::i18n::Language) 
 /// pointing at moss's JupyterLite viewer for the notebook.
 ///
 /// Reuses moss's existing notebook infrastructure (see `build/notebook.rs`):
-/// the site build copies the `.ipynb` into `.moss/build/current/...` and ships
+/// the site build copies the `.ipynb` into `.moss/build.nosync/current/...` and ships
 /// a JupyterLite WASM runtime at `/jupyter/`. The viewer URL for a notebook
 /// `foo.ipynb` is `/jupyter/notebooks/?path=<url-encoded filename>`.
 ///

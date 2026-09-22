@@ -30,7 +30,7 @@ moss works headless:
 moss build /path/to/folder --no-plugins
 ```
 
-The build output is a self-contained static site in `.moss/build/current/` — standard HTML, CSS, and JS that can be deployed anywhere. (`.moss/build/current/` is a symlink to the latest generation under `.moss/build/generations/`.)
+The build output is a self-contained static site in `.moss/build.nosync/current/` — standard HTML, CSS, and JS that can be deployed anywhere. (`.moss/build.nosync/current/` is a symlink to the latest generation under `.moss/build.nosync/generations/`.)
 
 ## Import
 

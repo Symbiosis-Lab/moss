@@ -35,7 +35,7 @@ fn test_article_map_is_article() {
 fn test_article_map_save_and_load() {
     let temp_dir = TempDir::new().unwrap();
     let moss_dir = temp_dir.path();
-    fs::create_dir_all(moss_dir.join("build")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
     let mut map = ArticleMap::new();
     map.articles.insert(
@@ -55,7 +55,7 @@ fn test_article_map_save_and_load() {
 
     // Save
     map.save(moss_dir).unwrap();
-    assert!(moss_dir.join("build").join("article-map.json").exists());
+    assert!(moss_dir.join("build.nosync").join("article-map.json").exists());
 
     // Load
     let loaded = ArticleMap::load(moss_dir).unwrap();
@@ -83,12 +83,12 @@ fn test_article_map_save_is_atomic_no_temp_leftover() {
     // (no `.json.tmp` sibling left behind) and the final file is complete.
     let temp_dir = TempDir::new().unwrap();
     let moss_dir = temp_dir.path();
-    fs::create_dir_all(moss_dir.join("build")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
     let map = ArticleMap::new();
     map.save(moss_dir).unwrap();
 
-    let build = moss_dir.join("build");
+    let build = moss_dir.join("build.nosync");
     let leftovers: Vec<_> = fs::read_dir(&build)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -336,7 +336,7 @@ fn test_build_article_map_includes_html_content() {
 fn test_article_map_html_content_roundtrips_through_json() {
     let temp_dir = TempDir::new().unwrap();
     let moss_dir = temp_dir.path();
-    fs::create_dir_all(moss_dir.join("build")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
     let mut map = ArticleMap::new();
     map.articles.insert(
@@ -372,7 +372,7 @@ fn test_article_map_loads_without_html_content_field() {
     // Deserialization should still work (field defaults to None)
     let temp_dir = TempDir::new().unwrap();
     let moss_dir = temp_dir.path();
-    fs::create_dir_all(moss_dir.join("build")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
     let old_json = r##"{
             "articles": {
@@ -385,7 +385,7 @@ fn test_article_map_loads_without_html_content_field() {
                 }
             }
         }"##;
-    fs::write(moss_dir.join("build").join("article-map.json"), old_json).unwrap();
+    fs::write(moss_dir.join("build.nosync").join("article-map.json"), old_json).unwrap();
 
     let loaded = ArticleMap::load(moss_dir).unwrap();
     let article = loaded.articles.get("posts/old/").unwrap();
@@ -402,7 +402,7 @@ fn test_article_map_uid_serialization() {
     // Test that uid field is serialized to JSON and can be loaded back
     let temp_dir = TempDir::new().unwrap();
     let moss_dir = temp_dir.path();
-    fs::create_dir_all(moss_dir.join("build")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
     let mut map = ArticleMap::new();
     map.articles.insert(
@@ -422,7 +422,7 @@ fn test_article_map_uid_serialization() {
 
     // Save and verify JSON contains uid
     map.save(moss_dir).unwrap();
-    let json = fs::read_to_string(moss_dir.join("build").join("article-map.json")).unwrap();
+    let json = fs::read_to_string(moss_dir.join("build.nosync").join("article-map.json")).unwrap();
     assert!(json.contains("a7b3c9d2"), "JSON should contain uid value");
 
     // Load and verify uid roundtrips

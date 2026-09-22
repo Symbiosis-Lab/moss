@@ -1,4 +1,4 @@
-//! `.moss/build/inventory.json` — the build's own account of every document it
+//! `.moss/build.nosync/inventory.json` — the build's own account of every document it
 //! parsed, whether or not that document became a page.
 //!
 //! ## Why the build owns this file
@@ -84,7 +84,7 @@ pub struct InventoryEntry {
     pub lang: String,
 }
 
-/// `.moss/build/inventory.json` — written by the build, read by `moss list`.
+/// `.moss/build.nosync/inventory.json` — written by the build, read by `moss list`.
 ///
 /// Through `MossPaths::build_dir()`, not a bare join: a cloud sync client's
 /// rename-aside mid-build must not send this file to the decoy while the
@@ -165,13 +165,13 @@ pub fn build_inventory(
     rows
 }
 
-/// Write `.moss/build/inventory.json` from the build's parsed documents.
+/// Write `.moss/build.nosync/inventory.json` from the build's parsed documents.
 ///
 /// Called once per build, right where the article map is saved. Cheap: it
 /// clones a handful of short strings per document and serializes them.
 ///
 /// Goes through `build::io_utils` because everything landing under
-/// `.moss/build/` must (ADR-043) — a raw `fs::write` there fails against a
+/// `.moss/build.nosync/` must (ADR-043) — a raw `fs::write` there fails against a
 /// cloud-evicted destination and is caught by `output_write_invariant_test`.
 pub fn write_inventory(
     documents: &[crate::build::types::ParsedDocument],

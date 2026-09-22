@@ -795,9 +795,9 @@ mod tests {
 
     #[test]
     fn test_site_directory_state_new() {
-        let state = SiteDirectoryState::new(std::path::PathBuf::from("/folder_a/.moss/build/current"));
+        let state = SiteDirectoryState::new(std::path::PathBuf::from("/folder_a/.moss/build.nosync/current"));
         let current = state.current_dir.read().unwrap();
-        assert_eq!(*current, std::path::PathBuf::from("/folder_a/.moss/build/current"));
+        assert_eq!(*current, std::path::PathBuf::from("/folder_a/.moss/build.nosync/current"));
     }
 
     #[test]
@@ -805,20 +805,20 @@ mod tests {
         // Behavior: When switching from folder A to folder B, the server should
         // continue running but serve content from folder B's active generation.
         // This is used for zero-flicker folder switching without restarting servers.
-        let state = SiteDirectoryState::new(std::path::PathBuf::from("/folder_a/.moss/build/current"));
+        let state = SiteDirectoryState::new(std::path::PathBuf::from("/folder_a/.moss/build.nosync/current"));
 
         // Switch to folder B
-        assert!(state.switch_to(std::path::PathBuf::from("/folder_b/.moss/build/current")));
+        assert!(state.switch_to(std::path::PathBuf::from("/folder_b/.moss/build.nosync/current")));
         // Re-switching to the same directory is not a switch. The caller logs
         // off this, and its `initial-build-complete` listener fires on every
         // rebuild — 63 announced switches in one session's log, none of which
         // moved anything (moss#1174).
-        assert!(!state.switch_to(std::path::PathBuf::from("/folder_b/.moss/build/current")));
+        assert!(!state.switch_to(std::path::PathBuf::from("/folder_b/.moss/build.nosync/current")));
 
         let current = state.current_dir.read().unwrap();
         assert_eq!(
             *current,
-            std::path::PathBuf::from("/folder_b/.moss/build/current"),
+            std::path::PathBuf::from("/folder_b/.moss/build.nosync/current"),
             "After switch_to, server should serve folder_b content"
         );
     }

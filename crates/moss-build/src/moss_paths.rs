@@ -60,7 +60,7 @@
 //! Designers find `config.toml` and `theme/` at the top level. Developers
 //! dig into `build/` for cache and output diagnostics.
 //!
-//! **Single deletable build target.** `rm -rf .moss/build/` gives you a clean
+//! **Single deletable build target.** `rm -rf .moss/build.nosync/` gives you a clean
 //! rebuild without losing config, identity, plugins, or imported data.
 //!
 //! **Cloud-sync friendly, minus the regenerable parts.** Config, identity,
@@ -76,11 +76,18 @@
 //! the cloud copy and leaves the local one under a name the cloud can still
 //! deliver: it then renames the live `build/` aside as `build N` and puts its
 //! own copy at the path, mid-build. So nothing may depend on the marker in
-//! either direction. What the code does today is name the swap when it
-//! happens (`build::lifecycle::root_identity`, the `build.root` log line);
-//! the split of `build/` into a synced content-addressed cache and a
-//! per-machine `.nosync` root — the suffix iCloud honours unconditionally —
-//! is the next change here.
+//! either direction. So the tree is split by what "download and wait" can
+//! mean. `cache/` — the content-addressed store, `objects/` and
+//! `transforms/` — is the same bytes on every machine and every blob carries
+//! its checksum, so it syncs with the folder and is waited for (ADR-043's
+//! shared-cache amendment; `ObjectStore::ready_blob`). Everything else lives
+//! under `build.nosync/` — the suffix iCloud honours unconditionally — is
+//! marked for File Provider as well, and is never relied on to be excluded:
+//! the build holds that root by a directory handle
+//! (`build::lifecycle::root_identity`), logs its identity as the `build.root`
+//! line, and reads nothing there beyond what it wrote itself.
+//! `build::lifecycle::tree_migration` moves an older tree into this shape
+//! once, at build start.
 //!
 //! **Fully gitignored.** `.moss/` is not tracked by git. Cloud sync is the
 //! portability mechanism for settings across machines.
@@ -129,7 +136,7 @@
 //! construct paths directly. The Rust backend resolves paths for each SDK
 //! function:
 //!
-//! - `readSiteFile()` → `.moss/build/current/` (active frozen generation)
+//! - `readSiteFile()` → `.moss/build.nosync/current/` (active frozen generation)
 //! - `readPluginFile()` → `.moss/plugins/{plugin-name}/`
 //!
 //! Path traversal (`../`) and absolute paths are blocked at the Rust layer.
@@ -152,7 +159,7 @@ use std::path::{Path, PathBuf};
 /// let moss = root.join(".moss");
 ///
 /// // Build output (frozen generation)
-/// assert_eq!(paths.generation_dir("abc123"), moss.join("build").join("generations").join("abc123"));
+/// assert_eq!(paths.generation_dir("abc123"), moss.join("build.nosync").join("generations").join("abc123"));
 ///
 /// // Theme assets
 /// assert_eq!(paths.theme_dir(), moss.join("theme"));
@@ -196,7 +203,7 @@ impl MossPaths {
     /// A relative root makes the `current` generation symlink (and any other
     /// path baked to disk) resolve against the wrong base: a symlink target
     /// resolves relative to the link's own directory, not the CWD, so
-    /// `moss build ./site` wrote a dangling `.moss/build/current` and the
+    /// `moss build ./site` wrote a dangling `.moss/build.nosync/current` and the
     /// preview server fell back to a stale (or empty) `site/`. GUI callers
     /// already pass absolute project paths (`project_path` is documented and
     /// sent as absolute); this makes the CLI's relative paths equally safe.
@@ -332,9 +339,9 @@ impl MossPaths {
     // ── Build ───────────────────────────────────────────────
     //
     // Everything under build/ is generated and safe to delete.
-    // `rm -rf .moss/build/` gives a clean rebuild.
+    // `rm -rf .moss/build.nosync/` gives a clean rebuild.
 
-    /// `.moss/build/` — all generated artifacts.
+    /// `.moss/build.nosync/` — all generated artifacts.
     ///
     /// Safe to delete for a clean rebuild. This is the only large directory;
     /// everything else in `.moss/` is small.
@@ -350,48 +357,56 @@ impl MossPaths {
         if let Some(held) = crate::build::lifecycle::held_build_root_path(&self.root) {
             return held;
         }
-        self.root.join("build")
+        self.root.join("build.nosync")
     }
 
-    /// `.moss/build/cache/` — content-addressed object store.
+    /// `.moss/build.nosync/cache/` — content-addressed object store.
     pub fn cache_dir(&self) -> PathBuf {
         self.build_dir().join("cache")
     }
 
-    /// `.moss/build/cache/objects/` — hashed file blobs.
+    /// `.moss/cache/objects/` — hashed file blobs.
+    /// The content-addressed store, `.moss/cache/`: shared with the folder
+    /// and waited for, unlike everything under [`build_dir`](Self::build_dir).
+    /// A plain join, not the held handle — the store is never marked, so a
+    /// sync client has no reason to rename it aside.
+    pub fn store_dir(&self) -> PathBuf {
+        self.root.join("cache")
+    }
+
     pub fn cache_objects(&self) -> PathBuf {
-        self.cache_dir().join("objects")
+        self.store_dir().join("objects")
     }
 
-    /// `.moss/build/cache/transforms/` — source→output mappings.
+    /// `.moss/cache/transforms/` — source→output mappings.
     pub fn cache_transforms(&self) -> PathBuf {
-        self.cache_dir().join("transforms")
+        self.store_dir().join("transforms")
     }
 
-    /// `.moss/build/cache/tmp/` — temporary files during conversion.
+    /// `.moss/build.nosync/cache/tmp/` — temporary files during conversion.
     pub fn cache_tmp(&self) -> PathBuf {
         self.cache_dir().join("tmp")
     }
 
-    /// `.moss/build/cache/hash-index.json` — fast-path cache validation index.
+    /// `.moss/build.nosync/cache/hash-index.json` — fast-path cache validation index.
     pub fn cache_hash_index(&self) -> PathBuf {
         self.cache_dir().join("hash-index.json")
     }
 
-    /// `.moss/build/cache/dep-cache.json` — per-page facade fingerprints from
+    /// `.moss/build.nosync/cache/dep-cache.json` — per-page facade fingerprints from
     /// the previous build (moss#922 Stage 4), keyed by source path.
     pub fn cache_dep_graph(&self) -> PathBuf {
         self.cache_dir().join("dep-cache.json")
     }
 
-    /// `.moss/build/cache/frontmatter-scan.json` — per-file `url:`/`external_url:`
+    /// `.moss/build.nosync/cache/frontmatter-scan.json` — per-file `url:`/`external_url:`
     /// frontmatter extraction, keyed by source path, so an unchanged markdown
     /// file's page-map pre-scan is not re-read and re-parsed on every build.
     pub fn cache_frontmatter_scan(&self) -> PathBuf {
         self.cache_dir().join("frontmatter-scan.json")
     }
 
-    /// `.moss/build/cache/folder-lang.json` — per-folder inferred language
+    /// `.moss/build.nosync/cache/folder-lang.json` — per-folder inferred language
     /// (ADR-065), keyed by folder path, alongside the file-set fingerprint it
     /// was inferred from. A folder whose file set is unchanged since the
     /// last build reuses its stored language rather than re-inferring from
@@ -401,17 +416,17 @@ impl MossPaths {
         self.cache_dir().join("folder-lang.json")
     }
 
-    /// `.moss/build/cache/link-meta/` — cached og:tag metadata for external links.
+    /// `.moss/build.nosync/cache/link-meta/` — cached og:tag metadata for external links.
     pub fn cache_link_meta(&self) -> PathBuf {
         self.cache_dir().join("link-meta")
     }
 
-    /// `.moss/build/cache/videos/` — legacy video cache (pre-CAS migration).
+    /// `.moss/build.nosync/cache/videos/` — legacy video cache (pre-CAS migration).
     pub fn cache_videos_legacy(&self) -> PathBuf {
         self.cache_dir().join("videos")
     }
 
-    /// `.moss/build/cache/manifest-hash-memo.json` — `oid -> xxh3` memo for
+    /// `.moss/build.nosync/cache/manifest-hash-memo.json` — `oid -> xxh3` memo for
     /// the manifest hash of a CAS blob's bytes. A blob's bytes never change
     /// for a given oid, so this needs no staleness rule; it only grows (or
     /// gets crudely reset once it's large — see `ManifestHashMemo`). Lives
@@ -421,7 +436,7 @@ impl MossPaths {
         self.cache_dir().join("manifest-hash-memo.json")
     }
 
-    /// `.moss/build/index/` — holding area for the search bundle (ADR-045).
+    /// `.moss/build.nosync/index/` — holding area for the search bundle (ADR-045).
     ///
     /// Deliberately NOT under `staging/` or a generation: the search lane runs
     /// on its own schedule, so its output must survive `remove_stale_files`,
@@ -433,7 +448,7 @@ impl MossPaths {
         self.build_dir().join("index")
     }
 
-    /// `.moss/build/index/receipt.json` — the page-set fingerprint the lane
+    /// `.moss/build.nosync/index/receipt.json` — the page-set fingerprint the lane
     /// last indexed plus the `(path, hash)` pairs of every file it produced.
     /// Written last, so a torn publish reads as "no receipt" rather than as a
     /// bundle whose files are half on disk.
@@ -441,7 +456,7 @@ impl MossPaths {
         self.index_dir().join("receipt.json")
     }
 
-    /// `.moss/build/staging/` — in-progress build with preview annotations.
+    /// `.moss/build.nosync/staging/` — in-progress build with preview annotations.
     ///
     /// Contains `data-source-line` attributes for scroll sync. The preview
     /// server points here during builds. After build completes, staging is
@@ -450,12 +465,12 @@ impl MossPaths {
         self.build_dir().join("staging")
     }
 
-    /// `.moss/build/current.generation` — text marker naming the current generation id.
+    /// `.moss/build.nosync/current.generation` — text marker naming the current generation id.
     pub fn current_generation_marker(&self) -> PathBuf {
         self.build_dir().join("current.generation")
     }
 
-    /// `.moss/build/generations/` — content-addressed generation store.
+    /// `.moss/build.nosync/generations/` — content-addressed generation store.
     ///
     /// Each completed build is sealed as an immutable generation directory here.
     /// The `current` symlink points to the active generation.
@@ -463,12 +478,12 @@ impl MossPaths {
         self.build_dir().join("generations")
     }
 
-    /// `.moss/build/generations/<gen_id>/` — a single sealed generation.
+    /// `.moss/build.nosync/generations/<gen_id>/` — a single sealed generation.
     pub fn generation_dir(&self, gen_id: &str) -> PathBuf {
         self.generations_dir().join(gen_id)
     }
 
-    /// `.moss/build/current` — symlink to the active generation directory.
+    /// `.moss/build.nosync/current` — symlink to the active generation directory.
     ///
     /// Always points to an absolute path inside `generations/`. Replaced
     /// atomically via `set_current_ptr`.
@@ -476,7 +491,7 @@ impl MossPaths {
         self.build_dir().join("current")
     }
 
-    /// Atomically replace `.moss/build/current` → `generations/<gen_id>/`.
+    /// Atomically replace `.moss/build.nosync/current` → `generations/<gen_id>/`.
     ///
     /// Uses write-then-rename so no reader ever sees an absent `current` pointer.
     /// Symlink target is absolute to avoid cwd ambiguity.
@@ -529,7 +544,7 @@ impl MossPaths {
         }
         // The marker is the answer to "which generation is current" on every
         // platform; on unix `current` remains the served pointer. Under
-        // `.moss/build/`, so through io_utils, not a raw write (ADR-043).
+        // `.moss/build.nosync/`, so through io_utils, not a raw write (ADR-043).
         crate::build::io_utils::write_output(&self.current_generation_marker(), gen_id.as_bytes())?;
         Ok(())
     }
@@ -559,7 +574,7 @@ impl MossPaths {
         self.staging_dir()
     }
 
-    /// `.moss/build/hashes.json` — file hash manifest for change detection.
+    /// `.moss/build.nosync/hashes.json` — file hash manifest for change detection.
     ///
     /// Tracks content hashes of output files, source files, plugin fingerprints,
     /// and builder fingerprints. Enables incremental builds and smart preview
@@ -568,7 +583,7 @@ impl MossPaths {
         self.build_dir().join("hashes.json")
     }
 
-    /// `.moss/build/article-map.json` — content index.
+    /// `.moss/build.nosync/article-map.json` — content index.
     ///
     /// Maps URL paths to article metadata (title, content, frontmatter, tags).
     /// Used by syndication plugins, RSS generation, and search.
@@ -576,7 +591,7 @@ impl MossPaths {
         self.build_dir().join("article-map.json")
     }
 
-    /// `.moss/build/profile.jsonl` — build performance metrics.
+    /// `.moss/build.nosync/profile.jsonl` — build performance metrics.
     ///
     /// One JSON line per build with step-level timing data.
     pub fn profile(&self) -> PathBuf {
@@ -698,12 +713,19 @@ pub enum CloudPolicy {
     /// moss holds the replacement bytes at every build start, so a dataless
     /// file here **is** absent and writes go through `build::io_utils`.
     ExcludedRegenerable,
+    /// Regenerable AND worth waiting for: the content-addressed store. Same
+    /// key ⇒ same bytes on every machine, and every blob carries its own
+    /// checksum, so a dataless one is a download to wait for — bounded, then
+    /// a miss — rather than an absence (ADR-043's shared-cache amendment).
+    /// Never marked: on iCloud Drive the marker un-syncs a directory the
+    /// cloud already holds, which for a shared store is a delete.
+    SyncedRegenerable,
 }
 
 impl CloudPolicy {
     /// Whether this path gets the "do not sync" marker.
     pub fn is_excluded(self) -> bool {
-        !matches!(self, CloudPolicy::Synced)
+        matches!(self, CloudPolicy::ExcludedRegenerable)
     }
 }
 
@@ -731,7 +753,7 @@ pub struct MossPathRule {
     /// Strictly wider than `watched`: `.moss/identity/` is the file publish
     /// cannot proceed without and the file no edit ever rebuilds on — which is
     /// how the one file a publish dies on became the one nobody asked the
-    /// provider for (moss#986). Not the same as "important": `.moss/build/` is
+    /// provider for (moss#986). Not the same as "important": `.moss/build.nosync/` is
     /// read back but regenerable, and ADR-043 says a dataless file there is
     /// *absent*, so it stays false and stays pruned.
     pub materialized: bool,
@@ -776,15 +798,15 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // as advisory (ADR-062: unreadable is never "nothing published"). The v6
     // gitignore migration prunes the old `deploy/` line from existing projects.
     r(".moss/deploy/", false, CloudPolicy::Synced, false, true),
-    // Declared under `.moss/build/` anyway: a row is what creates and marks
+    // Declared under `.moss/build.nosync/` anyway: a row is what creates and marks
     // the directory the moment moss first writes there.
-    r(".moss/build/cache/", true, CloudPolicy::ExcludedRegenerable, false, false),
-    r(".moss/build/staging/", true, CloudPolicy::ExcludedRegenerable, false, false),
+    r(".moss/build.nosync/cache/", false, CloudPolicy::ExcludedRegenerable, false, false),
+    r(".moss/build.nosync/staging/", false, CloudPolicy::ExcludedRegenerable, false, false),
     // Born 2026-07-22 with no row: on the CPHS vault its 6 GB carried
     // `com.dropbox.attrs` while the marked `staging/` and `cache/` beside it
     // stayed clean. `gitignore: false` — a line would rewrite every existing
     // project's `.moss/.gitignore` as a side effect (#960).
-    r(".moss/build/generations/", false, CloudPolicy::ExcludedRegenerable, false, false),
+    r(".moss/build.nosync/generations/", false, CloudPolicy::ExcludedRegenerable, false, false),
     r(".moss/agents/", true, CloudPolicy::Synced, false, false),
     // Gitignored: a git user already has git's own history, and moss must never
     // turn a version store into commits nobody made. `CloudPolicy::Synced`
@@ -795,7 +817,11 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // needs to be force-downloaded.
     r(".moss/history/", true, CloudPolicy::Synced, false, false),
     // — regenerable output, kept out of cloud sync —
-    r(".moss/build/", false, CloudPolicy::ExcludedRegenerable, false, false),
+    r(".moss/build.nosync/", true, CloudPolicy::ExcludedRegenerable, false, false),
+    // The store is the one path that is both regenerable and shared: see the
+    // variant's doc. Gitignored like the rest of the output — blobs in a
+    // site's repository are never wanted.
+    r(".moss/cache/", true, CloudPolicy::SyncedRegenerable, false, false),
     // — moss-written, neither gitignored nor cloud-excluded —
     // Plugin bundles are moss-written but not regenerable without a re-install,
     // and a plugin whose bundle is evicted simply fails to load.
@@ -904,9 +930,10 @@ pub fn is_materialized_rel(rel: &str) -> bool {
 }
 
 /// Delete the output roots older moss versions wrote, and unblock `current`.
-/// `.moss/cache/`, `.moss/site/` and `.moss/build/site/` lost their last
-/// reader when the cache moved under `build/` and generations replaced
-/// in-place output. A directory-shaped `.moss/build/current` is the
+/// `.moss/site/` and `build/site/` (now under `build.nosync/`, where the
+/// tree migration moves the old root) lost their last reader when generations
+/// replaced in-place output. `.moss/cache/` was retired here too, until it
+/// became the shared store's home. A directory-shaped `build.nosync/current` is the
 /// pre-generations form of the pointer, and on unix `set_current_ptr` renames
 /// a symlink into place, so while that directory sits there the build seals
 /// generations it can never promote — an old site served forever with no error
@@ -921,7 +948,7 @@ pub fn is_materialized_rel(rel: &str) -> bool {
 /// same as the accessors above before this fix.
 pub fn retire_legacy_roots(mp: &MossPaths) {
     let moss_root = mp.root();
-    for legacy in [moss_root.join("cache"), moss_root.join("site"), mp.build_dir().join("site")] {
+    for legacy in [moss_root.join("site"), mp.build_dir().join("site")] {
         // allow:unlink retired output roots that no build writes or serves
         let _ = crate::build::io_utils::remove_output_dir_all(&legacy);
     }
@@ -987,9 +1014,12 @@ pub fn exclude_dirs_from_cloud_sync(moss_root: &std::path::Path) {
 /// permanent site identity (pinned by `build_tests::keystore_dir_is_gitignored`).
 ///
 /// Derived from [`MOSS_PATH_RULES`]; the exact output is pinned by
-/// `moss_paths_tests::gitignore_matches_the_shipped_contents`. Note it does not
-/// list `build/generations/` — see #960's "out of scope" note; adding it would
-/// rewrite every existing project's `.moss/.gitignore` as a side effect.
+/// `moss_paths_tests::gitignore_matches_the_shipped_contents`. Adding a line
+/// here appends it to every existing project's `.moss/.gitignore` on its next
+/// build, which is why `build/generations/` never was; `build.nosync/` and
+/// `cache/` were, deliberately, when the tree split — the old `build/cache/`
+/// and `build/staging/` lines they supersede stay where a project has them,
+/// matching nothing.
 pub fn moss_gitignore() -> String {
     gitignore_rules().map(|(_, line)| format!("{line}\n")).collect()
 }
@@ -1067,7 +1097,7 @@ pub fn already_excluded(existing: &str, dir: &str, negatable: bool) -> bool {
 /// other providers that adopted File Provider). Best-effort and idempotent.
 ///
 /// Applied to every [`MOSS_PATH_RULES`] row that `exclude_dirs_from_cloud_sync`
-/// marks `ExcludedRegenerable`: `.moss/build/` plus `cache/`, `staging/` and
+/// marks `ExcludedRegenerable`: `.moss/build.nosync/` plus `cache/`, `staging/` and
 /// `generations/` beneath it — there is no top-level `.moss/cache` since the
 /// CAS migration in 752fe9e0e5. All regenerable, and syncing it is actively
 /// harmful: on one iCloud vault it was 12.3 GB of 15.6 GB, ~1700 conflict
@@ -1126,7 +1156,7 @@ fn exclude_from_cloud_sync(dir: &std::path::Path) {
     // The failure is still non-fatal — failing to set this costs sync hygiene,
     // never a build, and a read-only or non-xattr filesystem is fine. But the
     // return value is no longer *silent*: on one live iCloud vault the marker
-    // was measured ABSENT on `.moss/build` while present on `.moss/cache`, with
+    // was measured ABSENT on `.moss/build.nosync` while present on `.moss/cache`, with
     // 24 cross-machine conflict copies of the `current` symlink to show for it
     // (moss#964 §4). Whether the call fails, the marker is stripped on a
     // cross-machine round trip, or it was applied only after the directory had
@@ -1202,7 +1232,7 @@ mod tests {
     fn gitignore_matches_the_shipped_contents() {
         assert_eq!(
             moss_gitignore(),
-            "identity/\nkeys/\ndata/*\nbuild/cache/\nbuild/staging/\nagents/\nhistory/\n",
+            "identity/\nkeys/\ndata/*\nagents/\nhistory/\nbuild.nosync/\ncache/\n",
             "the generated .moss/.gitignore changed — if that is intended, note \
              that it lands in every existing project on its next build"
         );
@@ -1305,16 +1335,16 @@ mod tests {
         let mp = MossPaths::new(proj.path());
         let root = mp.root();
 
-        for legacy in ["cache", "site", "build/site"] {
+        for legacy in ["site", "build.nosync/site"] {
             std::fs::create_dir_all(root.join(legacy)).unwrap();
             std::fs::write(root.join(legacy).join("stale"), b"old").unwrap();
         }
-        std::fs::create_dir_all(root.join("build/current")).unwrap();
-        std::fs::write(root.join("build/current/index.html"), b"<h1>five weeks old</h1>").unwrap();
+        std::fs::create_dir_all(root.join("build.nosync/current")).unwrap();
+        std::fs::write(root.join("build.nosync/current/index.html"), b"<h1>five weeks old</h1>").unwrap();
 
         retire_legacy_roots(&mp);
 
-        for legacy in ["cache", "site", "build/site", "build/current"] {
+        for legacy in ["site", "build.nosync/site", "build.nosync/current"] {
             assert!(!root.join(legacy).exists(), "{legacy} must be gone");
         }
         retire_legacy_roots(&mp); // idempotent: the next build finds nothing
@@ -1347,10 +1377,10 @@ mod tests {
         assert_eq!(
             excluded,
             [
-                ".moss/build/",
-                ".moss/build/cache/",
-                ".moss/build/generations/",
-                ".moss/build/staging/",
+                ".moss/build.nosync/",
+                ".moss/build.nosync/cache/",
+                ".moss/build.nosync/generations/",
+                ".moss/build.nosync/staging/",
             ]
         );
         assert!(
@@ -1396,11 +1426,11 @@ mod tests {
     fn build_output_is_never_watchable() {
         for rel in [
             ".moss",
-            ".moss/build",
-            ".moss/build/staging/index.html",
-            ".moss/build/generations/abc/index.html",
-            ".moss/build/cache/objects/ab/cd",
-            ".moss/build/hashes.json",
+            ".moss/build.nosync",
+            ".moss/build.nosync/staging/index.html",
+            ".moss/build.nosync/generations/abc/index.html",
+            ".moss/cache/objects/ab/cd",
+            ".moss/build.nosync/hashes.json",
             ".moss/site/index.html",
             ".moss/identity/secret-key",
             ".moss/plugins/github/main.bundle.js",
@@ -1531,7 +1561,7 @@ mod tests {
         // Regression (2026-06-22): `moss build <relative-path>` must still produce
         // a `current` symlink that RESOLVES. Before the absolute-root invariant,
         // the relative gen_dir target dangled (a symlink resolves against its own
-        // dir, .moss/build/, not the CWD), so the preview fell back to a stale or
+        // dir, .moss/build.nosync/, not the CWD), so the preview fell back to a stale or
         // empty site/ — the coldstart-blank class, re-exposed on the relative path.
         let tmp = make_tmp(); // absolute, under CARGO_MANIFEST_DIR/../target/test-tmp
         // Unit-test CWD is CARGO_MANIFEST_DIR (src-tauri); express the same dir as
@@ -1652,13 +1682,13 @@ mod tests {
         assert_eq!(paths.identity_secret(), moss.join("identity").join("secret-key"));
         assert_eq!(
             paths.generation_dir("abc123"),
-            moss.join("build").join("generations").join("abc123")
+            moss.join("build.nosync").join("generations").join("abc123")
         );
-        assert_eq!(paths.current_ptr(), moss.join("build").join("current"));
-        assert_eq!(paths.staging_dir(), moss.join("build").join("staging"));
-        assert_eq!(paths.cache_dir(), moss.join("build").join("cache"));
-        assert_eq!(paths.hashes(), moss.join("build").join("hashes.json"));
-        assert_eq!(paths.article_map(), moss.join("build").join("article-map.json"));
+        assert_eq!(paths.current_ptr(), moss.join("build.nosync").join("current"));
+        assert_eq!(paths.staging_dir(), moss.join("build.nosync").join("staging"));
+        assert_eq!(paths.cache_dir(), moss.join("build.nosync").join("cache"));
+        assert_eq!(paths.hashes(), moss.join("build.nosync").join("hashes.json"));
+        assert_eq!(paths.article_map(), moss.join("build.nosync").join("article-map.json"));
         assert_eq!(paths.social_dir(), moss.join("data").join("social"));
         assert_eq!(
             paths.deployed_article_map(),
@@ -1699,7 +1729,7 @@ mod tests {
     #[test]
     fn the_cloud_sync_marker_reads_back_once_set() {
         let tmp = make_tmp();
-        let dir = tmp.path().join("build");
+        let dir = tmp.path().join("build.nosync");
         std::fs::create_dir_all(&dir).unwrap();
         assert!(!has_cloud_sync_marker(&dir), "an unmarked directory reads back unmarked");
         exclude_from_cloud_sync(&dir);
@@ -1710,8 +1740,8 @@ mod tests {
     #[test]
     fn should_warn_once_fires_only_on_first_sighting_of_a_dir() {
         let seen = std::sync::Mutex::new(std::collections::HashSet::new());
-        let a = std::path::PathBuf::from("/tmp/a/.moss/build");
-        let b = std::path::PathBuf::from("/tmp/b/.moss/build");
+        let a = std::path::PathBuf::from("/tmp/a/.moss/build.nosync");
+        let b = std::path::PathBuf::from("/tmp/b/.moss/build.nosync");
 
         assert!(should_warn_once(&a, &seen), "first sighting of a must warn");
         assert!(!should_warn_once(&a, &seen), "second sighting of a must stay quiet");
@@ -1842,7 +1872,8 @@ history/
         // same no-op. The bug was only visible because it recurred on every
         // single build.
         assert_eq!(
-            after, SITE_THAT_COMMITS_ITS_REDIRECTS,
+            after,
+            format!("{SITE_THAT_COMMITS_ITS_REDIRECTS}build.nosync/\ncache/\n"),
             "only a rule this file is actually missing may be added"
         );
         ensure_moss_gitignore(&moss_root).unwrap();
@@ -1886,8 +1917,9 @@ history/
 
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            workaround,
-            "a live site's pushed .moss/.gitignore must survive a build byte-for-byte"
+            format!("{workaround}build.nosync/\ncache/\n"),
+            "a live site's pushed .moss/.gitignore must survive a build byte-for-byte, \
+             gaining only the two lines the split tree needs"
         );
     }
 
@@ -1910,7 +1942,7 @@ history/
 
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            old,
+            format!("{old}build.nosync/\ncache/\n"),
             "`data/` already excludes everything `data/*` does; rewriting or \
              duplicating it would edit a file moss promised only to add to"
         );

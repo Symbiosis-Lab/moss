@@ -159,7 +159,7 @@ pub fn site_audience_list(
 }
 
 /// The audience list the last build persisted at
-/// `.moss/build/site-languages.json`, or `None` when no build has written
+/// `.moss/build.nosync/site-languages.json`, or `None` when no build has written
 /// one (or it is unreadable). The root entry's `lang` is the language the
 /// build resolved for the site; readers that must answer without a build
 /// decide their own fallback.

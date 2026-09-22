@@ -30,7 +30,7 @@ moss build <folder> --serve
 Builds the site and serves it on port 8080, or the next free port if 8080 is
 taken — read the port from the build output rather than assuming it, or you
 may be inspecting a different moss instance's site. Inspect the built HTML under
-`.moss/build/current/` (the active frozen generation). Useful for headless or automated checks without
+`.moss/build.nosync/current/` (the active frozen generation). Useful for headless or automated checks without
 opening the GUI preview. The `.css` files under its `_moss/` are minified build
 output — don't read or edit them; use `moss describe --css <selector>` instead.
 
@@ -64,7 +64,7 @@ So a block that came out as an unstyled div is a name problem, not a fence
 problem. If you have lost the build log, grep the output instead:
 
 ```
-grep -ro 'moss-unknown-shortcode[^>]*' .moss/build/current/
+grep -ro 'moss-unknown-shortcode[^>]*' .moss/build.nosync/current/
 ```
 
 `data-name` is the name moss did not recognize. For the valid names, run

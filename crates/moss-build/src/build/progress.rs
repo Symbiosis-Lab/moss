@@ -162,7 +162,7 @@ pub struct BuildComplete {
 /// of the pipeline, and it reports a filesystem fact rather than progress.
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct SitePromoted {
-    /// The generation now serving at `.moss/build/current`.
+    /// The generation now serving at `.moss/build.nosync/current`.
     pub generation_id: String,
 }
 

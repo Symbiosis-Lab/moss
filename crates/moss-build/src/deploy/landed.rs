@@ -36,7 +36,7 @@ use crate::moss_paths::MossPaths;
 /// It cannot any more: both plugin callers go through
 /// `plugin_push::run_plugin_deploy_inner`, which refuses a sealless publish
 /// before any bytes move — the directory it hands the plugin is
-/// `.moss/build/current`, and without the manifest nothing can say which
+/// `.moss/build.nosync/current`, and without the manifest nothing can say which
 /// generation that is. The sealless writer went with the `Option`; its
 /// behaviour is in git history and in `one_shot::require_sealed`'s doc.
 ///
@@ -224,7 +224,7 @@ struct LiveArticleMapping {
 /// Async fs so a slow (e.g. iCloud-syncing) file cannot block a runtime worker.
 async fn read_live_article_mapping(mp: &MossPaths) -> Option<LiveArticleMapping> {
     let src = mp.article_map();
-    // allow:raw_read regenerable build output under `.moss/build/` (ADR-043),
+    // allow:raw_read regenerable build output under `.moss/build.nosync/` (ADR-043),
     // where dataless is absent — and an unreadable one is handled either way.
     let bytes = match tokio::fs::read(&src).await {
         Ok(bytes) => bytes,

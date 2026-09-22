@@ -9,7 +9,7 @@
 //!
 //! Joined 2026-08-18 by the `.moss` **layout** owner per
 //! [ADR-057](../../../../docs/decisions/ADR-057-moss-paths-ships-in-moss-build.md): the crate
-//! that writes `.moss/build/generations/<id>/` owns the names for it, and 22 of
+//! that writes `.moss/build.nosync/generations/<id>/` owns the names for it, and 22 of
 //! `MossPaths`'s consumers sit in the build tree that moves at M6a. Same argument as
 //! ADR-051, second type — identity, then layout.
 //!

@@ -36,7 +36,7 @@
 //! ImageOutputs (2026-05-15), ImageVariants (2026-05-15), and VideoOutputs
 //! (2026-06-11) all had the same root cause: `inner.files.insert()` was an
 //! opt-in per-bucket call that was easy to forget on new buckets. Each omission
-//! caused the artifact to exist locally in `.moss/build/current/` but never reach
+//! caused the artifact to exist locally in `.moss/build.nosync/current/` but never reach
 //! the seta server, producing 404s on the live site. The structural fix moves
 //! `inner.files.insert()` unconditionally before the match statement so the
 //! compiler enforces the invariant — a new bucket cannot skip deploy registration.

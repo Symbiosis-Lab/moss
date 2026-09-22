@@ -309,7 +309,7 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), KeystoreErr
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        // allow:raw_write identity keys live under .moss/identity/, not .moss/build/ — 0600 perms require this open, and the path is never cloud-evicted output
+        // allow:raw_write identity keys live under .moss/identity/, not .moss/build.nosync/ — 0600 perms require this open, and the path is never cloud-evicted output
         let mut f = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -321,7 +321,7 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), KeystoreErr
     }
     #[cfg(not(unix))]
     {
-        // allow:raw_write identity keys live under .moss/identity/, not .moss/build/
+        // allow:raw_write identity keys live under .moss/identity/, not .moss/build.nosync/
         let mut f = std::fs::File::create(path).map_err(|_| KeystoreError::Io)?;
         f.write_all(bytes).map_err(|_| KeystoreError::Io)?;
     }

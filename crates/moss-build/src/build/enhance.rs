@@ -574,7 +574,7 @@ pub fn inject_slots_into_directory_cached(
         }
         let changed_page = injected != html;
         if changed_page {
-            // `write_output`, not `fs::write`: `dir` is `.moss/build/staging/`,
+            // `write_output`, not `fs::write`: `dir` is `.moss/build.nosync/staging/`,
             // and an `O_TRUNC` open of a page the sync client evicted between
             // render and injection fails EDEADLK (ADR-043).
             crate::build::io_utils::write_output(entry.path(), injected.as_bytes())

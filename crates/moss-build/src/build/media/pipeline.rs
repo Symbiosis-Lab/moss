@@ -156,7 +156,7 @@ fn check_source_cache(
 /// would record for the bytes written.
 ///
 /// The hash is taken from `source`, never from the destination. Reading back
-/// what moss just wrote under `.moss/build/` is the failure this whole design
+/// what moss just wrote under `.moss/build.nosync/` is the failure this whole design
 /// exists to delete: the destination can be a cloud-evicted placeholder, and a
 /// read of one returns `EDEADLK` under the dataless fail-fast policy. The
 /// source is an input, so waiting on it is meaningful; the destination is not.

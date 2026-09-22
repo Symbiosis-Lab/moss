@@ -370,7 +370,7 @@ pub struct SiteResult {
 
 /// Hash map of generated site files for change detection.
 ///
-/// Maps output file paths (relative to the active generation `.moss/build/current/`) to their SHA-256 content hashes.
+/// Maps output file paths (relative to the active generation `.moss/build.nosync/current/`) to their SHA-256 content hashes.
 /// Used for:
 /// 1. Smart preview refresh - only refresh if current page's hash changed
 /// 2. Future incremental uploads - only upload files whose hash changed
@@ -467,7 +467,7 @@ pub struct SiteHashes {
     /// builder version, so those remain unaffected.
     ///
     /// The `alias` accepts the legacy `compiler_fingerprint` field name so
-    /// existing `.moss/build/hashes.json` files from pre-rename moss
+    /// existing `.moss/build.nosync/hashes.json` files from pre-rename moss
     /// deserialize cleanly; write always emits `builder_fingerprint`.
     #[serde(default, alias = "compiler_fingerprint")]
     pub builder_fingerprint: Option<String>,
@@ -643,7 +643,7 @@ mod tests {
 
     // DO NOT REMOVE the `alias = "compiler_fingerprint"` on SiteHashes
     // without also bumping a major version and accepting that every
-    // pre-rename `.moss/build/hashes.json` will trigger a silent full
+    // pre-rename `.moss/build.nosync/hashes.json` will trigger a silent full
     // rebuild on first load. The alias can be dropped once all active
     // sites have rebuilt post-rename (see issue #554).
     #[test]

@@ -349,7 +349,7 @@ pub fn get_build_passthrough(project_path: &str) -> Result<Vec<String>, String> 
 
 /// Read `[build].keep_generations` from `.moss/config.toml`.
 ///
-/// How many generation directories under `.moss/build/generations/` survive
+/// How many generation directories under `.moss/build.nosync/generations/` survive
 /// retention. `None` when the key is absent or not an integer; the caller
 /// applies `store_gc::KEEP_GENERATIONS_DEFAULT` and the floor.
 ///

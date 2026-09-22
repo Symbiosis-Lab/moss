@@ -268,7 +268,7 @@ pub fn resolve_asset(
 ///
 /// Results are appended to `out` as real-case root-relative paths (no leading slash).
 /// Excluded dirs (`.moss`, `node_modules`, etc.) are skipped — same rule as the build
-/// pipeline — so `.moss/build/staging` shadow copies are never returned.
+/// pipeline — so `.moss/build.nosync/staging` shadow copies are never returned.
 fn walk_collect(dir: &Path, suffix: &str, project_root: &Path, max_depth: usize, out: &mut Vec<String>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -306,7 +306,7 @@ fn walk_collect(dir: &Path, suffix: &str, project_root: &Path, max_depth: usize,
             }
         } else if ft.is_dir() && max_depth > 0 {
             // Mirror the build pipeline's exclusion rule: skip .moss, node_modules,
-            // .git, etc. Critically skips `.moss/build/staging` shadow copies.
+            // .git, etc. Critically skips `.moss/build.nosync/staging` shadow copies.
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if crate::build::scan::classify::is_excluded_dir_name(name) {
                 continue;
@@ -377,17 +377,17 @@ mod tests {
     fn walk_skips_dot_moss_build_staging_shadow() {
         // Exact replica of the Yi-website resolve-not-found repro: a bare-filename
         // image reference (`![](forest.jpg)`) with the real source under `assets/`
-        // and TWO build-output shadows under `.moss/build/{staging,current}/assets/`.
+        // and TWO build-output shadows under `.moss/build.nosync/{staging,current}/assets/`.
         // Both shadows live below `.moss`, which the walker now skips, so the real
         // `assets/forest.jpg` is the only candidate returned.
         let dir = scratch_root();
         let root = dir.path();
         std::fs::create_dir_all(root.join("assets")).unwrap();
         std::fs::write(root.join("assets/forest.jpg"), b"real").unwrap();
-        std::fs::create_dir_all(root.join(".moss/build/staging/assets")).unwrap();
-        std::fs::write(root.join(".moss/build/staging/assets/forest.jpg"), b"shadow").unwrap();
-        std::fs::create_dir_all(root.join(".moss/build/current/assets")).unwrap();
-        std::fs::write(root.join(".moss/build/current/assets/forest.jpg"), b"shadow").unwrap();
+        std::fs::create_dir_all(root.join(".moss/build.nosync/staging/assets")).unwrap();
+        std::fs::write(root.join(".moss/build.nosync/staging/assets/forest.jpg"), b"shadow").unwrap();
+        std::fs::create_dir_all(root.join(".moss/build.nosync/current/assets")).unwrap();
+        std::fs::write(root.join(".moss/build.nosync/current/assets/forest.jpg"), b"shadow").unwrap();
 
         let from_file = root.join("main.md");
         let result = resolve_asset("forest.jpg", &from_file, root).expect("resolves");
@@ -634,8 +634,8 @@ mod tests {
         std::fs::create_dir_all(p.join("docs/a/b/c/d")).unwrap();
         std::fs::write(p.join("docs/a/b/c/d/photo.jpg"), b"x").unwrap();
         // And an excluded dir that must STILL be skipped (parity with build scan).
-        std::fs::create_dir_all(p.join(".moss/build/current")).unwrap();
-        std::fs::write(p.join(".moss/build/current/photo.jpg"), b"shadow").unwrap();
+        std::fs::create_dir_all(p.join(".moss/build.nosync/current")).unwrap();
+        std::fs::write(p.join(".moss/build.nosync/current/photo.jpg"), b"shadow").unwrap();
 
         let idx = FsAssetIndex::new(p);
         let hits = idx.find_by_suffix("photo.jpg");

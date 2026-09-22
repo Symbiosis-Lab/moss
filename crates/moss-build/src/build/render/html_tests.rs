@@ -267,7 +267,7 @@ mod stale_cleanup_tests {
 
         // Simulate a previous build that registered video_outputs in hashes.json
         let moss_dir = test_dir.join(".moss");
-        fs::create_dir_all(moss_dir.join("build")).unwrap();
+        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
         let hashes_json = serde_json::json!({
             "files": {},
             "sources": {},
@@ -277,14 +277,14 @@ mod stale_cleanup_tests {
             ]
         });
         fs::write(
-            moss_dir.join("build").join("hashes.json"),
+            moss_dir.join("build.nosync").join("hashes.json"),
             hashes_json.to_string(),
         )
         .unwrap();
 
         // Create the output directory with video files that would have been
         // placed there by a previous background video conversion
-        let output_dir = moss_dir.join("build").join("site");
+        let output_dir = moss_dir.join("build.nosync").join("site");
         let videos_dir = output_dir.join("videos");
         fs::create_dir_all(&videos_dir).unwrap();
         fs::write(videos_dir.join("aimeili.mp4"), "fake mp4").unwrap();
@@ -523,7 +523,7 @@ mod non_blocking_video_tests {
     fn test_generate_blocking_content_returns_background_context_with_videos() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
 
         // Create content with a markdown file referencing a video
         fs::write(test_dir.join("index.md"), "# Test\nVideo content").unwrap();
@@ -599,7 +599,7 @@ mod non_blocking_video_tests {
     fn test_generate_blocking_content_does_not_block_on_video_conversion() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
 
         // Create content
         fs::write(test_dir.join("index.md"), "# Test").unwrap();
@@ -694,7 +694,7 @@ mod deferred_asset_tests {
         fs::write(test_dir.join("CNAME"), "example.com").unwrap();
         fs::write(test_dir.join("robots.txt"), "User-agent: *").unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -743,7 +743,7 @@ mod deferred_asset_tests {
         fs::write(test_dir.join("resume.pdf"), "fake pdf").unwrap();
         fs::write(test_dir.join("CNAME"), "example.com").unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Simulate previous build's hashes for these asset files
@@ -759,7 +759,7 @@ mod deferred_asset_tests {
         let moss_dir = test_dir.join(".moss");
         fs::create_dir_all(&moss_dir).unwrap();
         let hashes_json = serde_json::to_string(&previous_hashes).unwrap();
-        fs::write(moss_dir.join("build").join("hashes.json"), hashes_json).unwrap();
+        fs::write(moss_dir.join("build.nosync").join("hashes.json"), hashes_json).unwrap();
 
         let project_structure =
             scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
@@ -801,7 +801,7 @@ mod deferred_asset_tests {
         fs::write(test_dir.join("index.md"), "# Test").unwrap();
         fs::write(test_dir.join("resume.pdf"), "fake pdf").unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -879,7 +879,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -926,7 +926,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -988,7 +988,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1055,7 +1055,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1107,7 +1107,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1151,7 +1151,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1200,7 +1200,7 @@ mod auto_folder_index_tests {
             )
             .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1256,7 +1256,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1321,7 +1321,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1383,7 +1383,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1441,7 +1441,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1511,7 +1511,7 @@ mod auto_folder_index_tests {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1702,7 +1702,7 @@ mod cover_wikilink_integration {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1782,7 +1782,7 @@ mod folder_cover_no_description {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1884,7 +1884,7 @@ mod folder_cover_grid_escapes_narrow_column {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -1975,7 +1975,7 @@ mod folder_cover_grid_escapes_narrow_column {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -2050,7 +2050,7 @@ mod folder_cover_grid_escapes_narrow_column {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         let project_structure =
@@ -2156,7 +2156,7 @@ mod folder_cover_lede_release {
         )
         .unwrap();
 
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
         let project_structure =
             scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
@@ -2273,7 +2273,7 @@ mod children_listing_and_grid_independence {
     }
 
     fn build_site(test_dir: &std::path::Path) -> std::path::PathBuf {
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
         let project_structure =
             scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
@@ -5839,7 +5839,7 @@ mod video_path_mapping_integration_tests {
         fs::write(test_dir.join("index.md"), "# Home").unwrap();
 
         // Create output directory
-        let output_dir = test_dir.join(".moss").join("build").join("staging");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Run the blocking phase
@@ -5914,7 +5914,7 @@ mod video_path_mapping_integration_tests {
         let _cleanup = Cleanup(test_dir.clone());
 
         fs::write(test_dir.join("index.md"), "# Home").unwrap();
-        let output_dir = test_dir.join(".moss").join("build").join("staging");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         let mut project_structure =
@@ -7237,7 +7237,7 @@ mod homepage_translation_tests {
     fn test_homepage_translation_does_not_create_index_directory() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Create both homepage files
@@ -7306,7 +7306,7 @@ mod homepage_translation_tests {
     fn test_homepage_translation_page_content() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Pin lang on each homepage so dedup tiers are deterministic regardless of
@@ -7368,7 +7368,7 @@ mod homepage_translation_tests {
     fn test_homepage_translation_no_article_title() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Pin lang on each homepage so dedup tiers are deterministic regardless of
@@ -7433,7 +7433,7 @@ mod homepage_translation_tests {
     fn test_home_marker_promoted_no_folder_title_h1() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
         fs::create_dir_all(test_dir.join("en")).unwrap();
 
@@ -7487,7 +7487,7 @@ mod homepage_translation_tests {
     fn test_homepage_translation_not_in_nav() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Pin lang on each homepage so dedup tiers are deterministic regardless of
@@ -7560,7 +7560,7 @@ mod homepage_translation_tests {
     fn test_og_image_resolves_cover_wikilink_on_translated_page() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Mirror the 刘果 vault layout: language-neutral assets/ + a per-language
@@ -7631,7 +7631,7 @@ mod homepage_translation_tests {
     fn test_og_site_name_uses_default_lang_homepage() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // Mirror the user's layout: Chinese-default site with a self-named
@@ -7695,7 +7695,7 @@ mod homepage_translation_tests {
     fn test_og_image_resolves_html_cover_wikilink_on_translated_page() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         fs::create_dir_all(test_dir.join("assets")).unwrap();
@@ -7752,7 +7752,7 @@ mod homepage_translation_tests {
     fn test_html_lang_attribute_is_per_page() {
         let (test_dir, _cleanup) = create_test_dir();
         let folder_path = test_dir.to_str().unwrap();
-        let output_dir = test_dir.join(".moss/build/staging");
+        let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
         // English homepage and Chinese translation, lang pinned for determinism.
@@ -8025,7 +8025,7 @@ mod registry_clear_tests {
 
         // A site with NO videos — the case the old placement never reached.
         fs::write(test_dir.join("index.md"), "# Test").unwrap();
-        let output_dir = test_dir.join(".moss").join("build").join("site");
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
         fs::create_dir_all(&output_dir).unwrap();
 
         // An earlier build's failure, surviving on the shared registry.

@@ -430,7 +430,7 @@ pub async fn download_asset_impl(
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create directory: {}", e))?;
     }
-    // allow:raw_write downloaded asset lands in the plugin's target dir under the project root, not .moss/build/ — freshly created path, no evicted destination
+    // allow:raw_write downloaded asset lands in the plugin's target dir under the project root, not .moss/build.nosync/ — freshly created path, no evicted destination
     fs::write(&file_path, &bytes).map_err(|e| format!("Failed to write file: {}", e))?;
 
     log::debug!(

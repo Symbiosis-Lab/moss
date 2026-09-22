@@ -364,7 +364,7 @@ fn run_native_process_sync(
     }
 
     // Link metadata prewarm: refresh the cache for any external URLs the most
-    // recent build needed (persisted at .moss/build/link-meta-urls.json).
+    // recent build needed (persisted at .moss/build.nosync/link-meta-urls.json).
     // Render reads from cache only — this is what makes those reads fast and
     // keeps the build off the network.
     let moss_dir = Path::new(folder_path).join(".moss");

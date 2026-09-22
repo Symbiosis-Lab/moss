@@ -16,7 +16,7 @@
 //!
 //! There is no `site/` directory. Every build writes to two directories:
 //!
-//! - `stage_dir/` (`.moss/build/staging/`) — writer surface + at-rest reader.
+//! - `stage_dir/` (`.moss/build.nosync/staging/`) — writer surface + at-rest reader.
 //!   All emits write here. HTML carries preview-only annotations
 //!   (`data-source-line`, `data-source-range`, `data-source-fm`, `data-source-none`,
 //!   `data-moss-preview`) used by editor↔preview scroll-sync and click-to-source.
@@ -717,16 +717,18 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
 
     // Ensure .moss/ exists and mark the regenerable tree out of cloud sync
     // BEFORE anything below writes into it: the CLI's link-meta prewarm writes
-    // `.moss/build/cache/link-meta/`, and a marker cannot un-sync bytes a
+    // `.moss/build.nosync/cache/link-meta/`, and a marker cannot un-sync bytes a
     // provider already took.
     // allow:raw_write `.moss` itself; the regenerable tree starts below it
     std::fs::create_dir_all(&moss_dir_path).map_err(|e| format!("Failed to create .moss directory: {}", e))?;
+    // Before the tree is marked or held: the split layout is what both assume.
+    crate::build::lifecycle::tree_migration::migrate_build_tree(&crate::moss_paths::MossPaths::from_moss_dir(moss_dir_path.to_path_buf()));
     crate::infra::moss_paths::exclude_dirs_from_cloud_sync(&moss_dir_path); // regenerable output: keep it out of iCloud, and out of the set moss waits for
-    // Hold `.moss/build` by fd from here so a cloud sync client's rename-aside
+    // Hold `.moss/build.nosync` by fd from here so a cloud sync client's rename-aside
     // mid-build cannot silently move where `build_dir()` reads or writes.
     crate::build::lifecycle::open_build_root_handle(&lifecycle_paths);
     // This build's root identity, to compare against later phases.
-    let start_identity = crate::build::lifecycle::root_identity::log_build_root(&lifecycle_paths.root().join("build"), "start", None);
+    let start_identity = crate::build::lifecycle::root_identity::log_build_root(&lifecycle_paths.root().join("build.nosync"), "start", None);
 
     // Begin a fresh link-meta URL session for this build. Render fills the
     // session via `record_urls_for_prewarm`; we flush it just before spawning
@@ -1610,7 +1612,7 @@ pub fn load_article_map_for_features(
 /// `exits_after_build` run takes instead of detaching.
 ///
 /// `stage_dir` is the directory to stale-clean after materialize —
-/// `.moss/build/staging`.
+/// `.moss/build.nosync/staging`.
 ///
 /// `is_pinned` is called by GC to skip generations currently in-flight.
 /// Pass `|g| s.is_generation_pinned(g)` when AppState is available, or
@@ -1960,7 +1962,7 @@ async fn advertise_sealed(
     }
     // Observed at the plain path on purpose: `build_dir()` follows the handle,
     // so it can never disagree with the start identity.
-    crate::build::lifecycle::root_identity::log_build_root(&mp.root().join("build"), "ship", guards.build_root_identity);
+    crate::build::lifecycle::root_identity::log_build_root(&mp.root().join("build.nosync"), "ship", guards.build_root_identity);
     let mat_ok = matches!(promotion, Ok(Promotion::Promoted));
     let owns_shared = crate::build::ship::tail_owns_shared_state(&promotion);
 

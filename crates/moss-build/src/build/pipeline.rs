@@ -18,8 +18,8 @@
 //!
 //! There is no `site/` directory any more. A build writes annotated HTML
 //! (`data-source-line` for editor↔preview scroll sync) into
-//! `.moss/build/staging/`, and deployment-ready output lives in immutable
-//! `.moss/build/generations/<id>/` directories behind the `current` symlink:
+//! `.moss/build.nosync/staging/`, and deployment-ready output lives in immutable
+//! `.moss/build.nosync/generations/<id>/` directories behind the `current` symlink:
 //!
 //! 1. Build to `staging/`                    (server still serves `current`)
 //! 2. Switch server pointer to `staging/`    (instant — preview shows new content)
@@ -830,7 +830,7 @@ fn run_notebook_processing(
 /// To prevent preview flicker during rebuilds, we use a staging directory and
 /// dynamically switch the server's directory pointer:
 ///
-/// 1. Build to `.moss/build/staging/`         (server still serves `current` generation)
+/// 1. Build to `.moss/build.nosync/staging/`         (server still serves `current` generation)
 /// 2. Switch server pointer to `staging/`     (instant - preview shows new content)
 /// 3. Seal + materialize to `generations/`    (immutable frozen generation created)
 /// 4. Atomically swap `current` symlink       (deployment-ready, zero-flicker)
@@ -1157,7 +1157,7 @@ fn build_inner(
 
     // Step 1: Load previous hashes BEFORE building
     // CRITICAL: Must read hashes before generate_blocking_content() runs, because
-    // the deferred phase writes new hashes to .moss/build/hashes.json after asset copying.
+    // the deferred phase writes new hashes to .moss/build.nosync/hashes.json after asset copying.
     // If we read after, we'd be comparing new hashes against themselves!
     let previous_hashes = load_previous_hashes(folder_path);
     log::debug!(target: "timing", "[build] staging: load_hashes: {:?}", build_start.elapsed());
@@ -1630,7 +1630,7 @@ fn build_inner(
         // returns EDEADLK under the dataless fail-fast policy. That stop
         // classified as Report, so it was fatal, and because `build_folder`
         // applies `?` before `start_file_watching` there was no watcher left to
-        // retry. Nothing under `.moss/build/` needs to be read to find out what
+        // retry. Nothing under `.moss/build.nosync/` needs to be read to find out what
         // moss just wrote there: the writer already knew.
         for (out_path, hash) in &notebook_outputs {
             pending.register_hashed(out_path, hash, crate::build::manifest::HashBucket::NotebookOutputs);
@@ -1925,7 +1925,7 @@ fn sweep_staging(
     }
 }
 
-/// Load previous hashes from .moss/build/hashes.json.
+/// Load previous hashes from .moss/build.nosync/hashes.json.
 ///
 /// On load, runs `migrate_to_normalized_paths` to lowercase any keys that
 /// predate the ServedPath chokepoint. This is a one-time, opportunistic

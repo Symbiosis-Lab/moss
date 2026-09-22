@@ -87,7 +87,7 @@ impl InvokeCtx {
     /// session now in force — authoritative across folder switches. Binding
     /// the vault already bound returns the existing session; binding a
     /// different one mints a fresh token, publishes it to that vault's
-    /// `.moss/build/http-token`, and retires the previous session — which is
+    /// `.moss/build.nosync/http-token`, and retires the previous session — which is
     /// what invalidates every token handed out for the previous vault. A serve
     /// dir that resolves to no vault retires the session in force and returns
     /// `None`: the gated tiers then 401 and the token-free tier reports no
@@ -127,7 +127,7 @@ impl InvokeCtx {
         match super::carrier_token::publish(vault.path(), &token) {
             Ok(()) => log::info!(
                 target: "preview",
-                "HTTP carrier token published under .moss/build/ (loopback-readable)"
+                "HTTP carrier token published under .moss/build.nosync/ (loopback-readable)"
             ),
             Err(e) => log::warn!(target: "preview", "could not publish HTTP carrier token: {e}"),
         }

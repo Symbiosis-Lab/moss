@@ -1034,7 +1034,7 @@ async fn copy_deferred_assets_manifest_entry_not_dropped_by_hash_step() {
     // The output file (just linked from the CAS blob by link_to) lives at
     // staging/<mapped_path>.  Its bytes equal the source bytes — the xxh3
     // is identical — but reading it proves the hash is resilient to a source
-    // eviction (the output is a LOCAL .moss/build file, immune to iCloud).
+    // eviction (the output is a LOCAL .moss/build.nosync file, immune to iCloud).
     let output_file = staging.join("assets/cover.jpg");
     assert!(
         output_file.exists(),

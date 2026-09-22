@@ -1904,7 +1904,7 @@ pub(crate) fn cleanup_legacy_video_cache(moss_dir: &Path) {
         if let Err(e) = fs::remove_dir_all(&legacy_video_cache) {
             log::warn!("Failed to remove legacy video cache: {}", e);
         } else {
-            log::info!("Removed legacy path-based video cache (.moss/build/cache/videos/)");
+            log::info!("Removed legacy path-based video cache (.moss/build.nosync/cache/videos/)");
         }
     }
 }

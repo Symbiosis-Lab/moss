@@ -181,7 +181,7 @@ fn looks_like_zeroed_stub(bytes: &[u8]) -> bool {
 async fn read_leading_bytes(path: &Path, n: usize) -> Result<Vec<u8>, String> {
     use tokio::io::AsyncReadExt;
     // `path` is always the sealed generation's `canonical` file under
-    // `.moss/build/generations/`, not a vault input; the bytes only feed
+    // `.moss/build.nosync/generations/`, not a vault input; the bytes only feed
     // looks_like_zeroed_stub below, so a torn or corrupted read is caught by
     // content rather than trusted as the file's real state.
     // allow:raw_read built output — dataless is absent (ADR-043)

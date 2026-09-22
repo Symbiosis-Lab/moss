@@ -2080,14 +2080,15 @@ fn test_cached_media_meta_none_lqip_omitted_in_json() {
 
 /// Helper: set up a mock build directory with cache structure.
 /// Returns (build_dir, objects_dir, transforms_dir).
-fn make_gc_test_dir(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+fn make_gc_test_dir(name: &str) -> (crate::moss_paths::MossPaths, PathBuf, PathBuf) {
     let dir = make_test_dir(name);
-    let build_dir = dir.join("build");
-    let objects_dir = build_dir.join("cache").join("objects");
-    let transforms_dir = build_dir.join("cache").join("transforms");
+    let mp = crate::moss_paths::MossPaths::from_moss_dir(dir.join(".moss"));
+    let objects_dir = mp.cache_objects();
+    let transforms_dir = mp.cache_transforms();
     fs::create_dir_all(&objects_dir).expect("create objects dir");
     fs::create_dir_all(&transforms_dir).expect("create transforms dir");
-    (build_dir, objects_dir, transforms_dir)
+    fs::create_dir_all(mp.cache_dir()).expect("create the per-machine cache dir");
+    (mp, objects_dir, transforms_dir)
 }
 
 /// Helper: write a blob to the object store at the correct sharded path.
@@ -2113,8 +2114,8 @@ fn put_transform(transforms_dir: &Path, record: &TransformRecord) {
 #[test]
 fn test_gc_empty_cache() {
     // GC on an empty cache should succeed with zero removals.
-    let (build_dir, _, _) = make_gc_test_dir("gc_empty");
-    let result = gc(&build_dir, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
+    let (mp, _, _) = make_gc_test_dir("gc_empty");
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
     assert_eq!(result.transforms_removed, 0);
     assert_eq!(result.objects_removed, 0);
     assert_eq!(result.bytes_freed, 0);
@@ -2124,9 +2125,9 @@ fn test_gc_empty_cache() {
 fn test_gc_nonexistent_dirs() {
     // GC on a build dir with no cache subdirs should not panic.
     let dir = make_test_dir("gc_nonexistent");
-    let build_dir = dir.join("build");
-    fs::create_dir_all(&build_dir).expect("create build dir");
-    let result = gc(&build_dir, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
+    let mp = crate::moss_paths::MossPaths::from_moss_dir(dir.join(".moss"));
+    fs::create_dir_all(mp.root()).expect("create .moss");
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
     assert_eq!(result.transforms_removed, 0);
     assert_eq!(result.objects_removed, 0);
     assert_eq!(result.bytes_freed, 0);
@@ -2134,7 +2135,7 @@ fn test_gc_nonexistent_dirs() {
 
 #[test]
 fn test_gc_removes_orphaned_transform() {
-    let (build_dir, objects_dir, transforms_dir) = make_gc_test_dir("gc_orphan_transform");
+    let (mp, objects_dir, transforms_dir) = make_gc_test_dir("gc_orphan_transform");
 
     // Source OID that IS in HashIndex (live)
     let live_oid = "aaaa".repeat(16);
@@ -2163,7 +2164,7 @@ fn test_gc_removes_orphaned_transform() {
             m
         },
     };
-    let hash_index_path = build_dir.join("cache").join("hash-index.json");
+    let hash_index_path = mp.cache_hash_index();
     hash_index.save(&hash_index_path).expect("save hash index");
 
     // Create transform records
@@ -2210,7 +2211,7 @@ fn test_gc_removes_orphaned_transform() {
     put_object(&objects_dir, &orphan_oid, b"orphan source");
     put_object(&objects_dir, &orphan_output, b"orphan output");
 
-    let result = gc(&build_dir, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
 
     // Should have removed 1 transform record (the orphaned one)
     assert_eq!(
@@ -2269,7 +2270,7 @@ fn test_gc_removes_orphaned_transform() {
 
 #[test]
 fn test_gc_preserves_objects_referenced_by_site_hashes() {
-    let (build_dir, objects_dir, _) = make_gc_test_dir("gc_site_hashes");
+    let (mp, objects_dir, _) = make_gc_test_dir("gc_site_hashes");
 
     // Object referenced by hashes.json but NOT by any transform or hash index
     let site_hash_oid = "eeee".repeat(16);
@@ -2288,12 +2289,12 @@ fn test_gc_preserves_objects_referenced_by_site_hashes() {
         "video_outputs": [],
     });
     fs::write(
-        build_dir.join("hashes.json"),
+        mp.hashes(),
         serde_json::to_string_pretty(&hashes_json).unwrap(),
     )
     .expect("write hashes.json");
 
-    let result = gc(&build_dir, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
 
     // Should remove only the orphan, not the site-hashes-referenced blob
     assert_eq!(result.objects_removed, 1, "should remove 1 orphaned object");
@@ -2311,7 +2312,7 @@ fn test_gc_preserves_objects_referenced_by_site_hashes() {
 
 #[test]
 fn test_gc_preserves_objects_referenced_by_transforms() {
-    let (build_dir, objects_dir, transforms_dir) = make_gc_test_dir("gc_transform_refs");
+    let (mp, objects_dir, transforms_dir) = make_gc_test_dir("gc_transform_refs");
 
     let source_oid = "1111".repeat(16);
     let output_oid = "2222".repeat(16);
@@ -2335,7 +2336,7 @@ fn test_gc_preserves_objects_referenced_by_transforms() {
             m
         },
     };
-    let hash_index_path = build_dir.join("cache").join("hash-index.json");
+    let hash_index_path = mp.cache_hash_index();
     hash_index.save(&hash_index_path).expect("save");
 
     // Create transform that references output_oid
@@ -2362,7 +2363,7 @@ fn test_gc_preserves_objects_referenced_by_transforms() {
     put_object(&objects_dir, &output_oid, b"converted webp");
     put_object(&objects_dir, &orphan_oid, b"orphaned blob");
 
-    let result = gc(&build_dir, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
 
     assert_eq!(
         result.transforms_removed, 0,
@@ -2413,7 +2414,7 @@ fn record_with(source_oid: &str, output_oid: &str) -> TransformRecord {
 /// machine's live work until it has aged past the TTL; its outputs stay with it.
 #[test]
 fn gc_keeps_another_machines_record_and_its_blobs_until_the_record_ages_out() {
-    let (build_dir, objects_dir, transforms_dir) = make_gc_test_dir("gc_shared_records");
+    let (mp, objects_dir, transforms_dir) = make_gc_test_dir("gc_shared_records");
     let fresh = record_with(&"aaaa".repeat(16), &"bbbb".repeat(16));
     let aged = record_with(&"cccc".repeat(16), &"dddd".repeat(16));
     put_transform(&transforms_dir, &fresh);
@@ -2424,7 +2425,7 @@ fn gc_keeps_another_machines_record_and_its_blobs_until_the_record_ages_out() {
     }
     // No hash index at all: nothing is live on this machine.
 
-    let result = gc(&build_dir, &crate::build::lifecycle::gc_token_for_test()).expect("readable");
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("readable");
 
     let store = ObjectStore::new(objects_dir);
     assert_eq!(result.transforms_removed, 1, "only the aged record is condemned");
@@ -2438,7 +2439,7 @@ fn gc_keeps_another_machines_record_and_its_blobs_until_the_record_ages_out() {
 /// own name; one that arrives as other bytes is removed so the miss regenerates.
 #[test]
 fn find_cached_output_trusts_a_cloud_blob_only_when_it_hashes_to_its_oid() {
-    let (_build_dir, objects_dir, transforms_dir) = make_gc_test_dir("cache_cloud_blob_ladder");
+    let (_mp, objects_dir, transforms_dir) = make_gc_test_dir("cache_cloud_blob_ladder");
     let store = ObjectStore::new(objects_dir.clone());
     let cache = TransformCache::new(transforms_dir, ObjectStore::new(objects_dir.clone()));
     let params = serde_json::json!({});
@@ -2471,14 +2472,14 @@ fn gc_deletes_nothing_when_a_mark_input_is_unreadable() {
     let orphan_oid = "8888".repeat(16);
 
     let rig = |name: &str| {
-        let (build_dir, objects_dir, transforms_dir) = make_gc_test_dir(name);
+        let (mp, objects_dir, transforms_dir) = make_gc_test_dir(name);
         let mut entries = HashMap::new();
         entries.insert(
             "file.jpg".to_string(),
             HashIndexEntry { size: 500, mtime: 2000, mtime_nanos: None, ctime: None, inode: None, content_hash: source_oid.clone() },
         );
         HashIndex { entries }
-            .save(&build_dir.join("cache").join("hash-index.json"))
+            .save(&mp.cache_hash_index())
             .expect("save index");
         let mut transforms = HashMap::new();
         transforms.insert(
@@ -2490,35 +2491,35 @@ fn gc_deletes_nothing_when_a_mark_input_is_unreadable() {
             &TransformRecord { source_oid: source_oid.clone(), source_size: 500, transforms },
         );
         fs::write(
-            build_dir.join("hashes.json"),
+            mp.hashes(),
             format!(r#"{{"files": {{"page/index.html": "{site_oid}"}}}}"#),
         )
         .unwrap();
         for oid in [&source_oid, &output_oid, &site_oid, &orphan_oid] {
             put_object(&objects_dir, oid, oid.as_bytes());
         }
-        (build_dir, objects_dir, transforms_dir)
+        (mp, objects_dir, transforms_dir)
     };
     let record_of = |transforms_dir: &Path| {
         transforms_dir.join(&source_oid[..2]).join(&source_oid[2..4]).join(format!("{source_oid}.json"))
     };
 
-    let cases: [(&str, fn(&Path, &Path) -> PathBuf); 3] = [
-        ("gc_unreadable_index", |build, _| build.join("cache").join("hash-index.json")),
+    let cases: [(&str, fn(&crate::moss_paths::MossPaths, &Path) -> PathBuf); 3] = [
+        ("gc_unreadable_index", |mp, _| mp.cache_hash_index()),
         ("gc_unreadable_record", |_, record| record.to_path_buf()),
-        ("gc_unreadable_hashes", |build, _| build.join("hashes.json")),
+        ("gc_unreadable_hashes", |mp, _| mp.hashes()),
     ];
     for (name, locked_input) in cases {
-        let (build_dir, objects_dir, transforms_dir) = rig(name);
+        let (mp, objects_dir, transforms_dir) = rig(name);
         let record = record_of(&transforms_dir);
-        let locked = locked_input(&build_dir, &record);
+        let locked = locked_input(&mp, &record);
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
         if fs::read(&locked).is_ok() {
             eprintln!("skipped: this process can read a 0o000 file (running as root?)");
             return;
         }
 
-        let result = gc(&build_dir, &crate::build::lifecycle::gc_token_for_test());
+        let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test());
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
 
         let store = ObjectStore::new(objects_dir.clone());

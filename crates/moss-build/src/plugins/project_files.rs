@@ -185,7 +185,7 @@ pub fn write_file_with_dirs(file_path: &std::path::Path, data: &[u8]) -> Result<
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create directory: {}", e))?;
     }
-    // allow:raw_write plugin storage/project files under the vault root, never .moss/build/ — a fresh path each write, no evicted destination to truncate
+    // allow:raw_write plugin storage/project files under the vault root, never .moss/build.nosync/ — a fresh path each write, no evicted destination to truncate
     fs::write(file_path, data)
         .map_err(|e| format!("Failed to write file: {}", e))
 }
@@ -370,7 +370,7 @@ fn resolve_plugin_project_path(
     PluginPath::sandboxed(relative_path)?.resolve_under(Path::new(project_path))
 }
 
-/// Read a file from the active generation directory (.moss/build/current/)
+/// Read a file from the active generation directory (.moss/build.nosync/current/)
 ///
 /// Returns the file content as base64-encoded string.
 /// Used by deploy plugins to read site files without direct filesystem access.
@@ -384,7 +384,7 @@ fn resolve_plugin_project_path(
 ///
 /// # Security
 /// * Directory traversal (`..`) is blocked
-/// * Files are scoped to the active generation (.moss/build/current/) only
+/// * Files are scoped to the active generation (.moss/build.nosync/current/) only
 /// Shared body for read_site_file — called by the Tauri command and the engine
 /// arm (so QuickJS plugins can read built-site bytes, not just webview callers).
 pub async fn read_site_file_impl(

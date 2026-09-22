@@ -40,10 +40,10 @@ fn test_load_previous_hashes_nonexistent() {
 fn test_load_previous_hashes_valid_json() {
     let temp = TempDir::new().unwrap();
     let moss_dir = temp.path().join(".moss");
-    fs::create_dir_all(moss_dir.join("build")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
     let hashes_json = r#"{"files":{"index.html":"abc123","about.html":"def456"}}"#;
-    fs::write(moss_dir.join("build").join("hashes.json"), hashes_json).unwrap();
+    fs::write(moss_dir.join("build.nosync").join("hashes.json"), hashes_json).unwrap();
 
     let hashes = load_previous_hashes(temp.path().to_str().unwrap());
     assert_eq!(hashes.files.len(), 2);
@@ -54,9 +54,9 @@ fn test_load_previous_hashes_valid_json() {
 fn test_load_previous_hashes_invalid_json() {
     let temp = TempDir::new().unwrap();
     let moss_dir = temp.path().join(".moss");
-    fs::create_dir_all(moss_dir.join("build")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
 
-    fs::write(moss_dir.join("build").join("hashes.json"), "not valid json").unwrap();
+    fs::write(moss_dir.join("build.nosync").join("hashes.json"), "not valid json").unwrap();
 
     // Should return default (empty) on parse error
     let hashes = load_previous_hashes(temp.path().to_str().unwrap());
@@ -85,7 +85,7 @@ fn create_test_dir() -> (std::path::PathBuf, impl Drop) {
 /// Test wrapper around `run`. Constructs a single-thread tokio runtime
 /// per call, runs the build, awaits the `BackgroundHandle` (so the
 /// coordinator drains and seals), and persists the resulting
-/// `SealedManifest` to `.moss/build/hashes.json` so the next build's
+/// `SealedManifest` to `.moss/build.nosync/hashes.json` so the next build's
 /// `load_previous_hashes` sees a complete manifest.
 ///
 /// Pre-#620 Item 2 the synchronous path was supported by:
@@ -203,7 +203,7 @@ fn test_build_creates_output_directory() {
     assert!(!result.unwrap(), "Site should not be empty");
 
     // Verify output was created (staging/ is sole output post-T2)
-    assert!(test_dir.join(".moss/build/staging/index.html").exists());
+    assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 }
 
 #[test]
@@ -227,7 +227,7 @@ fn test_build_with_site_dir_state() {
     fs::write(test_dir.join("index.md"), "# Test").unwrap();
 
     // Create SiteDirectoryState seeded to staging (post-generations: site/ is empty)
-    let staging_path = test_dir.join(".moss/build/staging");
+    let staging_path = test_dir.join(".moss/build.nosync/staging");
     fs::create_dir_all(&staging_path).unwrap();
     let site_dir_state = SiteDirectoryState::new(staging_path.clone());
 
@@ -243,7 +243,7 @@ fn test_build_with_site_dir_state() {
 
     assert!(result.is_ok());
     // Post-T2: staging/ is sole build output
-    assert!(test_dir.join(".moss/build/staging/index.html").exists());
+    assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 }
 
 #[test]
@@ -269,11 +269,11 @@ fn test_site_stage_persists_after_successful_build() {
     assert!(result.is_ok(), "Build should succeed: {:?}", result);
 
     // Staging directory persists for mtime/size cache optimization
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     assert!(stage_dir.exists(), "site-stage should persist after build");
 
     // Post-T2: staging/ is sole output (ship_phase removed)
-    assert!(test_dir.join(".moss/build/staging/index.html").exists());
+    assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 }
 
 #[test]
@@ -287,7 +287,7 @@ fn test_site_stage_persists_after_empty_build() {
 
     // Even empty builds use staging — site-stage/ is created
     assert!(
-        test_dir.join(".moss/build/staging").exists(),
+        test_dir.join(".moss/build.nosync/staging").exists(),
         "site-stage should exist even for empty builds"
     );
 }
@@ -304,13 +304,13 @@ fn test_site_stage_persists_after_rebuild() {
     // Second build (with different content to trigger changes)
     fs::write(test_dir.join("index.md"), "# Second").unwrap();
     // Clear caches to avoid mtime-based false cache hits on CI
-    let _ = fs::remove_dir_all(test_dir.join(".moss/build/cache"));
-    let _ = fs::remove_file(test_dir.join(".moss/build/hashes.json"));
+    let _ = fs::remove_dir_all(test_dir.join(".moss/build.nosync/cache"));
+    let _ = fs::remove_file(test_dir.join(".moss/build.nosync/hashes.json"));
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok());
 
     // Verify site-stage persists for incremental rebuilds
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     assert!(
         stage_dir.exists(),
         "site-stage directory should persist for incremental rebuilds"
@@ -330,15 +330,15 @@ fn test_rebuild_site_populated_after_build() {
 
     // Modify content to trigger staging path on second build
     fs::write(test_dir.join("index.md"), "# Second").unwrap();
-    let _ = fs::remove_dir_all(test_dir.join(".moss/build/cache"));
-    let _ = fs::remove_file(test_dir.join(".moss/build/hashes.json"));
+    let _ = fs::remove_dir_all(test_dir.join(".moss/build.nosync/cache"));
+    let _ = fs::remove_file(test_dir.join(".moss/build.nosync/hashes.json"));
 
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok(), "Rebuild should succeed: {:?}", result);
 
     // Immediately after build() returns, staging/ must contain the latest content.
     let staging_content =
-        fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+        fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         staging_content.contains("Second"),
         "staging/ must contain the latest content after rebuild"
@@ -363,7 +363,7 @@ fn test_site_stage_persists_when_no_changes() {
     assert!(result.is_ok());
 
     // Verify site-stage persists
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     assert!(
         stage_dir.exists(),
         "site-stage directory should persist for incremental rebuilds"
@@ -403,7 +403,7 @@ fn test_slots_injected_before_copy_to_site() {
     let result = build_test(folder_path, None, None, None, None, &slots);
     assert!(result.is_ok(), "Build should succeed: {:?}", result);
 
-    let stage_html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let stage_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
 
     assert!(
         stage_html.contains("test-subscribe"),
@@ -436,7 +436,7 @@ fn test_empty_slots_leave_no_markers() {
     assert!(result.is_ok());
 
     // Post-T2: check staging/ (sole output)
-    let stage_html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let stage_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         !stage_html.contains("<!-- slot:"),
         "No raw slot markers should remain in staging/ even with empty slots"
@@ -457,7 +457,7 @@ fn test_slots_injected_on_rebuild() {
 
     // Rebuild with slots
     fs::write(test_dir.join("index.md"), "# Second").unwrap();
-    let _ = fs::remove_file(test_dir.join(".moss/build/hashes.json"));
+    let _ = fs::remove_file(test_dir.join(".moss/build.nosync/hashes.json"));
 
     let mut slots = ResolvedSlots::empty();
     let mut result_slots = std::collections::HashMap::new();
@@ -477,7 +477,7 @@ fn test_slots_injected_on_rebuild() {
     assert!(result.is_ok(), "Rebuild should succeed: {:?}", result);
 
     // Post-T2: check staging/ (sole output)
-    let stage_html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let stage_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         stage_html.contains("test-style"),
         "Rebuild should have injected head-end slot content"
@@ -514,7 +514,7 @@ fn test_slot_injection_manifest_hash_matches_site_file() {
     build_test(folder_path, None, None, None, None, &slots).expect("build with slots must succeed");
 
     // Read the actual staging file bytes after slot injection.
-    let staging_html = fs::read(test_dir.join(".moss/build/staging/index.html"))
+    let staging_html = fs::read(test_dir.join(".moss/build.nosync/staging/index.html"))
         .expect("staging/index.html must exist after build");
 
     // The injected content must be present in staging.
@@ -528,7 +528,7 @@ fn test_slot_injection_manifest_hash_matches_site_file() {
     // data-source-line annotations stripped via apply_transform). staging/ holds
     // annotated HTML; the manifest records the stripped derivative that deploy uploads.
     // site/ is not updated until T4 (seal+persist materialization).
-    let staging_html_for_hash = fs::read(test_dir.join(".moss/build/staging/index.html"))
+    let staging_html_for_hash = fs::read(test_dir.join(".moss/build.nosync/staging/index.html"))
         .expect("staging/index.html must exist after build");
     let manifest_bytes = crate::build::ship::apply_transform(
         crate::build::ship::transform_for("index.html"),
@@ -537,7 +537,7 @@ fn test_slot_injection_manifest_hash_matches_site_file() {
     let expected_hash = format!("100644:{}", compute_binary_hash(&manifest_bytes));
 
     // Read hashes.json and check the index.html entry.
-    let hashes_path = test_dir.join(".moss/build/hashes.json");
+    let hashes_path = test_dir.join(".moss/build.nosync/hashes.json");
     let hashes_json =
         fs::read_to_string(&hashes_path).expect("hashes.json must be written by build_test");
     let hashes: crate::types::content::SiteHashes =
@@ -572,13 +572,13 @@ fn test_first_build_uses_staging() {
 
     // Post-T2: staging/ is sole output
     assert!(
-        test_dir.join(".moss/build/staging/index.html").exists(),
+        test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "index.html should be generated in staging/"
     );
 
     // Staging directory persists for mtime/size cache optimization
     assert!(
-        test_dir.join(".moss/build/staging").exists(),
+        test_dir.join(".moss/build.nosync/staging").exists(),
         "site-stage should persist after build"
     );
 }
@@ -598,12 +598,12 @@ fn test_rebuild_when_site_emptied() {
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok());
     // staging/ has the output
-    assert!(test_dir.join(".moss/build/staging/index.html").exists());
+    assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 
     // Empty staging/ to force the pipeline to recreate it.
     // (site/ is no longer written by the pipeline; clearing staging/ is the
     // equivalent setup for verifying the "recover from empty output" path.)
-    let staging = test_dir.join(".moss/build/staging");
+    let staging = test_dir.join(".moss/build.nosync/staging");
     if staging.exists() {
         fs::remove_dir_all(&staging).unwrap();
     }
@@ -621,7 +621,7 @@ fn test_rebuild_when_site_emptied() {
 
     // staging/ should have content (sole output post-T2)
     assert!(
-        test_dir.join(".moss/build/staging/index.html").exists(),
+        test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "index.html should be in staging/ after build"
     );
 }
@@ -639,16 +639,16 @@ fn test_rebuild_when_staging_deleted() {
     // First build
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok());
-    assert!(test_dir.join(".moss/build/staging/index.html").exists());
+    assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 
     // Delete staging directory completely (simulates a partial cleanup)
-    if test_dir.join(".moss/build/staging").exists() {
-        fs::remove_dir_all(test_dir.join(".moss/build/staging")).unwrap();
+    if test_dir.join(".moss/build.nosync/staging").exists() {
+        fs::remove_dir_all(test_dir.join(".moss/build.nosync/staging")).unwrap();
     }
 
     // Verify staging doesn't exist
     assert!(
-        !test_dir.join(".moss/build/staging").exists(),
+        !test_dir.join(".moss/build.nosync/staging").exists(),
         "Staging should not exist before second build"
     );
 
@@ -658,7 +658,7 @@ fn test_rebuild_when_staging_deleted() {
 
     // staging/ has the output
     assert!(
-        test_dir.join(".moss/build/staging/index.html").exists(),
+        test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "index.html should be in staging/ after build"
     );
 }
@@ -685,7 +685,7 @@ fn build_annotates_stage_and_strips_site_without_server_port() {
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok(), "build should succeed: {:?}", result);
 
-    let stage = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let stage = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
 
     assert!(
             stage.contains(r#"data-source-line=""#),
@@ -709,7 +709,7 @@ fn test_staging_used_for_rebuild_with_existing_content() {
     assert!(result.is_ok());
 
     // Verify first content (in staging/ post-T2)
-    let content = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let content = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         content.contains("First"),
         "First build should contain 'First'"
@@ -721,8 +721,8 @@ fn test_staging_used_for_rebuild_with_existing_content() {
     // Clear caches to ensure rebuild detects content change (avoids
     // flaky failures when both builds run within the same second on CI,
     // causing mtime-based cache lookups to return stale hashes)
-    let _ = fs::remove_dir_all(test_dir.join(".moss/build/cache"));
-    let _ = fs::remove_file(test_dir.join(".moss/build/hashes.json"));
+    let _ = fs::remove_dir_all(test_dir.join(".moss/build.nosync/cache"));
+    let _ = fs::remove_file(test_dir.join(".moss/build.nosync/hashes.json"));
 
     // Second build - should use staging pattern (site has content)
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
@@ -732,7 +732,7 @@ fn test_staging_used_for_rebuild_with_existing_content() {
     // Note: site/ is updated by ship_phase which runs synchronously before
     // build() returns, but we check site-stage/ here for the annotated HTML.
     let stage_content =
-        fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+        fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         stage_content.contains("Second"),
         "Staging build should contain 'Second'"
@@ -740,7 +740,7 @@ fn test_staging_used_for_rebuild_with_existing_content() {
 
     // Staging persists for incremental rebuilds
     assert!(
-        test_dir.join(".moss/build/staging").exists(),
+        test_dir.join(".moss/build.nosync/staging").exists(),
         "site-stage should persist for incremental rebuilds"
     );
 }
@@ -759,7 +759,7 @@ fn test_pointer_switches_during_rebuild() {
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
     // Set up state for second build — seed to staging (post-generations: site/ is empty)
-    let staging_seed = test_dir.join(".moss/build/staging");
+    let staging_seed = test_dir.join(".moss/build.nosync/staging");
     fs::create_dir_all(&staging_seed).unwrap();
     let state = SiteDirectoryState::new(staging_seed.clone());
 
@@ -781,7 +781,7 @@ fn test_pointer_switches_during_rebuild() {
     .unwrap();
 
     // After build returns, pointer rests on site-stage/ (preview has annotations)
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     assert_eq!(state.current_dir.read().unwrap().as_path(), stage_dir);
 
     // Post-T2: staging/ is the sole output. site/ is NOT updated.
@@ -804,7 +804,7 @@ fn test_content_unchanged_when_hashes_match() {
     fs::write(test_dir.join("index.md"), "# Same content").unwrap();
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
-    let staging_file = test_dir.join(".moss/build/staging/index.html");
+    let staging_file = test_dir.join(".moss/build.nosync/staging/index.html");
     let content_before = fs::read_to_string(&staging_file).unwrap();
 
     // Small delay so any new write would be detectable.
@@ -831,12 +831,12 @@ fn test_multiple_sequential_rebuilds() {
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
     // Create state seeded to staging (post-generations: site/ is empty)
-    let staging_seed = test_dir.join(".moss/build/staging");
+    let staging_seed = test_dir.join(".moss/build.nosync/staging");
     fs::create_dir_all(&staging_seed).unwrap();
     let state = SiteDirectoryState::new(staging_seed);
 
     // Multiple rebuilds with changes
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     for i in 2..=5 {
         fs::write(test_dir.join("index.md"), format!("# Version {}", i)).unwrap();
         build_test(
@@ -863,7 +863,7 @@ fn test_multiple_sequential_rebuilds() {
 
         // Verify staging persists for incremental rebuilds
         assert!(
-            test_dir.join(".moss/build/staging").exists(),
+            test_dir.join(".moss/build.nosync/staging").exists(),
             "site-stage should persist after build {}",
             i
         );
@@ -885,7 +885,7 @@ fn test_pointer_sequence_during_rebuild() {
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
     // Seed state to staging (post-generations: site/ is empty)
-    let staging_seed = test_dir.join(".moss/build/staging");
+    let staging_seed = test_dir.join(".moss/build.nosync/staging");
     fs::create_dir_all(&staging_seed).unwrap();
     let state = SiteDirectoryState::new(staging_seed.clone());
 
@@ -906,7 +906,7 @@ fn test_pointer_sequence_during_rebuild() {
     .unwrap();
 
     // Pointer rests on site-stage/ (preview with annotations)
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     assert_eq!(state.current_dir.read().unwrap().as_path(), stage_dir);
 
     // staging/ has the new content (sole output post-T2)
@@ -960,7 +960,7 @@ fn test_build_returns_before_assets_copied() {
 
     // HTML should be immediately available after build() returns (in staging/ post-T2)
     assert!(
-        test_dir.join(".moss/build/staging/index.html").exists(),
+        test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "HTML should be generated in blocking phase"
     );
 
@@ -986,19 +986,19 @@ fn test_html_available_immediately_after_build() {
 
     // All HTML files must be available immediately (in staging/ post-T2)
     assert!(
-        test_dir.join(".moss/build/staging/index.html").exists(),
+        test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "index.html should be ready immediately"
     );
     assert!(
         test_dir
-            .join(".moss/build/staging/about/index.html")
+            .join(".moss/build.nosync/staging/about/index.html")
             .exists(),
         "about/index.html should be ready immediately"
     );
 
     // CSS and JS must also be available (needed for page rendering).
     // Files are now emitted with content-hash names (e.g. _moss/style.<hash>.css).
-    let moss_dir = test_dir.join(".moss/build/staging/_moss");
+    let moss_dir = test_dir.join(".moss/build.nosync/staging/_moss");
     let has_hashed_css = fs::read_dir(&moss_dir)
         .map(|entries| {
             entries.flatten().any(|e| {
@@ -1013,7 +1013,7 @@ fn test_html_available_immediately_after_build() {
         "_moss/style.<hash>.css should be ready immediately"
     );
 
-    let js_dir = test_dir.join(".moss/build/staging/_moss/js");
+    let js_dir = test_dir.join(".moss/build.nosync/staging/_moss/js");
     let has_hashed_theme_js = fs::read_dir(&js_dir)
         .map(|entries| {
             entries.flatten().any(|e| {
@@ -1045,9 +1045,9 @@ fn test_blocking_phase_includes_essential_files() {
     assert!(result.is_ok());
 
     // Essential files for page rendering (in staging/ post-T2)
-    assert!(test_dir.join(".moss/build/staging/index.html").exists());
+    assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
     // CSS and JS are now emitted with content-hash names.
-    let moss_dir = test_dir.join(".moss/build/staging/_moss");
+    let moss_dir = test_dir.join(".moss/build.nosync/staging/_moss");
     let has_hashed_css = fs::read_dir(&moss_dir)
         .map(|entries| {
             entries.flatten().any(|e| {
@@ -1061,7 +1061,7 @@ fn test_blocking_phase_includes_essential_files() {
         has_hashed_css,
         "_moss/style.<hash>.css must exist in blocking output"
     );
-    let js_dir = test_dir.join(".moss/build/staging/_moss/js");
+    let js_dir = test_dir.join(".moss/build.nosync/staging/_moss/js");
     let has_hashed_theme_js = fs::read_dir(&js_dir)
         .map(|entries| {
             entries.flatten().any(|e| {
@@ -1077,7 +1077,7 @@ fn test_blocking_phase_includes_essential_files() {
     );
     assert!(
         test_dir
-            .join(".moss/build/staging/assets/favicon.svg")
+            .join(".moss/build.nosync/staging/assets/favicon.svg")
             .exists(),
         "Favicon should be copied in blocking phase (above the fold)"
     );
@@ -1124,7 +1124,7 @@ fn test_background_ctx_is_not_ignored() {
     assert!(result.is_ok(), "Build should succeed: {:?}", result);
 
     assert!(
-        test_dir.join(".moss/build/staging/index.html").exists(),
+        test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "build should produce an output index.html"
     );
 }
@@ -1150,7 +1150,7 @@ fn a_ladder_already_in_staging_reaches_this_build_s_markup() {
 
     // What the previous build's encoder left behind. `master.m3u8` is the
     // gate — a directory without one is a half-written ladder.
-    let ladder = test_dir.join(".moss/build/staging/clip.hls");
+    let ladder = test_dir.join(".moss/build.nosync/staging/clip.hls");
     fs::create_dir_all(&ladder).unwrap();
     for member in moss_core::asset_paths::hls_members(&moss_core::asset_paths::VIDEO_LADDER) {
         fs::write(ladder.join(member), "fake ladder member").unwrap();
@@ -1169,7 +1169,7 @@ fn a_ladder_already_in_staging_reaches_this_build_s_markup() {
     );
     assert!(result.is_ok(), "Build should succeed: {:?}", result);
 
-    let html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         html.contains("clip.hls/master.m3u8"),
         "a staged ladder must reach the emitted markup; got:\n{}",
@@ -1200,8 +1200,8 @@ fn a_ladder_already_in_staging_reaches_this_build_s_markup() {
 fn test_legacy_video_cache_cleanup() {
     let temp = TempDir::new().unwrap();
     let moss_dir = temp.path().join(".moss");
-    let legacy = moss_dir.join("build").join("cache").join("videos");
-    let cas = moss_dir.join("build").join("cache").join("objects");
+    let legacy = moss_dir.join("build.nosync").join("cache").join("videos");
+    let cas = moss_dir.join("cache").join("objects");
 
     // Create both directories
     fs::create_dir_all(&legacy).unwrap();
@@ -1219,7 +1219,7 @@ fn test_legacy_video_cache_cleanup() {
 fn test_legacy_video_cache_not_removed_without_cas() {
     let temp = TempDir::new().unwrap();
     let moss_dir = temp.path().join(".moss");
-    let legacy = moss_dir.join("build").join("cache").join("videos");
+    let legacy = moss_dir.join("build.nosync").join("cache").join("videos");
 
     // Create only legacy directory (no CAS yet)
     fs::create_dir_all(&legacy).unwrap();
@@ -1253,7 +1253,7 @@ fn test_run_video_conversion_headless_empty_videos() {
     let ctx = BackgroundContext {
         video_items: vec![],
         source_path: "/nonexistent".to_string(),
-        staging_dir: std::path::PathBuf::from("/nonexistent/.moss/build/staging"),
+        staging_dir: std::path::PathBuf::from("/nonexistent/.moss/build.nosync/staging"),
         moss_dir: std::path::PathBuf::from("/nonexistent/.moss"),
         start_time: std::time::Instant::now(),
         notebook_files: vec![],
@@ -1281,7 +1281,7 @@ fn vault_with_videos(names: &[&str], script: &str) -> (TempDir, BackgroundContex
     let temp = TempDir::new().unwrap();
     let source_dir = temp.path().join("source");
     let staging_dir = temp.path().join("stage");
-    let cache = temp.path().join(".moss/build/cache");
+    let cache = temp.path().join(".moss/build.nosync/cache");
     std::fs::create_dir_all(&staging_dir).unwrap();
     for name in names {
         std::fs::create_dir_all(source_dir.join(name).parent().unwrap()).unwrap();
@@ -2105,7 +2105,7 @@ fn test_copy_deferred_assets_accepts_event_sink() {
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&source).unwrap();
     std::fs::create_dir_all(&output).unwrap();
-    std::fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    std::fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     std::fs::write(source.join("photo.jpg"), b"fake image data").unwrap();
 
@@ -2145,7 +2145,7 @@ fn test_copy_deferred_assets_copies_source_html_files() {
     fs::write(interactive.join("article.md"), "# Article").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("index.html".to_string());
@@ -2192,7 +2192,7 @@ fn test_copy_deferred_assets_skips_html_when_in_blocking_keys() {
     fs::write(interactive.join("sketch.html"), "<html>sketch</html>").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("index.html".to_string());
@@ -2337,7 +2337,7 @@ fn test_video_output_directories_preserved() {
     let moss = temp.path().join(".moss");
 
     fs::create_dir_all(&source).unwrap();
-    fs::create_dir_all(moss.join("build")).unwrap();
+    fs::create_dir_all(moss.join("build.nosync")).unwrap();
 
     let videos_dir = output.join("videos");
     fs::create_dir_all(&videos_dir).unwrap();
@@ -2350,7 +2350,7 @@ fn test_video_output_directories_preserved() {
         .insert("videos/clip.mp4".to_string());
 
     let hashes_json = serde_json::to_string_pretty(&site_hashes).unwrap();
-    fs::write(moss.join("build").join("hashes.json"), &hashes_json).unwrap();
+    fs::write(moss.join("build.nosync").join("hashes.json"), &hashes_json).unwrap();
 
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("index.html".to_string());
@@ -2586,7 +2586,7 @@ async fn test_copy_deferred_assets_preserves_notebook_hash_entries_for_deploy() 
     let moss = temp.path().join(".moss");
     std::fs::create_dir_all(&source).unwrap();
     std::fs::create_dir_all(&output).unwrap();
-    std::fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    std::fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let nb_path = "resources/habitable-zone.html".to_string();
     let nb_hash = "deadbeefdeadbeef".to_string();
@@ -2806,7 +2806,7 @@ fn test_copy_deferred_assets_cleans_staging_dir() {
     fs::create_dir_all(&source).unwrap();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(&site).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     fs::write(staging.join("custom.css"), "body { old }").unwrap();
     fs::write(site.join("custom.css"), "body { old }").unwrap();
@@ -3003,9 +3003,9 @@ fn test_fast_path_rejects_zero_byte_canonical_files() {
     fs::create_dir_all(source_dir.join("videos")).unwrap();
     fs::create_dir_all(staging_dir.join("videos")).unwrap();
     fs::create_dir_all(canonical_dir.join("videos")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("objects")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
 
     fs::write(
         source_dir.join("videos/clip.mov"),
@@ -3031,7 +3031,7 @@ fn test_fast_path_rejects_zero_byte_canonical_files() {
         source_mtime,
         "fake_hash_123".to_string(),
     );
-    let hash_index_path = moss_dir.join("build").join("cache").join("hash-index.json");
+    let hash_index_path = moss_dir.join("build.nosync").join("cache").join("hash-index.json");
     let hash_json = serde_json::to_string_pretty(&hash_index).unwrap();
     fs::write(&hash_index_path, hash_json).unwrap();
 
@@ -3121,7 +3121,7 @@ fn test_copy_deferred_assets_maps_paths_through_dir_overrides() {
     fs::write(chinese_dir.join("sketch.js"), "// sketch code").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let mut dir_overrides = HashMap::new();
     dir_overrides.insert("交互".to_string(), "interactive".to_string());
@@ -3173,7 +3173,7 @@ fn test_copy_deferred_assets_maps_nested_dir_overrides() {
     fs::write(nested_dir.join("photo.jpg"), "fake image").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let mut dir_overrides = HashMap::new();
     dir_overrides.insert("文字".to_string(), "writings".to_string());
@@ -3217,7 +3217,7 @@ fn test_copy_deferred_assets_no_overrides_unchanged() {
     fs::write(source.join("image.png"), "fake png").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
@@ -3254,7 +3254,7 @@ fn test_copy_deferred_assets_skips_root_style_css() {
     fs::create_dir_all(&output).unwrap();
     let default_css = ":root { --moss-color-accent: green; }";
     fs::write(output.join("style.css"), default_css).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("style.css".to_string());
@@ -3298,7 +3298,7 @@ fn test_copy_deferred_assets_skips_root_script_js() {
     fs::create_dir_all(&output).unwrap();
     let default_script = "console.log('moss default script');";
     fs::write(output.join("script.js"), default_script).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("script.js".to_string());
@@ -3801,7 +3801,7 @@ fn test_user_css_from_moss_dir() {
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
     // User CSS is now emitted with a content-hash filename; scan to find it.
-    let theme_dir = test_dir.join(".moss/build/staging/_moss/theme");
+    let theme_dir = test_dir.join(".moss/build.nosync/staging/_moss/theme");
     let hashed_css_path = fs::read_dir(&theme_dir)
         .unwrap()
         .flatten()
@@ -3815,7 +3815,7 @@ fn test_user_css_from_moss_dir() {
     let custom_css = fs::read_to_string(&hashed_css_path).unwrap();
     assert_eq!(custom_css, "body { color: blue; }");
 
-    let html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         html.contains("_moss/theme/style."),
         "HTML should link to _moss/theme/style.<hash>.css when .moss/theme/style.css exists"
@@ -3835,7 +3835,7 @@ fn test_user_css_root_ignored() {
 
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
-    assert!(!test_dir.join(".moss/build/staging/_moss/theme/style.css").exists(),
+    assert!(!test_dir.join(".moss/build.nosync/staging/_moss/theme/style.css").exists(),
             "Root style.css should NOT produce _moss/theme/style.css — only .moss/theme/style.css is canonical");
 }
 
@@ -3849,7 +3849,7 @@ fn test_no_user_css() {
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
     assert!(!test_dir
-        .join(".moss/build/staging/_moss/theme/style.css")
+        .join(".moss/build.nosync/staging/_moss/theme/style.css")
         .exists());
 }
 
@@ -3871,7 +3871,7 @@ fn test_theme_style_edit_regenerates_custom_css() {
     .unwrap();
 
     // Helper: collect content of all hashed CSS files in theme_dir.
-    let theme_dir = test_dir.join(".moss/build/staging/_moss/theme");
+    let theme_dir = test_dir.join(".moss/build.nosync/staging/_moss/theme");
     let read_all_hashed_css = |theme_dir: &std::path::Path| -> Vec<String> {
         fs::read_dir(theme_dir)
             .unwrap_or_else(|_| panic!("_moss/theme dir must exist"))
@@ -3934,7 +3934,7 @@ fn test_user_js_from_moss_dir() {
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
     // User JS is now emitted with a content-hash filename; scan to find it.
-    let theme_dir = test_dir.join(".moss/build/staging/_moss/theme");
+    let theme_dir = test_dir.join(".moss/build.nosync/staging/_moss/theme");
     let hashed_js_path = fs::read_dir(&theme_dir)
         .unwrap()
         .flatten()
@@ -3948,7 +3948,7 @@ fn test_user_js_from_moss_dir() {
     let custom_js = fs::read_to_string(&hashed_js_path).unwrap();
     assert_eq!(custom_js, "console.log('moss')");
 
-    let html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         html.contains("_moss/theme/script."),
         "HTML should include _moss/theme/script.<hash>.js when .moss/theme/script.js exists"
@@ -3968,7 +3968,7 @@ fn test_user_js_root_ignored() {
 
     build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
 
-    assert!(!test_dir.join(".moss/build/staging/_moss/theme/script.js").exists(),
+    assert!(!test_dir.join(".moss/build.nosync/staging/_moss/theme/script.js").exists(),
             "Root script.js should NOT produce _moss/theme/script.js — only .moss/theme/script.js is canonical");
 }
 
@@ -3990,7 +3990,7 @@ fn test_moss_assets_copied_to_output() {
     fs::write(moss.join("theme").join("logo.png"), b"fake png").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
@@ -4032,7 +4032,7 @@ fn test_moss_assets_nested_directories() {
     .unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
@@ -4077,7 +4077,7 @@ fn test_theme_video_overlay_copied_to_output() {
     fs::write(moss.join("theme").join("grain.png"), b"fake texture").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
@@ -4123,7 +4123,7 @@ fn test_theme_walk_skips_entry_files_copies_rest() {
     fs::write(moss.join("theme").join("allowed.svg"), "<svg/>").unwrap();
 
     fs::create_dir_all(&output).unwrap();
-    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
@@ -4327,7 +4327,7 @@ fn test_image_compression_pipeline_end_to_end() {
     // upgrades the HTML to `<picture><source srcset="photo.webp">`.
     //
     // Assertions prove the seams are wired correctly:
-    //   1. JPEGs on disk become .webp in .moss/build/staging/ (sole output post-T2)
+    //   1. JPEGs on disk become .webp in .moss/build.nosync/staging/ (sole output post-T2)
     //   2. .webp is smaller than the source JPEG (real encoding happened)
     //   3. SVG passes through unchanged (skip rules honoured)
     //   4. After build 2 — Built HTML wraps the markdown <img> in
@@ -4381,7 +4381,7 @@ fn test_image_compression_pipeline_end_to_end() {
     assert!(result.is_ok(), "Build 1 should succeed: {:?}", result);
 
     // ---- 1. WebP outputs exist (in staging/ — the sole build output post-T2) ----
-    let staging_dir = test_dir.join(".moss/build/staging");
+    let staging_dir = test_dir.join(".moss/build.nosync/staging");
     let photo_webp = staging_dir.join("photo.webp");
     let photo2_webp = staging_dir.join("photo2.webp");
     assert!(
@@ -4540,7 +4540,7 @@ async fn copy_deferred_assets_warm_cache_zero_misses() {
     let moss = temp.path().join(".moss");
     std::fs::create_dir_all(&source).unwrap();
     std::fs::create_dir_all(&output).unwrap();
-    std::fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    std::fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     // Two assets covering different MIME paths through the walker.
     std::fs::write(
@@ -4961,7 +4961,7 @@ fn a_build_that_changes_nothing_does_nothing() {
     build_test_shipped(folder_path).expect("build 1");
     build_test_shipped(folder_path).expect("build 2");
 
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     let before = stage_snapshot(&stage_dir);
 
     // Guard the fixture itself. Everything below is a claim about `.webp`
@@ -5082,7 +5082,7 @@ fn a_dropped_reference_reclaims_its_webp_bytes_on_the_same_build() {
 
     build_test_shipped(folder_path).expect("build 1: image referenced");
 
-    let stage_dir = test_dir.join(".moss/build/staging");
+    let stage_dir = test_dir.join(".moss/build.nosync/staging");
     assert!(
         stage_dir.join("gone.webp").is_file(),
         "fixture guard: the referenced image must produce a staged .webp, or \
@@ -5133,7 +5133,7 @@ fn a_cloud_evicted_page_survives_the_seal_time_sweep_and_the_deploy_manifest() {
     fs::write(test_dir.join("keeper.md"), "# Keeper\n\nStill a real page.").unwrap();
 
     let keys = build_test_sealed(folder_path).expect("first build");
-    let published = test_dir.join(".moss/build/staging/keeper/index.html");
+    let published = test_dir.join(".moss/build.nosync/staging/keeper/index.html");
     assert!(published.is_file(), "first build must publish the page");
     assert!(keys.iter().any(|k| k == "keeper/index.html"), "keys: {keys:?}");
 
@@ -5473,7 +5473,7 @@ fn a_page_that_could_not_be_read_no_longer_withholds_the_rest_of_the_site() {
 
     let (promotion, _keys, _stale) = build_test_promoted_or_withheld(folder_path).expect("first build");
     assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
-    let keeper_html = test_dir.join(".moss/build/staging/keeper/index.html");
+    let keeper_html = test_dir.join(".moss/build.nosync/staging/keeper/index.html");
     assert!(keeper_html.is_file(), "first build must publish the page");
     assert_eq!(
         load_previous_hashes(folder_path).page_meta.get("keeper.md").map(|m| m.title.as_str()),
@@ -5508,7 +5508,7 @@ fn a_page_that_could_not_be_read_no_longer_withholds_the_rest_of_the_site() {
         "keeper's old title must survive the carry-forward for nav/listing"
     );
 
-    let home_html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let home_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(home_html.contains("Updated"), "the rest of the site must update normally");
 }
 
@@ -5550,7 +5550,7 @@ fn an_unreadable_stylesheet_no_longer_withholds_the_rest_of_the_site() {
         crate::build::ship::Promotion::Promoted,
         "an unreadable stylesheet must not withhold the rest of the site"
     );
-    let home_html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let home_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(home_html.contains("Updated"), "the rest of the site must update normally");
 }
 
@@ -5643,7 +5643,7 @@ fn a_carried_forward_footer_reaches_the_staleness_gate() {
         vec!["footer.md".to_string()],
         "the carried-forward footer must be named in PipelineRunOutput::stale_sources"
     );
-    let home_html = fs::read_to_string(test_dir.join(".moss/build/staging/index.html")).unwrap();
+    let home_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(home_html.contains("Updated"), "the rest of the site must update normally");
 
     // What `build.rs`'s seal tail does with that value in production —
@@ -6144,7 +6144,7 @@ fn a_cmyk_jpeg_ships_as_the_original_with_no_webp_source() {
     // `build_test` stops where the seal tail (`advertise_sealed`) begins, so
     // run the tail's degrade step over the real staging page. This is the
     // same call the tail makes, against the HTML the build emitted.
-    let staging = test_dir.join(".moss/build/staging");
+    let staging = test_dir.join(".moss/build.nosync/staging");
     let html = fs::read_to_string(staging.join("index.html")).unwrap();
     assert!(html.contains("plate.webp"), "premise: the page promised the variant:\n{html}");
     let mut pending = crate::build::manifest::PendingManifest::new(Default::default());

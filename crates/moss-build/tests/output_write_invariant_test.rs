@@ -9,7 +9,7 @@
 //!
 //! ## Why this exists
 //!
-//! `.moss/build/` lives inside the vault, so the sync client is free to evict
+//! `.moss/build.nosync/` lives inside the vault, so the sync client is free to evict
 //! moss's own output. `std::fs::write` opens with `O_WRONLY|O_CREAT|O_TRUNC`,
 //! and `O_TRUNC` *requires* materialization — against a cloud-evicted
 //! (`SF_DATALESS`) destination, under the process-wide fail-fast policy, it
@@ -17,7 +17,7 @@
 //! make a fix possible: `unlink` and `rename` over a dataless file both
 //! succeed, because neither touches data extents.
 //!
-//! ADR-043 states the rule: **under `.moss/build/`, dataless is absent**, and
+//! ADR-043 states the rule: **under `.moss/build.nosync/`, dataless is absent**, and
 //! every write into that tree goes through `build::io_utils`, which writes to a
 //! temp sibling and `rename(2)`s it into place.
 //!
@@ -63,7 +63,7 @@ const MARKER: &str = "allow:raw_write";
 /// exactly as a truncating write does, and a raw one has no repair path:
 /// `cache/tmp` made that way failed every video run on a cloud-managed vault
 /// until it was routed through `io_utils::create_output_dir_all`. The rest of
-/// the crate never writes `.moss/build/`, so it is not asked to explain its
+/// the crate never writes `.moss/build.nosync/`, so it is not asked to explain its
 /// directories.
 const DIR_CALL_PATTERNS: &[&str] = &["create_dir_all(", "remove_dir_all("];
 const BUILD_ROOTS: &[&str] = &["build.rs", "build/", "moss_paths.rs", "ops/"];
@@ -138,11 +138,11 @@ fn raw_writes_in_the_build_tree_carry_allow_marker() {
 
     let mut msg = String::from(
         "Found raw file write(s) in a stage-writing module without an `// allow:raw_write <reason>` marker.\n\n\
-         `.moss/build/` lives inside the vault, so the sync client evicts moss's own output.\n\
+         `.moss/build.nosync/` lives inside the vault, so the sync client evicts moss's own output.\n\
          `fs::write` / `fs::copy` / `File::create` open the destination with O_TRUNC, which\n\
          requires materialization and fails EDEADLK against a cloud-evicted file (moss#964, ADR-043).\n\n\
          Recovery:\n  \
-         1. If the destination is under `.moss/build/`: use `crate::build::io_utils`\n     \
+         1. If the destination is under `.moss/build.nosync/`: use `crate::build::io_utils`\n     \
             (`write_output`, `write_output_if_changed`, `copy_output`, and for directories\n     \
             `create_output_dir_all` / `remove_output_dir_all`).\n  \
          2. If it is NOT regenerable output — a temp file you just minted, `.moss/cache`,\n     \

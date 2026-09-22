@@ -154,7 +154,7 @@ pub fn extract_rename_pairs(
 /// The hash-diff at the end of `do_rebuild_and_notify` decides whether to
 /// emit `FileChanged` based on (pre-rebuild hashes) vs (post-rebuild
 /// hashes). The implicit assumption is that the on-disk output tree
-/// (`.moss/build/staging/`) reflects the state hashes.json describes — moss
+/// (`.moss/build.nosync/staging/`) reflects the state hashes.json describes — moss
 /// is the only writer.
 ///
 /// When an external process wipes staging/ between ticks (iCloud "Optimize
@@ -1030,7 +1030,7 @@ fn request_path_under_root(root: &Path, abs: &Path) -> Option<String> {
 
     // Only Normal components allowed (no "..", ".", prefix roots).
     // Also exclude any component that matches is_excluded_dir_name (e.g. `.moss`,
-    // `node_modules`, `.git`) so build-output images written under `.moss/build/`
+    // `node_modules`, `.git`) so build-output images written under `.moss/build.nosync/`
     // never flood the editor with SourceAssetChanged events.
     let mut parts: Vec<String> = Vec::new();
     for comp in rel.components() {

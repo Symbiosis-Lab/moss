@@ -12,7 +12,7 @@
 //!
 //! moss has been bitten three times by an interaction between APFS hardlinks
 //! and iCloud Drive's "optimize storage" eviction. Files that land in a
-//! user-visible output path (`.moss/build/site/`, `.moss/build/staging/`, and
+//! user-visible output path (`.moss/build.nosync/site/`, `.moss/build.nosync/staging/`, and
 //! anything the CAS hardlinks INTO) must NEVER be created via
 //! `fs::hard_link`. Use `fs::copy` instead.
 //!

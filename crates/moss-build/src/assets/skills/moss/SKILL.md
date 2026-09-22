@@ -29,7 +29,7 @@ both erode legibility.
 serves, printing the URL it bound — read that, do not assume a port. (8080 is
 only the first one tried; a foreign dev server holding it means moss lands
 elsewhere, and a hardcoded `localhost:8080` would audit someone else's site.)
-Inspect built HTML under `.moss/build/current/` (the active frozen generation);
+Inspect built HTML under `.moss/build.nosync/current/` (the active frozen generation);
 the `.css` files under its `_moss/` are minified build output — use
 `moss describe --css <selector>` instead of reading them.
 
@@ -101,7 +101,7 @@ the rest. No `!important`, no `@layer`.
 
 moss's default rules ship **compiled into the binary** — there is no readable
 default stylesheet on disk anywhere in a site folder. Everything under
-`.moss/build/` is regenerated output, not source. A themed site has at least two
+`.moss/build.nosync/` is regenerated output, not source. A themed site has at least two
 stylesheets there: `_moss/style.<hash>.css` (the built-in defaults, minified to
 one line with comments stripped) and `_moss/theme/style.<hash>.css` (a
 hashed copy of your own `.moss/theme/style.css`), plus one
@@ -197,7 +197,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
 - **Site built by another generator:** `moss deploy <folder> --prebuilt=_site`
   skips `moss build` and uploads that directory as-is.
 - **Any non-moss host:** `moss build <folder> --site-url=https://example.com`,
-  then upload `.moss/build/current/` yourself. `--site-url` is required there
+  then upload `.moss/build.nosync/current/` yourself. `--site-url` is required there
   because canonical URLs, `og:image`, the sitemap, and RSS are all absolute and
   otherwise derive from moss hosting deployment state, which a non-moss host
   never sets. Flag details: `moss describe --json`.

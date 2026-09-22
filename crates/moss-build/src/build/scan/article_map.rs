@@ -9,7 +9,7 @@
 //! After site generation, call `build_article_map` to create a mapping from
 //! URL paths (e.g., "posts/my-article.html") to article metadata.
 //!
-//! The map is persisted to `.moss/build/article-map.json` and can be queried by:
+//! The map is persisted to `.moss/build.nosync/article-map.json` and can be queried by:
 //! - Preview system to determine if current page is syndicatable
 //! - Syndication system to get article info for current preview URL
 
@@ -187,7 +187,7 @@ impl ArticleMap {
         self.articles.contains_key(normalized)
     }
 
-    /// Save article map to .moss/build/article-map.json
+    /// Save article map to .moss/build.nosync/article-map.json
     pub fn save(&self, moss_dir: &Path) -> Result<(), String> {
         let paths = MossPaths::from_moss_dir(moss_dir.to_path_buf());
         let map_path = paths.article_map();
@@ -233,7 +233,7 @@ impl ArticleMap {
         if key.is_empty() { "/".to_string() } else { format!("/{key}/") }
     }
 
-    /// Load article map from .moss/build/article-map.json
+    /// Load article map from .moss/build.nosync/article-map.json
     pub fn load(moss_dir: &Path) -> Result<Self, String> {
         let paths = MossPaths::from_moss_dir(moss_dir.to_path_buf());
         let map_path = paths.article_map();

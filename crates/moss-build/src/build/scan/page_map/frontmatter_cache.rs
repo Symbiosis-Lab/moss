@@ -31,7 +31,7 @@ pub(super) struct FrontmatterScanEntry {
 /// A mismatch discards the file, which costs one full re-scan exactly once.
 const SCHEMA: u32 = 2;
 
-/// Persisted `.moss/build/cache/frontmatter-scan.json`: the `url:` and
+/// Persisted `.moss/build.nosync/cache/frontmatter-scan.json`: the `url:` and
 /// `external_url:` frontmatter fields `build_page_map`/`build_external_url_map`
 /// pre-scan out of every markdown file, keyed by source path, so a rebuild
 /// that touches one file does not re-read and re-parse all of them.
@@ -115,7 +115,7 @@ impl FrontmatterScanCache {
     }
 
     /// Persist to disk. Goes through `io_utils` because this file lives
-    /// under `.moss/build/` (ADR-043 — dataless is absent there).
+    /// under `.moss/build.nosync/` (ADR-043 — dataless is absent there).
     pub(crate) fn save(&self, path: &Path) -> std::io::Result<()> {
         let json = serde_json::to_vec_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;

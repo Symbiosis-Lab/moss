@@ -228,9 +228,9 @@ async fn do_rebuild_and_notify(
     admission_epoch: Option<u64>,
 ) -> bool {
     let source = std::path::PathBuf::from(folder_path);
-    // Post-generations: the pipeline writes to .moss/build/staging/. A stable
+    // Post-generations: the pipeline writes to .moss/build.nosync/staging/. A stable
     // path reference for the baseline diff lookup.
-    let output = source.join(".moss/build/staging");
+    let output = crate::moss_paths::MossPaths::new(&source).staging_dir();
 
     // Baseline for the change-detection diff: prefer the PREVIOUS build's
     // race-free in-memory hashes over re-reading the asynchronously-sealed

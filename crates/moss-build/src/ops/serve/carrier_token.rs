@@ -26,7 +26,7 @@
 //!
 //!   * **A browser page cannot read a local file.** `fetch('file:///…')` is
 //!     blocked; there is no API that hands a web page the bytes of
-//!     `.moss/build/http-token`. So a page cannot learn the token.
+//!     `.moss/build.nosync/http-token`. So a page cannot learn the token.
 //!   * **A browser page cannot forge the custom header cross-origin without a
 //!     CORS preflight** the server never answers. `X-Moss-Token` is not a
 //!     CORS-safelisted header, so any cross-origin `fetch` that sets it triggers
@@ -46,8 +46,8 @@
 //!    persists across restarts: a new server, a new token, and the old file
 //!    is overwritten.
 //! 2. **Publish** — [`publish`] writes the token to
-//!    `<vault>/.moss/build/http-token` (see [`token_path`]) in the same bind.
-//!    `.moss/build/` is cloud-EXCLUDED and regenerable
+//!    `<vault>/.moss/build.nosync/http-token` (see [`token_path`]) in the same bind.
+//!    `.moss/build.nosync/` is cloud-EXCLUDED and regenerable
 //!    (`moss_paths::MOSS_PATH_RULES`), so the file never syncs to another
 //!    machine and is never left dataless by an eviction — and the write goes
 //!    through `build::io_utils::write_output` per ADR-043, so it lands via
@@ -78,7 +78,7 @@ use crate::moss_paths::MossPaths;
 pub const TOKEN_HEADER: &str = "x-moss-token";
 
 /// The loopback-readable file the session token is published to, relative to the
-/// vault root. Under `.moss/build/` deliberately: that tree is cloud-excluded
+/// vault root. Under `.moss/build.nosync/` deliberately: that tree is cloud-excluded
 /// and regenerable (never synced, never left dataless), so the secret cannot
 /// leak to a second machine and is always readable while the server runs.
 pub fn token_path(vault_root: &Path) -> PathBuf {
@@ -99,7 +99,7 @@ pub fn mint() -> String {
 
 /// Publish `token` to [`token_path`] so a local client can read it. Writes
 /// through `build::io_utils::write_output` (temp+rename, dataless-safe) because
-/// the destination is under `.moss/build/`.
+/// the destination is under `.moss/build.nosync/`.
 ///
 /// The error string names the path only — never the token bytes.
 pub fn publish(vault_root: &Path, token: &str) -> Result<(), String> {
@@ -167,7 +167,7 @@ mod tests {
         let vault = Path::new("/tmp/some-vault");
         let p = token_path(vault);
         assert!(
-            p.ends_with(".moss/build/http-token"),
+            p.ends_with(".moss/build.nosync/http-token"),
             "token must live under the regenerable, cloud-excluded build tree; got {}",
             p.display()
         );

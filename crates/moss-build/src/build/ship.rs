@@ -587,7 +587,7 @@ pub fn tail_owns_shared_state(promotion: &Result<Promotion, String>) -> bool {
 }
 
 /// Copy `staging/` → `generations/<gen-id>/` (stripping dev annotations) and
-/// atomically swap `.moss/build/current` → the new generation.
+/// atomically swap `.moss/build.nosync/current` → the new generation.
 ///
 /// Caller must ensure `staging/` is fully populated (post-barrier). The
 /// generation dir is created inside this function via `create_dir_all`.
