@@ -214,7 +214,12 @@ const BASELINE = {
   // 276392 -> 276643 (2026-09-22): standAtTerminalClose's mob.scene = SHARE
   // fix (and its comment) for the reverse-latch bug that stranded shown at
   // SHARE on mobile.
-  scriptBytes: 276643,
+  // 276643 -> 277909 (2026-09-22): updateFinalDissolve's cover/grayscale
+  // switch moved off finalWash's own catch-up paint onto q directly (the
+  // mobile reverse-leg-off-the-closing-scene fix), plus dropping the
+  // releasePigmentCover() call that stripped a class renderMorphAt still
+  // owned -- real logic plus its own explanatory comments, not bloat.
+  scriptBytes: 277909,
 };
 
 function countWindowAssignments(text) {

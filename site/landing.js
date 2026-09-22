@@ -4014,7 +4014,15 @@ function updateFinalDissolve() {
   if (!q) {
     if (finalWash) {
       cancelAnimationFrame(finalWash.raf); finalWash = null;
-      releasePigmentCover(); canvas.style.filter = '';
+      // Not releasePigmentCover(): on mobile, 'mobile-handoff' and --wash-cover
+      // are also mob's (renderMorphAt) for as long as the reader is anywhere
+      // at or past SHIPS -- mob mounts that class once and never remounts to
+      // re-add it, so removing it here left #gl with no matching rule and its
+      // opacity fell back to CSS's un-set default (1) instead of the 0 the
+      // wash had already reached: the up-leg-off-DEPLOY flip in
+      // check-landing-monotone.mjs. Writing the property itself to 0 reaches
+      // the same invisible result without touching a class mob still owns.
+      stage.style.setProperty('--wash-cover', '0'); canvas.style.filter = '';
       if (shown === DEPLOY) orbitSim?.restart();
     }
     return;
@@ -4025,20 +4033,30 @@ function updateFinalDissolve() {
     // Retain these exact pixels through the final scene and the return trip.
     if (!finalPrints) finalPrints = { source: deployPrint(), film: closingPigmentPrint() };
     holdCanvas(finalPrints.source, finalPrints.film, DEPLOY, true, true);
-    finalWash = { t: 0, drawn: -1, goal: q * T_TOTAL, raf: 0, covered: true };
+    finalWash = { t: 0, drawn: -1, goal: q * T_TOTAL, raf: 0, covered: true, shownQ: -1 };
   }
   const wash = finalWash; wash.goal = q * T_TOTAL;
+  // Cover and the grayscale switch are q's alone (unit7 part A's rule: what
+  // is presented is a pure function of scroll position). A wash recreated
+  // at t=0 toward an already-large goal must read as that goal on this same
+  // frame, not wait however many frames advanceWash's step budget takes to
+  // close the gap -- that wait was the mobile reverse-leg bug: cover pinned
+  // at 0 while the sim caught up, then jumping straight to ~1.
+  if (q !== wash.shownQ) {
+    stage.style.setProperty('--wash-cover', String(smooth(0, .18, q)));
+    canvas.style.filter = `grayscale(${smooth(.1, .65, q)})`;
+    wash.shownQ = q;
+  }
   if (wash.raf) return;
   const frame = () => {
     if (finalWash !== wash) return;
     wash.raf = 0;
+    // The sim itself may still lag or rebuild behind q -- it is a
+    // simulation, not the presenter -- so only the actual paint waits on it.
     // Reverse scroll reconstructs the same forward field at the earlier
     // position. One clock owns both directions, without competing fade loops.
     const result = advanceWash(sim, wash, { goal: wash.goal, fwd: true }, t => {
-      const p = wash.goal / T_TOTAL;
-      stage.style.setProperty('--wash-cover', String(smooth(0, .18, p)));
-      canvas.style.filter = `grayscale(${smooth(.1, .65, p)})`;
-      sim.draw(true, smooth(T_CURE, T_TOTAL, t), -.2 + 1.4 * smooth(.94, 1, p));
+      sim.draw(true, smooth(T_CURE, T_TOTAL, t), -.2 + 1.4 * smooth(.94, 1, wash.goal / T_TOTAL));
     });
     if (!result.caughtUp) wash.raf = requestAnimationFrame(frame);
   };
