@@ -5,6 +5,7 @@
 //!
 //! See docs/archive/2026-05-17-listing-sort-and-embeds-design.md.
 
+use crate::media::{extract_placement_from_alias, AlignSide, Placement};
 use crate::resolve::embed_renderer::Sizing;
 use crate::sort::SortAxis;
 
@@ -42,6 +43,92 @@ pub struct FolderEmbedParams {
     /// Internal: exclude folder pages that act as top-level nav items.
     /// Set by synthesize_children_marker for homepage default-mode; not user-facing.
     pub exclude_nav: bool,
+    /// How wide the listing is and which way it floats — the same vocabulary
+    /// every other embed kind reads, written in its own pipe segment
+    /// (`![[/journal/|wide]]`). Distinct from [`Self::size`], which is the
+    /// static-index iframe's own dimension token and predates this.
+    pub placement: Placement,
+    /// Caption for the listing, rendered as a `<figcaption>` on the figure
+    /// that wraps it. Any segment that is neither a keyed param nor
+    /// placement.
+    pub caption: Option<String>,
+}
+
+/// Read a whole folder-embed pothole: keyed params, placement and caption,
+/// in any order and any number of `|` segments.
+///
+/// A segment goes to the keyed grammar when it carries a `:`, is a bare
+/// sizing token, or is entirely `key=value` pairs — `sort:date` and
+/// `sort=date` mean the same thing. Otherwise it is placement if it reads as
+/// placement, and the caption if it does not.
+///
+/// Splitting on `|` FIRST is the fix: the whole text after the first pipe
+/// used to go to the comma grammar intact, so `style:grid|wide|A caption`
+/// set `style` to the string `"grid|wide|A caption"`.
+pub fn classify_folder_segments(raw: &str) -> FolderEmbedParams {
+    let mut out = FolderEmbedParams::default();
+    let mut caption: Vec<String> = Vec::new();
+    for segment in raw.split('|') {
+        let trimmed = segment.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if is_keyed_segment(trimmed) {
+            merge_keyed_params(&mut out, trimmed);
+            continue;
+        }
+        let (placement, rest) = extract_placement_from_alias(trimmed);
+        if !placement.is_empty() {
+            out.placement.fill_from(placement);
+            if !rest.trim().is_empty() {
+                caption.push(rest);
+            }
+            continue;
+        }
+        caption.push(segment.to_string());
+    }
+    if !caption.is_empty() {
+        out.caption = Some(caption.join("|").trim().to_string());
+    }
+    out
+}
+
+/// Recognized keys for the keyed (`key:value` / `key=value`) grammar.
+const KNOWN_KEYS: &[&str] = &["limit", "sort", "style", "depth", "group", "covers", "more", "size"];
+
+/// Whether a segment belongs to the keyed grammar rather than to placement
+/// or the caption.
+///
+/// A `key:value`/`key=value` token must name a recognized key — otherwise a
+/// colon in prose (`Note: 2024`) misfires as the keyed grammar and silently
+/// eats the caption. A token with NEITHER `:` nor `=` is tolerated rather
+/// than disqualifying: `merge_keyed_params` already treats a colon-less
+/// token as a bare flag (a sizing hint, or silently ignored, per its own
+/// comment), so `limit:3,more` must stay keyed with `more` a no-op, the same
+/// as `merge_keyed_params` parses it standalone. At least one recognized
+/// key is still required, or a plain caption ("wide cover", "This is nice")
+/// would misfire as keyed since every one of its tokens is colon-less.
+fn is_keyed_segment(segment: &str) -> bool {
+    if is_size_token(segment) {
+        return true;
+    }
+    let tokens: Vec<&str> = segment
+        .split([',', ' '])
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .collect();
+    if tokens.is_empty() {
+        return false;
+    }
+    let mut has_known_key = false;
+    for t in &tokens {
+        match t.split_once([':', '=']) {
+            Some((k, _)) if KNOWN_KEYS.contains(&k.trim()) => has_known_key = true,
+            Some(_) => return false,
+            None => {} // colon-less bare token — tolerated
+        }
+    }
+    has_known_key
 }
 
 /// Parse pipe-encoded params from the portion after `|`.
@@ -50,12 +137,21 @@ pub struct FolderEmbedParams {
 /// Unknown keys are silently ignored.
 pub fn parse_params(raw: &str) -> FolderEmbedParams {
     let mut out = FolderEmbedParams::default();
+    merge_keyed_params(&mut out, raw);
+    out
+}
+
+/// Fold one comma-separated run of `key:value` / `key=value` pairs into
+/// `out`. Shared by the comma grammar and the per-segment classifier so the
+/// two spellings cannot drift.
+fn merge_keyed_params(out: &mut FolderEmbedParams, raw: &str) {
     for tok in raw.split(',') {
         let tok = tok.trim();
         if tok.is_empty() {
             continue;
         }
-        if let Some((k, v)) = tok.split_once(':') {
+        let split = tok.split_once(':').or_else(|| tok.split_once('='));
+        if let Some((k, v)) = split {
             match k.trim() {
                 "limit" => out.limit = v.trim().parse().ok(),
                 "sort" => {
@@ -88,7 +184,6 @@ pub fn parse_params(raw: &str) -> FolderEmbedParams {
         }
         // unknown bare flags (e.g. a bare "more" with no `:target`) silently ignored
     }
-    out
 }
 
 /// Whether a bare pothole token is unambiguously a sizing hint.
@@ -115,6 +210,52 @@ fn is_size_token(tok: &str) -> bool {
 pub const MARKER_FOLDER_LIST: &str = "<!--MOSS_MARKER_FOLDER_LIST:";
 pub const MARKER_END: &str = "-->";
 
+/// Percent-encode the characters that would otherwise end a marker field or
+/// the marker itself.
+///
+/// `|` and `=` separate fields and keys; `,` separates the comma grammar;
+/// `<` and `>` are encoded because a value containing `-->` would truncate
+/// the HTML comment the marker lives in, dropping everything after it. `%`
+/// goes first so decoding is unambiguous.
+pub fn marker_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '%' => out.push_str("%25"),
+            '|' => out.push_str("%7C"),
+            '=' => out.push_str("%3D"),
+            ',' => out.push_str("%2C"),
+            '<' => out.push_str("%3C"),
+            '>' => out.push_str("%3E"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Inverse of [`marker_encode`]. An unrecognised or truncated `%` escape is
+/// left as written rather than dropped.
+pub fn marker_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = String::with_capacity(value.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+            if let Some(byte) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(byte as char);
+                i += 3;
+                continue;
+            }
+        }
+        // `i` indexes a byte; push the whole char starting here.
+        let ch = value[i..].chars().next().unwrap_or('%');
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
 pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String {
     let mut parts = vec![format!("path={}", path), format!("from={}", from)];
     if let Some(ref s) = params.style {
@@ -130,7 +271,27 @@ pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String
         parts.push(format!("covers={}", c));
     }
     if let Some(ref m) = params.more {
-        parts.push(format!("more={}", m));
+        parts.push(format!("more={}", marker_encode(m)));
+    }
+    if let Some(w) = params.placement.width {
+        parts.push(format!("width={}", w));
+    }
+    if let Some(a) = params.placement.align {
+        parts.push(format!(
+            "align={}",
+            match a {
+                AlignSide::Left => "left",
+                AlignSide::Right => "right",
+            }
+        ));
+    }
+    // `pct`, not `size`: `size=` is already taken by the static-index
+    // iframe's own dimension token, which means something else.
+    if let Some(ref pct) = params.placement.size {
+        parts.push(format!("pct={}", pct));
+    }
+    if let Some(ref c) = params.caption {
+        parts.push(format!("caption={}", marker_encode(c)));
     }
     if let Some(ref sz) = params.size {
         parts.push(format!("size={}", sz));

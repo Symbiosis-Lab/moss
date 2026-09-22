@@ -62,23 +62,6 @@ pub fn html_escape_attr(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Build the ` data-width="value"` attribute fragment (with leading space)
-/// for spec § P9 wrapper-width emission. Empty string when `None` so
-/// formatters can splice unconditionally without an extra conditional.
-///
-/// Values reaching here are pre-validated by [`crate::media::match_width_token`]
-/// (only `body | wide | page | screen`), so HTML escaping is a defensive
-/// belt-and-braces and never actually substitutes.
-///
-/// Retained for Phase 1's Stage 2 dispatcher.
-#[allow(dead_code)]
-pub(super) fn width_attr(width: Option<&str>) -> String {
-    match width {
-        Some(w) => format!(r#" data-width="{}""#, html_escape_attr(w)),
-        None => String::new(),
-    }
-}
-
 /// Extract filename stem (no directory, no extension). Used by renderers that
 /// want a human-readable label from a path.
 ///

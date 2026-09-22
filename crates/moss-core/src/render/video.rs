@@ -93,6 +93,8 @@
 
 use crate::asset_paths::{to_hls_master, to_mp4, to_thumb};
 use crate::asset_snapshot::AssetSnapshot;
+use crate::media::Placement;
+use crate::render::placement::placement_attrs;
 use crate::resolve::embed_renderer::html_escape_attr;
 use crate::resolve::title_params::TitleParams;
 use std::path::PathBuf;
@@ -127,9 +129,12 @@ const DOWNLOAD_LABEL: &str = "Download video";
 /// docs for the authoritative byte-shape contract.
 pub fn synthesize_video_html(
     params: &TitleParams,
+    placement: &Placement,
     src: &str,
     assets: &AssetSnapshot,
 ) -> String {
+    let place = placement_attrs(placement);
+    let align = place.align_suffix();
     // .mov → .mp4 source-extension swap (idempotent for .mp4 / .webm).
     // Pre-Phase-0 lived in placeholder.rs; moved here because the typed-
     // data layer is the single source of truth for the served URL.
@@ -186,7 +191,10 @@ pub fn synthesize_video_html(
         // ignores its <source> children — and the progressive MP4 is last so a
         // browser with neither native HLS nor hls.js still plays something.
         return format!(
-            r#"<video class="moss-embed moss-embed-video" data-type="video"{data_loop} data-placeholder-src="{orig}" poster="{thumb}" data-thumb-src="{thumb}" {playback}{w}{h}><source src="{hls}" type="{HLS_MIME}"><source src="{src}" type="video/mp4"></video><p class="moss-embed-video-download"><a href="{src}" download>{download}</a></p>"#,
+            r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop} data-placeholder-src="{orig}" poster="{thumb}" data-thumb-src="{thumb}" {playback}{w}{h}{size}><source src="{hls}" type="{HLS_MIME}"><source src="{src}" type="video/mp4"></video><p class="moss-embed-video-download"><a href="{src}" download>{download}</a></p>"#,
+            align = align,
+            dw = place.data_width_attr,
+            size = place.size_style_attr,
             data_loop = data_loop,
             hls = html_escape_attr(&to_hls_master(src)),
             src = html_escape_attr(&converted_src),
@@ -200,7 +208,10 @@ pub fn synthesize_video_html(
     }
 
     format!(
-        r#"<video class="moss-embed moss-embed-video" data-type="video"{data_loop} src="{src}" data-placeholder-src="{orig}" poster="{thumb}" data-thumb-src="{thumb}" {playback}{w}{h}></video>"#,
+        r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop} src="{src}" data-placeholder-src="{orig}" poster="{thumb}" data-thumb-src="{thumb}" {playback}{w}{h}{size}></video>"#,
+        align = align,
+        dw = place.data_width_attr,
+        size = place.size_style_attr,
         data_loop = data_loop,
         src = html_escape_attr(&converted_src),
         orig = html_escape_attr(src),
@@ -232,7 +243,7 @@ mod tests {
     #[test]
     fn video_basic_shape() {
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(out.contains("<video"), "got: {}", out);
         assert!(out.contains(r#"src="clip.mp4""#), "got: {}", out);
     }
@@ -240,7 +251,7 @@ mod tests {
     #[test]
     fn video_emits_moss_embed_classes() {
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(
             out.contains(r#"class="moss-embed moss-embed-video""#),
             "got: {}",
@@ -254,7 +265,7 @@ mod tests {
         // The downstream rewriter regex matches `<video … src="…">` and
         // expects a separate closing tag.
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(out.ends_with("</video>"), "got: {}", out);
     }
 
@@ -266,7 +277,7 @@ mod tests {
         // carries `playsinline` too — without it iOS hands playback to the
         // fullscreen AVKit player instead of playing in the page.
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(out.contains(" controls"), "default path must emit controls, got: {}", out);
         assert!(out.contains(" playsinline"), "default path must emit playsinline, got: {}", out);
     }
@@ -276,7 +287,7 @@ mod tests {
         // `preload="metadata"` is the historical default: browser fetches
         // duration/dimensions but defers the full payload until play.
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(out.contains(r#"preload="metadata""#), "got: {}", out);
     }
 
@@ -290,7 +301,7 @@ mod tests {
         // With a nested <source> and no `src`, both silently drop. See the
         // module doc's "Authoritative byte shape" section above.
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(!out.contains("<source"), "must not emit <source>: {}", out);
     }
 
@@ -313,7 +324,7 @@ mod tests {
         // `src` ignores its <source> children, so emitting both would silently
         // serve the progressive MP4 to everyone and make the ladder dead bytes.
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.mov", &hls_snapshot("clip"));
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mov", &hls_snapshot("clip"));
         assert!(
             !out.contains(r#"<video class="moss-embed moss-embed-video" data-type="video" src="#),
             "the ladder form must not carry src on <video>: {out}"
@@ -332,7 +343,7 @@ mod tests {
         // understands. If the MP4 were first, every Safari would take it and
         // the ladder would never be used.
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.mov", &hls_snapshot("clip"));
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mov", &hls_snapshot("clip"));
         let hls_at = out.find("clip.hls/master.m3u8").expect("hls source");
         let mp4_at = out.find(r#"<source src="clip.mp4""#).expect("mp4 source");
         assert!(hls_at < mp4_at, "MP4 must come last: {out}");
@@ -344,7 +355,7 @@ mod tests {
         // the seconds before the first segment lands; losing it would make the
         // slow case look broken rather than slow.
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.mov", &hls_snapshot("clip"));
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mov", &hls_snapshot("clip"));
         assert!(out.contains(r#"poster="clip.thumb.jpg""#), "got: {out}");
         assert!(
             out.contains(r#"<a href="clip.mp4" download>"#),
@@ -355,7 +366,7 @@ mod tests {
     #[test]
     fn a_ladder_registered_for_another_video_does_not_leak() {
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "other.mp4", &hls_snapshot("clip"));
+        let out = synthesize_video_html(&p, &Placement::default(), "other.mp4", &hls_snapshot("clip"));
         assert!(!out.contains("<source"), "got: {out}");
     }
 
@@ -369,7 +380,7 @@ mod tests {
         // to the synthesizer at the typed-data boundary (Decision #6:
         // zero carve-outs).
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.mov", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mov", &empty_snapshot());
         assert!(
             out.contains(r#"src="clip.mp4""#),
             "expected .mov swapped to .mp4, got: {}",
@@ -392,7 +403,7 @@ mod tests {
         // .MOV (uppercase) is the macOS QuickTime export default and must
         // also swap. Mirrors the to_mp4 helper's case-insensitive contract.
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.MOV", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.MOV", &empty_snapshot());
         assert!(
             out.contains(r#"src="clip.mp4""#),
             "expected .MOV swapped to .mp4, got: {}",
@@ -404,7 +415,7 @@ mod tests {
     fn video_mp4_extension_pass_through() {
         // .mp4 is the served form; pass through unchanged.
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "../assets/clip.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "../assets/clip.mp4", &empty_snapshot());
         assert!(
             out.contains(r#"src="../assets/clip.mp4""#),
             "got: {}",
@@ -416,7 +427,7 @@ mod tests {
     fn video_webm_extension_pass_through() {
         // .webm is not transcoded; pass through.
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.webm", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.webm", &empty_snapshot());
         assert!(out.contains(r#"src="clip.webm""#), "got: {}", out);
     }
 
@@ -425,14 +436,14 @@ mod tests {
     #[test]
     fn video_emits_width_param_when_present() {
         let p = params_with(&[("kind", "video"), ("width", "640px")]);
-        let out = synthesize_video_html(&p, "clip.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(out.contains(r#"width="640px""#), "got: {}", out);
     }
 
     #[test]
     fn video_emits_height_param_when_present() {
         let p = params_with(&[("kind", "video"), ("width", "640px"), ("height", "360px")]);
-        let out = synthesize_video_html(&p, "clip.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(out.contains(r#"width="640px""#), "got: {}", out);
         assert!(out.contains(r#"height="360px""#), "got: {}", out);
     }
@@ -445,7 +456,7 @@ mod tests {
         // "no fallback dims" decision in the Phase 2E design (the regex's
         // 800x600 fallback was a long-standing band-aid; Phase 2E drops it).
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(!out.contains("width="), "got: {}", out);
         assert!(!out.contains("height="), "got: {}", out);
     }
@@ -457,7 +468,7 @@ mod tests {
         // & must escape to &amp; in attribute values. The URL Q&A is
         // contrived but exercises the html_escape pass.
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "q&a.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "q&a.mp4", &empty_snapshot());
         assert!(out.contains(r#"src="q&amp;a.mp4""#), "got: {}", out);
     }
 
@@ -471,7 +482,7 @@ mod tests {
         // the regex contract at `placeholder.rs:440-490` so the post-pass
         // becomes a no-op for synthesizer output.
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.mov", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mov", &empty_snapshot());
         assert!(
             out.contains(r#"src="clip.mp4""#),
             "expected src= to point at transcoded mp4, got: {}",
@@ -492,7 +503,7 @@ mod tests {
         // arrives after the page renders). Both reference `to_thumb(src)`,
         // mirroring `placeholder.rs:444-446`.
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.mov", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mov", &empty_snapshot());
         assert!(
             out.contains(r#"poster="clip.thumb.jpg""#),
             "expected poster= from to_thumb(src), got: {}",
@@ -514,7 +525,7 @@ mod tests {
         let p = params_with(&[("kind", "video")]);
         let mut snap = AssetSnapshot::new();
         snap.dimensions.insert(PathBuf::from("clip.mov"), (1920, 1080));
-        let out = synthesize_video_html(&p, "clip.mov", &snap);
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mov", &snap);
         assert!(out.contains(r#"width="1920""#), "got: {}", out);
         assert!(out.contains(r#"height="1080""#), "got: {}", out);
     }
@@ -527,7 +538,7 @@ mod tests {
         let p = params_with(&[("kind", "video")]);
         let mut snap = AssetSnapshot::new();
         snap.dimensions.insert(PathBuf::from("clip.mov"), (0, 0));
-        let out = synthesize_video_html(&p, "clip.mov", &snap);
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mov", &snap);
         assert!(
             !out.contains("width="),
             "(0, 0) sentinel must NOT produce width=, got: {}",
@@ -554,7 +565,7 @@ mod tests {
         // `![[clip.mp4|loop]]` must emit the ambient playback set and must
         // NOT emit `controls` (the chrome-free ambient branch has no control bar).
         let p = params_with(&[("kind", "video"), ("loop", "1")]);
-        let out = synthesize_video_html(&p, "clip.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(out.contains(" autoplay"), "missing autoplay, got: {}", out);
         assert!(out.contains(" muted"), "missing muted, got: {}", out);
         assert!(out.contains(" loop"), "missing loop, got: {}", out);
@@ -567,7 +578,7 @@ mod tests {
         // data-type="video" (drift fix) and data-loop (JS/CSS hook) must both
         // be present on the loop branch.
         let p = params_with(&[("kind", "video"), ("loop", "1")]);
-        let out = synthesize_video_html(&p, "clip.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(out.contains(r#"data-type="video""#), "missing data-type=video, got: {}", out);
         assert!(out.contains(" data-loop"), "missing data-loop attribute, got: {}", out);
     }
@@ -578,7 +589,7 @@ mod tests {
         // ambient attribute set. The parser arm is tested end-to-end here via
         // the synthesizer (width/height come from TitleParams the parser sets).
         let p = params_with(&[("kind", "video"), ("loop", "1"), ("width", "640px"), ("height", "360px")]);
-        let out = synthesize_video_html(&p, "clip.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(out.contains(r#"width="640px""#), "missing width, got: {}", out);
         assert!(out.contains(r#"height="360px""#), "missing height, got: {}", out);
         assert!(out.contains(" autoplay"), "missing autoplay, got: {}", out);
@@ -591,7 +602,7 @@ mod tests {
         // data-type="video" must be on the default (non-loop) branch too — this
         // is the drift fix bundled with the loop feature.
         let p = params_with(&[("kind", "video")]);
-        let out = synthesize_video_html(&p, "clip.mp4", &empty_snapshot());
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(out.contains(r#"data-type="video""#), "missing data-type=video on default branch, got: {}", out);
     }
 }

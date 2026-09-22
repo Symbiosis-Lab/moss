@@ -3759,6 +3759,30 @@ article figure.moss-image:has(.moss-align-right):not([data-width]) {
   max-width: 50%;
 }
 
+/* The same half-column cap for every other floated embed: a bare embed
+ * element, the figure wrapping a captioned one, and a folder listing. The
+ * float itself needs no rule — `article .moss-align-*` above already matches
+ * any element. The image block keeps its own `:has()` escalation because a
+ * bare `<img>` can float without a figure; these kinds never do, so the
+ * class is always on the outermost element and no `:has()` is needed. */
+article .moss-embed.moss-align-left:not([data-width]),
+article .moss-embed.moss-align-right:not([data-width]),
+article .moss-embed-figure.moss-align-left:not([data-width]),
+article .moss-embed-figure.moss-align-right:not([data-width]),
+article .moss-cards-container.moss-align-left:not([data-width]),
+article .moss-cards-container.moss-align-right:not([data-width]) {
+  max-width: 50%;
+}
+
+/* A captioned non-image embed's width, data-width and float all move to
+ * the `.moss-embed-figure` wrapper (see `wrap_embed_with_caption`) — the
+ * inner element carries none of its own. Fill it to the figure's width,
+ * whatever set it: the align cap above, the data-width escape below, or
+ * the figure's own inline `style="width:NN%"`. */
+article .moss-embed-figure > :is(.moss-embed, .moss-cards-container) {
+  width: 100%;
+}
+
 /* When the figure carries data-width, drop the align 50% cap so the align
  * contributes only float behavior. The data-width *width* rules live just
  * below (the ADR-021 Corollary 2 content-width escape). */
@@ -3841,6 +3865,22 @@ article.container > hr {
   article img.moss-align-right,
   article figure.moss-image:has(.moss-align-left),
   article figure.moss-image:has(.moss-align-right) {
+    float: none;
+    max-width: 100%;
+    margin-inline: 0;
+  }
+
+  /* Mobile collapse: match the default rule's specificity (`article
+   * img.moss-align-*`) so this override actually wins. A bare `article
+   * .moss-align-*` selector here has lower specificity than the default's
+   * `article img.moss-align-*` and silently loses regardless of source
+   * order or @media wrapping. */
+  article .moss-embed.moss-align-left,
+  article .moss-embed.moss-align-right,
+  article .moss-embed-figure.moss-align-left,
+  article .moss-embed-figure.moss-align-right,
+  article .moss-cards-container.moss-align-left,
+  article .moss-cards-container.moss-align-right {
     float: none;
     max-width: 100%;
     margin-inline: 0;

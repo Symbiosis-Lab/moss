@@ -642,8 +642,10 @@ mod tests {
         let blocks = parse_and_dispatch("![[clip.mov|77%]]\n", &["clip.mov"]);
         let html = dispatched_html(&blocks);
         assert!(html.contains("<video"), "got: {html}");
+        // A bare percent is the element's own width, so it rides inline
+        // style — `<video width="77%">` was never valid HTML anyway.
         assert!(
-            html.contains(r#"width="77%""#),
+            html.contains(r#"style="width:77%""#),
             "percent width dropped: {html}"
         );
         assert!(

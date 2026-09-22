@@ -22,7 +22,7 @@ fn test_dummy_renderer_trait_surface() {
         query: None,
         section: None,
         alias: None,
-        width: None,
+        placement: crate::media::Placement::default(),
         attrs: None,
     };
     assert_eq!(

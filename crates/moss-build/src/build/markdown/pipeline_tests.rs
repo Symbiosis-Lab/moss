@@ -3591,8 +3591,10 @@ fn video_embed_plain_end_to_end() {
 fn video_embed_percent_end_to_end() {
     let html = render_with_graph("![[clip.mov|77%]]\n", &["clip.mov"]);
     assert!(html.contains("<video"), "got: {html}");
+    // A bare percent is the element's own width and rides inline style;
+    // `<video width="77%">` was never valid HTML.
     assert!(
-        html.contains(r#"width="77%""#),
+        html.contains(r#"style="width:77%""#),
         "percent width dropped: {html}"
     );
     assert!(

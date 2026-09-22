@@ -8,6 +8,14 @@
 
 use std::collections::BTreeMap;
 
+mod placement;
+pub use placement::{extract_placement_from_alias, Placement};
+// `parse_placement_segment` has exactly one caller outside its own module:
+// `segment_without_size` below, the editor's drag-resize write path — hence
+// `pub(crate)`, not the wider `pub` the other two placement helpers used to
+// share despite never being called from outside `placement.rs` at all.
+use placement::parse_placement_segment;
+
 // ---------------------------------------------------------------------------
 // Fit — maps to CSS `object-fit`
 // ---------------------------------------------------------------------------
@@ -427,26 +435,39 @@ pub fn parse_image_width(seg: &str) -> Option<String> {
     None
 }
 
-/// Split pipe-delimited alt/alias text into `(remaining, width)`.
+/// Strip the width/size out of one pipe segment, keeping its align keyword
+/// and any other tokens it carries.
 ///
-/// Pulls out the FIRST segment that `parse_image_width` recognizes; all
-/// other segments are rejoined with `|` in order. If no segment is a
-/// width, returns the input unchanged with `None`. Mirrors the segment
-/// model of [`extract_width_from_alias`] but for the image width vocabulary
-/// (named + percent).
-pub fn split_alt_width(text: &str) -> (String, Option<String>) {
-    let mut width: Option<String> = None;
-    let mut remaining: Vec<&str> = Vec::new();
-    for seg in text.split('|') {
-        if width.is_none() {
-            if let Some(w) = parse_image_width(seg) {
-                width = Some(w);
-                continue;
+/// Unlike a whole-segment width check, this reaches into a MIXED segment
+/// like `"align-right 33%"` — a float and a size sharing one segment — and
+/// drops only the size, so the editor's drag-resize write path (the only
+/// caller) does not leave a stale size sitting next to a fresh one. A
+/// segment that is not placement-shaped at all (a caption) is returned
+/// unchanged; a segment that WAS width/size and nothing else disappears
+/// (`None`).
+fn segment_without_size(seg: &str) -> Option<String> {
+    let Some((placement, rest)) = parse_placement_segment(seg) else {
+        // Not placement-shaped at all — a caption, kept verbatim.
+        return Some(seg.to_string());
+    };
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(side) = placement.align {
+        parts.push(
+            match side {
+                AlignSide::Left => "align-left",
+                AlignSide::Right => "align-right",
             }
-        }
-        remaining.push(seg);
+            .to_string(),
+        );
     }
-    (remaining.join("|"), width)
+    if !rest.is_empty() {
+        parts.push(rest);
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
 }
 
 /// Rewrite the width token of a single image's markdown, preserving all
@@ -471,10 +492,13 @@ pub fn set_image_width(image_md: &str, width: Option<&str>) -> String {
         .and_then(|s| s.strip_suffix("]]"))
     {
         let (path, pothole) = inner.split_once('|').unwrap_or((inner, ""));
-        // Strip any existing width from the pothole, keep other segments.
-        let (rest, _old) = split_alt_width(pothole);
-        let segments: Vec<&str> = rest.split('|').filter(|s| !s.is_empty()).collect();
-        let mut parts: Vec<String> = segments.iter().map(|s| s.to_string()).collect();
+        // Strip any existing width/size from every segment, keeping align
+        // and whatever else each segment carries.
+        let mut parts: Vec<String> = pothole
+            .split('|')
+            .filter(|s| !s.is_empty())
+            .filter_map(segment_without_size)
+            .collect();
         if let Some(w) = new_width {
             parts.push(w);
         }
@@ -494,7 +518,14 @@ pub fn set_image_width(image_md: &str, width: Option<&str>) -> String {
             .and_then(|rest| rest.strip_suffix(')'));
         if let Some((alt_raw, url)) = body.and_then(|body| body.rsplit_once("](")) {
             {
-                let (rest_alt, _old) = split_alt_width(alt_raw);
+                // Strip width/size per segment (not upfront-filtered: an
+                // empty leading segment is the empty-alt placeholder and
+                // must survive to round-trip `![|55%]`, below).
+                let rest_alt: String = alt_raw
+                    .split('|')
+                    .filter_map(segment_without_size)
+                    .collect::<Vec<_>>()
+                    .join("|");
                 // Setting a width always emits `![{alt}|{w}]` — even when the
                 // remaining alt is empty (`![|55%]`), so it round-trips with
                 // the standard-image parser's empty-alt-with-width form
@@ -553,6 +584,9 @@ pub fn extract_width_from_alias(alias: &str) -> (Option<&'static str>, String) {
 ///
 /// Handles single-token keywords (`"left"`, `"contain"`) and two-word position
 /// keywords (`"top left"`).  An empty string returns `false`.
+///
+/// Fit and object-position only: alignment is [`Placement`]'s and is stripped
+/// out before anything calls this.
 pub fn is_all_display_keywords(text: &str) -> bool {
     let tokens: Vec<&str> = text.split_whitespace().collect();
     if tokens.is_empty() {
@@ -580,68 +614,9 @@ pub fn is_all_display_keywords(text: &str) -> bool {
             continue;
         }
 
-        if AlignSide::from_keyword(tokens[i]).is_some() {
-            i += 1;
-            continue;
-        }
-
         return false;
     }
 
-    true
-}
-
-/// True when every whitespace-separated token in `alias` is either a
-/// recognized display keyword (fit / position / align) OR a canonical
-/// width token (body / wide / page / screen / full).
-///
-/// This is the structural-vs-caption classifier for image aliases: a
-/// fully-structural alias contributes only to display params; anything else
-/// becomes caption / alt text. The [`is_all_display_keywords`] half is
-/// unchanged (covers two-word position tokens like `top left`); the
-/// width-token half lets authors write `align-left wide` without breaking
-/// the pipe.
-///
-/// Lifted from `resolve::embed_renderer` (Phase 1 of the image-embed
-/// synth-collapse) so it survives `ImageRenderer`'s deletion — it is the
-/// load-bearing half of [`classify_image_alias`].
-pub(crate) fn is_structural_alias(alias: &str) -> bool {
-    // Fast path: any caption-like text fails `is_all_display_keywords`
-    // and would also fail the per-token loop below.
-    if is_all_display_keywords(alias) {
-        return true;
-    }
-    let tokens: Vec<&str> = alias.split_whitespace().collect();
-    if tokens.is_empty() {
-        return false;
-    }
-    // Walk tokens; admit width tokens, otherwise defer to display-keyword
-    // recognition (per-token, since position tokens may pair across two).
-    let mut i = 0;
-    while i < tokens.len() {
-        // Width token: single-token, simple admit.
-        if match_width_token(tokens[i]).is_some() {
-            i += 1;
-            continue;
-        }
-        // Two-word position (e.g. `top left`).
-        if i + 1 < tokens.len() {
-            let combined = format!("{} {}", tokens[i], tokens[i + 1]);
-            if Position::from_keyword(&combined).is_some() {
-                i += 2;
-                continue;
-            }
-        }
-        // Single-token display keyword.
-        if Fit::from_keyword(tokens[i]).is_some()
-            || Position::from_keyword(tokens[i]).is_some()
-            || AlignSide::from_keyword(tokens[i]).is_some()
-        {
-            i += 1;
-            continue;
-        }
-        return false;
-    }
     true
 }
 
@@ -677,6 +652,11 @@ pub(crate) struct ImageAliasClass {
 /// - `Some("")` (empty)           → both `None` (no empty figcaption)
 /// - `Some(s)` and structural     → `display_keywords = Some(s)`, `caption = None`
 /// - `Some(other)`                → `display_keywords = None`, `caption = Some(other)`
+///
+/// "Structural" here is fit / object-position only. Width and alignment have
+/// already been taken by [`extract_placement_from_alias`] before an alias
+/// reaches this function, so what is left is either image display keywords or
+/// prose.
 pub(crate) fn classify_image_alias(alias: Option<&str>) -> ImageAliasClass {
     match alias {
         // Empty alias (`![[file|]]`) is treated as no alias. Matches the
@@ -685,7 +665,7 @@ pub(crate) fn classify_image_alias(alias: Option<&str>) -> ImageAliasClass {
             display_keywords: None,
             caption: None,
         },
-        Some(a) if is_structural_alias(a) => ImageAliasClass {
+        Some(a) if is_all_display_keywords(a) => ImageAliasClass {
             display_keywords: Some(a.to_string()),
             caption: None,
         },

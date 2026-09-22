@@ -254,6 +254,7 @@ fn test_generate_children_empty() {
         None,
         true,
         false,
+        &Default::default(),
     );
     assert_eq!(result, "");
 }
@@ -283,6 +284,7 @@ fn test_generate_children_list_no_group() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     assert!(result.contains("Article A"));
@@ -316,6 +318,7 @@ fn test_generate_children_summary_no_group() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     assert!(result.contains("Article A"));
@@ -364,6 +367,7 @@ fn test_generate_children_folders_before_articles() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     let folder_pos = result.find("Tutorials").expect("Should contain Tutorials");
@@ -406,6 +410,7 @@ fn test_generate_children_folder_sorted_by_latest_date() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     let pos_a = result.find("Folder A").unwrap();
@@ -471,6 +476,7 @@ fn test_generate_children_pre_sorted_card_style() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Should use summary rendering — identified by `data-layout="list"`
@@ -523,6 +529,7 @@ fn test_generate_children_pre_sorted_preserves_order() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     let pos_older = result
@@ -574,6 +581,7 @@ fn test_generate_children_summary_has_divider_between_folders_and_articles() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Should have a divider between folder and article sections
@@ -617,6 +625,7 @@ fn test_generate_children_summary_no_divider_when_only_articles() {
         None,
         true,
         false,
+        &Default::default(),
     );
     assert!(
         !result.contains("moss-child-section-divider"),
@@ -657,6 +666,7 @@ fn test_year_group_triggered_by_multi_year() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Should contain moss-cards-minimal-year-group sections
@@ -713,6 +723,7 @@ fn test_no_year_group_for_single_year() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Should NOT contain moss-cards-minimal-year-group
@@ -753,6 +764,7 @@ fn test_year_group_with_summary_style() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Should contain moss-cards-minimal-year-group--summary sections for ALL year groups (2025 and 2016)
@@ -879,6 +891,7 @@ fn test_generate_children_strips_markdown_from_frontmatter_description() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Markdown syntax should be stripped from the description
@@ -924,6 +937,7 @@ fn test_generate_children_strips_markdown_from_content_extracted_description() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Content-extracted descriptions should also be stripped (already works)
@@ -966,6 +980,7 @@ fn test_generate_children_grid_style_renders_collection_grid() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Should render as data-layout="grid", not data-layout="list"
@@ -1033,6 +1048,7 @@ fn test_generate_children_grid_leaf_description_renders_below_title() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Description renders as a paragraph below the title...
@@ -1085,6 +1101,7 @@ fn test_generate_children_grid_folder_shows_count_not_description() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     assert!(
@@ -1125,6 +1142,7 @@ fn test_generate_children_grid_childless_folder_renders_description() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     assert!(
@@ -1174,6 +1192,7 @@ fn test_generate_children_grid_sorts_date_descending() {
         None,
         true,
         false,
+        &Default::default(),
     );
 
     // Find the positions of each title in the output — date-desc = Gamma, Beta, Alpha

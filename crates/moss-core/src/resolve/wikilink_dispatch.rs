@@ -43,7 +43,8 @@ use crate::asset_snapshot::AssetSnapshot;
 use crate::content_graph::ContentGraph;
 use crate::path_ext::path_extension;
 use crate::media::{
-    extract_width_from_alias, parse_media_attrs, AlignSide, Fit, MediaAttrs, Position,
+    extract_placement_from_alias, extract_width_from_alias, parse_media_attrs, AlignSide, Fit,
+    MediaAttrs, Placement, Position,
 };
 
 use super::embed_renderer::{
@@ -427,25 +428,30 @@ fn dispatch_embed_form(
         resolve_reference(split.file, graph, from_path)
     };
 
-    // Derive `alias` and `width` for ParsedEmbed from the pothole.
+    // Derive `alias` and `placement` for ParsedEmbed from the pothole.
     // For PotholeContent::Params we surface no alias; the params are
     // carried via TitleParams (consumers in PR4 onward can read them
     // directly without round-tripping through the `moss:` title channel).
     // For PR1 the params get folded into the renderer via the same path
     // Stage 1 uses today: there's no Stage-2 consumer yet, so we forward
     // alias as None when we have pure params.
-    let (alias_owned, width): (Option<String>, Option<&'static str>) = match &pothole {
-        PotholeContent::Empty => (None, None),
-        PotholeContent::WidthToken { width, rest_alias } => (
-            if rest_alias.is_empty() {
-                None
-            } else {
-                Some(rest_alias.clone())
-            },
-            Some(*width),
-        ),
-        PotholeContent::Params(_) => (None, None),
-        PotholeContent::Alias(s) => (Some(s.clone()), None),
+    //
+    // The placement is read off EVERY pipe segment, not just the first, so
+    // `align-right|33%|A caption` keeps its float, its size and its caption.
+    // What the placement did not claim is the alias every kind parses on its
+    // own terms (sizing sugar, an iframe title, an image caption).
+    let (alias_owned, placement): (Option<String>, Placement) = match &pothole {
+        PotholeContent::Empty => (None, Placement::default()),
+        PotholeContent::WidthToken { width, rest_alias } => {
+            let (mut p, rest) = extract_placement_from_alias(rest_alias);
+            p.width = Some(*width);
+            (if rest.is_empty() { None } else { Some(rest) }, p)
+        }
+        PotholeContent::Params(params) => (None, placement_from_params(params)),
+        PotholeContent::Alias(s) => {
+            let (p, rest) = extract_placement_from_alias(s);
+            (if rest.is_empty() { None } else { Some(rest) }, p)
+        }
     };
 
     match resolved {
@@ -464,7 +470,7 @@ fn dispatch_embed_form(
                 query: split.query,
                 section: split.section,
                 alias: alias_owned.as_deref(),
-                width,
+                placement: placement.clone(),
                 attrs: None,
             };
 
@@ -482,23 +488,75 @@ fn dispatch_embed_form(
             // and from a note nested three folders down (moss#903 bug 3).
             let url = pinned_url.clone();
             if let Some(synth_kind) = ext.as_deref().and_then(synth_kind_for_ext) {
+                // What the placement did not take is a caption only when the
+                // author wrote placement at all and the kind's own alias
+                // grammar has no claim on it. Every pothole that means
+                // something today therefore still means it: `|My Widget`
+                // stays an iframe title, `|640x360` stays sizing.
+                let caption: Option<String> = match parsed.alias {
+                    Some(rest)
+                        if !placement.is_empty() && !alias_is_sizing(synth_kind, rest) =>
+                    {
+                        Some(rest.to_string())
+                    }
+                    _ => None,
+                };
+                // With a caption, the whole placement — width, float AND
+                // size — moves out to the wrapper: the width escape is a
+                // direct-child selector, only the outermost element can
+                // satisfy it, and a figure has no width of its own to fall
+                // back on for its size either. CSS fills the inner element
+                // to 100% of the figure.
+                let element_placement = match caption {
+                    Some(_) => Placement::default(),
+                    None => placement.clone(),
+                };
+                let parsed = ParsedEmbed {
+                    // A visible caption owns the text, so it is not repeated
+                    // as the iframe's accessible name — the same reason a
+                    // captioned figure blanks its image's `alt`.
+                    alias: if caption.is_some() { None } else { parsed.alias },
+                    placement: element_placement.clone(),
+                    ..parsed
+                };
                 let params = build_synth_params(synth_kind, &parsed, &pothole);
                 let html = match synth_kind {
-                    SynthKind::Video => {
-                        crate::render::video::synthesize_video_html(&params, &url, assets)
-                    }
-                    SynthKind::Pdf => {
-                        crate::render::pdf::synthesize_pdf_html(&params, &url, assets)
-                    }
-                    SynthKind::Audio => {
-                        crate::render::audio::synthesize_audio_html(&params, &url, assets)
-                    }
-                    SynthKind::Iframe => {
-                        crate::render::iframe::synthesize_iframe_html(&params, &url, assets)
-                    }
-                    SynthKind::Model => {
-                        crate::render::model::synthesize_model_html(&params, &url, assets)
-                    }
+                    SynthKind::Video => crate::render::video::synthesize_video_html(
+                        &params,
+                        &element_placement,
+                        &url,
+                        assets,
+                    ),
+                    SynthKind::Pdf => crate::render::pdf::synthesize_pdf_html(
+                        &params,
+                        &element_placement,
+                        &url,
+                        assets,
+                    ),
+                    SynthKind::Audio => crate::render::audio::synthesize_audio_html(
+                        &params,
+                        &element_placement,
+                        &url,
+                        assets,
+                    ),
+                    SynthKind::Iframe => crate::render::iframe::synthesize_iframe_html(
+                        &params,
+                        &element_placement,
+                        &url,
+                        assets,
+                    ),
+                    SynthKind::Model => crate::render::model::synthesize_model_html(
+                        &params,
+                        &element_placement,
+                        &url,
+                        assets,
+                    ),
+                };
+                let html = match caption {
+                    Some(ref c) => crate::render::placement::wrap_embed_with_caption(
+                        &html, &placement, c,
+                    ),
+                    None => html,
                 };
                 return WikilinkEmit {
                     output: EmitKind::Html(html),
@@ -534,26 +592,10 @@ fn dispatch_embed_form(
             // reached for a lone embed (within its container), so the figure
             // shape is always correct here.
             if matches!(ext.as_deref(), Some(e) if IMAGE_EXTENSIONS.iter().any(|x| *x == e)) {
-                let media = build_image_media_attrs(&pothole, parsed.attrs.as_ref());
-                // Recover a content-relative percent (`|55%`) from the alias.
-                // A percent isn't a named width token, so `parse_pothole_params`
-                // classifies it as `Alias` and it would otherwise leak into the
-                // caption. Split it here so the figure carries the width and the
-                // caption is the remaining (width-stripped) alias. Recovered here
-                // (not in `parse_pothole_params`) so the shared pothole classifier
-                // stays width-vocabulary-agnostic.
-                // Sync: the no-graph twin lives in ast/parser.rs::try_promote_to_figure
-                // (wikilink_pothole arm) — both split width via media::split_alt_width.
-                let (alias_no_width, pct_width): (Option<String>, Option<String>) =
-                    match parsed.alias {
-                        Some(a) => {
-                            let (rest, w) = crate::media::split_alt_width(a);
-                            (Some(rest), w)
-                        }
-                        None => (None, None),
-                    };
-                let alias_class =
-                    crate::media::classify_image_alias(alias_no_width.as_deref());
+                let media = build_image_media_attrs(parsed.alias, &pothole, parsed.attrs.as_ref());
+                // The alias reaching here is the placement-stripped remainder,
+                // so what is left is either image display keywords or a caption.
+                let alias_class = crate::media::classify_image_alias(parsed.alias);
                 let alt = alias_class.caption.clone().unwrap_or_default();
                 let caption: Option<Vec<crate::ast::node::Inline>> = alias_class
                     .caption
@@ -561,22 +603,16 @@ fn dispatch_embed_form(
                 // `AlignSide::css_class()` returns the canonical
                 // `moss-align-left` / `moss-align-right` class verbatim —
                 // the same class the figure renderer appends.
-                let align = media.align.map(|side| side.css_class().to_string());
+                let align = placement.align.map(|side| side.css_class().to_string());
                 let img_style = media.to_inline_style();
-                // Width source, in priority order:
-                //  1. canonical pothole WidthToken (`|wide`) — `width`
-                //  2. a width token embedded in a structural alias (`|wide cover`)
-                //  3. a content-relative percent anywhere in the pothole (`|55%`)
-                let figure_width: Option<String> = width
+                // `Block::Figure.width` carries both width vocabularies: a
+                // named token emits `data-width=`, a percent emits an inline
+                // `style="width:NN%"`. A named width wins over a percent when
+                // an author wrote both.
+                let figure_width: Option<String> = placement
+                    .width
                     .map(|w| w.to_string())
-                    .or_else(|| {
-                        alias_class.display_keywords.as_deref().and_then(|kw| {
-                            kw.split_whitespace()
-                                .find_map(crate::media::match_width_token)
-                                .map(|w| w.to_string())
-                        })
-                    })
-                    .or(pct_width);
+                    .or_else(|| placement.size.clone());
                 let figure = crate::ast::node::Block::Figure {
                     image: crate::ast::node::Inline::Image {
                         // `Asset` is the canonical kind for an `<img src>`
@@ -764,41 +800,22 @@ fn dispatch_wikilink_form(
 /// future wiring; today the function ignores it. Don't grow the merge
 /// logic here until a caller actually populates `parsed.attrs`.
 fn build_image_media_attrs(
+    alias: Option<&str>,
     pothole: &PotholeContent,
     _attrs: Option<&crate::ast::attrs::AttrBlock>,
 ) -> MediaAttrs {
     let mut media = MediaAttrs::default();
 
-    // Source 1: alias form. Only fold when the entire alias is structural
-    // (every token is a display keyword) — non-structural aliases are
-    // caption text and don't contribute display params.
-    let alias_text = match pothole {
-        PotholeContent::Alias(s) => Some(s.as_str()),
-        PotholeContent::WidthToken { rest_alias, .. } if !rest_alias.is_empty() => {
-            Some(rest_alias.as_str())
-        }
-        _ => None,
-    };
-    if let Some(text) = alias_text {
-        // Width tokens (`wide`, `screen`, etc.) may appear adjacent to fit /
-        // position keywords in space-separated aliases like
-        // `![[hero|wide cover]]`. They ride on the figure wrapper via
-        // `embed.width`, not the inner `<img>`; strip them here so the
-        // remainder ("cover") parses cleanly through `parse_media_attrs`.
-        // Without this, `is_all_display_keywords("wide cover")` returns
-        // `false` (because "wide" isn't a display keyword) and we'd
-        // silently drop the fit/position — the same regression this branch
-        // exists to fix.
-        let cleaned: Vec<&str> = text
-            .split_whitespace()
-            .filter(|t| crate::media::match_width_token(t).is_none())
-            .collect();
-        let cleaned_str = cleaned.join(" ");
-        if !cleaned_str.is_empty() && crate::media::is_all_display_keywords(&cleaned_str) {
-            let parsed = parse_media_attrs(&cleaned_str);
+    // Source 1: alias form — the placement-stripped remainder, so
+    // `wide cover` arrives here as `cover` and parses cleanly. Only fold
+    // when the whole remainder is display keywords; anything else is caption
+    // text and contributes no display params.
+    if let Some(text) = alias.filter(|t| !t.is_empty()) {
+        if crate::media::is_all_display_keywords(text) {
+            let parsed = parse_media_attrs(text);
             media.fit = parsed.fit;
             media.position = parsed.position;
-            media.align = parsed.align;
+            // Alignment is `Placement`'s, read off the pipe before this runs.
             // `parse_media_attrs` doesn't populate `class_names` or
             // `extra_attrs` today (those come from Pandoc blocks, which
             // aren't wired). The extends here are forward-looking scaffolding
@@ -831,14 +848,9 @@ fn build_image_media_attrs(
                         media.position = Some(pos);
                     }
                 }
-                "align" => {
-                    if let Some(side) = AlignSide::from_keyword(v) {
-                        media.align = Some(side);
-                    }
-                }
-                // `width` / `data-width` ride on the figure wrapper, not the
-                // inner `<img>` — handled upstream via `embed.width`.
-                "width" | "data-width" => {}
+                // `align`, `width` and `data-width` ride on the wrapper, not
+                // the inner `<img>` — handled upstream by `Placement`.
+                "align" | "width" | "data-width" => {}
                 "classes" => {
                     for c in v.split_whitespace() {
                         if !media.class_names.iter().any(|x| x == c) {
@@ -857,6 +869,50 @@ fn build_image_media_attrs(
     }
 
     media
+}
+
+/// Whether a kind's own alias grammar claims `rest` as sizing sugar rather
+/// than leaving it to be read as a caption.
+///
+/// Audio has no alias grammar, so nothing is ever claimed from it.
+fn alias_is_sizing(kind: SynthKind, rest: &str) -> bool {
+    match kind {
+        SynthKind::Video => {
+            // `loop` is a flag, not text; what surrounds it decides.
+            let remainder: Vec<&str> = rest
+                .split_whitespace()
+                .filter(|t| !t.eq_ignore_ascii_case("loop"))
+                .collect();
+            remainder.is_empty() || Sizing::parse(&remainder.join(" ")).is_some()
+        }
+        SynthKind::Pdf | SynthKind::Model | SynthKind::Iframe => Sizing::parse(rest).is_some(),
+        SynthKind::Audio => false,
+    }
+}
+
+/// Read the placement out of a `key=value` pothole.
+///
+/// The K=V form is the other way an author writes the same three values
+/// (`![[report.pdf|align=right data-width=wide]]`), so it lands in the same
+/// carrier rather than a second one. `width=` is not read here: on the K=V
+/// form it is the HTML pixel width attribute, which the per-kind synth params
+/// still own.
+fn placement_from_params(params: &TitleParams) -> Placement {
+    let mut placement = Placement::default();
+    for (k, v) in &params.params {
+        match k.as_str() {
+            "align" => placement.align = AlignSide::from_keyword(v),
+            "data-width" => match crate::media::match_width_token(v) {
+                Some(w) => placement.width = Some(w),
+                None => {
+                    placement.size = crate::media::parse_image_width(v)
+                        .filter(|p| p.ends_with('%'));
+                }
+            },
+            _ => {}
+        }
+    }
+    placement
 }
 
 /// Discriminant for the per-kind HTML synthesizer the dispatcher routes to
@@ -920,9 +976,6 @@ fn build_synth_params(
     pothole: &PotholeContent,
 ) -> TitleParams {
     let mut params = TitleParams::default();
-    if let Some(w) = embed.width {
-        params.insert("data-width", w);
-    }
 
     // iframe / pdf carry ?query and #fragment out-of-band on the synth side.
     if matches!(kind, SynthKind::Iframe | SynthKind::Pdf) {

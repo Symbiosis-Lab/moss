@@ -2194,6 +2194,7 @@ pub fn generate_blocking_content(
                 // the legacy meta-slot behavior.
                 None,
                 site_config.math, false,
+                &Default::default(),
             );
             // The generated half of the same split the claimed term page gets
             // in `folder_embed`, through the same function: a term no page

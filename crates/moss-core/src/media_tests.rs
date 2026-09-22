@@ -501,13 +501,102 @@ fn test_parse_media_attrs_align_last_wins() {
 }
 
 #[test]
-fn test_is_all_display_keywords_align() {
-    assert!(is_all_display_keywords("align-left"));
-    assert!(is_all_display_keywords("align-right"));
-    assert!(is_all_display_keywords("cover align-left"));
-    assert!(is_all_display_keywords("align-left cover"));
-    // Composes with Position too.
-    assert!(is_all_display_keywords("align-left top"));
+fn test_is_all_display_keywords_excludes_alignment() {
+    // Alignment belongs to `Placement` and is stripped before this runs, so
+    // an align keyword reaching here is a leak, not a display keyword.
+    assert!(!is_all_display_keywords("align-left"));
+    assert!(!is_all_display_keywords("align-right"));
+    assert!(!is_all_display_keywords("align-left cover"));
+}
+
+// -- Placement ---------------------------------------------------------
+
+#[test]
+fn placement_reads_each_vocabulary_on_its_own() {
+    let (p, rest) = extract_placement_from_alias("wide");
+    assert_eq!(p.width, Some("wide"));
+    assert_eq!(rest, "");
+
+    let (p, rest) = extract_placement_from_alias("full");
+    assert_eq!(p.width, Some("screen"), "`full` canonicalises to `screen`");
+    assert_eq!(rest, "");
+
+    let (p, rest) = extract_placement_from_alias("align-right");
+    assert_eq!(p.align, Some(AlignSide::Right));
+    assert_eq!(rest, "");
+
+    let (p, rest) = extract_placement_from_alias("40%");
+    assert_eq!(p.size.as_deref(), Some("40%"));
+    assert_eq!(rest, "");
+}
+
+#[test]
+fn placement_accumulates_across_segments_instead_of_stopping_at_the_first() {
+    let (p, rest) = extract_placement_from_alias("align-right|33%|A caption");
+    assert_eq!(p.align, Some(AlignSide::Right));
+    assert_eq!(p.size.as_deref(), Some("33%"));
+    assert_eq!(rest, "A caption");
+}
+
+#[test]
+fn placement_earlier_segment_wins_over_a_later_one() {
+    let (p, _) = extract_placement_from_alias("wide|page");
+    assert_eq!(p.width, Some("wide"));
+    let (p, _) = extract_placement_from_alias("align-left|align-right");
+    assert_eq!(p.align, Some(AlignSide::Left));
+}
+
+#[test]
+fn placement_matches_the_whole_segment_before_its_tokens() {
+    // "55 %" is one percent with a stray space, not the two tokens "55"
+    // and "%" — `parse_image_width` tolerates it and so must this.
+    let (p, rest) = extract_placement_from_alias("55 %|Caption");
+    assert_eq!(p.size.as_deref(), Some("55%"));
+    assert_eq!(rest, "Caption");
+}
+
+#[test]
+fn placement_shares_a_segment_with_image_display_keywords() {
+    // One segment, two vocabularies: the placement half is taken, the
+    // object-fit half is handed back for the image to parse.
+    let (p, rest) = extract_placement_from_alias("align-right cover");
+    assert_eq!(p.align, Some(AlignSide::Right));
+    assert_eq!(rest, "cover");
+
+    let (p, rest) = extract_placement_from_alias("wide cover");
+    assert_eq!(p.width, Some("wide"));
+    assert_eq!(rest, "cover");
+
+    // A two-word object-position stays whole in the remainder.
+    let (p, rest) = extract_placement_from_alias("33% top left");
+    assert_eq!(p.size.as_deref(), Some("33%"));
+    assert_eq!(rest, "top left");
+}
+
+#[test]
+fn placement_leaves_prose_alone() {
+    // Every one of these contains a word that is placement vocabulary on
+    // its own; none of them is placement.
+    for prose in [
+        "The page was left open",
+        "Caption 55%",
+        "A wide view of the bay",
+    ] {
+        let (p, rest) = extract_placement_from_alias(prose);
+        assert!(p.is_empty(), "{prose:?} should carry no placement, got {p:?}");
+        assert_eq!(rest, prose);
+    }
+}
+
+#[test]
+fn placement_leaves_bare_left_and_right_to_object_position() {
+    // `![[hero.jpg|left]]` has positioned the crop since before alignment
+    // existed; only the `align-` spellings float.
+    for tok in ["left", "right", "top", "bottom", "center"] {
+        let (p, rest) = extract_placement_from_alias(tok);
+        assert!(p.is_empty(), "{tok:?} must not be read as alignment");
+        assert_eq!(rest, tok);
+    }
 }
 
 // -- match_width_token / extract_width_from_alias ---------------------
@@ -684,18 +773,14 @@ fn test_classify_image_alias_structural_single_keyword() {
 }
 
 #[test]
-fn test_classify_image_alias_structural_compound() {
-    // `wide cover` = width token + fit keyword — fully structural.
-    let c = classify_image_alias(Some("wide cover"));
-    assert_eq!(c.display_keywords.as_deref(), Some("wide cover"));
-    assert_eq!(c.caption, None);
-}
-
-#[test]
-fn test_classify_image_alias_pure_width_token_is_structural() {
-    // A bare width token alone is structural, not a caption.
-    let c = classify_image_alias(Some("wide"));
-    assert_eq!(c.display_keywords.as_deref(), Some("wide"));
+fn test_classify_image_alias_never_sees_a_width() {
+    // `wide cover` reaches the classifier as `cover`: the width went into
+    // the `Placement` one step earlier. A width arriving here would be a
+    // leak, and it is caption text, not a display keyword.
+    let (p, rest) = extract_placement_from_alias("wide cover");
+    assert_eq!(p.width, Some("wide"));
+    let c = classify_image_alias(Some(&rest));
+    assert_eq!(c.display_keywords.as_deref(), Some("cover"));
     assert_eq!(c.caption, None);
 }
 
@@ -707,13 +792,22 @@ fn test_classify_image_alias_caption_text() {
 }
 
 #[test]
-fn test_is_structural_alias_matches_classifier() {
-    // Sanity: the lifted helper agrees with the classifier's branch.
-    assert!(is_structural_alias("cover"));
-    assert!(is_structural_alias("wide cover"));
-    assert!(is_structural_alias("top left"));
-    assert!(!is_structural_alias("My nice photo"));
-    assert!(!is_structural_alias(""));
+fn test_classify_image_alias_structural_vs_caption() {
+    // What reaches the classifier has already had its placement stripped,
+    // so `wide cover` arrives as `cover`.
+    for structural in ["cover", "top left", "contain bottom-right"] {
+        let c = classify_image_alias(Some(structural));
+        assert_eq!(c.display_keywords.as_deref(), Some(structural));
+        assert_eq!(c.caption, None);
+    }
+    for caption in ["My nice photo", "left side"] {
+        let c = classify_image_alias(Some(caption));
+        assert_eq!(c.display_keywords, None);
+        assert_eq!(c.caption.as_deref(), Some(caption));
+    }
+    let empty = classify_image_alias(Some(""));
+    assert_eq!(empty.display_keywords, None);
+    assert_eq!(empty.caption, None);
 }
 
 // -- parse_image_width -------------------------------------------------
@@ -746,40 +840,6 @@ fn parse_image_width_rejects_non_width() {
     assert_eq!(parse_image_width("200x150"), None); // box sizing not a figure width
     assert_eq!(parse_image_width("hello"), None);
     assert_eq!(parse_image_width(""), None);
-}
-
-// -- split_alt_width ---------------------------------------------------
-
-#[test]
-fn split_alt_width_extracts_and_preserves() {
-    // (remaining_alt, width)
-    assert_eq!(
-        split_alt_width("My caption|55%"),
-        ("My caption".to_string(), Some("55%".to_string()))
-    );
-    assert_eq!(
-        split_alt_width("55%"),
-        (String::new(), Some("55%".to_string()))
-    );
-    assert_eq!(
-        split_alt_width("wide"),
-        (String::new(), Some("wide".to_string()))
-    );
-    // No width → alt unchanged, no pipe collapse
-    assert_eq!(
-        split_alt_width("just a caption"),
-        ("just a caption".to_string(), None)
-    );
-    // Width is any one segment; other segments preserved joined by '|'
-    assert_eq!(
-        split_alt_width("cap|55%|extra"),
-        ("cap|extra".to_string(), Some("55%".to_string()))
-    );
-    // Only the FIRST width-looking segment is consumed
-    assert_eq!(
-        split_alt_width("40%|60%"),
-        ("60%".to_string(), Some("40%".to_string()))
-    );
 }
 
 // -- set_image_width ---------------------------------------------------
@@ -842,6 +902,24 @@ fn set_image_width_wikilink() {
         set_image_width("![[pic.jpg|My cap]]", Some("55%")),
         "![[pic.jpg|My cap|55%]]"
     );
+}
+
+#[test]
+fn set_image_width_strips_a_combined_align_and_size_segment() {
+    // `align-right 33%` is one segment mixing a float with a size. The
+    // editor's drag-resize write path has to strip the OLD size out of it
+    // while keeping the float — a segment-shaped-as-a-whole-width check
+    // (the old `split_alt_width`) never matches this, so the 33% survived
+    // untouched and the resize silently did nothing.
+    let out = set_image_width("![[x.jpg|align-right 33%|Cap]]", Some("50%"));
+    let (placement, rest) = extract_placement_from_alias(
+        out.strip_prefix("![[x.jpg|")
+            .and_then(|s| s.strip_suffix("]]"))
+            .expect("still a wikilink pothole"),
+    );
+    assert_eq!(placement.align, Some(AlignSide::Right), "align must survive: {out}");
+    assert_eq!(placement.size.as_deref(), Some("50%"), "must resize to 50%: {out}");
+    assert_eq!(rest, "Cap", "caption must survive: {out}");
 }
 
 #[test]

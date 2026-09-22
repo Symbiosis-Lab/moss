@@ -1023,7 +1023,7 @@ fn try_promote_to_figure(
     // Recover the percent from `wikilink_pothole` directly so the figure
     // carries the width on both the with-graph path (wikilink_dispatch) and
     // the no-graph path (fragment/test render with no ContentGraph).
-    let mut figure_width: Option<String> = None;
+    let mut placement = crate::media::Placement::default();
     let mut rewritten_alt: Option<String> = None;
     match inlines.iter().find(|i| matches!(i, Inline::Image { .. })) {
         Some(Inline::Image {
@@ -1031,9 +1031,9 @@ fn try_promote_to_figure(
             is_wikilink: false,
             ..
         }) => {
-            let (rest_alt, w) = crate::media::split_alt_width(alt);
-            if w.is_some() {
-                figure_width = w;
+            let (found, rest_alt) = crate::media::extract_placement_from_alias(alt);
+            if !found.is_empty() {
+                placement = found;
                 rewritten_alt = Some(rest_alt);
             }
         }
@@ -1042,26 +1042,31 @@ fn try_promote_to_figure(
             wikilink_pothole,
             ..
         }) => {
-            // Recover a content-relative percent from the raw pothole.
-            // Named tokens are already absent from `alt` (WidthToken arm in
-            // parse_pothole_params clears them); only the percent case falls
-            // through as `Alias` and still needs extracting.
+            // Recover the placement from the raw pothole. The parser's own
+            // Alias arm has already stripped it out of `alt`, so the pothole
+            // is the only place it survives on this path.
             // Sync: the with-graph twin lives in resolve/wikilink_dispatch.rs
-            // (image branch, ~line 565) — both split width via media::split_alt_width.
+            // (image branch) — both read the pipe via
+            // media::extract_placement_from_alias.
             if let Some(pothole) = wikilink_pothole {
-                let (remaining, w) = crate::media::split_alt_width(pothole);
-                if w.is_some() {
-                    figure_width = w;
-                    // The remaining pothole (caption after stripping the %) is
-                    // the intended caption; propagate it as the rewritten alt if
-                    // the current alt is empty (percent-only pothole) or already
-                    // stripped to the same value.
+                let (found, remaining) = crate::media::extract_placement_from_alias(pothole);
+                if !found.is_empty() {
+                    placement = found;
+                    // The remainder is the intended caption; propagate it as
+                    // the rewritten alt, which may be empty when the whole
+                    // pothole was placement.
                     rewritten_alt = Some(remaining);
                 }
             }
         }
         _ => {}
     }
+    // `Block::Figure.width` carries both width vocabularies: a named token
+    // emits `data-width=`, a percent emits an inline `style="width:NN%"`.
+    let figure_width: Option<String> = placement
+        .width
+        .map(|w| w.to_string())
+        .or_else(|| placement.size.clone());
 
     // The figure's caption text is the effective alt (width-stripped if a
     // width was present, else the raw alt), trimmed.
@@ -1079,7 +1084,7 @@ fn try_promote_to_figure(
     // original `<p><img></p>` shape with its whitespace siblings) — UNLESS it
     // carries a width, which needs a figure to hold the inline
     // `style="width:NN%"` / `data-width=`.
-    if alt_text.is_empty() && figure_width.is_none() {
+    if alt_text.is_empty() && placement.is_empty() {
         return Err(inlines);
     }
 
@@ -1111,7 +1116,7 @@ fn try_promote_to_figure(
             events,
             para_start,
             alt_text,
-            figure_width.is_some(),
+            !placement.is_empty(),
         ))
     };
 
@@ -1119,7 +1124,7 @@ fn try_promote_to_figure(
         image,
         caption,
         width: figure_width,
-        align: None,
+        align: placement.align.map(|side| side.css_class().to_string()),
         class_names: Vec::new(),
         img_style: None,
     })
@@ -1456,37 +1461,35 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
                         // Empty pothole OR pulldown-cmark synthesized
                         // dest_url as text → no author alt.
                         alt.clear();
-                    } else if crate::media::is_all_display_keywords(&trimmed) {
-                        // `contain center`, `left top`, etc. → display
-                        // attrs (production maps to style), not alt.
-                        alt.clear();
                     } else {
-                        use crate::resolve::wikilink_dispatch::{
-                            parse_pothole_params, PotholeContent,
-                        };
-                        match parse_pothole_params(&trimmed) {
-                            PotholeContent::Empty | PotholeContent::Params(_) => {
-                                alt.clear();
-                            }
-                            PotholeContent::WidthToken { rest_alias, .. } => {
-                                alt = rest_alias;
-                            }
-                            PotholeContent::Alias(text) => {
-                                // `parse_pothole_params` classifies a content-relative
-                                // percent (e.g. `55%`) as `Alias` because it is not a
-                                // named width token. Intercept it here: a bare percent
-                                // is NOT a caption — strip it from the alt so it does
-                                // not leak to `<figcaption>`. The actual width is
-                                // recovered from `wikilink_pothole` by
-                                // `dispatch_wikilink_embeds` (with-graph path) or
-                                // directly from `split_alt_width` in the parser's
-                                // `try_promote_to_figure` (no-graph path via `alt`).
-                                //
-                                // `split_alt_width` returns the remaining caption and
-                                // the width token. If the whole alias was a width
-                                // (nothing remaining), clear alt.
-                                let (remaining, _w) = crate::media::split_alt_width(&text);
-                                alt = remaining;
+                        // Width, float side and float size are display data,
+                        // never caption text — strip them first so none of
+                        // them can leak into `<figcaption>`. The values
+                        // themselves are recovered from `wikilink_pothole` by
+                        // `dispatch_wikilink_embeds` (with-graph path) or by
+                        // `try_promote_to_figure` (no-graph path).
+                        let (_placement, rest) =
+                            crate::media::extract_placement_from_alias(&trimmed);
+                        let rest = rest.trim().to_string();
+                        if rest.is_empty() || crate::media::is_all_display_keywords(&rest) {
+                            // Nothing left, or `contain center` / `left top`
+                            // → display attrs (production maps to style),
+                            // not alt.
+                            alt.clear();
+                        } else {
+                            use crate::resolve::wikilink_dispatch::{
+                                parse_pothole_params, PotholeContent,
+                            };
+                            match parse_pothole_params(&rest) {
+                                PotholeContent::Empty | PotholeContent::Params(_) => {
+                                    alt.clear();
+                                }
+                                PotholeContent::WidthToken { rest_alias, .. } => {
+                                    alt = rest_alias;
+                                }
+                                PotholeContent::Alias(text) => {
+                                    alt = text;
+                                }
                             }
                         }
                     }

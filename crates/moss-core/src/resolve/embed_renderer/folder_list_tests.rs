@@ -143,3 +143,45 @@ fn marker_roundtrips_more() {
     let m = emit_marker("/p/", "index.md", &p);
     assert!(m.contains("more=Archive"));
 }
+
+// -- classify_folder_segments -------------------------------------------
+
+#[test]
+fn caption_with_a_colon_is_not_swallowed_by_the_keyed_grammar() {
+    // A colon in prose (`Note: 2024`) must not be classified as `key:value`
+    // just because it contains a colon somewhere — only a segment whose
+    // tokens are each a recognized key is keyed.
+    let p = classify_folder_segments("wide|Note: 2024");
+    assert_eq!(p.caption.as_deref(), Some("Note: 2024"));
+    assert_eq!(p.placement.width, Some("wide"));
+}
+
+#[test]
+fn a_keyed_segment_still_wins_over_a_lookalike_caption() {
+    // `sort:date` must stay keyed grammar, not get reclassified as caption
+    // prose now that a bare `:` no longer decides it.
+    let p = classify_folder_segments("sort:date|A caption");
+    assert_eq!(p.sort, Some(SortAxis::Date));
+    assert_eq!(p.caption.as_deref(), Some("A caption"));
+}
+
+#[test]
+fn a_comma_joined_keyed_segment_tolerates_a_trailing_bare_flag() {
+    // `limit:3,more` is one segment: `limit:3` is a recognized key, `more`
+    // is a colon-less bare flag `merge_keyed_params` itself treats as a
+    // no-op. It must stay keyed grammar as a whole, not fall through to a
+    // caption just because one of its comma-joined tokens has no colon.
+    let p = classify_folder_segments("limit:3,more");
+    assert_eq!(p.limit, Some(3));
+    assert_eq!(p.caption, None);
+}
+
+#[test]
+fn caption_drops_the_placement_words_it_shared_a_segment_with() {
+    // `wide cover` is one segment: `wide` is placement, `cover` is left
+    // over. The caption must be the leftover text, not the whole segment
+    // (which would otherwise repeat the placement word into the caption).
+    let p = classify_folder_segments("wide cover");
+    assert_eq!(p.caption.as_deref(), Some("cover"));
+    assert_eq!(p.placement.width, Some("wide"));
+}

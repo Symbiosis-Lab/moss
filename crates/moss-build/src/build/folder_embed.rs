@@ -37,7 +37,7 @@
 use std::path::Path;
 
 use moss_core::asset_snapshot::AssetSnapshot;
-use moss_core::resolve::embed_renderer::folder_list::{MARKER_END, MARKER_FOLDER_LIST};
+use moss_core::resolve::embed_renderer::folder_list::{marker_decode, MARKER_END, MARKER_FOLDER_LIST};
 use moss_core::resolve::embed_renderer::Sizing;
 use moss_core::resolve::title_params::TitleParams;
 use moss_core::sort::{ResolvedSort, SortAxis};
@@ -83,7 +83,11 @@ struct ParsedMarker<'a> {
     /// `children_more`) or directly by a body `![[/|more:Archive]]` embed —
     /// both flow through `FolderEmbedParams::more` (moss-core) into this one
     /// marker field, so the render side doesn't need to know which named it.
-    more: Option<&'a str>,
+    more: Option<String>,
+    /// The listing's own width / float / size, read off the embed pothole.
+    placement: moss_core::media::Placement,
+    /// Caption for the listing, rendered on the figure that wraps it.
+    caption: Option<String>,
 }
 
 /// Parse the pipe-encoded body of a marker. Returns None if `path` is missing.
@@ -111,8 +115,18 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
                 "depth" => out.depth = Some(v.trim().to_string()),
                 "group" => out.group = Some(v.trim().to_string()),
                 "size" => out.size = Some(v.trim().to_string()),
-                "more" => out.more = Some(v.trim()),
+                "more" => out.more = Some(marker_decode(v.trim())),
                 "covers" => out.covers = Some(v.trim()),
+                "width" => out.placement.width = moss_core::media::match_width_token(v.trim()),
+                "align" => {
+                    out.placement.align = match v.trim() {
+                        "left" => Some(moss_core::media::AlignSide::Left),
+                        "right" => Some(moss_core::media::AlignSide::Right),
+                        _ => None,
+                    }
+                }
+                "pct" => out.placement.size = Some(v.trim().to_string()),
+                "caption" => out.caption = Some(marker_decode(v.trim())),
                 _ => {}
             }
         } else if tok == "scope_default_tree" {
@@ -332,6 +346,7 @@ pub(crate) fn generate_children(
     parent_sort_axis: Option<moss_core::sort::SortAxis>,
     math: bool,
     is_embed: bool,
+    placement: &moss_core::media::Placement,
 ) -> String {
     if folder_docs.is_empty() {
         return String::new();
@@ -438,6 +453,7 @@ pub(crate) fn generate_children(
             Some(media_lookup_ref),
             parent_axis,
             is_embed,
+            placement,
         );
     }
 
@@ -576,7 +592,7 @@ pub(crate) fn generate_children(
     // render through `child_summary` and don't depend on the minimal item CSS.
     // (Grid returns earlier with its own data-layout="grid".)
     let data_layout = if style != "summary" { "minimal" } else { "list" };
-    components::cards_container(data_layout, is_embed, html.trim())
+    components::cards_container(data_layout, is_embed, placement, html.trim())
 }
 
 /// Bucket articles by year using find-or-append: one section per year, in
@@ -909,7 +925,12 @@ fn try_render_folder_index_iframe(
         }
     }
     let assets = AssetSnapshot::new();
-    let html = moss_core::render::iframe::synthesize_iframe_html(&params, &url, &assets);
+    let html = moss_core::render::iframe::synthesize_iframe_html(
+        &params,
+        &moss_core::media::Placement::default(),
+        &url,
+        &assets,
+    );
 
     // Apply the pretty-URL `../` adjustment if the embedding page is
     // pretty-URL-wrapped (non-index). See doc-comment above.
@@ -1272,6 +1293,15 @@ fn render_one(
 
     let all_docs_refs: Vec<&ParsedDocument> = all_docs.iter().collect();
 
+    // With a caption, the whole placement — width, float AND size — moves
+    // out to the figure wrapping the listing (the width escape is a
+    // direct-child selector, and the figure has no width of its own to size
+    // itself by otherwise); without one the container wears it itself.
+    let container_placement = match parsed.caption {
+        Some(_) => moss_core::media::Placement::default(),
+        None => parsed.placement.clone(),
+    };
+
     // Dispatch rendering based on style.
     let render_group = |docs: &[&ParsedDocument]| {
         generate_children(
@@ -1288,6 +1318,7 @@ fn render_one(
             Some(resolved.presentation_axis()),
             math,
             is_embed,
+            &container_placement,
         )
     };
     // A page that won a term claim splits its listing by the field each
@@ -1340,7 +1371,7 @@ fn render_one(
         .with_dir_overrides(dir_overrides.clone());
     let more_link: Option<(String, String)> = if !truncated {
         None
-    } else if let Some(more_ref) = parsed.more {
+    } else if let Some(more_ref) = parsed.more.as_deref() {
         match resolve_more_link_target(more_ref, all_docs) {
             Some(doc) => {
                 let stem = doc.url_path.trim_end_matches("index.html").trim_end_matches('/');
@@ -1372,12 +1403,20 @@ fn render_one(
         None
     };
 
-    match more_link {
+    let listing = match more_link {
         Some((href, text)) => format!(
             "{}\n<p class=\"moss-embed-more\"><a href=\"{}\">{}</a></p>",
             listing,
             html_escape(&href),
             text,
+        ),
+        None => listing,
+    };
+    match parsed.caption.as_deref() {
+        Some(caption) => moss_core::render::placement::wrap_embed_with_caption(
+            &listing,
+            &parsed.placement,
+            caption,
         ),
         None => listing,
     }
@@ -1465,6 +1504,10 @@ pub fn synthesize_children_marker(
         more: doc.children_more.clone().filter(|s| !s.is_empty()),
         scope_default_tree: homepage_default_mode,
         exclude_nav: homepage_default_mode,
+        // A frontmatter listing has no pothole to read placement or a
+        // caption out of; both are body-embed vocabulary.
+        placement: Default::default(),
+        caption: None,
     };
     // Always emit an absolute path (leading /) so resolve_folder_id doesn't
     // interpret the path as relative to from_md_path's parent directory.

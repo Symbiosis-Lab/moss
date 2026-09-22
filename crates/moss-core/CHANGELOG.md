@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`date:` accepts a year or a year and month**, not only a full `YYYY-MM-DD`. A page datable to 1697, or to its eighth month but no further, takes `date: "1697"` or `date: 1697-09` and is no longer warned about. Listings print what was given ("1697 · 09", or bare "1697") and sort mixed precision by year, so the previous workaround — padding the unknown part to `-01-01` — is no longer needed to keep the validator quiet; it was never a vaguer claim than the truth, just a different one that cards printed as a real month.
 - **`:::grid`/`:::gallery`'s named column-count attribute is `per-line=`, not `cols=`.** "Columns" is the wrong word under vertical typesetting, where the tracks run along the line rather than down a column — "N per line" is true in both writing modes. The positional form (`:::grid 3`, `:::gallery 3`) is unchanged. `cols=` still works and sets the same value, but is deprecated and produces a build warning; when both are written, `per-line=` wins and the warning still fires.
+- **BREAKING:** `ParsedEmbed.width` is replaced by `ParsedEmbed.placement: Placement`. `render::{video,audio,pdf,iframe,model}::synthesize_*_html` take a `&Placement` as their second argument.
+- Page embeds and notebook/table embeds do not yet accept a placement pipe; tracked as a follow-up, not a bug.
+- `media::split_alt_width` is gone. The editor's drag-resize/reset write path (`set_image_width`) now strips an old width or size out of each pipe segment individually through the shared placement parser, which also reaches into a segment that mixes a float with a size (`align-right 33%`) — `split_alt_width` only ever matched a segment that was a width in its entirety, so a mixed segment kept its stale size after a resize.
 
 ### Added
 
@@ -18,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The first build after upgrading re-renders every listing once.** Documents gained the fields above, and the incremental renderer fingerprints a document by everything on it, so every listing digest moves. One build, then the usual incremental behaviour resumes.
 - **`sort::cmp_labels`** — the one comparator for ordering user-visible listing labels by title. Case is a tiebreak, not a primary key, so `mao` now sorts between `Kayla` and `Scarly` instead of after every capitalised name. All title-axis and dateless-tiebreak label sorts now route through it.
 - **`:::grid N {scroll}`** — keeps a grid's row on one line instead of it wrapping or collapsing; `N` becomes how many cards fit in view at once, with a slice of the next one showing as the cue to scroll. `label="…"` names the row for assistive technology. `.summary` still replaces the whole container when both are written on one fence, so `scroll` never reaches the page in that case.
+- **Every embed takes the same placement words.** A video, pdf, audio clip, iframe, 3D model or folder listing accepts `wide`/`page`/`screen`, `align-left`/`align-right` and a percent size in any pipe segment, the same as an image: `![[talk.mp4|align-right 40%]]`. A non-image embed shows a caption when its pipe also carries placement (`![[report.pdf|wide|Annual report]]`), wrapped in a new `.moss-embed-figure` that carries the width and the float. A pipe with only text keeps its old meaning, e.g. an iframe title.
+- **`Placement` and `extract_placement_from_alias`**: the one type and parser for that vocabulary.
+- Folder embeds accept `key=value` as well as `key:value`, a float, a width and a caption: `![[/journal/|style:grid|wide|Recent entries]]`.
 
 ### Removed
 
@@ -26,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **`cover` picker offers `.html`/`.htm`.** `cover`'s `file_kinds` now includes `Iframe`, so the chip-bar search dropdown and the OS Browse dialog stop excluding files the build has rendered as iframe covers since 2026-03-09 — an author no longer has to hand-type `cover: "[[page.html]]"` to get what the picker wouldn't offer.
+- An image's float was lost when combined with a caption or a percent (`align-right|Caption` printed "align-right|Caption" as its caption; `align-right 33%` did nothing). Both now float, size and caption correctly.
+- Video and audio embeds dropped `wide`/`page`/`screen`; audio embeds now also carry `data-type="audio"` like every other kind.
+- A folder embed with more than one pipe segment set its `style` to the whole remainder, and `sort=date` was ignored.
+- A bare percent on a video or iframe (`|77%`) is now emitted as an inline style width instead of an invalid `width="77%"` attribute.
 
 ## [0.15.0] - 2026-09-06
 

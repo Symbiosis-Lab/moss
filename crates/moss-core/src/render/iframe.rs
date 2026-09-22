@@ -15,6 +15,8 @@
 //! folder_embed migrated (P2E prereq #2, 2026-05-25).
 
 use crate::asset_snapshot::AssetSnapshot;
+use crate::media::Placement;
+use crate::render::placement::placement_attrs;
 use crate::resolve::embed_renderer::html_escape_attr;
 use crate::resolve::title_params::TitleParams;
 
@@ -47,6 +49,7 @@ const CLASS_EMBED: &str = "moss-embed";
 #[allow(unused_variables)]
 pub fn synthesize_iframe_html(
     params: &TitleParams,
+    placement: &Placement,
     src: &str,
     assets: &AssetSnapshot,
 ) -> String {
@@ -69,10 +72,8 @@ pub fn synthesize_iframe_html(
         _ => String::new(),
     };
 
-    let data_width_attr = match params.get("data-width") {
-        Some(w) => format!(r#" data-width="{}""#, html_escape_attr(w)),
-        None => String::new(),
-    };
+    let place = placement_attrs(placement);
+    let class_value = place.class_value(CLASS_EMBED);
 
     let title_attr = match params.get("title") {
         Some(t) => format!(" title=\"{}\"", html_escape_attr(t)),
@@ -106,10 +107,10 @@ pub fn synthesize_iframe_html(
     };
 
     format!(
-        "<iframe class=\"{}\" data-type=\"iframe\"{}{} src=\"{}\"{}{}{}{}{}{} loading=\"lazy\"></iframe>",
-        CLASS_EMBED,
+        "<iframe class=\"{}\" data-type=\"iframe\"{}{} src=\"{}\"{}{}{}{}{}{}{} loading=\"lazy\"></iframe>",
+        class_value,
         data_provider_attr,
-        data_width_attr,
+        place.data_width_attr,
         html_escape_attr(&full_src),
         title_attr,
         width_attr,
@@ -117,6 +118,7 @@ pub fn synthesize_iframe_html(
         allow_attr,
         sandbox_attr,
         allowfullscreen_attr,
+        place.size_style_attr,
     )
 }
 
@@ -139,7 +141,7 @@ mod tests {
     #[test]
     fn iframe_basic_shape() {
         let p = params_with(&[("kind", "iframe")]);
-        let out = synthesize_iframe_html(&p, "widget.html", &empty_snapshot());
+        let out = synthesize_iframe_html(&p, &Placement::default(), "widget.html", &empty_snapshot());
         assert!(out.contains("<iframe"));
         assert!(out.contains(r#"src="widget.html""#));
         assert!(out.contains(r#"loading="lazy""#));
@@ -148,16 +150,23 @@ mod tests {
     }
 
     #[test]
-    fn iframe_with_data_width() {
-        let p = params_with(&[("kind", "iframe"), ("data-width", "wide")]);
-        let out = synthesize_iframe_html(&p, "widget.html", &empty_snapshot());
+    fn iframe_carries_the_whole_placement() {
+        let p = params_with(&[("kind", "iframe")]);
+        let place = Placement {
+            width: Some("wide"),
+            align: Some(crate::media::AlignSide::Right),
+            size: Some("40%".to_string()),
+        };
+        let out = synthesize_iframe_html(&p, &place, "widget.html", &empty_snapshot());
         assert!(out.contains(r#"data-width="wide""#), "got: {}", out);
+        assert!(out.contains(r#"class="moss-embed moss-align-right""#), "got: {}", out);
+        assert!(out.contains(r#"style="width:40%""#), "got: {}", out);
     }
 
     #[test]
     fn iframe_with_query_param() {
         let p = params_with(&[("kind", "iframe"), ("query", "k=v&x=y")]);
-        let out = synthesize_iframe_html(&p, "widget.html", &empty_snapshot());
+        let out = synthesize_iframe_html(&p, &Placement::default(), "widget.html", &empty_snapshot());
         assert!(
             out.contains(r#"src="widget.html?k=v"#)
                 || out.contains(r#"src="widget.html?k=v&amp;x=y""#),
@@ -169,35 +178,35 @@ mod tests {
     #[test]
     fn iframe_with_title() {
         let p = params_with(&[("kind", "iframe"), ("title", "My Widget")]);
-        let out = synthesize_iframe_html(&p, "widget.html", &empty_snapshot());
+        let out = synthesize_iframe_html(&p, &Placement::default(), "widget.html", &empty_snapshot());
         assert!(out.contains(r#"title="My Widget""#));
     }
 
     #[test]
     fn iframe_with_allow_attr() {
         let p = params_with(&[("allow", "autoplay; encrypted-media")]);
-        let out = synthesize_iframe_html(&p, "x.html", &empty_snapshot());
+        let out = synthesize_iframe_html(&p, &Placement::default(), "x.html", &empty_snapshot());
         assert!(out.contains(r#"allow="autoplay; encrypted-media""#), "got: {out}");
     }
 
     #[test]
     fn iframe_with_sandbox_attr() {
         let p = params_with(&[("sandbox", "allow-scripts allow-same-origin")]);
-        let out = synthesize_iframe_html(&p, "x.html", &empty_snapshot());
+        let out = synthesize_iframe_html(&p, &Placement::default(), "x.html", &empty_snapshot());
         assert!(out.contains(r#"sandbox="allow-scripts allow-same-origin""#), "got: {out}");
     }
 
     #[test]
     fn iframe_with_allowfullscreen() {
         let p = params_with(&[("allowfullscreen", "true")]);
-        let out = synthesize_iframe_html(&p, "x.html", &empty_snapshot());
+        let out = synthesize_iframe_html(&p, &Placement::default(), "x.html", &empty_snapshot());
         assert!(out.contains("allowfullscreen"), "got: {out}");
     }
 
     #[test]
     fn iframe_without_allow_omits_attr() {
         let p = params_with(&[]);
-        let out = synthesize_iframe_html(&p, "x.html", &empty_snapshot());
+        let out = synthesize_iframe_html(&p, &Placement::default(), "x.html", &empty_snapshot());
         assert!(!out.contains("allow="), "got: {out}");
         assert!(!out.contains("sandbox="), "got: {out}");
         assert!(!out.contains("allowfullscreen"), "got: {out}");
@@ -207,7 +216,7 @@ mod tests {
     fn iframe_allow_empty_string_is_omitted() {
         // Empty string should be treated same as absent — no allow= attr emitted
         let p = params_with(&[("allow", "")]);
-        let out = synthesize_iframe_html(&p, "x.html", &empty_snapshot());
+        let out = synthesize_iframe_html(&p, &Placement::default(), "x.html", &empty_snapshot());
         assert!(!out.contains("allow="), "got: {out}");
     }
 
@@ -215,7 +224,7 @@ mod tests {
     fn iframe_allowfullscreen_false_is_omitted() {
         // Only "true" emits the boolean attr; any other value is treated as absent
         let p = params_with(&[("allowfullscreen", "false")]);
-        let out = synthesize_iframe_html(&p, "x.html", &empty_snapshot());
+        let out = synthesize_iframe_html(&p, &Placement::default(), "x.html", &empty_snapshot());
         assert!(!out.contains("allowfullscreen"), "got: {out}");
     }
 

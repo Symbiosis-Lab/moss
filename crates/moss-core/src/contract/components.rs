@@ -994,6 +994,24 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "Base class on every typed embed. Kind on `data-type` (v1). Ambient video: add `data-loop` via `![[clip.mp4|loop]]`. `.moss-embed-audio` / `-video` / `-pdf` / `-notebook` / `-table` / `-iframe` / `-3d` retired in Phase 1c.",
     },
     ComponentEntry {
+        class: "moss-embed-figure",
+        kind: "standalone",
+        parent: "",
+        data_attrs: &[
+            DataAttr {
+                name: "data-width",
+                values: &["body", "wide", "page", "screen"],
+                default: "body",
+                description: "Display width — text-column (body), wider than text (wide), page-width (page), or viewport-width (screen). Sits here, not on the embed inside, because the width escape is a direct-child selector.",
+            },
+        ],
+        example_html: r#"<figure class="moss-embed-figure" data-width="wide"><object class="moss-embed" data-type="pdf" data="report.pdf"></object><figcaption>A caption</figcaption></figure>"#,
+        example_markdown: "![[report.pdf|wide|A caption]]",
+        status: Status::Confirmed,
+        since: "0",
+        description: "Wraps a captioned non-image embed (video, audio, pdf, iframe, 3D model, folder listing), the way `.moss-image` wraps a captioned image. Carries the caption's `<figcaption>` and, because it is the outermost element, the embed's `data-width` and float class; the embed element inside keeps `.moss-embed` and its `data-type`.",
+    },
+    ComponentEntry {
         class: "moss-embed-pending",
         kind: "instance",
         parent: "moss-embed",

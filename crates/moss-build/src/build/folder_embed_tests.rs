@@ -1942,6 +1942,7 @@ fn year_groups_under_non_date_axis_skip_resort() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
+        &Default::default(),
     );
 
     // Year sections must appear.
@@ -2026,6 +2027,7 @@ fn year_groups_skip_resort_keeps_folders_flat_above() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
+        &Default::default(),
     );
 
     // Sections exist for the articles.
@@ -2078,6 +2080,7 @@ fn no_group_skip_resort_stays_flat() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
+        &Default::default(),
     );
 
     assert!(
@@ -2156,6 +2159,7 @@ fn skip_resort_summary_still_separates_folders_from_articles() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
+        &Default::default(),
     );
 
     // Both folders must precede both articles.
@@ -2224,6 +2228,7 @@ fn skip_resort_summary_year_still_groups_by_year() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
+        &Default::default(),
     );
 
     assert!(
@@ -2279,6 +2284,7 @@ fn undated_grid_puts_folders_first_then_folds_case() {
         Some(moss_core::sort::SortAxis::Title),
         true,
         false,
+        &Default::default(),
     );
 
     let order: Vec<&str> = ["Zebra", "Alpha", "mao", "Scarly"]
@@ -2472,4 +2478,60 @@ mod bulk_style_tests {
 
         assert_eq!(auto_style(&docs), "list");
     }
+}
+
+/// Markdown → the moss-core pre-pass → the marker → this renderer: the
+/// whole chain a body `![[folder/|…]]` embed takes.
+fn render_body_embed(markdown: &str, docs: &[ParsedDocument]) -> String {
+    let graph = moss_core::content_graph::ContentGraphBuilder::new().build();
+    let resolved = moss_core::resolve::resolve_content("index.md", markdown, &graph, &|_| None);
+    resolve_markers(
+        &resolved.content_markdown,
+        "index.md",
+        docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    )
+}
+
+fn journal_docs() -> Vec<ParsedDocument> {
+    vec![
+        make_folder_doc("journal/index.html", "Journal"),
+        make_doc("journal/a.html", "A", Some("2025-01-01")),
+        make_doc("journal/b.html", "B", Some("2025-03-01")),
+    ]
+}
+
+#[test]
+fn a_captioned_folder_embed_puts_its_width_on_the_figure() {
+    let out = render_body_embed("![[/journal/|style:grid|wide|A caption]]\n", &journal_docs());
+    assert!(
+        out.starts_with(r#"<figure class="moss-embed-figure" data-width="wide"><div class="moss-cards-container">"#),
+        "the figure is outermost and the container carries no width of its own: {out}"
+    );
+    assert!(out.contains(r#"data-layout="grid""#), "style must survive the extra segments: {out}");
+    assert!(out.trim_end().ends_with("<figcaption>A caption</figcaption></figure>"), "got: {out}");
+}
+
+#[test]
+fn an_uncaptioned_folder_embed_wears_its_placement_on_the_container() {
+    let out = render_body_embed("![[/journal/|align-right 40%]]\n", &journal_docs());
+    assert!(!out.contains("moss-embed-figure"), "no wrapper without a caption: {out}");
+    assert!(
+        out.contains(r#"<div class="moss-cards-container moss-align-right" style="width:40%">"#),
+        "got: {out}"
+    );
+}
+
+#[test]
+fn a_caption_with_marker_breaking_characters_reaches_the_page_intact() {
+    let out = render_body_embed("![[/journal/|wide|Before --> after, a=b]]\n", &journal_docs());
+    assert!(
+        out.contains("<figcaption>Before --&gt; after, a=b</figcaption>"),
+        "got: {out}"
+    );
 }

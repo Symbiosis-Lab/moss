@@ -492,7 +492,8 @@ pub trait RenderHooks {
                             // synthesis as `![[clip.mp4|loop]]`.
                             let mut params = crate::resolve::title_params::TitleParams::default();
                             params.params.insert("loop".into(), "1".into());
-                            crate::render::video::synthesize_video_html(&params, href, snap)
+                            let place = crate::media::Placement::default();
+                            crate::render::video::synthesize_video_html(&params, &place, href, snap)
                         } else {
                             crate::render::image::synthesize_image_html(
                                 href,

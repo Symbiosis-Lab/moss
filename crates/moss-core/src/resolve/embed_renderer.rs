@@ -34,6 +34,8 @@ pub mod folder_list;
 // inside `"…"` attributes.
 pub use common::{file_stem, html_escape_attr};
 
+use crate::media::Placement;
+
 // ---------------------------------------------------------------------------
 // Reserved classnames (HTML/CSS contract, per moss#508)
 // ---------------------------------------------------------------------------
@@ -116,20 +118,21 @@ pub struct ParsedEmbed<'a> {
     /// For `.md` renderers this is a heading/block-ref marker (block refs
     /// keep their `^` prefix). For every other renderer this is a URL fragment.
     pub section: Option<&'a str>,
-    /// `|pipe-content` from the source wikilink — with any spec § P9 width
-    /// token already split out into [`Self::width`]. Image renderer uses
-    /// this for display keywords / size; other renderers parse per their
-    /// convention.
+    /// `|pipe-content` from the source wikilink — with the placement
+    /// vocabulary already split out into [`Self::placement`]. Image renderer
+    /// uses this for display keywords / size; other renderers parse per
+    /// their convention.
     pub alias: Option<&'a str>,
-    /// Canonical width value (`body | wide | page | screen`) extracted from
-    /// the pipe-alias by the wikilink resolver. `None` means the author
-    /// did not include a width token; renderers omit `data-width` in that
-    /// case so themes can target the default via `:not([data-width])`.
+    /// Width, float side and float size, read off the pipe by
+    /// [`crate::media::extract_placement_from_alias`]. An empty
+    /// [`Placement`] means the author wrote none of the three; renderers
+    /// then omit `data-width` so themes can target the default via
+    /// `:not([data-width])`.
     ///
     /// `full` is normalised to `screen` upstream — values reaching here
     /// are already in value-space terms (see
     /// [`crate::media::match_width_token`]).
-    pub width: Option<&'static str>,
+    pub placement: Placement,
     /// Trailing Pandoc `{.class key=value}` attribute block, if present.
     ///
     /// Per Decision #8 of the unified-image-emission architecture, Pandoc-

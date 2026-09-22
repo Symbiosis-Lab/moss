@@ -35,9 +35,25 @@ pub mod year_group;
 /// `is_embed` stamps `data-embed`, which marks a body-embedded listing (a
 /// `![[folder/]]` embed or a grid fence) apart from the trailing automatic one
 /// so CSS can give it its own block rhythm.
-pub(crate) fn cards_container(layout: &str, is_embed: bool, inner: &str) -> String {
+///
+/// `placement` is the listing's own width / float / size. It emits NOTHING
+/// when empty, which is load-bearing: `render::html::annotate_children_listing`
+/// stamps the editor-preview chip by a literal `replacen` on
+/// `<div class="moss-cards-container">`, and a stray attribute would make
+/// that match silently stop matching with no test going red.
+pub(crate) fn cards_container(
+    layout: &str,
+    is_embed: bool,
+    placement: &moss_core::media::Placement,
+    inner: &str,
+) -> String {
+    let place = moss_core::render::placement::placement_attrs(placement);
+    let align = place.align_suffix();
     format!(
-        "<div class=\"moss-cards-container\"{}><div class=\"moss-cards\" data-layout=\"{}\">{}</div></div>",
+        "<div class=\"moss-cards-container{}\"{}{}{}><div class=\"moss-cards\" data-layout=\"{}\">{}</div></div>",
+        align,
+        place.data_width_attr,
+        place.size_style_attr,
         if is_embed { " data-embed" } else { "" },
         layout,
         inner,

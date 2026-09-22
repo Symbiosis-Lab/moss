@@ -379,7 +379,8 @@ fn lower_transclusion_and_folder_wikilinks(
                     Some((_, params)) => params,
                     None => "",
                 };
-                let params = embed_renderer::folder_list::parse_params(pothole_raw);
+                let params =
+                    embed_renderer::folder_list::classify_folder_segments(pothole_raw);
                 let marker =
                     embed_renderer::folder_list::emit_marker(file_part, source_path, &params);
                 rewritten.push_str(&marker);
@@ -726,6 +727,66 @@ mod tests {
             lower("`![[note.md]]` renders ![[note.md]] inline\n"),
             "`![[note.md]]` renders <!-- moss-embed:note.md --> inline\n"
         );
+    }
+
+    /// Run the real entry point, not just the pre-pass: the marker has to
+    /// survive everything downstream of it, and it is what moss-build reads.
+    fn marker_for(body: &str) -> String {
+        resolve_content("index.md", body, &test_graph(), &|_| None).content_markdown
+    }
+
+    #[test]
+    fn a_folder_embed_accepts_key_equals_value() {
+        // `sort=date` used to be dropped on the floor: the comma grammar
+        // only ever looked for `:`.
+        let out = marker_for("![[/journal/|sort=date]]\n");
+        assert!(out.contains("sort=date"), "got: {out}");
+    }
+
+    #[test]
+    fn a_folder_embed_reads_params_placement_and_caption_from_one_pothole() {
+        let out = marker_for("![[/journal/|style:grid|wide|A caption]]\n");
+        assert!(out.contains("style=grid"), "style must not swallow the rest: {out}");
+        assert!(out.contains("width=wide"), "got: {out}");
+        assert!(out.contains("caption=A caption"), "got: {out}");
+    }
+
+    #[test]
+    fn a_folder_embed_reads_a_float_and_its_size() {
+        let out = marker_for("![[/journal/|align-right 33%|A caption]]\n");
+        assert!(out.contains("align=right"), "got: {out}");
+        // `pct`, not `size` — `size=` is the static-index iframe's own token.
+        assert!(out.contains("pct=33%"), "got: {out}");
+        assert!(!out.contains("size=33%"), "got: {out}");
+    }
+
+    #[test]
+    fn a_bare_percent_still_sizes_the_static_index_iframe() {
+        let out = marker_for("![[/journal/|80%]]\n");
+        assert!(out.contains("size=80%"), "got: {out}");
+        assert!(!out.contains("pct="), "got: {out}");
+    }
+
+    #[test]
+    fn a_caption_survives_every_character_that_could_end_the_marker() {
+        use crate::resolve::embed_renderer::folder_list::{marker_decode, marker_encode};
+        for raw in [
+            "a|b",
+            "a,b",
+            "a=b",
+            "a --> b",
+            "100% of it",
+            "普通的標題",
+        ] {
+            assert_eq!(marker_decode(&marker_encode(raw)), raw, "round trip: {raw:?}");
+        }
+        // The marker's own terminator must not appear in the encoded form,
+        // or everything after the caption is truncated away.
+        assert!(!marker_encode("a --> b").contains("-->"));
+
+        let out = marker_for("![[/journal/|wide|Then --> after]]\n");
+        assert!(out.contains("caption=Then --%3E after"), "got: {out}");
+        assert!(out.ends_with("-->\n"), "marker must still terminate: {out}");
     }
 
     #[test]

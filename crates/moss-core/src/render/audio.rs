@@ -24,7 +24,9 @@
 //! future param plumbing without changing the dispatcher contract.
 
 use crate::asset_snapshot::AssetSnapshot;
+use crate::media::Placement;
 use crate::path_ext::path_extension_lower;
+use crate::render::placement::placement_attrs;
 use crate::resolve::embed_renderer::html_escape_attr;
 use crate::resolve::title_params::TitleParams;
 
@@ -44,16 +46,19 @@ use crate::resolve::title_params::TitleParams;
 #[allow(unused_variables)]
 pub fn synthesize_audio_html(
     params: &TitleParams,
+    placement: &Placement,
     src: &str,
     assets: &AssetSnapshot,
 ) -> String {
     let ext = path_extension_lower(src);
     let mime = audio_mime_for_ext(&ext);
     let escaped = html_escape_attr(src);
+    let place = placement_attrs(placement);
+    let align = place.align_suffix();
 
     format!(
-        "<audio class=\"moss-embed moss-embed-audio\" controls preload=\"metadata\"><source src=\"{}\" type=\"{}\">Your browser does not support the audio tag.</audio>",
-        escaped, mime,
+        "<audio class=\"moss-embed moss-embed-audio{}\" data-type=\"audio\"{}{} controls preload=\"metadata\"><source src=\"{}\" type=\"{}\">Your browser does not support the audio tag.</audio>",
+        align, place.data_width_attr, place.size_style_attr, escaped, mime,
     )
 }
 
@@ -95,7 +100,7 @@ mod tests {
     #[test]
     fn audio_basic_shape() {
         let p = params_with(&[("kind", "audio")]);
-        let out = synthesize_audio_html(&p, "track.mp3", &empty_snapshot());
+        let out = synthesize_audio_html(&p, &Placement::default(), "track.mp3", &empty_snapshot());
         assert!(out.contains("<audio"), "got: {}", out);
         assert!(out.contains(r#"src="track.mp3""#));
     }
@@ -103,7 +108,7 @@ mod tests {
     #[test]
     fn audio_with_controls() {
         let p = params_with(&[("kind", "audio"), ("controls", "true")]);
-        let out = synthesize_audio_html(&p, "track.mp3", &empty_snapshot());
+        let out = synthesize_audio_html(&p, &Placement::default(), "track.mp3", &empty_snapshot());
         assert!(out.contains("controls"));
     }
 
@@ -111,8 +116,8 @@ mod tests {
     fn audio_preserves_extension() {
         // Audio kinds: .mp3, .ogg, .wav, .m4a, .flac, ...
         let p = params_with(&[("kind", "audio")]);
-        let mp3 = synthesize_audio_html(&p, "track.mp3", &empty_snapshot());
-        let ogg = synthesize_audio_html(&p, "track.ogg", &empty_snapshot());
+        let mp3 = synthesize_audio_html(&p, &Placement::default(), "track.mp3", &empty_snapshot());
+        let ogg = synthesize_audio_html(&p, &Placement::default(), "track.ogg", &empty_snapshot());
         assert!(mp3.contains(r#"src="track.mp3""#));
         assert!(ogg.contains(r#"src="track.ogg""#));
     }
@@ -120,7 +125,7 @@ mod tests {
     #[test]
     fn audio_escapes_url() {
         let p = params_with(&[("kind", "audio")]);
-        let out = synthesize_audio_html(&p, r#"file with "quotes".mp3"#, &empty_snapshot());
+        let out = synthesize_audio_html(&p, &Placement::default(), r#"file with "quotes".mp3"#, &empty_snapshot());
         assert!(out.contains(r#"&quot;quotes&quot;"#), "got: {}", out);
     }
 
@@ -128,9 +133,11 @@ mod tests {
     fn audio_emits_pre_phase_0_class_and_attrs() {
         // Lock in the byte shape: class + controls + preload="metadata" + fallback text.
         let p = params_with(&[("kind", "audio")]);
-        let out = synthesize_audio_html(&p, "track.mp3", &empty_snapshot());
+        let out = synthesize_audio_html(&p, &Placement::default(), "track.mp3", &empty_snapshot());
         assert!(
-            out.starts_with(r#"<audio class="moss-embed moss-embed-audio" controls preload="metadata">"#),
+            out.starts_with(
+                r#"<audio class="moss-embed moss-embed-audio" data-type="audio" controls preload="metadata">"#
+            ),
             "got: {}",
             out,
         );
@@ -151,7 +158,7 @@ mod tests {
             ("track.opus", "audio/opus"),
         ];
         for (src, mime) in cases {
-            let out = synthesize_audio_html(&p, src, &snap);
+            let out = synthesize_audio_html(&p, &Placement::default(), src, &snap);
             let expected = format!(r#"type="{}""#, mime);
             assert!(out.contains(&expected), "src={}, want {}, got: {}", src, expected, out);
         }
@@ -160,14 +167,14 @@ mod tests {
     #[test]
     fn audio_unknown_extension_falls_back_to_octet_stream() {
         let p = params_with(&[("kind", "audio")]);
-        let out = synthesize_audio_html(&p, "mystery.xyz", &empty_snapshot());
+        let out = synthesize_audio_html(&p, &Placement::default(), "mystery.xyz", &empty_snapshot());
         assert!(out.contains(r#"type="application/octet-stream""#), "got: {}", out);
     }
 
     #[test]
     fn audio_extension_lookup_ignores_query_and_fragment() {
         let p = params_with(&[("kind", "audio")]);
-        let out = synthesize_audio_html(&p, "track.mp3?v=2#t=10", &empty_snapshot());
+        let out = synthesize_audio_html(&p, &Placement::default(), "track.mp3?v=2#t=10", &empty_snapshot());
         // Extension still parsed as mp3 → audio/mpeg, full URL preserved as src.
         assert!(out.contains(r#"type="audio/mpeg""#), "got: {}", out);
         assert!(out.contains(r#"src="track.mp3?v=2#t=10""#), "got: {}", out);

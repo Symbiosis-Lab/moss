@@ -366,7 +366,12 @@ pub(crate) fn apply_summary_grids(plan: &mut BodyPlan, index: &BuildIndex<'_>) {
         }
         *segment = BodySegment::Html(format!(
             "{}\n",
-            crate::build::components::cards_container("list", true, &cards.join("\n"))
+            crate::build::components::cards_container(
+                "list",
+                true,
+                &Default::default(),
+                &cards.join("\n"),
+            )
         ));
     }
 }

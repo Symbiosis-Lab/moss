@@ -16,6 +16,12 @@
 
 ![[logo.png|contain center]]
 
+## Float, size and caption together
+
+![[logo.png|align-right|A floating caption]]
+
+![[logo.png|align-left 40%|Another one]]
+
 ---
 
 ## Media demo

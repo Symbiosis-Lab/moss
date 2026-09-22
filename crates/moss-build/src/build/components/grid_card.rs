@@ -189,6 +189,7 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     sort_axis: moss_core::sort::SortAxis,
     is_embed: bool,
+    placement: &moss_core::media::Placement,
 ) -> String {
     if cards.is_empty() {
         return String::new();
@@ -231,10 +232,13 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     };
     let cover_attr = if has_covers { " data-list-has-covers" } else { "" };
     let container_attr = if is_embed { " data-embed" } else { "" };
+    // Same emit-nothing-when-empty rule as `components::cards_container`.
+    let place = moss_core::render::placement::placement_attrs(placement);
+    let align = place.align_suffix();
 
     format!(
-        r#"<div class="moss-cards-container"{}><div class="moss-cards" data-layout="grid" data-list-axis="{}"{}>{}</div></div>"#,
-        container_attr, axis_str, cover_attr, items
+        r#"<div class="moss-cards-container{}"{}{}{}><div class="moss-cards" data-layout="grid" data-list-axis="{}"{}>{}</div></div>"#,
+        align, place.data_width_attr, place.size_style_attr, container_attr, axis_str, cover_attr, items
     )
 }
 

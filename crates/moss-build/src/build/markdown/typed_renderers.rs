@@ -285,7 +285,12 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
         (Some(href), _) if hero_href_is_video(href) => {
             let empty_snapshot = moss_core::asset_snapshot::AssetSnapshot::new();
             let assets = media_assets.unwrap_or(&empty_snapshot);
-            moss_core::render::video::synthesize_video_html(&hero_video_params(), href, assets)
+            moss_core::render::video::synthesize_video_html(
+                &hero_video_params(),
+                &moss_core::media::Placement::default(),
+                href,
+                assets,
+            )
         }
         (Some(href), Some(_lookup)) => {
             // Route through synthesizer: gives dims, LQIP, optional
@@ -381,6 +386,7 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
                 let assets = media_assets.unwrap_or(&empty_snapshot);
                 let synth = moss_core::render::video::synthesize_video_html(
                     &hero_video_params(),
+                    &moss_core::media::Placement::default(),
                     href,
                     assets,
                 );

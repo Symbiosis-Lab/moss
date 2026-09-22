@@ -25,6 +25,8 @@
 //! `param=true` they appear as bare attributes on the element.
 
 use crate::asset_snapshot::AssetSnapshot;
+use crate::media::Placement;
+use crate::render::placement::placement_attrs;
 use crate::resolve::embed_renderer::html_escape_attr;
 use crate::resolve::title_params::TitleParams;
 
@@ -57,21 +59,25 @@ pub fn page_needs_model_viewer_script(page_html: &str) -> bool {
 #[allow(unused_variables)]
 pub fn synthesize_model_html(
     params: &TitleParams,
+    placement: &Placement,
     src: &str,
     assets: &AssetSnapshot,
 ) -> String {
-    let data_width = match params.get("data-width") {
-        Some(w) => format!(r#" data-width="{}""#, html_escape_attr(w)),
-        None => String::new(),
-    };
+    let place = placement_attrs(placement);
 
     let flags = collect_flag_attrs(params);
-    let style = collect_style_attr(params);
+    // `<model-viewer>` takes its dimensions through inline style, so an
+    // explicit `|WxH` sizing alias and a placement percent compete for the
+    // same attribute; the explicit one wins.
+    let style = match collect_style_attr(params) {
+        s if s.is_empty() => place.size_style_attr.clone(),
+        s => s,
+    };
 
     format!(
         r#"<model-viewer class="{class}" data-type="3d"{data_width} src="{src}"{flags} touch-action="pan-y" loading="lazy"{style}></model-viewer>"#,
-        class = CLASS_EMBED,
-        data_width = data_width,
+        class = place.class_value(CLASS_EMBED),
+        data_width = place.data_width_attr,
         src = html_escape_attr(src),
         flags = flags,
         style = style,
@@ -145,7 +151,7 @@ mod tests {
     #[test]
     fn model_basic_shape() {
         let p = params_with(&[("kind", "3d")]);
-        let out = synthesize_model_html(&p, "scene.glb", &empty_snapshot());
+        let out = synthesize_model_html(&p, &Placement::default(), "scene.glb", &empty_snapshot());
         assert!(out.contains("<model-viewer"), "got: {}", out);
         assert!(out.contains(r#"src="scene.glb""#));
     }
@@ -153,28 +159,28 @@ mod tests {
     #[test]
     fn model_with_camera_controls() {
         let p = params_with(&[("kind", "3d"), ("camera-controls", "true")]);
-        let out = synthesize_model_html(&p, "scene.glb", &empty_snapshot());
+        let out = synthesize_model_html(&p, &Placement::default(), "scene.glb", &empty_snapshot());
         assert!(out.contains("camera-controls"));
     }
 
     #[test]
     fn model_with_auto_rotate() {
         let p = params_with(&[("kind", "3d"), ("auto-rotate", "true")]);
-        let out = synthesize_model_html(&p, "scene.glb", &empty_snapshot());
+        let out = synthesize_model_html(&p, &Placement::default(), "scene.glb", &empty_snapshot());
         assert!(out.contains("auto-rotate"));
     }
 
     #[test]
     fn model_with_ar() {
         let p = params_with(&[("kind", "3d"), ("ar", "true")]);
-        let out = synthesize_model_html(&p, "scene.glb", &empty_snapshot());
+        let out = synthesize_model_html(&p, &Placement::default(), "scene.glb", &empty_snapshot());
         assert!(out.contains(" ar"));
     }
 
     #[test]
     fn model_escapes_url() {
         let p = params_with(&[("kind", "3d")]);
-        let out = synthesize_model_html(&p, r#"scene with "spaces".glb"#, &empty_snapshot());
+        let out = synthesize_model_html(&p, &Placement::default(), r#"scene with "spaces".glb"#, &empty_snapshot());
         // The src attribute must HTML-escape quotes.
         assert!(
             !out.contains(r#"src="scene with """#),
@@ -188,7 +194,7 @@ mod tests {
     #[test]
     fn model_emits_moss_embed_class_and_data_type() {
         let p = params_with(&[("kind", "3d")]);
-        let out = synthesize_model_html(&p, "x.glb", &empty_snapshot());
+        let out = synthesize_model_html(&p, &Placement::default(), "x.glb", &empty_snapshot());
         assert!(
             out.contains(r#"class="moss-embed" data-type="3d""#),
             "got: {}",
@@ -201,7 +207,7 @@ mod tests {
         // `touch-action="pan-y"` and `loading="lazy"` are always emitted —
         // they preserve the pre-Phase-0 byte shape.
         let p = params_with(&[("kind", "3d")]);
-        let out = synthesize_model_html(&p, "x.glb", &empty_snapshot());
+        let out = synthesize_model_html(&p, &Placement::default(), "x.glb", &empty_snapshot());
         assert!(out.contains(r#"touch-action="pan-y""#), "got: {}", out);
         assert!(out.contains(r#"loading="lazy""#), "got: {}", out);
     }
@@ -212,14 +218,14 @@ mod tests {
         // `width=400px` (via `Sizing::parse`); this synthesizer re-projects
         // it to inline CSS.
         let p = params_with(&[("kind", "3d"), ("width", "400px")]);
-        let out = synthesize_model_html(&p, "x.glb", &empty_snapshot());
+        let out = synthesize_model_html(&p, &Placement::default(), "x.glb", &empty_snapshot());
         assert!(out.contains(r#"style="width:400px""#), "got: {}", out);
     }
 
     #[test]
     fn model_emits_width_and_height_style() {
         let p = params_with(&[("kind", "3d"), ("width", "400px"), ("height", "400px")]);
-        let out = synthesize_model_html(&p, "x.glb", &empty_snapshot());
+        let out = synthesize_model_html(&p, &Placement::default(), "x.glb", &empty_snapshot());
         assert!(
             out.contains(r#"style="width:400px;height:400px""#),
             "got: {}",
@@ -228,19 +234,27 @@ mod tests {
     }
 
     #[test]
-    fn model_emits_data_width_wrapper_attr() {
+    fn model_carries_the_whole_placement() {
         // Wrapper-width tokens (`body | wide | page | screen`) ride the
-        // `data-width=` attribute, matching `width_attr` in moss-core common.
-        let p = params_with(&[("kind", "3d"), ("data-width", "wide")]);
-        let out = synthesize_model_html(&p, "x.glb", &empty_snapshot());
+        // `data-width=` attribute; the float rides the class list and the
+        // float's own percent rides inline style.
+        let p = params_with(&[("kind", "3d")]);
+        let place = Placement {
+            width: Some("wide"),
+            align: Some(crate::media::AlignSide::Right),
+            size: Some("40%".to_string()),
+        };
+        let out = synthesize_model_html(&p, &place, "x.glb", &empty_snapshot());
         assert!(out.contains(r#"data-width="wide""#), "got: {}", out);
+        assert!(out.contains(r#"class="moss-embed moss-align-right""#), "got: {}", out);
+        assert!(out.contains(r#"style="width:40%""#), "got: {}", out);
     }
 
     #[test]
     fn model_suppresses_default_flag_when_param_false() {
         // `camera-controls` is on by default; `param=false` suppresses it.
         let p = params_with(&[("kind", "3d"), ("camera-controls", "false")]);
-        let out = synthesize_model_html(&p, "x.glb", &empty_snapshot());
+        let out = synthesize_model_html(&p, &Placement::default(), "x.glb", &empty_snapshot());
         assert!(!out.contains("camera-controls"), "got: {}", out);
         // auto-rotate still emits (its default also true, but not suppressed).
         assert!(out.contains("auto-rotate"), "got: {}", out);
@@ -251,7 +265,7 @@ mod tests {
         // Pre-Phase-0 parity: bare `![[scene.glb]]` (no flag params) must
         // still emit camera-controls and auto-rotate. `ar` stays opt-in.
         let p = params_with(&[("kind", "3d")]);
-        let out = synthesize_model_html(&p, "x.glb", &empty_snapshot());
+        let out = synthesize_model_html(&p, &Placement::default(), "x.glb", &empty_snapshot());
         assert!(out.contains("camera-controls"), "got: {}", out);
         assert!(out.contains("auto-rotate"), "got: {}", out);
         assert!(!out.contains(" ar"), "ar must stay opt-in, got: {}", out);
@@ -260,14 +274,14 @@ mod tests {
     #[test]
     fn model_closes_tag() {
         let p = params_with(&[("kind", "3d")]);
-        let out = synthesize_model_html(&p, "x.glb", &empty_snapshot());
+        let out = synthesize_model_html(&p, &Placement::default(), "x.glb", &empty_snapshot());
         assert!(out.ends_with("></model-viewer>"), "got: {}", out);
     }
 
     #[test]
     fn page_needs_model_viewer_script_detects_rendered_model() {
         let p = params_with(&[("kind", "3d")]);
-        let page = synthesize_model_html(&p, "x.glb", &empty_snapshot());
+        let page = synthesize_model_html(&p, &Placement::default(), "x.glb", &empty_snapshot());
         assert!(page_needs_model_viewer_script(&page));
     }
 

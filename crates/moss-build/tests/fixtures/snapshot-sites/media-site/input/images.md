@@ -15,3 +15,9 @@ date: 2025-04-01
 ## Display control
 
 ![[logo.png|contain center]]
+
+## Float, size and caption together
+
+![[logo.png|align-right|A floating caption]]
+
+![[logo.png|align-left 40%|Another one]]
