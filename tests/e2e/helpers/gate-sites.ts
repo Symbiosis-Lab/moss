@@ -620,6 +620,71 @@ implicit_figure = false
   },
 };
 
+// ── A grid-card image fills the card's inline size ───────────────────────────
+// An external-link cell renders as a flex column (`a.moss-grid-card
+// .link-preview`) whose figure carries `margin-inline: auto`; nothing else
+// stretches it, so a lazy image's `sizes="auto, …"` sizes the source from the
+// figure's own shrunk-to-caption width unless
+// `.moss-grid-card :is(.moss-image, picture, img) { inline-size: 100% }`
+// (site.css) holds. That needs a real `<figure class="moss-image">` around
+// the image, which only exists with moss's default `implicit_figure` (unset
+// — true here), unlike GRID_MOBILE_COLLAPSE_GATE above, which turns it off to
+// test the plain-`<p>` shape instead — this gate cannot reuse that site.
+// Both writing modes matter: under vertical typesetting the inline axis is
+// the box's physical HEIGHT, and the base rule this one has to outrank sets
+// a PHYSICAL `height: auto`, which is the inline axis there.
+// Served by playwright/grid-card-image-inline-size.config.ts.
+//
+// Deliberately tiny intrinsic size (40×30, an order of magnitude below any
+// card): `article figure:not(.video-figure) img { max-width: 100% }` already
+// caps an OVERSIZED image down to the card, masking this exact regression —
+// the bug this gate guards is an image that never gets STRETCHED UP to fill
+// a card bigger than it, which only a real `sizes="auto"` lazy fetch or (as
+// here) a genuinely small source can exercise without depending on a lazy
+// network fetch resolving inside the test.
+const CARD_IMAGE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30" viewBox="0 0 40 30"><rect width="40" height="30" fill="#a47"/></svg>
+`;
+
+export const GRID_CARD_IMAGE_INLINE_SIZE_GATE: ScratchSiteSpec = {
+  name: "grid-card-image-inline-size-gate",
+  files: {
+    "tile.svg": CARD_IMAGE_SVG,
+    "index.md": `---
+title: Card Image Inline Size
+uid: "gcis0101"
+---
+
+:::grid 2 {.no-cards}
+[![Tile](tile.svg)](https://example.org/)
++++
+[![Tile](tile.svg)](/about/)
+:::
+`,
+    "vertical/index.md": `---
+title: Card Image Inline Size Vertical
+uid: "gcis0102"
+typesetting: vertical
+---
+
+:::grid 2 {.no-cards}
+[![Tile](tile.svg)](https://example.org/)
++++
+[![Tile](tile.svg)](/about/)
+:::
+`,
+    "About.md": `---
+title: About
+uid: "gcis0103"
+---
+
+# About
+`,
+    ".moss/config.toml": CONFIG_TOML,
+    // No user theme: this gate is about moss's own defaults.
+    ".moss/theme/style.css": null,
+  },
+};
+
 // ── A hero that carries a caption ────────────────────────────────────────────
 // Two claims no text assertion can settle. The caption must be READABLE — below
 // the photograph, not printed across it and not swallowed by the section's

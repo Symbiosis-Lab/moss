@@ -246,15 +246,21 @@ function writeOrRemove(filePath: string, content: string | null): void {
 }
 
 /**
- * `.moss/build/current` is a symlink re-pointed at a new `generations/<id>/`
- * every build. `staging/` is the fallback for a build that did not ship.
+ * `.moss/build.nosync/current` is a symlink re-pointed at a new
+ * `generations/<id>/` every build. `staging/` is the fallback for a build
+ * that did not ship. Per-machine output moved from `.moss/build` to
+ * `.moss/build.nosync` (moss_paths.rs's `build_dir()`) while this helper
+ * still pointed at the old name, so every GATES_BUILD gate failed
+ * `no build output` on a fresh scratch site — there was never a legacy
+ * `.moss/build` to migrate from in the first place. See moss_paths.rs's
+ * `current_ptr`/`staging_dir` for the paths this mirrors.
  */
 function findBuiltDir(siteDir: string): string | null {
-  const currentLink = path.join(siteDir, ".moss/build/current");
+  const currentLink = path.join(siteDir, ".moss/build.nosync/current");
   if (fs.existsSync(currentLink)) {
     const target = fs.realpathSync(currentLink);
     if (fs.statSync(target).isDirectory()) return target;
   }
-  const staging = path.join(siteDir, ".moss/build/staging");
+  const staging = path.join(siteDir, ".moss/build.nosync/staging");
   return fs.existsSync(staging) ? staging : null;
 }

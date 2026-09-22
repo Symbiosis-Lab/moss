@@ -56,6 +56,7 @@ GATES_BUILD=(
   nav-mobile
   grid-mobile-collapse
   card-cover-ratio
+  grid-card-image-inline-size
   hero-caption
   hero-tone
   heading-anchor

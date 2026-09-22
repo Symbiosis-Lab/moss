@@ -116,7 +116,6 @@ use std::path::PathBuf;
 /// - `MarkdownInline` → bare `<img>` (or `<picture><img></picture>`)
 /// - `Hero` → bare `<img>` (the hero shortcode wraps with `<header>`)
 /// - `FolderCardCover` → bare `<img>` (`.moss-card-cover > ` wraps)
-/// - `LinkPreview` → bare `<img>` (link-preview anchor wraps)
 /// - `Favicon` → bare 16×16 `<img>` with no `<picture>`, no LQIP
 ///
 /// Not `Copy` (the embedded `&str` caption would force a lifetime on
@@ -180,8 +179,6 @@ pub enum ImageContext<'a> {
     Hero { plate: bool },
     /// Folder-card cover or child-summary cover image.
     FolderCardCover,
-    /// External-link preview thumbnail image.
-    LinkPreview,
     /// Favicon for a link-preview card. Bare 16×16 `<img>`, no `<picture>`,
     /// no LQIP, no responsive variants.
     Favicon,
@@ -449,7 +446,7 @@ pub fn synthesize_image_html(
             ImageContext::MarkdownStandalone { width: Some(w), .. } => {
                 ctx_sizes::sizes_for_data_width(w).unwrap_or(ctx_sizes::SIZES_BODY)
             }
-            ImageContext::FolderCardCover | ImageContext::LinkPreview => ctx_sizes::SIZES_CARD,
+            ImageContext::FolderCardCover => ctx_sizes::SIZES_CARD,
             ImageContext::GalleryThumb => ctx_sizes::SIZES_GALLERY,
             _ => ctx_sizes::SIZES_BODY,
         },
