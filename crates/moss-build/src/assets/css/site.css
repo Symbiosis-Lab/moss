@@ -3635,12 +3635,24 @@ article .moss-image img {
 /* :not([data-width]): a figure carrying a width token is sized by the
    content-width escape rules below (ADR-021 Corollary 2) — this 100% cap
    would out-specificity the escape's `max-width: none` and pin the band
-   to the column. */
-article figure.moss-image:not(:has(.moss-align-left)):not(:has(.moss-align-right)):not([data-width]) {
+   to the column.
+
+   Excluded both ways — `:not(.moss-align-left)` AND `:not(:has(.moss-align-
+   left))` — because the renderer puts the align class on the figure itself
+   (ast/render.rs's `Block::Figure` arm), never on a descendant, so the
+   `:has()`-only form this comment used to name never actually excluded an
+   aligned figure: `:not(:has(.moss-align-left))` was vacuously true for
+   EVERY figure, aligned or not, and at (0,4,2) this rule outranked the
+   float-cap rule's (0,3,2) `:not([data-width])` form above, so every
+   unsized aligned figure got centered at 100% width instead of floated and
+   capped at 50% — verified empirically (`tests/render-gates/site/float-
+   mobile-collapse.spec.ts`). Kept both forms, as above, for a hypothetical
+   descendant-carried class. */
+article figure.moss-image:not(.moss-align-left):not(.moss-align-right):not(:has(.moss-align-left)):not(:has(.moss-align-right)):not([data-width]) {
   margin-inline: auto;
   max-width: 100%;
 }
-article figure.moss-image:not(:has(.moss-align-left)):not(:has(.moss-align-right)) img {
+article figure.moss-image:not(.moss-align-left):not(.moss-align-right):not(:has(.moss-align-left)):not(:has(.moss-align-right)) img {
   margin-inline: auto;
 }
 /* Bare-paragraph (uncaptioned) standalone image: center the lone img. */
@@ -3751,9 +3763,22 @@ article figure.moss-image:has(.moss-align-right) {
 
 /* Default max-width when no data-width is set on the wrapping figure.
  * The standalone img form (no figure) and the figure-without-data-width
- * form both cap at 50% — a half-column. */
+ * form both cap at 50% — a half-column.
+ *
+ * The figure form is listed twice: the plain compound (`figure.moss-image.
+ * moss-align-*`) is what the renderer actually emits — align is appended to
+ * the figure's OWN class list (ast/render.rs's `Block::Figure` arm, and
+ * render/image.rs's `wrap_in_figure_full`; both agree) — while `:has(.moss-
+ * align-*)` would only match a DESCENDANT carrying the class, which no
+ * current renderer does. Verified empirically: before this line was added,
+ * a real `<figure class="moss-image moss-align-right">` rendered at full
+ * column width on desktop, uncapped, because the `:has()`-only rule never
+ * matched it. Kept alongside rather than replaced, in case a future/plugin
+ * renderer ever does put the class on a descendant. */
 article img.moss-align-left,
 article img.moss-align-right,
+article figure.moss-image.moss-align-left:not([data-width]),
+article figure.moss-image.moss-align-right:not([data-width]),
 article figure.moss-image:has(.moss-align-left):not([data-width]),
 article figure.moss-image:has(.moss-align-right):not([data-width]) {
   max-width: 50%;
@@ -3772,6 +3797,26 @@ article .moss-embed-figure.moss-align-right:not([data-width]),
 article .moss-cards-container.moss-align-left:not([data-width]),
 article .moss-cards-container.moss-align-right:not([data-width]) {
   max-width: 50%;
+}
+
+/* `.moss-cards-container` carries `container-type: inline-size` (below, so
+ * `.moss-cards` can use `@container` instead of `@media`), which makes its
+ * own inline-size intrinsically indeterminate for layout purposes:
+ * containment tells the float's shrink-to-fit algorithm to size the box AS
+ * IF it had no content, so an unsized, floated listing's shrink-to-fit
+ * input is 0 regardless of what is actually inside it — verified with real
+ * `.moss-cards[data-layout]` card markup, not an empty box. `max-width`
+ * above never binds when the value it would cap never grows past it. A
+ * definite `width` sidesteps shrink-to-fit for this one kind instead of
+ * capping it. `.moss-embed` / `.moss-embed-figure` / the image figure don't
+ * need this: none of them is size-contained, so their own content still
+ * drives shrink-to-fit normally, and giving them a forced 50% too would
+ * stop a narrower embed from sizing to its actual content. An inline
+ * `style="width:NN%"` (the sized case) still wins over this — inline beats
+ * any non-`!important` stylesheet rule regardless of specificity. */
+article .moss-cards-container.moss-align-left:not([data-width]),
+article .moss-cards-container.moss-align-right:not([data-width]) {
+  width: 50%;
 }
 
 /* A captioned non-image embed's width, data-width and float all move to
@@ -3855,35 +3900,67 @@ article.container > hr {
   clear: both;
 }
 
-/* Mobile collapse: match the default rule's specificity (`article
- * img.moss-align-*`) so this override actually wins. A bare `article
- * .moss-align-*` selector here has lower specificity than the default's
- * `article img.moss-align-*` and silently loses regardless of source
- * order or @media wrapping. */
+/* Mobile collapse: every one of these mirrors its desktop 50%-cap
+ * counterpart's selector text exactly, `:not([data-width])` included, so
+ * the specificity ties and the later (mobile) declaration wins on source
+ * order. Dropping `:not([data-width])` here — as the figure-form image
+ * selectors and the whole embed block used to — under-specifies against
+ * the desktop rule, which still wins on phones regardless of source order
+ * or @media wrapping: the bare-img selectors happened to tie already (a
+ * bare `<img>` never carries `data-width`), which is what made the bug
+ * invisible in the one case this comment used to describe. The align+
+ * data-width combination this excludes (float contributing runaround
+ * while data-width's own escape governs width — see the "drop the align
+ * 50% cap" rule above) is unreached by any fixture or test today, so
+ * narrowing to it costs nothing tested. The figure-form image selector is
+ * listed both ways (plain compound AND `:has()`) for the same reason the
+ * desktop rule now is: real markup carries align on the figure itself. */
 @media (max-width: 48rem) {
   article img.moss-align-left,
   article img.moss-align-right,
-  article figure.moss-image:has(.moss-align-left),
-  article figure.moss-image:has(.moss-align-right) {
+  article figure.moss-image.moss-align-left:not([data-width]),
+  article figure.moss-image.moss-align-right:not([data-width]),
+  article figure.moss-image:has(.moss-align-left):not([data-width]),
+  article figure.moss-image:has(.moss-align-right):not([data-width]) {
     float: none;
     max-width: 100%;
     margin-inline: 0;
   }
 
-  /* Mobile collapse: match the default rule's specificity (`article
-   * img.moss-align-*`) so this override actually wins. A bare `article
-   * .moss-align-*` selector here has lower specificity than the default's
-   * `article img.moss-align-*` and silently loses regardless of source
-   * order or @media wrapping. */
+  article .moss-embed.moss-align-left:not([data-width]),
+  article .moss-embed.moss-align-right:not([data-width]),
+  article .moss-embed-figure.moss-align-left:not([data-width]),
+  article .moss-embed-figure.moss-align-right:not([data-width]),
+  article .moss-cards-container.moss-align-left:not([data-width]),
+  article .moss-cards-container.moss-align-right:not([data-width]) {
+    float: none;
+    max-width: 100%;
+    margin-inline: 0;
+  }
+
+  /* A sized float carries its percent as an inline `style="width:NN%"`
+   * on its outermost element (render/placement.rs's `size_style_attr`;
+   * images via ast/render.rs's `Block::Figure` renderer) — no stylesheet
+   * specificity beats an inline style, `:not([data-width])` included, so
+   * the rules above cap `max-width` but never touch a `width` the author
+   * set. `!important` is the narrow tool for that here. Threading a
+   * `--moss-float-size` custom property through instead — read by a
+   * `width: var(...)` rule scoped the same way, with the Rust side
+   * emitting the property rather than a literal width — would avoid the
+   * `!important`, but touches every embed renderer that calls
+   * `placement_attrs` (audio/video/iframe/pdf/model) plus the image
+   * figure renderer, and rewrites every snapshot fixture that exercises a
+   * sized float, for a mobile-only concern. Keyed off the align class so
+   * a centered (unfloated) `data-width` band is never touched. */
+  article figure.moss-image.moss-align-left,
+  article figure.moss-image.moss-align-right,
   article .moss-embed.moss-align-left,
   article .moss-embed.moss-align-right,
   article .moss-embed-figure.moss-align-left,
   article .moss-embed-figure.moss-align-right,
   article .moss-cards-container.moss-align-left,
   article .moss-cards-container.moss-align-right {
-    float: none;
-    max-width: 100%;
-    margin-inline: 0;
+    width: 100% !important;
   }
 }
 

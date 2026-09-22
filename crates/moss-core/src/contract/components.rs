@@ -259,14 +259,20 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 default: "",
                 description: "Boolean presence flag: emitted only for a body `![[folder/|…]]` embed, never for the frontmatter-synthesized listing (homepage / folder index) — both render through the same `generate_children`, so this is the one thing in the markup that tells them apart. CSS uses it to give an embedded listing ordinary block rhythm (`--moss-space-md`, matching `.moss-gallery`) instead of the larger section-break margin the trailing automatic listing keeps.",
             },
+            DataAttr {
+                name: "data-width",
+                values: &["body", "wide", "page", "screen"],
+                default: "body",
+                description: "Display width — text-column (body), wider than text (wide), page-width (page), or viewport-width (screen). Same placement vocabulary every other embed kind reads off its pipe segment (`![[/journal/|wide]]`). See spec § P9.",
+            },
         ],
-        example_html: r#"<div class="moss-cards-container" data-embed>
+        example_html: r#"<div class="moss-cards-container moss-align-right" data-width="wide" style="width:40%" data-embed>
   <div class="moss-cards" data-layout="grid">...</div>
 </div>"#,
-        example_markdown: "",
+        example_markdown: "![[/journal/|wide|align-right|40%]]",
         status: Status::Confirmed,
         since: "1",
-        description: "Outer wrapper around `.moss-cards` that carries `container-type: inline-size` so the grid can use `@container` queries instead of viewport `@media` queries. Layout-agnostic — wraps any `data-layout` variant.",
+        description: "Outer wrapper around `.moss-cards` that carries `container-type: inline-size` so the grid can use `@container` queries instead of viewport `@media` queries. Layout-agnostic — wraps any `data-layout` variant. A body embed also reads the same placement vocabulary every other embed kind does: `data-width`, a `moss-align-left` / `moss-align-right` float class, and a content-relative size as inline `style=\"width:NN%\"` — the frontmatter-synthesized listing never carries any of the three.",
     },
     ComponentEntry {
         class: "moss-summary-layout",
@@ -991,7 +997,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "![[clip.mp4|loop]]",
         status: Status::Confirmed,
         since: "0",
-        description: "Base class on every typed embed. Kind on `data-type` (v1). Ambient video: add `data-loop` via `![[clip.mp4|loop]]`. `.moss-embed-audio` / `-video` / `-pdf` / `-notebook` / `-table` / `-iframe` / `-3d` retired in Phase 1c.",
+        description: "Base class on every typed embed. Kind on `data-type` (v1), including `audio` and `video`. Ambient video: add `data-loop` via `![[clip.mp4|loop]]`. `.moss-embed-audio` and `.moss-embed-video` still ride alongside as co-classes on the element (see their own entries) — `.moss-embed-pdf` / `-notebook` / `-table` / `-iframe` / `-3d` are the ones retired in Phase 1c, collapsed into `data-type`.",
     },
     ComponentEntry {
         class: "moss-embed-figure",
@@ -1009,7 +1015,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "![[report.pdf|wide|A caption]]",
         status: Status::Confirmed,
         since: "0",
-        description: "Wraps a captioned non-image embed (video, audio, pdf, iframe, 3D model, folder listing), the way `.moss-image` wraps a captioned image. Carries the caption's `<figcaption>` and, because it is the outermost element, the embed's `data-width` and float class; the embed element inside keeps `.moss-embed` and its `data-type`.",
+        description: "Wraps a captioned non-image embed (video, audio, pdf, iframe, 3D model, folder listing), the way `.moss-image` wraps a captioned image. Carries the caption's `<figcaption>` and, because it is the outermost element, the embed's `data-width`, float class AND any content-relative size (inline `style=\"width:NN%\"`) — the embed element inside keeps `.moss-embed` and its `data-type`, and fills the figure at `width:100%` rather than carrying any placement of its own.",
     },
     ComponentEntry {
         class: "moss-embed-pending",
@@ -1027,22 +1033,22 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "moss-embed",
         data_attrs: &[],
-        example_html: r#"<div class="moss-embed moss-embed-audio"><audio controls src="..."></audio></div>"#,
+        example_html: r#"<audio class="moss-embed moss-embed-audio" data-type="audio" controls preload="metadata"><source src="track.mp3" type="audio/mpeg"></audio>"#,
         example_markdown: "![[track.mp3]]",
-        status: Status::Retired,
+        status: Status::Confirmed,
         since: "0",
-        description: "Retired in Phase 1c — collapsed to `.moss-embed[data-type=audio]`.",
+        description: "Co-class alongside `.moss-embed` on every audio element — not collapsed away by Phase 1c the way the other kind co-classes were. The default CSS keys off `[data-type=audio]` rather than this class, so it is a hook for themes, not a style dependency.",
     },
     ComponentEntry {
         class: "moss-embed-video",
         kind: "instance",
         parent: "moss-embed",
         data_attrs: &[],
-        example_html: r#"<div class="moss-embed moss-embed-video"><video controls playsinline src="..."></video></div>"#,
+        example_html: r#"<video class="moss-embed moss-embed-video" data-type="video" src="clip.mp4"></video>"#,
         example_markdown: "![[clip.mp4]]",
-        status: Status::Retired,
+        status: Status::Confirmed,
         since: "0",
-        description: "Retired in Phase 1c — collapsed to `.moss-embed[data-type=video]`.",
+        description: "Co-class alongside `.moss-embed` on every video element — not collapsed away by Phase 1c the way the other kind co-classes were. The default CSS keys off `[data-type=video]` rather than this class, so it is a hook for themes, not a style dependency.",
     },
     ComponentEntry {
         class: "moss-embed-video-download",
@@ -1278,7 +1284,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "![[photo.jpg|align-left]]",
         status: Status::Confirmed,
         since: "0",
-        description: "Floats an image to the left of body text (editorial runaround). Defaults max-width to 50% on desktop, collapses to full-width below 48rem. CSS `:has()` escalates the float to a wrapping `<figure class=\"moss-image\">` or `<picture>` when present. Mirrors WordPress's `alignleft` convention.",
+        description: "Floats an embed element to the left of body text (editorial runaround) — an image, a captioned figure (`.moss-image`, `.moss-embed-figure`), a bare `.moss-embed`, or a `.moss-cards-container` listing. Defaults max-width to 50% on desktop unless the element carries its own `data-width` or content-relative size, and collapses to a full-width, unfloated block below 48rem regardless. CSS `:has()` escalates an image's float to its wrapping `<figure class=\"moss-image\">` when present; every other kind carries the class on its own outermost element already. Mirrors WordPress's `alignleft` convention.",
     },
     ComponentEntry {
         class: "moss-align-right",
@@ -1289,7 +1295,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "![[photo.jpg|align-right]]",
         status: Status::Confirmed,
         since: "0",
-        description: "Floats an image to the right of body text (editorial runaround). Symmetric counterpart to `.moss-align-left`. Mirrors WordPress's `alignright` convention.",
+        description: "Floats an embed element to the right of body text (editorial runaround) — an image, a captioned figure (`.moss-image`, `.moss-embed-figure`), a bare `.moss-embed`, or a `.moss-cards-container` listing. Symmetric counterpart to `.moss-align-left`. Mirrors WordPress's `alignright` convention.",
     },
     ComponentEntry {
         class: "moss-article-title",

@@ -2,6 +2,12 @@
 
 All notable changes to moss will be documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- Floated images, embeds, and folder listings now collapse to a full-width block on phones instead of staying pinned at their desktop float width or an explicit size. `![[photo.jpg|align-right]]` without a size now floats at half the column on desktop, as documented; before, it rendered full width because the cap never matched.
+
 ## [0.7.14] - 2026-06-27
 
 ### New
