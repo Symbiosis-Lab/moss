@@ -3158,6 +3158,7 @@ async fn emit_image_outputs_skips_missing_staged_files() {
     let (tx, rx) = test_utils::build_test_coordinator();
     let paths = vec![("present.webp".to_string(), None), ("missing.webp".to_string(), None)];
     let staging_path = staging.path().to_path_buf();
+    let objects = crate::build::cache::ObjectStore::new(staging.path().join("cache"));
     // `emit_image_outputs_via_channel` uses `blocking_send` and must run
     // on a non-async thread (matching production, which dispatches it via
     // `tokio::task::spawn_blocking` from `run_image_conversion`).
@@ -3171,6 +3172,7 @@ async fn emit_image_outputs_skips_missing_staged_files() {
             &Some(tx),
             &paths,
             &staging_path,
+            &objects,
             &std::collections::HashSet::new(),
             Some(reg.as_ref()),
         );
@@ -3224,9 +3226,10 @@ async fn emit_image_outputs_suppressed_absent_produces_no_violation() {
     let mut suppressed = std::collections::HashSet::new();
     suppressed.insert("pruned.webp".to_string());
     let staging_path = staging.path().to_path_buf();
+    let objects = crate::build::cache::ObjectStore::new(staging.path().join("cache"));
 
     let lines = tokio::task::spawn_blocking(move || {
-        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &suppressed, None)
+        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &objects, &suppressed, None)
     })
     .await
     .unwrap();
@@ -3250,9 +3253,10 @@ async fn emit_image_outputs_unsuppressed_absent_still_violates() {
     let mut suppressed = std::collections::HashSet::new();
     suppressed.insert("pruned.webp".to_string());
     let staging_path = staging.path().to_path_buf();
+    let objects = crate::build::cache::ObjectStore::new(staging.path().join("cache"));
 
     let lines = tokio::task::spawn_blocking(move || {
-        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &suppressed, None)
+        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &objects, &suppressed, None)
     })
     .await
     .unwrap();
@@ -3289,9 +3293,10 @@ async fn emit_image_outputs_registers_suppressed_path_that_exists() {
     let mut suppressed = std::collections::HashSet::new();
     suppressed.insert("referenced-later.webp".to_string());
     let staging_path = staging.path().to_path_buf();
+    let objects = crate::build::cache::ObjectStore::new(staging.path().join("cache"));
 
     tokio::task::spawn_blocking(move || {
-        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &suppressed, None);
+        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &objects, &suppressed, None);
     })
     .await
     .unwrap();
@@ -4238,6 +4243,7 @@ fn self_heal_then_emit_registers_relinked_webp() {
             &Some(tx),
             &[("photo.webp".to_string(), None)],
             &h.staging,
+            &h.objects,
             &std::collections::HashSet::new(),
             None,
         );
@@ -4268,6 +4274,7 @@ fn self_heal_then_emit_registers_relinked_webp() {
         &Some(tx),
         &[("photo.webp".to_string(), None)],
         &h.staging,
+        &h.objects,
         &std::collections::HashSet::new(),
         None,
     );
@@ -4292,7 +4299,7 @@ fn self_heal_then_emit_registers_relinked_webp() {
     }
 }
 
-// ----- Commit 2: self-heal a just-dispatched batch's own output before registration -----
+// ----- Commit 2: heal a just-dispatched batch's own output inline, at registration -----
 
 /// The exact coherence violation real uploads showed: `[ERROR] [image]
 /// coherence violation: staged .webp missing (3× this build); skipping
@@ -4302,20 +4309,16 @@ fn self_heal_then_emit_registers_relinked_webp() {
 /// staged bytes are genuinely present at that moment — but
 /// `run_image_conversion` registers a whole batch's outputs only ONCE,
 /// after every item finishes. On a cloud-synced vault the exclusion marker
-/// on `.moss/build.nosync/staging` can silently fail to stick (moss#964 measured
-/// it ABSENT on `.moss/build.nosync` while present on `.moss/cache` on a real
-/// vault), so the provider can evict an early-finished item's `.webp`
-/// before that shared registration pass reads it back.
-///
-/// `self_heal_before_registration` closes that gap by re-verifying (and
-/// here, re-materializing from the still-intact CAS blob) every one of a
-/// batch's own outputs immediately before registration. This is a
-/// different call site from `self_heal_then_emit_registers_relinked_webp`
-/// above, which covers the OLDER, already-existing self-heal for a
-/// *carried-forward* (skip-branch) image; this one covers an image that
-/// was *just dispatched and encoded in this very round*.
+/// on `.moss/build.nosync/staging` can silently fail to stick — measured
+/// absent there while present on `.moss/cache` at the same time, on a real
+/// vault — so the provider can evict an early-finished item's `.webp`
+/// before that shared registration pass reads it back. `emit_image_outputs_
+/// via_channel` closes that gap itself now: the CAS oid the just-encoded
+/// path already carries in `paths` is enough to re-link the bytes right
+/// where the presence check finds them missing, with no second pass and no
+/// re-derivation of the source path.
 #[test]
-fn an_evicted_batch_output_is_healed_before_registration_not_silently_dropped() {
+fn emit_image_outputs_heals_an_evicted_staged_webp_when_the_oid_is_known() {
     let h = harness();
     let src = h._tmp.path().join("photo.jpg");
     make_big_jpeg(&src, 400, 300);
@@ -4343,20 +4346,12 @@ fn an_evicted_batch_output_is_healed_before_registration_not_silently_dropped() 
         "encode failed: {:?}",
         outcome.error
     );
+    let webp_oid = outcome.webp_oid.expect("encode must record the produced webp's CAS oid");
     let staged = h.staging.join("photo.webp");
     assert!(
         staged.exists(),
         "precondition: staged webp present after encode"
     );
-
-    let item = ImageConversionItem {
-        source_path: PathBuf::from("photo.jpg"),
-        source_oid: source_oid.clone(),
-        ext: "jpg".to_string(),
-        dimensions: None,
-        skip: None,
-        fingerprint: None,
-    };
 
     // Simulate the eviction race: the provider zeroes the staged file to a
     // dataless placeholder sometime between this item's own successful
@@ -4370,61 +4365,20 @@ fn an_evicted_batch_output_is_healed_before_registration_not_silently_dropped() 
         "precondition: staged webp evicted (0 bytes)"
     );
 
-    // Control: registering now, WITHOUT the self-heal this fix adds, must
-    // silently drop the path — reproducing the exact bug (a coherence
-    // violation logged, no File message, the image vanishes from the built
-    // site with no user-visible error).
-    {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-        emit_image_outputs_via_channel(
-            &Some(tx),
-            &[("photo.webp".to_string(), None)],
-            &h.staging,
-            &std::collections::HashSet::new(),
-            None,
-        );
-        assert!(
-            rx.try_recv().is_err(),
-            "control: an evicted staged webp must NOT be registered without self-heal — \
-             confirms this scenario reproduces the coherence violation"
-        );
-    }
-
-    // The fix: verify (and here, re-materialize from the surviving CAS
-    // blob) every one of this batch's own outputs before registration ever
-    // runs.
-    let params = cfg.to_params();
-    let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    let healed = self_heal_before_registration(
-        &[item],
-        h._tmp.path(),
-        &HashMap::new(),
+    // Registering now, WITH the oid the encode already produced, must heal
+    // in place and register — the image is present, not silently missing.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
+    emit_image_outputs_via_channel(
+        &Some(tx),
+        &[("photo.webp".to_string(), Some(webp_oid))],
         &h.staging,
         &h.objects,
-        &h.transforms,
-        &params,
-        &mut index,
-        &HashMap::new(),
         &std::collections::HashSet::new(),
-    );
-    assert_eq!(
-        healed, 1,
-        "self-heal must recover exactly the one evicted output"
+        None,
     );
     assert!(
         fs::metadata(&staged).unwrap().len() > 0,
         "staged webp must be restored to real bytes, not left as a 0-byte stub"
-    );
-
-    // Registering again now succeeds: the image is present, not silently
-    // missing — the outcome this fix requires.
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-    emit_image_outputs_via_channel(
-        &Some(tx),
-        &[("photo.webp".to_string(), None)],
-        &h.staging,
-        &std::collections::HashSet::new(),
-        None,
     );
     match rx.try_recv() {
         Ok(EmitMessage::File {
@@ -4441,52 +4395,114 @@ fn an_evicted_batch_output_is_healed_before_registration_not_silently_dropped() 
             assert!(matches!(bucket, HashBucket::ImageVariants));
         }
         other => panic!(
-            "expected a File registration after self-heal, got {:?}",
+            "expected a File registration after the inline heal, got {:?}",
             other
         ),
     }
 }
 
-/// No CAS blob for the source (genuinely never encoded, not merely
-/// evicted) ⇒ `self_heal_before_registration` must not fabricate a phantom
-/// file — mirrors `rematerialize_noop_without_cas_blob`, at this new call
-/// site.
+/// Same eviction race, but the provider removed the file outright rather
+/// than leaving a 0-byte stub — the `Absent` arm of the same match, not
+/// `Evicted`. Both must heal the same way from the oid.
 #[test]
-fn self_heal_before_registration_does_not_fabricate_without_a_cas_blob() {
+fn emit_image_outputs_heals_a_removed_staged_webp_when_the_oid_is_known() {
     let h = harness();
-    let src = h._tmp.path().join("never-encoded.jpg");
-    make_big_jpeg(&src, 200, 200);
-    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
-    let item = ImageConversionItem {
-        source_path: PathBuf::from("never-encoded.jpg"),
-        source_oid,
-        ext: "jpg".to_string(),
-        dimensions: None,
-        skip: None,
-        fingerprint: None,
-    };
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 400, 300);
     let cfg = ImageCompressionConfig::default();
-    let params = cfg.to_params();
-    let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    let healed = self_heal_before_registration(
-        &[item],
-        h._tmp.path(),
-        &HashMap::new(),
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+
+    let outcome = convert_single_image(
+        &src,
+        &source_oid,
+        "photo.webp",
+        &h.temp,
         &h.staging,
         &h.objects,
         &h.transforms,
-        &params,
-        &mut index,
+        &cfg,
+        None,
+        None,
         &HashMap::new(),
-        &std::collections::HashSet::new(),
-    );
-    assert_eq!(
-        healed, 0,
-        "no CAS blob exists — nothing to heal, and nothing fabricated"
     );
     assert!(
-        !h.staging.join("never-encoded.webp").exists(),
+        outcome.error.is_none(),
+        "encode failed: {:?}",
+        outcome.error
+    );
+    let webp_oid = outcome.webp_oid.expect("encode must record the produced webp's CAS oid");
+    let staged = h.staging.join("photo.webp");
+    fs::remove_file(&staged).unwrap();
+    assert!(
+        !staged.exists(),
+        "precondition: staged webp removed outright"
+    );
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
+    emit_image_outputs_via_channel(
+        &Some(tx),
+        &[("photo.webp".to_string(), Some(webp_oid))],
+        &h.staging,
+        &h.objects,
+        &std::collections::HashSet::new(),
+        None,
+    );
+    assert!(staged.exists(), "staged webp must be restored");
+    match rx.try_recv() {
+        Ok(EmitMessage::File { rel_path, hash, bucket, .. }) => {
+            assert_eq!(rel_path, "photo.webp");
+            assert!(
+                !hash.is_empty(),
+                "registered variant must carry a content hash"
+            );
+            assert!(matches!(bucket, HashBucket::ImageVariants));
+        }
+        other => panic!(
+            "expected a File registration after the inline heal, got {:?}",
+            other
+        ),
+    }
+}
+
+/// Negative twin: neither a missing oid nor an oid with no backing CAS blob
+/// can heal, so both must still be reported as the coherence violation this
+/// guard exists to catch — mirrors `rematerialize_noop_without_cas_blob` at
+/// this call site.
+#[test]
+fn emit_image_outputs_does_not_fabricate_a_file_without_a_recoverable_oid() {
+    let h = harness();
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
+    let lines = emit_image_outputs_via_channel(
+        &Some(tx),
+        &[
+            ("no-oid.webp".to_string(), None),
+            ("never-stored.webp".to_string(), Some("oid-with-no-blob".to_string())),
+        ],
+        &h.staging,
+        &h.objects,
+        &std::collections::HashSet::new(),
+        None,
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "neither a None oid nor an oid with no backing blob may register a File message"
+    );
+    assert!(
+        !h.staging.join("no-oid.webp").exists() && !h.staging.join("never-stored.webp").exists(),
         "must not create a phantom staged file"
+    );
+    assert_eq!(
+        lines.len(),
+        1,
+        "both misses collapse into one coherence-violation summary line: {:?}",
+        lines
+    );
+    assert!(
+        lines[0].contains("staged .webp missing") && lines[0].contains("(2×"),
+        "the summary must be the missing-file violation, counting both \
+         unrecoverable paths, not the separate unreadable-file class: {}",
+        lines[0]
     );
 }
 
@@ -5038,6 +5054,7 @@ fn registration_over_an_unreadable_variant_reports_it_and_never_fails_it() {
         &Some(tx),
         &[("locked/photo.webp".to_string(), None)],
         &h.staging,
+        &h.objects,
         &std::collections::HashSet::new(),
         Some(&registry),
     );

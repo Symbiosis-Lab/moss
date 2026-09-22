@@ -2301,36 +2301,6 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     let converted_count = converted_count.load(Ordering::SeqCst);
     let produced_webp_paths = produced_webp_paths.into_inner().unwrap();
 
-    // Self-heal before registering: this batch's own outputs are verified
-    // present (re-materializing from CAS if not) right before both
-    // registration call sites below read them, closing the eviction race
-    // `self_heal_before_registration` documents. Scoped to `ctx.items` (this
-    // batch only, already small after per-image dispatch) so a large vault's
-    // untouched images are never touched here. The lock is released before
-    // `into_inner()` below moves the same `HashIndex` out for its own save.
-    {
-        let mut hash_index_guard = bg_hash_index.lock().unwrap();
-        let params = ctx.config.to_params();
-        let healed = self_heal_before_registration(
-            &ctx.items,
-            project_root,
-            dir_overrides,
-            &ctx.staging_dir,
-            &objects,
-            &transforms,
-            &params,
-            &mut hash_index_guard,
-            &ctx.rung_collisions,
-            &suppressed,
-        );
-        if healed > 0 {
-            log::info!(
-                "[image] self-heal: re-materialized {} staged .webp file(s) from CAS before registration",
-                healed
-            );
-        }
-    }
-
     // Persist the hash index so the next build's blocking `collect_images_for_
     // conversion` stat-matches instead of re-hashing every image (mirrors the
     // video worker at video.rs). save_merging (not save): the video worker writes
@@ -2348,7 +2318,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             "Image conversion cancelled ({} converted before cancel)",
             converted_count
         );
-        emit_image_outputs_via_channel(&ctx.tx, &produced_webp_paths, &ctx.staging_dir, &suppressed, services.assets.as_deref());
+        emit_image_outputs_via_channel(&ctx.tx, &produced_webp_paths, &ctx.staging_dir, &objects, &suppressed, services.assets.as_deref());
         return;
     }
 
@@ -2376,7 +2346,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     // had a `tx.is_none()` fallback to `update_image_hashes` (on-disk
     // hashes.json read+write); that fallback is gone — every caller goes
     // through the coordinator now.
-    emit_image_outputs_via_channel(&ctx.tx, &produced_webp_paths, &ctx.staging_dir, &suppressed, services.assets.as_deref());
+    emit_image_outputs_via_channel(&ctx.tx, &produced_webp_paths, &ctx.staging_dir, &objects, &suppressed, services.assets.as_deref());
 
     // Dual-emit (Step 3 Phase 4): legacy BackgroundProgress + a media child Job
     // under the Build parent. Gated on REAL work (FIX 1b).
@@ -2419,9 +2389,20 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
 ///
 /// **Producer-side coherence invariant:** every path passed in must exist at
 /// `staging_dir/<path>` before this function emits its `EmitMessage`. A
-/// pre-flight existence check enforces it; paths whose staged file is missing
-/// are skipped (logged at error level) and never reach the manifest. Without
-/// this check, a silent failure in `convert_single_image`'s staging-link step
+/// pre-flight existence check enforces it, and now heals first: a path found
+/// `Absent` or `Evicted` whose caller supplied a CAS `oid` is re-linked from
+/// the object store on the spot (`objects.link_to`) before the check runs
+/// again in effect — only a path that is still missing after that attempt,
+/// or that came with no `oid` to heal from, is skipped (logged at error
+/// level) and never reaches the manifest. The heal exists because a cloud
+/// sync provider's exclusion marker on the staging directory can silently
+/// fail to stick — measured absent on a real vault's staging directory
+/// while present on its CAS blob store at the same time — so the provider
+/// can evict a just-staged `.webp` between its own successful `link_to` at
+/// encode time and this batch-wide registration pass reading it back — the
+/// CAS blob keeps its exclusion marker far more reliably, so re-linking from there
+/// recovers the bytes without a full re-encode. Without either the heal or
+/// the check, a silent failure in `convert_single_image`'s staging-link step
 /// would still register the path in `image_outputs` and `inner.files`,
 /// breaking deploy with `"Manifest claims '<path>' exists but it's missing on
 /// disk"`. Together with the fatal staging-link guard in `convert_single_image`,
@@ -2440,6 +2421,7 @@ fn emit_image_outputs_via_channel(
     tx: &Option<mpsc::Sender<EmitMessage>>,
     paths: &[(String, Option<String>)],
     staging_dir: &Path,
+    objects: &crate::build::cache::ObjectStore,
     suppressed: &std::collections::HashSet<String>,
     registry: Option<&crate::types::assets::AssetRegistry>,
 ) -> Vec<String> {
@@ -2484,13 +2466,26 @@ fn emit_image_outputs_via_channel(
                 continue;
             }
             crate::build::io_utils::Presence::Absent | crate::build::io_utils::Presence::Evicted => {
-                if suppressed.contains(path) {
-                    suppressed_absent_count += 1;
-                } else {
-                    settle_failed(path, "missing at manifest registration".to_string());
-                    missing.push(abs.display().to_string());
+                // Heal on the spot from the CAS blob when the caller already
+                // knows the oid behind these exact bytes — the just-encoded
+                // main path's own `produced_webp_paths`. `link_to`, not
+                // `ensure_staged`: `ensure_staged` short-circuits on
+                // `out.exists()`, true for a 0-byte evicted stub, so it
+                // would treat the placeholder as already present. On
+                // success, fall through to the present-path handling below
+                // instead of `continue`-ing past it.
+                let healed = oid
+                    .as_deref()
+                    .is_some_and(|oid| objects.link_to(oid, &abs).is_ok());
+                if !healed {
+                    if suppressed.contains(path) {
+                        suppressed_absent_count += 1;
+                    } else {
+                        settle_failed(path, "missing at manifest registration".to_string());
+                        missing.push(abs.display().to_string());
+                    }
+                    continue;
                 }
-                continue;
             }
         }
         let hash = match std::fs::read(&abs) {
@@ -2574,87 +2569,6 @@ fn summarize_coherence_violations(
         ));
     }
     lines
-}
-
-/// Self-heal every base + rung output `items` are expected to have
-/// produced, immediately before `run_image_conversion` registers them.
-///
-/// **Why this exists.** A successful `link_to` at encode time is not proof
-/// the bytes survive to registration: `run_image_conversion` registers the
-/// whole batch's `produced_webp_paths` only ONCE, after every item in the
-/// batch finishes, so an early-finished item's `.webp` sits in
-/// `.moss/build.nosync/staging` for as long as the rest of the batch takes. On a
-/// cloud-synced vault (iCloud / Google Drive) that staging directory's
-/// exclusion marker (`moss_paths::exclude_from_cloud_sync`,
-/// `com.apple.fileprovider.ignore#P`) can silently fail to stick — moss#964
-/// measured it ABSENT on `.moss/build.nosync` while present on `.moss/cache` on a
-/// real vault — so the provider can evict a just-staged `.webp` before this
-/// batch's own registration pass reads it back:
-/// `emit_image_outputs_via_channel`'s `output_present` check then finds it
-/// gone and silently drops it ("coherence violation: staged .webp missing
-/// … Upstream staging-link reported success but the bytes are not on
-/// disk"), with no further attempt to recover it.
-///
-/// The CAS blob store (`.moss/cache`) keeps its own exclusion marker far
-/// more reliably (moss#964's own field data), so re-linking from there
-/// recovers the bytes without a full re-encode — the same self-heal
-/// `dispatch_image_conversions`'s skip branch already relies on for a
-/// *carried-forward* image, reused here for one that was *just dispatched*
-/// in the batch that is about to register it. No-op per candidate whose
-/// staging file is already present. Returns the count actually healed.
-fn self_heal_before_registration(
-    items: &[ImageConversionItem],
-    source_root: &Path,
-    dir_overrides: &HashMap<String, String>,
-    staging_dir: &Path,
-    objects: &crate::build::cache::ObjectStore,
-    transforms: &crate::build::cache::TransformCache,
-    params: &serde_json::Value,
-    hash_index: &mut crate::build::cache::HashIndex,
-    rung_collisions: &HashMap<String, PathBuf>,
-    suppressed: &std::collections::HashSet<String>,
-) -> usize {
-    let mut healed = 0usize;
-    for item in items {
-        let rel_source = item.source_path.to_string_lossy().to_string();
-        let mapped = crate::build::scan::page_map::resolve_path_with_overrides(&rel_source, dir_overrides);
-        let relative_webp = moss_core::asset_paths::to_webp(&mapped);
-        if !suppressed.contains(&relative_webp) {
-            healed += usize::from(matches!(
-                rematerialize(
-                    objects,
-                    transforms,
-                    params,
-                    hash_index,
-                    &source_root.join(&item.source_path),
-                    &rel_source,
-                    &staging_dir.join(&relative_webp),
-                    "image/webp",
-                    HashPolicy::HashOnMiss,
-                ),
-                HealOutcome::Healed
-            ));
-        }
-        for (rung, rung_rel) in promised_rungs(item, &mapped, rung_collisions) {
-            if !suppressed.contains(&rung_rel) {
-                healed += usize::from(matches!(
-                    rematerialize(
-                        objects,
-                        transforms,
-                        params,
-                        hash_index,
-                        &source_root.join(&item.source_path),
-                        &rel_source,
-                        &staging_dir.join(&rung_rel),
-                        &format!("image/webp-w{}", rung),
-                        HashPolicy::HashOnMiss,
-                    ),
-                    HealOutcome::Healed
-                ));
-            }
-        }
-    }
-    healed
 }
 
 // `update_image_hashes` removed in #620 Item 2. Pre-Track A this performed
@@ -2893,7 +2807,7 @@ pub(crate) fn dispatch_image_conversions(
         // docs/archive/2026-05-20-image-variant-honest-mirror.md (Layer 5A).
         if !skip_paths.is_empty() {
             emit_image_outputs_via_channel(
-                &tx, &skip_paths, &ctx.staging_dir, &heal_suppressed, None,
+                &tx, &skip_paths, &ctx.staging_dir, &heal_objects, &heal_suppressed, None,
             );
         }
 
