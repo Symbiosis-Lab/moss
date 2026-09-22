@@ -208,6 +208,23 @@ export function createDriver({ frame, frameWrap, pointerEl, getEditor }) {
     return sleep(dwellMs(button), signal);
   }
 
+  // The dip/ring Animation objects the last press() call created (Web Animations API, from
+  // dot.animate()/ring.animate() below) — tracked explicitly so a back-to-back press can cancel
+  // exactly those two rather than querying `element.getAnimations()`, which returns EVERY
+  // animation affecting the element, including the declarative CSS `moss-stage-hollow` keyframe a
+  // right-click's own `data-button="right"` mutation (below) just triggered on the same `dot`.
+  // Calling `.cancel()` on that CSSAnimation object the instant it starts is what silently killed
+  // the hollow look entirely (confirmed with an instrumented `getAnimations()`/MutationObserver
+  // probe in both engines: the hollow keyframe reports `playState: "running"` one synchronous
+  // call after `data-button` is set, then never renders a single hollow frame afterwards) — not
+  // "too early", but never at all, which is what an owner watching for it reports as "too early"
+  // (no hollow at the press they expected, so the next thing they see — the solid dot already
+  // mid-glide toward the NEXT target — reads as the look never having arrived on time). Tracking
+  // our own two animations here fixes that without weakening the "a still-running previous press
+  // is cancelled first" guarantee the comment below still describes.
+  let activeDip = null;
+  let activeGlow = null;
+
   /** Presses the pointer (stage/README.md, "The pointer"): records which button on the pointer
    * element itself (`data-button="left"|"right"`) — moss-stage.css keys every visual treatment,
    * including a right-click’s hollow dotted dot, off that attribute alone. The attribute is cleared and reflowed before
@@ -236,7 +253,10 @@ export function createDriver({ frame, frameWrap, pointerEl, getEditor }) {
     pointerEl.dataset.button = button;
     const dot = pointerEl.querySelector('.moss-stage__pointer-dot');
     const ring = pointerEl.querySelector('.moss-stage__pointer-ring');
-    [dot, ring].forEach((el) => el.getAnimations().forEach((a) => a.cancel()));
+    // Cancel only the WAAPI animations THIS module created for the previous press — never
+    // `dot.getAnimations()` (see the comment on activeDip/activeGlow above).
+    activeDip?.cancel();
+    activeGlow?.cancel();
     const dip = dot.animate(
       [{ transform: 'scale(1)' }, { transform: `scale(${PRESS_DIP_SCALE})`, offset: 0.35 }, { transform: 'scale(1)' }],
       { duration: PACE.pressDipMs, easing: 'ease-out' },
@@ -245,6 +265,8 @@ export function createDriver({ frame, frameWrap, pointerEl, getEditor }) {
       [{ transform: 'scale(1)', opacity: 0.7 }, { transform: `scale(${RING_EXPAND_SCALE})`, opacity: 0 }],
       { duration: PACE.pressRingMs, easing: 'ease-out' },
     );
+    activeDip = dip;
+    activeGlow = glow;
     return new Promise((resolve) => {
       const onAbort = () => { dip.cancel(); glow.cancel(); resolve(false); };
       signal?.addEventListener('abort', onAbort, { once: true });

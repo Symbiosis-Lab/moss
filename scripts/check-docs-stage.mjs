@@ -255,6 +255,39 @@ async function checkVersionsDiffShowsOwnText(browser, engine) {
   });
 }
 
+// The right-click look (stage/README.md, "The pointer"): the pointer dot must read solid through
+// the whole glide and dwell that precede a right-click's press, and switch to the hollow dotted
+// look only once the press itself lands — never earlier, and never not at all. Regression guard
+// for a bug where `press()`'s own animation cleanup cancelled the CSS `moss-stage-hollow` keyframe
+// the instant it started (it and the dip/ring Web Animations API animations all showed up in the
+// same `element.getAnimations()` sweep), so the hollow look never rendered a single frame — found
+// by sampling this same computed style every ~30ms against a real build. "save-as-template"'s
+// first step is a `context` (right-click) with a 600ms dwell and a long (reveals: 10) hold, wide
+// enough to sample several points on each side of the press reliably.
+async function checkRightClickHollowTiming(browser, engine) {
+  await withPage(browser, '/get-started/editor/', { width: 1440, height: 900 }, async (page) => {
+    await waitEditorReady(page);
+    const samples = await page.evaluate(() => new Promise((resolve) => {
+      const dot = document.querySelector('.moss-stage__pointer-dot');
+      const pointer = document.querySelector('.moss-stage__pointer');
+      const out = [];
+      const timer = setInterval(() => {
+        out.push({ button: pointer.dataset.button ?? null, borderStyle: getComputedStyle(dot).borderStyle });
+      }, 30);
+      document.querySelector('moss-scene[name="save-as-template"] button').click();
+      setTimeout(() => { clearInterval(timer); resolve(out); }, 2200);
+    }));
+    const pressIndex = samples.findIndex((s) => s.button === 'right');
+    assert(pressIndex > 0, `[${engine}] never observed the right-click press (data-button="right") while sampling: ${JSON.stringify(samples)}`);
+    const beforePress = samples.slice(0, pressIndex);
+    assert(beforePress.every((s) => s.borderStyle === 'solid'),
+      `[${engine}] the hollow look appeared before the press, during glide/dwell: ${JSON.stringify(beforePress)}`);
+    const atOrAfterPress = samples.slice(pressIndex);
+    assert(atOrAfterPress.some((s) => s.borderStyle === 'dotted'),
+      `[${engine}] the hollow look never appeared after the right-click press: ${JSON.stringify(atOrAfterPress)}`);
+  });
+}
+
 // e. A load whose own scene-JSON fetch is still pending when a second, different scene is
 // explicitly requested must not be able to claw back state once that stale fetch resolves — nor
 // navigate the shared iframe again after a newer load has already finished (stage/README.md, "One
@@ -650,6 +683,7 @@ for (const [engine, launcher] of engines) {
   await withBrowser(launcher, (browser) => checkContextMenuFollowsLocale(browser, engine));
   await withBrowser(launcher, (browser) => checkFixturesFrameDifferentProjects(browser, engine));
   await withBrowser(launcher, (browser) => checkVersionsDiffShowsOwnText(browser, engine));
+  await withBrowser(launcher, (browser) => checkRightClickHollowTiming(browser, engine));
   await withBrowser(launcher, (browser) => checkSecondLoadDoesNotNavigate(browser, engine));
   await withBrowser(launcher, (browser) => checkLoadFailureRetries(browser, engine));
   await withBrowser(launcher, (browser) => checkStickyLayout(browser, engine));
