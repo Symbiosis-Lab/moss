@@ -288,6 +288,52 @@ async function checkRightClickHollowTiming(browser, engine) {
   });
 }
 
+// The collapse-tree scene's pointer must visibly land ON the tree's bottom border (#divider), not
+// merely dispatch a functionally-correct dblclick at it — the two had drifted apart: the real
+// event's coordinates come from a fresh centerOf(el) at press time (driver.js), so it always hit
+// #divider regardless, while the pointer's own glide target was a ONE-TIME reading of #divider's
+// rect taken while the preceding "tree" scene's rows were still mounting (a CSS-driven height
+// change measured at ~140ms), so the dot would glide to and visibly rest at a stale position well
+// above the settled border. Regression guard: once the pointer arrives and stops moving, convert
+// its own on-screen center to the harvested iframe's local coordinate space and assert
+// elementFromPoint there is #divider itself.
+async function checkCollapseTreePointerOnBorder(browser, engine) {
+  await withPage(browser, '/get-started/editor/', { width: 1440, height: 900 }, async (page) => {
+    await waitEditorReady(page);
+    await page.evaluate(() => document.querySelector('moss-scene[name="collapse-tree"] button').click());
+
+    // Wait for the pointer to arrive and hold still (two consecutive polls reading the same
+    // transform) — glideTo commits its final inline transform only once the glide animation
+    // finishes, and it stays put through dwell/press/hold.
+    await page.evaluate(() => { window.__lastPointerT = undefined; });
+    await page.waitForFunction(() => {
+      const pointer = document.querySelector('.moss-stage__pointer');
+      if (pointer.hidden) return false;
+      const t = pointer.style.transform;
+      if (!t) return false;
+      const stable = window.__lastPointerT === t;
+      window.__lastPointerT = t;
+      return stable;
+    }, null, { timeout: await paceBoundMs('collapse-tree') });
+
+    const hit = await page.evaluate(() => {
+      const pointerRect = document.querySelector('.moss-stage__pointer').getBoundingClientRect();
+      const cx = pointerRect.left + pointerRect.width / 2;
+      const cy = pointerRect.top + pointerRect.height / 2;
+      const iframe = document.querySelector('moss-stage iframe');
+      const iframeRect = iframe.getBoundingClientRect();
+      const doc = iframe.contentDocument;
+      const el = doc.elementFromPoint(cx - iframeRect.left, cy - iframeRect.top);
+      return { id: el?.id ?? null, tag: el?.tagName ?? null };
+    });
+    assert(hit.id === 'divider', `[${engine}] the collapse-tree pointer's final position is not on #divider: elementFromPoint found ${JSON.stringify(hit)}`);
+
+    // Let the scene actually finish, and confirm the double-click it dispatched really collapsed
+    // the tree — the pointer landing correctly is not itself proof the gesture worked.
+    await page.waitForFunction(() => document.querySelector('moss-scene[name="collapse-tree"] .moss-scene__verb-text').textContent === 'Play', null, { timeout: await paceBoundMs('collapse-tree') });
+  });
+}
+
 // e. A load whose own scene-JSON fetch is still pending when a second, different scene is
 // explicitly requested must not be able to claw back state once that stale fetch resolves — nor
 // navigate the shared iframe again after a newer load has already finished (stage/README.md, "One
@@ -684,6 +730,7 @@ for (const [engine, launcher] of engines) {
   await withBrowser(launcher, (browser) => checkFixturesFrameDifferentProjects(browser, engine));
   await withBrowser(launcher, (browser) => checkVersionsDiffShowsOwnText(browser, engine));
   await withBrowser(launcher, (browser) => checkRightClickHollowTiming(browser, engine));
+  await withBrowser(launcher, (browser) => checkCollapseTreePointerOnBorder(browser, engine));
   await withBrowser(launcher, (browser) => checkSecondLoadDoesNotNavigate(browser, engine));
   await withBrowser(launcher, (browser) => checkLoadFailureRetries(browser, engine));
   await withBrowser(launcher, (browser) => checkStickyLayout(browser, engine));

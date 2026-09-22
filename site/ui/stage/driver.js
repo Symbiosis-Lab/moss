@@ -130,6 +130,37 @@ async function awaitTarget(resolveTarget, doc, name, signal) {
   }
 }
 
+// A previous step's own effect can still be moving `el` into its final position when THIS step
+// starts: waitForTarget above only confirms the target EXISTS, not that its layout has settled —
+// discovered on the collapse-tree scene, whose target (#divider, the tree's bottom border) exists
+// in the DOM from boot but visibly moves for ~140ms while the preceding "tree" scene's rows mount
+// (measured: an instrumented rect poll against a real build, top drifting ~42px -> ~72px over
+// several frames). glideTo's own getBoundingClientRect() runs ONCE, at the moment this resolves,
+// so a rect read mid-drift sends the pointer to glide toward and visibly rest at a stale position
+// — even though the actual dispatch still lands correctly (dispatchDblClick/dispatchContextMenu
+// call centerOf(el) fresh, at press time, not at glide start). Bounded at RECT_SETTLE_MAX_FRAMES
+// so a target that is (unexpectedly) still moving forever cannot hang playback.
+const RECT_SETTLE_STABLE_FRAMES = 2;
+const RECT_SETTLE_MAX_FRAMES = 20; // ~330ms at 60fps — comfortably past the ~140ms measured above
+function waitForRectStable(el, signal) {
+  return new Promise((resolve) => {
+    let lastKey = null;
+    let stableCount = 0;
+    let frame = 0;
+    function tick() {
+      if (signal?.aborted) { resolve(); return; }
+      const r = el.getBoundingClientRect();
+      const key = `${r.top},${r.left},${r.width},${r.height}`;
+      stableCount = key === lastKey ? stableCount + 1 : 0;
+      lastKey = key;
+      frame += 1;
+      if (stableCount >= RECT_SETTLE_STABLE_FRAMES || frame >= RECT_SETTLE_MAX_FRAMES) { resolve(); return; }
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  });
+}
+
 /**
  * @param {{
  *   frame: HTMLIFrameElement,
@@ -139,6 +170,15 @@ async function awaitTarget(resolveTarget, doc, name, signal) {
  * }} deps
  */
 export function createDriver({ frame, frameWrap, pointerEl, getEditor }) {
+  // `pointerEl` must already be un-hidden when this runs: `hidden` renders as `display:none` (the
+  // UA default, never overridden here), and `offsetWidth` reads 0 for a display:none element — so
+  // calling this while still hidden silently reads `size` as 0 below, which doesn't fail loudly,
+  // it just offsets the glide target by +size/2 in both axes (the pointer's TOP-LEFT corner lands
+  // where its CENTER should have). Found on the collapse-tree scene: confirmed with a temporary
+  // instrumentation dump of this function's own inputs against a real build, size read 0 and the
+  // pointer landed ~9px below-and-right of the tree divider's true center — invisible on a normal
+  // button-sized target (9px inside a much bigger hit box) but enough to miss the divider, only
+  // 12px tall. glideTo (below) now un-hides before calling this.
   function pointerTargetXY(el) {
     const frameRect = frame.getBoundingClientRect();
     const hostRect = frameWrap.getBoundingClientRect();
@@ -179,10 +219,12 @@ export function createDriver({ frame, frameWrap, pointerEl, getEditor }) {
    * instead of racing a separately-tracked duration. Resolves false, without moving the pointer to
    * its target position, if `signal` aborts mid-glide. */
   async function glideTo(el, signal) {
+    // Un-hide before measuring the target (pointerTargetXY's own comment): reading
+    // pointerEl.offsetWidth while still `hidden` (display:none) would read 0.
+    pointerEl.hidden = false;
     const { x, y } = pointerTargetXY(el);
     const from = currentPointerXY();
     const distance = Math.hypot(x - from.x, y - from.y);
-    pointerEl.hidden = false;
     const animation = pointerEl.animate(
       [{ transform: `translate(${from.x}px, ${from.y}px)` }, { transform: `translate(${x}px, ${y}px)` }],
       { duration: travelDurationMs(distance), easing: 'ease-in-out', fill: 'forwards' },
@@ -331,6 +373,11 @@ export function createDriver({ frame, frameWrap, pointerEl, getEditor }) {
       dispatch?.(el);
       return true;
     }
+    // The target exists (waitForTarget/awaitTarget above), but a previous step's own effect may
+    // still be moving it into its final position (waitForRectStable's own comment) — settle
+    // before glideTo takes its one-time reading of where to send the pointer.
+    await waitForRectStable(el, signal);
+    if (signal?.aborted) { hidePointer(); return false; }
     const arrived = await glideTo(el, signal);
     if (!arrived) { hidePointer(); return false; }
     if (!(await dwell(button, signal))) { hidePointer(); return false; }
