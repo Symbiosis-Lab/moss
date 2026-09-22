@@ -25,3 +25,4 @@ pub mod analytics;
 // `.moss/state.toml`'s `[deployment]` writers (2026-09-07, track C4b): what a
 // publish records, written the same way from either binary.
 pub mod deployment_state;
+pub mod synced_siblings;

@@ -722,7 +722,9 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // allow:raw_write `.moss` itself; the regenerable tree starts below it
     std::fs::create_dir_all(&moss_dir_path).map_err(|e| format!("Failed to create .moss directory: {}", e))?;
     // Before the tree is marked or held: the split layout is what both assume.
-    crate::build::lifecycle::tree_migration::migrate_build_tree(&crate::moss_paths::MossPaths::from_moss_dir(moss_dir_path.to_path_buf()));
+    let paths_at_start = crate::moss_paths::MossPaths::from_moss_dir(moss_dir_path.to_path_buf());
+    crate::build::lifecycle::tree_migration::migrate_build_tree(&paths_at_start);
+    crate::vault::synced_siblings::reconcile_synced_state(&paths_at_start);
     crate::infra::moss_paths::exclude_dirs_from_cloud_sync(&moss_dir_path); // regenerable output: keep it out of iCloud, and out of the set moss waits for
     // Hold `.moss/build.nosync` by fd from here so a cloud sync client's rename-aside
     // mid-build cannot silently move where `build_dir()` reads or writes.
