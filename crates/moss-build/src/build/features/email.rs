@@ -164,7 +164,8 @@ pub fn site_audience_list(
 /// build resolved for the site; readers that must answer without a build
 /// decide their own fallback.
 pub fn read_site_languages(project_root: &std::path::Path) -> Option<Vec<EmailAudience>> {
-    let raw = std::fs::read_to_string(project_root.join(".moss/build/site-languages.json")).ok()?;
+    let path = crate::moss_paths::MossPaths::new(project_root).build_dir().join("site-languages.json");
+    let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str::<Vec<EmailAudience>>(&raw).ok().filter(|list| !list.is_empty())
 }
 

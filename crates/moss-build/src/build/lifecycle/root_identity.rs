@@ -17,7 +17,7 @@
 //! build start, after the ship (promoted, superseded or withheld alike), when
 //! the preview server adopts a tree, and on a preview 404.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// A directory's on-disk identity: the device and inode `stat` reports for
 /// it, on the platforms where that means something. `None` on a platform
@@ -44,6 +44,84 @@ fn stat_identity(path: &Path) -> Option<RootIdentity> {
 #[cfg(not(unix))]
 fn stat_identity(_path: &Path) -> Option<RootIdentity> {
     None
+}
+
+/// An owned directory handle for the build root, opened once at build start.
+/// From then on, [`BuildRootHandle::current_path`] answers "where is the
+/// root now" from the open descriptor instead of a fresh `stat` by path — a
+/// cloud sync client's rename-aside changes what NAME resolves to the
+/// directory, never what the descriptor itself points at.
+///
+/// `open` returns `Err(Unsupported)` on any non-unix platform (there is no
+/// equivalent of `O_DIRECTORY` + `F_GETPATH`/`/proc/self/fd` to hold this
+/// with), and every caller falls back to resolving by path in that case,
+/// exactly as it did before this type existed. A `File` is `Send + Sync`, so
+/// this is too — nothing to derive.
+pub(crate) struct BuildRootHandle {
+    dir: std::fs::File,
+}
+
+impl BuildRootHandle {
+    /// Open `path` (`.moss/build`) as a directory file descriptor.
+    #[cfg(unix)]
+    pub(crate) fn open(path: &Path) -> std::io::Result<Self> {
+        use std::fs::OpenOptions;
+        use std::os::unix::fs::OpenOptionsExt;
+        // allow:raw_write read-only (O_DIRECTORY, no O_CREAT/O_TRUNC/O_WRONLY) — nothing is written
+        let dir = OpenOptions::new().read(true).custom_flags(libc::O_DIRECTORY).open(path)?;
+        Ok(Self { dir })
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn open(_path: &Path) -> std::io::Result<Self> {
+        Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+    }
+
+    /// The handle's identity straight from the open descriptor (`fstat`, not
+    /// a fresh `stat` by path) — stable across any rename of the directory.
+    #[cfg(unix)]
+    pub(crate) fn identity(&self) -> Option<RootIdentity> {
+        use std::os::unix::fs::MetadataExt;
+        let meta = self.dir.metadata().ok()?;
+        Some(RootIdentity { dev: meta.dev(), ino: meta.ino() })
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn identity(&self) -> Option<RootIdentity> {
+        None
+    }
+
+    /// Where the handle's directory lives right now. `F_GETPATH` on macOS;
+    /// `/proc/self/fd/<n>` on Linux — measured this session that macOS's
+    /// `/dev/fd/<n>/…` child traversal does NOT work here (ENOENT), so this
+    /// re-resolves a fresh absolute path instead of relying on that.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn current_path(&self) -> std::io::Result<PathBuf> {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::io::AsRawFd;
+        let mut buf = [0u8; libc::PATH_MAX as usize];
+        // SAFETY: `self.dir`'s fd is valid for the duration of this call, and
+        // `buf` is exactly `PATH_MAX` bytes — the size F_GETPATH requires.
+        let rc = unsafe {
+            libc::fcntl(self.dir.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr() as *mut libc::c_char)
+        };
+        if rc == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        Ok(PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..len])))
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    pub(crate) fn current_path(&self) -> std::io::Result<PathBuf> {
+        use std::os::unix::io::AsRawFd;
+        std::fs::read_link(format!("/proc/self/fd/{}", self.dir.as_raw_fd()))
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn current_path(&self) -> std::io::Result<PathBuf> {
+        Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+    }
 }
 
 /// One look at the build root: its identity, how many renamed-aside siblings
@@ -178,6 +256,38 @@ mod tests {
 
         let line = format_build_root("ship", &after, Some(before.identity != after.identity));
         assert!(line.contains("swapped=true"), "{line}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn handle_survives_a_rename_aside_and_finds_the_renamed_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Canonicalize: on macOS `TMPDIR` is itself a symlink
+        // (`/var` → `/private/var`), and `F_GETPATH` reports the resolved
+        // form — comparing against the unresolved `tmp.path()` would fail on
+        // that alone, independent of anything this test means to check.
+        let tmp_root = tmp.path().canonicalize().unwrap();
+        let build = tmp_root.join("build");
+        std::fs::create_dir(&build).unwrap();
+        let handle = BuildRootHandle::open(&build).unwrap();
+        let before = handle.identity();
+        assert!(before.is_some());
+
+        // The rename a cloud sync client makes: the held directory keeps its
+        // inode under a new name, and a fresh directory takes the old one.
+        let renamed = tmp_root.join("build 2");
+        std::fs::rename(&build, &renamed).unwrap();
+        std::fs::create_dir(&build).unwrap();
+
+        assert_eq!(handle.identity(), before, "the open descriptor still names the same directory");
+        let current = handle.current_path().unwrap();
+        assert_eq!(current, renamed, "current_path must report the renamed directory, not the decoy");
+
+        // A write through the re-resolved path must land in the held
+        // (renamed) directory, never the decoy moss recreated at the old name.
+        std::fs::write(current.join("proof.txt"), b"held").unwrap();
+        assert!(renamed.join("proof.txt").exists());
+        assert!(!build.join("proof.txt").exists());
     }
 
     #[test]

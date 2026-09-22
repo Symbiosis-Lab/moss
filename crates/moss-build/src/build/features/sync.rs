@@ -274,10 +274,7 @@ fn run_native_process_sync(
     let mut stats = SyncStats::default();
     let mut advisories: Vec<crate::advisory::Advisory> = Vec::new();
 
-    let article_map_path = Path::new(folder_path)
-        .join(".moss")
-        .join("build")
-        .join("article-map.json");
+    let article_map_path = crate::moss_paths::MossPaths::new(Path::new(folder_path)).article_map();
     if !article_map_path.exists() {
         log::debug!(target: "sync", "no article-map.json yet — nothing to sync");
         return (stats, advisories);

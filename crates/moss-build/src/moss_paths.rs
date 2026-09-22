@@ -338,46 +338,57 @@ impl MossPaths {
     ///
     /// Safe to delete for a clean rebuild. This is the only large directory;
     /// everything else in `.moss/` is small.
+    ///
+    /// Answers from a held [`crate::build::lifecycle::open_build_root_handle`]
+    /// handle when this folder's build has one open — resolved from the
+    /// directory's file descriptor, not a fresh `stat` by this joined path —
+    /// so a cloud sync client's rename-aside mid-build cannot silently move
+    /// where every accessor built on this method reads or writes. Falls back
+    /// to the joined path with no handle open (no build has started one yet,
+    /// or the platform cannot).
     pub fn build_dir(&self) -> PathBuf {
+        if let Some(held) = crate::build::lifecycle::held_build_root_path(&self.root) {
+            return held;
+        }
         self.root.join("build")
     }
 
     /// `.moss/build/cache/` — content-addressed object store.
     pub fn cache_dir(&self) -> PathBuf {
-        self.root.join("build").join("cache")
+        self.build_dir().join("cache")
     }
 
     /// `.moss/build/cache/objects/` — hashed file blobs.
     pub fn cache_objects(&self) -> PathBuf {
-        self.root.join("build").join("cache").join("objects")
+        self.cache_dir().join("objects")
     }
 
     /// `.moss/build/cache/transforms/` — source→output mappings.
     pub fn cache_transforms(&self) -> PathBuf {
-        self.root.join("build").join("cache").join("transforms")
+        self.cache_dir().join("transforms")
     }
 
     /// `.moss/build/cache/tmp/` — temporary files during conversion.
     pub fn cache_tmp(&self) -> PathBuf {
-        self.root.join("build").join("cache").join("tmp")
+        self.cache_dir().join("tmp")
     }
 
     /// `.moss/build/cache/hash-index.json` — fast-path cache validation index.
     pub fn cache_hash_index(&self) -> PathBuf {
-        self.root.join("build").join("cache").join("hash-index.json")
+        self.cache_dir().join("hash-index.json")
     }
 
     /// `.moss/build/cache/dep-cache.json` — per-page facade fingerprints from
     /// the previous build (moss#922 Stage 4), keyed by source path.
     pub fn cache_dep_graph(&self) -> PathBuf {
-        self.root.join("build").join("cache").join("dep-cache.json")
+        self.cache_dir().join("dep-cache.json")
     }
 
     /// `.moss/build/cache/frontmatter-scan.json` — per-file `url:`/`external_url:`
     /// frontmatter extraction, keyed by source path, so an unchanged markdown
     /// file's page-map pre-scan is not re-read and re-parsed on every build.
     pub fn cache_frontmatter_scan(&self) -> PathBuf {
-        self.root.join("build").join("cache").join("frontmatter-scan.json")
+        self.cache_dir().join("frontmatter-scan.json")
     }
 
     /// `.moss/build/cache/folder-lang.json` — per-folder inferred language
@@ -387,17 +398,17 @@ impl MossPaths {
     /// content — an edit to one file's body must never move the folder's
     /// language, only adding/removing a file may.
     pub fn cache_folder_lang(&self) -> PathBuf {
-        self.root.join("build").join("cache").join("folder-lang.json")
+        self.cache_dir().join("folder-lang.json")
     }
 
     /// `.moss/build/cache/link-meta/` — cached og:tag metadata for external links.
     pub fn cache_link_meta(&self) -> PathBuf {
-        self.root.join("build").join("cache").join("link-meta")
+        self.cache_dir().join("link-meta")
     }
 
     /// `.moss/build/cache/videos/` — legacy video cache (pre-CAS migration).
     pub fn cache_videos_legacy(&self) -> PathBuf {
-        self.root.join("build").join("cache").join("videos")
+        self.cache_dir().join("videos")
     }
 
     /// `.moss/build/cache/manifest-hash-memo.json` — `oid -> xxh3` memo for
@@ -407,7 +418,7 @@ impl MossPaths {
     /// under `cache/`, which is already `ExcludedRegenerable` and outside
     /// every staging/deploy sweep.
     pub fn cache_manifest_hash_memo(&self) -> PathBuf {
-        self.root.join("build").join("cache").join("manifest-hash-memo.json")
+        self.cache_dir().join("manifest-hash-memo.json")
     }
 
     /// `.moss/build/index/` — holding area for the search bundle (ADR-045).
@@ -419,7 +430,7 @@ impl MossPaths {
     /// copies the receipt's files in and registers them — never by the lane
     /// writing into the swept tree behind the manifest's back.
     pub fn index_dir(&self) -> PathBuf {
-        self.root.join("build").join("index")
+        self.build_dir().join("index")
     }
 
     /// `.moss/build/index/receipt.json` — the page-set fingerprint the lane
@@ -436,7 +447,7 @@ impl MossPaths {
     /// server points here during builds. After build completes, staging is
     /// strip-copied to `site/` for deployment.
     pub fn staging_dir(&self) -> PathBuf {
-        self.root.join("build").join("staging")
+        self.build_dir().join("staging")
     }
 
     /// `.moss/build/current.generation` — text marker naming the current generation id.
@@ -449,7 +460,7 @@ impl MossPaths {
     /// Each completed build is sealed as an immutable generation directory here.
     /// The `current` symlink points to the active generation.
     pub fn generations_dir(&self) -> PathBuf {
-        self.root.join("build").join("generations")
+        self.build_dir().join("generations")
     }
 
     /// `.moss/build/generations/<gen_id>/` — a single sealed generation.
@@ -462,7 +473,7 @@ impl MossPaths {
     /// Always points to an absolute path inside `generations/`. Replaced
     /// atomically via `set_current_ptr`.
     pub fn current_ptr(&self) -> PathBuf {
-        self.root.join("build").join("current")
+        self.build_dir().join("current")
     }
 
     /// Atomically replace `.moss/build/current` → `generations/<gen_id>/`.
@@ -554,7 +565,7 @@ impl MossPaths {
     /// and builder fingerprints. Enables incremental builds and smart preview
     /// refresh.
     pub fn hashes(&self) -> PathBuf {
-        self.root.join("build").join("hashes.json")
+        self.build_dir().join("hashes.json")
     }
 
     /// `.moss/build/article-map.json` — content index.
@@ -562,14 +573,14 @@ impl MossPaths {
     /// Maps URL paths to article metadata (title, content, frontmatter, tags).
     /// Used by syndication plugins, RSS generation, and search.
     pub fn article_map(&self) -> PathBuf {
-        self.root.join("build").join("article-map.json")
+        self.build_dir().join("article-map.json")
     }
 
     /// `.moss/build/profile.jsonl` — build performance metrics.
     ///
     /// One JSON line per build with step-level timing data.
     pub fn profile(&self) -> PathBuf {
-        self.root.join("build").join("profile.jsonl")
+        self.build_dir().join("profile.jsonl")
     }
 
     /// Read the id of the current promoted generation from the marker file.
@@ -902,14 +913,21 @@ pub fn is_materialized_rel(rel: &str) -> bool {
 /// a user could act on. Idempotent — three `remove_dir_all` calls returning
 /// `NotFound` once migrated — and unix-gated only around `current`, which on
 /// Windows is a real directory by design.
-pub fn retire_legacy_roots(moss_root: &std::path::Path) {
-    for legacy in [moss_root.join("cache"), moss_root.join("site"), moss_root.join("build/site")] {
+///
+/// Takes `&MossPaths`, not a bare path: `build/site` and `build/current` sit
+/// under the live build root, so they route through `build_dir()` like every
+/// other build-owned path — a hand-joined `moss_root.join("build/…")` here
+/// would keep targeting the decoy after a cloud sync client's rename-aside,
+/// same as the accessors above before this fix.
+pub fn retire_legacy_roots(mp: &MossPaths) {
+    let moss_root = mp.root();
+    for legacy in [moss_root.join("cache"), moss_root.join("site"), mp.build_dir().join("site")] {
         // allow:unlink retired output roots that no build writes or serves
         let _ = crate::build::io_utils::remove_output_dir_all(&legacy);
     }
     #[cfg(unix)]
     {
-        let current = moss_root.join("build/current");
+        let current = mp.current_ptr();
         // `symlink_metadata`, not `is_dir`: the live form is a symlink TO a
         // directory, and following it would delete the generation.
         if matches!(std::fs::symlink_metadata(&current), Ok(m) if m.is_dir()) {
@@ -1294,12 +1312,12 @@ mod tests {
         std::fs::create_dir_all(root.join("build/current")).unwrap();
         std::fs::write(root.join("build/current/index.html"), b"<h1>five weeks old</h1>").unwrap();
 
-        retire_legacy_roots(root);
+        retire_legacy_roots(&mp);
 
         for legacy in ["cache", "site", "build/site", "build/current"] {
             assert!(!root.join(legacy).exists(), "{legacy} must be gone");
         }
-        retire_legacy_roots(root); // idempotent: the next build finds nothing
+        retire_legacy_roots(&mp); // idempotent: the next build finds nothing
 
         // A live `current` is a symlink TO a directory. Following it would
         // delete the generation this very preview is serving.
@@ -1307,7 +1325,7 @@ mod tests {
         std::fs::create_dir_all(&gen).unwrap();
         std::fs::write(gen.join("index.html"), b"<h1>live</h1>").unwrap();
         mp.set_current_ptr("abc").unwrap();
-        retire_legacy_roots(root);
+        retire_legacy_roots(&mp);
         assert!(
             mp.current_ptr().join("index.html").exists(),
             "the served generation must survive the pass that removes the legacy form"

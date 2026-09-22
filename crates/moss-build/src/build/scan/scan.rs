@@ -935,8 +935,11 @@ pub fn scan_folder_with_dedup_emit(
     // Avoids ~5-10s download on builds with no video files (Task 4).
     let ffmpeg_cell: OnceCell<Option<FFmpegManager>> = OnceCell::new();
 
-    // Set up cache infrastructure (derived from folder_path).
-    let moss_cache_dir = path.join(".moss").join("build").join("cache");
+    // Set up cache infrastructure (derived from folder_path). Through
+    // `MossPaths::cache_dir()`, not a bare join: it must follow the same held
+    // build-root handle every other cache accessor does, or a cloud sync
+    // client's rename-aside mid-build sends the object store to the decoy.
+    let moss_cache_dir = crate::moss_paths::MossPaths::new(path).cache_dir();
     let hash_index_path = moss_cache_dir.join("hash-index.json");
     let old_index = HashIndex::load(&hash_index_path);
     let mut new_index = HashIndex::new();

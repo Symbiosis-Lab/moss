@@ -46,6 +46,15 @@ struct FolderLifecycle {
     encode_writers: usize,
     /// A [`CacheGcToken`] is out.
     gc_running: bool,
+    /// This build's handle on `.moss/build`, opened by
+    /// [`open_build_root_handle`] once at build start. `MossPaths::build_dir()`
+    /// answers from it, through [`held_build_root_path`], for every
+    /// `MossPaths` built from this folder's root — not just the instance that
+    /// opened it — so a cloud sync client's rename-aside mid-build stops
+    /// silently retargeting every accessor built on `build_dir()`. `None`
+    /// before a build opens one, and forever on a platform
+    /// [`root_identity::BuildRootHandle::open`] cannot support.
+    build_root_handle: Option<Arc<root_identity::BuildRootHandle>>,
 }
 
 /// One folder's record. Leases, permits and seal tails hold it, which is what
@@ -77,10 +86,20 @@ static RECORDS: LazyLock<Mutex<HashMap<PathBuf, Arc<LifecycleCell>>>> =
 /// evicting it would hand the next lookup a fresh record with no leases, and a
 /// build would then read "nobody else is writing" while someone is.
 pub(crate) fn lock_for(mp: &MossPaths) -> Arc<LifecycleCell> {
-    let mut records = RECORDS.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(record) = records.get(mp.root()) {
-        return record.clone();
+    {
+        let records = RECORDS.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(record) = records.get(mp.root()) {
+            return record.clone();
+        }
     }
+    // RECORDS is unlocked from here to the re-lock below. `cache_tmp()`
+    // derives from `build_dir()`, which (via `held_build_root_path`) reads
+    // this very registry for whichever folder it's asked about — nesting
+    // that read under the lock above would be this thread trying to lock a
+    // non-reentrant `Mutex` it already holds: a guaranteed self-deadlock, not
+    // a wait. The gap this opens (two first-lookups of the same new folder
+    // racing to insert) is closed by the second `records.get` below.
+    //
     // The first lookup of a folder in this process comes before anything here
     // writes its scratch, so what `cache/tmp` holds is a dead process's.
     static SCRATCH_CLEARED: LazyLock<Mutex<std::collections::HashSet<PathBuf>>> =
@@ -88,10 +107,61 @@ pub(crate) fn lock_for(mp: &MossPaths) -> Arc<LifecycleCell> {
     if SCRATCH_CLEARED.lock().unwrap_or_else(PoisonError::into_inner).insert(mp.root().to_path_buf()) {
         crate::build::io_utils::clear_scratch(&mp.cache_tmp());
     }
+    let mut records = RECORDS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(record) = records.get(mp.root()) {
+        return record.clone();
+    }
     records.retain(|_, record| Arc::strong_count(record) > 1);
     let record = Arc::new(LifecycleCell::default());
     records.insert(mp.root().to_path_buf(), record.clone());
     record
+}
+
+/// Open a handle on `mp`'s `.moss/build` and make it the answer every
+/// `MossPaths` for this folder's `build_dir()` gives from now on. Opens by
+/// the plain joined path, deliberately not through `build_dir()` itself — a
+/// build must look at whatever is actually at the canonical location right
+/// now, not wherever an EARLIER build's handle (if one is still installed)
+/// last resolved to.
+///
+/// Best-effort: a platform (or filesystem) [`root_identity::BuildRootHandle::open`]
+/// cannot open falls back to today's by-path resolution, logged once so a
+/// swap it then cannot see is not a silent failure.
+pub(crate) fn open_build_root_handle(mp: &MossPaths) {
+    let joined = mp.root().join("build");
+    match root_identity::BuildRootHandle::open(&joined) {
+        Ok(handle) => lock_for(mp).state().build_root_handle = Some(Arc::new(handle)),
+        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => {}
+        Err(e) => log::warn!(
+            "build root handle: could not open {} — falling back to path-based resolution: {e}",
+            joined.display()
+        ),
+    }
+}
+
+/// The build root's current path, from a handle already held for `root` (a
+/// `.moss` directory) — `None` when no build for this folder has opened one
+/// yet, which tells `MossPaths::build_dir()` to fall back to the joined
+/// path. A plain lookup, not `lock_for`: inserting a fresh, handle-less
+/// record for every folder a caller merely asks about would leak one per
+/// distinct path a curious reader ever passed in.
+pub(crate) fn held_build_root_path(root: &Path) -> Option<PathBuf> {
+    let handle = {
+        let records = RECORDS.lock().unwrap_or_else(PoisonError::into_inner);
+        let found = records.get(root)?.state().build_root_handle.clone();
+        found?
+    };
+    match handle.current_path() {
+        Ok(path) => Some(path),
+        // Once, not per call: `build_dir()` runs thousands of times a build.
+        Err(e) => {
+            static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                log::warn!("build root handle open for {} but current_path() failed — falling back to the joined path: {e}", root.display());
+            }
+            None
+        }
+    }
 }
 
 fn point(cell: &ServedCell, to: &Path) -> bool {
@@ -111,7 +181,7 @@ fn read(cell: &ServedCell) -> PathBuf {
 pub(crate) fn adopt_server(mp: &MossPaths, cell: &ServedCell) {
     let target = mp.initial_serve_dir();
     let build_dir = mp.build_dir();
-    root_identity::log_build_root(&build_dir, "serve", None);
+    root_identity::log_build_root(&mp.root().join("build"), "serve", None);
     let record = lock_for(mp);
     let mut st = record.state();
     st.served = Some(cell.clone());

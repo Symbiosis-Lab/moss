@@ -516,10 +516,8 @@ fn collect_native_slots_for_documents(
         // (docs/archive/2026-08-31-site-lang-derived-state.md).
         let sections =
             crate::build::features::email::site_audience_list(Some(site_lang), &pages);
-        let meta_path = Path::new(folder_path)
-            .join(".moss")
-            .join("build")
-            .join("site-languages.json");
+        let meta_path =
+            crate::moss_paths::MossPaths::new(Path::new(folder_path)).build_dir().join("site-languages.json");
         if let Ok(json) = serde_json::to_string(&sections) {
             let _ = crate::build::io_utils::write_output(&meta_path, json.as_bytes());
         }
@@ -541,10 +539,7 @@ fn collect_native_slots_for_documents(
         return crate::build::enhance::ResolvedSlots::empty();
     }
 
-    let article_map_path = Path::new(folder_path)
-        .join(".moss")
-        .join("build")
-        .join("article-map.json");
+    let article_map_path = crate::moss_paths::MossPaths::new(Path::new(folder_path)).article_map();
     let native_article_map = load_article_map_for_features(&article_map_path);
     let domain = cached_domain_config.domain.clone();
     let media_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(
@@ -727,8 +722,11 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // allow:raw_write `.moss` itself; the regenerable tree starts below it
     std::fs::create_dir_all(&moss_dir_path).map_err(|e| format!("Failed to create .moss directory: {}", e))?;
     crate::infra::moss_paths::exclude_dirs_from_cloud_sync(&moss_dir_path); // regenerable output: keep it out of iCloud, and out of the set moss waits for
+    // Hold `.moss/build` by fd from here so a cloud sync client's rename-aside
+    // mid-build cannot silently move where `build_dir()` reads or writes.
+    crate::build::lifecycle::open_build_root_handle(&lifecycle_paths);
     // This build's root identity, to compare against later phases.
-    let start_identity = crate::build::lifecycle::root_identity::log_build_root(&lifecycle_paths.build_dir(), "start", None);
+    let start_identity = crate::build::lifecycle::root_identity::log_build_root(&lifecycle_paths.root().join("build"), "start", None);
 
     // Begin a fresh link-meta URL session for this build. Render fills the
     // session via `record_urls_for_prewarm`; we flush it just before spawning
@@ -795,7 +793,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     crate::build::manifest::live_baseline::migrate(&crate::moss_paths::MossPaths::new(
         config.source(),
     ));
-    crate::infra::moss_paths::retire_legacy_roots(&moss_dir_path);
+    crate::infra::moss_paths::retire_legacy_roots(&lifecycle_paths);
 
     // Keep this project's coding-agent guidance current — see `SYNC_TRIGGERS`.
     let full_build = matches!(config.trigger, BuildTrigger::Full);
@@ -1960,8 +1958,9 @@ async fn advertise_sealed(
         Ok(Promotion::Withheld(_)) => {}
         Err(_) => log::error!("advertise_sealed: materialize failed — current_ptr stays put"),
     }
-    // Did the root move under this ship?
-    crate::build::lifecycle::root_identity::log_build_root(&mp.build_dir(), "ship", guards.build_root_identity);
+    // Observed at the plain path on purpose: `build_dir()` follows the handle,
+    // so it can never disagree with the start identity.
+    crate::build::lifecycle::root_identity::log_build_root(&mp.root().join("build"), "ship", guards.build_root_identity);
     let mat_ok = matches!(promotion, Ok(Promotion::Promoted));
     let owns_shared = crate::build::ship::tail_owns_shared_state(&promotion);
 
