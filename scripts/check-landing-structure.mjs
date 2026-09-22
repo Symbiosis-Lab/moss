@@ -63,12 +63,21 @@ const BASELINE = {
   // reassigning it directly), simArmed (arming without activating), and
   // paperPixelsCache (the hoisted, memoized noise buffer) -- five real
   // bindings for a real restoration, not five ways to say the same thing.
-  topLevelLets: 86,
+  // 86 -> 87 (2026-09-22): e14c2f0f added mobileMount/mobileLiveScene/
+  // mobileBridge (89) without updating this baseline; consolidating them
+  // into one `mob` record brings it to 87, still below that unrecorded high.
+  topLevelLets: 87,
   // Rose 14 -> 15 on 2026-09-21: the last scene's rest is a floor, not a point,
   // so a visitor can reach the footer on a short window. It is written as one
   // comparison against SHARE in the desktop drive. The scene table pays this
   // back: a floor rest becomes a property of the scene, not a literal here.
-  sceneComparisons: 15,
+  // Fell 15 -> 11 (unit7-scroll-and-flicker-spec.md part A): the mobile
+  // presenter moved from pour() to renderMorphAt, so the mobileLayout()-gated
+  // logo-solid trigger and the mobile cell-transform's size/sizeProgress
+  // formula inside pour() were dead the moment mobile stopped calling it --
+  // 4 of this count's own `to === DEPLOY`/`from === DEPLOY` comparisons,
+  // deleted with them rather than left to read as live.
+  sceneComparisons: 11,
   // Unit 0a: rose again -- the mobile header band's fix (one shared
   // body::before band interpolating colour through --xf instead of two
   // separate .brand/.language-picker background boxes) added net new
@@ -198,7 +207,11 @@ const BASELINE = {
   // off instrumentation for verifying any of it without a sampler race.
   // Real, requested restoration and its own verification, not bloat.
   // +443 on 2026-09-21: the TITLE_WASH gate and its comment; the wash pops on the first tick after idle.
-  scriptBytes: 264916,
+  // 264916 -> 276392 (2026-09-22): e14c2f0f's renderMorphAt/mountLeg/
+  // showMobileScene left this unrecorded at 274239; the mob-record
+  // consolidation (real new logic plus its own explanatory comments)
+  // brings it to 276392.
+  scriptBytes: 276392,
 };
 
 function countWindowAssignments(text) {

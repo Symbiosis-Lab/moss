@@ -2080,18 +2080,36 @@ function publishBridge(from, to, prints) {
 // because p starts each leg at 0 and the previous leg's own p ended at 1,
 // that is always a moment cover is already ~0 -- the one place a freshly
 // reset, blank simulation frame is invisible.
-let mobileMount = { from: -1, to: -1, pr: null };
-let mobileLiveScene = -1;
-let mobileBridge = null;
-const mobilePigment = { t: 0, drawn: -1 };
+// One record for everything the mobile presenter needs to persist across
+// frames -- pour()'s own equivalents (liveScene, the pigment clock) were
+// local to one promise; this outlives any single call, so it has to live
+// somewhere, and a single typed record beats a handful of scattered
+// top-level lets for the same reason it would anywhere else in this file.
+// t/drawn are advanceWash's own state shape, passed straight through.
+let mob = {
+  from: -1, to: -1, pr: null,          // the mounted leg, or pr: null while its prints are still missing
+  scene: -1,                            // showUnderCover's mobile twin: which side of the leg is live
+  bridge: null,                         // the Publish bridge clone; non-null only on the SHIPS<->DEPLOY leg
+  settled: true,                        // caught up to this frame's goal, or nothing to catch up (cut)
+  lastCover: -1, drawnT: -1, fanSolid: false,   // last-written values, so an unchanged frame writes nothing
+  t: 0, drawn: -1,
+};
 // Mounts the leg's canvas if its prints are both on hand, or records the
-// cut (mobileMount.pr stays null) if not. Callable every frame regardless
-// of which happened last time: a leg that cut for missing prints upgrades
-// to a real mount the moment they arrive, rather than staying a cut for
-// the rest of the leg -- a fast cold-load scroll can easily outrun capture
-// for one frame and not the next.
+// cut (mob.pr stays null) if not. Callable every frame regardless of which
+// happened last time: a leg that cut for missing prints upgrades to a real
+// mount the moment they arrive, rather than staying a cut for the rest of
+// the leg -- a fast cold-load scroll can easily outrun capture for one
+// frame and not the next.
 function mountLeg(from, to) {
-  if (!sheets[from] || !sheets[to]) { mobileMount = { from, to, pr: null }; return; }
+  if (!sheets[from] || !sheets[to]) {
+    // A cut mount still leaves the previous leg's bridge behind if it had
+    // one (found while consolidating mob: the pre-consolidation version had
+    // the same gap) -- only the SHIPS<->DEPLOY pair ever has one, so this
+    // only ever fires on the rare cut immediately after leaving it.
+    mob.bridge?.remove();
+    mob = { ...mob, from, to, pr: null, bridge: null };
+    return;
+  }
   if (from === SHIPS && s3Touched) {
     for (const id of S3_ORDER) stopCard(id);
     // Fire-and-forget: unlike pour(), this frame cannot await a fresh
@@ -2104,13 +2122,13 @@ function mountLeg(from, to) {
     capture(SHIPS).then((print) => { sheets[SHIPS] = print; }).catch((error) => console.warn('scene 3 outgoing print:', error.message));
   }
   const pr = { [from]: sheets[from], [to]: sheets[to] };
-  mobileBridge?.remove();
-  mobileBridge = publishBridge(from, to, pr);
-  mobileBridge?.draw(0);
+  mob.bridge?.remove();
+  const bridge = publishBridge(from, to, pr);
+  bridge?.draw(0);
   holdCanvas(pr[from], pr[to], from, to > from, true);
   if (from === SHIPS) { sketchVisible(false); videoActive(false); }
-  mobileMount = { from, to, pr };
-  mobilePigment.t = 0; mobilePigment.drawn = -1;
+  if (mob.fanSolid) { fanEl.style.filter = ''; fanEl.style.zIndex = ''; }
+  mob = { ...mob, from, to, pr, bridge, t: 0, drawn: -1, lastCover: -1, drawnT: -1, fanSolid: false };
 }
 // showUnderCover's mobile twin, module-level because the mount it tracks
 // now outlives any one frame. Also the one place `shown` is written for
@@ -2118,23 +2136,23 @@ function mountLeg(from, to) {
 // the Publish/video visibility) reads shown as "what the reader is
 // currently looking at", which is exactly what this switch decides.
 function showMobileScene(scene) {
-  if (scene === mobileLiveScene) return;
+  if (scene === mob.scene) return;
   snapStage();
   sceneClasses(scene);
   groundAt(scene);
-  if (!(mobileBridge && scene === DEPLOY)) scenes(PHASE[scene]);
+  if (!(mob.bridge && scene === DEPLOY)) scenes(PHASE[scene]);
   if (scene === SHIPS) { sketchVisible(false); videoActive(false); }
-  mobileLiveScene = scene;
+  mob.scene = scene;
   shown = scene;
   wentStale();
 }
 function renderMorphAt(progress) {
   const from = Math.max(0, Math.min(SHIPS, Math.floor(progress))), to = from + 1;
   const p = clamp01(progress - from);
-  if (from !== mobileMount.from || to !== mobileMount.to) {
-    passThrough(mobileLiveScene === -1 ? from : mobileLiveScene, from);
+  if (from !== mob.from || to !== mob.to) {
+    passThrough(mob.scene === -1 ? from : mob.scene, from);
     mountLeg(from, to);
-  } else if (!mobileMount.pr) {
+  } else if (!mob.pr) {
     mountLeg(from, to);   // retry: a print an earlier cut was missing may have arrived since
   }
   // driving/running() exists so the ambient warmer (fillPrints, retakeShown)
@@ -2143,24 +2161,24 @@ function renderMorphAt(progress) {
   // maybeJoin it calls is what's gated, not the assignment), so this leaves
   // that global alone rather than fighting it over a second meaning. Nothing
   // else here reads it: shown, updated below, is the whole visible state.
-  if (!mobileMount.pr) {
+  if (!mob.pr) {
     // Still cut (a fast cold-load scroll outrunning capture): a wash with
     // nothing to reach is a jump straight to the far end, the same rule
     // runJoin's own reach !== shown cut takes. The same latch as the
     // mounted path below, not a bare p <= 0.45 -- retrying every frame
-    // while cut means this runs every frame too, and without the
-    // mobileLiveScene deadband a p oscillating across 0.45 while the
-    // reader merely holds still flips back and forth on nothing (measured:
-    // dataset.scene visiting 2,1,2,3,2 while still waiting on SHIPS's
-    // print). driving stays whatever it was: there is no simulation
-    // running to protect here, and this state must never block the very
-    // capture that resolves it.
-    showMobileScene(mobileLiveScene === from ? (p >= 0.55 ? to : from) : (p <= 0.45 ? from : to));
+    // while cut means this runs every frame too, and without the mob.scene
+    // deadband a p oscillating across 0.45 while the reader merely holds
+    // still flips back and forth on nothing (measured: dataset.scene
+    // visiting 2,1,2,3,2 while still waiting on SHIPS's print). driving
+    // stays whatever it was: there is no simulation running to protect
+    // here, and this state must never block the very capture that resolves it.
+    showMobileScene(mob.scene === from ? (p >= 0.55 ? to : from) : (p <= 0.45 ? from : to));
+    mob.settled = false;   // keep retrying: a print may still arrive with no further scroll
     return;
   }
   const stir = Math.min(2, 3 * Math.abs(scrollV)), tilt = -0.35 * Math.max(-1.2, Math.min(1.2, scrollV));
-  const advanced = advanceWash(sim, mobilePigment, { goal: T_TOTAL * p, fwd: true, stir, tilt, relift: 0 }, () => {});
-  const t = mobilePigment.t;
+  const advanced = advanceWash(sim, mob, { goal: T_TOTAL * p, fwd: true, stir, tilt, relift: 0 }, () => {});
+  const t = mob.t;
   washT = t; steps += advanced.count;
   // True only while the pigment sim is still stepping toward this frame's
   // goal -- not shown !== target, which is almost always true (target is
@@ -2168,23 +2186,33 @@ function renderMorphAt(progress) {
   // caughtUp false for more than a frame or two would itself starve the
   // warmer the way an always-true driving did before this.
   driving = !advanced.caughtUp;
+  mob.settled = advanced.caughtUp;
   const cover = Math.min(smooth(0, .35, p), 1 - smooth(.82, 1, p));
-  stage.style.setProperty('--wash-cover', cover.toFixed(3));
-  showMobileScene(mobileLiveScene === from ? (p >= 0.55 ? to : from) : (p <= 0.45 ? from : to));
-  mobileBridge?.draw(t);
-  if (mobileBridge && to === DEPLOY && p > .35 &&
+  if (cover !== mob.lastCover) { stage.style.setProperty('--wash-cover', cover.toFixed(3)); mob.lastCover = cover; }
+  showMobileScene(mob.scene === from ? (p >= 0.55 ? to : from) : (p <= 0.45 ? from : to));
+  if (!mob.fanSolid && mob.bridge && to === DEPLOY && p > .35 &&
       textBottom(scenesEl[SHIPS]) <= stage.getBoundingClientRect().top + GEOM.cellH * SCALE / 2) {
     scenes(PHASE[DEPLOY]);
     // The logo group stays solid while the remaining article ink settles.
     fanEl.style.filter = 'none';
     fanEl.style.zIndex = '101';
+    mob.fanSolid = true;
   }
-  // Ease-in, not smoothstep's symmetric ease: the control spends longer
-  // small, then grows fast at the end (owner: "first go slow then fast").
-  const sizeProgress = clamp01((t - .35) / (T_TOTAL - .35)) ** 2;
-  const size = (from === DEPLOY ? 1.4 : 1) + ((to === DEPLOY ? 1.4 : 1) - (from === DEPLOY ? 1.4 : 1)) * sizeProgress;
-  cell.style.transform = `scale(${SCALE}) translate(${(1 - size) * GEOM.cellW / 2}px, ${(1 - size) * GEOM.cellH / 2}px) scale(${size})`;
-  sim.draw(true, smooth(T_CURE, T_TOTAL, t), -.2 + 1.4 * smooth(.35, T_TAKE, t) * (1 - smooth(1.3, 1.72, t)));
+  // Everything below is a pure function of t alone (plus the leg's fixed
+  // from/to): a frame that advanceWash left unmoved -- caught up already,
+  // waiting on the next scroll to name a new p -- has nothing new to draw.
+  // Skipping it is what stops a settled reader from costing a WebGL draw
+  // call and three style writes every frame forever.
+  if (t !== mob.drawnT) {
+    mob.bridge?.draw(t);
+    // Ease-in, not smoothstep's symmetric ease: the control spends longer
+    // small, then grows fast at the end (owner: "first go slow then fast").
+    const sizeProgress = clamp01((t - .35) / (T_TOTAL - .35)) ** 2;
+    const size = (from === DEPLOY ? 1.4 : 1) + ((to === DEPLOY ? 1.4 : 1) - (from === DEPLOY ? 1.4 : 1)) * sizeProgress;
+    cell.style.transform = `scale(${SCALE}) translate(${(1 - size) * GEOM.cellW / 2}px, ${(1 - size) * GEOM.cellH / 2}px) scale(${size})`;
+    sim.draw(true, smooth(T_CURE, T_TOTAL, t), -.2 + 1.4 * smooth(.35, T_TAKE, t) * (1 - smooth(1.3, 1.72, t)));
+    mob.drawnT = t;
+  }
   // The bridge's own lifetime is the leg's: mountLeg above already removes
   // the previous one (if any) before creating this leg's, or leaves it
   // null for a leg that isn't the SHIPS<->DEPLOY pair. Nothing here needs
@@ -2213,7 +2241,13 @@ async function pour(to) {
   const bridge = publishBridge(from, to, pr);
   bridge?.draw(0);
   const inOrder = () => [pr[Math.min(from, to)], pr[Math.max(from, to)]];
-  const mobileHandoff = mobileLayout() || !!bridge;
+  // Mobile never calls pour() any more (renderMorphAt owns it), so the only
+  // way into this covered/latched presentation from here is the desktop
+  // Publish bridge crossing (check-landing-publish-bridge.mjs exercises it
+  // directly, at desktop viewport) -- kept the name pour()'s other locals
+  // already use it under, rather than rename every reference for a check
+  // that only ever reads bridge now.
+  const mobileHandoff = !!bridge;
   holdCanvas(...inOrder(), from, fwd, mobileHandoff);
   if (mobileHandoff && from === SHIPS) { sketchVisible(false); videoActive(false); }
   let liveScene = from, lastCover = -1, drawnT = -1;
@@ -2307,7 +2341,10 @@ async function pour(to) {
       // moves it — including the settle's own travel, which the clock reads as
       // the scroll it is, and which ends inside the scene's text: a rest needs
       // no rate of its own, because being carried to a scene is an arrival.
-      const own = mobileLayout() ? 0 : jump ? ARRIVE_JUMP : arrived ? (t >= T_TAKE && t < T_WET ? ARRIVE_SMEAR : ARRIVE) : 0;
+      // Mobile no longer reaches this loop at all, so the own===0 arm that
+      // used to live here for it is gone with it -- this is a desktop pour
+      // now, always arriving at some rate.
+      const own = jump ? ARRIVE_JUMP : arrived ? (t >= T_TAKE && t < T_WET ? ARRIVE_SMEAR : ARRIVE) : 0;
       // Mobile no longer reaches this loop (renderMorphAt owns its own acc,
       // p * T_TOTAL, directly), so the progress-keyed arm that used to live
       // here is gone with it -- this is a desktop pour now, always paced by
@@ -2343,23 +2380,16 @@ async function pour(to) {
         // most once per direction, and the deadband means even a jittering
         // p cannot chatter.
         showUnderCover(liveScene === from ? (p >= 0.55 ? to : from) : (p <= 0.45 ? from : to));
+        // The logo-group-solid trigger and the mobile cell transform that
+        // used to live here were both mobileLayout()-gated, so both were
+        // already dead the moment mobile stopped calling pour() -- neither
+        // could ever fire from this loop again. renderMorphAt carries its
+        // own copy of the trigger for mobile; the desktop Publish control's
+        // own scale comes from publishBridge()'s draw(t) below, not cell.
         bridge?.draw(t);
-        if (bridge && mobileLayout() && to === DEPLOY && t > .35 &&
-            textBottom(scenesEl[SHIPS]) <= stage.getBoundingClientRect().top + GEOM.cellH * SCALE / 2) {
-          scenes(PHASE[DEPLOY]);
-          // The logo group stays solid while the remaining article ink settles.
-          fanEl.style.filter = 'none';
-          fanEl.style.zIndex = '101';
-        }
-        // Ease-in, not smoothstep's symmetric ease: the control spends
-        // longer small, then grows fast at the end (owner: "first go slow
-        // then fast").
-        const sizeProgress = clamp01((t - .35) / (T_TOTAL - .35)) ** 2;
-        const size = (from === DEPLOY ? 1.4 : 1) + ((to === DEPLOY ? 1.4 : 1) - (from === DEPLOY ? 1.4 : 1)) * sizeProgress;
-        if (mobileLayout()) cell.style.transform = `scale(${SCALE}) translate(${(1 - size) * GEOM.cellW / 2}px, ${(1 - size) * GEOM.cellH / 2}px) scale(${size})`;
       }
       if (!mobileHandoff || (caughtUp && t !== drawnT)) {
-        sim.draw(fwd, smooth(T_CURE, T_TOTAL, t), mobileLayout() ? -.2 + 1.4 * smooth(.35, T_TAKE, t) * (1 - smooth(1.3, 1.72, t)) : -.2);
+        sim.draw(fwd, smooth(T_CURE, T_TOTAL, t), -.2);
         drawnT = t;
       }
       if (!mobileHandoff) groundToward(to, smooth(T_DRY, T_TOTAL, t), stepClock ? DT * SPF : dtReal);
@@ -4013,13 +4043,17 @@ function updateFinalDissolve() {
 
 function watchScrollNative(now) {
   if (mobileLayout()) {
-    // Runs every frame, not just on a scrollY change: the pigment clock
-    // behind it may still be catching up to where a fast scroll already
-    // left it (advanceWash's own step budget), and it has to keep getting
-    // frames to do that even once the reader has stopped.
-    if (booted) renderMorphAt(progressAt());
     const key = `${scrollY}:${innerWidth}:${innerHeight}`;
-    if (key === mobileWatchKey) return;
+    const scrolled = key !== mobileWatchKey;
+    // Reaching the target still needs frames after the scroll that named it
+    // stops: the pigment clock is a simulation with its own step budget
+    // (advanceWash), so it can still be behind p even once scrollY itself
+    // has gone still. Calling only on a fresh scrollY would stall it there,
+    // uncaught-up, until the reader moves again -- this keeps calling while
+    // mob.settled is false and stops the moment renderMorphAt reports
+    // caught up, so R8 (zero steps at rest) still holds once it is.
+    if (booted && (scrolled || !mob.settled)) renderMorphAt(progressAt());
+    if (!scrolled) return;
     mobileWatchKey = key;
 
   }
