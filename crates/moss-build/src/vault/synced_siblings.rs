@@ -67,7 +67,21 @@ fn reconcile(canonical: &Path, sibling: &Path) {
         }
         return;
     }
-    let (Ok(ours), Ok(theirs)) = (std::fs::read_to_string(canonical), std::fs::read_to_string(sibling)) else {
+    // Both paths sit under `state.toml`, `.moss/deploy/`, or `.moss/data/` —
+    // synced vault state (CloudPolicy::Synced, moss_paths.rs), so either can
+    // be an iCloud placeholder here. Route through the materialize-wait
+    // reader rather than a raw read: a transient eviction must get a chance
+    // to download before this falls back to "unreadable, left in place",
+    // same as `read_managed_toml` does for `.moss/config.toml`/`state.toml`.
+    let ours = crate::build::cloud_readiness::read_to_string_with_materialize_wait(
+        canonical,
+        crate::build::cloud_readiness::INTERACTIVE_DEADLINE,
+    );
+    let theirs = crate::build::cloud_readiness::read_to_string_with_materialize_wait(
+        sibling,
+        crate::build::cloud_readiness::INTERACTIVE_DEADLINE,
+    );
+    let (Ok(ours), Ok(theirs)) = (ours, theirs) else {
         log::warn!("[synced-state] {} or its sibling is unreadable — left both in place", canonical.display());
         return;
     };

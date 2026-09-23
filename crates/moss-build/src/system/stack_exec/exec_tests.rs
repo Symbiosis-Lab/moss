@@ -56,8 +56,13 @@ fn the_declared_start_argv_is_what_runs() {
     let out = run(&home, Verb::Start, opts).expect("the declared start argv runs the fake binary");
     assert!(out.status.success());
     assert!(out.stdout.contains("ARGV:start --managed"), "got: {}", out.stdout);
+    // Canonicalize: on macOS `TempDir::path()` comes back under `/var`, a
+    // symlink to `/private/var`, and the subprocess's own `pwd` resolves it —
+    // comparing the raw path against a real `getcwd()` fails on every macOS
+    // run regardless of what cwd the executor actually passed.
+    let expected_cwd = std::fs::canonicalize(home_dir.path()).unwrap();
     assert!(
-        out.stdout.contains(&format!("CWD:{}", home_dir.path().display())),
+        out.stdout.contains(&format!("CWD:{}", expected_cwd.display())),
         "got: {}",
         out.stdout
     );
