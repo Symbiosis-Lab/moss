@@ -1,7 +1,6 @@
 // The whole harness surface in one place: a read side, filled in as each
 // piece of state comes into existence below, and a write side the harness
-// itself sets (stepClock/stepLimit/scrollV, read where pour() drives the
-// wash; faults, honoured at each fault's own call site so an outside write
+// itself sets (faults, honoured at each fault's own call site so an outside write
 // reaches every caller, internal or not).
 const landing = window.__landing = { title: { traceOn: false, trace: [] }, faults: { captureHang: false } };
 // The composition (the box width is --ed-w, in the stylesheet).
@@ -546,7 +545,8 @@ void main(){
 const PIG = HEAD + `
 uniform sampler2D uW, uS, uD;
 uniform sampler2D uNear, uWhole;
-uniform float uTime, uCure, uLift, uAds, uMix, uMixG, uDrying, uStir, uRelift, uLoad, uTakeFloor, uTakeL0, uTakeL1, uMixHold;
+uniform float uTime, uCure, uLift, uAds, uMix, uMixG, uDrying, uStir, uRelift, uLoad, uTakeFloor, uTakeL0, uTakeL1, uMixHold, uHomog;
+uniform vec3 uMean;
 layout(location=0) out vec4 oS; layout(location=1) out vec4 oD;
 vec4 S(vec2 t){ return texture(uS, t / uSize); }
 vec2 curlN(vec2 p){
@@ -647,7 +647,16 @@ void main(){
   // the footprint, forcing l to 1 here erased ink the film carried past the
   // silhouette instead of leaving it be.
   l = max(l, uCure * foot(vUv));
-  oS = vec4(min(s * (1.0 - uCure), 8.0), 0.0); oD = vec4(min(d, 8.0), l);
+  // A recorded dissolve ends in the stirred film's long-time limit: every
+  // texel relaxes toward the print's own mean load spread over the wetted
+  // sheet (uMean, set per print), the print's undissolved remnant and any
+  // deposit joining the liquid at the same rate, so the last step leaves one
+  // uniform wash holding exactly the print's pigment. 0 on every other step.
+  s += (Ao * (1.0 - l) * uLoad + d) * uHomog; d *= 1.0 - uHomog; l = mix(l, 1.0, uHomog);
+  s = mix(s, uMean * foot(vUv), uHomog);
+  // Depth rides in the liquid's spare channel, so a stored frame of the film
+  // is two textures and still carries the water the display refracts through.
+  oS = vec4(min(s * (1.0 - uCure), 8.0), h); oD = vec4(min(d, 8.0), l);
 }`;
 
 // Means: each texel the box average of a uBlock-square of (liquid rgb, depth)
@@ -714,13 +723,45 @@ void main(){
   // Clear the pigment along the paper grain, without a coloured overlay.
   A *= mix(.22, 1.0, smoothstep(uClearance - .12, uClearance + .12, pap.g));
   vec3 T = clamp(exp(-A), 0.0, 1.0); float a = 1.0 - min(T.r, min(T.g, T.b));
-  // The comment above already promised "clear where nothing is inked or
-  // wet" -- the code only ever cleared on ink. A wet pixel that has taken
-  // up no pigment yet is standing water, not bare paper, so it keeps a
-  // sheen floor on alpha; foot() confines it to the wash's own footprint,
-  // the same silhouette the cure mix above already uses.
-  a = max(a, 0.18 * wet * foot(uv));
   o = vec4(uTint * (T - (1.0 - a)), a);
+}`;
+
+// A scene transition's display (WatercolorMorph): one frame of the film is a
+// print plus two stored state textures, (liquid rgb, depth) and (deposit rgb,
+// dissolved fraction), and what is shown is two such frames mixed by uW1 --
+// neighbouring frames of one recorded dissolve, or the two scenes' well-mixed
+// washes. The optical thickness is summed at its true amount, with no hue
+// stretch and no wet boost: absorbance is the pigment's own quantity (Beer-
+// Lambert), so a wash that holds a print's pigment shows that print's amount
+// and colour ratio, and mixing two frames mixes the pigment, not the pixels.
+const SHOWK = HEAD + `
+uniform sampler2D uS0, uD0, uS1, uD1; uniform float uW1; uniform vec3 uK0, uK1;
+out vec4 o;
+float depth(vec2 uv){ return mix(texture(uS0, uv).a, texture(uS1, uv).a, uW1); }
+void main(){
+  vec2 uv = vUv; vec2 px = 1.0 / uSize;
+  float wet = wetOf(depth(uv));
+  vec2 gh = vec2(depth(uv + vec2(px.x, 0.0)) - depth(uv - vec2(px.x, 0.0)), depth(uv + vec2(0.0, px.y)) - depth(uv - vec2(0.0, px.y)));
+  vec2 at = uv + gh * 0.03 * wet;
+  vec4 pap = P(uv * uSize);
+  float g = max(1.0 + 0.4 * ((pap.r - 0.5) * 1.4 + (pap.b - 0.5) * 0.6), 0.05);
+  vec4 d0 = texture(uD0, uv), d1 = texture(uD1, uv);
+  vec3 A0 = absorb(texture(uSrc, at)) * (1.0 - d0.a) + (d0.rgb + texture(uS0, uv).rgb) * g * uK0;
+  vec3 A1 = absorb(texture(uTgt, at)) * (1.0 - d1.a) + (d1.rgb + texture(uS1, uv).rgb) * g * uK1;
+  vec3 T = clamp(exp(-min(mix(A0, A1, uW1), vec3(4.0))), 0.0, 1.0); float a = 1.0 - min(T.r, min(T.g, T.b));
+  o = vec4(uTint * (T - (1.0 - a)), a);
+}`;
+
+// A stored frame's pigment, split for the mass fixer: what the film carries
+// (liquid and deposit, grained as SHOWK shows them) and what is still in the
+// print, per texel at the grid's resolution, for MEAN to reduce.
+const FIX = HEAD + `
+uniform sampler2D uS, uD;
+layout(location=0) out vec4 oL; layout(location=1) out vec4 oR;
+void main(){
+  vec4 pap = P(gl_FragCoord.xy); vec4 d = texture(uD, vUv);
+  float g = max(1.0 + 0.4 * ((pap.r - 0.5) * 1.4 + (pap.b - 0.5) * 0.6), 0.05);
+  oL = vec4((d.rgb + texture(uS, vUv).rgb) * g, 1.0); oR = vec4(absorb(texture(uSrcLo, vUv)) * (1.0 - d.a), 1.0);
 }`;
 
 // Paper noise pixels: a pure function of nothing (a0=90210 is a fixed seed,
@@ -796,9 +837,11 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
   const compile = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
   const W = texW, H = texH;
   const tint = (() => { const c = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(); const n = parseInt(c.slice(1), 16); return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; })();
+  // absorb() per channel, tabulated by byte alpha then byte value.
+  const ABSORB = tint.map((t) => Float32Array.from({ length: 65536 }, (_, i) => -Math.log(Math.max(0.02, 1 + (Math.min(1, (i & 255) / 255 / t) - 1) * (i >> 8) / 255))));
   // the texture units and constants every pass shares are set once, at link;
   // per step only the framebuffers, the state textures and the prints change
-  const UNITS = { uW: 0, uS: 1, uD: 2, uNear: 3, uWhole: 4, uPaper: 8, uSrc: 9, uTgt: 10, uSrcLo: 11, uTgtLo: 12, uSrcFt: 13, uTgtFt: 14 };
+  const UNITS = { uW: 0, uS: 1, uD: 2, uNear: 3, uWhole: 4, uS0: 0, uD0: 1, uS1: 2, uD1: 3, uPaper: 8, uSrc: 9, uTgt: 10, uSrcLo: 11, uTgtLo: 12, uSrcFt: 13, uTgtFt: 14 };
   const prog = (fs) => { const p = gl.createProgram(); gl.attachShader(p, compile(gl.VERTEX_SHADER, V)); gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
     const u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i).name; u[nm] = gl.getUniformLocation(p, nm); }
@@ -813,6 +856,7 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
     if (u.uTakeL0) gl.uniform1f(u.uTakeL0, 0.15);
     if (u.uTakeL1) gl.uniform1f(u.uTakeL1, 0.55);
     if (u.uMixHold) gl.uniform1f(u.uMixHold, 0.25);
+    if (u.uHomog) gl.uniform1f(u.uHomog, 0);
     return { p, u }; };
   const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
@@ -865,11 +909,94 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
 
   const bind = (unit, t) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t); };
   const draw = () => gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  const bindPrints = (S, T) => { bind(8, paper); bind(9, S.full); bind(10, T.full); bind(11, S.lo); bind(12, T.lo); bind(13, S.ft); bind(14, T.ft); };
   // a pass with the prints bound in the wash's direction
   const common = (pr, fwd) => {
     const [S, T] = fwd ? [prints.src, prints.tgt] : [prints.tgt, prints.src];
-    gl.useProgram(pr.p);
-    bind(8, paper); bind(9, S.full); bind(10, T.full); bind(11, S.lo); bind(12, T.lo); bind(13, S.ft); bind(14, T.ft);
+    gl.useProgram(pr.p); bindPrints(S, T);
+  };
+  // Empty paper as a print, and the film at rest as a stored frame: one
+  // transparent texel, which absorb() reads as no ink and the state reads as
+  // no liquid, no deposit, nothing dissolved.
+  const blank = tex(1, 1, gl.CLAMP_TO_EDGE, false);
+  gl.bindTexture(gl.TEXTURE_2D, blank); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+  const blankPrint = { full: blank, lo: blank, ft: blank };
+  // The one film is shared: a dissolve being recorded owns it until its last
+  // frame is stored, and any other use of it (the closing wash's step/reset)
+  // hands it back, so that record starts over rather than resuming on a film
+  // somebody else has moved.
+  let recording = null, showk = null, fixer = null, held = [];
+  // The mass fixer: a stored frame's liquid is scaled, per channel, so the
+  // frame holds exactly its print's pigment. The film's transport is not
+  // conservative (semi-Lagrangian advection, and concentration relaxing
+  // across an uneven depth), and mid-dissolve it lost up to a fifth of a
+  // print (measured) before the stirring limit put it back; a global mass
+  // fixer is the standard answer for such a scheme. The frame's liquid and
+  // its undissolved remnant are drawn at grid resolution (FIX), box-averaged
+  // with MEAN, and the block means read back and weighted by the texels each
+  // block really holds: the grid's last row and column of blocks are partial,
+  // and an unweighted mean of block means is off by as much as 8% (phone).
+  const fixScale = (rec, f) => {
+    if (!fixer) {
+      const L = tex(W, H), R = tex(W, H), nearT2 = tex(NW, NH);
+      fixer = { p: prog(FIX), L, R, F: fbo([L, R]), nearF: fbo([nearT2]) };
+    }
+    gl.viewport(0, 0, W, H); gl.useProgram(fixer.p.p); bindPrints(rec.pr, blankPrint); gl.bindFramebuffer(gl.FRAMEBUFFER, fixer.F);
+    bind(1, f.S); bind(2, f.D); draw();
+    const reduce = (t) => {
+      gl.useProgram(mean.p);
+      gl.viewport(0, 0, NW, NH); gl.bindFramebuffer(gl.FRAMEBUFFER, fixer.nearF);
+      bind(0, t); gl.uniform1i(mean.u.uA, 0); gl.uniform2f(mean.u.uInSize, W, H); gl.uniform1i(mean.u.uBlock, BLOCK); gl.uniform1i(mean.u.uJoin, 0);
+      draw();
+      const px = new Float32Array(NW * NH * 4); gl.readPixels(0, 0, NW, NH, gl.RGBA, gl.FLOAT, px);
+      const sum = [0, 0, 0];
+      for (let by = 0; by < NH; by++) for (let bx = 0; bx < NW; bx++) {
+        const n = Math.min(BLOCK, W - bx * BLOCK) * Math.min(BLOCK, H - by * BLOCK), i = (by * NW + bx) * 4;
+        for (let c = 0; c < 3; c++) sum[c] += px[i + c] * n;
+      }
+      return sum.map((v) => v / (W * H));
+    };
+    const liquid = reduce(fixer.L), remnant = reduce(fixer.R);
+    return rec.target.map((m, c) => liquid[c] > 1e-5 ? Math.min(2, Math.max(0.5, (m - remnant[c]) / liquid[c])) : 1);
+  };
+  const clearState = () => {
+    gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 0);
+    for (const f of [...wF, ...pF, nearF, wholeF]) { gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.clear(gl.COLOR_BUFFER_BIT); }
+  };
+  const fitCanvas = () => {
+    const r = rect();
+    const dpr = Math.min(2, devicePixelRatio || 1);
+    const cw = Math.round(r.w * dpr), chh = Math.round(r.h * dpr);
+    if (canvas.width !== cw || canvas.height !== chh) { canvas.width = cw; canvas.height = chh; }
+    canvas.style.left = r.x + 'px'; canvas.style.top = r.y + 'px'; canvas.style.right = 'auto'; canvas.style.bottom = 'auto';
+    canvas.style.width = r.w + 'px'; canvas.style.height = r.h + 'px';
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cw, chh);
+  };
+  // One step of a print dissolving on its own, toward nothing: no uptake (the
+  // target is paper), no drying, the sheet kept wet, the film stirred harder
+  // as it goes, and from a third of the way the stirring's limit (uHomog)
+  // pulling it to one uniform wash that the last step reaches exactly.
+  const stepDissolve = (rec) => {
+    const t = rec.n * DT, u = (rec.n + 1) / rec.N;
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(water.p); bindPrints(rec.pr, blankPrint); gl.bindFramebuffer(gl.FRAMEBUFFER, wF[1 - wi]);
+    bind(0, wT[wi]);
+    gl.uniform1f(water.u.uSplash, t < T_SPLASH ? splashAmp : 0); gl.uniform1f(water.u.uMist, u < 0.6 ? mistAmp : 0); gl.uniform1f(water.u.uCure, 0);
+    gl.uniform1f(water.u.uEvap, 0.0008); gl.uniform1f(water.u.uDrying, 0); gl.uniform2f(water.u.uTilt, 0, 0);
+    draw(); wi = 1 - wi;
+    // on the record's own count, so a print's dissolve is the same every time it is recorded
+    if (rec.n % 3 === 0) means(pT[pi][0], wT[wi]);
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(pig.p); bindPrints(rec.pr, blankPrint); gl.bindFramebuffer(gl.FRAMEBUFFER, pF[1 - pi]);
+    bind(0, wT[wi]); bind(1, pT[pi][0]); bind(2, pT[pi][1]); bind(3, nearT); bind(4, wholeT);
+    gl.uniform1f(pig.u.uTime, t); gl.uniform1f(pig.u.uCure, 0);
+    gl.uniform1f(pig.u.uLift, 0.075); gl.uniform1f(pig.u.uAds, 0); gl.uniform1f(pig.u.uTakeFloor, 0);
+    gl.uniform1f(pig.u.uMix, 0.06); gl.uniform1f(pig.u.uMixG, 0.005 + 0.05 * smooth(0.2, 0.8, u));
+    gl.uniform1f(pig.u.uDrying, 0); gl.uniform1f(pig.u.uStir, smooth(0.05, 0.4, u)); gl.uniform1f(pig.u.uRelift, 0);
+    gl.uniform1f(pig.u.uLoad, load);
+    gl.uniform1f(pig.u.uHomog, rec.n + 1 >= rec.N ? 1 : 0.035 * smooth(0.3, 0.95, u));
+    gl.uniform3f(pig.u.uMean, rec.mean[0], rec.mean[1], rec.mean[2]);
+    draw(); pi = 1 - pi;
   };
 
   // Reversal keyframe ring: GPU-only, no readback. Four slots at p in {0,
@@ -891,7 +1018,7 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
   };
 
   return {
-    setPrints(src, tgt) { setPrint('src', src); setPrint('tgt', tgt);
+    setPrints(src, tgt) { setPrint('src', src); setPrint('tgt', tgt); held = [src, tgt];
       // A new pair invalidates every stored keyframe: it belongs to the
       // wash between these two specific prints, and setPrints always starts
       // a new one.
@@ -929,13 +1056,100 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       return best.t;
     },
-    reset() {
-      gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 0);
-      for (const f of [...wF, ...pF, nearF, wholeF]) { gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.clear(gl.COLOR_BUFFER_BIT); }
+    reset() { recording = null; clearState(); },
+    holds: (src, tgt) => held[0] === src && held[1] === tgt,
+    // A print's own dissolve, from the print at rest to its well-mixed wash,
+    // as stored frames at the fractions `us` of `steps` steps; nothing runs
+    // until advanceRecord. The grid-resolution print the film dissolves from
+    // is averaged in absorbance, not in colour: the log of an averaged colour
+    // understates the ink of any detail finer than a texel (by a sixth on the
+    // phone's grid, measured), and the film would lose that much the moment it
+    // dissolved. The mean load is the print's ink over the share of the grid
+    // the wash covers as the shaders draw it -- the footprint sil() makes,
+    // fibre noise included, times the display's grain -- so the uniform wash
+    // the record ends in shows exactly the print's pigment, channel by channel.
+    recordDissolve(im, us, steps) {
+      const ft = scaled(im, Math.round(W / 4), Math.round(H / 4)), fw = ft.width, fh = ft.height;
+      const full = im.getContext('2d').getImageData(0, 0, im.width, im.height).data, iw = im.width, ih = im.height;
+      const acc = new Float64Array(W * H * 3), cnt = new Float64Array(W * H), total = [0, 0, 0];
+      for (let y = 0; y < ih; y++) {
+        const gy = Math.min(H - 1, Math.floor((ih - 1 - y) * H / ih));   // flipped: the grid's row 0 is the print's bottom
+        for (let x = 0; x < iw; x++) {
+          const i = (y * iw + x) * 4, a = full[i + 3] << 8, j = gy * W + Math.min(W - 1, Math.floor(x * W / iw));
+          cnt[j]++;
+          if (a) for (let c = 0; c < 3; c++) { const A = ABSORB[c][a | full[i + c]]; acc[j * 3 + c] += A; total[c] += A; }
+        }
+      }
+      // The same thickness written back as a colour absorb() reads straight back.
+      const lo = new Uint8Array(W * H * 4);
+      for (let j = 0; j < W * H; j++) {
+        for (let c = 0; c < 3; c++) lo[j * 4 + c] = Math.round(255 * tint[c] * Math.exp(-acc[j * 3 + c] / Math.max(1, cnt[j])));
+        lo[j * 4 + 3] = 255;
+      }
+      const pp = computePaperPixels(), ftp = ft.getContext('2d').getImageData(0, 0, fw, fh).data;
+      const texel = (ch, x, y) => pp[(((y % 256) + 256) % 256 * 256 + ((x % 256) + 256) % 256) * 4 + ch] / 255;
+      const bilinear = (fx, fy, get) => { const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+        return (get(x0, y0) * (1 - tx) + get(x0 + 1, y0) * tx) * (1 - ty) + (get(x0, y0 + 1) * (1 - tx) + get(x0 + 1, y0 + 1) * tx) * ty; };
+      const alphaAt = (x, y) => ftp[((fh - 1 - Math.min(fh - 1, Math.max(0, y))) * fw + Math.min(fw - 1, Math.max(0, x))) * 4 + 3] / 255;
+      let share = 0;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const tx = (x + 0.5) * paperScale, ty = (y + 0.5) * paperScale;
+        const pap = (ch) => texel(ch, Math.floor(tx), Math.floor(ty)) * 0.55 + bilinear((tx / 977 + 0.37) * 256 - 0.5, (ty / 977 + 0.37) * 256 - 0.5, (u, v) => texel(ch, u, v)) * 0.45;
+        const pr = pap(0), pg = pap(1), pb = pap(2);
+        const f = smooth(0.5, 0.9, bilinear((x + 0.5) / W * fw - 0.5, (y + 0.5) / H * fh - 0.5, alphaAt) + (pg - 0.5) * 0.35 + (pb - 0.5) * 0.15);
+        share += f * Math.max(1 + 0.4 * ((pr - 0.5) * 1.4 + (pb - 0.5) * 0.6), 0.05);
+      }
+      share = Math.max(1e-3, share / (W * H));
+      const pr = { lo: tex(0, 0, gl.CLAMP_TO_EDGE, false), ft: tex(0, 0, gl.CLAMP_TO_EDGE, false) }; pr.full = pr.lo;
+      gl.bindTexture(gl.TEXTURE_2D, pr.lo); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, lo);
+      upload(pr.ft, ft);
+      const frames = us.map(() => { const S = tex(W, H), D = tex(W, H); return { S, D, fS: fbo([S]), fD: fbo([D]) }; });
+      const target = total.map((m) => m / (iw * ih));
+      return { us, frames, pr, target, mean: target.map((m) => m / share), N: steps, n: 0, done: 0 };
+    },
+    // Runs up to `budget` steps of a record, storing each frame as it is
+    // reached; returns the steps run. Complete once done === frames.length.
+    advanceRecord(rec, budget) {
+      if (rec.done === rec.frames.length) return 0;
+      if (recording !== rec) { clearState(); recording = rec; rec.n = 0; rec.done = 0; }
+      let count = 0;
+      while (count < budget && rec.done < rec.frames.length) {
+        stepDissolve(rec); rec.n++; count++;
+        if (rec.n >= Math.round(rec.us[rec.done] * rec.N)) {
+          const f = rec.frames[rec.done++];
+          blit(pF[pi], gl.COLOR_ATTACHMENT0, f.fS); blit(pF[pi], gl.COLOR_ATTACHMENT1, f.fD);
+          f.k = fixScale(rec, f);
+        }
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      if (rec.done === rec.frames.length) { recording = null; gl.deleteTexture(rec.pr.lo); gl.deleteTexture(rec.pr.ft); rec.pr = null; }
+      return count;
+    },
+    disposeRecord(rec) {
+      if (recording === rec) recording = null;
+      if (rec.pr) { gl.deleteTexture(rec.pr.lo); gl.deleteTexture(rec.pr.ft); }
+      for (const f of rec.frames) { gl.deleteTexture(f.S); gl.deleteTexture(f.D); gl.deleteFramebuffer(f.fS); gl.deleteFramebuffer(f.fD); }
+    },
+    // Shows two frames mixed by w. A frame is { slot: 'src' | 'tgt', rec, k }:
+    // the print held in that slot (setPrints) and the k-th stored frame of its
+    // dissolve, k = 0 being the print at rest.
+    present(f0, f1, w) {
+      if (!showk) showk = prog(SHOWK);
+      fitCanvas();
+      gl.useProgram(showk.p);
+      bind(8, paper); bind(9, prints[f0.slot].full); bind(10, prints[f1.slot].full);
+      const [s0, d0] = f0.k ? [f0.rec.frames[f0.k - 1].S, f0.rec.frames[f0.k - 1].D] : [blank, blank];
+      const [s1, d1] = f1.k ? [f1.rec.frames[f1.k - 1].S, f1.rec.frames[f1.k - 1].D] : [blank, blank];
+      bind(0, s0); bind(1, d0); bind(2, s1); bind(3, d1);
+      gl.uniform1f(showk.u.uW1, w);
+      const k0 = f0.k ? f0.rec.frames[f0.k - 1].k : [1, 1, 1], k1 = f1.k ? f1.rec.frames[f1.k - 1].k : [1, 1, 1];
+      gl.uniform3f(showk.u.uK0, k0[0], k0[1], k0[2]); gl.uniform3f(showk.u.uK1, k1[0], k1[1], k1[2]);
+      draw();
     },
     // One fixed step at time t (seconds). The schedule: flood, dissolve and
     // stir, take up, dry and cure.
     step(fwd, t, cure, stir = 0, tilt = 0, relift = 0) {
+      recording = null;
       const splash = t < T_SPLASH ? splashAmp : 0, mist = t < T_SPLASH + mistHold ? mistAmp : 0;
       // a hot-air blast: evaporation many times the rate of standing air, which
       // thins the film, drives the rim current and settles the pigment quickly
@@ -963,7 +1177,7 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       // the whole film is stirred by the drying current (and by the hand that scrolls), not before
       gl.uniform1f(pig.u.uMix, 0.06); gl.uniform1f(pig.u.uMixG, 0.005 + 0.025 * Math.max(drying, Math.min(1, stir)));
       gl.uniform1f(pig.u.uDrying, drying); gl.uniform1f(pig.u.uStir, stir); gl.uniform1f(pig.u.uRelift, relift);
-      gl.uniform1f(pig.u.uLoad, load);
+      gl.uniform1f(pig.u.uLoad, load); gl.uniform1f(pig.u.uHomog, 0);
       draw(); pi = 1 - pi;
     },
     // read one texel of the state, for the harness: [h,u,v,sat], s.rgb, [d.rgb,l]
@@ -992,13 +1206,7 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
     },
     // the display pass onto the canvas
     draw(fwd, cure, clearance = -.2) {
-      const r = rect();
-      const dpr = Math.min(2, devicePixelRatio || 1);
-      const cw = Math.round(r.w * dpr), chh = Math.round(r.h * dpr);
-      if (canvas.width !== cw || canvas.height !== chh) { canvas.width = cw; canvas.height = chh; }
-      canvas.style.left = r.x + 'px'; canvas.style.top = r.y + 'px'; canvas.style.right = 'auto'; canvas.style.bottom = 'auto';
-      canvas.style.width = r.w + 'px'; canvas.style.height = r.h + 'px';
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cw, chh);
+      fitCanvas();
       common(show, fwd);
       bind(0, wT[wi]); bind(1, pT[pi][0]); bind(2, pT[pi][1]);
       gl.uniform1f(show.u.uCure, cure);
@@ -1011,6 +1219,15 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
 // canvas and print rectangle are today's exact values; only the factory above
 // is new.
 const sim = makeSim({ canvas, texW: Math.round(BASE_TEX_W / (mobileLayout() ? 4 : 2)), texH: Math.round(BASE_TEX_H / (mobileLayout() ? 4 : 2)), rect: () => printRect });
+// Every scene transition, both layouts (site/watercolor-morph.js). A stored
+// frame is two RGBA16F textures of the grid: 2 x 410 x 390 x 8 B = 2.6 MB on
+// desktop, so six frames a print and three prints held is 46 MB; the phone's
+// grid is a quarter of that area, and four frames a print make 7.7 MB.
+// DISSOLVE_STEPS is a dissolve's length, 1.5 sim-seconds at DT.
+const DISSOLVE_STEPS = 180;
+const morph = sim && WatercolorMorph.create(sim, mobileLayout()
+  ? { frames: [0.1, 0.3, 0.6, 1], steps: DISSOLVE_STEPS }
+  : { frames: [0.06, 0.16, 0.32, 0.52, 0.76, 1], steps: DISSOLVE_STEPS });
 // Wherever the cursor is, a scroll gesture moves the page and nothing else. The
 // editor and the preview are live documents with their own scroll containers,
 // so each frame has its own scrolling switched off and the browser chains the
@@ -1145,20 +1362,15 @@ const running = () => phase === 'morph' || driving;
 // own work ends — the film at its wettest, the print fully smeared. From T_WET
 // to T_TOTAL is the cure, which belongs to time and not to the hand. DT is one
 // step of that clock and STEPS_PER_FRAME the most a frame may spend on it;
-// SPLIT is how much of the gap between two texts buys the part before T_TAKE;
 // V_TAU is the memory of the scroll-speed integrator that agitates and tilts
 // the film.
-// Three rates say how fast the clock runs when the scroll is not the thing
-// feeding it, in sim-seconds per real second: ARRIVE once the reader has
-// arrived at the text — or stopped, which asks for a scene just as plainly —
-// ARRIVE_SMEAR through the smeared window, so it is seen rather than skipped,
-// and ARRIVE_JUMP for a jump of more than one boundary, which is nobody's
-// reading; it is separate from ARRIVE so it can be answered alone. There is no
-// fourth rate for standing still between two texts, because a rest is no longer
-// left there: it settles onto a scene, and the wash runs out to it.
-const DT = 1 / 120, SPF = 2, STEPS_PER_FRAME = 36, V_TAU = 0.4, SPLIT = 0.4,
+// Scene transitions no longer run on this clock (WatercolorMorph presents
+// them by scroll position); the closing wash and the title still do. ARRIVE
+// and ARRIVE_SMEAR, in sim-seconds per real second, survive only in
+// cureLeft(), the reduced-motion settle's estimate of a wash's remaining time.
+const DT = 1 / 120, STEPS_PER_FRAME = 36, V_TAU = 0.4,
   T_SPLASH = 0.2, T_TAKE = 1.2, T_DRY = 1.2, T_CURE = .9, T_WET = 1.6, T_TOTAL = 2.1,
-  ARRIVE = 6, ARRIVE_SMEAR = 1, ARRIVE_JUMP = ARRIVE;
+  ARRIVE = 6, ARRIVE_SMEAR = 1;
 // The rest. REST_MS is how long the scroll must have been still to count as a
 // stop. A wheel is nudges rather than a stream — a reader turning it slowly
 // leaves a fifth of a second between them — and the old catch window could
@@ -1223,22 +1435,15 @@ function editorPlayback(active) {
   const doc = edFrame.contentDocument;
   if (doc) { doc.documentElement.classList.toggle('landing-playback', active); if (active) doc.querySelector('.insert-bar')?.classList.add('dim', 'visible'); }
 }
-// The grounds' opacity: the shadow of the scene being shown, faded as its
-// sheet wets and returned as the next one dries. The approach is eased so a
-// late turnaround does not snap the destination ground to nothing.
-const gOp = [1, 0];
-function ground(a, b) { gOp[0] = a; gOp[1] = b; stage.style.setProperty('--g0', a.toFixed(3)); stage.style.setProperty('--g1', b.toFixed(3)); }
+// The grounds' opacity: the shadow of the scene being shown, faded as it
+// dissolves and returned as the next one consolidates (pour, by position).
+function ground(a, b) { stage.style.setProperty('--g0', a.toFixed(3)); stage.style.setProperty('--g1', b.toFixed(3)); }
 // There are two sheet shapes, not four: the editor's, and the widened one that
 // scenes 2 and 3 share. So a 2 to 3 wash never touches the ground at all, and
 // scene 4 is under neither of them — the sheet itself has gone and what is left
 // on the paper is the control, which carries no window shadow.
 const GROUND = [[1, 0], [0, 1], [0, 1], [0, 0], [0, 0]];
 function groundAt(scene) { ground(...GROUND[scene]); }
-function groundToward(to, dryness, dtReal) {
-  const k = 1 - Math.exp(-dtReal / 0.25);
-  const want = GROUND[to].map((g) => g * dryness);
-  ground(gOp[0] + (want[0] - gOp[0]) * k, gOp[1] + (want[1] - gOp[1]) * k);
-}
 
 // ── Scene 4's control: the shell's own, measured rather than copied ───────
 // Where the control is and how big it is are read from the shell, never written
@@ -1792,7 +1997,17 @@ function holdCanvas(src, tgt, scene, fwd, mobileTransition = false) {
   if (mobileTransition) stage.classList.add('mobile-handoff');
   else stage.classList.add('morphing');
 }
+// The same arming for a scene transition: A's print is presented at p = 0
+// before anything live is hidden, so the handover is the same pixels.
+function holdMorph(a, b, from, to, covered) {
+  groundAt(from);
+  const leg = morph.leg(a, b, { from, to });
+  leg.render(0, 0);
+  stage.classList.add(covered ? 'mobile-handoff' : 'morphing');
+  return leg;
+}
 function releasePigmentCover() {
+  morph?.end();
   stage.classList.remove('morphing', 'mobile-handoff');
   stage.style.removeProperty('--wash-cover');
   canvas.style.filter = '';
@@ -1820,7 +2035,9 @@ function still(scene) {
   // otherwise the live Publish control flashes in its shell corner.
   if (!(finalWash?.covered && scene === DEPLOY)) releasePigmentCover();
   if (mobileLayout() && scene === SHIPS) { sketchVisible(true); videoActive(true); }
-  if (mobileLayout()) mobileWatchKey = '';
+  // The phone's mounted leg lost its canvas class above: remount it on the
+  // next frame rather than keep presenting into a canvas nothing shows.
+  if (mobileLayout()) { mobileWatchKey = ''; mob = { ...mob, from: -1, to: -1 }; }
   if (scene !== DEPLOY && finalWash) { cancelAnimationFrame(finalWash.raf); finalWash = null; canvas.style.filter = ''; }
   if (scene < DEPLOY) finalPrints = null;
 }
@@ -1946,7 +2163,6 @@ async function fade(to) {
 }
 
 const stepToward = (from, t) => t === from ? from : from + Math.sign(t - from);
-const isJump = (a, b) => Math.abs(a - b) > 1;
 // How far one mechanism carries the sheet toward `want`. A wash swallows every
 // wash boundary in its path — three boundaries is still one wash, from the
 // pixels on screen to the print of the scene asked for — while a join that
@@ -2100,14 +2316,13 @@ function publishBridge(from, to, prints) {
 // local to one promise; this outlives any single call, so it has to live
 // somewhere, and a single typed record beats a handful of scattered
 // top-level lets for the same reason it would anywhere else in this file.
-// t/drawn are advanceWash's own state shape, passed straight through.
 let mob = {
   from: -1, to: -1, pr: null,          // the mounted leg, or pr: null while its prints are still missing
+  leg: null,                            // the WatercolorMorph leg presenting it
   scene: -1,                            // showUnderCover's mobile twin: which side of the leg is live
   bridge: null,                         // the Publish bridge clone; non-null only on the SHIPS<->DEPLOY leg
-  settled: true,                        // caught up to this frame's goal, or nothing to catch up (cut)
-  lastCover: -1, drawnT: -1, fanSolid: false,   // last-written values, so an unchanged frame writes nothing
-  t: 0, drawn: -1,
+  settled: true,                        // the frame shown is exactly this p's, or nothing to show (cut)
+  p: -1, lastCover: -1, drawnT: -1, fanSolid: false,   // last-written values, so an unchanged frame writes nothing
 };
 // Mounts the leg's canvas if its prints are both on hand, or records the
 // cut (mob.pr stays null) if not. Callable every frame regardless of which
@@ -2140,10 +2355,10 @@ function mountLeg(from, to) {
   mob.bridge?.remove();
   const bridge = publishBridge(from, to, pr);
   bridge?.draw(0);
-  holdCanvas(pr[from], pr[to], from, to > from, true);
+  const leg = holdMorph(pr[from], pr[to], from, to, true);
   if (from === SHIPS) { sketchVisible(false); videoActive(false); }
   if (mob.fanSolid) { fanEl.style.filter = ''; fanEl.style.zIndex = ''; }
-  mob = { ...mob, from, to, pr, bridge, t: 0, drawn: -1, lastCover: -1, drawnT: -1, fanSolid: false };
+  mob = { ...mob, from, to, pr, leg, bridge, p: -1, lastCover: -1, drawnT: -1, fanSolid: false };
 }
 // showUnderCover's mobile twin, module-level because the mount it tracks
 // now outlives any one frame. Also the one place `shown` is written for
@@ -2191,19 +2406,18 @@ function renderMorphAt(progress) {
     mob.settled = false;   // keep retrying: a print may still arrive with no further scroll
     return;
   }
-  const stir = Math.min(2, 3 * Math.abs(scrollV)), tilt = -0.35 * Math.max(-1.2, Math.min(1.2, scrollV));
-  const advanced = advanceWash(sim, mob, { goal: T_TOTAL * p, fwd: true, stir, tilt, relift: 0 }, () => {});
-  const t = mob.t;
-  washT = t; steps += advanced.count;
-  // True only while the pigment sim is still stepping toward this frame's
-  // goal -- not shown !== target, which is almost always true (target is
-  // the leg's far end, and most of a leg is spent short of it on purpose).
-  // caughtUp false for more than a frame or two would itself starve the
-  // warmer the way an always-true driving did before this.
-  driving = !advanced.caughtUp;
-  mob.settled = advanced.caughtUp;
-  const cover = Math.min(smooth(0, .35, p), 1 - smooth(.82, 1, p));
-  if (cover !== mob.lastCover) { stage.style.setProperty('--wash-cover', cover.toFixed(3)); mob.lastCover = cover; }
+  if (p !== mob.p || !mob.settled) {
+    const r = mob.leg.render(p, STEPS_PER_FRAME);
+    steps += r.spent; mob.settled = r.exact; mob.p = p;
+  }
+  // True only while a dissolve this leg needs is still being recorded -- the
+  // one thing that makes the frame shown lag p. Longer than a few frames
+  // would starve the warmer, which waits on it.
+  driving = !mob.settled;
+  // The canvas takes the whole composition for the whole leg: never hidden
+  // while the reader is between the two scenes.
+  const cover = p > 0 && p < 1 ? 1 : 0;
+  if (cover !== mob.lastCover) { stage.style.setProperty('--wash-cover', String(cover)); mob.lastCover = cover; }
   showMobileScene(mob.scene === from ? (p >= 0.55 ? to : from) : (p <= 0.45 ? from : to));
   if (!mob.fanSolid && mob.bridge && to === DEPLOY && p > .35 &&
       textBottom(scenesEl[SHIPS]) <= stage.getBoundingClientRect().top + GEOM.cellH * SCALE / 2) {
@@ -2213,11 +2427,11 @@ function renderMorphAt(progress) {
     fanEl.style.zIndex = '101';
     mob.fanSolid = true;
   }
-  // Everything below is a pure function of t alone (plus the leg's fixed
-  // from/to): a frame that advanceWash left unmoved -- caught up already,
-  // waiting on the next scroll to name a new p -- has nothing new to draw.
-  // Skipping it is what stops a settled reader from costing a WebGL draw
-  // call and three style writes every frame forever.
+  // The Publish carry and the cell's growth keep their own curves, read off
+  // the leg's position on the span they were tuned in; an unchanged p has
+  // nothing new to draw.
+  const t = p * T_TOTAL;
+  washT = t;
   if (t !== mob.drawnT) {
     mob.bridge?.draw(t);
     // Ease-in, not smoothstep's symmetric ease: the control spends longer
@@ -2225,7 +2439,6 @@ function renderMorphAt(progress) {
     const sizeProgress = clamp01((t - .35) / (T_TOTAL - .35)) ** 2;
     const size = (from === DEPLOY ? 1.4 : 1) + ((to === DEPLOY ? 1.4 : 1) - (from === DEPLOY ? 1.4 : 1)) * sizeProgress;
     cell.style.transform = `scale(${SCALE}) translate(${(1 - size) * GEOM.cellW / 2}px, ${(1 - size) * GEOM.cellH / 2}px) scale(${size})`;
-    sim.draw(true, smooth(T_CURE, T_TOTAL, t), -.2 + 1.4 * smooth(.35, T_TAKE, t) * (1 - smooth(1.3, 1.72, t)));
     mob.drawnT = t;
   }
   // The bridge's own lifetime is the leg's: mountLeg above already removes
@@ -2238,13 +2451,7 @@ function renderMorphAt(progress) {
 async function pour(to) {
   const from = shown;
   let terminal = false;
-  let fwd = to > from;
   washesRun++;
-  // The prints are on hand (below), so the first drops land on the frame the
-  // trigger fires and the wash knows from its first step what it is dissolving
-  // and what it is to become. Nothing is ever taken up toward a stand-in. A
-  // fresh capture of the scene on screen replaces its print under the splash,
-  // so the poem is the poem being typed.
   // Freeze a reader's arrangement before taking its ink. No spring or teardown
   // may move an artifact back while its outgoing print is being captured.
   if (from === SHIPS && s3Touched) {
@@ -2255,18 +2462,13 @@ async function pour(to) {
   const pr = { [from]: sheets[from], [to]: sheets[to] };
   const bridge = publishBridge(from, to, pr);
   bridge?.draw(0);
-  const inOrder = () => [pr[Math.min(from, to)], pr[Math.max(from, to)]];
-  // Mobile never calls pour() any more (renderMorphAt owns it), so the only
-  // way into this covered/latched presentation from here is the desktop
-  // Publish bridge crossing (check-landing-publish-bridge.mjs exercises it
-  // directly, at desktop viewport) -- kept the name pour()'s other locals
-  // already use it under, rather than rename every reference for a check
-  // that only ever reads bridge now.
-  const mobileHandoff = !!bridge;
-  holdCanvas(...inOrder(), from, fwd, mobileHandoff);
-  if (mobileHandoff && from === SHIPS) { sketchVisible(false); videoActive(false); }
-  let liveScene = from, lastCover = -1, drawnT = -1;
-  const pigment = { t: 0, drawn: -1 };
+  // The Publish crossing keeps its control solid above the pigment, so the
+  // canvas covers the live composition by --wash-cover rather than by hiding
+  // it (check-landing-publish-bridge.mjs).
+  const covered = !!bridge;
+  const leg = holdMorph(pr[from], pr[to], from, to, covered);
+  if (covered && from === SHIPS) { sketchVisible(false); videoActive(false); }
+  let liveScene = from, lastCover = -1, shownP = -1, exact = false;
   const showUnderCover = (scene) => {
     if (scene === liveScene) return;
     snapStage();
@@ -2276,149 +2478,57 @@ async function pour(to) {
     if (scene === SHIPS) { sketchVisible(false); videoActive(false); }
     liveScene = scene;
   };
-  // The desktop twin of the latch above: a re-point that lands back on a
-  // scene this pour has already passed through must not rewrite
-  // dataset.scene to a value it had already left. One tracker, reused --
-  // showUnderCover only ever runs under mobileHandoff, this only when not,
-  // and a single pour() call is never both, so they never fight over it.
+  // A turnaround that lands back on a scene this pour has already passed
+  // through must not rewrite dataset.scene to a value it had already left.
   const passOnce = (dest) => {
     if (dest === liveScene) return;
     scenes('morph'); passThrough(liveScene, dest); sceneClasses(dest);
     liveScene = dest;
   };
   // The scenes' classes all land in this frame, under the canvas: the ones a
-  // jump passes over, and the target's. The wash used to take a fresh print of
-  // the scene it was leaving first, so the poem under the splash was the poem as
-  // typed — 35 to 54ms of capture inside the frames of a running wash, measured
-  // 2026-09-14, to buy at most one warm tick of typing. The rest's own retake
-  // keeps that print no older than that, and the splash reads it.
-  if (!mobileHandoff) passOnce(to);
-  // sim seconds per window height of scroll: the wash completes as the reading
-  // line travels from one text to the other, whatever the speed of the hand
-  // the two texts the wash runs between, which a turnaround swaps and a jump
-  // sets further apart
-  const gapOf = (a, b) => { const lo = Math.min(a, b), hi = Math.max(a, b); return Math.max(0.2, (textTop(scenesEl[hi > lo ? hi : lo + 1]) - textBottom(scenesEl[lo])) / innerHeight); };
-  let gapVh = gapOf(from, to);
-  // The gap is spent unevenly: the dissolve and the blooms take the first part,
-  // the smeared print takes the larger rest, and the cure is not the scroll's at
-  // all — it runs once the reader has arrived at the text, or stopped anywhere
-  // and been settled onto a scene.
-  const K = (t) => t < T_TAKE ? T_TAKE / (SPLIT * gapVh) : t < T_WET ? (T_WET - T_TAKE) / ((1 - SPLIT) * gapVh) : 0;
-  // The scroll works the wash. Its clock is the distance scrolled: each frame
-  // advances it by what the page moved, so a flick that covers the gap between
-  // the texts completes the wash in the frames the flick takes (bounded only by
-  // the steps a frame can run), and a slow read paces it. Left alone the film
-  // does not move at all: a reader who has stopped is not left standing in a
-  // half-finished wash, they are settled onto a scene, and from that moment the
-  // wash owes them it and runs on at ARRIVE — as it does the moment the reading
-  // line reaches the text of the scene being set.
-  // Speed also agitates the film and tilts the sheet so the water runs the way
-  // the page is pushed; a crossing back turns the wash around: the water is
-  // poured again, what it laid down lifts, and it sets on the scene the reader
-  // went back to. Every input shows on the next frame.
-  let t = 0, acc = 0, relift = 0, last = performance.now(), lastY = scrollY;
+  // jump passes over, and the target's.
+  if (!covered) passOnce(to);
   steps = 0; washT = 0;
-  await new Promise((finish) => {
-    const f = (now) => {
-      if (target === SHARE && xfAt() >= 1) { terminal = true; finish(); return; }
-      const stepClock = landing.stepClock;
-      if (stepClock && landing.stepLimit != null && steps >= landing.stepLimit) { requestAnimationFrame(f); return; }
-      const dtReal = Math.min(0.1, (now - last) / 1000); last = now;
-      const moved = Math.abs(scrollY - lastY) / innerHeight; lastY = scrollY;
-      // The newest target, however far off it is: this wash is re-pointed at
-      // it rather than finishing and handing on to a second one. Mobile no
-      // longer reaches this loop at all -- renderMorphAt, below, is its own
-      // presenter now -- so the early-abort that used to live here for a
-      // full reversal (turn === from) is gone with it; the ordinary
-      // re-point below already turns a desktop pour around when turn lands
-      // back on from (back becomes true, below), no separate exit needed.
-      const turn = legToward(from, target, true);
-      if (turn !== to) {
-        // Back across the scene it began on is the turnaround it always was:
-        // the water is poured again and what it laid down lifts. Anything else
-        // is a re-point — the film keeps its pigment and its motion, and only
-        // the print it is drying onto changes.
-        const back = (turn - from) * (to - from) <= 0;
-        to = turn; fwd = to > from;
-        if (!pr[to]) pr[to] = sheets[to] || pr[from];
-        if (back) { t = 0; acc = 0; relift = 1; }
-        gapVh = gapOf(from, to); sim.setPrints(...inOrder());
-        if (!mobileHandoff) passOnce(to);
-      }
-      const v = stepClock ? (landing.scrollV || 0) : scrollV;   // the harness can hold a scroll speed
-      // a jump has left the text it started from far behind: it is arrived by
-      // definition, and nothing it crosses is being read
-      const jump = isJump(to, from);
-      const line = innerHeight * LINE, arrived = jump || (to > from ? textTop(scenesEl[to]) <= line : textBottom(scenesEl[to]) >= line);
-      const stir = Math.min(2, 3 * Math.abs(v)), tilt = -0.35 * Math.max(-1.2, Math.min(1.2, v));
-      // arrived, the wash runs on at ARRIVE, but through the smear at reading
-      // pace, so it is seen. Anywhere else the scroll is the only thing that
-      // moves it — including the settle's own travel, which the clock reads as
-      // the scroll it is, and which ends inside the scene's text: a rest needs
-      // no rate of its own, because being carried to a scene is an arrival.
-      // Mobile no longer reaches this loop at all, so the own===0 arm that
-      // used to live here for it is gone with it -- this is a desktop pour
-      // now, always arriving at some rate.
-      const own = jump ? ARRIVE_JUMP : arrived ? (t >= T_TAKE && t < T_WET ? ARRIVE_SMEAR : ARRIVE) : 0;
-      // Mobile no longer reaches this loop (renderMorphAt owns its own acc,
-      // p * T_TOTAL, directly), so the progress-keyed arm that used to live
-      // here is gone with it -- this is a desktop pour now, always paced by
-      // scroll distance and the arrive rate above.
-      if (!stepClock) acc += dtReal * own + K(t) * moved;
-      washDbg = { acc: +acc.toFixed(3), arrived, own, dtReal: +dtReal.toFixed(3), fps: Math.round(1 / Math.max(dtReal, 1e-3)) };
-      if (mobileHandoff && !stepClock) {
-        pigment.t = t;
-        const advanced = advanceWash(sim, pigment, { goal: acc, fwd, stir, tilt, relift }, () => {});
-        t = pigment.t; steps += advanced.count;
-      } else {
-        let budget = stepClock ? SPF : STEPS_PER_FRAME;
-        while (t < T_TOTAL && budget-- > 0 && (stepClock || t < acc) && !(HOLD && t >= HOLD)) { sim.step(fwd, t, smooth(T_CURE, T_TOTAL, t), stir, tilt, relift); t += DT; steps++; }
-      }
-      washT = t;
-      const caughtUp = t >= acc - DT;
-      if (mobileHandoff && caughtUp) {
-        // All source furniture stays put while the cover rises. Both live
-        // compositions switch only under opaque pigment, including reversal.
-        // The cover is where the reader is, not how far the film has got:
-        // the film may stall behind a slow frame or rebuild itself on a
-        // reversal, and neither is a thing the page should show. Flat at 1
-        // across the middle so the live composition underneath can be
-        // swapped without that swap ever being visible.
-        const p = clamp01(progressAt() - from);
-        const cover = Math.min(smooth(0, .35, p), 1 - smooth(.82, 1, p));
-        if (cover !== lastCover) {
-          stage.style.setProperty('--wash-cover', cover.toFixed(3));
-          lastCover = cover;
+  // Where the reader stands between the two texts is the whole of what is
+  // shown: p is read off the scroll position every frame, so the carry's own
+  // travel to a rest is what plays a transition out and a turnaround plays it
+  // back, with no clock of its own. The pour ends where p does: at 1 on the
+  // scene asked for, or at 0 once the reader has turned back to where it began.
+  const settled = await new Promise((finish) => {
+    const f = () => {
+      if (target === SHARE && xfAt() >= 1) { terminal = true; finish(to); return; }
+      const p = clamp01((progressAt() - from) / (to - from));
+      if (p !== shownP || !exact) {
+        const r = leg.render(p, STEPS_PER_FRAME);
+        steps += r.spent; exact = r.exact; shownP = p; washT = p * T_TOTAL;
+        if (covered) {
+          const cover = p > 0 && p < 1 ? 1 : 0;
+          if (cover !== lastCover) { stage.style.setProperty('--wash-cover', String(cover)); lastCover = cover; }
+          // Switched only while the canvas covers it, and latched: p is
+          // monotone in scroll within a leg, so this changes at most once per
+          // direction, and the deadband means even a jittering p cannot chatter.
+          showUnderCover(liveScene === from ? (p >= 0.55 ? to : from) : (p <= 0.45 ? from : to));
+          bridge.draw(washT);
+        } else {
+          // The sheet's shadow goes as the scene dissolves and the next one's
+          // returns as it consolidates.
+          const out = 1 - smooth(0, WatercolorMorph.A_END, p), back = smooth(WatercolorMorph.B_START, 1, p);
+          ground(GROUND[from][0] * out + GROUND[to][0] * back, GROUND[from][1] * out + GROUND[to][1] * back);
         }
-        // Switched inside the plateau, where the cover is exactly 1, and
-        // latched: p is monotone in scroll within a leg, so this changes at
-        // most once per direction, and the deadband means even a jittering
-        // p cannot chatter.
-        showUnderCover(liveScene === from ? (p >= 0.55 ? to : from) : (p <= 0.45 ? from : to));
-        // The logo-group-solid trigger and the mobile cell transform that
-        // used to live here were both mobileLayout()-gated, so both were
-        // already dead the moment mobile stopped calling pour() -- neither
-        // could ever fire from this loop again. renderMorphAt carries its
-        // own copy of the trigger for mobile; the desktop Publish control's
-        // own scale comes from publishBridge()'s draw(t) below, not cell.
-        bridge?.draw(t);
       }
-      if (!mobileHandoff || (caughtUp && t !== drawnT)) {
-        sim.draw(fwd, smooth(T_CURE, T_TOTAL, t), -.2);
-        drawnT = t;
-      }
-      if (!mobileHandoff) groundToward(to, smooth(T_DRY, T_TOTAL, t), stepClock ? DT * SPF : dtReal);
-      if (t >= T_TOTAL - 1e-6) finish(); else requestAnimationFrame(f);
+      if (exact && p >= 1) finish(to);
+      else if (exact && p <= 0 && (target - from) * (to - from) <= 0) finish(from);
+      else requestAnimationFrame(f);
     };
     requestAnimationFrame(f);
   });
-  if (mobileHandoff) releasePigmentCover();
+  if (covered) releasePigmentCover();
   bridge?.remove();
   fanEl.style.filter = '';
   fanEl.style.zIndex = '';
   if (terminal) return SHARE;
-  if (!bridge) setSheet(to, pr[to]);   // the scene now on screen, at rest
-  return to;
+  if (!bridge && settled === to) setSheet(to, pr[to]);   // the scene now on screen, at rest
+  return settled;
 }
 // The wash needs the scene as pixels, and a browser will not hand over its own
 // rendering, so the scene is re-rendered by the same engine: each document
@@ -3138,7 +3248,7 @@ async function prepareScene3Capture() {
 }
 // The print of the scene the DOM is showing now (the wash switches the DOM
 // under its own canvas before asking for the target's print).
-let captureMs = 0, washT = 0, washDbg = null;
+let captureMs = 0, washT = 0, recordSteps = 0;
 // Counters for the harness only; nothing in the page reads them. A wrapper so
 // that the count is right however `takePrint` leaves (returned, thrown, timed out).
 let captures = 0, inFlight = 0, peakInFlight = 0;
@@ -3476,7 +3586,21 @@ async function warm() {
   // taken, then one a wash has just left behind, then the scene on screen, whose
   // print goes off because the scene moves.
   if (!await fillPrints() && !await refreshStale()) await retakeShown();
+  if (atRest()) warmDissolve();
   maybeJoin();
+}
+// A dissolve a leg from here will need, recorded while nothing moves: one
+// print a tick. Not the desktop scene on screen, whose print is retaken every
+// second at rest -- its record is made as its leg starts, from the print the
+// leg actually carries.
+function warmDissolve() {
+  if (!morph || running()) return;
+  morph.retain(needed(shown).map((scene) => sheets[scene]));
+  for (const scene of needed(shown)) {
+    if (!mobileLayout() && scene === shown) continue;
+    const spent = morph.warm(sheets[scene]);
+    if (spent) { recordSteps += spent; return; }
+  }
 }
 warmSoon();
 // The one door into a join. A target asked for while a print it needs was still
@@ -4455,6 +4579,9 @@ landing.still = (scene) => {
 };
 landing.wash = (to) => { if (running()) return Promise.resolve(false); target = to; return runJoin().then(() => true); };
 landing.probe = (x, y) => sim.probe(x, y);
+// The transition on screen (WatercolorMorph): the p it last presented and the
+// two prints it carries, and where its dissolves keep their stored frames.
+landing.morph = { current: () => morph?.current(), leg: () => morph?.current()?.tag ?? null, frames: morph?.frames, bounds: [WatercolorMorph.A_END, WatercolorMorph.B_START] };
 // The live array itself, not a copy: a fault is injected by assigning into
 // an element (e.g. prints[3] = null), so a snapshot here would turn that
 // into a no-op that still passes.
@@ -4465,7 +4592,7 @@ landing.sceneForRest = sceneForRest;   // which scene a rest carries to, the sam
 landing.printGeneration = () => printGeneration;   // a monotonic count, bumped only by applyPrintRect -- ground truth for "did the rect actually change", never a transient read of prints itself
 // settle/held/kind all call gestureKind(now) fresh, the same function every production
 // read site calls -- no cached field for this or any other reader to disagree with.
-landing.state = () => ({ titleWash: TITLE_WASH, shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: gestureKind(performance.now()) === 'settling', held: gestureKind(performance.now()) === 'held', kind: gestureKind(performance.now()), reason: gesture.reason, settleSecs: settleAt.secs, settleCureLeft: settleAt.cureLeft, settleShown: settleAt.shown, settleRunning: settleAt.running, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg, titleSteps, titleReady, titleMode });
+landing.state = () => ({ titleWash: TITLE_WASH, shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +progressAt().toFixed(3), travel, carryGoal, settle: gestureKind(performance.now()) === 'settling', held: gestureKind(performance.now()) === 'held', kind: gestureKind(performance.now()), reason: gesture.reason, settleSecs: settleAt.secs, settleCureLeft: settleAt.cureLeft, settleShown: settleAt.shown, settleRunning: settleAt.running, primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), recordSteps, titleSteps, titleReady, titleMode });
 
 const when = (frame, key) => new Promise((resolve, reject) => {
   const deadline = setTimeout(() => { clearInterval(poll); reject(new Error(`Demo ${frame.id} did not initialize`)); }, 10000);

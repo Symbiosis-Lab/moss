@@ -114,7 +114,8 @@ const BASELINE = {
   // tags (apple-touch-icon, PNG 32, PNG 16, plus the existing SVG) and the
   // comment explaining why this page repeats what the docs template
   // already declares -- real markup, not bloat.
-  htmlBytes: 54990,
+  // 54990 -> 55034 (2026-09-23): measured -- one <script src="watercolor-morph.js"> tag.
+  htmlBytes: 55034,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a
@@ -228,7 +229,8 @@ const BASELINE = {
   // coverage collapsing on every wash leg because alpha depended only on
   // pigment, never on the water the shader already computed) -- real logic
   // plus its own explanatory comment, not bloat.
-  scriptBytes: 278771,
+  // 278771 -> 286090 (2026-09-23): measured, set after correctness -- the three-phase transition's engine half (dissolve recorder, mass fixer, SHOWK/FIX), net of pour()'s deleted clock and the sheen floor.
+  scriptBytes: 286090,
 };
 
 function countWindowAssignments(text) {
