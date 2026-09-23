@@ -200,6 +200,18 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   writing-mode: horizontal-tb;
 }
 
+/* A grid-card figcaption is not a photo credit under a full-width plate —
+   it is the card's own title, the alt text of a `[![alt](img)](href)` cell
+   (`Block::LinkCard` in moss-core's renderer), which reads as card copy
+   alongside `.moss-card-title` a few rules down. That text was never forced
+   horizontal, so a caption naming the same card should not be either. Carve
+   it back out of the exception above; `inherit` rather than `vertical-rl`
+   outright, so the rule states "stop overriding" and not a second, possibly
+   drifting, opinion about which axis card copy runs on. */
+[data-typesetting="vertical"] .moss-grid-card figcaption {
+  writing-mode: inherit;
+}
+
 /* The three `.moss-card*` rules below asked for `--moss-font-serif`, which no
    token defines. The reads were invalid at computed-value time, so these cards
    have always rendered in the inherited body face — never a serif one. Dropping

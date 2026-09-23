@@ -84,3 +84,42 @@ for (const [page_, url] of [
     }
   });
 }
+
+/**
+ * A grid-card caption is card copy — the same kind of text as
+ * `.moss-card-title` — not a photo credit under a full-width plate, so it
+ * should turn with the rest of a vertical-typesetting page instead of
+ * following `site/vertical.css`'s `figure figcaption { writing-mode:
+ * horizontal-tb }` exception, which exists for ordinary in-article figures.
+ *
+ * Both grid-card shapes are checked (external `.link-preview` and internal
+ * `[data-kind="link"]`), same reasoning as the inline-size test above: the
+ * carve-out's selector governs both alike. The standalone figure appended to
+ * the vertical fixture page is the control — an ordinary article figure the
+ * horizontal exception still applies to, unaffected by the grid-card
+ * carve-out.
+ */
+test("grid-card figcaptions run vertical; an ordinary figure's caption still runs horizontal (vertical)", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  await page.goto("/vertical/");
+
+  const cardCaptions = await page.$$eval(".moss-grid > a.moss-grid-card figcaption", (nodes) =>
+    nodes.map((node) => {
+      const rect = node.getBoundingClientRect();
+      return { writingMode: getComputedStyle(node).writingMode, width: rect.width, height: rect.height };
+    }),
+  );
+  expect(cardCaptions).toHaveLength(2);
+  for (const { writingMode, width, height } of cardCaptions) {
+    expect.soft(writingMode).toBe("vertical-rl");
+    expect.soft(height, "a vertical caption's box should read taller than wide").toBeGreaterThan(width);
+  }
+
+  const standaloneWritingMode = await page.$eval(
+    "article > figure.moss-image > figcaption",
+    (node) => getComputedStyle(node).writingMode,
+  );
+  expect(standaloneWritingMode).toBe("horizontal-tb");
+});

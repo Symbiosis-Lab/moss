@@ -655,11 +655,17 @@ uid: "gcis0101"
 ---
 
 :::grid 2 {.no-cards}
-[![Tile](tile.svg)](https://example.org/)
+[![被兩地驅逐的人](tile.svg)](https://example.org/)
 +++
-[![Tile](tile.svg)](/about/)
+[![家鎖：家庭不只是你自己的事](tile.svg)](/about/)
 :::
 `,
+    // CJK alt text on both cells, plus a standalone (non-grid) captioned
+    // figure: the grid-card figcaption gate (below) needs real card
+    // captions to assert `writing-mode` on, and the standalone figure is
+    // the control — an ordinary article figure whose caption the vertical
+    // exception in site/vertical.css still governs, unlike the grid-card
+    // ones the fix carves out.
     "vertical/index.md": `---
 title: Card Image Inline Size Vertical
 uid: "gcis0102"
@@ -667,10 +673,12 @@ typesetting: vertical
 ---
 
 :::grid 2 {.no-cards}
-[![Tile](tile.svg)](https://example.org/)
+[![被兩地驅逐的人](tile.svg)](https://example.org/)
 +++
-[![Tile](tile.svg)](/about/)
+[![家鎖：家庭不只是你自己的事](tile.svg)](/about/)
 :::
+
+![人形物體載浮載沉](tile.svg)
 `,
     "About.md": `---
 title: About
