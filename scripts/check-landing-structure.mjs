@@ -230,7 +230,8 @@ const BASELINE = {
   // pigment, never on the water the shader already computed) -- real logic
   // plus its own explanatory comment, not bloat.
   // 278771 -> 286090 (2026-09-23): measured, set after correctness -- the three-phase transition's engine half (dissolve recorder, mass fixer, SHOWK/FIX), net of pour()'s deleted clock and the sheen floor.
-  scriptBytes: 286090,
+  // 286090 -> 289151 (2026-09-23): measured -- the dissolve shown as the real film, replayed from checkpoints (seek, checkpoint save/load, the mass fixer's interpolation), net of the stored-frame bookkeeping it replaced.
+  scriptBytes: 289151,
 };
 
 function countWindowAssignments(text) {

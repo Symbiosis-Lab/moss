@@ -31,10 +31,13 @@
 // says so in the report rather than fabricating a leg that isn't there.
 //
 // JOINS[3] (deploy->share) is a plain opacity crossfade (fade(), driven by
-// xfAt()/--xf) -- there is no #gl wash for it. Clauses 1/2/5 read a
-// full-viewport screenshot instead of #cell's rect for that leg, and clause
-// 3 reads .page/#five computed opacity instead of the canvas alpha channel;
-// both are called out inline and in the printed row.
+// xfAt()/--xf) -- there is no #gl wash for it. Clauses 1 and 5 read a
+// full-viewport screenshot instead of #cell's rect for that leg.
+//
+// Clauses 2 (mid-wash chroma) and 3 (canvas alpha coverage) were retired on
+// 2026-09-23, superseded by the three-phase clauses (held, mixA/mixB,
+// noBlank), which measure the same intent in the pigment's own units; see
+// the note in judge().
 //
 // Driving technique: frame-paced scrollTo ticks, not mouse.wheel or a
 // synthetic touch gesture -- the same choice check-landing-monotone.mjs
@@ -68,13 +71,15 @@ const SCENES = ['write', 'live', 'ships', 'deploy', 'share'];
 const LEGS = [[0, 1], [1, 2], [2, 3], [3, 4]];
 const WASH_LEG = [true, true, true, false];
 const GRID = { cols: 6, rows: 4 };
+// The source clause's own, finer grid: a member missing from the print (a
+// purple field, a logo) is a cell or two, and a coarse mean hides it.
+const SRC_GRID = { cols: 16, rows: 12 };
 const CHECKPOINTS = [0, 0.05, 0.1, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.6, 0.65, 0.7, 0.75, 0.8, 0.9, 0.95, 1];
 const FILM_POINTS = [0, 0.2, 0.35, 0.5, 0.65, 0.8, 1];
-const MID_POINTS = [0.4, 0.5, 0.6];
 const COVER_POINTS = [0.3, 0.4, 0.5, 0.6, 0.7];
 
 // Provisional -- stated per the brief, not tuned to make anything pass.
-const THRESH = { fidelityDE: 12, chromaFrac: 0.7, darkFrac: 0.7, continuityFloor: 0.5 };
+const THRESH = { fidelityDE: 12, sourceCellDE: 30 };
 
 // The three-phase model (site/watercolor-morph.js; the owner's definition of
 // a scene transition): A dissolves alone into a well-mixed wash by p = a,
@@ -235,23 +240,11 @@ function memberCheckBrowser(members) {
   });
 }
 
-function inkFractionBrowser() {
-  const cv = document.getElementById('gl');
-  const small = document.createElement('canvas');
-  small.width = 160; small.height = 120;
-  const g = small.getContext('2d', { willReadFrequently: true });
-  g.drawImage(cv, 0, 0, small.width, small.height);
-  const d = g.getImageData(0, 0, small.width, small.height).data;
-  let inked = 0, n = 0;
-  for (let i = 0; i < d.length; i += 4) { n++; if (d[i + 3] >= 32) inked++; }
-  return inked / n;
-}
-
 // The mounted leg, the p it presented (in this run's own direction), and the
 // wash canvas as optical density, downsampled to `side` columns; the two
 // prints the same way when asked. Density is -ln(pixel / paper), clamped
 // where absorb() clamps it (0.02 transmittance).
-function washReadBrowser({ side, withPrints, from, to }) {
+function washReadBrowser({ side, withPrints, from, to, maxW = Infinity }) {
   const L = window.__landing;
   const cv = document.getElementById('gl');
   const cs = getComputedStyle(cv);
@@ -270,9 +263,11 @@ function washReadBrowser({ side, withPrints, from, to }) {
   // colours first and taking the log after would understate any ink finer
   // than a grid cell, a print's most of all, and never a uniform wash's.
   const read = (src, composite) => {
-    const c = document.createElement('canvas'); c.width = src.width; c.height = src.height;
+    // maxW trades the per-pixel density for speed, where a pass reads every frame.
+    const f = Math.min(1, maxW / src.width);
+    const c = document.createElement('canvas'); c.width = Math.round(src.width * f); c.height = Math.round(src.height * f);
     const g = c.getContext('2d', { willReadFrequently: true });
-    g.drawImage(src, 0, 0);
+    g.drawImage(src, 0, 0, c.width, c.height);
     const d = g.getImageData(0, 0, c.width, c.height).data;
     const acc = new Float64Array(W * H * 3), inked = new Float64Array(W * H), cnt = new Float64Array(W * H);
     let alphaSum = 0;
@@ -341,15 +336,18 @@ async function cellRect(page, wash) {
   });
 }
 
-async function captureGrid(page, rect) {
+async function captureGrid(page, rect, grid = GRID) {
   const clip = { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
   const buf = await page.screenshot({ clip });
-  const reduced = await page.evaluate(decodeAndReduce, { b64: buf.toString('base64'), cols: GRID.cols, rows: GRID.rows });
-  return { ...reduced, buf, rect };
+  const b64 = buf.toString('base64');
+  const reduced = await page.evaluate(decodeAndReduce, { b64, cols: grid.cols, rows: grid.rows });
+  // The source clause's finer cells, from the same screenshot.
+  const fine = grid === GRID ? (await page.evaluate(decodeAndReduce, { b64, cols: SRC_GRID.cols, rows: SRC_GRID.rows })).cells : null;
+  return { ...reduced, fine, buf, rect };
 }
 
-async function namesGrid(page, rect) {
-  return page.evaluate(namesGridBrowser, { rect, cols: GRID.cols, rows: GRID.rows });
+async function namesGrid(page, rect, grid = GRID) {
+  return page.evaluate(namesGridBrowser, { rect, cols: grid.cols, rows: grid.rows });
 }
 
 async function saveFilm(dir, legLabel, layout, engine, p, buf) {
@@ -381,6 +379,7 @@ async function runLegDirection(page, { legIdx, from, to, wash, layout, engine, f
   const rectFrom = await cellRect(page, wash);
   const refFrom = await captureGrid(page, rectFrom);
   const refFromNames = await namesGrid(page, rectFrom);
+  const refFromFineNames = await namesGrid(page, rectFrom, SRC_GRID);
   if (FILM_POINTS.includes(0)) await saveFilm(filmDir, legLabel, layout, engine, 0, refFrom.buf);
 
   // Desktop's watchScrollDesktop reads `travel` (the last wheel/pointer
@@ -447,11 +446,6 @@ async function runLegDirection(page, { legIdx, from, to, wash, layout, engine, f
     shot.steps = st.steps; shot.washT = st.washT;
     if (p >= COVER_POINTS[0] && p <= COVER_POINTS.at(-1)) {
       shot.members = await page.evaluate(memberCheckBrowser, activeMembers(from));
-      if (wash) shot.inkFrac = await page.evaluate(inkFractionBrowser);
-      else shot.xfOpacity = await page.evaluate(() => ({
-        page: +getComputedStyle(document.querySelector('.page')).opacity,
-        five: +getComputedStyle(document.getElementById('five')).opacity,
-      }));
     }
     if (wash) {
       shot.wash = await page.evaluate(washReadBrowser, { side: 96, withPrints: !prints, from, to });
@@ -483,7 +477,7 @@ async function runLegDirection(page, { legIdx, from, to, wash, layout, engine, f
     samples[p] = shot;
   }
 
-  return judge({ legIdx, from, to, dir, wash, layout, engine, refFrom, refTo, refFromNames, refToNames, samples, prints, bounds });
+  return judge({ legIdx, from, to, dir, wash, layout, engine, refFrom, refTo, refFromNames, refFromFineNames, refToNames, samples, prints, bounds });
 }
 
 function worstCells(refCells, sampleCells, names) {
@@ -495,50 +489,27 @@ function worstCells(refCells, sampleCells, names) {
 }
 
 function judge(ctx) {
-  const { legIdx, from, to, wash, layout, engine, refFrom, refTo, refFromNames, refToNames, samples } = ctx;
+  const { legIdx, from, to, wash, layout, engine, refFrom, refTo, refToNames, samples } = ctx;
   const clauses = {};
 
-  // Clause 1: source fidelity at p~=0.05.
+  // Clause 1: source fidelity at p~=0.05, cell by cell and in colour: every
+  // one of SRC_GRID's cells within sourceCellDE of the live scene it started
+  // from. A dissolve 26 steps in has moved its ink by a few pixels; a member
+  // missing from the print (the notebook's purple field, a logo) leaves its
+  // cells a different colour altogether, and the worst of them are named.
   {
-    const { meanDE, worst } = worstCells(refFrom.cells, samples[0.05].cells, refFromNames);
-    clauses.source = { p: 0.05, meanDE, pass: meanDE < THRESH.fidelityDE, worst };
+    const de = refFrom.fine.map((c, i) => deltaE(cellLab(c), cellLab(samples[0.05].fine[i])));
+    const order = [...de.keys()].sort((a, b) => de[b] - de[a]);
+    const worst = order.slice(0, 3).map((i) => ({ col: i % SRC_GRID.cols, row: Math.floor(i / SRC_GRID.cols), dE: +de[i].toFixed(1), element: ctx.refFromFineNames[i] }));
+    clauses.source = { p: 0.05, worstDE: worst[0].dE, meanDE: +meanOf(de).toFixed(2), pass: de.every((v) => v <= THRESH.sourceCellDE), worst };
   }
 
-  // Clause 2: mid-wash pigment body, p=0.4/0.5/0.6, as a fraction of the
-  // outgoing scene's own mean chroma/darkness. "Covered area" is
-  // approximated as the whole clip region -- a wash is defined to cover the
-  // full composition, and clause 3 independently checks how much of it
-  // actually carries ink, so this does not also try to segment covered vs
-  // bare pixels.
-  {
-    const refChroma = meanOf(refFrom.cells.map((c) => chroma(cellLab(c))));
-    const refDark = meanOf(refFrom.cells.map((c) => darkness(cellLab(c))));
-    const per = MID_POINTS.map((p) => {
-      const s = samples[p];
-      const ch = meanOf(s.cells.map((c) => chroma(cellLab(c))));
-      const dk = meanOf(s.cells.map((c) => darkness(cellLab(c))));
-      return { p, chromaFrac: refChroma > 0.01 ? ch / refChroma : 1, darkFrac: refDark > 0.01 ? dk / refDark : 1 };
-    });
-    const worst = per.reduce((a, b) => Math.min(a.chromaFrac, a.darkFrac) <= Math.min(b.chromaFrac, b.darkFrac) ? a : b);
-    clauses.mid = { per, worst, refChroma: +refChroma.toFixed(1), refDark: +refDark.toFixed(3), pass: per.every((x) => x.chromaFrac >= THRESH.chromaFrac && x.darkFrac >= THRESH.darkFrac) };
-  }
-
-  // Clause 3: continuity. Wash legs read the canvas's own alpha coverage
-  // (the technique scratchpad/forensics/probes/probe-wash2.mjs already
-  // validated for this exact bug report); the crossfade leg has no canvas,
-  // so it reads .page/#five's own computed opacity instead and is judged by
-  // "both sides carry some ink whenever the crossfade is running", not by
-  // the 0.5 pigment-coverage floor, which measures a different mechanism
-  // and would not mean the same thing here.
-  if (wash) {
-    const points = COVER_POINTS.map((p) => ({ p, frac: +samples[p].inkFrac.toFixed(3) }));
-    const worst = points.reduce((a, b) => (a.frac <= b.frac ? a : b));
-    clauses.continuity = { mechanism: 'wash-alpha', points, worst, pass: points.every((x) => x.frac >= THRESH.continuityFloor) };
-  } else {
-    const points = COVER_POINTS.map((p) => ({ p, ...samples[p].xfOpacity }));
-    const worst = points.reduce((a, b) => Math.min(a.page, a.five) <= Math.min(b.page, b.five) ? a : b);
-    clauses.continuity = { mechanism: 'crossfade-opacity', points, worst, pass: points.every((x) => x.page > 0.02 && x.five > 0.02) };
-  }
+  // (Retired 2026-09-23: clause 2, mid-wash chroma and darkness at p = 0.4 to
+  // 0.6 against the source's, and clause 3, canvas alpha coverage at p = 0.3
+  // to 0.7. The three-phase clauses below state what they approximated --
+  // the wash holds the source's own pigment (held, mixA/mixB) and is never
+  // blank (noBlank) -- in the pigment's own units, where these two read a
+  // well-mixed wash's pale mean colour and its thin alpha as failures.)
 
   // Clause 4: nothing left behind, p=0.3..0.7, except the Publish control on
   // legs 2 and 3 (excluded from MEMBERS entirely -- see the module comment
@@ -682,14 +653,171 @@ function judgeReverse(fwd, back) {
   return { pairs, pass: compared.length > 0 && compared.every((q) => q.meanDE <= MODEL.reverseDE) };
 }
 
+// ---- the slow scroll: is the film continuous, physical and reversible? ----
+//
+// The owner's complaint (2026-09-23) was that the morph "goes in concrete
+// steps": a dissolve stored as a handful of frames and shown as a crossfade
+// between them has blooms that fade in place instead of spreading. Three
+// clauses, read off one slow pass through a leg, forward and then back over
+// the very same scroll positions:
+//   step       consecutive frames of the pass (one scroll pixel apart, a sim
+//              step or two) differ by at most SLOW.stepDE, the worst cell's
+//              CIE76 deltaE on a SLOW.cols x SLOW.rows grid of the canvas;
+//   bent       the film is a simulation, not a blend: for three frames p - d,
+//              p, p + d (d = SLOW.bendDp) a crossfade puts the middle frame's
+//              density exactly halfway between its neighbours, and a film in
+//              which pigment moves does not. The median, over the triples of
+//              the outer phases, of |mid - line(lo, hi)| / |hi - lo| (lower quartile) must
+//              reach SLOW.bend (the middle phase is excluded: it is an
+//              interpolation by design, between two washes with no structure);
+//   same       each position revisited on the way back shows the frame it
+//              showed on the way forward, pixel for pixel (SLOW.sameDE).
+// The thresholds are measured, not assumed; see the numbers in the report
+// that set them.
+// Measured 2026-09-23 (Chromium, both layouts, legs 1-2 and 2-3): the worst
+// step between consecutive frames 3.3 to 7.7, where a wash finishes mixing
+// (p 0.35 and 0.65); bent's lower quartile 0.024 to 0.043 for the replayed
+// film and 0.003 for the stored-frame crossfade it replaced; same exactly 0.
+const SLOW = { dp: 0.005, cols: 16, rows: 12, stepDE: 10, bendDp: 0.02, bend: 0.015, sameDE: 0.5, film: 20, back: 10 };
+const SLOW_LEGS = (process.env.MORPH_SLOW_LEGS ?? '1,2').split(',').filter(Boolean).map(Number);
+
+function gridLab(w, cols, rows) {
+  const out = [];
+  for (let ry = 0; ry < rows; ry++) for (let rx = 0; rx < cols; rx++) {
+    const x0 = Math.floor(rx * w.W / cols), x1 = Math.floor((rx + 1) * w.W / cols), y0 = Math.floor(ry * w.H / rows), y1 = Math.floor((ry + 1) * w.H / rows);
+    const m = [0, 0, 0]; let n = 0;
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const j = (y * w.W + x) * 3; m[0] += w.dens[j]; m[1] += w.dens[j + 1]; m[2] += w.dens[j + 2]; n++; }
+    out.push({ m: m.map((v) => v / Math.max(1, n)), lab: densLab(m.map((v) => v / Math.max(1, n)), w.bg) });
+  }
+  return out;
+}
+const worstDE = (g0, g1) => Math.max(...g0.map((c, i) => deltaE(c.lab, g1[i].lab)));
+
+async function runSlow(page, { from, to, layout, engine, filmDir }) {
+  const isDesktop = layout === 'desktop';
+  const dir = Math.sign(to - from);
+  // Both prints on hand first: a leg whose print is still being taken is a
+  // cut until it arrives, and then mounts mid-leg, which is a different
+  // question (a cold load outrunning capture) from the one asked here.
+  await page.evaluate((from) => { window.__landing.still(from); scrollTo(0, window.__landing.restY(from)); }, from);
+  await page.waitForFunction(([a, b]) => window.__landing.prints[a] && window.__landing.prints[b], [from, to], { timeout: 30000 });
+  await settleFrames(page, 3);
+  if (isDesktop) {
+    await page.mouse.wheel(0, dir * 40);
+    await page.evaluate((from) => scrollTo(0, window.__landing.restY(from)), from);
+    await settleFrames(page, 2);
+    await page.evaluate(() => dispatchEvent(new PointerEvent('pointerdown', { clientX: 1e5, clientY: 10, pointerType: 'mouse', button: 0 })));
+  }
+  const yTo = await page.evaluate((to) => window.__landing.restY(to), to);
+  const pAt = async () => ((await page.evaluate(() => window.__landing.state().progress)) - from) / (to - from);
+  // Waits for the frame shown to be p's own: a leg still recording a dissolve
+  // shows the furthest it has, and asks to be rendered again.
+  const exactFrame = async () => {
+    for (let i = 0; i < 120; i++) {
+      await settleFrames(page, 1);
+      const c = await page.evaluate(() => window.__landing.morph?.current?.());
+      if (!c || c.exact !== false) return;
+    }
+  };
+  let y = await page.evaluate(() => scrollY);
+  const sgn = Math.sign(yTo - y);
+  const fwd = [];
+  // Every scroll pixel is a frame, and each is read: consecutive frames of a
+  // slow scroll are what the reader compares.
+  while ((yTo - y) * sgn > 0) {
+    y += sgn;
+    await page.evaluate((yy) => scrollTo(0, yy), y);
+    await settleFrames(page, 1);
+    const p = await pAt();
+    if (p >= 1 - SLOW.dp) break;
+    if (p <= SLOW.dp || (fwd.length && p === fwd.at(-1).p)) continue;
+    await exactFrame();
+    const w = await page.evaluate(washReadBrowser, { side: 96, withPrints: false, from, to, maxW: 384 });
+    if (!w.mounted || Math.min(w.legFrom, w.legTo) !== Math.min(from, to) || Math.max(w.legFrom, w.legTo) !== Math.max(from, to)) continue;
+    const same = w.legFrom === from;
+    fwd.push({ y, p, pDir: same ? w.p : 1 - w.p, grid: gridLab(w, SLOW.cols, SLOW.rows) });
+  }
+  // The film: SLOW.film evenly spaced positions, the nearest sample to each.
+  const shots = [];
+  for (let i = 0; i < SLOW.film; i++) {
+    const want = (i + 0.5) / SLOW.film;
+    const s = fwd.reduce((a, b) => (Math.abs(b.p - want) < Math.abs(a.p - want) ? b : a), fwd[0]);
+    if (s) shots.push({ want, s });
+  }
+  // Back over the same positions, every SLOW.back-th one, and the film on the way.
+  const back = [];
+  const filmAt = new Map(shots.map((x) => [x.s.y, x.want]));
+  for (let i = fwd.length - 1; i >= 0; i--) {
+    const s = fwd[i];
+    if (i % SLOW.back && !filmAt.has(s.y)) continue;
+    await page.evaluate((yy) => scrollTo(0, yy), s.y);
+    await exactFrame();
+    if (i % SLOW.back === 0) {
+      const w = await page.evaluate(washReadBrowser, { side: 96, withPrints: false, from, to, maxW: 384 });
+      if (w.mounted) back.push({ i, p: s.p, de: worstDE(s.grid, gridLab(w, SLOW.cols, SLOW.rows)) });
+    }
+    if (filmAt.has(s.y)) {
+      const r = await cellRect(page, true);
+      const buf = await page.screenshot({ clip: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) } });
+      await writeFile(resolvePath(filmDir, `slow-${layout}-${engine}-${from}-${to}-${String(Math.round(filmAt.get(s.y) * 1000)).padStart(4, '0')}.png`), buf);
+    }
+  }
+  if (isDesktop) await page.evaluate(() => dispatchEvent(new PointerEvent('pointerup', { clientX: 1e5, clientY: 10, pointerType: 'mouse', button: 0 })));
+  return judgeSlow({ from, to, layout, engine, fwd, back });
+}
+
+function judgeSlow({ from, to, layout, engine, fwd, back }) {
+  const [a, b] = [0.35, 0.65];
+  const steps = [];
+  for (let i = 1; i < fwd.length; i++) steps.push({ p: +fwd[i].p.toFixed(3), de: +worstDE(fwd[i - 1].grid, fwd[i].grid).toFixed(1) });
+  const worstStep = steps.reduce((x, y) => (y.de > x.de ? y : x), { de: 0 });
+  // Triples in the outer phases, about d apart, from the samples nearest
+  // each; the middle is compared with the straight line between its
+  // neighbours at its own p, over the cells that changed by more than the
+  // canvas's 8-bit quantisation can make up.
+  const near = (p) => fwd.reduce((x, y) => (Math.abs(y.pDir - p) < Math.abs(x.pDir - p) ? y : x), fwd[0]);
+  const ratios = [];
+  for (let p = SLOW.bendDp; p < 1 - SLOW.bendDp; p += SLOW.bendDp / 2) {
+    if (p + SLOW.bendDp > a && p - SLOW.bendDp < b) continue;
+    const lo = near(p - SLOW.bendDp), mid = near(p), hi = near(p + SLOW.bendDp);
+    if (lo === mid || mid === hi) continue;
+    const t = (mid.pDir - lo.pDir) / (hi.pDir - lo.pDir);
+    let num = 0, den = 0;
+    mid.grid.forEach((c, k) => {
+      const d = lo.grid[k].m.map((l, ch) => hi.grid[k].m[ch] - l);
+      if (Math.abs(d[0]) + Math.abs(d[1]) + Math.abs(d[2]) < 0.03) return;
+      for (let ch = 0; ch < 3; ch++) { num += Math.abs(c.m[ch] - (lo.grid[k].m[ch] + d[ch] * t)); den += Math.abs(d[ch]); }
+    });
+    if (den > 0.3) ratios.push(+(num / den).toFixed(3));
+  }
+  const sorted = [...ratios].sort((x, y) => x - y);
+  // The lower quartile: a crossfade between stored frames is a straight line
+  // inside each stored interval, so it scores near zero on every triple that
+  // falls inside one, however it scores across the joins.
+  const median = sorted.length ? sorted[Math.floor(sorted.length / 4)] : 0;
+  const worstSame = back.reduce((x, y) => (y.de > x.de ? y : x), { de: 0 });
+  return {
+    from, to, layout, engine, samples: fwd.length,
+    step: { worst: worstStep, pass: fwd.length > 20 && worstStep.de <= SLOW.stepDE },
+    bent: { median: +median.toFixed(3), triples: ratios.length, ratios, pass: ratios.length > 5 && median >= SLOW.bend },
+    same: { compared: back.length, worst: { p: worstSame.p && +worstSame.p.toFixed(3), de: +worstSame.de.toFixed(2) }, pass: back.length > 5 && worstSame.de <= SLOW.sameDE },
+    steps,
+  };
+}
+
+function printSlow(r) {
+  console.log(`${r.layout}/${r.engine} slow ${r.from}->${r.to}  samples=${r.samples}`);
+  console.log(`  S1 step  worst deltaE=${r.step.worst.de} at p=${r.step.worst.p} (limit ${SLOW.stepDE})  ${fmtClause(r.step)}`);
+  console.log(`  S2 bent  q25=${r.bent.median} over ${r.bent.triples} triples (floor ${SLOW.bend})  ${fmtClause(r.bent)}`);
+  console.log(`  S3 same  worst deltaE=${r.same.worst.de} at p=${r.same.worst.p} over ${r.same.compared}  ${fmtClause(r.same)}`);
+}
+
 function fmtClause(c) { return c.pass ? 'PASS' : 'FAIL'; }
 
 function printRow(r) {
   const label = `${r.fromIdx}->${r.toIdx} (${r.from}->${r.to})`;
   console.log(`${r.layout}/${r.engine} ${label}`);
-  console.log(`  1 source  p=0.05  meanDE=${r.clauses.source.meanDE}  ${fmtClause(r.clauses.source)}${r.clauses.source.pass ? '' : '  worst=' + JSON.stringify(r.clauses.source.worst)}`);
-  console.log(`  2 mid     p=.4/.5/.6  worst chromaFrac=${r.clauses.mid.worst.chromaFrac.toFixed(2)} darkFrac=${r.clauses.mid.worst.darkFrac.toFixed(2)} (at p=${r.clauses.mid.worst.p})  ${fmtClause(r.clauses.mid)}`);
-  console.log(`  3 continuity [${r.clauses.continuity.mechanism}]  worst=${JSON.stringify(r.clauses.continuity.worst)}  ${fmtClause(r.clauses.continuity)}`);
+  console.log(`  1 source  p=0.05  worst cell deltaE=${r.clauses.source.worstDE} (mean ${r.clauses.source.meanDE})  ${fmtClause(r.clauses.source)}${r.clauses.source.pass ? '' : '  worst=' + JSON.stringify(r.clauses.source.worst)}`);
   console.log(`  4 leftBehind  ${fmtClause(r.clauses.leftBehind)}${r.clauses.leftBehind.flags.length ? '  flags=' + JSON.stringify(r.clauses.leftBehind.flags.slice(0, 4)) : ''}`);
   console.log(`  5 target  p=0.95  meanDE=${r.clauses.target.meanDE}  ${fmtClause(r.clauses.target)}${r.clauses.target.pass ? '' : '  worst=' + JSON.stringify(r.clauses.target.worst)}`);
   if (!r.wash) return;
@@ -735,6 +863,11 @@ async function main() {
             }
             if (wash) { pair[0].clauses.reverse = judgeReverse(pair[0], pair[1]); pair[1].clauses.reverse = judgeReverse(pair[1], pair[0]); }
             for (const r of pair) { printRow(r); delete r._wash; }
+          }
+          for (const legIdx of SLOW_LEGS) {
+            if (!WASH_LEG[legIdx]) continue;
+            const r = await runSlow(page, { from: LEGS[legIdx][0], to: LEGS[legIdx][1], layout: layout.name, engine: engineName, filmDir: FILM_DIR });
+            printSlow(r); results.push({ slow: true, ...r, clauses: { step: r.step, bent: r.bent, same: r.same } });
           }
           if (pageErrors.length) console.log(`${engineName}/${layout.name}: page errors: ${pageErrors.join('; ')}`);
           await page.close();

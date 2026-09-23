@@ -921,11 +921,12 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
   const blank = tex(1, 1, gl.CLAMP_TO_EDGE, false);
   gl.bindTexture(gl.TEXTURE_2D, blank); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
   const blankPrint = { full: blank, lo: blank, ft: blank };
-  // The one film is shared: a dissolve being recorded owns it until its last
-  // frame is stored, and any other use of it (the closing wash's step/reset)
-  // hands it back, so that record starts over rather than resuming on a film
-  // somebody else has moved.
-  let recording = null, showk = null, fixer = null, held = [];
+  // The one film is shared by every dissolve and the closing wash. `film`
+  // says which dissolve it holds and at which step, so a dissolve can carry
+  // on from where the film already is; anything else that moves the film
+  // (the closing wash's step/reset, another dissolve) makes the next user
+  // restore a checkpoint instead.
+  let film = null, showk = null, fixer = null, held = [];
   // The mass fixer: a stored frame's liquid is scaled, per channel, so the
   // frame holds exactly its print's pigment. The film's transport is not
   // conservative (semi-Lagrangian advection, and concentration relaxing
@@ -936,13 +937,13 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
   // with MEAN, and the block means read back and weighted by the texels each
   // block really holds: the grid's last row and column of blocks are partial,
   // and an unweighted mean of block means is off by as much as 8% (phone).
-  const fixScale = (rec, f) => {
+  const fixScale = (rec) => {
     if (!fixer) {
       const L = tex(W, H), R = tex(W, H), nearT2 = tex(NW, NH);
       fixer = { p: prog(FIX), L, R, F: fbo([L, R]), nearF: fbo([nearT2]) };
     }
     gl.viewport(0, 0, W, H); gl.useProgram(fixer.p.p); bindPrints(rec.pr, blankPrint); gl.bindFramebuffer(gl.FRAMEBUFFER, fixer.F);
-    bind(1, f.S); bind(2, f.D); draw();
+    bind(1, pT[pi][0]); bind(2, pT[pi][1]); draw();
     const reduce = (t) => {
       gl.useProgram(mean.p);
       gl.viewport(0, 0, NW, NH); gl.bindFramebuffer(gl.FRAMEBUFFER, fixer.nearF);
@@ -975,9 +976,13 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
   // One step of a print dissolving on its own, toward nothing: no uptake (the
   // target is paper), no drying, the sheet kept wet, the film stirred harder
   // as it goes, and from a third of the way the stirring's limit (uHomog)
-  // pulling it to one uniform wash that the last step reaches exactly.
-  const stepDissolve = (rec) => {
-    const t = rec.n * DT, u = (rec.n + 1) / rec.N;
+  // pulling it to one uniform wash that the last step reaches exactly. The
+  // pull closes the remaining gap evenly over the last steps (1 / steps
+  // left) rather than all in the last one: every step of the film is now a
+  // frame someone sees, and a last-step snap was the largest jump in a slow
+  // scroll (deltaE 13 to 20 in the worst cell, measured).
+  const stepDissolve = (rec, n) => {
+    const t = n * DT, u = (n + 1) / rec.N;
     gl.viewport(0, 0, W, H);
     gl.useProgram(water.p); bindPrints(rec.pr, blankPrint); gl.bindFramebuffer(gl.FRAMEBUFFER, wF[1 - wi]);
     bind(0, wT[wi]);
@@ -985,7 +990,7 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
     gl.uniform1f(water.u.uEvap, 0.0008); gl.uniform1f(water.u.uDrying, 0); gl.uniform2f(water.u.uTilt, 0, 0);
     draw(); wi = 1 - wi;
     // on the record's own count, so a print's dissolve is the same every time it is recorded
-    if (rec.n % 3 === 0) means(pT[pi][0], wT[wi]);
+    if (n % 3 === 0) means(pT[pi][0], wT[wi]);
     gl.viewport(0, 0, W, H);
     gl.useProgram(pig.p); bindPrints(rec.pr, blankPrint); gl.bindFramebuffer(gl.FRAMEBUFFER, pF[1 - pi]);
     bind(0, wT[wi]); bind(1, pT[pi][0]); bind(2, pT[pi][1]); bind(3, nearT); bind(4, wholeT);
@@ -994,7 +999,7 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
     gl.uniform1f(pig.u.uMix, 0.06); gl.uniform1f(pig.u.uMixG, 0.005 + 0.05 * smooth(0.2, 0.8, u));
     gl.uniform1f(pig.u.uDrying, 0); gl.uniform1f(pig.u.uStir, smooth(0.05, 0.4, u)); gl.uniform1f(pig.u.uRelift, 0);
     gl.uniform1f(pig.u.uLoad, load);
-    gl.uniform1f(pig.u.uHomog, rec.n + 1 >= rec.N ? 1 : 0.035 * smooth(0.3, 0.95, u));
+    gl.uniform1f(pig.u.uHomog, Math.max(0.035 * smooth(0.3, 0.95, u), 1 / (rec.N - n)));
     gl.uniform3f(pig.u.uMean, rec.mean[0], rec.mean[1], rec.mean[2]);
     draw(); pi = 1 - pi;
   };
@@ -1015,6 +1020,47 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, srcFbo); gl.readBuffer(srcAttachment);
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, dstFbo); if (dstBuffers) gl.drawBuffers(dstBuffers);
     gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+  };
+  // A checkpoint is the film's whole state at one step of a dissolve: the
+  // water (depth, velocity, saturation) as well as the pigment and deposit,
+  // since stepping on from anything less would not be the same film. The
+  // coarse means need no copy: a checkpoint falls on a step where
+  // stepDissolve recomputes them before they are read.
+  const saveCheckpoint = (rec, n) => {
+    const c = { W: tex(W, H), S: tex(W, H), D: tex(W, H) };
+    c.fW = fbo([c.W]); c.fS = fbo([c.S]); c.fD = fbo([c.D]);
+    blit(wF[wi], gl.COLOR_ATTACHMENT0, c.fW); blit(pF[pi], gl.COLOR_ATTACHMENT0, c.fS); blit(pF[pi], gl.COLOR_ATTACHMENT1, c.fD);
+    rec.ck.set(n, c);
+  };
+  const loadCheckpoint = (c) => {
+    blit(c.fW, gl.COLOR_ATTACHMENT0, wF[wi]);
+    blit(c.fS, gl.COLOR_ATTACHMENT0, pF[pi], [gl.COLOR_ATTACHMENT0, gl.NONE]);
+    blit(c.fD, gl.COLOR_ATTACHMENT0, pF[pi], [gl.NONE, gl.COLOR_ATTACHMENT1]);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, pF[pi]); gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+  };
+  // Puts the film at step s of a dissolve and returns the steps that took:
+  // from the film itself when it already holds this dissolve between s's
+  // checkpoint and s, else from that checkpoint. Replay is the real
+  // simulation with fixed inputs, so step s is the same state whichever way
+  // it was reached, going forward or coming back.
+  const seek = (rec, s) => {
+    const base = s - s % rec.every;
+    if (!(film && film.rec === rec && film.n >= base && film.n <= s)) {
+      if (base) loadCheckpoint(rec.ck.get(base)); else clearState();
+      film = { rec, n: base };
+    }
+    let count = 0;
+    while (film.n < s) { stepDissolve(rec, film.n); film.n++; count++; }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return count;
+  };
+  // A frame to show: the print at rest, a checkpoint, or the film itself.
+  const frameTextures = ({ rec, s }) => {
+    if (!s) return [blank, blank, [1, 1, 1]];
+    const k = Array.from(rec.k.subarray(s * 3, s * 3 + 3)), c = rec.ck.get(s);
+    if (c) return [c.S, c.D, k];
+    if (film?.rec === rec && film.n === s) return [pT[pi][0], pT[pi][1], k];
+    throw new Error(`dissolve step ${s} is neither stored nor on the film`);
   };
 
   return {
@@ -1049,6 +1095,7 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       let best = null;
       for (const k of kf) if (k.t >= 0 && k.t <= goal && (!best || k.t > best.t)) best = k;
       if (!best) return null;
+      film = null;
       blit(best.wF, gl.COLOR_ATTACHMENT0, wF[wi]);
       blit(best.pF0, gl.COLOR_ATTACHMENT0, pF[pi], [gl.COLOR_ATTACHMENT0, gl.NONE]);
       blit(best.pF1, gl.COLOR_ATTACHMENT0, pF[pi], [gl.NONE, gl.COLOR_ATTACHMENT1]);
@@ -1056,19 +1103,20 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       return best.t;
     },
-    reset() { recording = null; clearState(); },
+    reset() { film = null; clearState(); },
     holds: (src, tgt) => held[0] === src && held[1] === tgt,
     // A print's own dissolve, from the print at rest to its well-mixed wash,
-    // as stored frames at the fractions `us` of `steps` steps; nothing runs
-    // until advanceRecord. The grid-resolution print the film dissolves from
-    // is averaged in absorbance, not in colour: the log of an averaged colour
-    // understates the ink of any detail finer than a texel (by a sixth on the
-    // phone's grid, measured), and the film would lose that much the moment it
-    // dissolved. The mean load is the print's ink over the share of the grid
+    // `steps` steps long, kept as a checkpoint every `every` steps (a
+    // multiple of 3, the means' period) and the mass fixer's scale for every
+    // step; nothing runs until advanceRecord. The grid-resolution print the
+    // film dissolves from is averaged in absorbance, not in colour: the log
+    // of an averaged colour understates the ink of any detail finer than a
+    // texel (by a sixth on the phone's grid, measured), and the film would
+    // lose that much the moment it dissolved. The mean load is the print's ink over the share of the grid
     // the wash covers as the shaders draw it -- the footprint sil() makes,
     // fibre noise included, times the display's grain -- so the uniform wash
     // the record ends in shows exactly the print's pigment, channel by channel.
-    recordDissolve(im, us, steps) {
+    recordDissolve(im, steps, every) {
       const ft = scaled(im, Math.round(W / 4), Math.round(H / 4)), fw = ft.width, fh = ft.height;
       const full = im.getContext('2d').getImageData(0, 0, im.width, im.height).data, iw = im.width, ih = im.height;
       const acc = new Float64Array(W * H * 3), cnt = new Float64Array(W * H), total = [0, 0, 0];
@@ -1103,53 +1151,56 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       const pr = { lo: tex(0, 0, gl.CLAMP_TO_EDGE, false), ft: tex(0, 0, gl.CLAMP_TO_EDGE, false) }; pr.full = pr.lo;
       gl.bindTexture(gl.TEXTURE_2D, pr.lo); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, lo);
       upload(pr.ft, ft);
-      const frames = us.map(() => { const S = tex(W, H), D = tex(W, H); return { S, D, fS: fbo([S]), fD: fbo([D]) }; });
       const target = total.map((m) => m / (iw * ih));
-      return { us, frames, pr, target, mean: target.map((m) => m / share), N: steps, n: 0, done: 0 };
+      return { pr, target, mean: target.map((m) => m / share), N: steps, every, n: 0, ck: new Map(), k: new Float32Array((steps + 1) * 3).fill(1) };
     },
-    // Runs up to `budget` steps of a record, storing each frame as it is
-    // reached; returns the steps run. Complete once done === frames.length.
+    // Records up to `budget` steps of a dissolve (in whole checkpoint
+    // intervals, so a record interrupted between two calls resumes from its
+    // own last checkpoint with nothing lost); returns the steps run. Complete
+    // once n === N.
     advanceRecord(rec, budget) {
-      if (rec.done === rec.frames.length) return 0;
-      if (recording !== rec) { clearState(); recording = rec; rec.n = 0; rec.done = 0; }
-      let count = 0;
-      while (count < budget && rec.done < rec.frames.length) {
-        stepDissolve(rec); rec.n++; count++;
-        if (rec.n >= Math.round(rec.us[rec.done] * rec.N)) {
-          const f = rec.frames[rec.done++];
-          blit(pF[pi], gl.COLOR_ATTACHMENT0, f.fS); blit(pF[pi], gl.COLOR_ATTACHMENT1, f.fD);
-          f.k = fixScale(rec, f);
-        }
+      if (rec.n >= rec.N || budget <= 0) return 0;
+      let count = seek(rec, rec.n);
+      while (rec.n < rec.N && count < budget) {
+        const n0 = rec.n;
+        for (let i = 0; i < rec.every; i++) { stepDissolve(rec, rec.n); rec.n++; film.n = rec.n; count++; }
+        saveCheckpoint(rec, rec.n);
+        // The fixer reads back from the GPU, which stalls it (2 ms a step on
+        // an Apple GPU, measured, against 0.4 for the step), so it is read at
+        // checkpoints and the scale between them is interpolated: it varies
+        // as slowly as the losses it corrects.
+        const k0 = rec.k.slice(n0 * 3, n0 * 3 + 3), k1 = fixScale(rec);
+        for (let j = 1; j <= rec.every; j++) for (let c = 0; c < 3; c++) rec.k[(n0 + j) * 3 + c] = k0[c] + (k1[c] - k0[c]) * j / rec.every;
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      if (rec.done === rec.frames.length) { recording = null; gl.deleteTexture(rec.pr.lo); gl.deleteTexture(rec.pr.ft); rec.pr = null; }
       return count;
     },
+    seek,
     disposeRecord(rec) {
-      if (recording === rec) recording = null;
-      if (rec.pr) { gl.deleteTexture(rec.pr.lo); gl.deleteTexture(rec.pr.ft); }
-      for (const f of rec.frames) { gl.deleteTexture(f.S); gl.deleteTexture(f.D); gl.deleteFramebuffer(f.fS); gl.deleteFramebuffer(f.fD); }
+      if (film?.rec === rec) film = null;
+      gl.deleteTexture(rec.pr.lo); gl.deleteTexture(rec.pr.ft);
+      for (const c of rec.ck.values()) for (const k of ['W', 'S', 'D']) { gl.deleteTexture(c[k]); gl.deleteFramebuffer(c['f' + k]); }
+      rec.ck.clear();
     },
-    // Shows two frames mixed by w. A frame is { slot: 'src' | 'tgt', rec, k }:
-    // the print held in that slot (setPrints) and the k-th stored frame of its
-    // dissolve, k = 0 being the print at rest.
+    // Shows two frames mixed by w. A frame is { slot: 'src' | 'tgt', rec, s }:
+    // the print held in that slot (setPrints) at step s of its dissolve, s = 0
+    // being the print at rest; a step between checkpoints must be the one the
+    // film was last seeked to.
     present(f0, f1, w) {
       if (!showk) showk = prog(SHOWK);
+      const [s0, d0, k0] = frameTextures(f0), [s1, d1, k1] = frameTextures(f1);
       fitCanvas();
       gl.useProgram(showk.p);
       bind(8, paper); bind(9, prints[f0.slot].full); bind(10, prints[f1.slot].full);
-      const [s0, d0] = f0.k ? [f0.rec.frames[f0.k - 1].S, f0.rec.frames[f0.k - 1].D] : [blank, blank];
-      const [s1, d1] = f1.k ? [f1.rec.frames[f1.k - 1].S, f1.rec.frames[f1.k - 1].D] : [blank, blank];
       bind(0, s0); bind(1, d0); bind(2, s1); bind(3, d1);
       gl.uniform1f(showk.u.uW1, w);
-      const k0 = f0.k ? f0.rec.frames[f0.k - 1].k : [1, 1, 1], k1 = f1.k ? f1.rec.frames[f1.k - 1].k : [1, 1, 1];
       gl.uniform3f(showk.u.uK0, k0[0], k0[1], k0[2]); gl.uniform3f(showk.u.uK1, k1[0], k1[1], k1[2]);
       draw();
     },
     // One fixed step at time t (seconds). The schedule: flood, dissolve and
     // stir, take up, dry and cure.
     step(fwd, t, cure, stir = 0, tilt = 0, relift = 0) {
-      recording = null;
+      film = null;
       const splash = t < T_SPLASH ? splashAmp : 0, mist = t < T_SPLASH + mistHold ? mistAmp : 0;
       // a hot-air blast: evaporation many times the rate of standing air, which
       // thins the film, drives the rim current and settles the pigment quickly
@@ -1219,15 +1270,19 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
 // canvas and print rectangle are today's exact values; only the factory above
 // is new.
 const sim = makeSim({ canvas, texW: Math.round(BASE_TEX_W / (mobileLayout() ? 4 : 2)), texH: Math.round(BASE_TEX_H / (mobileLayout() ? 4 : 2)), rect: () => printRect });
-// Every scene transition, both layouts (site/watercolor-morph.js). A stored
-// frame is two RGBA16F textures of the grid: 2 x 410 x 390 x 8 B = 2.6 MB on
-// desktop, so six frames a print and three prints held is 46 MB; the phone's
-// grid is a quarter of that area, and four frames a print make 7.7 MB.
+// Every scene transition, both layouts (site/watercolor-morph.js). Each frame
+// shown is the dissolve itself at one step, replayed from the checkpoint
+// before it, so CHECKPOINT_EVERY bounds the replay a frame can cost: 17 steps
+// at most, measured 2026-09-23 at 1.3 ms on the desktop grid and 1.0 ms on
+// the phone's (WebKit, Apple GPU; recording all 180 steps took 82 and 53 ms),
+// which leaves a slower GPU ten times the room within a frame. A checkpoint
+// is three RGBA16F textures of the grid, 3 x 410 x 390 x 8 B = 3.8 MB on
+// desktop, so ten a print make 38 MB, a leg's two prints 77 MB and the three
+// the page keeps 115 MB; the phone's grid is a quarter of that area, 29 MB
+// for three.
 // DISSOLVE_STEPS is a dissolve's length, 1.5 sim-seconds at DT.
-const DISSOLVE_STEPS = 180;
-const morph = sim && WatercolorMorph.create(sim, mobileLayout()
-  ? { frames: [0.1, 0.3, 0.6, 1], steps: DISSOLVE_STEPS }
-  : { frames: [0.06, 0.16, 0.32, 0.52, 0.76, 1], steps: DISSOLVE_STEPS });
+const DISSOLVE_STEPS = 180, CHECKPOINT_EVERY = 18;
+const morph = sim && WatercolorMorph.create(sim, { steps: DISSOLVE_STEPS, every: CHECKPOINT_EVERY });
 // Wherever the cursor is, a scroll gesture moves the page and nothing else. The
 // editor and the preview are live documents with their own scroll containers,
 // so each frame has its own scrolling switched off and the browser chains the
@@ -4580,8 +4635,9 @@ landing.still = (scene) => {
 landing.wash = (to) => { if (running()) return Promise.resolve(false); target = to; return runJoin().then(() => true); };
 landing.probe = (x, y) => sim.probe(x, y);
 // The transition on screen (WatercolorMorph): the p it last presented and the
-// two prints it carries, and where its dissolves keep their stored frames.
-landing.morph = { current: () => morph?.current(), leg: () => morph?.current()?.tag ?? null, frames: morph?.frames, bounds: [WatercolorMorph.A_END, WatercolorMorph.B_START] };
+// two prints it carries, whether that frame was exactly p's, and a
+// dissolve's length and checkpoint spacing.
+landing.morph = { current: () => morph?.current(), leg: () => morph?.current()?.tag ?? null, steps: DISSOLVE_STEPS, every: CHECKPOINT_EVERY, bounds: [WatercolorMorph.A_END, WatercolorMorph.B_START] };
 // The live array itself, not a copy: a fault is injected by assigning into
 // an element (e.g. prints[3] = null), so a snapshot here would turn that
 // into a no-op that still passes.
