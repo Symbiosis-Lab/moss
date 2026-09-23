@@ -714,6 +714,12 @@ void main(){
   // Clear the pigment along the paper grain, without a coloured overlay.
   A *= mix(.22, 1.0, smoothstep(uClearance - .12, uClearance + .12, pap.g));
   vec3 T = clamp(exp(-A), 0.0, 1.0); float a = 1.0 - min(T.r, min(T.g, T.b));
+  // The comment above already promised "clear where nothing is inked or
+  // wet" -- the code only ever cleared on ink. A wet pixel that has taken
+  // up no pigment yet is standing water, not bare paper, so it keeps a
+  // sheen floor on alpha; foot() confines it to the wash's own footprint,
+  // the same silhouette the cure mix above already uses.
+  a = max(a, 0.18 * wet * foot(uv));
   o = vec4(uTint * (T - (1.0 - a)), a);
 }`;
 

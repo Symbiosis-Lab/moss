@@ -223,7 +223,12 @@ const BASELINE = {
   // measure against closingRestY() instead of mobileInkProgress's own
   // text-height span (owner report, "after scene 5 I cannot scroll back") --
   // real logic plus its own explanatory comment, not bloat.
-  scriptBytes: 278381,
+  // 278381 -> 278771 (2026-09-23): SHOW's alpha gained a wet*foot() sheen
+  // floor and its own comment (check-landing-morph.mjs clause 3, canvas
+  // coverage collapsing on every wash leg because alpha depended only on
+  // pigment, never on the water the shader already computed) -- real logic
+  // plus its own explanatory comment, not bloat.
+  scriptBytes: 278771,
 };
 
 function countWindowAssignments(text) {
