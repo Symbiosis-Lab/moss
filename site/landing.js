@@ -1875,7 +1875,16 @@ function mobileEntranceProgress() {
   const top = col.getBoundingClientRect().top + parseFloat(getComputedStyle(col).paddingTop);
   return clamp01((band.top - top) / Math.max(1, band.height * 0.55));
 }
-function mobileClosingProgress() { return mobileInkProgress(scenesEl[DEPLOY].firstElementChild); }
+// Ends at closingRestY() (the reader's actual last pixel of scroll), not
+// mobileInkProgress's own text-height span, which saturated at 1 hundreds
+// of px early and left a reversal stuck reading "already at 1" until the
+// whole gap was retraced (owner report 2026-09-22, "after scene 5 I cannot
+// scroll back").
+function mobileClosingProgress() {
+  const rect = scenesEl[DEPLOY].firstElementChild.getBoundingClientRect();
+  const startY = scrollY + rect.top - mobileVisualBand().bottom;
+  return clamp01((scrollY - startY) / Math.max(1, closingRestY() - startY));
+}
 function mobileVisualBand() {
   const visual = document.getElementById('vis');
   const top = parseFloat(getComputedStyle(visual).top);
