@@ -18,12 +18,14 @@
 //! ## Layout on disk
 //!
 //! ```text
-//! .moss/build.nosync/cache/
+//! .moss/cache/
 //! ├── objects/          # ObjectStore — raw blobs keyed by SHA-256
 //! │   └── ab/cd/<full_hash>
 //! └── transforms/       # TransformCache — JSON records keyed by source hash
 //!     └── ab/cd/<source_hash>.json
 //! ```
+//!
+//! Synced, a sibling of `.moss/build.nosync/` — build both via `for_site`, not a hand join.
 
 use crate::build::types::identity_disagrees;
 use serde::{Deserialize, Serialize};
@@ -70,6 +72,12 @@ impl ObjectStore {
     /// lazily (on first write), not here.
     pub fn new(base: PathBuf) -> Self {
         Self { base }
+    }
+
+    /// `mp`'s content-addressed object store — `.moss/cache/objects/`. Prefer this
+    /// over `ObjectStore::new(mp.cache_objects())` at every call site that has an `mp`.
+    pub fn for_site(mp: &crate::moss_paths::MossPaths) -> Self {
+        Self::new(mp.cache_objects())
     }
 
     /// Returns the root directory of this object store.
@@ -570,6 +578,17 @@ impl TransformCache {
     ///   verify blob existence.
     pub fn new(base: PathBuf, objects: ObjectStore) -> Self {
         Self { base, objects }
+    }
+
+    /// `mp`'s transform cache, paired with `mp`'s object store. Prefer this over
+    /// hand-assembling `TransformCache::new(mp.cache_transforms(), ObjectStore::new(mp.cache_objects()))`.
+    pub fn for_site(mp: &crate::moss_paths::MossPaths) -> Self {
+        Self::new(mp.cache_transforms(), ObjectStore::for_site(mp))
+    }
+
+    /// Returns the root directory of this transform cache — typically `.moss/cache/transforms/`.
+    pub fn root(&self) -> &Path {
+        &self.base
     }
 
     /// The object store backing this cache's transform outputs.

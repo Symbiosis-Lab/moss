@@ -38,11 +38,8 @@ pub fn apply_to_stage_and_manifest(
     // Construction is free of I/O — ObjectStore/TransformCache are just path
     // handles — so building fresh ones here (rather than threading them
     // through from further up) matches the established per-call-site idiom.
-    let object_store = crate::build::cache::ObjectStore::new(paths.cache_objects());
-    let transform_cache = crate::build::cache::TransformCache::new(
-        paths.cache_transforms(),
-        crate::build::cache::ObjectStore::new(paths.cache_objects()),
-    );
+    let object_store = crate::build::cache::ObjectStore::for_site(paths);
+    let transform_cache = crate::build::cache::TransformCache::for_site(paths);
     // Emit the feature stylesheets the resolved slots link to, BEFORE the
     // injection that writes those <link> tags into pages. Slot resolution can
     // name a content-hashed file but has no manifest to write one; this is the

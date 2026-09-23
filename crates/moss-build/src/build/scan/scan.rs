@@ -692,6 +692,7 @@ fn extract_media_metadata_cached(
         let ffmpeg_bin = ffmpeg.map(|f| f.bin_path().to_string());
         // Capture cache paths for reconstruction inside the closure.
         let objects_dir = objects.root().to_path_buf();
+        let transforms_dir = transform_cache.root().to_path_buf();
         let hash_clone = hash.clone();
 
         let (result, shared) = dedup.do_work(&dedup_key, move || {
@@ -710,13 +711,11 @@ fn extract_media_metadata_cached(
             // Reconstruct cache infrastructure from paths because ObjectStore/TransformCache
             // are borrowed from the enclosing scope and cannot be captured by reference in
             // a FnOnce + Send closure. These types are stateless path wrappers, so
-            // reconstruction is safe. Layout: .moss/cache/objects/ → sibling transforms/
-            let cache_dir = objects_dir.parent().unwrap_or(&objects_dir).to_path_buf();
+            // reconstruction is safe — from the two paths captured above, not derived from
+            // one another, so this stays correct even if the store and the transform cache
+            // ever stop being siblings on disk.
             let objects = ObjectStore::new(objects_dir);
-            let transform_cache = TransformCache::new(
-                cache_dir.join("transforms"),
-                ObjectStore::new(objects.root().to_path_buf()),
-            );
+            let transform_cache = TransformCache::new(transforms_dir, ObjectStore::new(objects.root().to_path_buf()));
             write_cached_meta(&objects, &transform_cache, &hash_clone, size, &CachedMediaMeta::from(&meta));
 
             meta
@@ -935,20 +934,21 @@ pub fn scan_folder_with_dedup_emit(
     // Avoids ~5-10s download on builds with no video files (Task 4).
     let ffmpeg_cell: OnceCell<Option<FFmpegManager>> = OnceCell::new();
 
-    // Set up cache infrastructure (derived from folder_path). Through
-    // `MossPaths::cache_dir()`, not a bare join: it must follow the same held
-    // build-root handle every other cache accessor does, or a cloud sync
-    // client's rename-aside mid-build sends the object store to the decoy.
-    let moss_cache_dir = crate::moss_paths::MossPaths::new(path).cache_dir();
-    let hash_index_path = moss_cache_dir.join("hash-index.json");
+    // Set up cache infrastructure (derived from folder_path). `hash-index.json`
+    // stays under the per-machine `cache_dir()`, but the object store and
+    // transform cache are the synced content-addressed store — `cache_objects()`
+    // / `cache_transforms()`, the same accessors the background media phase
+    // uses to enrich a stat-key entry with the LQIP it computed. A bare join
+    // under `cache_dir()` here points the blocking scan's read at the
+    // per-machine tree while writers use the synced one, so a warm scan can
+    // never see what the previous build's background phase just wrote.
+    let mp = crate::moss_paths::MossPaths::new(path);
+    let hash_index_path = mp.cache_hash_index();
     let old_index = HashIndex::load(&hash_index_path);
     let mut new_index = HashIndex::new();
 
-    let objects = ObjectStore::new(moss_cache_dir.join("objects"));
-    let transform_cache = TransformCache::new(
-        moss_cache_dir.join("transforms"),
-        ObjectStore::new(moss_cache_dir.join("objects")),
-    );
+    let objects = ObjectStore::for_site(&mp);
+    let transform_cache = TransformCache::for_site(&mp);
 
     // Raster-image metadata extraction (header read + dominant-color/LQIP or
     // stat-key cache I/O) is ~99% of a cold scan and is independent per file, so

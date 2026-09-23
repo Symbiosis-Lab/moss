@@ -3395,15 +3395,12 @@ pub fn generate_blocking_content(
     // Also returns the rung-collision map (built from ProjectStructure,
     // which the background worker doesn't have) for BackgroundContext.
     let (image_items, rung_collisions) = {
-        use crate::build::cache::{HashIndex, ObjectStore, TransformCache};
+        use crate::build::cache::{HashIndex, TransformCache};
         use crate::build::image::{collect_images_for_conversion, ImageCompressionConfig};
 
-        let cache_objects = paths.cache_objects();
-        let cache_transforms = paths.cache_transforms();
         let hash_index_path = paths.cache_hash_index();
         let mut hash_index = HashIndex::load(&hash_index_path);
-        let transforms =
-            TransformCache::new(cache_transforms, ObjectStore::new(cache_objects));
+        let transforms = TransformCache::for_site(&paths);
         let config = ImageCompressionConfig::default();
         let items = collect_images_for_conversion(
             project_structure,

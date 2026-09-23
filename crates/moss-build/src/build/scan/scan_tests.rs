@@ -1252,6 +1252,65 @@ fn test_image_scan_defers_expensive_work_on_stat_miss() {
     fs::remove_dir_all(&temp_dir).ok();
 }
 
+/// The public entry point a warm build actually calls — `scan_folder_with_dedup_emit`,
+/// not `extract_media_metadata_cached` directly — must read the SAME store the
+/// background media phase writes to. Writes here go through `MossPaths::cache_objects`
+/// / `cache_transforms`, exactly like `convert_single_image` does after encoding;
+/// nothing about this test's cache setup is hand-rolled the way the sibling tests
+/// above build their `ObjectStore`/`TransformCache` from a bare path.
+#[test]
+fn test_second_scan_reads_the_lqip_the_background_phase_wrote() {
+    let temp_dir = std::env::temp_dir().join(format!("moss_test_warm_lqip_scan_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let png_path = temp_dir.join("photo.png");
+    create_solid_color_png(&png_path, 64, 48, [255, 0, 0]);
+    let file_meta = fs::metadata(&png_path).unwrap();
+    let file_size = file_meta.len();
+    let mtime = file_meta
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let dir_str = temp_dir.to_string_lossy().to_string();
+
+    // Cold scan through the real entry point: preview mode defers LQIP.
+    let cold = scan_folder_with_dedup_emit(&dir_str, None, None, true).unwrap();
+    assert_eq!(cold.image_files.len(), 1);
+    assert!(cold.image_files[0].lqip_data_uri.is_none(), "a cold scan must defer LQIP");
+
+    // Simulate the background media phase enriching that same stat-key entry
+    // with a real LQIP, via the accessors `convert_single_image` actually uses.
+    let mp = crate::moss_paths::MossPaths::new(&temp_dir);
+    let objects = ObjectStore::new(mp.cache_objects());
+    let transforms = TransformCache::new(mp.cache_transforms(), ObjectStore::new(mp.cache_objects()));
+    let stat_key = image_meta_stat_key("photo.png", file_size, mtime);
+    write_cached_meta(
+        &objects,
+        &transforms,
+        &stat_key,
+        file_size,
+        &CachedMediaMeta {
+            dimensions: Some((64, 48)),
+            dominant_color: Some("#ff0000".to_string()),
+            lqip_data_uri: Some("data:image/jpeg;base64,fake".to_string()),
+            is_animated: false,
+        },
+    );
+
+    // Warm scan through the same entry point must pick up the enrichment.
+    let warm = scan_folder_with_dedup_emit(&dir_str, None, None, true).unwrap();
+    assert_eq!(
+        warm.image_files[0].lqip_data_uri.as_deref(),
+        Some("data:image/jpeg;base64,fake"),
+        "a warm scan must read the LQIP the background phase wrote to the stat-key entry"
+    );
+
+    fs::remove_dir_all(&temp_dir).ok();
+}
+
 // =========================================================================
 // is_animated sniffing on the scan path (responsive-image-variants Task 9)
 //

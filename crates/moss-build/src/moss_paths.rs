@@ -35,10 +35,12 @@
 //! │       ├── matters.json
 //! │       └── douban.json
 //! │
-//! └── build/                Generated artifacts (safe to delete)
-//!     ├── cache/            Content-addressed object store
-//!     │   ├── objects/      Hashed file blobs (2-char prefix dirs)
-//!     │   ├── transforms/   Source→output mappings
+//! ├── cache/                Content-addressed store — synced with the folder
+//! │   ├── objects/          Hashed file blobs (2-char prefix dirs)
+//! │   └── transforms/       Source→output mappings
+//! │
+//! └── build.nosync/         Generated artifacts, per machine (safe to delete)
+//!     ├── cache/            Per-machine caches — NOT synced, NOT the store above
 //!     │   ├── link-meta/    Cached og:tag metadata for links
 //!     │   ├── hash-index.json
 //!     │   └── tmp/
@@ -360,7 +362,20 @@ impl MossPaths {
         self.root.join("build.nosync")
     }
 
-    /// `.moss/build.nosync/cache/` — content-addressed object store.
+    /// `.moss/build.nosync/cache/` — the PER-MACHINE caches: `hash-index.json`,
+    /// `dep-cache.json`, `frontmatter-scan.json`, `folder-lang.json`,
+    /// `link-meta/`, `manifest-hash-memo.json`, `tmp/`.
+    ///
+    /// NOT the content-addressed object store — that moved to [`store_dir`]
+    /// (`.moss/cache/`, synced with the folder) when the tree split. Reading
+    /// this doc as "the object store lives here" is exactly the mistake that
+    /// left a warm scan reading an empty store after that split: use
+    /// [`cache_objects`](Self::cache_objects) / [`cache_transforms`](Self::cache_transforms),
+    /// or [`crate::build::cache::ObjectStore::for_site`] /
+    /// [`crate::build::cache::TransformCache::for_site`], never this method,
+    /// to reach the store.
+    ///
+    /// [`store_dir`]: Self::store_dir
     pub fn cache_dir(&self) -> PathBuf {
         self.build_dir().join("cache")
     }

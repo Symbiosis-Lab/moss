@@ -898,11 +898,8 @@ pub(crate) fn run_video_conversion(
 
     use crate::build::cache::{HashIndex, ObjectStore};
     let vid_paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
-    let objects = ObjectStore::new(vid_paths.cache_objects());
-    let transforms = crate::build::cache::TransformCache::new(
-        vid_paths.cache_transforms(),
-        ObjectStore::new(vid_paths.cache_objects()),
-    );
+    let objects = ObjectStore::for_site(&vid_paths);
+    let transforms = crate::build::cache::TransformCache::for_site(&vid_paths);
     let mp4_params = compression_config.to_params();
     let thumb_params = serde_json::json!({});
 
@@ -1514,11 +1511,8 @@ impl VideoStore {
     fn open(moss_dir: &Path, config: &crate::build::media::ffmpeg::VideoCompressionConfig) -> Self {
         let paths = MossPaths::from_moss_dir(moss_dir.to_path_buf());
         Self {
-            objects: crate::build::cache::ObjectStore::new(paths.cache_objects()),
-            transforms: crate::build::cache::TransformCache::new(
-                paths.cache_transforms(),
-                crate::build::cache::ObjectStore::new(paths.cache_objects()),
-            ),
+            objects: crate::build::cache::ObjectStore::for_site(&paths),
+            transforms: crate::build::cache::TransformCache::for_site(&paths),
             index: crate::build::cache::HashIndex::load(&paths.cache_hash_index()),
             mp4_params: config.to_params(),
         }
@@ -2218,8 +2212,8 @@ pub(crate) mod tests {
             std::fs::write(&source, format!("source of {item}")).unwrap();
         }
         let paths = MossPaths::from_moss_dir(moss_dir.to_path_buf());
-        let objects = ObjectStore::new(paths.cache_objects());
-        let transforms = TransformCache::new(paths.cache_transforms(), ObjectStore::new(paths.cache_objects()));
+        let objects = ObjectStore::for_site(&paths);
+        let transforms = TransformCache::for_site(&paths);
         let source_oid = ObjectStore::hash_file(&source).unwrap();
         let entry = |bytes: &[u8], params: serde_json::Value| TransformEntry {
             oid: objects.store_bytes(bytes).unwrap(),

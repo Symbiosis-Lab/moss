@@ -981,7 +981,7 @@ pub(crate) fn copy_deferred_assets(
     use walkdir::WalkDir;
 
     let deferred_paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
-    let object_store = ObjectStore::new(deferred_paths.cache_objects());
+    let object_store = ObjectStore::for_site(&deferred_paths);
     // See TODO(perf) at both call sites below: a CAS blob's bytes are a pure
     // function of its oid, so the xxh3 manifest hash of a just-linked output
     // file needs no staleness rule — only a cache keyed by oid.
@@ -994,10 +994,7 @@ pub(crate) fn copy_deferred_assets(
     // stays a transparency-preserving PNG). It is content-addressed and cached
     // (keyed by source hash + config) via this TransformCache, mirroring the
     // WebP pass.
-    let transforms = crate::build::cache::TransformCache::new(
-        deferred_paths.cache_transforms(),
-        ObjectStore::new(deferred_paths.cache_objects()),
-    );
+    let transforms = crate::build::cache::TransformCache::for_site(&deferred_paths);
     let image_config = crate::build::media::image::ImageCompressionConfig::default();
     // Seeded from the PREVIOUS build's manifest, not from this build's.
     //

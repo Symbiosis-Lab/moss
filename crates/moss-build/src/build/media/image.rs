@@ -1853,11 +1853,8 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
 
     let moss_paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
     let suppressed = suppressed_variants_for(&moss_paths, &ctx.staging_dir);
-    let objects = ObjectStore::new(moss_paths.cache_objects());
-    let transforms = TransformCache::new(
-        moss_paths.cache_transforms(),
-        ObjectStore::new(moss_paths.cache_objects()),
-    );
+    let objects = ObjectStore::for_site(&moss_paths);
+    let transforms = TransformCache::for_site(&moss_paths);
 
     // Deferred hashing (mirrors the video worker): the blocking collect leaves
     // each item's source_oid empty (stat-match only) so first paint isn't gated
@@ -2622,11 +2619,8 @@ pub(crate) fn dispatch_image_conversions(
         use std::collections::HashSet;
 
         let heal_paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
-        let heal_objects = crate::build::cache::ObjectStore::new(heal_paths.cache_objects());
-        let heal_transforms = crate::build::cache::TransformCache::new(
-            heal_paths.cache_transforms(),
-            crate::build::cache::ObjectStore::new(heal_paths.cache_objects()),
-        );
+        let heal_objects = crate::build::cache::ObjectStore::for_site(&heal_paths);
+        let heal_transforms = crate::build::cache::TransformCache::for_site(&heal_paths);
         let heal_params = config.to_params();
         let mut heal_index =
             crate::build::cache::HashIndex::load(&heal_paths.cache_hash_index());
