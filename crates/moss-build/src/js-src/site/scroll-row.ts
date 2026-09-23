@@ -23,19 +23,38 @@
  *
  * A mouse wheel over a HORIZONTAL row scrolls it sideways here in JS: a
  * vertical wheel would otherwise scroll the page, and most readers never
- * learn Shift+wheel. Over a VERTICAL row a vertical wheel already scrolls it
- * natively — it is an ordinary `overflow-y: auto` box — so `onWheel` does
- * nothing to the scroll itself there; its only job is `stopPropagation()`,
- * so theme.ts's page-wide "remap wheel to horizontal scroll" listener
- * (bound on `document` for vertical typesetting) doesn't call
- * `preventDefault()` on the same event first and cancel the row's own
- * native scroll before it runs — a wheel event has one default action for
- * its whole dispatch, decided after every listener has run, so a later
- * ancestor listener can still veto an earlier target's native scroll. In
- * both axes the wheel is taken only while the row can still move that way,
- * so at either end it passes through and the page scrolls on — the row
+ * learn Shift+wheel. The redirect only ever changes which axis the wheel
+ * moves — the motion itself is the browser's own smooth `scrollTo`, aimed at
+ * a running target rather than the row's live `scrollLeft`, so native
+ * `scroll-snap` still settles the row on a card edge instead of a script
+ * fighting it frame by frame. The running target, not `scrollLeft`, is what
+ * a second notch adds to: every engine tested (Chromium, Firefox, WebKit)
+ * reports `scrollLeft` mid-animation as a stale, not-yet-caught-up value, so
+ * a fast flick that adds each notch to that live value loses most of its
+ * distance — measured at 22-32% of the intended travel for 5 rapid notches
+ * where a running target lands within 1px. Over a VERTICAL row a vertical
+ * wheel already scrolls it natively — it is an ordinary `overflow-y: auto`
+ * box — so `onWheel` does nothing to the scroll itself there; its only job
+ * is `stopPropagation()`, so theme.ts's page-wide "remap wheel to
+ * horizontal scroll" listener (bound on `document` for vertical typesetting)
+ * doesn't call `preventDefault()` on the same event first and cancel the
+ * row's own native scroll before it runs — a wheel event has one default
+ * action for its whole dispatch, decided after every listener has run, so a
+ * later ancestor listener can still veto an earlier target's native scroll.
+ * In both axes the wheel is taken only while the row can still move that
+ * way, so at either end it passes through and the page scrolls on — the row
  * never traps the reader. A trackpad's own sideways gesture, pinch-zoom
  * (ctrlKey) and touch are left to the browser everywhere.
+ *
+ * A row also only ever takes a wheel gesture that STARTS over it. A gesture
+ * already scrolling the page doesn't stop doing that just because the
+ * cursor drifts over a row mid-flick — if it did, the row would trap an
+ * ordinary page scroll the moment it passed under the pointer. `trackRow`,
+ * a passive capture listener on `window`, watches every wheel event on the
+ * page (not just the ones over a row) and records which element — a row or
+ * nothing — the current gesture belongs to, resetting that record whenever
+ * a wheel arrives more than `GESTURE_GAP_MS` after the last one seen
+ * anywhere. `onWheel` only acts when that record names its own row.
  *
  * Progressive enhancement: the row scrolls without this script, and the dots
  * exist only once it runs. A row with nothing to scroll (all cards fit) keeps
@@ -64,6 +83,40 @@ interface RowState {
 }
 
 const rows = new WeakMap<HTMLElement, RowState>();
+
+/** Below this many milliseconds since the last wheel event seen anywhere,
+ * a new one still belongs to the same gesture — see the file header. */
+const GESTURE_GAP_MS = 200;
+
+/** The row (or `null` for "the page, or no row") the current wheel gesture
+ * belongs to, and when it was last extended. Written only by `trackRow`. */
+let gestureRow: HTMLElement | null = null;
+let gestureAt = -Infinity;
+
+function trackRow(e: Event): void {
+  const now = performance.now();
+  if (now - gestureAt > GESTURE_GAP_MS) {
+    const target = e.target;
+    gestureRow = target instanceof Element ? target.closest<HTMLElement>(ROW) : null;
+  }
+  gestureAt = now;
+}
+window.addEventListener("wheel", trackRow, { capture: true, passive: true });
+
+/** Test-only: a unit test that dispatches real wheel events to exercise
+ * `trackRow` would otherwise leak gesture state into whichever test runs
+ * next. Never called from production code. */
+export function __resetWheelGestureForTests(): void {
+  gestureRow = null;
+  gestureAt = -Infinity;
+}
+
+/** Per-row running scroll target for the smooth glide (see file header):
+ * successive wheel notches within one gesture add to this rather than to
+ * the row's live `scrollLeft`, which every tested engine reports behind the
+ * actual animation target while it's still moving. Reset once the row
+ * itself has gone `GESTURE_GAP_MS` without a wheel event. */
+const scrollTargets = new WeakMap<HTMLElement, { left: number; at: number }>();
 
 export function initScrollDots(root: ParentNode = document): void {
   root.querySelectorAll<HTMLElement>(ROW).forEach(attach);
@@ -98,6 +151,10 @@ function fit(row: HTMLElement, state: RowState): void {
   if (state.nav) state.nav.hidden = !isScrollableRow(row);
 }
 
+function prefersReducedMotion(): boolean {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}
+
 /** (Re)builds the dots for `row` from its current children. Idempotent: a
  * rebuild first tears down whatever the last one made — the observer it
  * pointed at the old cards, and the nav element itself, which a morph may
@@ -118,7 +175,7 @@ function buildDots(row: HTMLElement, state: RowState): void {
   const label = row.getAttribute("aria-label");
   if (label) nav.setAttribute("aria-label", label);
 
-  const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  const reduce = prefersReducedMotion();
   const dots = cards.map((card, i) => {
     const dot = document.createElement("button");
     dot.type = "button";
@@ -169,6 +226,13 @@ function wheelPixels(e: WheelEvent, row: HTMLElement): number {
 }
 
 export function onWheel(row: HTMLElement, e: WheelEvent): void {
+  // A gesture already scrolling the page (or a different row) doesn't
+  // become this row's just because the cursor drifts over it — see the
+  // file header's `trackRow` paragraph. `gestureAt` only advances on a real
+  // dispatch, so a unit test that calls `onWheel` directly without ever
+  // dispatching through `window` always reads as stale here, i.e. owned.
+  const stale = performance.now() - gestureAt > GESTURE_GAP_MS;
+  if (!stale && gestureRow !== row) return;
   if (e.ctrlKey || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
   if (!isScrollableRow(row)) return;
   if (isVertical(row)) {
@@ -185,11 +249,29 @@ export function onWheel(row: HTMLElement, e: WheelEvent): void {
   // moves toward the row's end.
   const rtl = getComputedStyle(row).direction === "rtl";
   const max = row.scrollWidth - row.clientWidth;
-  const pos = Math.abs(row.scrollLeft);
   const delta = wheelPixels(e, row);
-  if ((delta < 0 && pos <= 0) || (delta > 0 && pos >= max - 1)) return;
+  const now = performance.now();
+  const prior = scrollTargets.get(row);
+  // `base` is this row's own running target, not `row.scrollLeft`: see the
+  // file header for why reading the live value mid-glide silently drops
+  // most of a fast flick's distance. A row this notch hasn't touched
+  // recently starts fresh from wherever it actually is.
+  const base = prior && now - prior.at <= GESTURE_GAP_MS ? prior.left : row.scrollLeft;
+  const pos = Math.abs(base);
+  if ((delta < 0 && pos <= 0) || (delta > 0 && pos >= max - 1)) {
+    scrollTargets.delete(row);
+    return;
+  }
+  // Clamp the target itself, not just the boundary check above: a single
+  // large notch (fast wheel, OS scroll acceleration) can add more than the
+  // remaining distance in one step. An unclamped target would overshoot
+  // past `max`, and a reversed notch right after would have to "unwind"
+  // that overshoot before the row visibly moved at all.
+  const uncappedAbs = Math.min(max, Math.max(0, pos + delta));
+  const left = rtl ? -uncappedAbs : uncappedAbs;
+  scrollTargets.set(row, { left, at: now });
   e.preventDefault();
-  row.scrollLeft += rtl ? -delta : delta;
+  row.scrollTo({ left, behavior: prefersReducedMotion() ? "auto" : "smooth" });
 }
 
 if (document.readyState === "loading") {

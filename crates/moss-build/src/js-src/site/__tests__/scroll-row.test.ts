@@ -5,7 +5,7 @@
  * row but drops the injected dots, so `moss-morph-patched` re-inits it).
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { initScrollDots, onWheel } from "../scroll-row";
+import { __resetWheelGestureForTests, initScrollDots, onWheel } from "../scroll-row";
 
 function row(cards: number, label?: string): HTMLElement {
   const g = document.createElement("div");
@@ -46,6 +46,13 @@ const wheel = (init: WheelEventInit) => new WheelEvent("wheel", { cancelable: tr
 afterEach(() => {
   document.body.innerHTML = "";
   vi.restoreAllMocks();
+  // jsdom doesn't implement matchMedia at all, so a test that wants
+  // prefers-reduced-motion assigns it directly rather than spying on an
+  // existing method; undo that by hand since restoreAllMocks won't.
+  Reflect.deleteProperty(window, "matchMedia");
+  // A test that dispatches real wheel events to exercise gesture latching
+  // would otherwise leak which row "owns" the gesture into the next test.
+  __resetWheelGestureForTests();
 });
 
 describe("scroll dots", () => {
@@ -116,9 +123,10 @@ describe("scroll dots", () => {
 });
 
 describe("re-init after a preview morph", () => {
-  test("a morph that drops the dots gets exactly one set back, and one wheel event still moves by one delta", () => {
+  test("a morph that drops the dots gets exactly one set back, and one wheel event still asks the row to scroll", () => {
     const g = row(4);
     setOverflow(g, 400);
+    g.scrollTo = vi.fn();
     initScrollDots();
     // idiomorph reuses `g` (it matches the served row) but removes the
     // injected `.moss-scroll-dots`, which has no counterpart in the served
@@ -128,7 +136,7 @@ describe("re-init after a preview morph", () => {
 
     expect(document.querySelectorAll(".moss-scroll-dots")).toHaveLength(1);
     g.dispatchEvent(wheel({ deltaY: 100 }));
-    expect(g.scrollLeft).toBe(100);
+    expect(g.scrollTo).toHaveBeenCalledWith({ left: 100, behavior: "smooth" });
   });
 });
 
@@ -137,15 +145,26 @@ describe("wheel over the row", () => {
     const g = row(4);
     setOverflow(g, max);
     g.scrollLeft = pos;
+    // jsdom implements neither scrollTo nor scrollBy on elements at all, so
+    // every test stubs whichever one onWheel actually calls.
+    g.scrollTo = vi.fn();
     return g;
   }
 
-  test("a vertical wheel scrolls the row sideways and not the page", () => {
+  test("a vertical wheel scrolls the row sideways via a smooth scrollTo, never a direct scrollLeft write", () => {
     const g = scroller(0);
     const e = wheel({ deltaY: 100 });
     onWheel(g, e);
     expect(e.defaultPrevented).toBe(true);
-    expect(g.scrollLeft).toBe(100);
+    expect(g.scrollTo).toHaveBeenCalledWith({ left: 100, behavior: "smooth" });
+    expect(g.scrollLeft).toBe(0);
+  });
+
+  test("prefers-reduced-motion swaps the glide for an instant jump", () => {
+    const g = scroller(0);
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true }) as typeof window.matchMedia;
+    onWheel(g, wheel({ deltaY: 100 }));
+    expect(g.scrollTo).toHaveBeenCalledWith({ left: 100, behavior: "auto" });
   });
 
   test("at the end of the row the wheel passes through to the page", () => {
@@ -153,10 +172,12 @@ describe("wheel over the row", () => {
     const down = wheel({ deltaY: 100 });
     onWheel(g, down);
     expect(down.defaultPrevented).toBe(false);
+    expect(g.scrollTo).not.toHaveBeenCalled();
     const start = scroller(0);
     const up = wheel({ deltaY: -100 });
     onWheel(start, up);
     expect(up.defaultPrevented).toBe(false);
+    expect(start.scrollTo).not.toHaveBeenCalled();
   });
 
   test("a trackpad's sideways gesture and pinch-zoom are left to the browser", () => {
@@ -167,6 +188,7 @@ describe("wheel over the row", () => {
     const pinch = wheel({ deltaY: 50, ctrlKey: true });
     onWheel(g, pinch);
     expect(pinch.defaultPrevented).toBe(false);
+    expect(g.scrollTo).not.toHaveBeenCalled();
   });
 
   test("a row with nothing to scroll never takes the wheel", () => {
@@ -174,19 +196,63 @@ describe("wheel over the row", () => {
     const e = wheel({ deltaY: 100 });
     onWheel(g, e);
     expect(e.defaultPrevented).toBe(false);
+    expect(g.scrollTo).not.toHaveBeenCalled();
   });
 
   test("deltaMode 1 reports lines, converted to pixels at 16px each", () => {
     const g = scroller(0);
     onWheel(g, wheel({ deltaY: 5, deltaMode: 1 }));
-    expect(g.scrollLeft).toBe(80);
+    expect(g.scrollTo).toHaveBeenCalledWith({ left: 80, behavior: "smooth" });
   });
 
-  test("an RTL row moves scrollLeft the other way", () => {
+  test("an RTL row moves the scroll target the other way", () => {
     const g = scroller(0);
     g.style.direction = "rtl";
     onWheel(g, wheel({ deltaY: 100 }));
-    expect(g.scrollLeft).toBe(-100);
+    expect(g.scrollTo).toHaveBeenCalledWith({ left: -100, behavior: "smooth" });
+  });
+
+  test("a target that overshoots the end is clamped, so reversing right after moves back immediately", () => {
+    // A single large notch (a fast wheel, or OS scroll acceleration) can add
+    // more than the remaining distance in one step. Without clamping the
+    // running target itself overshoots past `max`, and every reversed notch
+    // afterward has to "unwind" that overshoot before the row visibly moves
+    // — it would take two reversed notches here to undo an unclamped 790px
+    // overshoot, instead of one.
+    const g = scroller(390); // 10px from the end (max = 400)
+    onWheel(g, wheel({ deltaY: 800 }));
+    expect(g.scrollTo).toHaveBeenLastCalledWith({ left: 400, behavior: "smooth" });
+    onWheel(g, wheel({ deltaY: -100 }));
+    expect(g.scrollTo).toHaveBeenLastCalledWith({ left: 300, behavior: "smooth" });
+  });
+});
+
+describe("wheel gesture latching", () => {
+  function scroller(pos: number, max = 400): HTMLElement {
+    const g = row(4);
+    setOverflow(g, max);
+    g.scrollLeft = pos;
+    g.scrollTo = vi.fn();
+    return g;
+  }
+
+  test("a gesture that began on the page is not taken by the row even once it passes under the cursor", () => {
+    const g = scroller(0);
+    document.body.dispatchEvent(wheel({ deltaY: 50 })); // the gesture starts on the page
+    const e = wheel({ deltaY: 100 });
+    onWheel(g, e); // <200ms later, cursor now over the row
+    expect(e.defaultPrevented).toBe(false);
+    expect(g.scrollTo).not.toHaveBeenCalled();
+  });
+
+  test("a fresh gesture, starting more than 200ms after the last wheel event anywhere, is taken by the row", async () => {
+    const g = scroller(0);
+    document.body.dispatchEvent(wheel({ deltaY: 50 })); // an old, unrelated page gesture
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    const e = wheel({ deltaY: 100 });
+    onWheel(g, e);
+    expect(e.defaultPrevented).toBe(true);
+    expect(g.scrollTo).toHaveBeenCalledWith({ left: 100, behavior: "smooth" });
   });
 });
 
