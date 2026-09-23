@@ -603,6 +603,77 @@ async function iFooterReachable(browsers) {
     }
   }
 }
+
+// I-close-reversal: owner report 2026-09-22, "after scene 5 I cannot
+// scroll back to previous scene". Reproduced by scrolling to the reader's
+// own actual rest at SHARE -- the literal document bottom, which
+// I-footer-reachable's well deliberately lets a reader reach past the
+// designed closingRestY() -- and then reversing with ordinary input.
+// Fault (site/landing.js, mobileClosingProgress): the function read
+// mobileInkProgress against #c4's own heading, a ratio over the text's own
+// height. The closing composition (signup form, footer) runs on well past
+// that heading, so the ratio saturated at 1 hundreds of px before a
+// reader's momentum scroll -- or a deliberate scroll down to read the
+// footer -- actually stopped moving them. Every one of those extra px then
+// read back as "already at 1", so scrolling back up moved nothing on
+// screen until the whole gap was retraced. RED on the code before this
+// fix: from the document's literal bottom, a 900px real touch reversal
+// (chromium; mobileInkProgress reads scrollY the same way regardless of
+// input device, so a wheel/scrollTo drive would show the same thing) left
+// state().progress pinned at exactly 4 the entire way -- GREEN after
+// rewriting mobileClosingProgress to read scrollY against closingRestY()
+// (the reader's actual last pixel of scroll) instead of the text's height.
+// Desktop's own closing well is one-sided (I-footer-reachable) but its
+// dead zone is small on this page (closingRestY() sits within ~100px of
+// document bottom), so a plain wheel reversal already moved it before this
+// fix -- kept here as the matching regression guard for that leg, not
+// because it was ever red.
+async function iCloseReversal(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const pos = gesturePos(engineName);
+    const page = await browser.newPage(PRESETS.desktop);
+    await ready(page);
+    await arm(page, pos);
+    await gotoScene(page, 3);
+    await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+    for (let i = 0; i < 20 && !(await page.evaluate(() => window.__landing.state().xf >= 1 && !window.__landing.state().running)); i++) {
+      await page.mouse.move(...pos); await page.mouse.wheel(0, 60); await page.waitForTimeout(20);
+    }
+    await page.waitForTimeout(400);
+    for (let i = 0; i < 15; i++) { await page.mouse.move(...pos); await page.mouse.wheel(0, -40); await page.waitForTimeout(20); }
+    await page.waitForTimeout(500);
+    const after = await page.evaluate(() => ({ progress: window.__landing.state().progress, shown: window.__landing.state().shown }));
+    assert(after.progress < 3.95, `I-close-reversal ${engineName}: a wheel reversal off the closing rest left progress at ${after.progress} (wanted a real move off SHARE)`);
+    console.log(`${engineName}: I-close-reversal a reversal off the closing rest moves progress to ${after.progress.toFixed(3)} (shown=${after.shown})`);
+    await page.close();
+  }
+
+  // Chromium only: mobile WebKit cannot be driven by synthesized touch
+  // events via Playwright/CDP (check-landing-mobile.mjs's own limit, also
+  // noted at I-header-scrim's own touch leg above).
+  if (!browsers.chromium) { console.log('I-close-reversal: mobile touch leg skipped (chromium not selected)'); return; }
+  const page = await browsers.chromium.newPage(PRESETS.phone);
+  await ready(page);
+  await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+  await page.waitForFunction(() => window.__landing.state().shown === 4 && !window.__landing.state().running, null, { timeout: 20000 });
+  await page.waitForTimeout(300);
+  const before = await page.evaluate(() => window.__landing.state().progress);
+  assert(before === 4, `I-close-reversal mobile: did not settle at SHARE before reversing (progress=${before})`);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 195, y: 400 }] });
+  let touchY = 400;
+  for (let i = 0; i < 150; i++) {
+    touchY += 6; // finger moves down the screen -> content scrolls up, toward scene 4
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 195, y: touchY }] });
+    await page.waitForTimeout(15);
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await page.waitForTimeout(300);
+  const after = await page.evaluate(() => ({ progress: window.__landing.state().progress, shown: window.__landing.state().shown }));
+  assert(after.progress < before - 0.1, `I-close-reversal mobile: a real ~900px touch reversal off the closing rest did not move progress (before=${before}, after=${after.progress})`);
+  console.log(`chromium: I-close-reversal mobile a real touch reversal off the closing rest moves progress ${before} -> ${after.progress.toFixed(3)} (shown=${after.shown})`);
+  await page.close();
+}
 // I-progress, unit 3 (review-phases-2-4.md Job 2 item 5): xfAt() must be a
 // pure function of progressAt(), not a second, independent reader of raw
 // scrollY -- the same closing-progress unification dissolve-module-design.md
@@ -1429,6 +1500,7 @@ const INVARIANTS = [
     await iCloseOvershootSettles(b);
   }],
   ['I-footer-reachable', (b) => iFooterReachable(b)],
+  ['I-close-reversal', (b) => iCloseReversal(b)],
   ['I-progress', (b) => iProgressMatchesXf(b)],
   ['I-rect', (b) => iRect(b)],
   ['I-scene3', (b) => iScene3(b)],

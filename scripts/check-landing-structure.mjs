@@ -219,7 +219,11 @@ const BASELINE = {
   // mobile reverse-leg-off-the-closing-scene fix), plus dropping the
   // releasePigmentCover() call that stripped a class renderMorphAt still
   // owned -- real logic plus its own explanatory comments, not bloat.
-  scriptBytes: 277909,
+  // 277909 -> 278381 (2026-09-22): mobileClosingProgress rewritten to
+  // measure against closingRestY() instead of mobileInkProgress's own
+  // text-height span (owner report, "after scene 5 I cannot scroll back") --
+  // real logic plus its own explanatory comment, not bloat.
+  scriptBytes: 278381,
 };
 
 function countWindowAssignments(text) {
