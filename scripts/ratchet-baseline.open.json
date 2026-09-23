@@ -22,11 +22,11 @@
         "crates/moss-build/src/build/render/html.rs": 1700,
         "crates/moss-build/src/build/scan/scan.rs": 1500,
         "crates/moss-build/src/build/ship.rs": 1000,
-        "crates/moss-build/src/build/types.rs": 900,
+        "crates/moss-build/src/build/types.rs": 1000,
         "crates/moss-build/src/build/watch.rs": 1200,
         "crates/moss-build/src/build.rs": 2300,
         "crates/moss-build/src/engine.rs": 1000,
-        "crates/moss-build/src/moss_paths.rs": 1300,
+        "crates/moss-build/src/moss_paths.rs": 1400,
         "crates/moss-build/src/plugins/manager.rs": 1000,
         "crates/moss-build/src/plugins/types.rs": 900,
         "crates/moss-build/src/seta/client.rs": 1100,
@@ -37,15 +37,16 @@
         "crates/moss-core/src/ast/render.rs": 1000,
         "crates/moss-core/src/ast/resolve_urls.rs": 1000,
         "crates/moss-core/src/ast/shortcode_extract.rs": 1700,
-        "crates/moss-core/src/contract/components.rs": 3900,
+        "crates/moss-core/src/contract/components.rs": 4000,
         "crates/moss-core/src/frontmatter_typed.rs": 1200,
         "crates/moss-core/src/render/image.rs": 1000,
         "crates/moss-core/src/resolve/wikilink_dispatch.rs": 1100,
-        "crates/moss-core/src/schema_fields.rs": 1000,
+        "crates/moss-core/src/schema_fields.rs": 1100,
         "packages/moss-api/src/testing/mock-tauri.ts": 1200,
         "crates/moss-build/src/build/manifest.rs": 1000,
         "crates/moss-build/src/build/feeds/search_lane.rs": 900,
-        "crates/moss-build/src/ops/serve/invoke.rs": 900
+        "crates/moss-build/src/ops/serve/invoke.rs": 900,
+        "crates/moss-build/src/build/terms.rs": 1000
       }
     },
     "children_per_dir": {

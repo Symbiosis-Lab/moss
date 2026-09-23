@@ -415,3 +415,64 @@ fn the_group_set_is_keyed_by_shape_not_by_host() {
         .is_some());
     assert_eq!(groups.len(), 2, "the root home's group and writings/'s group");
 }
+
+/// A `.moss/places.toml`-only edit (no document frontmatter touched) has no
+/// dedicated `listing_globals` entry — `listing_globals` is built in exactly
+/// one place (`render/incremental/verdict.rs`'s own call, passing only
+/// `project`/`dir_overrides`/`site_lang`/`typesetting`/`math`, no
+/// `SiteConfig`, no `term_kinds`), so a places-only edit has to move a
+/// document's own `also_in` for the verdict to see it at all. It does:
+/// `derive_terms`'s roll-up (task A5) writes the parent chain into
+/// `also_in`, which is inside the whole-document `Debug` surface
+/// `facade.rs::surface_debug` hashes (it strips only a short, explicitly
+/// named list of body-only fields, and `also_in` is not one of them), so
+/// `FullCause::SurfaceChanged` already catches this with nothing new to
+/// wire — no `listing_globals` extension is added here, deliberately.
+///
+/// Ablated by disabling the ancestor-push loop in `derive_terms` pass 2:
+/// `also_in` never moves at all with the loop gone, so there is nothing
+/// for the surface diff to see and the verdict stays `Incremental` rather
+/// than firing with the wrong membership. That reddens the FIRST
+/// assertion below (`assert_full`, verdict stays `Incremental` because
+/// `also_in` does not move), not the membership assertion at the end —
+/// with the loop gone there is no wrong page left to list the document on.
+#[test]
+fn a_places_toml_only_edit_full_renders_via_surface_changed_and_moves_membership() {
+    let h = Harness::new();
+
+    let places_kind = |parent_of_kyoto: &str| crate::build::terms::TermKind {
+        key: "places".to_string(),
+        fields: vec!["location".to_string()],
+        title: "Places".to_string(),
+        is_place: true,
+        parents: [("places/kyoto".to_string(), parent_of_kyoto.to_string())].into_iter().collect(),
+    };
+
+    let mut before_docs = vec![doc("posts/a/index.html", PageKind::Article, "A body", Some("A"))];
+    before_docs[0].location = vec!["Kyoto".to_string()];
+    crate::build::terms::derive_terms(&mut before_docs, vec![places_kind("Japan")]);
+    h.run(&before_docs);
+
+    // The only change: Kyoto's `parent` in `.moss/places.toml` moves from
+    // Japan to Kansai — re-run `derive_terms` the same way a real rebuild
+    // would, with no document frontmatter touched.
+    let mut after_docs = vec![doc("posts/a/index.html", PageKind::Article, "A body", Some("A"))];
+    after_docs[0].location = vec!["Kyoto".to_string()];
+    crate::build::terms::derive_terms(&mut after_docs, vec![places_kind("Kansai")]);
+
+    let verdict = h.run(&after_docs);
+    assert_full(&verdict, FullCause::SurfaceChanged);
+    match verdict.basis() {
+        VerdictBasis::Full(_, Some(witness)) => {
+            assert!(witness.contains("also_in"), "witness must name also_in: {witness}");
+        }
+        other => panic!("expected a witness naming the moved field, got {other:?}"),
+    }
+
+    // The new ancestor lists the document; the old one no longer does — not
+    // merely "a full render happened," but that membership actually moved
+    // to the right page.
+    let also_in = after_docs[0].also_in.as_ref().expect("Kyoto and Kansai both recorded");
+    assert!(also_in.contains(&"places/kansai".to_string()), "got {also_in:?}");
+    assert!(!also_in.contains(&"places/japan".to_string()), "got {also_in:?}");
+}

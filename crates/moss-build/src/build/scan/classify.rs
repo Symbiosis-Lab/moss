@@ -344,10 +344,13 @@ pub const HIDDEN_ENTRIES: &[&str] = &[".git", "node_modules", "target"];
 /// — it is build-managed media and not surfaced in the editor tree.
 ///
 /// `data/` is listed for NOTHING. The 2026-09-04 writer audit asked of every
-/// `.moss/` path who writes it and whether a hand edit survives, and only these
-/// two answered "the user": `config.toml`, whose every in-app writer goes
-/// through the format-preserving `infra::toml_rewrite` precisely because the
-/// file is hand-written, and `theme/`, which nothing but the user ever writes.
+/// `.moss/` path who writes it and whether a hand edit survives, and only
+/// `config.toml` and `theme/` answered "the user" then: `config.toml`, whose
+/// every in-app writer goes through the format-preserving
+/// `infra::toml_rewrite` precisely because the file is hand-written, and
+/// `theme/`, which nothing but the user ever writes. `places.toml` (the
+/// gazetteer, places build slice) joined them the same way — the app has no
+/// writer for it yet, so every byte in it is the user's own.
 /// `data/social/` was listed here until that audit and is not user-writable:
 /// the background comment sync and the matters plugin re-serialize those files
 /// wholesale, so an edit made in the editor survives only until the next sync,
@@ -357,7 +360,7 @@ pub const HIDDEN_ENTRIES: &[&str] = &[".git", "node_modules", "target"];
 /// list Settings edits with a real UI, `events*.json*` is the analytics stream,
 /// and `email/drafts/` is auto-saved newsletter scratch.
 /// See `docs/archive/2026-09-03-moss-folder-in-the-file-tree-audit-and-design.md`.
-pub const MOSS_INTERNAL_ALLOWLIST: &[&str] = &[".moss/config.toml", ".moss/theme"];
+pub const MOSS_INTERNAL_ALLOWLIST: &[&str] = &[".moss/config.toml", ".moss/theme", ".moss/places.toml"];
 
 /// Why `is_hidden_reason` filtered an entry out of the file tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -522,7 +525,7 @@ mod tests {
 
     #[test]
     fn moss_lists_only_what_the_user_writes() {
-        for name in ["config.toml", "theme"] {
+        for name in ["config.toml", "theme", "places.toml"] {
             assert!(!is_hidden(name, ".moss", true), "{name} is the user's to edit");
         }
         for name in ["state.toml", "build.nosync", "cache", "identity", "plugins", "hashes.json", "data", "assets"] {

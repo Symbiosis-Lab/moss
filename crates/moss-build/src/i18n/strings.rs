@@ -275,6 +275,18 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "评审",
             Language::ZhHant => "評審",
         },
+        "term_role_location" => match lang {
+            Language::En => "Location",
+            Language::ZhHans => "地点",
+            Language::ZhHant => "地點",
+        },
+        // The automatic place line's label-to-links separator (task A7) — a
+        // distinct string from any hard-coded punctuation, so a site's
+        // language controls it the same way every other i18n string does.
+        "place_line_separator" => match lang {
+            Language::En => ": ",
+            Language::ZhHans | Language::ZhHant => "：",
+        },
 
         // RSS / Subscribe
         "subscribe" => match lang {

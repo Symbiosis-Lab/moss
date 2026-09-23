@@ -27,6 +27,14 @@ use crate::build::types::ParsedDocument;
 
 mod kinds;
 pub use kinds::{term_kinds, TermKind, BUILTIN_DEFAULT_FIELDS};
+// The gazetteer's `parent` links, attached to place-typed kinds at the
+// config stage — the only place the gazetteer type crosses into the terms
+// machinery. `derive_terms` itself never reads it.
+pub mod places;
+// `TermSite.parent`, breadcrumbs, and children-with-counts — the once-per-
+// build resolution that reads pass 2's finished memberships. See its own
+// doc comment for why it is a sibling file rather than inline here.
+mod rollup;
 
 /// `[text](url)` and `[[wikilink]]` spans — what [`linked_spans`] scans for.
 static LINK_SPAN_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -43,6 +51,17 @@ pub struct TermSite {
     /// generated at the pseudo-folder key. Persisted as-is in the article
     /// map, so the editor reads the claim instead of re-deriving it.
     pub claimed_by: Option<String>,
+    /// This term's parent's pseudo-folder key (`places/japan`), when the
+    /// term belongs to a place-typed kind and that kind's `parents` map
+    /// names one after resolution. Set inside `derive_terms` pass 2 —
+    /// `derive_terms` reads only the generic `parents` map its own `kinds`
+    /// parameter already carries, never the gazetteer directly.
+    ///
+    /// `skip_serializing_if` keeps a term with no parent out of the JSON
+    /// entirely — without it every term in every article map gains a
+    /// literal `"parent": null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 /// The vault's terms, keyed by pseudo-folder key (`authors/<slug>`,
@@ -74,6 +93,24 @@ pub struct TermIndex {
     /// the claimed and unclaimed pages of the same term cannot disagree
     /// about which field a member came through.
     sections_by_term: BTreeMap<String, Vec<(Option<String>, Vec<String>)>>,
+    /// Term key → its ordered ancestor `(display, url)` pairs, oldest first,
+    /// walked from `TermSite::parent` to the root. Empty (absent) for every
+    /// term with no parent — which is every term of a non-place kind, since
+    /// only a place-typed kind's `parents` map is ever filled. Resolved once
+    /// here, the same "one computation, two readers" pattern
+    /// `sections_by_term` established: the claiming page reads its own copy
+    /// off `ParsedDocument::place_breadcrumb`, the generated page reads it
+    /// through [`Self::breadcrumb`].
+    breadcrumbs_by_term: BTreeMap<String, Vec<(String, String)>>,
+    /// Term key → its direct children's `(display, url, count)`, where
+    /// `count` is the number of distinct member URLs across the child's own
+    /// `members_by_field` entries (not a raw sum over fields, which would
+    /// double-count a document reaching the child through two fields).
+    /// Already roll-up-inclusive: a region's children counts already
+    /// reflect every city under it, since pass 2's ancestor walk pushed
+    /// every level of a document's chain into `members_by_field`, not only
+    /// the immediate parent.
+    children_by_term: BTreeMap<String, Vec<(String, String, usize)>>,
 }
 
 impl TermIndex {
@@ -149,6 +186,23 @@ impl TermIndex {
         self.sections_by_term.get(term_key).map(Vec::as_slice)
     }
 
+    /// This term's ancestor chain, oldest first — the same value a claiming
+    /// page carries in `ParsedDocument::place_breadcrumb`. The render
+    /// layer's generated term page reads it from here because it has no
+    /// document of its own. `None` for a term with no parent (every
+    /// non-place term, and a root place with no gazetteer parent).
+    pub fn breadcrumb(&self, term_key: &str) -> Option<&[(String, String)]> {
+        self.breadcrumbs_by_term.get(term_key).map(Vec::as_slice)
+    }
+
+    /// This term's direct children, `(display, url, count)` — the same
+    /// value a claiming page carries in `ParsedDocument::place_children`.
+    /// `None` for a term with no children (every non-place term, and a leaf
+    /// place).
+    pub fn children(&self, term_key: &str) -> Option<&[(String, String, usize)]> {
+        self.children_by_term.get(term_key).map(Vec::as_slice)
+    }
+
     /// Whether any term exists in this namespace (drives whether the
     /// namespace root index is worth emitting).
     fn namespace_in_use(&self, ns: &str) -> bool {
@@ -192,6 +246,7 @@ fn field_names<'a>(doc: &'a ParsedDocument, field: &str) -> &'a [String] {
         "tags" => doc.fm_tags.as_deref().unwrap_or(&[]),
         "editor" => &doc.editor,
         "jury" => &doc.jury,
+        "location" => &doc.location,
         _ => &[],
     }
 }
@@ -205,6 +260,7 @@ fn term_claim_of<'a>(doc: &'a ParsedDocument, field: &str) -> Option<&'a moss_co
         "tags" => doc.tag_page.as_ref(),
         "editor" => doc.editor_page.as_ref(),
         "jury" => doc.jury_page.as_ref(),
+        "location" => doc.place_page.as_ref(),
         _ => None,
     }
 }
@@ -220,6 +276,7 @@ pub fn claim_field_key(field: &str) -> Option<&'static str> {
         "tags" => Some("tag_page"),
         "editor" => Some("editor_page"),
         "jury" => Some("jury_page"),
+        "location" => Some("place_page"),
         _ => None,
     }
 }
@@ -256,6 +313,7 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
                 let site = index.sites.entry(key.clone()).or_insert_with(|| TermSite {
                     display: name.to_string(),
                     claimed_by: None,
+                    parent: None,
                 });
                 // First URL wins, so the result is scan-order independent.
                 let claim = to_pretty_url(&doc.url_path);
@@ -305,7 +363,10 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
 
     // Pass 2: memberships. Every field value of every kind claims membership
     // in its pseudo-folder, beside any authored `also_in` — and records which
-    // field it came through, in `members_by_field`.
+    // field it came through, in `members_by_field`. A place-typed kind's
+    // resolved key also walks `kind.parents` upward (the roll-up: a page in
+    // a city also lists on its region and country), pushing each ancestor
+    // through the same steps as the immediate key.
     for doc in documents.iter_mut() {
         let own_claim = claimed_key(doc, &kinds, &index);
         let doc_url = to_pretty_url(&doc.url_path);
@@ -317,6 +378,13 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
         // question ("which field did this member come through") that the
         // dedup here doesn't touch.
         let mut also_in_pushed: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Gates the `members_by_field` push, for the immediate key AND every
+        // ancestor alike — keyed on `(key, field)`, not on `also_in_pushed`
+        // (which only remembers keys already pushed into `also_in`, so it
+        // neither stops an ancestor reached twice through two fields of one
+        // document, nor a key reached both directly and as an ancestor).
+        let mut members_pushed: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
         for kind in &kinds {
             for field in &kind.fields {
                 let names = field_names(doc, field).to_vec();
@@ -328,22 +396,68 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
                     index.sites.entry(key.clone()).or_insert_with(|| TermSite {
                         display: name.to_string(),
                         claimed_by: None,
+                        parent: None,
                     });
-                    if own_claim.as_deref() == Some(key.as_str()) {
-                        continue; // a term page never lists itself
+                    if own_claim.as_deref() != Some(key.as_str()) {
+                        // a term page never lists itself
+                        if also_in_pushed.insert(key.clone()) {
+                            doc.also_in.get_or_insert_with(Vec::new).push(key.clone());
+                        }
+                        if members_pushed.insert((key.clone(), field.clone())) {
+                            index
+                                .members_by_field
+                                .entry((key.clone(), field.clone()))
+                                .or_default()
+                                .push(doc_url.clone());
+                        }
                     }
-                    if also_in_pushed.insert(key.clone()) {
-                        doc.also_in.get_or_insert_with(Vec::new).push(key.clone());
+                    // The roll-up: walk `kind.parents` upward from `key`.
+                    // Empty for every non-place kind, so this is a no-op
+                    // there. A4's cycle-guard already made the gazetteer's
+                    // `parents` map a fixed point, so this walk shouldn't
+                    // need one of its own — but `seen` is a defensive
+                    // backstop here too, the same as the two sibling walks
+                    // below that also traverse `kind.parents`: a hand-built
+                    // `TermKind` reaching this loop by some path other than
+                    // `attach_parents` is not this function's business to
+                    // rule out.
+                    let mut current = key.clone();
+                    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    seen.insert(current.clone());
+                    while let Some(parent_display) = kind.parents.get(&current) {
+                        let anc = term_folder_key(&kind.key, parent_display);
+                        index.sites.entry(anc.clone()).or_insert_with(|| TermSite {
+                            display: parent_display.clone(),
+                            claimed_by: None,
+                            parent: None,
+                        });
+                        if own_claim.as_deref() != Some(anc.as_str()) {
+                            if also_in_pushed.insert(anc.clone()) {
+                                doc.also_in.get_or_insert_with(Vec::new).push(anc.clone());
+                            }
+                            if members_pushed.insert((anc.clone(), field.clone())) {
+                                index
+                                    .members_by_field
+                                    .entry((anc.clone(), field.clone()))
+                                    .or_default()
+                                    .push(doc_url.clone());
+                            }
+                        }
+                        if !seen.insert(anc.clone()) {
+                            break;
+                        }
+                        current = anc;
                     }
-                    index
-                        .members_by_field
-                        .entry((key, field.clone()))
-                        .or_default()
-                        .push(doc_url.clone());
                 }
             }
         }
     }
+
+    // `TermSite.parent`, breadcrumbs, and children-with-counts — resolved
+    // once, in the sibling `rollup` module, now that pass 2's memberships
+    // are final. See its own doc comment for why this is a separate sweep
+    // rather than set inline during the ancestor walk above.
+    rollup::resolve_hierarchy(&mut index, &kinds);
 
     // Second small pass: resolve `term_sections` for every claiming page,
     // now that `members_by_field` is complete. A reverse scan of every
@@ -397,6 +511,8 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
     for doc in documents.iter_mut() {
         let Some(term_key) = doc.term_listing.as_deref() else { continue };
         doc.term_sections = index.sections_by_term.get(term_key).cloned();
+        doc.place_breadcrumb = index.breadcrumbs_by_term.get(term_key).cloned();
+        doc.place_children = index.children_by_term.get(term_key).cloned();
     }
 
     // Typo diagnostic (design §"what is genuinely required"): a claimed term
@@ -579,6 +695,46 @@ pub fn link_terms_in_bylines(documents: &mut [ParsedDocument], index: &TermIndex
                 );
             }
         }
+    }
+}
+
+/// The automatic place line: a generated markdown row naming every place a
+/// document declares, linked to each place's term page — the terms layer's
+/// one name-linking pass (see [`link_terms_in_bylines`]'s own doc)
+/// generalized to also decorate a generated line rather than only an
+/// authored one. Called beside `link_terms_in_bylines`, same reasoning: run
+/// before the incremental content hash is taken, so a claim moving
+/// invalidates the place line's link "for free," exactly like a
+/// byline-linked name already does.
+///
+/// `None` for every document when the site declares no place-typed kind at
+/// all. A page suppresses its own line only by leaving `location:` unset —
+/// there is no opt-out frontmatter key, since this is generated chrome with
+/// no authored equivalent (coordinator ruling, task A7).
+pub fn set_place_lines(documents: &mut [ParsedDocument], index: &TermIndex, lang: crate::i18n::Language) {
+    let Some(place_kind) = index.kinds.iter().find(|k| k.is_place) else { return };
+    for doc in documents.iter_mut() {
+        if doc.location.is_empty() {
+            continue;
+        }
+        let links: Vec<String> = doc
+            .location
+            .iter()
+            .filter_map(|name| {
+                let name = name.trim();
+                let url = index.term_url(&place_kind.key, name)?;
+                Some(format!("[{}]({})", name, url))
+            })
+            .collect();
+        if links.is_empty() {
+            continue;
+        }
+        doc.place_line = Some(format!(
+            "{}{}{}",
+            crate::i18n::t(lang, "term_role_location"),
+            crate::i18n::t(lang, "place_line_separator"),
+            links.join(", "),
+        ));
     }
 }
 
@@ -811,8 +967,8 @@ mod tests {
     /// kinds table (task A4).
     fn both_kinds() -> Vec<TermKind> {
         vec![
-            TermKind { key: AUTHOR_NS.to_string(), fields: vec!["author".to_string()], title: "Authors".to_string() },
-            TermKind { key: TAGS_NS.to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string() },
+            TermKind { key: AUTHOR_NS.to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), is_place: false, parents: Default::default() },
+            TermKind { key: TAGS_NS.to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default() },
         ]
     }
 
@@ -1015,6 +1171,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["jury".to_string()],
             title: "People".to_string(),
+            is_place: false, parents: Default::default(),
         }];
         let mut docs = vec![doc("about/kane/index.html", "Kane"), doc("posts/a/index.html", "A")];
         docs[0].jury_page = Some(TermClaim::UseTitle);
@@ -1026,11 +1183,233 @@ mod tests {
     }
 
     #[test]
+    fn claim_through_place_page_hosts_the_listing() {
+        let kinds = vec![TermKind {
+            key: "places".to_string(),
+            fields: vec!["location".to_string()],
+            title: "Places".to_string(),
+            is_place: true, parents: Default::default(),
+        }];
+        let mut docs = vec![doc("about/kyoto/index.html", "Kyoto"), doc("posts/a/index.html", "A")];
+        docs[0].place_page = Some(TermClaim::UseTitle);
+        docs[1].location = vec!["Kyoto".to_string()];
+        let index = derive_terms(&mut docs, kinds);
+        assert_eq!(docs[0].term_listing.as_deref(), Some("places/kyoto"));
+        assert_eq!(index.unclaimed_keys().count(), 0);
+        assert!(docs[1].also_in.as_ref().unwrap().contains(&"places/kyoto".to_string()));
+    }
+
+    // ── task A5: the roll-up ──────────────────────────────────────────────
+
+    fn places_kind_with_parents(parents: &[(&str, &str)]) -> TermKind {
+        TermKind {
+            key: "places".to_string(),
+            fields: vec!["location".to_string()],
+            title: "Places".to_string(),
+            is_place: true,
+            parents: parents.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        }
+    }
+
+    #[test]
+    fn a_page_in_a_city_appears_on_the_countrys_listing_through_parent_rollup() {
+        let kinds = vec![places_kind_with_parents(&[("places/kyoto", "Japan")])];
+        let mut docs = vec![doc("posts/a/index.html", "A")];
+        docs[0].location = vec!["Kyoto".to_string()];
+        let index = derive_terms(&mut docs, kinds);
+        assert!(docs[0].also_in.as_ref().unwrap().contains(&"places/kyoto".to_string()));
+        assert!(docs[0].also_in.as_ref().unwrap().contains(&"places/japan".to_string()));
+        assert_eq!(
+            index.members_by_field.get(&("places/japan".to_string(), "location".to_string())),
+            Some(&vec!["posts/a/".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_page_in_a_city_rolls_up_through_a_multi_level_chain_to_a_country_with_no_gazetteer_row_of_its_own(
+    ) {
+        // The umbrella spec's own worked example, reproduced with neutral
+        // names: city → region → country, and the country-level ancestor
+        // gets its `TermSite` from THIS pass — `attach_parents` (A4) never
+        // creates one, since no gazetteer row named "Japan" itself.
+        let kinds = vec![places_kind_with_parents(&[
+            ("places/kyoto", "Kansai"),
+            ("places/kansai", "Japan"),
+        ])];
+        let mut docs = vec![doc("posts/a/index.html", "A")];
+        docs[0].location = vec!["Kyoto".to_string()];
+        let index = derive_terms(&mut docs, kinds);
+        for key in ["places/kyoto", "places/kansai", "places/japan"] {
+            assert!(
+                docs[0].also_in.as_ref().unwrap().contains(&key.to_string()),
+                "missing {key} in also_in: {:?}",
+                docs[0].also_in
+            );
+        }
+        assert!(index.sites().contains_key("places/japan"), "Japan gets a TermSite from this pass");
+    }
+
+    #[test]
+    fn roll_up_records_the_right_field_on_a_multi_field_place_kind() {
+        let mut kind = places_kind_with_parents(&[("places/kyoto", "Japan")]);
+        kind.fields = vec!["location".to_string(), "editor".to_string()];
+        let kinds = vec![kind];
+        let mut docs = vec![doc("posts/a/index.html", "A")];
+        docs[0].location = vec!["Kyoto".to_string()];
+        let index = derive_terms(&mut docs, kinds);
+        assert_eq!(
+            index.members_by_field.get(&("places/japan".to_string(), "location".to_string())),
+            Some(&vec!["posts/a/".to_string()]),
+            "the roll-up records the field the city was reached through, not a flat merge"
+        );
+        assert_eq!(
+            index.members_by_field.get(&("places/japan".to_string(), "editor".to_string())),
+            None,
+            "no editor: value named this document, so it must not appear under that field"
+        );
+    }
+
+    #[test]
+    fn a_document_naming_a_city_and_its_country_is_counted_once_in_the_country() {
+        let kinds = vec![places_kind_with_parents(&[("places/kyoto", "Japan")])];
+        let mut docs = vec![doc("posts/a/index.html", "A")];
+        docs[0].location = vec!["Kyoto".to_string(), "Japan".to_string()];
+        let index = derive_terms(&mut docs, kinds);
+        assert_eq!(
+            index
+                .members_by_field
+                .get(&("places/japan".to_string(), "location".to_string()))
+                .map(Vec::len),
+            Some(1),
+            "Japan reached both directly and as Kyoto's ancestor must be counted once"
+        );
+    }
+
+    #[test]
+    fn ancestor_walk_terminates_on_a_cycle_longer_than_break_cycles_max_hops() {
+        // Ten nodes, one longer than `places::break_cycles`'s own 8-hop cap
+        // — and built by hand rather than through `attach_parents`, so that
+        // guard never runs at all. `break_cycles` is a config-stage
+        // precaution over a gazetteer-sourced `parents` map; a `TermKind`
+        // reaching this pass some other way (hand-built here, but the same
+        // shape a future caller could construct) has no such promise
+        // upstream, so this walk needs its own backstop rather than relying
+        // on one it never sees run.
+        let mut parents = std::collections::BTreeMap::new();
+        for i in 0..10 {
+            let key = term_folder_key("places", &format!("n{i}"));
+            let parent_name = format!("n{}", (i + 1) % 10);
+            parents.insert(key, parent_name);
+        }
+        let kinds = vec![TermKind {
+            key: "places".to_string(),
+            fields: vec!["location".to_string()],
+            title: "Places".to_string(),
+            is_place: true,
+            parents,
+        }];
+        let mut docs = vec![doc("posts/a/index.html", "A")];
+        docs[0].location = vec!["n0".to_string()];
+        // Hangs forever without the `seen` guard — this call is the test.
+        let index = derive_terms(&mut docs, kinds);
+
+        let also_in = docs[0].also_in.as_ref().expect("every node on the cycle is a member");
+        for i in 0..10 {
+            let key = format!("places/n{i}");
+            assert!(also_in.contains(&key), "missing {key} in also_in: {also_in:?}");
+        }
+        assert_eq!(
+            also_in.iter().filter(|k| k.starts_with("places/n")).count(),
+            10,
+            "each node on the cycle recorded exactly once, not looped: {also_in:?}"
+        );
+        assert_eq!(index.sites().len(), 10, "no duplicate TermSite created by looping back around");
+    }
+
+    #[test]
+    fn a_claimed_place_with_no_members_still_gets_its_breadcrumb() {
+        let kinds = vec![places_kind_with_parents(&[("places/kyoto", "Japan")])];
+        let mut docs = vec![doc("about/kyoto/index.html", "Kyoto")];
+        docs[0].place_page = Some(TermClaim::UseTitle);
+        // No document's `location:` ever names Kyoto — the claim is the
+        // only thing that puts it in `index.sites` — so only the post-pass-2
+        // sweep, not the ancestor walk (which never runs for this document),
+        // can set its `parent`.
+        let index = derive_terms(&mut docs, kinds);
+        assert_eq!(index.sites().get("places/kyoto").and_then(|s| s.parent.as_deref()), Some("places/japan"));
+        // The claiming page reads its own copy off `ParsedDocument`, same
+        // condition as `term_sections` (task A6).
+        assert_eq!(
+            docs[0].place_breadcrumb,
+            Some(vec![("Japan".to_string(), "/places/japan/".to_string())])
+        );
+    }
+
+    // ── task A6: breadcrumb and children ─────────────────────────────────
+
+    #[test]
+    fn non_place_kind_renders_neither_element() {
+        // A people-kind claiming page: `TermSite::parent` is never set for a
+        // non-place kind (`kind.parents` stays empty), so both
+        // `breadcrumbs_by_term` and `children_by_term` end up with nothing
+        // recorded for it — the emptiness check the render layer applies is
+        // the only guard, replacing the dropped `is_place` gate.
+        let kinds = vec![TermKind {
+            key: "people".to_string(),
+            fields: vec!["jury".to_string()],
+            title: "People".to_string(),
+            is_place: false,
+            parents: Default::default(),
+        }];
+        let mut docs = vec![doc("about/kane/index.html", "Kane")];
+        docs[0].jury_page = Some(TermClaim::UseTitle);
+        derive_terms(&mut docs, kinds);
+        assert_eq!(docs[0].place_breadcrumb, None);
+        assert_eq!(docs[0].place_children, None);
+    }
+
+    // ── task A7: the automatic place line ────────────────────────────────
+
+    #[test]
+    fn place_line_renders_linked_names_in_declared_order() {
+        let kinds = vec![places_kind_with_parents(&[])];
+        let mut docs = vec![doc("about/kyoto/index.html", "Kyoto"), doc("posts/a/index.html", "A")];
+        docs[0].place_page = Some(TermClaim::UseTitle);
+        docs[1].location = vec!["Kyoto".to_string()];
+        let index = derive_terms(&mut docs, kinds);
+        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
+        assert_eq!(docs[1].place_line.as_deref(), Some("Location: [Kyoto](/about/kyoto/)"));
+    }
+
+    #[test]
+    fn place_line_is_absent_when_location_is_unset() {
+        let kinds = vec![places_kind_with_parents(&[])];
+        let mut docs = vec![doc("posts/a/index.html", "A")];
+        let index = derive_terms(&mut docs, kinds);
+        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
+        assert_eq!(docs[0].place_line, None);
+    }
+
+    #[test]
+    fn place_line_is_absent_when_the_site_declares_no_place_kind() {
+        // `location:` is set — the absence has to come from "no declared
+        // place kind", not merely from an empty `location:`, which
+        // `place_line_is_absent_when_location_is_unset` already covers.
+        let kinds = both_kinds();
+        let mut docs = vec![doc("posts/a/index.html", "A")];
+        docs[0].location = vec!["Kyoto".to_string()];
+        let index = derive_terms(&mut docs, kinds);
+        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
+        assert_eq!(docs[0].place_line, None);
+    }
+
+    #[test]
     fn members_by_field_records_which_field_a_member_came_through() {
         let kinds = vec![TermKind {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
+            is_place: false, parents: Default::default(),
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1058,6 +1437,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string()],
             title: "People".to_string(),
+            is_place: false, parents: Default::default(),
         }];
         let mut docs = vec![doc("about/chen/index.html", "陳小華"), doc("posts/a/index.html", "A")];
         docs[0].author_page = Some(TermClaim::UseTitle);
@@ -1085,6 +1465,7 @@ mod tests {
         d.fm_tags = Some(vec!["essays".to_string()]);
         d.editor = vec!["Kane".to_string()];
         d.jury = vec!["Kaneda".to_string()];
+        d.location = vec!["Kyoto".to_string()];
         for field in moss_core::schema_fields::name_list_fields() {
             assert!(
                 !field_names(&d, field).is_empty(),
@@ -1105,6 +1486,7 @@ mod tests {
             key: "authors".to_string(),
             fields: Vec::new(),
             title: "作者".to_string(),
+            is_place: false, parents: Default::default(),
         }];
         let mut docs = vec![doc("authors/index.html", "authors")];
         let index = derive_terms(&mut docs, off);
@@ -1118,6 +1500,7 @@ mod tests {
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "作者".to_string(),
+            is_place: false, parents: Default::default(),
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1136,6 +1519,7 @@ mod tests {
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "Authors".to_string(),
+            is_place: false, parents: Default::default(),
         }];
         let mut docs = vec![doc("posts/a/index.html", "A"), doc("posts/b/index.html", "B")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1158,6 +1542,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string(), "jury".to_string()],
             title: "People".to_string(),
+            is_place: false, parents: Default::default(),
         }];
         let mut docs = vec![doc("posts/a/index.html", "A"), doc("posts/b/index.html", "B")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1174,6 +1559,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string(), "jury".to_string()],
             title: "People".to_string(),
+            is_place: false, parents: Default::default(),
         }];
         let mut docs = vec![doc("seasons/one/index.html", "One"), doc("posts/a/index.html", "A")];
         docs[0].jury = vec!["Ada Lin".to_string()];
@@ -1202,6 +1588,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "jury".to_string()],
             title: "People".to_string(),
+            is_place: false, parents: Default::default(),
         }];
         let mut docs = vec![doc("posts/a/index.html", "A"), doc("seasons/one/index.html", "One")];
         docs[0].author = vec!["Kane".to_string()];
@@ -1232,6 +1619,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
+            is_place: false, parents: Default::default(),
         }];
         let mut docs = vec![
             doc("ada-lin/index.html", "Ada Lin"),
@@ -1291,12 +1679,13 @@ mod tests {
     /// the built-in loses the field, the declared kind gains it.
     fn author_moved_to_people() -> Vec<TermKind> {
         vec![
-            TermKind { key: "authors".to_string(), fields: Vec::new(), title: "Authors".to_string() },
-            TermKind { key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string() },
+            TermKind { key: "authors".to_string(), fields: Vec::new(), title: "Authors".to_string(), is_place: false, parents: Default::default() },
+            TermKind { key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default() },
             TermKind {
                 key: "people".to_string(),
                 fields: vec!["author".to_string(), "editor".to_string()],
                 title: "People".to_string(),
+                is_place: false, parents: Default::default(),
             },
         ]
     }
@@ -1344,8 +1733,9 @@ mod tests {
                 key: "authors".to_string(),
                 fields: vec!["author".to_string()],
                 title: "Authors".to_string(),
+                is_place: false, parents: Default::default(),
             },
-            TermKind { key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string() },
+            TermKind { key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default() },
         ];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1361,6 +1751,7 @@ mod tests {
             key: "authors".to_string(),
             fields: Vec::new(),
             title: "Authors".to_string(),
+            is_place: false, parents: Default::default(),
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1376,6 +1767,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
+            is_place: false, parents: Default::default(),
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1450,6 +1842,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string()],
             title: "People".to_string(),
+            is_place: false, parents: Default::default(),
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Alex Rivera".to_string()];

@@ -29,6 +29,30 @@ pub struct TermKind {
     /// with a fallback: a declared kind's config `title` or its own key; a
     /// built-in's `i18n::term_root_title`. There is nothing to fall back to.
     pub title: String,
+    /// `type = "place"` in `[terms.<key>]`. The only typed kind — a plain
+    /// bool, not an enum, because a place is the only kind type moss
+    /// recognizes so far. Drives which kinds `build::terms::places::attach_parents`
+    /// fills; render-time code does NOT gate on this field — it gates on
+    /// whether `parents` or its inverse actually has an entry for the term
+    /// in question, so a non-place kind renders no breadcrumb/children by
+    /// simply having nothing recorded, not by an extra check.
+    ///
+    /// `skip_serializing_if` on the negation, not a plain `#[serde(default)]`
+    /// alone: without it every kind in every article map, place or not,
+    /// gains a literal `"is_place": false`, which is not byte-identical to a
+    /// pre-places-slice map.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_place: bool,
+    /// Generic parent hierarchy: term key (already `term_folder_key`-shaped,
+    /// e.g. `places/kyoto`) → parent's DISPLAY NAME (not yet a key —
+    /// resolving a display name to its own key, to keep walking upward, is
+    /// `derive_terms` pass 2's job, once it already has the fully-built
+    /// kinds table in scope). Only place kinds are ever filled; every other
+    /// kind carries an empty map and pays nothing. Filled once, at the
+    /// config stage, by `build::terms::places::attach_parents` —
+    /// `derive_terms` itself never reads the gazetteer.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub parents: std::collections::BTreeMap<String, String>,
 }
 
 /// Turn config into the kinds table [`super::derive_terms`] derives from —
@@ -102,7 +126,19 @@ pub fn term_kinds(cfg: &crate::config::ConfigFile, lang: crate::i18n::Language) 
                     kind.key.clone()
                 }
             });
-            TermKind { key: kind.key, fields, title }
+            let is_place = match kind.kind_type.as_deref() {
+                Some("place") => true,
+                Some(other) => {
+                    crate::build::cli_output::log_warn_problem!(
+                        "[terms.{}] has type = \"{}\", which moss does not recognize; ignoring",
+                        kind.key,
+                        other
+                    );
+                    false
+                }
+                None => false,
+            };
+            TermKind { key: kind.key, fields, title, is_place, parents: Default::default() }
         })
         .collect()
 }
@@ -145,6 +181,37 @@ mod tests {
             vec!["editor".to_string()],
             "an unrecognized field name is dropped with a diagnostic, not a panic"
         );
+    }
+
+    #[test]
+    fn declared_place_kind_is_marked_is_place() {
+        let cfg = crate::config::ConfigFile::parse(
+            "[terms.places]\ntype = \"place\"\nfields = [\"location\"]\n",
+        )
+        .unwrap();
+        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let places = kinds.iter().find(|k| k.key == "places").expect("places kind present");
+        assert!(places.is_place);
+    }
+
+    #[test]
+    fn unknown_kind_type_is_a_diagnostic_not_a_crash() {
+        let cfg = crate::config::ConfigFile::parse(
+            "[terms.places]\ntype = \"country\"\nfields = [\"location\"]\n",
+        )
+        .unwrap();
+        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let places = kinds.iter().find(|k| k.key == "places").expect("places kind present");
+        assert!(!places.is_place, "an unrecognized type is ignored, not a panic");
+    }
+
+    #[test]
+    fn a_kind_with_no_type_key_is_never_a_place_kind() {
+        let cfg =
+            crate::config::ConfigFile::parse("[terms.people]\nfields = [\"author\"]\n").unwrap();
+        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
+        assert!(!people.is_place);
     }
 
     /// A vault with no `.moss/config.toml` at all still yields both

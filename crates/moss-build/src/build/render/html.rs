@@ -493,7 +493,7 @@ fn generate_html_inner(
             // under; render/credits.rs says where it goes instead, and why a
             // `layout: article` homepage is the article path's page, not this one.
             if !is_article_page {
-                content = credits::splice_byline_at_page_head(content, &doc.byline, emit_source_lines);
+                content = credits::splice_byline_at_page_head(content, &doc.byline, emit_source_lines, doc.place_line.as_deref());
             }
 
             // Folder card <img> tags inherit width/height/loading/LQIP/color
@@ -651,7 +651,7 @@ fn generate_html_inner(
                 // below emits both. Same boolean as that gate, so "exactly one
                 // fires" reads off one variable. See render/credits.rs.
                 let folder_byline = (!is_article_page)
-                    .then(|| credits::render_byline_html(&doc.byline, emit_source_lines))
+                    .then(|| credits::render_byline_html(&doc.byline, emit_source_lines, doc.place_line.as_deref()))
                     .flatten()
                     .unwrap_or_default();
                 if resolved_cover.is_some() && !is_article_layout {
@@ -718,7 +718,7 @@ fn generate_html_inner(
             } else if !is_article_page {
                 // No title block of moss's own — a home-override or language-root
                 // folder page, or a plain page — so the homepage rule applies.
-                content = credits::splice_byline_at_page_head(content, &doc.byline, emit_source_lines);
+                content = credits::splice_byline_at_page_head(content, &doc.byline, emit_source_lines, doc.place_line.as_deref());
             }
 
             // Folder card <img> tags: same LQIP/dimensions inheritance as the
@@ -1171,7 +1171,7 @@ fn generate_html_inner(
         // control — and which is emitted only when the page has a date, while
         // a byline must render with or without one.
         if let Some(byline) = doc
-            .and_then(|d| credits::render_byline_html(&d.byline, emit_source_lines))
+            .and_then(|d| credits::render_byline_html(&d.byline, emit_source_lines, d.place_line.as_deref()))
         {
             after_title_block.push_str(&byline);
         }

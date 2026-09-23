@@ -1280,6 +1280,18 @@ fn build_inner(
         &project_structure.root_path,
     );
     let site_comments = site_bool("comments");
+    // The kinds table, pulled out of the `SiteConfig` literal below so the
+    // gazetteer's `parent` links can be attached to place-typed kinds before
+    // the config is built — `derive_terms` itself never sees the gazetteer
+    // (`build::terms::places::attach_parents`'s own module doc explains why
+    // that keeps geography a thin layer on top of the term model rather than
+    // a special case inside it).
+    let mut kinds = crate::build::terms::term_kinds(
+        cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
+        crate::i18n::Language::from_code(&site_lang).unwrap_or(crate::i18n::Language::En),
+    );
+    let gazetteer = crate::vault::places::load_gazetteer(&paths.places());
+    crate::build::terms::places::attach_parents(&mut kinds, &gazetteer);
     // Read site-level config from .moss/config.toml [site] section
     let site_config = crate::build::render::SiteConfig {
         lang: site_lang.clone(),
@@ -1337,11 +1349,10 @@ fn build_inner(
         // `[terms].author = false` / `[terms].tags = false`, or moving a
         // field into a declared `[terms.<key>]` kind, changes that.
         // `Language::from_code` is the same conversion `blocking.rs:451`
-        // already performs on this same `site_lang` value.
-        term_kinds: crate::build::terms::term_kinds(
-            cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
-            crate::i18n::Language::from_code(&site_lang).unwrap_or(crate::i18n::Language::En),
-        ),
+        // already performs on this same `site_lang` value. Computed above,
+        // before this literal, so the gazetteer's `parent` links can be
+        // attached first.
+        term_kinds: kinds,
         incremental,
     };
     log::debug!(target: "timing", "[build] staging: config_reads (1 parse) took {:?}", t_config.elapsed());

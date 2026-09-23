@@ -1899,6 +1899,40 @@ header:has(+ .moss-hero) .main-nav {
   display: none;
 }
 
+/* A place page's ancestor trail (`build::components::place_hierarchy`),
+   reusing `.breadcrumb-segment`/`.breadcrumb-separator` above rather than
+   duplicating them — this container just needs to lay them out as a row;
+   none of the masthead's fold/truncation machinery applies here, so
+   wrapping (not ellipsis) is how a long chain avoids overflow. */
+.moss-place-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  margin-block: 0 var(--moss-space-md);
+}
+
+/* A place page's direct children, each already carrying its roll-up-
+   inclusive count in the link text (`Kyoto (3)`) — no separate markup to
+   mute just the count against, so the whole entry gets the same muted,
+   underlined-on-hover treatment as a byline credit. */
+.moss-place-children {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--moss-space-xs) var(--moss-space-sm);
+  margin-block: var(--moss-space-sm) 0;
+  padding: 0;
+  list-style: none;
+}
+.moss-place-children a {
+  color: var(--moss-color-text-secondary);
+  text-decoration: none;
+  border-bottom: 1px solid var(--moss-border-light);
+}
+.moss-place-children a:hover {
+  color: var(--moss-color-text);
+  border-bottom-color: currentColor;
+}
+
 /* ---------------------------------------------------------------------------
    Hover hint (`data-tooltip`)
    ---------------------------------------------------------------------------
@@ -2401,6 +2435,28 @@ header:has(+ .moss-hero) .main-nav {
   border-bottom: 1px solid var(--moss-border-light);
 }
 .moss-byline a:hover {
+  border-bottom-color: currentColor;
+}
+
+/* The automatic place line (generated from `location:`) — same font, colour
+   and link treatment as the byline just above, since it sits in the same
+   credit-line role, just machine-generated rather than authored. A separate
+   class rather than reusing `.moss-byline` because it is not one of that
+   block's rows (see `render_byline_html`, which resolves the two pieces
+   independently). */
+.moss-place-line {
+  font-size: 0.82em;
+  line-height: 1.75;
+  font-weight: 400;
+  color: var(--moss-color-text-secondary);
+  margin-block: 0 var(--moss-space-md);
+}
+.moss-place-line a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid var(--moss-border-light);
+}
+.moss-place-line a:hover {
   border-bottom-color: currentColor;
 }
 

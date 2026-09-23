@@ -26,3 +26,6 @@ pub mod analytics;
 // publish records, written the same way from either binary.
 pub mod deployment_state;
 pub mod synced_siblings;
+// `.moss/places.toml`'s reader: the gazetteer a `location:` frontmatter
+// value looks a place name up in (task A1, places build slice).
+pub mod places;

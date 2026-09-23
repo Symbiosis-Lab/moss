@@ -1,0 +1,9 @@
+schema_version = 6
+
+[site]
+lang = "en"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+title = "Places"

@@ -167,7 +167,19 @@ fn asset_field_names_is_exactly_cover_and_logo() {
 /// non-empty — a wildcard match arm elsewhere (`_ => &[]`) would otherwise
 /// pass as a real accessor for a name the set silently dropped.
 #[test]
-fn name_list_fields_is_exactly_the_four_name_list_fields() {
+fn name_list_fields_is_exactly_the_five_name_list_fields() {
     let names: std::collections::HashSet<&str> = name_list_fields().collect();
-    assert_eq!(names, std::collections::HashSet::from(["author", "tags", "editor", "jury"]));
+    assert_eq!(names, std::collections::HashSet::from(["author", "tags", "editor", "jury", "location"]));
+}
+
+/// Same discipline as `name_list_fields_is_exactly_the_four_name_list_fields`:
+/// set equality against the exact five term-claim fields, not merely
+/// non-empty.
+#[test]
+fn term_claim_fields_is_exactly_the_five_term_claim_fields() {
+    let names: std::collections::HashSet<&str> = term_claim_fields().collect();
+    assert_eq!(
+        names,
+        std::collections::HashSet::from(["author_page", "tag_page", "editor_page", "jury_page", "place_page"])
+    );
 }

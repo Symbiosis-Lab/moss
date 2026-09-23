@@ -258,6 +258,16 @@ impl MossPaths {
         self.root.join("state.toml")
     }
 
+    /// `.moss/places.toml` — the hand-edited place-name gazetteer a
+    /// `location:` frontmatter value looks a name up in.
+    ///
+    /// User-writable, like `config.toml`: watched (a hand edit rebuilds the
+    /// preview) and materialized (a cloud-evicted gazetteer must never
+    /// silently read as absent and drop every place).
+    pub fn places(&self) -> PathBuf {
+        self.root.join("places.toml")
+    }
+
     // ── Theme ───────────────────────────────────────────────
 
     /// `.moss/theme/` — designer assets copied to site output root.
@@ -860,6 +870,11 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // watched on purpose: the sync is change-gated, and the preview has to
     // refresh when it lands. Pinned by the social-sync rebuild regression test.
     r(".moss/data/social/", false, CloudPolicy::Synced, true, true),
+    // The place-name gazetteer (places build slice) — user hand-edits this
+    // file, so it must stay watched (a hand edit rebuilds the preview) and
+    // materialized (a cloud-evicted gazetteer must never silently read as
+    // absent). Modeled directly on `config.toml`'s own identical row above.
+    r(".moss/places.toml", false, CloudPolicy::Synced, true, true),
 ];
 
 const fn r(
@@ -1288,6 +1303,7 @@ mod tests {
             (".moss/theme/", "the user's own theme — content"),
             (".moss/assets/", "the user's own assets — content"),
             (".moss/data/social/", "background comment/social sync results, re-fetchable from the server that produced them"),
+            (".moss/places.toml", "the user's own gazetteer — content, same reasoning as config.toml"),
             (".moss/deploy/", "what is live at each target, which is a fact about the SITE: a second machine needs it to leave a forwarding link for a page this one renamed. Read through `manifest::live_baseline`, whose tri-state keeps unreadable apart from absent (moss#1079)"),
         ];
 

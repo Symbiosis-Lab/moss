@@ -3227,6 +3227,34 @@ mod children_field_tests {
         }
     }
 
+    /// The automatic place line reuses `render_byline_html`/
+    /// `splice_byline_at_page_head`, so it has to reach all four call sites
+    /// in `render/html.rs` (homepage page-head, folder title block,
+    /// non-homepage page-head, article) — traced directly against the
+    /// source rather than re-asserted, and exercised here through the same
+    /// `every_page_kind` cases the byline count test uses, since those
+    /// cases already cover every assembly path. This is the test that would
+    /// have caught two missing call sites in an earlier draft, and — with
+    /// `render_byline_html`'s combined-`Option` fix — a page with
+    /// `location:` set and no `byline:` at all.
+    #[test]
+    fn all_four_byline_sites_carry_the_place_line() {
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+
+        for (label, mut doc, is_homepage) in every_page_kind() {
+            doc.place_line = Some("Location: [Kyoto](/about/kyoto/)".to_string());
+            let all_docs = vec![homepage.clone(), doc.clone()];
+            let html = render_page(Some(&doc), &all_docs, is_homepage);
+
+            assert_eq!(
+                html.matches(r#"class="moss-place-line""#).count(),
+                1,
+                "{label}: place line must render exactly once. Got: {html}"
+            );
+        }
+    }
+
     /// Every page kind moss can assemble, as `(label, doc, is_homepage)` —
     /// one entry per assembly path in `render/html.rs`, plus the
     /// `layout: article` variants that traverse two of them.

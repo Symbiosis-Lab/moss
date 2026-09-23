@@ -13,6 +13,8 @@
 use std::collections::HashMap;
 use serde_yaml::Value;
 
+use crate::schema_fields;
+
 /// What a saved template produces when instantiated. Decided at capture time
 /// from the tree's own home-file election (a folder's home file captures as
 /// `Folder`), so the template store and the tree never disagree about it.
@@ -31,10 +33,11 @@ pub enum TemplateKind {
 /// (the untitled-first flow fills it in when the user commits the H1), a
 /// `date` the template carries is re-stamped to `now`, and every field that
 /// names THIS page rather than describes it is dropped — `uid` (the
-/// comments/redirects join key), `url` (the pinned address), `author_page` /
-/// `tag_page` / `editor_page` / `jury_page` (a term claim; two claimants
-/// resolve to the first `url_path`, so a copy could steal the original's
-/// term page), `translationKey` (a copy
+/// comments/redirects join key), `url` (the pinned address), every term-page
+/// claim (`schema_fields::term_claim_fields()` — `author_page` / `tag_page` /
+/// `editor_page` / `jury_page` / `place_page` today; two claimants resolve to
+/// the first `url_path`, so a copy could steal the original's term page),
+/// `translationKey` (a copy
 /// makes the pair "one page's translations" and links them), and
 /// `syndicated` (where the captured page was published, written by the
 /// matters plugin). Every other field — layout, tags, cascade, and anything
@@ -60,7 +63,7 @@ pub fn instantiate_template_frontmatter(
     // the preview waits on the path-derived URL that never arrives (seen in
     // the 2026-09-05 log: `測試獎.md` sent to /awards/writing-2/).
     frontmatter.remove("url");
-    for claim in ["author_page", "tag_page", "editor_page", "jury_page", "translationKey", "syndicated"] {
+    for claim in schema_fields::term_claim_fields().chain(["translationKey", "syndicated"]) {
         frontmatter.remove(claim);
     }
     if frontmatter.contains_key("date") {
@@ -84,6 +87,7 @@ mod tests {
             ("tag_page", "essays"),
             ("editor_page", "ada"),
             ("jury_page", "kane"),
+            ("place_page", "kyoto"),
             ("translationKey", "about"),
             ("date", "2020-01-01"),
         ] {
@@ -93,7 +97,7 @@ mod tests {
 
         let out = instantiate_template_frontmatter(fm, "2026-09-03");
 
-        for identity in ["title", "uid", "url", "author_page", "tag_page", "editor_page", "jury_page", "translationKey", "syndicated"] {
+        for identity in ["title", "uid", "url", "author_page", "tag_page", "editor_page", "jury_page", "place_page", "translationKey", "syndicated"] {
             assert_eq!(out.get(identity), None, "`{identity}` names the captured page, not the instance");
         }
         assert_eq!(out.get("date"), Some(&Value::String("2026-09-03".to_string())));

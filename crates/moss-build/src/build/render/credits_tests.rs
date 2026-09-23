@@ -12,7 +12,7 @@ fn rows(v: &[&str]) -> Vec<String> {
 
 #[test]
 fn absent_rows_emit_nothing() {
-    assert_eq!(render_byline_html(&[], false), None);
+    assert_eq!(render_byline_html(&[], false, None), None);
     assert_eq!(render_colophon_html(&[], false), None);
 }
 
@@ -20,7 +20,7 @@ fn absent_rows_emit_nothing() {
 fn each_entry_is_one_row() {
     // Full-width space between role and name survives verbatim — the shape
     // content is being migrated to.
-    let html = render_byline_html(&rows(&["作者　糜緒洋", "編輯　謝丁"]), false).unwrap();
+    let html = render_byline_html(&rows(&["作者　糜緒洋", "編輯　謝丁"]), false, None).unwrap();
     assert_eq!(
         html,
         r#"<div class="moss-byline"><div class="moss-byline-row">作者　糜緒洋</div><div class="moss-byline-row">編輯　謝丁</div></div>"#
@@ -58,7 +58,7 @@ fn inline_markdown_is_rendered_not_escaped() {
 
 #[test]
 fn plain_text_is_html_escaped() {
-    let html = render_byline_html(&rows(&["Q&A 統籌"]), false).unwrap();
+    let html = render_byline_html(&rows(&["Q&A 統籌"]), false, None).unwrap();
     assert!(html.contains("Q&amp;A"), "ampersand escaped: {html}");
 }
 
@@ -68,14 +68,14 @@ fn raw_html_passes_through_exactly_as_it_does_in_the_body() {
     // site author's own file, read by the same markdown path as the body,
     // where inline HTML has always passed through. Pinned so a future change
     // to that shared path is a visible decision rather than a surprise here.
-    let html = render_byline_html(&rows(&["作者 <span>X</span>"]), false).unwrap();
+    let html = render_byline_html(&rows(&["作者 <span>X</span>"]), false, None).unwrap();
     assert!(html.contains("<span>X</span>"), "got: {html}");
 }
 
 #[test]
 fn a_row_that_is_not_one_paragraph_falls_back_to_literal_text() {
     // A stray `#` must render as itself, never as a heading in the masthead.
-    let html = render_byline_html(&rows(&["# 作者 X"]), false).unwrap();
+    let html = render_byline_html(&rows(&["# 作者 X"]), false, None).unwrap();
     assert!(
         html.contains("# 作者 X"),
         "heading syntax renders as literal text: {html}"
@@ -85,10 +85,26 @@ fn a_row_that_is_not_one_paragraph_falls_back_to_literal_text() {
 
 #[test]
 fn source_mapping_attribute_is_opt_in_and_names_its_field() {
-    let on = render_byline_html(&rows(&["作者 X"]), true).unwrap();
+    let on = render_byline_html(&rows(&["作者 X"]), true, None).unwrap();
     assert!(on.contains(r#"data-source-fm="byline""#), "got: {on}");
     let on = render_colophon_html(&rows(&["首發媒體 X"]), true).unwrap();
     assert!(on.contains(r#"data-source-fm="colophon""#), "got: {on}");
-    let off = render_byline_html(&rows(&["作者 X"]), false).unwrap();
+    let off = render_byline_html(&rows(&["作者 X"]), false, None).unwrap();
     assert!(!off.contains("data-source-fm"), "got: {off}");
+}
+
+#[test]
+fn place_line_renders_on_a_page_with_no_byline() {
+    // The bug this round caught: keying the combined result on `rows`
+    // alone silently dropped the place line on the common case — a page
+    // with `location:` set and no `byline:` at all.
+    let html = render_byline_html(&[], false, Some("Location: [Kyoto](/about/kyoto/)")).unwrap();
+    assert!(html.contains(r#"<div class="moss-place-line">Location: <a href="/about/kyoto/">Kyoto</a></div>"#), "got: {html}");
+}
+
+#[test]
+fn place_line_and_byline_both_render_independently() {
+    let html = render_byline_html(&rows(&["作者　糜緒洋"]), false, Some("Location: [Kyoto](/about/kyoto/)")).unwrap();
+    assert!(html.contains("moss-byline"), "got: {html}");
+    assert!(html.contains("moss-place-line"), "got: {html}");
 }

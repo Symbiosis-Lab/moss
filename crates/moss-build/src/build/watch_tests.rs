@@ -783,6 +783,8 @@ fn test_should_watch_moss_file() {
     assert!(should_watch_moss_file("theme/script.js"));
     assert!(should_watch_moss_file("assets/logo.png"));
     assert!(should_watch_moss_file("assets\\logo.png")); // Windows
+    // A hand edit to the gazetteer must rebuild the preview, same as config.toml.
+    assert!(should_watch_moss_file("places.toml"));
 
     // Legacy root paths are NO LONGER accepted (migration removed)
     assert!(!should_watch_moss_file("style.css"));

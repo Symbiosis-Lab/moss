@@ -100,13 +100,41 @@
 //!    only, never re-spaced in the middle.
 
 /// Render the byline block for an article, or `None` when there is nothing
-/// to show.
+/// to show — the authored `byline:` rows, the automatic place line, or both.
 ///
 /// `emit_source_fm` mirrors the date row: when the preview is running for the
-/// editor, the block carries `data-source-fm="byline"` so a click maps back to
-/// the frontmatter field. Stripped from shipped HTML by `build::ship`.
-pub fn render_byline_html(rows: &[String], emit_source_fm: bool) -> Option<String> {
-    render_rows("moss-byline", "moss-byline-row", "byline", rows, emit_source_fm)
+/// editor, the block carries `data-source-fm="byline"` (or `"location"` on
+/// the place line's own `<div>`) so a click maps back to the frontmatter
+/// field. Stripped from shipped HTML by `build::ship`.
+///
+/// The two pieces are resolved independently and only `None` when BOTH are —
+/// a page with `location:` set but no `byline:` (the common case) must still
+/// show its place line, which keying this function's result on `rows` alone
+/// would silently drop.
+pub fn render_byline_html(rows: &[String], emit_source_fm: bool, place_line: Option<&str>) -> Option<String> {
+    let byline = render_rows("moss-byline", "moss-byline-row", "byline", rows, emit_source_fm);
+    let place = render_place_line_html(place_line, emit_source_fm);
+    match (byline, place) {
+        (None, None) => None,
+        (Some(b), None) => Some(b),
+        (None, Some(p)) => Some(p),
+        (Some(b), Some(p)) => Some(format!("{}{}", b, p)),
+    }
+}
+
+/// The automatic place line's own block, or `None` when there is none. Not
+/// row-split like `render_rows` — the line is inherently one row, so
+/// `moss-place-line` is the only class the contract table needs.
+fn render_place_line_html(place_line: Option<&str>, emit_source_fm: bool) -> Option<String> {
+    let line = place_line?;
+    let mut out = String::from(r#"<div class="moss-place-line""#);
+    if emit_source_fm {
+        out.push_str(r#" data-source-fm="location""#);
+    }
+    out.push('>');
+    out.push_str(&render_row(line));
+    out.push_str("</div>");
+    Some(out)
 }
 
 /// Append the colophon to the end of a page's content — the one placement it
@@ -141,8 +169,9 @@ pub fn splice_byline_at_page_head(
     content: String,
     rows: &[String],
     emit_source_fm: bool,
+    place_line: Option<&str>,
 ) -> String {
-    let Some(byline) = render_byline_html(rows, emit_source_fm) else {
+    let Some(byline) = render_byline_html(rows, emit_source_fm, place_line) else {
         return content;
     };
     if content.trim_start().starts_with("<h1") {

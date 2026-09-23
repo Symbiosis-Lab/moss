@@ -247,10 +247,10 @@ fn claimed_term_url_is_moved_to_the_claiming_page() {
     let mut m = ArticleMap::new();
     m.articles.insert("about/ma/".into(), make_article("關於/作者/ma.md", "about/ma/"));
     m.generated = vec!["authors/".into(), "authors/scarly/".into()];
-    m.terms.insert("authors/馬欣宜".into(), TermSite { display: "馬欣宜".into(), claimed_by: Some("about/ma/".into()) });
-    m.terms.insert("authors/scarly".into(), TermSite { display: "Scarly".into(), claimed_by: None });
+    m.terms.insert("authors/馬欣宜".into(), TermSite { display: "馬欣宜".into(), claimed_by: Some("about/ma/".into()), parent: None });
+    m.terms.insert("authors/scarly".into(), TermSite { display: "Scarly".into(), claimed_by: None, parent: None });
     // The home page claiming a term: its pretty URL key is empty, the site root.
-    m.terms.insert("tags/home".into(), TermSite { display: "Home".into(), claimed_by: Some(String::new()) });
+    m.terms.insert("tags/home".into(), TermSite { display: "Home".into(), claimed_by: Some(String::new()), parent: None });
     let idx = ArticleMapIndex::from_map(&m);
     assert_eq!(idx.lookup_moved("/tags/home/"), Some("/".into()));
     assert!(!idx.lookup_exact("/authors/馬欣宜/"), "the generated URL no longer exists");
@@ -339,10 +339,10 @@ fn people_url_classifies_the_way_authors_url_does() {
         "people/".into(),
         "people/sam-okafor/".into(),
     ];
-    m.terms.insert("authors/ada-lin".into(), TermSite { display: "Ada Lin".into(), claimed_by: Some("ada-lin/".into()) });
-    m.terms.insert("people/ada-lin".into(), TermSite { display: "Ada Lin".into(), claimed_by: Some("ada-lin/".into()) });
-    m.terms.insert("authors/sam-okafor".into(), TermSite { display: "Sam Okafor".into(), claimed_by: None });
-    m.terms.insert("people/sam-okafor".into(), TermSite { display: "Sam Okafor".into(), claimed_by: None });
+    m.terms.insert("authors/ada-lin".into(), TermSite { display: "Ada Lin".into(), claimed_by: Some("ada-lin/".into()), parent: None });
+    m.terms.insert("people/ada-lin".into(), TermSite { display: "Ada Lin".into(), claimed_by: Some("ada-lin/".into()), parent: None });
+    m.terms.insert("authors/sam-okafor".into(), TermSite { display: "Sam Okafor".into(), claimed_by: None, parent: None });
+    m.terms.insert("people/sam-okafor".into(), TermSite { display: "Sam Okafor".into(), claimed_by: None, parent: None });
     let idx = ArticleMapIndex::from_map(&m);
 
     assert_eq!(idx.lookup_moved("/people/ada-lin/"), idx.lookup_moved("/authors/ada-lin/"));

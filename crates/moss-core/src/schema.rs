@@ -342,7 +342,9 @@ mod tests {
         // (`editor`/`jury`/`editor_page`/`jury_page` added 2026-09 — the
         // term-kinds generalization of `author`/`author_page` beyond the two
         // built-in namespaces; see moss_core::terms and build::terms.)
-        assert_eq!(schema.frontmatter.fields.len(), 46);
+        // (`location`/`place_page` added 2026-09 — the geography term kind;
+        // see moss_core::terms and build::terms::places.)
+        assert_eq!(schema.frontmatter.fields.len(), 48);
     }
 
     #[test]

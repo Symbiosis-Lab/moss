@@ -1,0 +1,15 @@
+["Kyoto"]
+lat = 35.0116
+lng = 135.7681
+precision = "city"
+parent = "Japan"
+
+["Osaka"]
+lat = 34.6937
+precision = "city"
+parent = "Japan"
+
+["Nara"]
+lat = 34.6851
+lng = 135.8048
+precision = "neighborhood"

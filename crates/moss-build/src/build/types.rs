@@ -220,6 +220,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub jury: Vec<String>,
+    /// Place names from frontmatter `location:` — same story as `editor`/
+    /// `jury`, feeding whichever term kind's `fields` names "location".
+    #[serde(skip)]
+    #[specta(skip)]
+    pub location: Vec<String>,
     /// Term-page claim from `author_page:` — this page is the author page
     /// for the claimed name (see `moss_core::terms::TermClaim`). Resolved by
     /// `build::terms::derive_terms` into [`Self::term_listing`] on the
@@ -241,6 +246,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub jury_page: Option<moss_core::terms::TermClaim>,
+    /// Term-page claim from `place_page:` — same as `author_page`, for
+    /// whichever kind carries the `location` field.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub place_page: Option<moss_core::terms::TermClaim>,
     /// The term pseudo-folder key (`authors/<slug>`, `tags/<slug>`) whose
     /// member listing this page hosts. Set by `build::terms::derive_terms`
     /// on the page that WINS a term claim — and only when the author didn't
@@ -261,6 +271,27 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub term_sections: Option<Vec<(Option<String>, Vec<String>)>>,
+    /// This place term's ancestor chain, oldest first — set alongside
+    /// `term_sections`, on the same condition (`term_listing.is_some()`).
+    /// `None` for a non-place claiming page, and for a root place with no
+    /// gazetteer parent.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub place_breadcrumb: Option<Vec<(String, String)>>,
+    /// This place term's direct children, `(display, url, count)` — set
+    /// alongside `term_sections`, same condition. `None` for a non-place
+    /// claiming page, and for a leaf place with no children.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub place_children: Option<Vec<(String, String, usize)>>,
+    /// The automatic place line: a generated markdown row naming every
+    /// place this document declares via `location:`, linked to each
+    /// place's term page. Set by `build::terms::set_place_lines`, after
+    /// `derive_terms`, alongside `link_terms_in_bylines`. `None` when
+    /// `location:` is unset, or the site declares no place-typed kind.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub place_line: Option<String>,
     /// Whether to render child pages below content.
     /// Accepts bool or wikilink in frontmatter (e.g. `children: "[[News]]"`).
     /// true = render children, false = hide, None = default to true.

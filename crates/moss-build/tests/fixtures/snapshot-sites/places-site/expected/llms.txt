@@ -1,0 +1,58 @@
+# Places Site
+
+---
+
+## nara diary
+
+# Nara Diary
+
+Two places in one field, one of them with an invalid `precision`.
+
+---
+
+## osaka notes
+
+# Osaka Notes
+
+A place whose gazetteer entry has no `lng`.
+
+---
+
+## kyoto report
+
+# Kyoto Report
+
+A single place, named through `location:`.
+
+---
+
+## Japan
+
+---
+
+## Kyoto
+
+# Kyoto
+
+Claims the `places/kyoto` page, so its breadcrumb and children list render here rather than on a generated one.
+
+---
+
+## Nara
+
+---
+
+## Osaka
+
+---
+
+## Places Site
+
+# Places Site
+
+One namespace, geography.
+
+---
+
+## posts
+

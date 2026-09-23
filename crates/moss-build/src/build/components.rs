@@ -23,6 +23,7 @@ pub mod nav;
 pub mod series_nav;
 pub mod sidebar_nav;
 pub mod year_group;
+pub mod place_hierarchy;
 
 /// The container every children listing wears: a `.moss-cards-container`
 /// wrapping one `.moss-cards` of the given layout.

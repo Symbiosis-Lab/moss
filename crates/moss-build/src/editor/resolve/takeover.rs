@@ -263,6 +263,7 @@ fn namespace_kind(map: &ArticleMap, ns: &str, site_lang: Language) -> Option<cra
             key: key.to_string(),
             fields: vec![field.to_string()],
             title: crate::i18n::term_root_title(site_lang, key).to_string(),
+            is_place: false, parents: Default::default(),
         })
 }
 
@@ -334,13 +335,13 @@ mod tests {
         let mut m = ArticleMap::default();
         m.terms.insert(
             "authors/馬欣宜".into(),
-            TermSite { display: "馬欣宜".into(), claimed_by: None },
+            TermSite { display: "馬欣宜".into(), claimed_by: None, parent: None },
         );
         m.terms.insert(
             "authors/scarly".into(),
-            TermSite { display: "Scarly".into(), claimed_by: Some("about/ma/".into()) },
+            TermSite { display: "Scarly".into(), claimed_by: Some("about/ma/".into()), parent: None },
         );
-        m.terms.insert("tags/城市".into(), TermSite { display: "城市".into(), claimed_by: None });
+        m.terms.insert("tags/城市".into(), TermSite { display: "城市".into(), claimed_by: None, parent: None });
         m.generated = vec!["authors/".into(), "authors/馬欣宜/".into(), "tags/".into(), "zh-hans/".into()];
         m.pages.insert("".into(), "index.md".into());
         m
@@ -452,7 +453,7 @@ mod tests {
         // the next unclaimed author lands in `作者/` with no second home note,
         // found through the claim's source path even before any disk walk.
         let mut m = map();
-        m.terms.insert("authors/王五".into(), TermSite { display: "王五".into(), claimed_by: None });
+        m.terms.insert("authors/王五".into(), TermSite { display: "王五".into(), claimed_by: None, parent: None });
         m.terms.get_mut("authors/馬欣宜").unwrap().claimed_by = Some("authors/馬欣宜/".into());
         m.dir_overrides.insert("作者".into(), "authors".into());
         m.pages.insert("authors/".into(), "作者/作者.md".into());
@@ -516,8 +517,9 @@ mod tests {
             key: "people".into(),
             fields: vec!["author".into(), "editor".into(), "jury".into()],
             title: "People".into(),
+            is_place: false, parents: Default::default(),
         }];
-        m.terms.insert("people/kane".into(), TermSite { display: "Kane".into(), claimed_by: None });
+        m.terms.insert("people/kane".into(), TermSite { display: "Kane".into(), claimed_by: None, parent: None });
         m.generated = vec!["people/".into(), "people/kane/".into()];
         m
     }
@@ -564,6 +566,7 @@ mod tests {
             key: "authors".into(),
             fields: Vec::new(),
             title: "作者".into(),
+            is_place: false, parents: Default::default(),
         }];
         m.generated = vec!["authors/".into()];
         let t = takeover_for(&m, dir.path(), "s", "authors/", Language::ZhHant).unwrap();
@@ -662,7 +665,7 @@ mod tests {
     fn a_name_that_cannot_be_a_filename_slugs_but_still_claims_the_real_name() {
         let dir = root();
         let mut m = map();
-        m.terms.insert("authors/a-b".into(), TermSite { display: "A/B".into(), claimed_by: None });
+        m.terms.insert("authors/a-b".into(), TermSite { display: "A/B".into(), claimed_by: None, parent: None });
         let t = takeover_for(&m, dir.path(), "s", "authors/a-b/", Language::En).unwrap();
         let f = only(&t);
         assert_eq!(f.name, "a-b.md");

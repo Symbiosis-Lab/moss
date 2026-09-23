@@ -198,6 +198,16 @@ pub struct FrontMatter {
         serialize_with = "serialize_name_list"
     )]
     pub jury: Option<Vec<String>>,
+    /// Place name(s), same shapes and normalizer as `author`/`editor`/`jury`
+    /// — feeding whichever term kind's `fields` names "location". Each name
+    /// is looked up in `.moss/places.toml` (`crate::terms` knows nothing
+    /// about the gazetteer; that lookup happens in moss-build).
+    #[serde(
+        default,
+        deserialize_with = "deserialize_name_list",
+        serialize_with = "serialize_name_list"
+    )]
+    pub location: Option<Vec<String>>,
     /// Term-page claim for the `editor` field — same shapes and behaviour as
     /// `author_page`, in whichever kind carries `editor`.
     #[serde(
@@ -214,6 +224,14 @@ pub struct FrontMatter {
         serialize_with = "serialize_term_claim"
     )]
     pub jury_page: Option<crate::terms::TermClaim>,
+    /// Term-page claim for the `location` field — same shapes and behaviour
+    /// as `author_page`, in whichever kind carries `location`.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_term_claim",
+        serialize_with = "serialize_term_claim"
+    )]
+    pub place_page: Option<crate::terms::TermClaim>,
     /// Byline shown under the article title: the credit lines a reader sees,
     /// as the author wrote them. One row per list entry, or per line of a
     /// block scalar:
@@ -1517,6 +1535,24 @@ mod tests {
             serde_yaml::from_str("editor_page: true\njury_page: Kane\n").expect("parse");
         assert_eq!(fm.editor_page, Some(crate::terms::TermClaim::UseTitle));
         assert_eq!(fm.jury_page, Some(crate::terms::TermClaim::Name("Kane".to_string())));
+    }
+
+    #[test]
+    fn location_and_place_page_round_trip_like_editor_and_jury() {
+        let fm: FrontMatter =
+            serde_yaml::from_str("location: Kyoto\nplace_page: true\n").expect("parse");
+        assert_eq!(fm.location.as_deref(), Some(&["Kyoto".to_string()][..]));
+        assert_eq!(fm.place_page, Some(crate::terms::TermClaim::UseTitle));
+
+        let single = FrontMatter { location: Some(vec!["Kyoto".to_string()]), ..Default::default() };
+        let yaml = serde_yaml::to_string(&single).expect("serialize");
+        assert!(
+            yaml.contains("location: Kyoto\n"),
+            "a single place name serializes as a plain string, like author: {yaml}"
+        );
+
+        let fm: FrontMatter = serde_yaml::from_str("place_page: Kyoto\n").expect("parse");
+        assert_eq!(fm.place_page, Some(crate::terms::TermClaim::Name("Kyoto".to_string())));
     }
 }
 

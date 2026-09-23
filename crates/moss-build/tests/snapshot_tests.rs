@@ -594,6 +594,40 @@ fn snapshot_term_kinds_site() {
     run_snapshot_test("term-kinds-site");
 }
 
+/// The places build slice: a declared place-typed kind, a `.moss/places.toml`
+/// gazetteer with a two-level parent chain (a country with no gazetteer row
+/// of its own), a claimed and a generated place page, and the automatic
+/// place line. Only a whole-build snapshot can see the roll-up's generated
+/// ancestor page, the breadcrumb/children markup, and that no coordinate
+/// digit ever reaches rendered output.
+#[test]
+fn snapshot_places_site() {
+    run_snapshot_test("places-site");
+}
+
+/// This slice renders no coordinates at all — no map, no locator SVG (both
+/// deferred to a later slice). Any digit sequence resembling a `lat`/`lng`
+/// value appearing anywhere in `places-site/expected/` would itself be a
+/// bug worth catching structurally, not just by eye, since nothing here is
+/// SUPPOSED to read `.moss/places.toml`'s coordinates at all.
+#[test]
+fn places_site_output_carries_no_coordinates() {
+    let expected_dir = fixtures_dir().join("places-site").join("expected");
+    for entry in WalkDir::new(&expected_dir).into_iter().filter_map(|e| e.ok()) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(entry.path()) else { continue }; // binary asset (favicon, js bundle)
+        for needle in ["35.0116", "135.7681", "34.6937", "34.6851", "135.8048"] {
+            assert!(
+                !text.contains(needle),
+                "{} contains a gazetteer coordinate digit sequence ({needle}) — this slice renders no coordinates",
+                entry.path().display()
+            );
+        }
+    }
+}
+
 /// A site with no home file at the root, and image directories the
 /// `[editor].attachment_folder` setting names as storage.
 ///

@@ -115,6 +115,13 @@ pub struct BuiltinField {
     /// `one_of_members` at all, so a predicate keyed on that would silently
     /// exclude it. Read by `name_list_fields()`.
     pub name_list: bool,
+    /// Whether this field is a term-page claim (`author_page`, `tag_page`,
+    /// `editor_page`, `jury_page`, `place_page`): a page claiming the term
+    /// page for a name-list field's value. `false` for every other field.
+    /// Schema-derived so a claim-stripping consumer (`template.rs`'s
+    /// instantiate-frontmatter reset) needs no hand-maintained copy of this
+    /// set. Read by `term_claim_fields()`.
+    pub term_claim: bool,
 }
 
 /// Default values for optional `BuiltinField` fields. Used with struct update
@@ -137,6 +144,7 @@ const FIELD_DEFAULTS: BuiltinField = BuiltinField {
     group: "",
     file_kinds: None,
     name_list: false,
+    term_claim: false,
 };
 
 /// Union members for `children`: a boolean toggle OR a single wikilink/path
@@ -412,6 +420,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "This page IS the author page for a name: true claims the page's own title, a string claims that name. It hosts the author's works listing, replaces the generated page in the kind's own namespace, and author mentions site-wide link here.",
         label_key: "chip.author_page.label",
         group: "This Page",
+        term_claim: true,
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -425,6 +434,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "This page IS the tag page for a tag: true claims the page's own title, a string claims that tag. It hosts the tag's listing, replaces the generated page in the kind's own namespace, and tag links site-wide point here.",
         label_key: "chip.tag_page.label",
         group: "This Page",
+        term_claim: true,
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -439,6 +449,22 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         score: 71,
         description: "Editor name, or a list of names for co-editors, feeding whichever term kind's `fields` names \"editor\" ([terms.<key>] fields = [\"editor\", ...] in .moss/config.toml). Same shapes and behaviour as author:.",
         label_key: "chip.editor.label",
+        group: "This Page",
+        name_list: true,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "location",
+        // Same union shape as `author`/`editor`/`jury`: a place name, or a
+        // list, naming an entry in `.moss/places.toml` by its display name —
+        // slugged the same way `derive_terms` slugs any other name-list value.
+        field_type: FieldType::OneOf,
+        widget: Widget::TagInput,
+        one_of_members: Some(NAME_LIST_MEMBERS),
+        // 73 is the one free integer between jury's 72 and external_url's 74.
+        score: 73,
+        description: "Place name, or a list of names, feeding whichever term kind's `fields` names \"location\" ([terms.<key>] fields = [\"location\", ...], type = \"place\" in .moss/config.toml). Each name is looked up in .moss/places.toml. Same shapes and behaviour as author:.",
+        label_key: "chip.location.label",
         group: "This Page",
         name_list: true,
         ..FIELD_DEFAULTS
@@ -470,6 +496,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "This page IS the editor page for a name: true claims the page's own title, a string claims that name. It hosts the editor's works listing, replaces the generated page in the kind's own namespace, and editor mentions site-wide link here.",
         label_key: "chip.editor_page.label",
         group: "This Page",
+        term_claim: true,
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -485,6 +512,21 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "This page IS the jury page for a name: true claims the page's own title, a string claims that name. It hosts the juror's works listing, replaces the generated page in the kind's own namespace, and jury mentions site-wide link here.",
         label_key: "chip.jury_page.label",
         group: "This Page",
+        term_claim: true,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "place_page",
+        // Same union as `jury_page`, for the `location` field.
+        field_type: FieldType::OneOf,
+        widget: Widget::Checkbox,
+        one_of_members: Some(TERM_CLAIM_MEMBERS),
+        // 102 is the next free integer past jury_page's 101.
+        score: 102,
+        description: "This page IS the place page for a name: true claims the page's own title, a string claims that name. It hosts the place's works listing, replaces the generated page in the kind's own namespace, and location mentions site-wide link here.",
+        label_key: "chip.place_page.label",
+        group: "This Page",
+        term_claim: true,
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -947,6 +989,15 @@ pub fn asset_field_names() -> impl Iterator<Item = &'static str> {
 /// unrecognized name is a diagnostic rather than a silent no-op.
 pub fn name_list_fields() -> impl Iterator<Item = &'static str> {
     BUILTIN_FIELDS.iter().filter(|f| f.name_list).map(|f| f.name)
+}
+
+/// Frontmatter fields that are a term-page claim: `author_page`, `tag_page`,
+/// `editor_page`, `jury_page`, `place_page`. The schema-derived replacement
+/// for a hand-maintained claim-field list — `template.rs`'s instantiate-reset
+/// strips every one of these from a captured page's frontmatter without
+/// naming them itself.
+pub fn term_claim_fields() -> impl Iterator<Item = &'static str> {
+    BUILTIN_FIELDS.iter().filter(|f| f.term_claim).map(|f| f.name)
 }
 
 #[cfg(test)]

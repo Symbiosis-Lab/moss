@@ -239,7 +239,8 @@ impl ConfigFile {
                 let fields: Vec<String> =
                     fields.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
                 let title = table.get("title").and_then(|v| v.as_str()).map(str::to_string);
-                declared.push(RawKind { key: key.clone(), fields, title });
+                let kind_type = table.get("type").and_then(|v| v.as_str()).map(str::to_string);
+                declared.push(RawKind { key: key.clone(), fields, title, kind_type });
             }
         }
         let declared_keys: std::collections::HashSet<&str> =
@@ -258,6 +259,7 @@ impl ConfigFile {
                     Vec::new()
                 },
                 title: None,
+                kind_type: None,
             });
         }
         kinds.extend(declared);
@@ -292,6 +294,11 @@ pub struct RawKind {
     /// the two built-ins (their title comes from `i18n::term_root_title`)
     /// and for a declared kind that didn't set one (its title is its key).
     pub title: Option<String>,
+    /// The declared `type = "..."` key, unvalidated — `"place"` is the only
+    /// value `build::terms::term_kinds` recognizes today; anything else is a
+    /// diagnostic there, not here. `None` for the two built-ins and for a
+    /// declared kind that didn't set one.
+    pub kind_type: Option<String>,
 }
 
 #[cfg(test)]

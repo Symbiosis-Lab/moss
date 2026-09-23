@@ -57,6 +57,7 @@ fn duplicate_name_in_one_row_warns() {
         key: "people".to_string(),
         fields: vec!["author".to_string(), "editor".to_string()],
         title: "People".to_string(),
+        is_place: false, parents: Default::default(),
     }];
     let mut docs = vec![crate::build::types::ParsedDocument {
         url_path: "posts/a/index.html".to_string(),
@@ -75,6 +76,29 @@ fn duplicate_name_in_one_row_warns() {
     );
 }
 
+/// Task A8: confirms `vault::places::parse_gazetteer`'s diagnostics go
+/// through `log_warn_problem!`, the CLI-visible macro, not a bare
+/// `log::warn!` — so a malformed `.moss/places.toml` entry counts toward
+/// `--strict`'s exit code, the same guarantee every other build diagnostic
+/// carries.
+#[test]
+fn gazetteer_diagnostics_count_as_cli_problems() {
+    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
+    take_cli_problems();
+    let table: toml::value::Table = toml::from_str(
+        "[\"Osaka\"]\nlat = 34.6937\nprecision = \"city\"\n\n[\"Nara\"]\nlat = 34.6851\nlng = 135.8048\nprecision = \"neighborhood\"\n",
+    )
+    .unwrap();
+    let gaz = crate::vault::places::parse_gazetteer(&table);
+    assert_eq!(
+        take_cli_problems(),
+        2,
+        "a missing lng and an invalid precision are each one CLI-visible problem"
+    );
+    assert_eq!(gaz.get("Osaka").unwrap().coords, None);
+    assert_eq!(gaz.get("Nara").unwrap().precision, crate::vault::places::Precision::Country);
+}
+
 /// Task A6: every remaining `log::warn!` in `derive_terms`/`claimed_key`
 /// renamed to `log_warn_problem!`, so a claimed term with no member pages
 /// (a likely typo between the claim and the name authors actually wrote)
@@ -87,6 +111,7 @@ fn unclaimed_typo_diagnostic_counts_as_a_cli_problem() {
         key: "authors".to_string(),
         fields: vec!["author".to_string()],
         title: "Authors".to_string(),
+        is_place: false, parents: Default::default(),
     }];
     let mut docs = vec![crate::build::types::ParsedDocument {
         url_path: "about/kane/index.html".to_string(),
@@ -109,6 +134,7 @@ fn declared_name_absent_from_any_byline_row_warns() {
         key: "authors".to_string(),
         fields: vec!["author".to_string()],
         title: "Authors".to_string(),
+        is_place: false, parents: Default::default(),
     }];
     let mut docs = vec![crate::build::types::ParsedDocument {
         url_path: "posts/a/index.html".to_string(),

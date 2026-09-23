@@ -1440,6 +1440,10 @@ pub fn generate_blocking_content(
     // linked URL is part of each page's surface, so a claim appearing
     // elsewhere re-renders the bylines that point at it.
     crate::build::terms::link_terms_in_bylines(&mut documents, &term_index);
+    // The automatic place line — same neighborhood, same reasoning: before
+    // the incremental content hash is taken, so a claim moving invalidates
+    // the line's link for free.
+    crate::build::terms::set_place_lines(&mut documents, &term_index, site_lang);
 
     // Synthesize folder index entries for folders that have child documents but
     // no explicit index file. This completes the page tree so parent folder pages
@@ -2197,6 +2201,18 @@ pub fn generate_blocking_content(
                 render_group,
             )
             .unwrap_or_else(|| render_group(&folder_docs));
+            // The generated half of the same breadcrumb/children chrome the
+            // claimed page gets in `folder_embed`, through the same resolved
+            // data: `None` (rendered empty) for every non-place term, since
+            // `TermSite::parent` is only ever set for a place-typed kind.
+            let place_breadcrumb_html = crate::build::components::place_hierarchy::render_breadcrumb(
+                term_index.breadcrumb(folder).unwrap_or(&[]),
+            )
+            .unwrap_or_default();
+            let place_children_html = crate::build::components::place_hierarchy::render_children(
+                term_index.children(folder).unwrap_or(&[]),
+            )
+            .unwrap_or_default();
             // Synthetic folder index: no markdown source, so prepend the shared
             // <h1 class="moss-folder-title"> via folder_title::render. Same
             // helper used by folder_cover::render (cover branch) and
@@ -2213,11 +2229,22 @@ pub fn generate_blocking_content(
             // behind this heading, so a click on it in the editor preview has
             // no `title` field to point at. Annotating it would promise a
             // destination that does not exist.
-            let content_html = format!(
-                "{}\n{}",
-                crate::build::components::folder_title::render(&page_title, false),
-                article_list,
-            );
+            //
+            // Breadcrumb/children are spliced in only when non-empty, each on
+            // its own line — an empty string here must not add a byte to a
+            // non-place site's output, which the byte-identity witness (task
+            // A0) treats as a build regression exactly the same as any other.
+            let mut content_html = crate::build::components::folder_title::render(&page_title, false);
+            if !place_breadcrumb_html.is_empty() {
+                content_html.push('\n');
+                content_html.push_str(&place_breadcrumb_html);
+            }
+            content_html.push('\n');
+            content_html.push_str(&article_list);
+            if !place_children_html.is_empty() {
+                content_html.push('\n');
+                content_html.push_str(&place_children_html);
+            }
 
             let path_resolver = {
                 let pr = match css_version.as_str() {
