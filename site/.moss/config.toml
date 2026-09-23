@@ -1,5 +1,8 @@
 schema_version = 4
 
+[build]
+passthrough = ["ui"]
+
 [channels.email]
 
 [site]
