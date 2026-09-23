@@ -352,7 +352,13 @@ const FORMAT_PROBE_TRANSFORM: &str = "format-probe";
 /// version changes with it; that also invalidates every entry a build made while
 /// the bug was live, which is the cheapest possible migration for vaults nobody
 /// can inspect. It costs a re-probe of each image once, not a re-encode.
-const FORMAT_PROBE_VERSION: u32 = 2;
+///
+/// **2 → 3**: the dimension read inside this probe (the `AlreadySmall` check)
+/// switched from extension-only to content-sniffed, so a mislabeled file that
+/// used to fail the read (and thus never skip) can now read real dimensions
+/// and be judged `AlreadySmall` — a different, newly-correct verdict the old
+/// version would still be serving.
+const FORMAT_PROBE_VERSION: u32 = 3;
 
 impl SkipReason {
     /// Whether a source skipped for this reason still has to be collected so
@@ -594,7 +600,7 @@ fn probe_cmyk_magic_already_small(
     }
 
     // AlreadySmall: both size AND dimension constraints met. Note: if
-    // image_dimensions() fails (corrupt / non-image), we do NOT skip — let
+    // sniff_dimensions() fails (corrupt / non-image), we do NOT skip — let
     // convert_single_image fail per-image with a warning, rather than
     // silently shipping the original.
     //
@@ -633,7 +639,7 @@ fn probe_cmyk_magic_already_small(
     let raster_with_picture = moss_core::asset_paths::is_ladder_source_ext(ext_lower)
         && !moss_core::asset_paths::is_webp_source_ext(ext_lower);
     if !raster_with_picture && file_size < config.min_size_kb.saturating_mul(1024) {
-        if let Ok((w, h)) = image::image_dimensions(source_path) {
+        if let Ok((w, h)) = super::decode::sniff_dimensions(source_path) {
             let (lw, lh) = if ext_lower == "webp"
                 && crate::build::scan::scan::should_swap_dimensions(read_exif_orientation(
                     source_path,

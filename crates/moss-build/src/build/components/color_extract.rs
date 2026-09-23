@@ -81,7 +81,10 @@ pub fn resolve_color_source_path(
 /// * `Some(String)` - HSLA color string like "hsla(200, 45%, 25%, 1)"
 /// * `None` - If the image cannot be loaded or processed
 pub fn extract_dominant_color(image_path: &Path) -> Option<String> {
-    let img = image::open(image_path).ok()?;
+    // Content-sniffed, not extension-only: a file whose extension lies about
+    // its format (a PNG saved as `x.jpg`) still decodes, instead of silently
+    // returning `None` here and losing the card's background color.
+    let img = crate::build::media::decode::sniff_decode(image_path).ok()?;
 
     let img = img.resize(50, 50, image::imageops::FilterType::Nearest);
     let rgb = img.to_rgb8();

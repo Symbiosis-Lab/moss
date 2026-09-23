@@ -1150,18 +1150,6 @@ fn warned_dirs() -> &'static std::sync::Mutex<std::collections::HashSet<std::pat
     WARNED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
 }
 
-/// Pure gate: `true` the first time `dir` is seen, `false` on every later
-/// call with the same `dir`. Takes `seen` explicitly rather than reading
-/// [`warned_dirs`] directly so a test exercises a local set — parallel-safe,
-/// independent of every other test in the binary.
-#[cfg(target_os = "macos")]
-pub(crate) fn should_warn_once(
-    dir: &std::path::Path,
-    seen: &std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
-) -> bool {
-    seen.lock().unwrap_or_else(|e| e.into_inner()).insert(dir.to_path_buf())
-}
-
 #[cfg(target_os = "macos")]
 fn exclude_from_cloud_sync(dir: &std::path::Path) {
     use std::os::unix::ffi::OsStrExt;
@@ -1194,7 +1182,7 @@ fn exclude_from_cloud_sync(dir: &std::path::Path) {
     // investigation starts from.
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        if should_warn_once(dir, warned_dirs()) {
+        if crate::infra::warn_once::should_warn_once(dir.to_path_buf(), warned_dirs()) {
             log::warn!(
                 "[cloud-exclude] setxattr(com.apple.fileprovider.ignore#P) failed on {}: {}",
                 dir.display(),
@@ -1206,7 +1194,7 @@ fn exclude_from_cloud_sync(dir: &std::path::Path) {
     // Verify after set: a call that returned 0 is not the same as a marker on
     // the directory, and which of the two failed is the question moss#965
     // could not answer from the return code alone.
-    if !has_cloud_sync_marker(dir) && should_warn_once(dir, warned_dirs()) {
+    if !has_cloud_sync_marker(dir) && crate::infra::warn_once::should_warn_once(dir.to_path_buf(), warned_dirs()) {
         log::warn!(
             "[cloud-exclude] com.apple.fileprovider.ignore#P is absent on {} right after it was set — \
              the provider may still sync it",
@@ -1767,18 +1755,6 @@ mod tests {
         assert!(has_cloud_sync_marker(&dir), "and a marked one reads back marked");
     }
 
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn should_warn_once_fires_only_on_first_sighting_of_a_dir() {
-        let seen = std::sync::Mutex::new(std::collections::HashSet::new());
-        let a = std::path::PathBuf::from("/tmp/a/.moss/build.nosync");
-        let b = std::path::PathBuf::from("/tmp/b/.moss/build.nosync");
-
-        assert!(should_warn_once(&a, &seen), "first sighting of a must warn");
-        assert!(!should_warn_once(&a, &seen), "second sighting of a must stay quiet");
-        assert!(should_warn_once(&b, &seen), "a different dir must still warn");
-        assert!(!should_warn_once(&b, &seen), "and then go quiet in turn");
-    }
 }
 
 /// Write `.moss/.gitignore`, adding any lines a prior moss version didn't know

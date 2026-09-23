@@ -374,6 +374,32 @@ fn cache_path_and_runtime_extraction_produce_equivalent_colors() {
     );
 }
 
+/// A file whose extension lies about its format — a PNG saved with a `.jpg`
+/// extension, e.g. by an export tool that mislabels its output — must still
+/// yield a color instead of silently losing it. The color/LQIP half of the
+/// same extension-vs-content bug `extract_image_dimensions` has in
+/// `build/scan/scan.rs`; both now go through `media::decode::sniff_decode`.
+///
+/// Ablation: reverting `extract_dominant_color` to `image::open(image_path)`
+/// (extension-only) makes this fail — the JPEG decoder rejects the PNG bytes
+/// and the function returns `None`.
+#[test]
+fn extracts_a_color_from_a_png_saved_with_a_jpg_extension() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("mislabeled.jpg");
+
+    let img = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([255u8, 0, 0]));
+    image::DynamicImage::ImageRgb8(img)
+        .save_with_format(&path, image::ImageFormat::Png)
+        .unwrap();
+
+    let color = extract_dominant_color(&path);
+    assert!(
+        color.is_some(),
+        "a PNG saved with a .jpg extension must still yield a dominant color, not None"
+    );
+}
+
 #[test]
 fn video_cover_resolves_and_extracts_end_to_end() {
     // The strongest regression guard: bypass the asymmetry by going

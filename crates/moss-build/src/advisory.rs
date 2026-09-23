@@ -206,23 +206,21 @@ fn warned_advisories() -> &'static std::sync::Mutex<std::collections::HashSet<(S
     WARNED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
 }
 
-/// Pure gate: `true` the first time `(source_path, what)` is seen, `false`
-/// on every later call with the same pair. Keyed on the caller-supplied
-/// `source_path` rather than the derived, possibly-`None` `item`, so two
-/// different rejected/malformed paths never collide under one shared `None`
-/// key; keyed on `what` alongside it so a change in the advisory's own
-/// content (a video that grew past a new cap, a different error) still logs
-/// once more. Takes `seen` explicitly, same shape as
-/// `moss_paths::should_warn_once`, so a test drives a local set instead of
-/// the process-wide one.
+/// Gate on the pair `(source_path, what)`, not the derived, possibly-`None`
+/// `item` — so two different rejected/malformed paths never collide under
+/// one shared `None` key — and on `what` alongside it so a change in the
+/// advisory's own content (a video that grew past a new cap, a different
+/// error) still logs once more. The composite key is this wrapper's own
+/// job; the gate itself is [`crate::infra::warn_once::should_warn_once`].
 pub(crate) fn should_warn_advisory_once(
     source_path: &str,
     what: &str,
     seen: &std::sync::Mutex<std::collections::HashSet<(String, String)>>,
 ) -> bool {
-    seen.lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert((source_path.to_string(), what.to_string()))
+    crate::infra::warn_once::should_warn_once(
+        (source_path.to_string(), what.to_string()),
+        seen,
+    )
 }
 
 impl Advisory {
@@ -338,23 +336,18 @@ mod tests {
     }
 
     // ─── advisory warn-once gate (re-raise spam in a long `watch` session) ──
+    //
+    // The repeat/first-sighting behavior itself is
+    // `infra::warn_once::should_warn_once`'s own test; this pins only what
+    // this wrapper adds — that `what` is part of the key, so a changed
+    // advisory on the SAME path still warns instead of being swallowed by
+    // the path alone.
 
     #[test]
-    fn should_warn_advisory_once_fires_only_on_first_sighting_of_a_pair() {
+    fn should_warn_advisory_once_treats_a_changed_what_as_a_different_key() {
         let seen = std::sync::Mutex::new(std::collections::HashSet::new());
 
-        assert!(
-            should_warn_advisory_once("videos/clip.mov", "shipped without optimizing", &seen),
-            "first sighting of this (path, what) must warn"
-        );
-        assert!(
-            !should_warn_advisory_once("videos/clip.mov", "shipped without optimizing", &seen),
-            "a stat-based rebuild re-raising the identical advisory must stay quiet"
-        );
-        assert!(
-            should_warn_advisory_once("videos/other.mov", "shipped without optimizing", &seen),
-            "a different source path must still warn"
-        );
+        assert!(should_warn_advisory_once("videos/clip.mov", "shipped without optimizing", &seen));
         assert!(
             should_warn_advisory_once("videos/clip.mov", "size grew past a new cap", &seen),
             "a changed `what` on the same path must still warn"

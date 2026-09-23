@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- An image whose file extension doesn't match its contents (a PNG saved as `.jpg`) now gets its real width and height, placeholder colour and responsive sizes on the page instead of a generic 800×600 box, and the build log names the file so it can be renamed.
 - Floated images, embeds, and folder listings now collapse to a full-width block on phones instead of staying pinned at their desktop float width or an explicit size. `![[photo.jpg|align-right]]` without a size now floats at half the column on desktop, as documented; before, it rendered full width because the cap never matched.
 - On vertically typeset sites, a `:::hero {.plate}` image is no longer cut off on long pages, and a plate with a caption no longer disappears entirely; the caption runs vertically beside the plate, centred on it.
 - `--moss-card-cover-fit` now applies to list-style folder listings too, not just grids, so a site can show whole pictures in its card thumbnails instead of a centre crop.

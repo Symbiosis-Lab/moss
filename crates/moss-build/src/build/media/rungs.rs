@@ -75,29 +75,12 @@ pub(crate) fn rung_collision_map(
         .collect()
 }
 
-/// Decode `source_file` (format sniffed by magic bytes, allocation-capped)
-/// and apply its EXIF orientation. The shared decode front half of the base
-/// webp pass and the rung encodes.
-///
-/// The 1 GiB `max_alloc` cap is defense-in-depth against decompression bombs
-/// / wrong-dimension headers: the MegapixelBudget bounds *concurrent* decoded
-/// pixels, but nothing else caps a *single* decode's allocation — a tiny file
-/// declaring enormous dimensions would decode to multiple GB and OOM-kill the
-/// process regardless of the budget. 1 GiB ≈ 250 MP of RGBA, orders of
-/// magnitude above any real photo, so legitimate images are never rejected.
+/// Decode `source_file` (format sniffed by magic bytes, allocation-capped —
+/// see `media::decode::sniff_decode`) and apply its EXIF orientation. The
+/// shared decode front half of the base webp pass and the rung encodes.
 pub(crate) fn decode_oriented(source_file: &Path) -> Result<image::DynamicImage, String> {
-    use image::io::Reader as ImageReader;
-    const DECODE_ALLOC_CEILING: u64 = 1024 * 1024 * 1024;
     let orientation = read_exif_orientation(source_file);
-    let img = ImageReader::open(source_file)
-        .and_then(|r| r.with_guessed_format())
-        .map_err(image::ImageError::IoError)
-        .and_then(|mut r| {
-            let mut limits = image::io::Limits::default();
-            limits.max_alloc = Some(DECODE_ALLOC_CEILING);
-            r.limits(limits);
-            r.decode()
-        })
+    let img = super::decode::sniff_decode(source_file)
         .map_err(|e| format!("Failed to open image: {}", e))?;
     Ok(apply_exif_orientation(img, orientation))
 }
@@ -175,7 +158,7 @@ pub(crate) fn encode_rungs(
     let mut lazy: Option<image::DynamicImage> = None;
     let dims = match decoded {
         Some(img) => Some((img.width(), img.height())),
-        None => match image::image_dimensions(source_file) {
+        None => match super::decode::sniff_dimensions(source_file) {
             Ok((w, h)) => {
                 if crate::build::scan::scan::should_swap_dimensions(read_exif_orientation(
                     source_file,

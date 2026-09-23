@@ -508,6 +508,35 @@ fn test_media_metadata_extracts_image_dimensions() {
     fs::remove_dir_all(&temp_dir).ok();
 }
 
+/// A file whose extension lies about its format — a PNG exported/saved with
+/// a `.jpg` extension, the real-world case this guards — must still yield
+/// its real dimensions instead of `None` (which the caller falls back to an
+/// 800x600 placeholder box for). `create_test_png` can't make this fixture:
+/// `ImageBuffer::save` picks the encoder from the path's extension, so
+/// saving to a `.jpg` path would silently write real JPEG bytes and defeat
+/// the point — `save_with_format` pins the encoder to PNG regardless of path.
+///
+/// Ablation: reverting `extract_image_dimensions` to call
+/// `image::image_dimensions(path)` (extension-only) makes this fail — the
+/// JPEG decoder rejects the PNG bytes and the function returns `None`.
+#[test]
+fn test_media_metadata_extracts_dimensions_from_a_mislabeled_extension() {
+    let temp_dir = std::env::temp_dir().join(format!("moss_test_mislabeled_{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let jpg_path = temp_dir.join("mislabeled.jpg");
+    create_test_png_at_extension(&jpg_path, 1826, 4796);
+
+    let dims = extract_image_dimensions(&jpg_path);
+    assert_eq!(
+        dims,
+        Some((1826, 4796)),
+        "a PNG saved with a .jpg extension must still yield its real dimensions"
+    );
+
+    fs::remove_dir_all(&temp_dir).ok();
+}
+
 #[test]
 fn test_media_metadata_handles_exif_rotation() {
     // Test that EXIF orientation 5-8 swaps dimensions
@@ -1830,6 +1859,48 @@ fn a_scan_caches_nothing_under_the_stat_key_of_an_evicted_video() {
     assert!(read_cached_meta(&fx.transforms, &fx.objects, &key).is_some(), "control: the same scan of a video on disk caches under the stat key");
 }
 
+/// A vault built before the mislabeled-extension fix cached "no dimensions,
+/// no color, no LQIP" for such a file under `media/meta` with the pre-fix
+/// `params: {}` shape (what `write_cached_meta` wrote before this change).
+/// `.moss/cache/transforms/` persists across moss upgrades, so without the
+/// `MEDIA_META_VERSION` bump this entry would be served as current forever —
+/// the content never changes, so nothing else would invalidate it.
+///
+/// Ablation: reverting the `params` in `read_cached_meta`/`write_cached_meta`
+/// back to `serde_json::json!({})` makes this fail — the stale entry's params
+/// then match current params, `find_cached_output` returns it, and
+/// `read_cached_meta` answers `Some` instead of `None`.
+#[test]
+fn a_pre_fix_media_meta_entry_is_not_reused_after_the_version_bump() {
+    let fx = ScanFixture::new("stale_media_meta");
+    let hash = "hash-of-a-previously-mislabeled-file";
+
+    let stale = CachedMediaMeta {
+        dimensions: None,
+        dominant_color: None,
+        lqip_data_uri: None,
+        is_animated: false,
+    };
+    let json_bytes = serde_json::to_vec(&stale).unwrap();
+    let meta_oid = fx.objects.store_bytes(&json_bytes).unwrap();
+    let old_entry = TransformEntry {
+        oid: meta_oid,
+        size: json_bytes.len() as u64,
+        params: serde_json::json!({}),
+    };
+    let record = TransformRecord {
+        source_oid: hash.to_string(),
+        source_size: 1,
+        transforms: HashMap::from([(MEDIA_META_TRANSFORM.to_string(), old_entry)]),
+    };
+    fx.transforms.put(&record).unwrap();
+
+    assert!(
+        read_cached_meta(&fx.transforms, &fx.objects, hash).is_none(),
+        "an entry cached under the pre-fix params must not be served as current"
+    );
+}
+
 // =========================================================================
 // What the walk feeds the hash index: the file's whole stat record
 // =========================================================================
@@ -1924,6 +1995,17 @@ fn create_test_png(path: &std::path::Path, width: u32, height: u32) {
         Rgb([(x % 256) as u8, (y % 256) as u8, 128])
     });
     img.save(path).unwrap();
+}
+
+/// Write real PNG bytes at `path`, whatever `path`'s own extension says.
+/// `save_with_format` (unlike `save`, which picks the encoder from the path)
+/// pins the encoder to PNG — the fixture for "the extension lies" tests.
+fn create_test_png_at_extension(path: &std::path::Path, width: u32, height: u32) {
+    use image::{ImageBuffer, ImageFormat, Rgb};
+    let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(width, height, |x, y| {
+        Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+    });
+    img.save_with_format(path, ImageFormat::Png).unwrap();
 }
 
 /// Create a solid color PNG for testing dominant color extraction

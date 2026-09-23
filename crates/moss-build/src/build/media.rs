@@ -10,6 +10,9 @@
 //! - `image`       — WebP image conversion, ImageConversionItem, run_image_conversion
 //! - `fallback_raster` — the deployed raster original (the `<img>` inside `<picture>`)
 //! - `video`       — Video transcoding dispatch, run_video_conversion
+//! - `decode`      — the one place `image::ImageReader` is opened with content
+//!                   sniffing instead of trusting the extension; shared by every
+//!                   reader of image bytes in and outside this module
 //! - `dimensions`  — MediaDimensionLookup (dimension / LQIP / color lookup table) +
 //!                   extract_video_dominant_color (FFmpeg-based color extraction)
 //! - `cover`       — CoverType detection and cover HTML rendering
@@ -32,6 +35,7 @@
 //! re-exports are omitted to avoid compiler warnings.
 
 pub mod cover;
+pub(crate) mod decode;
 pub mod dimensions;
 pub mod fallback_raster;
 pub mod hls;

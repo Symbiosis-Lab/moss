@@ -92,8 +92,9 @@ impl ScanEventEmitter {
 
 /// Extract image dimensions from file header.
 ///
-/// ADR-006: Uses image::image_dimensions() which reads header only (~1ms per file)
-/// This is much faster than loading the entire image into memory.
+/// ADR-006: reads the header only (~1ms per file) via
+/// `media::decode::sniff_dimensions`, much faster than loading the entire
+/// image into memory.
 ///
 /// # Arguments
 /// * `path` - Path to the image file
@@ -102,8 +103,12 @@ impl ScanEventEmitter {
 /// * `Some((width, height))` - Dimensions if successfully read
 /// * `None` - If file cannot be read or is not a valid image
 pub fn extract_image_dimensions(path: &Path) -> Option<(u32, u32)> {
-    // ADR-006: Use image_dimensions() which reads header only (~1ms per file)
-    match image::image_dimensions(path) {
+    // ADR-006: header-only read (~1ms per file). Content-sniffed (not
+    // extension-only) via `media::decode::sniff_dimensions` — a file whose
+    // extension lies about its format (a PNG saved as `x.jpg`) still decodes
+    // correctly instead of silently returning `None` and falling back to an
+    // 800x600 placeholder box downstream.
+    match crate::build::media::decode::sniff_dimensions(path) {
         Ok((width, height)) => {
             // EXIF orientation 5-8 (a 90°/270° rotation) swaps the DISPLAY
             // dimensions relative to the stored pixel grid. Read the tag for
@@ -168,7 +173,11 @@ pub fn should_swap_dimensions(orientation: u32) -> bool {
 /// Returns `(dominant_color, lqip_data_uri)` — both are `None` if the
 /// image cannot be loaded (SVG, corrupt, etc.).
 pub fn extract_color_and_lqip(path: &Path) -> (Option<String>, Option<String>) {
-    let img = match image::open(path) {
+    // Content-sniffed, same reason as `extract_image_dimensions` above:
+    // `image::open` alone picks the decoder from the extension, so a
+    // mislabeled file decoded fine by `media::decode::sniff_decode` would
+    // otherwise fail here too and silently lose its color/LQIP.
+    let img = match crate::build::media::decode::sniff_decode(path) {
         Ok(img) => img,
         Err(_) => return (None, None),
     };
@@ -324,6 +333,21 @@ pub fn extract_media_metadata(
 /// Transform name used for cached media metadata in the TransformCache.
 const MEDIA_META_TRANSFORM: &str = "media/meta";
 
+/// Folded into `media/meta`'s cache `params` (mirrors `FORMAT_PROBE_VERSION`
+/// in `build/media/image.rs`) so a version bump is an ordinary cache miss.
+/// `.moss/cache/transforms/` persists across moss upgrades — without a
+/// version in the key, a decoding-logic fix would keep serving an old wrong
+/// answer for every already-scanned file forever.
+///
+/// **1 → 2**: `extract_image_dimensions`/`extract_color_and_lqip` used to pick
+/// their decoder from the file's extension alone, so a PNG saved with a
+/// `.jpg` extension cached `dimensions: None` (and no color/LQIP) under this
+/// key permanently — the content never changes, so nothing else would ever
+/// invalidate it. The version bump makes every entry a build wrote while that
+/// bug was live miss once and re-extract with the fix, which is the cheapest
+/// possible migration for a vault nobody can inspect by hand.
+const MEDIA_META_VERSION: u32 = 2;
+
 /// Stat-based cache key for an image's placeholder metadata (dimensions +
 /// dominant color + LQIP), shared by the blocking scan and the background media
 /// phase so they read/write the SAME `media/meta` entry.
@@ -368,7 +392,7 @@ pub(crate) fn read_cached_meta(
     objects: &ObjectStore,
     content_hash: &str,
 ) -> Option<CachedMediaMeta> {
-    let params = serde_json::json!({});
+    let params = serde_json::json!({ "v": MEDIA_META_VERSION });
     let meta_oid = transform_cache.find_cached_output(content_hash, MEDIA_META_TRANSFORM, &params)?;
     let blob_path = objects.get_path(&meta_oid)?;
     let raw = std::fs::read(blob_path).ok()?;
@@ -413,7 +437,7 @@ pub(crate) fn write_cached_meta(
         }
     };
 
-    let params = serde_json::json!({});
+    let params = serde_json::json!({ "v": MEDIA_META_VERSION });
     let new_entry = TransformEntry {
         oid: meta_oid,
         size: json_bytes.len() as u64,

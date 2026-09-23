@@ -385,21 +385,11 @@ pub(crate) fn encode_sized_raster(
     max_edge: u32,
     jpeg_quality: u8,
 ) -> Result<Vec<u8>, String> {
-    use image::io::Reader as ImageReader;
-    // Same decompression-bomb ceiling as the WebP decode path — a tiny file
-    // declaring enormous dimensions fails cleanly instead of OOM-killing us.
-    const DECODE_ALLOC_CEILING: u64 = 1024 * 1024 * 1024;
-
+    // Content-sniffed and allocation-capped by `media::decode::sniff_decode`
+    // (same primitive the WebP decode path uses) rather than a second
+    // hand-rolled copy of that open/guess/decode sequence.
     let orientation = read_exif_orientation(source_file);
-    let img = ImageReader::open(source_file)
-        .and_then(|r| r.with_guessed_format())
-        .map_err(image::ImageError::IoError)
-        .and_then(|mut r| {
-            let mut limits = image::io::Limits::default();
-            limits.max_alloc = Some(DECODE_ALLOC_CEILING);
-            r.limits(limits);
-            r.decode()
-        })
+    let img = super::decode::sniff_decode(source_file)
         .map_err(|e| format!("decode failed: {}", e))?;
 
     // EXIF orientation must be applied so the sized image isn't rotated wrong.

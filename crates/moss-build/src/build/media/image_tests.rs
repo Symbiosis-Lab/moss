@@ -2003,6 +2003,79 @@ fn format_probe_cache_recomputes_on_corrupt_blob() {
     );
 }
 
+/// The `AlreadySmall` dimension read used to pick its decoder from the
+/// extension alone (`image::image_dimensions`), so a real image saved under
+/// a mismatched NON-picture extension (a PNG saved as `.bmp` — bmp is not a
+/// ladder/picture source, so `AlreadySmall` is even in play for it) failed
+/// to read dimensions and could never be judged `AlreadySmall`: a silently
+/// wrong "proceed to conversion" verdict, cached under `FORMAT_PROBE_VERSION`
+/// forever. Content-sniffing (`media::decode::sniff_dimensions`) fixes the
+/// read; this pins the VERDICT, not just the read.
+#[test]
+fn already_small_reads_real_dimensions_from_a_mislabeled_extension() {
+    let h = harness();
+    let src = h._tmp.path().join("mislabeled.bmp");
+    // Real PNG bytes, `.bmp` extension: small enough (well under the 200KB /
+    // max_edge defaults) that a correct dimension read must call it AlreadySmall.
+    let img = image::ImageBuffer::from_fn(40, 30, |_, _| image::Rgb([10u8, 20, 30]));
+    img.save_with_format(&src, image::ImageFormat::Png).unwrap();
+    let size = fs::metadata(&src).unwrap().len();
+    let cfg = ImageCompressionConfig::default();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+
+    assert_eq!(
+        should_skip(&src, "bmp", size, &cfg, &h.transforms, &source_oid, false),
+        Some(SkipReason::AlreadySmall),
+        "a real, small image must be judged AlreadySmall even under a mismatched extension"
+    );
+}
+
+/// A vault built before `FORMAT_PROBE_VERSION` bumped for this fix cached
+/// "not AlreadySmall" (`None`, "proceed to conversion") for a mislabeled file
+/// under the OLD version's params — the pre-fix, extension-only dimension
+/// read failed and never reached the AlreadySmall branch. Without the bump
+/// this stale verdict would be served forever: the content never changes, so
+/// nothing else invalidates it.
+#[test]
+fn a_stale_pre_fix_format_probe_entry_is_not_reused_after_the_version_bump() {
+    let h = harness();
+    let src = h._tmp.path().join("mislabeled.bmp");
+    let img = image::ImageBuffer::from_fn(40, 30, |_, _| image::Rgb([10u8, 20, 30]));
+    img.save_with_format(&src, image::ImageFormat::Png).unwrap();
+    let size = fs::metadata(&src).unwrap().len();
+    let cfg = ImageCompressionConfig::default();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+
+    let stale_verdict: Option<SkipReason> = None;
+    let json_bytes = serde_json::to_vec(&stale_verdict).unwrap();
+    let blob_oid = h.objects.store_bytes(&json_bytes).unwrap();
+    let old_params = serde_json::json!({
+        "min_size_kb": cfg.min_size_kb,
+        "max_edge": cfg.max_edge,
+        "ext": "bmp",
+        "v": 2,
+    });
+    let record = crate::build::cache::TransformRecord {
+        source_oid: source_oid.clone(),
+        source_size: size,
+        transforms: std::collections::HashMap::from([(
+            FORMAT_PROBE_TRANSFORM.to_string(),
+            crate::build::cache::TransformEntry {
+                oid: blob_oid,
+                size: json_bytes.len() as u64,
+                params: old_params,
+            },
+        )]),
+    };
+    h.transforms.put(&record).unwrap();
+
+    assert_eq!(
+        should_skip(&src, "bmp", size, &cfg, &h.transforms, &source_oid, false),
+        Some(SkipReason::AlreadySmall),
+        "an entry cached under the pre-fix version must not be served as current"
+    );
+}
+
 #[test]
 fn format_probe_cache_ignores_empty_source_oid() {
     // An unresolved `source_oid` (`""`, the stat-match-miss fallback used by
