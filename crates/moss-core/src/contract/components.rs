@@ -266,13 +266,13 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 description: "Display width — text-column (body), wider than text (wide), page-width (page), or viewport-width (screen). Same placement vocabulary every other embed kind reads off its pipe segment (`![[/journal/|wide]]`). See spec § P9.",
             },
         ],
-        example_html: r#"<div class="moss-cards-container moss-align-right" data-width="wide" style="width:40%" data-embed>
+        example_html: r#"<div class="moss-cards-container moss-align-right" style="width:40%" data-embed>
   <div class="moss-cards" data-layout="grid">...</div>
 </div>"#,
-        example_markdown: "![[/journal/|wide|align-right|40%]]",
+        example_markdown: "![[/journal/|align-right|40%]]",
         status: Status::Confirmed,
         since: "1",
-        description: "Outer wrapper around `.moss-cards` that carries `container-type: inline-size` so the grid can use `@container` queries instead of viewport `@media` queries. Layout-agnostic — wraps any `data-layout` variant. A body embed also reads the same placement vocabulary every other embed kind does: `data-width`, a `moss-align-left` / `moss-align-right` float class, and a content-relative size as inline `style=\"width:NN%\"` — the frontmatter-synthesized listing never carries any of the three.",
+        description: "Outer wrapper around `.moss-cards` that carries `container-type: inline-size` so the grid can use `@container` queries instead of viewport `@media` queries. Layout-agnostic — wraps any `data-layout` variant. A body embed also reads the same placement vocabulary every other embed kind does: `data-width`, a `moss-align-left` / `moss-align-right` float class, and a content-relative size as inline `style=\"width:NN%\"`, which replaces the `data-width` token when both are written — the frontmatter-synthesized listing never carries any of the three.",
     },
     ComponentEntry {
         class: "moss-summary-layout",

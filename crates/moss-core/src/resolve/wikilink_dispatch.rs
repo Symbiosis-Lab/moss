@@ -607,12 +607,15 @@ fn dispatch_embed_form(
                 let img_style = media.to_inline_style();
                 // `Block::Figure.width` carries both width vocabularies: a
                 // named token emits `data-width=`, a percent emits an inline
-                // `style="width:NN%"`. A named width wins over a percent when
-                // an author wrote both.
+                // `style="width:NN%"`. A percent wins over a named width when
+                // an author wrote both, the same rule `placement_attrs` holds
+                // for every other embed: the escape's centring margins assume
+                // the token's width, so both at once push the figure out of
+                // the column.
                 let figure_width: Option<String> = placement
-                    .width
-                    .map(|w| w.to_string())
-                    .or_else(|| placement.size.clone());
+                    .size
+                    .clone()
+                    .or_else(|| placement.width.map(str::to_string));
                 let figure = crate::ast::node::Block::Figure {
                     image: crate::ast::node::Inline::Image {
                         // `Asset` is the canonical kind for an `<img src>`

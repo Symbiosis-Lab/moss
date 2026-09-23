@@ -20,20 +20,31 @@ fn an_empty_placement_contributes_nothing() {
 
 #[test]
 fn each_field_becomes_its_own_fragment() {
-    let a = placement_attrs(&placement(Some("wide"), Some(AlignSide::Right), Some("40%")));
+    let a = placement_attrs(&placement(Some("wide"), Some(AlignSide::Right), None));
     assert_eq!(a.data_width_attr, r#" data-width="wide""#);
     assert_eq!(a.align_class, Some("moss-align-right"));
-    assert_eq!(a.size_style_attr, r#" style="width:40%""#);
+    assert_eq!(a.size_style_attr, "");
     assert_eq!(a.class_value("moss-embed"), "moss-embed moss-align-right");
 }
 
 #[test]
-fn a_caption_wrapper_carries_the_width_the_float_and_the_size() {
-    let p = placement(Some("wide"), Some(AlignSide::Left), Some("40%"));
+fn an_explicit_size_wins_over_a_width_token() {
+    // `|wide|40%`: the escape centres a token-sized band with negative
+    // margins, so a box the inline style has shrunk to 40% would sit
+    // outside the column. The size is the more specific ask; the token goes.
+    let a = placement_attrs(&placement(Some("wide"), Some(AlignSide::Right), Some("40%")));
+    assert_eq!(a.data_width_attr, "");
+    assert_eq!(a.align_class, Some("moss-align-right"));
+    assert_eq!(a.size_style_attr, r#" style="width:40%""#);
+}
+
+#[test]
+fn a_caption_wrapper_carries_the_width_and_the_float() {
+    let p = placement(Some("wide"), Some(AlignSide::Left), None);
     let html = wrap_embed_with_caption("<object></object>", &p, "A caption");
     assert_eq!(
         html,
-        r#"<figure class="moss-embed-figure moss-align-left" data-width="wide" style="width:40%"><object></object><figcaption>A caption</figcaption></figure>"#
+        r#"<figure class="moss-embed-figure moss-align-left" data-width="wide"><object></object><figcaption>A caption</figcaption></figure>"#
     );
 }
 

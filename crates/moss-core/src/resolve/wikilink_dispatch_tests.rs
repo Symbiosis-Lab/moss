@@ -726,6 +726,18 @@ fn dispatch_image_width_token_preserved_as_data_width() {
 }
 
 #[test]
+fn dispatch_image_percent_wins_over_a_width_token() {
+    use crate::ast::node::Block;
+    let emit = dispatch_img(Some("wide|40%"));
+    match figure_of(&emit) {
+        Block::Figure { width, .. } => assert_eq!(width.as_deref(), Some("40%")),
+        other => panic!("expected Figure, got {other:?}"),
+    }
+    let html = render_figure(&emit);
+    assert!(!html.contains("data-width"), "got: {html}");
+}
+
+#[test]
 fn dispatch_image_cover_emits_object_fit_on_inner_img() {
     use crate::ast::node::Block;
     let emit = dispatch_img(Some("cover"));

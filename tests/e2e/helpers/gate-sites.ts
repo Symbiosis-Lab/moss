@@ -714,7 +714,7 @@ const HERO_LANDSCAPE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="2400"
 // Enough columns that body's flex row overflows the viewport — the condition
 // under which a shrinkable hero gives up its width (a real vertical-writing site, 2026-09-23).
 const VERTICAL_BODY = Array.from({ length: 12 }, () =>
-  "蕙嵒先生屬畫此卷。自丁丑五月以至六、七、八月荷葉荷花落成。戲作河上花歌僅二百餘字呈正。",
+  "這是一段用來填滿版面的測試文字。每一段的長度大致相同，足以讓直排的欄位向左延伸好幾列。",
 ).join("\n\n");
 
 export const HERO_CAPTION_GATE: ScratchSiteSpec = {
@@ -743,7 +743,7 @@ Body text.
 `,
     "scroll.svg": HERO_LANDSCAPE_SVG,
     "vertical-plate.md": `---
-title: 河上花
+title: 直排圖版
 uid: "hcg00103"
 typesetting: vertical
 ---
@@ -755,12 +755,12 @@ typesetting: vertical
 ${VERTICAL_BODY}
 `,
     "vertical-plate-captioned.md": `---
-title: 冊頁
+title: 直排圖說
 uid: "hcg00104"
 typesetting: vertical
 ---
 
-:::hero {.plate caption="每開縱三一．七公分　橫二七．五公分"}
+:::hero {.plate caption="圖版說明文字，直排於圖旁"}
 ![[scroll.svg]]
 :::
 
@@ -1376,5 +1376,101 @@ More body copy 內文.
 `,
     ".moss/config.toml": CONFIG_TOML,
     ".moss/theme/style.css": null,
+  },
+};
+
+// ── Content-width escape: `data-width` bands in both writing modes ──────────
+// A width token breaks a block out of the reading measure. Where the band
+// lands, and whether the text after it clears it, is only visible once an
+// engine lays the page out — horizontally, right-to-left, and under
+// vertical-rl, where the inline axis runs down the page.
+//
+// The plate is portrait so its figcaption (horizontal-tb even in a vertical
+// page) sits beside it rather than after it. `doc.pdf` is only a box to size:
+// the percent case needs an embed kind whose placement carries a size. A
+// float shrinks to fit rather than stretching to its margins, so `float-*.md`
+// are the cases where the band's own size, not its margins, sets the width.
+// `raw.md` is hand-written HTML, the one way a token and a percent still meet
+// on one element now that the renderer drops the token for a size.
+// Served by playwright/content-width-escape.config.ts.
+const ESCAPE_PLATE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="800" viewBox="0 0 400 800"><rect width="400" height="800" fill="#357"/></svg>
+`;
+const ESCAPE_PDF = `%PDF-1.1
+1 0 obj<<>>endobj
+trailer<<>>
+%%EOF
+`;
+const escapePage = (token: string, vertical: boolean) =>
+  vertical
+    ? `---
+title: 縱 ${token}
+typesetting: vertical
+---
+
+![縱排圖說|${token}](plate.svg)
+
+第一段。
+
+第二段。
+`
+    : `---
+title: Band ${token}
+---
+
+![A caption|${token}](plate.svg)
+
+The first paragraph after the figure.
+
+The second paragraph.
+`;
+
+export const CONTENT_WIDTH_ESCAPE_GATE: ScratchSiteSpec = {
+  name: "content-width-escape-gate",
+  files: {
+    ".moss/config.toml": CONFIG_TOML,
+    ".moss/theme/style.css": null,
+    "plate.svg": ESCAPE_PLATE_SVG,
+    "doc.pdf": ESCAPE_PDF,
+    "index.md": `---
+title: Home
+---
+
+Home.
+`,
+    ...Object.fromEntries(
+      ["body", "wide", "page", "screen"].flatMap((t) => [
+        [`h-${t}.md`, escapePage(t, false)],
+        [`v-${t}.md`, escapePage(t, true)],
+      ]),
+    ),
+    "sized.md": `---
+title: Sized
+---
+
+![[doc.pdf|A caption|wide|40%]]
+
+The first paragraph after the embed.
+`,
+    ...Object.fromEntries(
+      ["left", "right"].map((side) => [
+        `float-${side}.md`,
+        `---
+title: Floated ${side}
+---
+
+![A caption|wide|align-${side}](plate.svg)
+
+The first paragraph after the figure.
+`,
+      ]),
+    ),
+    "raw.md": `---
+title: Hand-written
+---
+
+<figure class="moss-image" data-width="wide" style="width:40%"><img src="/plate.svg" alt=""><figcaption>Hand-written</figcaption></figure>
+
+The first paragraph after the figure.
+`,
   },
 };

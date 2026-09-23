@@ -98,6 +98,16 @@ body[data-typesetting="vertical"] article {
   letter-spacing: 0.05em;
 }
 
+/* Width tokens (`|wide`, `|page`, `|screen`) are inert here. They widen a
+   block past the measure, and the measure is already the whole column, so a
+   band could only gain the container's inset — and a figure should stand in
+   the text band, head-aligned (see the hero note below). site.css's escape
+   is logical, so a body-width band already sits in the column; this pins
+   every token to it. */
+body[data-typesetting="vertical"] article.container > [data-width] {
+  --moss-escape: 100%;
+}
+
 /* ── Navigation ── */
 /* One strip: site.css's own flex rule lays it out — `.nav-left` grows, so
    the site name sits at the head and the toggle cluster's auto margin ends

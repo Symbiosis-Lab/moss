@@ -1063,10 +1063,11 @@ fn try_promote_to_figure(
     }
     // `Block::Figure.width` carries both width vocabularies: a named token
     // emits `data-width=`, a percent emits an inline `style="width:NN%"`.
+    // A percent wins when both are written (see `placement_attrs`).
     let figure_width: Option<String> = placement
-        .width
-        .map(|w| w.to_string())
-        .or_else(|| placement.size.clone());
+        .size
+        .clone()
+        .or_else(|| placement.width.map(str::to_string));
 
     // The figure's caption text is the effective alt (width-stripped if a
     // width was present, else the raw alt), trimmed.

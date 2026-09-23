@@ -202,12 +202,16 @@ mod tests {
         let place = Placement {
             width: Some("wide"),
             align: Some(crate::media::AlignSide::Right),
-            size: Some("40%".to_string()),
+            size: None,
         };
         let out = synthesize_pdf_html(&p, &place, "doc.pdf", &empty_snapshot());
         assert!(out.contains(r#"data-width="wide""#), "got: {}", out);
         assert!(out.contains(r#"class="moss-embed moss-align-right""#), "got: {}", out);
+        // A size replaces the width token (render/placement.rs).
+        let sized = Placement { size: Some("40%".to_string()), ..place };
+        let out = synthesize_pdf_html(&p, &sized, "doc.pdf", &empty_snapshot());
         assert!(out.contains(r#"style="width:40%""#), "got: {}", out);
+        assert!(!out.contains("data-width"), "got: {}", out);
     }
 
     #[test]

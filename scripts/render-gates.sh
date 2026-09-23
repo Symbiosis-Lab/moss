@@ -58,6 +58,7 @@ GATES_BUILD=(
   card-cover-ratio
   grid-card-image-inline-size
   hero-caption
+  content-width-escape
   hero-tone
   heading-anchor
   footnote-target

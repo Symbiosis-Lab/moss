@@ -1365,7 +1365,7 @@ fn explicit_sizes_option_overrides_context() {
 
 #[test]
 fn markdown_standalone_width_screen_uses_full_bleed_sizes() {
-    // screen/full = the full container band (100cqw in site.css's
+    // screen/full = the full container band (100cqi in site.css's
     // content-width escape); 100vw is the closest sizes= can express.
     // Mirrors markdown_standalone_width_screen_emits_data_width
     // _on_figure but with ladder-triggering dims.

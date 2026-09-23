@@ -1884,7 +1884,7 @@ fn test_css_content_width_full_preset() {
 
 #[test]
 fn test_css_content_width_escape_rules() {
-    // main is the query container the escape resolves 100cqw against.
+    // main is the query container the escape resolves 100cqi against.
     assert!(
         DEFAULT_CSS.contains("main {\n  container-type: inline-size;\n}"),
         "main must be an inline-size query container for the data-width escape"
@@ -1892,8 +1892,8 @@ fn test_css_content_width_escape_rules() {
     // container-type implies contain:layout, which would make `main` the
     // containing block for the position:fixed immersive iframe — this
     // override is the single highest-risk line of the escape; see the
-    // comment block above the rule and the immersive check in
-    // tests/render-gates/site/content-width-escape.spec.js.
+    // comment block above the rule. No render gate exercises immersive
+    // fullscreen, so this text pin is the only guard it has.
     assert!(
         DEFAULT_CSS.contains(".immersive-fs-active main {\n  container-type: normal;\n}"),
         "immersive fullscreen must turn the query container off"
@@ -1912,21 +1912,30 @@ fn test_css_content_width_escape_rules() {
     );
     assert!(
         DEFAULT_CSS
-            .contains(r#"article.container > [data-width="screen"] { --moss-escape: 100cqw; }"#),
+            .contains(r#"article.container > [data-width="screen"] { --moss-escape: 100cqi; }"#),
         "screen band missing"
     );
-    // The shared rule clamps to the container: cqw, never vw (100vw
+    // The shared rule clamps to the container: cqi, never vw (100vw
     // includes a classic scrollbar's gutter and clips silently under
     // body{overflow-x:hidden} — the rejected option B failure mode).
+    // The band's geometry, in both writing modes, is checked by
+    // tests/render-gates/site/content-width-escape.spec.ts.
     let rule = get_css_rule(DEFAULT_CSS, "article.container > [data-width]")
         .expect("shared data-width escape rule must exist");
     assert!(
-        rule.contains("width: min(var(--moss-escape, 100%), 100cqw)"),
-        "escape width must clamp to 100cqw, got: {rule}"
+        rule.contains("inline-size: min(var(--moss-escape, 100%), 100cqi)"),
+        "escape width must clamp to 100cqi, got: {rule}"
     );
     assert!(
         !rule.contains("100vw"),
         "the escape must never size against 100vw (scrollbar gutter), got: {rule}"
+    );
+    // A relative offset or a transform moves only the paint, and only along
+    // x: under vertical-rl that is the block axis, where it paints the band
+    // over the text after it.
+    assert!(
+        !rule.contains("left:") && !rule.contains("transform"),
+        "the escape must centre with inline margins, not a paint offset, got: {rule}"
     );
 }
 
@@ -1953,7 +1962,7 @@ fn test_css_content_width_escape_collapses_on_mobile() {
     )
     .expect("data-width escape must collapse below 48rem");
     assert!(
-        rule.contains("width: auto") && rule.contains("transform: none"),
+        rule.contains("inline-size: auto") && rule.contains("margin-inline: auto"),
         "mobile collapse must undo the escape, got: {rule}"
     );
 }

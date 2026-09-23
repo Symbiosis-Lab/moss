@@ -175,7 +175,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-escape",
         owner: "[data-width]",
         default: "100%",
-        description: "Width a `data-width` block escapes to. moss sets it per keyword (`wide`, `page`, `screen`); set it directly for a width the keywords do not cover. Always clamped by `min(…, 100cqw)`, so a narrow viewport stays safe.",
+        description: "Width a `data-width` block escapes to. moss sets it per keyword (`wide`, `page`, `screen`); set it directly for a width the keywords do not cover. Always clamped by `min(…, 100cqi)`, so a narrow viewport stays safe. Under vertical typesetting the tokens are inert: every band stays in the column, which is already the full measure.",
     },
     CustomProp {
         name: "--moss-success",
@@ -253,7 +253,7 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         selector: "article > [data-width]",
         name: "data-width",
         values: &["body", "wide", "page", "screen"],
-        description: "Set by block shortcodes to escape the text column. The width resolves through `--moss-escape`, clamped by `min(…, 100cqw)` so a narrow viewport stays safe.",
+        description: "Set by block shortcodes to escape the text column. The width resolves through `--moss-escape`, clamped by `min(…, 100cqi)` so a narrow viewport stays safe.",
     },
     ScopeAttr {
         selector: "body",

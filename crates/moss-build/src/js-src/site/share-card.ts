@@ -180,7 +180,7 @@ export function buildCardCanvas(
   if (document.body.dataset.typesetting === "vertical") {
     // The vertical card's meta column carries a site/author line; most moss
     // pages never set `meta[name="author"]`, so the vertical card alone
-    // falls back to the site's own title — `og:site_name`, e.g. 八大山人 —
+    // falls back to the site's own title — `og:site_name` —
     // rather than dropping the line. Scoped to this branch only: the
     // horizontal card's byte-identity regression test pins its output to a
     // caller that never sets an author either.

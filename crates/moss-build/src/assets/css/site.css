@@ -3899,18 +3899,20 @@ article figure.moss-image[data-width] :is(.moss-align-left, .moss-align-right) {
  *            width so the band aligns with the nav/footer chrome
  *   screen → the full container width
  *
- * `main` is the container: container query units (100cqw) resolve against its
+ * `main` is the container: container query units (100cqi) resolve against its
  * CONTENT box, which excludes a classic scrollbar's gutter — the reason this
- * is not `100vw` + negative margin (100vw includes the gutter; with
- * body{overflow-x:hidden} the ~15px excess is clipped silently and the band
- * sits off-centre on Windows/Linux classic-scrollbar platforms).
+ * is not `100vw` (100vw includes the gutter; with body{overflow-x:hidden}
+ * the ~15px excess is clipped silently and the band sits off-centre on
+ * Windows/Linux classic-scrollbar platforms).
  *
  * `container-type: inline-size` implies `contain: layout`, which makes `main`
  * the containing block for position:fixed descendants — and immersive
  * fullscreen (.immersive-iframe-wrapper, further down) is exactly that. The
  * one-line override below turns the container off for that state so the
- * iframe sizes to the viewport again. If you touch either line, re-run the
- * immersive check in tests/render-gates/site/content-width-escape.spec.js.
+ * iframe sizes to the viewport again. No render gate exercises immersive
+ * fullscreen; both lines are pinned as text by
+ * `test_css_content_width_escape_rules` (build/page/shell_tests.rs), so
+ * check fullscreen by hand if you change either.
  *
  * `.moss-hero` needs none of this: it escapes by DOM position (emitted
  * outside <main>), which these article-scoped rules cannot reach. */
@@ -3924,26 +3926,31 @@ main {
 
 article.container > [data-width="wide"]   { --moss-escape: var(--moss-width-wide); }
 article.container > [data-width="page"]   { --moss-escape: var(--moss-site-max-width); }
-article.container > [data-width="screen"] { --moss-escape: 100cqw; }
+article.container > [data-width="screen"] { --moss-escape: 100cqi; }
 
-/* min(…, 100cqw) keeps narrow viewports safe without a width media query —
- * the band can never exceed the container. left:50% + translateX(-50%)
- * centres the band on the (page-centred) article content box. */
+/* min(…, 100cqi) keeps narrow viewports safe without a width media query —
+ * the band can never exceed the container. Equal negative inline margins
+ * centre it on the article content box: a percentage margin resolves
+ * against the containing block's inline size in every writing mode and
+ * direction, so the band moves in layout, along the line. It used to be
+ * centred with `position: relative; left: 50%` + `translateX(-50%)`, which
+ * moves only the paint and only along x: under vertical-rl x is the block
+ * axis, so the figure was painted over the text that follows it, and under
+ * `dir="rtl"` the band sat off-centre. */
 article.container > [data-width] {
-  width: min(var(--moss-escape, 100%), 100cqw);
-  max-width: none;
-  margin-inline: auto;
-  position: relative;
-  left: 50%;
-  transform: translateX(-50%);
+  inline-size: min(var(--moss-escape, 100%), 100cqi);
+  max-inline-size: none;
+  margin-inline: calc((100% - min(var(--moss-escape, 100%), 100cqi)) / 2);
 }
 
 @media (max-width: 48rem) {
   article.container > [data-width] {
-    /* collapse to the column */
-    width: auto;
-    left: auto;
-    transform: none;
+    /* collapse to the column. `auto` rather than 0: a hand-written band
+       that also carries an inline width is centred here, below 48rem only —
+       above it the escape's margins assume the token's width. The renderer
+       never emits a token and a percent together. */
+    inline-size: auto;
+    margin-inline: auto;
   }
 }
 

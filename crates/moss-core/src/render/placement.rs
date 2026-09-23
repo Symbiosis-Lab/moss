@@ -56,11 +56,16 @@ impl PlacementAttrs {
 }
 
 /// Build the attribute fragments for one element.
+///
+/// An explicit size wins over a width token: `|wide|40%` emits only the
+/// `width:40%`. Both at once meant the escape's centring margins (sized for
+/// the token's band) applied to a box the inline style had already shrunk,
+/// which pushed it out past the column's edge.
 pub fn placement_attrs(placement: &Placement) -> PlacementAttrs {
     PlacementAttrs {
-        data_width_attr: match placement.width {
-            Some(w) => format!(r#" data-width="{}""#, html_escape_attr(w)),
-            None => String::new(),
+        data_width_attr: match (placement.width, &placement.size) {
+            (Some(w), None) => format!(r#" data-width="{}""#, html_escape_attr(w)),
+            _ => String::new(),
         },
         align_class: placement.align.map(|side| side.css_class()),
         size_style_attr: match placement.size {

@@ -1136,6 +1136,17 @@ fn two_images_in_one_paragraph_do_not_promote() {
 // ------------------------------------------------------------------
 
 #[test]
+fn standard_image_percent_wins_over_a_width_token() {
+    // ![alt|wide|40%](pic.jpg): the percent is the more specific ask, and a
+    // figure carrying both would be centred for the token's band while the
+    // inline style shrank it — pushing it out of the column.
+    match first_block("![alt|wide|40%](pic.jpg)\n") {
+        Block::Figure { width, .. } => assert_eq!(width.as_deref(), Some("40%")),
+        other => panic!("expected a Figure, got {other:?}"),
+    }
+}
+
+#[test]
 fn standard_image_percent_promotes_with_width() {
     // ![alt|55%](pic.jpg) → Figure { width: Some("55%"), caption "alt" }
     match first_block("![alt|55%](pic.jpg)\n") {
