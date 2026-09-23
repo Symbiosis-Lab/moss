@@ -6,7 +6,8 @@
     "prepare": "node scripts/install-git-hooks.mjs",
     "build:backend-scripts": "node scripts/build-backend-scripts.mjs",
     "check:backend-scripts": "node scripts/build-backend-scripts.mjs && git diff --exit-code -- crates/moss-build/src/assets/js crates/moss-build/src/ops/serve/js",
-    "test:render-gates": "bash scripts/render-gates.sh"
+    "test:render-gates": "bash scripts/render-gates.sh",
+    "test:demo-player": "node --test scripts/demo-player.test.mjs && node scripts/check-demo-scenes.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",
