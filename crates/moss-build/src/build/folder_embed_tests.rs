@@ -353,6 +353,46 @@ fn zh_hant_vertical_listing_shows_card_meta_in_chinese_numerals() {
     );
 }
 
+/// A body embed's listing follows its host page's EFFECTIVE typesetting —
+/// the page's own `typesetting:`, else the site's. It used to read only the
+/// page's, so on a site set vertical in config.toml alone, a zh-hant body
+/// embed printed Arabic dates beside a page written in Chinese numerals.
+#[test]
+fn body_embed_listing_follows_the_hosts_effective_typesetting() {
+    let folder = make_folder_doc("文/index.html", "文");
+    let mut article = make_doc("文/a.html", "A", Some("1697-09"));
+    article.lang = crate::i18n::Language::ZhHant;
+    let project = test_project();
+    let dir_overrides = std::collections::HashMap::new();
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        style: Some("summary".to_string()),
+        ..Default::default()
+    };
+    let marker =
+        moss_core::resolve::embed_renderer::folder_list::emit_marker("/文/", "home.md", &params);
+    let media_lookup =
+        crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &dir_overrides, None);
+    let expand = |page: Option<&str>, site: Option<&str>| {
+        let host = ParsedDocument {
+            url_path: "index.html".to_string(),
+            source_path: Some("home.md".to_string()),
+            html_content: marker.clone(),
+            kind: PageKind::Article,
+            lang: crate::i18n::Language::ZhHant,
+            typesetting: page.map(String::from),
+            ..Default::default()
+        };
+        let mut documents = vec![host, folder.clone(), article.clone()];
+        expand_markers_in_documents(&mut documents, &project, &dir_overrides, true, &media_lookup, site);
+        documents.swap_remove(0).html_content
+    };
+    let cjk = "一六九七年·九月";
+    let site_only = expand(None, Some("vertical"));
+    assert!(site_only.contains(cjk), "site-only vertical must reach the embed: {site_only}");
+    let page_override = expand(Some("horizontal"), Some("vertical"));
+    assert!(!page_override.contains(cjk), "the page's horizontal must win: {page_override}");
+}
+
 #[test]
 fn root_homepage_self_listing_suppresses_more_link() {
     // Homepage listing its own root children (no children_source) with a limit
@@ -1770,7 +1810,7 @@ fn body_embed_is_tagged_data_embed_but_the_frontmatter_listing_is_not() {
     let media_lookup =
         crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &dir_overrides, None);
     let mut documents = vec![host, folder.clone(), a.clone(), b.clone()];
-    expand_markers_in_documents(&mut documents, &project, &dir_overrides, true, &media_lookup);
+    expand_markers_in_documents(&mut documents, &project, &dir_overrides, true, &media_lookup, None);
     assert!(
         documents[0].html_content.contains("data-embed"),
         "a literal body embed must be tagged; got: {}",
@@ -1844,7 +1884,7 @@ fn root_self_embed_resolves_from_a_page_that_is_not_the_home() {
     let media_lookup =
         crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &dir_overrides, None);
     let mut documents = vec![archive, home, a, b];
-    expand_markers_in_documents(&mut documents, &project, &dir_overrides, true, &media_lookup);
+    expand_markers_in_documents(&mut documents, &project, &dir_overrides, true, &media_lookup, None);
 
     let out = &documents[0].html_content;
     assert!(

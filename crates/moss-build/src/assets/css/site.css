@@ -6312,9 +6312,8 @@ article a:where(:not(.moss-btn)):focus {
    an external-link card is a flex column whose figure carries
    `margin-inline: auto`, so nothing else stretches it: the figure shrank to
    its caption's width and the image followed. One `:is()` rule (0,2,0) so it
-   outranks `article figure:not(.video-figure) img` (0,1,3), whose physical
-   `height: auto` is the inline axis under vertical-rl and would otherwise win
-   there and collapse the image to zero. */
+   outranks `article figure:not(.video-figure) img` (0,1,3), which only caps
+   the inline size and never stretches it. */
 .moss-grid-card :is(.moss-image, picture, img) {
   inline-size: 100%;
 }
@@ -7048,13 +7047,22 @@ article figure:not(.video-figure) {
    nothing. Plain element names after a space survive minification. The
    descendant (not child) combinator is required because moss wraps `<img>`
    in `<picture>` for webp variants — the IMG is then a grandchild of the
-   `<figure>`, not a direct child. */
+   `<figure>`, not a direct child.
+
+   The size caps are logical. Written physically (`max-width` + `height:
+   auto`), `height: auto` lands on the INLINE axis under vertical-rl and
+   cancels the `height=` presentational hint, leaving the physical width to
+   the image's intrinsic size — which for a srcset image is the `sizes=`
+   value. Every vertical figure then rendered exactly `sizes=` wide (756px
+   for a body image) instead of filling its column (2026-09-23). `block-size:
+   auto` releases the width to the aspect ratio instead; horizontally the two
+   spellings are the same properties. */
 article figure:not(.video-figure) img,
 article figure:not(.video-figure) video,
 article figure:not(.video-figure) picture {
   display: block;
-  max-width: 100%;
-  height: auto;
+  max-inline-size: 100%;
+  block-size: auto;
   margin: 0;
 }
 

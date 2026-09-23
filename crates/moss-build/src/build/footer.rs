@@ -620,10 +620,7 @@ mod tests {
             false,
             crate::i18n::Language::En,
             None,
-            false,
-            true, // math: [site].math default (ADR-030)
-            true, // hard_line_breaks: [site] default (Obsidian parity)
-            true, // heading_anchors: [site] default (unconditional today)
+            crate::build::markdown::SiteMarkdown::default(),
             None,
             None,
             None,
@@ -665,10 +662,7 @@ mod tests {
             false,
             crate::i18n::Language::En,
             None,
-            false,
-            true, // math: [site].math default (ADR-030)
-            true, // hard_line_breaks: [site] default (Obsidian parity)
-            true, // heading_anchors: [site] default (unconditional today)
+            crate::build::markdown::SiteMarkdown::default(),
             None,
             None,
             None,

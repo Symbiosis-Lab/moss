@@ -5386,6 +5386,56 @@ mod typesetting_tests {
         );
     }
 
+    /// A folder page's automatic children listing — the homepage's and any
+    /// other folder index's, two separate call sites — follows the page's
+    /// EFFECTIVE typesetting, like the shell's `data-typesetting` above. Both
+    /// used to read the site's alone, so a page's own `typesetting:` changed
+    /// the page but not the dates in its listing.
+    #[test]
+    fn folder_listings_follow_the_pages_effective_typesetting() {
+        let render = |dir: &str, page_typesetting: Option<&str>, site_typesetting: Option<&str>| {
+            let (url, source, child_url, child_source) = if dir.is_empty() {
+                ("index.html".to_string(), "index.md".to_string(), "a/index.html".to_string(), "a.md".to_string())
+            } else {
+                (format!("{dir}/index.html"), format!("{dir}/index.md"), format!("{dir}/a/index.html"), format!("{dir}/a.md"))
+            };
+            let mut folder = make_doc("Folder", &url);
+            folder.kind = PageKind::Folder;
+            folder.lang = Language::ZhHant;
+            folder.source_path = Some(source);
+            folder.typesetting = page_typesetting.map(String::from);
+            let mut child = make_doc("A", &child_url);
+            child.lang = Language::ZhHant;
+            child.source_path = Some(child_source);
+            child.date = Some("1697-09".to_string());
+            let mut all_docs = vec![folder.clone(), child];
+            if !dir.is_empty() {
+                all_docs.push(make_doc("Test Site", "index.html"));
+            }
+            let mut layout = make_layout();
+            if let Some(t) = site_typesetting {
+                layout = layout.with_typesetting(t.to_string());
+            }
+            generate_html(
+                Some(&folder), &all_docs, &make_project(), &layout, dir.is_empty(), None, None,
+                Language::ZhHant, None, false, false, None, false, None, None,
+                &std::collections::HashMap::new(), &localhost_url(), false, false, "favicon.svg",
+                None, std::path::Path::new(""),
+            )
+            .expect("generate_html should succeed")
+        };
+        // The listing's year heading reads 一六九七 under vertical CJK.
+        let cjk = "一六九七";
+        for dir in ["", "wen"] {
+            let page_vertical = render(dir, Some("vertical"), None);
+            assert!(page_vertical.contains(cjk), "{dir:?}: page-level vertical must reach the listing");
+            let site_vertical = render(dir, None, Some("vertical"));
+            assert!(site_vertical.contains(cjk), "{dir:?}: site-only vertical must reach the listing");
+            let page_horizontal = render(dir, Some("horizontal"), Some("vertical"));
+            assert!(!page_horizontal.contains(cjk), "{dir:?}: the page's horizontal must win");
+        }
+    }
+
     #[test]
     fn test_site_default_content_width() {
         let homepage = make_doc("Test Site", "index.html");
@@ -5533,10 +5583,7 @@ mod article_cover_tests {
             true,
             crate::i18n::Language::En,
             None,
-            false,
-            true,
-            true, // hard_line_breaks: [site] default (Obsidian parity)
-            true, // heading_anchors: [site] default (unconditional today)
+            crate::build::markdown::SiteMarkdown::default(),
             None,
             None,
             None,
@@ -5706,10 +5753,7 @@ mod home_file_demotion_tests {
             emit_source_lines,
             crate::i18n::Language::En,
             None,
-            false,
-            true,
-            true, // hard_line_breaks: [site] default (Obsidian parity)
-            true, // heading_anchors: [site] default (unconditional today)
+            crate::build::markdown::SiteMarkdown::default(),
             None,
             None,
             None,

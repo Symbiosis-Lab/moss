@@ -477,15 +477,14 @@ pub fn generate_blocking_content(
             // `heading_anchors` was missing until 2026-08-06: it was masked
             // only by the old markdown-only gate, which a `config.toml` edit
             // could never pass. Add a parameter there, add it here, in the
-            // same commit.
-            &(
+            // same commit. The `[site]` flags ride as one `SiteMarkdown`, the
+            // same value the call takes, so a field added to it needs no edit
+            // here.
+            &crate::build::parse_cache::site_scalars(
                 site_lang,
                 site_id.as_deref(),
                 seta_url_for_build.as_str(),
-                site_config.implicit_figure,
-                site_config.math,
-                site_config.hard_line_breaks,
-                site_config.heading_anchors,
+                site_config.markdown(),
                 emit_source_lines,
                 project_structure.has_content_folders,
             ),
@@ -704,7 +703,7 @@ pub fn generate_blocking_content(
                     // above the loop, over the whole folder, never here.
                     let folder_lang = folder_languages.get(&folder_of(&file_info.path)).copied();
 
-                    let mut doc = match process_markdown_file(&file_info.path, resolved_content, root_folder_name, &page_map, emit_source_lines, site_lang, site_id.as_deref(), site_config.implicit_figure, site_config.math, site_config.hard_line_breaks, site_config.heading_anchors, Some(&event_level_image_lookup), Some(&external_url_map), Some(&content_graph), Some(resolve_registry), project_structure.has_content_folders, Some(&seta_url_for_build), folder_lang) {
+                    let mut doc = match process_markdown_file(&file_info.path, resolved_content, root_folder_name, &page_map, emit_source_lines, site_lang, site_id.as_deref(), site_config.markdown(), Some(&event_level_image_lookup), Some(&external_url_map), Some(&content_graph), Some(resolve_registry), project_structure.has_content_folders, Some(&seta_url_for_build), folder_lang) {
                         Ok(doc) => doc,
                         Err(_) => return None,
                     };
@@ -1084,6 +1083,7 @@ pub fn generate_blocking_content(
             &dir_overrides,
             site_config.math,
             &event_level_image_lookup,
+            site_config.typesetting.as_deref(),
         );
         log::debug!(target: "timing", "[reduce] expand_markers_in_documents: {:?}", reduce_start.elapsed());
 

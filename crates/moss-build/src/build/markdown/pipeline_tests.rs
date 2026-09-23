@@ -177,10 +177,7 @@ fn short_doc_with_no_signal_uses_site_default_lang() {
         false,
         Language::ZhHans,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -209,10 +206,7 @@ fn editor_and_jury_frontmatter_lower_into_parsed_document_beside_author() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -243,10 +237,7 @@ fn body_cover_path_captures_first_markdown_image() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -279,10 +270,7 @@ fn body_cover_path_skips_raw_html_img_in_markdown() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -323,10 +311,7 @@ fn body_cover_path_none_when_document_has_no_images() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -352,10 +337,7 @@ fn frontmatter_lang_overrides_site_default() {
         false,
         Language::ZhHans,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -385,10 +367,7 @@ fn article_without_h1_or_title_injects_filename_as_h1() {
         false,
         Language::ZhHans,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -421,10 +400,7 @@ fn article_with_frontmatter_title_injects_title() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -461,10 +437,7 @@ fn nav_page_suppresses_injected_article_title() {
         false,
         Language::En,
         None,
-        false,
-        true,
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -493,10 +466,7 @@ fn non_nav_article_still_injects_title() {
         false,
         Language::En,
         None,
-        false,
-        true,
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -528,10 +498,7 @@ fn nav_false_restores_article_title() {
         false,
         Language::En,
         None,
-        false,
-        true,
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -560,10 +527,7 @@ fn nav_page_keeps_authored_body_h1() {
         false,
         Language::En,
         None,
-        false,
-        true,
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -604,10 +568,7 @@ fn strict_contract_section_number_h1_does_not_suppress_injection() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -650,10 +611,7 @@ fn strict_contract_leading_blockquote_then_section_h1_injects_title() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -702,10 +660,7 @@ fn matching_leading_body_h1_is_kept_alongside_injected_title() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -745,10 +700,7 @@ fn dedup_does_not_strip_when_text_differs() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -787,10 +739,7 @@ fn dedup_does_not_strip_buried_h1_matching_filename() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -833,10 +782,7 @@ fn article_with_differing_body_h1_renders_both() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -880,10 +826,7 @@ fn article_with_empty_title_suppresses_injection() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -916,10 +859,7 @@ fn index_page_without_h1_does_not_inject() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -950,10 +890,7 @@ fn self_named_folder_index_does_not_inject() {
         false,
         Language::ZhHans,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -988,10 +925,7 @@ fn parse_for_test(file_path: &str, md: &str, root: Option<&str>) -> ParsedDocume
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1119,10 +1053,7 @@ fn filename_title_preserves_case_verbatim() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1156,10 +1087,7 @@ fn filename_title_no_longer_capitalizes_kebab_case() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1189,10 +1117,7 @@ fn article_with_h1_inside_hero_block_does_not_inject() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1228,10 +1153,7 @@ fn article_with_an_image_only_hero_still_renders_its_title() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1305,10 +1227,7 @@ fn moss_resolved_link_preserves_query_when_target_in_page_map() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1353,10 +1272,7 @@ fn moss_resolved_link_to_html_asset_uses_pinned_url_regardless_of_page_depth() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1430,10 +1346,7 @@ fn moss_resolved_link_to_html_asset_depth_table() {
             false,
             Language::En,
             None,
-            false,
-            true, // math: [site].math default (ADR-030)
-            true, // hard_line_breaks: [site] default (Obsidian parity)
-            true, // heading_anchors: [site] default (unconditional today)
+            crate::build::markdown::SiteMarkdown::default(),
             None,
             None,
             None,
@@ -1469,10 +1382,7 @@ fn moss_resolved_link_to_html_asset_opens_in_new_tab() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1524,10 +1434,7 @@ fn moss_resolved_link_to_markdown_page_stays_same_tab() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1561,10 +1468,7 @@ fn moss_resolved_link_to_html_asset_from_root_page() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1605,10 +1509,7 @@ fn nested_image_link_with_query_renders_correctly() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1640,10 +1541,7 @@ fn filename_suffix_overrides_site_default() {
         false,
         Language::ZhHans,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1677,10 +1575,7 @@ fn folder_index_with_slug_override_is_still_index() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1714,10 +1609,7 @@ fn home_override_is_index_via_page_map() {
         false,
         Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1746,10 +1638,7 @@ fn test_pipeline_sets_features_inline_subscribe_when_shortcode_present() {
         false,
         crate::i18n::Language::En,
         Some("test-site"),
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1780,10 +1669,7 @@ fn test_pipeline_features_default_false_without_shortcode() {
         false,
         crate::i18n::Language::En,
         Some("test-site"),
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1811,10 +1697,7 @@ fn test_pipeline_sets_scroll_rows_only_for_a_scrolling_grid() {
             false,
             crate::i18n::Language::En,
             Some("test-site"),
-            false,
-            true,
-            true,
-            true,
+            crate::build::markdown::SiteMarkdown::default(),
             None,
             None,
             None,
@@ -1843,10 +1726,7 @@ fn test_pipeline_sets_features_inline_apply_when_shortcode_present() {
         false,
         crate::i18n::Language::ZhHans,
         Some("test-site"),
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1886,10 +1766,7 @@ fn test_pipeline_no_site_id_yields_pending_form() {
         false,
         crate::i18n::Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -1935,10 +1812,7 @@ fn process_markdown_file_emits_data_source_line_when_flag_on() {
         true, // emit_source_lines
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
@@ -1996,10 +1870,7 @@ fn process_markdown_file_malformed_yaml_does_not_leak_block() {
         false, // emit_source_lines
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
@@ -2078,10 +1949,7 @@ fn data_source_line_skips_frontmatter_collision() {
         true, // emit_source_lines
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
@@ -2130,10 +1998,7 @@ fn data_source_line_offset_traditional_yaml_frontmatter() {
         true, // emit_source_lines
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
@@ -2193,10 +2058,7 @@ fn data_source_line_matches_editor_cm6_body_line() {
         true, // emit_source_lines
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
@@ -2255,10 +2117,7 @@ fn data_source_line_matches_editor_on_malformed_frontmatter() {
         true,
         crate::i18n::Language::En,
         None,
-        true,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
@@ -2302,10 +2161,7 @@ fn data_source_line_matches_editor_on_simplified_frontmatter() {
         true,
         crate::i18n::Language::En,
         None,
-        true,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
@@ -2350,10 +2206,7 @@ fn process_markdown_file_omits_data_source_line_when_flag_off() {
         false, // emit_source_lines OFF
         crate::i18n::Language::En,
         None,
-        true,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
@@ -2388,10 +2241,7 @@ fn process_markdown_file_emits_data_source_range_on_shortcode_when_flag_on() {
         true, // emit_source_lines
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
@@ -2423,10 +2273,7 @@ fn process_markdown_file_omits_data_source_range_when_flag_off() {
         false, // emit_source_lines OFF
         crate::i18n::Language::En,
         None,
-        true,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
         None,
         None,
         None,
@@ -2472,10 +2319,7 @@ fn buttons_internal_link_does_not_leak_moss_resolved_prefix() {
         false,
         crate::i18n::Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -2529,10 +2373,7 @@ Inline link to [extend](docs/extend/) for comparison.
         false,
         crate::i18n::Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -2617,10 +2458,7 @@ Para with [link](docs/) and *em* and `code`.
         false,
         crate::i18n::Language::En,
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -2671,10 +2509,7 @@ fn render_with_math(md: &str, math: bool) -> String {
         false,
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        math,
-        false, // hard_line_breaks: off here — this harness probes math wiring alone
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, math, hard_line_breaks: false, ..Default::default() },
         None,
         None,
         None,
@@ -2753,10 +2588,7 @@ fn render_with_breaks(md: &str, hard_line_breaks: bool) -> String {
         false,
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        false, // math: off here — this harness probes line-break wiring alone
-        hard_line_breaks,
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, math: false, hard_line_breaks, ..Default::default() },
         None,
         None,
         None,
@@ -2812,10 +2644,7 @@ fn render_with_heading_anchors(heading_anchors: bool) -> String {
         false,
         crate::i18n::Language::En,
         None,
-        true, // implicit_figure
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        heading_anchors,
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, heading_anchors, ..Default::default() },
         None,
         None,
         None,
@@ -2901,10 +2730,7 @@ fn tags_of(content: &str) -> Option<Vec<String>> {
         false,
         crate::i18n::Language::En,
         None,
-        true,  // implicit_figure
-        false, // math
-        false, // hard_line_breaks
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, math: false, hard_line_breaks: false, ..Default::default() },
         None,
         None,
         None,
@@ -2969,10 +2795,7 @@ fn render(md: &str, implicit_figure: bool) -> String {
         false,
         crate::i18n::Language::En,
         None,
-        implicit_figure,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure, ..Default::default() },
         None,
         None,
         None,
@@ -3458,10 +3281,7 @@ fn recent_shortcode_dispatch_renders_fallback_on_html_path() {
         false,
         crate::i18n::Language::En,
         Some("test-site"),
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -3494,10 +3314,7 @@ fn recent_shortcode_dispatch_empty_fallback_yields_no_marker_leak() {
         false,
         crate::i18n::Language::En,
         Some("test-site"),
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -3599,10 +3416,7 @@ fn parse_with_graph_cfg(
         false,
         crate::i18n::Language::En,
         None,
-        implicit_figure,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown { implicit_figure, ..Default::default() },
         None,
         None,
         Some(&graph),
@@ -3705,10 +3519,7 @@ fn per_page_language_apply_in_zh_hans_subdir() {
         false,
         Language::En, // site default is EN
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -3754,10 +3565,7 @@ fn per_page_language_subscribe_in_zh_hans_subdir() {
         false,
         Language::En, // site default is EN
         Some("test-site"),
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -3799,10 +3607,7 @@ fn per_page_language_apply_en_page_in_zh_hans_site() {
         false,
         Language::ZhHans, // site default is ZhHans
         None,
-        false,
-        true, // math: [site].math default (ADR-030)
-        true, // hard_line_breaks: [site] default (Obsidian parity)
-        true, // heading_anchors: [site] default (unconditional today)
+        crate::build::markdown::SiteMarkdown::default(),
         None,
         None,
         None,
@@ -3958,4 +3763,45 @@ fn valid_frontmatter_warns_nothing_at_build() {
         &fm_of("title: Hi\ndate: '2026-08-04'\nweight: 3\nchildren_style: grid\ndraft: true"),
     );
     assert!(warnings.is_empty(), "got: {warnings:?}");
+}
+
+/// A body image's `sizes=` follows the page's EFFECTIVE typesetting: the
+/// page's own `typesetting:` over `[site].typesetting`. Under vertical-rl
+/// the column is a height, so the value is the column height × the aspect.
+#[test]
+fn body_image_sizes_follow_the_pages_effective_typesetting() {
+    let meta = crate::types::content::MediaMetadata {
+        is_animated: false,
+        path: "photo.jpg".to_string(),
+        file_type: "jpg".to_string(),
+        size: 0,
+        modified: None,
+        dimensions: Some((2400, 1771)),
+        dominant_color: None,
+        lqip_data_uri: None,
+    };
+    let lookup =
+        crate::build::media::dimensions::MediaDimensionLookup::new(&[meta], &[], &HashMap::new(), None);
+    let empty_map = HashMap::new();
+    let render = |frontmatter: &str, site_typesetting: Option<&str>| {
+        let md = format!("---\ntitle: t\n{frontmatter}---\n\n正文。\n\n![](photo.jpg)\n");
+        let site = SiteMarkdown { typesetting: site_typesetting, ..Default::default() };
+        process_markdown_file(
+            "a.md", &md, "site", &empty_map, false, Language::ZhHant, None, site,
+            Some(&lookup), None, None, None, false, None, None,
+        )
+        .expect("should parse")
+        .html_content
+    };
+    let vertical = r#"sizes="calc(1.356 * (100vh - 4rem))""#;
+    let horizontal = r#"sizes="(min-width: 48rem) 47.25rem, 100vw""#;
+
+    let site_vertical = render("", Some("vertical"));
+    assert!(site_vertical.contains(vertical), "{site_vertical}");
+    let page_horizontal = render("typesetting: horizontal\n", Some("vertical"));
+    assert!(page_horizontal.contains(horizontal), "{page_horizontal}");
+    let page_vertical = render("typesetting: vertical\n", None);
+    assert!(page_vertical.contains(vertical), "{page_vertical}");
+    let site_default = render("", None);
+    assert!(site_default.contains(horizontal), "{site_default}");
 }

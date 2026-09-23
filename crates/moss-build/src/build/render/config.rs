@@ -112,6 +112,20 @@ pub struct SiteConfig {
     pub incremental: IncrementalGates,
 }
 
+impl SiteConfig {
+    /// The `[site]` answers `process_markdown_file` reads, as the one value
+    /// both it and the parse cache's fingerprint take.
+    pub fn markdown(&self) -> crate::build::markdown::SiteMarkdown<'_> {
+        crate::build::markdown::SiteMarkdown {
+            implicit_figure: self.implicit_figure,
+            math: self.math,
+            hard_line_breaks: self.hard_line_breaks,
+            heading_anchors: self.heading_anchors,
+            typesetting: self.typesetting.as_deref(),
+        }
+    }
+}
+
 /// Hand-written rather than derived for one field: `#[derive(Default)]` gives
 /// `lang: ""`, which is not a language code — it reaches `<html lang="">` and
 /// the site-languages artifact as an invalid value that nothing rejects.
@@ -141,6 +155,16 @@ impl Default for SiteConfig {
             incremental: IncrementalGates::default(),
         }
     }
+}
+
+/// A page's effective typesetting: its own `typesetting:` if it set one, else
+/// `[site].typesetting`. The one owner of that precedence — the page shell,
+/// the stylesheet's vertical partial and a body image's `sizes=` (through
+/// [`crate::build::markdown::SiteMarkdown`]) must agree on which pages are
+/// vertical, and three hand-written copies of this line were how they could
+/// drift apart.
+pub(crate) fn effective_typesetting<'a>(page: Option<&'a str>, site: Option<&'a str>) -> Option<&'a str> {
+    page.or(site)
 }
 
 /// `suppress` omits the attribute when the resolved value equals the default (e.g. "horizontal").

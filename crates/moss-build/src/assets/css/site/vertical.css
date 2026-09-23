@@ -52,7 +52,11 @@ html:has(body[data-typesetting="vertical"]) {
 body[data-typesetting="vertical"] {
   /* Written once so the head-margin calc below and `height` agree; `em`
      inside a custom property resolves against the font-size of the element
-     that uses it, i.e. this body's own --moss-vertical-font-size. */
+     that uses it, i.e. this body's own --moss-vertical-font-size.
+     Duplicated as an upper bound in moss-core's `sizes_vertical_body`
+     (contract/sizes.rs), which declares body images' `sizes=` as
+     `A * (100vh - 4rem)`: this column must never exceed `100vh - 4rem`, or
+     those images fetch short rungs. The vertical-sizes render gate pins it. */
   --moss-vertical-column: min(38em, 100svh - 4rem);
   font-size: var(--moss-vertical-font-size, clamp(1rem, 1.9svh, 1.4rem));
   margin-top: calc((100svh - var(--moss-vertical-column)) * 0.382);

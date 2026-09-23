@@ -1007,10 +1007,10 @@ fn unknown_dims_keep_legacy_shape() {
 
 #[test]
 fn portrait_below_first_rung_keeps_legacy_shape() {
-    // 1200×3600 portrait: the encoder caps the longest EDGE, so the
-    // deployed base is only 800 wide — no rung below it (strict `<`),
-    // legacy single-URL shape.
-    let assets = snapshot_dims("photo.jpg", 1200, 3600);
+    // 800×3000 portrait: its short edge is under the deploy floor, so it
+    // deploys whole and the base is exactly 800 wide — no rung below it
+    // (strict `<`), legacy single-URL shape.
+    let assets = snapshot_dims("photo.jpg", 800, 3000);
     let html = synthesize_image_html(
         "photo.jpg",
         "",
@@ -1343,9 +1343,8 @@ fn markdown_standalone_width_page_uses_page_band_sizes() {
 }
 
 #[test]
-fn explicit_sizes_option_overrides_context() {
-    // The options.sizes channel (figure data-width tokens and grid-cell
-    // scoping thread through it) must win over the context default.
+fn grid_cell_scope_sets_a_body_images_sizes() {
+    // An image inside a grid cell declares the cell, not the column.
     let s = snapshot_dims("photo.jpg", 2000, 1200);
     let html = synthesize_image_html(
         "photo.jpg",
@@ -1353,14 +1352,60 @@ fn explicit_sizes_option_overrides_context() {
         &s,
         ImageContext::MarkdownInline,
         &ImageRenderOptions {
-            sizes: Some("(min-width: 48rem) calc(min(1200px, 100vw) / 3), 100vw"),
+            grid_cell_sizes: Some("auto, calc(min(1200px, 100vw) / 3)"),
             ..Default::default()
         },
     );
     assert!(
-        html.contains(r#"sizes="(min-width: 48rem) calc(min(1200px, 100vw) / 3), 100vw""#),
-        "options.sizes must override the context default; got: {html}"
+        html.contains(r#"sizes="auto, calc(min(1200px, 100vw) / 3)""#),
+        "the grid cell scope must set sizes=; got: {html}"
     );
+}
+
+/// The vertical body value, for a body image in each shape it arrives in.
+fn vertical_body_html(context: ImageContext<'_>, data_width: Option<&str>, cell: Option<&str>) -> String {
+    let s = snapshot_dims("photo.jpg", 2400, 1771);
+    synthesize_image_html(
+        "photo.jpg",
+        "",
+        &s,
+        context,
+        &ImageRenderOptions {
+            vertical: true,
+            data_width,
+            grid_cell_sizes: cell,
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn vertical_body_image_declares_the_column_height_times_its_aspect() {
+    let want = r#"sizes="calc(1.356 * (100vh - 4rem))""#;
+    let inline = vertical_body_html(ImageContext::MarkdownInline, None, None);
+    assert!(inline.contains(want), "got: {inline}");
+    // A width token is inert under vertical typesetting.
+    let wide = vertical_body_html(ImageContext::MarkdownInline, Some("wide"), None);
+    assert!(wide.contains(want), "got: {wide}");
+    let extras = empty_extras();
+    let standalone = vertical_body_html(
+        ImageContext::MarkdownStandalone {
+            caption: None,
+            width: Some("screen"),
+            align: None,
+            class_names: &[],
+            extra_attrs: &extras,
+        },
+        None,
+        None,
+    );
+    assert!(standalone.contains(want), "got: {standalone}");
+    // A grid cell has a definite box: its own scope still wins.
+    let cell = vertical_body_html(ImageContext::MarkdownInline, None, Some("auto, 100vw"));
+    assert!(cell.contains(r#"sizes="auto, 100vw""#), "got: {cell}");
+    // Only body images move: a hero keeps its value.
+    let hero = vertical_body_html(ImageContext::Hero { plate: false }, None, None);
+    assert!(hero.contains(r#"sizes="100vw""#), "got: {hero}");
 }
 
 #[test]
@@ -1788,4 +1833,39 @@ fn webp_source_in_email_body_never_leaks_srcset() {
         html.contains(r#"style="display:block;max-width:100%;height:auto;""#),
         "email <img> shape preserved: {html}"
     );
+}
+
+/// The vertical body `sizes=` values the `vertical-sizes` render gate fetches
+/// against the real CSS column in Chromium and WebKit. The gate cannot call
+/// Rust, so it reads this golden; this test keeps the golden equal to what
+/// the synthesizer emits. Regenerate with `SNAPSHOTS=overwrite`.
+#[test]
+fn vertical_sizes_render_gate_golden_matches_the_synthesizer() {
+    let cases: [(u32, u32); 4] = [(2400, 1771), (6000, 1500), (2000, 4000), (2400, 2400)];
+    let mut want = String::from("{\n");
+    for (i, (w, h)) in cases.iter().enumerate() {
+        let s = snapshot_dims("photo.jpg", *w, *h);
+        let html = synthesize_image_html(
+            "photo.jpg",
+            "",
+            &s,
+            ImageContext::MarkdownInline,
+            &ImageRenderOptions { vertical: true, ..Default::default() },
+        );
+        let sizes = html
+            .split(r#"sizes=""#)
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .unwrap_or_else(|| panic!("no sizes= for {w}x{h}: {html}"));
+        let sep = if i + 1 == cases.len() { "" } else { "," };
+        want.push_str(&format!("  \"{w}x{h}\": \"{sizes}\"{sep}\n"));
+    }
+    want.push_str("}\n");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/render-gates/site/vertical-sizes.golden.json");
+    if std::env::var("SNAPSHOTS").as_deref() == Ok("overwrite") {
+        std::fs::write(&path, &want).unwrap();
+    }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert_eq!(have, want, "stale {}: rerun with SNAPSHOTS=overwrite", path.display());
 }

@@ -17,6 +17,23 @@
 //!   column; a horizontal site collapses to 1 column below 768px, a
 //!   vertical one never does (site.css) — see `sizes_for_grid_cell`'s
 //!   `auto,` lead, which reads the real width instead of guessing it
+//! - vertical typesetting: the column is a HEIGHT, not a width — see
+//!   [`sizes_vertical_body`]
+//!
+//! A `sizes=` value is a fetch hint and nothing else. The synthesizer emits
+//! the source's `width`/`height` alongside every srcset, and site.css caps
+//! images on their logical axes, so the laid-out box comes from those hints
+//! and the column, never from the density `sizes=` implies. Overstating the
+//! rendered width only over-fetches (a bigger rung than needed); understating
+//! it blurs (the browser upscales a smaller rung). Every value here therefore
+//! errs on the large side when it cannot be exact.
+//!
+//! Engine support constrains the spelling. WebKit (26, 2026-09) drops a
+//! source-size entry that uses `min()` or `clamp()` and falls through to the
+//! next one — ultimately `100vw` — while Chromium and Firefox evaluate them;
+//! `calc()` with viewport units works in all three. The `min()` values below
+//! degrade to `100vw` there, an over-fetch; a new value must not rely on
+//! `min()`/`clamp()` to avoid an understatement.
 
 /// Hero images and `data-width="screen|full"` figures: span the viewport
 /// (bounded by the 2400px deploy cap).
@@ -24,19 +41,18 @@ pub const SIZES_FULL_BLEED: &str = "100vw";
 
 /// `:::hero {.plate}` images (2026-09-11): the plate variant's CSS shows
 /// the image whole and never upscales it — render width tracks the
-/// image's own delivered resolution (up to `DEPLOY_MAX_EDGE`), not the
-/// viewport. `100vw` would therefore ask the srcset ladder to resolve
-/// against viewport width, which under-selects a wide plate (a 7.6:1
-/// handscroll can render near its full deployed width while
-/// `sizes=100vw` picks a mid rung — a blurry upscale; see
-/// `docs/archive/2026-09-11-hero-plate-variant.md`). A plate can
-/// legitimately render at up to its full deployed width regardless of
-/// viewport, so `sizes=` names a fixed value at least as large as
-/// [`crate::asset_paths::DEPLOY_MAX_EDGE`] — this always selects the top
-/// (base) rung, the same trade every institutional handscroll viewer
-/// makes (serve one high-resolution asset rather than device-tiering the
-/// object). `sizes_hero_plate_covers_deploy_max_edge` pins the two in
-/// sync so a future ceiling change can't silently starve the ladder.
+/// image's own delivered resolution, not the viewport. `100vw` would
+/// therefore ask the srcset ladder to resolve against viewport width,
+/// which under-selects a wide plate (a 7.6:1 handscroll can render near
+/// its full deployed width while `sizes=100vw` picks a mid rung — a
+/// blurry upscale; see `docs/archive/2026-09-11-hero-plate-variant.md`).
+/// So `sizes=` names a fixed value wider than every ladder rung, which
+/// always selects the base — the same trade every institutional
+/// handscroll viewer makes (serve one high-resolution asset rather than
+/// device-tiering the object). The base itself may be wider than 2400px
+/// for an elongated image (`asset_paths::deployed_long_edge`); that
+/// changes nothing here. `sizes_hero_plate_selects_the_base` pins the
+/// value above the top rung.
 pub const SIZES_HERO_PLATE: &str = "2400px";
 
 /// `data-width="wide"` figures: the wide band —
@@ -136,6 +152,35 @@ pub fn sizes_for_grid_cell(columns: u32, data_width: Option<&str>) -> String {
     format!("auto, {fallback}")
 }
 
+/// Body images on a `typesetting = "vertical"` page: `calc(A * (100vh - 4rem))`
+/// with `A` = the source's width/height, rounded UP to three decimals.
+///
+/// Under vertical-rl the column is a fixed HEIGHT
+/// (`--moss-vertical-column: min(38em, 100svh - 4rem)` in vertical.css), the
+/// image's inline size (its height) fills it, and its physical width follows
+/// from the aspect ratio: roughly column × A. None of the horizontal values
+/// describe that — `SIZES_BODY` names a 47.25rem WIDTH, which asked a
+/// 2400×1771 plate rendered ~794px wide for the 800w rung, and a 23:1
+/// handscroll laid out thousands of px wide for the same.
+///
+/// `100vh - 4rem` is an upper bound on the column, not the column: it drops
+/// the `38em` term (a theme or the reading-scale control can move `em`, and
+/// an understated column would blur) and uses `vh`, which is never smaller
+/// than `svh`. Rounding `A` up keeps the bound. The cost is ~28% of width on
+/// common viewports; see the module doc for why no `min()` is used. The
+/// render gate `vertical-sizes` pins the fetch this produces against the CSS
+/// column, so a change to `--moss-vertical-column` that outgrows this bound
+/// turns it red.
+///
+/// Applies to `data-width` figures too: width tokens are inert under
+/// vertical typesetting, so such a figure sits in the column like any
+/// other body image.
+pub fn sizes_vertical_body(width: u32, height: u32) -> String {
+    let h = u64::from(height.max(1));
+    let milli = (u64::from(width) * 1000).div_ceil(h);
+    format!("calc({}.{:03} * (100vh - 4rem))", milli / 1000, milli % 1000)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,11 +260,42 @@ mod tests {
     }
 
     #[test]
-    fn sizes_hero_plate_covers_deploy_max_edge() {
-        // SIZES_HERO_PLATE must always select the base (highest) srcset
-        // rung, i.e. it must be >= DEPLOY_MAX_EDGE. If the deploy cap ever
-        // changes this test forces SIZES_HERO_PLATE to move with it rather
-        // than silently starving the ladder for a plate hero.
+    fn vertical_body_names_the_column_height_times_the_aspect() {
+        assert_eq!(sizes_vertical_body(2400, 1771), "calc(1.356 * (100vh - 4rem))");
+        assert_eq!(sizes_vertical_body(1000, 4000), "calc(0.250 * (100vh - 4rem))");
+        assert_eq!(sizes_vertical_body(21969, 950), "calc(23.126 * (100vh - 4rem))");
+        // WebKit drops a source-size entry using min()/clamp() (module doc).
+        let s = sizes_vertical_body(2400, 1771);
+        assert!(!s.contains("min(") && !s.contains("clamp(") && !s.contains("max("), "{s}");
+    }
+
+    #[test]
+    fn vertical_body_never_understates_the_aspect() {
+        // An understated coefficient fetches a smaller rung than the
+        // rendered width needs, i.e. blurs.
+        for w in (1..=6000u32).step_by(37) {
+            for h in (1..=6000u32).step_by(41) {
+                let s = sizes_vertical_body(w, h);
+                // Integer thousandths: `9.200` → 9200 (f64 would round
+                // an exact 9.2 × 165 below 1518).
+                let milli: u64 = s
+                    .strip_prefix("calc(")
+                    .and_then(|r| r.split(' ').next())
+                    .unwrap()
+                    .replace('.', "")
+                    .parse()
+                    .unwrap();
+                assert!(milli * u64::from(h) >= u64::from(w) * 1000, "{w}x{h} -> {s}");
+            }
+        }
+    }
+
+    #[test]
+    fn sizes_hero_plate_selects_the_base() {
+        // SIZES_HERO_PLATE must always select the base srcset candidate:
+        // wider than every ladder rung, and at least the long-edge cap so a
+        // base at the cap is taken at 1x. A ladder or cap change must move
+        // it rather than silently starve a plate hero.
         let px: u32 = SIZES_HERO_PLATE
             .strip_suffix("px")
             .expect("SIZES_HERO_PLATE must be a bare px length, not a media-query list")
@@ -231,5 +307,7 @@ mod tests {
              under-selects its srcset rung",
             crate::asset_paths::DEPLOY_MAX_EDGE,
         );
+        let top_rung = *crate::asset_paths::LADDER.last().unwrap();
+        assert!(px > top_rung, "SIZES_HERO_PLATE ({px}px) must exceed the top rung ({top_rung}w)");
     }
 }

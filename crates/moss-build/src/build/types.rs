@@ -812,7 +812,10 @@ impl SiteAssets {
         };
         for page in pages {
             out.callouts |= page.features.callouts;
-            out.vertical |= page.typesetting.as_deref() == Some("vertical");
+            out.vertical |= crate::build::render::config::effective_typesetting(
+                page.typesetting.as_deref(),
+                site_typesetting,
+            ) == Some("vertical");
             out.has_footnotes |= page.features.footnotes;
             out.scroll_rows |= page.features.scroll_rows;
         }

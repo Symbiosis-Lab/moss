@@ -287,6 +287,50 @@ fn schema_frontmatter_warnings(
         .collect()
 }
 
+/// The `[site]` answers that change how a page's markdown renders, handed to
+/// [`process_markdown_file`] as one value.
+///
+/// `render/blocking.rs` hashes this whole value into the parse cache's inputs
+/// fingerprint too, so a field added here invalidates cached bodies without a
+/// second edit there. Every field is
+/// resolved on `SiteConfig` — see `SiteConfig::markdown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SiteMarkdown<'a> {
+    /// `[site].implicit_figure`: an image alone in a paragraph with alt text
+    /// renders as a captioned `<figure>`.
+    pub implicit_figure: bool,
+    /// `[site].math` (ADR-030): when false, `$` stays an ordinary character —
+    /// the escape hatch for prose where `$` pairs up by accident.
+    pub math: bool,
+    /// `[site].hard_line_breaks`: a single newline renders as `<br>`
+    /// (Obsidian parity) rather than a space (CommonMark). See
+    /// crates/moss-core/src/ast/line_breaks.rs.
+    pub hard_line_breaks: bool,
+    /// `[site].heading_anchors`: when false, headings carry no trailing `#`
+    /// permalink anchor.
+    pub heading_anchors: bool,
+    /// `[site].typesetting`. A page's own `typesetting:` wins over it
+    /// (`render::config::effective_typesetting`); a vertical page's body
+    /// images declare their `sizes=` against the column height.
+    pub typesetting: Option<&'a str>,
+}
+
+/// Math, hard line breaks and heading anchors on — their absent-key answers
+/// on `SiteConfig` — implicit figures off, no site-wide typesetting. A caller
+/// with a real config uses `SiteConfig::markdown` instead; this is the
+/// drop-in for the four positional flags `process_markdown_file` used to take.
+impl Default for SiteMarkdown<'_> {
+    fn default() -> Self {
+        Self {
+            implicit_figure: false,
+            math: true,
+            hard_line_breaks: true,
+            heading_anchors: true,
+            typesetting: None,
+        }
+    }
+}
+
 /// Processes a markdown file with frontmatter into a ParsedDocument.
 ///
 /// `site_lang` is the site's default language, used as the final fallback
@@ -303,25 +347,7 @@ pub fn process_markdown_file(
     emit_source_lines: bool,
     site_lang: crate::i18n::Language,
     site_id: Option<&str>,
-    implicit_figure: bool,
-    // 2026-07 (ADR-030): `[site].math`, resolved on `SiteConfig` (absent
-    // key => true). When false, `$` stays an ordinary character and the
-    // parser never emits math events — the escape hatch for prose where
-    // `$` pairs up by accident. Threaded alongside `implicit_figure`
-    // because both are site-level answers to "what does this character
-    // mean", which only the config owner can answer.
-    math: bool,
-    // 2026-07: `[site].hard_line_breaks`, resolved on `SiteConfig` (absent
-    // key => true — Obsidian parity). Third member of the "what does this
-    // character mean" family with `implicit_figure`/`math`: a single
-    // newline renders as `<br>` when true, as a space (CommonMark) when
-    // false. See crates/moss-core/src/ast/line_breaks.rs.
-    hard_line_breaks: bool,
-    // 2026-07 (ADR-030): `[site].heading_anchors`, resolved on `SiteConfig`
-    // (absent key => true). Controls `RenderHooks::emit_heading_anchors` —
-    // when false, headings render without the trailing `#` permalink
-    // anchor.
-    heading_anchors: bool,
+    site: SiteMarkdown<'_>,
     // 2026-05 (structural-html-emission migration, Step 2): when `Some`,
     // markdown `Tag::Image` events route through `image_render::synthesize_image_html`
     // at the event-iterator level, producing HTML with dimensions, LQIP,
@@ -755,7 +781,11 @@ pub fn process_markdown_file(
         assets: asset_snapshot,
         media_lookup,
         permalink_section_label: crate::i18n::t(doc_lang, "permalink_section"),
-        heading_anchors,
+        heading_anchors: site.heading_anchors,
+        vertical: crate::build::render::config::effective_typesetting(
+            frontmatter.typesetting.as_deref(),
+            site.typesetting,
+        ) == Some("vertical"),
     };
 
     // 0. Parse markdown into the typed AST. Sees `:::shortcode` blocks
@@ -849,10 +879,10 @@ pub fn process_markdown_file(
     };
     let parse_config = moss_core::ast::ParseConfig {
         emit_source_lines,
-        implicit_figure,
+        implicit_figure: site.implicit_figure,
         source_line_offset,
-        math,
-        hard_line_breaks,
+        math: site.math,
+        hard_line_breaks: site.hard_line_breaks,
     };
     let mut doc = moss_core::ast::parse_with_config(&markdown_content, &parse_config);
     // Mirrors the `frontmatter:` warning line above: a misspelled shortcode
@@ -894,7 +924,7 @@ pub fn process_markdown_file(
         // spelling of the same image did not have. One authorial intent, two
         // boxes, and any theme rule keyed on `.moss-image` hit only half the
         // images on the page.
-        if !implicit_figure {
+        if !site.implicit_figure {
             moss_core::ast::unwrap_implicit_figures(&mut doc);
         }
     }
@@ -1735,6 +1765,8 @@ pub fn render_markdown_to_html_with(
         media_lookup,
         permalink_section_label: crate::i18n::t(crate::i18n::Language::En, "permalink_section"),
         heading_anchors,
+        // A fragment has no page, so no typesetting of its own.
+        vertical: false,
     };
 
     moss_core::ast::render_document(&doc, &pipeline_hooks)
@@ -1862,6 +1894,9 @@ struct PipelineHooks<'a> {
     /// when false, headings render without the trailing `#` permalink
     /// anchor.
     heading_anchors: bool,
+    /// The page's effective typesetting is vertical. Handed to the delegated
+    /// `DefaultHooks`, where it only changes body images' `sizes=`.
+    vertical: bool,
 }
 
 impl<'a> PipelineHooks<'a> {
@@ -1872,6 +1907,7 @@ impl<'a> PipelineHooks<'a> {
             Some(a) => moss_core::ast::DefaultHooks::with_snapshot(a),
             None => moss_core::ast::DefaultHooks::new(),
         }
+        .vertical(self.vertical)
     }
 }
 

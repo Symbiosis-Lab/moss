@@ -272,13 +272,13 @@ pub struct ImageRenderOptions<'a> {
     /// for `:::hero` covers carrying `MediaAttrs`). The caller is responsible
     /// for HTML-escaping values inside this fragment.
     pub extra_attrs: Option<&'a str>,
-    /// Explicit `sizes=` override for the srcset ladder. When `Some`, wins
-    /// over the [`ImageContext`]-derived default — used by callers that know
-    /// the rendered slot better than the context does: a figure carrying a
-    /// `data-width` token ([`crate::contract::sizes::sizes_for_data_width`])
-    /// or an image inside a `.moss-grid` cell
-    /// ([`crate::contract::sizes::sizes_for_grid_cell`]).
-    pub sizes: Option<&'a str>,
+    /// Inputs to the `sizes=` table (`sizes_for`) for a body image: the
+    /// enclosing grid cell's scope ([`crate::contract::sizes::sizes_for_grid_cell`]),
+    /// the figure's raw `data-width` token (for `MarkdownInline`; a
+    /// `MarkdownStandalone` carries its own), and whether the page is vertical.
+    pub grid_cell_sizes: Option<&'a str>,
+    pub data_width: Option<&'a str>,
+    pub vertical: bool,
 }
 
 /// Synthesize the HTML for an image reference.
@@ -428,30 +428,8 @@ pub fn synthesize_image_html(
     // every non-favicon context. The wrapping `<figure class="moss-image">`
     // and optional `<figcaption>` are the only context-dependent
     // structure. Compute the inner first, then wrap if requested.
-    //
-    // The context decides the `sizes=` value for the srcset ladder
-    // (responsive-image-variants Task 3): full-bleed surfaces (hero,
-    // `data-width="screen|full"` figures) span the viewport; wide/page
-    // figures span their escape band (ADR-021 Corollary 2, the data-width
-    // CSS in site.css); cards/gallery thumbs occupy grid cells; everything
-    // else renders in the content column. `options.sizes` overrides all of
-    // it — the caller (figure renderer with a data-width token, grid cell)
-    // knows the slot better than the context does. Only emitted when the
-    // ladder is non-empty — see synthesize_inner.
-    let sizes_value: &str = match options.sizes {
-        Some(s) => s,
-        None => match &context {
-            ImageContext::Hero { plate: true } => ctx_sizes::SIZES_HERO_PLATE,
-            ImageContext::Hero { plate: false } => ctx_sizes::SIZES_FULL_BLEED,
-            ImageContext::MarkdownStandalone { width: Some(w), .. } => {
-                ctx_sizes::sizes_for_data_width(w).unwrap_or(ctx_sizes::SIZES_BODY)
-            }
-            ImageContext::FolderCardCover => ctx_sizes::SIZES_CARD,
-            ImageContext::GalleryThumb => ctx_sizes::SIZES_GALLERY,
-            _ => ctx_sizes::SIZES_BODY,
-        },
-    };
-    let inner = synthesize_inner(src, alt, assets, options, sizes_value);
+    let sizes_value = sizes_for(src, assets, &context, options);
+    let inner = synthesize_inner(src, alt, assets, options, &sizes_value);
 
     match context {
         ImageContext::MarkdownStandalone {
@@ -722,6 +700,42 @@ fn is_raster_original(src: &str) -> bool {
 fn is_webp_source(src: &str) -> bool {
     src.rsplit_once('.')
         .is_some_and(|(_, ext)| is_webp_source_ext(ext))
+}
+
+/// The `sizes=` value for the srcset ladder — the one place it is decided.
+/// Non-body contexts are fixed. A body image takes, on a vertical page, its
+/// grid cell's scope (a definite box) else the column height × its aspect —
+/// `data-width` is inert there; on a horizontal page, its `data-width` escape
+/// band (ADR-021 Corollary 2) → its grid cell's scope → the content column.
+fn sizes_for<'s>(
+    src: &str,
+    assets: &AssetSnapshot,
+    context: &ImageContext<'_>,
+    options: &ImageRenderOptions<'s>,
+) -> std::borrow::Cow<'s, str> {
+    use std::borrow::Cow;
+    let data_width = match context {
+        ImageContext::MarkdownStandalone { width, .. } => *width,
+        ImageContext::MarkdownInline => options.data_width,
+        ImageContext::Hero { plate: true } => return Cow::Borrowed(ctx_sizes::SIZES_HERO_PLATE),
+        ImageContext::Hero { plate: false } => return Cow::Borrowed(ctx_sizes::SIZES_FULL_BLEED),
+        ImageContext::FolderCardCover => return Cow::Borrowed(ctx_sizes::SIZES_CARD),
+        ImageContext::GalleryThumb => return Cow::Borrowed(ctx_sizes::SIZES_GALLERY),
+        _ => return Cow::Borrowed(ctx_sizes::SIZES_BODY),
+    };
+    if options.vertical {
+        if let Some(cell) = options.grid_cell_sizes {
+            return Cow::Borrowed(cell);
+        }
+        return match lookup_dims(assets, src) {
+            Some((w, h)) => Cow::Owned(ctx_sizes::sizes_vertical_body(w, h)),
+            None => Cow::Borrowed(ctx_sizes::SIZES_BODY),
+        };
+    }
+    match data_width.and_then(ctx_sizes::sizes_for_data_width) {
+        Some(band) => Cow::Borrowed(band),
+        None => Cow::Borrowed(options.grid_cell_sizes.unwrap_or(ctx_sizes::SIZES_BODY)),
+    }
 }
 
 /// Try several path normalizations against `AssetSnapshot.dimensions` so the

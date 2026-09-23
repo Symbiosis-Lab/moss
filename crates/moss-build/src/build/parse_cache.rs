@@ -534,6 +534,22 @@ impl ParseSession {
     }
 }
 
+/// The build-level scalars `process_markdown_file` reads, as the
+/// `site_scalars` argument of [`inputs_fingerprint`]. A function rather than a
+/// tuple written at the call site so a test can build exactly what production
+/// hashes: `render/blocking.rs` passes the same `SiteMarkdown` value to the
+/// call, so the two cannot disagree about which `[site]` flags a parse reads.
+pub fn site_scalars<'a>(
+    site_lang: crate::i18n::Language,
+    site_id: Option<&'a str>,
+    seta_url: &'a str,
+    site: crate::build::markdown::SiteMarkdown<'a>,
+    emit_source_lines: bool,
+    has_content_folders: bool,
+) -> impl std::fmt::Debug + 'a {
+    (site_lang, site_id, seta_url, site, emit_source_lines, has_content_folders)
+}
+
 /// Fingerprint of Loop A's non-content inputs (moss#922 Stage 7).
 ///
 /// Every one of these is a whole-corpus pre-scan result threaded into
@@ -662,6 +678,32 @@ mod tests {
             &("en", false),
         );
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_site_typesetting_toggle_moves_the_inputs_fingerprint() {
+        // A vertical page's body images declare a different `sizes=`, so a
+        // `[site] typesetting` edit must not replay bodies parsed under the
+        // old value.
+        let page_map = map(&[("a.md", "a/index.html")]);
+        let fingerprint = |typesetting: Option<&str>| {
+            let cfg = crate::build::render::config::SiteConfig {
+                typesetting: typesetting.map(String::from),
+                ..Default::default()
+            };
+            let scalars = site_scalars(crate::i18n::Language::En, None, "", cfg.markdown(), false, false);
+            let fp = inputs_fingerprint(
+                &["a.md".to_string()],
+                &page_map,
+                &HashMap::new(),
+                &HashMap::new(),
+                &std::collections::HashSet::new(),
+                "site",
+                &scalars,
+            );
+            fp
+        };
+        assert_ne!(fingerprint(None), fingerprint(Some("vertical")));
     }
 
     #[test]

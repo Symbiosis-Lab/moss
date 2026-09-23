@@ -753,9 +753,17 @@ pub struct DefaultHooks<'a> {
     /// Stored negated so `#[derive(Default)]` still means "anchors on".
     /// Set by [`DefaultHooks::hero_overlay`] and [`DefaultHooks::grid_cells`].
     suppress_heading_anchors: bool,
+    /// The page is vertically typeset (see [`DefaultHooks::vertical`]).
+    vertical: bool,
 }
 
 impl<'a> DefaultHooks<'a> {
+    /// Mark the page as vertically typeset; only body images' `sizes=` reads it.
+    pub fn vertical(mut self, vertical: bool) -> Self {
+        self.vertical = vertical;
+        self
+    }
+
     /// Construct a no-snapshot `DefaultHooks`. The `Gallery` arm of
     /// [`RenderHooks::render_shortcode`] emits the legacy bare-`<img>`
     /// byte shape so the regex post-pass can fill in attributes. Use
@@ -883,10 +891,8 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
     /// yields `ImageRenderOptions::default()` — byte-identical to before the
     /// synth-collapse.
     ///
-    /// `sizes=` precedence for the srcset ladder (most specific slot
-    /// knowledge wins): the figure's own `data-width` token → the enclosing
-    /// grid cell scope ([`begin_grid_cells`]) → the context default
-    /// ([`crate::contract::sizes::SIZES_BODY`] via `MarkdownInline`).
+    /// `sizes=` is the synthesizer's decision; this hands it the `data-width`
+    /// token, the grid cell scope ([`begin_grid_cells`]) and the typesetting.
     fn render_image(
         &self,
         out: &mut String,
@@ -914,15 +920,12 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
         let ctx = crate::render::image::ImageContext::MarkdownInline;
         let style_attr =
             img_style.map(|s| format!(r#"style="{}""#, crate::media::html_escape(s)));
-        // sizes= precedence: figure data-width token > grid cell scope >
-        // context default (see doc comment above).
         let cell_scope = self.grid_cell_sizes.borrow();
-        let sizes: Option<&str> = width
-            .and_then(crate::contract::sizes::sizes_for_data_width)
-            .or_else(|| cell_scope.last().map(String::as_str));
         let opts = crate::render::image::ImageRenderOptions {
             extra_attrs: style_attr.as_deref(),
-            sizes,
+            grid_cell_sizes: cell_scope.last().map(String::as_str),
+            data_width: width,
+            vertical: self.vertical,
             ..Default::default()
         };
         let html = crate::render::image::synthesize_image_html(

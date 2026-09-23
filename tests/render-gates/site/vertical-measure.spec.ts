@@ -233,6 +233,30 @@ ${colophon}
 </body></html>`;
 }
 
+// A body figure as the synthesizer emits it for a laddered source: the
+// source's `width`/`height` hints on the `<img>`, the rungs on a `<source>`
+// with the horizontal column's `sizes=`. A srcset image's intrinsic width IS
+// its `sizes=` value, so the only thing that may size it is the column —
+// never the fetch hint. The landscape source is wider than the column at
+// every viewport here, so filling the column's height is the whole claim.
+// The rung is a real 800px-wide candidate, as `photo.w800.webp` is: the
+// density `800w` over `sizes=` is computed against its own pixels.
+const landscape = (w, h) => 'data:image/svg+xml,' + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="#2050c0"/></svg>`);
+const LANDSCAPE_IMG = landscape(2400, 1771);
+const LANDSCAPE_RUNG = landscape(800, 590);
+
+function figurePage({ vertical }) {
+  return `${head(vertical)}<body${vertical ? ' data-typesetting="vertical"' : ''}>
+${nav}
+<main id="main-content"><article class="container">
+<p id="prose">正文。</p>
+<figure class="moss-image"><picture><source srcset="${LANDSCAPE_RUNG} 800w" type="image/svg+xml" sizes="(min-width: 48rem) 47.25rem, 100vw"><img src="${LANDSCAPE_IMG}" width="2400" height="1771" alt=""></picture></figure>
+</article></main>
+<footer class="container"></footer>
+</body></html>`;
+}
+
 // A hero page, as that site's plates are: the hero is emitted outside <main>,
 // so it owns no band of its own. A blockquote stands in for the inscriptions.
 function heroPage() {
@@ -630,6 +654,34 @@ test.describe('vertical-rl inline plate (album leaf, not the hero)', () => {
       expect(plate.bottom).toBeLessThanOrEqual(band.bottom + 1);
     });
   }
+});
+
+test.describe('vertical-rl body figure with a srcset', () => {
+  for (const [label, width, height] of [['desktop', 1440, 900], ['phone', 390, 844]]) {
+    test(`${label}: the image fills the figure's inline extent, not the width its sizes= names`, async ({ page }) => {
+      await page.setViewportSize({ width, height });
+      await page.setContent(figurePage({ vertical: true }));
+      await page.locator('figure img').evaluate((img) => img.decode());
+      const fig = await contentBox(page, 'figure.moss-image');
+      const img = await rect(page, 'figure img');
+
+      // Under vertical-rl the inline axis is the physical height. A physical
+      // `height: auto` cancelled the `height=` hint there and left the width
+      // at the intrinsic (= sizes=) 756px, short of the column.
+      expect(img.height).toBeGreaterThan(fig.bottom - fig.top - 2);
+      expect(img.width / img.height).toBeCloseTo(2400 / 1771, 1);
+    });
+  }
+
+  test('horizontally the same figure fills the column width', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.setContent(figurePage({ vertical: false }));
+    await page.locator('figure img').evaluate((img) => img.decode());
+    const fig = await contentBox(page, 'figure.moss-image');
+    const img = await rect(page, 'figure img');
+    expect(Math.abs(img.width - (fig.right - fig.left))).toBeLessThanOrEqual(2);
+    expect(img.width / img.height).toBeCloseTo(2400 / 1771, 1);
+  });
 });
 
 test('horizontally the logical spellings change nothing', async ({ page }) => {

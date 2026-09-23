@@ -81,6 +81,7 @@ GATES_NOBUILD=(
   card-cover-fit
   img-fallback
   vertical-measure
+  vertical-sizes
   article-date-alignment
   footer-subscribe-alignment
   float-mobile-collapse

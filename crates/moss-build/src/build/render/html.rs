@@ -278,9 +278,10 @@ fn generate_html_inner(
     // The page's effective typesetting — its own, else the site's. Computed
     // here (not beside its original use below) because `resolve_page_body`,
     // which also needs it for card-meta dates, runs before that point.
-    let resolved_typesetting: Option<&str> = doc
-        .and_then(|d| d.typesetting.as_deref())
-        .or(layout_config.typesetting.as_deref());
+    let resolved_typesetting: Option<&str> = super::config::effective_typesetting(
+        doc.and_then(|d| d.typesetting.as_deref()),
+        layout_config.typesetting.as_deref(),
+    );
     let vertical_typesetting = resolved_typesetting == Some("vertical");
 
     // `<html lang>`, hreflang and Schema.org `inLanguage` all emit THIS one
@@ -537,7 +538,7 @@ fn generate_html_inner(
                     project,
                     &dir_overrides,
                     doc.lang, // per-page language, not site default
-                    layout_config.typesetting.as_deref(),
+                    resolved_typesetting,
                     Some(&media_lookup),
                     layout_config.assets.math,
                 );
@@ -771,7 +772,7 @@ fn generate_html_inner(
                         project,
                         &dir_overrides,
                         doc.lang, // per-page language, not site default
-                        layout_config.typesetting.as_deref(),
+                        resolved_typesetting,
                         Some(&media_lookup),
                         layout_config.assets.math,
                     );

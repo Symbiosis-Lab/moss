@@ -13,7 +13,7 @@
 //! 1. Cache lookup (return WebP from CAS if a prior encode matched current params)
 //! 2. Decode via `image` crate (handles JPEG/PNG/WebP)
 //! 3. Apply EXIF orientation to pixels
-//! 4. Resize if larger than `max_edge`
+//! 4. Resize to `asset_paths::deployed_long_edge` (the `max_edge` cap, short-edge floor)
 //! 5. Encode WebP at configured quality
 //! 6. Validate encoded output
 //! 7. CAS store + write transform record
@@ -158,7 +158,9 @@ pub struct ImageConversionOutcome {
 pub struct ImageCompressionConfig {
     /// WebP quality 0-100. 80 is the visually-lossless sweet spot.
     pub quality: u8,
-    /// Resize so max(width, height) <= max_edge. Default: `asset_paths::DEPLOY_MAX_EDGE` (2400, retina).
+    /// Long-edge cap for the deploy resize (`asset_paths::deployed_long_edge`,
+    /// which also keeps an elongated image's short edge at `max_edge / 2`).
+    /// Default: `asset_paths::DEPLOY_MAX_EDGE` (2400, retina).
     pub max_edge: u32,
     /// Drop EXIF metadata (privacy + ~10-50KB savings). ICC profile is preserved separately.
     pub strip_exif: bool,
@@ -189,6 +191,12 @@ impl ImageCompressionConfig {
             "max_edge": self.max_edge,
             "strip_exif": self.strip_exif,
             "flatten_alpha": true,
+            // Which deploy resize rule produced the cached pixels. 2 =
+            // `deployed_long_edge`'s short-edge floor (2026-09); without it a
+            // cached 2400×104 handscroll base would outlive the rule change.
+            // Every image re-encodes once on the bump; up to 2:1 the output
+            // is the same bytes.
+            "resize_policy": 2,
         })
     }
 }
@@ -1176,17 +1184,16 @@ pub(crate) fn convert_single_image(
         0
     };
     let mut original: Option<image::DynamicImage> = Some(img);
-    let resized = if w.max(h) > config.max_edge {
-        original.as_ref().unwrap().resize(
-            config.max_edge,
-            config.max_edge,
-            image::imageops::FilterType::Lanczos3,
-        )
+    let bound = moss_core::asset_paths::deployed_long_edge(w, h, config.max_edge);
+    let resized = if bound < w.max(h) {
+        original.as_ref().unwrap().resize(bound, bound, image::imageops::FilterType::Lanczos3)
     } else if ladder_len > 0 {
         // Small-but-laddered source (e.g. 2000×1200 under the 2400 cap):
         // the base encodes the unresized pixels, and the original must stay
         // alive for the rung resizes. The clone is bounded — this arm's
-        // images are ≤ max_edge on the long edge, ≤ ~23 MB decoded RGBA.
+        // images are ≤ max_edge on the long edge (≤ ~23 MB decoded RGBA), or
+        // elongated with a short edge under max_edge / 2 and a long one
+        // within WebP's limit (≤ 16383 × 1200, ~79 MB).
         original.as_ref().unwrap().clone()
     } else {
         original.take().unwrap()

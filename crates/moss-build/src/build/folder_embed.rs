@@ -693,6 +693,7 @@ pub fn expand_markers_in_documents(
     dir_overrides: &std::collections::HashMap<String, String>,
     math: bool,
     media_lookup: &crate::build::media::dimensions::MediaDimensionLookup,
+    site_typesetting: Option<&str>,
 ) {
     let has_marker = |d: &ParsedDocument| d.html_content.contains(MARKER_FOLDER_LIST);
     if !documents.iter().any(has_marker) {
@@ -707,7 +708,11 @@ pub fn expand_markers_in_documents(
             .clone()
             .unwrap_or_else(|| documents[i].url_path.clone());
         let lang = documents[i].lang; // hosting page's language, not site default
-        let typesetting = documents[i].typesetting.clone();
+        let typesetting = crate::build::render::config::effective_typesetting(
+            documents[i].typesetting.as_deref(),
+            site_typesetting,
+        )
+        .map(str::to_owned);
         let mut plan = documents[i].body_plan.take();
         // `tag_embed: true` — every marker this scan finds came from a
         // literal body `![[folder/|…]]`, never from `synthesize_children_marker`

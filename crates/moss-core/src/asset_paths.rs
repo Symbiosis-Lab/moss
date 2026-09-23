@@ -207,10 +207,44 @@ pub fn is_webp_source_ext(ext: &str) -> bool {
     ext.eq_ignore_ascii_case("webp")
 }
 
-/// Max edge (px) of any deployed raster. Single source of truth — the encode
-/// pipeline's `ImageCompressionConfig::default()` reads this constant, and the
-/// srcset base-width descriptor caps at it. 2400 covers retina displays.
+/// Long-edge cap (px) of a deployed raster up to 2:1. Single source of truth —
+/// the encode pipeline's `ImageCompressionConfig::default()` reads this
+/// constant, and [`deployed_long_edge`] applies it. 2400 covers retina
+/// displays. A more elongated image may deploy longer: see
+/// [`deployed_long_edge`].
 pub const DEPLOY_MAX_EDGE: u32 = 2400;
+
+/// WebP's hard per-dimension limit: libwebp refuses to encode anything
+/// larger, so no deployed webp may exceed it on either edge.
+pub const WEBP_MAX_DIMENSION: u32 = 16383;
+
+/// The long edge a `natural_w`×`natural_h` source deploys at, under a
+/// long-edge cap of `max_edge` — the one owner of the deploy resize rule.
+///
+/// The long edge is capped at `max_edge`, but the short edge is never
+/// reduced below `max_edge / 2`, the source is never upscaled, and neither
+/// edge exceeds [`WEBP_MAX_DIMENSION`]. As a scale:
+/// `min(1, max(max_edge / long, (max_edge / 2) / short))`, then the WebP clamp.
+///
+/// A long-edge cap alone turned elongated images into strips: a 21969×950
+/// handscroll deployed at 2400×104, useless at any column height (found on a
+/// real vertical-writing site, 2026-09-23); a 1356×5161 hanging scroll at
+/// 631×2400, soft in a horizontal column. `max_edge / 2` is the largest floor
+/// that changes nothing up to 2:1 — at exactly 2:1 the two terms are equal —
+/// so every such image deploys byte-identically to the long-edge-only rule.
+/// `ceil` keeps the encoder's rounded short edge at or above the floor.
+pub fn deployed_long_edge(natural_w: u32, natural_h: u32, max_edge: u32) -> u32 {
+    let long = natural_w.max(natural_h);
+    let short = natural_w.min(natural_h).max(1);
+    let floor = max_edge / 2;
+    let target = if long <= max_edge || short <= floor {
+        long
+    } else {
+        let floored = (u64::from(long) * u64::from(floor)).div_ceil(u64::from(short));
+        max_edge.max(floored as u32)
+    };
+    target.min(long).min(WEBP_MAX_DIMENSION)
+}
 
 /// The responsive ladder: rung widths generated below the deployed base.
 /// Must be strictly ascending — the `take_while` in [`ladder_rungs`] depends on it.
@@ -222,11 +256,11 @@ pub const DEPLOY_MAX_EDGE: u32 = 2400;
 pub const LADDER: [u32; 2] = [800, 1600];
 
 /// Width the deployed base variant actually has after the encoder's
-/// aspect-preserving longest-EDGE resize (`img.resize(max_edge, max_edge,
-/// Lanczos3)` in build/media/image.rs). When the longest edge exceeds
-/// [`DEPLOY_MAX_EDGE`], BOTH dimensions shrink by the same ratio — for
-/// portraits the deployed width is therefore SMALLER than `min(w, 2400)`:
-/// a 3024×4032 portrait deploys at 1800×2400, so its base width is 1800.
+/// aspect-preserving resize to [`deployed_long_edge`] (`img.resize(bound,
+/// bound, Lanczos3)` in build/media/image.rs). BOTH dimensions shrink by the
+/// same ratio — for portraits the deployed width is therefore SMALLER than
+/// the long edge: a 3024×4032 portrait deploys at 1800×2400, so its base
+/// width is 1800.
 ///
 /// Integer math (u64 multiply, truncating divide, floor at 1) mirrors the
 /// image crate's `resize_dimensions` as closely as practical. srcset width
@@ -235,10 +269,11 @@ pub const LADDER: [u32; 2] = [800, 1600];
 /// encode output pins gross agreement.
 pub fn deployed_width(natural_w: u32, natural_h: u32) -> u32 {
     let long_edge = natural_w.max(natural_h);
-    if long_edge <= DEPLOY_MAX_EDGE {
+    let bound = deployed_long_edge(natural_w, natural_h, DEPLOY_MAX_EDGE);
+    if bound >= long_edge {
         return natural_w;
     }
-    ((natural_w as u64 * DEPLOY_MAX_EDGE as u64 / long_edge as u64) as u32).max(1)
+    ((natural_w as u64 * bound as u64 / long_edge as u64) as u32).max(1)
 }
 
 /// Which ladder rungs exist for a source of `natural_w`×`natural_h` px.
@@ -1086,12 +1121,16 @@ mod tests {
         // 3024×4032 portrait: the encoder shrinks the longest EDGE to 2400,
         // so the deployed base is 1800 wide — both rungs still below it.
         assert_eq!(ladder_rungs(3024, 4032, false), &[800, 1600][..]);
-        // Extreme portrait 1179×8000: base width 353 — NO rung is below it,
-        // so the ladder must be empty (a w800 rung would be WIDER than the
-        // base: ladder inversion).
-        assert_eq!(ladder_rungs(1179, 8000, false), &[] as &[u32]);
-        // 1200×3600: base width exactly 800 — strict `<` excludes the 800 rung.
-        assert_eq!(ladder_rungs(1200, 3600, false), &[] as &[u32]);
+        // Extreme portrait 500×20000: the WebP limit binds (16383 tall), base
+        // width 409 — NO rung is below it, so the ladder must be empty (a
+        // w800 rung would be WIDER than the base: ladder inversion).
+        assert_eq!(ladder_rungs(500, 20000, false), &[] as &[u32]);
+        // 800×3000: short edge under the floor, deployed whole — base width
+        // exactly 800, and strict `<` excludes the 800 rung.
+        assert_eq!(ladder_rungs(800, 3000, false), &[] as &[u32]);
+        // 1179×8000 keeps its 1179 short edge (under the 1200 floor), so the
+        // hanging scroll now carries a w800 rung instead of a 353-wide base.
+        assert_eq!(ladder_rungs(1179, 8000, false), &[800][..]);
     }
 
     #[test]
@@ -1107,12 +1146,51 @@ mod tests {
         // Portrait: HEIGHT is the longest edge; width shrinks by the same
         // aspect-preserving ratio the encoder applies.
         assert_eq!(deployed_width(3024, 4032), 1800);
-        assert_eq!(deployed_width(1179, 8000), 353);
-        assert_eq!(deployed_width(1200, 3600), 800);
+        // Past 2:1 the short edge keeps at least max_edge / 2 (below).
+        assert_eq!(deployed_width(1179, 8000), 1179);
+        assert_eq!(deployed_width(1200, 3600), 1200);
         // Square at the cap: untouched.
         assert_eq!(deployed_width(2400, 2400), 2400);
         // Degenerate sliver never collapses to 0.
         assert_eq!(deployed_width(1, 100_000), 1);
+    }
+
+    #[test]
+    fn deployed_long_edge_keeps_the_short_edge_of_an_elongated_image() {
+        let dims = |w: u32, h: u32| {
+            let l = deployed_long_edge(w, h, DEPLOY_MAX_EDGE);
+            let long = w.max(h);
+            (w as u64 * l as u64 / long as u64, h as u64 * l as u64 / long as u64)
+        };
+        // A handscroll: short edge under the floor, so no downscale — until
+        // WebP's 16383 limit binds.
+        assert_eq!(deployed_long_edge(21969, 950, DEPLOY_MAX_EDGE), 16383);
+        assert_eq!(dims(21969, 950), (16383, 708));
+        // 4:1 with a big short edge: shrunk until the short edge is 1200.
+        assert_eq!(dims(6000, 1500), (4800, 1200));
+        // A hanging scroll: `ceil` keeps the short edge at the floor.
+        assert_eq!(deployed_long_edge(1356, 5161, DEPLOY_MAX_EDGE), 4568);
+        assert_eq!(dims(1356, 5161), (1200, 4568));
+        // 3:1, short edge under the floor: deployed whole.
+        assert_eq!(deployed_long_edge(3000, 1000, DEPLOY_MAX_EDGE), 3000);
+        // Never upscaled, and the floor tracks the cap it is given.
+        assert_eq!(deployed_long_edge(500, 100, DEPLOY_MAX_EDGE), 500);
+        assert_eq!(deployed_long_edge(4000, 1000, 1600), 3200);
+    }
+
+    #[test]
+    fn deployed_long_edge_is_the_long_edge_cap_up_to_two_to_one() {
+        // Byte-identical deploys for every image up to 2:1: the long edge is
+        // exactly what the long-edge-only rule gave.
+        for w in (1..=8000u32).step_by(53) {
+            for h in (1..=8000u32).step_by(59) {
+                if w.max(h) > 2 * w.min(h) {
+                    continue;
+                }
+                let old = w.max(h).min(DEPLOY_MAX_EDGE);
+                assert_eq!(deployed_long_edge(w, h, DEPLOY_MAX_EDGE), old, "{w}x{h}");
+            }
+        }
     }
 
     #[test]

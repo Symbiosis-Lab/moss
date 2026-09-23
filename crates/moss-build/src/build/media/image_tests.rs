@@ -687,6 +687,55 @@ fn base_webp_width_matches_deployed_width_within_one_px() {
     }
 }
 
+/// An elongated source keeps its short edge: the base is resized to
+/// `deployed_long_edge`, not to a 2400 long edge, and its width equals the
+/// `deployed_width` the srcset descriptor names. Past WebP's 16383 limit the
+/// long edge clamps there — the encode must succeed, not fail on the limit.
+#[test]
+fn elongated_base_keeps_its_short_edge_and_stays_within_webp_limits() {
+    // max_edge 240 scales the floor case down (floor 120) to keep the encode
+    // cheap; the rule is the same at any cap. 17000×100 is the only proof of
+    // the 16383 clamp, so it runs at the real default.
+    let small = ImageCompressionConfig { max_edge: 240, ..Default::default() };
+    let real = ImageCompressionConfig::default();
+    for (w, hh, cfg, want) in [
+        (300u32, 130u32, &small, (277u32, 120u32)),
+        (300, 30, &small, (300, 30)),
+        (17000, 100, &real, (16383, 96)),
+    ] {
+        let h = harness();
+        let src = h._tmp.path().join("scroll.jpg");
+        make_big_jpeg(&src, w, hh);
+        let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+        let outcome = convert_single_image(
+            &src,
+            &source_oid,
+            "scroll.webp",
+            &h.temp,
+            &h.staging,
+            &h.objects,
+            &h.transforms,
+            cfg,
+            None,
+            None,
+            &HashMap::new(),
+        );
+        assert!(outcome.error.is_none(), "{w}x{hh}: {:?}", outcome.error);
+        let got = staged_webp_dims(&h.staging.join("scroll.webp"));
+        assert_eq!(got, want, "{w}x{hh}");
+        let bound = moss_core::asset_paths::deployed_long_edge(w, hh, cfg.max_edge);
+        assert_eq!(got.0, w * bound / w.max(hh), "{w}x{hh}");
+    }
+}
+
+/// A cache entry written under the long-edge-only rule must miss: its
+/// pixels are the old strip. The params are the transform cache key.
+#[test]
+fn to_params_names_the_resize_policy() {
+    let v = ImageCompressionConfig::default().to_params();
+    assert_eq!(v["resize_policy"], 2);
+}
+
 /// Base-failure promise retraction (review fix): blocking.rs registers
 /// the rung URLs as Pending BEFORE the worker runs; when the BASE
 /// conversion fails, the worker must `set_failed` every registered rung
