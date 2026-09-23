@@ -12,33 +12,7 @@ Markdown 格式是纯文本加上少量符号：`#` 是标题，`**` 是加粗�
 
 ## 基础语法
 
-左边是你写的，右边是青苔渲染的结果：
-
-:::grid 2 {.sc-demo}
-```markdown
-## 小标题
-
-一段普通文字，可以**加粗**或*倾斜*。
-
-- 列表的一项
-- 另一项
-
-> 一段引用。
-
-[一个链接](https://example.com)
-```
-+++
-## 小标题
-
-一段普通文字，可以**加粗**或*倾斜*。
-
-- 列表的一项
-- 另一项
-
-> 一段引用。
-
-[一个链接](https://example.com)
-:::
+在上方的真实编辑器中试试这些语法，直接输入即可。 [▶](#scene=)
 
 需要完整的语法速查，可参考 [Markdown 语法速查表](https://www.markdownguide.org/basic-syntax/)，或 [Obsidian 的基础格式语法](https://help.obsidian.md/syntax)。
 
