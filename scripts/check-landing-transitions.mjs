@@ -48,20 +48,45 @@ for (const name of (process.env.ENGINE || 'chromium,webkit').split(',')) {
       await page.mouse.move(720, 20);
       await page.mouse.down();
       await page.mouse.up();
+      // Each leg is driven by real scroll, a few pixels a frame, not by one
+      // jump to the next rest: a transition is presented by position now, so
+      // a jump shows its last frame on the first one and a wash is never on
+      // screen long enough to be seen.
       for (const scene of [1, 2, 3, 2, 0]) {
         const previous = await page.evaluate(() => window.__landing.state());
         const prior = previous.washes;
-        await page.evaluate(scene => scrollTo(0, window.__landing.restY(scene)), scene);
         // The Publish control stays solid and travels between the preview and the
         // orbit in both directions, so neither leg of that swap is a pigment wash.
         const carriesPublish = Math.min(previous.shown, scene) === 2 && Math.max(previous.shown, scene) === 3;
+        // One wheel tick in the leg's direction says which way the reader is
+        // going (a scrollTo alone never does), then the page goes back to its rest.
+        await page.mouse.wheel(0, Math.sign(scene - previous.shown) * 40);
+        await page.evaluate((from) => scrollTo(0, window.__landing.restY(from)), previous.shown);
+        const seen = await page.evaluate(async (scene) => {
+          const goal = window.__landing.restY(scene), frame = () => new Promise((r) => requestAnimationFrame(r));
+          let y = scrollY, washing = 0, canvas = 0;
+          // A pointer held on the scrollbar is direct manipulation: the carry
+          // spring leaves the page where the scroll puts it, as it would for
+          // a reader dragging the thumb.
+          const hold = (type) => dispatchEvent(new PointerEvent(type, { clientX: 1e5, clientY: 10, pointerType: 'mouse', button: 0 }));
+          hold('pointerdown');
+          while (Math.abs(goal - y) > 0.5) {
+            y += Math.sign(goal - y) * Math.min(12, Math.abs(goal - y));
+            scrollTo(0, Math.round(y));
+            await frame();
+            const stage = document.getElementById('stage'), style = getComputedStyle(document.getElementById('gl'));
+            if (stage.classList.contains('morphing')) {
+              washing++;
+              if (style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0) canvas++;
+            }
+          }
+          hold('pointerup');
+          return { washing, canvas };
+        }, scene);
         if (!carriesPublish) {
-          await page.waitForFunction(prior => window.__landing.state().washes > prior && document.getElementById('stage').classList.contains('morphing'), prior, { timeout: 15000 });
-          const visible = await page.evaluate(() => {
-            const style = getComputedStyle(document.getElementById('gl'));
-            return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0;
-          });
-          assert(visible, `${name}/${locale}: wash ran without a visible canvas`);
+          await page.waitForFunction(prior => window.__landing.state().washes > prior, prior, { timeout: 15000 });
+          assert(seen.washing > 3, `${name}/${locale}: a scroll through the leg to scene ${scene} showed the wash on ${seen.washing} frames`);
+          assert(seen.canvas === seen.washing, `${name}/${locale}: wash ran without a visible canvas on ${seen.washing - seen.canvas} of ${seen.washing} frames`);
         }
         await page.waitForFunction(scene => {
           const state = window.__landing.state();

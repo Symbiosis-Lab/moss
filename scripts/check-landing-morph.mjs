@@ -71,15 +71,21 @@ const SCENES = ['write', 'live', 'ships', 'deploy', 'share'];
 const LEGS = [[0, 1], [1, 2], [2, 3], [3, 4]];
 const WASH_LEG = [true, true, true, false];
 const GRID = { cols: 6, rows: 4 };
-// The source clause's own, finer grid: a member missing from the print (a
-// purple field, a logo) is a cell or two, and a coarse mean hides it.
-const SRC_GRID = { cols: 16, rows: 12 };
+
 const CHECKPOINTS = [0, 0.05, 0.1, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.6, 0.65, 0.7, 0.75, 0.8, 0.9, 0.95, 1];
-const FILM_POINTS = [0, 0.2, 0.35, 0.5, 0.65, 0.8, 1];
+const FILM_POINTS = [0, 0.05, 0.2, 0.35, 0.5, 0.65, 0.8, 1];
 const COVER_POINTS = [0.3, 0.4, 0.5, 0.6, 0.7];
 
 // Provisional -- stated per the brief, not tuned to make anything pass.
-const THRESH = { fidelityDE: 12, sourceCellDE: 30 };
+const THRESH = { fidelityDE: 12 };
+// cell: the side of a source cell in screen pixels, so the phone's smaller
+// composition is judged at the same size of detail as the desktop's; radius:
+// how many cells away a cell's ink may have moved by p = 0.05, 26 steps into
+// the film, which spreads a sharp edge by 20 px and more (measured: the worst
+// neighbourhood deltaE 28 on desktop and 24 on the phone at this size and
+// radius, against 60 and more where a stale print held a different frame).
+// A member too small for a cell this size, a logo, is clause 1b's.
+const SRC = { cell: 24, radius: 2, de: 40, chroma: 12, keep: 0.35, hue: 40, memberDE: 12, memberAlpha: 0.5 };
 
 // The three-phase model (site/watercolor-morph.js; the owner's definition of
 // a scene transition): A dissolves alone into a well-mixed wash by p = a,
@@ -206,7 +212,7 @@ function decodeAndReduce({ b64, cols, rows }) {
   });
 }
 
-function namesGridBrowser({ rect, cols, rows }) {
+function namesGridBrowser({ rect, cols, rows, stageOnly = false }) {
   const out = [];
   for (let ry = 0; ry < rows; ry++) {
     for (let rx = 0; rx < cols; rx++) {
@@ -218,10 +224,60 @@ function namesGridBrowser({ rect, cols, rows }) {
         const withId = el.id ? el : el.closest('[id]');
         name = withId ? '#' + withId.id : el.tagName.toLowerCase();
       }
-      out.push(name);
+      // null for a cell whose centre is outside the composition's own box
+      // (the page around it), when only the composition is asked for; hit
+      // testing cannot say this, since the canvas and much of the stage take
+      // no pointer.
+      const st = document.getElementById('stage').getBoundingClientRect();
+      const inside = cx >= st.left && cx <= st.right && cy >= st.top && cy <= st.bottom;
+      out.push(stageOnly && !inside ? null : name || '#stage');
     }
   }
   return out;
+}
+
+// The members of the scene a leg leaves -- scene 3's cards, scene 4's
+// targets -- as boxes in the reference screenshot's own pixels.
+function memberBoxesBrowser({ from, rect }) {
+  const els = from === 2 ? ['#sib-nb', '#sib-sk', '#s3-video'].map((q) => document.querySelector(q)) : from === 3 ? [...document.querySelectorAll('#fan > *')] : [];
+  return els.filter(Boolean).map((el, i) => {
+    const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+    const x0 = Math.max(0, r.left - rect.x), y0 = Math.max(0, r.top - rect.y), x1 = Math.min(rect.width, r.right - rect.x), y1 = Math.min(rect.height, r.bottom - rect.y);
+    const label = el.querySelector('img')?.alt || el.getAttribute('aria-label') || '';
+    return { name: el.id ? '#' + el.id : `#fan > :nth-child(${i + 1})${label ? ` (${label})` : ''}`, x: x0, y: y0, w: x1 - x0, h: y1 - y0,
+      shown: cs.visibility !== 'hidden' && +cs.opacity > 0.05 };
+  }).filter((b) => b.shown && b.w > 4 && b.h > 4);
+}
+
+// Each member's box, as the live reference showed it and as the print the
+// leg carries holds it: mean colour of each (the print over the page colour)
+// and the print's own ink cover there.
+function memberPrintBrowser({ boxes, rect, b64, from }) {
+  return new Promise((res) => {
+    const img = new Image();
+    img.onload = () => {
+      const ref = document.createElement('canvas'); ref.width = img.naturalWidth; ref.height = img.naturalHeight;
+      const rg = ref.getContext('2d', { willReadFrequently: true }); rg.drawImage(img, 0, 0);
+      // the leaving scene's print: a phone leg is mounted lower to upper
+      // whichever way it is travelled
+      const cur = window.__landing.morph.current(), print = cur && (cur.tag?.from === from ? cur.a : cur.b);
+      if (!print) { res(null); return; }
+      const pg = print.getContext('2d', { willReadFrequently: true });
+      const hex = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(), n = parseInt(hex.slice(1), 16), bg = [n >> 16, (n >> 8) & 255, n & 255];
+      const mean = (g, x, y, w, h, over) => {
+        const d = g.getImageData(Math.round(x), Math.round(y), Math.max(1, Math.round(w)), Math.max(1, Math.round(h))).data, m = [0, 0, 0]; let a = 0;
+        for (let i = 0; i < d.length; i += 4) { const al = over ? d[i + 3] / 255 : 1; a += al; for (let c = 0; c < 3; c++) m[c] += d[i + c] * al + (over ? bg[c] * (1 - al) : 0); }
+        const k = d.length / 4; return { rgb: m.map((v) => v / k), alpha: a / k };
+      };
+      res(boxes.map((b) => {
+        const kx = print.width / printRect.w, sx = rect.width / ref.width;
+        const px = (b.x * GEOM.cellW / rect.width - printRect.x) * kx, py = (b.y * GEOM.cellW / rect.width - printRect.y) * kx;
+        const pw = b.w * GEOM.cellW / rect.width * kx, ph = b.h * GEOM.cellW / rect.width * kx;
+        return { name: b.name, live: mean(rg, b.x / sx, b.y / sx, b.w / sx, b.h / sx, false).rgb, print: mean(pg, px, py, pw, ph, true) };
+      }));
+    };
+    img.src = 'data:image/png;base64,' + b64;
+  });
 }
 
 function memberCheckBrowser(members) {
@@ -336,18 +392,18 @@ async function cellRect(page, wash) {
   });
 }
 
-async function captureGrid(page, rect, grid = GRID) {
+async function captureGrid(page, rect, fineGrid = null) {
   const clip = { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
   const buf = await page.screenshot({ clip });
   const b64 = buf.toString('base64');
-  const reduced = await page.evaluate(decodeAndReduce, { b64, cols: grid.cols, rows: grid.rows });
+  const reduced = await page.evaluate(decodeAndReduce, { b64, cols: GRID.cols, rows: GRID.rows });
   // The source clause's finer cells, from the same screenshot.
-  const fine = grid === GRID ? (await page.evaluate(decodeAndReduce, { b64, cols: SRC_GRID.cols, rows: SRC_GRID.rows })).cells : null;
-  return { ...reduced, fine, buf, rect };
+  const fine = fineGrid ? (await page.evaluate(decodeAndReduce, { b64, cols: fineGrid.cols, rows: fineGrid.rows })).cells : null;
+  return { ...reduced, fine, fineGrid, buf, rect };
 }
 
-async function namesGrid(page, rect, grid = GRID) {
-  return page.evaluate(namesGridBrowser, { rect, cols: grid.cols, rows: grid.rows });
+async function namesGrid(page, rect, grid = GRID, stageOnly = false) {
+  return page.evaluate(namesGridBrowser, { rect, cols: grid.cols, rows: grid.rows, stageOnly });
 }
 
 async function saveFilm(dir, legLabel, layout, engine, p, buf) {
@@ -376,27 +432,36 @@ async function runLegDirection(page, { legIdx, from, to, wash, layout, engine, f
 
   await page.evaluate((from) => { window.__landing.still(from); scrollTo(0, window.__landing.restY(from)); }, from);
   await settleFrames(page, 3);
-  const rectFrom = await cellRect(page, wash);
-  const refFrom = await captureGrid(page, rectFrom);
-  const refFromNames = await namesGrid(page, rectFrom);
-  const refFromFineNames = await namesGrid(page, rectFrom, SRC_GRID);
-  if (FILM_POINTS.includes(0)) await saveFilm(filmDir, legLabel, layout, engine, 0, refFrom.buf);
 
-  // Desktop's watchScrollDesktop reads `travel` (the last wheel/pointer
-  // direction) to disambiguate an in-between scroll position into the scene
-  // ahead or behind (restSceneAt's dir<0?floor:ceil, DEAD-widened) -- a
-  // plain scrollTo() write never sets `travel` itself (only a real wheel
-  // event or a held pointer gesture do; watchScrollDesktop only reads it),
-  // so without ever dispatching one the page falls back to dir===0's
-  // round-to-nearest and never starts a wash before the reader crosses the
-  // exact midpoint between the two scenes. Mobile has no such gap --
-  // watchScrollNative sets travel from the raw scrollY delta itself, which
-  // is why this is desktop-only. Found live in this leg: a scrollTo-only
-  // version of this script (no wheel tick at all) read meanDE=0 at p=0.05,
-  // i.e. no wash had started. One real wheel tick, in the leg's own
-  // direction, seeds `travel`; the position it leaves scrollY at is then
-  // overwritten back to restY(from) so the tick's own 1:1 push (if any)
-  // does not shift where the checkpoint loop starts from.
+  // What moves on its own is stopped before the reference is taken, as the
+  // leg stops it at its start, so the two are of one instant: the field and
+  // the sketch and the video paused, scene 4's targets held. A print holding
+  // the frame from boot, not this one, still fails. Scene 4's targets pop
+  // out one by one after the scene stands; they are waited for, so a print
+  // missing them has something to be missing.
+  if (from === DEPLOY) await page.waitForFunction(() => orbitNodes?.length && !orbitStartPromise && orbitNodes.every((n) => n.popAt && performance.now() - n.popAt > 800), null, { timeout: 20000 }).catch(() => {});
+  // Held stopped for the whole leg: the wheel tick that tells desktop the
+  // leg's direction can start a leg the checkpoint walk then restarts, and
+  // the scene shown again in between would set its media running, so the
+  // reference and the print would be of different moments. The page's own
+  // switches are stood in for until the leg is over (thawMotion below).
+  await page.evaluate(() => {
+    sketchVisible(false); videoActive(false); orbitSim?.stop();
+    window.__frozen = { sketchVisible, videoActive, restart: orbitSim?.restart };
+    window.sketchVisible = () => {}; window.videoActive = () => {};
+    if (orbitSim) orbitSim.restart = () => orbitSim;
+  });
+  await settleFrames(page, 3);
+  const rectFrom = await cellRect(page, wash);
+  const srcGrid = { cols: Math.round(rectFrom.width / SRC.cell), rows: Math.round(rectFrom.height / SRC.cell) };
+  const refFrom = await captureGrid(page, rectFrom, srcGrid);
+  const refFromNames = await namesGrid(page, rectFrom);
+  const refFromFineNames = await namesGrid(page, rectFrom, srcGrid, true);
+  const memberBoxes = wash ? await page.evaluate(memberBoxesBrowser, { from, rect: rectFrom }) : [];
+  if (FILM_POINTS.includes(0)) await saveFilm(filmDir, legLabel, layout, engine, 0, refFrom.buf);
+  // Desktop's watchScrollDesktop reads the reader's direction off a wheel
+  // tick, so one real tick in the leg's own direction starts the leg; the
+  // page is put back at its rest after it, so the walk starts from there.
   if (isDesktop) {
     await page.mouse.wheel(0, dir * 40);
     await page.evaluate((from) => scrollTo(0, window.__landing.restY(from)), from);
@@ -429,7 +494,10 @@ async function runLegDirection(page, { legIdx, from, to, wash, layout, engine, f
     const q = await pAt();
     if (!first) { if (q > 0.004) first = [curY, q]; } else if (q > 0.03) second = [curY, q];
   }
-  const slope = second ? (second[1] - first[1]) / (second[0] - first[0]) : 1 / (yTo - yFrom);
+  const measured = second ? (second[1] - first[1]) / (second[0] - first[0]) : 0;
+  // A slope of the wrong sign or none (the page carried past the ramp before
+  // it was measured) would send the walk the wrong way, or to infinity.
+  const slope = Number.isFinite(measured) && measured * (yTo - yFrom) > 0 ? measured : 1 / (yTo - yFrom);
   for (const p of CHECKPOINTS) {
     if (p === 0) continue;
     if (p === 1) curY = await tickScrollTo(page, curY, yTo);
@@ -439,8 +507,18 @@ async function runLegDirection(page, { legIdx, from, to, wash, layout, engine, f
       curY = await tickScrollTo(page, curY, Math.round(curY + err / slope), i ? { tick: 60, gapMs: 8 } : undefined);
     }
     await settleFrames(page, 1);
+    // The frame read must be this position's: a leg still recording a
+    // dissolve (a slow software GPU, the page's first leg) presents late, or
+    // the furthest it has, and asks to be rendered again.
+    if (wash) for (let i = 0; i < 60; i++) {
+      const ok = await page.evaluate(([from, to]) => { const c = window.__landing.morph?.current?.(), q = (window.__landing.state().progress - from) / (to - from);
+        return !c || (c.exact !== false && Math.abs((c.tag?.from === from ? c.p : 1 - c.p) - Math.min(1, Math.max(0, q))) < 0.01); }, [from, to]);
+      if (ok) break;
+      await settleFrames(page, 1);
+    }
     const rect = wash ? await cellRect(page, wash) : rectTo;
-    const shot = await captureGrid(page, rect);
+    const shot = await captureGrid(page, rect, p === 0.05 ? srcGrid : null);
+    if (p === 0.05 && memberBoxes.length) shot.memberPrint = await page.evaluate(memberPrintBrowser, { boxes: memberBoxes, rect: rectFrom, b64: refFrom.buf.toString('base64'), from });
     const st = await page.evaluate(() => window.__landing.state());
     shot.achievedP = (st.progress - from) / (to - from);
     shot.steps = st.steps; shot.washT = st.washT;
@@ -464,6 +542,12 @@ async function runLegDirection(page, { legIdx, from, to, wash, layout, engine, f
       }
     }
     if (p === 1) {
+      await page.evaluate(() => {
+        const f = window.__frozen; if (!f) return;
+        window.sketchVisible = f.sketchVisible; window.videoActive = f.videoActive;
+        if (orbitSim && f.restart) orbitSim.restart = f.restart;
+        delete window.__frozen;
+      });
       shot.arrived = await page.evaluate(() => window.__landing.state().shown);
       if (isDesktop) await page.evaluate(() => dispatchEvent(new PointerEvent('pointerup', { clientX: 1e5, clientY: 10, pointerType: 'mouse', button: 0 })));
       if (wash) {
@@ -477,7 +561,7 @@ async function runLegDirection(page, { legIdx, from, to, wash, layout, engine, f
     samples[p] = shot;
   }
 
-  return judge({ legIdx, from, to, dir, wash, layout, engine, refFrom, refTo, refFromNames, refFromFineNames, refToNames, samples, prints, bounds });
+  return judge({ legIdx, from, to, dir, wash, layout, engine, refFrom, refTo, refFromNames, refFromFineNames, refToNames, samples, prints, bounds, srcGrid });
 }
 
 function worstCells(refCells, sampleCells, names) {
@@ -492,16 +576,54 @@ function judge(ctx) {
   const { legIdx, from, to, wash, layout, engine, refFrom, refTo, refToNames, samples } = ctx;
   const clauses = {};
 
-  // Clause 1: source fidelity at p~=0.05, cell by cell and in colour: every
-  // one of SRC_GRID's cells within sourceCellDE of the live scene it started
-  // from. A dissolve 26 steps in has moved its ink by a few pixels; a member
-  // missing from the print (the notebook's purple field, a logo) leaves its
-  // cells a different colour altogether, and the worst of them are named.
+  // Clause 1: source fidelity at p~=0.05, cell by cell and in colour. By
+  // then the dissolve has moved the ink (26 steps: a few pixels on desktop,
+  // a cell or more on the phone's coarser grid), so a cell is judged against
+  // its own neighbourhood in the dissolving frame: a coloured cell of the
+  // live scene (chroma at least SRC.chroma) needs a neighbour still carrying
+  // that hue (within SRC.hue degrees) at SRC.keep of its chroma, and every
+  // cell a neighbour within SRC.de. A member missing from the print (the
+  // notebook's purple field, a logo, a black sketch) leaves no such
+  // neighbour, and the worst cells are named by the element under them.
   {
-    const de = refFrom.fine.map((c, i) => deltaE(cellLab(c), cellLab(samples[0.05].fine[i])));
-    const order = [...de.keys()].sort((a, b) => de[b] - de[a]);
-    const worst = order.slice(0, 3).map((i) => ({ col: i % SRC_GRID.cols, row: Math.floor(i / SRC_GRID.cols), dE: +de[i].toFixed(1), element: ctx.refFromFineNames[i] }));
-    clauses.source = { p: 0.05, worstDE: worst[0].dE, meanDE: +meanOf(de).toFixed(2), pass: de.every((v) => v <= THRESH.sourceCellDE), worst };
+    const ref = refFrom.fine.map(cellLab), got = samples[0.05].fine.map(cellLab);
+    const hue = (l) => Math.atan2(l.b, l.a) * 180 / Math.PI;
+    const G = ctx.srcGrid, R = SRC.radius;
+    const near = (i) => { const c = i % G.cols, r = Math.floor(i / G.cols), out = [];
+      for (let dr = -R; dr <= R; dr++) for (let dc = -R; dc <= R; dc++) { const cc = c + dc, rr = r + dr; if (cc >= 0 && rr >= 0 && cc < G.cols && rr < G.rows) out.push(got[rr * G.cols + cc]); }
+      return out; };
+    const refNear = (i) => { const c = i % G.cols, r = Math.floor(i / G.cols), out = [];
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) { const cc = c + dc, rr = r + dr; if (cc >= 0 && rr >= 0 && cc < G.cols && rr < G.rows) out.push(ref[rr * G.cols + cc]); }
+      return out; };
+    const bad = [];
+    let maxNearDE = 0;
+    ref.forEach((l, i) => {
+      if (!ctx.refFromFineNames[i]) return;
+      const ns = near(i), de = Math.min(...ns.map((n) => deltaE(l, n)));
+      maxNearDE = Math.max(maxNearDE, de);
+      let why = de > SRC.de ? `deltaE ${de.toFixed(1)}` : null;
+      const sameHue = (n) => chroma(n) >= SRC.keep * chroma(l) && Math.abs(((hue(n) - hue(l) + 540) % 360) - 180) <= SRC.hue;
+      // a colour field, not a speck: a colour held by a single cell (a logo's
+      // mark) may dissolve by 26 steps, and is clause 1b's to judge
+      const field = refNear(i).filter((n) => n !== l && chroma(n) >= SRC.chroma && sameHue(n)).length >= 2;
+      if (!why && chroma(l) >= SRC.chroma && field && !ns.some(sameHue)) why = `hue ${hue(l).toFixed(0)} at chroma ${chroma(l).toFixed(0)} gone`;
+      if (why) bad.push({ col: i % G.cols, row: Math.floor(i / G.cols), why, element: ctx.refFromFineNames[i] });
+    });
+    clauses.source = { p: 0.05, cells: ctx.refFromFineNames.filter(Boolean).length, bad: bad.length, maxNearDE: +maxNearDE.toFixed(1), worst: bad.slice(0, 4), pass: bad.length === 0 };
+  }
+
+  // Clause 1b: each member of the scene being left is in the print the leg
+  // carries, as it stood: its box's mean colour in the print within
+  // SRC.memberDE of the live reference's, and (a target, a card) ink covering
+  // at least SRC.memberAlpha of it. This is what a stale or missing member
+  // fails, by name, however small it is in the composition.
+  {
+    const got = samples[0.05]?.memberPrint;
+    if (got) {
+      const bad = got.map((m) => ({ element: m.name, dE: +deltaE(cellLab({ r: m.live[0], g: m.live[1], b: m.live[2] }), cellLab({ r: m.print.rgb[0], g: m.print.rgb[1], b: m.print.rgb[2] })).toFixed(1), alpha: +m.print.alpha.toFixed(2) }))
+        .filter((m) => m.dE > SRC.memberDE || m.alpha < SRC.memberAlpha);
+      clauses.members = { count: got.length, bad, pass: bad.length === 0 };
+    }
   }
 
   // (Retired 2026-09-23: clause 2, mid-wash chroma and darkness at p = 0.4 to
@@ -817,7 +939,8 @@ function fmtClause(c) { return c.pass ? 'PASS' : 'FAIL'; }
 function printRow(r) {
   const label = `${r.fromIdx}->${r.toIdx} (${r.from}->${r.to})`;
   console.log(`${r.layout}/${r.engine} ${label}`);
-  console.log(`  1 source  p=0.05  worst cell deltaE=${r.clauses.source.worstDE} (mean ${r.clauses.source.meanDE})  ${fmtClause(r.clauses.source)}${r.clauses.source.pass ? '' : '  worst=' + JSON.stringify(r.clauses.source.worst)}`);
+  console.log(`  1 source  p=0.05  ${r.clauses.source.bad} of ${r.clauses.source.cells} cells off (worst neighbourhood deltaE ${r.clauses.source.maxNearDE})  ${fmtClause(r.clauses.source)}${r.clauses.source.pass ? '' : '  worst=' + JSON.stringify(r.clauses.source.worst)}`);
+  if (r.clauses.members) console.log(`  1b members  ${r.clauses.members.count} in the print  ${fmtClause(r.clauses.members)}${r.clauses.members.pass ? '' : '  bad=' + JSON.stringify(r.clauses.members.bad.slice(0, 4))}`);
   console.log(`  4 leftBehind  ${fmtClause(r.clauses.leftBehind)}${r.clauses.leftBehind.flags.length ? '  flags=' + JSON.stringify(r.clauses.leftBehind.flags.slice(0, 4)) : ''}`);
   console.log(`  5 target  p=0.95  meanDE=${r.clauses.target.meanDE}  ${fmtClause(r.clauses.target)}${r.clauses.target.pass ? '' : '  worst=' + JSON.stringify(r.clauses.target.worst)}`);
   if (!r.wash) return;

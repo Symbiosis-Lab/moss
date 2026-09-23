@@ -210,6 +210,31 @@
     return { ok: true, canvas: cv };
   }
 
+  // The frame on screen now, read in this task, for a caller that cannot
+  // wait for a decode: a transition starting on the frame the reader scrolls
+  // in. A 2D canvas and a decoded video frame are read as they stand (a
+  // paused one is exactly what is on screen); a WebGL canvas is redrawn by
+  // its own mossCaptureFrame and read in the same task, before the browser
+  // may clear its drawing buffer. Anything else declines, as every painter
+  // here does, rather than hand back a blank.
+  function frameNow(el, w, h) {
+    if (!el) return { ok: false, reason: 'no element' };
+    const cv = offscreen(w, h), g = cv.getContext('2d');
+    try {
+      if (el.tagName === 'VIDEO') {
+        if (el.readyState < 2 || !el.videoWidth) return { ok: false, reason: 'video has no decoded frame' };
+      } else if (el.tagName === 'CANVAS') {
+        // getContext of the kind a canvas does not hold returns null and creates nothing
+        if (!el.getContext('2d')) {
+          if (typeof el.mossCaptureFrame !== 'function') return { ok: false, reason: 'webgl canvas has no mossCaptureFrame hook' };
+          el.mossCaptureFrame();
+        }
+      } else return { ok: false, reason: 'no synchronous read for ' + el.tagName };
+      g.drawImage(el, 0, 0, cv.width, cv.height);
+    } catch (e) { return { ok: false, reason: 'frame unreadable: ' + e.message }; }
+    return { ok: true, canvas: cv };
+  }
+
   const painters = { img: paintImg, canvas2d: paintCanvas2d, webgl: paintWebgl, video: paintVideo, svg: paintSvg, iframe: paintIframe, box: paintBox };
 
   // Kind is read from data-capture-kind when a caller sets it (the fixture
@@ -278,5 +303,5 @@
     }
   }
 
-  global.WatercolorCapture = { painters, classify, capture, compositeOnto };
+  global.WatercolorCapture = { painters, classify, capture, compositeOnto, frameNow };
 })(window);

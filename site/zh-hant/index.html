@@ -163,29 +163,22 @@
   #stage[data-scene="0"] #ed, #stage[data-scene="1"] #sh, #stage[data-scene="2"] #vd, #stage[data-scene="3"] #vd { visibility: visible; }
   /* The three layers behind the preview's own edge: similar-sized sheets,
      slightly offset so they read as a stack rather than a hero with two
-     cards peeking from its sides. They arrive by fading in place — transform
-     and opacity, nothing else — and settle at their own stagger off the
-     preview's rect. Their own content takes no pointer — grabbing the card
+     cards peeking from its sides. They arrive and leave under a
+     transition's print, as its members, not on a fade of their own. Their
+     own content takes no pointer — grabbing the card
      is the only gesture offered — so it always lands on the wrapper, which
      is what makes the wrapper draggable at all: a pointer that started on
      the iframe/img inside would never reach this page's JS. */
   .sib { position: absolute; left: -32px; top: 0; width: calc(100% + 32px); height: 100%;
     background: var(--bg); border-radius: var(--win-r); box-shadow: var(--sheet-shadow); overflow: hidden; touch-action: none; transform-origin: 0 0;
-    pointer-events: none; opacity: 0; z-index: 1; transition: transform var(--sib-ms) ease-out, opacity var(--sib-ms) ease-out; }
+    pointer-events: none; opacity: 0; z-index: 1; }
   /* only scene 3's own layers are ever a drag target — elsewhere they are
      furniture the wheel and the pointer both pass straight through */
   #stage[data-scene="2"] .sib { pointer-events: auto; }
   .sib iframe, .sib img { position: absolute; top: 0; left: 0; height: 100%; width: 100%; border: 0; display: block; pointer-events: none; }
   /* the notebook's own baked WebP, which is what its first moment paints anyway */
   .sib img { object-fit: cover; object-position: center; background: var(--bg); }
-  #stage[data-scene="2"]:not(.morphing) .sib { opacity: 1; }
-  /* in, the notebook leads; out, the same two in reverse — the app-chrome and
-     shell layers are hidden under #box either way, so they need no stagger */
-  #sib-sk { transition-delay: 0s; }
-  #sib-nb { transition-delay: var(--sib-stagger); }
-  #stage[data-scene="2"]:not(.morphing) #sib-nb { transition-delay: var(--sib-lead); }
-  #stage[data-scene="2"]:not(.morphing) #sib-sk { transition-delay: calc(var(--sib-lead) + var(--sib-stagger)); }
-  @media (prefers-reduced-motion: reduce) { .sib { transition: none; transition-delay: 0s; } }
+  #stage[data-scene="2"] .sib { opacity: 1; }
 
   /* One preview layer; every movable artifact sits above the whole window. */
   #stage[data-scene="2"] #box { left: 120px; right: auto; top: 30px; width: 540px; height: 560px; background: transparent; border-radius: var(--win-r); box-shadow: 0 0 0 1px rgba(44,40,37,.22), 0 20px 52px #28251c26; z-index: 9; pointer-events: none; }
@@ -197,7 +190,7 @@
   #stage[data-scene="2"] [data-asset].s3-drag { outline: none; cursor: grabbing; transition: none; box-shadow: var(--sheet-shadow); }
   #stage[data-scene="2"]:not(.s3-ready) #box { visibility: hidden; }
   #s3-video { position: absolute; left: 0; top: 0; width: 400px; height: 300px; overflow: hidden; border-radius: 3px; box-shadow: var(--sheet-shadow); background: #111; opacity: 0; pointer-events: none; touch-action: none; transform-origin: 0 0; z-index: 5; }
-  #stage[data-scene="2"]:not(.morphing) #s3-video { opacity: 1; pointer-events: auto; }
+  #stage[data-scene="2"] #s3-video { opacity: 1; pointer-events: auto; }
   #s3-video video { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
 
   /* ── Scene 4: the control alone, and the targets that orbit it ──────────── */
@@ -294,10 +287,11 @@
   #stage.mobile-handoff #gl { display: block; z-index: 100; opacity: var(--wash-cover, 0); }
   #stage.mobile-handoff #cell > :not(#gl) { filter: opacity(calc(1 - var(--wash-cover, 0))); }
   #publish-bridge { position: absolute; z-index: 110; pointer-events: none; transform-origin: center; }
-  /* The fan sits above the wash while it is interactive. On departure its
-     return animation starts before data-scene changes, so without this shared
-     lifecycle guard the circles cross the watercolor for several frames. */
-  #stage.morphing #fan { visibility: hidden; }
+  /* Membership, not animation (site/watercolor-morph.js): an element a
+     transition's print carries is either live or it is that print on the
+     canvas, never half of each. visibility, not opacity, because visibility
+     cannot be transitioned into a second, unsynchronised fade. */
+  .wash-member { visibility: hidden !important; transition: none !important; }
   #stage.live .plate { visibility: hidden; }
   /* an explicit visible on a child beats a hidden parent, so the morph hides the frames themselves */
   #stage.morphing #box iframe { visibility: hidden; }

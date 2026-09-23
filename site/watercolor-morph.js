@@ -24,13 +24,22 @@
 // other end is the same leg: A to B at p shows what B to A shows at 1 - p. The
 // middle gets the smaller share because nothing structural happens in it.
 //
+// Membership: whatever a print carries of an element that stays in the page
+// (a card, a video, the logos) is a member of the leg, and the live element
+// is hidden, by one class, from the frame after the canvas first shows the
+// print that holds it until the leg lets go of it: never half live and half
+// print, and never a frame with neither. An element its scene could not
+// capture is not in the print, so it cannot hide behind it: it fades itself
+// out with its own scene's phase instead (in over B's), never a pop.
+//
 // The engine is makeSim's instance (landing.js): recordDissolve, advanceRecord,
-// seek, disposeRecord, setPrints, holds and present. This file owns the model
-// and the cache, nothing about scenes, scroll or the DOM.
+// seek, disposeRecord, setPrints, holds and present. This file owns the model,
+// the cache and the members' visibility; nothing about scenes or scroll.
 (function (global) {
   'use strict';
   const A_END = 0.35, B_START = 0.65;
   const smoothstep = (x) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
+  const MEMBER = 'wash-member';
 
   // Where p falls: which step of which dissolve to show, or in the middle
   // which two washes to mix and by how much. A dissolve is N steps from the
@@ -62,6 +71,24 @@
       return rec;
     };
     let current = null;
+    // The members of the leg on screen: shown again, and any fade undone.
+    const release = () => {
+      if (!current) return;
+      cancelAnimationFrame(current.hiding);
+      for (const m of current.members) { m.el.classList.remove(MEMBER); m.el.style.opacity = ''; }
+      current.hidden = false; current.hiding = 0;
+    };
+    // Called with every frame presented: members hide while the canvas shows
+    // the leg between its ends, and only once it has shown it for a frame.
+    const showMembers = (leg, p) => {
+      if (!(p > 0 && p < 1)) { release(); return; }
+      if (!leg.hidden && !leg.hiding) leg.hiding = requestAnimationFrame(() => {
+        leg.hiding = 0; if (current !== leg) return;
+        for (const m of leg.members) if (m.captured) m.el.classList.add(MEMBER);
+        leg.hidden = true;
+      });
+      for (const m of leg.members) if (!m.captured) m.el.style.opacity = String(m.side === 'a' ? 1 - smoothstep(p / A_END) : smoothstep((p - B_START) / (1 - B_START)));
+    };
     return {
       steps, every, A_END, B_START,
       // Records a print's dissolve to the end now, if it is not already on
@@ -82,12 +109,15 @@
       },
       // Mounts the leg from print a to print b: both are held for display
       // and their dissolves are recorded as the leg is rendered. `tag` is the
-      // caller's name for the leg, handed back by current().
-      leg(a, b, tag = null) {
+      // caller's name for the leg, handed back by current(). `members`:
+      // [{ el, side: 'a' | 'b', captured }], the live elements whose pixels
+      // each print carries (captured) or should have and does not.
+      leg(a, b, tag = null, members = []) {
         engine.setPrints(a, b);
+        release();
         current = null;
         const ra = recordFor(a), rb = recordFor(b);
-        const leg = current = { a, b, ra, rb, tag, p: -1, exact: true };
+        const leg = current = { a, b, ra, rb, tag, p: -1, exact: true, members, hidden: false, hiding: 0 };
         return {
           // Presents p, spending at most `budget` steps recording a dissolve
           // this leg still lacks (a's first: it is the one shown first), plus
@@ -114,17 +144,19 @@
             if (f0[1] % every) spent += engine.seek(rec[f0[0]], f0[1]);
             engine.present(frame(f0), frame(f1), exact ? at.w : 0);
             leg.p = p; leg.exact = exact;
+            showMembers(leg, p);
             return { spent, exact };
           },
         };
       },
-      // The leg is off screen: its records may be released like any other.
-      end() { current = null; },
+      // The leg is off screen: its members are live again, and its records
+      // may be released like any other.
+      end() { release(); current = null; },
       // For the harness: the leg on screen, the p it last presented, whether
       // that frame was exactly p's, its prints and tag.
       current: () => current && { p: current.p, exact: current.exact, a: current.a, b: current.b, tag: current.tag },
     };
   }
 
-  global.WatercolorMorph = { create, frameAt, A_END, B_START };
+  global.WatercolorMorph = { create, frameAt, A_END, B_START, MEMBER };
 })(window);

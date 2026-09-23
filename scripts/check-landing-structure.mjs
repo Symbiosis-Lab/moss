@@ -77,7 +77,9 @@ const BASELINE = {
   // formula inside pour() were dead the moment mobile stopped calling it --
   // 4 of this count's own `to === DEPLOY`/`from === DEPLOY` comparisons,
   // deleted with them rather than left to read as live.
-  sceneComparisons: 11,
+  // Fell 11 -> 9 (2026-09-23): pour() and mountLeg() no longer special-case
+  // scene 3 for a retake; memberPrint reads every leg's members the same way.
+  sceneComparisons: 9,
   // Unit 0a: rose again -- the mobile header band's fix (one shared
   // body::before band interpolating colour through --xf instead of two
   // separate .brand/.language-picker background boxes) added net new
@@ -115,7 +117,9 @@ const BASELINE = {
   // comment explaining why this page repeats what the docs template
   // already declares -- real markup, not bloat.
   // 54990 -> 55034 (2026-09-23): measured -- one <script src="watercolor-morph.js"> tag.
-  htmlBytes: 55034,
+  // 55034 -> 54436 (2026-09-23): the siblings' and the video's own fade ramps
+  // and their four delays gave way to one membership class.
+  htmlBytes: 54436,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a
@@ -231,7 +235,8 @@ const BASELINE = {
   // plus its own explanatory comment, not bloat.
   // 278771 -> 286090 (2026-09-23): measured, set after correctness -- the three-phase transition's engine half (dissolve recorder, mass fixer, SHOWK/FIX), net of pour()'s deleted clock and the sheen floor.
   // 286090 -> 289151 (2026-09-23): measured -- the dissolve shown as the real film, replayed from checkpoints (seek, checkpoint save/load, the mass fixer's interpolation), net of the stored-frame bookkeeping it replaced.
-  scriptBytes: 289151,
+  // 289151 -> 295117 (2026-09-23): measured -- membership (memberPrint, artifactNow, a recomposable scene 3 print, deployPrint's two halves, the members' hide and fade in watercolor-morph.js's caller), the fixer read every 6 steps, and the warmer kept off a capture in flight.
+  scriptBytes: 295117,
 };
 
 function countWindowAssignments(text) {

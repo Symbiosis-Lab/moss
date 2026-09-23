@@ -53,11 +53,10 @@ const SPILL = 32;
 // or drag past that edge — sized once as a sibling's peek, kept now as the
 // original card layout, so the composition's
 // own width (VIS_W, PAGE_MAX below) never has to move for scene 3's redesign.
-// SIB_MS/STAGGER/LEAD still pace the two background layers' own fade-in on
-// arrival — unrelated to any drag, kept exactly as tuned. The wash's own
-// constants are further down, at `const DT =`; a pacing complaint here is a
-// change to these.
-const PEEK = 150, SIB_MS = 320, SIB_STAGGER = 170, SIB_LEAD = 140;
+// The two background layers no longer fade on their own clock: they arrive
+// and leave under a transition's print (WatercolorMorph's membership). The
+// wash's own constants are further down, at `const DT =`.
+const PEEK = 150;
 // Scene 4's control. PUB_SCALE/PUB_MS grow it, alone, before anything else
 // happens. PUB_BEAT is the pause after growth before the
 // targets start popping (below). Going back, the control drops last, after
@@ -109,7 +108,7 @@ const joinAt = (a, b) => JOINS[Math.min(a, b)];
 
 
 for (const [k, v] of Object.entries({ '--peek': PEEK + 'px',
-  '--sib-ms': SIB_MS + 'ms', '--sib-stagger': SIB_STAGGER + 'ms', '--sib-lead': SIB_LEAD + 'ms', '--vis-w': VIS_W + 'px', '--page-max': PAGE_MAX + 'px',
+  '--vis-w': VIS_W + 'px', '--page-max': PAGE_MAX + 'px',
   '--pub-k': String(PUB_SCALE), '--pub-ms': PUB_MS + 'ms', '--pub-out-delay': PUB_OUT_DELAY + 'ms', '--scrim': String(SCRIM) }))
   document.documentElement.style.setProperty(k, v);
 
@@ -937,6 +936,7 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
   // with MEAN, and the block means read back and weighted by the texels each
   // block really holds: the grid's last row and column of blocks are partial,
   // and an unweighted mean of block means is off by as much as 8% (phone).
+  const FIX_EVERY = 6;   // divides every checkpoint spacing in use
   const fixScale = (rec) => {
     if (!fixer) {
       const L = tex(W, H), R = tex(W, H), nearT2 = tex(NW, NH);
@@ -958,7 +958,10 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       return sum.map((v) => v / (W * H));
     };
     const liquid = reduce(fixer.L), remnant = reduce(fixer.R);
-    return rec.target.map((m, c) => liquid[c] > 1e-5 ? Math.min(2, Math.max(0.5, (m - remnant[c]) / liquid[c])) : 1);
+    // Up to 32, not 2: a print that is one small disc (scene 4's control)
+    // loses most of its ink mid-dissolve and needed 3.2 on desktop and 14 on
+    // the phone's coarser grid (measured) to hold it.
+    return rec.target.map((m, c) => liquid[c] > 1e-5 ? Math.min(32, Math.max(0.5, (m - remnant[c]) / liquid[c])) : 1);
   };
   const clearState = () => {
     gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 0);
@@ -1162,15 +1165,18 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       if (rec.n >= rec.N || budget <= 0) return 0;
       let count = seek(rec, rec.n);
       while (rec.n < rec.N && count < budget) {
-        const n0 = rec.n;
-        for (let i = 0; i < rec.every; i++) { stepDissolve(rec, rec.n); rec.n++; film.n = rec.n; count++; }
-        saveCheckpoint(rec, rec.n);
         // The fixer reads back from the GPU, which stalls it (2 ms a step on
-        // an Apple GPU, measured, against 0.4 for the step), so it is read at
-        // checkpoints and the scale between them is interpolated: it varies
-        // as slowly as the losses it corrects.
-        const k0 = rec.k.slice(n0 * 3, n0 * 3 + 3), k1 = fixScale(rec);
-        for (let j = 1; j <= rec.every; j++) for (let c = 0; c < 3; c++) rec.k[(n0 + j) * 3 + c] = k0[c] + (k1[c] - k0[c]) * j / rec.every;
+        // an Apple GPU, measured, against 0.4 for the step), so it is read
+        // every FIX_EVERY steps and the scale between is interpolated: it
+        // varies as slowly as the losses it corrects, except early in a small
+        // print's dissolve, which a checkpoint's spacing was too coarse for.
+        for (let i = 0; i < rec.every; i++) {
+          stepDissolve(rec, rec.n); rec.n++; film.n = rec.n; count++;
+          if (rec.n % FIX_EVERY) continue;
+          const n0 = rec.n - FIX_EVERY, k0 = rec.k.slice(n0 * 3, n0 * 3 + 3), k1 = fixScale(rec);
+          for (let j = 1; j <= FIX_EVERY; j++) for (let c = 0; c < 3; c++) rec.k[(n0 + j) * 3 + c] = k0[c] + (k1[c] - k0[c]) * j / FIX_EVERY;
+        }
+        saveCheckpoint(rec, rec.n);
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       return count;
@@ -2054,9 +2060,10 @@ function holdCanvas(src, tgt, scene, fwd, mobileTransition = false) {
 }
 // The same arming for a scene transition: A's print is presented at p = 0
 // before anything live is hidden, so the handover is the same pixels.
-function holdMorph(a, b, from, to, covered) {
+// `members` are memberPrint's for each end, a's then b's.
+function holdMorph(a, b, from, to, covered, members = [[], []]) {
   groundAt(from);
-  const leg = morph.leg(a, b, { from, to });
+  const leg = morph.leg(a, b, { from, to }, [...members[0].map((m) => ({ ...m, side: 'a' })), ...members[1].map((m) => ({ ...m, side: 'b' }))]);
   leg.render(0, 0);
   stage.classList.add(covered ? 'mobile-handoff' : 'morphing');
   return leg;
@@ -2089,11 +2096,13 @@ function still(scene) {
   // cached source covered until the next frame can set the reverse direction;
   // otherwise the live Publish control flashes in its shell corner.
   if (!(finalWash?.covered && scene === DEPLOY)) releasePigmentCover();
+  // a leg that left scene 4 froze its targets where they stood (memberPrint)
+  if (scene === DEPLOY) orbitSim?.restart();
   if (mobileLayout() && scene === SHIPS) { sketchVisible(true); videoActive(true); }
   // The phone's mounted leg lost its canvas class above: remount it on the
   // next frame rather than keep presenting into a canvas nothing shows.
   if (mobileLayout()) { mobileWatchKey = ''; mob = { ...mob, from: -1, to: -1 }; }
-  if (scene !== DEPLOY && finalWash) { cancelAnimationFrame(finalWash.raf); finalWash = null; canvas.style.filter = ''; }
+  if (scene !== DEPLOY && finalWash) { cancelAnimationFrame(finalWash.raf); finalWash = null; canvas.style.filter = ''; fanEl.classList.remove(WatercolorMorph.MEMBER); }
   if (scene < DEPLOY) finalPrints = null;
 }
 
@@ -2306,6 +2315,65 @@ function advanceWash(simInstance, state, { goal, fwd, stir = 0, tilt = 0, relift
   if (state.t >= goal - DT && state.t !== state.drawn) { paint(state.t); state.drawn = state.t; }
   return { caughtUp: state.t >= goal - DT, count };
 }
+// ── Membership: what a leg's two prints carry of what moves ───────────────
+// A cached sheet is right for everything that stands still -- the stage, the
+// window, the documents in it -- and is taken at rest. What animates (scene
+// 3's sketch, the notebook's zooming field, the video; scene 4's targets when
+// it is left) is only right on the frame it was read, so at a leg's start it
+// is frozen where it stands and read through the painter registry in the same
+// task, and the print is composed with it. Each such element is a member of
+// the leg: WatercolorMorph hides it under its own print (or, where it could
+// not be read, fades it) until its scene is shown again.
+function memberPrint(scene, leaving) {
+  const sheet = sheets[scene];
+  if (!sheet) return { print: sheet, members: [] };
+  if (scene === SHIPS && sheet.recompose) {
+    // a reader's own arrangement is frozen, as it stands, with the media
+    for (const id of S3_ORDER) stopCard(id);
+    sketchVisible(false); videoActive(false);
+    const fresh = {}, members = [];
+    for (const id of S3_ORDER) {
+      // Not read now, the card's cached pixels still stand in; with neither,
+      // it is not in the print at all and fades instead of hiding.
+      const im = artifactNow(id, sheet.artifacts[id]);
+      if (im) fresh[id] = im; else reportCaptureFault(`member ${id}: not read at the leg's start`);
+      members.push({ el: CARDS[id].el, captured: !!(im || sheet.artifacts[id]) });
+    }
+    // The freshest print of scene 3 there is: it replaces the one on hand, so
+    // the dissolve recorded for this leg is the one kept warm after it.
+    const print = sheet.recompose(fresh);
+    setSheet(SHIPS, print);
+    return { print, members };
+  }
+  if (scene === DEPLOY) {
+    if (leaving) orbitSim?.stop();
+    // Left before any target has popped, scene 4 is its control alone, and a
+    // print of nothing would show paper where the control's wash should be.
+    const print = deployPrint({ logos: leaving, control: !leaving || !orbitNodes?.some((n) => n.popAt) });
+    print.__printGeneration = sheet.__printGeneration;
+    return { print, members: leaving ? [{ el: fanEl, captured: true }] : [] };
+  }
+  return { print: sheet, members: [] };
+}
+// Scene 3's card `id` as it stands on screen now, on the cached card's own
+// canvas size: the sketch and the video read directly, the notebook as its
+// cached document with only its live field read afresh and laid over it.
+function artifactNow(id, cached) {
+  const read = (el, w, h) => { const r = WatercolorCapture.frameNow(el, w, h); return r.ok ? r.canvas : null; };
+  try {
+    if (id === 'video') { const v = $('s3-video-el'); return read(v, v.videoWidth, v.videoHeight); }
+    const doc = $(id).contentDocument;
+    if (id === 'sk') { const cv = doc?.querySelector('canvas'); return cv && read(cv, cv.width, cv.height); }
+    const field = doc?.getElementById('field');
+    if (!field || !cached) return null;
+    const live = read(field, field.width, field.height);
+    if (!live) return null;
+    const out = document.createElement('canvas'); out.width = cached.width; out.height = cached.height;
+    const g = out.getContext('2d'), r = field.getBoundingClientRect(), k = cached.width / CARDS.nb.width;
+    g.drawImage(cached, 0, 0); g.drawImage(live, r.left * k, r.top * k, r.width * k, r.height * k);
+    return out;
+  } catch (e) { reportCaptureFault(`member ${id}: ${e.message}`); return null; }
+}
 function publishBridge(from, to, prints) {
   if (Math.min(from, to) !== SHIPS || Math.max(from, to) !== DEPLOY) return null;
   const button = vdFrame.contentDocument.querySelector('.moss-publish-button');
@@ -2325,18 +2393,19 @@ function publishBridge(from, to, prints) {
   const cs = button.ownerDocument.defaultView.getComputedStyle(button);
   const x = 120 + 540 - (parseFloat(cs.right) || 6) - size / 2;
   const y = 30 + 560 - (parseFloat(cs.bottom) || 6) - size / 2;
-  // The live control survives independently; remove its ink from both sheets.
-  for (const scene of [SHIPS, DEPLOY]) {
-    const source = prints[scene], copy = document.createElement('canvas');
-    copy.width = source.width; copy.height = source.height;
-    const context = copy.getContext('2d');
-    if (scene === SHIPS) {
-      context.drawImage(source, 0, 0);
-      const k = copy.width / printW();
-      context.clearRect((x - size / 2 - 2 - printRect.x) * k, (y - size / 2 - 2 - printRect.y) * k, (size + 4) * k, (size + 4) * k);
-    }
-    prints[scene] = copy;
-  }
+  // The live control survives independently, so its ink comes out of scene
+  // 3's sheet -- but only its ink: a square clear took the window's rounded
+  // corner and shadow with it (the box the owner saw around the button) and
+  // left the disc's own edge behind. Scene 4's print arriving keeps its
+  // control, under the bridge's landing place (memberPrint), so the wash has
+  // somewhere to gather and is never paper alone.
+  const source = prints[SHIPS], copy = document.createElement('canvas');
+  copy.width = source.width; copy.height = source.height;
+  const context = copy.getContext('2d'), k = copy.width / printW();
+  context.drawImage(source, 0, 0);
+  context.globalCompositeOperation = 'destination-out';
+  context.beginPath(); context.arc((x - printRect.x) * k, (y - printRect.y) * k, (size / 2 + 2) * k, 0, Math.PI * 2); context.fill();
+  prints[SHIPS] = copy;
   return {
     draw(t) {
       // Forward finishes at T_WET, where the reading line reaches scene 4's
@@ -2385,7 +2454,10 @@ let mob = {
 // mount the moment they arrive, rather than staying a cut for the rest of
 // the leg -- a fast cold-load scroll can easily outrun capture for one
 // frame and not the next.
-function mountLeg(from, to) {
+// `leaving` is the end the reader is leaving, whose members are read as they
+// stand; null mounts a leg at rest, from the prints on hand, and it is mounted
+// again with its members the moment the reader leaves that end.
+function mountLeg(from, to, leaving = null) {
   if (!sheets[from] || !sheets[to]) {
     // A cut mount still leaves the previous leg's bridge behind if it had
     // one (found while consolidating mob: the pre-consolidation version had
@@ -2395,23 +2467,13 @@ function mountLeg(from, to) {
     mob = { ...mob, from, to, pr: null, bridge: null };
     return;
   }
-  if (from === SHIPS && s3Touched) {
-    for (const id of S3_ORDER) stopCard(id);
-    // Fire-and-forget: unlike pour(), this frame cannot await a fresh
-    // capture before mounting. stopCard has already frozen the card at
-    // wherever it was dropped, so the wash starts from whatever print is
-    // on hand -- stale only if the reader dragged a card and flung the
-    // page away before the ambient warmer (which runs at rest, roughly
-    // once a second) caught up -- and never goes stale mid-wash, only
-    // possibly on this one mount.
-    capture(SHIPS).then((print) => { sheets[SHIPS] = print; }).catch((error) => console.warn('scene 3 outgoing print:', error.message));
-  }
-  const pr = { [from]: sheets[from], [to]: sheets[to] };
+  const A = leaving == null ? { print: sheets[from], members: [] } : memberPrint(from, leaving === from);
+  const B = leaving == null ? { print: sheets[to], members: [] } : memberPrint(to, leaving === to);
+  const pr = { [from]: A.print, [to]: B.print };
   mob.bridge?.remove();
   const bridge = publishBridge(from, to, pr);
   bridge?.draw(0);
-  const leg = holdMorph(pr[from], pr[to], from, to, true);
-  if (from === SHIPS) { sketchVisible(false); videoActive(false); }
+  const leg = holdMorph(pr[from], pr[to], from, to, true, [A.members, B.members]);
   if (mob.fanSolid) { fanEl.style.filter = ''; fanEl.style.zIndex = ''; }
   mob = { ...mob, from, to, pr, leg, bridge, p: -1, lastCover: -1, drawnT: -1, fanSolid: false };
 }
@@ -2434,11 +2496,14 @@ function showMobileScene(scene) {
 function renderMorphAt(progress) {
   const from = Math.max(0, Math.min(SHIPS, Math.floor(progress))), to = from + 1;
   const p = clamp01(progress - from);
+  const between = p > 0 && p < 1, leaving = between ? (p < 0.5 ? from : to) : null;
   if (from !== mob.from || to !== mob.to) {
     passThrough(mob.scene === -1 ? from : mob.scene, from);
-    mountLeg(from, to);
+    mountLeg(from, to, leaving);
   } else if (!mob.pr) {
-    mountLeg(from, to);   // retry: a print an earlier cut was missing may have arrived since
+    mountLeg(from, to, leaving);   // retry: a print an earlier cut was missing may have arrived since
+  } else if (between && (mob.p === 0 || mob.p === 1)) {
+    mountLeg(from, to, mob.p === 1 ? to : from);   // the reader leaves an end: read its members now
   }
   // driving/running() exists so the ambient warmer (fillPrints, retakeShown)
   // never captures out from under a scene mid-transition; onScroll's own
@@ -2507,22 +2572,15 @@ async function pour(to) {
   const from = shown;
   let terminal = false;
   washesRun++;
-  // Freeze a reader's arrangement before taking its ink. No spring or teardown
-  // may move an artifact back while its outgoing print is being captured.
-  if (from === SHIPS && s3Touched) {
-    for (const id of S3_ORDER) stopCard(id);
-    try { setSheet(SHIPS, await capture(SHIPS)); }
-    catch (error) { console.warn('scene 3 outgoing print:', error.message); }
-  }
-  const pr = { [from]: sheets[from], [to]: sheets[to] };
+  const A = memberPrint(from, true), B = memberPrint(to, false);
+  const pr = { [from]: A.print, [to]: B.print };
   const bridge = publishBridge(from, to, pr);
   bridge?.draw(0);
   // The Publish crossing keeps its control solid above the pigment, so the
   // canvas covers the live composition by --wash-cover rather than by hiding
   // it (check-landing-publish-bridge.mjs).
   const covered = !!bridge;
-  const leg = holdMorph(pr[from], pr[to], from, to, covered);
-  if (covered && from === SHIPS) { sketchVisible(false); videoActive(false); }
+  const leg = holdMorph(pr[from], pr[to], from, to, covered, [A.members, B.members]);
   let liveScene = from, lastCover = -1, shownP = -1, exact = false;
   const showUnderCover = (scene) => {
     if (scene === liveScene) return;
@@ -3344,8 +3402,6 @@ async function takePrint(scene) {
   const artifactIds = scene === SHIPS ? [...S3_ORDER] : [];
   if (artifactIds.length) await prepareScene3Capture();
   const k = Math.min(mobileLayout() ? 1 : 2, devicePixelRatio || 1, MAX_PRINT_EDGE / Math.max(printW(), printH()));
-  const c = document.createElement('canvas'); c.width = printW() * k; c.height = printH() * k;
-  const g = c.getContext('2d');
   // the stage: plates, the box's shadow and ground, frames as holes
   const stageC = await fold(document, stage);
   // A print is the sheet at rest: not mid-wash, and not with scene 4's fan
@@ -3391,20 +3447,33 @@ async function takePrint(scene) {
   // the page's max-width was 1440 and --s was 1 there, live since the third
   // scene's two siblings widened it to 1584.
   const innerR = shell.innerR && { x: boxR.x + shell.innerR.x, y: boxR.y + shell.innerR.y, w: shell.innerR.w, h: shell.innerR.h };
-  g.drawImage(stageImg, 0, 0, c.width, c.height);
-  if (scene === 0) drawPlates(g, k);
-  if (artifactIds.length) drawScene3Artifacts(g, k, Object.fromEntries(artifactIds.map((id, i) => [id, artifactImages[i]])), false);
-  g.save();
-  // Scene 4's sheet is the shell cut to the control's own circle, the same cut
-  // the stylesheet makes on the live box: the print carries the real pixels of
-  // the real control and nothing of the window around it.
-  if (scene === DEPLOY) { const cs = getComputedStyle(stage);
-    const cut = (n) => parseFloat(cs.getPropertyValue(n)) || 0;
-    g.beginPath(); g.arc((boxR.x + cut('--pub-cx')) * k, (boxR.y + cut('--pub-cy')) * k, cut('--pub-r') * k, 0, Math.PI * 2); g.clip();
-  } else roundClip(g, boxR, k, radius);
-  g.drawImage(frameImg, boxR.x * k, boxR.y * k, boxR.w * k, frameImg.height * k); g.restore();
-  if (innerImg) { g.save(); roundClip(g, boxR, k, radius); roundClip(g, innerR, k, innerRadius); g.drawImage(innerImg, innerR.x * k, innerR.y * k, innerR.w * k, innerImg.height * k); g.restore(); }
-  if (artifactIds.length) drawScene3Artifacts(g, k, Object.fromEntries(artifactIds.map((id, i) => [id, artifactImages[i]])), true);
+  const cut = scene === DEPLOY && ((cs) => (n) => parseFloat(cs.getPropertyValue(n)) || 0)(getComputedStyle(stage));
+  // The sheet from its layers. Scene 3's cards are layered between the
+  // window's own, so a card read afresh at a leg's start (memberPrint) is
+  // composed back in here, at its current pose, not pasted over the top.
+  const pw = printW(), ph = printH();
+  const compose = (images) => {
+    const c = document.createElement('canvas'); c.width = pw * k; c.height = ph * k;
+    const g = c.getContext('2d');
+    g.drawImage(stageImg, 0, 0, c.width, c.height);
+    if (scene === 0) drawPlates(g, k);
+    if (artifactIds.length) drawScene3Artifacts(g, k, images, false);
+    g.save();
+    // Scene 4's sheet is the shell cut to the control's own circle, the same cut
+    // the stylesheet makes on the live box: the print carries the real pixels of
+    // the real control and nothing of the window around it.
+    if (cut) { g.beginPath(); g.arc((boxR.x + cut('--pub-cx')) * k, (boxR.y + cut('--pub-cy')) * k, cut('--pub-r') * k, 0, Math.PI * 2); g.clip(); }
+    else roundClip(g, boxR, k, radius);
+    g.drawImage(frameImg, boxR.x * k, boxR.y * k, boxR.w * k, frameImg.height * k); g.restore();
+    if (innerImg) { g.save(); roundClip(g, boxR, k, radius); roundClip(g, innerR, k, innerRadius); g.drawImage(innerImg, innerR.x * k, innerR.y * k, innerR.w * k, innerImg.height * k); g.restore(); }
+    if (artifactIds.length) {
+      drawScene3Artifacts(g, k, images, true);
+      c.artifacts = images;
+      c.recompose = (fresh) => { const r = compose({ ...images, ...fresh }); r.__printGeneration = c.__printGeneration; return r; };
+    }
+    return c;
+  };
+  const c = compose(Object.fromEntries(artifactIds.map((id, i) => [id, artifactImages[i]])));
   captureMs = Math.round(performance.now() - t0);
   return c;
 }
@@ -3649,7 +3718,10 @@ async function warm() {
 // second at rest -- its record is made as its leg starts, from the print the
 // leg actually carries.
 function warmDissolve() {
-  if (!morph || running()) return;
+  // Not beside a print being taken: a record holds the main thread for its
+  // whole length (seconds on a software GPU), and a raster waiting on it
+  // times out and leaves its scene without a print (seen at boot, 2026-09-23).
+  if (!morph || running() || !booted || inFlight) return;
   morph.retain(needed(shown).map((scene) => sheets[scene]));
   for (const scene of needed(shown)) {
     if (!mobileLayout() && scene === shown) continue;
@@ -4160,23 +4232,37 @@ function watchScrollDesktop(now) {
 // observational path: native scrolling supplies scrollY, which drives the scenes and closing
 // scrub continuously, and no release may move the page after the reader lets go.
 let mobileWatchKey = '', finalDissolve = 0, finalWash = null, finalPrints = null;
-function deployPrint() {
+// Scene 4 as pixels: with `control` the grown control where it stands, and
+// with `logos` the targets at their exact current physics positions. The
+// closing wash dissolves both. A leg to scene 3 carries the targets alone,
+// since the control stays solid above it (publishBridge) and its ink run out
+// from under it would be a stain spreading from a button that does not
+// dissolve (measured: a dark blot by p = 0.05); a leg arriving from scene 3
+// carries the control alone, for the wash to gather into, while the targets
+// pop out of it as the scene's own performance.
+function deployPrint({ logos = true, control = true } = {}) {
   const copy = document.createElement('canvas'); copy.width = printW(); copy.height = printH();
   const g = copy.getContext('2d'), ox = -printRect.x, oy = -printRect.y;
-  // Use loaded logo images at their exact current physics positions.
-  for (let i = 0; i < (orbitNodes?.length || 0); i++) {
+  for (let i = 0; logos && i < (orbitNodes?.length || 0); i++) {
     const n = orbitNodes[i], el = orbitEls[i], im = el.querySelector('img');
     const radius = ORBIT_D * Math.max(0, popScale(n, performance.now())) / 2;
     if (!n.popAt || !radius) continue;
     g.save(); g.beginPath(); g.arc(n.x + ox, n.y + oy, radius, 0, Math.PI * 2); g.clip();
     g.fillStyle = getComputedStyle(el).backgroundColor; g.fillRect(n.x + ox - radius, n.y + oy - radius, radius * 2, radius * 2);
+    const fb = el.querySelector('.orbit-fallback');
     if (im?.complete && im.naturalWidth) {
       const k = Math.min(radius * 1.24 / im.naturalWidth, radius * 1.24 / im.naturalHeight);
       g.drawImage(im, n.x + ox - im.naturalWidth * k / 2, n.y + oy - im.naturalHeight * k / 2, im.naturalWidth * k, im.naturalHeight * k);
+    } else if (fb) {
+      // a target with no mark shows its name; the print shows it too
+      const fs = getComputedStyle(fb);
+      g.fillStyle = fs.color; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.font = `${fs.fontWeight} ${parseFloat(fs.fontSize) * radius * 2 / ORBIT_D}px ${fs.fontFamily}`;
+      g.fillText(fb.textContent, n.x + ox, n.y + oy);
     }
     g.restore();
   }
-  const source = sheets[DEPLOY];
+  const source = control && sheets[DEPLOY];
   if (source) {
     const cs = getComputedStyle(stage), cx = parseFloat(cs.getPropertyValue('--pub-cx')), cy = parseFloat(cs.getPropertyValue('--pub-cy'));
     const k = source.width / printW(), r = pubR, diameter = r * 2 * PUB_SCALE;
@@ -4217,6 +4303,7 @@ function updateFinalDissolve() {
       // check-landing-monotone.mjs. Writing the property itself to 0 reaches
       // the same invisible result without touching a class mob still owns.
       stage.style.setProperty('--wash-cover', '0'); canvas.style.filter = '';
+      fanEl.classList.remove(WatercolorMorph.MEMBER);
       if (shown === DEPLOY) orbitSim?.restart();
     }
     return;
@@ -4238,6 +4325,9 @@ function updateFinalDissolve() {
   // at 0 while the sim caught up, then jumping straight to ~1.
   if (q !== wash.shownQ) {
     stage.style.setProperty('--wash-cover', String(smooth(0, .18, q)));
+    // The targets are in this print (deployPrint): members, hidden once the
+    // canvas fully covers them and not before, since this cover fades in.
+    fanEl.classList.toggle(WatercolorMorph.MEMBER, q >= .18);
     canvas.style.filter = `grayscale(${smooth(.1, .65, q)})`;
     wash.shownQ = q;
   }
