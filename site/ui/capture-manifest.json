@@ -1,0 +1,19 @@
+{
+  "captured_on": "2026-09-18",
+  "harvest_commit": "2604e46c3dbda4e83c52523f4611f9398b7fbe6d",
+  "app_editor_source": {
+    "repository": "the desktop app repository",
+    "branch": "feat/harvest-app-editor",
+    "commit": "8a3649e439c220aef194b658fe544008afa53100",
+    "generator": "scripts/landing/harvest-ui.mjs",
+    "note": "app-editor.html — the app's real editor.html + editor-main.ts, only the Tauri seams mocked; the docs demo's \"editor\" surface frames this instead of a hand-assembled mock. Accepts ?lang=en|zh-hant|zh-hans to render its own UI strings AND to pick which in-memory project opens: a William Blake project for en, a 朱耷 project (traditional characters for zh-hant, simplified for zh-hans) otherwise. Backed by a real in-memory project, so creating a page, Save as Template…, New from template, Manage Templates, and versions mode (list/diff/restore OF THE OPEN PIECE) all really work — not just the tree/chip/divider interactions a prior harvest supported. Context-menu rows and the ＋▾ create/template menus carry a stable `data-action` attribute (their own i18n key, or `template:<id>` / `manage-template:<id>` for a saved template's own rows). Breadcrumb is flush left; double-clicking the tree's bottom border (#divider) collapses/reopens the tree (a height change on #nav-surface, rows stay mounted)."
+  },
+  "states": {
+    "editor-ui-source.png": "760x420 Playwright capture; William Blake index.md selected; tree collapsed; Date chip visible; filename-derived title; two-line Blake excerpt focused in the editor; bottom toolbar visible",
+    "choose-page-source.png": "520x520 Playwright capture; William Blake/Songs of Experience/The Tyger.md selected; breadcrumb clicked through the fixture's native summary control; expanded tree, Date chip, and filename-derived title visible"
+  },
+  "derivation": {
+    "editor-ui-source.png": "scripts/capture-editor-guide-assets.mjs sets the document through window.__editor.setDoc(), focuses through window.__editor.focus(), and captures at 760x420",
+    "choose-page-source.png": "The same script clicks summary.nav-bc-strip, waits for details.lab-tree-root[open] and the active row, then captures at 520x520"
+  }
+}

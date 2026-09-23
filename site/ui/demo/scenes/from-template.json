@@ -1,0 +1,13 @@
+{
+  "after": "save-as-template",
+  "steps": [
+    {
+      "click": "create.caret",
+      "reveals": 4
+    },
+    {
+      "click": "templates.fromTemplateRow",
+      "reveals": 1
+    }
+  ]
+}
