@@ -3553,9 +3553,14 @@ fn grid_scroll_carries_no_template_columns() {
 
 #[test]
 fn grid_scroll_cards_snap_and_do_not_floor_at_content_width() {
+    // `min-inline-size`, not `min-width`: the automatic minimum needs
+    // overriding on whichever axis a track actually sizes cards on — the
+    // column axis, i.e. the INLINE axis, physical width under horizontal-tb
+    // but physical height under vertical-rl (vertical.css transposes this
+    // same row to stack cards down the line there).
     let rule = get_css_rule(DEFAULT_CSS, ".moss-grid[data-scroll] > .moss-grid-card")
         .expect(".moss-grid[data-scroll] > .moss-grid-card CSS rule should exist");
-    assert!(rule.contains("min-width: 0"), "got: {rule}");
+    assert!(rule.contains("min-inline-size: 0"), "got: {rule}");
     assert!(rule.contains("scroll-snap-align: start"), "got: {rule}");
 }
 
@@ -3633,15 +3638,53 @@ fn grid_scroll_reuses_the_table_scrollers_focus_ring() {
 }
 
 #[test]
-fn grid_scroll_is_a_no_op_under_vertical_typesetting() {
-    // The reading column's own scroll direction is the axis a horizontal
-    // scroller would need to borrow, so forcing one on top would fight the
-    // page's own scroll rather than add a sideways one — `scroll` falls
-    // back to the ordinary wrapping grid instead.
+fn grid_scroll_scrolls_along_the_line_under_vertical_typesetting() {
+    // Transposed, not disabled: a grid's columns are both sized and
+    // positioned along the INLINE axis, which vertical-rl points down the
+    // page, so the base rule's unmodified `grid-auto-flow: column` already
+    // stacks cards top to bottom there — only the overflow axis is
+    // physical, so it is the only one swapped by hand.
     let css = site_css_with_partials();
     let rule = get_css_rule(&css, r#"[data-typesetting="vertical"] .moss-grid[data-scroll]"#)
         .expect(r#"[data-typesetting="vertical"] .moss-grid[data-scroll] rule should exist"#);
-    assert!(rule.contains("grid-auto-flow: row"), "got: {rule}");
-    assert!(rule.contains("overflow: visible"), "got: {rule}");
+    assert!(rule.contains("overflow-y: auto"), "got: {rule}");
+    assert!(rule.contains("overflow-x: visible"), "got: {rule}");
+    assert!(
+        !rule.contains("grid-auto-flow"),
+        "must not re-disable the column flow the base rule already sets: got: {rule}"
+    );
+}
+
+#[test]
+fn grid_scroll_per_count_tracks_fit_n_cards_plus_a_peek_under_vertical_typesetting() {
+    // Same formulas as `grid_scroll_per_count_tracks_fit_n_cards_plus_a_peek`
+    // (site.css) — the calc() is a fraction of the container's own inline
+    // size either way — restated here because they need to win a
+    // specificity race the wrapping per-count rules above already run,
+    // against the `@media (max-width: 768px)` phone collapse: the wrong
+    // reason to shrink a card under vertical typesetting, whose
+    // constraining dimension is the row's own SVH-derived height, not
+    // viewport width.
+    let css = site_css_with_partials();
+    let template = get_css_rule(&css, r#"[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns]"#)
+        .expect("vertical [data-scroll][data-columns] rule should exist");
+    assert!(
+        template.contains("grid-template-columns: none"),
+        "got: {template}"
+    );
+    for n in 1..=4u32 {
+        let selector =
+            format!(r#"[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="{n}"]"#);
+        let rule = get_css_rule(&css, &selector)
+            .unwrap_or_else(|| panic!("{selector} CSS rule should exist"));
+        assert!(
+            rule.contains("grid-auto-columns:") && rule.contains("--moss-grid-scroll-peek"),
+            "{selector} must size tracks off the peek custom property: {rule}"
+        );
+        assert!(
+            rule.contains(&format!("/ {n}")) || n == 1,
+            "{selector} should divide by {n}: {rule}"
+        );
+    }
 }
 

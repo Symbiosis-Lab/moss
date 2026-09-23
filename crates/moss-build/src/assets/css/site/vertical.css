@@ -279,18 +279,77 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   grid-template-columns: var(--moss-grid-ratio, repeat(4, minmax(0, 1fr)));
 }
 
-/* A wrapping grid's overflow cards already stack along the BLOCK axis under
-   vertical-rl — the same axis the page itself scrolls (horizontally, between
-   reading columns) — so they ride the page's own scroll for free. `scroll`
-   would instead need to scroll the INLINE axis (vertically, within one
-   column), a second scroller perpendicular to the page's; it is a no-op
-   here and falls back to the wrapping layout. Does not touch
-   `grid-template-columns` — the per-count rules just above already restore
-   it for this same `.moss-grid[data-columns="N"]` selector, scroll or not. */
+/* Scrolling row (`:::grid N {scroll}`), transposed rather than disabled:
+   site.css's base rule already places one card per grid "column", and a
+   grid's columns are both SIZED and POSITIONED along the INLINE axis —
+   vertical-rl points that down the page — so the unmodified `grid-auto-flow:
+   column` stacks N cards top to bottom here instead of side by side, each
+   spanning the row's full (block-axis) width, with `grid-auto-columns`
+   giving each one the same "N cards plus a peek" share of the row's own
+   INLINE size (its height) that it gives the row's WIDTH under horizontal
+   typesetting — the calc() is a fraction of the container's inline size
+   either way, so the four `grid-auto-columns` formulas below are the exact
+   values site.css already declares for `[data-scroll][data-columns="N"]`,
+   restated only because they need to win a specificity race (next
+   paragraph), not because the numbers change.
+
+   `overflow-x: auto` is the one physical property in the base rule with no
+   safe logical spelling: `overflow-inline`/`overflow-block` exist (CSS
+   Overflow Level 3) but are too new for this file's Safari floor (see the
+   `overflow-x: hidden` comment on `html:has(...)` above), so the axis is
+   swapped by hand — `overflow-y: auto` scrolls the row down the line.
+   Declaring `overflow-x: visible` alongside it is documentation, not the
+   last word: CSS Overflow §3 forces a box's other axis to stop being
+   `visible` once one axis isn't, so both compute to `auto`. That is exactly
+   what the un-touched `padding-block: 4px` above (site.css) already
+   compensates for — being logical, it pads left/right here instead of
+   top/bottom, wherever the forced-auto block axis now clips a focus ring.
+   `scroll-snap-type: inline proximity` and `overscroll-behavior-inline:
+   contain` (site.css, both logical) need no restatement either.
+
+   `grid-template-columns` needs restoring to `none` specifically for a
+   scroll row: the per-count `[data-columns="N"]` rules above restate
+   site.css's WRAPPING template for `.moss-grid[data-columns="N"]`
+   generally (no `[data-scroll]` exclusion, since until now a scroll row
+   under vertical typesetting fell back to that same wrapping layout) — at a
+   specificity that would otherwise re-apply here too and fight
+   `grid-auto-columns`. One more attribute selector (`[data-scroll]`) beats
+   them regardless of source order.
+
+   And the per-count `grid-auto-columns` formulas need restating
+   unconditionally (no media query): they have to win the same specificity
+   race the wrapping per-count rules above already run, against site.css's
+   `@media (max-width: 768px)` phone collapse (divides by a flat 1.3) — the
+   wrong reason to shrink a card here, for the same cause the wrapping grid
+   has no phone variant either (comment further up): the constraining
+   dimension under vertical typesetting is the row's own SVH-derived height,
+   never the viewport's WIDTH. */
 [data-typesetting="vertical"] .moss-grid[data-scroll] {
-  grid-auto-flow: row;
-  overflow: visible;
-  scroll-snap-type: none;
+  overflow-y: auto;
+  overflow-x: visible;
+}
+[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns] {
+  grid-template-columns: none;
+}
+[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="1"] {
+  grid-auto-columns: calc(
+    100% - var(--moss-grid-scroll-peek, 2.5rem) - var(--moss-space-md)
+  );
+}
+[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="2"] {
+  grid-auto-columns: calc(
+    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 2 * var(--moss-space-md)) / 2
+  );
+}
+[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="3"] {
+  grid-auto-columns: calc(
+    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 3 * var(--moss-space-md)) / 3
+  );
+}
+[data-typesetting="vertical"] .moss-grid[data-scroll][data-columns="4"] {
+  grid-auto-columns: calc(
+    (100% - var(--moss-grid-scroll-peek, 2.5rem) - 4 * var(--moss-space-md)) / 4
+  );
 }
 
 /* ── Child summary cards (vertical mode) ── */

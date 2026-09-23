@@ -6361,8 +6361,17 @@ a.moss-grid-card:hover {
   grid-template-columns: none;
 }
 
+/* `min-inline-size`, not `min-width`: a grid item's automatic minimum size
+   only needs overriding on the axis a track actually sizes it on — the
+   column axis, i.e. the INLINE axis, physical width under horizontal-tb but
+   physical HEIGHT under vertical-rl (vertical.css transposes this same
+   scrolling row to stack cards down the line instead of across it). A
+   physical `min-width: 0` would do nothing there, and a card with an
+   unbreakable long line or a tall image could then push its `grid-
+   auto-columns` track taller than the calc() below intends, the vertical
+   twin of the wide-image bug this line was written to stop. */
 .moss-grid[data-scroll] > .moss-grid-card {
-  min-width: 0;
+  min-inline-size: 0;
   scroll-snap-align: start;
 }
 

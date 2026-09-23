@@ -102,7 +102,7 @@ Wildfire Recovery
 
 Set the `--moss-grid-scroll-peek` custom property to control exactly how many pixels of the next card show at the row's edge (default `2.5rem`, so with the defaults that's 40px of the next card, not an approximation); lower it toward `0` to hide the cue, or raise it for a more insistent one.
 
-Under vertical (right-to-left column) typesetting, `scroll` has no effect: extra cards already advance along the page's own horizontal scroll, so the row renders as the ordinary wrapping grid instead.
+Under vertical (right-to-left column) typesetting, `scroll` still keeps the row on one line, but the line itself runs down the page instead of across it, so the row scrolls vertically — perpendicular to the page's own sideways scroll between columns — with the same peek cueing more cards below.
 
 ## Cell content
 

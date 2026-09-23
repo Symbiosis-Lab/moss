@@ -11,6 +11,10 @@ function row(cards: number, label?: string): HTMLElement {
   const g = document.createElement("div");
   g.className = "moss-grid";
   g.setAttribute("data-scroll", "");
+  // The base `.moss-grid[data-scroll]` rule (site.css) always declares this;
+  // real rows never see anything else on the horizontal axis, so it is the
+  // default here too, not something each horizontal test restates.
+  g.style.overflowX = "auto";
   if (label) g.setAttribute("aria-label", label);
   for (let i = 0; i < cards; i++) {
     const c = document.createElement("a");
@@ -28,10 +32,20 @@ function setOverflow(g: HTMLElement, max: number): void {
   Object.defineProperty(g, "clientWidth", { value: 1000, configurable: true });
 }
 
+/** The vertical-typesetting counterpart of `setOverflow`: a row whose inline
+ * axis (the one it scrolls on under `writing-mode: vertical-rl`) is vertical. */
+function setVerticalOverflow(g: HTMLElement, max: number): void {
+  g.style.writingMode = "vertical-rl";
+  g.style.overflowY = "auto";
+  Object.defineProperty(g, "scrollHeight", { value: 1000 + max, configurable: true });
+  Object.defineProperty(g, "clientHeight", { value: 1000, configurable: true });
+}
+
 const wheel = (init: WheelEventInit) => new WheelEvent("wheel", { cancelable: true, ...init });
 
 afterEach(() => {
   document.body.innerHTML = "";
+  vi.restoreAllMocks();
 });
 
 describe("scroll dots", () => {
@@ -70,6 +84,34 @@ describe("scroll dots", () => {
     initScrollDots();
     expect((flush.nextElementSibling as HTMLElement).hidden).toBe(true);
     expect((overflowing.nextElementSibling as HTMLElement).hidden).toBe(false);
+  });
+
+  test("a row whose computed overflow-x is visible keeps its dots hidden even though it overflows", () => {
+    // The shape of the originally reported bug: a size mismatch alone
+    // (scrollWidth > clientWidth) used to be read as "scrollable", even on
+    // an axis the row was never declared to scroll on.
+    const g = row(3);
+    g.style.overflowX = "visible";
+    setOverflow(g, 400);
+    initScrollDots();
+    expect((g.nextElementSibling as HTMLElement).hidden).toBe(true);
+  });
+
+  test("a vertical row shows its dots once it actually overflows on its own (inline/vertical) axis", () => {
+    const g = row(4);
+    setVerticalOverflow(g, 400);
+    initScrollDots();
+    expect((g.nextElementSibling as HTMLElement).hidden).toBe(false);
+  });
+
+  test("a vertical row whose computed overflow-y isn't auto/scroll keeps its dots hidden, even though scrollHeight exceeds clientHeight", () => {
+    const g = row(4);
+    g.style.writingMode = "vertical-rl";
+    g.style.overflowY = "visible";
+    Object.defineProperty(g, "scrollHeight", { value: 1400, configurable: true });
+    Object.defineProperty(g, "clientHeight", { value: 1000, configurable: true });
+    initScrollDots();
+    expect((g.nextElementSibling as HTMLElement).hidden).toBe(true);
   });
 });
 
@@ -145,5 +187,59 @@ describe("wheel over the row", () => {
     g.style.direction = "rtl";
     onWheel(g, wheel({ deltaY: 100 }));
     expect(g.scrollLeft).toBe(-100);
+  });
+});
+
+describe("wheel over a vertical row", () => {
+  test("a vertical wheel is left to the browser's own native scroll, but kept from theme.ts's page-wide handler", () => {
+    const g = row(4);
+    setVerticalOverflow(g, 400);
+    const stop = vi.spyOn(WheelEvent.prototype, "stopPropagation");
+    const e = wheel({ deltaY: 100 });
+    onWheel(g, e);
+    // Neither preventDefault (the browser's native scroll is what should
+    // move the row) nor a manual scrollTop write (there is none in onWheel).
+    expect(e.defaultPrevented).toBe(false);
+    expect(g.scrollTop).toBe(0);
+    expect(stop).toHaveBeenCalled();
+  });
+
+  test("at the end of a vertical row the wheel passes all the way through, uncancelled and unstopped", () => {
+    const g = row(4);
+    setVerticalOverflow(g, 400);
+    g.scrollTop = 400;
+    const stop = vi.spyOn(WheelEvent.prototype, "stopPropagation");
+    const down = wheel({ deltaY: 100 });
+    onWheel(g, down);
+    expect(down.defaultPrevented).toBe(false);
+    expect(stop).not.toHaveBeenCalled();
+
+    const top = row(4);
+    setVerticalOverflow(top, 400);
+    const stop2 = vi.spyOn(WheelEvent.prototype, "stopPropagation");
+    const up = wheel({ deltaY: -100 });
+    onWheel(top, up);
+    expect(up.defaultPrevented).toBe(false);
+    expect(stop2).not.toHaveBeenCalled();
+  });
+
+  test("a vertical row with nothing to scroll never intervenes", () => {
+    const g = row(2);
+    setVerticalOverflow(g, 0);
+    const stop = vi.spyOn(WheelEvent.prototype, "stopPropagation");
+    const e = wheel({ deltaY: 100 });
+    onWheel(g, e);
+    expect(e.defaultPrevented).toBe(false);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  test("a trackpad's sideways gesture over a vertical row is left alone", () => {
+    const g = row(4);
+    setVerticalOverflow(g, 400);
+    const stop = vi.spyOn(WheelEvent.prototype, "stopPropagation");
+    const sideways = wheel({ deltaX: 80, deltaY: 10 });
+    onWheel(g, sideways);
+    expect(sideways.defaultPrevented).toBe(false);
+    expect(stop).not.toHaveBeenCalled();
   });
 });
