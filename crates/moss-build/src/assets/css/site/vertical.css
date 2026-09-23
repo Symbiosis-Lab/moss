@@ -142,19 +142,20 @@ body[data-typesetting="vertical"] .font-pill.visible {
 }
 
 /* ── Hero ──
-   Horizontally the hero bleeds edge to edge; a vertical figure is sized to
-   the column measure instead (research §5, jlreq 4.3.2): the plate stands in
-   the text band, head-aligned, the full band tall. The band is the
-   `.container` inset, which the hero — emitted outside <main> — never had.
+   A vertical figure is sized to the column measure (research §5, jlreq
+   4.3.2): the plate stands in the text band, head-aligned, full band tall.
+   The band is the `.container` inset the hero, emitted outside <main>, lacks.
 
-   `max-width: 100vw`: block axis = physical width under inherited
-   `vertical-rl`, and a flex item's main size is content-fit by default, so
-   nothing bounded it. `vw` not `%`: `body`'s own `width: 100%` is circular
-   here (its auto size grows to fit the hero). See
-   docs/archive/2026-09-11-hero-plate-variant.md. */
+   The hero is a flex item of body's row, sized along the block axis
+   (physical width). `max-width: 100vw` bounds it; `vw` because body's
+   `width: 100%` is circular here. `flex-shrink: 0` because `overflow:
+   hidden` zeroes its minimum size: a long page squeezed the section below
+   its plate and cropped it (2026-09-23).
+   See docs/archive/2026-09-11-hero-plate-variant.md. */
 body[data-typesetting="vertical"] .moss-hero {
   padding-inline: var(--moss-container-padding);
   max-width: 100vw;
+  flex-shrink: 0;
 }
 
 /* Same cap, on the plate/captioned image's own BLOCK axis — not the INLINE

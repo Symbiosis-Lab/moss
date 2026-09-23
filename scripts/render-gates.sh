@@ -77,6 +77,7 @@ GATES_NOBUILD=(
   term-index-layout
   site-elevation
   card-media-track
+  card-cover-fit
   img-fallback
   vertical-measure
   article-date-alignment

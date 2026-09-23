@@ -706,6 +706,16 @@ uid: "gcis0103"
 // Served by playwright/hero-caption.config.ts.
 const HERO_PORTRAIT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="800" viewBox="0 0 400 800"><rect width="400" height="800" fill="#357"/><circle cx="200" cy="740" r="40" fill="#fc3"/></svg>
 `;
+// A landscape plate for the vertical pages: under vertical-rl the plate's
+// physical width is its block size, so a wide image is the shape a squeezed
+// section cuts into.
+const HERO_LANDSCAPE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1771" viewBox="0 0 2400 1771"><rect width="2400" height="1771" fill="#357"/><circle cx="120" cy="885" r="80" fill="#fc3"/></svg>
+`;
+// Enough columns that body's flex row overflows the viewport — the condition
+// under which a shrinkable hero gives up its width (a real vertical-writing site, 2026-09-23).
+const VERTICAL_BODY = Array.from({ length: 12 }, () =>
+  "蕙嵒先生屬畫此卷。自丁丑五月以至六、七、八月荷葉荷花落成。戲作河上花歌僅二百餘字呈正。",
+).join("\n\n");
 
 export const HERO_CAPTION_GATE: ScratchSiteSpec = {
   name: "hero-caption-gate",
@@ -730,6 +740,31 @@ uid: "hcg00102"
 :::
 
 Body text.
+`,
+    "scroll.svg": HERO_LANDSCAPE_SVG,
+    "vertical-plate.md": `---
+title: 河上花
+uid: "hcg00103"
+typesetting: vertical
+---
+
+:::hero {.plate}
+![[scroll.svg]]
+:::
+
+${VERTICAL_BODY}
+`,
+    "vertical-plate-captioned.md": `---
+title: 冊頁
+uid: "hcg00104"
+typesetting: vertical
+---
+
+:::hero {.plate caption="每開縱三一．七公分　橫二七．五公分"}
+![[scroll.svg]]
+:::
+
+${VERTICAL_BODY}
 `,
     ".moss/config.toml": CONFIG_TOML,
     // No user theme: this gate is about moss's own defaults.

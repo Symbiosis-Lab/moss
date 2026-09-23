@@ -59,6 +59,37 @@ test.describe("hero caption", () => {
     expect(shape.drawn).toBeCloseTo(shape.natural, 1);
   });
 
+  // Under vertical typesetting body is a flex row of columns and the hero one
+  // of its items. `overflow: hidden` drops a flex item's automatic minimum
+  // size to zero, so once a long article overflows the row, the default
+  // `flex-shrink: 1` squeezed the section narrower than its plate and the
+  // frame cut the painting off — 175px of a handscroll on a real site,
+  // and the whole plate once a caption joined the row.
+  for (const path of ["/vertical-plate/", "/vertical-plate-captioned/"]) {
+    test(`a vertical plate is never cut off by its frame (${path})`, async ({ page }) => {
+      await page.goto(path);
+      const sec = (await page.locator(".moss-hero").boundingBox())!;
+      const img = (await page.locator(".moss-hero img").boundingBox())!;
+      expect(img.width).toBeGreaterThan(100);
+      expect(sec.x).toBeLessThanOrEqual(img.x + 1);
+      expect(sec.x + sec.width).toBeGreaterThanOrEqual(img.x + img.width - 1);
+    });
+  }
+
+  test("a vertical plate's caption runs vertically beside it, centred on it", async ({ page }) => {
+    await page.goto("/vertical-plate-captioned/");
+    const caption = page.locator(CAPTION);
+    await expect(caption).toBeVisible();
+    expect(await caption.evaluate((el) => getComputedStyle(el).writingMode)).toBe("vertical-rl");
+
+    const img = (await page.locator(".moss-hero img").boundingBox())!;
+    const cap = (await caption.boundingBox())!;
+    expect(cap.height).toBeGreaterThan(cap.width);
+    // The next column after the plate (block-end is leftward), not over it.
+    expect(cap.x + cap.width).toBeLessThanOrEqual(img.x + 1);
+    expect(Math.abs(cap.y + cap.height / 2 - (img.y + img.height / 2))).toBeLessThan(2);
+  });
+
   test("a hero without a caption keeps the default crop", async ({ page }) => {
     await page.goto("/plain/");
 
