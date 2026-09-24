@@ -33,9 +33,21 @@
   </nav>
 </header>
 
-<main class="container">
+<!-- main/article, byte-for-byte the shape article-content.html + html.rs
+     emit for a dated article with no sidebar: `<main id="main-content"
+     tabindex="-1">` with NO class (main_class is only ever "" or
+     "has-sidebar", html.rs ~1373) wrapping `<article class="container">`
+     directly — never `<main class="container">`, which no real build emits
+     and which understates how far a scale change reflows the page. The
+     title carries `moss-article-title` (html_post.rs), the class that
+     makes it "the masthead" site.css's own comments mean by that word: its
+     font-size is `--moss-read-title`, a multiple of `--moss-reading-size`
+     (site.css ~4352), so it grows with every scale step the same way
+     `.container`'s width does — a bare `<h1>` has neither property and
+     understates the reflow this fixture exists to reproduce. -->
+<main id="main-content" tabindex="-1">
   <article class="container">
-    <h1>試題長卷範例</h1>
+    <h1 class="moss-article-title">群山之間的信件與尚未寄出的故事（虛構範例標題）</h1>
 
     <!-- The date-line/font-anchor/font-pill HTML, byte-for-byte as
          html.rs (~line 1142) emits it for an article page with a date. -->

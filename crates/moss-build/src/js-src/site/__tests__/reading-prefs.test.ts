@@ -1,13 +1,17 @@
 /**
  * Tests for the morphing font control.
  *
- * Design: A single glyph ("字" or "Aa") sits next to the date at the
- * currently-selected font size. Clicking it morphs it into a 4-button
- * pill (the glyph slides into position, then the pill fades in around
- * it). Selecting a size updates the glyph and the document scale.
- * Dismissing (click-outside or scroll) reverses the morph — the pill
- * fades out, the glyph reappears at the active button's position, and
- * slides back to its rest spot.
+ * Design: A single glyph ("字" or "Aa") sits next to the date, at a fixed
+ * slot the pill's own first button always shares — no size is ever
+ * "active" in a way that moves either one. Clicking the glyph grows a
+ * 4-button pill out of that slot. Selecting a size updates the glyph's
+ * `size-*` co-class and the document scale; while the pill stays open, the
+ * scale change reflows the page around the control (title, column width),
+ * so theme.ts holds `.font-anchor` in place against that reflow until the
+ * pill closes. jsdom has no layout, so the hold itself — and the geometry
+ * invariants it exists for — are covered by the render-gate under
+ * tests/render-gates/site/vertical-nav-chrome.spec.ts, not here. Dismissing
+ * (click-outside, Escape, or scroll) closes the pill and releases the hold.
  *
  * Key invariant: the trigger and the pill are never both visible at the
  * same time. When the pill is visible, the trigger is hidden (and vice
@@ -17,7 +21,7 @@
  *   .date-line
  *     .date
  *     .font-anchor          (relative wrapper for trigger + pill)
- *       .font-trigger       (position: absolute, overlays first pill button)
+ *       .font-trigger       (position: absolute, fixed slot shared with the pill's first button)
  *       .font-pill#fontPill  (always in layout via visibility:hidden)
  *         button[data-scale] × 4
  *
@@ -241,5 +245,109 @@ describe("Morphing font control", () => {
 
     // The IIFE should have applied the scale class to <html>
     expect(document.documentElement.classList.contains("scale-large")).toBe(true);
+  });
+
+  // jsdom lays nothing out — every rect here is a scripted stand-in for
+  // "the page reflowed", not a real measurement — so these test the hold's
+  // arithmetic and state machine (accumulate, reset on open/close, skip
+  // when closed), not real geometry. Real geometry is the render-gate's job
+  // (tests/render-gates/site/vertical-nav-chrome.spec.ts).
+  describe("hold-while-open (anchor translate)", () => {
+    let rectSpy: ReturnType<typeof vi.spyOn>;
+
+    const rect = (left: number, top: number) =>
+      ({ left, top, right: left, bottom: top, width: 0, height: 0, x: left, y: top, toJSON() {} }) as DOMRect;
+
+    beforeEach(() => {
+      rectSpy = vi.spyOn(Element.prototype, "getBoundingClientRect");
+    });
+
+    afterEach(() => {
+      rectSpy.mockRestore();
+    });
+
+    test("picking a size while open translates the anchor by the pill's before/after delta, instantly", () => {
+      initFontPanel();
+      const trigger = document.querySelector(".font-trigger") as HTMLElement;
+      const anchor = document.querySelector(".font-anchor") as HTMLElement;
+
+      trigger.click();
+      flushAnimations();
+
+      // Pill measured at (100, 50) before the scale-class swap reflows the
+      // page, (130, 60) after — the hold must cancel exactly that 30/10 shift.
+      rectSpy.mockReturnValueOnce(rect(100, 50)).mockReturnValueOnce(rect(130, 60));
+      (document.querySelector('[data-scale="large"]') as HTMLElement).click();
+
+      expect(anchor.style.translate).toBe("-30px -10px");
+      // "Instantly" is `transition: none` written in the same step as the
+      // translate — site.css's own `.font-anchor` transition only animates
+      // a change when this inline override isn't present (see close() below).
+      expect(anchor.style.transition).toBe("none");
+    });
+
+    test("a second pick while still open accumulates onto the running hold, each one instant", () => {
+      initFontPanel();
+      const trigger = document.querySelector(".font-trigger") as HTMLElement;
+      const anchor = document.querySelector(".font-anchor") as HTMLElement;
+
+      trigger.click();
+      flushAnimations();
+
+      rectSpy.mockReturnValueOnce(rect(0, 0)).mockReturnValueOnce(rect(20, 0));
+      (document.querySelector('[data-scale="large"]') as HTMLElement).click();
+      expect(anchor.style.translate).toBe("-20px 0px");
+      expect(anchor.style.transition).toBe("none");
+
+      rectSpy.mockReturnValueOnce(rect(0, 0)).mockReturnValueOnce(rect(-5, 0));
+      (document.querySelector('[data-scale="xlarge"]') as HTMLElement).click();
+      expect(anchor.style.translate).toBe("-15px 0px");
+      expect(anchor.style.transition).toBe("none");
+    });
+
+    test("restoring a saved scale on load writes no translate and no transition override — the pill is closed", () => {
+      localStorage.setItem("moss-font-scale", "large");
+      // A huge, obviously-wrong delta: if restore ever read it, the
+      // assertion below would fail loudly instead of passing by accident.
+      rectSpy.mockReturnValue(rect(999, 999));
+      setupDOM();
+      initFontPanel();
+
+      const anchor = document.querySelector(".font-anchor") as HTMLElement;
+      expect(anchor.style.translate).toBe("");
+      expect(anchor.style.transition).toBe("");
+    });
+
+    test("the next open starts from a zero hold, not the previous session's, and close released the transition override too", () => {
+      initFontPanel();
+      const trigger = document.querySelector(".font-trigger") as HTMLElement;
+      const anchor = document.querySelector(".font-anchor") as HTMLElement;
+
+      trigger.click();
+      flushAnimations();
+      rectSpy.mockReturnValueOnce(rect(0, 0)).mockReturnValueOnce(rect(40, 0));
+      (document.querySelector('[data-scale="large"]') as HTMLElement).click();
+      expect(anchor.style.transition).toBe("none");
+
+      trigger.click(); // close, releases the hold
+      flushAnimations();
+      expect(anchor.style.translate).toBe("");
+      // The release clears the inline override together with the translate,
+      // so site.css's own transition is what's left to animate it — a bare
+      // "none" left behind here would make the release jump instead.
+      expect(anchor.style.transition).toBe("");
+
+      trigger.click(); // reopen
+      flushAnimations();
+      expect(anchor.style.translate).toBe("");
+
+      // Picking the size already active — before/after both report the
+      // same rect (no reflow) — must yield exactly a zero-delta hold, not
+      // whatever total the previous open session left off at.
+      rectSpy.mockReturnValueOnce(rect(0, 0)).mockReturnValueOnce(rect(0, 0));
+      (document.querySelector('[data-scale="large"]') as HTMLElement).click();
+      expect(anchor.style.translate).toBe("0px 0px");
+      expect(anchor.style.transition).toBe("none");
+    });
   });
 });

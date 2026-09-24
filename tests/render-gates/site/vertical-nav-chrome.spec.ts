@@ -122,6 +122,21 @@ const gotoWithScale = async (page: Page, scale: string, typesetting: 'horizontal
 const crossAxisCenter = (r: { left: number; right: number; top: number; bottom: number }, typesetting: 'horizontal' | 'vertical') =>
   typesetting === 'vertical' ? (r.left + r.right) / 2 : (r.top + r.bottom) / 2;
 
+/**
+ * Inline-start edge of a rect: `left` under horizontal-tb, `top` under
+ * vertical-rl — the same physical property `inset-inline-start` resolves to
+ * (site.css's `.font-trigger` comment). This is the axis "the first button
+ * sits under the trigger" is about: the trigger is fixed at one size
+ * (matching the pill's `standard` button) while the pill's actual first
+ * button is `small` (a deliberately different, smaller size), so the two
+ * have different intrinsic cross-axis heights and are centered
+ * independently within the same box — a small, expected cross-axis offset
+ * between them, not a positioning bug. Only the inline-start edge is the
+ * invariant this design promises.
+ */
+const inlineStart = (r: { left: number; top: number }, typesetting: 'horizontal' | 'vertical') =>
+  typesetting === 'vertical' ? r.top : r.left;
+
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
 });
@@ -178,6 +193,116 @@ for (const typesetting of ['horizontal', 'vertical'] as const) {
         expect(Math.abs(crossAxisCenter(triggerRect, typesetting) - crossAxisCenter(dateRect, typesetting))).toBeLessThanOrEqual(1);
       });
     }
+
+    // Hold-while-open: the fixed-layout pill plus the per-selectScale()
+    // hold-offset design. Three invariants a passing gate must hold, none
+    // of which the old `--pill-offset` design met (see this file's header
+    // defect log):
+    //   a. whatever the reader just clicked stays under the pointer;
+    //   b. every size option always lives in the same place, so reopening
+    //      after any saved scale puts the first button under the trigger;
+    //   c. closing releases the hold — the anchor animates back home and
+    //      carries no leftover inline `translate`.
+    const PICK_SEQUENCE = ['large', 'xlarge', 'small', ''] as const;
+
+    // The pill's own open/close grow transition is 280ms (SLIDE_MS in
+    // theme.ts). This config's `use: { reducedMotion: 'reduce' }` never
+    // reaches the page: `page.context()` shows the resolved project `use`
+    // correctly carries `reducedMotion: "reduce"`, but the live context's
+    // own internal options omit the key entirely (sibling keys from the
+    // same object — userAgent, viewport, baseURL — all land fine), and
+    // `matchMedia('(prefers-reduced-motion: reduce)').matches` is false
+    // until a page calls `page.emulateMedia()` itself. `test.use()` in the
+    // spec file has the same gap, so this isn't a config-merging mistake to
+    // fix here — it's Playwright (1.61.1) not applying `reducedMotion` from
+    // resolved test options to the context it creates. site.css's own
+    // `@media (prefers-reduced-motion: reduce)` block is not at fault: it
+    // wins the cascade correctly once the browser actually reports the
+    // preference (confirmed the same way). Until upstream fixes or works
+    // around this, `waitForFunction` on the `visible`/closed class only
+    // proves the class landed, not that the transform transition finished.
+    // A button rect read before it settles is mid-grow, not a rest
+    // position, and would make these assertions fail on the ANIMATION
+    // rather than on the hold this gate exists to check. 350ms covers the
+    // 280ms transition plus slack, matching the wait the pre-existing
+    // release-animation assertions below already use for the same reason.
+    const SETTLE_MS = 350;
+
+    /** Click the trigger open and wait for the grow transition to settle. */
+    const openAndSettle = async (page: Page) => {
+      await page.click('.font-trigger');
+      await page.waitForFunction(() => document.getElementById('fontPill')?.classList.contains('visible'));
+      await page.waitForTimeout(SETTLE_MS);
+    };
+
+    /** Two rAF ticks — enough for the hold's synchronous re-measure-and-translate to have painted. */
+    const waitTwoFrames = (page: Page) =>
+      page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+
+    test('what you click stays under the pointer through a whole picking sequence', async ({ page }) => {
+      await gotoWithScale(page, '', typesetting);
+      await openAndSettle(page);
+
+      for (const scale of PICK_SEQUENCE) {
+        const sel = `.font-pill button[data-scale="${scale}"]`;
+        const before = await rect(page, sel);
+        await page.click(sel);
+        await waitTwoFrames(page);
+        const after = await rect(page, sel);
+        expect(Math.abs(after.left - before.left)).toBeLessThanOrEqual(1);
+        expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(1);
+        await expect(page.locator('#fontPill')).toHaveClass(/visible/);
+      }
+    });
+
+    for (const scale of PICK_SEQUENCE) {
+      test(`each size lives in the same place: reopening after picking ${JSON.stringify(scale)} puts the first button under the trigger`, async ({ page }) => {
+        await gotoWithScale(page, '', typesetting);
+
+        await openAndSettle(page);
+        await page.click(`.font-pill button[data-scale="${scale}"]`);
+
+        // Close (click outside) and wait out the release animation. Picking
+        // a non-default size persists past the close (that's the reader's
+        // choice sticking, not a bug), which reflows the page and can
+        // legitimately move the trigger's own rest slot — so `rest` is
+        // measured HERE, after the pick has settled, not before it.
+        await page.mouse.click(5, 5);
+        await page.waitForFunction(() => !document.getElementById('fontPill')?.classList.contains('visible'));
+        await page.waitForTimeout(SETTLE_MS);
+        const rest = await rect(page, '.font-trigger');
+
+        await openAndSettle(page);
+
+        const firstButton = await rect(page, '.font-pill button[data-scale="small"]');
+        expect(Math.abs(inlineStart(firstButton, typesetting) - inlineStart(rest, typesetting))).toBeLessThanOrEqual(1);
+      });
+    }
+
+    test('the trigger goes home on close: no leftover translate, and it still continues the date column', async ({ page }) => {
+      await gotoWithScale(page, '', typesetting);
+
+      await openAndSettle(page);
+      for (const scale of PICK_SEQUENCE) {
+        await page.click(`.font-pill button[data-scale="${scale}"]`);
+      }
+
+      await page.mouse.click(5, 5);
+      await page.waitForFunction(() => !document.getElementById('fontPill')?.classList.contains('visible'));
+      await page.waitForTimeout(SETTLE_MS);
+
+      const translate = await page.locator('.font-anchor').evaluate((el) => (el as HTMLElement).style.translate);
+      expect(translate).toBe('');
+
+      const dateRect = await rect(page, '.date-line .date');
+      const triggerRect = await rect(page, '.font-trigger');
+      expect(Math.abs(crossAxisCenter(triggerRect, typesetting) - crossAxisCenter(dateRect, typesetting))).toBeLessThanOrEqual(1);
+    });
   });
 }
 

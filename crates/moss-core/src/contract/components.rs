@@ -3315,7 +3315,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "The button that opens the reading-size pills. Its second class tracks the chosen size (`size-std` by default), so a theme can restyle the trigger per size without reading state from JS.",
+        description: "The button that opens the reading-size pills. Its second class tracks the chosen size (`size-std` by default); moss's own theme no longer sizes the closed glyph by it (the trigger is one fixed size regardless of the reader's scale), but the co-class remains, so a theme can still restyle the trigger per size without reading state from JS.",
     },
     ComponentEntry {
         class: "size-std",
@@ -3326,7 +3326,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Co-class on the font trigger reflecting the current reading size (`size-std` at the default). Lets a theme show the active size on the closed control.",
+        description: "Co-class on the font trigger reflecting the current reading size (`size-std` at the default). The default theme's closed glyph is one fixed size regardless of this class; it remains a hook for a theme that wants to show the active size on the closed control.",
     },
     ComponentEntry {
         class: "cover-thumb",

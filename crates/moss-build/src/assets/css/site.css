@@ -2414,20 +2414,31 @@ header:has(+ .moss-hero) .main-nav {
  *
  * A single glyph next to the date opens a 4-button size picker that grows
  * out of it. The trigger is the fixed anchor — it never
- * moves and carries no runtime position; `.font-pill` is the second,
- * differently-sized object that grows from the anchor's point,
- * carrying a JS-computed `--pill-offset` so its active button always lines
- * up under the trigger's fixed slot. Trigger and pill are never both
- * visible — trigger hides, pill shows — but because the pill's active
- * button coincides with the trigger's slot, this reads as one glyph
- * unfolding rather than two nodes swapping.
+ * moves and carries no runtime position. `.font-pill` is the
+ * second, differently-sized object that grows from the anchor's point: it
+ * has no offset of its own, so its FIRST button's inline-start edge always
+ * lands at the pill's own padding — which is the same 3px the trigger sits
+ * at (`.font-trigger`'s `inset-inline-start` below) — regardless of which
+ * size is active. Every size option therefore lives in the same physical
+ * slot every time the pill opens; picking one doesn't move the others.
+ * Trigger and pill are never both visible — trigger hides, pill shows —
+ * but because the pill's first slot coincides with the trigger's, this
+ * reads as one glyph unfolding rather than two nodes swapping.
+ *
+ * The reader's chosen scale (`html.scale-*`) reflows the page around this
+ * control (the title and column resize, the date row shifts), so theme.ts's
+ * `selectScale()` holds the anchor in place while the pill is open: it
+ * measures the pill's rect before and after the scale class swaps, and
+ * writes the accumulated delta as `.font-anchor`'s inline `translate` —
+ * instantly, no transition. Closing releases the hold (removes the inline
+ * translate) and that release alone animates.
  *
  * Structure:
  *   .date-line
  *     .date
- *     .font-anchor            position: relative wrapper
+ *     .font-anchor            position: relative wrapper, fixed font-size
  *       .font-trigger         position: absolute, static inline-start
- *       .font-pill#fontPill   position: relative, grows via transform
+ *       .font-pill#fontPill   normal flex item, grows via transform
  */
 .date-line {
   display: flex;
@@ -2546,6 +2557,21 @@ header:has(+ .moss-hero) .main-nav {
   margin-inline-start: 0.75em;
   display: flex;
   align-items: center;
+  /* Fixed at the DEFAULT reading size regardless of html.scale-* — matches
+     --moss-reading-size's own unscaled formula, so the control doesn't
+     compound with the size it's choosing (trigger, pill and the per-button
+     glyph ratios below stay one constant ratio apart at every scale step)
+     while still matching `.date-line .date` at the default scale.
+     vertical.css overrides this to `--moss-vertical-font-size` under
+     vertical typesetting, where body's own font-size already isn't
+     `--moss-reading-size` — see that file. */
+  font-size: calc(var(--moss-reading-size-base) * var(--moss-reading-script-scale));
+  /* Always on: theme.ts's selectScale() writes `translate` + `transition:
+     none` together for an instant hold, and close() clears both together so
+     THIS transition animates the release — a transition is decided by the
+     after-change style, so which one applies depends only on whether JS set
+     `transition: none` in the same step as the translate. */
+  transition: translate 280ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .font-trigger {
@@ -2554,6 +2580,10 @@ header:has(+ .moss-hero) .main-nav {
   color: var(--moss-color-muted);
   cursor: pointer;
   font-family: inherit;
+  /* A `<button>`'s UA stylesheet sets its own font-size (not `inherit`), so
+     without this the trigger's glyph would fall back to the browser's
+     control font instead of matching `.font-anchor`'s fixed size. */
+  font-size: 1em;
   padding-block: 4px;
   padding-inline: 10px;
   border-radius: 16px;
@@ -2572,20 +2602,8 @@ header:has(+ .moss-hero) .main-nav {
 .font-trigger:hover { color: var(--moss-color-text); }
 .font-trigger.hidden { opacity: 0; pointer-events: none; }
 
-/* Trigger size variants — match pill button sizes */
-.font-trigger.size-small  { font-size: 0.85em; }
-.font-trigger.size-std    { font-size: 1em; }
-.font-trigger.size-large  { font-size: 1.12em; }
-.font-trigger.size-xlarge { font-size: 1.25em; }
-
-/* The pill is the second, differently-sized object that grows
-   from the trigger's fixed point — it moves, the anchor never does.
-   `--pill-offset` (set once per selectScale() in theme.ts) shifts the pill
-   so its *active* button lands exactly under the trigger's 3px slot; the
-   grow transform shares that same fixed point via `transform-origin`.
-   `position: relative`, not `absolute` — the pill stays a normal flex item
-   of `.font-anchor` (at its unshifted rest box) so the anchor keeps a real
-   size to align the trigger against; only its painted position moves. */
+/* Every size option lives in the same place regardless of which is active
+   — see the "Morphing font control" comment above for why. */
 .font-pill {
   display: inline-flex;
   align-items: center;
@@ -2593,10 +2611,12 @@ header:has(+ .moss-hero) .main-nav {
   border-radius: 20px;
   padding: 3px;
   gap: 2px;
-  position: relative;
-  inset-inline-start: calc(3px - var(--pill-offset, 0px));
-  transform-origin: left center; /* logical `inline-start` is invalid for transform-origin (no
-     logical keyword form) — vertical.css carries the vertical-mode override */
+  /* The trigger's fixed inset-inline-start: 3px point IS this pill's own
+     inline-start edge (see the comment above) — transform-origin needs no
+     runtime value to pivot there. Logical `inline-start` is invalid for
+     transform-origin (no logical keyword form); vertical.css carries
+     vertical-rl's physical equivalent. */
+  transform-origin: left center;
   visibility: hidden;
   opacity: 0;
   transform: scaleX(0.001);
@@ -2610,7 +2630,8 @@ header:has(+ .moss-hero) .main-nav {
 
 @media (prefers-reduced-motion: reduce) {
   .font-trigger,
-  .font-pill {
+  .font-pill,
+  .font-anchor {
     transition: none;
   }
 }
@@ -2647,7 +2668,13 @@ header:has(+ .moss-hero) .main-nav {
 :lang(ko) .font-trigger::after,
 :lang(ko) .font-pill button::after { content: '\AE00'; }
 
-/* Progressive sizing — same scale for both trigger and pill buttons */
+/* Progressive sizing — each pill button's own glyph previews the size it
+   picks, ratios of `.font-anchor`'s fixed font-size above so they hold
+   steady across `html.scale-*` rather than compounding with it. The closed
+   trigger is one size in moss's own theme (no matching `.font-trigger.size-*`
+   rule) — theme.ts still toggles that co-class on it (contract: `size-std`
+   et al. in moss-core's component list) purely as a hook for a theme that
+   wants to size the closed glyph itself. */
 .font-pill button[data-scale="small"] { font-size: 0.85em; }
 .font-pill button[data-scale=""]      { font-size: 1em; }
 .font-pill button[data-scale="large"] { font-size: 1.12em; }

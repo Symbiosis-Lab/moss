@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A folder embed with more than one pipe segment set its `style` to the whole remainder, and `sort=date` was ignored.
 - A bare percent on a video or iframe (`|77%`) is now emitted as an inline style width instead of an invalid `width="77%"` attribute.
 - **An unlabeled `:::grid N {scroll}` row that actually scrolls now gets an accessible name.** It was a keyboard stop (`tabindex="0"`) with no `role` or name at all unless the author wrote `label="…"` — a screen reader announced a focusable element with nothing to say about it. Without an explicit `label`, the row now falls back to the text of the nearest preceding heading (`## Related` above the row names it "Related"); with no such heading, today's unnamed-but-scrollable output is unchanged.
+- **`font-trigger`/`size-std`'s `describe --json` descriptions now say what the default theme actually does.** They used to imply the closed reading-size glyph is sized per its `size-*` co-class; moss's own theme no longer does that (fixing the font-size picker's own compounding-with-itself bug meant giving the control one fixed size instead), so the descriptions now say the co-class is a hook a theme can still use, not something the shipped theme sizes by.
 
 ## [0.15.0] - 2026-09-06
 
