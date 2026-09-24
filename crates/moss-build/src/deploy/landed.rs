@@ -195,6 +195,37 @@ async fn record_what_is_live(
     summary
 }
 
+/// Write the publish record for a prebuilt tree that just went live.
+///
+/// Another tool built it, so moss knows no pages behind it: `sources` and
+/// `source_to_output` are empty, which is the truth. `files` is the tree as
+/// sent to the server. The next moss-built publish therefore counts every page
+/// as added, because to the live site every page is. The note IDs last seen
+/// live are carried forward from the standing record, as
+/// [`record_what_is_live`] does when it has no article map to read: forgetting
+/// them would drop the rename forwarding the site has earned.
+///
+/// Best-effort like the hosted record: a failed write costs a degraded change
+/// set, never the publish.
+pub fn record_prebuilt_landed(folder: &Path, generation_id: &str, target: &str, files: &HashMap<String, String>) {
+    let mp = MossPaths::new(folder);
+    let standing = published_record::load_for(&mp, Some(target));
+    let record = PublishedSnapshot {
+        generation_id: generation_id.to_string(),
+        target: target.to_string(),
+        published_at: chrono::Utc::now().to_rfc3339(),
+        files: files.clone(),
+        // Always `Some`: `None` would ask `live_baseline` to rebuild the
+        // triples from `uids` and `source_to_output`, and this record has no
+        // pages to rebuild them from.
+        triples: Some(standing.and_then(|s| s.triples).unwrap_or_default()),
+        ..Default::default()
+    };
+    if let Err(e) = published_record::save(&mp, &record) {
+        log::warn!("deploy(prebuilt): could not record what went live: {e}");
+    }
+}
+
 /// What one publish record advances together, read off the same article map so
 /// none of it can land out of step with the rest (moss#1089: the sealless
 /// writer, deleted at track P slice P3, used to advance `uids` alone and leave

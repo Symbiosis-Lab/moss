@@ -258,9 +258,10 @@ fn commit_response_deserializes_without_generation_id() {
     );
 }
 
-/// 200 with a real generation_id → Ok(Some(id)).
+/// 200 with a real generation_id → the id, and when it went live in the
+/// server's Unix seconds (what `moss deploy`'s stale-copy check compares).
 #[tokio::test]
-async fn test_get_live_generation_200_with_id_returns_some() {
+async fn test_live_generation_200_carries_id_and_deployed_at() {
     let body = br#"{"generation_id":"abc123def456abcd","deployed_at":1718000000}"#;
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n",
@@ -276,13 +277,19 @@ async fn test_get_live_generation_200_with_id_returns_some() {
         &identity,
         &format!("http://{}", addr),
     );
-    let result = client.get_live_generation("her-blog").await;
+    let result = client.live_generation("her-blog").await;
     assert!(
         result.is_ok(),
         "200+id must produce Ok, got: {:?}",
         result.err()
     );
-    assert_eq!(result.unwrap(), Some("abc123def456abcd".to_string()));
+    assert_eq!(
+        result.unwrap(),
+        crate::seta::sites::LiveGeneration {
+            generation_id: Some("abc123def456abcd".to_string()),
+            deployed_at: Some(1718000000),
+        }
+    );
 }
 
 // ============================================================================

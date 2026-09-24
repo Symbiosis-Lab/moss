@@ -738,11 +738,15 @@ async fn push_site_inner_impl(
 /// [`crate::deploy::refuse_publish`]. A binary that refused here on a problem
 /// count the app publishes through would be the divergence this whole track
 /// exists to delete. `--strict` belongs to `build`, where the caller decides.
+///
+/// One refusal is the terminal's alone, on purpose: a folder behind the live
+/// site, lifted by `overwrite_newer` — see [`crate::deploy::resolve_publish_inputs`].
 pub async fn run_hosted_deploy(
     folder: &Path,
     host_ports: &(dyn Fn(&str) -> crate::build::HostPorts + Send + Sync),
     plugins: crate::build::PluginMode,
     requested_site_id: Option<&str>,
+    overwrite_newer: bool,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
 ) -> Result<PushResult, String> {
     let folder_str = folder.to_string_lossy().to_string();
@@ -751,7 +755,7 @@ pub async fn run_hosted_deploy(
     // well it builds, and an evicted identity key is knowable at t=0 — asking
     // for it is usually what makes it arrive.
     let Some((site_id, identity)) =
-        crate::deploy::resolve_publish_inputs(folder, requested_site_id, sink).await?
+        crate::deploy::resolve_publish_inputs(folder, requested_site_id, overwrite_newer, sink).await?
     else {
         return Ok(PushResult::NeedsSetup);
     };
@@ -1274,5 +1278,256 @@ mod tests {
             !body.contains(stale_hash),
             "the stale sealed hash must not survive into the committed manifest: {body}"
         );
+    }
+
+    // ── a copy behind the live site ────────────────────────────────────────
+    //
+    // Both `moss deploy` routes to moss hosting are here, prebuilt included:
+    // the guard is one call in `deploy::resolve_publish_inputs`, which both
+    // reach, and they share these fixtures.
+
+    /// A canned `200` with a JSON body, leaked for `mock_seta_sequence`.
+    fn json_200(body: &str) -> &'static [u8] {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        Box::leak(response.into_bytes().into_boxed_slice())
+    }
+
+    /// What the server says after another copy published at 2026-09-24 14:03
+    /// UTC — after this folder's own last publish.
+    const PUBLISHED_ELSEWHERE_SINCE: &str = r#"{"generation_id":"theirs","deployed_at":1790258580}"#;
+
+    /// A one-page folder whose record says it last published generation
+    /// `ours` at 2026-09-20 09:12 UTC. Under the workspace `target/` like
+    /// `one_shot`'s pipeline test, because the override test builds it.
+    fn folder_that_last_published(record: bool) -> tempfile::TempDir {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp/hosted");
+        std::fs::create_dir_all(&base).unwrap();
+        let tmp = tempfile::Builder::new().prefix("behind").tempdir_in(&base).unwrap();
+        std::fs::write(tmp.path().join("index.md"), "---\ntitle: Home\n---\n\nHello.\n").unwrap();
+        std::fs::create_dir_all(tmp.path().join(".moss")).unwrap();
+        std::fs::write(tmp.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"behind-test\"\n").unwrap();
+        if record {
+            crate::build::manifest::published_record::save(
+                &MossPaths::new(tmp.path()),
+                &crate::build::manifest::change_set::PublishedSnapshot {
+                    generation_id: "ours".to_string(),
+                    target: "moss:behind-test".to_string(),
+                    published_at: "2026-09-20T09:12:30+00:00".to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        tmp
+    }
+
+    /// `run_hosted_deploy` exactly as `moss deploy` calls it, minus plugins.
+    async fn cli_deploy(folder: &Path, overwrite_newer: bool) -> Result<PushResult, String> {
+        run_hosted_deploy(
+            folder,
+            &crate::cli::host::cli_host_ports,
+            crate::build::PluginMode::Skip,
+            None,
+            overwrite_newer,
+            &progress::silent(),
+        )
+        .await
+    }
+
+    /// Awaits `publish` against the mock at `addr`. The caller holds
+    /// `ENV_TEST_MUTEX`; the client reads the variable when the future runs.
+    async fn with_seta_url<F: std::future::Future>(addr: std::net::SocketAddr, publish: F) -> F::Output {
+        let prev = std::env::var("MOSS_SETA_URL").ok();
+        std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+        let out = publish.await;
+        match prev {
+            Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+        out
+    }
+
+    /// The near-miss this guards: a folder behind the copy that last published
+    /// would have replaced the newer live site. The server answers exactly one
+    /// request, the live-generation probe; the refusal must come from it, before
+    /// the build and before anything is uploaded. Ablated by deleting the
+    /// `refuse_stale_copy` call in `run_hosted_deploy`: the deploy goes on to
+    /// build and fails at the sync with a connection error instead.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_cli_deploy_from_a_copy_behind_the_live_site_uploads_nothing() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_last_published(true);
+        let (addr, probe) = mock_seta_sequence_capturing(vec![json_200(PUBLISHED_ELSEWHERE_SINCE)]).await;
+
+        let result = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
+
+        let err = result.expect_err("a copy behind the live site must not publish");
+        assert!(err.contains("published from another copy"), "got: {err}");
+        let probe = String::from_utf8_lossy(&probe.await.expect("the probe is the one request made")).to_string();
+        assert!(probe.starts_with("GET /api/sites/behind-test/generation"), "got: {probe}");
+    }
+
+    /// `--overwrite-newer` publishes over it: the build runs and the push
+    /// reaches the sync, which reports nothing to change.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_override_publishes_over_a_newer_live_site() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_last_published(true);
+        let addr = mock_seta_sequence(vec![
+            // push's own no-op probe: a different generation, so it goes on.
+            json_200(PUBLISHED_ELSEWHERE_SINCE),
+            json_200(r#"{"need":[],"remove":[]}"#),
+        ])
+        .await;
+
+        let result = with_seta_url(addr, cli_deploy(folder.path(), true)).await;
+
+        assert!(matches!(result, Ok(PushResult::Success { .. })), "got: {result:?}");
+    }
+
+    /// The app publishes through `push_site_inner`, and its behaviour is
+    /// unchanged: the same folder and server state go ahead there.
+    #[tokio::test]
+    async fn the_app_publish_path_does_not_refuse_a_copy_behind_the_live_site() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_last_published(true);
+        let sealed = sealed_fixture();
+        std::fs::create_dir_all(MossPaths::new(folder.path()).generation_dir(sealed.generation_id())).unwrap();
+        let addr = mock_seta_sequence(vec![
+            json_200(PUBLISHED_ELSEWHERE_SINCE),
+            json_200(r#"{"need":[],"remove":[]}"#),
+        ])
+        .await;
+
+        let identity = Identity::generate().expect("generate identity");
+        let sink = progress::silent();
+        let spy = SpyPorts::default();
+        let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cx = PushContext {
+            folder_path: folder.path(),
+            identity: &identity,
+            site_id: "behind-test",
+            sink: &sink,
+            ports: &spy,
+            events_lock: &events_lock,
+        };
+        let result = with_seta_url(addr, push_site_inner(&sealed, &cx)).await;
+
+        assert!(matches!(result, Ok(PushResult::Success { .. })), "got: {result:?}");
+    }
+
+    /// No record means a first publish from this copy: nothing to compare,
+    /// so no refusal whatever the server says.
+    #[tokio::test]
+    async fn a_folder_with_no_publish_record_is_not_refused() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_last_published(false);
+        let addr = mock_seta_sequence(vec![json_200(PUBLISHED_ELSEWHERE_SINCE)]).await;
+        let identity = Identity::generate().unwrap();
+
+        let result = with_seta_url(addr, crate::deploy::refuse_stale_copy(folder.path(), "behind-test", &identity)).await;
+
+        assert_eq!(result, Ok(()));
+    }
+
+    /// A probe that fails is not evidence: the deploy goes ahead, as it does
+    /// past `push`'s own no-op check.
+    #[tokio::test]
+    async fn a_failed_probe_does_not_refuse() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_last_published(true);
+        let addr = mock_seta_sequence(vec![
+            b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        ])
+        .await;
+        let identity = Identity::generate().unwrap();
+
+        let result = with_seta_url(addr, crate::deploy::refuse_stale_copy(folder.path(), "behind-test", &identity)).await;
+
+        assert_eq!(result, Ok(()));
+    }
+
+    /// A prebuilt tree another tool produced, for `--prebuilt`.
+    fn prebuilt_site() -> tempfile::TempDir {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp/hosted");
+        std::fs::create_dir_all(&base).unwrap();
+        let dir = tempfile::Builder::new().prefix("prebuilt").tempdir_in(&base).unwrap();
+        std::fs::write(dir.path().join("index.html"), "<html>Built elsewhere</html>").unwrap();
+        dir
+    }
+
+    /// The same near-miss through `--prebuilt`, which publishes to the same
+    /// site. Ablated by deleting the `refuse_stale_copy` call in
+    /// `resolve_publish_inputs`: the deploy goes on to hash and sync instead.
+    #[tokio::test]
+    async fn a_prebuilt_deploy_from_a_copy_behind_the_live_site_uploads_nothing() {
+        let _latch = crate::deploy::freeze::single_flight_tests::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_last_published(true);
+        let site = prebuilt_site();
+        let (addr, probe) = mock_seta_sequence_capturing(vec![json_200(PUBLISHED_ELSEWHERE_SINCE)]).await;
+
+        let result = with_seta_url(
+            addr,
+            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, &progress::silent()),
+        )
+        .await;
+
+        let err = result.expect_err("a copy behind the live site must not publish");
+        assert!(err.contains("published from another copy"), "got: {err}");
+        let probe = String::from_utf8_lossy(&probe.await.expect("the probe is the one request made")).to_string();
+        assert!(probe.starts_with("GET /api/sites/behind-test/generation"), "got: {probe}");
+    }
+
+    /// A folder that publishes with `--prebuilt` and then with moss's own
+    /// build is the same copy both times, so the second deploy must not read
+    /// the first as someone else's. Ablated by deleting the
+    /// `record_prebuilt_landed` call in `push_prebuilt_inner`: the record
+    /// stays at the earlier moss-built publish and the hosted deploy is
+    /// refused.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn after_a_prebuilt_publish_the_next_hosted_deploy_is_not_refused() {
+        let _latch = crate::deploy::freeze::single_flight_tests::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_last_published(true);
+        let site = prebuilt_site();
+        let prebuilt_gen = crate::build::assets::paths::compute_manifest_generation_id(
+            &crate::deploy::prebuilt::build_manifest_from_dir(site.path()).unwrap(),
+        );
+        let live_prebuilt: &'static str =
+            Box::leak(format!(r#"{{"generation_id":"{prebuilt_gen}","deployed_at":1790258580}}"#).into_boxed_str());
+
+        let addr = mock_seta_sequence(vec![
+            // The guard: this copy's own generation is live, so it goes ahead.
+            json_200(r#"{"generation_id":"ours","deployed_at":1790000000}"#),
+            // push_prebuilt's no-op probe, the sync, the upload, the commit.
+            json_200(r#"{"generation_id":"ours","deployed_at":1790000000}"#),
+            json_200(r#"{"need":["index.html"],"remove":[]}"#),
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            json_200(&format!(
+                r#"{{"url":"https://behind-test.mosspub.com","files_updated":1,"files_removed":0,"timestamp":1790258580,"generation_id":"{prebuilt_gen}"}}"#
+            )),
+        ])
+        .await;
+        let published = with_seta_url(
+            addr,
+            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, &progress::silent()),
+        )
+        .await;
+        assert!(matches!(published, Ok(PushResult::Success { files_uploaded: 1, .. })), "got: {published:?}");
+
+        let addr = mock_seta_sequence(vec![
+            // The guard, then push's own probe: the prebuilt tree is live.
+            json_200(live_prebuilt),
+            json_200(live_prebuilt),
+            json_200(r#"{"need":[],"remove":[]}"#),
+        ])
+        .await;
+        let result = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
+
+        assert!(matches!(result, Ok(PushResult::Success { .. })), "got: {result:?}");
     }
 }

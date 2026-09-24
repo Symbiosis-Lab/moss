@@ -192,6 +192,12 @@ model (dark mode, quiet chrome, `@layer` rules), see
   nothing. The invite allowlist can also refuse registration.
 - **Every publish after the first:** `moss deploy <folder>` — the site id
   already lives in `.moss/state.toml`.
+- **Refused because the live site is newer:** `deploy` to moss hosting
+  (`--prebuilt` included) refuses when the site was published from another
+  copy of the folder after this copy's last publish. Bring this folder up to
+  date with that copy (usually `git pull`) and deploy again. `--overwrite-newer`
+  undoes the other publish — use it only when the human says to. A
+  `[hooks] deploy` plugin's destination is not checked.
 - **Custom domain:** `moss domain list <folder>` / `moss domain link <folder>
   example.com`.
 - **Site built by another generator:** `moss deploy <folder> --prebuilt=_site`

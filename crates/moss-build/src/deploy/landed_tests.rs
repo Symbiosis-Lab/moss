@@ -105,6 +105,40 @@ async fn an_unreadable_article_map_does_not_erase_the_note_ids() {
     assert_eq!(live.urls_by_uid().get("aabbccdd"), Some(&"kept/"));
 }
 
+/// A prebuilt tree names no moss pages, so its record says so rather than
+/// carrying the last moss build's page map: the next moss-built publish then
+/// counts every page as added, which is what it does to the live site. The
+/// note IDs last seen live still carry forward, as they do above.
+#[test]
+fn a_prebuilt_publish_records_its_tree_and_keeps_the_note_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let mp = MossPaths::new(dir.path());
+    let manifest = sealed(&[("kept.md", "kept/index.html", "h-kept", b"K")]);
+    let mut standing =
+        PublishedSnapshot::from_sealed(&manifest, TARGET, "2026-08-09T00:00:00Z".into());
+    standing.triples = Some(vec![crate::build::manifest::change_set::LiveEntry {
+        uid: "aabbccdd".into(),
+        url: "kept/".into(),
+        source_path: "kept.md".into(),
+        title: "Kept".into(),
+    }]);
+    published_record::save(&mp, &standing).unwrap();
+
+    let tree = std::collections::HashMap::from([("index.html".to_string(), "100644:abc".to_string())]);
+    super::record_prebuilt_landed(dir.path(), "prebuilt-gen", TARGET, &tree);
+
+    let record = published_record::load_for(&mp, Some(TARGET)).expect("a record was written");
+    assert_eq!(record.generation_id, "prebuilt-gen");
+    assert_eq!(record.files, tree);
+    assert!(record.sources.is_empty() && record.source_to_output.is_empty());
+    let Baseline::Present(live) = live_baseline::load(&mp) else {
+        panic!("the note IDs last seen live must survive a prebuilt publish")
+    };
+    assert_eq!(live.urls_by_uid().get("aabbccdd"), Some(&"kept/"));
+    let next = crate::build::manifest::change_set::classify(Some(&record), &manifest);
+    assert!(next.classified && next.added == 1 && next.edited == 0 && next.deleted == 0, "{next:?}");
+}
+
 // ── The page-change summary a receipt renders (publish-receipt step 4) ──
 
 /// A rename and a brand-new page between two publishes must both reach the

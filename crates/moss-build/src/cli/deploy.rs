@@ -102,6 +102,12 @@ pub struct DeployFlags {
     /// it a plugin the app has never been told to allow is refused — which,
     /// on the route that publishes THROUGH a plugin, refuses the publish.
     pub allow_plugins: bool,
+    /// `--overwrite-newer`: publish even though the live site was published
+    /// from another copy after this folder's last publish, undoing that
+    /// publish. Named for what it discards rather than `--force`, because
+    /// the other publish refusals have no override and must not look as if
+    /// this one lifts them.
+    pub overwrite_newer: bool,
 }
 
 /// A parsed `moss deploy` command line.
@@ -132,6 +138,7 @@ impl DeployArgs {
                     flags.site_id = Some(a["--site-id=".len()..].to_string())
                 }
                 "--allow-plugins" => flags.allow_plugins = true,
+                "--overwrite-newer" => flags.overwrite_newer = true,
                 a if a.starts_with('-') => {
                     return Err(format!("error: unknown option '{}'\n{}", a, usage()))
                 }
@@ -242,7 +249,13 @@ pub fn publish(
     runtime.block_on(async {
         match route {
             DeployRoute::Prebuilt { dir } => {
-                crate::deploy::prebuilt::run_prebuilt_deploy(folder, dir, flags.site_id.as_deref(), &sink)
+                crate::deploy::prebuilt::run_prebuilt_deploy(
+                    folder,
+                    dir,
+                    flags.site_id.as_deref(),
+                    flags.overwrite_newer,
+                    &sink,
+                )
                     .await
                     .map(DeployReport::from)
             }
@@ -257,6 +270,7 @@ pub fn publish(
                     host_ports,
                     crate::build::PluginMode::Blocking,
                     flags.site_id.as_deref(),
+                    flags.overwrite_newer,
                     &sink,
                 )
                 .await
@@ -330,6 +344,20 @@ pub fn report(result: Result<DeployReport, String>, folder_display: &str) -> i32
 /// from that table before dispatch.
 fn usage() -> String {
     super::commands::help_for("deploy").expect("deploy is in the command table")
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::DeployArgs;
+
+    #[test]
+    fn overwrite_newer_is_accepted_and_off_by_default() {
+        let parse = |args: &[&str]| {
+            DeployArgs::parse(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>()).unwrap()
+        };
+        assert!(parse(&["site", "--overwrite-newer"]).flags.overwrite_newer);
+        assert!(!parse(&["site"]).flags.overwrite_newer);
+    }
 }
 
 #[cfg(test)]

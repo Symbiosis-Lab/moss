@@ -10,13 +10,15 @@
 //! What this path intentionally does NOT do (vs. `push_site_inner`):
 //! - No redirect-stub generation (moss tracks renames via its own article-map;
 //!   external SSGs handle redirects themselves)
-//! - No article-map snapshot (no moss build → no article-map)
+//! - No article-map snapshot (no moss build → no article-map), so the
+//!   publish record it writes names no pages — see `landed::record_prebuilt_landed`
 //! - No subscriber/analytics post-deploy sync (no moss-managed channels)
 //! - No domain orchestrator (callers wire this up if they want a custom
 //!   domain — orthogonal to the prebuilt question)
 //!
 //! Everything that IS still done: identity load, manifest hash, sync diff,
-//! HTTP/2 parallel upload (20 concurrent), commit, save deployment URL.
+//! HTTP/2 parallel upload (20 concurrent), commit, save deployment URL, and
+//! the publish record `moss deploy`'s stale-copy check reads.
 
 use crate::build::assets::paths::compute_manifest_generation_id;
 use crate::deploy::{progress, PushResult};
@@ -412,6 +414,12 @@ async fn push_prebuilt_inner(
     let deployed_at = chrono::DateTime::from_timestamp(commit_result.timestamp as i64, 0)
         .unwrap_or_else(chrono::Utc::now)
         .to_rfc3339();
+    // The record a later `moss deploy` compares the live site against, from
+    // either route: without it, a folder that alternates the two routes reads
+    // its own prebuilt publish as someone else's and is refused.
+    if let Some(target) = crate::config::deployment::slot_for("moss", Some(site_id)) {
+        crate::deploy::landed::record_prebuilt_landed(project_folder, &generation_id, &target, &manifest);
+    }
     if let Err(e) = crate::vault::deployment_state::record_publish(
         &folder_path_str,
         crate::vault::deployment_state::PublishOutcome {
@@ -462,10 +470,11 @@ pub async fn run_prebuilt_deploy(
     folder: &Path,
     dir: &Path,
     requested_site_id: Option<&str>,
+    overwrite_newer: bool,
     sink: &Arc<dyn DeploySink>,
 ) -> Result<PushResult, String> {
     let Some((site_id, identity)) =
-        crate::deploy::resolve_publish_inputs(folder, requested_site_id, sink).await?
+        crate::deploy::resolve_publish_inputs(folder, requested_site_id, overwrite_newer, sink).await?
     else {
         return Ok(PushResult::NeedsSetup);
     };

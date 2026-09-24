@@ -441,6 +441,128 @@ pub(crate) fn stale_source_refusal_text(stale: &[String]) -> String {
     format!("Nothing published — {subject}, so moss is still showing what it built last time. Publish again once it's readable.")
 }
 
+/// The refusal for a publish from a copy of the site that is behind the live
+/// site, or `None` to go ahead.
+///
+/// The publish record is tracked by git and synced with the folder, so a copy
+/// that has pulled the one that published last holds that publish's record
+/// too. A live generation this folder's record does not name, which went live
+/// after the record was written, came from a copy this folder has not caught
+/// up with — and publishing from here would undo it.
+///
+/// Anything short of that evidence goes ahead: no live generation, no time for
+/// it, the record's own generation, or a record time that does not parse.
+pub(crate) fn stale_copy_refusal(
+    record: &crate::build::manifest::change_set::PublishedSnapshot,
+    live: &crate::seta::sites::LiveGeneration,
+) -> Option<String> {
+    if live.generation_id.as_deref()? == record.generation_id {
+        return None;
+    }
+    let live_at = chrono::DateTime::from_timestamp(live.deployed_at?, 0)?;
+    let recorded_at = chrono::DateTime::parse_from_rfc3339(&record.published_at).ok()?;
+    if live_at <= recorded_at {
+        return None;
+    }
+    let when = |t: chrono::DateTime<chrono::Utc>| t.format("%Y-%m-%d %H:%M UTC").to_string();
+    Some(format!(
+        "Nothing published — the live site was published from another copy of this folder on {}, \
+         after this folder last published on {}. Deploying from here would undo that publish. \
+         Bring this folder up to date with the copy that published (for example, git pull), \
+         then deploy again — or pass --overwrite-newer to replace the live site anyway.",
+        when(live_at),
+        when(recorded_at.with_timezone(&chrono::Utc)),
+    ))
+}
+
+/// Refuse `moss deploy` from a copy that is behind the live site — see
+/// [`stale_copy_refusal`]. With no record there is nothing to compare, so the
+/// server is not asked; a probe that fails goes ahead, as `push`'s no-op check
+/// does, because a refusal needs evidence.
+pub async fn refuse_stale_copy(
+    folder: &std::path::Path,
+    site_id: &str,
+    identity: &crate::identity::Identity,
+) -> Result<(), String> {
+    let record = crate::config::deployment::slot_for("moss", Some(site_id)).and_then(|target| {
+        crate::build::manifest::published_record::load_for(
+            &crate::moss_paths::MossPaths::new(folder),
+            Some(&target),
+        )
+    });
+    let Some(record) = record else { return Ok(()) };
+    let environment = crate::build::site_config::resolve_environment(&folder.to_string_lossy());
+    let client = crate::seta::client::MossSetaClient::for_environment(identity, &environment);
+    let Ok(live) = client.live_generation(site_id).await else { return Ok(()) };
+    match stale_copy_refusal(&record, &live) {
+        Some(refusal) => Err(refusal),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod stale_copy_tests {
+    use super::stale_copy_refusal;
+    use crate::build::manifest::change_set::PublishedSnapshot;
+    use crate::seta::sites::LiveGeneration;
+
+    /// This folder last published generation `ours` at 2026-09-20 09:12 UTC.
+    fn record() -> PublishedSnapshot {
+        PublishedSnapshot {
+            generation_id: "ours".to_string(),
+            target: "moss:blog".to_string(),
+            published_at: "2026-09-20T09:12:30.123456+00:00".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn live(generation_id: Option<&str>, deployed_at: Option<&str>) -> LiveGeneration {
+        LiveGeneration {
+            generation_id: generation_id.map(str::to_string),
+            deployed_at: deployed_at.map(|t| {
+                chrono::DateTime::parse_from_rfc3339(t).unwrap().timestamp()
+            }),
+        }
+    }
+
+    #[test]
+    fn a_generation_published_elsewhere_after_this_folders_last_publish_is_refused() {
+        let refusal = stale_copy_refusal(&record(), &live(Some("theirs"), Some("2026-09-24T14:03:00Z")))
+            .expect("the live site is newer than anything this folder has seen");
+        assert!(refusal.contains("2026-09-24 14:03 UTC"), "names when the live site was published: {refusal}");
+        assert!(refusal.contains("2026-09-20 09:12 UTC"), "names this folder's last publish: {refusal}");
+        assert!(refusal.contains("git pull"), "names the fix: {refusal}");
+        assert!(refusal.contains("--overwrite-newer"), "names the override: {refusal}");
+    }
+
+    #[test]
+    fn the_generation_this_folder_published_goes_ahead() {
+        assert_eq!(stale_copy_refusal(&record(), &live(Some("ours"), Some("2026-09-24T14:03:00Z"))), None);
+    }
+
+    #[test]
+    fn a_foreign_generation_that_went_live_before_this_folders_publish_goes_ahead() {
+        assert_eq!(stale_copy_refusal(&record(), &live(Some("theirs"), Some("2026-09-19T00:00:00Z"))), None);
+    }
+
+    #[test]
+    fn a_site_with_no_live_generation_goes_ahead() {
+        assert_eq!(stale_copy_refusal(&record(), &live(None, None)), None);
+        assert_eq!(stale_copy_refusal(&record(), &LiveGeneration::default()), None);
+    }
+
+    #[test]
+    fn a_live_generation_with_no_time_goes_ahead() {
+        assert_eq!(stale_copy_refusal(&record(), &live(Some("theirs"), None)), None);
+    }
+
+    #[test]
+    fn a_record_whose_time_does_not_parse_goes_ahead() {
+        let record = PublishedSnapshot { published_at: "yesterday".to_string(), ..record() };
+        assert_eq!(stale_copy_refusal(&record, &live(Some("theirs"), Some("2026-09-24T14:03:00Z"))), None);
+    }
+}
+
 /// What every publish needs before it can start: the site it publishes to, and
 /// the key it signs with.
 ///
@@ -460,6 +582,11 @@ pub(crate) fn stale_source_refusal_text(stale: &[String]) -> String {
 /// iCloud folder reported the raw `Resource deadlock avoided` that moss#986
 /// was closed for. A gate added to a publish now goes in one place, which is
 /// the property that failure cost.
+///
+/// The last gate here is [`refuse_stale_copy`], skipped when `overwrite_newer`
+/// (`--overwrite-newer`) is set. Both callers are `moss deploy` routes; the
+/// app's own publish does not come through here, and does not refuse yet,
+/// because a refusal in a window needs a designed way to explain itself.
 /// Whether moss may mint a site for a folder that has never published.
 ///
 /// Registering is irreversible external state at seta — a site ID cannot be
@@ -485,6 +612,7 @@ fn first_publish_is_permitted(folder_str: &str) -> Result<bool, String> {
 pub async fn resolve_publish_inputs(
     folder: &std::path::Path,
     requested_site_id: Option<&str>,
+    overwrite_newer: bool,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
 ) -> Result<Option<(String, crate::identity::Identity)>, String> {
     let folder_str = folder.to_string_lossy().to_string();
@@ -556,6 +684,13 @@ pub async fn resolve_publish_inputs(
         (None, None) => return Ok(None),
     };
 
+    // Last, and still before the build: it needs the site and the key above,
+    // and a copy behind the live site is knowable now — saying so after a
+    // multi-minute build is saying it late.
+    if !overwrite_newer {
+        refuse_stale_copy(folder, &site_id, &identity).await?;
+    }
+
     Ok(Some((site_id, identity)))
 }
 
@@ -600,7 +735,7 @@ mod registration_gate_tests {
             .expect("write");
 
         let sink = super::progress::silent();
-        let err = super::resolve_publish_inputs(&vault, None, &sink)
+        let err = super::resolve_publish_inputs(&vault, None, false, &sink)
             .await
             .expect_err("a reserved name must refuse");
         assert!(err.contains("reserved"), "{err}");

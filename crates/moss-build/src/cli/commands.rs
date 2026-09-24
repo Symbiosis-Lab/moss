@@ -32,8 +32,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "deploy",
-            args: "<folder> [--prebuilt=<dir>] [--site-id=<name>] [--allow-plugins]",
-            description: "Build and deploy the site. Where it goes is the folder's to say: a prebuilt directory wins, then a `[hooks] deploy` plugin, otherwise moss hosting. A folder publishing for the first time needs `moss env <staging|production|local>` first, and then registers a site named after the folder (or --site-id) — a site ID cannot be un-minted, so moss will not pick one for a folder that never named an environment. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed, exactly as in `moss build`.",
+            args: "<folder> [--prebuilt=<dir>] [--site-id=<name>] [--allow-plugins] [--overwrite-newer]",
+            description: "Build and deploy the site. Where it goes is the folder's to say: a prebuilt directory wins, then a `[hooks] deploy` plugin, otherwise moss hosting. A folder publishing for the first time needs `moss env <staging|production|local>` first, and then registers a site named after the folder (or --site-id) — a site ID cannot be un-minted, so moss will not pick one for a folder that never named an environment. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed, exactly as in `moss build`. A publish to moss hosting, --prebuilt included, is refused when the live site was published from another copy after this folder last published — deploying would undo that publish. Bring this folder up to date with that copy (for example, git pull) and deploy again, or pass --overwrite-newer to replace the live site anyway.",
         },
         CliCommandInfo {
             name: "preview",

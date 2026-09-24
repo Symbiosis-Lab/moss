@@ -66,6 +66,16 @@ pub struct CommitResponse {
     pub generation_id: Option<String>,
 }
 
+/// Response from GET /api/sites/{id}/generation: which generation the site is
+/// serving, and when it went live. Both `None` for a site that has never
+/// deployed — and for an old server with no such endpoint, which answers 404.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct LiveGeneration {
+    pub generation_id: Option<String>,
+    /// Server clock, Unix seconds.
+    pub deployed_at: Option<i64>,
+}
+
 /// One live chunked-upload session, from GET /api/sites/{id}/uploads.
 ///
 /// Wire contract (moss-seta `listUploadSessions`): `offset` is the byte count
@@ -479,13 +489,13 @@ impl MossSetaClient {
     ///   `None` for a never-deployed site).
     /// On other non-2xx → `Err(SetaError)` (caller treats any Err as "proceed").
     pub async fn get_live_generation(&self, site_id: &str) -> Result<Option<String>, SetaError> {
-        #[derive(Debug, Deserialize)]
-        struct LiveGenerationResponse {
-            generation_id: Option<String>,
-            #[allow(dead_code)]
-            deployed_at: Option<i64>,
-        }
+        Ok(self.live_generation(site_id).await?.generation_id)
+    }
 
+    /// [`Self::get_live_generation`] with the time the generation went live,
+    /// which `moss deploy` compares with this folder's last publish. 404 is
+    /// `LiveGeneration::default()` — nothing known, for the same reason.
+    pub async fn live_generation(&self, site_id: &str) -> Result<LiveGeneration, SetaError> {
         let path = format!("/api/sites/{}/generation", site_id);
         let (url, auth_header) = self.sign_and_build(&path)?;
 
@@ -501,18 +511,14 @@ impl MossSetaClient {
         // Treat as "no live generation known" → proceed with normal deploy.
         if response.status().as_u16() == 404 {
             log::debug!(target: "seta", "GET {} → 404, server does not support /generation endpoint", url);
-            return Ok(None);
+            return Ok(LiveGeneration::default());
         }
 
         if !response.status().is_success() {
             return Err(SetaError::from_failed_response(response).await);
         }
 
-        let resp: LiveGenerationResponse = response
-            .json()
-            .await
-            .map_err(|e| SetaError::Parse(e.to_string()))?;
-        Ok(resp.generation_id)
+        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
     }
 
     /// The custom-domain hostnames seta holds for this site

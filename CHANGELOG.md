@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- `moss deploy` no longer replaces a live site that was published from another copy of the folder after this copy last published — say, from another computer whose changes this folder hasn't pulled yet. It stops before uploading anything, says when each publish happened, and asks you to bring the folder up to date first; `--overwrite-newer` replaces the live site anyway. This covers `--prebuilt` deploys too, which now also record what they published, so a folder that switches between `--prebuilt` and moss's own build is not mistaken for another copy. Publishing from the app and through a `[hooks] deploy` plugin is unchanged.
 - An image whose file extension doesn't match its contents (a PNG saved as `.jpg`) now gets its real width and height, placeholder colour and responsive sizes on the page instead of a generic 800×600 box, and the build log names the file so it can be renamed.
 - Floated images, embeds, and folder listings now collapse to a full-width block on phones instead of staying pinned at their desktop float width or an explicit size. `![[photo.jpg|align-right]]` without a size now floats at half the column on desktop, as documented; before, it rendered full width because the cap never matched.
 - On vertically typeset sites, a `:::hero {.plate}` image is no longer cut off on long pages, and a plate with a caption no longer disappears entirely; the caption runs vertically beside the plate, centred on it.
@@ -18,6 +19,7 @@ All notable changes to moss will be documented here.
 ### Changed
 
 - **BREAKING (`moss-build` API):** `markdown::process_markdown_file` takes one `SiteMarkdown` value in place of its four `implicit_figure`, `math`, `hard_line_breaks` and `heading_anchors` bools; the value also carries `[site].typesetting`. `SiteMarkdown::default()` is the drop-in for the common `false, true, true, true`; set only what differs, e.g. `SiteMarkdown { math: false, ..Default::default() }`. A caller with a `SiteConfig` passes `site_config.markdown()`. `folder_embed::expand_markers_in_documents` gains a trailing `site_typesetting: Option<&str>`.
+- **BREAKING (`moss-build` API):** `deploy::resolve_publish_inputs`, `deploy::push::run_hosted_deploy` and `deploy::prebuilt::run_prebuilt_deploy` take `overwrite_newer: bool` after `requested_site_id` (pass `false` to keep the stale-copy refusal), and `cli::deploy::DeployFlags` gains an `overwrite_newer` field.
 
 ## [0.7.14] - 2026-06-27
 
