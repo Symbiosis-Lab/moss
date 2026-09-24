@@ -887,6 +887,15 @@ pub fn kind_move_stubs(index: &TermIndex) -> Vec<(String, String)> {
         else {
             continue;
         };
+        // The per-name stubs below cover every member's old `authors/<slug>/`
+        // URL, but the old namespace ROOT — `authors/` itself, the listing an
+        // external link may point at directly — has no member to inherit one
+        // from. It simply stops being emitted once the field moves (the
+        // generated namespace-index loop only emits pages for namespaces
+        // still in use), so without this it 404s even though every page it
+        // used to list has a working forward. One stateless stub, same as
+        // the per-name ones, to the new kind's own root.
+        stubs.push((format!("{}/", builtin_ns), format!("/{}/", new_kind.key))); // allow:served-path-url-construct (term-namespace-root redirect target)
         for (key, site) in &index.sites {
             let Some((ns, slug)) = key.split_once('/') else { continue };
             if ns != new_kind.key {
@@ -1704,6 +1713,10 @@ mod tests {
         assert_eq!(
             kind_move_stubs(&index),
             vec![
+                // The old namespace root itself, stateless and unconditional
+                // on any particular member — an external link to `authors/`
+                // must not 404 just because every member below it moved.
+                ("authors/".to_string(), "/people/".to_string()),
                 // Claimed: the old URL forwards to the claiming page.
                 ("authors/ada-lin/".to_string(), "/ada-lin/".to_string()),
                 // Unclaimed: to the generated page in the new namespace.
@@ -1713,13 +1726,44 @@ mod tests {
     }
 
     #[test]
-    fn a_term_reached_only_through_a_field_that_did_not_move_gets_no_stub() {
+    fn a_term_reached_only_through_a_field_that_did_not_move_gets_no_per_name_stub() {
         // Kane is in `people` through `editor:`, which was never `authors/`'s
-        // field. Forwarding `authors/kane/` would invent a page that never was.
+        // field. Forwarding `authors/kane/` would invent a page that never
+        // was — but the field STILL moved at the kind level, so the
+        // namespace-root stub is unconditional and present regardless.
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].editor = vec!["Kane".to_string()];
         let index = derive_terms(&mut docs, author_moved_to_people());
-        assert_eq!(kind_move_stubs(&index), Vec::new());
+        assert_eq!(
+            kind_move_stubs(&index),
+            vec![("authors/".to_string(), "/people/".to_string())]
+        );
+    }
+
+    /// `BUILTIN_DEFAULT_FIELDS` pairs `tags` with the `tags` field the same
+    /// way it pairs `authors` with `author` — one loop over that table
+    /// builds every root stub, so a moved `tags/` root needs no separate
+    /// code path to redirect correctly.
+    #[test]
+    fn a_moved_tags_namespace_root_also_gets_a_redirect() {
+        let moved = vec![
+            TermKind { key: "authors".to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), is_place: false, parents: Default::default() },
+            TermKind { key: "tags".to_string(), fields: Vec::new(), title: "Tags".to_string(), is_place: false, parents: Default::default() },
+            TermKind {
+                key: "topics".to_string(),
+                fields: vec!["tags".to_string()],
+                title: "Topics".to_string(),
+                is_place: false, parents: Default::default(),
+            },
+        ];
+        let mut docs = vec![doc("posts/a/index.html", "A")];
+        docs[0].tags = Some(vec!["craft".to_string()]);
+        let index = derive_terms(&mut docs, moved);
+        assert!(
+            kind_move_stubs(&index).contains(&("tags/".to_string(), "/topics/".to_string())),
+            "a moved tags namespace root must redirect to the new kind's root: {:?}",
+            kind_move_stubs(&index)
+        );
     }
 
     #[test]

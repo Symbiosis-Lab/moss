@@ -2830,10 +2830,21 @@ pub fn generate_blocking_content(
     // covers them.
     {
         use crate::build::context::BuildContext;
-        use crate::build::feeds::redirects::{generate_redirect_html, pretty_url_to_fs_path};
+        use crate::build::feeds::redirects::{
+            current_build_urls, generate_redirect_html, pretty_url_to_fs_path,
+        };
         use crate::build::manifest::HashBucket;
         use crate::build::served_path::ServedPath;
+        // A stub must never aim at a URL a real page already serves this
+        // build — the root stub (`authors/`) can collide with an unrelated
+        // page at that address, and a per-name stub can collide with a page
+        // a member reused its old slug for. The manifest is last-write-wins,
+        // so either collision would silently bury the real page.
+        let served_urls = current_build_urls(&article_map);
         for (old_url, new_url) in crate::build::terms::kind_move_stubs(&term_index) {
+            if served_urls.contains(&old_url) {
+                continue;
+            }
             let fs_path = pretty_url_to_fs_path(&old_url);
             let html = generate_redirect_html(&new_url);
             match ServedPath::from_source(&fs_path) {

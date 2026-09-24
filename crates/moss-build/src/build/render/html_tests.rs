@@ -4699,6 +4699,290 @@ mod children_field_tests {
         );
     }
 
+    /// A page that WINS a term claim (`term_listing` set) hosts that term's
+    /// member listing below its own body, but it is still an ordinary leaf
+    /// page — not `PageKind::Folder` — so the folder-cover branch above never
+    /// ran for it and its `cover:` reached only `data-share-cover` (OG/share
+    /// metadata), never a visible `<img>`. A folder-index page that claims
+    /// the same term already shows its cover (the branch gated on
+    /// `is_folder_index`); a claiming leaf page must show it too — the SAME
+    /// book-open layout (cover beside title and lede), not a bare row with
+    /// empty space beside the image — and it must still show only one
+    /// visible title: its own, not a second one from the cover component.
+    #[test]
+    fn test_claimed_leaf_page_renders_own_cover() {
+        let mut claimant = make_doc("Ada Lin", "people/ada-lin/index.html");
+        claimant.cover = Some("ada.png".to_string());
+        claimant.term_listing = Some("people/ada-lin".to_string());
+        // Stands in for the markdown pipeline's own injected article title —
+        // by the time `generate_html` runs, this shell's visible `<h1>` is
+        // already the head of the body, not something this branch adds.
+        claimant.html_content =
+            "<h1 class=\"moss-article-title\">Ada Lin</h1>\n<p>Ada Lin content</p>".to_string();
+
+        let all_docs = vec![claimant.clone()];
+        let project = make_project();
+        let layout = make_layout();
+
+        let html = generate_html(
+            Some(&claimant),
+            &all_docs,
+            &project,
+            &layout,
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,                     // output_dir — tests skip auto OG card generation
+            std::path::Path::new(""), // source_root
+        )
+        .expect("generate_html should succeed");
+
+        assert!(
+            html.contains(r#"class="moss-collection-cover-body""#),
+            "a claimed leaf page with a cover must render the same book-open \
+             layout — cover beside title and lede — a claimed folder index \
+             gets, not a bare row: {}",
+            html
+        );
+        assert!(
+            html.contains(r#"<h1 class="moss-folder-title"></h1>"#),
+            "the folder-cover component's own title slot must be passed an \
+             empty label and collapse (site.css `.moss-folder-title:empty`) \
+             — the claiming leaf's visible heading is its own, not a second \
+             one from this component: {}",
+            html
+        );
+        assert!(
+            html.contains(r#"<h1 class="moss-article-title">Ada Lin</h1>"#),
+            "the page's own heading must survive, inside the cover column: {}",
+            html
+        );
+    }
+
+    /// An Article-shell claiming leaf (the default shell here: no `layout:`
+    /// override, flat mode, `is_root_level: false`) with a cover, a date, and
+    /// a byline. The date-line + reading-prefs row and the byline are built
+    /// separately, later in `generate_html`, and spliced into the WHOLE
+    /// assembled page content via `splice_after_title_block` — which used to
+    /// require the content to start with `<h1`. Once the claimed-leaf cover
+    /// wraps that title in `.moss-collection-cover-row`, the content starts
+    /// with `<div` instead, so the splice fell through to prepending: the
+    /// date-line and byline landed BEFORE the whole cover row, above the
+    /// image, on develop this page has no cover so the regression is
+    /// specific to this branch. Both must land after the real title, inside
+    /// `.moss-collection-cover-body`, and before the rest of the body.
+    #[test]
+    fn test_claimed_leaf_article_shell_date_and_byline_land_in_cover_column() {
+        let mut claimant = make_doc("Ada Lin", "people/ada-lin/index.html");
+        claimant.cover = Some("ada.png".to_string());
+        claimant.term_listing = Some("people/ada-lin".to_string());
+        claimant.date = Some("2026-04-01".to_string());
+        claimant.byline = vec!["Photography by Ada Lin".to_string()];
+        claimant.html_content =
+            "<h1 class=\"moss-article-title\">Ada Lin</h1>\n<p>Ada Lin content</p>".to_string();
+
+        let all_docs = vec![claimant.clone()];
+        let project = make_project();
+        let layout = make_layout();
+
+        let html = generate_html(
+            Some(&claimant),
+            &all_docs,
+            &project,
+            &layout,
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,                     // output_dir — tests skip auto OG card generation
+            std::path::Path::new(""), // source_root
+        )
+        .expect("generate_html should succeed");
+
+        let cover_row_pos = html
+            .find(r#"class="moss-collection-cover-row""#)
+            .expect("cover row must render");
+        let title_end = html
+            .find("<h1 class=\"moss-article-title\">Ada Lin</h1>")
+            .map(|i| i + "<h1 class=\"moss-article-title\">Ada Lin</h1>".len())
+            .expect("the page's own title must render");
+        let date_line_pos = html
+            .find(r#"class="date-line""#)
+            .expect("date-line must render for a dated article");
+        let byline_pos = html
+            .find("Photography by Ada Lin")
+            .expect("byline must still render");
+        let body_pos = html
+            .find("<p>Ada Lin content</p>")
+            .expect("the rest of the body must still render");
+
+        assert!(
+            cover_row_pos < title_end,
+            "the cover row must open before the title: {}",
+            html
+        );
+        assert!(
+            date_line_pos > title_end,
+            "date-line must land after the title, not above the whole cover \
+             row: {}",
+            html
+        );
+        assert!(
+            byline_pos > title_end,
+            "byline must land after the title, not above the whole cover \
+             row: {}",
+            html
+        );
+        assert!(
+            date_line_pos < body_pos && byline_pos < body_pos,
+            "date-line and byline must land before the rest of the body: {}",
+            html
+        );
+    }
+
+    /// A claiming leaf page rendered with the PAGE shell (not Article) still
+    /// gets its `byline:` — the same `!is_article_page` splice every other
+    /// page kind uses, run on the WHOLE already cover-wrapped `content` (one
+    /// splice site, no lead-scoping special case). It lands correctly because
+    /// `splice_byline_at_page_head` delegates unconditionally to
+    /// `splice_after_title_block`, which recognizes the cover wrapper's own
+    /// empty `<h1 class="moss-folder-title">` and steps past it to splice
+    /// after this page's REAL title — not above the whole cover row, which is
+    /// where a naive first-`<h1>` test would leave it (the wrapper's outer
+    /// `<div>` is never itself an `<h1`).
+    #[test]
+    fn test_claimed_leaf_page_shell_byline_lands_beside_title_in_cover_column() {
+        let mut claimant = make_doc("Ada Lin", "people/ada-lin/index.html");
+        claimant.cover = Some("ada.png".to_string());
+        claimant.term_listing = Some("people/ada-lin".to_string());
+        claimant.layout = Some("page".to_string()); // force Page shell, not Article
+        claimant.byline = vec!["Photography by Ada Lin".to_string()];
+        claimant.html_content = "<h1>Ada Lin</h1>\n<p>Ada Lin content</p>".to_string();
+
+        let all_docs = vec![claimant.clone()];
+        let project = make_project();
+        let layout = make_layout();
+
+        let html = generate_html(
+            Some(&claimant),
+            &all_docs,
+            &project,
+            &layout,
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,                     // output_dir — tests skip auto OG card generation
+            std::path::Path::new(""), // source_root
+        )
+        .expect("generate_html should succeed");
+
+        let body_col_start = html
+            .find(r#"class="moss-collection-cover-body""#)
+            .expect("cover-body column must render");
+        let title_end = html[body_col_start..]
+            .find("</h1>")
+            .map(|i| body_col_start + i)
+            .expect("a title h1 must render inside the cover column");
+        let byline_pos = html
+            .find("Photography by Ada Lin")
+            .expect("byline must still render for a Page-shell claimant");
+        assert!(
+            byline_pos > title_end,
+            "byline must land after this page's own title, inside the cover \
+             column, not above the whole cover row: {}",
+            html
+        );
+    }
+
+    /// Baseline: an ordinary leaf page with NO term claim keeps its
+    /// pre-existing behavior — `cover:` reaches `data-share-cover` only, no
+    /// visible `<img>`. Guards the claimed-page fix above from broadening
+    /// into every page that merely sets `cover:`.
+    #[test]
+    fn test_unclaimed_leaf_page_with_cover_has_no_visible_cover_row() {
+        let mut page = make_doc("First Look", "posts/first-look/index.html");
+        page.cover = Some("first-look-cover.png".to_string());
+
+        let all_docs = vec![page.clone()];
+        let project = make_project();
+        let layout = make_layout();
+
+        let html = generate_html(
+            Some(&page),
+            &all_docs,
+            &project,
+            &layout,
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,                     // output_dir — tests skip auto OG card generation
+            std::path::Path::new(""), // source_root
+        )
+        .expect("generate_html should succeed");
+
+        assert!(
+            !html.contains(r#"class="moss-collection-cover-row""#),
+            "an unclaimed leaf page must not gain a visible cover row: {}",
+            html
+        );
+        assert!(
+            html.contains(r#"data-share-cover="/first-look-cover.png""#),
+            "the cover must still reach data-share-cover as before: {}",
+            html
+        );
+    }
+
     #[test]
     fn test_homepage_children_limit_caps_body_feed_with_more_link() {
         // Homepage with children: "[[News]]" + children_limit: 3 should render

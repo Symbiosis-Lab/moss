@@ -3,6 +3,7 @@ title: Ada Lin
 uid: 2c4e6a80
 author_page: true
 location: Kyoto
+cover: '[[ada.png]]'
 ---
 
 # Ada Lin

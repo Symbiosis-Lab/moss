@@ -4341,10 +4341,12 @@ hr::before {
   margin-block: 0 var(--moss-space-md);
 }
 
-/* Defensive: hide empty folder-title h1s. The render helpers always pass
-   non-empty labels (filename or title cascade), but treating empty as
-   invisible avoids reserving heading typography space if a future code
-   path ever passes an empty string. */
+/* Hide empty folder-title h1s. Most callers pass a non-empty label (filename
+   or title cascade); a claimed leaf page rendering its cover through the same
+   book-open layout passes "" instead, because that shell's own visible <h1>
+   is already the head of its content — this rule is what keeps the page down
+   to one visible title instead of an empty heading reserving typography
+   space above it. */
 .moss-folder-title:empty {
   display: none;
 }

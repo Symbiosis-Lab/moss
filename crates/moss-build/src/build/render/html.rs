@@ -198,6 +198,21 @@ fn no_cover_folder_heading(
     }
 }
 
+/// Split a pipe-encoded `cover:` value ("path|attrs") into its resolved URL
+/// and display attrs. Shared by the folder-index cover branch and the
+/// claimed-leaf-page cover branch below — both draw the page's own `cover:`
+/// through the same two steps, and used to spell them out twice.
+fn resolve_page_cover(
+    cover: &str,
+    path_resolver: &PathResolver,
+) -> (String, moss_core::media::MediaAttrs) {
+    let (path_part, attrs_str) = moss_core::media::split_pipe(cover);
+    (
+        path_resolver.resolve_url(path_part),
+        moss_core::media::parse_media_attrs(attrs_str),
+    )
+}
+
 /// Editor preview: stamp a frontmatter-synthesized children listing with
 /// `data-source-fm="children"` on its `.moss-cards-container` — ONE attribute
 /// for the whole `children_*` family (children / children_style /
@@ -614,6 +629,19 @@ fn generate_html_inner(
                 && doc.url_path.chars().filter(|&c| c == '/').count() == 1;
             let is_home_override = is_folder_index && (doc.is_home_override || is_lang_tree_root_home);
 
+            // A page that won a term claim (`author_page:`/`tag_page:`) hosts
+            // that term's member listing below its own body — at ANY path,
+            // whether the claiming file is a folder index or a plain leaf
+            // note (`build::terms::derive_terms`). Read here (rather than
+            // where the listing itself is appended, further below) because
+            // the cover branch immediately below needs it too: a claim must
+            // add the listing without changing how the page's own
+            // cover/title/byline render, and a plain leaf claimant was
+            // falling through to the folder branch's `else` with no cover
+            // rendering at all (folder pages draw their cover only in the
+            // branch above, gated on `is_folder_index`).
+            let term_listing = doc.term_listing.as_deref();
+
             // Wrap content in book-open layout with cover on the left (before
             // placeholder pass so LQIP attributes are added to the cover <img>).
             // Title and byline are prepended into the cover body so they
@@ -622,11 +650,8 @@ fn generate_html_inner(
                 // Split pipe-encoded cover to separate path from display attrs.
                 let (resolved_cover, cover_attrs) = match doc.cover.as_deref() {
                     Some(c) => {
-                        let (path_part, attrs_str) = moss_core::media::split_pipe(c);
-                        (
-                            Some(path_resolver.resolve_url(path_part)),
-                            moss_core::media::parse_media_attrs(attrs_str),
-                        )
+                        let (url, attrs) = resolve_page_cover(c, &path_resolver);
+                        (Some(url), attrs)
                     }
                     None => (None, moss_core::media::MediaAttrs::default()),
                 };
@@ -686,6 +711,7 @@ fn generate_html_inner(
                     let cover_row_html = components::folder_cover::render(
                         resolved_cover.as_deref(),
                         h1_text,
+                        h1_text,
                         &format!("{}{}", folder_byline, lead),
                         cover_type,
                         &cover_attrs,
@@ -716,10 +742,53 @@ fn generate_html_inner(
                         format!("{}\n{}", heading, content)
                     };
                 }
-            } else if !is_article_page {
-                // No title block of moss's own — a home-override or language-root
-                // folder page, or a plain page — so the homepage rule applies.
-                content = credits::splice_byline_at_page_head(content, &doc.byline, emit_source_lines, doc.place_line.as_deref());
+            } else {
+                // A claimed page that ISN'T itself a folder index (an
+                // ordinary leaf note that won `author_page:`/`tag_page:`,
+                // Article shell or Page shell alike) draws its cover through
+                // the SAME book-open layout a folder index uses: cover on the
+                // left, lede beside it, rest of the body released back to
+                // full width — gone are the days of a bare cover-row with
+                // nothing but empty space beside the image (moss#903 bug 4's
+                // fix now applies here too). `folder_cover::render` takes an
+                // empty label rather than `h1_text`: this shell's own visible
+                // `<h1>` is already the head of `lead` (the pipeline-injected
+                // article title, or the author's own body `# H1`), so an
+                // empty `<h1 class="moss-folder-title">` is emitted and
+                // immediately collapsed by `.moss-folder-title:empty` in
+                // site.css — one visible title, not two.
+                if term_listing.is_some() {
+                    if let Some(c) = doc.cover.as_deref() {
+                        let (resolved, cover_attrs) = resolve_page_cover(c, &path_resolver);
+                        let cover_type = crate::build::media::cover::detect_cover_type(&resolved, doc.cover_type.as_deref());
+                        let (lead, trailer) = body.split_at_lede();
+                        content = format!(
+                            "{}{}",
+                            components::folder_cover::render(
+                                Some(&resolved),
+                                "",
+                                &doc.title,
+                                &lead,
+                                cover_type,
+                                &cover_attrs,
+                                Some(&media_lookup),
+                                emit_source_lines,
+                            ),
+                            trailer,
+                        );
+                    }
+                }
+                if !is_article_page {
+                    // No title block of moss's own — a home-override or
+                    // language-root folder page, or a plain page — so the
+                    // homepage rule applies. Runs AFTER any cover-wrap above:
+                    // `splice_byline_at_page_head` (via `splice_after_title_block`)
+                    // recognizes that wrapper's own empty title placeholder
+                    // and lands the byline beside the real title inside it,
+                    // the same as it would for an unwrapped page — one splice
+                    // site for both shapes.
+                    content = credits::splice_byline_at_page_head(content, &doc.byline, emit_source_lines, doc.place_line.as_deref());
+                }
             }
 
             // Folder card <img> tags: same LQIP/dimensions inheritance as the
@@ -730,12 +799,6 @@ fn generate_html_inner(
             // the same alias-aware check as the homepage branch above.
             let has_sidebar = doc.from_sidebar_alias.unwrap_or(false)
                 || doc.children_in.as_deref() == Some("sidebar");
-            // A page that won a term claim (`author_page:`/`tag_page:`) hosts
-            // that term's member listing at any path — article or folder index.
-            // `term_listing` is only set when the author didn't route
-            // `children` explicitly, so the claim never overrides their intent
-            // (`build::terms::derive_terms`).
-            let term_listing = doc.term_listing.as_deref();
             // An ordinary page can host ANOTHER folder's listing too (archive
             // §4, 2026-09-11) — a folder index or term listing keeps its own.
             let children_source_target = doc.children_source.as_deref()

@@ -5,7 +5,9 @@
 
 use crate::build::media::cover::{self, CoverType};
 
-/// Renders the folder cover layout for a folder page.
+/// Renders the folder cover layout for a folder page — or for a claimed leaf
+/// page hosting a term listing, which uses the identical layout for its own
+/// `cover:` (`render/html.rs`'s claimed-leaf branch).
 ///
 /// When a cover is set, wraps the content in a two-column row with the cover
 /// media on the left and the cover body on the right. The cover body contains:
@@ -13,7 +15,11 @@ use crate::build::media::cover::{self, CoverType};
 ///      `folder_title::render(label)` — the single page heading for SEO and
 ///      a11y outline. Shared with the no-cover folder-index path
 ///      (`render/html.rs`) and the synthetic folder-index path
-///      (`render/blocking.rs`).
+///      (`render/blocking.rs`). A caller whose own shell already carries a
+///      visible title — a claimed leaf page, whose `<h1>` is the head of
+///      `content` rather than a separate `label` — passes `""`: the emitted
+///      `<h1 class="moss-folder-title"></h1>` is empty and collapsed by
+///      `.moss-folder-title:empty` in site.css, so exactly one title shows.
 ///   2. The page content (markdown body). The caller may prepend the page's
 ///      `byline:` rows to `content` so they land between the h1 and the body,
 ///      inside the cover body column.
@@ -23,11 +29,16 @@ use crate::build::media::cover::{self, CoverType};
 /// h1 is added by the caller in `render/html.rs` so this helper stays purely
 /// a cover-layout component.
 ///
-/// `label` is the plain-text chrome label (typically `doc.label`); HTML
-/// escaping happens inside `folder_title::render`, so do not pre-escape.
+/// `label` is the plain-text chrome label (typically `doc.label`, or `""` —
+/// see above); HTML escaping happens inside `folder_title::render`, so do not
+/// pre-escape. `alt_label` names the page for the cover image's `alt` text
+/// SEPARATELY from `label` — a claimed leaf still has a real name even when it
+/// passes `""` for the (already-shown-elsewhere) visible title, and the alt
+/// text must keep saying who or what the picture is of.
 pub fn render(
     cover: Option<&str>,
     label: &str,
+    alt_label: &str,
     content: &str,
     cover_type: CoverType,
     attrs: &moss_core::media::MediaAttrs,
@@ -42,7 +53,7 @@ pub fn render(
 ) -> String {
     match cover {
         Some(path) => {
-            let alt = format!("{} cover", label);
+            let alt = format!("{} cover", alt_label);
             // Folder covers are typically the LCP candidate on folder
             // index pages — emit eager + fetchpriority="high" when the
             // synthesizer is in scope.

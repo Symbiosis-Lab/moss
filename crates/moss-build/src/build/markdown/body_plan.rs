@@ -238,9 +238,11 @@ impl BodyPlan {
 
     /// Put `html` in front of the body, inside the cover column.
     ///
-    /// The one caller is the auto-injected `<h1 class="moss-article-title">`,
-    /// which only fires on article pages — pages that never take the cover
-    /// branch. `lede_segments` still moves so the two features stay composable.
+    /// The one caller is the auto-injected `<h1 class="moss-article-title">`.
+    /// A page it fires on CAN also take the cover branch — a term-claiming
+    /// leaf with its own `cover:` renders book-open too (`render/html.rs`) —
+    /// so `lede_segments` moving here is exactly what keeps the injected
+    /// title inside the lede that ends up beside the cover, not past it.
     pub fn prepend_html(&mut self, html: String) {
         self.segments.insert(0, BodySegment::Html(html));
         self.lede_segments += 1;

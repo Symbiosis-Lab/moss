@@ -53,6 +53,26 @@ pub fn detect_renames(
     renames
 }
 
+/// Every URL a real page — article or folder index — will serve in this
+/// build, in the pretty-URL format this module trades in ("foo/bar/", no
+/// leading slash).
+///
+/// The one set two different stub sources must both check before emitting: a
+/// detected rename here, or a term namespace-move stub from
+/// `terms::kind_move_stubs`. Skipping the check silently buries a real page,
+/// because the manifest is last-write-wins and a stub emitted after the
+/// page's own write simply replaces it with a meta-refresh. `pages` matters
+/// here as much as `articles`: a namespace ROOT stub (e.g. `authors/`) lands
+/// squarely on the URL a hand-authored folder index uses.
+pub fn current_build_urls(current_article_map: &ArticleMap) -> HashSet<String> {
+    current_article_map
+        .articles
+        .keys()
+        .chain(current_article_map.pages.keys())
+        .cloned()
+        .collect()
+}
+
 /// Merge new renames into an existing redirect map.
 ///
 /// - Starts with existing redirects
@@ -191,7 +211,7 @@ pub fn emit_redirect_stubs(
         Baseline::Present(projection) => detect_renames(projection, current_article_map),
         Baseline::Absent | Baseline::Unreadable(_) => HashMap::new(),
     };
-    let current_urls: HashSet<String> = current_article_map.articles.keys().cloned().collect();
+    let current_urls = current_build_urls(current_article_map);
     let merged = merge_redirects(existing.as_ref().unwrap_or(&BTreeMap::new()), &new_renames, &current_urls);
 
     match existing {
@@ -794,6 +814,100 @@ mod tests {
         );
     }
 
+
+    /// `current_build_urls` unions `articles` and `pages` (fix for the
+    /// namespace-move redirect clobbering a real folder index at the old
+    /// address) — this consumer, the persisted-rename path, must get the
+    /// same protection for the same reason: a rename's old URL can just as
+    /// easily be reclaimed by a real folder index as by a real article, and
+    /// `merge_redirects`'s staleness check is oblivious to which `ArticleMap`
+    /// bucket the URL came from. Regresses to `.articles.keys()` alone by
+    /// reverting the `current_build_urls` call in `emit_redirect_stubs`.
+    #[test]
+    fn emit_redirect_stubs_skips_a_rename_whose_old_url_is_now_a_pages_entry() {
+        use crate::build::context::BuildContext;
+        use crate::build::manifest::{HashBucket, PendingManifest};
+        use crate::build::served_path::ServedPath;
+        use crate::moss_paths::MossPaths;
+        use crate::types::content::SiteHashes;
+
+        let test_tmp = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
+            .parent()
+            .unwrap()
+            .join("target")
+            .join("test-tmp");
+        std::fs::create_dir_all(&test_tmp).unwrap();
+        let tmp = tempfile::TempDir::new_in(&test_tmp).unwrap();
+
+        let moss_dir = tmp.path().join(".moss");
+        let data_dir = moss_dir.join("data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let deploy_dir = moss_dir.join("deploy");
+        std::fs::create_dir_all(&deploy_dir).unwrap();
+        let output_dir = tmp.path().join("output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+
+        // Write a deployed snapshot: uid X was at "old/page/"
+        let deployed_map = {
+            let mut m = ArticleMap::new();
+            m.articles.insert(
+                "old/page/".to_string(),
+                article_info_with_uid(Some("uid-X")),
+            );
+            m
+        };
+        let snapshot_path = deploy_dir.join("deployed-article-map.json");
+        std::fs::write(&snapshot_path, serde_json::to_string(&deployed_map).unwrap()).unwrap();
+
+        // Current article-map: uid X moved to "new/page/" (a rename this
+        // build would otherwise detect), AND "old/page/" is now a real
+        // folder-index page — `pages`, not `articles` — reoccupying the
+        // address the rename would have redirected.
+        let mut current_map = ArticleMap::new();
+        current_map.articles.insert(
+            "new/page/".to_string(),
+            article_info_with_uid(Some("uid-X")),
+        );
+        current_map.pages.insert("old/page/".to_string(), "old/page/index.md".to_string());
+
+        let paths = MossPaths::from_moss_dir(moss_dir);
+        let mut pending = PendingManifest::new(SiteHashes::default());
+
+        let new_sp = ServedPath::from_source("new/page/index.html").unwrap();
+        BuildContext::for_render(&output_dir, &mut pending)
+            .emit(&new_sp, b"<html>new</html>", HashBucket::Files)
+            .unwrap();
+        // The real folder-index page this build actually serves at the old
+        // address — what a redirect stub there would silently clobber.
+        let old_sp = ServedPath::from_source("old/page/index.html").unwrap();
+        BuildContext::for_render(&output_dir, &mut pending)
+            .emit(&old_sp, b"<html>real page</html>", HashBucket::Files)
+            .unwrap();
+
+        emit_redirect_stubs(&paths, &current_map, &output_dir, &mut pending).unwrap();
+
+        let sealed = pending.seal();
+        let stub_key = "old/page/index.html";
+        assert_eq!(
+            sealed.files().get(stub_key).map(|h| h.as_str()),
+            Some(file_entry(&compute_binary_hash(b"<html>real page</html>")).as_str()),
+            "the real page's own bytes must survive — no redirect stub may \
+             overwrite them: {:?}",
+            sealed.files().get(stub_key)
+        );
+
+        let redirects_path = data_dir.join("redirects.json");
+        let saved: std::collections::BTreeMap<String, String> = serde_json::from_str(
+            &std::fs::read_to_string(&redirects_path).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !saved.contains_key("old/page/"),
+            "redirects.json must not persist a redirect over a real pages \
+             entry: {:?}",
+            saved
+        );
+    }
 
     /// The moss#1079 shape on the redirect side: the record exists and cannot
     /// be read. Every stub the site has already earned must keep being emitted

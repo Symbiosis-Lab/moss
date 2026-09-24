@@ -174,13 +174,12 @@ pub fn splice_byline_at_page_head(
     let Some(byline) = render_byline_html(rows, emit_source_fm, place_line) else {
         return content;
     };
-    if content.trim_start().starts_with("<h1") {
-        // Same splice the article path uses, so the byline lands in the same
-        // relation to the title on every page kind.
-        crate::build::markdown::html_post::splice_after_title_block(&content, &byline)
-    } else {
-        format!("{}{}", byline, content)
-    }
+    // Same splice the article path uses, so the byline lands in the same
+    // relation to the title on every page kind — including a claimed leaf's
+    // cover, which wraps that title behind a recognized prefix
+    // `splice_after_title_block` already knows to step past; a page with no
+    // title block at all still falls through to its own prepend.
+    crate::build::markdown::html_post::splice_after_title_block(&content, &byline)
 }
 
 /// The shared body of both renderers.
