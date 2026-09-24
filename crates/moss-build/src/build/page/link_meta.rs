@@ -69,7 +69,22 @@ pub fn parse_link_meta(url: &str, html: &str) -> LinkMeta {
 
     let origin = extract_origin(url);
     let favicon = match favicon_href {
-        Some(href) => Some(resolve_url(&href, &origin)),
+        Some(href) => {
+            let resolved = resolve_url(&href, &origin);
+            // The fetched page is untrusted, and this string is copied
+            // verbatim into `<img src="…">` on every page that links out
+            // to it (`render_link_preview`). `data:,` (no payload after
+            // the comma) is a deliberate "we have no favicon" placeholder
+            // some sites emit to stop browsers guessing /favicon.ico, and
+            // anything else that isn't a small http(s)/raster-data URL is
+            // dropped the same way rather than handed to the sink — see
+            // `is_safe_favicon_url`.
+            if is_safe_favicon_url(&resolved) {
+                Some(resolved)
+            } else {
+                None
+            }
+        }
         None => origin.map(|o| format!("{o}/favicon.ico")),
     };
 
@@ -95,10 +110,67 @@ fn extract_origin(url: &str) -> Option<String> {
     }
 }
 
+/// True when `href` already carries a URI scheme (`data:`, `mailto:`,
+/// `blob:`, `https:`, ...) per RFC 3986 §3.1: a letter, then letters,
+/// digits, `+`, `-`, or `.`, then `:`. Anything matching this is already
+/// absolute and must never be joined to an origin. Protocol-relative
+/// (`//host/...`) has no scheme and is handled separately.
+fn has_uri_scheme(href: &str) -> bool {
+    let Some(colon) = href.find(':') else {
+        return false;
+    };
+    let scheme = &href[..colon];
+    scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// Raster favicon MIME types kept verbatim as a `data:` URL. SVG is
+/// deliberately excluded even though it is `image/*`: an SVG payload can
+/// carry `<script>` or an `onload` handler, and while every current
+/// browser disables script execution for an `<img>`-context image, that is
+/// a property of the browser, not of these bytes — the same fetched page
+/// is untrusted regardless.
+const ALLOWED_DATA_FAVICON_TYPES: [&str; 5] =
+    ["image/png", "image/jpeg", "image/gif", "image/webp", "image/x-icon"];
+
+/// A fetched page's `data:` favicon fully controls this string, and it is
+/// copied into every generated page that links there — 8 KiB comfortably
+/// fits a 16×16–32×32 icon.
+const MAX_DATA_FAVICON_BYTES: usize = 8 * 1024;
+
+/// True for a favicon URL safe to hand to `render_link_preview`'s `<img
+/// src="…">`: `http(s)://` (already the fetch origin's own scheme, or an
+/// absolute URL the page named), or a small `data:` URL of a raster image
+/// type with an actual payload. Everything else — `data:,` (the "no
+/// favicon" placeholder), `data:image/svg+xml` and `data:text/html`
+/// (script-capable payloads), and opaque schemes such as `javascript:`,
+/// `file:`, `blob:`, `mailto:` (never a renderable image, `file:` a small
+/// local-disclosure risk if the built page is ever opened over `file://`)
+/// — comes from an untrusted fetched page and is dropped to `None` rather
+/// than reaching the sink.
+fn is_safe_favicon_url(url: &str) -> bool {
+    if url.starts_with("https://") || url.starts_with("http://") {
+        return true;
+    }
+    let Some(rest) = url.strip_prefix("data:") else {
+        return false;
+    };
+    let Some((media_type, data)) = rest.split_once(',') else {
+        return false;
+    };
+    let mime = media_type.split(';').next().unwrap_or("");
+    !data.is_empty()
+        && ALLOWED_DATA_FAVICON_TYPES.contains(&mime)
+        && url.len() <= MAX_DATA_FAVICON_BYTES
+}
+
 /// Resolve a potentially relative URL against an origin.
 fn resolve_url(href: &str, origin: &Option<String>) -> String {
-    if href.starts_with("https://") || href.starts_with("http://") {
-        // Already absolute
+    if has_uri_scheme(href) {
+        // Already absolute: https:, http:, data:, mailto:, blob:, ... A
+        // scheme means the href is opaque and self-contained — joining it
+        // onto an origin produced `https://example.org/data:,` for a
+        // page's `data:,` favicon placeholder, which 404s in the browser.
         href.to_string()
     } else if href.starts_with("//") {
         // Protocol-relative
@@ -985,6 +1057,158 @@ mod tests {
         "#;
         let meta = parse_link_meta("https://example.com", html);
         assert_eq!(meta.favicon.as_deref(), Some("https://cdn.example.com/icon.png"));
+    }
+
+    // `resolve_url` unit tests: a `data:` (or any other scheme-carrying)
+    // href is already absolute and must never be joined to the origin —
+    // that join produced the malformed `https://example.org/data:,`, a
+    // real 404 seen for pages that declare `<link rel="icon" href="data:,">`
+    // as a "no favicon" placeholder.
+    #[test]
+    fn resolve_url_data_scheme_is_not_joined_to_origin() {
+        let origin = Some("https://example.org".to_string());
+        assert_eq!(resolve_url("data:,", &origin), "data:,");
+    }
+
+    #[test]
+    fn resolve_url_data_image_base64_is_not_joined_to_origin() {
+        let origin = Some("https://example.org".to_string());
+        let data_url = "data:image/png;base64,iVBORw0KGgo=";
+        assert_eq!(resolve_url(data_url, &origin), data_url);
+    }
+
+    #[test]
+    fn resolve_url_absolute_https_is_unchanged() {
+        let origin = Some("https://example.org".to_string());
+        assert_eq!(
+            resolve_url("https://cdn.example.com/icon.png", &origin),
+            "https://cdn.example.com/icon.png"
+        );
+    }
+
+    #[test]
+    fn resolve_url_protocol_relative_takes_scheme_from_origin() {
+        let origin = Some("https://example.org".to_string());
+        assert_eq!(
+            resolve_url("//cdn.example.com/icon.png", &origin),
+            "https://cdn.example.com/icon.png"
+        );
+    }
+
+    #[test]
+    fn resolve_url_root_relative_is_joined_to_origin() {
+        let origin = Some("https://example.org".to_string());
+        assert_eq!(resolve_url("/favicon.ico", &origin), "https://example.org/favicon.ico");
+    }
+
+    #[test]
+    fn resolve_url_relative_path_is_joined_to_origin() {
+        let origin = Some("https://example.org".to_string());
+        assert_eq!(resolve_url("icon.png", &origin), "https://example.org/icon.png");
+    }
+
+    #[test]
+    fn test_favicon_empty_data_url_placeholder_yields_no_favicon() {
+        // Some sites declare `data:,` (empty payload) as a deliberate
+        // "we have no favicon, don't bother guessing /favicon.ico either"
+        // signal. Render must produce no <img> at all — same as when a
+        // page has no <link rel="icon"> and (unlike that case) we must
+        // not fall back to guessing /favicon.ico, since the site already
+        // told us explicitly there is nothing to show.
+        let html = r#"
+        <html><head>
+            <link rel="icon" href="data:,">
+            <title>Test</title>
+        </head><body></body></html>
+        "#;
+        let meta = parse_link_meta("https://example.org/page", html);
+        assert_eq!(meta.favicon, None);
+    }
+
+    #[test]
+    fn test_favicon_data_image_base64_is_kept_verbatim() {
+        let html = r#"
+        <html><head>
+            <link rel="icon" href="data:image/png;base64,iVBORw0KGgo=">
+        </head><body></body></html>
+        "#;
+        let meta = parse_link_meta("https://example.org/page", html);
+        assert_eq!(
+            meta.favicon.as_deref(),
+            Some("data:image/png;base64,iVBORw0KGgo=")
+        );
+    }
+
+    // The favicon string is copied verbatim into `<img src="…">` on every
+    // page that links out to the fetched site (`render_link_preview`). A
+    // fetched page is untrusted input, so any scheme other than http(s) or
+    // a small raster `data:` image must be dropped to `None` rather than
+    // handed to the sink — `has_uri_scheme`/`resolve_url` only decide
+    // whether to join to an origin, not whether the result is safe to emit.
+    #[test]
+    fn favicon_javascript_scheme_is_dropped() {
+        let html = r#"<html><head><link rel="icon" href="javascript:alert(1)"></head></html>"#;
+        let meta = parse_link_meta("https://example.org/page", html);
+        assert_eq!(meta.favicon, None);
+    }
+
+    #[test]
+    fn favicon_file_scheme_is_dropped() {
+        let html = r#"<html><head><link rel="icon" href="file:///etc/passwd"></head></html>"#;
+        let meta = parse_link_meta("https://example.org/page", html);
+        assert_eq!(meta.favicon, None);
+    }
+
+    #[test]
+    fn favicon_mailto_scheme_is_dropped() {
+        let html = r#"<html><head><link rel="icon" href="mailto:x@example.org"></head></html>"#;
+        let meta = parse_link_meta("https://example.org/page", html);
+        assert_eq!(meta.favicon, None);
+    }
+
+    #[test]
+    fn favicon_data_svg_is_dropped() {
+        // SVG can carry `<script>`/event-handler content; excluded even
+        // though it is `image/*` — see `is_safe_favicon_url`.
+        let html = r#"<html><head><link rel="icon" href="data:image/svg+xml,<svg onload=alert(1)>"></head></html>"#;
+        let meta = parse_link_meta("https://example.org/page", html);
+        assert_eq!(meta.favicon, None);
+    }
+
+    #[test]
+    fn favicon_data_text_html_is_dropped() {
+        let html = r#"<html><head><link rel="icon" href="data:text/html,<script>alert(1)</script>"></head></html>"#;
+        let meta = parse_link_meta("https://example.org/page", html);
+        assert_eq!(meta.favicon, None);
+    }
+
+    #[test]
+    fn favicon_oversized_data_url_is_dropped() {
+        let huge = "A".repeat(9 * 1024);
+        let html = format!(
+            r#"<html><head><link rel="icon" href="data:image/png;base64,{huge}"></head></html>"#
+        );
+        let meta = parse_link_meta("https://example.org/page", &html);
+        assert_eq!(meta.favicon, None);
+    }
+
+    #[test]
+    fn is_safe_favicon_url_accepts_http_https_and_small_raster_data_urls() {
+        assert!(is_safe_favicon_url("https://example.org/icon.png"));
+        assert!(is_safe_favicon_url("http://example.org/icon.png"));
+        assert!(is_safe_favicon_url("data:image/png;base64,iVBORw0KGgo="));
+        assert!(is_safe_favicon_url("data:image/x-icon;base64,AA=="));
+    }
+
+    #[test]
+    fn is_safe_favicon_url_rejects_non_raster_and_opaque_schemes() {
+        assert!(!is_safe_favicon_url("data:,"));
+        assert!(!is_safe_favicon_url("data:image/svg+xml,<svg/>"));
+        assert!(!is_safe_favicon_url("data:text/html,<script></script>"));
+        assert!(!is_safe_favicon_url("javascript:alert(1)"));
+        assert!(!is_safe_favicon_url("file:///etc/passwd"));
+        assert!(!is_safe_favicon_url("mailto:x@example.org"));
+        assert!(!is_safe_favicon_url("blob:https://example.org/abc"));
     }
 
     /// Helper: write a fresh (today-stamped) cache entry for a URL so
