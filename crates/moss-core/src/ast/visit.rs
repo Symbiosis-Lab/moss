@@ -303,15 +303,19 @@ pub fn has_shortcode_recursive(doc: &Document, kind: ShortcodeKind) -> bool {
     any_block(doc, |block| matches!(block, Block::Shortcode(sc) if sc.kind() == kind))
 }
 
-/// True if any `:::grid` in the document actually scrolls — see
-/// [`GridShortcode::scrolls`] — recursive, like [`has_shortcode_recursive`].
-/// Gates the scroll-row runtime script, so a site with no scroll row ships
-/// none of it, and a `{scroll}` grid whose cells all fit doesn't ship it
-/// either.
+/// True if any `:::grid` in the document is a scroll row at all — see
+/// [`GridShortcode::is_scroll_row`] — recursive, like
+/// [`has_shortcode_recursive`]. Gates the scroll-row runtime script, so a
+/// site with no scroll row ships none of it. A `{scroll}` grid whose cells
+/// all fit still counts: it only *looks* like a plain grid on a wide
+/// screen, but it needs the script's resize-driven `tabindex`/dots toggling
+/// to become a real scroller once the viewport narrows — only a one-cell
+/// `{scroll}` grid, which is never a scroll row at any width, ships none of
+/// it.
 pub fn has_scroll_row_recursive(doc: &Document) -> bool {
     any_block(
         doc,
-        |block| matches!(block, Block::Shortcode(Shortcode::Grid(grid)) if grid.scrolls()),
+        |block| matches!(block, Block::Shortcode(Shortcode::Grid(grid)) if grid.is_scroll_row()),
     )
 }
 

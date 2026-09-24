@@ -222,3 +222,102 @@ test("a scroll row's hidden captions do not widen a vertical-typesetting page", 
     "a vertical page's own scroll axis is still physically horizontal; hidden captions must not widen it",
   ).toBeLessThanOrEqual(docMetrics.clientWidth);
 });
+
+/**
+ * Owner's rule: a `{scroll}` row whose cards already fit its column count
+ * (`scroll-row-fits.md`, 3 cells over `:::grid 3`) renders exactly like the
+ * plain grid on a screen wide enough to show every card, and only becomes a
+ * real scroller once the viewport narrows past the SAME breakpoint that
+ * collapses a plain grid to one column — never pinned to one behavior or
+ * the other. `data-fits` (moss-core's `GridShortcode::fits_without_scrolling`)
+ * is what the stylesheet keys the wide-screen layout off, and
+ * `scroll-row.ts`'s `fit()` is what pulls the row in and out of the tab
+ * order and toggles its dots to match.
+ */
+test("a fitting scroll row renders as a plain grid at 1280px: equal tracks, no overflow, no dots, no tab stop", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  await page.goto("/scroll-row-fits/");
+
+  const row = page.locator(".moss-grid[data-scroll]");
+  await expect(row).toHaveAttribute("data-fits", "");
+  await expect(row).toHaveAttribute("data-columns", "3");
+
+  const metrics = await row.evaluate((el) => ({
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+    tabIndex: (el as HTMLElement).tabIndex,
+    widths: Array.from(el.children).map((c) => c.getBoundingClientRect().width),
+  }));
+  expect(metrics.scrollWidth, "no overflow to scroll").toBeLessThanOrEqual(metrics.clientWidth + 1);
+  expect(metrics.tabIndex, "not a pointless tab stop when nothing scrolls").toBe(-1);
+  expect(metrics.widths).toHaveLength(3);
+  for (const w of metrics.widths) expect(w).toBeCloseTo(metrics.widths[0], 0);
+
+  // The dots exist in the DOM (built for any row with 2+ cards) but stay
+  // `hidden` once `fit()` sees the row isn't actually scrollable — "no
+  // dots" is a visibility claim, not a DOM-absence one.
+  await expect(page.locator(".moss-scroll-dots")).toBeHidden();
+
+  // "Renders exactly like the plain grid" is a box-model claim too, not just
+  // a track-width one: `.moss-grid[data-scroll]`'s always-on `padding-block:
+  // 4px` exists to stop the row's own overflow clip from cutting a focus
+  // ring (site.css's comment on that rule) — a reason that stops applying
+  // the moment this same media query sets `overflow-x: visible` back. A
+  // plain `.moss-grid` carries no padding at all, so a fitting row left at
+  // 4px is 8px taller than its plain twin and insets its cards 4px further
+  // from the top/bottom edges than `align-items: flex-start` would if the
+  // padding had actually gone.
+  const padding = await row.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return { top: cs.paddingTop, bottom: cs.paddingBottom };
+  });
+  expect(padding, "no padding leftover from the always-scrolling rule").toEqual({
+    top: "0px",
+    bottom: "0px",
+  });
+});
+
+test("the same fitting scroll row becomes a slideshow at 390px: ~1.3 cards, scrollable, 3 dots, focusable", async ({
+  page,
+}) => {
+  await page.setViewportSize(MOBILE);
+  await page.goto("/scroll-row-fits/");
+
+  const row = page.locator(".moss-grid[data-scroll]");
+  const metrics = await row.evaluate((el) => ({
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+    tabIndex: (el as HTMLElement).tabIndex,
+    firstCardWidth: (el.children[0] as HTMLElement).getBoundingClientRect().width,
+  }));
+  expect(metrics.scrollWidth, "narrow screens scroll").toBeGreaterThan(metrics.clientWidth);
+  expect(metrics.tabIndex, "a real scroller is keyboard reachable").toBe(0);
+  // ~1.3 cards per view: the first card should read narrower than the full
+  // row width, wide enough that roughly a third of a second card peeks.
+  expect(metrics.firstCardWidth / metrics.clientWidth).toBeLessThan(0.85);
+
+  const dots = page.locator(".moss-scroll-dots button");
+  await expect(dots).toHaveCount(3);
+  await expect(page.locator(".moss-scroll-dots")).toBeVisible();
+});
+
+test("the fitting scroll row's vertical-typesetting twin also fits at 1280px", async ({ page }) => {
+  await page.setViewportSize(DESKTOP);
+  await page.goto("/scroll-row-fits-vertical/");
+
+  const row = page.locator(".moss-grid[data-scroll]");
+  await expect(row).toHaveAttribute("data-fits", "");
+
+  const metrics = await row.evaluate((el) => ({
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+    tabIndex: (el as HTMLElement).tabIndex,
+  }));
+  expect(metrics.scrollHeight, "no overflow along the transposed (block) axis").toBeLessThanOrEqual(
+    metrics.clientHeight + 1,
+  );
+  expect(metrics.tabIndex, "not a pointless tab stop when nothing scrolls").toBe(-1);
+  await expect(page.locator(".moss-scroll-dots")).toBeHidden();
+});

@@ -160,10 +160,21 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
         // `role`/`aria-label` only alongside `scroll` — set on its own it
         // would name a landmark that was never created.
         //
-        // `args.scrolls()`, not the bare `scroll` flag: a `{scroll}` grid
-        // whose cells already fit in one row (`cells.len() <= columns`)
-        // needs none of this — no dots, no drag, full-width cards, same as
-        // the grid without `scroll` at all. See `GridShortcode::scrolls`.
+        // `args.is_scroll_row()`, not the bare `scroll` flag: a `{scroll}`
+        // grid with only one cell has nothing to drag past at any width, so
+        // it needs none of this — no dots, no drag, full-width card, same
+        // as the grid without `scroll` at all. See
+        // `GridShortcode::is_scroll_row`.
+        //
+        // A row whose cells already fit in `columns` (`fits_without_scrolling`)
+        // still gets the full `data-scroll`/`tabindex`/`role`/`aria-label`
+        // treatment here — it stays a real scroll region at narrow widths,
+        // just not at wide ones — but carries `data-fits` too, so
+        // site.css/vertical.css can key the wide-screen plain-grid layout
+        // off it. `tabindex="0"` is always emitted regardless of `data-fits`
+        // so a no-JS narrow view is still keyboard-scrollable; the runtime
+        // script (`scroll-row.ts`) removes it again once it can see the row
+        // isn't actually scrollable at the current width.
         //
         // `label` may be the author's own `{label="…"}` text, or — when
         // they wrote none — the nearest preceding heading's text, filled in
@@ -174,8 +185,12 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
         // apart, and doesn't need to — an unnamed keyboard stop is a real
         // accessibility gap (a screen reader announces a focusable element
         // with no name), and both are equally valid names for it.
-        if args.scrolls() {
-            open_tag.push_str(r#" data-scroll tabindex="0""#);
+        if args.is_scroll_row() {
+            open_tag.push_str(r#" data-scroll"#);
+            if args.fits_without_scrolling() {
+                open_tag.push_str(r#" data-fits"#);
+            }
+            open_tag.push_str(r#" tabindex="0""#);
             if let Some(label) = &args.label {
                 open_tag.push_str(r#" role="region" aria-label=""#);
                 open_tag.push_str(&escape_attr(label));

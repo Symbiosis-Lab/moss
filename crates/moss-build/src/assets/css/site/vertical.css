@@ -379,6 +379,46 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   );
 }
 
+/* `data-fits` (site.css) counters the transpose above the SAME breakpoint
+   site.css uses, for a fitting row's twin reason: `.moss-grid[data-columns=
+   "N"]` (this file, unconditional) already renders it as plain-grid N cards
+   stacked down the column whenever `[data-scroll]` isn't in the selector at
+   all, so restoring exactly that shape above 769px only needs
+   `grid-template-columns` back. site.css's own `[data-fits]` rule sits at
+   the SAME specificity (one class, three attributes) as this file's own
+   `[data-scroll][data-columns]` rule two rules up (one class, three
+   attributes — `[data-typesetting]` counts too, even though it's on an
+   ancestor), so it would lose the tie by source order: partials load AFTER
+   core (`stylesheet.rs`'s `CSS_PARTIALS`), but THIS rule sits below line
+   358's inside the same file, and equal specificity + later source wins —
+   so restating it here, one attribute selector higher
+   (`[data-typesetting]` again, `[data-fits]` again), the same technique the
+   collapse-counter rules above already use, is what actually settles it.
+   `overflow-y: visible` undoes this file's own always-scrolling
+   `overflow-y: auto`. `grid-auto-flow: row` undoes site.css's
+   `[data-scroll] { grid-auto-flow: column }`, unconditional there for every
+   typesetting — the plain-count rules above rely on the same 'row' default
+   (never restated because nothing before this ever set it to 'column' on a
+   non-scroll grid), so a scroll row has to explicitly ask for it back. */
+@media (min-width: 769px) {
+  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits] {
+    grid-auto-flow: row;
+    overflow-y: visible;
+  }
+  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits][data-columns="1"] {
+    grid-template-columns: var(--moss-grid-ratio, minmax(0, 1fr));
+  }
+  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits][data-columns="2"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(2, minmax(0, 1fr)));
+  }
+  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits][data-columns="3"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(3, minmax(0, 1fr)));
+  }
+  [data-typesetting="vertical"] .moss-grid[data-scroll][data-fits][data-columns="4"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(4, minmax(0, 1fr)));
+  }
+}
+
 /* ── Child summary cards (vertical mode) ── */
 /* The list card is site.css's card rotated, nothing else: `.moss-card-row`'s
    flex row already runs along the inline axis, which vertical-rl turns

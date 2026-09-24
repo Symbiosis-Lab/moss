@@ -1187,8 +1187,9 @@ fn end_to_end_parse_with_config_emits_data_source_line() {
 // ── Grid `scroll` emission ───────────────────────────────────────
 
 /// Four cells against three columns, so `scroll: true` actually overflows
-/// the row and `GridShortcode::scrolls()` reads true — the emission tests
-/// below need a grid that genuinely scrolls, not just one that asked to.
+/// the row and `GridShortcode::is_scroll_row()` (but not
+/// `fits_without_scrolling()`) reads true — the emission tests below need a
+/// grid that overflows at every width, not just one that asked to scroll.
 fn grid(scroll: bool, label: Option<&str>) -> Block {
     grid_with_cells(scroll, label, 4)
 }
@@ -1254,19 +1255,39 @@ fn grid_label_without_scroll_emits_nothing_extra() {
     assert!(!html.contains("data-scroll"), "got: {html}");
 }
 
-/// Owner's rule: with only as many cards as fit per row, no dots are
-/// needed and the cards should take the full width — the scroll styling
-/// is not needed. A `{scroll}` grid whose cell count is at or under its
-/// column count must emit exactly what the same grid without `scroll`
-/// emits.
+/// Owner's rule: a `{scroll}` row whose cards already fit its column count
+/// still IS a scroll row — it renders like the plain grid on a wide screen,
+/// but becomes a real scroller once the viewport narrows — so it still gets
+/// `data-scroll`/`tabindex`, plus `data-fits` marking the wide-screen
+/// plain-grid case for the stylesheet. Only a single cell has nothing to
+/// scroll at any width and opts all the way back out. Exact attribute
+/// strings, 1 through 4 cells against `columns=3`.
 #[test]
-fn grid_scroll_with_cells_at_columns_emits_the_plain_grid() {
-    let scrolling = render(vec![grid_with_cells(true, Some("Ignored"), 3)]);
-    let plain = render(vec![grid_with_cells(false, None, 3)]);
-    assert_eq!(scrolling, plain, "3 cells over 3 columns should not scroll: {scrolling}");
-    assert!(!scrolling.contains("data-scroll"), "got: {scrolling}");
-    assert!(!scrolling.contains("tabindex"), "got: {scrolling}");
-    assert!(!scrolling.contains("aria-label"), "got: {scrolling}");
+fn grid_scroll_emission_by_cell_count_at_columns_3() {
+    let one = render(vec![grid_with_cells(true, None, 1)]);
+    assert!(
+        one.starts_with(r#"<div class="moss-grid" data-columns="3">"#),
+        "1 cell: nothing to scroll, plain grid: {one}"
+    );
+
+    let two = render(vec![grid_with_cells(true, None, 2)]);
+    assert!(
+        two.starts_with(r#"<div class="moss-grid" data-columns="3" data-scroll data-fits tabindex="0">"#),
+        "2 cells <= 3 columns: fits, still a scroll row: {two}"
+    );
+
+    let three = render(vec![grid_with_cells(true, None, 3)]);
+    assert!(
+        three.starts_with(r#"<div class="moss-grid" data-columns="3" data-scroll data-fits tabindex="0">"#),
+        "3 cells == 3 columns: fits, still a scroll row: {three}"
+    );
+
+    let four = render(vec![grid_with_cells(true, None, 4)]);
+    assert!(
+        four.starts_with(r#"<div class="moss-grid" data-columns="3" data-scroll tabindex="0">"#),
+        "4 cells > 3 columns: overflows, no data-fits: {four}"
+    );
+    assert!(!four.contains("data-fits"), "got: {four}");
 }
 
 #[test]

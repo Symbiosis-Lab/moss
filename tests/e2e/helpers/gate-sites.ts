@@ -769,6 +769,44 @@ typesetting: vertical
 ${SCROLL_OVERFLOW_CELLS}
 :::
 `,
+    // Owner's rule: a `{scroll}` row whose cells already fit its column
+    // count (3 cells over 3 columns here) renders like the plain grid on a
+    // wide screen and only becomes a slideshow once the viewport narrows —
+    // it must not be pinned to one or the other. Three plain-text cells
+    // (no images) keep the geometry the render-gate assertions read off
+    // (equal card widths, row scroll metrics) independent of image decode.
+    "scroll-row-fits.md": `---
+title: Scroll Row Fits
+uid: "gcis0107"
+---
+
+:::grid 3 {scroll label="Related"}
+One
++++
+Two
++++
+Three
+:::
+`,
+    // Same row, vertical typesetting: the fits/doesn't-fit switch has to
+    // hold on the transposed (block) axis too, at the SAME viewport-width
+    // breakpoint site/vertical.css restates rather than a height-based one
+    // (see that file's own comment on why it borrows site.css's breakpoint
+    // number here).
+    "scroll-row-fits-vertical.md": `---
+title: Scroll Row Fits Vertical
+uid: "gcis0108"
+typesetting: vertical
+---
+
+:::grid 3 {scroll label="Related"}
+One
++++
+Two
++++
+Three
+:::
+`,
     ".moss/config.toml": CONFIG_TOML,
     // A theme is what actually surfaces this bug (see
     // SCROLL_OVERFLOW_THEME_CSS above): a real caption-hiding rule, not

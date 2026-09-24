@@ -396,11 +396,27 @@ fn scroll_row_heading_fallback_flattens_inline_markup() {
 }
 
 #[test]
-fn a_scroll_row_that_fits_gets_no_accessible_name_machinery_either() {
-    // Owner-side rule: `scrolls()` is false when the cells already fit in one
-    // row, so this grid renders exactly like a plain grid — no data-scroll,
-    // no tabindex, and (new) no role/aria-label, even under a heading.
+fn a_scroll_row_that_fits_still_gets_the_accessible_name_machinery() {
+    // Owner-side rule: a fitting row (`fits_without_scrolling()`) still IS a
+    // scroll row (`is_scroll_row()`) — it only looks like a plain grid on a
+    // wide screen, and becomes a real scroll region once the viewport
+    // narrows — so it needs a name for assistive tech just as much as a row
+    // that always scrolls, and gets `data-fits` alongside `data-scroll`.
     let open_tag = grid_open_tag("## Related\n\n:::grid 3 {scroll}\nA\n+++\nB\n+++\nC\n:::\n");
+    assert!(open_tag.contains("data-scroll"), "got: {open_tag}");
+    assert!(open_tag.contains("data-fits"), "got: {open_tag}");
+    assert!(open_tag.contains(r#"tabindex="0""#), "got: {open_tag}");
+    assert!(
+        open_tag.contains(r#"role="region" aria-label="Related""#),
+        "got: {open_tag}"
+    );
+}
+
+#[test]
+fn a_single_cell_scroll_row_gets_no_accessible_name_machinery() {
+    // The one case that opts all the way out: nothing to scroll at any
+    // width, so `is_scroll_row()` itself is false.
+    let open_tag = grid_open_tag("## Related\n\n:::grid 3 {scroll}\nA\n:::\n");
     assert!(!open_tag.contains("data-scroll"), "got: {open_tag}");
     assert!(!open_tag.contains("tabindex"), "got: {open_tag}");
     assert!(!open_tag.contains("role="), "got: {open_tag}");

@@ -303,21 +303,26 @@ fn nearest_heading_label(preceding: &[Block]) -> Option<String> {
 /// Render a `:::grid`'s parts, falling back to the nearest preceding
 /// heading's text as the scroll row's accessible name when the author wrote
 /// no explicit `label=` — see [`nearest_heading_label`]. `args` is cloned
-/// only on this rare path (an actually-scrolling row, no author label, a
-/// heading to borrow from); every other grid — the vast majority — renders
-/// through the caller's own reference with no allocation. Kept to a
-/// borrowed-`label` swap rather than a new `render_grid_parts` parameter: the
-/// trait is public (moss-core is the MIT-licensed open half), and every other
-/// caller of [`RenderHooks::render_grid_parts`] already has no sibling blocks
-/// in view, so a parameter only this one caller could ever fill is a
-/// signature every implementor pays for and none but this one uses.
+/// only on this rare path (a scroll row, no author label, a heading to
+/// borrow from); every other grid — the vast majority — renders through the
+/// caller's own reference with no allocation. Kept to a borrowed-`label`
+/// swap rather than a new `render_grid_parts` parameter: the trait is public
+/// (moss-core is the MIT-licensed open half), and every other caller of
+/// [`RenderHooks::render_grid_parts`] already has no sibling blocks in view,
+/// so a parameter only this one caller could ever fill is a signature every
+/// implementor pays for and none but this one uses.
+///
+/// `args.is_scroll_row()`, not the old cells-exceed-columns test: a row
+/// whose cells fit `columns` still becomes a real scroll region once the
+/// viewport narrows (`GridShortcode::fits_without_scrolling`), so it needs
+/// an accessible name just as much as a row that always scrolls.
 fn grid_parts_with_heading_fallback<H: RenderHooks + ?Sized>(
     hooks: &H,
     args: &GridShortcode,
     source_line: Option<usize>,
     preceding: &[Block],
 ) -> GridParts {
-    if args.scrolls() && args.label.is_none() {
+    if args.is_scroll_row() && args.label.is_none() {
         if let Some(label) = nearest_heading_label(preceding) {
             let named = GridShortcode { label: Some(label), ..args.clone() };
             return hooks.render_grid_parts(&named, source_line);

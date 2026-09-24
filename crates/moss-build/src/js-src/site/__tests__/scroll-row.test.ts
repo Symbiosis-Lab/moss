@@ -122,6 +122,37 @@ describe("scroll dots", () => {
   });
 });
 
+describe("keyboard reachability follows the dots", () => {
+  // A `data-fits` row ships `tabindex="0"` in the HTML so a no-JS narrow view
+  // stays keyboard-scrollable, but once the script can see it isn't actually
+  // scrollable at the current width it shouldn't be a pointless tab stop —
+  // `fit()` toggles `tabIndex` off the same `isScrollableRow` check that
+  // hides the dots, so the two never disagree.
+  test("a row that doesn't overflow is pulled out of the tab order", () => {
+    const g = row(3);
+    setOverflow(g, 0);
+    initScrollDots();
+    expect(g.tabIndex).toBe(-1);
+  });
+
+  test("a row that overflows stays a tab stop", () => {
+    const g = row(3);
+    setOverflow(g, 400);
+    initScrollDots();
+    expect(g.tabIndex).toBe(0);
+  });
+
+  test("a vertical row follows the same rule on its own (block) axis", () => {
+    const flush = row(4);
+    setVerticalOverflow(flush, 0);
+    const overflowing = row(4);
+    setVerticalOverflow(overflowing, 400);
+    initScrollDots();
+    expect(flush.tabIndex).toBe(-1);
+    expect(overflowing.tabIndex).toBe(0);
+  });
+});
+
 describe("re-init after a preview morph", () => {
   test("a morph that drops the dots gets exactly one set back, and one wheel event still asks the row to scroll", () => {
     const g = row(4);

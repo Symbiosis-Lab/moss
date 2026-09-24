@@ -1717,10 +1717,13 @@ fn test_pipeline_sets_scroll_rows_only_for_a_scrolling_grid() {
 }
 
 /// Owner's rule: a `{scroll}` grid whose cells all fit in one row (cell
-/// count <= columns) is not a scroll row at all — same emission as a plain
-/// grid — so it must not set the feature flag either.
+/// count <= columns) still IS a scroll row — it just renders like the plain
+/// grid on a wide screen and only becomes a scroller once the viewport
+/// narrows — so it must still set the feature flag, to ship the runtime
+/// script that drives that narrow-screen behavior. See the single-cell test
+/// below for the one shape that really sets no flag.
 #[test]
-fn test_pipeline_scroll_grid_that_fits_does_not_set_scroll_rows() {
+fn test_pipeline_scroll_grid_that_fits_still_sets_scroll_rows() {
     let doc = process_markdown_file(
         "test.md",
         ":::grid 3 {scroll}\na\n+++\nb\n:::\n",
@@ -1739,7 +1742,32 @@ fn test_pipeline_scroll_grid_that_fits_does_not_set_scroll_rows() {
         None,
     )
     .expect("pipeline should succeed");
-    assert!(!doc.features.scroll_rows, "2 cells over 3 columns fit; must not set the flag");
+    assert!(doc.features.scroll_rows, "2 cells over 3 columns fit, but is still a scroll row");
+}
+
+/// The one shape that truly opts out: a single cell has nothing to scroll
+/// past at any width.
+#[test]
+fn test_pipeline_single_cell_scroll_grid_does_not_set_scroll_rows() {
+    let doc = process_markdown_file(
+        "test.md",
+        ":::grid 3 {scroll}\na\n:::\n",
+        "root",
+        &std::collections::HashMap::new(),
+        false,
+        crate::i18n::Language::En,
+        Some("test-site"),
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+        None,
+    )
+    .expect("pipeline should succeed");
+    assert!(!doc.features.scroll_rows, "a single-cell scroll grid has nothing to scroll");
 }
 
 #[test]

@@ -6500,6 +6500,61 @@ a.moss-grid-card:hover {
   }
 }
 
+/* A `{scroll}` row whose cells already fit its column count (`data-fits`,
+   from `GridShortcode::fits_without_scrolling` — moss-core) renders exactly
+   like the plain wrapping grid above 768px: N equal tracks, no drag, no
+   peek. It only becomes the scroller the rest of this section builds once
+   the viewport narrows past the SAME breakpoint the plain grid collapses
+   at (`min-width: 769px` here is that breakpoint's complement, not a
+   second number to keep in sync by hand) — `scroll-row.js` still attaches
+   at every width (`data-scroll` is unconditional, `is_scroll_row` is what
+   gates the script), so the reader gets the dots and the keyboard affordance
+   the moment the row actually starts scrolling, with no reload needed.
+   `grid-auto-flow: row` un-does the column-flow the always-scrolling rule
+   above sets — with an explicit `grid-template-columns` restored below,
+   row-flow is what makes N cards wrap into N tracks instead of one long row.
+   `.moss-grid[data-scroll][data-fits][data-columns="N"]` (one class + 3
+   attributes) outranks the always-scrolling `[data-scroll][data-columns]`
+   rule above (one class + 2 attributes) regardless of source order, so this
+   media query doesn't need `!important` or a rewrite of that rule.
+
+   The other three declarations undo box-model residue the always-scrolling
+   rule leaves behind once its own reason for each is gone at this width:
+   `padding-block: 4px` there exists only to keep the row's overflow clip
+   from cutting a focus ring, a concern that stops applying the moment
+   `overflow-x` goes back to `visible` two lines up — left alone, a plain
+   `.moss-grid` carries no padding at all, so a fitting row would sit 8px
+   taller than its plain twin and inset every card 4px further from the top
+   and bottom edges. `grid-auto-columns` only ever sized an IMPLICIT track,
+   which `grid-auto-flow: row` plus the explicit per-count
+   `grid-template-columns` below never create, so it is already inert here —
+   reset anyway so a later change to either can't silently wake a stale
+   peek-sized value back up. `overscroll-behavior-inline` is likewise inert
+   on a box that isn't a scroll container once `overflow-x: visible` applies,
+   same reasoning, same anyway. */
+@media (min-width: 769px) {
+  .moss-grid[data-scroll][data-fits] {
+    grid-auto-flow: row;
+    overflow-x: visible;
+    scroll-snap-type: none;
+    grid-auto-columns: auto;
+    overscroll-behavior-inline: auto;
+    padding-block: 0;
+  }
+  .moss-grid[data-scroll][data-fits][data-columns="1"] {
+    grid-template-columns: var(--moss-grid-ratio, minmax(0, 1fr));
+  }
+  .moss-grid[data-scroll][data-fits][data-columns="2"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(2, minmax(0, 1fr)));
+  }
+  .moss-grid[data-scroll][data-fits][data-columns="3"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(3, minmax(0, 1fr)));
+  }
+  .moss-grid[data-scroll][data-fits][data-columns="4"] {
+    grid-template-columns: var(--moss-grid-ratio, repeat(4, minmax(0, 1fr)));
+  }
+}
+
 /* Position dots under a scroll row (`scroll-row.js` adds them; without the
    script the row still scrolls). The dot is drawn 8px but the button is a
    24px target, the WCAG 2.5.8 minimum. Cards in view are lit; the first of
@@ -6511,6 +6566,16 @@ a.moss-grid-card:hover {
   justify-content: center;
   margin-block-start: var(--moss-space-xs);
   color: var(--moss-color-text);
+}
+
+/* `scroll-row.ts`'s `fit()` sets the `hidden` IDL property, not just a class,
+   when the row it belongs to isn't actually scrollable — but `display: flex`
+   above is an AUTHOR rule, and the UA stylesheet's `[hidden] { display: none
+   }` is a lower-priority origin, not a losing specificity: an author rule
+   with no `!important` still wins over it. Same fix already applied to
+   `.lightbox[hidden]` and the nav-island rules elsewhere in this file. */
+.moss-scroll-dots[hidden] {
+  display: none;
 }
 .moss-scroll-dots button {
   display: grid;

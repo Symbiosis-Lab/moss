@@ -194,18 +194,44 @@ pub struct GridShortcode {
 }
 
 impl GridShortcode {
-    /// True when this grid actually needs the scroll-row treatment: the
-    /// author wrote `{scroll}` AND the cells don't already fit in one row.
-    /// A `{scroll}` grid with `cells.len() <= columns` renders exactly like
-    /// the same grid without `scroll` — no dots, no sideways drag are
-    /// needed when every card already has the full row to itself. Both the
-    /// emitter ([`crate::ast::grid_parts::render_grid_parts`]) and the
-    /// `scroll_rows` page-feature gate
-    /// ([`crate::ast::visit::has_scroll_row_recursive`]) call this rather
-    /// than reading `scroll` directly, so they cannot disagree about which
-    /// grids get the treatment.
-    pub fn scrolls(&self) -> bool {
-        self.scroll && self.cells.len() > self.columns as usize
+    /// True whenever this grid is a scroll row AT ALL — the author wrote
+    /// `{scroll}` and there's more than one cell. A single-cell `{scroll}`
+    /// grid has nothing to drag past at any viewport width, so it never
+    /// counts, even though `cells.len() <= columns` would otherwise call it
+    /// "fits". Everything downstream that decides whether the scroll-row
+    /// machinery exists AT ALL for this grid — `data-scroll`/`tabindex` on
+    /// the emitted element ([`crate::ast::grid_parts::render_grid_parts`]),
+    /// the accessible-name fallback
+    /// ([`crate::build::markdown::body_plan`] in moss-build), and the
+    /// `scroll_rows` page-feature gate that ships `scroll-row.js`
+    /// ([`crate::ast::visit::has_scroll_row_recursive`]) — calls this
+    /// rather than reading `scroll` directly, so they cannot disagree about
+    /// which grids get it. It says nothing about whether the row scrolls at
+    /// every width or only once the viewport narrows — see
+    /// [`Self::fits_without_scrolling`] for that.
+    pub fn is_scroll_row(&self) -> bool {
+        self.scroll && self.cells.len() >= 2
+    }
+
+    /// True when a scroll row's own cells already fit in one line at its
+    /// authored `columns` count. Only meaningful when [`Self::is_scroll_row`]
+    /// is already true — a plain (non-`{scroll}`) grid, or a one-cell
+    /// `{scroll}` grid, never asks this.
+    ///
+    /// A fitting row (`cells.len() <= columns`) is not exempt from the
+    /// scroll-row treatment the way it used to be: on a screen wide enough
+    /// to show every card at once it renders exactly like the plain grid —
+    /// N equal tracks, no drag, no dots — but once the viewport narrows
+    /// past the same breakpoint that would otherwise wrap a plain grid to
+    /// one column, it becomes a real scroller instead, one card (plus a
+    /// peek) at a time. The emitter marks this case with `data-fits`
+    /// alongside `data-scroll`, and `site.css`/`site/vertical.css` key the
+    /// wide-screen plain-grid layout off that marker; the script still
+    /// ships and still attaches (`is_scroll_row` is what gates it), because
+    /// only the runtime knows which side of the breakpoint the reader is
+    /// actually on right now.
+    pub fn fits_without_scrolling(&self) -> bool {
+        self.cells.len() <= self.columns as usize
     }
 }
 
@@ -608,19 +634,36 @@ mod tests {
     }
 
     #[test]
-    fn scrolls_is_false_without_the_scroll_flag_even_when_cells_overflow() {
-        assert!(!grid_with(3, 4, false).scrolls());
+    fn is_scroll_row_is_false_without_the_scroll_flag_at_every_cell_count() {
+        assert!(!grid_with(3, 1, false).is_scroll_row());
+        assert!(!grid_with(3, 2, false).is_scroll_row());
+        assert!(!grid_with(3, 3, false).is_scroll_row());
+        assert!(!grid_with(3, 4, false).is_scroll_row());
     }
 
     #[test]
-    fn scrolls_is_false_when_cell_count_is_at_or_under_columns() {
-        assert!(!grid_with(3, 3, true).scrolls());
-        assert!(!grid_with(3, 2, true).scrolls());
+    fn is_scroll_row_is_false_for_a_single_cell_even_with_scroll() {
+        // Nothing to drag past at any width — `{scroll}` on a one-cell grid
+        // is a no-op, not a fitting scroll row.
+        assert!(!grid_with(3, 1, true).is_scroll_row());
     }
 
     #[test]
-    fn scrolls_is_true_when_cells_exceed_columns() {
-        assert!(grid_with(3, 4, true).scrolls());
+    fn is_scroll_row_is_true_for_two_or_more_cells_with_scroll_whether_or_not_they_fit() {
+        assert!(grid_with(3, 2, true).is_scroll_row());
+        assert!(grid_with(3, 3, true).is_scroll_row());
+        assert!(grid_with(3, 4, true).is_scroll_row());
+    }
+
+    #[test]
+    fn fits_without_scrolling_is_true_at_or_under_columns() {
+        assert!(grid_with(3, 2, true).fits_without_scrolling());
+        assert!(grid_with(3, 3, true).fits_without_scrolling());
+    }
+
+    #[test]
+    fn fits_without_scrolling_is_false_once_cells_exceed_columns() {
+        assert!(!grid_with(3, 4, true).fits_without_scrolling());
     }
 
     // ---- Recent ----

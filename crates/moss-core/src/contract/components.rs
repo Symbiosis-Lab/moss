@@ -1343,7 +1343,13 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-scroll",
                 values: &[],
                 default: "",
-                description: "Presence flag: emitted from the bare `scroll` keyword (`:::grid N {scroll}`). Keeps the row on one line — the reader drags it sideways instead of it wrapping or collapsing. Always paired with `tabindex=\"0\"` (keyboard-scrollable, same affordance as `.moss-table-scroll`); also gets `role=\"region\"` plus an escaped `aria-label` naming the row for assistive tech — the author's own `label=\"…\"` text when they wrote one, else the nearest preceding heading's text, or neither attribute when no name is available at all.",
+                description: "Presence flag: emitted from the bare `scroll` keyword (`:::grid N {scroll}`) whenever there's more than one cell. Keeps the row on one line — the reader drags it sideways instead of it wrapping or collapsing. Always paired with `tabindex=\"0\"` (keyboard-scrollable, same affordance as `.moss-table-scroll`, though the runtime script removes it again on a screen wide enough that the row isn't actually scrollable); also gets `role=\"region\"` plus an escaped `aria-label` naming the row for assistive tech — the author's own `label=\"…\"` text when they wrote one, else the nearest preceding heading's text, or neither attribute when no name is available at all.",
+            },
+            DataAttr {
+                name: "data-fits",
+                values: &[],
+                default: "",
+                description: "Presence flag alongside `data-scroll`: this row's cell count is at or under its `data-columns`, so it renders exactly like the plain wrapping grid on a screen wide enough to show every card at once — N equal tracks, no drag, no dots — and only becomes a real scroller once the viewport narrows past the same breakpoint that would otherwise collapse a plain grid to one column. Absent on a row that overflows its columns and so scrolls at every width, and on a one-cell `{scroll}` row (which gets no `data-scroll` either — nothing to scroll at any width).",
             },
         ],
         example_html: r#"<div class="moss-grid" data-width="wide">

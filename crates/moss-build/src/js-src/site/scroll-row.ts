@@ -57,8 +57,13 @@
  * anywhere. `onWheel` only acts when that record names its own row.
  *
  * Progressive enhancement: the row scrolls without this script, and the dots
- * exist only once it runs. A row with nothing to scroll (all cards fit) keeps
- * its dots hidden.
+ * exist only once it runs. A row with nothing to scroll at the CURRENT
+ * viewport — either because it never overflows (`data-fits`, on a wide
+ * enough screen) or, in principle, any other row that stops overflowing —
+ * keeps its dots hidden and, since `fit()` below toggles both off the same
+ * check, is also pulled out of the tab order, so a `{scroll}` row that fits
+ * its columns is never a pointless keyboard stop on a screen wide enough to
+ * show every card already.
  *
  * A preview morph reuses the `.moss-grid[data-scroll]` node itself but drops
  * the dots, which are not in the source HTML idiomorph reconciles against —
@@ -147,8 +152,18 @@ function isScrollableRow(row: HTMLElement): boolean {
   return row.scrollWidth > row.clientWidth + 1;
 }
 
+/** A `{scroll}` row whose cards fit its column count (`data-fits`) ships
+ * `tabindex="0"` in the HTML so a no-JS view stays keyboard-scrollable at a
+ * narrow width, but on a wide screen it isn't a scroll container at all —
+ * only the runtime knows which side of the breakpoint the reader is on, so
+ * this toggles the tab stop together with the dots, off the same
+ * `isScrollableRow` check, on both init and resize. A row that always
+ * scrolls (no `data-fits`) is scrollable at every width `isScrollableRow`
+ * can observe, so this is a no-op for it — it keeps `tabindex="0"`. */
 function fit(row: HTMLElement, state: RowState): void {
-  if (state.nav) state.nav.hidden = !isScrollableRow(row);
+  const scrollable = isScrollableRow(row);
+  if (state.nav) state.nav.hidden = !scrollable;
+  row.tabIndex = scrollable ? 0 : -1;
 }
 
 function prefersReducedMotion(): boolean {

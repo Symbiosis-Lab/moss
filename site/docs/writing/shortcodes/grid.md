@@ -72,7 +72,7 @@ The column count is also settable by name — `:::grid {per-line=2}` — for whe
 
 Add `scroll` to keep the row on one line and let the reader drag it sideways, with part of the next card showing as a cue to keep going. `N` still sets the column count, but under `scroll` it means how many cards fit in view at once rather than how many sit per row.
 
-A row with `N` cards or fewer already fits on one line, so it renders as an ordinary grid — no dots, no drag, every card at full width.
+A row with `N` cards or fewer already fits on one line, so on a wide enough screen it renders as an ordinary grid — no dots, no drag, every card at full width — and only turns into a slideshow once the screen narrows past the same width where a plain grid would otherwise wrap.
 
 Use it for a "related articles" or "more like this" strip where order matters more than seeing every card at once. Skip it when every card must be visible without scrolling — a small comparison set the reader should scan as a whole — and use the plain wrapping grid instead.
 
