@@ -4,7 +4,7 @@
 
 /// A link rendered INSIDE the toast's message, on the message's own line —
 /// for a toast whose sentence ends in a thing you can open ("Published to
-/// okagaki.mosspub.com"). An action button would put the same words on a
+/// sample-site.mosspub.com"). An action button would put the same words on a
 /// second row and say them twice.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, specta::Type)]
 pub struct ToastInlineLink {

@@ -1109,7 +1109,7 @@ async fn a_shared_budget_stops_retries_compounding_across_chunks() {
 ///
 /// The 600 s budget used to measure total time, so a file's own successful
 /// transfer consumed the allowance meant for its failures — a 50 MB video on a
-/// 50 KB/s uplink exhausted it while doing everything right (okagaki,
+/// 50 KB/s uplink exhausted it while doing everything right (a large live site,
 /// 2026-08-04). Success now restarts the stopwatch, so an arbitrarily large
 /// file that keeps landing chunks keeps its full retry allowance.
 #[tokio::test(start_paused = true)]

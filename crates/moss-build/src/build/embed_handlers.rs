@@ -486,17 +486,17 @@ mod tests {
             eprintln!("skipping: MOSS_NOTEBOOK_FIXTURE not set");
             return;
         };
-        let nb = "resources/habitable-zone.ipynb";
+        let nb = "resources/orbit-model.ipynb";
         if !root.join(nb).exists() {
             eprintln!("skipping: {} not under MOSS_NOTEBOOK_FIXTURE", nb);
             return;
         }
 
         let mut builder = ContentGraphBuilder::new();
-        builder.add_file(nb, "habitable-zone");
+        builder.add_file(nb, "orbit-model");
         let graph = builder.build();
 
-        let md = "# Real notebook\n\n![[habitable-zone.ipynb]]\n";
+        let md = "# Real notebook\n\n![[orbit-model.ipynb]]\n";
         let registry = RendererRegistry::empty().build();
         let handlers = builtin_marker_handlers(root.clone(), crate::i18n::Language::En);
         let file_reader = |path: &str| std::fs::read_to_string(root.join(path)).ok();
@@ -517,7 +517,7 @@ mod tests {
         assert!(
             result
                 .content_markdown
-                .contains("/jupyter/notebooks/?path=habitable-zone.ipynb")
+                .contains("/jupyter/notebooks/?path=orbit-model.ipynb")
         );
     }
 

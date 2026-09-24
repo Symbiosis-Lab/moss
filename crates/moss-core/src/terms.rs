@@ -53,7 +53,7 @@ pub fn term_folder_key(ns: &str, name: &str) -> String {
 pub enum TermClaim {
     /// `author_page: true` — claim the name equal to this page's title.
     UseTitle,
-    /// `author_page: 馬欣宜` — claim this name explicitly (used when the
+    /// `author_page: 林小滿` — claim this name explicitly (used when the
     /// page title differs from the term name).
     Name(String),
 }
@@ -100,12 +100,12 @@ mod tests {
     #[test]
     fn fold_is_trimmed_and_case_insensitive() {
         assert_eq!(term_fold(" ScarlyZ "), "scarlyz");
-        assert_eq!(term_fold("馬欣宜"), "馬欣宜");
+        assert_eq!(term_fold("林小滿"), "林小滿");
     }
 
     #[test]
     fn slug_preserves_cjk_and_hyphenates_spaces() {
-        assert_eq!(term_slug("馬欣宜"), "馬欣宜");
+        assert_eq!(term_slug("林小滿"), "林小滿");
         assert_eq!(term_slug("David Yang"), "david-yang");
         assert_eq!(term_slug("Web 2.0"), "web-2-0");
         assert_eq!(term_folder_key(AUTHOR_NS, "David Yang"), "authors/david-yang");
@@ -114,7 +114,7 @@ mod tests {
 
     #[test]
     fn claim_name_resolves_use_title_to_the_page_title() {
-        assert_eq!(TermClaim::UseTitle.name("馬欣宜"), "馬欣宜");
+        assert_eq!(TermClaim::UseTitle.name("林小滿"), "林小滿");
         assert_eq!(TermClaim::Name("Scarly".into()).name("ScarlyZ 的頁面"), "Scarly");
     }
 

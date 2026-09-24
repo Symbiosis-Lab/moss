@@ -28,7 +28,7 @@ pub use moss_core::slug::{generate_slug, slugify_path_segments};
 /// filenames. Lowercase-rewriting `MathJax_Main-Bold.woff` → 404.
 ///
 /// Examples:
-/// - `Resources/habitable-zone.html` → `resources/habitable-zone.html`
+/// - `Resources/orbit-model.html` → `resources/orbit-model.html`
 /// - `jupyter/build/schemas/@jupyter-notebook/foo.json` → `jupyter/build/schemas/@jupyter-notebook/foo.json`
 /// - `News/Sub Section/post.md` → `news/sub section/post.md`
 /// - `Photo (1).jpg` → `Photo (1).jpg` (no dirs)
@@ -422,7 +422,7 @@ pub fn resolve_duplicate_slugs_with_lang(
     let reported = root_causes(found);
     // The author's copy of this goes on the `url` chip, where the field she
     // has to change is; this is for the support read of an uploaded log,
-    // which is how the 潮汐·週報 report was diagnosed at all.
+    // which is how the 河灣·週刊 report was diagnosed at all.
     for c in &reported {
         log::warn!(
             target: "build",
@@ -442,13 +442,13 @@ fn parent_dir(source_path: &str) -> &str {
 ///
 /// A folder's `url:` cascades to its descendants, so one duplicated folder
 /// produces a collision for the folder AND for every page beneath it — the
-/// 潮汐·週報 report was ~20 of them for a single copied folder. Every deeper
+/// 河灣·週刊 report was ~20 of them for a single copied folder. Every deeper
 /// one is a consequence, and reporting them all buries the single edit that
 /// fixes the lot: the children's own `url:` segments are relative and correct,
 /// so changing the parent's resolves them untouched.
 fn root_causes(found: Vec<(UrlCollision, Option<String>)>) -> Vec<UrlCollision> {
     // Paired with its own index: a folder note lives INSIDE the directory it
-    // cascades over (`獎項/記憶獎/記憶獎.md`), so a collision compared against
+    // cascades over (`評選/散文組/散文組.md`), so a collision compared against
     // its own directory would suppress itself and report nothing at all.
     let cascading: Vec<(usize, String)> = found
         .iter()
@@ -702,7 +702,7 @@ mod tests {
         assert_eq!(replace_uid_in_frontmatter(no_fm, "753659e7"), no_fm);
     }
 
-    /// The shape of a real, in-production `footer.md` (harbor.mosspub.com):
+    /// The shape of a real, in-production `footer.md` (riverbend.mosspub.com):
     /// no frontmatter, opens with literal HTML, and its site map is a
     /// `:::grid 3` whose cells are separated by `---`. A live build stamped
     /// `uid: "2af1e0f6"` in front of that first grid `---`, which rendered as a
@@ -711,9 +711,9 @@ mod tests {
     ///
     /// Byte-identical is the whole assertion. Anything else means moss edited a
     /// file it had no business editing.
-    const HARBOR_FOOTER: &str = concat!(
+    const RIVERBEND_FOOTER: &str = concat!(
         "<div class=\"fs-signup\">\n",
-        "<p class=\"fs-invite\">訂閱潮汐，第一手收到消息。</p>\n",
+        "<p class=\"fs-invite\">訂閱河灣，第一手收到消息。</p>\n",
         "\n",
         ":::subscribe {placeholder=\"你的電子郵件\" button=\"訂閱\"}\n",
         ":::\n",
@@ -723,7 +723,7 @@ mod tests {
         "<nav class=\"fs-map\" aria-label=\"網站地圖\">\n",
         "\n",
         ":::grid 3\n",
-        "**[[獎項]]**\n",
+        "**[[評選]]**\n",
         "\n",
         "- [[現正徵件]]\n",
         "\n",
@@ -749,13 +749,13 @@ mod tests {
     /// status list. `uid: "dd54e60c"` was spliced immediately above that break,
     /// exactly as in the footer. Neither file's first line is a field line, so
     /// today both are refused at the first line of the scan.
-    const HARBOR_README: &str = concat!(
-        "# Harbor Weekly (潮汐 · 週報) → moss port\n",
+    const RIVERBEND_README: &str = concat!(
+        "# Riverbend Review (河灣 · 週刊) → moss port\n",
         "\n",
-        "Entrance / status board for porting https://www.harborweekly.io/ (a\n",
+        "Entrance / status board for porting https://www.riverbend.example/ (a\n",
         "Strikingly site) to moss.\n",
         "\n",
-        "- **The vault:** [`潮汐/`](潮汐/) — the moss site.\n",
+        "- **The vault:** [`河灣/`](河灣/) — the moss site.\n",
         "- **Port records:** [`archive/`](archive/) — the completed port machinery.\n",
         "\n",
         "---\n",
@@ -764,11 +764,11 @@ mod tests {
     );
 
     #[test]
-    fn test_insert_uid_leaves_the_two_corrupted_harbor_files_byte_identical() {
+    fn test_insert_uid_leaves_the_two_corrupted_riverbend_files_byte_identical() {
         // Both files were found carrying a spliced `uid:` line on disk. Whatever
         // wrote them, nothing may write them again.
         for (label, content) in
-            [("footer.md", HARBOR_FOOTER), ("README.md", HARBOR_README)]
+            [("footer.md", RIVERBEND_FOOTER), ("README.md", RIVERBEND_README)]
         {
             assert_eq!(
                 &insert_uid_into_frontmatter(content, "2af1e0f6"),
@@ -1023,10 +1023,10 @@ mod tests {
         use crate::i18n::Language;
 
         let mut docs = vec![
-            folder("Comics", "awards/comics/index.html", "獎項/漫畫獎/漫畫獎.md"),
-            folder("Memory", "awards/comics/index.html", "獎項/記憶獎/記憶獎.md"),
-            folder("S1 orig", "awards/comics/s1/index.html", "獎項/漫畫獎/第一季/第一季.md"),
-            folder("S1 copy", "awards/comics/s1/index.html", "獎項/記憶獎/第一季/第一季.md"),
+            folder("Comics", "awards/comics/index.html", "評選/繪本組/繪本組.md"),
+            folder("Memory", "awards/comics/index.html", "評選/散文組/散文組.md"),
+            folder("S1 orig", "awards/comics/s1/index.html", "評選/繪本組/第一屆/第一屆.md"),
+            folder("S1 copy", "awards/comics/s1/index.html", "評選/散文組/第一屆/第一屆.md"),
         ];
         docs[2].kind = PageKind::Folder;
         docs[3].kind = PageKind::Folder;
@@ -1034,8 +1034,8 @@ mod tests {
         let reported = resolve_duplicate_slugs_with_lang(&mut docs, Language::En);
 
         assert_eq!(reported.len(), 1, "got {:?}", reported);
-        assert_eq!(reported[0].loser, "獎項/記憶獎/記憶獎.md");
-        assert_eq!(reported[0].keeper, "獎項/漫畫獎/漫畫獎.md");
+        assert_eq!(reported[0].loser, "評選/散文組/散文組.md");
+        assert_eq!(reported[0].keeper, "評選/繪本組/繪本組.md");
         assert_eq!(reported[0].wanted, "awards/comics/");
         assert_eq!(reported[0].moved_to, "awards/comics-2/");
     }

@@ -454,7 +454,7 @@ fn cjk_date_keeps_separate_meta_inside_card() {
         description: None,
         cover: None,
         cover_type: None,
-        kicker: Some("端傳媒".to_string()),
+        kicker: Some("遠聲媒體".to_string()),
         permalink: Some("/archive/foo/".to_string()),
         url_path: String::new(),
     };
@@ -469,7 +469,7 @@ fn cjk_date_keeps_separate_meta_inside_card() {
     // card-head with ★; meta renders separately also inside card-head.
     // Both are inside the card-body, no split across the card boundary.
     assert!(
-        html.contains(r#"<div class="moss-card-kicker">端傳媒 <a class="moss-card-permalink""#),
+        html.contains(r#"<div class="moss-card-kicker">遠聲媒體 <a class="moss-card-permalink""#),
         "kicker contains publisher + ★; got: {}",
         html
     );

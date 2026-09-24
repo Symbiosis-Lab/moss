@@ -864,13 +864,13 @@ fn image_href_is_identical_from_root_and_from_a_nested_note() {
     // asset copier writes (`MIRROR/` → `/mirror/`) — not the source spelling,
     // and not a case-folded guess.
     let graph = graph_with(&[
-        "MIRROR/潮汐/cover-IMG.png",
+        "MIRROR/河灣/cover-IMG.png",
         "index.md",
-        "MIRROR/潮汐/note.md",
+        "MIRROR/河灣/note.md",
     ]);
     let from_root = resolve_image_src("cover-IMG.png", "index.md", &graph);
-    let from_deep = resolve_image_src("cover-IMG.png", "MIRROR/潮汐/note.md", &graph);
-    assert_eq!(from_root, "/mirror/%E6%BD%AE%E6%B1%90/cover-IMG.png");
+    let from_deep = resolve_image_src("cover-IMG.png", "MIRROR/河灣/note.md", &graph);
+    assert_eq!(from_root, "/mirror/%E6%B2%B3%E7%81%A3/cover-IMG.png");
     assert_eq!(
         from_root, from_deep,
         "the referencing note's depth must not change the emitted URL"

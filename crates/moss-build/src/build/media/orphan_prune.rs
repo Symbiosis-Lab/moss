@@ -300,7 +300,7 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
 /// image file under the vault, so on any site holding an unreferenced image
 /// the producers and the prune disagreed by construction and each build
 /// re-created exactly what the previous build had deleted. Measured on
-/// harbor 2026-08-19: sixteen consecutive builds, each logging `self-heal:
+/// riverbend 2026-08-19: sixteen consecutive builds, each logging `self-heal:
 /// re-materialized 96 staged .webp file(s)` and then `orphan prune: removed 96
 /// unreferenced .webp file(s), 3553600 bytes freed` — identical counts,
 /// identical bytes, work that could never settle.

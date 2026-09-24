@@ -1276,7 +1276,7 @@ pub fn process_markdown_file(
     // (frontmatter first, inline #tags appended case-insensitively; both
     // absent stays None so the folder cascade still fills). The pre-merge
     // frontmatter list is kept apart because only IT derives term pages:
-    // inline hashtags are prose, not cataloguing — measured on harbor,
+    // inline hashtags are prose, not cataloguing — measured on riverbend,
     // every one of its six inline tags was rhetorical emphasis mid-sentence,
     // and deriving pages from them shipped six junk pages.
     let fm_tags = frontmatter.tags.clone();

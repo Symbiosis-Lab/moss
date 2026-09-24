@@ -8,7 +8,7 @@
 //! `slug(X)/index.html`. That document set has two halves, and the editor's old
 //! filesystem answer could see neither:
 //!
-//! 1. **Source-backed folder-index docs.** `獎項/獎項.md` carrying `url: awards`
+//! 1. **Source-backed folder-index docs.** `評選/評選.md` carrying `url: awards`
 //!    in its frontmatter is served at `awards/index.html`. `![[/awards/]]`
 //!    renders a listing in the build; a `read_dir` of `<root>/awards` finds
 //!    nothing.
@@ -203,7 +203,7 @@ impl EditorFolderIndex {
         // Half (A): source-backed folder-index documents, straight from the
         // map. A directory whose folder-index document the map already claims
         // contributes ONLY that document's URL key, never its own directory key
-        // — otherwise `![[/獎項/]]` goes green in the editor while the build
+        // — otherwise `![[/評選/]]` goes green in the editor while the build
         // (whose doc lives at `awards/index.html`) emits a missing embed.
         // `is_file` is the staleness guard: a mapped source that no longer
         // exists is a dead entry and must not suppress anything.

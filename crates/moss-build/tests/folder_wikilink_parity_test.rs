@@ -66,8 +66,8 @@ fn write_fixture(root: &Path) {
     fs::write(root.join("news/index.md"), "---\ntitle: News\n---\n\nHello.\n").unwrap();
 
     // A self-named folder note under a directory whose slug is overridden.
-    fs::create_dir_all(root.join("獎項")).unwrap();
-    fs::write(root.join("獎項/獎項.md"), "---\ntitle: 獎項\nurl: awards\n---\n\n你好。\n").unwrap();
+    fs::create_dir_all(root.join("評選")).unwrap();
+    fs::write(root.join("評選/評選.md"), "---\ntitle: 評選\nurl: awards\n---\n\n你好。\n").unwrap();
 }
 
 #[test]
@@ -88,11 +88,11 @@ fn editor_and_build_agree_on_folder_wikilinks() {
     // registration — not a graph assembled by hand for the test.
     let content_graph = build_content_graph(&project_structure);
 
-    // `獎項/獎項.md` carries `url: awards` — the override a real build would
+    // `評選/評選.md` carries `url: awards` — the override a real build would
     // derive from that frontmatter, passed explicitly here rather than
     // running the full page-map scan pipeline.
     let mut dir_overrides = HashMap::new();
-    dir_overrides.insert("獎項".to_string(), "awards".to_string());
+    dir_overrides.insert("評選".to_string(), "awards".to_string());
 
     // 3. The REAL ArticleMap, including this fix's `folder_indexes` field —
     // produced by the real `build_article_map`, not assembled by hand. The
@@ -161,7 +161,7 @@ fn editor_and_build_agree_on_folder_wikilinks() {
         ("news", "index.md", Some("news/index.md")),
         // Case + override: the on-disk directory name resolves to the
         // overridden slug, not to a URL built from its own on-disk name.
-        ("獎項", "index.md", Some("獎項/獎項.md")),
+        ("評選", "index.md", Some("評選/評選.md")),
     ];
 
     for &(reference, from, expected_source) in folder_cases {
@@ -203,8 +203,8 @@ fn editor_and_build_agree_on_folder_wikilinks() {
 
 /// The directory a resolved folder-note source path names: its own leaf
 /// filename stripped off. `"essays/index.md"` -> `"essays"`;
-/// `"obsidian/notes/index.md"` -> `"obsidian/notes"`; `"獎項/獎項.md"` ->
-/// `"獎項"` (self-named).
+/// `"obsidian/notes/index.md"` -> `"obsidian/notes"`; `"評選/評選.md"` ->
+/// `"評選"` (self-named).
 fn parent_dir(source_path: &str) -> &str {
     source_path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("")
 }

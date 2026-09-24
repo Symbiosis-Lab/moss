@@ -2567,7 +2567,7 @@ fn remove_stale_dirs_never_deletes_math_dir() {
 /// walk used to hold a snapshot clone of the whole manifest and re-emit it,
 /// so anything it failed to recognise was swept before persistence — the
 /// deploy manifest shipped to seta missed those paths and prod 404'd
-/// `/resources/habitable-zone.html` and `/jupyter/**`.
+/// `/resources/orbit-model.html` and `/jupyter/**`.
 ///
 /// The walk now owns only the static-asset slice, seeded from the PREVIOUS
 /// build's manifest, so it has no way to sweep an entry belonging
@@ -2588,7 +2588,7 @@ async fn test_copy_deferred_assets_preserves_notebook_hash_entries_for_deploy() 
     std::fs::create_dir_all(&output).unwrap();
     std::fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
-    let nb_path = "resources/habitable-zone.html".to_string();
+    let nb_path = "resources/orbit-model.html".to_string();
     let nb_hash = "deadbeefdeadbeef".to_string();
 
     // What `run_notebook_processing` does in `build_inner`: register the
@@ -2633,7 +2633,7 @@ async fn test_copy_deferred_assets_preserves_notebook_hash_entries_for_deploy() 
 /// deleted on every rebuild because their source is .ipynb but the outputs
 /// have different extensions — matching the webp pattern exactly.
 ///
-/// Regression test for a 404 on /resources/habitable-zone.html observed on
+/// Regression test for a 404 on /resources/orbit-model.html observed on
 /// a real site: rebuild → stale cleanup deletes the viewer HTML →
 /// iframe 404 until the next full notebook regeneration completes.
 #[test]
@@ -2646,11 +2646,11 @@ fn test_remove_stale_files_preserves_notebook_outputs() {
     fs::create_dir_all(&jupyter_lab).unwrap();
 
     // Viewer HTML wrapper (sibling of .ipynb at its natural path)
-    fs::write(resources.join("habitable-zone.html"), "viewer").unwrap();
+    fs::write(resources.join("orbit-model.html"), "viewer").unwrap();
     // JupyterLite asset file
     fs::write(jupyter_lab.join("index.html"), "lab").unwrap();
     // .ipynb copy (for direct access / JupyterLite load)
-    fs::write(resources.join("habitable-zone.ipynb"), "nb").unwrap();
+    fs::write(resources.join("orbit-model.ipynb"), "nb").unwrap();
     // Orphan: not in any preserve-set, must be deleted (proves the
     // function is actually scanning, not no-op'ing).
     fs::write(jupyter_lab.join("orphan.js"), "stale").unwrap();
@@ -2658,18 +2658,18 @@ fn test_remove_stale_files_preserves_notebook_outputs() {
     let mut hashes = SiteHashes::new();
     hashes
         .notebook_outputs
-        .insert("resources/habitable-zone.html".to_string());
+        .insert("resources/orbit-model.html".to_string());
     hashes
         .notebook_outputs
         .insert("jupyter/lab/index.html".to_string());
     hashes
         .notebook_outputs
-        .insert("resources/habitable-zone.ipynb".to_string());
+        .insert("resources/orbit-model.ipynb".to_string());
 
     remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
     assert!(
-        resources.join("habitable-zone.html").exists(),
+        resources.join("orbit-model.html").exists(),
         "notebook viewer HTML should be preserved"
     );
     assert!(
@@ -2677,7 +2677,7 @@ fn test_remove_stale_files_preserves_notebook_outputs() {
         "jupyter asset should be preserved"
     );
     assert!(
-        resources.join("habitable-zone.ipynb").exists(),
+        resources.join("orbit-model.ipynb").exists(),
         ".ipynb copy should be preserved"
     );
     assert!(
@@ -3660,7 +3660,7 @@ fn test_copy_dir_recursive_copies_all_files() {
 /// that directory, so the twins entered the manifest as moss's own output; they
 /// were cloud-evicted, and reading one back to hash it returned EDEADLK, which
 /// classified as a fatal stop and killed every build of that vault
-/// (the CPHS vault, 2026-08-30).
+/// (a large vault, 2026-08-30).
 ///
 /// The receipt is what makes that unrepresentable: `copy_dir_recursive` reports
 /// what it copied, so whatever else is sitting in the destination — a twin, a
@@ -4889,7 +4889,7 @@ fn stage_snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<String, u
 /// The general shape of this bug: one part of the build derives a set by
 /// walking the disk, another derives "the same" set by reading what the render
 /// referenced, the two disagree, and every build redoes work that can never
-/// settle. On harbor that ran for sixteen consecutive builds — 96 `.webp`
+/// settle. On riverbend that ran for sixteen consecutive builds — 96 `.webp`
 /// files re-materialized from the CAS and the same 96 deleted again, 3.5 MB
 /// each pass, 1–2 s on the critical path between `seal+persist` and the prune
 /// finishing.
@@ -5790,7 +5790,7 @@ fn markdown_pages_appear_in_sealed_sources() {
 /// footers as drift, dispatched a full rebuild that could not clear them, then
 /// blamed the watcher for missing an event and recreated it — after which the
 /// folder degraded to sweep-only and the event-driven partial build stopped
-/// happening at all (harbor, 2026-08-19: `n=2` every pass, always
+/// happening at all (riverbend, 2026-08-19: `n=2` every pass, always
 /// `en/footer.md`).
 ///
 /// `everything_the_walk_judges_the_scan_consumes` did not catch it: it asserts

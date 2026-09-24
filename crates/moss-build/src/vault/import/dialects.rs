@@ -81,8 +81,8 @@ fn pascal_case_component(ty: &str) -> bool {
     ty.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
-/// Strikingly's `$S` component tree. Match arms come from the harbor
-/// corpus census (`潮汐/.port/census-summary.txt`): ALL prose is
+/// Strikingly's `$S` component tree. Match arms come from the riverbend
+/// corpus census (`河灣/.port/census-summary.txt`): ALL prose is
 /// `RichText.value`; real videos are bare `Video` components; `Media`
 /// wrappers carry a stock placeholder video and select their active child
 /// via `current`; `Background.useImage=false` is an explicit opt-out.

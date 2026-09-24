@@ -43,7 +43,7 @@ fn truncated_s_assignment_returns_none() {
 
 // ---- section renderer ----------------------------------------------------
 //
-// Fixture shapes mirror the real $S corpus (潮汐/.port/s-corpus): blog
+// Fixture shapes mirror the real $S corpus (河灣/.port/s-corpus): blog
 // sections are `Blog.Section` wrappers with a single `component`; page
 // sections are `Slide`s with a `components` map; ALL prose is `RichText`
 // with HTML in `value` (no Title/SubTitle/Text types exist).
@@ -57,12 +57,12 @@ fn renders_richtext_value_html_as_markdown() {
     let sections = json!([
         {"type": "Blog.Section", "id": "s1", "component":
             {"type": "RichText", "id": "c1",
-             "value": "<p style=\"text-align: justify;\"><span style=\"color: #000000;\">2024年10月，第四季作品出爐。</span></p>"}},
+             "value": "<p style=\"text-align: justify;\"><span style=\"color: #000000;\">2024年10月，第二屆作品出爐。</span></p>"}},
         {"type": "Blog.Section", "id": "s2", "component":
             {"type": "RichText", "id": "c2", "value": "<h2>得獎名單</h2>"}}
     ]);
     let out = render_sections(&sections, RES_ID);
-    assert!(out.markdown.contains("2024年10月，第四季作品出爐。"), "got: {}", out.markdown);
+    assert!(out.markdown.contains("2024年10月，第二屆作品出爐。"), "got: {}", out.markdown);
     assert!(out.markdown.contains("## 得獎名單"), "got: {}", out.markdown);
     assert!(!out.markdown.contains("<p"), "raw HTML leaked: {}", out.markdown);
     assert!(out.skipped.is_empty(), "skipped: {:?}", out.skipped);
@@ -71,7 +71,7 @@ fn renders_richtext_value_html_as_markdown() {
 #[test]
 fn renders_video_component_as_wikilink_embed() {
     // Real videos sit as bare Video components inside BlockComponent items
-    // (verified on shortfilmfellowship-1): url is the oEmbed watch URL.
+    // (verified on a real vault's export): url is the oEmbed watch URL.
     let sections = json!([
         {"type": "Slide", "id": "s1", "components": {
             "block1": {"type": "BlockComponent", "id": "b1", "items": [
@@ -131,11 +131,11 @@ fn renders_blog_quote_as_blockquote() {
     let sections = json!([
         {"type": "Blog.Section", "id": "s1", "component":
             {"type": "Blog.Quote", "id": "q1",
-             "value": "<p><strong>「進來的，都是我們的家人。」榮奧說。</strong></p>"}}
+             "value": "<p><strong>「留下來的，都是我們的夥伴。」余安說。</strong></p>"}}
     ]);
     let out = render_sections(&sections, RES_ID);
     assert!(
-        out.markdown.contains("> **「進來的，都是我們的家人。」榮奧說。**"),
+        out.markdown.contains("> **「留下來的，都是我們的夥伴。」余安說。**"),
         "got: {}",
         out.markdown
     );
@@ -314,16 +314,16 @@ fn extracts_res_id_from_raw_html() {
 
 use crate::vault::import::scrape::converter::AdapterBody;
 
-const BLOG_HTML: &str = r#"<html><head><title>【潮汐活動】寫作的決心 - 潮汐</title></head><body>
+const BLOG_HTML: &str = r#"<html><head><title>【河灣活動】寫作的決心 - 河灣</title></head><body>
 <script>//<![CDATA[
-window.$S={};$S.conf={"locale":"zh-TW"};$S.blogPostData={"blogPostMeta":{"publishedAt":"2024-10-13T20:08:41.387-07:00","socialMediaConfig":{"url":"https://www.harborweekly.io/blog/202411event","title":"【潮汐活動】寫作的決心"}},"content":{"type":"Blog.Post","sections":[{"type":"Blog.Section","id":"s1","component":{"type":"RichText","id":"c1","value":"<p>時間：2024/11/9 14:30</p>"}},{"type":"Blog.Section","id":"s2","component":{"type":"Image","id":"i1","url":"!","thumb_url":"!","storageKey":"5927377/250970_432913","format":"jpeg"}}]}};$S.stores={"blogData":{}};
+window.$S={};$S.conf={"locale":"zh-TW"};$S.blogPostData={"blogPostMeta":{"publishedAt":"2024-10-13T20:08:41.387-07:00","socialMediaConfig":{"url":"https://www.riverbend.example/blog/202411event","title":"【河灣活動】寫作的決心"}},"content":{"type":"Blog.Post","sections":[{"type":"Blog.Section","id":"s1","component":{"type":"RichText","id":"c1","value":"<p>時間：2024/11/9 14:30</p>"}},{"type":"Blog.Section","id":"s2","component":{"type":"Image","id":"i1","url":"!","thumb_url":"!","storageKey":"5927377/250970_432913","format":"jpeg"}}]}};$S.stores={"blogData":{}};
 //]]></script>
 <img src="https://custom-images.strikinglycdn.com/res/hrscywv4p/image/upload/c_limit/5927377/x.jpeg">
 </body></html>"#;
 
-const PAGE_HTML: &str = r#"<html><head><title>為什麼要發起「潮汐」？ - 潮汐</title></head><body>
+const PAGE_HTML: &str = r#"<html><head><title>為什麼要發起「河灣」？ - 河灣</title></head><body>
 <script>//<![CDATA[
-window.$S={};$S.nav=[{"uid":"home-uid","name":"/4th-test","isHomePage":true},{"uid":"p2-uid","name":"/2","isHomePage":false}];$S.stores={"pageData":{"pages":[{"uid":"home-uid","path":"/4th-test","title":"首頁","sections":[{"type":"Slide","id":"hs1","components":{"text1":{"type":"RichText","id":"ht1","value":"<p>首頁內容</p>"}}}]},{"uid":"p2-uid","path":"/2","title":"為什麼要發起「潮汐」？","sections":[{"type":"Slide","id":"ps1","components":{"text1":{"type":"RichText","id":"pt1","value":"<p>第二頁內容</p>"}}}]}]}};
+window.$S={};$S.nav=[{"uid":"home-uid","name":"/4th-test","isHomePage":true},{"uid":"p2-uid","name":"/2","isHomePage":false}];$S.stores={"pageData":{"pages":[{"uid":"home-uid","path":"/4th-test","title":"首頁","sections":[{"type":"Slide","id":"hs1","components":{"text1":{"type":"RichText","id":"ht1","value":"<p>首頁內容</p>"}}}]},{"uid":"p2-uid","path":"/2","title":"為什麼要發起「河灣」？","sections":[{"type":"Slide","id":"ps1","components":{"text1":{"type":"RichText","id":"pt1","value":"<p>第二頁內容</p>"}}}]}]}};
 //]]></script>
 <img src="https://custom-images.strikinglycdn.com/res/hrscywv4p/image/upload/c_limit/5927377/y.jpeg">
 </body></html>"#;
@@ -337,11 +337,11 @@ fn expect_markdown_body(content: crate::vault::import::scrape::converter::SiteCo
 
 #[test]
 fn strikingly_blog_extract_overrides_title_and_date() {
-    let content = extract(BLOG_HTML, "https://www.harborweekly.io/blog/202411event")
+    let content = extract(BLOG_HTML, "https://www.riverbend.example/blog/202411event")
         .expect("blog post should extract");
     assert_eq!(
         content.overrides.title.as_deref(),
-        Some("【潮汐活動】寫作的決心"),
+        Some("【河灣活動】寫作的決心"),
         "clean socialMediaConfig title, no site suffix"
     );
     assert_eq!(content.overrides.date.as_deref(), Some("2024-10-13"));
@@ -357,11 +357,11 @@ fn strikingly_blog_extract_overrides_title_and_date() {
 
 #[test]
 fn strikingly_page_extract_selects_current_page_sections() {
-    let content = extract(PAGE_HTML, "https://www.harborweekly.io/2")
+    let content = extract(PAGE_HTML, "https://www.riverbend.example/2")
         .expect("page /2 should extract");
     assert_eq!(
         content.overrides.title.as_deref(),
-        Some("為什麼要發起「潮汐」？")
+        Some("為什麼要發起「河灣」？")
     );
     let md = expect_markdown_body(content);
     assert!(md.contains("第二頁內容"), "got: {md}");
@@ -372,7 +372,7 @@ fn strikingly_page_extract_selects_current_page_sections() {
 fn strikingly_homepage_matched_via_nav_is_home_page_uid() {
     // No page has path "/": the homepage is $S.nav[].isHomePage==true → uid
     // → pageData.pages[].uid (its own path is an arbitrary slug).
-    let content = extract(PAGE_HTML, "https://www.harborweekly.io/")
+    let content = extract(PAGE_HTML, "https://www.riverbend.example/")
         .expect("homepage should extract via nav uid");
     let md = expect_markdown_body(content);
     assert!(md.contains("首頁內容"), "got: {md}");
@@ -383,7 +383,7 @@ fn strikingly_homepage_matched_via_nav_is_home_page_uid() {
 fn strikingly_unmatched_page_returns_none() {
     // Never guess: a request path matching no page falls back to the
     // generic extractor (portfolio items land here by design).
-    assert!(extract(PAGE_HTML, "https://www.harborweekly.io/nonexistent").is_none());
+    assert!(extract(PAGE_HTML, "https://www.riverbend.example/nonexistent").is_none());
 }
 
 #[test]
@@ -410,9 +410,9 @@ fn extract_article_routes_strikingly_blog_through_adapter() {
     // download (media_urls) like any remote image.
     let art = crate::vault::import::scrape::converter::extract_article(
         BLOG_HTML,
-        "https://www.harborweekly.io/blog/202411event",
+        "https://www.riverbend.example/blog/202411event",
     );
-    assert_eq!(art.metadata.title.as_deref(), Some("【潮汐活動】寫作的決心"));
+    assert_eq!(art.metadata.title.as_deref(), Some("【河灣活動】寫作的決心"));
     assert_eq!(art.metadata.date.as_deref(), Some("2024-10-13"));
     assert!(art.markdown.contains("時間：2024/11/9 14:30"), "got: {}", art.markdown);
     assert!(
@@ -425,7 +425,7 @@ fn extract_article_routes_strikingly_blog_through_adapter() {
 /// Corpus snapshot harness (not a CI test — run explicitly).
 ///
 /// Reconstructs minimal Strikingly HTML around each saved `$S` store dict in
-/// `MOSS_STRIKINGLY_CORPUS` ({blog,pages}/*.json from the harbor port's
+/// `MOSS_STRIKINGLY_CORPUS` ({blog,pages}/*.json from the riverbend port's
 /// fetch_s_corpus.py) and writes `extract()`'s output (title/date overrides +
 /// markdown) to `MOSS_CORPUS_OUT`, one `.md` per input. Diffing two runs of
 /// this harness across a refactor is the zero-behavior-change gate —
@@ -458,9 +458,9 @@ fn corpus_snapshot() {
             );
             let slug = path.file_stem().unwrap().to_string_lossy();
             let url = match (sub, slug.as_ref()) {
-                ("pages", "home") => "https://www.harborweekly.io/".to_string(),
-                ("pages", s) => format!("https://www.harborweekly.io/{s}"),
-                (_, s) => format!("https://www.harborweekly.io/blog/{s}"),
+                ("pages", "home") => "https://www.riverbend.example/".to_string(),
+                ("pages", s) => format!("https://www.riverbend.example/{s}"),
+                (_, s) => format!("https://www.riverbend.example/blog/{s}"),
             };
             let rendered = match extract(&html, &url) {
                 Some(c) => {

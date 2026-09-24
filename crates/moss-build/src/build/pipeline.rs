@@ -1630,7 +1630,7 @@ fn build_inner(
         // coordinator takes ownership of it below.
         //
         // There is no read here. This loop used to `std::fs::read` every
-        // registered output back to hash it — which is where the CPHS vault
+        // registered output back to hash it — which is where a large vault
         // died: the walk above had laundered 382 Dropbox conflicted-copy twins
         // into the output list, the twins were cloud-evicted, and reading one
         // returns EDEADLK under the dataless fail-fast policy. That stop
@@ -1951,7 +1951,7 @@ pub fn load_previous_hashes(folder_path: &str) -> SiteHashes {
 
 /// Normalize all path-typed entries in `hashes` so they match what
 /// post-PR builds emit. Existing sites built with older moss versions
-/// have capital-cased entries (e.g., `Resources/habitable-zone.html`)
+/// have capital-cased entries (e.g., `Resources/orbit-model.html`)
 /// that diverge from what the new build pipeline produces.
 ///
 /// Migrated:

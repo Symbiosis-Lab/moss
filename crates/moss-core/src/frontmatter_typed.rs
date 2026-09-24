@@ -238,9 +238,9 @@ pub struct FrontMatter {
     ///
     /// ```yaml
     /// byline: |
-    ///   作者　糜緒洋
-    ///   編輯　謝丁
-    ///   首發媒體　[端傳媒](https://…)
+    ///   作者　陳遠山
+    ///   編輯　周一
+    ///   首發媒體　[遠聲媒體](https://…)
     /// ```
     ///
     /// A display string, not structured data: moss renders each row as inline
@@ -255,9 +255,9 @@ pub struct FrontMatter {
     ///
     /// ```yaml
     /// colophon: |
-    ///   首發媒體　[端傳媒](https://…)、[單讀](https://…)
-    ///   封面　基輔米迦勒修道院門口的陣亡將士紀念牆（拍攝：糜緒洋）
-    ///   編輯　謝丁，記者、作家，曾任《正午》主編
+    ///   首發媒體　[遠聲媒體](https://…)、[夜讀](https://…)
+    ///   封面　山城舊教堂門口的無名將士紀念牆（拍攝：陳遠山）
+    ///   編輯　周一，記者、作家，曾任《遠方》主編
     /// ```
     ///
     /// Two fields rather than one because publications agree on the split: a
@@ -556,7 +556,7 @@ where
 }
 
 /// Serialize `author` back to its dominant authored form: exactly one name
-/// emits a plain string (`author: 馬欣宜`), several emit a list. Keeps the
+/// emits a plain string (`author: 林小滿`), several emit a list. Keeps the
 /// single-author round-trip byte-shape stable for every existing file.
 pub fn serialize_name_list<S>(v: &Option<Vec<String>>, serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -1260,14 +1260,14 @@ mod project_typed_tests {
     #[test]
     fn byline_accepts_a_block_scalar_with_a_markdown_link() {
         let (byline, warnings) = byline_of(
-            "byline: |\n  作者　糜緒洋\n  編輯　謝丁\n  首發媒體　[端傳媒](https://theinitium.com/a)\n",
+            "byline: |\n  作者　陳遠山\n  編輯　周一\n  首發媒體　[遠聲媒體](https://example.org/a)\n",
         );
         assert_eq!(
             byline.unwrap(),
             vec![
-                "作者　糜緒洋",
-                "編輯　謝丁",
-                "首發媒體　[端傳媒](https://theinitium.com/a)"
+                "作者　陳遠山",
+                "編輯　周一",
+                "首發媒體　[遠聲媒體](https://example.org/a)"
             ]
         );
         assert!(warnings.is_empty());
@@ -1275,8 +1275,8 @@ mod project_typed_tests {
 
     #[test]
     fn byline_accepts_a_list() {
-        let (byline, warnings) = byline_of("byline:\n  - 作者　糜緒洋\n  - 編輯　謝丁\n");
-        assert_eq!(byline.unwrap(), vec!["作者　糜緒洋", "編輯　謝丁"]);
+        let (byline, warnings) = byline_of("byline:\n  - 作者　陳遠山\n  - 編輯　周一\n");
+        assert_eq!(byline.unwrap(), vec!["作者　陳遠山", "編輯　周一"]);
         assert!(warnings.is_empty());
     }
 
@@ -1290,14 +1290,14 @@ mod project_typed_tests {
     #[test]
     fn colophon_parses_like_byline_and_is_independent_of_it() {
         let m: serde_yaml::Mapping = serde_yaml::from_str(
-            "byline: 作者　糜緒洋\ncolophon: |\n  首發媒體　[端傳媒](https://theinitium.com/a)\n  封面　拍攝：糜緒洋\n",
+            "byline: 作者　陳遠山\ncolophon: |\n  首發媒體　[遠聲媒體](https://example.org/a)\n  封面　拍攝：陳遠山\n",
         )
         .expect("yaml parses");
         let (fm, warnings) = project_typed(&m);
-        assert_eq!(fm.byline.unwrap(), vec!["作者　糜緒洋"]);
+        assert_eq!(fm.byline.unwrap(), vec!["作者　陳遠山"]);
         assert_eq!(
             fm.colophon.unwrap(),
-            vec!["首發媒體　[端傳媒](https://theinitium.com/a)", "封面　拍攝：糜緒洋"]
+            vec!["首發媒體　[遠聲媒體](https://example.org/a)", "封面　拍攝：陳遠山"]
         );
         assert!(warnings.is_empty());
     }

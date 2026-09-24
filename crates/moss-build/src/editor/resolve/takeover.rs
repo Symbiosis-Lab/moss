@@ -332,15 +332,15 @@ mod tests {
     fn map() -> ArticleMap {
         let mut m = ArticleMap::default();
         m.terms.insert(
-            "authors/馬欣宜".into(),
-            TermSite { display: "馬欣宜".into(), claimed_by: None, parent: None },
+            "authors/林小滿".into(),
+            TermSite { display: "林小滿".into(), claimed_by: None, parent: None },
         );
         m.terms.insert(
             "authors/scarly".into(),
             TermSite { display: "Scarly".into(), claimed_by: Some("about/ma/".into()), parent: None },
         );
         m.terms.insert("tags/城市".into(), TermSite { display: "城市".into(), claimed_by: None, parent: None });
-        m.generated = vec!["authors/".into(), "authors/馬欣宜/".into(), "tags/".into(), "zh-hans/".into()];
+        m.generated = vec!["authors/".into(), "authors/林小滿/".into(), "tags/".into(), "zh-hans/".into()];
         m.pages.insert("".into(), "index.md".into());
         m
     }
@@ -374,25 +374,25 @@ mod tests {
     #[test]
     fn unclaimed_author_on_an_english_site_is_one_file_in_authors() {
         let dir = root();
-        let t = takeover_for(&map(), dir.path(), "s", "authors/馬欣宜/", Language::En).unwrap();
-        assert_eq!((t.kind, t.display.as_str()), (TakeoverKind::TermPage, "馬欣宜"));
+        let t = takeover_for(&map(), dir.path(), "s", "authors/林小滿/", Language::En).unwrap();
+        assert_eq!((t.kind, t.display.as_str()), (TakeoverKind::TermPage, "林小滿"));
         assert_eq!(t.field.as_deref(), Some("author"));
         let f = only(&t);
         assert_eq!(f.dir, dir.path().join("authors").to_string_lossy(), "the English title slugs to the namespace, so the folder IS the namespace");
-        assert_eq!(f.name, "馬欣宜.md");
-        assert_eq!(serde_json::Value::Object(f.frontmatter.clone()), serde_json::json!({ "author_page": "馬欣宜" }));
+        assert_eq!(f.name, "林小滿.md");
+        assert_eq!(serde_json::Value::Object(f.frontmatter.clone()), serde_json::json!({ "author_page": "林小滿" }));
     }
 
     #[test]
     fn unclaimed_author_on_a_chinese_site_adds_the_unlisted_root_home_that_serves_authors() {
         let dir = root();
-        let t = takeover_for(&map(), dir.path(), "s", "authors/馬欣宜/", Language::ZhHant).unwrap();
+        let t = takeover_for(&map(), dir.path(), "s", "authors/林小滿/", Language::ZhHant).unwrap();
         assert_eq!(t.files.len(), 2);
         let home = &t.files[0];
         assert_eq!((home.dir.as_str(), home.name.as_str()), (dir.path().join("作者").to_string_lossy().as_ref(), "作者.md"));
         assert_eq!(serde_json::Value::Object(home.frontmatter.clone()), serde_json::json!({ "url": "authors", "listed": false }));
         let claim = &t.files[1];
-        assert_eq!((claim.dir.as_str(), claim.name.as_str()), (home.dir.as_str(), "馬欣宜.md"));
+        assert_eq!((claim.dir.as_str(), claim.name.as_str()), (home.dir.as_str(), "林小滿.md"));
     }
 
     #[test]
@@ -402,12 +402,12 @@ mod tests {
         let mut m = map();
         m.dir_overrides.insert("作者群".into(), "authors".into());
         m.pages.insert("authors/".into(), "作者群/作者群.md".into());
-        let t = takeover_for(&m, dir.path(), "s", "authors/馬欣宜/", Language::ZhHant).unwrap();
+        let t = takeover_for(&m, dir.path(), "s", "authors/林小滿/", Language::ZhHant).unwrap();
         assert_eq!(only(&t).dir, dir.path().join("作者群").to_string_lossy());
         // …and so does a plain on-disk `authors/`.
         let m = map();
         std::fs::create_dir(dir.path().join("authors")).unwrap();
-        let t = takeover_for(&m, dir.path(), "s", "authors/馬欣宜/", Language::ZhHant).unwrap();
+        let t = takeover_for(&m, dir.path(), "s", "authors/林小滿/", Language::ZhHant).unwrap();
         assert_eq!(only(&t).dir, dir.path().join("authors").to_string_lossy());
     }
 
@@ -419,7 +419,7 @@ mod tests {
         let dir = root();
         let mut m = map();
         m.dir_overrides.insert("關於/作者群".into(), "authors".into());
-        let t = takeover_for(&m, dir.path(), "s", "authors/馬欣宜/", Language::ZhHant).unwrap();
+        let t = takeover_for(&m, dir.path(), "s", "authors/林小滿/", Language::ZhHant).unwrap();
         assert_eq!(t.files.len(), 2);
         assert_eq!(t.files[0].name, "作者.md");
         assert!(t.files[1].dir.ends_with("作者"));
@@ -433,32 +433,32 @@ mod tests {
         // its own, no second home is written and the root offers nothing.
         let dir = root();
         std::fs::create_dir(dir.path().join("作者")).unwrap();
-        let t = takeover_for(&map(), dir.path(), "s", "authors/馬欣宜/", Language::ZhHant).unwrap();
+        let t = takeover_for(&map(), dir.path(), "s", "authors/林小滿/", Language::ZhHant).unwrap();
         assert_eq!(t.files.len(), 2);
-        assert_eq!((t.files[0].name.as_str(), t.files[1].name.as_str()), ("作者.md", "馬欣宜.md"));
+        assert_eq!((t.files[0].name.as_str(), t.files[1].name.as_str()), ("作者.md", "林小滿.md"));
 
         let mut m = map();
         m.pages.insert("people/".into(), "作者/作者.md".into());
         m.dir_overrides.insert("作者".into(), "people".into());
-        let t = takeover_for(&m, dir.path(), "s", "authors/馬欣宜/", Language::ZhHant).unwrap();
+        let t = takeover_for(&m, dir.path(), "s", "authors/林小滿/", Language::ZhHant).unwrap();
         assert_eq!(t.files.len(), 1, "the claim still lands, by field; no second home note");
         assert!(takeover_for(&m, dir.path(), "s", "authors/", Language::ZhHant).is_none());
     }
 
     #[test]
-    fn the_harbor_layout_claims_the_next_author_beside_the_first() {
-        // `作者/作者.md` (`url: authors`) and a claimed `作者/馬欣宜.md` exist;
+    fn the_riverbend_layout_claims_the_next_author_beside_the_first() {
+        // `作者/作者.md` (`url: authors`) and a claimed `作者/林小滿.md` exist;
         // the next unclaimed author lands in `作者/` with no second home note,
         // found through the claim's source path even before any disk walk.
         let mut m = map();
         m.terms.insert("authors/王五".into(), TermSite { display: "王五".into(), claimed_by: None, parent: None });
-        m.terms.get_mut("authors/馬欣宜").unwrap().claimed_by = Some("authors/馬欣宜/".into());
+        m.terms.get_mut("authors/林小滿").unwrap().claimed_by = Some("authors/林小滿/".into());
         m.dir_overrides.insert("作者".into(), "authors".into());
         m.pages.insert("authors/".into(), "作者/作者.md".into());
         m.articles.insert(
-            "authors/馬欣宜/".into(),
+            "authors/林小滿/".into(),
             serde_json::from_value::<ArticleInfo>(serde_json::json!({
-                "source_path": "作者/馬欣宜.md", "title": "馬欣宜", "content": "", "url_path": "authors/馬欣宜/", "date": null
+                "source_path": "作者/林小滿.md", "title": "林小滿", "content": "", "url_path": "authors/林小滿/", "date": null
             })).unwrap(),
         );
         let dir = root();
@@ -473,7 +473,7 @@ mod tests {
         // claim lands in it rather than in a second `authors/` beside it.
         let dir = root();
         std::fs::create_dir(dir.path().join("Authors")).unwrap();
-        let t = takeover_for(&map(), dir.path(), "s", "authors/馬欣宜/", Language::En).unwrap();
+        let t = takeover_for(&map(), dir.path(), "s", "authors/林小滿/", Language::En).unwrap();
         assert_eq!(only(&t).dir, dir.path().join("Authors").to_string_lossy());
     }
 

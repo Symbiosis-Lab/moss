@@ -1,7 +1,7 @@
 //! Loop A parse cache.
 //!
 //! Stage 0 measured Loop A — read + Obsidian-resolve + parse, `render/blocking.rs` —
-//! at ~70-74% of render wall time (~16-18s of ~22s on the 216-page harbor/潮汐
+//! at ~70-74% of render wall time (~16-18s of ~22s on the 216-page riverbend/河灣
 //! vault). Stages 4-6 only ever skip Loop B, so a one-file save still paid for
 //! parsing all 216 pages. This module lets an unchanged page replay the
 //! `ParsedDocument` the previous build produced instead.

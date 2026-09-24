@@ -261,7 +261,7 @@ fn enrich_resolution(
     // …and where following it lands: the folder's INDEX SOURCE, resolved through
     // the same `key_for` bridge the counts use. Joining the author-typed target
     // to the root instead would break on exactly the case the card handles best
-    // — `獎項/獎項.md` publishing at `awards/`, where `<root>/awards` names no
+    // — `評選/評選.md` publishing at `awards/`, where `<root>/awards` names no
     // directory at all.
     if matches!(resolved.kind, ReferenceKind::FolderListing) {
         if let Some(ref folder_rel) = resolved.target_path {

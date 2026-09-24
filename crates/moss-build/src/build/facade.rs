@@ -97,7 +97,7 @@ fn hash_str(rendered: &str) -> String {
 /// for any page whose source carries no `uid:`. moss normally writes the
 /// minted value straight back into the frontmatter, so the churn lasts one
 /// build. It lasts FOREVER for a page with no frontmatter block at all
-/// (`footer.md` in the harbor/潮汐 reference vault is exactly this), because
+/// (`footer.md` in the riverbend/河灣 reference vault is exactly this), because
 /// there is nowhere to write it: that one page then reports as changed on
 /// every build, and since slot pages are global invalidators it would force a
 /// full render every single save, silently reducing this whole feature to a
@@ -187,7 +187,7 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // background media phase fills those in AFTER the build that first sees
     // the image. So every hero-bearing page's surface moved as soon as its
     // cover was enriched, and one enriched cover full-renders the site.
-    // Measured on the 223-page harbor vault: ~390ms per edit, on four of
+    // Measured on the 223-page riverbend vault: ~390ms per edit, on four of
     // six page classes.
     //
     // `hero_image_url` — the genuinely cross-page half, read by the homepage
@@ -365,7 +365,7 @@ pub struct PageFingerprints {
     /// input to any verdict.
     ///
     /// It costs ~500 bytes per page in `dep-cache.json` (90 KB -> ~205 KB on
-    /// the 223-page harbor vault) and buys a `SurfaceChanged` line that
+    /// the 223-page riverbend vault) and buys a `SurfaceChanged` line that
     /// names the field. That trade was made after a full render whose cause
     /// took three diagnoses to find, two of them wrong, because the only
     /// evidence a whole-struct hash leaves is "something moved".
@@ -443,7 +443,7 @@ pub struct FacadeCache {
     ///
     /// The point of narrowing it: a home page's whole body used to invalidate
     /// the site, so every save while editing the homepage re-rendered all 223
-    /// pages of the harbor vault when the only thing other pages read from
+    /// pages of the riverbend vault when the only thing other pages read from
     /// it is its extracted excerpt — which most edits do not touch at all.
     ///
     /// **Keyed by the page that contributes.** It was one digest over all of
@@ -882,7 +882,7 @@ mod tests {
 
     #[test]
     fn a_freshly_minted_uid_does_not_move_either_fingerprint() {
-        // `footer.md` in the harbor/潮汐 reference vault has no frontmatter
+        // `footer.md` in the riverbend/河灣 reference vault has no frontmatter
         // block, so the uid moss mints for it can never be written back and is
         // random on every build. Left in the fingerprint it forced a full
         // render on every save forever — see `normalized`.

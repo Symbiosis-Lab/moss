@@ -3539,7 +3539,7 @@ fn flatten_alpha_to_white_on_rgb_image_passes_through() {
 /// this guard, a silent failure in `convert_single_image`'s staging-link
 /// step would still register the path in `image_outputs` and `inner.files`,
 /// breaking deploy with `"Manifest claims '<path>' exists but it's missing
-/// on disk"`. Regression for the CPHS faculty-webp deploy failure
+/// on disk"`. Regression for the large-vault faculty-webp deploy failure
 /// (2026-05-18).
 #[tokio::test]
 async fn emit_image_outputs_skips_missing_staged_files() {
@@ -4073,7 +4073,7 @@ fn sized_raster_oid_keeps_source_when_reencode_not_smaller() {
 /// Write an OPAQUE, photograph-like truecolour PNG: smooth diagonal gradients
 /// (the part a palette has to approximate) plus fine per-pixel noise (the part
 /// that defeats lossless compression). This is the shape of the real corpus's
-/// expensive files — 潮汐's largest deployed assets are 2000×2500 photographs
+/// expensive files — 河灣's largest deployed assets are 2000×2500 photographs
 /// stored as PNG.
 fn make_photographic_png(path: &Path, w: u32, h: u32) {
     let buf: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(w, h, |x, y| {
@@ -4095,7 +4095,7 @@ fn sized_raster_oid_shrinks_an_opaque_photographic_png() {
     // inside the fallback cap has nothing to gain from resizing, and a
     // TRUECOLOUR re-encode of it is always BIGGER than the author's own file —
     // so the keep-smaller guard used to win every time and moss shipped the
-    // original bytes verbatim. Measured on 潮汐: 469 PNG originals, 133.5 MB of
+    // original bytes verbatim. Measured on 河灣: 469 PNG originals, 133.5 MB of
     // source, 134.0 MB deployed — a 0% saving that looked deliberate but was
     // just a lost size comparison.
     //
@@ -4160,7 +4160,7 @@ fn sized_raster_oid_shrinks_an_opaque_photographic_png() {
 /// Write an OPAQUE, POSTER-like PNG: a grid of `block`-sized uniform squares,
 /// each a slightly different colour. 1,024 distinct colours over 147,456
 /// pixels is a ratio of 0.007 — the flat-artwork side of
-/// `PHOTOGRAPHIC_COLOR_RATIO`, and close to the 潮汐 corpus's PNG median.
+/// `PHOTOGRAPHIC_COLOR_RATIO`, and close to the 河灣 corpus's PNG median.
 fn make_flat_art_png(path: &Path, blocks: u32, block: u32) {
     let side = blocks * block;
     let buf: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(side, side, |x, y| {
@@ -4180,7 +4180,7 @@ fn flat_art_is_quantized_without_dither_speckle() {
     // 256 colours cannot express a sky, and wrong for a poster, where the
     // diffused error lands in large uniform regions and reads as speckle.
     //
-    // 潮汐 is the case that made this concrete: all 469 of its PNGs are
+    // 河灣 is the case that made this concrete: all 469 of its PNGs are
     // pngquant'd posters, comics and diagrams (every one already <=256 source
     // colours), so gating on opacity alone would have dithered the entire PNG
     // corpus of a site whose PNGs are exclusively flat artwork.
@@ -4228,7 +4228,7 @@ fn sized_raster_oid_keeps_png_verbatim_when_palette_cannot_beat_it() {
     // The other half of the guard: lossy must never mean "bigger". A tiny flat
     // graphic compresses to a few hundred bytes losslessly, while ANY indexed
     // PNG pays a fixed 768-byte PLTE chunk — so the palette encode loses, and
-    // the source must be kept verbatim (real: 潮汐 has 3.7 KB PNGs whose
+    // the source must be kept verbatim (real: 河灣 has 3.7 KB PNGs whose
     // palette encode is 13 KB).
     use crate::build::cache::{ObjectStore, TransformCache};
 

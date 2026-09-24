@@ -52,7 +52,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("prose only", "Hello.\n\nSecond paragraph.\n"),
         (
             "cjk prose then grid",
-            "潮汐作為一個文學計畫，關注的是非虛構寫作的現場。\n\n\
+            "河灣作為一個寫作計畫，記錄的是平凡人書寫的日常。\n\n\
              :::grid 2\n[A](a/)\n+++\n[B](b/)\n:::\n\nAfter.\n",
         ),
         (

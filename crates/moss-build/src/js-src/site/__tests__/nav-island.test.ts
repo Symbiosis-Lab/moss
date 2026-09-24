@@ -18,7 +18,7 @@ import { describe, test, expect, beforeEach } from "vitest";
 import { foldPlan, outerWidth } from "../nav/breadcrumb-fold";
 import { initNavIsland } from "../nav/nav-island";
 
-// A five-level trail: 潮汐週報 / 獎項 / 寫作獎 / 第一季 / 末代女礦工…
+// A five-level trail: 河灣週刊 / 評選 / 小說組 / 第一屆 / 末代女礦工…
 const TRAIL = [100, 60, 70, 60, 220];
 const SEP = 10;
 const MORE = 20;
@@ -39,10 +39,10 @@ describe("foldPlan", () => {
   });
 
   test("ancestors go from the middle outward, leftmost first", () => {
-    // Room for one fold (that row measures 510): 獎項 (index 1) is the least
+    // Room for one fold (that row measures 510): 評選 (index 1) is the least
     // useful ancestor, so it is the first to go.
     expect(foldPlan(TRAIL, SEP, MORE, 520)).toEqual([1]);
-    // Tighter: 寫作獎 follows. 第一季 — nearest the reader — is still there.
+    // Tighter: 小說組 follows. 第一屆 — nearest the reader — is still there.
     expect(foldPlan(TRAIL, SEP, MORE, 430)).toEqual([1, 2]);
     // Tighter still: every ancestor is gone.
     expect(foldPlan(TRAIL, SEP, MORE, 300)).toEqual([1, 2, 3]);
@@ -86,7 +86,7 @@ describe("foldPlan", () => {
     expect(foldPlan(TRAIL, SEP, MORE, 430, FLOOR)).toEqual([]);
 
     // The give is finite, and once it is spent the folds resume — still
-    // leftmost first, so 第一季 outlives 獎項.
+    // leftmost first, so 第一屆 outlives 評選.
     expect(foldPlan(TRAIL, SEP, MORE, 360, FLOOR)).toEqual([1]);
     expect(foldPlan(TRAIL, SEP, MORE, 300, FLOOR)).toEqual([1, 2]);
     expect(foldPlan(TRAIL, SEP, MORE, 250, FLOOR)).toEqual([1, 2, 3]);
@@ -144,7 +144,7 @@ describe("initNavIsland — the contents gate and the sections panel", () => {
     <div class="moss-nav-island">
       <div class="moss-nav-island-bar">
         <nav class="moss-nav-island-trail">
-          <a href="/" class="site-name" data-island-crumb>潮汐週報</a>
+          <a href="/" class="site-name" data-island-crumb>河灣週刊</a>
         </nav>
         <span class="moss-nav-island-actions">
           <button type="button" class="moss-nav-island-sections"

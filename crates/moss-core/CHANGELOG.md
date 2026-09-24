@@ -181,7 +181,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `resolve::fuzzy_path::percent_decode_path` — the canonical inverse of the encoder in `resolve::output_url`, and now the only decoder. Five hand-rolled percent-decoders existed across the tree; the pair lives together so the two directions cannot drift apart. Anything that consumes an emitted asset URL as a filesystem path or cache key must decode with this first.
 
 ### Fixed
-- An asset URL whose path contains non-ASCII characters is now percent-encoded by every producer. `PathResolver::resolve_url` in the app was a hand-written duplicate of `resolve::output_url::pinned_url` — identical dir-override handling and leading slash, but no percent-encoding — so one emitter shipped `/獎項/封面.webp` while every other shipped the encoded form. The orphan pruner, correct against encoded URLs, read the raw one as unreferenced and deleted the file: 207 broken images on one live site. `resolve_url` now delegates, and a test asserts the two agree so they cannot diverge again.
+- An asset URL whose path contains non-ASCII characters is now percent-encoded by every producer. `PathResolver::resolve_url` in the app was a hand-written duplicate of `resolve::output_url::pinned_url` — identical dir-override handling and leading slash, but no percent-encoding — so one emitter shipped `/評選/封面.webp` while every other shipped the encoded form. The orphan pruner, correct against encoded URLs, read the raw one as unreferenced and deleted the file: 207 broken images on one live site. `resolve_url` now delegates, and a test asserts the two agree so they cannot diverge again.
 
 ## [0.5.0] - 2026-08-06
 

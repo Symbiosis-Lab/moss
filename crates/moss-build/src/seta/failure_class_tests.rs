@@ -29,7 +29,7 @@ fn classify_groups_statuses_by_what_the_client_should_do() {
     }
     // A 524 is retryable but NOT forgiven: the chunk loop answers it by sending
     // less (`upload_policy::escalate_down`), and forgiving it here would buy
-    // three more full-size replays first — the okagaki failure, restaged.
+    // three more full-size replays first — a large live site's failure, restaged.
     assert_eq!(
         classify(&api(524)),
         FailureClass::Transient,

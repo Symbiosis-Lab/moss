@@ -126,25 +126,25 @@ mod build_page_map_tests {
     #[test]
     fn home_overrides_and_winners_agree_on_the_root_name_for_a_dot_path() {
         let tmp = setup_temp_dir(&[]);
-        let site = tmp.path().join("潮汐");
+        let site = tmp.path().join("河灣");
         fs::create_dir_all(site.join("en")).unwrap();
         fs::write(
-            site.join("潮汐.md"),
-            "---\ntranslationKey: x\n---\n# 潮汐\n",
+            site.join("河灣.md"),
+            "---\ntranslationKey: x\n---\n# 河灣\n",
         )
         .unwrap();
         fs::write(
-            site.join("en/潮汐.md"),
-            "---\ntranslationKey: x\nlang: en\n---\n# Tide\n",
+            site.join("en/河灣.md"),
+            "---\ntranslationKey: x\nlang: en\n---\n# Bay\n",
         )
         .unwrap();
 
         let dotted = VaultRoot::resolve_in(Path::new("."), &site);
         let absolute = VaultRoot::resolve(&site);
-        assert_eq!(dotted.name(), "潮汐", "a `.` root must still know its name");
+        assert_eq!(dotted.name(), "河灣", "a `.` root must still know its name");
         assert_eq!(dotted.name(), absolute.name());
 
-        let files = vec![make_file("潮汐.md"), make_file("en/潮汐.md")];
+        let files = vec![make_file("河灣.md"), make_file("en/河灣.md")];
         let dotted_overrides = compute_home_overrides(&files, &dotted);
         assert_eq!(dotted_overrides, compute_home_overrides(&files, &absolute));
 
@@ -156,7 +156,7 @@ mod build_page_map_tests {
         // The self-named root file IS the root home: a `""` root name would have
         // demoted it off `/`.
         assert!(
-            compute_home_file_winners(&files, dotted.name(), &dotted_overrides).contains("潮汐.md")
+            compute_home_file_winners(&files, dotted.name(), &dotted_overrides).contains("河灣.md")
         );
     }
 

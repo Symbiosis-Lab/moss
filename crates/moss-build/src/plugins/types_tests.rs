@@ -806,7 +806,7 @@ fn project_info_folder_name_survives_a_dot_path_root() {
     use crate::vault::paths::VaultRoot;
 
     let tmp = std::env::temp_dir().join(format!("moss_pi_dot_{}", uuid::Uuid::new_v4()));
-    let site = tmp.join("潮汐");
+    let site = tmp.join("河灣");
     fs::create_dir_all(&site).unwrap();
     fs::write(site.join("index.md"), "---\ntitle: 首頁\n---\n內容\n").unwrap();
 
@@ -816,7 +816,7 @@ fn project_info_folder_name_survives_a_dot_path_root() {
         ProjectInfo::from_structure(&ps, &root)
             .folder_name
             .as_deref(),
-        Some("潮汐"),
+        Some("河灣"),
         "a `.` root must still tell plugins the folder name"
     );
 

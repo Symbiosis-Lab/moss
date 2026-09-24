@@ -4,7 +4,7 @@
 use super::*;
 
 const VIEWER: &str = r#"<html><head><script>
-window.ServerData = {"mags":{"m1":{"title":"Michael Okagaki","uri":"4612303","pages":[
+window.ServerData = {"mags":{"m1":{"title":"Sam Placeholder","uri":"4612303","pages":[
  {"title":"Home","uri":"home","num":1,"htmlUrl":"https://c-p.rmcdn.net/acc/4612303/Snip-home.html"},
  {"title":"Music","uri":"music","num":3,"htmlUrl":"https://c-p.rmcdn.net/acc/4612303/Snip-music.html"}
 ]}}};
@@ -166,7 +166,7 @@ fn home_page_takes_the_mag_title() {
         "https://readymag.website/u3067627634/4612303/",
     )
     .expect("home should extract");
-    assert_eq!(content.overrides.title.as_deref(), Some("Michael Okagaki"));
+    assert_eq!(content.overrides.title.as_deref(), Some("Sam Placeholder"));
 }
 
 #[test]
@@ -174,7 +174,7 @@ fn missing_snapshot_returns_none_for_generic_fallback() {
     assert!(extract(VIEWER, None, "https://readymag.website/u3067627634/4612303/music/").is_none());
 }
 
-/// Corpus snapshot harness over the saved Okagaki site (not a CI test).
+/// Corpus snapshot harness over a saved sample-site export (not a CI test).
 ///
 /// `MOSS_READYMAG_CORPUS` holds `viewer.html` + `snapshot-{uri}.html` per
 /// page; outputs land in `MOSS_CORPUS_OUT`. Inline assertions pin the
@@ -209,8 +209,8 @@ fn readymag_corpus_snapshot() {
     let count = |s: &str, needle: &str| s.matches(needle).count();
 
     let home = &rendered["home"];
-    assert!(home.contains("Michael Okagaki"), "home name: {home}");
-    assert!(home.contains("May 14, 1957"), "home dates: {home}");
+    assert!(home.contains("Sam Placeholder"), "home name: {home}");
+    assert!(home.contains("March 3, 1958"), "home dates: {home}");
     assert!(!home.contains("[Personal History]"), "nav leaked: {home}");
 
     let videos = &rendered["videos"];
@@ -230,18 +230,18 @@ fn readymag_corpus_snapshot() {
 
     let finaldays = &rendered["finaldays"];
     for date in [
-        "December 2022",
-        "September 20, 2023",
-        "December 7, 2023",
-        "December 14, 2023",
-        "December 22, 2023",
+        "March 2023",
+        "October 5, 2023",
+        "December 3, 2023",
+        "December 10, 2023",
+        "December 18, 2023",
     ] {
         assert!(finaldays.contains(date), "missing letter {date}");
     }
 
     let history = &rendered["personalhistory"];
     assert!(
-        history.contains("Michael Bruce Okagaki"),
+        history.contains("Sam River Placeholder"),
         "obituary lead: {history}"
     );
 }

@@ -136,16 +136,16 @@ fn also_in_counts_once_whether_or_not_it_lives_under_the_folder() {
 
 #[test]
 fn slug_overridden_cjk_folder_is_found_by_its_on_disk_name() {
-    // `獎項/獎項.md` carries `url: awards`, so the build published it at
+    // `評選/評選.md` carries `url: awards`, so the build published it at
     // `awards/`. The classifier hands back the author-typed on-disk path.
     let mut m = ArticleMap::new();
-    m.pages.insert("awards/".into(), "獎項/獎項.md".into());
+    m.pages.insert("awards/".into(), "評選/評選.md".into());
     m.articles
-        .insert("awards/a".into(), make_article("獎項/a.md", "awards/a"));
+        .insert("awards/a".into(), make_article("評選/a.md", "awards/a"));
     let f = FolderFacts::from_map(&m);
     let dir = scratch();
     let info = f
-        .lookup("獎項")
+        .lookup("評選")
         .expect("reverse source-dir lookup");
     assert_eq!(info.direct_child_count, 1);
     // …and the URL-space spelling finds the same folder.
@@ -174,18 +174,18 @@ fn root_homepage_is_nobodys_child() {
 
 #[test]
 fn also_in_with_a_multibyte_folder_key_does_not_panic() {
-    // REGRESSION: the ancestry walk must never byte-index a URL. `獎項/` is 7
+    // REGRESSION: the ancestry walk must never byte-index a URL. `評選/` is 7
     // bytes; `posts/hello` is 11 — an offset-based `&url[key.len()..]` lands
     // mid-sequence on other URLs and panics.
     let mut m = ArticleMap::new();
-    m.pages.insert("獎項/".into(), "獎項/獎項.md".into());
+    m.pages.insert("評選/".into(), "評選/評選.md".into());
     m.articles.insert(
         "posts/hello".into(),
-        article_with("posts/hello.md", &[("also_in", serde_json::json!(["獎項"]))]),
+        article_with("posts/hello.md", &[("also_in", serde_json::json!(["評選"]))]),
     );
     let f = FolderFacts::from_map(&m);
     let dir = scratch();
-    let info = f.lookup("獎項").expect("獎項");
+    let info = f.lookup("評選").expect("評選");
     assert_eq!(info.direct_child_count, 1);
     assert_eq!(info.descendant_count, 1);
 }
@@ -211,13 +211,13 @@ fn title_comes_from_the_map_and_is_none_when_the_scan_recorded_none() {
     // stale or guessed one.
     let mut m = ArticleMap::new();
     m.pages.insert("awards/".into(), "awards/index.md".into());
-    m.page_titles.insert("awards/".into(), "獎項".into());
+    m.page_titles.insert("awards/".into(), "評選".into());
     m.pages.insert("news/".into(), "news/News.md".into());
     m.page_titles.insert("news/".into(), String::new());
     m.pages.insert("old/".into(), "old/index.md".into());
     let f = FolderFacts::from_map(&m);
 
-    assert_eq!(f.lookup("awards").expect("awards").title.as_deref(), Some("獎項"));
+    assert_eq!(f.lookup("awards").expect("awards").title.as_deref(), Some("評選"));
     assert_eq!(f.lookup("news").expect("news").title, None, "empty title → None");
     assert_eq!(f.lookup("old").expect("old").title, None, "no record → None");
 }
@@ -230,10 +230,10 @@ fn title_comes_from_the_map_and_is_none_when_the_scan_recorded_none() {
 #[test]
 fn generated_pages_resolve_without_a_source() {
     let mut m = ArticleMap::new();
-    m.generated = vec!["writings/".into(), "authors/".into(), "authors/馬欣宜/".into()];
+    m.generated = vec!["writings/".into(), "authors/".into(), "authors/林小滿/".into()];
     let idx = ArticleMapIndex::from_map(&m);
     assert!(idx.lookup_exact("/writings/"));
-    assert!(idx.lookup_exact("authors/馬欣宜"));
+    assert!(idx.lookup_exact("authors/林小滿"));
     assert_eq!(idx.lookup_normalized("/Writings/"), Some("/writings/".into()));
     assert_eq!(idx.resolve_reference_to_url("writings", "main.md"), None);
     assert_eq!(idx.lookup_moved("/writings/"), None);
@@ -247,14 +247,14 @@ fn claimed_term_url_is_moved_to_the_claiming_page() {
     let mut m = ArticleMap::new();
     m.articles.insert("about/ma/".into(), make_article("關於/作者/ma.md", "about/ma/"));
     m.generated = vec!["authors/".into(), "authors/scarly/".into()];
-    m.terms.insert("authors/馬欣宜".into(), TermSite { display: "馬欣宜".into(), claimed_by: Some("about/ma/".into()), parent: None });
+    m.terms.insert("authors/林小滿".into(), TermSite { display: "林小滿".into(), claimed_by: Some("about/ma/".into()), parent: None });
     m.terms.insert("authors/scarly".into(), TermSite { display: "Scarly".into(), claimed_by: None, parent: None });
     // The home page claiming a term: its pretty URL key is empty, the site root.
     m.terms.insert("tags/home".into(), TermSite { display: "Home".into(), claimed_by: Some(String::new()), parent: None });
     let idx = ArticleMapIndex::from_map(&m);
     assert_eq!(idx.lookup_moved("/tags/home/"), Some("/".into()));
-    assert!(!idx.lookup_exact("/authors/馬欣宜/"), "the generated URL no longer exists");
-    assert_eq!(idx.lookup_moved("/authors/馬欣宜/"), Some("/about/ma/".into()));
+    assert!(!idx.lookup_exact("/authors/林小滿/"), "the generated URL no longer exists");
+    assert_eq!(idx.lookup_moved("/authors/林小滿/"), Some("/about/ma/".into()));
     assert_eq!(idx.lookup_moved("/authors/scarly/"), None);
     assert!(idx.lookup_exact("/authors/scarly/"));
 }
@@ -318,9 +318,9 @@ fn a_bare_leaf_does_not_match_a_nested_folder_but_the_full_path_does() {
 #[test]
 fn folder_index_value_carries_the_override_not_the_directory_name() {
     let mut m = ArticleMap::new();
-    m.folder_indexes.insert("獎項".into(), "awards".into());
+    m.folder_indexes.insert("評選".into(), "awards".into());
     let idx = ArticleMapIndex::from_map(&m);
-    assert_eq!(idx.resolve_reference_to_url("獎項", "main.md"), Some("/awards/".into()));
+    assert_eq!(idx.resolve_reference_to_url("評選", "main.md"), Some("/awards/".into()));
 }
 
 /// A declared kind's namespace is not special here, and this file needs no

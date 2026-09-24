@@ -24,8 +24,8 @@
 //! register APIs. Constructing one runs `slugify_path_segments` on the input,
 //! making it impossible to write or register an un-normalized path.
 //!
-//! Why this exists: a source `Resources/habitable-zone.ipynb` used to produce
-//! a notebook viewer at `Resources/habitable-zone.html` (capital R preserved).
+//! Why this exists: a source `Resources/orbit-model.ipynb` used to produce
+//! a notebook viewer at `Resources/orbit-model.html` (capital R preserved).
 //! On case-insensitive APFS this worked; on Dropbox CloudStorage (case-sensitive
 //! FUSE) and Linux servers, the on-disk file landed at lowercase while the
 //! manifest registered the capital path, causing deploy ENOENT on canonicalize.
@@ -533,8 +533,8 @@ mod tests {
     #[test]
     fn lowercases_directory_segments() {
         assert_eq!(
-            ServedPath::from_source("Resources/habitable-zone.html").unwrap().as_str(),
-            "resources/habitable-zone.html"
+            ServedPath::from_source("Resources/orbit-model.html").unwrap().as_str(),
+            "resources/orbit-model.html"
         );
     }
 

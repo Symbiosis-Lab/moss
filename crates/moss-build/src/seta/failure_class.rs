@@ -22,9 +22,9 @@
 //!
 //! Tempting, since both mean "too slow", and §8.6 of the design floated it. But
 //! backpressure's remedy is *wait longer and send the same thing again*, and
-//! that is precisely the move the okagaki failure indicts: a 524 means the body
+//! that is precisely the move a large live site's failure indicts: a 524 means the body
 //! outran Cloudflare's 125 s proxy read timeout, and replaying it identically
-//! "spent okagaki's whole 600 s budget on three failures that each took exactly
+//! "spent that site's whole 600 s budget on three failures that each took exactly
 //! as long as the first" (`upload_policy::escalate_down`). The client already
 //! has a strictly better answer — send *less* — and it lives past the end of the
 //! retry loop, so forgiving these here would only delay the escalation by three

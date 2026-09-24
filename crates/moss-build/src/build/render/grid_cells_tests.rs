@@ -764,7 +764,7 @@ fn cjk_prose_immediately_before_a_grid_builds_and_places_the_grid_correctly() {
         make_doc("A", "writings/a/index.html", None),
     ];
     let page = Page::new("index.html", &docs);
-    let md = "潮汐作為一個文學計畫，關注的是非虛構寫作的現場。\n\n\
+    let md = "河灣作為一個寫作計畫，關注的是普通人寫作的現場。\n\n\
               :::grid 1\n[文字](writings/)\n:::\n\n之後的段落。\n";
 
     let mut plan = plan_of(md);
@@ -773,7 +773,7 @@ fn cjk_prose_immediately_before_a_grid_builds_and_places_the_grid_correctly() {
     let (lead, trailer) = plan.split_at_lede();
 
     // The lede stays in the cover column, the grid is released past it.
-    assert!(lead.contains("潮汐作為一個文學計畫"), "lead: {lead}");
+    assert!(lead.contains("河灣作為一個寫作計畫"), "lead: {lead}");
     assert!(
         !lead.contains("moss-grid"),
         "the grid escaped the column: {lead}"

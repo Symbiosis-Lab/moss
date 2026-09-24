@@ -626,15 +626,15 @@ mod publish_receipt_tests {
     #[test]
     fn from_moss_push_derives_host_from_url() {
         let receipt = PublishReceipt::from_moss_push(
-            "https://okagaki.mosspub.com/some/page?x=1",
+            "https://sample-site.mosspub.com/some/page?x=1",
             3,
             1,
             true,
             "gen-42".to_string(),
         );
 
-        assert_eq!(receipt.host, "okagaki.mosspub.com");
-        assert_eq!(receipt.url, "https://okagaki.mosspub.com/some/page?x=1");
+        assert_eq!(receipt.host, "sample-site.mosspub.com");
+        assert_eq!(receipt.url, "https://sample-site.mosspub.com/some/page?x=1");
         assert_eq!(receipt.uploaded.files_uploaded, 3);
         assert_eq!(receipt.uploaded.files_removed, 1);
         assert!(receipt.first_publish);

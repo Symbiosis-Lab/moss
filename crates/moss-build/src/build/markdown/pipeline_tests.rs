@@ -2930,7 +2930,7 @@ fn implicit_figure_caption_typesets_math_and_leaves_alt_to_the_caption() {
 /// kept a `<figure class="moss-image">` on a site that had opted out while
 /// `![alt](x.png)` did not. Any theme rule keyed on `.moss-image` then styled
 /// whichever images happened to be written as wikilinks — visible on
-/// harbor's homepage as one award tile narrower than the three beside it.
+/// riverbend's homepage as one award tile narrower than the three beside it.
 #[test]
 fn implicit_figure_off_unwraps_wikilink_embeds_too() {
     let html = render_with_graph_cfg("![[photo.jpg]]\n", &["photo.jpg"], false);

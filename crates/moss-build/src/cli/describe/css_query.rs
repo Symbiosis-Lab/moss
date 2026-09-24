@@ -5,8 +5,8 @@
 //!
 //! The emitted stylesheet is ~89 KB minified. Telling an agent to read it is
 //! telling it to spend most of its context on vertical-Chinese typesetting and
-//! immersive fullscreen in order to change a hero. okagaki's whole 136-line
-//! theme fights about 50 rules. So: print the matching ones.
+//! immersive fullscreen in order to change a hero. A large live site's whole
+//! 136-line theme fights about 50 rules. So: print the matching ones.
 //!
 //! ## Why the source, not the emitted CSS
 //!

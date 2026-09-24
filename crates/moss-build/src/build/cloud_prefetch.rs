@@ -25,7 +25,7 @@
 //! one-byte read; Google Drive fetches 4 MiB and leaves the file dataless. So
 //! "moss never has to know which provider" holds only for reads that ask for
 //! the whole file. See [`materialize`], which asks for the file rather than a
-//! range — a one-byte read cost the 潮汐·週報 vault days of a download that
+//! range — a one-byte read cost the 河灣·週刊 vault days of a download that
 //! could not progress.
 //!
 //! **Everything about scheduling belongs to the provider.** What to fetch

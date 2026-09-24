@@ -8,7 +8,7 @@ use super::*;
 /// Every test below reads THIS text, so a reader that only works on
 /// moss-generated formatting fails here.
 const HAND_WRITTEN: &str = "\
-# 潮汐 — site configuration.
+# 河灣 — site configuration.
 # Hand-written; the modals are for people in a hurry.
 
 schema_version = 5

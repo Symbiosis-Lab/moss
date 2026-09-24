@@ -65,11 +65,11 @@
 //!
 //! ```yaml
 //! byline: |
-//!   作者　糜緒洋
-//!   編輯　謝丁
+//!   作者　陳遠山
+//!   編輯　周一
 //! colophon: |
-//!   首發媒體　[端傳媒](https://…)、[單讀](https://…)
-//!   封面　基輔米迦勒修道院門口的陣亡將士紀念牆（拍攝：糜緒洋）
+//!   首發媒體　[遠聲媒體](https://…)、[夜讀](https://…)
+//!   封面　河灣港口清晨卸魚的漁船（拍攝：陳遠山）
 //! ```
 //!
 //! Two fields, one renderer, because they differ only in where they land. The
@@ -92,11 +92,11 @@
 //!    the body (the file is the author's own — this is not a trust boundary).
 //! 2. **moss cannot style the role apart from the name.** With a free-form
 //!    string there is nothing to tell moss that `作者` is a label and
-//!    `糜緒洋` is a person, so the whole row is one muted line. A site that
+//!    `陳遠山` is a person, so the whole row is one muted line. A site that
 //!    wants the label tracked-out (the CJK stand-in for small caps) writes
 //!    that in its own theme CSS, or writes the label in markdown emphasis.
 //! 3. **The row separator is whatever the author typed.** A full-width space
-//!    (`作者　糜緒洋`) is preserved verbatim — rows are trimmed at the ends
+//!    (`作者　陳遠山`) is preserved verbatim — rows are trimmed at the ends
 //!    only, never re-spaced in the middle.
 
 /// Render the byline block for an article, or `None` when there is nothing

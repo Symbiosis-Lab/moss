@@ -363,8 +363,8 @@ describe("CJK de-segmentation for display", () => {
 
   test("adjacent marks join — Pagefind wraps each matched word separately", () => {
     const container = document.createElement("span");
-    renderExcerpt(container, "前文 <mark>潮汐</mark> <mark>紀實</mark> 後文");
-    expect(container.textContent).toBe("前文潮汐紀實後文");
+    renderExcerpt(container, "前文 <mark>河灣</mark> <mark>紀實</mark> 後文");
+    expect(container.textContent).toBe("前文河灣紀實後文");
     expect(container.querySelectorAll("mark")).toHaveLength(2);
   });
 

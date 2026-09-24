@@ -431,15 +431,14 @@ fn declared_only(
 /// only this crate's own tests can see across a file boundary.
 #[cfg(test)]
 pub(crate) mod fixtures {
-    /// The real 獎項/寫作獎/第四季/戰火下的文學抉擇/戰火下的文學抉擇.md
-    /// article's body, byte-for-byte (frontmatter stripped). Chinese prose
-    /// is a MINORITY of this text by raw byte count — `:::hero`/`:::grid`
-    /// shortcode directives, `![[assets/…jpg]]` wikilink targets and
-    /// `/awards/writing/s4/…` link destinations outweigh it — which is
-    /// exactly the shape that used to flip this page to English on a
-    /// trivial edit and force a 223-page full rebuild for a 1-page
-    /// change.
-    pub(crate) const REAL_UKRAINE_DERUSSIFICATION_BODY: &str = "\n\n:::hero {image=ukraine-derussification-cover.jpg}\n:::\n\n一座前線城市的文學博物館收下了仇烏作家的檔案；一位俄羅斯文學研究者在戰時的烏克蘭走了二十幾天；基輔的歷史在一個夏天裡洶洶降臨。俄羅斯全面入侵之後，烏克蘭人如何重新選擇自己的語言、文學與身份，而所謂「去俄化」又在日常裡長成什麼模樣。\n\n## 全文\n\n:::grid 3 {.fs-parts}\n![[assets/36b53bd90ac0f689.jpg]]\n\n上篇\n\n### [在前線，一座文學博物館的抵抗](/awards/writing/s4/ukraine-derussification/museum-harbor/)\n+++\n![[assets/a98150d81cfa4c49.jpg]]\n\n中篇\n\n### [在烏克蘭的兩極之間遊蕩](/awards/writing/s4/ukraine-derussification/between-poles/)\n+++\n![[assets/068be02906b7788d.jpg]]\n\n下篇\n\n### [歷史在基輔洶洶降臨](/awards/writing/s4/ukraine-derussification/kyiv-history/)\n:::\n\n## 場外\n\n- [場外手記：進入戰爭很容易，但走出來很難](/awards/writing/s4/ukraine-derussification/memo/)\n- [編輯手記：謝丁 x 糜緒洋](/awards/writing/s4/ukraine-derussification/editor-memo/)\n- [發佈會記錄：糜緒洋 x 湯舒雯 x 謝丁 | 戰火裡的文學選擇：烏克蘭去俄化之後](/awards/writing/s4/ukraine-derussification/launch/)\n";
+    /// A synthetic article body shaped like a real vault article, byte-for-byte
+    /// stable (frontmatter stripped). Chinese prose is a MINORITY of this
+    /// text by raw byte count — `:::hero`/`:::grid` shortcode directives,
+    /// `![[assets/…jpg]]` wikilink targets and `/reviews/…` link
+    /// destinations outweigh it — which is exactly the shape that used to
+    /// flip a page like this to English on a trivial edit and force a
+    /// 223-page full rebuild for a 1-page change.
+    pub(crate) const SYNTHETIC_TRAD_CHINESE_ARTICLE_BODY: &str = "\n\n:::hero {image=letters-in-rain-cover.jpg}\n:::\n\n一座河灣小城的書信資料館收下了一位隱居作家的信件；一位方言譯者沿著河口走了三十幾天；渡口的往事在一個雨季裡靜靜歸來。老河道改道之後，河灣人如何重新找回自己的方言、故事與身份，而所謂「返鄉寫作」又在日常裡長成什麼模樣。\n\n## 全文\n\n:::grid 3 {.fs-parts}\n![[assets/7c14f2a03df8b562.jpg]]\n\n上篇\n\n### [在河灣，一座書信資料館的收藏](/reviews/fiction/edition-2/letters-in-rain/archive-riverbend/)\n+++\n![[assets/91ab6de204f7c318.jpg]]\n\n中篇\n\n### [在河口的兩端之間往返](/reviews/fiction/edition-2/letters-in-rain/between-the-banks/)\n+++\n![[assets/5f309c81b6e42a97.jpg]]\n\n下篇\n\n### [往事在雨季裡靜靜回來](/reviews/fiction/edition-2/letters-in-rain/the-old-crossing/)\n:::\n\n## 場外\n\n- [場外手記：走進雨季很容易，但走出來很難](/reviews/fiction/edition-2/letters-in-rain/memo/)\n- [編輯手記：周一 x 陳遠山](/reviews/fiction/edition-2/letters-in-rain/editor-memo/)\n- [發佈會記錄：陳遠山 x 吳夏 x 周一 | 雨季裡的文學選擇：老河道改道之後](/reviews/fiction/edition-2/letters-in-rain/launch/)\n";
 }
 
 #[cfg(test)]
@@ -720,7 +719,7 @@ mod tests {
     // (content beating/losing to some other rung) went with it; the
     // content-inference behavior they covered now lives at the FOLDER
     // level in `build::scan::page_map::folder_lang`, tested there against
-    // `fixtures::REAL_UKRAINE_DERUSSIFICATION_BODY`.
+    // `fixtures::SYNTHETIC_TRAD_CHINESE_ARTICLE_BODY`.
     #[test]
     fn test_resolve_frontmatter_wins() {
         let (lang, stem) = resolve_document_language(

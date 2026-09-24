@@ -4,7 +4,7 @@
  * The two trails used to shrink two different ways: the island folded whole
  * ancestors into a `…`, the masthead ellipsised every middle
  * segment down to an unreadable stub — on a phone a deep trail read as
- * "潮汐週報 / 獎.. / 寫.. / 第.. / 戰火下的文學抉…". Half an ancestor name
+ * "河灣週刊 / 評.. / 小.. / 第.. / 雨季裡的一封…". Half an ancestor name
  * tells the reader nothing, so the masthead now consumes the same fold
  * (`breadcrumb-fold.ts`): middle segments either fit whole or fold whole into
  * a `…` button that names them on hover and opens them on click, and only

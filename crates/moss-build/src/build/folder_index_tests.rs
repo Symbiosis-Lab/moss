@@ -68,13 +68,13 @@ fn dir_has_markdown_index_slug_normalizes_both_sides() {
 }
 
 /// A `url:` override renames the served directory independently of its
-/// source path (e.g. `獎項/` served at `awards/`). The root-only fix must
+/// source path (e.g. `評選/` served at `awards/`). The root-only fix must
 /// not touch this: nested folders still answer from `url_path`, which is
 /// the only place the override is recorded.
 #[test]
 fn dir_has_markdown_index_nested_url_override_still_matches_by_url_path() {
-    let docs = vec![folder_doc("獎項/獎項.md", "awards/index.html")];
+    let docs = vec![folder_doc("評選/評選.md", "awards/index.html")];
     let idx = BuildFolderIndex { docs: &docs, html_files: &[] };
     assert!(idx.dir_has_markdown_index("awards"));
-    assert!(!idx.dir_has_markdown_index("獎項"));
+    assert!(!idx.dir_has_markdown_index("評選"));
 }

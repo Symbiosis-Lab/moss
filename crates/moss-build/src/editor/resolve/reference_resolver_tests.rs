@@ -129,7 +129,7 @@ fn folder_listing_carries_folder_detail() {
 /// The slug-override case, which is the whole reason `resolved_path` goes
 /// through `FolderFacts` instead of joining the target to the project root.
 ///
-/// A folder whose index is `獎項/獎項.md` publishes at `awards/`, so an author
+/// A folder whose index is `評選/評選.md` publishes at `awards/`, so an author
 /// writing `![[/awards/]]` names a URL that exists and a directory that does
 /// not. `<root>/awards` would be a path to nothing; the answer is the source
 /// file the build recorded for that URL.
@@ -137,16 +137,16 @@ fn folder_listing_carries_folder_detail() {
 fn folder_embed_follows_a_slug_override_to_its_real_source() {
     let dir = scratch_root();
     let root = dir.path();
-    std::fs::create_dir_all(root.join("獎項")).expect("mkdir");
+    std::fs::create_dir_all(root.join("評選")).expect("mkdir");
     std::fs::write(
-        root.join("獎項/獎項.md"),
-        "---\ntitle: 獎項\nslug: awards\n---\n",
+        root.join("評選/評選.md"),
+        "---\ntitle: 評選\nslug: awards\n---\n",
     )
     .expect("write");
 
     let mut map = ArticleMap::new();
     // What the build recorded: the pretty URL `awards/` ← the CJK source.
-    map.pages.insert("awards/".into(), "獎項/獎項.md".into());
+    map.pages.insert("awards/".into(), "評選/評選.md".into());
     let moss_dir = root.join(".moss");
     std::fs::create_dir_all(moss_dir.join("build.nosync")).expect("mkdir .moss/build.nosync");
     map.save(&moss_dir).expect("save article map");
@@ -162,7 +162,7 @@ fn folder_embed_follows_a_slug_override_to_its_real_source() {
     let canonical = root.canonicalize().expect("canonical root");
     assert_eq!(
         followed,
-        canonical.join("獎項/獎項.md").to_string_lossy().as_ref(),
+        canonical.join("評選/評選.md").to_string_lossy().as_ref(),
         "must be the CJK source, not <root>/awards"
     );
     assert!(
@@ -274,16 +274,16 @@ fn folder_embed_follows_its_home_file_when_no_build_has_run() {
 fn an_unbuilt_folder_finds_its_self_named_note() {
     let dir = scratch_root();
     let root = dir.path();
-    std::fs::create_dir_all(root.join("獎項")).expect("mkdir");
-    std::fs::write(root.join("獎項/獎項.md"), "---\ntitle: 獎項\n---\n").expect("write");
+    std::fs::create_dir_all(root.join("評選")).expect("mkdir");
+    std::fs::write(root.join("評選/評選.md"), "---\ntitle: 評選\n---\n").expect("write");
 
-    let targets = vec![RefTarget { text: "/獎項/".into(), is_embed: true }];
+    let targets = vec![RefTarget { text: "/評選/".into(), is_embed: true }];
     let out = resolve_references_batch(&targets, "index.md", root);
 
     let canonical = root.canonicalize().expect("canonical root");
     assert_eq!(
         out[0].resolved_path.as_deref(),
-        Some(canonical.join("獎項/獎項.md").to_string_lossy().as_ref()),
+        Some(canonical.join("評選/評選.md").to_string_lossy().as_ref()),
     );
 }
 

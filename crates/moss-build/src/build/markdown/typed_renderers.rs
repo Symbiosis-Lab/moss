@@ -511,12 +511,12 @@ mod tests {
     fn hero_caption_renders_below_the_image_not_over_it() {
         let args = moss_core::ast::HeroShortcode {
             image: Some(moss_core::ast::Url::resolved("cover.jpg", moss_core::ast::UrlKind::Asset)),
-            caption: "封面：基輔米迦勒修道院門口的陣亡將士紀念牆（拍攝：糜緒洋）".to_string(),
+            caption: "封面：河灣渡口老市場清晨開市前的剪影（拍攝：陳遠山）".to_string(),
             ..Default::default()
         };
         let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None);
         assert!(
-            html.contains(r#"</section><p class="moss-hero-caption">封面：基輔米迦勒修道院門口的陣亡將士紀念牆（拍攝：糜緒洋）</p>"#),
+            html.contains(r#"</section><p class="moss-hero-caption">封面：河灣渡口老市場清晨開市前的剪影（拍攝：陳遠山）</p>"#),
             "caption must follow the section, outside it: {html}"
         );
         assert!(html.contains(" data-captioned>"), "got: {html}");

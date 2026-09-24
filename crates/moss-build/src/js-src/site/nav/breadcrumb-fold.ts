@@ -57,7 +57,7 @@ export const FOLD_FLOOR_EM = 7;
  * the island, the parent page on the masthead — which skips the current
  * page); both always survive — they are the two ends of "where am I".
  * Everything between is foldable, and is sacrificed **left to right**:
- * `第一季` locates a reader better than `獎項` does, so the ancestor nearest
+ * `第一屆` locates a reader better than `評選` does, so the ancestor nearest
  * them is the last to go.
  *
  * Returns the indices to hide, ascending. Empty means the trail fits as it is.

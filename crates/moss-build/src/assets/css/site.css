@@ -1877,7 +1877,7 @@ header:has(+ .moss-hero) .main-nav {
      the way: the 1.4em floor is the width `text-overflow: ellipsis` needs to
      paint its "…". Without it a squeezed segment shrank toward zero, the
      ellipsis had nowhere to go, and the trail rendered as bare slashes with
-     nothing between them — 潮汐 · 週報 / / / / 戰火下的… — which reads as a
+     nothing between them — 河灣 · 週刊 / / / / 雨季裡的… — which reads as a
      rendering fault rather than as "there are folders here". Now every dropped
      ancestor keeps one "…" token that is still a link and still carries its
      full name in the hover hint. */
@@ -1920,8 +1920,8 @@ header:has(+ .moss-hero) .main-nav {
   font-weight: 500;
 }
 
-/* Phone (≤ 32rem): a deep trail — 潮汐 · 週報 / 獎項 / 寫作獎 / 第四季 /
-   戰火下的文學抉擇… — has no room left for a 5-character parent segment once
+/* Phone (≤ 32rem): a deep trail — 河灣 · 週刊 / 評選 / 小說組 / 第二屆 /
+   雨季裡的一封信… — has no room left for a 5-character parent segment once
    the site name (which never shrinks) and four separators have taken their
    share, so the floor drops to 3em and the separators tighten. Everything else
    about the collapse is width-driven, not breakpoint-driven: the middles reach
@@ -2469,7 +2469,7 @@ header:has(+ .moss-hero) .main-nav {
  * the whole signal; a rule would re-assert the weight we just removed.
  *
  * moss cannot style the role apart from the name: `byline:` is a display
- * string, so `作者　糜緒洋` is one run of text with nothing marking which
+ * string, so `作者　陳遠山` is one run of text with nothing marking which
  * half is the label. Themes that want the label tracked out (the CJK stand-in
  * for small caps) write that themselves, or the author writes the label in
  * markdown emphasis.
@@ -4876,7 +4876,7 @@ article a:where(:not(.moss-btn)):focus {
 }
 
 /* `keep-all` forbids the implicit break BETWEEN Han characters, which is what
-   would split a name like 呂適之 down the middle; Latin still breaks at its
+   would split a name like 沈知遠 down the middle; Latin still breaks at its
    spaces, so a long Latin name rags onto a second line rather than being
    truncated. Never `nowrap` with an ellipsis here — clipping a person's name
    to tidy a roster is the wrong trade.
@@ -6691,7 +6691,7 @@ a.moss-grid-card:hover {
  * Folding both into `repeat(var(--moss-gallery-columns, auto-fill), minmax(200px,
  * 1fr))` is correct only for auto-fill. With an explicit N the 200px floor
  * becomes a hard `N × 200px + gaps` minimum that the container never agreed
- * to: harbor's `:::gallery 8` of fellow portraits demanded 1712px inside a
+ * to: riverbend's `:::gallery 8` of fellow portraits demanded 1712px inside a
  * 692px text column and spilled the whole document sideways at EVERY viewport,
  * desktop included. Same bug class as the `minmax(0, 1fr)` note on
  * `.moss-grid`'s tracks above. */
@@ -6788,7 +6788,7 @@ a.moss-grid-card:hover {
 
      Left in, that is 96px of dead space per gallery ROW. Desktop hides it: a
      one-row strip just looks loosely spaced. Every wrap multiplies it — the
-     8-up on harbor's homepage reflows to 3 columns at 390px, and the block
+     8-up on riverbend's homepage reflows to 3 columns at 390px, and the block
      measured 630px tall for 341px of avatars. 12-up partner logos: 845px for
      460px of content.
 

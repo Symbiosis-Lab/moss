@@ -139,8 +139,8 @@ pub struct FolderFacts {
     index_source: HashMap<String, String>,
     /// on-disk source PARENT dir (project-relative, no trailing slash) → folder
     /// key, plus a lowercased twin. This is the slug-override bridge: a folder
-    /// whose index is `獎項/獎項.md` but which publishes at `awards/` can only
-    /// be found from the author-typed `獎項` this way.
+    /// whose index is `評選/評選.md` but which publishes at `awards/` can only
+    /// be found from the author-typed `評選` this way.
     by_source_dir: HashMap<String, String>,
     by_source_dir_ci: HashMap<String, String>,
     /// folder key → the index page's title, as the scan recorded it.
@@ -167,7 +167,7 @@ fn fm_also_in(fm: &HashMap<String, serde_json::Value>) -> Vec<String> {
 }
 
 /// Project-relative parent directory of a source path, no trailing slash.
-/// `"獎項/獎項.md"` → `"獎項"`; `"index.md"` → `""`.
+/// `"評選/評選.md"` → `"評選"`; `"index.md"` → `""`.
 fn parent_dir(source_path: &str) -> String {
     match source_path.rsplit_once('/') {
         Some((dir, _)) => dir.to_string(),
@@ -179,7 +179,7 @@ fn parent_dir(source_path: &str) -> String {
 /// the doc's own key: `"awards/2024/x"` → `["", "awards/", "awards/2024/"]`.
 ///
 /// Deliberately built by `split('/')` + `push_str` and never by byte-slicing a
-/// URL. A folder key can be multibyte (`獎項/` — the case this whole feature
+/// URL. A folder key can be multibyte (`評選/` — the case this whole feature
 /// exists for) and `&url[key.len()..]` panics when that byte offset lands
 /// mid-UTF-8-sequence in an unrelated URL.
 fn strict_ancestors(url: &str) -> Vec<String> {
@@ -254,8 +254,8 @@ impl FolderFacts {
         if let Some(k) = known(format!("{}/", slugged)) {
             return Some(k);
         }
-        // 3. Reverse by on-disk source dir: `pages["awards/"] == "獎項/獎項.md"`
-        //    → parent `獎項` → key `awards/`. The slug-override case.
+        // 3. Reverse by on-disk source dir: `pages["awards/"] == "評選/評選.md"`
+        //    → parent `評選` → key `awards/`. The slug-override case.
         if let Some(k) = self.by_source_dir.get(t) {
             return Some(k.clone());
         }
@@ -281,7 +281,7 @@ impl FolderFacts {
     /// This is what "following" a folder embed opens, and it is deliberately a
     /// FILE: the author-typed target is a URL, not a path, so joining it to the
     /// project root is wrong the moment a slug override is in play — a folder
-    /// whose index is `獎項/獎項.md` publishes at `awards/`, and `<root>/awards`
+    /// whose index is `評選/評選.md` publishes at `awards/`, and `<root>/awards`
     /// names nothing on disk. `key_for` already crosses that bridge for the
     /// counts; this reuses it so the card and the click agree by construction.
     ///

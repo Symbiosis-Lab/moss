@@ -16,7 +16,7 @@
 //!
 //! ## Why it is worth attacking
 //!
-//! Measured on the 潮汐 corpus (2026-08-04): a build was 4,156 files / 592.8
+//! Measured on the 河灣 corpus (2026-08-04): a build was 4,156 files / 592.8
 //! MB, of which the raster originals were 1,086 files / 328.2 MB — 55% of the
 //! bytes, and 327.7 MB of that had a `.webp` sibling that ~96% of installs
 //! fetch instead. The fallback was also the build's HIGHEST-resolution asset
@@ -47,7 +47,7 @@ pub(crate) const SIZED_JPEG_QUALITY: u8 = 82;
 /// negotiation (it carries no width descriptor; `render/image.rs::render_img_tag`
 /// takes `width`/`height` from the SOURCE's natural dimensions, so shrinking the
 /// deployed pixels changes no HTML). Sizing it at 2400 made the fallback the
-/// build's HIGHEST-resolution asset: on the 潮汐 corpus the raster originals
+/// build's HIGHEST-resolution asset: on the 河灣 corpus the raster originals
 /// were 328 MB of a 593 MB build — 55% of the bytes.
 ///
 /// **It is not only a web fallback.** `infra/newsletter.rs`'s
@@ -145,7 +145,7 @@ const PHOTOGRAPHIC_COLOR_RATIO: f32 = 0.02;
 ///
 /// The discriminator is colour complexity — distinct RGB triples per pixel,
 /// measured after the downscale, since resampling is what reintroduces colours
-/// into an image that was already palettized. Measured on the 潮汐 corpus
+/// into an image that was already palettized. Measured on the 河灣 corpus
 /// (469 PNGs, 608 JPEGs, sampled 40 each, resized to `FALLBACK_MAX_EDGE`):
 ///
 /// | class                          | p10    | p50    | p90    |
@@ -259,7 +259,7 @@ fn is_fully_opaque(rgba: &image::RgbaImage) -> bool {
 /// truecolour re-encode of a photograph is essentially always LARGER than the
 /// author's already-optimized original, so `sized_raster_oid_for_original`'s
 /// keep-smaller guard used to lose every time and ship the original verbatim.
-/// A lost size comparison, not a deliberate policy — measured on the 潮汐
+/// A lost size comparison, not a deliberate policy — measured on the 河灣
 /// corpus, PNG originals shipped at 100.0% of source bytes.
 ///
 /// Caller must have checked [`is_fully_opaque`]: the palette is written without

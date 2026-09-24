@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn percent_decode_path_inverts_the_segment_encoder() {
         for raw in [
-            "獎項/封面.jpg",
+            "評選/封面.jpg",
             "News/Winter Song.mov",
             "img/a,b.png",
             "plain/ascii.webp",

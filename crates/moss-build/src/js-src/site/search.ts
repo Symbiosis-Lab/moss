@@ -457,7 +457,7 @@ const SPACE_BEFORE_HAN = new RegExp(
  * digest, so removing a space with Han on one side and a Han/kana/CJK-punct
  * neighbour on the other is the exact inverse. Spaces between Han and
  * Latin/digits/ASCII punctuation stay: the boundary rule inserts those too,
- * but authored text legitimately has them ("潮汐 tide", "文字 (note)")
+ * but authored text legitimately has them ("河流 river", "文字 (note)")
  * and mixed-script spacing is the conventional CJK typography anyway.
  */
 export function joinSegmentedHan(text: string): string {

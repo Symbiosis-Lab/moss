@@ -45,7 +45,7 @@
 //!
 //! Pagefind's plain indexer splits text on whitespace, so a run of Han
 //! characters ("這是一段文字") indexes as one giant token and Chinese queries
-//! match almost nothing — unacceptable given 潮汐 (harborweekly), the
+//! match almost nothing — unacceptable given 河灣 (riverbend-review), the
 //! feature's validation target, is majority-Chinese-content.
 //!
 //! Pagefind's own answer is its `extended` feature (charabia → lindera). moss

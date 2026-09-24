@@ -697,7 +697,7 @@ fn test_no_changes_suppresses_event() {
 /// A search re-index alone must NOT refresh the preview.
 ///
 /// Pagefind shards are content-addressed, so re-indexing renames every file it
-/// touches: 85 entries between two consecutive harbor generations, all
+/// touches: 85 entries between two consecutive riverbend generations, all
 /// create+delete, none of them a change to anything the open page renders.
 /// Before the exclusion this flipped `has_changes` on its own, and the refresh
 /// it forced is the one that flashes when the morph declines it.

@@ -2455,7 +2455,7 @@ mod bulk_style_tests {
 
     #[test]
     fn one_claimed_term_in_a_roster_leaves_the_index_a_grid() {
-        // The harbor case: 1 claimed author, the rest bare labels. Both
+        // The riverbend case: 1 claimed author, the rest bare labels. Both
         // clauses must fail — it is neither mostly rich nor a handful of rows.
         assert_eq!(one_rich_among(8), "grid", "one claim must not re-style the roster");
     }

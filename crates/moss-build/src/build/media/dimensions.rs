@@ -132,7 +132,7 @@ impl MediaDimensionLookup {
         // These maps are keyed by raw source path, but `get_cover_color*`
         // probes with `cover_key(cover_url)` — a resolved output URL. On a site
         // whose folders carry `slug:` overrides the two never coincide
-        // (`獎項/漫畫獎/第一季/…/assets/editor-memo-cover.jpg` against
+        // (`評選/繪本組/第一屆/…/assets/editor-memo-cover.jpg` against
         // `awards/comics/s1/kayla/assets/editor-memo-cover.jpg`), so the exact
         // and normalized lookups missed on EVERY cover and the whole site fell
         // through to the stem fallback — which is what let 22 articles sharing
@@ -347,7 +347,7 @@ fn unique_suffix_match<'a, V>(
 /// On a site where 22 articles each keep an `assets/editor-memo-cover.jpg`,
 /// that returns an arbitrary OTHER article's value — and reshuffles it every
 /// build, because `HashMap` iteration order is not stable across processes.
-/// Measured on the harbor vault (2026-08-19): 46 built pages differed
+/// Measured on the riverbend vault (2026-08-19): 46 built pages differed
 /// between two consecutive generations in `--moss-cover-color` and nothing
 /// else, with two unrelated articles landing on the identical wrong colour.
 /// Every one of those covers is also re-uploaded on every publish.
@@ -484,8 +484,8 @@ mod tests {
     #[test]
     fn cover_color_lookup_decodes_a_percent_encoded_url() {
         let mut lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None);
-        lookup.maps.colors.insert("獎項/封面.jpg".to_string(), "#0088CC".to_string());
-        let encoded = "/%E7%8D%8E%E9%A0%85/%E5%B0%81%E9%9D%A2.jpg";
+        lookup.maps.colors.insert("評選/封面.jpg".to_string(), "#0088CC".to_string());
+        let encoded = "/%E8%A9%95%E9%81%B8/%E5%B0%81%E9%9D%A2.jpg";
         assert!(lookup.get_cover_color(encoded).is_some(), "encoded URL must hit the cache");
         assert!(lookup.get_cover_color_muted(encoded).is_some());
     }
@@ -502,7 +502,7 @@ mod tests {
     /// One article must never be served another article's cover colour.
     ///
     /// A convention-named cover (`editor-memo-cover.jpg`) repeats once per
-    /// article — 22 times on the harbor vault. The old stem fallback scanned
+    /// article — 22 times on the riverbend vault. The old stem fallback scanned
     /// the whole map for ANY entry sharing a stem and returned the first the
     /// `HashMap` yielded, so covers borrowed each other's colours and the
     /// borrowing reshuffled every build: 46 pages differed between two
@@ -563,9 +563,9 @@ mod tests {
     #[test]
     fn the_snapshot_indexes_a_cover_under_its_override_slug() {
         let mut overrides = HashMap::new();
-        overrides.insert("獎項".to_string(), "awards".to_string());
+        overrides.insert("評選".to_string(), "awards".to_string());
         let meta = MediaMetadata {
-            path: "獎項/assets/cover.png".to_string(),
+            path: "評選/assets/cover.png".to_string(),
             dimensions: Some((1200, 800)),
             dominant_color: Some("#336699".to_string()),
             lqip_data_uri: Some("data:image/webp;base64,AAAA".to_string()),

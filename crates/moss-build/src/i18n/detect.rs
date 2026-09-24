@@ -599,10 +599,10 @@ mod tests {
         assert_eq!(detect_language(""), None);
     }
 
-    /// Realistic Traditional Chinese body text (~1,254 bytes in the real
-    /// vault article that surfaced this bug), including a couple of ASCII
-    /// URLs — exactly the mix a real article carries.
-    const REALISTIC_ZH_HANT_ARTICLE: &str = "戰火下的文學抉擇：在動盪的年代裡，作家們面臨著前所未有的挑戰與困境。他們必須在生存與創作之間做出艱難的抉擇，究竟是選擇沉默以求自保，還是繼續執筆記錄下這個時代的真相。許多作家選擇了後者，即使明知這樣的選擇可能為他們帶來危險，他們依然堅持用文字對抗遺忘。這段歷史提醒著我們，文學從來不只是消遣，而是見證與抵抗的重要方式。相關資料可參考 https://example.com/archive/war-literature 與 https://example.com/archive/writers-in-exile 這兩個典藏網站，裡面收錄了大量珍貴的第一手訪談與手稿掃描檔案，對於研究這段歷史的讀者而言，是不可多得的重要資源，值得反覆閱讀與深入探討，也期盼未來有更多學者投入相關領域的研究工作。";
+    /// Realistic Traditional Chinese body text (~1,250 bytes, shaped like a
+    /// real vault article that surfaced this bug), including a couple of
+    /// ASCII URLs — exactly the mix a real article carries.
+    const REALISTIC_ZH_HANT_ARTICLE: &str = "雨季裡的一封信：在漂泊的日子裡，寫信的人面臨著前所未有的猶豫與掙扎。他們必須在沉默與傾訴之間做出艱難的抉擇，究竟是選擇把話留在心裡，還是繼續提筆記錄下這段旅程的真相。許多人選擇了後者，即使明知這樣的選擇可能為他們帶來風險，他們依然堅持用文字對抗遺忘。這段經歷提醒著我們，書信從來不只是問候，而是見證與陪伴的重要方式。相關資料可參考 https://example.com/archive/rainy-season-letters 與 https://example.com/archive/writers-on-the-road 這兩個典藏網站，裡面收錄了大量珍貴的第一手訪談與手稿掃描檔案，對於研究這段旅程的讀者而言，是不可多得的重要資源，值得反覆閱讀與深入探討，也期盼未來有更多讀者投入相關領域的整理工作。";
 
     /// The bug this fix closes: appending a short English sentence to a real
     /// Traditional Chinese article must not flip its detected language.
@@ -655,11 +655,11 @@ mod tests {
         );
     }
 
-    /// The real article's `resolve_document_language`-level regression test
-    /// lives in `i18n::tests::a_trivial_edit_to_the_real_ukraine_article_does_not_flip_its_language`
-    /// (uses the same fixture bytes, exercised through the full priority
-    /// chain). This one is the `detect_language`-only inverse: an English page
-    /// carrying the same
+    /// The folder-level regression test for this same shape of fixture
+    /// lives in `build::scan::page_map::folder_lang` (a synthetic
+    /// markup-heavy Traditional Chinese body, exercised through the full
+    /// priority chain). This one is the `detect_language`-only inverse: an
+    /// English page carrying the same
     /// kind of heavy markup (shortcode directives, wikilink targets,
     /// markdown links with long slugs) must still resolve to English —
     /// stripping markup before detection must not manufacture a Chinese

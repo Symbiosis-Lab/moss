@@ -1550,7 +1550,7 @@ mod tests {
         // not a separator) — but the whole-value path it falls through to must
         // still hand back a `%2C`, or the decode → re-encode round-trip decays
         // it to a literal comma, the browser reads two candidates, and both
-        // 404 with `<picture>` already committed. That is the live harbor
+        // 404 with `<picture>` already committed. That is the live riverbend
         // bug; this test previously asserted the broken output.
         assert_eq!(
             adjust_relative_paths_for_pretty_urls(r#"<source srcset="a%2Cb.webp">"#),

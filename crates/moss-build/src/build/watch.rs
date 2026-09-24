@@ -225,7 +225,7 @@ fn compute_rebuild_event(
     // Pagefind is excluded from all three diffs. Its shards are
     // content-addressed (`zh-hant_b02cc96.pf_index`), so a re-index renames
     // every file it touches and the diff reads it as a bulk create + delete —
-    // 85 entries between two consecutive harbor generations, none of them a
+    // 85 entries between two consecutive riverbend generations, none of them a
     // change to anything the open page renders. The search UI lazy-loads the
     // bundle at query time, so a stale index in an already-open tab costs at
     // most one stale result set until the next navigation; forcing a refresh

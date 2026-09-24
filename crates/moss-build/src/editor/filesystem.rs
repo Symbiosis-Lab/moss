@@ -354,7 +354,7 @@ pub fn list_tree_inner_cached(
     // re-derived from the path string with a second `Path::file_name()` /
     // `trim_end_matches`. That re-derivation returns `None` / `""` for `.`, a
     // trailing slash and `/`, silently demoting a self-named root home
-    // (`潮汐/潮汐.md`) off `/` — the `moss build .` bug one code path over.
+    // (`河灣/河灣.md`) off `/` — the `moss build .` bug one code path over.
     // `VaultRoot::resolve` collapses all three spellings the way the build
     // does, so the tree's `is_home` flag can never disagree with which file the
     // built site serves at the folder's URL. A SUBFOLDER keeps its plain
@@ -1180,19 +1180,19 @@ mod tests {
 
     #[test]
     fn is_home_self_named_root_home_is_spelling_invariant() {
-        // The self-named root home (`潮汐/潮汐.md`) is elected whether the
+        // The self-named root home (`河灣/河灣.md`) is elected whether the
         // project root arrives as an ABSOLUTE path, with a TRAILING SLASH, or as
         // `.` — the root name now comes from `VaultRoot::resolve`, not
         // `Path::file_name()`. `Path::file_name()` is `None` for `.`, which left
         // the election with an empty root name; the self-named rule could not
         // fire, and the root's gated-out alphabetical fallback then elected NO
-        // home at all (`潮汐.md` silently demoted off `/`).
+        // home at all (`河灣.md` silently demoted off `/`).
         let dir = tempfile::tempdir().unwrap();
-        let proj = dir.path().join("\u{5728}\u{5834}");
+        let proj = dir.path().join("\u{521d}\u{96ea}");
         std::fs::create_dir(&proj).unwrap();
-        std::fs::write(proj.join("\u{5728}\u{5834}.md"), "# home").unwrap();
+        std::fs::write(proj.join("\u{521d}\u{96ea}.md"), "# home").unwrap();
         std::fs::write(proj.join("note.md"), "# note").unwrap();
-        let home = ("\u{5728}\u{5834}.md".to_string(), true);
+        let home = ("\u{521d}\u{96ea}.md".to_string(), true);
 
         // Absolute and trailing-slash spellings need no working-directory move.
         let abs = proj.to_string_lossy().to_string();

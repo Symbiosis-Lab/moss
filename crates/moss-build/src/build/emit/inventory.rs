@@ -29,11 +29,11 @@ use std::path::{Path, PathBuf};
 /// became a page.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InventoryEntry {
-    /// Project-root-relative source file, e.g. `works/《潮汐》第一期 — 邊界.md`.
+    /// Project-root-relative source file, e.g. `works/《河灣》第一期 — 遠行.md`.
     /// `None` for synthesized pages that have no markdown file behind them.
     pub source_path: Option<String>,
     /// Where it publishes, relative to the site root, e.g.
-    /// `works/潮汐第一期-邊界/index.html`. Empty for a slot-only document,
+    /// `works/河灣第一期-遠行/index.html`. Empty for a slot-only document,
     /// which is not published at a URL at all.
     pub url_path: String,
     /// The chrome label (nav, breadcrumb, cards) — `label`, not the body H1.

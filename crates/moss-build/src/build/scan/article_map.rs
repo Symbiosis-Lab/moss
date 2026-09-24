@@ -143,7 +143,7 @@ pub struct ArticleMap {
     #[serde(default)]
     pub url_collisions: HashMap<String, UrlCollision>,
 
-    /// URL keys (`posts/`, `authors/`, `authors/馬欣宜/`) of every index page the
+    /// URL keys (`posts/`, `authors/`, `authors/林小滿/`) of every index page the
     /// build SYNTHESIZED: index-less folders, unclaimed term pages, the term
     /// namespace roots. Collected where those pages are emitted (the auto-index
     /// loop in `render/blocking.rs`), the only place the set is true — the
@@ -155,7 +155,7 @@ pub struct ArticleMap {
     pub generated: Vec<String>,
 
     /// Every term the build derived, keyed by pseudo-folder key
-    /// (`authors/馬欣宜`), exactly as `derive_terms` built it. The claim is
+    /// (`authors/林小滿`), exactly as `derive_terms` built it. The claim is
     /// recorded here so the editor never re-derives it: a claimed term's
     /// generated URL is `Moved` to the claiming page, and the chip gesture
     /// resolves against this record.

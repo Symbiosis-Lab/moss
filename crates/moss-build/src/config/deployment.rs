@@ -366,7 +366,7 @@ pub struct DeploymentState {
     /// Legacy (read-only): the domain is authored intent and lives in
     /// config.toml `[site].domain` since 2026-08-31 — state.toml is a file
     /// moss rewrites wholesale, and an authored fact must not live there
-    /// (the CPHS vault baked a mosspub canonical for months because this
+    /// (a large vault baked a mosspub canonical for months because this
     /// copy was absent locally while the server had the real domain). Read
     /// so the project-open migration can adopt it into config.toml;
     /// `skip_serializing` retires it from disk on the next save.
@@ -628,10 +628,10 @@ impl DeploymentState {
 ///
 /// Reconciliation is a VISIBLE event with exactly one silent case: no local
 /// intent and the server naming exactly one domain — then there is nothing
-/// to conflict with and the server's answer is adopted (the CPHS case: a
-/// domain configured on the server, absent locally, every page baking the
-/// mosspub canonical). Everything else either needs no action or needs a
-/// human.
+/// to conflict with and the server's answer is adopted (the large-vault
+/// case: a domain configured on the server, absent locally, every page
+/// baking the mosspub canonical). Everything else either needs no action
+/// or needs a human.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DomainReconciliation {
     /// Nothing to change: agreement, nothing authored and nothing (or too

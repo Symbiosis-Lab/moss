@@ -668,7 +668,7 @@ mod annotate_tests {
     #[test]
     fn test_annotate_home_files_self_named_root_home() {
         // ROOT-level files (the `""` parent). The self-named root home
-        // (`潮汐.md` in a project named `潮汐`) must win over the alphabetically
+        // (`河灣.md` in a project named `河灣`) must win over the alphabetically
         // earlier sibling. Before the fix the root folder name was `""` (the
         // retired `rfind('/')` on the empty root string), so the self-named rule
         // could not fire and the priority-5 alphabetical fallback flagged
@@ -676,12 +676,12 @@ mod annotate_tests {
         // (`VaultRoot::name()`), passed by `list_project_tree_impl`.
         let paths = vec![
             "aaa.md".to_string(),
-            "\u{5728}\u{5834}.md".to_string(),
+            "\u{6cb3}\u{7063}.md".to_string(),
         ];
         let result = annotate_home_files_marked(
             &paths,
             &std::collections::HashSet::new(),
-            "\u{5728}\u{5834}",
+            "\u{6cb3}\u{7063}",
         );
         let home: Vec<&str> = result
             .iter()
@@ -690,7 +690,7 @@ mod annotate_tests {
             .collect();
         assert_eq!(
             home,
-            vec!["\u{5728}\u{5834}.md"],
+            vec!["\u{6cb3}\u{7063}.md"],
             "the self-named root home must be elected, not the alpha-first sibling"
         );
     }

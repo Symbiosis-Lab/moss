@@ -49,7 +49,7 @@ fn folder_predicates_over_one_fixture_vault() {
     // Index-less folder with children — the build synthesizes an index here.
     write(root, "writings/post.md", b"# Post");
     // Self-named folder note (the content-folder form).
-    write(root, "獎項/獎項.md", b"# Awards");
+    write(root, "評選/評選.md", b"# Awards");
     // Home stems the old hardcoded ["index.md","README.md","_index.md"] missed.
     write(root, "Docs/README.MD", b"# Docs");
     write(root, "Notes/main.md", b"# Notes");
@@ -69,7 +69,7 @@ fn folder_predicates_over_one_fixture_vault() {
         ("Resources", true, None, true),
         ("news", true, None, true),
         ("writings", true, None, true),
-        ("獎項", true, None, true),
+        ("評選", true, None, true),
         ("Docs", true, None, true),
         ("Notes", true, None, true),
         // Root home file.
@@ -91,24 +91,24 @@ fn folder_predicates_over_one_fixture_vault() {
     }
 }
 
-/// The reported bug: `獎項/獎項.md` carries `url: awards`, so the folder lives
+/// The reported bug: `評選/評選.md` carries `url: awards`, so the folder lives
 /// at `awards/` in URL space and NOWHERE on disk.
 #[test]
 fn url_override_folder_resolves_under_its_url_not_its_source_dir() {
     let t = tmp();
     let root = t.path();
-    write(root, "獎項/獎項.md", b"# Awards");
+    write(root, "評選/評選.md", b"# Awards");
 
     let mut map = ArticleMap::new();
-    map.pages.insert("awards/".into(), "獎項/獎項.md".into());
-    map.dir_overrides.insert("獎項".into(), "awards".into());
+    map.pages.insert("awards/".into(), "評選/評選.md".into());
+    map.dir_overrides.insert("評選".into(), "awards".into());
     let idx = EditorFolderIndex::new(root, &map);
 
     assert!(idx.dir_has_markdown_index("awards"), "the URL the build serves");
     assert!(idx.is_dir("awards"), "and it must read as a directory");
     // The SOURCE dir must NOT also go green: the build emits nothing at
-    // `獎項/index.html`, so a green here would be a false green.
-    assert!(!idx.dir_has_markdown_index("獎項"));
+    // `評選/index.html`, so a green here would be a false green.
+    assert!(!idx.dir_has_markdown_index("評選"));
 }
 
 /// A map entry whose source file was deleted or renamed is dead: it must not
@@ -120,7 +120,7 @@ fn stale_map_entry_whose_source_vanished_falls_back_to_the_filesystem() {
     write(root, "news/post.md", b"# Post");
 
     let mut map = ArticleMap::new();
-    map.pages.insert("awards/".into(), "獎項/獎項.md".into());
+    map.pages.insert("awards/".into(), "評選/評選.md".into());
     let idx = EditorFolderIndex::new(root, &map);
 
     assert!(!idx.dir_has_markdown_index("awards"), "source is gone — dead entry");

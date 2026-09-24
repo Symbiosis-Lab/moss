@@ -8,7 +8,7 @@
  * the end edge. But when `.nav-left` is just a short site name, that same
  * wrap leaves row 1 mostly empty and drops the toggle cluster to wherever the
  * last link row ends — chrome appended to a link list it has nothing to do
- * with (seen on okagaki.mosspub.com).
+ * with (seen on sample-site.mosspub.com).
  *
  * The wanted two-row order — site name + toggles / links — cannot come from
  * flex wrapping: line-breaking places items in sequence and never floats a

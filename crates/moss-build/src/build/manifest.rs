@@ -169,7 +169,7 @@ pub struct PendingManifest {
     /// of `sources` on the first warm build and stayed out, after which every
     /// sweep pass read each footer as a file with no baseline entry, i.e. a
     /// CREATE, and dispatched a full rebuild that could not clear it
-    /// (harbor, 2026-08-20).
+    /// (riverbend, 2026-08-20).
     ///
     /// [`carry_forward_page_source`]: PendingManifest::carry_forward_page_source
     carried_page_sources: HashMap<String, crate::build::types::SourceMetadata>,

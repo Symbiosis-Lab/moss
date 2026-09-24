@@ -1144,7 +1144,7 @@ fn extracts_grid_with_compound_link_cell_typed_as_link_card() {
 
 #[test]
 fn compound_link_image_cell_with_caption_paragraphs_becomes_card_plus_siblings() {
-    // Real-world shape from harbor's "翻譯 · 得獎作品" grid: an
+    // Real-world shape from riverbend's "翻譯 · 得獎作品" grid: an
     // image wrapped in a link, followed (after a blank line) by caption
     // paragraphs. Before this fix, `detect_compound_link` required the
     // cell to literally END in `)`, so this cell fell through to the
@@ -2553,16 +2553,16 @@ fn url_raw(u: &crate::ast::url::Url) -> &str {
 
 #[test]
 fn gallery_bare_paths_span_exactly() {
-    // The harbor shape: CJK directory-relative bare paths.
-    let src = ":::gallery 8 {.profiles}\n關於/頭像-李柏萱.png\n關於/頭像-李年.png\n:::\n";
+    // The riverbend shape: CJK directory-relative bare paths.
+    let src = ":::gallery 8 {.profiles}\n關於/頭像-李知安.png\n關於/頭像-李年.png\n:::\n";
     let s = spans(src);
     assert_eq!(s.len(), 2, "{s:?}");
-    assert_eq!(&src[s[0].value.clone()], "關於/頭像-李柏萱.png");
+    assert_eq!(&src[s[0].value.clone()], "關於/頭像-李知安.png");
     assert_eq!(&src[s[1].value.clone()], "關於/頭像-李年.png");
-    assert_eq!(s[0].path, "關於/頭像-李柏萱.png");
+    assert_eq!(s[0].path, "關於/頭像-李知安.png");
     assert_eq!(s[0].container, PathContainer::GalleryBody);
     // `outer` is the whole physical line including its terminator.
-    assert_eq!(&src[s[0].outer.clone()], "關於/頭像-李柏萱.png\n");
+    assert_eq!(&src[s[0].outer.clone()], "關於/頭像-李知安.png\n");
 }
 
 #[test]

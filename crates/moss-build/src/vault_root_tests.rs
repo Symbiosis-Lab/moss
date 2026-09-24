@@ -17,11 +17,11 @@ fn plain_absolute_path_passes_through_byte_identical() {
     // macOS temp dirs are symlinks (/var → /private/var). A resolver that
     // canonicalized unconditionally would rewrite this path and silently change
     // recents entries, window titles and session keys for every symlinked vault.
-    let site = tmp("plain").join("潮汐");
+    let site = tmp("plain").join("河灣");
     fs::create_dir_all(&site).unwrap();
     let root = VaultRoot::resolve(&site);
     assert_eq!(root.as_str(), site.to_string_lossy());
-    assert_eq!(root.name(), "潮汐");
+    assert_eq!(root.name(), "河灣");
 }
 
 #[test]
@@ -42,16 +42,16 @@ fn trailing_separator_is_dropped_without_touching_the_filesystem() {
 
 #[test]
 fn dot_resolves_to_the_real_directory_name_without_touching_the_filesystem() {
-    let site = tmp("dot").join("潮汐");
+    let site = tmp("dot").join("河灣");
     fs::create_dir_all(&site).unwrap();
-    for raw in [".", "./", "潮汐"] {
-        let cwd = if raw == "潮汐" {
+    for raw in [".", "./", "河灣"] {
+        let cwd = if raw == "河灣" {
             site.parent().unwrap().to_path_buf()
         } else {
             site.clone()
         };
         let root = VaultRoot::resolve_in(Path::new(raw), &cwd);
-        assert_eq!(root.name(), "潮汐", "`{raw}` must name the real directory");
+        assert_eq!(root.name(), "河灣", "`{raw}` must name the real directory");
         // `.` is answered lexically — `Path::components()` already drops interior CurDir.
         // On macOS the temp dir is a symlink, so a canonicalize here would rewrite
         // `/var/...` to `/private/var/...` and change the recents entry / window title /

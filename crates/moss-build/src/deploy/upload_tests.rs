@@ -428,7 +428,7 @@ fn routing_matches_the_policy_at_the_boundary() {
     let t = tp.plan_request_size() as u64;
     assert!(!tp.needs_chunking(t));
     assert!(tp.needs_chunking(t + 1));
-    // The file that killed the okagaki deploy.
+    // The file that killed a large live site's deploy.
     assert!(tp.needs_chunking(8_910_888));
 }
 

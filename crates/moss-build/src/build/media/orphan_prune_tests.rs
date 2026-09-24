@@ -306,8 +306,8 @@ fn a_fully_percent_encoded_reference_survives_pruning() {
     let rows: &[(&str, &str, &str)] = &[
         (
             "encoded cjk dir and leaf",
-            "獎項/封面.w800.webp",
-            "/%E7%8D%8E%E9%A0%85/%E5%B0%81%E9%9D%A2.w800.webp",
+            "評選/封面.w800.webp",
+            "/%E8%A9%95%E9%81%B8/%E5%B0%81%E9%9D%A2.w800.webp",
         ),
         (
             "encoded leaf only",

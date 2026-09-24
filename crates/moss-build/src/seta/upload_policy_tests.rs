@@ -101,7 +101,7 @@ fn a_solo_upload_is_sized_for_the_whole_link_not_a_third_of_it() {
 /// 8,910,888 bytes is `audio/dreamin.mp3` exactly. Under the old 20 MB
 /// threshold it went out as one PUT and could not finish inside 125s.
 #[test]
-fn the_mp3_that_broke_okagaki_now_chunks() {
+fn the_mp3_that_broke_sample_site_now_chunks() {
     for in_flight in 0..=LIMIT_START {
         assert!(needs_chunking(8_910_888, SEED_BANDWIDTH_BYTES_PER_SEC, in_flight, LIMIT_START));
     }
@@ -174,7 +174,7 @@ fn a_healthy_link_still_gets_the_full_four_mib_request() {
 /// implemented: 135 KB/s x 45 s = 6.07 MB clamps to the 4 MiB ceiling, so the
 /// first request of every publish was the largest one the client can make — the
 /// opposite of "start small and grow from measurement", and a guaranteed 150 s
-/// timeout on the link okagaki actually had.
+/// timeout on the link that large site actually had.
 ///
 /// Any seed at or above ~98 KB/s has this property, which is why the seed is
 /// now derived from the size instead of chosen as a rate.
@@ -549,7 +549,7 @@ fn the_window_bounds_resident_bytes_far_below_the_old_400_mb() {
 
 // ── Retry escalation ─────────────────────────────────────────────────────────
 
-/// Retrying the identical request after a 524 is what spent okagaki's 600 s
+/// Retrying the identical request after a 524 is what spent that large site's 600 s
 /// budget on three failures that each took exactly as long as the first.
 #[test]
 fn escalation_actually_shrinks_the_request() {
@@ -595,8 +595,8 @@ fn the_escalation_floor_is_comfortably_sendable_on_the_slowest_link() {
 // ── Timeout ──────────────────────────────────────────────────────────────────
 
 /// Above CF's cut, so the 524 stays the authoritative signal. Below it, moss
-/// would abort requests CF was still happily proxying — including the okagaki
-/// deploy's own successful 121 s PUT.
+/// would abort requests CF was still happily proxying — including a large live
+/// site's deploy's own successful 121 s PUT.
 #[test]
 fn the_request_timeout_sits_above_the_edge_budget() {
     assert!(

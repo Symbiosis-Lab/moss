@@ -50,9 +50,9 @@ const TOKENS = `:root{
 // name, a Latin name carrying a full-width parenthetical, and the longest
 // Latin name in the set. The last is the one the track floor is sized around.
 const NAMES = [
-  '方六', '王舜薇', '烏日漢', '糜緒洋', '顧玉玲', '黃鈺晴', '茉莉', '斑戈',
-  '方六、常籮', 'Yan Chen 陳研', 'Kayla（呂適之）', 'mao', 'Scarly',
-  'Hongyu Jasmine Zhu',
+  '卓遠', '蘇文彥', '賀曉嵐', '陳遠山', '柯明遠', '岳知秋', '沈川', '江風',
+  '卓遠、沐恩', 'Mei Sun 孫梅', 'Nadia（沈知遠）', 'lio', 'Marlow',
+  'Robin Q. Sample',
 ];
 
 // Byte-for-byte the shape grid_card.rs emits for a coverless term child: an
@@ -90,7 +90,7 @@ const BAND = [1100, 980, 860, 740, 700, 640, 560, 480, 420, 380, 340];
 
 test('no name is ever broken mid-word, across the width band', async ({ page }) => {
   // `word-break: keep-all` forbids the implicit break BETWEEN Han characters,
-  // which is what would split 呂適之 down the middle. A Latin name may still
+  // which is what would split 沈知遠 down the middle. A Latin name may still
   // rag onto a second line at its spaces — that is legible and truncates
   // nothing, so it is allowed. What is never allowed is a Han run splitting,
   // or any name being clipped.

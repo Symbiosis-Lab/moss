@@ -148,10 +148,10 @@ mod url_collision_tests {
         std::fs::create_dir_all(moss.join("build.nosync")).unwrap();
         let mut map = ArticleMap::new();
         map.url_collisions.insert(
-            "獎項/記憶獎/記憶獎.md".to_string(),
+            "評選/散文組/散文組.md".to_string(),
             UrlCollision {
-                loser: "獎項/記憶獎/記憶獎.md".to_string(),
-                keeper: "獎項/漫畫獎/漫畫獎.md".to_string(),
+                loser: "評選/散文組/散文組.md".to_string(),
+                keeper: "評選/繪本組/繪本組.md".to_string(),
                 wanted: "awards/comics/".to_string(),
                 moved_to: "awards/comics-2/".to_string(),
             },
@@ -167,7 +167,7 @@ mod url_collision_tests {
     #[test]
     fn an_absolute_editor_path_finds_the_relative_map_key() {
         let dir = vault_with_collision();
-        let file = dir.path().join("獎項/記憶獎/記憶獎.md");
+        let file = dir.path().join("評選/散文組/散文組.md");
 
         let diags = super::url_collision_diagnostic(dir.path(), &file);
 
@@ -176,14 +176,14 @@ mod url_collision_tests {
         assert_eq!(diags[0].path.as_deref(), Some("url"));
         // Warning, not error: the page is published, just not where she asked.
         assert_eq!(diags[0].severity, 2);
-        assert!(diags[0].message.contains("漫畫獎"), "{}", diags[0].message);
+        assert!(diags[0].message.contains("繪本組"), "{}", diags[0].message);
         assert!(diags[0].message.contains("awards/comics-2/"), "{}", diags[0].message);
     }
 
     #[test]
     fn a_file_with_no_recorded_collision_is_silent() {
         let dir = vault_with_collision();
-        let file = dir.path().join("獎項/漫畫獎/漫畫獎.md");
+        let file = dir.path().join("評選/繪本組/繪本組.md");
         assert!(super::url_collision_diagnostic(dir.path(), &file).is_empty());
     }
 
@@ -201,7 +201,7 @@ mod url_collision_tests {
     #[test]
     fn a_path_outside_the_vault_is_silent() {
         let dir = vault_with_collision();
-        let outside = std::path::Path::new("/somewhere/else/記憶獎.md");
+        let outside = std::path::Path::new("/somewhere/else/散文組.md");
         assert!(super::url_collision_diagnostic(dir.path(), outside).is_empty());
     }
 }

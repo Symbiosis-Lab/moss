@@ -28,7 +28,7 @@ pub enum Target {
     /// A directory, project-relative, no trailing slash. Accepting one
     /// descends: the insert ends in `/` so the list reopens inside it.
     Folder { source: String },
-    /// A page the build synthesizes (`/tags/design/`, `/authors/馬欣宜/`). It
+    /// A page the build synthesizes (`/tags/design/`, `/authors/林小滿/`). It
     /// has no source, so the URL is its only address.
     Generated { url: String, display: String },
     /// A heading in the target page. `slug` is the anchor the build emits.
@@ -255,7 +255,7 @@ pub fn insert_for(t: &Target, ctx: &InsertCtx<'_>) -> String {
 /// A prefix containing a `/` (or `\`) is PATH-QUALIFIED: its segments are
 /// matched, in order, against the target's path components rather than
 /// against its names alone. That is what makes `關於/頭像-李` find
-/// `關於/assets/頭像-李柏萱.png` even though the author omits the `assets/`
+/// `關於/assets/頭像-李知安.png` even though the author omits the `assets/`
 /// segment they never type. In URL space the components are the published
 /// URL's.
 pub fn rank_completions(targets: &[Target], ctx: &InsertCtx<'_>) -> Vec<usize> {

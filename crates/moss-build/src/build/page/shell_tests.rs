@@ -685,7 +685,7 @@ fn test_css_nav_split_keeps_toggles_on_row_one() {
 fn test_css_hover_hints_are_gated_on_a_hover_capable_device() {
     // Touch has no un-hover: a tapped element keeps `:hover` until the next
     // tap, so an ungated hint pill just hangs there (the stuck theme-toggle
-    // hint, okagaki 2026-08). Both hover-triggered rules — the pill itself
+    // hint, a large live site, 2026-08). Both hover-triggered rules — the pill itself
     // and the .nav-left overflow lift that lets it escape the clip — sit
     // behind `@media (any-hover: hover)`; `:focus-visible` stays ungated
     // because keyboards exist on touch devices too. This is a text property

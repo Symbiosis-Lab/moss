@@ -253,7 +253,7 @@ enum Declaration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::i18n::fixtures::REAL_UKRAINE_DERUSSIFICATION_BODY;
+    use crate::i18n::fixtures::SYNTHETIC_TRAD_CHINESE_ARTICLE_BODY;
     use crate::types::content::FileInfo;
 
     /// Every production caller resolves folder languages against a
@@ -274,37 +274,37 @@ mod tests {
     }
 
     /// The invariant this module exists to hold: editing a folder's ONE
-    /// file's body — even the real Ukraine article's real bytes, whose
+    /// file's body — even a realistic long-form article's real bytes, whose
     /// markup-heavy shape is exactly what used to flip the per-page
     /// detector — must not move the folder's resolved language, because a
     /// rebuild with the same file SET reuses the cached verdict without
     /// re-reading content at all.
     #[test]
-    fn editing_the_real_ukraine_article_does_not_move_its_folder_language() {
+    fn editing_a_realistic_article_does_not_move_its_folder_language() {
         let dir = tempfile::tempdir().unwrap();
-        let folder = dir.path().join("awards/writing/s4/ukraine-derussification");
+        let folder = dir.path().join("awards/writing/s2/rainy-season-letter");
         std::fs::create_dir_all(&folder).unwrap();
-        let article_path = folder.join("戰火下的文學抉擇.md");
-        std::fs::write(&article_path, REAL_UKRAINE_DERUSSIFICATION_BODY).unwrap();
+        let article_path = folder.join("雨季裡的一封信.md");
+        std::fs::write(&article_path, SYNTHETIC_TRAD_CHINESE_ARTICLE_BODY).unwrap();
 
-        let files = vec![file("awards/writing/s4/ukraine-derussification/戰火下的文學抉擇.md")];
+        let files = vec![file("awards/writing/s2/rainy-season-letter/雨季裡的一封信.md")];
         let mut cache = FolderLangCache::default();
 
         let before = resolve(&files, dir.path(), &mut cache);
         assert_eq!(
-            before.get("awards/writing/s4/ukraine-derussification"),
+            before.get("awards/writing/s2/rainy-season-letter"),
             Some(&Language::ZhHant)
         );
 
         // Edit the body — same file, same folder membership — and rebuild
         // against the SAME (now-populated) cache, as a real second build
         // would.
-        let edited = format!("{REAL_UKRAINE_DERUSSIFICATION_BODY}\n\n<!-- rebuild-bench 1787295798955 -->\n");
+        let edited = format!("{SYNTHETIC_TRAD_CHINESE_ARTICLE_BODY}\n\n<!-- rebuild-bench 1787295798955 -->\n");
         std::fs::write(&article_path, &edited).unwrap();
 
         let after = resolve(&files, dir.path(), &mut cache);
         assert_eq!(
-            after.get("awards/writing/s4/ukraine-derussification"),
+            after.get("awards/writing/s2/rainy-season-letter"),
             Some(&Language::ZhHant),
             "a body edit with an unchanged file set must not move the folder's resolved language"
         );

@@ -265,7 +265,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // already in the SURFACE and already force a full render one branch up.
     // Editing a homepage paragraph below the excerpt therefore now costs the
     // pages that link to it, not the whole site (223 pages per keystroke on
-    // harbor). A slot page has no such narrowing: its rendered body IS
+    // riverbend). A slot page has no such narrowing: its rendered body IS
     // spliced into every page, so its whole facade stays the contribution.
     //
     // SEE ALSO — there are TWO whole-build bypasses, not one, and they are

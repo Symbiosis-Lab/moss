@@ -51,7 +51,7 @@ impl<'a> FolderIndex for BuildFolderIndex<'a> {
         //
         // Every OTHER directory still compares against `url_path`: that is
         // where `url:` overrides live (a source directory can be renamed for
-        // the URL, e.g. `獎項/` → `awards/`), and `url_path` is the only
+        // the URL, e.g. `評選/` → `awards/`), and `url_path` is the only
         // place that renaming is recorded — re-deriving identity from the
         // source path there would silently stop matching an overridden
         // folder (see `reference_parity.rs`'s `build_and_editor_folder_index_agree`).

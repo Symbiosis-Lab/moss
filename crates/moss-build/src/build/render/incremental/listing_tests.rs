@@ -390,24 +390,24 @@ fn an_unmodelled_host_shape_yields_no_groups_and_therefore_renders() {
 #[test]
 fn a_term_claim_page_hosts_the_terms_group_and_its_membership_moves_with_authorship() {
     let mut claim = article("about/ma/index.html", "bio");
-    claim.term_listing = Some("authors/馬欣宜".to_string());
+    claim.term_listing = Some("authors/林小滿".to_string());
     assert!(hosts_listing(&claim));
 
     let mut docs = vault();
     let mut credited = article("writings/credited/index.html", "x");
-    credited.also_in = Some(vec!["authors/馬欣宜".to_string()]);
+    credited.also_in = Some(vec!["authors/林小滿".to_string()]);
     docs.push(credited);
     docs.push(claim.clone());
 
     let keys = groups_read_by(&claim, &docs).expect("term hosts are a modelled shape");
-    assert!(keys.iter().any(|k| k.folder_slug == "authors/馬欣宜"));
+    assert!(keys.iter().any(|k| k.folder_slug == "authors/林小滿"));
 
     // Crediting one more article moves the group's membership digest — the
     // signal that re-renders the claim page.
-    let before = digest(&docs, &key("authors/馬欣宜"));
+    let before = digest(&docs, &key("authors/林小滿"));
     let mut more = docs.clone();
     let mut another = article("writings/another/index.html", "y");
-    another.also_in = Some(vec!["authors/馬欣宜".to_string()]);
+    another.also_in = Some(vec!["authors/林小滿".to_string()]);
     more.push(another);
-    assert_ne!(digest(&more, &key("authors/馬欣宜")).membership, before.membership);
+    assert_ne!(digest(&more, &key("authors/林小滿")).membership, before.membership);
 }

@@ -224,14 +224,14 @@ fn resolve_cover_decodes_a_percent_encoded_url_back_to_the_on_disk_name() {
     // silently dropping the card's dominant color.
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path();
-    std::fs::create_dir_all(src.join("獎項")).unwrap();
-    std::fs::write(src.join("獎項/封面.jpg"), b"fake").unwrap();
+    std::fs::create_dir_all(src.join("評選")).unwrap();
+    std::fs::write(src.join("評選/封面.jpg"), b"fake").unwrap();
     let out = src.join(".moss/build.nosync/current");
 
     let resolved =
-        resolve_color_source_path("/%E7%8D%8E%E9%A0%85/%E5%B0%81%E9%9D%A2.jpg", src, &out)
+        resolve_color_source_path("/%E8%A9%95%E9%81%B8/%E5%B0%81%E9%9D%A2.jpg", src, &out)
             .expect("encoded cover should resolve");
-    assert_eq!(resolved, src.join("獎項/封面.jpg"));
+    assert_eq!(resolved, src.join("評選/封面.jpg"));
 }
 
 #[test]

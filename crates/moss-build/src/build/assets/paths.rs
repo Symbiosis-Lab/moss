@@ -665,8 +665,8 @@ mod tests {
     fn resolve_url_percent_encodes_non_ascii_segments() {
         let resolver = PathResolver::new();
         assert_eq!(
-            resolver.resolve_url("獎項/封面.jpg"),
-            "/%E7%8D%8E%E9%A0%85/%E5%B0%81%E9%9D%A2.jpg"
+            resolver.resolve_url("評選/封面.jpg"),
+            "/%E8%A9%95%E9%81%B8/%E5%B0%81%E9%9D%A2.jpg"
         );
     }
 
@@ -690,7 +690,7 @@ mod tests {
         overrides.insert("交互".to_string(), "interactive".to_string());
         let resolver = PathResolver::new().with_dir_overrides(overrides.clone());
         for input in [
-            "獎項/封面.jpg",
+            "評選/封面.jpg",
             "News/Winter Song.mov",
             "交互/night-in-the-woods.html",
             "posts/article/index.html",
@@ -709,8 +709,8 @@ mod tests {
         // Encoding an absolute URL would mangle its `://` and query string.
         let resolver = PathResolver::new();
         assert_eq!(
-            resolver.resolve_url("https://example.com/獎項/封面.jpg?w=800"),
-            "https://example.com/獎項/封面.jpg?w=800"
+            resolver.resolve_url("https://example.com/評選/封面.jpg?w=800"),
+            "https://example.com/評選/封面.jpg?w=800"
         );
     }
 

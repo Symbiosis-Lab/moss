@@ -115,7 +115,7 @@ fn assert_full(verdict: &RenderVerdict, cause: FullCause) {
 
 // ---- the number this whole design exists to move -------------------------
 
-/// The Stage-0 baseline on `harbor/潮汐`: a no-op save re-renders 114 of
+/// The Stage-0 baseline on `riverbend/河灣`: a no-op save re-renders 114 of
 /// 214 pages, of which every listing host was rendered *by the predicate*, not
 /// by the diff. After Stage 2 the same save must skip every page — hosts
 /// included.
@@ -312,7 +312,7 @@ fn a_translation_siblings_lang_change_still_full_renders_via_surface_changed() {
 /// reaches no other page, so it must not re-render the site.
 ///
 /// The old rule tested the home page's whole facade, so every keystroke while
-/// editing the homepage was a full render — 223 pages on harbor. The only
+/// editing the homepage was a full render — 223 pages on riverbend. The only
 /// body-derived value another page reads out of a home is rung 6 of the
 /// description chain, and this edit does not move it.
 #[test]

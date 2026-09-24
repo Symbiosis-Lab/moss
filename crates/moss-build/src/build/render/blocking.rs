@@ -1501,7 +1501,7 @@ pub fn generate_blocking_content(
         // reachable through term links, the breadcrumb and search.
         // (Until 2026-09-05 the roots were left out of `documents` entirely,
         // and every breadcrumb under them fell back to the current page's
-        // own title: `Site › 馬欣宜 › 馬欣宜`.)
+        // own title: `Site › 林小滿 › 林小滿`.)
         folders_with_children.extend(term_index.synthetic_folder_keys());
 
         // Filter out lang-prefix directories (e.g., "zh-hans") — structural, not content.
@@ -1894,7 +1894,7 @@ pub fn generate_blocking_content(
             // dispatched a full rebuild that could not clear them, then blamed
             // the watcher and recreated it — twice, after which the folder
             // degraded to sweep-only and the event-driven partial build stopped
-            // happening at all (harbor, 2026-08-19).
+            // happening at all (riverbend, 2026-08-19).
             //
             // No `register_source_mapping`: there is no output to map, and the
             // hash-only shape is what keeps a slot invisible to the publish
@@ -1905,7 +1905,7 @@ pub fn generate_blocking_content(
             // The one place a hash is read from disk rather than carried. A
             // slot source is only in `page_source_hashes` when THIS build read
             // it, and only carried when the previous MANIFEST held it — so a
-            // vault whose manifest already lost its footers (every harbor
+            // vault whose manifest already lost its footers (every riverbend
             // vault, before the carry was fixed) would stay lost until some
             // build happened to bypass the parse cache. Hashing the two or
             // three slot files directly makes the entry unconditional, so the
@@ -2289,7 +2289,7 @@ pub fn generate_blocking_content(
             // an explicit `breadcrumb: true` and, for an ancestor with no
             // document, printed the current page's title — so a nav-less
             // site's articles had a trail their folder index lacked, and a
-            // term page read `Site › 馬欣宜 › 馬欣宜`. The home crumb is
+            // term page read `Site › 林小滿 › 林小滿`. The home crumb is
             // `site_name`, as it always was here; an authored page under a
             // nested language folder derives a per-language site title
             // instead (`render/html.rs`), a remaining twin noted elsewhere.

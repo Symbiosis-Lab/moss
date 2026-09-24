@@ -1599,19 +1599,19 @@ fn test_navigation_lang_toggle_multiple_translations() {
 /// `awards/translation/s2/david-yang/` on a zh-hant site with no `en/` tree)
 /// must keep `/` as the site-name home link — `/en/` does not exist and 404s —
 /// and must still show the SITE language's nav items rather than an empty nav.
-/// Regression: harborweekly port, 2026-07-28.
+/// Regression: riverbend-review port, 2026-07-28.
 #[test]
 fn detected_lang_without_language_tree_keeps_root_home_and_site_nav() {
     use crate::i18n::Language;
     let mut awards =
-        make_doc_with_root_level("awards/index.html", "獎項", None, Some(true), false);
+        make_doc_with_root_level("awards/index.html", "評選", None, Some(true), false);
     awards.lang = Language::ZhHant;
 
     let documents = vec![awards];
     // Site language zh-hant; current page detected En, url NOT under a lang tree.
     let nav_html = NavigationBuilder::new(
         &documents,
-        "潮汐 · 週報",
+        "河灣 · 週刊",
         Some("awards/translation/s2/david-yang/index.html"),
         Language::ZhHant,
         true,
@@ -1630,7 +1630,7 @@ fn detected_lang_without_language_tree_keeps_root_home_and_site_nav() {
         nav_html
     );
     assert!(
-        nav_html.contains(">獎項<"),
+        nav_html.contains(">評選<"),
         "site-language nav items must still show. Got: {}",
         nav_html
     );
@@ -2713,10 +2713,10 @@ fn island_labels_are_localized_and_attribute_safe() {
         make_doc_with_breadcrumb("posts/hello/index.html", "Hello", None),
     ];
     let doc = &documents[2];
-    let segments = compute_breadcrumb_segments(doc, &documents, "潮汐", true).unwrap();
+    let segments = compute_breadcrumb_segments(doc, &documents, "河灣", true).unwrap();
     let island = NavigationBuilder::new(
         &documents,
-        "潮汐",
+        "河灣",
         Some(doc.url_path.as_str()),
         crate::i18n::Language::ZhHant,
         true,

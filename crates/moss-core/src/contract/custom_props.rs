@@ -31,11 +31,12 @@
 /// is set *on a component or a scope* to change that component.
 ///
 /// The distinction matters because it is the whole theming API in practice.
-/// Audited 2026-08-03: the two most heavily customized moss sites (okagaki, 潮汐)
-/// overrode **zero** design tokens between them and set six of these. None was
-/// discoverable — not in `moss describe --json`, not in any published doc — so
-/// okagaki hand-fought the hero height caps that `--moss-hero-max-height` exists
-/// to lift, across three selectors and a 12-line comment.
+/// Audited 2026-08-03: the two most heavily customized moss sites (a large live
+/// site, a literary-award site) overrode **zero** design tokens between them
+/// and set six of these. None was discoverable — not in `moss describe --json`,
+/// not in any published doc — so the large live site hand-fought the hero
+/// height caps that `--moss-hero-max-height` exists to lift, across three
+/// selectors and a 12-line comment.
 pub struct CustomProp {
     /// Property name including the leading dashes (e.g. `"--moss-hero-max-height"`).
     pub name: &'static str,

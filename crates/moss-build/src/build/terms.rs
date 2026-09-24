@@ -340,7 +340,7 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
     // lowered onto `children_source`: that field is a wikilink reference that
     // resolves through stem extraction (`frontmatter_ref_to_stem` keeps only
     // the last path segment), which would mangle a pseudo-folder key like
-    // `authors/馬欣宜`. A dedicated resolved field keeps the render layer and
+    // `authors/林小滿`. A dedicated resolved field keeps the render layer and
     // the listing-group digest reading one unambiguous value.
     for doc in documents.iter_mut() {
         let claim_key = claimed_key(doc, &kinds, &index);
@@ -553,7 +553,7 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
 ///    span is left alone (byte-range check, [`linked_spans`] — not the old
 ///    exact-substring `[Name]` check, which missed a co-credit inside one
 ///    link, `[Name, ed.](url)`, and a wikilink, `[[Name]]`, alike);
-/// 3. longest name first, so "馬欣" never claims the middle of "馬欣宜"
+/// 3. longest name first, so "林小" never claims the middle of "林小滿"
 ///    when both are credited;
 /// 4. a Latin-script name never matches glued inside a longer Latin word
 ///    ("Alex" inside "Alexander") — [`find_bounded`] requires no such
@@ -648,9 +648,9 @@ pub fn link_terms_in_bylines(documents: &mut [ParsedDocument], index: &TermIndex
             let spans = linked_spans(row);
             // All match positions are found on the ORIGINAL row, longest name
             // first and non-overlapping, and the linked text is assembled
-            // once at the end — so a shorter co-author name ("馬欣") can never
+            // once at the end — so a shorter co-author name ("林小") can never
             // match inside the link already injected for a longer one
-            // ("馬欣宜") and nest markdown.
+            // ("林小滿") and nest markdown.
             let mut matches: Vec<(usize, &str, &str)> = Vec::new();
             for (name, url) in &links {
                 let Some((pos, end)) = find_bounded(row, name) else { continue };
@@ -992,9 +992,9 @@ mod tests {
 
     #[test]
     fn synthetic_folders_are_the_unclaimed_terms_plus_the_roots_in_use() {
-        let mut docs = vec![doc("about/ma/index.html", "馬欣宜"), doc("posts/a/index.html", "A")];
+        let mut docs = vec![doc("about/ma/index.html", "林小滿"), doc("posts/a/index.html", "A")];
         docs[0].author_page = Some(TermClaim::UseTitle);
-        docs[1].author = vec!["馬欣宜".into(), "Scarly".into()];
+        docs[1].author = vec!["林小滿".into(), "Scarly".into()];
         docs[1].fm_tags = Some(vec!["城市".into()]);
         let index = derive_terms(&mut docs, both_kinds());
         // The claimed term is a real page; its root is still synthesized.
@@ -1015,28 +1015,28 @@ mod tests {
 
     #[test]
     fn claim_replaces_generated_page_and_hosts_the_listing() {
-        let mut docs = vec![doc("about/ma/index.html", "馬欣宜"), doc("posts/a/index.html", "A")];
+        let mut docs = vec![doc("about/ma/index.html", "林小滿"), doc("posts/a/index.html", "A")];
         docs[0].author_page = Some(TermClaim::UseTitle);
-        docs[1].author = vec!["馬欣宜".into()];
+        docs[1].author = vec!["林小滿".into()];
         let index = derive_terms(&mut docs, both_kinds());
         // The winning claimer hosts the member listing…
-        assert_eq!(docs[0].term_listing.as_deref(), Some("authors/馬欣宜"));
+        assert_eq!(docs[0].term_listing.as_deref(), Some("authors/林小滿"));
         // …the term page is no longer generated…
         assert_eq!(index.unclaimed_keys().count(), 0);
         // …the claim page takes its place in the /authors/ root listing…
         assert!(docs[0].also_in.as_ref().unwrap().contains(&"authors".to_string()));
         // …links point at the claiming page…
-        assert_eq!(index.term_url("authors", "馬欣宜").as_deref(), Some("/about/ma/"));
+        assert_eq!(index.term_url("authors", "林小滿").as_deref(), Some("/about/ma/"));
         // …and the member doc still claims membership for the selector.
-        assert!(docs[1].also_in.as_ref().unwrap().contains(&"authors/馬欣宜".to_string()));
+        assert!(docs[1].also_in.as_ref().unwrap().contains(&"authors/林小滿".to_string()));
     }
 
     #[test]
     fn a_term_page_never_lists_itself() {
         // The author page is itself authored by its subject.
-        let mut docs = vec![doc("about/ma/index.html", "馬欣宜")];
+        let mut docs = vec![doc("about/ma/index.html", "林小滿")];
         docs[0].author_page = Some(TermClaim::UseTitle);
-        docs[0].author = vec!["馬欣宜".into()];
+        docs[0].author = vec!["林小滿".into()];
         derive_terms(&mut docs, both_kinds());
         // Root-listing membership yes, own-term membership no.
         assert_eq!(docs[0].also_in.as_deref(), Some(&["authors".to_string()][..]));
@@ -1057,7 +1057,7 @@ mod tests {
 
     #[test]
     fn explicit_children_routing_wins_over_claim_lowering() {
-        let mut docs = vec![doc("about/ma/index.html", "馬欣宜")];
+        let mut docs = vec![doc("about/ma/index.html", "林小滿")];
         docs[0].author_page = Some(TermClaim::UseTitle);
         docs[0].children_source = Some("[[News]]".into());
         let index = derive_terms(&mut docs, both_kinds());
@@ -1065,48 +1065,48 @@ mod tests {
         assert!(docs[0].term_listing.is_none());
         // The claim still resolves links and suppresses the generated page.
         assert_eq!(index.unclaimed_keys().count(), 0);
-        assert_eq!(index.term_url("authors", "馬欣宜").as_deref(), Some("/about/ma/"));
+        assert_eq!(index.term_url("authors", "林小滿").as_deref(), Some("/about/ma/"));
     }
 
     #[test]
     fn byline_names_link_to_term_pages() {
         let mut docs = vec![doc("posts/a/index.html", "A")];
-        docs[0].author = vec!["馬欣宜".into()];
-        docs[0].byline = vec!["文｜馬欣宜".into(), "編輯｜其他人".into()];
+        docs[0].author = vec!["林小滿".into()];
+        docs[0].byline = vec!["文｜林小滿".into(), "編輯｜其他人".into()];
         let index = derive_terms(&mut docs, both_kinds());
         link_terms_in_bylines(&mut docs, &index);
-        assert_eq!(docs[0].byline[0], "文｜[馬欣宜](/authors/馬欣宜/)");
+        assert_eq!(docs[0].byline[0], "文｜[林小滿](/authors/林小滿/)");
         // Names not declared in `author:` stay untouched.
         assert_eq!(docs[0].byline[1], "編輯｜其他人");
     }
 
     #[test]
     fn byline_link_points_at_a_claim_page_and_never_at_itself() {
-        let mut docs = vec![doc("about/ma/index.html", "馬欣宜"), doc("posts/a/index.html", "A")];
+        let mut docs = vec![doc("about/ma/index.html", "林小滿"), doc("posts/a/index.html", "A")];
         docs[0].author_page = Some(TermClaim::UseTitle);
-        docs[0].author = vec!["馬欣宜".into()];
-        docs[0].byline = vec!["馬欣宜".into()];
-        docs[1].author = vec!["馬欣宜".into()];
-        docs[1].byline = vec!["文｜馬欣宜".into()];
+        docs[0].author = vec!["林小滿".into()];
+        docs[0].byline = vec!["林小滿".into()];
+        docs[1].author = vec!["林小滿".into()];
+        docs[1].byline = vec!["文｜林小滿".into()];
         let index = derive_terms(&mut docs, both_kinds());
         link_terms_in_bylines(&mut docs, &index);
-        assert_eq!(docs[1].byline[0], "文｜[馬欣宜](/about/ma/)");
+        assert_eq!(docs[1].byline[0], "文｜[林小滿](/about/ma/)");
         // The claim page's own byline names its subject: no self-link.
-        assert_eq!(docs[0].byline[0], "馬欣宜");
+        assert_eq!(docs[0].byline[0], "林小滿");
     }
 
     #[test]
     fn a_co_author_name_inside_a_longer_name_never_nests_links() {
-        // "馬欣" is a substring of "馬欣宜"; matching must happen on the
+        // "林小" is a substring of "林小滿"; matching must happen on the
         // original row only, or the shorter name matches inside the link
         // injected for the longer one and nests markdown.
         let mut docs = vec![doc("posts/a/index.html", "A")];
-        docs[0].author = vec!["馬欣宜".into(), "馬欣".into()];
-        docs[0].byline = vec!["文｜馬欣宜".into(), "編｜馬欣".into()];
+        docs[0].author = vec!["林小滿".into(), "林小".into()];
+        docs[0].byline = vec!["文｜林小滿".into(), "編｜林小".into()];
         let index = derive_terms(&mut docs, both_kinds());
         link_terms_in_bylines(&mut docs, &index);
-        assert_eq!(docs[0].byline[0], "文｜[馬欣宜](/authors/馬欣宜/)");
-        assert_eq!(docs[0].byline[1], "編｜[馬欣](/authors/馬欣/)");
+        assert_eq!(docs[0].byline[0], "文｜[林小滿](/authors/林小滿/)");
+        assert_eq!(docs[0].byline[1], "編｜[林小](/authors/林小/)");
     }
 
     #[test]

@@ -2194,12 +2194,12 @@ mod folder_cover_lede_release {
     fn cjk_prose_before_a_grid_builds_instead_of_aborting_on_a_char_boundary() {
         let html = folder_html_for(
             "folder_cover_cjk_lede",
-            "潮汐作為一個文學計畫，關注的是非虛構寫作的現場。\n\n\
+            "河灣作為一個寫作計畫，關注的是普通人寫作的現場。\n\n\
              :::grid 2\nCard One\n+++\nCard Two\n:::\n",
         );
         let (cover_body, released) = split_cover_body(&html);
         assert!(
-            cover_body.contains("潮汐作為一個文學計畫"),
+            cover_body.contains("河灣作為一個寫作計畫"),
             "the CJK lede belongs beside the cover: {cover_body}"
         );
         assert!(
@@ -3234,8 +3234,8 @@ mod children_field_tests {
 
         let mut folder_index = make_doc("發佈會", "events/index.html");
         folder_index.kind = PageKind::Folder;
-        folder_index.byline = vec!["主講　糜緒洋".to_string()];
-        folder_index.colophon = vec!["主辦　端傳媒".to_string()];
+        folder_index.byline = vec!["主講　陳遠山".to_string()];
+        folder_index.colophon = vec!["主辦　遠聲媒體".to_string()];
 
         let all_docs = vec![homepage, folder_index.clone()];
         let html = render_page(Some(&folder_index), &all_docs, false);
@@ -3254,8 +3254,8 @@ mod children_field_tests {
             title_at < byline_at && byline_at < colophon_at,
             "order must be title → byline → … → colophon. Got: {html}"
         );
-        assert!(html.contains("主講　糜緒洋"), "Got: {html}");
-        assert!(html.contains("主辦　端傳媒"), "Got: {html}");
+        assert!(html.contains("主講　陳遠山"), "Got: {html}");
+        assert!(html.contains("主辦　遠聲媒體"), "Got: {html}");
     }
 
     /// The rule holds for every page kind moss can assemble, and each credit
@@ -3275,8 +3275,8 @@ mod children_field_tests {
         homepage.is_root_level = true;
 
         for (label, mut doc, is_homepage) in every_page_kind() {
-            doc.byline = vec!["主講　糜緒洋".to_string()];
-            doc.colophon = vec!["主辦　端傳媒".to_string()];
+            doc.byline = vec!["主講　陳遠山".to_string()];
+            doc.colophon = vec!["主辦　遠聲媒體".to_string()];
             let all_docs = vec![homepage.clone(), doc.clone()];
             let html = render_page(Some(&doc), &all_docs, is_homepage);
 
@@ -3409,8 +3409,8 @@ mod children_field_tests {
         homepage.is_root_level = true;
 
         for (label, mut doc, is_homepage) in every_page_kind() {
-            doc.byline = vec!["主講　糜緒洋".to_string()];
-            doc.colophon = vec!["主辦　端傳媒".to_string()];
+            doc.byline = vec!["主講　陳遠山".to_string()];
+            doc.colophon = vec!["主辦　遠聲媒體".to_string()];
             let all_docs = vec![homepage.clone(), doc.clone()];
             let html = render_page_for_editor(Some(&doc), &all_docs, is_homepage);
 
@@ -3451,8 +3451,8 @@ mod children_field_tests {
 
         let mut folder_index = make_doc("發佈會", "events/index.html");
         folder_index.kind = PageKind::Folder;
-        folder_index.byline = vec!["主講　糜緒洋".to_string()];
-        folder_index.colophon = vec!["主辦　端傳媒".to_string()];
+        folder_index.byline = vec!["主講　陳遠山".to_string()];
+        folder_index.colophon = vec!["主辦　遠聲媒體".to_string()];
         folder_index.cover = Some("assets/cover.jpg".to_string());
 
         let mut child = make_doc("Launch", "events/launch/index.html");
@@ -3549,8 +3549,8 @@ mod children_field_tests {
     fn a_page_with_no_moss_title_places_the_byline_at_its_head() {
         let mut homepage = make_doc("Test Site", "index.html");
         homepage.is_root_level = true;
-        homepage.byline = vec!["主講　糜緒洋".to_string()];
-        homepage.colophon = vec!["主辦　端傳媒".to_string()];
+        homepage.byline = vec!["主講　陳遠山".to_string()];
+        homepage.colophon = vec!["主辦　遠聲媒體".to_string()];
 
         // No heading: the byline opens the page, before the body.
         homepage.html_content = "<p>Welcome.</p>".to_string();

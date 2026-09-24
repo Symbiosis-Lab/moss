@@ -827,7 +827,7 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // the directory the moment moss first writes there.
     r(".moss/build.nosync/cache/", false, CloudPolicy::ExcludedRegenerable, false, false),
     r(".moss/build.nosync/staging/", false, CloudPolicy::ExcludedRegenerable, false, false),
-    // Born 2026-07-22 with no row: on the CPHS vault its 6 GB carried
+    // Born 2026-07-22 with no row: on a large vault its 6 GB carried
     // `com.dropbox.attrs` while the marked `staging/` and `cache/` beside it
     // stayed clean. `gitignore: false` — a line would rewrite every existing
     // project's `.moss/.gitignore` as a side effect.

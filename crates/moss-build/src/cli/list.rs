@@ -3,7 +3,7 @@
 //! Two questions have no answer anywhere else in moss, and both come up on the
 //! first day of a real site:
 //!
-//! 1. **"What URL does `《潮汐》第一期 — 邊界.md` publish at?"** moss's slug
+//! 1. **"What URL does `《河灣》第一期 — 邊界.md` publish at?"** moss's slug
 //!    rules strip punctuation and keep CJK, which is the right behavior and
 //!    completely undiscoverable — the only way to find out used to be to build
 //!    and go read the emitted directory tree.
@@ -330,7 +330,7 @@ mod tests {
     fn cjk_titles_are_two_cells_wide() {
         assert_eq!(display_width("邊界"), 4);
         assert_eq!(display_width("abc"), 3);
-        assert_eq!(display_width("《潮汐》"), 8);
+        assert_eq!(display_width("《河灣》"), 8);
     }
 
     /// Columns must line up for a CJK site — that is the site this command

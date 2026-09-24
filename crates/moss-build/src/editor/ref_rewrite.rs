@@ -227,7 +227,7 @@ pub(crate) fn match_and_retarget(
 
     // ── Attempt 3: document-relative ─────────────────────────────────────
     // Only fires where the arms above returned None, so no match that works
-    // today can regress. Without it, the harbor corpus's actual shape — a
+    // today can regress. Without it, the riverbend corpus's actual shape — a
     // gallery in a subfolder referencing `關於/x.png` — keeps breaking
     // silently, which is the reported bug wearing a different label.
     if from_dir.is_empty() {

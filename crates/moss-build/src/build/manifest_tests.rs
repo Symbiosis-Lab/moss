@@ -335,8 +335,8 @@ fn carry_forward_entries_are_preserved_mid_build() {
 }
 
 /// Regression: when a page's slug changes, the previous build's output
-/// path must not survive into the sealed manifest. The CPHS deploy
-/// failure on 2026-05-18 (`projects/biogeochemical-processes/index.html`
+/// path must not survive into the sealed manifest. The large-vault deploy
+/// failure on 2026-05-18 (`projects/long-baseline-observations/index.html`
 /// listed in `hashes.json` while only the new long slug existed on disk)
 /// landed because `PendingManifest::new` carried the old key forward and
 /// nothing pruned it. Mark-and-sweep at `seal()` is the fix.
@@ -919,7 +919,7 @@ fn carry_forward_page_source_preserves_hash_for_skipped_page() {
 /// absent from that map — could be registered once and never carried. It then
 /// fell out of `sources` on the very next build, and the sweep's disk walk
 /// read a file with no baseline entry as a CREATE, dispatching a full rebuild
-/// every pass for the life of the session (harbor, 2026-08-20).
+/// every pass for the life of the session (riverbend, 2026-08-20).
 #[test]
 fn a_slot_only_source_carries_forward_without_an_output_mapping() {
     let mut carry = SiteHashes::default();

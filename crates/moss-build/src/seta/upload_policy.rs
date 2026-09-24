@@ -589,7 +589,7 @@ const ADAPT_FAILURE_LIMIT: f64 = 0.2;
 /// guardrails were audited for. [`BYTE_BUDGET`] (memory) and [`EDGE_BUDGET`]
 /// (Cloudflare's proxy deadline) stay hard, independent caps that the limit
 /// must never be able to grow into: an adaptive limit allowed to run until one
-/// of them bites has rediscovered the okagaki incident of 2026-08-03.
+/// of them bites has rediscovered the large-site incident of 2026-08-03.
 pub(crate) const LIMIT_MAX: usize = 12;
 
 /// Cap on bytes buffered across all in-flight uploads.
@@ -606,8 +606,8 @@ pub const BYTE_BUDGET: u64 = 8 * 1024 * 1024;
 ///
 /// Deliberately **above** [`EDGE_BUDGET`], so that when Cloudflare is in the
 /// path its 524 is the authority and this timeout only catches the no-CF case.
-/// A tempting 120 s would have failed the okagaki deploy's own *successful*
-/// 121 s PUT of `michael-performing-1970s.png`. The old 300 s was the opposite
+/// A tempting 120 s would have failed a large live site's deploy's own *successful*
+/// 121 s PUT of `sam-performing-1970s.png`. The old 300 s was the opposite
 /// error: waiting five minutes for a response CF killed at 125 s.
 pub(crate) const UPLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(150);
 
