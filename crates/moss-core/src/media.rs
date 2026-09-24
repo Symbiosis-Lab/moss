@@ -118,7 +118,7 @@ impl Position {
 /// Image alignment for editorial runaround layout. Mirrors WordPress's
 /// `alignleft` / `alignright` block-editor convention; the moss CSS class
 /// is `moss-align-left` / `moss-align-right`. Float behavior plus mobile
-/// collapse (≤48rem) live in `src-tauri/src/assets/css/site.css`.
+/// collapse (≤48rem) live in the desktop app's `site.css`.
 ///
 /// Hyphenated `align-left` is the canonical pipe-keyword form; unhyphenated
 /// `alignleft` (matching the WP class name) is a forgiveness alias.
@@ -177,8 +177,6 @@ impl AlignSide {
 /// deterministic alphabetical order).
 /// `color` is also moss-vocabulary — parsed into [`MediaAttrs::color`] for
 /// the build's cover-color ladder, never emitted as class or inline style.
-///
-/// See `docs/reference/unified-image-emission.md` Decision #10.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MediaAttrs {
     pub fit: Option<Fit>,
@@ -401,8 +399,8 @@ pub fn match_width_token(s: &str) -> Option<&'static str> {
 /// Box/px are intentionally rejected: image figures only support
 /// content-relative widths in v1 (see design §"Out of scope").
 ///
-/// MIRROR: the editor's read-side `parseImageWidth` in
-/// `frontend/app/editor/cm-image-extract.ts` agrees with this for every
+/// MIRROR: the editor's read-side `parseImageWidth` (in the frontend
+/// editor) agrees with this for every
 /// canonical/moss-emitted width (named tokens, `NN%`, `NN.N%`) — the only
 /// widths the write path (`set_image_width`) ever produces. The two may
 /// diverge on malformed hand-typed input (this `f64::parse` accepts `"55 %"`,

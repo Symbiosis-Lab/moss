@@ -191,7 +191,7 @@ document.addEventListener("click", function (event: MouseEvent) {
  *
  * The trigger is the fixed anchor — it never moves and is never given a
  * runtime position. `.font-pill` is the second, differently-sized object
- * (ADR-049) that grows from the anchor's point: it carries a JS-computed
+ * that grows from the anchor's point: it carries a JS-computed
  * `--pill-offset` custom property so its *active* button always lines up
  * exactly under the trigger's fixed slot, then animates in with a
  * `transform-origin: inline-start` scale grow. The trigger and the pill
@@ -350,7 +350,7 @@ if (document.readyState === "loading") {
   initFontPanel();
 }
 
-// Re-scan after an in-place morph (frontend/bridge/iframe-bridge.ts). A
+// Re-scan after an in-place morph (the preview iframe bridge). A
 // same-URL rebuild can introduce the font-panel markup for the first time
 // (e.g. the user just added `date:` frontmatter to a page that had none) —
 // idiomorph creates that subtree as brand-new nodes with no listeners
@@ -405,7 +405,7 @@ import "./nav/nav-split";
 // references, so it needs no morph re-init.
 import "./nav/hint-place";
 
-// The floating nav island (ADR-049) — reveal on scroll-up, measured folding,
+// The floating nav island — reveal on scroll-up, measured folding,
 // the two panels, reading progress. Rides this bundle for the same reason the
 // hint above does: theme.js is the nav-chrome runtime and is already on every
 // page. Self-wires on import (DOMContentLoaded + `moss-morph-patched`), and

@@ -98,7 +98,7 @@ async fn invoke_call<'js>(
 pub fn install_invoke<'js>(ctx: &Ctx<'js>, bridge: DispatchBridge, plugin: &str) -> Result<()> {
     let core = Object::new(ctx.clone())?;
     // Bind the bridge to THIS Context's plugin so the host can gate privileged
-    // commands per-plugin (ADR-031). A Context is per-plugin, so this binding is
+    // commands per-plugin. A Context is per-plugin, so this binding is
     // the authoritative caller identity — it cannot be spoofed from JS.
     let b = bridge.for_plugin(plugin);
     // The `ctx` and `args` params share a single `'js` so `js_to_json(&ctx, obj)` and
@@ -177,8 +177,8 @@ pub(crate) fn parse_execute_binary_args(
 }
 
 /// State a build-capable host fn needs, INJECTED by whoever constructed the
-/// engine rather than reached through Tauri's managed-state container
-/// (ADR-050, #1019). That is the whole difference between a host fn that can
+/// engine rather than reached through Tauri's managed-state container.
+/// That is the whole difference between a host fn that can
 /// run in a headless `moss build` and one that cannot.
 ///
 /// The app builds this from its managed singletons, so both routes mutate the
@@ -217,8 +217,8 @@ impl HostState {
 /// browser, the live webview cookie jar) reply a structured error there.
 pub struct EngineHost<'a> {
     pub app: Option<&'a dyn AppHost>,
-    /// Injected task state. `None` only where no caller can supply it (the
-    /// pre-#1019 test stub); the lifecycle arm then refuses rather than
+    /// Injected task state. `None` only where no caller can supply it (an
+    /// older test stub); the lifecycle arm then refuses rather than
     /// inventing a registry whose tasks nobody would ever read.
     pub state: Option<&'a HostState>,
     pub project_path: &'a str,
@@ -255,7 +255,7 @@ fn keystore_caller_scope(
 /// The plugin whose private storage or cookies an arm may touch.
 ///
 /// Taken from the dispatch seam ([`EngineHost::plugin`]), never from the args.
-/// ADR-032 gates "another plugin's isolation — one plugin must not read or
+/// This module gates "another plugin's isolation — one plugin must not read or
 /// write another's keys, storage, or identity", and the args are the caller's
 /// to write: scoping by them let any approved plugin read `matters`' stored
 /// `auth.json`, or take its live session cookies, simply by naming it.
@@ -434,14 +434,14 @@ async fn dispatch_command_core(
         // Resolve the environment from the project path directly rather than from
         // `AppState`: `AppState::active_environment` IS
         // `domain::config::resolve_environment(project_path)` for any project-scoped
-        // call (infra/state.rs), so this is the same answer without an app (#1019).
+        // call (infra/state.rs), so this is the same answer without an app.
         "get_plugin_env_var" => {
             let name = req_str(&args, "name")?;
             let env = crate::build::site_config::resolve_environment(host.project_path);
             let v = crate::plugins::runtime::portable::get_plugin_env_var_impl(&name, &env);
             reply_json(&v)
         }
-        // Keystore (ADR-031, ADR-032). Not gated: the caller signs only with
+        // Keystore. Not gated: the caller signs only with
         // its own scoped key. The scope is the calling plugin, resolved from the
         // dispatch seam — never a parameter, so a caller cannot reach another's
         // key. moss's own identity uses the same store at the System scope, off
@@ -466,8 +466,8 @@ async fn dispatch_command_core(
             })
             .to_string())
         }
-        // Secrets. The bodies are in [`secrets`], which owns the custody rules
-        // ADR-072 §3 states; the arms stay here so the seam still lists them.
+        // Secrets. The bodies are in [`secrets`], which owns the custody rules;
+        // the arms stay here so the seam still lists them.
         "get_plugin_secret" => secrets::get(&host, &args),
         "set_plugin_secret" => secrets::set(&host, &args),
         "reject_plugin_secret" => secrets::reject(&host, &args).await,
@@ -516,7 +516,7 @@ async fn dispatch_command_core(
             // IS this seam's gate, and the command's window-label check has no
             // meaning here (there is no calling webview). Streaming is
             // webview-only (see `parse_execute_binary_args`), so this seam
-            // takes the blocking half of the #1019 split directly.
+            // takes the blocking half of the headless split directly.
             let r = crate::plugins::runtime::download::execute_binary_blocking_impl(
                 p.binary_path, p.args, p.working_dir, p.env_vars,
                 p.timeout_ms, p.stdin_data).await?;
@@ -558,12 +558,12 @@ async fn dispatch_command_core(
         }
         // No progress sink: the AppHandle was only ever the `download-progress`
         // emit target, and a headless caller has no window to paint it in. The
-        // binary resolves identically, quietly (#1019).
+        // binary resolves identically, quietly.
         "resolve_git_path" => {
             let r = crate::plugins::runtime::portable::resolve_git_path_impl(None).await?;
             reply_json(&r)
         }
-        // Runs headless (#1019): the registries come from the injected
+        // Runs headless: the registries come from the injected
         // [`HostState`], not from managed state. The `contributes.jobs`
         // descriptor comes from the caller's manifest snapshot, the same one
         // the grant arms read.
@@ -617,9 +617,9 @@ async fn dispatch_command_core(
 /// HOST-SIDE dispatcher: runs on a Tauri async task. Wired by
 /// `QuickJsEngineAdapter`'s host dispatch task.
 ///
-/// `app` is `None` on the headless build path (#1019). That is not a degraded
+/// `app` is `None` on the headless build path. That is not a degraded
 /// mode — every arm a build-time hook reaches works from `state` alone. The arms
-/// that genuinely need windows refuse by name, which is the ADR-050 shape: a
+/// that genuinely need windows refuse by name, which is the deliberate shape: a
 /// build never silently drops plugin content, it stops and says which command
 /// wanted a desktop.
 pub async fn dispatch_command(
@@ -647,7 +647,7 @@ pub async fn dispatch_command(
 
 /// AppHandle-free entry for unit tests that call one arm directly, with no
 /// engine and no `HostState`. The host dispatch task no longer routes here —
-/// since #1019 it calls the real [`dispatch_command`] with an injected
+/// it now calls the real [`dispatch_command`] with an injected
 /// `HostState` on the no-app path, so `__test_slow__` lives there instead.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub async fn dispatch_command_test_stub(
@@ -674,7 +674,7 @@ pub async fn dispatch_command_test_stub(
 mod tests {
     use super::*;
 
-    // ── requires-gate (ADR-031): fail-closed grants for privileged commands ──
+    // ── requires-gate: fail-closed grants for privileged commands ──
 
     /// Write a plugin dir with a manifest declaring `requires`.
     fn plugin_with_requires(root: &std::path::Path, name: &str, requires: Option<&str>) {
@@ -1162,7 +1162,7 @@ mod tests {
         assert!(listed.contains("notes/a.md"), "got {listed}");
     }
 
-    /// ADR-032: "one plugin must not read or write another's keys, storage, or
+    /// "One plugin must not read or write another's keys, storage, or
     /// identity". The plugin-storage arms take their scope from the dispatch
     /// seam, so naming a victim in the args reaches the CALLER's own storage,
     /// never the victim's. Before this was enforced, `read_plugin_file` with
@@ -1350,7 +1350,7 @@ mod tests {
         }
     }
 
-    /// #1019: `get_plugin_env_var` resolves the environment from the project path,
+    /// `get_plugin_env_var` resolves the environment from the project path,
     /// so it ANSWERS without an app instead of erroring — matters' process hook
     /// reads `MOSS_MATTERS_TEST_PROFILE` and `MOSS_MATTERS_DOMAIN` on the build
     /// path. The allow-list still holds: an unlisted var reads `null` even when it
@@ -1426,13 +1426,13 @@ mod tests {
     /// app handle".
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn app_needing_arms_return_structured_error_without_app() {
-        // These are the arms that are app-only BY NATURE (#1019, ADR-050): they
+        // These are the arms that are app-only BY NATURE: they
         // drive windows and the system browser, which have no headless meaning.
         // The arms that merely *reached* the app for state or an event sink —
         // get_plugin_env_var, execute_binary, resolve_git_path — were ported and
         // now answer without one; see their own tests.
         //
-        // `execute_binary` is deliberately NOT here: it is gated (ADR-031) and the
+        // `execute_binary` is deliberately NOT here: it is gated and the
         // grant check runs BEFORE anything else, so it refuses with the
         // capability message instead. That ordering is the point — deny first.
         // Its refusal is covered by the `grant_*` tests above.
@@ -1454,7 +1454,7 @@ mod tests {
         }
     }
 
-    /// #1019: the lifecycle arm is what matters' `process` hook reaches through
+    /// The lifecycle arm is what matters' `process` hook reaches through
     /// `startTask()`, so a headless build depends on it working with NO app. It
     /// spawns a real task in the injected registry; the descriptor lookup — the
     /// only genuinely app-shaped part — is simply skipped.

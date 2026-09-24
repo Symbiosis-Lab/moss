@@ -4,8 +4,7 @@
 // a second `@codemirror/state` breaks facet identity) plus the package's own
 // core layer. Host specifics arrive through options: strings as thunks
 // (cm-shortcode-block), the reference cache + resolution envelope declared
-// structurally (cm-link-resolver). Design:
-// docs/archive/2026-08-11-cm6-extraction-design.md §5 (#1020).
+// structurally (cm-link-resolver).
 //
 // The module set is collision-free by construction (verified at L2): each
 // module exports a disjoint name set, so a flat re-export is unambiguous.

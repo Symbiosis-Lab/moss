@@ -1,5 +1,5 @@
 /**
- * Behavioural tests for the site-search client runtime (frontend/site/search.ts).
+ * Behavioural tests for the site-search client runtime (js-src/site/search.ts).
  *
  * Pagefind itself is never available here — the dynamic import of
  * `/_moss/pagefind/pagefind.js` fails under jsdom, which search.ts handles by
@@ -7,8 +7,7 @@
  * "did a query actually fire?" observable as a status-text change, which is
  * exactly what the IME-composition test needs to assert.
  *
- * The bug class under test (flagged in
- * docs/archive/2026-07-30-search-feature-plan.md): a naive `input` listener
+ * The bug class under test: a naive `input` listener
  * ships a garbage pinyin-fragment query on every IME keystroke.
  *
  * The module is imported ONCE. It binds delegated listeners to `document`, so

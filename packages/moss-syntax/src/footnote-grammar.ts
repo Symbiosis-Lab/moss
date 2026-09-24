@@ -3,8 +3,8 @@
  * `[^label]:` definition lines.
  *
  * ── Why this exists ─────────────────────────────────────────────────────
- * The build has parsed footnotes since ADR-035 (`Options::ENABLE_FOOTNOTES`
- * in `ast/parser.rs`). The editor never has, and CommonMark does not leave
+ * The build has parsed footnotes since `Options::ENABLE_FOOTNOTES`
+ * in `ast/parser.rs`. The editor never has, and CommonMark does not leave
  * unknown brackets alone — it claims them. Measured against the real parser,
  * a footnoted paragraph came out of the editor mangled three different ways:
  *

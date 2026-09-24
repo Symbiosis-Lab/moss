@@ -14,7 +14,7 @@
 // `.container`'s inline padding, so the header rule, the listing and the
 // colophon share one `y` extent under vertical-rl by construction. A physical
 // `padding-top` on any of them lands on the wrong axis and only an engine
-// laying out a vertical body can see it (docs/archive/2026-09-05-vertical-layout-design.md).
+// laying out a vertical body can see it.
 //
 // Fixture: the emitted shape of a folder page (nav strip, article.container
 // with a cover row and a list of cards, footer.container, colophon) under
@@ -744,8 +744,7 @@ test('horizontally the logical spellings change nothing', async ({ page }) => {
   expect(Math.abs(label.centerX - icon.centerX)).toBeLessThan(2);
 });
 
-// The shelf a `:::grid` of folder links makes. Issue 1 of
-// docs/archive/2026-09-11-vertical-cards-design.md, reversed by the site owner
+// The shelf a `:::grid` of folder links makes, reversed by the site owner
 // the same evening: the cards stack DOWN the column (a horizontal row of three,
 // transposed), and each card IS its plate — the picture edge to edge, the label
 // riding on the card's block-end edge instead of taking a colour band beside it.
@@ -841,9 +840,7 @@ test.describe('vertical-rl grid cards', () => {
   // `@container (max-width: …)` condition queries physical width, which is
   // main's uncontained BLOCK axis here (`container-type: inline-size`
   // contains only the INLINE axis, physical height under vertical-rl), so
-  // site.css's narrow-container override (docs/archive/2026-09-14-phone-card-
-  // composition-fix.md, docs/archive/2026-09-15-card-cover-ratio-scope.md)
-  // cannot match and this rule stays pinned at its single reciprocal
+  // site.css's narrow-container override cannot match and this rule stays pinned at its single reciprocal
   // literal — see site/vertical.css's comment.
   for (const width of [390, 1280]) {
     test(`at ${width}px the shelf card keeps the rotated cover|band split — no phone-width design of its own`, async ({ page }) => {
@@ -1025,7 +1022,6 @@ test.describe('vertical-rl "more" link after a listing', () => {
   });
 });
 
-// Issue 2 of docs/archive/2026-09-11-vertical-cards-design.md.
 test.describe('vertical-rl 年表', () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -1119,7 +1115,6 @@ test('horizontally the 年表 is unchanged: headings above their rows, years sta
   expect(titleStyle.size).toBe(dateStyle.size);
 });
 
-// Slice 1 of docs/archive/2026-09-14-vertical-transposition-thermo-review.md:
 // `vertical.css` exempted `figcaption`/`pre`/`pre code` back to horizontal-tb
 // but never `table`, so a Markdown table on a vertical page inherited
 // `vertical-rl` on every cell — no engine lays that out sensibly.
@@ -1161,7 +1156,6 @@ test('horizontally a table is unaffected by the vertical exception', async ({ pa
   expect(table.width).toBeGreaterThan(table.height);
 });
 
-// Slice 2 of docs/archive/2026-09-14-vertical-transposition-thermo-review.md:
 // `.moss-article-colophon`'s rule and gap were spelled `border-top`/
 // `padding-top`, which stay on the physical top under vertical-rl instead of
 // following the block-start edge (the column's right side, since block

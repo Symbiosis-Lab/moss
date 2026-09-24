@@ -19,7 +19,7 @@ describe("pickThemeFromMessage", () => {
  * Page-colour reporting — the iframe half of the shell's chrome tint.
  *
  * The regression this file exists for: the re-post after a theme flip used to
- * live in `frontend/site/link-preview.ts`, which only ships when
+ * live in `js-src/site/link-preview.ts`, which only ships when
  * `[site].link_preview` is true. On a site with it off, the site's own moon
  * toggle changed the page's backdrop and told the shell nothing, so the shell
  * kept a stale colour — and in `navigation-manager.ts` a non-null stale colour

@@ -13,7 +13,7 @@
 //! image bytes the same fix from one place instead of reimplementing it.
 //!
 //! Two shapes, because callers want different amounts of work done:
-//! [`sniff_dimensions`] reads only the header (no pixel buffer, ADR-006's
+//! [`sniff_dimensions`] reads only the header (no pixel buffer, within a
 //! ~1ms budget); [`sniff_decode`] fully decodes, capped against a
 //! decompression bomb. Neither applies EXIF orientation — that stays a
 //! decision each caller makes for itself (some want it, some don't).
@@ -46,8 +46,8 @@ fn open_sniffed(path: &Path) -> std::io::Result<ImageReader<std::io::BufReader<s
     Ok(reader)
 }
 
-/// Read just the header: width/height, no pixel decode (~1ms per file,
-/// ADR-006) — safe to call once per scanned image.
+/// Read just the header: width/height, no pixel decode (~1ms per file)
+/// — safe to call once per scanned image.
 pub(crate) fn sniff_dimensions(path: &Path) -> image::ImageResult<(u32, u32)> {
     open_sniffed(path)
         .map_err(image::ImageError::IoError)?

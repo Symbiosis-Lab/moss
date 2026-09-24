@@ -1,5 +1,5 @@
 //! Pure reducer: fold owner-signed moderation events over the comment set to
-//! produce the visible view at RENDER time (ADR-025 §8). Signed `hide`/`unhide`
+//! produce the visible view at RENDER time. Signed `hide`/`unhide`
 //! events in `moderation.jsonl` are the SOLE bake-time moderation path —
 //! the legacy replica-tombstone path has been retired. `sync_remote` runs a
 //! one-time migration that converts any pre-existing tombstones to signed events

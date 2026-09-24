@@ -1,18 +1,14 @@
 //! Task 1.3 verification tests: tokens.json is the runtime source of the :root token block.
 //!
-//! Twin of `src-tauri/tests/token_emit_test.rs` (desktop repo) — that file's
-//! "Group 1" tests only ever read this crate's own
-//! `src/assets/css/site.css` and are moved here verbatim minus the
-//! desktop-relative path math (class A per
-//! docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md).
+//! Twin of the desktop app's `token_emit_test.rs` — that file's "Group 1"
+//! tests only ever read this crate's own `src/assets/css/site.css` and are
+//! moved here verbatim minus the desktop-relative path math.
 //!
 //! The desktop file's "Group 2" (`smoke_build_stylesheet_contains_generated_token_layer`)
 //! is NOT twinned here: it drives `moss::build_sync`, a desktop-crate-only
-//! entry point (`src-tauri/src/build.rs`, `#[allow(dead_code)] // Used in
-//! tests and re-exported from lib.rs for integration tests`) with no
-//! moss-build equivalent — that half stays desktop-only. This is a deviation
-//! from the plan doc's classification of the whole file as class A; flagged
-//! for review rather than silently dropped.
+//! entry point (`#[allow(dead_code)] // Used in tests and re-exported from
+//! lib.rs for integration tests`) with no moss-build equivalent — that half
+//! stays desktop-only.
 //!
 //! Tests assert:
 //! 1. site.css SOURCE defines no `--moss-color-bg:` at :root (definition moved to generated prefix).

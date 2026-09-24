@@ -361,7 +361,7 @@ describe("QR code", () => {
 //
 // Replaces the old `qrKeyForPathname` suite, which asserted that this file
 // rebuilt the QR filename the same way `qr_key_for_url_path` does in
-// src-tauri/src/build/media/qr.rs. Those cases proved the two implementations
+// `build::media::qr`. Those cases proved the two implementations
 // agreed on the inputs someone thought to write down — and said nothing about
 // the inputs that actually broke (a folder note, whose code the build never
 // emitted at all). The reader computes nothing now, so the only thing left to

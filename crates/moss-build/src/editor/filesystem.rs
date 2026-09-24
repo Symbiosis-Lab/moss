@@ -40,8 +40,6 @@ pub struct DirEntry {
     /// Windows (v1): always `None` — stable Rust doesn't expose file_index
     /// without nightly. Future PR can wire the `file-id` crate (already
     /// transitive via notify-debouncer-full) for proper Windows support.
-    ///
-    /// See: docs/archive/2026-05-26-treenode-inode.md
     pub file_id: Option<String>,
 }
 
@@ -72,7 +70,7 @@ pub struct TreeNode {
     /// is `true`; always `false` for directories. The frontend consumes this
     /// flag (`entries.find(e => e.is_home)`) instead of re-deriving the
     /// election — the backend owns the home decision (consolidation-map
-    /// homeRank row, docs/reference/target/).
+    /// homeRank row).
     pub is_home: bool,
     /// Children of this directory. `None` for files.
     pub children: Option<Vec<TreeNode>>,
@@ -455,7 +453,7 @@ pub fn list_tree_inner_cached(
 ///
 /// Both are read via `read_frontmatter_only` → `frontmatter_map`, which covers
 /// both frontmatter dialects — so the tree flag now agrees with the build's
-/// `file_has_home_marker` instead of missing simplified frontmatter (moss#937).
+/// `file_has_home_marker` instead of missing simplified frontmatter.
 fn resolve_md_date(
     entry: &DirEntry,
     cache: &PublishDateCacheView<'_>,
@@ -546,7 +544,7 @@ pub fn resolve_collision(path: &std::path::Path) -> std::path::PathBuf {
     // symlink_metadata, not exists(): exists() follows symlinks, so a
     // DANGLING symlink at the destination reads as absent and fs::copy would
     // then write THROUGH it — outside the vault if it points there (the
-    // moss#997 shape, one component deeper). Any pre-existing entry,
+    // same escape shape, one component deeper). Any pre-existing entry,
     // including a dangling symlink, gets collision-suffixed instead.
     if path.symlink_metadata().is_err() {
         return path.to_path_buf();
@@ -792,7 +790,7 @@ pub fn read_frontmatter_only(
     let text = String::from_utf8_lossy(&buf);
     // `frontmatter_map`, not `parse`: the file tree needs the fields, and a
     // simplified-frontmatter page used to come back empty here — no date in the
-    // tree, and its `home: true` never flagged (moss#937).
+    // tree, and its `home: true` never flagged.
     Ok(moss_core::frontmatter::frontmatter_map(&text))
 }
 

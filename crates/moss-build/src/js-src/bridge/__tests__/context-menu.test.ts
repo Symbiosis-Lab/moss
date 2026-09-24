@@ -6,8 +6,6 @@
  * iframe-viewport px plus what was under the cursor — resolved source
  * target, link href, image src, selection text. The shell renders the menu;
  * nothing here draws anything.
- *
- * Decision: docs/archive/2026-08-15-context-menu-vocabulary.md (Cut 2).
  */
 import { describe, it, expect, vi } from "vitest";
 import {

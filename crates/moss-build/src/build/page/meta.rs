@@ -438,16 +438,15 @@ pub fn build_schema_website(
 /// except where the first paragraph says nothing on its own and the excerpt
 /// reads on into the next — see [`reads_as_fragment`].
 ///
-/// **Deliberately not an `ast::plain_text` lowering.** ADR-036's "parse once, lower to many"
-/// unified email HTML/plain-text onto the typed AST, and this function was investigated for the
+/// **Deliberately not an `ast::plain_text` lowering.** An earlier "parse once, lower to many"
+/// design unified email HTML/plain-text onto the typed AST, and this function was investigated for the
 /// same move — the doc comments below on `first_paragraph_excerpt`/`non_prose_view` are what that
 /// investigation left in place: consult the parser (`FootnoteIndex`, `extract_shortcodes`)
 /// wherever block context genuinely disambiguates something, but keep the line/shape-based
 /// scanning everywhere the goal is excerpt SAFETY rather than render parity — an image's alt text
 /// and a paragraph the parser would still render (as literal text, if its markdown is malformed)
 /// are deliberately not description material, per `test_extract_description_strips_image_syntax`
-/// and `a_broken_image_paragraph_is_deliberately_not_the_description`. See ADR-036's
-/// "Investigated and excluded: meta.rs" note for the full reasoning.
+/// and `a_broken_image_paragraph_is_deliberately_not_the_description`.
 ///
 /// Shortcode handling matches the renderer exactly (the excerpt is computed
 /// on the output of moss-core's `extract_shortcodes` — see
@@ -457,9 +456,9 @@ pub fn build_schema_website(
 /// (`:::{.class}` — an empty shortcode name, just a styling wrapper) is NOT
 /// excluded: its surrounding prose is genuine, user-visible page content, so
 /// it stays excerpt-eligible while any nested typed shortcode inside it is
-/// still removed. See docs/reference/shortcode-grammar.md.
+/// still removed.
 /// (Shared with [`extract_preview`] via [`first_paragraph_excerpt`].)
-/// `math` is the site's `[site].math` setting (ADR-030, default ON) and must
+/// `math` is the site's `[site].math` setting (default ON) and must
 /// be the SAME value the page renders with: `$…$` swallows any footnote
 /// marker inside it, so a math-blind parse here reads `$[^a]$` as a marker
 /// and deletes characters the published page displays. Same rule, same
@@ -777,7 +776,7 @@ struct NonProseView {
 /// Only the doc-order-FIRST definition of a label is skipped — the one the
 /// renderer hoists (`footnotes::is_hoisted` decides by that same
 /// first-in-doc-order identity). A REPEAT definition renders its body in
-/// place per ADR-035, so its lines stay prose; only its `[^label]:` marker
+/// place, so its lines stay prose; only its `[^label]:` marker
 /// (which the page never shows) is redacted, span-exact from the parser:
 /// the marker runs from the definition's start to its first child's start.
 ///
@@ -1166,8 +1165,7 @@ pub fn resolve_page_description(
 /// Six rungs, two tiers. Within each tier the precedence is the same:
 /// explicit `description:` > hero overlay text > body first paragraph.
 /// Tiers run page-then-homepage so a page's own lede still beats the
-/// site-wide tagline — see the asymmetry rationale in
-/// docs/archive/2026-05-16-homepage-hero-og-fallback-design.md.
+/// site-wide tagline.
 pub struct DescriptionChainInputs<'a> {
     /// Current page's `description:` frontmatter (may carry inline markdown).
     pub page_description: Option<&'a str>,
@@ -1285,8 +1283,7 @@ pub fn escape_html_attr(s: &str) -> String {
 /// Every value here is a DECLARED BCP-47 tag — the same string the page emits
 /// as its own `<html lang>`. Taking them from `Language` instead made a `fr`
 /// page advertise `hreflang="en"` against its own `<html lang>: fr`, and
-/// collapsed two pages of one unshipped language into a single alternate
-/// (moss#1177).
+/// collapsed two pages of one unshipped language into a single alternate.
 pub fn build_hreflang_link_tags(
     current_lang_tag: &str,
     current_url_path: &str,

@@ -158,7 +158,7 @@ pub fn lang_suffix(stem: &str) -> Option<&str> {
 /// [`strip_lang_suffix`] honors it, [`lang_tree_prefix`] returns it — it simply
 /// gets the default edition's chrome, because there are no Japanese strings to
 /// render it with. Keeping the two questions apart is what stopped a Japanese
-/// page being served as `lang="zh-Hant"` (#977).
+/// page being served as `lang="zh-Hant"`.
 ///
 /// ```
 /// assert!(moss_core::home::is_known_language_code("ja"));
@@ -225,7 +225,7 @@ pub fn is_home_file(stem: &str, parent_folder_name: &str) -> bool {
     // the note inside it carries the human title (`Garden Path.md`) — the
     // same normalization `generate_slug` already applies to every URL
     // segment in the site. A raw-string compare never matched that pair
-    // (a real site's root folder-note, moss#1101): the file silently
+    // (a real site's root folder-note): the file silently
     // stopped being the folder's home and fell back to an ordinary slugged
     // page, which is what let a ROOT vault with no other home candidate
     // synthesize an empty index at `/`.
@@ -350,7 +350,7 @@ pub fn detect_home_file_in_folder_marked<'a>(
 /// Resolve the site name from the home page, structurally.
 ///
 /// This is the single decision that both the static `<title>` path and the
-/// bundled-SPA `og:title` path route through, so the two never disagree (#775).
+/// bundled-SPA `og:title` path route through, so the two never disagree.
 ///
 /// Inputs:
 /// - `homepage_filename`: the home file's basename (e.g. `"index.md"`,
@@ -359,7 +359,7 @@ pub fn detect_home_file_in_folder_marked<'a>(
 ///   frontmatter `title:` (callers that read frontmatter directly, e.g.
 ///   `resolve_site_name`) or the pipeline's already-resolved `doc.title` (the
 ///   render sites). For an index home with no `title:`, the resolved candidate
-///   is the folder name (post root-aware fix #775); for a genuine `title:` it
+///   is the folder name (post the root-aware fix); for a genuine `title:` it
 ///   is that title. `None`/empty when unavailable.
 /// - `folder_name`: the project's root folder basename — the structural
 ///   fallback.
@@ -639,7 +639,7 @@ mod tests {
     /// A site's root folder-note: a titled file (`Garden
     /// Path.md`, spaces and capitals) inside a kebab-case vault folder
     /// (`garden-path/`). Both slugify to the same string, so this is the
-    /// same self-named identity a raw lowercase compare cannot see (moss#1101).
+    /// same self-named identity a raw lowercase compare cannot see.
     #[test]
     fn test_is_home_file_self_named_across_case_space_and_hyphen() {
         assert!(is_home_file("garden path", "garden-path"));
@@ -763,7 +763,7 @@ mod tests {
         );
     }
 
-    // --- site_name (#775): one structural decision for <title> + og:title ---
+    // --- site_name: one structural decision for <title> + og:title ---
 
     #[test]
     fn test_site_name_root_index_no_title_uses_folder() {

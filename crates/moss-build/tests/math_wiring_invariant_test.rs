@@ -3,13 +3,12 @@
 //! declares with `// allow:math-events-ignored <reason>` that ignoring them
 //! is correct.
 //!
-//! Open-half twin of `src-tauri/tests/math_wiring_invariant_test.rs`
-//! (desktop repo) — that file's `SOURCE_ROOTS` scans `src-tauri/src`,
+//! Open-half twin of the desktop app's `math_wiring_invariant_test.rs` —
+//! that file's `SOURCE_ROOTS` scans the desktop app's own source,
 //! `open/crates/moss-core/src`, `open/crates/moss-build/src` independently
-//! for the same pattern (class B per
-//! docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md).
-//! moss-core gets its own copy of this lint in its own tests directory; this
-//! is moss-build's copy, scoped to this crate's own `src`.
+//! for the same pattern. moss-core gets its own copy of this lint in its
+//! own tests directory; this is moss-build's copy, scoped to this crate's
+//! own `src`.
 //!
 //! ## Why this exists
 //!
@@ -18,8 +17,6 @@
 //! that does not match them does not fall back to the raw text — the events
 //! carry the equation and nothing else does, so an unmatched arm **deletes the
 //! author's content**.
-//!
-//! See docs/decisions/ADR-030-latex-math-rendering.md.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -85,7 +82,7 @@ fn every_pulldown_walker_is_math_aware() {
     if !violations.is_empty() {
         let mut msg = String::from(
             "Found pulldown-cmark walker(s) that neither handle math events nor declare\n\
-             that ignoring them is correct. See docs/decisions/ADR-030-latex-math-rendering.md.\n\nViolations:\n",
+             that ignoring them is correct.\n\nViolations:\n",
         );
         for (path, missing) in &violations {
             let rel = path.strip_prefix(&repo_root).unwrap_or(path).display();
@@ -441,7 +438,7 @@ fn every_event_match_arm_set_is_math_aware() {
     if !violations.is_empty() {
         let mut msg = String::from(
             "Found `match` arm set(s) over pulldown events that neither handle math nor declare\n\
-             that ignoring it is correct. See docs/decisions/ADR-030-latex-math-rendering.md.\n\nViolations:\n",
+             that ignoring it is correct.\n\nViolations:\n",
         );
         for (path, line, detail) in &violations {
             let rel = path.strip_prefix(&repo_root).unwrap_or(path).display();

@@ -28,8 +28,7 @@
 //! # Sizing
 //!
 //! Every number is in `domain::seta::upload_policy`, with the measurement that
-//! justifies it. Diagnosis:
-//! `docs/archive/2026-08-03-publish-resilience-slow-uplinks.md`.
+//! justifies it.
 
 use std::path::Path;
 
@@ -86,7 +85,7 @@ impl HashAlgo {
             HashAlgo::Sha256 => {
                 use sha2::{Digest, Sha256};
                 use std::io::Read;
-                // allow:raw_read built output being hashed for upload — dataless is absent (ADR-043)
+                // allow:raw_read built output being hashed for upload — dataless is absent
                 let mut file = std::fs::File::open(path)
                     .map_err(|e| format!("Failed to open {}: {}", path.display(), e))?;
                 let mut hasher = Sha256::new();
@@ -184,7 +183,7 @@ async fn read_leading_bytes(path: &Path, n: usize) -> Result<Vec<u8>, String> {
     // `.moss/build.nosync/generations/`, not a vault input; the bytes only feed
     // looks_like_zeroed_stub below, so a torn or corrupted read is caught by
     // content rather than trusted as the file's real state.
-    // allow:raw_read built output — dataless is absent (ADR-043)
+    // allow:raw_read built output — dataless is absent
     let mut file = tokio::fs::File::open(path)
         .await
         .map_err(|e| format!("Failed to open {}: {}", path.display(), e))?;
@@ -350,7 +349,7 @@ pub async fn upload_regular_file(
             .await
             .map_err(|e| format!("Failed to upload {}: {}", file_path, e))?;
     } else {
-        // allow:raw_read built output being uploaded — dataless is absent (ADR-043)
+        // allow:raw_read built output being uploaded — dataless is absent
         let mut body = tokio::fs::read(canonical)
             .await
             .map_err(|e| format!("Failed to read {}: {}", file_path, e))?;
@@ -362,7 +361,7 @@ pub async fn upload_regular_file(
             // Same `canonical` sealed-generation file as the first read above.
             // This is the re-read looks_like_zeroed_stub below checks before
             // trusting the drift as a real, finished rebuild.
-            // allow:raw_read built output — dataless is absent (ADR-043)
+            // allow:raw_read built output — dataless is absent
             let resettled = tokio::fs::read(canonical)
                 .await
                 .map_err(|e| format!("Failed to re-read {}: {}", file_path, e))?;
@@ -498,7 +497,7 @@ impl UploadWindow {
 
     /// Wait for every remaining task, failing on the first error.
     ///
-    /// On success this also emits the one-line upload roll-up (#1133) — the
+    /// On success this also emits the one-line upload roll-up — the
     /// window spans exactly the upload phase, and logging here means neither
     /// deploy loop can forget it.
     pub async fn drain(&mut self) -> Result<(), String> {

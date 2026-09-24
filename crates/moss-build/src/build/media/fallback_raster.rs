@@ -1,8 +1,8 @@
 //! The deployed raster ORIGINAL — the `<img>` inside `<picture>`.
 //!
 //! Sibling of `image` (which owns the WebP variant pass) and `rungs` (which
-//! owns the responsive ladder), extracted per MIGRATION-STATE's image.rs debt
-//! row. Plan: docs/archive/2026-07-06-exclude-original-images-from-deploy.md.
+//! owns the responsive ladder), extracted out of `image.rs` to separate the
+//! deployed-original path from the encoded-variant paths it used to share.
 //!
 //! ## The container constraint
 //!
@@ -58,7 +58,7 @@ pub(crate) const SIZED_JPEG_QUALITY: u8 = 82;
 /// is a resolution a mail client can still render well; something aggressive
 /// like 800 would not be.
 ///
-/// A literal, not derived from `asset_paths::LADDER` — moss#976 B1 measured
+/// A literal, not derived from `asset_paths::LADDER` — measurement showed
 /// that decoupling it from the ladder's top rung (1600) down to 1200 saves
 /// ~39.5% on JPEG and ~29.5% on PNG fallbacks with no HTML change (the
 /// fallback carries no width descriptor) and negligible visible softening in
@@ -482,7 +482,7 @@ pub(crate) fn sized_raster_oid_for_original(
     // Every guard below this point reads the source, and each one answers a
     // question about its CONTENT — is it CMYK, is it animated, does it
     // re-encode smaller. A source that is still in the cloud can answer none of
-    // them, and before moss#982 it silently took the encode-failure arm: an
+    // them, and before this was fixed it silently took the encode-failure arm: an
     // eviction was logged with the same words as a corrupt JPEG, 6,967 times in
     // one incident log, recording nothing anywhere the gate could see.
     //

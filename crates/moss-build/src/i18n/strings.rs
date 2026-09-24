@@ -140,7 +140,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "切换菜单",
             Language::ZhHant => "切換選單",
         },
-        // Skip link (WCAG 2.4.1, moss#1047): the first focusable element on
+        // Skip link (WCAG 2.4.1): the first focusable element on
         // every page, visually hidden until it receives keyboard focus, and
         // jumping straight to <main id="main-content"> — see shell.html and
         // `moss-skip-link` in site.css / components.rs.
@@ -167,7 +167,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "第 {n} 篇，共 {total} 篇",
             Language::ZhHant => "第 {n} 篇，共 {total} 篇",
         },
-        // Floating nav island (ADR-049). All three name a control that has no
+        // Floating nav island. All three name a control that has no
         // visible text of its own: the trail's landmark, the "…" that stands in
         // for the levels the trail had to drop, and the sections glyph.
         "nav_breadcrumb" => match lang {
@@ -187,7 +187,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         },
         // Search palette strings. Consumed by the site runtime, not by any Rust
         // emitter: generate-artifacts' `search-runtime` emitter lowers these
-        // (plus `nav_search`) into frontend/site/search.generated.ts, so the
+        // (plus `nav_search`) into js-src/site/search.generated.ts, so the
         // client and Rust never drift.
         "search_placeholder" => match lang {
             Language::En => "Search this site",

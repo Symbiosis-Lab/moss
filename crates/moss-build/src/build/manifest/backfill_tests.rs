@@ -45,7 +45,7 @@ fn sealed_of(files: &[(&str, &[u8])]) -> SealedManifest {
     pending.seal()
 }
 
-/// The whole feasibility claim of moss#993's local backfill, and the
+/// The whole feasibility claim of this local backfill, and the
 /// non-obvious half of it: the manifest entry for a page is in the GENERATION
 /// domain, not staging's. Staging carries `data-source-*` annotations that
 /// `ship_phase` strips on the way to the generation directory, and the manifest
@@ -192,7 +192,7 @@ fn a_symlink_hashes_its_target_string_not_the_bytes_behind_it() {
     );
 }
 
-/// The defect moss#993 #2 names: with no `last-published.json`, the resting
+/// The defect this backfill closes: with no `last-published.json`, the resting
 /// answer used to be blank AND zero. It is now a real file-level count — and
 /// still carries no verb, because a file set cannot justify one.
 #[tokio::test]
@@ -217,7 +217,7 @@ async fn with_no_publish_record_a_seal_reports_the_backfilled_count() {
 }
 
 /// Generations are collectable, and a site published only from another machine
-/// has no pointer at all — the residual gap moss#993 documents. Both surface as
+/// has no pointer at all — a residual gap this backfill documents but cannot close. Both surface as
 /// `AskServer`, and a caller with no port renders that as the blank default —
 /// unclassified and zero, exactly where they landed before the backfill
 /// existed. Never a partial count.
@@ -310,7 +310,7 @@ async fn the_server_diff_is_the_last_resort_and_is_asked_once_per_generation() {
     assert_eq!((again.flat_upload, again.flat_remove), (3, 1));
 }
 
-/// The step-5b contract (moss#993 4a, and the superseded-tail defect beside it).
+/// The step-5b contract (and the superseded-tail defect beside it).
 /// Both refusals produce the same `None`, and `None` is "say nothing" — the
 /// caller leaves the stash standing, because the manifest it describes stands.
 #[tokio::test]

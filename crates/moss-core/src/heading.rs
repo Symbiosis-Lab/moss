@@ -23,10 +23,6 @@
 //! three of the four homes independently in July 2026 precisely because
 //! nothing structural tied them together. Co-locating them makes the
 //! shared step ([`text`]) a single function instead of a coincidence.
-//!
-//! Consolidation mandated by
-//! `docs/reference/target/05-consolidation-map.md`
-//! (row 36 and the F10 tiny-file merge list).
 
 pub mod anchor;
 pub mod extract;

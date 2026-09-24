@@ -2,7 +2,7 @@
  * masthead-fold.ts — the masthead breadcrumb folds like the island.
  *
  * The two trails used to shrink two different ways: the island folded whole
- * ancestors into a `…` (ADR-049 §4), the masthead ellipsised every middle
+ * ancestors into a `…`, the masthead ellipsised every middle
  * segment down to an unreadable stub — on a phone a deep trail read as
  * "潮汐週報 / 獎.. / 寫.. / 第.. / 戰火下的文學抉…". Half an ancestor name
  * tells the reader nothing, so the masthead now consumes the same fold

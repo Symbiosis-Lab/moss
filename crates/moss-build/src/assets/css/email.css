@@ -9,8 +9,7 @@
   /* Every moss-hosted subscribe form is now the `:::subscribe` shortcode
      shape — `<div class="moss-subscribe"><form data-position="inline">` —
      whether auto-injected into the footer or authored in body/footer.md.
-     Card container for the in-page (non-footer) case. Token-only. See spec
-     docs/archive/2026-04-30-subscribe-shortcode-design.md. */
+     Card container for the in-page (non-footer) case. Token-only. */
   .moss-subscribe {
     max-width: 32rem;
     margin: var(--moss-space-lg) 0;
@@ -160,8 +159,7 @@
    form reaching readers (defense-in-depth for non-seta exports — GitHub
    Pages plugin, plain `moss build` — where email is unsupported in Phase 1).
    NOTE: this rule sits OUTSIDE the @layer block above (unlayered → highest
-   precedence after the wrap), which is what we want for a safety hide.
-   See docs/archive/2026-06-10-email-footer-mode-independent-design.md. */
+   precedence after the wrap), which is what we want for a safety hide. */
 body:not([data-moss-preview]) .moss-subscribe-form[data-moss-pending-site] {
   display: none;
 }

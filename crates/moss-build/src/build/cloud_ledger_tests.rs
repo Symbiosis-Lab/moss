@@ -110,12 +110,12 @@ fn a_file_moss_never_reads_is_not_structural() {
 
 /// Either half alone is enough — they see different windows in time. The scan
 /// predates the build; the ledger only holds what a read site reached. The
-/// scan-only case is the blueprint-grid shape moss#1042 reported: every page
+/// scan-only case is the blueprint-grid shape a real vault once reported: every page
 /// source was dataless when the walk ran, so no document reached the render
 /// pass, no `read_page_source` ever ran, and the ledger is empty.
 ///
-/// And the COUNT is the decision's own, not a later re-query. moss#1061: the
-/// log explaining a withheld publish re-read `structural_outstanding()` while
+/// And the COUNT is the decision's own, not a later re-query. The
+/// log explaining a withheld publish used to re-read `structural_outstanding()` while
 /// the decision had been made from the scan's list, so a build withheld because
 /// every page source was dataless printed "0 structural source(s) are still
 /// downloading" — a sentence contradicting itself, in the one line an operator
@@ -135,7 +135,7 @@ fn either_half_alone_reports_a_structural_gap_and_says_how_many() {
         "neither — the fully-local case"
     );
 
-    // Media never counts, however much of it is still arriving (ADR-013).
+    // Media never counts, however much of it is still arriving.
     let mixed = [
         std::path::PathBuf::from("/v/index.md"),
         std::path::PathBuf::from("/v/about.md"),

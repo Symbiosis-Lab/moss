@@ -56,7 +56,7 @@ fn promise(registry: &AssetRegistry, items: Vec<ImageConversionItem>, collisions
 fn a_source_that_will_never_encode_settles_every_promised_url_failed() {
     // The synthesizer has already emitted `<source srcset="plate.webp …">`
     // and the rung candidates. Settling them Failed is what lets the
-    // post-seal degrade pass drop the `<source>` (moss#867) — before this the
+    // post-seal degrade pass drop the `<source>` — before this the
     // URLs stayed unregistered and 404ed on the published site.
     let registry = AssetRegistry::new();
     let premise = rung_urls();
@@ -76,7 +76,7 @@ fn a_source_that_will_never_encode_settles_every_promised_url_failed() {
 
 #[test]
 fn a_source_still_in_the_cloud_is_promised_with_a_passthrough() {
-    // moss#982: the bytes are on their way down, so the promise is kept
+    // The bytes are on their way down, so the promise is kept
     // Pending and the preview serves the original at every variant URL.
     let registry = AssetRegistry::new();
 

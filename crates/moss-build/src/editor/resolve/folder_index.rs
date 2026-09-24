@@ -32,9 +32,9 @@
 //!
 //! With a fresh article map the editor and the build agree exactly. Where they
 //! cannot (no build has ever run, or a `url:` override was added since the last
-//! build), the editor is deliberately GREENER than the build — see
-//! `docs/decisions/ADR-040-editor-build-folder-parity.md` for why a false red
-//! costs more than a false green here, and for the enumerated divergences.
+//! build), the editor is deliberately GREENER than the build: a false red
+//! blocks an author over a divergence the next build will resolve on its own,
+//! which costs more than a false green here.
 //!
 //! One known hazard from that choice: deleting a real directory named `awards/`
 //! while `awards` is ALSO a frontmatter `url:` override for some other folder

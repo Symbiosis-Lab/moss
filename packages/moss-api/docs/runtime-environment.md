@@ -164,4 +164,4 @@ incompatibilities — and exercise the plugin once in a real moss.
 
 ## There is no escape hatch
 
-QuickJS is the only plugin engine. The `MOSS_PLUGIN_ENGINE=webview` variable and the webview engine behind it were removed with the `enhance` capability (ADR-055) — every plugin runs in the QuickJS environment described here, in its own Context, and nothing another plugin in the same project declares can move you off it.
+QuickJS is the only plugin engine. The `MOSS_PLUGIN_ENGINE=webview` variable and the webview engine behind it were removed with the `enhance` capability — every plugin runs in the QuickJS environment described here, in its own Context, and nothing another plugin in the same project declares can move you off it.

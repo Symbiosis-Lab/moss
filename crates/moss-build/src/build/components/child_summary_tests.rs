@@ -703,7 +703,7 @@ fn folder(description: Option<&str>, date_display: Option<&str>) -> ChildItemPro
 
 /// A folder's count is its meta, whatever else the card carries: a
 /// description does not displace it, and on a date listing it wins over the
-/// folder's own date (`docs/reference/design/preview-cards.md`).
+/// folder's own date.
 #[test]
 fn folder_count_fills_the_meta_slot() {
     for (desc, date, axis) in [

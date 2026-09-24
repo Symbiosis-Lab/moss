@@ -990,7 +990,7 @@ fn test_extract_description_one_line_empty_body_shortcode_does_not_swallow_rest(
 #[test]
 fn test_extract_description_nested_shortcode_arity_does_not_leak_or_truncate() {
     // Higher-arity outer fence wrapping a lower-arity inner fence
-    // (docs/reference/shortcode-grammar.md "What's reserved").
+    // (a reserved shortcode-grammar case).
     // Nothing between the outer opener and closer should leak, and
     // prose after the outer closer must still be reachable.
     let content = "\
@@ -1094,7 +1094,7 @@ fn make_translation_link(lang: Language, url_path: &str) -> TranslationLink {
 #[test]
 fn an_unshipped_language_advertises_its_own_tag_not_the_nearest_shipped_one() {
     // `Language` has three variants, so a `fr` page resolves to `En` for the
-    // interface. Its `<html lang>` says `fr` (#977) and its hreflang used to
+    // interface. Its `<html lang>` says `fr` and its hreflang used to
     // say `en` — the two contradicting each other on the same page — while a
     // second `fr` page deduped away against the first as "already seen en".
     let fr = |url: &str| TranslationLink {
@@ -2126,7 +2126,7 @@ fn the_excerpt_asks_the_parser_which_lines_are_a_footnote_definition() {
 }
 
 /// Only the doc-order-FIRST definition of a label is hoisted; a repeat
-/// renders its body in place (ADR-035, `footnotes::is_hoisted`), so the
+/// renders its body in place (`footnotes::is_hoisted`), so the
 /// repeat's text is the page's visible prose and must stay in the
 /// description — marker-less, exactly as the page shows it. Skipping every
 /// definition deleted the page's real lead; when the repeat was the ONLY

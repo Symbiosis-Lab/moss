@@ -19,7 +19,7 @@
 // This used to be a hand-written script inlined in shell.html that swapped the
 // <img>'s src to the blueprint data-URI, dropped its `srcset`, and DELETED every
 // <source> child of an enclosing <picture>. Nothing was saved. The preview's
-// asset-ready swap (frontend/bridge/iframe-bridge.ts) finds elements by URL, so
+// asset-ready swap (js-src/bridge/iframe-bridge.ts) finds elements by URL, so
 // after that transform there was no longer anything to find: the <source>
 // elements were gone and the <img>'s src was a data-URI. A pending image that
 // errored once stayed a blueprint grid until the user pressed Cmd+R, no matter
@@ -172,7 +172,7 @@ function placeVideo(video: HTMLVideoElement, doc: Document): void {
  * Restores with a cache-bust: the original fetch failed, and a negatively
  * cached 404 would otherwise fail again on the same URL. When the re-fetch
  * succeeds the <img> fires `load`, which is what tears down the preview's
- * animated blueprint overlay (frontend/bridge/blueprint-fallback.ts).
+ * animated blueprint overlay (js-src/bridge/blueprint-fallback.ts).
  */
 export function restore(absPath: string, doc: Document = document): number {
   let restored = 0;

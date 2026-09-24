@@ -52,8 +52,6 @@ use tower_http::services::{ServeDir, ServeFile};
 ///    address. Our two specific-loopback listeners win, so the iframe
 ///    sees moss content regardless of whether `localhost` resolves to
 ///    `127.0.0.1` or `::1`.
-///
-/// See `docs/archive/2026-05-22-preview-port-dual-stack-collision.md`.
 async fn try_bind_dual_stack(port: u16) -> Result<(TcpListener, TcpListener), String> {
     let v4_addr: SocketAddr = SocketAddr::from(([127, 0, 0, 1], port));
     let v6_addr: SocketAddr = SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
@@ -365,7 +363,7 @@ pub async fn start_server(
     // `moss-source://` Tauri scheme uses (`editor::source_asset_protocol::serve_source_asset`).
     // One implementation, two carriers — not two implementations kept in step by a test.
     // It exists so a host with no custom-scheme support (a browser, an Obsidian
-    // pane) can still render the editor's SOURCE assets, which ADR-022 requires
+    // pane) can still render the editor's SOURCE assets, which must
     // come from the vault rather than from `.moss/build.nosync`.
     //
     // Internal moss endpoints live under the `/__moss_*` namespace. They MUST
@@ -381,7 +379,7 @@ pub async fn start_server(
         // The `/__moss_health/` route is registered BEFORE `.fallback()` so it
         // always wins over `ServeDir`. The endpoint emits a moss-specific JSON
         // body that `verify_server_ready` checks before accepting a port as
-        // moss-owned (see `docs/archive/2026-05-22-preview-port-dual-stack-collision.md`).
+        // moss-owned.
         let state_for_source = state.clone();
         let mut router = Router::new()
             .route(MOSS_HEALTH_PATH, get(moss_health_handler))
@@ -542,7 +540,7 @@ pub async fn start_server(
                                 // from `stat`, and returns 200 with a streaming
                                 // body that then dies mid-read on `EDEADLK`. A
                                 // truncated 200 on a chosen `<source>` is as
-                                // unrecoverable as the 404 ADR-013 forbids. The
+                                // unrecoverable as the 404 the promise model forbids. The
                                 // `SF_DATALESS` bit is an `lstat` — no download,
                                 // no block — so ask before opening and let the
                                 // placeholder handler stand in until the
@@ -595,8 +593,8 @@ pub async fn start_server(
                                     // transparent stub for an image variant —
                                     // never anything that could be mistaken for
                                     // the author's own picture), and stub if it
-                                    // declines. Never 404 a chosen <source>
-                                    // (ADR-013), and never block the request
+                                    // declines. Never 404 a chosen <source>,
+                                    // and never block the request
                                     // thread on a synchronous materialize
                                     // (build/media/icloud.rs rule).
                                     _ => {

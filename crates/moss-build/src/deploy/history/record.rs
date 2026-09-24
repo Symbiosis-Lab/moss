@@ -314,7 +314,7 @@ pub(crate) fn record_one(
 }
 
 // ---------------------------------------------------------------------------
-// git_head — plain file reads, never the git binary (ADR-083: moss reads a
+// git_head — plain file reads, never the git binary (moss reads a
 // vault's .git and never writes it)
 // ---------------------------------------------------------------------------
 

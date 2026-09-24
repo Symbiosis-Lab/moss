@@ -11,12 +11,12 @@
 //! Heading IDs ARE assigned by this parser. Phase 4 PR2: each
 //! `Tag::Heading` arm computes the Obsidian-compatible anchor slug from
 //! the heading's text content (only `Event::Text` / `Event::Code`,
-//! matching production's `transform_events` behavior in
-//! `src-tauri/src/build/markdown/pipeline.rs` lines 1776-1845); a
+//! matching production's `transform_events` behavior in the desktop app's
+//! markdown pipeline); a
 //! post-parse pass ([`assign_heading_id_suffixes`]) walks all headings in
 //! document order (recursively into BlockQuotes, lists, callouts) and
 //! applies duplicate-suffix numbering (`{slug}-1`, `-2`, …) matching the
-//! `id_counts` HashMap behavior at `pipeline.rs:1798`.
+//! `id_counts` HashMap behavior in that same pipeline.
 
 use std::collections::{HashMap, HashSet};
 
@@ -77,8 +77,8 @@ pub struct ParseConfig {
     /// frontmatter line count, so editor→preview scroll-sync maps to the wrong
     /// element (the home page's grid scrolled the preview to the bottom). Set
     /// to the number of lines the frontmatter consumes (0 when there is none).
-    /// See `process_markdown_file` and docs/reference/editor-preview-sync.md
-    /// "Known defect — source-line coordinate-system mismatch".
+    /// See `process_markdown_file` for this known source-line
+    /// coordinate-system mismatch.
     pub source_line_offset: usize,
 
     /// When true, `$…$` / `$$…$$` parse as math ([`Options::ENABLE_MATH`])
@@ -151,7 +151,7 @@ impl Default for ParseConfig {
 /// events.** pulldown emits them as leaf inline events; a walker that
 /// pattern-matches known events and ignores the rest will *silently delete*
 /// every equation in the document (measured: `Energy $E = mc^2$.` →
-/// `<p>Energy .</p>`). See `src-tauri/tests/math_wiring_invariant_test.rs`,
+/// `<p>Energy .</p>`). See the desktop app's math-wiring invariant test,
 /// which fails any site that turns math on without arms in the same walker.
 ///
 /// `ENABLE_TASKLISTS` carries the same obligation, and it is met by
@@ -160,7 +160,7 @@ impl Default for ParseConfig {
 /// the leaf arm in `parse_inline` and the whitelist in `parse_inline_event`
 /// model it. Turning the flag on WITHOUT those arms silently deletes the
 /// checkbox — measured on `- [ ] todo\n- [x] done`, which rendered
-/// `<ul><li>todo</li><li>done</li></ul>`. See ADR-035 § Task lists.
+/// `<ul><li>todo</li><li>done</li></ul>`.
 pub fn parser_options(math: bool) -> Options {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -179,7 +179,7 @@ pub fn parser_options(math: bool) -> Options {
     // amendment to CommonMark 0.31.2; backward-compatible on every existing
     // CommonMark example. Feature-gated because the flag exists only in the
     // `[patch]` fork until pulldown releases it, keeping the published crate
-    // buildable against crates.io. Pinned by `src-tauri/tests/cjk_emphasis.rs`.
+    // buildable against crates.io. Pinned by the desktop app's cjk_emphasis test.
     #[cfg(feature = "cjk-friendly-emphasis")]
     options.insert(Options::ENABLE_CJK_FRIENDLY_EMPHASIS);
     if math {
@@ -914,7 +914,7 @@ fn parse_block_with_tag(
         // `[^label]: body`. pulldown emits this wherever the author wrote it,
         // including nested inside a blockquote or list item, so this arm is
         // reached from every block collector. Hoisting to the endnote section
-        // is the renderer's job (ADR-035).
+        // is the renderer's job.
         Tag::FootnoteDefinition(label) => {
             let (children, end) = collect_blocks_until(events, start + 1, line_ctx, |e| {
                 matches!(e, Event::End(TagEnd::FootnoteDefinition))
@@ -1283,7 +1283,7 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
         Event::SoftBreak => (Some(Inline::Text("\n".to_string())), 1),
         Event::HardBreak => (Some(Inline::LineBreak), 1),
         Event::Html(s) | Event::InlineHtml(s) => (Some(Inline::Other(s.to_string())), 1),
-        // Math (ADR-030). Both are LEAF inline events carrying the raw TeX.
+        // Math. Both are LEAF inline events carrying the raw TeX.
         // These arms are load-bearing: without them the two catch-alls below
         // return `(None, 1)` and every equation is silently deleted from the
         // document (`Energy $E = mc^2$.` → `<p>Energy .</p>`).
@@ -1292,7 +1292,7 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
         // source — honest, never blank. `Inline::Other` is a RAW passthrough
         // at render time (render.rs), which is exactly why the escaping has
         // to happen HERE, at construction: the TeX is author input and is
-        // full of `<`, `>` and `&`. ADR-030 §4 records why this rides
+        // full of `<`, `>` and `&`. This rides
         // `Inline::Other` instead of a new `Inline::Math` variant (the enum
         // is published, serialized and not `#[non_exhaustive]`, so a variant
         // is a semver one-way door).
@@ -1870,8 +1870,8 @@ fn flush_pending_paragraph(out: &mut Vec<Block>, pending_inlines: &mut Vec<Inlin
 /// Post-parse pass: disambiguate duplicate heading IDs by appending `-1`,
 /// `-2`, … to the slug, in the order the headings will appear ON THE PAGE.
 ///
-/// Mirrors the `id_counts: HashMap<String, usize>` behavior at
-/// `src-tauri/src/build/markdown/pipeline.rs:1798-1805`:
+/// Mirrors the `id_counts: HashMap<String, usize>` behavior in the desktop
+/// app's markdown pipeline:
 ///
 /// - First occurrence of slug `foo` keeps id `foo`; counter starts at 1.
 /// - Second occurrence becomes `foo-1`; counter becomes 2.

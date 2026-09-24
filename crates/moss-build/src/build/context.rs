@@ -9,7 +9,7 @@
 //! generation from the sealed manifest once, after the seal. A dual-write
 //! constructor (`for_deferred`, per-emit inline `ship_one`) existed alongside
 //! these and was never called by anything but its own tests — deleted with
-//! `DeferredWork` (moss#618), along with the `site_dir` field that only it ever
+//! `DeferredWork`, along with the `site_dir` field that only it ever
 //! set.
 //!
 //! There was a second sink — a `Channel` variant that sent registrations to the
@@ -92,7 +92,7 @@ impl<'a> BuildContext<'a> {
 
 /// Write `bytes` to `dir.join(rel_path)`, creating parent directories as
 /// needed. Routed through `io_utils::write_output` — this is the busiest write
-/// into the output tree, so it is the one that most needs ADR-043's rule that a
+/// into the output tree, so it is the one that most needs the rule that a
 /// dataless destination is discarded rather than materialized.
 fn write_at(dir: &Path, rel_path: &str, bytes: &[u8]) -> std::io::Result<()> {
     crate::build::io_utils::write_output(&dir.join(rel_path), bytes)

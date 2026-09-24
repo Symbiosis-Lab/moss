@@ -4,13 +4,12 @@
  * The site's accent (`--moss-color-accent`) is its declared identity colour:
  * author-chosen, WCAG-normalised per theme. The shell tints its chrome and
  * the mobile room with a colour *derived* from it (hue and capped chroma from
- * the accent, lightness from the app surface — see
- * docs/archive/2026-08-03-site-identity-tint.md). This module reads the
+ * the accent, lightness from the app surface). This module reads the
  * accent inside the previewed page and posts it up.
  *
  * Shell-mounted bridge only, like chrome-ambient: the probe never ships in
- * the served bytes, so preview bytes stay identical to web bytes (ADR-039's
- * invariant — this adds a reader, never a writer).
+ * the served bytes, so preview bytes stay identical to web bytes — this
+ * adds a reader, never a writer.
  *
  * Why a probe element and not `getPropertyValue("--moss-color-accent")`: an
  * unregistered custom property returns its raw declared text. An author who

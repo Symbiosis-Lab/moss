@@ -3,12 +3,12 @@
 //! Closed enums; pattern matching is the visitor framework. The variants
 //! model every construct [`super::parser::parser_options`] turns on —
 //! CommonMark plus the GFM tables, strikethrough, footnotes and task lists
-//! moss enables (ADR-035 § Task lists, amended) — so nothing pulldown-cmark
+//! moss enables — so nothing pulldown-cmark
 //! emits for those constructs reaches a catch-all.
 //!
 //! `Block::Other` / `Inline::Other` are NOT a general catch-all. They carry
 //! **raw HTML only** — `Tag::HtmlBlock` and `Event::Html`/`InlineHtml` in
-//! [`super::parser`] — plus payloads moss synthesizes itself (math, ADR-030;
+//! [`super::parser`] — plus payloads moss synthesizes itself (math;
 //! dispatched wikilink embeds). Anything pulldown-cmark emits that has no arm
 //! is **dropped, not passed through**: `parse_block`, `parse_block_with_tag`
 //! and `parse_inline` all end in `_ => (None, 1)`, and
@@ -18,9 +18,9 @@
 //! variant here PLUS arms in `parse_block_with_tag` / `parse_inline` /
 //! `parse_inline_event`'s whitelist, in the same change, or the construct
 //! silently disappears from published pages. That is not hypothetical: before
-//! ADR-035, `~~` was a construct the AST hadn't modeled and it did not flow
-//! through `Inline::Other` — `~~gone~~ stays` published `gone stays` for two
-//! months. See ADR-035 § Why now.
+//! this rule was enforced, `~~` was a construct the AST hadn't modeled and it
+//! did not flow through `Inline::Other` — `~~gone~~ stays` published
+//! `gone stays` for two months.
 
 use serde::{Deserialize, Serialize};
 
@@ -232,7 +232,7 @@ pub enum Block {
     ///
     /// Phase 4 source-lines followup (2026-05-28): added because the
     /// preview's scroll-sync (cm-scroll-sync via
-    /// `frontend/bridge/iframe-bridge.ts`) interpolates editor positions
+    /// the desktop app's iframe bridge) interpolates editor positions
     /// proportionally between annotated DOM elements. A 30-item list
     /// spanning 50 source lines without per-`<li>` annotations forces
     /// interpolation between the outer `<ul>` and the next top-level
@@ -360,7 +360,7 @@ pub enum Block {
     /// `[^label]: body` — a GFM footnote definition, wherever the author
     /// wrote it (pulldown-cmark nests one written inside a blockquote or a
     /// list item under that container). The renderer hoists it out to the
-    /// document's endnote section; see ADR-035.
+    /// document's endnote section.
     FootnoteDefinition { label: String, children: Vec<Block> },
     /// Raw HTML passthrough: a `Tag::HtmlBlock` the author wrote, or a
     /// payload moss synthesized itself (the shortcode sentinel pass in
@@ -440,7 +440,7 @@ pub enum Inline {
     /// `[^label]` — a GFM footnote marker. Carries the author's label, not
     /// the printed number: numbering is first-reference order over the whole
     /// document, which is a render-time fact (same rule as
-    /// [`ColumnAlignment`]'s numeric auto-alignment). See ADR-035.
+    /// [`ColumnAlignment`]'s numeric auto-alignment).
     FootnoteRef(String),
     /// The `[ ]` / `[x]` of a GFM task-list item, carrying its checked state.
     ///
@@ -448,10 +448,10 @@ pub enum Inline {
     /// where pulldown-cmark puts it: `Event::TaskListMarker` is the first event
     /// *inside* `Tag::Item`, ahead of the item's own content. Keeping it inline
     /// leaves `Block::List`'s shape untouched and avoids a third vector parallel
-    /// to `items` / `item_source_lines`. See ADR-035 § Task lists.
+    /// to `items` / `item_source_lines`.
     TaskMarker(bool),
     /// Raw inline HTML passthrough (`Event::Html` / `Event::InlineHtml`),
-    /// plus the math node `math_text::math_inline` synthesizes (ADR-030).
+    /// plus the math node `math_text::math_inline` synthesizes.
     /// NOT a fallback for unmodeled pulldown constructs — see the module doc.
     Other(String),
 }

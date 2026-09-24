@@ -3,7 +3,7 @@
 //!
 //! ## Why this exists
 //!
-//! Commands were only half the seam. `frontend/app/platform/listen.ts` had a
+//! Commands were only half the seam. The desktop app's platform listener had a
 //! working Tauri branch and a documented no-op browser branch, so outside the
 //! desktop shell every subscriber was silently dead — no rebuild notice, no
 //! task toast, no failure report. Silently, because a subscription that never
@@ -121,8 +121,8 @@ fn event_stream(
 ///
 /// The stream ends when the session it was admitted under is retired by a
 /// folder switch: these events describe the vault, and a subscriber holding
-/// the previous vault's token must not keep reading the next one's (ADR-075
-/// rule 4). The browser's reconnect then re-presents its token and is 401.
+/// the previous vault's token must not keep reading the next one's. The
+/// browser's reconnect then re-presents its token and is 401.
 pub async fn handle_events(
     axum::Extension(session): axum::Extension<Arc<super::invoke::Session>>,
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {

@@ -221,8 +221,7 @@ pub fn run(args: &[String]) -> i32 {
             // the likeliest reader has *just* run one. A build that is
             // interrupted never rewrites this file, so `list` goes on reading
             // whatever the last COMPLETED build left — possibly from an older
-            // moss whose schema differs. Say which of those it is (#977 trial,
-            // 2026-08-05).
+            // moss whose schema differs. Say which of those it is.
             eprintln!("Could not read {}: {e}", path.display());
             eprintln!(
                 "This file is rewritten only by a build that runs to completion — an\n\

@@ -1,5 +1,4 @@
-//! Email/RSS math PNG projection (ADR-030 §3.4/§3.5, design
-//! `docs/archive/2026-07-21-latex-math-design.md`).
+//! Email/RSS math PNG projection.
 //!
 //! The website inlines each typeset equation as an `<svg>` (see
 //! `build::markdown::math`). Two surfaces cannot show that SVG:
@@ -28,7 +27,7 @@
 //! are exempt from stale-file/dir pruning (`media::pipeline`), and
 //! [`emit_math_pngs`] re-registers every PNG already on disk into each
 //! build's manifest so old equations keep shipping in every deployed
-//! generation. *Falsifier (ADR-030): if pruning ever removes a math PNG that
+//! generation. *Falsifier: if pruning ever removes a math PNG that
 //! a sent email references, adopt the append-only ledger mechanism
 //! (`.moss/data/math-ledger.json`) in place of the exemption rule.*
 //!
@@ -359,7 +358,7 @@ pub fn emit_math_pngs(
                 }
                 // Unreadable or a 0-byte eviction stub. Dropping it would let
                 // the next publish remove a URL that is already in somebody's
-                // inbox, which ADR-030 §3.4 forbids — so carry the previous
+                // inbox, which the append-only design forbids — so carry the previous
                 // build's entry instead. The PNG is content-addressed, so that
                 // entry describes these exact bytes; C1 is what makes the file
                 // itself come back.
@@ -660,8 +659,8 @@ mod tests {
 
     /// An unreadable math PNG must keep its manifest entry, not lose it.
     ///
-    /// These URLs are already in people's inboxes: ADR-030 §3.4 makes the
-    /// directory append-only precisely so a published `<img>` never 404s. The
+    /// These URLs are already in people's inboxes: the directory is
+    /// append-only precisely so a published `<img>` never 404s. The
     /// walk used to `continue` past a file it could not read, which silently
     /// dropped the entry and let the next publish delete the URL from the live
     /// site. The hash is in the previous manifest and the file is

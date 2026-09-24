@@ -1,14 +1,11 @@
 //! The nested-site decision table (rows 3–6) and its CLI refusal shapes.
 //!
 //! Detection lives in [`crate::nested_roots`], which never decides anything;
-//! this module is the POLICY half both hosts share (crossed from
-//! `src-tauri/src/system/nested_site_guard.rs` at open-CLI slice 3, #1019).
+//! this module is the POLICY half both hosts share (crossed from the app's
+//! nested-site guard at open-CLI slice 3).
 //! The app's GUI guard consumes [`plan_unowned_open`] and renders a dialog;
 //! [`guard_cli_open`] is the whole answer for a host with no surface to ask
 //! on — every Confirm row becomes a refusal message naming the fix.
-//!
-//! Decision table, remediation rules and test plan:
-//! `docs/archive/2026-08-19-nested-moss-folder-design.md` (Part 1).
 
 use crate::nested_roots::{
     find_nested_roots, owns_moss, NestedRootInfo, NestedRootsReport, RootClass, ScanLimits,

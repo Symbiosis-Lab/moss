@@ -73,7 +73,7 @@ fn accepts_project_root_itself() {
 }
 
 /// The first-party door does NOT fence off `.moss/` — that is the whole point
-/// of splitting the two domains (moss#997). The editor's file tree can show
+/// of splitting the two domains. The editor's file tree can show
 /// `.moss/config.toml`, and moss's own panels read their own data.
 #[test]
 fn first_party_may_reach_moss_internal_paths() {
@@ -182,7 +182,7 @@ fn plugin_storage_name_must_be_one_segment() {
     }
 }
 
-// ── Shared social-data exception (docs/reference/social-data-standard.md) ──
+// ── Shared social-data exception ──────────────────────────────────────────
 
 /// `write_project_file` / `read_project_file` try `shared_social_data` first
 /// and fall back to `sandboxed` — so the fallback must still catch traversal

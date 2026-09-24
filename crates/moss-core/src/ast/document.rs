@@ -52,10 +52,10 @@ pub struct Document {
     /// article. The renderer suppresses auto-injected article chrome
     /// (`<h1 class="moss-article-title">`) when this is set.
     ///
-    /// Replaces the `heading: false` YAML synthesis hack at
-    /// `src-tauri/src/build/footer.rs:160`. Lands in Phase A.5 of the
-    /// typed-AST migration; in Phase A it's available but not yet
-    /// consumed by src-tauri.
+    /// Replaces the `heading: false` YAML synthesis hack in the desktop
+    /// app's footer builder. Lands in Phase A.5 of the typed-AST
+    /// migration; in Phase A it's available but not yet consumed by the
+    /// desktop app.
     pub slot_only: bool,
     /// Non-fatal problems found while parsing this body — today, every
     /// `:::name` fence whose name is not a registered shortcode.

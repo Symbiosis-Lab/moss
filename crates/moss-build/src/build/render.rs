@@ -1,4 +1,4 @@
-//! Page rendering. Split into submodules per docs/archive/2026-04-24-codebase-restructure-continuation-plan.md Task 1.
+//! Page rendering. Split into submodules as part of an earlier codebase restructure.
 
 pub mod preflight;
 pub mod config;

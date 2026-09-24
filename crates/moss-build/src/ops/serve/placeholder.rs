@@ -7,8 +7,6 @@
 
 use axum::{body::Body, response::Response};
 
-// ADR-002: Step 4 - Preview server with placeholder support
-
 /// Generate an SVG placeholder for a pending asset.
 pub fn generate_placeholder_svg(dims: Option<(u32, u32)>, color: Option<String>) -> String {
     let (w, h) = dims.unwrap_or((800, 600));
@@ -23,7 +21,7 @@ pub fn generate_placeholder_svg(dims: Option<(u32, u32)>, color: Option<String>)
 /// never-404 fallback body for a Pending image variant whose source
 /// passthrough could not be served (unregistered, or the source read failed —
 /// e.g. an iCloud-dataless original). 50 bytes; the smallest valid webp the
-/// encoder can produce. A chosen `<source>` must never 404 (ADR-013).
+/// encoder can produce. A chosen `<source>` must never 404.
 const TRANSPARENT_WEBP_1X1: &[u8] = &[
     0x52, 0x49, 0x46, 0x46, 0x2a, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
     0x56, 0x50, 0x38, 0x4c, 0x1d, 0x00, 0x00, 0x00, 0x2f, 0x00, 0x00, 0x00,
@@ -62,8 +60,8 @@ fn is_image_variant_url(path: &str) -> bool {
 /// a multi-byte UTF-8 codepoint (e.g., a CJK path in the source file name).
 /// `chars().take(80)` walks codepoints and never splits one.
 ///
-/// Visual: a static blueprint-grid pattern (the same motif as
-/// `frontend/app/components/blueprint-grid.ts`'s animated canvas background
+/// Visual: a static blueprint-grid pattern (the same motif as the desktop
+/// app's animated canvas background component
 /// and the `.moss-img-fallback` CSS class in `site.css`, both grid lines in
 /// blueprint blue `#143c82`) rather than a flat pink rect — this is moss's
 /// own "asset failed" state, not a generic missing-image placeholder, so it
@@ -112,7 +110,7 @@ fn generate_failed_svg(error: &str) -> String {
 /// `ServeFile`). It reads SOURCE bytes only for registered/promised originals,
 /// which `copy_deferred_assets` copies into staging → generation → deploy, so
 /// preview never surfaces bytes the deploy won't reproduce (honest-mirror
-/// preserved; ADR-022 `moss-source://` is the editor analog). This handler is
+/// preserved; `moss-source://` is the editor analog). This handler is
 /// therefore the RESIDUAL fallback — reached when the original itself cannot be
 /// read (iCloud-dataless, deleted mid-build) or was never registered.
 ///
@@ -120,8 +118,8 @@ fn generate_failed_svg(error: &str) -> String {
 /// - File exists on disk → `None` (let ServeDir handle it).
 /// - `Pending` + image variant URL (`.webp`/`.avif`) → 200 with the 1×1
 ///   transparent-webp stub. Deliberately something the author can NEVER mistake
-///   for their own image; it exists only so a chosen `<source>` never 404s
-///   (ADR-013). An LQIP is never served here — see the two-audiences rule above.
+///   for their own image; it exists only so a chosen `<source>` never 404s.
+///   An LQIP is never served here — see the two-audiences rule above.
 /// - `Pending` + other URL → 200 with SVG placeholder (video path — the
 ///   derived poster `to_thumb` has no source equivalent, so it stays a brief
 ///   gray poster until playback loads the passthrough original).
@@ -136,8 +134,7 @@ fn generate_failed_svg(error: &str) -> String {
 /// the matching `<source srcset>` to trigger fresh source-set selection
 /// (HTML spec § reacting-to-dom-mutations).
 ///
-/// Pattern: explicit promise model. See
-/// `docs/archive/2026-05-20-image-variant-honest-mirror.md` (Layer 1).
+/// Pattern: explicit promise model.
 pub fn handle_asset_request(
     request_path: &str,
     asset_registry: &crate::types::assets::AssetRegistry,
@@ -153,7 +150,7 @@ pub fn handle_asset_request(
     // `preview::asset_rewriter`. Without it, non-ASCII image-variant
     // placeholders MISS the registry here and fall through to a ServeDir 404
     // during the Pending/Failed window — the exact non-recoverable
-    // `<picture><source>` 404 the promise model (ADR-013) exists to prevent.
+    // `<picture><source>` 404 the promise model exists to prevent.
     let encoded = request_path.trim_start_matches('/');
     let decoded = urlencoding::decode(encoded)
         .map(|s| s.into_owned())
@@ -175,7 +172,7 @@ pub fn handle_asset_request(
                 // serves the real original for a Pending variant before this
                 // runs. We only reach here when the original could not be read
                 // or was never registered; return the 1×1 transparent-webp stub
-                // so a chosen <source> never 404s (ADR-013). Nothing that
+                // so a chosen <source> never 404s. Nothing that
                 // resembles the author's image is ever served in its place.
                 // `placeholder`'s dimensions/color are the VIDEO branch's
                 // material; an image variant needs none of it.
@@ -431,7 +428,7 @@ mod tests {
         // an LQIP at all, so this handler CANNOT serve one. A Pending image
         // variant that reaches it (the router's source passthrough did not
         // serve the original) returns the 1×1 transparent-webp stub — never
-        // None/404 — so a chosen <source> never 404s (ADR-013).
+        // None/404 — so a chosen <source> never 404s.
         use crate::types::assets::AssetRegistry;
         use axum::http::{header, StatusCode};
         use tempfile::TempDir;

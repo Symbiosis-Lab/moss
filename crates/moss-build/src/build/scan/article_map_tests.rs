@@ -78,7 +78,7 @@ fn test_article_map_load_nonexistent() {
 
 #[test]
 fn test_article_map_save_is_atomic_no_temp_leftover() {
-    // #820: save writes via a temp file + atomic rename so concurrent readers
+    // save writes via a temp file + atomic rename so concurrent readers
     // never catch a half-written file. Assert the rename consumed the temp
     // (no `.json.tmp` sibling left behind) and the final file is complete.
     let temp_dir = TempDir::new().unwrap();
@@ -496,7 +496,6 @@ fn test_build_article_map_propagates_uid_from_parsed_document() {
 /// page, so an entry here is a URL nothing else believes in: the editor's
 /// preview follower navigates to `/footer/` and 404s, and `resolve_page_source`
 /// reports `is_article: true`, which arms the syndicate path.
-/// See docs/archive/2026-08-02-footer-slot-preview-and-chip-bar.md.
 #[test]
 fn test_slot_only_doc_excluded_from_article_map() {
     let mut doc = make_doc("Footer", "footer/index.html", false);

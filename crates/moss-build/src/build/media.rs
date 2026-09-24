@@ -1,8 +1,5 @@
 //! Media pipeline. Consolidates image, video, placeholder, cover, QR, ffmpeg orchestration.
 //!
-//! Per docs/archive/2026-04-24-codebase-restructure-continuation-plan.md Task 8
-//! and docs/archive/2026-04-20-media-pipeline-refactor.md.
-//!
 //! # Module layout
 //!
 //! - `ffmpeg`      — FFmpeg detection, video conversion helpers, the encode plan
@@ -22,7 +19,7 @@
 //!
 //! # Singleflight
 //!
-//! Both image and video conversion use `Singleflight` dedup (ADR-010). When
+//! Both image and video conversion use `Singleflight` dedup. When
 //! concurrent builds try to convert the same source_oid, only the first runs
 //! the encoder; waiters receive a clone of the result.
 //!

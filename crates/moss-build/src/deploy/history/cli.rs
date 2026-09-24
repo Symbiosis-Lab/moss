@@ -1,9 +1,8 @@
-//! `moss history` — the CLI form of publish history (slice 2 of
-//! [docs/archive/2026-09-11-publish-history-design.md](../../../../../docs/archive/2026-09-11-publish-history-design.md)).
+//! `moss history` — the CLI form of publish history (slice 2).
 //! One row in [`crate::cli::commands::cli_commands`], on `OWN_HELP` because it
 //! parses its own flags. Lives beside [`super::store`]/[`super::record`]/
 //! [`super::restore`]/[`super::timeline`] rather than under `cli/`, which is
-//! at its file budget (see the design's "Placement and budgets").
+//! at its file budget.
 //!
 //! Five forms, dispatched by which flags/positional are present:
 //!
@@ -223,8 +222,8 @@ fn resolve_id<'a>(records: &'a [(String, PublishRecord)], needle: &str) -> Resul
 /// `register_session` in particular DRAINS the folder's existing session.
 ///
 /// No `--allow-plugins` here — this command has no such flag — so a
-/// sideloaded plugin is refused exactly as a plain `moss build` refuses one
-/// (ADR-077); a plugin the app has already approved still runs.
+/// sideloaded plugin is refused exactly as a plain `moss build` refuses one;
+/// a plugin the app has already approved still runs.
 fn headless_build_sealed(root: &VaultRoot) -> Result<SealedManifest, String> {
     crate::build::cli_output::install_headless_logger();
     crate::plugins::install::registry_client::enforce::install_headless(false);

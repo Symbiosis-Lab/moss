@@ -1,14 +1,12 @@
 //! No `tokio::spawn` in this crate's Tauri-context files.
 //!
-//! Open-half twin of `test_no_tokio_spawn_in_tauri_context_files` in
-//! `src-tauri/tests/plugin_integration_tests.rs` (desktop repo) — that test
-//! checks `build.rs` (desktop) plus `manager.rs` / `watch.rs` (this crate)
-//! against the same regex via `include_str!`, and the `include_str!` reads
-//! are the only thing forcing the desktop crate to see this crate's source
-//! for that one test (class B per
-//! docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md).
-//! This twin asserts this crate's own two files never call `tokio::spawn`;
-//! the desktop half keeps checking `build.rs`.
+//! Open-half twin of `test_no_tokio_spawn_in_tauri_context_files` in the
+//! desktop app's test suite — that test checks `build.rs` (desktop) plus
+//! `manager.rs` / `watch.rs` (this crate) against the same regex via
+//! `include_str!`, and the `include_str!` reads are the only thing forcing
+//! the desktop crate to see this crate's source for that one test. This
+//! twin asserts this crate's own two files never call `tokio::spawn`; the
+//! desktop half keeps checking `build.rs`.
 //!
 //! ## Why this exists
 //!

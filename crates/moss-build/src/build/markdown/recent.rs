@@ -28,9 +28,9 @@ use crate::build::types::ParsedDocument;
 /// warns rather than vanishing. `moss describe --json` carries the same caveat
 /// on the `moss-recent` entry.
 ///
-/// moss#915: the fallback render must go through `render_markdown_to_html_with`.
+/// The fallback render must go through `render_markdown_to_html_with`.
 /// It was a bare `pulldown_cmark::Parser::new`, which silently mishandled
-/// footnotes, wikilinks and tables (ADR-036's "parse once" bug class).
+/// footnotes, wikilinks and tables (the "parse once" bug class).
 pub fn render_web(
     args: &RecentShortcode,
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,

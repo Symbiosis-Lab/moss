@@ -70,8 +70,7 @@ pub fn generate_sitemap(entries: &[SitemapEntry], site_url: &str) -> String {
 /// produced. Leaves out a page whose document keeps it out of listings, and a
 /// linkblog page (an absolute `external_url:`): its canonical home is
 /// elsewhere on the web, and listing the local URL beside the canonical tag
-/// would split crawler attention between two URLs claiming the same content
-/// (moss#679).
+/// would split crawler attention between two URLs claiming the same content.
 pub(crate) fn entries_for_pages<'a>(
     pages: impl IntoIterator<Item = &'a String>,
     documents: &[crate::build::types::ParsedDocument],

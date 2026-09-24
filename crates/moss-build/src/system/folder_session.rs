@@ -1,6 +1,6 @@
 //! Per-folder session: owns UiBound work and is cancelled on window close.
 //!
-//! See moss#548 for design rationale. Cancellation has a single source of
+//! Cancellation has a single source of
 //! truth: the session's `cancel` token, fired by the close handler in
 //! `system/utils.rs`. Three classes of consumers attach:
 //!
@@ -36,7 +36,7 @@ pub struct FolderSession {
     /// each other's progress.
     ///
     /// A plain level is enough because the build is FROZEN for the duration of
-    /// a publish (moss#959): `build_shell/watch.rs::attempt_admitted_rebuild`
+    /// a publish: `build_shell/watch.rs::attempt_admitted_rebuild`
     /// admits nothing while `deploy::publish_in_flight()`, so the set the
     /// drain waits on can only shrink and the level reaches zero. The
     /// monotonic `admitted`/`completed` totals that briefly lived here existed
@@ -95,8 +95,7 @@ pub struct FolderSession {
     ///
     /// State only, like the worker's `degraded` flag: nothing gates on it.
     /// The sweep reads it every tick and surfaces transitions to the preview
-    /// as `FolderHealthChanged` — the full-window project-unavailable state
-    /// (moss#1075).
+    /// as `FolderHealthChanged` — the full-window project-unavailable state.
     unavailable: AtomicBool,
 }
 
@@ -268,7 +267,7 @@ impl FolderSession {
 
 /// Registry of active folder sessions, keyed by canonicalized folder path.
 ///
-/// moss enforces one open folder at a time (see #548 non-goals), so this
+/// moss enforces one open folder at a time, so this
 /// registry typically holds zero or one session. When a new folder is opened,
 /// `swap_in` cancels and removes any existing session before inserting the new one.
 #[derive(Default)]
@@ -276,7 +275,7 @@ pub struct FolderSessionRegistry {
     sessions: StdMutex<HashMap<String, Arc<FolderSession>>>,
 }
 
-/// The process-global registry (ADR-010, 2026-08-24 extension: lifetime
+/// The process-global registry (2026-08-24 extension: lifetime
 /// differences live in the `FolderSession`, and the session must therefore be
 /// reachable without an `AppHandle`). Until then this was `app.manage`d, which
 /// made every headless path session-less by construction — the watcher's

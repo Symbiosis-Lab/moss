@@ -2,9 +2,9 @@
 //!
 //! `run()` / `build()` is the single entry point for all build paths (CLI and
 //! GUI). Behavioral differences between preview/build/watch/no-plugins live in
-//! the `Config` passed in, never in branches here (ADR-010).
+//! the `Config` passed in, never in branches here.
 //!
-//! ## Two-Phase Build (ADR-001)
+//! ## Two-Phase Build
 //!
 //! **Blocking phase (~1s)**: scan, markdown→HTML, document setup (language,
 //! slugs, navigation), HTML/CSS/JS emission, RSS/sitemap/robots.txt. It
@@ -98,10 +98,10 @@ const NOTEBOOK_IO_TIMEOUT_SECS: u64 = 30;
 
 /// Above this, a stage-write lock wait is reported at `warn`, not `debug` — a
 /// release preview build is where a user feels it and it was invisible there.
-/// Well above the lock's own measured cost — moss#968's Stage 0 clocked the
-/// wait at 57µs–288µs on the issue's vault and 57µs–12ms in a later
+/// Well above the lock's own measured cost — an earlier investigation clocked the
+/// wait at 57µs–288µs on the affected vault and 57µs–12ms in a later
 /// run — so this is a tripwire for an unexplained
-/// stall, not a fraction of a known worst case. moss#968 raised the lock as
+/// stall, not a fraction of a known worst case. That investigation raised the lock as
 /// one hypothesis (H-lock) for a separate, unexplained 1–3s foreground gap;
 /// measurement rejected it (the wait above is nowhere near 1–3s) along with
 /// the other hypothesis (twelve config re-parses), and that gap is still
@@ -180,7 +180,7 @@ fn is_home_candidate_path(p: &std::path::Path) -> bool {
 /// File Provider — none of which exist on CI, where `is_evicted` is a
 /// compile-time `false`.
 ///
-/// Two properties, both of which moss#982 found missing:
+/// Two properties, both of which were found missing:
 ///
 /// **It is monotonic.** `has_sealed_generation` comes from `current_ptr`, which
 /// resolves to the last generation moss sealed for this folder, and a sealed
@@ -188,9 +188,8 @@ fn is_home_candidate_path(p: &std::path::Path) -> bool {
 /// never again — which is what makes a screen with no dismissal control safe.
 /// `home_waiting` is re-emitted by every build and the supervisor triggers a
 /// build on file arrival, so a re-armable gate can slam a full-window screen
-/// back over a site the user is already reading. That is the hazard
-/// `docs/archive/2026-08-05-cloud-waiting-screen-redesign.md` §1 removed the
-/// escape hatch to contain; a first-run gate cannot re-arm at all. It also
+/// back over a site the user is already reading. An earlier redesign removed
+/// the escape hatch to contain that hazard; a first-run gate cannot re-arm at all. It also
 /// matches what `KEEP_GENERATIONS_FLOOR = 2` already guarantees in
 /// `store_gc.rs`: from build 2 onward something is always servable.
 ///
@@ -202,8 +201,7 @@ fn is_home_candidate_path(p: &std::path::Path) -> bool {
 /// The trade this makes is deliberate: with a servable generation and a home
 /// page that has since been evicted, the user sees the substitute home page and
 /// the titlebar's download counter rather than the waiting screen. An honest
-/// partial state beats a modal blocking a site moss can actually serve. See
-/// `docs/archive/2026-08-06-cloud-availability-design.md` §3.4.
+/// partial state beats a modal blocking a site moss can actually serve.
 ///
 /// **A site rendered without its sources is not a servable site.** `home_ready`
 /// asks only whether an `index.html` was written, and every structural source is
@@ -232,9 +230,9 @@ fn is_home_candidate_path(p: &std::path::Path) -> bool {
 /// here because a sealed generation means there is something to *look at*, which
 /// is all a full-window screen needs to know. It says nothing about whether this
 /// build's output is fit to replace it — publishing stopped asking
-/// `structural_incomplete` at all in the 2026-09-17 ADR-056 revision (see the
+/// `structural_incomplete` at all as of a 2026-09-17 revision (see the
 /// deleted `should_publish`), which is the question the same fact was silently
-/// answering before moss#1042.
+/// answering before that fix.
 fn cloud_gate_should_hold(
     home_ready: bool,
     has_sealed_generation: bool,
@@ -246,10 +244,10 @@ fn cloud_gate_should_hold(
     !servable && cloud_outstanding > 0
 }
 
-// `should_publish` (deleted 2026-09-17, ADR-056 revision) used to withhold
+// `should_publish` (deleted 2026-09-17) used to withhold
 // publishing whenever `structural_incomplete` was true — the same rule
 // `cloud_gate_should_hold` still uses for the SHOWING question. It existed to
-// answer moss#1042: a build whose page sources were still downloading
+// solve this: a build whose page sources were still downloading
 // rendered directory names and `Unknown` dates in place of real titles, and
 // that placeholder used to be allowed to overwrite a real sealed generation.
 // Withholding fixed the regression, but every call site read the SAME
@@ -267,7 +265,7 @@ fn cloud_gate_should_hold(
 // this way is no longer a *wrong* rendering of the site, only a possibly
 // stale one — and staleness is a publish-time gate on its own
 // (`BuildRecords::stale_sources` / `deploy::refuse_publish`), not a reason to
-// stop showing the user their own site. See ADR-056.
+// stop showing the user their own site.
 
 fn emit_initial_build_complete(services: Option<&BuildServices>, site_path: Option<&Path>) {
     let (Some(svc), Some(site_path)) = (services, site_path) else {
@@ -965,12 +963,12 @@ pub(crate) fn run_leased(
     slot_resolver: Option<SlotResolver>,
     project_structure: &ProjectStructure,
     site_url_override: Option<String>,
-    // moss#922: resolved by `PipelineConfig::allows_incremental_skip` (Stage
-    // 5b render skip) and `::allows_parse_cache_reuse` (Stage 7 parse cache) at
+    // Resolved by `PipelineConfig::allows_incremental_skip` (render skip)
+    // and `::allows_parse_cache_reuse` (parse cache) at
     // the entry point, so the render phase never reads the trigger or the
-    // environment itself (ADR-010).
+    // environment itself.
     incremental: crate::build::render::IncrementalGates,
-    search_freshness: crate::build::feeds::search_lane::Freshness, // ADR-045
+    search_freshness: crate::build::feeds::search_lane::Freshness,
     cache_keys: &crate::build::ports::CacheKeyInputs,
     // The caller's `lifecycle::CacheWriteLease`, carried into the background
     // handle so it drops when the workers have joined.
@@ -992,7 +990,7 @@ pub(crate) fn run_leased(
 
     // The gate verdict is emitted from INSIDE `build_inner`, so any `?` before
     // it skips the gate and the user gets a raw errno where the waiting screen
-    // belongs (moss#964). This is the one place that can still speak, and
+    // belongs. This is the one place that can still speak, and
     // `is_deferred()` is unforgeable by `?` — see `build::outcome`.
     if let Err(ref stopped) = result {
         if stopped.is_deferred() {
@@ -1039,7 +1037,7 @@ fn build_inner(
     cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
     // `BuildStopped`, not `String`: the gate verdict is emitted from inside this
     // function, so the error type must be able to say "not yet" for the caller
-    // to raise the gate instead of reporting. See `build::outcome` (moss#964).
+    // to raise the gate instead of reporting. See `build::outcome`.
 ) -> Result<PipelineRunOutput, BuildStopped> {
     let build_start = std::time::Instant::now();
     let folder_path = root.as_str(); // the PATH only; `root.name()` is the one name source
@@ -1112,7 +1110,7 @@ fn build_inner(
             total,
             remaining,
             // The build does not compute the blocking subset; its own gate
-            // verdict is the answer to that question (moss#1077).
+            // verdict is the answer to that question.
             blocking: None,
             unavailable: &[],
         });
@@ -1167,8 +1165,7 @@ fn build_inner(
     // The build now simply runs. Whether the home page rendered is answered by
     // the one authority that cannot drift from what the preview will serve —
     // the build's own output — and reported as `home_ready` below. Evicted
-    // files are deferred rather than waited on. See docs/archive/2026-08-03-
-    // dataless-fail-fast-and-build-driven-cloud-gate.md.
+    // files are deferred rather than waited on.
     //
     // The build does NOT hand the files over. The supervisor does, once per
     // sweep, from a walk of the whole vault — so a build doing it too would be
@@ -1202,7 +1199,7 @@ fn build_inner(
     // The WAIT is timed, not elapsed-since-start: only the wait says whether the
     // PREVIOUS build's seal tail (which takes this same mutex in
     // `advertise_sealed`, behind every background worker) is on this build's
-    // critical path — moss#968 Finding 3, hypothesis H-lock, against H-config
+    // critical path — hypothesis H-lock, against H-config
     // just below.
     let t_lock = std::time::Instant::now();
     let _stage_write_guard = services
@@ -1212,7 +1209,7 @@ fn build_inner(
     log::log!(
         target: "timing",
         if lock_wait >= STAGE_WRITE_LOCK_WARN { log::Level::Warn } else { log::Level::Debug },
-        "[build] staging: waited {lock_wait:?} for the stage-write lock (above {STAGE_WRITE_LOCK_WARN:?} means the previous build's seal tail is on this build's critical path — moss#968)",
+        "[build] staging: waited {lock_wait:?} for the stage-write lock (above {STAGE_WRITE_LOCK_WARN:?} means the previous build's seal tail is on this build's critical path)",
     );
 
     // Step 2: Ensure staging directory exists (persistent across rebuilds)
@@ -1224,8 +1221,8 @@ fn build_inner(
     // `create_dir_all` here failed `EDEADLK` on a Google Drive vault's first
     // preview — putting "Resource deadlock avoided (os error 11)" on the
     // onboarding overlay, before the build could reach the cloud gate that
-    // explains itself. The staging tree is regenerable, so ADR-043 applies:
-    // unreadable is absent, and it is replaced rather than waited for.
+    // explains itself. The staging tree is regenerable, so unreadable is
+    // treated as absent, and it is replaced rather than waited for.
     crate::build::io_utils::create_output_dir_all(&stage_dir)
         .map_err(|e| format!("Failed to create staging directory: {}", e))?;
 
@@ -1243,15 +1240,14 @@ fn build_inner(
     // `ship_phase` strips BOTH data-source-* and data-moss-preview when shipping
     // /stage→/site, so /site stays deploy-clean regardless. The preview port is
     // still used for the completion progress message (send_progress) — it is no
-    // longer the annotation lever. See docs/reference/editor-preview-sync.md
-    // mechanism 1.
+    // longer the annotation lever.
     let emit_source_lines = true;
 
     // The `.moss/` on-disk migrations that used to run here — the
     // `config.toml` schema bump and the legacy email-path rename — are now a
     // precondition the entry point satisfies via
-    // `HostPorts::run_vault_migrations`, before anything reads the vault
-    // (ADR-059). They write files the user owns, so they cannot travel into
+    // `HostPorts::run_vault_migrations`, before anything reads the vault.
+    // They write files the user owns, so they cannot travel into
     // the compiler crate; the config read below still runs no migrations of
     // its own and still depends on them having happened.
 
@@ -1301,10 +1297,9 @@ fn build_inner(
         // write `[site].implicit_figure = false` opt out. Sites that
         // migrated under the *previous* PR (since reverted) still carry
         // a literal `false` value — they remain opted out as a legacy
-        // artifact; deleting that line opts back in. See
-        // docs/archive/2026-05-05-figure-captions-design.md.
+        // artifact; deleting that line opts back in.
         implicit_figure: site_bool("implicit_figure").unwrap_or(true),
-        // Default-on by key absence (ADR-030). Deliberately NOT the
+        // Default-on by key absence. Deliberately NOT the
         // implicit_figure story above: nothing has ever written
         // `[site].math`, so there is no legacy value to preserve and no
         // migration involved — absence simply means "the author never
@@ -1329,13 +1324,13 @@ fn build_inner(
         heading_anchors: site_bool("heading_anchors").unwrap_or(true),
         // Default-OFF by key absence, unlike `math`: extra reading chrome is
         // asked for, not inherited, so a site that never said anything gets no
-        // floating nav (ADR-049 §1 as amended 2026-08-30).
+        // floating nav (as amended 2026-08-30).
         floating_nav: site_bool("floating_nav").unwrap_or(false),
         site_url_override,
         ai_policy: site_str("ai_policy"),
         // One switch: the per-site Services-tab toggle, absent key = off
-        // (graduated out of `experimental.preview_features` 2026-08-31 —
-        // ADR-037 "Gating"). Resolved here into the ONE value the nav button
+        // (graduated out of `experimental.preview_features` 2026-08-31).
+        // Resolved here into the ONE value the nav button
         // and the index emitter both read, so a button can never point at an
         // index that was never built.
         search: site_bool("search").unwrap_or(false),
@@ -1357,7 +1352,7 @@ fn build_inner(
     // After the call, pending holds the accumulated site_hashes + blocking_keys;
     let mut pending = PendingManifest::new(previous_hashes.clone());
     // `documents` is the parsed page slice (production type `ParsedDocument`,
-    // not yet the typed-AST `moss_core::ast::Document`). PR7b (moss#599)
+    // not yet the typed-AST `moss_core::ast::Document`). An earlier change
     // threads it back to `build.rs` so native slot generation can read typed
     // feature flags + slot-only files without the previous filesystem rescan
     // hacks (`project_has_inline_subscribe`, `render_footer_pages_from_disk`).
@@ -1394,7 +1389,7 @@ fn build_inner(
     log::debug!(target: "timing", "[build] staging: builder_fingerprint: {:?}", build_start.elapsed());
     site_result.hashes.builder_fingerprint = Some(current_builder_fingerprint.clone());
     // Propagate the fingerprint to `pending` so the SealedManifest produced
-    // by the seal+persist side task carries it. Pre-#620 Item 2 the legacy
+    // by the seal+persist side task carries it. The old legacy
     // on-disk write at `media/pipeline.rs` serialized `&site_hashes` directly
     // (which had the fingerprint); now the only writer is the seal task, so
     // it must reach `pending` before it sealed.
@@ -1500,7 +1495,7 @@ fn build_inner(
 
     // How much of this site is still in the cloud, as of NOW.
     //
-    // `icloud_count` alone is the blindness moss#982 measured: it comes from the
+    // `icloud_count` alone is a known blindness: it comes from the
     // source scan, which runs before the build and prunes dot-directories, so it
     // is stale by construction for anything the provider evicted afterwards. On
     // the incident vault it was the reason 578 evicted images could not
@@ -1562,7 +1557,7 @@ fn build_inner(
 
         // Step 5: show this render — unless this build could not read its own
         // sources. Showing it is the moment the user sees this build's output,
-        // so an unpublishable build must not (moss#1042).
+        // so an unpublishable build must not.
         let (seq, announced) = crate::build::lifecycle::show_render(&paths, publishable);
         render_seq = Some(seq);
         announce = announced;
@@ -1575,7 +1570,7 @@ fn build_inner(
         // Asked HERE, not carried in. A build that started no server of its own
         // may have had one come up while it ran — on the incident vault, fourteen
         // seconds after this build was dispatched and nineteen seconds before it
-        // reached this line. See `ports::LivePortResolver` (moss#1061).
+        // reached this line. See `ports::LivePortResolver`.
         send_progress(progress_sender, "complete", &crate::infra::app_advisory::t("build_complete"), 100, true, preview_port(), Some(is_empty));
 
         // The preview rests on staging/ after step 5: its HTML has the data-source-line
@@ -1596,7 +1591,7 @@ fn build_inner(
         // Asked HERE, not carried in. A build that started no server of its own
         // may have had one come up while it ran — on the incident vault, fourteen
         // seconds after this build was dispatched and nineteen seconds before it
-        // reached this line. See `ports::LivePortResolver` (moss#1061).
+        // reached this line. See `ports::LivePortResolver`.
         send_progress(progress_sender, "complete", &crate::infra::app_advisory::t("build_complete"), 100, true, preview_port(), Some(is_empty));
 
         emit_initial_build_complete(services, announce.as_deref());
@@ -1605,12 +1600,12 @@ fn build_inner(
         crate::build::phase::record_count("render", seq as usize);
     }
 
-    // Step 6c: no search worker. Pagefind is generation-free (ADR-045) — cost
+    // Step 6c: no search worker. Pagefind is generation-free — cost
     // scales with corpus, not delta — so it runs on its own lane, adopted below.
     let search_enabled = background_ctx.search_enabled;
 
     // === BACKGROUND PHASE (spawn, don't block) ===
-    // ADR-001: Background work runs after preview opens.
+    // Background work runs after preview opens.
     // Notebook processing runs BEFORE background asset dispatch so its
     // generated paths are registered before stale cleanup could remove them.
     let notebook_files = std::mem::take(&mut background_ctx.notebook_files);
@@ -1656,7 +1651,7 @@ fn build_inner(
         }
     }
 
-    // Adopt the search bundle from the lane's receipt (ADR-045): inside the
+    // Adopt the search bundle from the lane's receipt: inside the
     // stage-write span (it lays files into `stage_dir`) and before the seal.
     // Mark-and-sweep — skipping it deletes `_moss/pagefind/*` off the live site.
     let search_paths = MossPaths::new(std::path::Path::new(folder_path));
@@ -1679,7 +1674,7 @@ fn build_inner(
     // processing, but not the detached background dispatch below).
     drop(_stage_write_guard);
 
-    // Subscribe landing pages moved to generate_blocking_content (Task 5 of moss#524).
+    // Subscribe landing pages moved to generate_blocking_content.
 
     // === BackgroundHandle dispatch ===
     // Spawn all three background dispatches into a single BackgroundHandle.
@@ -1694,10 +1689,10 @@ fn build_inner(
     // No gate: every build has at least the asset walk, so there is always a
     // worker and always a seal. The zero-worker branch that used to sit beside
     // this — reachable only when `deferred` was `None`, which
-    // `generate_blocking_content` never produced — went with `DeferredWork`
-    // (moss#618). Search dispatches no worker of its own (ADR-045); its bundle
+    // `generate_blocking_content` never produced — went with `DeferredWork`.
+    // Search dispatches no worker of its own; its bundle
     // is adopted from a receipt above.
-    // Post-#620 Item 2 invariant: build_inner runs inside a Tokio runtime.
+    // Invariant: build_inner runs inside a Tokio runtime.
     // The legacy `tokio::runtime::Handle::try_current().is_ok()` fallback to
     // a synchronous dispatch path has been removed; existing tests that
     // exercise this code now run with `#[tokio::test]` (or are gated to the
@@ -1760,7 +1755,7 @@ fn build_inner(
         );
         // For the assets worker we need the reporter and the session
         // separately — copy_deferred_assets takes the reporter by ref.
-        // Issue #697: pass the AssetRegistry so static assets (audio/PDF/etc.)
+        // Pass the AssetRegistry so static assets (audio/PDF/etc.)
         // are registered as Ready after copy, enabling editor hover-preview.
         let reporter_for_assets = services.map(|s| s.reporter.clone());
         let session_for_assets = services.and_then(|s| s.session.clone());
@@ -1848,7 +1843,7 @@ fn build_inner(
                     .map_err(crate::build::background::BuildError::from)
                 });
             }
-            // No search worker (ADR-045): a generation-free worker is never
+            // No search worker: a generation-free worker is never
             // awaited by a seal, so the previous build's index cannot land on
             // this build's critical path. Its output is adopted from a receipt.
 
@@ -1942,8 +1937,6 @@ fn sweep_staging(
 /// predate the ServedPath chokepoint. This is a one-time, opportunistic
 /// migration: subsequent builds re-derive state, so the migration is
 /// self-healing — no version field needed in hashes.json.
-///
-/// See `docs/archive/2026-05-07-output-path-normalization.md` for the rationale.
 pub fn load_previous_hashes(folder_path: &str) -> SiteHashes {
     let paths = MossPaths::new(Path::new(folder_path));
     let hashes_path = paths.hashes();

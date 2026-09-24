@@ -6,7 +6,7 @@
 //! # Phase 4: render_document IS the production rendering path (target)
 //!
 //! Today (2026-05-27) this function runs as a parallel observer via
-//! `observe_typed_ast` in `src-tauri/src/build/markdown/pipeline.rs`;
+//! `observe_typed_ast` in the desktop app's markdown pipeline;
 //! production HTML still comes from `pulldown_cmark::html::push_html` over
 //! the event stream. Phase 4 PR7a flips this: `render_document` becomes
 //! the production renderer, `html::push_html` is no longer called in the
@@ -15,11 +15,9 @@
 //!
 //! # Why the AST renders (not pulldown-cmark)
 //!
-//! Cross-SSG research (2026-05-27) — see
-//! [docs/archive/2026-05-27-typed-ast-cross-ssg-research.md](../../../../../docs/archive/2026-05-27-typed-ast-cross-ssg-research.md)
-//! — confirms every AST-bearing SSG with secondary consumers (link
-//! graphs, editors, validators, multi-target rendering) puts the AST at
-//! the rendering source:
+//! Cross-SSG research (2026-05-27) confirms every AST-bearing SSG with
+//! secondary consumers (link graphs, editors, validators, multi-target
+//! rendering) puts the AST at the rendering source:
 //!
 //! - **mdBook** (same parser as moss) recently migrated from
 //!   `html::push_html` to a typed `Tree<Node>` via `ego_tree`. Same
@@ -35,14 +33,9 @@
 //! Streaming-only SSGs (Zola, markdown-it ecosystem) live without an AST,
 //! but pay the cost: structural reshape requires fragile token-window
 //! pattern matching; secondary consumers can't ride on event streams.
-//! moss has secondary consumers (#599 page threading, editor's
+//! moss has secondary consumers (page threading, editor's
 //! `scan_shortcodes`, `has_shortcode_recursive`, future WASM editor,
 //! future LSP-style diagnostics) — AST is non-optional.
-//!
-//! See [docs/reference/typed-body-ast.md](../../../../../docs/reference/typed-body-ast.md)
-//! for the design intent + 7 principles, and
-//! [docs/archive/2026-05-27-phase4-typed-ast-completion.md](../../../../../docs/archive/2026-05-27-phase4-typed-ast-completion.md)
-//! for the Phase 4 execution plan.
 
 use super::document::{BlockMeta, Document};
 use super::footnotes::{self, FootnoteCtx};
@@ -188,8 +181,8 @@ pub fn render_document<H: RenderHooks>(doc: &Document, hooks: &H) -> String {
 ///
 /// A host that serializes a document one top-level block at a time (so it can
 /// record where each block's output begins and ends, instead of scanning the
-/// finished string for structure later — see src-tauri's `BodyPlan` and
-/// ADR-034) must go through this rather than [`render_blocks`]: the latter has
+/// finished string for structure later — see the desktop app's `BodyPlan`)
+/// must go through this rather than [`render_blocks`]: the latter has
 /// no meta vec and would silently drop every `data-source-line` annotation.
 ///
 /// Takes the caller's [`FootnoteCtx`] (built once via `FootnoteCtx::
@@ -211,15 +204,15 @@ pub fn render_block_with_meta<H: RenderHooks + ?Sized>(
 }
 
 /// Render a sequence of blocks to HTML. Used by shortcode-body renderers —
-/// grid cells and, via src-tauri's `render_hero_html_typed` (Phase 4 PR4.5),
+/// grid cells and, via the desktop app's `render_hero_html_typed` (Phase 4 PR4.5),
 /// the hero overlay — to render a `Vec<Block>` that didn't come from a full
 /// `Document`. [`render_document`] does NOT call this: it walks its blocks
 /// and meta in lockstep, calling `render_block` directly.
 ///
 /// **Not table cells.** A `Block::Table` holds `Vec<Vec<Vec<Inline>>>` — its
 /// cells are inlines, rendered by `render_inlines` inside the table arm, so
-/// they never reach any block-level entry point. Listing them here (and in
-/// ADR-035) described a caller that cannot exist.
+/// they never reach any block-level entry point. Listing them here would
+/// describe a caller that cannot exist.
 ///
 /// **Source-line caveat:** this entry point has no per-block meta vec, so
 /// every block renders without `data-source-line`. Callers that need
@@ -238,7 +231,7 @@ pub fn render_block_with_meta<H: RenderHooks + ?Sized>(
 /// definition renders in place. That is the honest shape for the callers
 /// this function has — shortcode bodies, which are their own little
 /// documents with no endnote section of their own. Nested walks INSIDE a
-/// document use `render_blocks_with`. ADR-035 § Three call paths.
+/// document use `render_blocks_with`.
 pub fn render_blocks<H: RenderHooks + ?Sized>(hooks: &H, out: &mut String, blocks: &[Block]) {
     render_blocks_with(hooks, out, blocks, &mut FootnoteCtx::default());
 }
@@ -675,9 +668,9 @@ fn render_block<H: RenderHooks + ?Sized>(
             // External URLs render as a link-preview wrapper; internal URLs
             // render as `data-kind="link"` grid-card.
             //
-            // Production byte shape matches today's src-tauri
+            // Production byte shape matches today's desktop app
             // `render_compound_link_cell` output (ported here so that
-            // shape was deleted from src-tauri in PR4.5). The wrapping
+            // shape was deleted from the desktop app in PR4.5). The wrapping
             // `<div class="moss-grid">` chrome lives in the Grid render
             // arm in hooks.rs; LinkCard is the per-cell shape.
             let body = render_children_to_string(hooks, children, fnotes);
@@ -772,12 +765,12 @@ fn hoist_emptied(children: &[Block], rendered: &str) -> bool {
 /// No-op otherwise.
 ///
 /// Used at every top-level block's opening tag arm so the preview's
-/// `cm-scroll-sync` (in `frontend/bridge/iframe-bridge.ts`) can locate
+/// `cm-scroll-sync` (in the desktop app's iframe bridge) can locate
 /// the DOM element that corresponds to a given editor source line.
 ///
 /// Matches the legacy `transform_events` emit byte shape — leading space,
 /// double-quoted attribute value, decimal integer — verified against
-/// `src-tauri/src/build/ship.rs::apply_strip_removes_data_source_line`
+/// the desktop app's `ship.rs::apply_strip_removes_data_source_line`
 /// which scrubs this exact pattern from the ship-stage output.
 fn push_source_line_attr(out: &mut String, source_line: Option<usize>) {
     if let Some(n) = source_line {
@@ -898,9 +891,9 @@ fn render_inline<H: RenderHooks + ?Sized>(
         }
         Inline::LineBreak => out.push_str("<br />\n"),
         Inline::Other(html) => {
-            // A math node (ADR-030) is an `Inline::Other` carrying the P1
+            // A math node is an `Inline::Other` carrying the P1
             // escaped-source `<code class="moss-math">` payload. Route it
-            // through `render_math` so a typesetting hook (src-tauri's
+            // through `render_math` so a typesetting hook (the desktop app's
             // `PipelineHooks`) can replace it with an SVG; the default hook
             // re-emits `html` verbatim, so non-pipeline renders are byte-
             // identical to P1. Any non-math `Inline::Other` falls straight

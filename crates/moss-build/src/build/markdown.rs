@@ -1,4 +1,4 @@
-//! Markdown parsing pipeline. Split per docs/archive/2026-04-24-codebase-restructure-continuation-plan.md Task 2.
+//! Markdown parsing pipeline. Split out of a single larger module for size.
 
 pub mod body_plan;
 pub mod frontmatter;
@@ -7,9 +7,8 @@ pub mod math;
 pub mod pipeline;
 pub mod recent;
 
-// Enumerate re-exports. Verified via:
-// `grep -rn "build::markdown::" src-tauri/src/` and
-// `grep -rn "super::markdown::\|use.*markdown::{" src-tauri/src/`
+// Enumerate re-exports. Verified via a grep across the desktop app's Rust
+// source for `build::markdown::` and `super::markdown::`/`use ... markdown::{` usages.
 
 // ── frontmatter ────────────────────────────────────────────────────────
 pub use frontmatter::{

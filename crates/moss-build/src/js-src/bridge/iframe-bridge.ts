@@ -49,17 +49,16 @@ import { installContextMenu } from "./context-menu";
   // ============================================================
   // Chrome clearance: `moss-shell-frame` class on <html>
   // ============================================================
-  // INERT since ADR-039: the shell insets the preview iframe, so the served
+  // INERT now: the shell insets the preview iframe, so the served
   // document needs no clearance and site.css defines no rule for this class.
   // The reconciliation below still runs, kept as the revert path in case
-  // ADR-039's insetting is ever undone. It formerly gated
+  // this insetting is ever undone. It formerly gated
   // `body{padding-top:48px}`, stamped server-side before first
   // paint off the `?__moss_shell=1` marker; this runtime topology check is the
   // defense-in-depth half, recovering the class when user-page JS navigates and
   // drops the marker, and REMOVING it when the marker leaks into a nested
   // iframe (chrome geometry must never reach one — the load-bearing
-  // nested-iframe invariant). Read docs/reference/preview-chrome-clearance.md
-  // for the full mechanism and that hazard before deleting any of it. On the
+  // nested-iframe invariant). On the
   // real web the bridge is never injected at all, so nothing here applies.
   const isShellMounted =
     window !== window.top && window.parent === window.top;
@@ -89,9 +88,9 @@ import { installContextMenu } from "./context-menu";
   let currentShellTheme: "light" | "dark" | null = null;
 
   // Device-preview mode (mobile phone-frame vs desktop), pushed DOWN by the
-  // shell. INERT since ADR-039 — no document-side clearance left to drop, and
+  // shell. INERT now — no document-side clearance left to drop, and
   // site.css defines no rule for either class. Kept as the revert path in
-  // case ADR-039's insetting is ever undone; it formerly undid the
+  // case this insetting is ever undone; it formerly undid the
   // clearance, which showed as a gap inside the phone
   // frame because that frame already sits BELOW the titlebar.
   // The iframe CANNOT infer this from its own width: a desktop preview dragged
@@ -631,8 +630,7 @@ import { installContextMenu } from "./context-menu";
   // ============================================================
   // Click-to-Source Handler (Preview → Editor navigation)
   // ============================================================
-  // Preview-click vocabulary (docs/archive/2026-08-14-preview-click-vocabulary
-  // .md): single click = reveal (editor scrolls + flashes, focus stays here),
+  // Preview-click vocabulary: single click = reveal (editor scrolls + flashes, focus stays here),
   // double click = jump (editor focused, caret placed). Disambiguation is by
   // click count — see click-vocabulary.ts for why there is no delay timer.
   // Native word-selection from the double click is left alone: we only post a
@@ -762,16 +760,15 @@ import { installContextMenu } from "./context-menu";
   installSwipeNavigation(window);
 
   // Ambient chrome colour. Shell-mounted only: this reports the page's own
-  // colours up so the titlebar can look translucent over content that, since
-  // ADR-039, no longer passes beneath it. See bridge/chrome-ambient.ts.
+  // colours up so the titlebar can look translucent over content that no
+  // longer passes beneath it. See bridge/chrome-ambient.ts.
   if (isShellMounted) {
     chromeAmbient = startChromeAmbient(window, (colors) => {
       window.parent.postMessage({ type: "moss-chrome-ambient", colors }, "*");
     });
     // Site identity: the accent token, for the shell's chrome veil and mobile
     // room wash. Nulls are posted too — a token-less page must clear the
-    // previous page's sticky tint. See bridge/site-accent.ts and
-    // docs/archive/2026-08-03-site-identity-tint.md.
+    // previous page's sticky tint. See bridge/site-accent.ts.
     startSiteAccent(window, (color) => {
       window.parent.postMessage({ type: "moss-site-accent", color }, "*");
     });
@@ -842,7 +839,6 @@ import { installContextMenu } from "./context-menu";
       // triggers fresh source-set selection on the parent <picture> per HTML
       // spec; combined with Cache-Control: no-store on the placeholder response
       // this re-fetches the real bytes. For <img src>: cache-bust + LQIP cleanup.
-      // See docs/archive/2026-05-20-image-variant-honest-mirror.md (Layer 2).
       const bust = "?_t=" + Date.now();
 
       // srcset matches: <source srcset> inside a <picture>, and the bare
@@ -1064,8 +1060,7 @@ import { installContextMenu } from "./context-menu";
   // Model: Eleventy Dev Server `reload-client.js` morph branch — it too
   // `fetch`es its own `location.href` and idiomorphs the live document
   // (full <head>+<body>, restore focus). Phase-1 scope is REFRESH (same
-  // URL); morph-driven navigation is future work. See
-  // docs/reference/editor-preview-sync.md "Design model" mechanism 3.
+  // URL); morph-driven navigation is future work.
   window.addEventListener("message", (e: MessageEvent) => {
     if (e.data?.type !== "moss-morph") return;
     const { gen } = e.data as { gen?: number };
@@ -1118,7 +1113,7 @@ import { installContextMenu } from "./context-menu";
         // served bytes, so idiomorph treats it as surplus and removes it —
         // removal is gated ONLY here. Without this veto such overlays vanish on
         // the first content morph while data-theme survives on <html>, leaving
-        // "theme on, effect gone." See docs/reference/editor-preview-sync.md.
+        // "theme on, effect gone."
         // `querySelector` as well as `closest`: idiomorph fires this only on the
         // OUTERMOST surplus node, then removeChild()s its whole subtree without
         // per-descendant callbacks — so a permanent node wrapped in an unmarked
@@ -1146,8 +1141,8 @@ import { installContextMenu } from "./context-menu";
         // own child list and WebKit forbids (`NotSupportedError`). Per-region
         // keeps every mutation inside <head>/<body>. Unchanged nodes — the
         // injected bridge <script>, every <link>/<style> — are matched and
-        // REUSED (no script re-exec, no CSS reflash). See idiomorph
-        // morphOuterHTML + normalizeParent, docs/reference/editor-preview-sync.md.
+        // REUSED (no script re-exec, no CSS reflash). See idiomorph's
+        // morphOuterHTML + normalizeParent.
         //
         // Hand over a DocumentFragment, NOT an innerHTML STRING.
         // idiomorph sniffs a string for a literal `</html>|</head>|</body>` and

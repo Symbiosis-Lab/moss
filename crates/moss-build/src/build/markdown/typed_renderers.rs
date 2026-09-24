@@ -20,7 +20,7 @@
 //!   be an outbound link.
 //!
 //! An `<a href=…>`-matching regex (`LINK_RE`) used to live here for
-//! `grid_post.rs`'s post-HTML scanning. ADR-034 deleted that file: which
+//! `grid_post.rs`'s post-HTML scanning. That file was deleted: which
 //! cells are links is read off the typed `Vec<Block>` the serializer
 //! rendered from, so nothing re-matches emitted anchors.
 
@@ -61,7 +61,7 @@ pub(crate) fn render_link_preview(href: &str, title: Option<&str>, domain: &str,
     // bare 16×16 <img> (no manifest, no <picture>, no LQIP). Output is
     // byte-identical to the prior inline format!() call; the routing is
     // architectural so every <img> in moss output now flows through one
-    // function. See docs/reference/structural-html-emission.md.
+    // function.
     //
     // Phase 1 B1 (2026-05-25): the synthesizer takes `&AssetSnapshot` after
     // the data-source switch. `Favicon` short-circuits before any snapshot
@@ -734,7 +734,7 @@ mod tests {
     // Grid arm in `crates/moss-core/src/ast/hooks.rs`. Test coverage
     // for the AST-level Grid shape lives in `moss-core` lib tests.
 
-    /// moss#754, on the branch production actually takes. The overlay is
+    /// A regression on the branch production actually takes. The overlay is
     /// rendered by `render_hero_html_typed` with a PRIMED snapshot, so the
     /// embed's fit/position must survive the synth path
     /// (`ImageRenderOptions.extra_attrs`) and not just the bare-`<img>`

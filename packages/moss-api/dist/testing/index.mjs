@@ -4,7 +4,7 @@
 *
 * Mirrors the real guard: `PluginPath::sandboxed` in
 * open/crates/moss-build/src/vault/fs.rs, and its one documented exception,
-* `PluginPath::shared_social_data` (docs/reference/social-data-standard.md),
+* `PluginPath::shared_social_data`,
 * which is bound to the calling plugin's own `<plugin_id>.json` file — not
 * the whole shared directory. Before this mirror existed, mock-tauri.ts's
 * `write_project_file` / `read_project_file` handlers never enforced the
@@ -38,7 +38,7 @@ const RESERVED_SOCIAL_DATA_IDS = ["review"];
 /**
 * The one documented exception to the `.moss/` fence: the calling plugin's
 * own file in the shared social-data standard's canonical directory
-* (`.moss/data/social/<pluginId>.json`) or its pre-#793 legacy home
+* (`.moss/data/social/<pluginId>.json`) or its legacy home
 * (`.moss/social/<pluginId>.json`, plus that directory's `.migrated-bak`
 * archive copy) — never another plugin's file, and never first-party data
 * such as `review.json`.

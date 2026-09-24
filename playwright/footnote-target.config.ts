@@ -1,6 +1,5 @@
 /**
- * Render gate: the footnote landing fix (docs/archive/2026-08-24-footnote-
- * landing-fix-plan.md) — `:target` highlight wash + `scroll-padding-top`
+ * Render gate: the footnote landing fix — `:target` highlight wash + `scroll-padding-top`
  * island clearance.
  *
  * Both claims need a real engine: whether the endnote `<li>` clears the

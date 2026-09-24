@@ -1,5 +1,4 @@
-// Click-count disambiguation for the preview-click vocabulary
-// (docs/archive/2026-08-14-preview-click-vocabulary.md).
+// Click-count disambiguation for the preview-click vocabulary.
 //
 // There is deliberately NO delay timer: a 250–300ms hold would make every
 // single-click highlight land perceptibly late, and the vocabulary makes it

@@ -62,7 +62,7 @@ pub struct PageChangeSummary {
 /// maps into the Added/Moved/Removed rows a publish receipt shows.
 ///
 /// `prev_triples` is the previous publish record's `{uid, url, source_path,
-/// title}` entries ([`LiveEntry`], moss#1093) — the same baseline `renames`
+/// title}` entries ([`LiveEntry`]) — the same baseline `renames`
 /// was itself computed against, so a Removed row's title is read from here
 /// rather than re-derived from anything current.
 pub fn build_page_change_records(

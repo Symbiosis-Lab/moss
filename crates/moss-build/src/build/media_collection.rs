@@ -263,8 +263,7 @@ fn generate_grid_item(
     // `<picture><source srcset>` WebP wrap. When `None`, falls back to
     // bare `<img loading="lazy">` and the legacy regex pass retrofits
     // attrs — needed for the unit tests at lines 587+ that don't
-    // construct a manifest. See
-    // `docs/reference/structural-html-emission.md`.
+    // construct a manifest.
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
 ) -> String {
     let data_type = match item.media_type {
@@ -346,7 +345,7 @@ pub fn generate_media_page(
     // which draws the interface: `Language::code()` emitted the lowercase
     // internal form its own doc reserves for routing, so this page said
     // `lang="zh-hans"` while every content page on the same site said
-    // `zh-Hant` (moss#1177).
+    // `zh-Hant`.
     site_lang_tag: &str,
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     js_theme_path: &str,
@@ -796,7 +795,7 @@ mod tests {
         // `fr` has no `Language` variant, so it resolves to `En` for the
         // interface while declaring `fr`. This page used to emit the enum's
         // `code()` and so said `lang="en"` on an `fr` site — the same
-        // contradiction as moss#1177, on the one page the audit first missed.
+        // contradiction found elsewhere, on the one page the audit first missed.
         // Every other test here passes `En` for BOTH arguments and so cannot
         // tell the two apart.
         let items = vec![MediaItem {

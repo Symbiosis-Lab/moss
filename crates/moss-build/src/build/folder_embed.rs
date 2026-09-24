@@ -28,11 +28,6 @@
 //! use the slugified form of `folder_id` because `ParsedDocument.url_path` is
 //! slugified. Source-side lookups (e.g. `project.html_files`) use the raw
 //! `folder_id` because those carry on-disk paths.
-//!
-//! See Task 16 in `docs/archive/2026-05-17-listing-sort-and-embeds-design.md`
-//! for the listing pipeline and
-//! `docs/archive/2026-05-18-folder-webapp-autoiframe.md` for the static-index
-//! branch.
 
 use std::path::Path;
 
@@ -213,14 +208,14 @@ pub(crate) fn resolve_children_config(
             // into empty archive rows. Mostly-rich is an archive at any size, and
             // so is a rich page beside at most 3 bare ones; what summary cannot
             // survive is a screenful of them. Boundary pinned by
-            // bulk_style_tests. docs/archive/2026-09-07-listing-style-bulk-test.md
+            // bulk_style_tests.
             let rich = docs.iter().filter(|d| d.cover.is_some()
                 || crate::build::page::meta::resolve_page_description(
                     d.description.as_deref(), &d.content, math).is_some()).count();
             let has_rich = rich > 0 && (rich * 2 > docs.len() || docs.len() - rich <= 3);
             let any_has_date = docs.iter().any(|d| d.date.is_some());
             // Nothing at all is an INDEX of bare labels, not an archive, and "summary" lays
-            // those out one per row. docs/archive/2026-09-06-authors-index-design-decision.md
+            // those out one per row.
             let auto_value = match (has_rich, any_has_date) {
                 (false, false) => "grid".to_string(),
                 (true, _) => "summary".to_string(),
@@ -330,7 +325,7 @@ pub(crate) fn folder_latest_date<D: std::borrow::Borrow<ParsedDocument>>(
 /// * `is_embed` - true only for a body `![[folder/|…]]` embed; stamps
 ///   `data-embed` on the `.moss-cards-container` built here so CSS can give
 ///   an embedded listing block rhythm distinct from the trailing automatic
-///   listing. §6 of docs/archive/2026-09-11-home-feed-cards-and-archive-link.md.
+///   listing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn generate_children(
     folder_docs: &[&ParsedDocument],
@@ -651,7 +646,7 @@ fn render_minimal_year_section(
 /// markers reads `&documents` to find the target folder and its children, so
 /// the body being rewritten is taken OUT of the vec for the duration and put
 /// back after. Both shapes of that body move together — `html_content` is
-/// `body_plan` flattened (ADR-034), and the render phase reads the plan, so
+/// `body_plan` flattened, and the render phase reads the plan, so
 /// leaving either one behind would silently drop the expansion.
 ///
 /// `media_lookup` is the caller's already-built `MediaDimensionLookup` — the
@@ -661,7 +656,6 @@ fn render_minimal_year_section(
 /// every image and video's dimensions/color/LQIP on EVERY build this
 /// function ran at all, regardless of whether any listing actually changed —
 /// corpus-scaled work identical in shape to `page_map`/`external_url_map`'s.
-/// See docs/archive/2026-08-20-rebuild-loop-incrementality.md.
 pub fn expand_markers_in_documents(
     documents: &mut [ParsedDocument],
     project: &ProjectStructure,
@@ -756,12 +750,11 @@ pub fn resolve_markers(
 /// Shared implementation behind [`resolve_markers`]. `is_embed` threads to
 /// [`render_one`]/[`generate_children`], which stamp `data-embed` at the
 /// point the container is first built (never by re-scanning emitted HTML —
-/// ratchet row `(p)`/ADR-034), distinguishing a body `![[folder/|…]]` embed
+/// ratchet row `(p)`), distinguishing a body `![[folder/|…]]` embed
 /// from the frontmatter listing `synthesize_children_marker` produces, since
 /// both share this same marker format and `render_one`. Only
 /// [`expand_markers_in_documents`] passes `true`; `resolve_markers` always
-/// passes `false`, so its own callers are unaffected. §6 of
-/// docs/archive/2026-09-11-home-feed-cards-and-archive-link.md.
+/// passes `false`, so its own callers are unaffected.
 #[allow(clippy::too_many_arguments)]
 fn resolve_markers_impl(
     html: &str,
@@ -880,7 +873,7 @@ fn try_render_folder_index_iframe(
     } else {
         format!("{}/{}", folder_id, index_name)
     };
-    // Folder-as-iframe runs in src-tauri's build pipeline outside the
+    // Folder-as-iframe runs in the desktop app's build pipeline outside the
     // markdown emission path (no pulldown-cmark, no Stage-2 dispatcher).
     // Call the canonical Stage 2 synthesizer directly. Folder embeds carry
     // a `|size` token (e.g. `![[/app/|80%]]`) which we translate into the
@@ -961,10 +954,10 @@ fn is_index_source(from_path: &str, all_docs: &[ParsedDocument]) -> bool {
 ///
 /// Three consumers: `render_one` (the marker path), the synthetic
 /// folder-index loop in `render/blocking.rs`, and the listing-group digest in
-/// `render/incremental/listing.rs`. Before moss#968 Stage 1b the blocking loop
-/// carried an inlined second copy — so "one selector, therefore no drift" was
-/// false, and ADR-044 rule 3 (the digest honours every rule the renderer
-/// honours, structurally) could not hold.
+/// `render/incremental/listing.rs`. The blocking loop used to
+/// carry an inlined second copy — so "one selector, therefore no drift" was
+/// false, and the rule that the digest honours every rule the renderer
+/// honours, structurally, could not hold.
 pub(crate) fn select_children_by_slug<'a>(
     folder_id_slug: &str,
     is_flatten: bool,
@@ -996,7 +989,7 @@ pub(crate) fn select_children_by_slug<'a>(
             }
             // Folder embeds publish a list of articles — `is_listable`
             // covers draft/slot_only in one shot
-            // (PR7b/moss#599 routed slot files through this path).
+            // (PR7b routed slot files through this path).
             if !d.is_listable() {
                 return false;
             }
@@ -1004,8 +997,7 @@ pub(crate) fn select_children_by_slug<'a>(
             // tree. On a multilingual site (gated by `has_language_trees`), drop docs
             // under any language-prefix folder (`en/`, …) so the default-language home
             // never lists other-language articles. Single-language sites: gate is off,
-            // so this is a no-op. Location model — see
-            // docs/archive/2026-06-06-multilingual-children-scoping-design.md.
+            // so this is a no-op.
             // Set by synthesize_children_marker for homepage default-mode only.
             if scope_default_tree
                 && project.has_language_trees

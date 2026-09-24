@@ -107,7 +107,7 @@ fn the_shipped_json_shape_parses() {
     assert_eq!(
         stack.sources[1],
         StackSource::Path { platform: None, binary: "ipfs".to_string() },
-        "the path shape ADR-080's ruling addition exists for — no source needs a sha256 to be valid"
+        "the path shape this ruling exists for — no source needs a sha256 to be valid"
     );
     stack.validate().expect("the shipped OnionPress declaration is valid, download and path alike");
 }

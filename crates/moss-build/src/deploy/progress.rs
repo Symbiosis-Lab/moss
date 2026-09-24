@@ -33,8 +33,7 @@ pub enum DeployStage {
     /// serving it (OnionPress publishes only). Emitted by `deploy_site` right
     /// after the publish guard's `Complete`, so the LAST stage a verifying
     /// publish shows is this one — the green success moment belongs to the
-    /// `PublishVerdict` event, not to upload completion. Design:
-    /// docs/archive/2026-08-16-publish-verified-live-design.md §2.3/X4.
+    /// `PublishVerdict` event, not to upload completion.
     Verifying,
     Complete,
     Failed,
@@ -50,8 +49,7 @@ pub struct DeployProgress {
     pub message: String,
     /// Cumulative bytes uploaded so far this deploy. `Some` only during the
     /// Uploading stage; `None` on every other stage so the frontend falls back
-    /// to the file-count fraction. (Design: docs/archive/2026-06-11-deploy-upload-
-    /// progress.md — "Bytes-Based Progress Bar". File-count progress is
+    /// to the file-count fraction. (File-count progress is
     /// actively misleading for video-heavy sites — it reaches ~97% before the
     /// videos start uploading.)
     ///
@@ -70,8 +68,7 @@ pub struct DeployProgress {
     /// Here rather than left to the resting change set, which is the answer to
     /// a different question ("what would publishing change?"). Sending both
     /// down one channel is what forced the frontend to guess which of the two
-    /// it was holding — see
-    /// `docs/archive/2026-08-09-upload-readout-and-publish-reset.md` §5.
+    /// it was holding.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub removing: Option<u32>,
     /// The largest upload currently in flight, as a site-relative path.
@@ -194,9 +191,9 @@ impl DeploySink for RecordingSink {
 /// Shared upload accounting, created once per deploy and cloned into every
 /// upload task via `Arc`. The hot path is `bytes_uploaded.fetch_add` (one per
 /// chunk for large files, one per small file); a 4 Hz ticker reads the atomics
-/// and emits. (Design docs/archive/2026-06-11-deploy-upload-progress.md, "Ticker
-/// pattern": the 20 concurrent upload tasks would otherwise flood the event
-/// channel with bursts then go silent for tens of seconds.)
+/// and emits. ("Ticker pattern": the 20 concurrent upload tasks would
+/// otherwise flood the event channel with bursts then go silent for tens of
+/// seconds.)
 pub struct UploadProgressState {
     pub bytes_uploaded: AtomicU64,
     /// Immutable after creation: sum of `diff.need` file sizes.

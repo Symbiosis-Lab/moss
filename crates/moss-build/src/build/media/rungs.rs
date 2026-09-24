@@ -1,9 +1,7 @@
 //! Responsive-ladder rung encode unit.
 //!
-//! Extracted from `build/media/image.rs` per
-//! `docs/reference/target/MIGRATION-STATE.md` (the `build/media/image.rs`
-//! debt row) / the responsive-image-variants plan, Task 10.5 — a pure code
-//! move, zero behavior change. Owns the rung-specific encode path
+//! Extracted from `build/media/image.rs` as part of the responsive-image-variants
+//! plan — a pure code move, zero behavior change. Owns the rung-specific encode path
 //! (`encode_rungs`), the shared EXIF-aware decode front half
 //! (`decode_oriented`), the per-rung result carrier (`RungOutcome`), and the
 //! user-file collision map (`rung_collision_map`). The dispatch-side rung loop
@@ -55,7 +53,7 @@ pub struct RungOutcome {
 /// (`BackgroundContext` → `ImageRunContext`) — don't recompute it there:
 /// the worker has no `ProjectStructure`, and a divergent set means a
 /// registered-but-never-encoded rung, i.e. a sealed deploy with a 404ing
-/// `<picture>` candidate (ADR-013).
+/// `<picture>` candidate.
 pub(crate) fn rung_collision_map(
     project_structure: &crate::types::content::ProjectStructure,
     dir_overrides: &HashMap<String, String>,
@@ -108,7 +106,7 @@ pub(crate) fn decode_oriented(source_file: &Path) -> Result<image::DynamicImage,
 /// and cached but NEVER written: the user's file wins there (registration
 /// skipped its promise too — it warned; we only debug-log). The encode still
 /// runs so a singleflight WAITER — duplicate content at a non-colliding path
-/// — can link the shared blob; skipping would strand its REGISTERED rung (ADR-013).
+/// — can link the shared blob; skipping would strand its REGISTERED rung.
 ///
 /// Failures are per-rung (`RungOutcome::error`): one bad rung neither rolls
 /// back the base nor stops the rest. NO outcome-based skipping (keep-smaller,
@@ -129,7 +127,7 @@ pub(crate) fn decode_oriented(source_file: &Path) -> Result<image::DynamicImage,
 /// the warm base path, fresh encode length on the cold path — both already in
 /// hand at the call sites, no extra I/O). A rung whose bytes are >= the base's
 /// is logged at info (design doc § Guards): it is EXPECTED near the ladder cap
-/// (e.g. a w1600 rung of a 1603w source) and still served per ADR-013, so this
+/// (e.g. a w1600 rung of a 1603w source) and still served, so this
 /// is observability only — never a skip.
 ///
 /// [`convert_single_image`]: super::image::convert_single_image
@@ -219,7 +217,7 @@ pub(crate) fn encode_rungs(
         // Design doc § Guards: a rung at least as heavy as the base webp is
         // an anomaly worth one log line — debug, not warn, because it is
         // expected near the ladder cap (e.g. w1600 with a 1603w base). The
-        // rung is still cached/linked per ADR-013 (a registered rung must
+        // rung is still cached/linked (a registered rung must
         // exist), so this is observability only. DEBUG rather than INFO
         // because it fires per image PER RUNG: an expected outcome multiplied
         // by the ladder size is a flood, not a signal.
@@ -227,7 +225,7 @@ pub(crate) fn encode_rungs(
             if base_webp_len > 0 && rung_len >= base_webp_len {
                 log::debug!(
                     "[image] rung {} is {} bytes, not smaller than the base webp's {} \
-                     bytes — expected near the ladder cap; serving it anyway (ADR-013)",
+                     bytes — expected near the ladder cap; serving it anyway",
                     rung_rel, rung_len, base_webp_len
                 );
             }

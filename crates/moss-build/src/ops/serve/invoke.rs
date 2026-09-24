@@ -33,7 +33,7 @@
 //! `allowlist_is_a_subset_of_the_command_registry` reads `registry.rs` and fails
 //! if any allowlisted name is not a registered command. A command NOT in the
 //! allowlist is **absent** from this carrier — the router returns 404, never a
-//! runtime 403 (ADR-032 §5: an unexposed capability is not gated, it does not
+//! runtime 403 (an unexposed capability is not gated, it does not
 //! exist here).
 //!
 //! ## Three carriers on one seam, one per trust tier
@@ -67,7 +67,7 @@
 //! the trust boundary. So a foreign `Origin` is refused with 403 before the
 //! token is even inspected, and only a same-origin/loopback request with a valid
 //! token, POST method, and `application/json` body reaches a mutation arm. See
-//! `super::carrier_token` and ADR-022 §6.
+//! `super::carrier_token`.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -503,7 +503,7 @@ async fn arm_list_tree(ctx: &Session, args: Value) -> ArmResult {
 /// `resolve_url_for_file(file_path, state)` — the accurate post-build resolve
 /// PreviewFollower uses to point the preview at the edited page. Coordinates
 /// editor→preview scroll; the preview IS build output, so consulting it here is
-/// not the editor-renders-source concern ADR-022 governs. The arm mirrors the
+/// not the editor-renders-source concern. The arm mirrors the
 /// command body: strip the project root the command reads from `AppState`, then
 /// call the SAME pure `resolve_url_for_file_inner` core.
 ///
@@ -930,7 +930,7 @@ mod tests {
     }
 
     // The allowlist-is-a-subset-of-the-registry gate lives app-side
-    // (src-tauri/src/preview/server.rs tests): it reads `registry.rs`, which
+    // (in the desktop app's preview server tests): it reads `registry.rs`, which
     // stays in the app crate — the one manual surface is still validated
     // against the ONE `command_list!`, just from the crate that owns it.
 

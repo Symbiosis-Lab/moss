@@ -13,11 +13,11 @@
 #
 # This is the public half of the desktop repo's own `scripts/render-gates.sh`:
 # only the gates whose subject is a published page's CSS (site.css +
-# cascade), ported per docs/archive/2026-09-20-ci-cost-cut-plan.md (C2a).
+# cascade).
 # App/editor/preview gates stay in the private desktop repo, because their
 # subject is the desktop app's own chrome, not anything this repo builds.
 #
-# `moss-cli build` opens no window (ADR-050), so no display wrapper is needed
+# `moss-cli build` opens no window, so no display wrapper is needed
 # even on Linux — unlike the desktop repo's app-UI gates. Builds are
 # content-stamped, so a re-run with unchanged fixtures and an unchanged
 # binary skips straight to the assertions. The no-site gates cost seconds
@@ -245,7 +245,7 @@ if [ "$needs_bin" = true ]; then
 fi
 
 # A display wrapper is a Linux concern for a real windowed app; `moss-cli
-# build` opens none (ADR-050), so nothing here needs xvfb even on Linux CI.
+# build` opens none, so nothing here needs xvfb even on Linux CI.
 
 status=0
 for gate in "${GATES[@]}"; do

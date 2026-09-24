@@ -1,4 +1,4 @@
-//! The listing group model — membership as a value, not N×H edges (ADR-044).
+//! The listing group model — membership as a value, not N×H edges.
 //!
 //! A listing host reads each listed child's **raw body** at render time
 //! (`resolve_page_description` falls back to an excerpt of `content`), and
@@ -6,13 +6,13 @@
 //! edge for it. Lacking an edge type, `render/blocking.rs` used to substitute
 //! "render every page that could possibly be a member's parent" — 114 of 214
 //! pages on the reference vault, on every save, including saves that changed
-//! no output byte (moss#968 Finding 2).
+//! no output byte.
 //!
 //! The replacement is *change pruning on a derived projection*: a **listing
 //! group** is the unit of dependency, and a host re-renders iff a group it
 //! reads has a moved digest.
 //!
-//! Three rules, all from ADR-044, all load-bearing:
+//! Three rules, all load-bearing:
 //!
 //! 1. **Everything a host can observe about a child is a digest input** — the
 //!    card fields *and* the resolved sort/style/group plan, which the card
@@ -179,7 +179,7 @@ fn digest_of(
         .map(|d| projections.get(d.url_path.as_str()))
         .collect();
 
-    // The member-derived half of the listing plan (ADR-044 rule 1, second
+    // The member-derived half of the listing plan (rule 1, second
     // bullet). The host's OWN overrides (`children_style`, `children_group`,
     // `sort:`) are fields of the host document, so they already move the
     // host's facade; what the host cannot see in its own fingerprint is how
@@ -207,7 +207,7 @@ fn digest_of(
 
 /// Everything a listing card can observe about one child.
 ///
-/// **Blank-out on a clone** (ADR-044 rule 2). The five body fields are the
+/// **Blank-out on a clone** (rule 2). The five body fields are the
 /// ones a card provably cannot read — a card renders no HTML of the child's
 /// body, no links out of it and no transclusion — and each is replaced, where
 /// the card *does* observe a derived form of it, by that resolved value.
@@ -255,7 +255,7 @@ fn project_child(
     stripped.body_plan = None;
     stripped.outgoing_links = Vec::new();
     stripped.embed_deps = Vec::new();
-    // moss#1041: a card never displays a CHILD's own `lang` — the only lang a
+    // A card never displays a CHILD's own `lang` — the only lang a
     // listing reads is the HOST's own (`folder_embed.rs`'s `let lang =
     // documents[i].lang`, for localized "N articles" strings), which already
     // moves the host's own facade directly. Left in, a translation flipping
@@ -304,7 +304,7 @@ fn project_child(
 }
 
 /// The demoted predicate. It used to answer "render it"; it now answers
-/// "which groups does it read" (ADR-044).
+/// "which groups does it read".
 ///
 /// NOT a `url_path.ends_with("/index.html")` test: pretty URLs give EVERY page
 /// that shape, which would make every page a host.
@@ -321,7 +321,7 @@ pub fn hosts_listing(doc: &ParsedDocument) -> bool {
 ///
 /// `None` means **render**. Over-approximation is the only safe default —
 /// rustc keeps `eval_always` for the same reason, and it is what all host
-/// shapes did before moss#968.
+/// shapes did before this model.
 pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Option<Vec<GroupKey>> {
     let mut keys: Vec<GroupKey> = Vec::new();
 
@@ -458,7 +458,7 @@ fn resolve_sidebar_slug(reference: &str, documents: &[ParsedDocument]) -> Option
 }
 
 /// The build-global inputs to card rendering that no per-child projection
-/// covers (moss#968 FM-4).
+/// covers.
 ///
 /// A mismatch is a full-render bypass alongside `asset_versions`, not a
 /// per-group diff: these move the rendered listing of *every* group at once,

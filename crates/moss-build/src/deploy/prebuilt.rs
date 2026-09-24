@@ -64,7 +64,7 @@ pub fn build_manifest_from_dir(dir: &Path) -> Result<HashMap<String, String>, St
         // Forward-slash-only on the wire; Windows-style backslashes break
         // server-side path joins.
         let rel_str = rel.to_string_lossy().replace('\\', "/");
-        // allow:raw_read built output being uploaded — regenerable, dataless is absent (ADR-043)
+        // allow:raw_read built output being uploaded — regenerable, dataless is absent
         let bytes = std::fs::read(path)
             .map_err(|e| format!("read {}: {}", path.display(), e))?;
         let mut hasher = Sha256::new();
@@ -335,9 +335,9 @@ async fn push_prebuilt_inner(
                 crate::infra::liveness::bump();
                 // follow-up: this prebuilt (CLI build+deploy) path still emits
                 // FILE-COUNT progress; the interactive publish (deploy.rs) emits
-                // byte-based progress via a ticker (docs/archive/2026-06-11-deploy-
-                // upload-progress.md). The frontend falls back to file-count when
-                // byte fields are absent, so the hairline still moves here — just
+                // byte-based progress via a ticker. The frontend falls back to
+                // file-count when byte fields are absent, so the hairline still
+                // moves here — just
                 // by file count. C4b unifies the two loops, when the prebuilt path
                 // crosses with the state.toml publish writer it needs.
                 let done = uploaded.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;

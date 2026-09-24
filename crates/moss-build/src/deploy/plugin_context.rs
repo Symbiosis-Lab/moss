@@ -1,10 +1,9 @@
 //! The window-free half of the plugin deploy route: the context a deploy hook
 //! receives, and the one guard that can refuse a publish before it runs.
 //!
-//! These bodies drove `deploy_site` from `src-tauri/src/preview/commands.rs`
+//! These bodies drove `deploy_site` from the app's own preview-commands module
 //! until 2026-09-09 and never touched Tauri; they moved here so the headless
-//! `moss deploy` can build the same context the app does (track P, slice P1 of
-//! [the plan](../../../../../docs/archive/2026-09-09-deploy-plugin-runs-windowless-plan.md)).
+//! `moss deploy` can build the same context the app does (track P, slice P1).
 
 use crate::plugins::types::{
     DeployContext, DeployResult, HookResult, ProjectInfo, Toast, ToastOutcome,

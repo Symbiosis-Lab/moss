@@ -31,11 +31,11 @@
 //!
 //! That inverts the usual risk. A stray POSIX read on the wrong thread fails
 //! fast and is a bug moss survives; a stray coordinated read on the wrong
-//! thread is moss#986 again — a thread gone for the life of the process, and
+//! thread costs a whole thread for the life of the process, and
 //! if it is the main thread, the app.
 //!
 //! Therefore: **the only legitimate caller is `build::cloud_prefetch`'s reader
-//! pool**, whose threads exist to be lost (ADR-047) and whose wedge accounting
+//! pool**, whose threads exist to be lost and whose wedge accounting
 //! already guarantees a file that eats a thread is never handed over again. Do
 //! not call this from a build thread, an async task, a Tauri command, or the
 //! main thread. If you need bytes rather than materialization, use

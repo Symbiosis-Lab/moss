@@ -9,9 +9,9 @@
 //!
 //! The user's own identity key is one entry here too, at the reserved [`SYSTEM`]
 //! scope — the keystore is the general mechanism, and identity is its flagship
-//! caller (ADR-031). Plugin keys are separate keys at per-plugin scopes.
+//! caller. Plugin keys are separate keys at per-plugin scopes.
 //!
-//! Custody, not restriction (ADR-032): moss holds the bytes because
+//! Custody, not restriction: moss holds the bytes because
 //! `.moss/plugins/` is not gitignored, so a caller holding its own key bytes
 //! would commit a site's permanent, unrotatable key to the user's repo. Holding
 //! the bytes preserves the caller's agency (the key keeps working, stays the
@@ -156,7 +156,7 @@ impl Keystore {
         // *replaces* the file with a hidden `.name.icloud` sibling, so a bare
         // `exists()` reads the user's key as absent and the branch below mints
         // a replacement over it — the same key-loss shape `Identity::exists`
-        // guards against (moss#986).
+        // guards against (the identity-file bug).
         if path.exists() || crate::build::icloud::is_still_in_the_cloud(&path) {
             let stored = StoredKey::load(&path)?;
             if stored.algorithm != algorithm {
@@ -237,7 +237,7 @@ impl StoredKey {
     /// gitignored but deliberately *synced* (it is how a key follows the user
     /// to a second machine), so the provider is free to evict it, and a plain
     /// read of an evicted key fails `EDEADLK` under the process-wide fail-fast
-    /// policy (moss#986). Asking for it back is the only thing that ends that.
+    /// policy. Asking for it back is the only thing that ends that.
     fn load(path: &Path) -> Result<Self, KeystoreError> {
         let text = crate::build::cloud_readiness::read_to_string_with_materialize_wait(
             path,

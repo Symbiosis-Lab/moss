@@ -400,7 +400,7 @@ pub(crate) fn extract_webpage_color(html_path: &Path) -> Option<String> {
 /// page is NEVER rendered (a JS-painted canvas is statically invisible by
 /// design; see the spec's rejected-approaches section).
 ///
-/// Precedence (spec: docs/archive/2026-06-11-iframe-cover-card-color-design.md):
+/// Precedence:
 /// theme-color meta (media-less preferred, else first) → `body` → `html`;
 /// within an element a `style=` attr beats `<style>` rules; among `<style>`
 /// declarations for the same element the last one wins (cascade order).
@@ -655,7 +655,7 @@ pub const IFRAME_COVER_FALLBACK: &str = "hsla(0, 0%, 18%, 1)";
 /// `folder_embed`) MUST call, for the same reason they must share
 /// `resolve_color_source_path`: per-renderer copies of this ladder drift.
 ///
-/// Ladder (spec: docs/archive/2026-06-11-iframe-cover-card-color-design.md):
+/// Ladder:
 /// 1. `color=` pipe-attr override — wins for every cover type.
 /// 2. By cover type:
 ///    - Image/Video: scan-cached dominant color, else runtime extraction

@@ -11,7 +11,7 @@
 // so all decoration builders that honor the reveal contract show raw,
 // token-highlighted source with zero additional logic of their own.
 // (Retired 2026-08-18 for its affordance, revived 2026-09-01 with the mode
-// control — docs/archive/2026-08-31-editor-modes-and-chip-bar-redesign.md §2.)
+// control.)
 //
 // EDITOR FOCUS (cm-editor-focus.ts) is threaded here the same way, as the
 // opposite case: while the host reports the editor unfocused, no line is

@@ -1,5 +1,4 @@
-//! CJK-in-math font verification + pinning (ADR-030 §3.6, design
-//! `docs/archive/2026-07-26-cjk-in-math-verify-and-pin.md`).
+//! CJK-in-math font verification + pinning.
 //!
 //! RaTeX's `ratex-unicode-font` resolves a CJK glyph font by **silently
 //! probing system fonts** and caching the result in a process-global
@@ -141,7 +140,7 @@ pub fn probe_and_verify() -> Option<PinnedFont> {
 /// returns, so the first ratex render caches *our* choice, not a probed one.
 /// The `OnceLock` serializes the set — it runs before any render reads the var.
 ///
-/// INVARIANT (ADR-030 Consequences §CJK-in-math): this process-global pin is
+/// INVARIANT: this process-global pin is
 /// valid ONLY while font choice is process-invariant. moss is a long-running
 /// process building many sites, and math content addresses are permanent (inbox
 /// proxies cache the PNGs forever). The day font selection becomes per-site or

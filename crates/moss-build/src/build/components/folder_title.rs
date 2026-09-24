@@ -9,8 +9,7 @@
 //!      listing in `render/blocking.rs`.
 //!
 //! Index pages always carry exactly one `<h1>` after this consolidation, restoring
-//! document-outline parity with article pages. See
-//! `docs/reference/title-rendering.md`.
+//! document-outline parity with article pages.
 
 use crate::build::features::html_escape;
 

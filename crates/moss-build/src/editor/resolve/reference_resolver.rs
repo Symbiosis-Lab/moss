@@ -23,7 +23,7 @@ use std::path::Path;
 /// One reference to resolve: the raw target text plus whether it appeared in an
 /// embed context (`![[...]]` / `![](...)`) or a plain link (`[[...]]` / `[](...)`).
 /// `is_embed` is what drives the classifier's Link-vs-embed fork.
-// NOTE: `specta` is a NON-optional dependency in src-tauri (no `specta`
+// NOTE: `specta` is a NON-optional dependency in the desktop app (no `specta`
 // cargo feature exists in this crate), so the gated `cfg_attr(feature =
 // "specta", ...)` form would never actually derive `specta::Type` and the
 // `#[specta::specta]` command would fail to compile. Match the existing

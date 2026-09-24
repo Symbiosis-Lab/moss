@@ -2,7 +2,7 @@
 //! and how a template's frontmatter is reset when it's instantiated into a
 //! new page.
 //!
-//! Template storage and file I/O live in src-tauri (`.moss/templates/`) —
+//! Template storage and file I/O live in the desktop app (`.moss/templates/`) —
 //! this module never touches the filesystem. Frontmatter here is the same
 //! untyped `HashMap<String, serde_yaml::Value>` `crate::frontmatter` reads
 //! and writes, not the vault's typed `FrontMatter`/`BUILTIN_FIELDS` schema:

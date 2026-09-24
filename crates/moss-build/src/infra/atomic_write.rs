@@ -23,7 +23,7 @@
 //! Temp-then-rename rather than a plain `fs::write` for a second reason: a
 //! write opens the destination `O_TRUNC`, which fails `EDEADLK` against a file
 //! the sync client has evicted, while a rename **over** an evicted file
-//! succeeds (ADR-043). So "simplify this back to `fs::write`" is a change that
+//! succeeds. So "simplify this back to `fs::write`" is a change that
 //! breaks on a cloud-synced folder and nowhere else.
 
 use std::path::Path;

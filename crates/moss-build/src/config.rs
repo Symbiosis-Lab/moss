@@ -3,8 +3,7 @@
 //! # Who owns this file
 //!
 //! The **app** owns `.moss/config.toml`: every setting is written from a
-//! settings modal, and every writer lives in the app crate
-//! ([ADR-059](../../../../docs/decisions/ADR-059-config-reader-and-migration-runner-after-the-crate-split.md)).
+//! settings modal, and every writer lives in the app crate.
 //! What ships here is the **reader**, because the CLI reads config too and
 //! `moss-cli` cannot depend on the app crate (`scripts/check-crate-dag.mjs`
 //! rule 4). Ownership did not move; the reader's home did.
@@ -29,11 +28,11 @@
 //!   its default. The CLI needs the eviction-aware read too — which is one more
 //!   reason that cluster crosses the crate line at step 4.
 //!
-//! Splitting it this way is also what keeps this module honest about the third
-//! rule in ADR-059: **advanced users hand-edit this file.** Nothing here can
+//! Splitting it this way is also what keeps this module honest about a core
+//! rule: **advanced users hand-edit this file.** Nothing here can
 //! write, so nothing here can disturb a comment, a key order or a quoting
 //! style. A reader preserves them by construction; the one writer primitive
-//! this crate holds, [`crate::vault::config`] (ADR-059 amendment, 2026-09-07),
+//! this crate holds, [`crate::vault::config`],
 //! preserves them with `infra::toml_rewrite`, and the app's modal-driven
 //! writers go through the same door.
 
@@ -69,8 +68,8 @@ impl ConfigFile {
     /// caller would then act on.
     ///
     /// The parsed value is migrated to `CURRENT_VERSION` **in memory** before
-    /// any key is read (open-CLI slice 3, #1019). ADR-059 warned that once
-    /// moss-cli is a separate binary "no single migration point both reach"
+    /// any key is read (open-CLI slice 3). Once
+    /// moss-cli is a separate binary, "no single migration point both reach"
     /// exists, and a host that forgets to migrate renders a v4 config's absent
     /// keys as defaults with no error anywhere — migrating at the one parse
     /// funnel closes that class for every host, current and future. The
@@ -174,8 +173,7 @@ impl ConfigFile {
     }
 
     /// `[history].enabled` — whether a landed publish snapshots into the
-    /// vault's own publish-history store, at `.moss/history/`
-    /// ([ADR-083](../../../../docs/decisions/ADR-083-publish-history-lives-in-the-vault.md)).
+    /// vault's own publish-history store, at `.moss/history/`.
     /// `None` when unset; the caller's default is on.
     pub fn history_enabled(&self) -> Option<bool> {
         self.root

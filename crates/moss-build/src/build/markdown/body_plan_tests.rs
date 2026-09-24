@@ -45,7 +45,7 @@ fn resolve(doc: &mut moss_core::ast::Document) {
 /// Markdown that exercises every block kind the plan has to segment across:
 /// prose, headings, a grid (its own segment), a gallery, a table, code, lists,
 /// callouts, blockquotes, math, and CJK prose immediately before a grid — the
-/// exact shape that used to abort the build (moss#903 bug 1).
+/// exact shape that used to abort the build.
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![
         ("empty", ""),
@@ -214,7 +214,7 @@ fn summary_is_read_from_typed_classes_not_the_serialized_tag() {
     assert!(!grid.summary());
 }
 
-/// The ADR-034 invariant still holds for a `.summary` fence BEFORE the render
+/// The byte-identical-serialization invariant still holds for a `.summary` fence BEFORE the render
 /// pass runs: the class changes what a later phase does with the segment, not
 /// what the serializer emitted.
 #[test]
@@ -248,7 +248,7 @@ fn lede_end_of(md: &str) -> (usize, usize) {
 
 #[test]
 fn lede_ends_at_the_first_heading_after_a_paragraph() {
-    // moss#903 bug 4: a long-form article on a cover-bearing folder home was
+    // A regression where a long-form article on a cover-bearing folder home was
     // typeset in the narrow cover column for its ENTIRE body because the only
     // recognized release point was a literal `.moss-grid`.
     let (end, total) = lede_end_of(

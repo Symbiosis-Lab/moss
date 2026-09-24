@@ -15,11 +15,10 @@
 //! Phase 2E v5 PR5 (2026-05-26) is gone — the moss-core synthesizers
 //! now own all attribute emission at parse time.
 //!
-//! # References
+//! # Design notes
 //!
-//! - [`docs/reference/structural-html-emission.md`](../../../../docs/reference/structural-html-emission.md): the seam this module lives within
-//! - ADR-002: Dynamic SVG placeholders with dominant color
-//! - ADR-006: Thumbnail-based extraction for performance
+//! - dynamic SVG placeholders carry a dominant color
+//! - dimension extraction uses a thumbnail rather than the full image, for performance
 
 use crate::types::content::MediaMetadata;
 use moss_core::asset_snapshot::{FALLBACK_HEIGHT, FALLBACK_WIDTH};

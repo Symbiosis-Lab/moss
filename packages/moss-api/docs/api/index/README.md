@@ -110,7 +110,7 @@ type PluginHook = "import" | "publish" | "deploy" | "syndicate" | "process";
 ```
 
 `PluginHook` mirrors the closed Rust enum in
-`src-tauri/src/plugins/types.rs`. The router (T1) cross-products
+the app's plugin types module. The router (T1) cross-products
 `PluginHook × TriggerContext` to pick a UI surface for the task.
 Plugin authors pick the hook that matches what they're doing; they
 do NOT pick the surface (the router owns that).
@@ -243,7 +243,7 @@ Awaiting pulse) surfaces the task. Plugin authors do NOT pick the
 surface; they just describe what they're doing and why.
 
 Preferred over `reportProgress()` for new code. The legacy API stays
-supported until ADR-015 Phase 3 sweeps all 151 call sites.
+supported until a later phase sweeps the remaining call sites.
 
 #### Parameters
 
@@ -1639,7 +1639,7 @@ Messages that plugins can send to moss
 | Interface | Description |
 | ------ | ------ |
 | [SocialArticleData](interfaces/SocialArticleData.md) | The social data for a single article — currently its comments. |
-| [SocialComment](interfaces/SocialComment.md) | One comment in the .moss/data/social/*.json shared standard. See moss/docs/reference/social-data-standard.md. |
+| [SocialComment](interfaces/SocialComment.md) | One comment in the .moss/data/social/*.json shared standard. |
 | [SocialDataFile](interfaces/SocialDataFile.md) | A `.moss/data/social/*.json` file: the schema version plus every article's social data, keyed by article path. |
 
 ## Keys

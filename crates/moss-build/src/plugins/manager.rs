@@ -182,7 +182,7 @@ pub struct PluginManager {
     /// cloned into the engine adapter so both stamp the same registries.
     host: AdapterHost,
 
-    /// Engine that performs hook dispatch (#789 Phase 4): `QuickJsEngineAdapter`,
+    /// Engine that performs hook dispatch: `QuickJsEngineAdapter`,
     /// the only one since the hidden-webview escape hatch was removed.
     engine: Arc<dyn PluginEngine>,
 
@@ -196,8 +196,7 @@ pub struct PluginManager {
 ///
 /// CARDINALITY (Phase-3 D1): one engine per PluginManager (per project). The engine's
 /// per-plugin Context map is keyed by name only; per-manager keeps it project-safe and
-/// folder-close teardown replaces a dead engine. Process-global was rejected — see
-/// docs/archive/2026-06-10-plugin-runtime-phase3-real-plugins.md D1.
+/// folder-close teardown replaces a dead engine. Process-global was rejected.
 fn build_engine(
     host: AdapterHost,
     project_path: &str,
@@ -300,8 +299,8 @@ impl PluginManager {
     ///
     /// Carried a Phase-4 condition-3 warning about engine_kind never being
     /// re-evaluated here: a mid-session `enhance` install left one bundle
-    /// loaded in two runtimes with split module state. ADR-055 retired the
-    /// capability, and with it the only way to reach that state.
+    /// loaded in two runtimes with split module state. Retiring the
+    /// capability retired the only way to reach that state.
     pub fn rediscover_plugins(&self) {
         match discover_plugins(&self.project_path) {
             Ok(plugins) => {
@@ -325,8 +324,8 @@ impl PluginManager {
     /// Was `find_single_plugin_by_capability(&Capability)` with an
     /// auto-activate ladder — configured-in-`[hooks]`, else the sole
     /// capability-bearer, else an error naming the conflict. Deploy never took
-    /// that path and `generate`, the only other caller, was retired by
-    /// ADR-055, so the parameter went with the ladder.
+    /// that path and `generate`, the only other caller, was retired,
+    /// so the parameter went with the ladder.
     ///
     /// It asks the one resolver that owns "which target is Publish about to
     /// use" — the same one the Host row and the setup gate read. It used to
@@ -343,7 +342,7 @@ impl PluginManager {
             .and_then(|name| self.find_plugin_by_name(&name))
     }
 
-    /// Build an advisory for a plugin process-hook sync failure (issue #793).
+    /// Build an advisory for a plugin process-hook sync failure.
     ///
     /// Scope: Remote — the hook ran but reported a sync failure, typically a
     /// network/API problem reaching the remote platform.
@@ -774,8 +773,8 @@ impl PluginManager {
     /// issue only affects process/generate/slots hooks that can fire from both
     /// install and build paths simultaneously.
     ///
-    /// WITHIN-MANAGER CONCURRENCY PARITY (#789 Phase-3 plan, D1 "Known latent
-    /// issue #2" — documented, NOT fixed here): deploy/syndicate hooks have NO
+    /// WITHIN-MANAGER CONCURRENCY PARITY (documented, NOT fixed here):
+    /// deploy/syndicate hooks have NO
     /// singleflight, so a deploy hook can overlap a build's process hook for the
     /// SAME plugin on the SAME engine Context — the first hook to finish clears
     /// `__MOSS_INTERNAL_CONTEXT__` out from under the still-running one (SDK
@@ -802,8 +801,8 @@ impl PluginManager {
     /// The one hook-execution spine: context prep, engine dispatch, the
     /// activity-based watchdog, teardown, and the final progress emit.
     ///
-    /// Routed through `engine.dispatch_hook` (the `PluginEngine` trait,
-    /// #789 Phase 2/3). The sink routes signals into the SAME PluginHookState
+    /// Routed through `engine.dispatch_hook` (the `PluginEngine` trait).
+    /// The sink routes signals into the SAME PluginHookState
     /// the select! loop below reads, and the Complete signal carries the
     /// HookResult into the completion oneshot.
     ///
@@ -996,7 +995,7 @@ mod tests {
         assert!(cache.get_or_create("/nowhere/that/exists").is_err(), "an unresolvable folder is an error, not a manager");
     }
 
-    // ── plugin advisory constructors (issue #793) ─────────────────────────
+    // ── plugin advisory constructors ───────────────────────────────────────
 
     /// Hook-failure advisory: Remote scope, NeedsAction severity, no action.
     #[test]

@@ -23,7 +23,7 @@ The full size scale runs `--moss-size-{2xs,xs,sm,md,lg,xl,2xl,3xl}`.
 | color | `--moss-border-medium` | `#d1cdc4` | Medium border color |
 | color | `--moss-color-accent` | `#2d5a2d` | Links, highlights, accent elements |
 | color | `--moss-color-accent-hover` | `color-mix(in oklch, var(--moss-color-accent) 85%, black)` | Accent color on hover — auto-derived from --moss-color-accent. Light: darkens accent by mixing 85% accent + 15% black (hover = press-down cue). Dark: lightens accent by mixing 80% accent + 20% white (hover = surface lift). Override only if the mix produces a wrong result for a custom palette. |
-| color | `--moss-color-accent-quiet` | `rgba(45, 90, 45, 0.28)` | Quiet accent for ambient indicators (hairlines, tree-row left-borders). ~28% opacity of moss-color-accent. Consumed by the breadcrumb and preview hairlines (ADR-015 Ambient renderer). |
+| color | `--moss-color-accent-quiet` | `rgba(45, 90, 45, 0.28)` | Quiet accent for ambient indicators (hairlines, tree-row left-borders). ~28% opacity of moss-color-accent. Consumed by the breadcrumb and preview hairlines. |
 | color | `--moss-color-bg` | `#faf8f5` | Page background |
 | color | `--moss-color-muted` | `#8a8580` | Secondary/muted text |
 | color | `--moss-color-surface` | `#f4f1ec` | Card and surface background |

@@ -81,7 +81,7 @@ under Unreleased for seven weeks after users could already install them._
 
 ### Added
 
-- First publish via the open-source release pipeline (#738). moss-api source consolidated into the moss monorepo; CI build pipeline replaces the standalone repo's build setup.
+- First publish via the open-source release pipeline. moss-api source consolidated into the moss monorepo; CI build pipeline replaces the standalone repo's build setup.
 - `httpPostMultipart(url, { textFields, files }, options)` — POST a `multipart/form-data` body (ordered text fields + base64 file parts). Enables binary uploads that the JSON-only `httpPost` cannot express, e.g. uploading image/audio bytes (read via `readSiteFile`) to a syndication target's GraphQL `singleFileUpload`. moss builds the multipart body, generates the boundary, and sets the Content-Type. New `MultipartTextField` / `MultipartFilePart` / `MultipartPostOptions` types.
 - First npm appearance of the [0.8.0] items below: `SocialComment`, `contributes.jobs`, and `startTask()` (`exposeAdvisoryPath()` did not make the bundle; it ships in 0.11.0).
 
@@ -104,7 +104,7 @@ _Pending publish — cumulative since `0.7.12` (last released on main); full det
 
 ### Minor Changes
 
-- #738 Thanks [@guoliu](https://github.com/guoliu)! - First publish via the open-source release pipeline. moss-api source consolidated into the moss monorepo; CI build pipeline replaces the standalone repo's build setup.
+- Thanks [@guoliu](https://github.com/guoliu)! - First publish via the open-source release pipeline. moss-api source consolidated into the moss monorepo; CI build pipeline replaces the standalone repo's build setup.
 
 ## [0.8.0] - 2026-06-11
 

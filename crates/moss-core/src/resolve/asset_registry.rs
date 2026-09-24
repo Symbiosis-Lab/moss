@@ -7,14 +7,14 @@
 //!   the `ExtKind` for any extension by looking up this table.
 //! - `crates/moss-core/src/resolve/embed_renderer.rs` — the renderer subset test asserts
 //!   that every extension the renderer handles is present here.
-//! - `frontend/app/editor/asset-registry.generated.ts` — generated TypeScript const
+//! - the frontend editor's `asset-registry.generated.ts` — generated TypeScript const
 //!   consumed synchronously during drag-and-drop in the editor (cannot IPC round-trip).
-//! - `docs/reference/supported-assets.md` — generated user-facing reference table.
+//! - the generated user-facing supported-assets reference table.
 //!
 //! **To add or change a file type:**
 //! 1. Edit `ASSET_REGISTRY` in this file.
 //! 2. Run `pnpm run gen:assets` from the repo root to regenerate both
-//!    `asset-registry.generated.ts` and `docs/reference/supported-assets.md`.
+//!    generated outputs.
 //! 3. Commit all three files together (`asset_registry.rs` + the two generated outputs).
 
 use crate::resolve::ext_kind::ExtKind;
@@ -22,7 +22,7 @@ use crate::resolve::ext_kind::ExtKind;
 /// Metadata for a single file type supported by moss.
 ///
 /// The embed string itself is not stored here — use `wrapEmbedWikilink(name)`
-/// from `frontend/app/editor/wikilink-syntax.ts` as the single source of truth
+/// from the frontend editor's `wikilink-syntax.ts` as the single source of truth
 /// for constructing `![[name]]` strings. Keeping the template out of the struct
 /// prevents parallel drift between a data field and the builder function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

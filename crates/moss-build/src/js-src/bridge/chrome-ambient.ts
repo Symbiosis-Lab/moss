@@ -1,7 +1,7 @@
 /**
  * Chrome ambient sampling — the iframe half.
  *
- * ADR-039 inset the preview iframe below the floating titlebar, which fixed a
+ * Insetting the preview iframe below the floating titlebar fixed a
  * nine-time-recurring geometry bug but cost the glass its content: the pill's
  * `backdrop-filter` now blurs the shell's flat container background, because
  * there are no page pixels above the iframe's top edge any more.

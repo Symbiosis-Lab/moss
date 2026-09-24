@@ -51,7 +51,7 @@ use crate::types::{content::ProjectStructure, runtime::ChildProcessRegistry};
 /// because 97 MB ÷ 340 s happens to equal that. Nothing about any viewer's
 /// bandwidth entered the calculation, and a shorter clip got a *higher*
 /// bitrate for the same reason. That is what made playback fail on throttled
-/// links — see `docs/archive/2026-08-27-video-delivery-on-slow-networks.md`.
+/// links.
 ///
 /// # References
 /// - Rate Control: https://slhck.info/video/2017/03/01/rate-control.html
@@ -454,7 +454,7 @@ fn resolve_ffprobe_path(ffmpeg_bin_path: &str) -> Result<String, String> {
 /// * `Err(String)` - Copy failed
 pub fn copy_video_as_fallback(source: &Path, output: &Path) -> Result<(), String> {
     // `copy_output`: the destination is build output, so a cloud-evicted one
-    // is discarded rather than materialized (ADR-043). Parent dirs included.
+    // is discarded rather than materialized. Parent dirs included.
     crate::build::io_utils::copy_output(source, output)
         .map_err(|e| format!("Failed to copy video: {}", e))?;
 

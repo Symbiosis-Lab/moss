@@ -1,5 +1,5 @@
 /**
- * Playwright config for the floating nav island's LAYOUT guard (ADR-049).
+ * Playwright config for the floating nav island's LAYOUT guard.
  *
  * Two of the island's promises are geometry, and geometry is the one thing
  * neither a Rust test nor jsdom can answer:

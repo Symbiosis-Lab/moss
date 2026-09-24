@@ -46,8 +46,8 @@ fn empty_cell() -> ServedCell {
 /// build may not sweep while the withheld build's workers still write staging.
 ///
 /// Render 1 is shown and promoted; build 2 parks on `current` and renders a
-/// page only it has, but could not read its sources. Showing it anyway is
-/// moss#1042's flip. Build 3 then starts while build 2's background workers are
+/// page only it has, but could not read its sources. Showing it anyway would
+/// flip the outcome. Build 3 then starts while build 2's background workers are
 /// still running, and a sweep then would unlink what they are writing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_withheld_render_is_never_shown_and_its_workers_block_the_next_sweep() {

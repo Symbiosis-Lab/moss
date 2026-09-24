@@ -477,7 +477,7 @@ mod stale_dir_cleanup_tests {
     }
 }
 
-/// Tests for non-blocking video conversion (ADR-001: Two-Phase Build).
+/// Tests for non-blocking video conversion (Two-Phase Build).
 ///
 /// The problem: Video conversion blocks the preview UI. Users see
 /// "Converting video 2/3... 80%" and cannot use the preview until
@@ -1140,7 +1140,7 @@ mod auto_folder_index_tests {
         fs::write(test_dir.join("index.md"), "# My Site").unwrap();
 
         // Folder with hyphens: "my-videos" should become "my videos"
-        // (#775: synthetic folder indexes use `filename_text` — hyphens →
+        // (synthetic folder indexes use `filename_text` — hyphens →
         // spaces, NO title-casing — so a folder renders identical H1/title
         // text whether or not it has an `index.md`).
         let folder = test_dir.join("my-videos");
@@ -1173,7 +1173,7 @@ mod auto_folder_index_tests {
         // The page title should be in the <title> tag
         assert!(
                 content.contains("my videos"),
-                "Auto-generated page title should derive from folder name 'my-videos' -> 'my videos' (#775: filename_text, no title-casing)"
+                "Auto-generated page title should derive from folder name 'my-videos' -> 'my videos' (filename_text, no title-casing)"
             );
     }
 
@@ -2104,8 +2104,7 @@ mod folder_cover_grid_escapes_narrow_column {
     }
 }
 
-/// Where a cover-bearing folder home releases its narrow column, end to end
-/// (moss#903 bugs 1 and 4, closed by ADR-034).
+/// Where a cover-bearing folder home releases its narrow column, end to end.
 ///
 /// Both bugs had one cause: the release point was found by cutting the page's
 /// already-rendered HTML string. `split_lead_before_grid` walked a byte cursor
@@ -2187,7 +2186,7 @@ mod folder_cover_lede_release {
             .unwrap_or_else(|| panic!("cover row never closes in:\n{html}"))
     }
 
-    /// moss#903 bug 1. CJK prose in the lede of a cover-bearing folder home
+    /// CJK prose in the lede of a cover-bearing folder home
     /// aborted the build outright: `start byte index 66 is not a char boundary;
     /// it is inside '在'`. Any non-ASCII byte before the grid was enough — the
     /// cursor stepped one byte at a time and then sliced.
@@ -2213,7 +2212,7 @@ mod folder_cover_lede_release {
         );
     }
 
-    /// moss#903 bug 4. A long-form article body on a cover-bearing folder home
+    /// A long-form article body on a cover-bearing folder home
     /// has no grid to release at, so the whole body used to be typeset in the
     /// narrow column with half the viewport empty beside it. The release point
     /// is now the end of the lede — the first heading after a paragraph.
@@ -2792,7 +2791,6 @@ mod children_field_tests {
 
     /// Regression: `children: false` must suppress `data-layout="grid"`
     /// on folder-index pages that use `children_style: grid`.
-    /// See docs/archive/2026-04-20-moss-dogfood-tier-1-fixes.md Task 2.9.
     #[test]
     fn test_children_false_suppresses_grid_on_folder_index() {
         let mut homepage = make_doc("Test Site", "index.html");
@@ -2855,7 +2853,6 @@ mod children_field_tests {
     /// On a real site we observed `.moss-cards[data-layout="grid"]` emitted above the hero and
     /// `.moss-cards[data-layout="list"]` after the footer on zh-hans home. This pins the
     /// behavior so custom homepages can fully opt out of auto-emitted listings.
-    /// See docs/archive/2026-04-20-moss-dogfood-tier-1-fixes.md Task 2.9.
     #[test]
     fn test_children_false_suppresses_both_on_homepage() {
         let mut homepage = make_doc("Test Site", "index.html");
@@ -3430,7 +3427,7 @@ mod children_field_tests {
 
             // The folder-index heading is moss's own, rendered from `title:`.
             // Translation homes and `home: true` pages deliberately render no
-            // such heading (see docs/reference/title-rendering.md), so there
+            // such heading, so there
             // is nothing to annotate there.
             if html.contains("moss-folder-title") {
                 assert!(
@@ -4603,8 +4600,7 @@ mod children_field_tests {
     /// An ORDINARY page (not the homepage, not a folder index) carrying
     /// `children: '[[/]]'` + `children_depth: all` should host a whole-site
     /// listing the same way the homepage branch's `children_source` does.
-    /// docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §4: the
-    /// "Regular page content" arm only synthesized a children marker when
+    /// The "Regular page content" arm only synthesized a children marker when
     /// `is_folder_index || term_listing.is_some()`, so this page's parsed
     /// `children_source`/`children_depth` were silently dropped on the floor.
     #[test]
@@ -6017,7 +6013,6 @@ mod article_cover_tests {
 ///
 /// Class is `moss-folder-title`, shared with the explicit-folder-index paths
 /// in `folder_cover.rs` (cover branch) and the no-cover branch in this file.
-/// See `docs/reference/title-rendering.md`.
 #[test]
 fn test_auto_folder_index_includes_h1_heading() {
     let folder_h1 = crate::build::components::folder_title::render("文字", false);
@@ -6233,7 +6228,7 @@ mod home_file_demotion_tests {
 mod video_path_mapping_integration_tests {
     /// End-to-end test: build a site with Chinese directory names and
     /// url overrides, verify that dir_overrides is captured on BackgroundContext.
-    /// Also asserts that no .placeholder.svg files are produced (Pattern E removed, #615).
+    /// Also asserts that no .placeholder.svg files are produced (Pattern E removed).
     #[test]
     fn test_cjk_dir_overrides_captured_in_deferred_work() {
         use crate::build::manifest::PendingManifest;
@@ -6297,7 +6292,7 @@ mod video_path_mapping_integration_tests {
             "dir_overrides should map '视频' → 'video'"
         );
 
-        // Pattern E removed (#615): no .placeholder.svg keys in manifest
+        // Pattern E removed: no .placeholder.svg keys in manifest
         {
             let hashes = &site_result.hashes;
             let placeholder_keys: Vec<&str> = hashes
@@ -6314,7 +6309,7 @@ mod video_path_mapping_integration_tests {
         }
     }
 
-    /// Acceptance criterion for #615: PendingManifest after generate_blocking_content
+    /// Acceptance criterion: PendingManifest after generate_blocking_content
     /// must not contain any keys ending in .placeholder.svg, even for sites with videos.
     #[test]
     fn test_no_placeholder_svg_in_manifest_after_build() {
@@ -7667,7 +7662,7 @@ mod homepage_translation_tests {
 
         // Create both homepage files
         // Pin lang on each homepage so dedup tiers are deterministic regardless of
-        // whatlang confidence on short bodies. Post-#545 the site default falls
+        // whatlang confidence on short bodies. The site default falls
         // back to whichever lang has a reliable detection (here only the CJK file
         // does) and the English-content `index.md` has no signal — without an
         // explicit lang both docs collapse to ZhHans and dedup uses a numeric
@@ -7735,7 +7730,7 @@ mod homepage_translation_tests {
         fs::create_dir_all(&output_dir).unwrap();
 
         // Pin lang on each homepage so dedup tiers are deterministic regardless of
-        // whatlang confidence on short bodies. Post-#545 the site default falls
+        // whatlang confidence on short bodies. The site default falls
         // back to whichever lang has a reliable detection (here only the CJK file
         // does) and the English-content `index.md` has no signal — without an
         // explicit lang both docs collapse to ZhHans and dedup uses a numeric
@@ -7785,8 +7780,7 @@ mod homepage_translation_tests {
     /// Homepage translation should NOT render an injected article title.
     /// When index.zh-hans.md is demoted (is_index=false), it must still be
     /// recognized as a folder/index page by the markdown pipeline so that
-    /// the auto-injection (`<h1 class="moss-article-title">`) added in
-    /// `docs/archive/2026-04-28-auto-h1-injection-design.md` is not applied
+    /// the auto-injection (`<h1 class="moss-article-title">`) is not applied
     /// above the authored body. The legacy `.article-title` class no
     /// longer ships as an injected class but is also asserted absent.
     #[test]
@@ -7797,7 +7791,7 @@ mod homepage_translation_tests {
         fs::create_dir_all(&output_dir).unwrap();
 
         // Pin lang on each homepage so dedup tiers are deterministic regardless of
-        // whatlang confidence on short bodies. Post-#545 the site default falls
+        // whatlang confidence on short bodies. The site default falls
         // back to whichever lang has a reliable detection (here only the CJK file
         // does) and the English-content `index.md` has no signal — without an
         // explicit lang both docs collapse to ZhHans and dedup uses a numeric
@@ -7916,7 +7910,7 @@ mod homepage_translation_tests {
         fs::create_dir_all(&output_dir).unwrap();
 
         // Pin lang on each homepage so dedup tiers are deterministic regardless of
-        // whatlang confidence on short bodies. Post-#545 the site default falls
+        // whatlang confidence on short bodies. The site default falls
         // back to whichever lang has a reliable detection (here only the CJK file
         // does) and the English-content `index.md` has no signal — without an
         // explicit lang both docs collapse to ZhHans and dedup uses a numeric
@@ -8171,8 +8165,7 @@ mod homepage_translation_tests {
     }
 
     /// `<html lang>` should reflect each page's actual language, not the
-    /// site default. Regression for the bug filed in
-    /// docs/archive/2026-04-20-html-lang-per-page-fix.md.
+    /// site default.
     #[test]
     fn test_html_lang_attribute_is_per_page() {
         let (test_dir, _cleanup) = create_test_dir();
@@ -8238,8 +8231,8 @@ mod homepage_translation_tests {
 /// the production render code applies to suppress `moss-folder-title`.
 mod lang_tree_root_home_tests {
     /// Helper: compute the is_lang_tree_root_home predicate for a given
-    /// source_path and url_path, matching the production logic at
-    /// `src-tauri/src/build/render/html.rs`.
+    /// source_path and url_path, matching the production logic in
+    /// `build/render/html.rs`.
     fn is_lang_tree_root_home(source_path: Option<&str>, url_path: &str) -> bool {
         source_path
             .and_then(|p| moss_core::home::lang_tree_prefix(p))
@@ -8380,7 +8373,7 @@ mod sequence_siblings_tests {
         );
     }
 
-    /// #1012: `layout: article` is the author saying "this one is a piece",
+    /// `layout: article` is the author saying "this one is a piece",
     /// so the folder index rejoins the chain — and, being in it, renders its
     /// own prev/next too. `subfolder_index_is_not_a_neighbour` above is the
     /// other half of the pair: a folder index that said nothing stays a

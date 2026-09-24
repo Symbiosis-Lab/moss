@@ -55,8 +55,8 @@ pub fn to_pretty_url(file_path: &str) -> String {
 // Lived in `plugins/types.rs` until 2026-08-17 because its *readers* are the
 // syndication plugins. But the build is what fills it and what persists it —
 // `ArticleMap` right below is nothing but a map of these — so the plugin module
-// was owning a type the build produced, which is the dependency edge ADR-050
-// points the other way. Plugins import it from here now.
+// was owning a type the build produced, which points the dependency edge the
+// wrong way. Plugins import it from here now.
 //
 // The rationale is a plain comment, not a doc comment: this type carries
 // `Type`, so every `///` line here is copied verbatim into `bindings.ts` and
@@ -139,8 +139,7 @@ pub struct ArticleMap {
     ///
     /// Root causes only, never the pages a duplicated folder dragged along
     /// with it. Empty on a site with no duplicated `url:`, which is nearly all
-    /// of them. See
-    /// docs/archive/2026-09-02-url-collision-as-a-frontmatter-diagnostic.md.
+    /// of them.
     #[serde(default)]
     pub url_collisions: HashMap<String, UrlCollision>,
 
@@ -151,8 +150,7 @@ pub struct ArticleMap {
     /// namespace roots are not documents at all. Kept apart from `pages`
     /// because every `pages` consumer joins its value to a source file, and a
     /// synthesized page has none. The editor's URL index reads this so a link
-    /// to a generated page classifies the way the build deploys it
-    /// (docs/archive/2026-09-02-term-links-editor-verify-and-follow.md).
+    /// to a generated page classifies the way the build deploys it.
     #[serde(default)]
     pub generated: Vec<String>,
 
@@ -233,7 +231,7 @@ impl ArticleMap {
         let map_path = paths.article_map();
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize article map: {}", e))?;
-        // Atomic write (#820): the map is rewritten on every build, and concurrent
+        // Atomic write: the map is rewritten on every build, and concurrent
         // readers (editor `resolve_page_source`, syndication) must never catch a
         // half-truncated file. A plain `fs::write` truncates-then-writes, leaving a
         // window where a reader gets partial/empty JSON → a parse error. Write to a
@@ -301,7 +299,7 @@ impl ArticleMap {
 ///
 /// Returns a `BTreeMap`, not a `HashMap`: this map ends up (unmodified,
 /// via `ParsedDocument::raw_frontmatter`) inside the `Debug` string
-/// `PageFacade` hashes (moss#922). `HashMap`'s per-process-random hasher
+/// `PageFacade` hashes. `HashMap`'s per-process-random hasher
 /// makes its `Debug` iteration order — and thus the facade hash — differ
 /// between build invocations for byte-identical frontmatter; verified
 /// empirically against a real vault (208/216 pages "changed" with zero
@@ -482,7 +480,7 @@ pub fn build_article_map(
         // no page of their own — the render partition skips them
         // (`render/blocking.rs`, the `doc.slot_only` filter). They deliberately
         // stay in `documents` so the slot collector can reach their parsed HTML
-        // through the normal data path (moss#599), which is exactly why this
+        // through the normal data path, which is exactly why this
         // loop has to exclude them explicitly: without this gate `footer.md`
         // lands under the key `footer/`, and the map is the ONLY reason
         // anything believes that URL exists. Two consequences followed —
@@ -490,7 +488,6 @@ pub fn build_article_map(
         // `/footer/` that was never emitted (404), and
         // `editor::commands::resolve_page_source` reported `is_article: true`,
         // which arms the syndicate path in `plugins::syndicate`.
-        // See docs/archive/2026-08-02-footer-slot-preview-and-chip-bar.md.
         if doc.slot_only {
             continue;
         }

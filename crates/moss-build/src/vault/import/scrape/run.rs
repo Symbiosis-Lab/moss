@@ -5,7 +5,7 @@
 //! leaves through the `on_progress` closure the caller supplies, which is a
 //! Tauri emit in the app, a `TaskRegistry` handle behind the import panel,
 //! and a no-op in `moss import`. The one Tauri wrapper that supplies the
-//! second of those stays in `src-tauri/src/scrape.rs`.
+//! second of those stays in the desktop app.
 
 use serde::{Deserialize, Serialize};
 use specta::Type;

@@ -121,13 +121,13 @@ pub(crate) fn math_source_from_other(html: &str) -> Option<String> {
 ///
 /// This is what lets the renderer route a math node through
 /// [`RenderHooks::render_math`](crate::ast::RenderHooks::render_math) without a
-/// dedicated `Inline::Math` AST variant (ADR-030 D3): the P1 node already
+/// dedicated `Inline::Math` AST variant: the P1 node already
 /// carries the source verbatim, so P2's typesetter recovers the exact bytes the
 /// engine needs. Round-tripping `math_inline` → this is pinned by
 /// `node_parts_round_trips` below.
 ///
 /// `pub` for the same reason as [`math_source`]: the email HTML renderer in
-/// `moss::infra::newsletter` walks `Document` directly (ADR-036) rather than
+/// `moss::infra::newsletter` walks `Document` directly rather than
 /// going through `RenderHooks`, so it decodes `Inline::Other` math nodes here
 /// to route them through its own hosted-PNG math path, falling back to the
 /// escaped source on refusal — the same three-question gate `render_math`

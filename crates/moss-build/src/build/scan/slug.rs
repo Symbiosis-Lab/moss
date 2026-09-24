@@ -9,7 +9,7 @@
 use crate::build::types::ParsedDocument;
 use moss_core::PageKind;
 
-// generate_slug and slugify_path_segments moved to moss-core (ADR-018).
+// generate_slug and slugify_path_segments moved to moss-core.
 pub use moss_core::slug::{generate_slug, slugify_path_segments};
 
 /// Lowercase directory segments only; preserve the final basename verbatim.
@@ -101,7 +101,7 @@ pub fn generate_uid(_relative_path: &str) -> String {
 /// WHERE the frontmatter is, is `moss_core::frontmatter::frontmatter_span`'s
 /// call, never a local scan: this writes its answer back to the author's file,
 /// so a `---` misread as a delimiter corrupts their document. That is exactly
-/// what a local copy did to a page whose body opened with `:::grid` (moss#932).
+/// what a local copy did to a page whose body opened with `:::grid`.
 pub fn insert_uid_into_frontmatter(content: &str, uid: &str) -> String {
     let Some(span) = moss_core::frontmatter::frontmatter_span(content) else {
         return content.to_string();
@@ -160,7 +160,7 @@ pub fn insert_uid_into_frontmatter(content: &str, uid: &str) -> String {
 /// If the content has no `uid:` field in its frontmatter, returns the content
 /// unchanged. Both dialects; the body is never touched — a `uid:` line in an
 /// author's prose or code block used to be rewritten, because this scanned the
-/// whole file rather than the frontmatter (moss#937).
+/// whole file rather than the frontmatter.
 pub fn replace_uid_in_frontmatter(content: &str, new_uid: &str) -> String {
     let Some(span) = moss_core::frontmatter::frontmatter_span(content) else {
         return content.to_string();
@@ -204,8 +204,7 @@ pub fn replace_uid_in_frontmatter(content: &str, new_uid: &str) -> String {
 /// The repair is always an edit to the **loser's** `url:` — the keeper is
 /// named only so the author can see which pair is in conflict. Produced by
 /// [`resolve_duplicate_slugs_with_lang`] and reported at the frontmatter
-/// field, not in the log: see
-/// docs/archive/2026-09-02-url-collision-as-a-frontmatter-diagnostic.md.
+/// field, not in the log.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct UrlCollision {
     /// Source path of the file whose `url:` must change.
@@ -299,7 +298,6 @@ pub(crate) fn push_unless_reserved_device_output(
 /// disk. `compute_url_path` returns `.../index.html` on every branch; the root
 /// home (`index.html`) is the one page with no directory of its own, and gets
 /// one here, so the result is directory-shaped unconditionally.
-/// See docs/archive/2026-09-01-duplicate-url-override-index-n-404.md.
 fn numbered(url_path: &str, n: u32) -> String {
     match url_path.strip_suffix("/index.html") {
         Some(dir) => format!("{}-{}/index.html", dir, n),
@@ -324,8 +322,7 @@ fn numbered(url_path: &str, n: u32) -> String {
 /// Returns the collisions an author must settle: those where numbering was
 /// needed, minus the ones a numbered ancestor already explains. A
 /// cross-language pair resolved by its prefix is the designed outcome and is
-/// not a collision. See
-/// docs/archive/2026-09-02-url-collision-as-a-frontmatter-diagnostic.md.
+/// not a collision.
 pub fn resolve_duplicate_slugs_with_lang(
     documents: &mut [ParsedDocument],
     site_lang: crate::i18n::Language,
@@ -945,7 +942,6 @@ mod tests {
     /// that is the only form the preview's `ServeDir` can route. The old
     /// `<dir>/index-2.html` came out as the extensionless `<dir>/index-2` and
     /// 404'd with its bytes on disk.
-    /// See docs/archive/2026-09-01-duplicate-url-override-index-n-404.md.
     #[test]
     fn every_deduplicated_page_gets_a_servable_url() {
         use crate::build::scan::article_map::to_pretty_url;
@@ -980,7 +976,7 @@ mod tests {
     ///
     /// The old lang-prefix branch had no counter, so all three landed on
     /// `zh-hans/about/index.html` — one address, three documents, last render
-    /// wins. Filed as moss#1172; fixed by making both branches claim.
+    /// wins. Fixed by making both branches claim.
     #[test]
     fn a_lang_prefix_is_claimed_once_and_then_numbered() {
         use crate::i18n::Language;

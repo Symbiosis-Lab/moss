@@ -1,7 +1,7 @@
 //! Regression test for the epoch-mint-order half of the open-double-build
 //! fix (part 2, thermo-review hardening on commit 9b795440b9).
 //!
-//! `build_folder` (src-tauri/src/build_shell.rs) mints its `admission_epoch`
+//! `build_folder` (in the desktop app's build shell) mints its `admission_epoch`
 //! immediately, before its own `run_pipeline` call, instead of leaving it
 //! `None` for that call's post-hoc fallback — because once a worker exists
 //! from folder-open onward (part 1 of the same fix), a worker-admitted
@@ -21,7 +21,7 @@
 //! `build_folder` itself — this repo has no mock-Tauri-app test harness, and
 //! building one for a single test crosses the ladder's "does this need to
 //! exist" line. It reconstructs the two calls' RELATIVE epoch-mint order
-//! exactly as the fixed src-tauri code produces it (open mints first, a
+//! exactly as the desktop app's fixed code produces it (open mints first, a
 //! worker admission mints later — see `next_promotion_epoch`'s own doc:
 //! "call in build order"), then drives both builds through the real
 //! seal/promotion machinery this crate owns.

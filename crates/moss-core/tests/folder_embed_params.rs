@@ -3,7 +3,7 @@
 //! `tests/fixtures/folder-embed-params.vectors.json` is the cross-language
 //! contract for `![[/folder/|style:grid,sort:weight]]`. This test holds the
 //! Rust side of it; the editor's read-side twin `parseFolderParams`
-//! (`frontend/app/editor/cm-image-extract.ts`) reads the same file from
+//! (in the frontend editor) reads the same file from
 //! `cm-image-extract.test.ts`, so the chips the editor draws cannot claim a
 //! param the build would drop, or drop one the build would keep.
 //!

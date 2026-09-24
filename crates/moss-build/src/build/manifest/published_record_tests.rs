@@ -141,7 +141,7 @@ fn a_pre_rename_legacy_record_still_loads() {
 
     // The alias carries the old value through verbatim — unprefixed, which is
     // what marks it as moss hosting's (nothing else ever wrote one). It carries
-    // no note IDs, because nothing recorded them until moss#1079; that loads as
+    // no note IDs, because nothing recorded them until the uid-remint fix; that loads as
     // an empty map here, and `live_baseline` is what refuses to read absence
     // into it.
     let loaded = load_for(&paths, Some(MOSS)).expect("a pre-rename record must still load");

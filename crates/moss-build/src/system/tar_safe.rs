@@ -1,5 +1,5 @@
 //! One hardened `.tar.gz` extractor, shared by the stack executor and
-//! `moss desktop install` (docs/archive/2026-09-12-tar-safe-unification-plan.md).
+//! `moss desktop install`.
 //! `tar::Archive::unpack` is never called: it resolves a hardlink's source
 //! against the process cwd rather than the extraction root, so a
 //! `parent.join(link_name)` enclosure check on the entry's declared path is

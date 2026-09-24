@@ -2,7 +2,7 @@
 //!
 //! These tests verify that moss build produces consistent, deterministic output.
 //!
-//! Moved here from the private desktop-app repo (`src-tauri/tests/snapshot_tests.rs`)
+//! Moved here from the desktop app's `snapshot_tests.rs`
 //! so a render change and its fixture refresh land in one commit, in the repo that
 //! owns the pipeline. Fixture sites are a COPY of the private repo's
 //! `tests/fixtures/<site>` — several of those (`basic-site`, `media-site`,
@@ -42,9 +42,8 @@
 //!
 //! A `[channels.email]` config in a fixture just adds the subscribe form +
 //! email CSS to the output — no build path performs network fetches
-//! (`fetch_buttondown_username` has no production caller; see
-//! docs/archive/2026-06-10-email-footer-mode-independent-design.md), so
-//! snapshot tests stay deterministic and offline.
+//! (`fetch_buttondown_username` has no production caller), so snapshot
+//! tests stay deterministic and offline.
 //!
 //! One process-global env var is still read during some code paths:
 //!
@@ -69,7 +68,7 @@ use walkdir::WalkDir;
 /// crate, not a downstream consumer of it).
 const MOSS_MARK: &str = moss_build::build::page::shell::DEFAULT_FAVICON;
 
-/// Reconstruction of the desktop app's `moss::build_sync` (`src-tauri/src/build.rs`)
+/// Reconstruction of the desktop app's `moss::build_sync`
 /// from moss-build's own public API, so this suite has no dependency on the
 /// desktop crate. `cli_host_ports` is the exact headless host `moss-cli build`
 /// uses in production — not a parallel build path invented for this test.

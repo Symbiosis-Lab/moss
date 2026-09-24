@@ -1,7 +1,6 @@
 //! Plugin-facing project/site file I/O — the headless bodies behind the
 //! `plugin_config.rs` Tauri commands and the QuickJS engine's
-//! file arms (open-CLI plan slice 1,
-//! docs/archive/2026-08-28-open-cli-engine-and-thin-binary-plan.md).
+//! file arms (open-CLI plan slice 1).
 //! Tauri-free by construction; at slice 2 this file moves verbatim into
 //! `crates/moss-build/src/plugins/`, so every `crate::` path below must spell
 //! the same in both crates.

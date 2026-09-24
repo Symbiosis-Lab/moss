@@ -486,7 +486,7 @@ pub fn sync_after_build(project: &Path, is_full_build: bool) {
 ///
 /// Takes the project path as an argument and must never read
 /// `std::env::current_dir()`. That was the defect in the Connect flow this
-/// replaces (#778): it detected `.cursor/` against the *process* cwd, so moss
+/// replaces: it detected `.cursor/` against the *process* cwd, so moss
 /// launched from Finder wrote a moss pointer into whatever unrelated directory
 /// launchd happened to hand it.
 pub fn sync_project(project: &Path, cli: &Path) -> Result<SyncReport, String> {

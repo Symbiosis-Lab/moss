@@ -67,8 +67,8 @@ fn a_structural_markdown_batch_may_still_replay_the_parse_cache() {
 }
 
 /// The allowlist is the whole safety argument and outranks the trigger in
-/// both directions. An image baked dimensions and LQIP into parsed HTML
-/// (ADR-013), so it disables the cache no matter how it arrived.
+/// both directions. An image baked dimensions and LQIP into parsed HTML,
+/// so it disables the cache no matter how it arrived.
 #[test]
 fn an_image_disables_the_parse_cache_under_any_trigger() {
     assert!(!cfg(BuildTrigger::Structural(paths(&["a.md", "hero.png"]))).allows_parse_cache_reuse());

@@ -13,7 +13,7 @@
  * `splitIntoLines` turns those into `CardBlock.lines`; here each of them is
  * wrapped, justified and drawn on its own. That is the whole difference between
  * a poem and a paragraph — and the reason a four-line stanza used to arrive as
- * one run-on line. See `docs/archive/2026-08-10-share-card-audit.md`.
+ * one run-on line.
  */
 
 import {

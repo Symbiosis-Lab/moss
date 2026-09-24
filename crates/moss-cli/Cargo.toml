@@ -1,4 +1,4 @@
-# The open moss CLI (ADR-050, open-CLI slice 3 / #1019): `moss build` with no
+# The open moss CLI (open-CLI slice 3): `moss build` with no
 # window system anywhere in the dependency graph. check-crate-dag.mjs arms its
 # moss-cli rule on this crate's existence — no tauri/wry, and never the app
 # crate.
@@ -21,7 +21,7 @@ path = "src/main.rs"
 [dependencies]
 moss-build = { path = "../moss-build" }
 log = "0.4"
-# The app binary loads `.env` before dispatch (`src-tauri/src/main.rs`), so a
+# The app binary loads `.env` before dispatch (the desktop app's `main.rs`), so a
 # crossed verb reading `MOSS_ENV`/`MOSS_SETA_URL` saw a developer's local
 # environment there and production here. Same crate, same call, same answer.
 dotenvy = "0.15"
@@ -40,9 +40,8 @@ base64 = "0.21"
 [dev-dependencies]
 tempfile = "3.0"
 # Only the fixture builders in `desktop_tests.rs` still use these —
-# `install_bundle` now unpacks through `moss_build::system::tar_safe`
-# (docs/archive/2026-09-12-tar-safe-unification-plan.md). Same version
-# strings as moss-build's and src-tauri's, both already in the lock — no new
-# crate, no version bump.
+# `install_bundle` now unpacks through `moss_build::system::tar_safe`.
+# Same version strings as moss-build's and the desktop app's, both already
+# in the lock — no new crate, no version bump.
 flate2 = "1"
 tar = "0.4"

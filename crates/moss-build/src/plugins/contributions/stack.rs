@@ -1,7 +1,7 @@
 //! `contributes.stack` — a plugin's declaration of the long-lived local
-//! companion process moss installs and runs on its behalf (ADR-080 item 3).
+//! companion process moss installs and runs on its behalf.
 //!
-//! This slice (S3 of docs/archive/2026-09-10-plugin-owned-stack-lifecycle-design.md)
+//! This slice (S3 of the plugin-owned stack lifecycle design)
 //! declares the whole contract and consumes only the pin: `version`, the
 //! winning [`StackSource`]'s `url` + `sha256`. Nothing here spawns a process
 //! or extracts an archive — that is S4's executor
@@ -38,7 +38,7 @@ pub struct StackContribution {
 }
 
 impl StackContribution {
-    /// ADR-080 item 5: a `download` source with no `sha256` is refused —
+    /// A `download` source with no `sha256` is refused —
     /// not warned, not defaulted. A `path` source is exempt: no artifact is
     /// fetched, so there is nothing to hash.
     pub fn validate(&self) -> Result<(), StackDeclarationError> {
@@ -86,7 +86,7 @@ pub enum StackSource {
     /// is used as given when absolute, and joined onto the stack's home
     /// otherwise (see `system::stack_exec::layout::binary_path`) — a `PATH`
     /// search is S5's to add, if it is ever wanted. No artifact is fetched,
-    /// so there is nothing to hash (ADR-080 ruling addition).
+    /// so there is nothing to hash.
     Path {
         /// `darwin-arm64`, `linux-x64`, …: the vocabulary
         /// `binary_resolver::get_current_platform` already produces. Absent

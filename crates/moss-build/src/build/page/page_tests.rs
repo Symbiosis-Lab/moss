@@ -819,7 +819,7 @@ fn resolve_children_config_covers_the_two_by_two() {
     // all is an index of bare labels, not an archive, and "summary" laid it
     // out one-per-row (56 author names, ~2,400px of scroll on the reference
     // vault). It now selects "grid", whose coverless state site.css styles
-    // as a roster. docs/archive/2026-09-06-authors-index-design-decision.md
+    // as a roster.
     let bare_a = make_test_doc("Topic A", "topics/a/index.html");
     let bare_b = make_test_doc("Topic B", "topics/b/index.html");
 
@@ -1154,7 +1154,7 @@ fn test_generate_children_grid_childless_folder_renders_description() {
 
 #[test]
 fn test_generate_children_grid_sorts_date_descending() {
-    // Regression test for #636: grid style was sorting by url_path (alphabetically)
+    // Regression test: grid style was sorting by url_path (alphabetically)
     // instead of by publication date descending, causing older articles to appear
     // first when their URL paths sorted earlier alphabetically.
 

@@ -1,4 +1,4 @@
-//! Post-seal, pre-publish HTML degradation pass (moss#867).
+//! Post-seal, pre-publish HTML degradation pass.
 //!
 //! Glues the pure [`crate::build::markdown::html_post::degrade_failed_variants`]
 //! filter to disk: for every HTML page the sealed manifest tracked as a
@@ -20,14 +20,14 @@ use std::path::Path;
 /// so that dropping a pass from it is something a test can see.
 ///
 /// `failed` is every variant URL the AssetRegistry already knows will not
-/// exist (a terminally-failed encode, moss#867); the caller owns registry
+/// exist (a terminally-failed encode); the caller owns registry
 /// access, so this function needs no `BuildServices`. Returned is whether the
 /// generation may ship at all.
 ///
 /// The four sources that can leave a `<source>` pointing at nothing: a failed
-/// encode (moss#867), the orphan prune (moss#976 B2), the presence pass, and a
+/// encode, the orphan prune, the presence pass, and a
 /// reference with no manifest entry at all. This is the only scope that sees
-/// all four (ADR-013 amendment 2026-09-09) — and the only one that can hand
+/// all four (as amended 2026-09-09) — and the only one that can hand
 /// them ONE reference scan, which their disjointness depends on: the prune acts
 /// on what that scan did NOT see, the fourth source on what it did. Hoisting
 /// the scan out of the prune also keeps the fourth source alive under
@@ -88,7 +88,7 @@ pub(crate) fn repair_staged_html(
 /// `failed` is every site-root-relative URL that must not survive in HTML,
 /// whatever removed it. This function does not care which — a `<picture>`
 /// cannot fall back from a chosen-source 404 regardless of who deleted the
-/// file, so every source feeds one strip set (ADR-013 amendment 2026-09-09).
+/// file, so every source feeds one strip set (as amended 2026-09-09).
 /// Taking a set rather than the `AssetRegistry` is what lets the removal
 /// passes downstream of the encoder participate at all.
 ///
@@ -162,10 +162,10 @@ pub fn apply_to_staging(
         sealed.apply_post_seal_rewrites(rewrites);
         // This just wrote NEW bytes straight to `stage_dir`, bypassing the CAS
         // entirely — any `Cas` ship source recorded before now names the
-        // PRE-rewrite bytes and must not survive to ship-by-OID (moss#867: a
+        // PRE-rewrite bytes and must not survive to ship-by-OID: a
         // page repaired to drop a failed image variant must not have that
         // variant resurrected by shipping the object that predates the
-        // repair). `stamp_ship_fingerprints` both clears it and re-stamps
+        // repair. `stamp_ship_fingerprints` both clears it and re-stamps
         // with the bytes THIS rewrite just wrote, in one transition — a
         // separate clear-then-stamp pair could drift apart, and a
         // `ShipSource::Cas` entry left un-cleared here (e.g. by a future

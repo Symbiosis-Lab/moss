@@ -1,16 +1,16 @@
 //! Progress communication for build process
 //!
-//! Two-tier progress system (ADR-004):
+//! Two-tier progress system:
 //! - Tier 1: ProgressUpdate via Channel → loading screen (blocking phase)
 //! - Tier 2: PipelineEvent variants relayed by the reporter to the frontend
-//!   via either the typed MossEvent bus (post-#523) or legacy string-literal
+//!   via either the typed MossEvent bus or legacy string-literal
 //!   channels (still pending migration) → toast (background phase)
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
 /// Format progress message with optional counts
-/// ADR-004: Shared utility for consistent messaging
+/// Shared utility for consistent messaging
 pub fn format_progress_message(task: &str, current: u32, total: u32) -> String {
     if total > 0 {
         format!("{} ({}/{})", task, current, total)
@@ -20,7 +20,7 @@ pub fn format_progress_message(task: &str, current: u32, total: u32) -> String {
 }
 
 /// Background progress update for non-blocking tasks
-/// ADR-004: Separate from blocking ProgressUpdate for clean separation
+/// Separate from blocking ProgressUpdate for clean separation
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct BackgroundProgress {
     /// Task identifier from the emitting subsystem (e.g. "markdown",
@@ -67,7 +67,7 @@ pub struct BackgroundProgress {
 use crate::advisory::{Action, Advisory, Scope, Severity};
 
 /// Asset ready notification for placeholder swapping
-/// ADR-003: Tauri events for instant updates
+/// Tauri events for instant updates
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct AssetReady {
     /// Relative path to the asset
@@ -166,7 +166,7 @@ pub struct SitePromoted {
     pub generation_id: String,
 }
 
-/// Unified pipeline event enum (ADR-010).
+/// Unified pipeline event enum.
 ///
 /// All pipeline progress goes through this type. Routed via `emit_event()`
 /// (for code with a `ProgressSink`) or `BuildReporter::report` (for code with an
@@ -369,12 +369,12 @@ pub fn emit_event(sink: &super::ProgressSink, event: &PipelineEvent) {
 /// the floor. That is what happened to the pair of `[diag] preview-wait:` lines
 /// these replace. They were the CLI's only sign that `moss build
 /// --wait-plugins` had entered the blocking wait, they rode on the logger the
-/// Tauri path happened to install, and #1019 took the Tauri path away from a
+/// Tauri path happened to install, and a later change took the Tauri path away from a
 /// plugin-bearing build without anyone noticing the announcement went with it.
 ///
 /// The sink is the right channel regardless: it reaches the CLI's stderr AND
-/// the GUI loading screen, and it is the mode-agnostic seam ADR-010 asks the
-/// pipeline to branch through. Nothing is lost from the app's log either —
+/// the GUI loading screen, and it is the mode-agnostic seam the pipeline is
+/// meant to branch through. Nothing is lost from the app's log either —
 /// `PhaseTrace::start("process_hooks_await")` still records the same boundary
 /// and elapsed time wherever a logger exists.
 ///
@@ -987,7 +987,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Design Invariant Tests (ADR-010)
+    // Design Invariant Tests
     // =========================================================================
 
     /// INVARIANT: Stdout sink handles ALL PipelineEvent variants without panic.

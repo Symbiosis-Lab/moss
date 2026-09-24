@@ -62,8 +62,8 @@ pub(crate) struct AssetPipelineRunStats {
 /// is an unusual layout, and it is the first thing worth knowing when that
 /// site reports missing images. The per-item lines are DEBUG (they were a
 /// flood on a large tree), so if this line does not carry the counts, an
-/// uploaded log has no trace of the symlink at all — the state issue #1005
-/// was filed about. Preserved counts appear only when non-zero: on the ordinary
+/// uploaded log has no trace of the symlink at all. Preserved counts appear
+/// only when non-zero: on the ordinary
 /// site they are always 0 and would be two dead clauses on every build.
 pub(crate) fn format_asset_run_summary(stats: &AssetPipelineRunStats) -> String {
     let mut line = format!(
@@ -412,7 +412,7 @@ fn write_spa_inject_record(
 /// before this runs, so a source-unchanged cache hit alone does NOT imply
 /// `target` already holds injected content; the cache below stores the
 /// INJECTED OUTPUT, not just an "unchanged" bit, precisely to avoid that
-/// trap — see moss#919).
+/// trap).
 ///
 /// On a `TransformCache` hit, `link_to`s the previously-computed injected
 /// blob straight into `target` (or, if the record says injection was a
@@ -621,9 +621,9 @@ pub(crate) fn remove_stale_files(
                 continue;
             }
 
-            // Always unlink orphan *.placeholder.svg. PR #615 removed Pattern
-            // E (per-video .placeholder.svg generation), but pre-#615 vaults
-            // have these files on disk AND entries in hashes.json#files for
+            // Always unlink orphan *.placeholder.svg. An earlier change removed
+            // Pattern E (per-video .placeholder.svg generation), but vaults built
+            // before that change have these files on disk AND entries in hashes.json#files for
             // them — so the standard "not in files → remove" check below
             // would preserve them indefinitely. Current code never produces
             // .placeholder.svg, so they are always orphans.
@@ -641,7 +641,7 @@ pub(crate) fn remove_stale_files(
                 continue;
             }
 
-            // Email/RSS math PNGs are APPEND-ONLY (ADR-030 §3.4): their URLs
+            // Email/RSS math PNGs are APPEND-ONLY: their URLs
             // are baked into already-sent emails and cached forever by
             // Gmail's proxy / Apple MPP, so a PNG whose equation was edited
             // or deleted must keep serving its original bytes. Never stale.
@@ -705,7 +705,7 @@ pub(crate) fn remove_stale_dirs(
     }
     actual_dirs.sort_by(|a, b| b.components().count().cmp(&a.components().count()));
     for d in &actual_dirs {
-        // `_moss/math/` is append-only (ADR-030 §3.4) — a build whose pages
+        // `_moss/math/` is append-only — a build whose pages
         // no longer carry math computes no expected entry for it, but the
         // PNGs inside are referenced by already-sent emails.
         if d.starts_with("_moss/math") {
@@ -776,8 +776,7 @@ pub(crate) fn compute_expected_dirs(site_hashes: &SiteHashes) -> std::collection
 /// `source_oid` is the caller's cheap stat-match resolution (empty string on a
 /// miss) — passed through so this call and `collect_images_for_conversion`'s
 /// call consult the SAME `should_skip` format-probe cache entry instead of
-/// each recomputing the expensive probes independently. See
-/// docs/archive/2026-07-31-image-format-probe-cache-design.md.
+/// each recomputing the expensive probes independently.
 fn webp_converter_owns_base(
     source_path: &Path,
     ext: &str,
@@ -799,7 +798,7 @@ fn webp_converter_owns_base(
             // NOT own this base — `SourceInTheCloud` makes `is_none()` false,
             // which is the answer that lets the loop below copy the verbatim
             // blob it already has. Answering "the converter owns it" would
-            // leave the base with no writer at all and 404 it (ADR-013).
+            // leave the base with no writer at all and 404 it.
             crate::build::icloud::is_evicted(source_path),
         )
         .is_none(),
@@ -865,7 +864,6 @@ fn preserve_link(
     };
     live_symlinks.insert(rel_path.clone());
     // Register in the manifest so deploy uploads the symlink.
-    // Wire format: see docs/reference/deploy-upload-contract.md.
     let target_str = target.to_string_lossy();
     match crate::build::served_path::ServedPath::from_source(rel_path) {
         Ok(out_path) => {
@@ -964,7 +962,7 @@ fn record_blob(
 /// It reads `ctx.previous_hashes` for the entries it may carry forward and
 /// `ctx.blocking_keys` to know which `.html` paths a rendered page already
 /// claims — it does NOT hold a copy of this build's manifest.
-/// Issue #697: AssetRegistry passed in so audio/PDF/static assets are registered
+/// AssetRegistry passed in so audio/PDF/static assets are registered
 /// as Ready once they are copied to the output. The registry key is the mapped
 /// output-relative path (e.g. `audio/talk.mp3`, `docs/paper.pdf`), matching the
 /// URL the preview server normalises from the browser's request.
@@ -1007,7 +1005,7 @@ pub(crate) fn copy_deferred_assets(
     // already has this build's entries. Re-emitting those from a snapshot taken
     // at the end of the render phase is what forced three hand-written syncs to
     // keep the snapshot current, and would now overwrite a live entry with a
-    // stale hash (moss#618).
+    // stale hash.
     let mut site_hashes = ctx.previous_hashes.clone();
     let source_root = Path::new(&ctx.source_path);
     let output_dir = &ctx.staging_dir;
@@ -1046,7 +1044,7 @@ pub(crate) fn copy_deferred_assets(
     let mut skipped = 0u32;
     let mut skipped_symlinks = 0u32;
     // Preserved symlinks / resolved aliases. Counted because the per-item log
-    // line is DEBUG (issue #1005): without these the summary reports nothing.
+    // line is DEBUG: without these the summary reports nothing.
     let mut preserved_symlinks = 0u32;
     // Only the macOS alias branch writes this; elsewhere it stays 0.
     #[allow(unused_mut)]
@@ -1251,7 +1249,7 @@ pub(crate) fn copy_deferred_assets(
         // check_misplaced_theme_files() warns authors about the misplacement.
         // This must be the same predicate the sweep's drift walk uses
         // (`drift_eligible` in build_shell::watch::sweep) — see
-        // is_ignored_root_theme_file's doc comment (moss#1087).
+        // is_ignored_root_theme_file's doc comment.
         if crate::build::render::is_ignored_root_theme_file(&relative_path) {
             continue;
         }
@@ -1314,13 +1312,12 @@ pub(crate) fn copy_deferred_assets(
         // `source_oid` is `cached_oid` resolved via the SAME cheap stat-match
         // fast path `collect_images_for_conversion` uses (falls back to ""
         // on a miss, exactly like that call site) — this lets both callers
-        // consult the same `should_skip` format-probe cache (see
-        // docs/archive/2026-07-31-image-format-probe-cache-design.md) instead
+        // consult the same `should_skip` format-probe cache instead
         // of one of them recomputing the expensive probes on every build:
         //   • None    → webp is converted → converter owns the base → skip here.
         //   • Some(_) → AlreadySmall / AnimatedWebp / NotAnImage / … → the
         //     converter never writes it → fall through and copy verbatim, else
-        //     the base 404s (ADR-013). Small + animated webp rely on this.
+        //     the base 404s. Small + animated webp rely on this.
         //
         // A read failure fails SAFE (converter owns the base) rather than the
         // old `.unwrap_or(0)` — see `webp_converter_owns_base` (follow-up #6).
@@ -1389,9 +1386,8 @@ pub(crate) fn copy_deferred_assets(
                 // cached by source hash, so unchanged images are not re-encoded
                 // on incremental builds. The manifest hash below is computed from
                 // the OUTPUT file, so it correctly reflects the sized bytes.
-                // See docs/archive/2026-07-06-exclude-original-images-from-deploy.md.
                 // A source still in the cloud never reaches the sized-raster
-                // encode (moss#982).
+                // encode.
                 //
                 // The deferral above is guarded on `cached_oid.is_none()`,
                 // correctly: with a warm OID the bytes are already in the CAS
@@ -1400,7 +1396,7 @@ pub(crate) fn copy_deferred_assets(
                 // a transform-cache miss, reads it — so a warm OID walked
                 // straight past the deferral into a full source read that fails
                 // `EDEADLK`. That is the 6,967 `[sized-raster] encode failed …
-                // keeping verbatim original` lines in the moss#982 incident
+                // keeping verbatim original` lines in one incident's uploaded
                 // log, once per image per build for the whole download window,
                 // and a large part of the 7-10 cores it burned.
                 //
@@ -1435,7 +1431,7 @@ pub(crate) fn copy_deferred_assets(
                     continue;
                 }
 
-                // Issue #697: register audio/PDF/static assets as Ready so the
+                // Register audio/PDF/static assets as Ready so the
                 // editor hover-preview can resolve them. Only register non-image,
                 // non-video assets here — images are registered in the blocking
                 // phase via set_pending (and set_ready'd by run_image_conversion).
@@ -1595,8 +1591,7 @@ pub(crate) fn copy_deferred_assets(
             if relative_path == "style.css" || relative_path == "script.js" {
                 // Every build, unconditionally, for exactly these two files —
                 // not actionable by anyone reading the log, so DEBUG not WARN
-                // (2026-09-15, docs/archive/2026-09-15-open-feedback-design.md:
-                // measured ~170 lines/session in a real upload).
+                // (measured ~170 lines/session in a real upload, 2026-09-15).
                 log::debug!(
                     "[background-assets] Skipping .moss/theme/{} — handled by blocking phase",
                     relative_path
@@ -1701,7 +1696,7 @@ pub(crate) fn copy_deferred_assets(
     // One line for the whole prune, not one per entry — a rename/restructure
     // or a first full-cache build could otherwise log ~1300 lines in a
     // single "Send Logs" upload for information no individual key adds over
-    // the count (2026-09-15, docs/archive/2026-09-15-open-feedback-design.md).
+    // the count (2026-09-15).
     if !stale_sources.is_empty() {
         log::debug!(
             "[background-assets] Removed {} stale source-cache entr{}",
@@ -1713,8 +1708,8 @@ pub(crate) fn copy_deferred_assets(
     // All background workers (image, video, assets) send their
     // registrations via the coordinator channel, so `video_outputs`,
     // `image_outputs`, and `notebook_outputs` accumulate in the
-    // coordinator's PendingManifest — not on disk. The pre-#620 Item 2
-    // `tx.is_none()` legacy on-disk merge has been removed.
+    // coordinator's PendingManifest — not on disk. The legacy on-disk merge
+    // that ran through `tx.is_none()` has been removed.
 
     // Stale files, dirs and symlinks leave staging only through the build's
     // permitted sweep (`pipeline::sweep_staging`), never from this worker.
@@ -1738,7 +1733,6 @@ pub(crate) fn copy_deferred_assets(
     // images, source HTML) from the deploy manifest — they would no longer
     // be `touched` at seal time, would be pruned from the output buckets,
     // and stale-file cleanup would then delete them from the sealed generation dir.
-    // See `docs/archive/2026-05-18-manifest-integrity.md`.
     //
     // We send ALL entries (not just newly added ones) so the coordinator's
     // PendingManifest has the full picture including carry-forwards. The
@@ -1767,8 +1761,7 @@ pub(crate) fn copy_deferred_assets(
     // `PendingManifest::inner.sources` would remain the previous build's
     // carry-forward and the next build's `prev_sources` (loaded from the
     // sealed `hashes.json`) would be two builds stale, defeating the
-    // change-detection cache. See `docs/archive/2026-05-18-manifest-integrity.md`
-    // followup #2 (filed as GitHub issue prior to this fix).
+    // change-detection cache.
     //
     // `mem::take` (vs. `clone`) moves the ~40KB sources map into the message
     // — `site_hashes` is dropped at the end of this function and has no

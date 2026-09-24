@@ -13,8 +13,7 @@
 //! time-critical phases (media metadata during the blocking phase).
 //!
 //! As of `platform::macos::iopolicy::set_dataless_fail_fast` (called once at
-//! startup — see docs/archive/2026-08-03-dataless-fail-fast-and-build-driven-
-//! cloud-gate.md), reading a dataless file's content on macOS no longer
+//! startup), reading a dataless file's content on macOS no longer
 //! blocks-then-succeeds: it fails immediately with `EDEADLK`. Use
 //! `is_dataless_unavailable()` to recognize that failure and defer instead
 //! of hard-failing. **Do NOT use `is_evicted()` as a skip gate for file copy

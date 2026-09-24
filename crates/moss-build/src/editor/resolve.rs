@@ -6,9 +6,9 @@
 //! indexes injected. All filesystem and config I/O lives on this side of the
 //! boundary; `moss_core` stays pure.
 //!
-//! Target location per `docs/reference/target/03-module-tree.md` (`src/editor/
-//! {asset_resolver,reference_resolver,url_index,links,folder_index}` (image_size, a pure Tauri wrapper, stayed app-side)
-//! → `editor/resolve/`). Caches will move to `editor/session.rs` in M5.
+//! Ended up here as `editor/resolve/{asset_resolver,reference_resolver,
+//! url_index,links,folder_index}` (image_size, a pure Tauri wrapper, stayed
+//! app-side). Caches will move to `editor/session.rs` in M5.
 
 pub mod asset_resolver;
 pub mod folder_index;

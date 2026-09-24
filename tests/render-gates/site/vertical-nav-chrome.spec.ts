@@ -4,10 +4,8 @@
  *
  *   1. The font selector's anchor glyph (`.font-trigger`) never moves, in
  *      either writing mode, at any saved font scale, during or after the
- *      open/close morph. Before the font-morph redesign (font-morph.md,
- *      docs/decisions/ADR-024-geometry-ownership.md rule 1,
- *      ADR-049-floating-nav-is-a-second-smaller-object.md rule 3), `open()`/
- *      `close()` measured and wrote `trigger.style.insetInlineStart` every
+ *      open/close morph. Before the font-morph redesign (font-morph.md),
+ *      `open()`/`close()` measured and wrote `trigger.style.insetInlineStart` every
  *      time, sliding the anchor itself to the active button's slot whenever
  *      the saved scale wasn't the default — the same displacement bug an
  *      earlier fix (`ae9a43ba8`) repaired on the wrong axis but never

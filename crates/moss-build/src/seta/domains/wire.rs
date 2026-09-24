@@ -2,7 +2,7 @@
 //!
 //! Split out of `domains.rs` so the endpoint methods and the vocabulary they
 //! parse are each readable on their own. The second half crossed from the
-//! app's `domain/types.rs` with the client itself (ADR-078); the app
+//! app's `domain/types.rs` with the client itself; the app
 //! re-exports it from `domain::types`, so those paths and the specta bindings
 //! that name it still resolve.
 
@@ -168,8 +168,7 @@ pub struct DomainSuggestResponse {
     #[serde(default, rename = "availableCount")]
     pub available_count: u32,
     /// Exact-TLD match pinned at top when the user typed a full domain.
-    /// Populated from moss-seta when the query contained a dot. See
-    /// docs/archive/2026-04-21-domain-search-ux-fix-design.md.
+    /// Populated from moss-seta when the query contained a dot.
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "exact_match")]
     pub exact_match: Option<DomainSuggestion>,
 }

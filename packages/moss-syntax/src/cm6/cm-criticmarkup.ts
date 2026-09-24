@@ -5,9 +5,9 @@
 //
 // Patterns follow the MultiMarkdown-6 spec: https://fletcher.github.io/MultiMarkdown-6/syntax/critic.html
 //
-// ── Why this is NOT a Lezer inline grammar (deliberate, evaluated for #486) ──
+// ── Why this is NOT a Lezer inline grammar (a deliberate choice) ──
 //
-// The build pipeline's `accept_criticmarkup` (src-tauri/src/build/markdown/
+// The build pipeline's `accept_criticmarkup` (crates/moss-build/src/build/markdown/
 // html_post.rs) strips/applies CriticMarkup with `(?s)` regexes that CROSS
 // PARAGRAPH BOUNDARIES — `{++a\n\nb++}` is one accepted edit. A Lezer inline
 // parser is paragraph-bounded by construction (inline contexts never span
@@ -194,7 +194,6 @@ function buildDecorations(state: EditorState): DecorationSet {
 // ── CM6 Extension ──────────────────────────────────────────────────────
 
 // PATTERN 7 — INCREMENTAL DECORATION via RangeSet.map + MatchDecorator
-// see docs/archive/2026-05-22-editor-state-architecture.md
 // Canonical reference: @codemirror/view src/matchdecorator.ts (MatchDecorator.updateDeco)
 
 // Characters that can create, destroy, or restructure a CriticMarkup mark or

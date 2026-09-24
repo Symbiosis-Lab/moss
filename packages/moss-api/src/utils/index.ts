@@ -14,7 +14,7 @@ export {
   sendMessage,
   reportProgress,
   reportError,
-  // PanelTask lifecycle (ADR-015 Phase 2 — T8a). Preferred over
+  // PanelTask lifecycle. Preferred over
   // reportProgress for new code; legacy API stays supported.
   startTask,
   type StartTaskOptions,

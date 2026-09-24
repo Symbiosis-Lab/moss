@@ -1,4 +1,4 @@
-//! Forward and backward link/embed edges between pages (moss#922 Stage 4).
+//! Forward and backward link/embed edges between pages (Stage 4).
 //!
 //! `DepGraph` answers "who links to / embeds this page?" — the question
 //! Stage 5's facade-gated render skip needs to widen a changed page's
@@ -7,14 +7,12 @@
 //! from file paths alone (zero content reads, see `content_graph.rs`)
 //! while `DepGraph` is built from parsed per-page edges — same
 //! type-vs-populator split as `ContentGraph` itself (the type here; the
-//! `Vec<ParsedDocument>` → edges glue lives in `src-tauri`, which is not a
+//! `Vec<ParsedDocument>` → edges glue lives in the desktop app, which is not a
 //! moss-core dependency).
 //!
 //! Rebuilt fresh every build from scratch — cheap (a handful of `HashMap`
 //! inserts over ~one page count), same argument as why `ContentGraph`
-//! itself is never persisted. See the "Don't persist ContentGraph; don't
-//! use ObjectStore" section of
-//! `docs/archive/2026-07-31-incremental-build-facade-diff.md`.
+//! itself is never persisted.
 
 use crate::resolve::embeds::MAX_EMBED_DEPTH;
 use crate::resolve::{LinkType, OutgoingLink};
@@ -74,8 +72,7 @@ impl DepGraph {
         graph
     }
 
-    /// Fold in transclusion edges recorded by the resolve phase (moss#922
-    /// Stage 7).
+    /// Fold in transclusion edges recorded by the resolve phase (Stage 7).
     ///
     /// `pairs` are `(target, immediate_embedder)` — exactly the shape
     /// `ResolveResult::embed_deps` produces (`resolve/embeds.rs`), i.e. DIRECT
@@ -120,7 +117,7 @@ impl DepGraph {
     /// dependency on content the resolver refused to splice. Cycles terminate
     /// on the visited set.
     ///
-    /// This is the parse cache's validity input (moss#922 Stage 7): `path`'s
+    /// This is the parse cache's validity input (Stage 7): `path`'s
     /// cached `ParsedDocument` is only reusable if every member of this set
     /// still hashes to what it hashed to when the entry was written.
     pub fn embed_closure(&self, path: &str) -> Vec<String> {

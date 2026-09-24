@@ -35,14 +35,14 @@
 //!
 //! This is the shape Jupyter uses (a token in a loopback-readable runtime file)
 //! paired with the MCP Inspector remediation for CVE-2025-49596 (a session
-//! token layered on top of Host/Origin checks). See ADR-022 §6.
+//! token layered on top of Host/Origin checks).
 //!
 //! ## Token lifecycle
 //!
 //! 1. **Mint** — [`mint`] draws 256 bits of entropy (two `uuid` v4 values)
 //!    when [`super::session::InvokeCtx::bind`] binds a vault the carrier was
 //!    not already serving: at start-up, and again on every folder switch,
-//!    which retires the previous vault's token (ADR-075 rule 4). It never
+//!    which retires the previous vault's token. It never
 //!    persists across restarts: a new server, a new token, and the old file
 //!    is overwritten.
 //! 2. **Publish** — [`publish`] writes the token to
@@ -50,7 +50,7 @@
 //!    `.moss/build.nosync/` is cloud-EXCLUDED and regenerable
 //!    (`moss_paths::MOSS_PATH_RULES`), so the file never syncs to another
 //!    machine and is never left dataless by an eviction — and the write goes
-//!    through `build::io_utils::write_output` per ADR-043, so it lands via
+//!    through `build::io_utils::write_output`, so it lands via
 //!    temp+rename and never materializes a dataless destination.
 //! 3. **Obtain (client)** — a local client reads the whole file, trims it, and
 //!    sends the value as `X-Moss-Token`.
@@ -297,7 +297,7 @@ fn admit(
     // Bind BEFORE comparing: across a folder switch the presented token must
     // be judged against the vault the server now serves, whose token is fresh,
     // so a tab holding the previous vault's token is 401 here rather than
-    // admitted and then run against the new vault (ADR-075 rule 4). The
+    // admitted and then run against the new vault. The
     // session admitted here is the one the handler runs against.
     let Some(session) = ctx.bind(site_dir) else {
         return Err(unauthorized());

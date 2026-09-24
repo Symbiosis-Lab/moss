@@ -1,5 +1,5 @@
 /**
- * Tests for the iframe-bridge morph handler (#771 keystone).
+ * Tests for the iframe-bridge morph handler.
  *
  * The bridge (an IIFE injected into the preview iframe) handles `moss-morph` by
  * re-fetching its own URL and reconciling <head>/<body> in place with idiomorph.
@@ -127,7 +127,7 @@ describe("iframe-bridge morph handler (local harness)", () => {
   });
 
   test("a morph mid-lightbox does not unlock background scroll", () => {
-    // frontend/site/fullscreen.ts sets this to lock scrolling while the overlay
+    // js-src/site/fullscreen.ts sets this to lock scrolling while the overlay
     // is open. The server never emits an inline style on <body>, so a blind
     // "remove what the new document lacks" strips it and the page scrolls behind
     // a still-open lightbox. Found in review of the first cut of this sync.

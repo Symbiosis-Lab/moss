@@ -254,7 +254,7 @@ const CACHE_FRESHNESS_DAYS: u64 = 7;
 /// Check if a cached entry is still fresh (< CACHE_FRESHNESS_DAYS old).
 ///
 /// Uses the same epoch-day algorithm as `now_iso8601` (round-trip consistent).
-/// Per moss issue #574 review: previous arithmetic mixed `m*30+d` which
+/// A prior review found the previous arithmetic mixed `m*30+d` which
 /// double-counted month boundaries (a Jan 31 → Feb 1 diff read as 0 days,
 /// while the threshold "7" was actually 217 because we compared in the same
 /// broken metric). Fixed by going through the inverse of `days_to_ymd`.
@@ -357,7 +357,7 @@ fn write_cache(moss_dir: &Path, meta: &LinkMeta) {
 /// # Visibility
 ///
 /// **`pub(crate)` only — do not widen.** This function does blocking
-/// network I/O (10s timeout, but per moss issue #574, ureq's connect
+/// network I/O (10s timeout, but ureq's connect
 /// timeout is unreliable and can stall ~30s). Calling it from the build's
 /// render path freezes the pipeline. The legitimate caller is
 /// [`crate::build::features::sync::spawn_native_process_sync`], which runs
@@ -536,7 +536,7 @@ pub(crate) fn prewarm_link_meta_for_build_with_progress(
 // ---------------------------------------------------------------------------
 // Render-side API: cache reads + per-build URL recording for prewarm bridge.
 //
-// Design (moss issue #574 review feedback):
+// Design (from a prior review's feedback):
 //
 // 1. Render is a pure cache reader — `read_link_meta_from_cache` has NO
 //    side effects, so two pages racing don't lose-update a shared file.

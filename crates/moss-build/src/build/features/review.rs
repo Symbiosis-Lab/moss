@@ -328,7 +328,7 @@ pub struct ReviewArticleInput {
 ///
 /// **`pub(in crate::build::features)` — do not widen.** Blocking network I/O.
 /// Always go through
-/// [`crate::build::features::sync::spawn_native_process_sync`]. See #570.
+/// [`crate::build::features::sync::spawn_native_process_sync`].
 pub(in crate::build::features) fn process_reviews(
     project_path: &str,
     articles: &[ReviewArticleInput],
@@ -452,8 +452,8 @@ pub fn render_stars(rating: u8) -> String {
 /// Render a review colophon HTML footer for a single article.
 ///
 /// When `media_lookup` is `Some`, the cover image routes through
-/// `image_render::synthesize_image_html` (single-emission seam per
-/// `docs/reference/structural-html-emission.md`). This gates `<source
+/// `image_render::synthesize_image_html` (the single-emission seam shared
+/// by every `<img>` in moss output). This gates `<source
 /// srcset="X.webp">` emission on manifest presence — eliminating the
 /// WebP-404 failure mode for the colophon — and adds dims/LQIP/dominant-color
 /// attribute injection at the typed-data layer. Uses `ImageContext::FolderCardCover`

@@ -55,7 +55,7 @@ pub fn should_inject_subscribe_assets(
         || pages.iter().any(|p| p.features.inline_apply)
 }
 
-// `project_has_inline_subscribe(folder_path)` was removed in PR7b (moss#599).
+// `project_has_inline_subscribe(folder_path)` was removed in PR7b.
 //
 // It was a temporary filesystem-scan stand-in for "does any page in this
 // build use the `:::subscribe` shortcode?", reading every .md file under
@@ -81,8 +81,7 @@ pub fn should_inject_subscribe_assets(
 ///
 /// `start_server` — mirrors `PipelineConfig.start_server`: `true` when this
 /// build will boot the embedded preview server after it completes.
-/// Orchestration only — build output is mode-independent by design
-/// (docs/archive/2026-06-10-email-footer-mode-independent-design.md), so
+/// Orchestration only — build output is mode-independent by design, so
 /// never read this as "is this a preview build".
 ///
 /// Analytics and beacon are both mode-INDEPENDENT: injected in every
@@ -117,8 +116,7 @@ pub fn should_inject_subscribe_assets(
 /// (1) a serve-time rewrite that replaces the form's `data-server-url`
 /// with `/__moss/comments` on every served HTML response, and
 /// (2) the comment-preview-shim.ts injected before `</body>` as
-/// defense-in-depth. No gate applies to comments any longer
-/// (design: docs/archive/2026-06-10-comments-local-first-design.md §7).
+/// defense-in-depth. No gate applies to comments any longer.
 ///
 /// Subscribe forms (the seta footer form and inline `:::subscribe`) are
 /// mode-INDEPENDENT: identical markup in every build mode, with preview
@@ -129,8 +127,8 @@ pub fn should_inject_subscribe_assets(
 /// --watch` runs with `start_server: false` and still emits both.
 ///
 /// `media_lookup` — when `Some`, the review colophon's cover image routes
-/// through `image_render::synthesize_image_html` (per
-/// `docs/reference/structural-html-emission.md`). This gates `<source
+/// through `image_render::synthesize_image_html` (the single-emission path
+/// shared by every `<img>` in moss output). This gates `<source
 /// srcset="X.webp">` emission on manifest presence — eliminating the
 /// WebP-404 failure mode for the colophon — and adds attribute-injection
 /// (`width`/`height`/`loading`/`data-placeholder-src`) at the typed-data
@@ -140,12 +138,12 @@ pub fn generate_native_slots(
     project_path: &str,
     // Whether the `email` channel is installed for this project. Handed in
     // rather than read here: answering it means parsing `.moss/config.toml`'s
-    // `[channels]` table through `plugins::discovery`, and ADR-050 §1 keeps the
-    // compiler clear of plugin discovery outright — so the caller, which
+    // `[channels]` table through `plugins::discovery`, which the compiler stays
+    // clear of outright — so the caller, which
     // already knows the answer, says it.
     email_installed: bool,
     // The Matters domain for comment attribution, resolved by the caller for
-    // the same ADR-050 reason as `email_installed` — see
+    // the same reason as `email_installed` — see
     // `comment::load_all_social_comments`.
     matters_domain: &str,
     article_map: &HashMap<String, ArticleInfo>,
@@ -159,7 +157,7 @@ pub fn generate_native_slots(
     // the SAME `.moss/config.toml` parse `pipeline.rs::build_inner` already
     // did to build `render::SiteConfig` (`site_bool("comments")` at
     // pipeline.rs ~1283) — handed in rather than re-read here for the same
-    // ADR-050 §1 / H-config reason as `email_installed`: a second parse of
+    // H-config reason as `email_installed`: a second parse of
     // the same file is a second ladder that can drift from the first, not a
     // saved read (H-config already made this ONE read for the whole build).
     site_comments: Option<bool>,
@@ -333,7 +331,7 @@ pub fn generate_native_slots(
 
         // Apply owner moderation: signed hide/unhide events (moderation.jsonl) decide
         // visibility, replacing the legacy replica-tombstone path. No events → no-op
-        // (the identity is not even loaded). (ADR-025 §8)
+        // (the identity is not even loaded).
         let mod_events = comment::moderation::load_mod_events(project_path);
         if !mod_events.is_empty() {
             let mut id_svc =
@@ -355,7 +353,7 @@ pub fn generate_native_slots(
         // is written out in `build_article_map`). Comments are a different
         // question, and the answer does not follow from the page having
         // children — so an author who turns comments on for a folder page (or
-        // for the homepage, which is a folder index too) gets them (#1013).
+        // for the homepage, which is a folder index too) gets them.
         // Folder pages carry no `syndicated:` link-outs, since nothing can
         // syndicate them.
         let folder_targets: Vec<(String, ArticleInfo)> = pages
@@ -396,7 +394,7 @@ pub fn generate_native_slots(
         //
         // Articles default ON (`comments: false` opts out); folder pages —
         // the homepage among them — default OFF (`comments: true` opts in).
-        // #1013 fixed folder pages being unable to show comments at all, but
+        // A fix that let folder pages show comments at all
         // chained them onto the article loop with the article default, so an
         // author who never touched `comments:` got a section on every folder
         // page including the homepage. The homepage having no explicit
@@ -581,13 +579,12 @@ pub fn generate_native_slots(
         // the site hasn't been published yet, so preview shows the real
         // footer from day one.
         //
-        // Per docs/archive/2026-04-30-footer-verbatim-design.md,
-        // when footer.md is present moss renders it verbatim and the user
+        // When footer.md is present moss renders it verbatim and the user
         // places the form via `:::subscribe`. When footer.md is absent, moss
         // emits a minimal default footer with the subscribe form.
         //
-        // Slot::FooterEnd places the form AFTER the default link list per the
-        // design B ordering in docs/archive/2026-05-06-footer-default-order.md.
+        // Slot::FooterEnd places the form AFTER the default link list — links
+        // lead, the auto-injected widget trails.
         // High-signal diagnostic, gated on `email_installed` so off-by-default
         // sites stay quiet: the subscribe footer is the slot most likely to
         // "appear then disappear" across rebuilds, yet nothing on this path was
@@ -662,7 +659,6 @@ pub fn generate_native_slots(
 
     // Author-customized footer slots (footer.md at site root and per language
     // tree, plus any file with `slot: footer-left` in frontmatter).
-    // See docs/archive/2026-04-30-footer-file.md.
     //
     // Bucketed by the source file's language tree: a `zh-hans/footer.md` is
     // injected on zh-hans pages, the root `footer.md` on everything else. When

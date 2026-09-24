@@ -138,7 +138,7 @@ fn authorable_example_markdown_renders_its_class() {
     }
 }
 
-/// Drift gate (arch-review #776): `ShortcodeKind::all()` is a hand-maintained
+/// Drift gate: `ShortcodeKind::all()` is a hand-maintained
 /// array, the SSOT for "which shortcodes are authorable". This test makes a
 /// new enum variant impossible to add silently: the exhaustive `match` below
 /// fails to COMPILE until the new variant is handled, and the count/coverage

@@ -25,9 +25,6 @@
 //! The 246-LOC fence-aware regex below works correctly today and is the
 //! pragmatic shape until usage actually surfaces. Revisit AST migration
 //! when an Obsidian-imported site exercises this path.
-//!
-//! See `docs/archive/2026-05-27-phase4-typed-ast-completion.md` § "PR5
-//! Deferred" and § "Out of scope" for the full rationale.
 
 /// Transform block reference markers in `content` into HTML span anchors.
 ///

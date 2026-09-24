@@ -1,6 +1,6 @@
 //! The asset promise registry — app-runtime side of the M6a boundary.
 //!
-//! The explicit promise model behind ADR-013: the pipeline registers every
+//! The explicit promise model: the pipeline registers every
 //! image/video variant URL as Pending, the encoder transitions it to
 //! Ready/Failed, and the preview server consults the state to decide what
 //! bytes to serve. Request-time state of the running preview, so it stays
@@ -9,8 +9,6 @@
 //!
 //! Split out of `types.rs` 2026-08-10 (M5a); `types.rs` re-exports every
 //! item at its old path, so consumers are unchanged.
-
-// ADR-002: Step 4 - Preview server with placeholder support
 
 /// Placeholder metadata for pending assets during staged build.
 ///
@@ -27,10 +25,7 @@
 /// `AssetSnapshot::lqip`, and baked into published HTML by
 /// `moss_core::render::image`. It is simply never served by the preview server.
 /// The field was removed from here on 2026-08-21 so that stays true by
-/// construction; see `docs/archive/2026-08-21-pending-variant-source-passthrough-audit.md`
-/// and ADR-013 § Amendment (2026-08-21).
-///
-/// See docs/archive/2026-05-20-image-variant-honest-mirror.md (Layer 1).
+/// construction.
 #[derive(Debug, Clone)]
 pub struct AssetPlaceholder {
     pub dimensions: Option<(u32, u32)>,
@@ -49,8 +44,7 @@ pub struct AssetPlaceholder {
 /// Analogs: GraphQL `@defer` (schema-declared deferred fields,
 /// github.com/graphql/graphql-spec/blob/master/rfcs/DeferStream.md), Bazel
 /// `ActionResult` (action-declared `output_files` contract,
-/// bazel.build/remote/caching). See
-/// docs/archive/2026-05-20-image-variant-honest-mirror.md.
+/// bazel.build/remote/caching).
 #[derive(Debug, Clone)]
 pub enum AssetState {
     Pending(AssetPlaceholder),
@@ -58,8 +52,8 @@ pub enum AssetState {
     ///
     /// Carries nothing, and that is the point: this state answers one question
     /// ("is the promise kept?"), and every reader asks only that. It used to
-    /// carry an `lqip_data_uri` for an editor hover-preview (issue #700) whose
-    /// consumer had moved to `moss-asset://` source bytes (ADR-022), and then a
+    /// carry an `lqip_data_uri` for an editor hover-preview whose
+    /// consumer had moved to `moss-asset://` source bytes, and then a
     /// `file_path` that no reader ever destructured — both removed 2026-08-21
     /// rather than left as state that invites a stale comment. Where the bytes
     /// landed is a filesystem fact; the preview server asks the filesystem.
@@ -84,7 +78,7 @@ pub struct AssetRegistry {
     /// blurry LQIP), so the very first paint is sharp. The background encoder
     /// later lands the real webp/mp4; publish awaits the background drain
     /// before sealing, so the on-disk/deployed generation always contains the
-    /// encoded variant (ADR-013 by construction).
+    /// encoded variant, by construction.
     ///
     /// Honest-mirror: every entry here is a source that `set_pending` promised
     /// AND `copy_deferred_assets` will copy into staging → generation → deploy,
@@ -170,7 +164,7 @@ impl AssetRegistry {
         assets.get(path).cloned()
     }
     /// Snapshot of every registry key currently in the terminal `Failed`
-    /// state. Used by the post-seal degrade-failed-variants pass (moss#867)
+    /// state. Used by the post-seal degrade-failed-variants pass
     /// to decide which `<source>` srcset candidates to drop from sealed HTML
     /// before publish.
     pub fn failed_keys(&self) -> std::collections::HashSet<String> {
@@ -238,7 +232,7 @@ impl AssetRegistry {
     /// synthesizer can ask "does this source asset have a webp variant?"
     /// regardless of the source's own extension (jpg/png/gif/etc.).
     ///
-    /// Failed entries are skipped per ADR-013 (don't emit a `<source>` for
+    /// Failed entries are skipped (don't emit a `<source>` for
     /// a failed variant — `<picture>` does not recover from a chosen-source
     /// 404, HTML spec § update-the-source-set).
     ///
@@ -256,7 +250,7 @@ impl AssetRegistry {
         let assets = self.assets.read().unwrap();
         let mut by_stem: HashMap<PathBuf, VariantKindSet> = HashMap::new();
         for (url, state) in assets.iter() {
-            // Skip Failed entries — see ADR-013.
+            // Skip Failed entries.
             if matches!(state, AssetState::Failed(_)) {
                 continue;
             }

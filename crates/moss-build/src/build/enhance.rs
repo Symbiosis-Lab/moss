@@ -75,7 +75,7 @@ struct ResolvedEntry {
 /// Merged slot content from all plugins, ready for template injection.
 /// Entries per slot are sorted by plugin priority (lower = first).
 ///
-/// `Serialize` (moss#919 item 2) is used only to derive a cache-params hash
+/// `Serialize` is used only to derive a cache-params hash
 /// in [`resolved_slots_hash`] — never round-tripped, so no `Deserialize`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolvedSlots {
@@ -303,7 +303,7 @@ const SLOT_INJECT_TRANSFORM: &str = "html/slots";
 /// Cached record for an `html/slots` transform: the page's shipped bytes (the
 /// blob holding them and their manifest hash), whether injection changed them,
 /// and the residual-marker scan result so the `residual_known_slot_markers`
-/// diagnostic can still fire on a cache hit (moss#919 item 2, prior-art
+/// diagnostic can still fire on a cache hit (prior-art
 /// requirement from `4dca6d3fc`: a coverage bug once shipped a raw marker to a
 /// real user's browser — caching must never make that WARN skippable).
 ///
@@ -491,7 +491,7 @@ impl StoreFailures {
 /// succeeds today for a page that never needed a blob.
 pub fn inject_slots_into_directory_cached(
     // The VAULT root, not `dir` (which is the stage below it): `io_stop` asks
-    // the watcher predicates about the path inside the vault (#1067).
+    // the watcher predicates about the path inside the vault.
     root: &std::path::Path,
     dir: &std::path::Path,
     slots: &ResolvedSlots,
@@ -508,7 +508,7 @@ pub fn inject_slots_into_directory_cached(
     let mut store_failures = StoreFailures::default();
     // Split the pass into the part that scales with the CORPUS (walk every HTML
     // file, read it, hash it — paid even when nothing changed) and the part that
-    // scales with the DELTA (inject + write). moss#968 predicted the walk is the
+    // scales with the DELTA (inject + write). One prediction was that the walk is the
     // majority of the ~0.9s and that narrowing the render set therefore reclaims
     // less of it than it looks; these two numbers settle that.
     // `walk` is measured directly and `rewrite` derived as the remainder, because
@@ -522,7 +522,7 @@ pub fn inject_slots_into_directory_cached(
         let page_path = page_path_for(dir, entry.path());
         // Reads back HTML this build just wrote into the stage. The sync client
         // can evict it in between; `io_stop` keeps that answer distinguishable
-        // from a real failure all the way up to the cloud gate (moss#964).
+        // from a real failure all the way up to the cloud gate.
         let html = std::fs::read_to_string(entry.path())
             .map_err(|e| io_stop(root, "re-read for slot injection", entry.path(), e))?;
         scanned += 1;
@@ -576,7 +576,7 @@ pub fn inject_slots_into_directory_cached(
         if changed_page {
             // `write_output`, not `fs::write`: `dir` is `.moss/build.nosync/staging/`,
             // and an `O_TRUNC` open of a page the sync client evicted between
-            // render and injection fails EDEADLK (ADR-043).
+            // render and injection fails EDEADLK.
             crate::build::io_utils::write_output(entry.path(), injected.as_bytes())
                 .map_err(|e| io_stop(root, "write injected page", entry.path(), e))?;
             rewritten += 1;

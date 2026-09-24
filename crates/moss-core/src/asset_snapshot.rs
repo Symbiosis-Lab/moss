@@ -1,10 +1,10 @@
 //! Pre-fetched asset metadata available to Stage 1 + Stage 2.
 //!
-//! src-tauri's asset pipeline populates this before any markdown processing
+//! The desktop app's asset pipeline populates this before any markdown processing
 //! runs. moss-core consumes it as input — pure Rust, zero I/O, full data.
 //!
 //! Mirrors the architectural shape of [`crate::content_graph::ContentGraph`]:
-//! src-tauri does the I/O, moss-core takes typed data IN.
+//! the desktop app does the I/O, moss-core takes typed data IN.
 //!
 //! ## Variant keying
 //!
@@ -12,7 +12,7 @@
 //! not the source path. Rationale: a single source asset (e.g. `assets/photo.jpg`)
 //! may have multiple registered variants (`assets/photo.webp`, `assets/photo.avif`)
 //! and the synthesizer asks "does this source have a webp variant?" without
-//! caring about the source's own extension. src-tauri's
+//! caring about the source's own extension. The desktop app's
 //! `AssetRegistry::iter_registered_variants` derives variant kinds from URL
 //! extension and folds them under the shared stem. Consumers should look up
 //! variants via [`AssetSnapshot::has_webp_for_source`] /
@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Width fallback when AssetSnapshot.dimensions has no entry for a source path.
-/// Returned by `MediaDimensionLookup::get` (in src-tauri) and consumed by
+/// Returned by `MediaDimensionLookup::get` (in the desktop app) and consumed by
 /// image_render's render_img_tag. The 800x600 pair is the legacy aspect ratio
 /// from pre-Phase-2E days; semantically a layout-shift hint, not a real
 /// dimension. Synthesizer callers may choose to omit width/height entirely
@@ -34,7 +34,7 @@ pub const FALLBACK_WIDTH: u32 = 800;
 pub const FALLBACK_HEIGHT: u32 = 600;
 
 /// Pre-fetched asset metadata available to moss-core's synthesizer.
-/// Populated by src-tauri's asset pipeline before any markdown processing runs.
+/// Populated by the desktop app's asset pipeline before any markdown processing runs.
 #[derive(Debug, Default, Clone)]
 pub struct AssetSnapshot {
     /// Original-image dimensions. Path is the source path as it appears in markdown.
@@ -45,7 +45,7 @@ pub struct AssetSnapshot {
     pub lqip: HashMap<PathBuf, String>,
 
     /// Registered variant URLs per source-stem. A variant is "registered" if
-    /// it's in `AssetRegistry::set_pending` (Pending or Ready per ADR-013) —
+    /// it's in `AssetRegistry::set_pending` (Pending or Ready) —
     /// moss may emit a `<source srcset=…>` for it. Keyed by stem path
     /// (extension stripped); see module docs.
     pub variants: HashMap<PathBuf, VariantKindSet>,
@@ -58,7 +58,7 @@ pub struct AssetSnapshot {
     /// ANIM chunk). Keyed EXACTLY like `dimensions` — the source path as it
     /// appears in markdown (with its own extension), NOT the stem-keyed
     /// `variants` map. A missing key reads as `false` via [`is_animated`], so
-    /// only src-tauri's scanned media populate it. The synthesizer consults it
+    /// only the desktop app's scanned media populate it. The synthesizer consults it
     /// to suppress the responsive ladder for animated sources (which must never
     /// be resized/re-encoded).
     ///

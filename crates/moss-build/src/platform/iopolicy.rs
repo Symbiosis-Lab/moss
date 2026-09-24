@@ -10,9 +10,6 @@
 //! (verified against a live SDK, not guessed) and confirmed against
 //! `man getiopolicy_np` and Apple technote TN3150
 //! ("Getting ready for dataless files").
-//!
-//! See docs/archive/2026-08-03-dataless-fail-fast-and-build-driven-cloud-gate.md
-//! for the design this implements.
 
 use std::os::raw::c_int;
 
@@ -36,8 +33,8 @@ unsafe extern "C" {
 /// **not `open` with `O_TRUNC`**, which is what `std::fs::write`,
 /// `std::fs::copy` and `File::create` all use. Truncation requires
 /// materialization, so those fail `EDEADLK` against a dataless destination too.
-/// Measured in moss#964 §1; this doc comment previously claimed `open` was
-/// unconditionally unaffected. See ADR-043 for how the build tree writes
+/// This doc comment previously claimed `open` was
+/// unconditionally unaffected — see `build::io_utils` for how the build tree writes
 /// instead. Materialization becomes explicit, and confined to the download
 /// workers, via [`materialize_on_this_thread`].
 ///

@@ -132,9 +132,9 @@ export function describeScriptChange(live: ParentNode, next: ParentNode): string
  * the attribute entirely rather than changing its value.
  *
  * A blind "remove anything the new document lacks" removes runtime mutations
- * too. `frontend/site/fullscreen.ts` sets `body.style.overflow = "hidden"` to
+ * too. `js-src/site/fullscreen.ts` sets `body.style.overflow = "hidden"` to
  * lock background scroll while the lightbox is open, and
- * `frontend/site/immersive-mode.ts` adds `immersive-fs-active`; the server emits
+ * `js-src/site/immersive-mode.ts` adds `immersive-fs-active`; the server emits
  * neither, so a morph mid-lightbox would unlock scrolling under an open overlay.
  * Carrying a hand-written list of those forward is the include-list shape that
  * rots silently — the next runtime mutation anyone adds is a bug nobody sees.

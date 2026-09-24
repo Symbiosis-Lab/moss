@@ -75,7 +75,7 @@ pub fn generate_year_grouped_article_list(
         .filter(|doc| {
             if doc.url_path == "index.html" { return false; }
             // Listing chrome — exclude draft / slot-only via the
-            // canonical predicate (PR7b/moss#599 routed `footer.md` etc.
+            // canonical predicate (an earlier change routed `footer.md` etc.
             // through the documents slice for layout-slot wiring; the
             // `slot_only` arm of `is_listable` keeps them out of articles).
             if !doc.is_listable() { return false; }

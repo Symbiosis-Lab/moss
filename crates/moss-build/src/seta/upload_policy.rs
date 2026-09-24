@@ -21,11 +21,10 @@
 //!
 //! # The measurement
 //!
-//! okagaki.mosspub.com, 2026-08-03: 33.46 MB moved in 242 s, i.e. an aggregate
+//! A live vault, 2026-08-03: 33.46 MB moved in 242 s, i.e. an aggregate
 //! uplink of **~135 KB/s (1.11 Mbps)**. An 8.91 MB mp3 sharing that link 20
 //! ways could not finish in 125 s and killed the whole 160-file, 49.6 MB
 //! deploy — three times, because retry replayed the identical strategy.
-//! Diagnosis: `docs/archive/2026-08-03-publish-resilience-slow-uplinks.md`.
 //!
 //! # The bound, and which quantity is which
 //!
@@ -40,8 +39,7 @@
 //! is what divides the link.
 //!
 //! Which concurrency, though, is a **target vs. clamp** split, and getting it
-//! wrong in either direction has a measured cost (2026-08-27, Shanghai,
-//! `docs/archive/2026-08-27-adaptive-upload-strategy.md`):
+//! wrong in either direction has a measured cost (2026-08-27, Shanghai):
 //!
 //! * **target** — a request is sized for the concurrency *actually in flight*
 //!   ([`Throughput::in_flight`]), so it takes [`TARGET_REQUEST_SECONDS`] at the
@@ -105,8 +103,7 @@
 //! ([`plan_request_size`]) and the routing threshold is that same number
 //! ([`needs_chunking`]) — one number, so there is no second one to keep
 //! consistent. [`escalate_down`] stays: it is the reactive half, applied after
-//! a request has already failed. Diagnosis:
-//! `docs/archive/2026-08-04-publish-deadlines-vs-bandwidth.md`.
+//! a request has already failed.
 //!
 //! # Why the seed is derived from a size and not from a bandwidth (2026-08-04, second pass)
 //!
@@ -630,7 +627,7 @@ pub(crate) fn needs_chunking(size: u64, bytes_per_sec: u64, in_flight: usize, li
 /// represents rather than by any per-request policy — the `/sync` and
 /// `/commit` manifest POSTs.
 ///
-/// I1 (`docs/archive/2026-08-04-publish-deadlines-vs-bandwidth.md`) forbids a
+/// Invariant I1 forbids a
 /// deadline that is a function of total work. A flat 150 s on a body that
 /// grows with file count is exactly that: a 10k-file site's ~1 MB manifest
 /// needs ~200 s at 5 KB/s, fails four times, and that site can never publish

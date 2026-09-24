@@ -6,7 +6,7 @@
 //! materialization barrier — when the channel drains, the coordinator seals
 //! the manifest and returns the read-only `SealedManifest`.
 //!
-//! See also: `src-tauri/src/build/manifest.rs`, `src-tauri/src/build/context.rs`.
+//! See also: `manifest.rs`, `context.rs`.
 
 use std::collections::HashMap;
 
@@ -22,8 +22,7 @@ use crate::types::content::SiteHashes;
 /// `File` registers an output-bucket entry (the original purpose of this
 /// channel). `SourcesReplace` propagates the change-detection cache produced
 /// by the deferred-asset walk so the next build's `prev_sources` reflects
-/// THIS build's hashing work rather than a snapshot two builds old. See
-/// `docs/archive/2026-05-18-manifest-integrity.md` followup #2 and the
+/// THIS build's hashing work rather than a snapshot two builds old. See the
 /// `SourcesReplace` arm of `ManifestCoordinator::run_until_drained`.
 ///
 /// Intentionally NOT `Clone`: `mpsc::Sender::send` takes ownership, and the
@@ -133,7 +132,7 @@ impl ManifestCoordinator {
 ///
 /// Used by tests in `build/media/image.rs` and `build/media/video.rs` after
 /// the legacy on-disk hash-write fallbacks (`update_image_hashes` /
-/// `update_video_hashes`) were removed (#620 Item 2). Direct callers that
+/// `update_video_hashes`) were removed. Direct callers that
 /// previously fired with `tx: None` now build a coordinator, drain it, and
 /// inspect the resulting `SealedManifest`.
 #[cfg(test)]
@@ -257,16 +256,15 @@ mod tests {
         // ImageOutputs must also enter `files` so the deploy wire manifest
         // at `deploy.rs:213` (built from `sealed.files()`) carries the path
         // and the seta server requests the upload. See 2026-05-15 fix in
-        // `manifest.rs::register_with_hash` and the architecture note at
-        // `docs/reference/structural-html-emission.md`.
+        // `manifest.rs::register_with_hash`.
         assert!(
             sealed.files().contains_key("og/home.png"),
             "ImageOutputs must enter files for deploy upload"
         );
     }
 
-    /// Regression for the sources-divergence followup (manifest-integrity
-    /// plan, followup #2): `SourcesReplace` propagates the change-detection
+    /// Regression for the sources-divergence followup:
+    /// `SourcesReplace` propagates the change-detection
     /// cache produced by this build into the sealed manifest. Without it,
     /// `inner.sources` remains the previous build's carry-forward snapshot
     /// and the next build's `prev_sources` is two builds stale.
@@ -305,8 +303,7 @@ mod tests {
     /// output buckets but NOT `sources`. If a future change to `seal()`
     /// accidentally sweeps `sources` along with the output buckets, this
     /// test fails: file emits are touched (kept), the `SourcesReplace`
-    /// payload is NOT touched (would be wrongly pruned). See
-    /// `docs/archive/2026-05-18-manifest-integrity.md`.
+    /// payload is NOT touched (would be wrongly pruned).
     #[tokio::test]
     async fn seal_keeps_sources_alongside_pruned_output_buckets() {
         let mut carry = SiteHashes::default();

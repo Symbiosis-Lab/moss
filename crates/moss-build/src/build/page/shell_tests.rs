@@ -152,7 +152,7 @@ fn test_substitute_known_token_and_drops_unknown_in_same_pass() {
 #[test]
 fn test_substitute_never_rescans_substituted_values() {
     // A value containing a known token literal must be emitted verbatim —
-    // single pass over template text only (#847).
+    // single pass over template text only.
     let values = std::collections::HashMap::from([
         (
             "content",
@@ -656,7 +656,6 @@ fn test_css_nav_split_keeps_toggles_on_row_one() {
     // alone on row 2 spread edge to edge. `display: contents` is what lifts
     // the two groups out of .nav-right so they can land on different rows —
     // flex wrapping alone can never float the later sibling back up.
-    // Design: docs/archive/2026-08-09-nav-two-line-split-and-touch-hints.md
     let right = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-right")
         .expect("split .nav-right rule should exist");
     let links = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-links")
@@ -1253,9 +1252,8 @@ fn test_css_root_content_width_is_font_stable() {
     // not a `ch` value, so text, inline images, and figures resolve to the
     // same column at any element font-size. A `ch` cap drifts per element
     // font and desyncs text from figures when a theme lowers the prose font.
-    // See docs/archive/2026-06-04-content-column-measure-consistency-design.md.
     //
-    // Task 1.3: token definitions live in tokens.json (not DEFAULT_CSS), so
+    // Token definitions live in tokens.json (not DEFAULT_CSS), so
     // we check the full assembled CSS (generated prefix + DEFAULT_CSS).
     let css = full_site_css();
     assert!(
@@ -1473,7 +1471,7 @@ fn test_css_hero_mobile_stacks_overlay_below_image() {
     // below the image in a solid block; the image shows at full natural
     // width.
     //
-    // Hero-responsive fix (#508) earlier narrowed the rule from bare
+    // An earlier hero-responsive fix narrowed the rule from bare
     // `.moss-hero` to `.moss-hero:has(.moss-hero-content)` so image-only
     // heroes keep their natural aspect ratio. That narrowing still
     // applies; only the with-overlay arm changed from crop to stack.
@@ -1876,7 +1874,7 @@ fn test_css_content_width_full_preset() {
 }
 
 // =========================================================================
-// CSS: content-width escape (ADR-021 Corollary 2, data-width bands)
+// CSS: content-width escape (data-width bands)
 // =========================================================================
 
 #[test]
@@ -2235,7 +2233,7 @@ fn process_does_not_resplice_main_content_from_a_var_value() {
     let out = ShellProcessor::new().process(ShellType::Article, vars);
     // The shell splice runs ONCE over pure template text; a var value
     // containing the token must not cause a re-splice AND must survive
-    // verbatim — substituted values are never rescanned (#847).
+    // verbatim — substituted values are never rescanned.
     assert!(
         out.contains("see {main_content} marker"),
         "literal {{main_content}} in author content must survive verbatim"
@@ -2243,7 +2241,7 @@ fn process_does_not_resplice_main_content_from_a_var_value() {
 }
 
 // =========================================================================
-// #847: literal {token} text in AUTHOR content must never be eaten
+// literal {token} text in AUTHOR content must never be eaten
 // =========================================================================
 
 #[test]
@@ -2251,7 +2249,7 @@ fn process_preserves_literal_tokens_in_article_content() {
     // Real-world shapes from the live docs site: inline code and prose
     // containing {name}, {title}, {value}, {main_content}. All four must
     // render literally — substituted values are never rescanned for
-    // placeholders or stripped (#847).
+    // placeholders or stripped.
     let body = concat!(
         "<p>Plugins live in <code>.moss/plugins/{name}/</code>.</p>",
         "<p>Use {title} in your template, and set {value} in the manifest.</p>",
@@ -2264,7 +2262,7 @@ fn process_preserves_literal_tokens_in_article_content() {
     let out = ShellProcessor::new().process(ShellType::Article, vars);
     assert!(
         out.contains(".moss/plugins/{name}/"),
-        "inline-code {{name}} must survive (rendered as .moss/plugins//: the #847 bug)"
+        "inline-code {{name}} must survive (rendered as .moss/plugins//: a real regression)"
     );
     assert!(
         out.contains("Use {title} in your template"),
@@ -2292,7 +2290,7 @@ fn process_preserves_literal_tokens_in_homepage_content() {
     assert!(out.contains("strings like {name} and {value} interpolate"));
 }
 
-/// #1013: the Page template used to drop both halves of the comment
+/// The Page template used to drop both halves of the comment
 /// contract on the floor — no `{comments_attr}`, no `<!-- slot:after-article
 /// -->` — so moss accepted `comments:` on a folder page, computed the value,
 /// and rendered nothing. Both templates must carry both, exactly once: a
@@ -2658,7 +2656,7 @@ fn minify_css_is_smaller() {
 
 #[test]
 fn minify_css_preserves_descendant_combinator_before_pseudo_class() {
-    // Regression (#631): the minifier was stripping the space before ':' in
+    // Regression: the minifier was stripping the space before ':' in
     // pseudo-classes when the pseudo-class was preceded by whitespace in the source.
     // ".foo :hover" (all :hover descendants of .foo) must NOT become ".foo:hover"
     // (.foo itself when hovered — a completely different set of elements).
@@ -2774,7 +2772,7 @@ fn test_template_includes_colophon_text_placeholder() {
 
 #[test]
 fn test_template_skip_link_is_first_in_body_and_localized() {
-    // Skip link (WCAG 2.4.1, moss#1047): must be the very first thing after
+    // Skip link (WCAG 2.4.1): must be the very first thing after
     // <body ...>, before {nav_island}, and localized via {skip_link_label}
     // rather than hardcoded — same reasoning as the colophon text above.
     let body_open = SHELL_TEMPLATE
@@ -2810,7 +2808,7 @@ fn test_template_skip_link_is_first_in_body_and_localized() {
 #[test]
 fn test_template_main_has_id_for_skip_link_target() {
     // Both content fragments emit <main id="main-content" tabindex="-1"> — the
-    // skip link's href target (WCAG 2.4.1, moss#1047).
+    // skip link's href target (WCAG 2.4.1).
     //
     // The tabindex is not decoration. WebKit moves the SCROLL position to a
     // fragment target but only moves FOCUS if the target can hold it, so
@@ -3038,7 +3036,7 @@ fn test_css_vertical_grid_card_layout_is_site_css() {
     // The measure-and-plate geometry that lived here for one day on
     // 2026-09-11 — a 13em card along the scroll, a plate 0.75 of it, a
     // `display: none` on the coverless card — is what this forbids coming
-    // back (docs/archive/2026-09-11-vertical-cards-design.md).
+    // back.
     let css = site_css_with_partials();
     assert!(
         !css.contains("--moss-vertical-card-measure"),
@@ -3138,8 +3136,8 @@ fn test_css_vertical_list_card_layout_is_site_css() {
     // all — not even an `order` or `display: contents` reorder. The 140×140
     // square, the per-card hairline, the head-column flex, and
     // (2026-09-10 – 2026-09-11) the cover-leads-column and title-first
-    // reorders all lived here once; a rule reappearing is the compensation
-    // §1 forbids (docs/archive/2026-09-05-vertical-layout-design.md).
+    // reorders all lived here once; a rule reappearing is exactly the
+    // compensation this design forbids.
     let css = site_css_with_partials();
     for part in ["moss-card-cover", "moss-card-body", "moss-card-head"] {
         let sel = format!(r#"[data-typesetting="vertical"] .moss-cards[data-layout="list"] .{part}"#);
@@ -3444,8 +3442,7 @@ fn a_built_page_ships_no_blueprint_placeholder() {
 /// and clamps the result against the visible band. A `transform:
 /// translateX(-50%)` here would silently re-introduce the centring the script
 /// already applied AND hide the true left edge from it — which is exactly how
-/// half the share/copy bar ended up off the left of a phone screen. See
-/// docs/reference/design/floating-surfaces.md.
+/// half the share/copy bar ended up off the left of a phone screen.
 #[test]
 fn the_selection_popover_is_not_centred_by_a_transform() {
     let rule = get_css_rule(DEFAULT_CSS, ".sel-popover")

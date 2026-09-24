@@ -1,4 +1,4 @@
-//! Engine abstraction for plugin hook dispatch (#789 Phase 2, report 4).
+//! Engine abstraction for plugin hook dispatch (Phase 2).
 //!
 //! Abstracts ONLY the dispatch primitive (eval_to_runtime, manager.rs:365).
 //! PluginHookState plumbing stays host-side and engine-agnostic (signal_route).
@@ -179,7 +179,7 @@ pub struct QuickJsEngineAdapter {
 
 impl QuickJsEngineAdapter {
     /// Production ctor. Spawns the host dispatch task wired to the real
-    /// [`dispatch_command`]. `host.app` is `None` on a headless build (#1019),
+    /// [`dispatch_command`]. `host.app` is `None` on a headless build,
     /// where the app-only arms refuse by name. `bundles` is the live
     /// [`BundleSource`] (fresh read per dispatch — `bundle_source_for_project`).
     pub fn new(
@@ -215,7 +215,7 @@ impl QuickJsEngineAdapter {
 
     /// Test ctor (Task 14b): no `AppHandle`, no manager. Carries ONE inline bundle
     /// registered under plugin name `"p"`, and spawns a sink-aware dispatch task.
-    /// Since #1019 that task runs the REAL command arms against a standalone
+    /// That task runs the REAL command arms against a standalone
     /// `HostState` — not a narrowed stub — so a test here reaches the same code a
     /// headless `moss build` does.
     #[cfg(any(test, feature = "test-fixtures"))]
@@ -325,7 +325,7 @@ fn respawn_engine(
     }
     log::error!(
         target: "plugin",
-        "plugin engine thread died — respawning (in-flight hooks and JS state of the old engine are lost; see #789 P4 D4)"
+        "plugin engine thread died — respawning (in-flight hooks and JS state of the old engine are lost)"
     );
     let ids: Vec<ListenerId> = bridged.lock().unwrap().drain().map(|(_, id)| id).collect();
     if let Some(app) = host.app.as_ref() {
@@ -346,7 +346,7 @@ fn respawn_engine(
 }
 
 /// Spawn the host dispatch task. Every command runs the real
-/// [`dispatch_command`] against `host.state` (#1019). A `plugin_message`
+/// [`dispatch_command`] against `host.state`. A `plugin_message`
 /// command is intercepted, translated to a [`HookSignal`], and emitted on the
 /// sink the `(plugin, hook)`-keyed map holds for that in-flight dispatch.
 ///

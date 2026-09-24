@@ -29,7 +29,7 @@ export type ExtKind =
  * `link_completions::LinkSyntax` (serde kebab-case); declared locally for the
  * same reason `ExtKind` is. The backend reads it, with the typed prefix, to
  * decide the FORM every row inserts — the author links to a thing, moss
- * writes the address (docs/archive/2026-09-05-link-target-completion-audit-and-design.md).
+ * writes the address.
  */
 export type LinkSyntax = 'wikilink' | 'embed' | 'inline' | 'asset-path';
 

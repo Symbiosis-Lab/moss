@@ -224,9 +224,9 @@ pub fn render_pointer() -> String {
 /// say where moss comes from, or the reader is stuck with a path and no way to
 /// act on it.
 ///
-/// The link below deliberately names the repository the current release
-/// repo becomes at the F6 flip, ahead of that rename — see the F6 runbook,
-/// `docs/archive/2026-09-13-f6-flip-day-runbook.md`.
+/// The link below deliberately names the repository this crate lives in
+/// today, set ahead of the rename that made it official so it needed no
+/// follow-up update once the rename landed.
 const NO_BINARY: &str = "\
 ## If that path does not resolve
 

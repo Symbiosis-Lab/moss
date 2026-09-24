@@ -1,5 +1,5 @@
 //! Crosses the REAL rename_entry FS-boundary (no mocks) to lock the bug class
-//! that survived mocked unit tests (#715/#731 origin). The existing TS tests
+//! that survived mocked unit tests. The existing TS tests
 //! mock `renameEntry` and assert on the relative-path argument, baking in the
 //! buggy contract; these tests exercise the real path-validation + `fs::rename`
 //! core directly.

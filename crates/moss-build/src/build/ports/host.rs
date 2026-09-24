@@ -58,7 +58,7 @@ pub type ServerDiff = Arc<
 /// so they are one trait, matching the three ports that were already traits.
 ///
 /// The fold is not a way to shrink the seam: ratchet row (o) counts a trait
-/// method exactly as it counts a struct member, which is ADR-058's whole point.
+/// method exactly as it counts a struct member, which is the abort-threshold rule's whole point.
 /// What it buys is that the shapes are named and the `None` arms are a real
 /// implementation rather than a silent skip at each call site.
 pub trait HostStore: Send + Sync {
@@ -68,8 +68,8 @@ pub trait HostStore: Send + Sync {
     /// Bring the vault's on-disk `.moss/` up to date before the build reads it
     /// — the `config.toml` schema migration and the legacy email-path rename.
     ///
-    /// Both rewrite files the user owns, so they stay host territory
-    /// (ADR-059). They are a PRECONDITION of reading the vault, which is why
+    /// Both rewrite files the user owns, so they stay host territory.
+    /// They are a PRECONDITION of reading the vault, which is why
     /// the build asks for them rather than each caller remembering: "the only
     /// migration point both the GUI and the CLI reach" was previously a
     /// comment, and a comment is not a guarantee once moss-cli is its own
@@ -117,15 +117,15 @@ pub struct HostPorts {
     /// over the carrier reporter. Whether plugins run at all is a
     /// `PluginMode` decision in the config, never a fork on which host this
     /// is — the `PluginRuntime` trait that used to sit here retired on
-    /// 2026-09-05 when the manager crossed into this crate (ADR-076).
+    /// 2026-09-05 when the manager crossed into this crate.
     pub plugins: Arc<crate::plugins::manager::ManagerCache>,
     /// See [`ServerDiff`]. `None` (headless, or a shell with no hosted site)
     /// means the last-resort change-set arm in `manifest::backfill::for_seal`
     /// is skipped and the surfaces stay honestly blank.
     pub server_diff: Option<ServerDiff>,
     /// Start (or reuse) the preview server for `moss_dir`, sharing the given
-    /// serve-dir cell. The server is host territory (ADR-067 relocates its
-    /// core later); the pipeline only asks for a port.
+    /// serve-dir cell. The server is host territory (its core relocates there
+    /// later); the pipeline only asks for a port.
     pub launch_server: Option<
         Arc<
             dyn Fn(String, Option<Arc<std::sync::RwLock<std::path::PathBuf>>>) -> ServerFuture

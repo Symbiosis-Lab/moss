@@ -6,11 +6,10 @@
  *
  * The previewed page's effective backdrop (`--moss-color-bg`) is what the
  * shell derives `data-chrome-theme` from, so the floating glass chrome stays
- * legible over whatever is behind it (see `frontend/app/utils/chrome-theme.ts`
- * and docs/archive/2026-06-23-shell-chrome-tracks-preview-backdrop-design.md).
+ * legible over whatever is behind it (see the app's own `chrome-theme.ts`).
  * This module reads that colour inside the page and posts it up.
  *
- * WHY IT LIVES IN THE BRIDGE. It used to live in `frontend/site/link-preview.ts`,
+ * WHY IT LIVES IN THE BRIDGE. It used to live in `js-src/site/link-preview.ts`,
  * which ships as `preview.js` only when `[site].link_preview` is true. That made
  * an *app chrome* mechanism a hostage of a *content* preference: with the flag
  * off, the site's own moon toggle repainted the page and told the shell nothing,
@@ -18,7 +17,7 @@
  * colour is not inert — `applyChromeTheme()` prefers any non-null colour over
  * the shell's intended theme — so the chrome wedged on the wrong pole until the
  * next rebuild. The bridge is injected into every previewed page unconditionally
- * (`src-tauri/src/preview/iframe_bridge.rs`), which is where a mechanism the
+ * (the app's own preview iframe-bridge module), which is where a mechanism the
  * chrome depends on belongs.
  *
  * The `data-theme` observer and settle re-read are `onThemeSettled`

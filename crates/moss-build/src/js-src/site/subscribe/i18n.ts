@@ -2,7 +2,7 @@
  * Copy table for the moss-hosted subscribe form.
  *
  * Intentionally duplicated from the Rust `SubscribeI18n` in
- * `src-tauri/src/build/features/email.rs`: the set is tiny (5 strings × 3
+ * `crates/moss-build/src/build/features/email.rs`: the set is tiny (5 strings × 3
  * locales) and both sides only need read access. Keeping them in sync by hand
  * is cheaper than plumbing the strings through the DOM as data- attributes.
  */
@@ -88,7 +88,7 @@ export const APPLY_COPY: Record<Lang, ApplyCopy> = {
  * Bucket an arbitrary BCP-47 language tag into one of the three copy keys.
  *
  * The blessed TS twin of Rust's `Language::from_bcp47_lenient` in
- * `src-tauri/src/i18n.rs` — any change here needs a corresponding Rust
+ * `crates/moss-build/src/i18n.rs` — any change here needs a corresponding Rust
  * change (and vice versa). Do not re-implement zh bucketing elsewhere;
  * import this.
  */

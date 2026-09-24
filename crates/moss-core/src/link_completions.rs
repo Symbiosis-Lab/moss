@@ -6,8 +6,7 @@
 //! Ranking mirrors the resolver's NFC-normalize + lowercase comparison so the
 //! suggested target is the one the link resolver will actually resolve.
 //!
-//! The mental model this encodes (docs/archive/2026-09-05-link-target-
-//! completion-audit-and-design.md): the author links to a THING, moss writes
+//! The mental model this encodes: the author links to a THING, moss writes
 //! the address. Which address is a function of the syntax around the caret
 //! and of whether the author opened the target with `/`, never a per-row
 //! choice — see [`insert_for`].

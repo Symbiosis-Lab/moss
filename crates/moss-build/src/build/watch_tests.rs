@@ -875,8 +875,7 @@ fn test_moss_config_toml_triggers_rebuild() {
 
 // -----------------------------------------------------------------------
 // Content-hash gate tests (source_metadata_matches, path_to_relative_key,
-// should_rebuild_for_paths, evaluate_gate). See plan
-// docs/archive/2026-04-23-watcher-content-hash-gate.md.
+// should_rebuild_for_paths, evaluate_gate).
 // -----------------------------------------------------------------------
 
 use crate::build::types::SourceMetadata;
@@ -2615,7 +2614,7 @@ fn full_rename_flow_pretty_url_resolves_to_output_pair_and_suppresses_deletion()
     // Construct hashes simulating moss's PRETTY URL output (the common
     // case for non-index articles). This is what `previous_hashes.files`
     // and `new_hashes.files` actually look like in a real rebuild — see
-    // `src-tauri/src/build/markdown/pipeline.rs:559-565` ("non-index
+    // `build/markdown/pipeline.rs` ("non-index
     // files get wrapped in a subdirectory: article.md → article/index.html").
     let mut prev = SiteHashes::new();
     prev.insert("blog/old-post/index.html".into(), "hash_x".into());
@@ -3426,7 +3425,7 @@ fn raw_create_key_moss_theme_excluded() {
 /// promises a row that does not exist. This is not hypothetical: when moss
 /// wrote this file itself (agent-file sync), the watcher saw a create for the
 /// very file the tree refuses to show, and the editor's only consumer went
-/// looking for a nav row to flash and found none (#955). The same file can
+/// looking for a nav row to flash and found none. The same file can
 /// still appear today whenever an author or another agent creates it.
 ///
 /// The guard is `is_hidden` — the predicate `list_tree` filters with — so the

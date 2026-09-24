@@ -674,9 +674,9 @@ Active branches not yet in this release — landing in a future version:
 - Hero and Gallery shortcode image URLs now resolve against the content graph
   rather than the filesystem path.
 - correct ops_for doc-comment — production executes mount_preview directly
-- moss-claude.sh auto-runs pnpm install in a fresh worktree (#728)
-- preview follows breadcrumb/tree rename — wait on FileChanged not BuildComplete (#731)
-- preview follows breadcrumb/tree rename — wait on FileChanged not BuildComplete (#731)
+- moss-claude.sh auto-runs pnpm install in a fresh worktree
+- preview follows breadcrumb/tree rename — wait on FileChanged not BuildComplete
+- preview follows breadcrumb/tree rename — wait on FileChanged not BuildComplete
 - restore @tauri-apps/plugin-dialog + grant dialog:allow-open
 - unify rename-path math; fix root-level file rename (leading slash)
 - inline folder-note pair as flex row; update grid-based tests to --ft-depth contract
@@ -684,7 +684,7 @@ Active branches not yet in this release — landing in a future version:
 - heading rename must pass absolute paths to rename_entry
 - address pre-merge review (flash guard, listener signal, docs)
 - render nested markup + inline images in CM6 live preview
-- mount fresh preview into persistent shell, never destroy main (ADR-017)
+- mount fresh preview into persistent shell, never destroy main
 - deterministic listener cleanup for inline-URL card
 - one-shot auto-open latch per opened folder
 - load empty-home artifact instead of empty-state overlay
@@ -712,7 +712,7 @@ Active branches not yet in this release — landing in a future version:
 - coordinate slot.display between Narrator and Awaiting
 - add data-inline-task-anchor="save" for T7's Inline badges
 - mount Inline + toast subscriber in editor-main.ts (action-panel webview)
-- exclude frontend/app/preview/__tests__/e2e/** from vitest collection (T2 follow-up)
+- exclude the app's preview e2e tests from vitest collection (T2 follow-up)
 - large card spans full row width per spec mockup
 - gate tasks_dev behind cfg(debug_assertions) to prevent release leak
 - restore ActivationPolicy on auto-open failure path
@@ -738,14 +738,14 @@ Active branches not yet in this release — landing in a future version:
 - review feedback for dual-session-ports
 - restore figure.image wrap for matters' sanitizer
 - close native gap so hairline is the only visible seam
-- wire-domain conversions for cross-webview boundaries (#711)
+- wire-domain conversions for cross-webview boundaries
 - close Stage 2 dispatch coverage gaps (list-item Tag::Image, format_img_tag)
 - remove dead || true guard around setDropHighlight(null)
 - add aria-posinset and aria-setsize to tree-body rows
 - first row keyboard-reachable when no selection (initial focus)
 - add aria-label to tree container (WAI-ARIA)
 - updateTabIndex moves DOM focus + scrollIntoView for SR users
-- replace in-place override mutations with functional rebuild (ADR-014)
+- replace in-place override mutations with functional rebuild
 - move_one same-dir check uses canonical paths
 - add project-root containment to import_files_to_dir (security)
 - extract commitRename helper; preserve EntryId across in-app renames
@@ -1061,7 +1061,7 @@ Active branches not yet in this release — landing in a future version:
 - emit <link rel=alternate hreflang> in <head>
 - add build_hreflang_link_tags helper
 - Pandoc-style implicit figures + uniform empty-alt guard
-- deprecation warnings + stale comment cleanup (#613)
+- deprecation warnings + stale comment cleanup
 - add thumb-swap.js for missing-thumbnail fallback
 - ship pass + restore for_deferred dual-arg + module docs
 - BackgroundHandle materialization barrier
@@ -1069,7 +1069,7 @@ Active branches not yet in this release — landing in a future version:
 - BuildContext emit handle (render-phase forms)
 - PendingManifest/SealedManifest typestate
 - complete Step 2c — delete :::toc, rename shortcode.rs
-- port :::grid to typed AST (Step 2b of #613)
+- port :::grid to typed AST (Step 2b)
 - port :::hero to typed AST (Step 2 Hero)
 - rename type alias PayloadFor → MossEventOf
 - add onMossEvent helper for typed dispatch
@@ -1081,9 +1081,9 @@ Active branches not yet in this release — landing in a future version:
 - +++ cell divider helper for unified shortcode grammar
 - attribute-block parser for unified shortcode grammar
 - watch channel + set_progress for menu-bar consumers
-- plumb cancel flag into execute_generate_plugin (closes #548 follow-up)
+- plumb cancel flag into execute_generate_plugin (follow-up)
 - wire bridge_call for *ConversionState cancellation
-- cancel asset copy on window close (closes #506)
+- cancel asset copy on window close
 - close window immediately, drain JoinSet in background
 - construct FolderSession per open folder, drain on switch
 - add FolderSession with cancel token + JoinSet
@@ -1149,13 +1149,13 @@ Active branches not yet in this release — landing in a future version:
 - eager migration + CSS scope + test coverage
 - include `_*` files and percent-encode wikilink asset URLs
 - recurse into CssRegion + Unknown bodies for nested fenced divs
-- drop Option wrapper in #621 variant A test call (post-rebase)
-- defer stale-file cleanup past seal (closes #621)
+- drop Option wrapper in a variant A test call (post-rebase)
+- defer stale-file cleanup past seal
 - tighten copy_deferred_assets tx parameter to non-Option; clean up stale blocking_insert! comment refs
 - folder_session.rs:33 stale doc reference (post-B rename)
 - restore spinner UX in thumb-swap; clarify Pattern A/E comment
 - unit test + accurate comments for register_with_hash mode-prefix preservation
-- remove SVG placeholder generation (Pattern E, closes #615)
+- remove SVG placeholder generation (Pattern E)
 - rename legacy MossEvent interface; update orchestrator doc comments
 - delete orphan window-resized listener and dead test mock
 - persist SealedManifest after each build (closes B1 from review)
@@ -1282,7 +1282,7 @@ Active branches not yet in this release — landing in a future version:
 - make non-page-map asset hrefs root-aware
 - add 1px border to .link-preview for dark-mode legibility
 - address review of 021f09e8b
-- promote translationKey:home to folder index (closes #587)
+- promote translationKey:home to folder index
 - preserve query string through resolve_link
 - preserve query string in markdown link resolution
 - address review findings on link-preview redesign
@@ -1290,7 +1290,7 @@ Active branches not yet in this release — landing in a future version:
 - media files in assets/ folders reach variant pipeline
 - widen detect_project_lang sample size from 5 to 20
 - emit `<html lang>` per page, not site default
-- thread site_lang through build pipeline (closes #545)
+- thread site_lang through build pipeline
 - eliminate 48px chrome-clearance flash on iframe load
 - backfill first_checking_at on resume for legacy state.toml
 - prefer extension-matching candidates in resolve_path tiebreaker
@@ -1341,7 +1341,7 @@ Active branches not yet in this release — landing in a future version:
 
 ### Fixed
 - preserve notebook hashes from carried-forward stale prune
-- address review — move reset into function, add TODO(#524) markers
+- address review — move reset into function, add TODO markers
 - isolate notebook cancellation from video cancel flag
 - clear pendingEcho on no-op navigateToPage to prevent stale-echo misclassification
 - bidirectional identity hardening — pathname comparison + sourceFile null-window drop
@@ -1349,7 +1349,7 @@ Active branches not yet in this release — landing in a future version:
 - clear stage on compile error so 'Opening folder…' doesn't stick
 - reset .site-logo vertical margins
 - route raw-TOML writers through migration path
-- address review — TODO(#524) markers + negative test assertions
+- address review — TODO markers + negative test assertions
 - preserve notebook outputs from stale cleanup
 - per-page toggle is in-memory only; isSyndicatedTo accepts email:<date>
 - label cloud downloads with actual provider, not always iCloud
@@ -1479,7 +1479,7 @@ Active branches not yet in this release — landing in a future version:
 - glass pill chrome redesign (Liquid Glass titlebar)
 - image-as-page generation + visual page layout
 - parse notebook title from .ipynb JSON metadata
-- add mark-and-sweep garbage collection for orphaned cache entries (#355)
+- add mark-and-sweep garbage collection for orphaned cache entries
 - redesign vertical typesetting with Chinese numerals, cards, and dates
 - shortcode syntax highlighting + build-time code highlighting
 - single-column nav + vertical summary cards
@@ -1507,7 +1507,7 @@ Active branches not yet in this release — landing in a future version:
 - add unified channel model backend
 
 ### Fixed
-- filter home_children by language in multilingual sites (#542)
+- filter home_children by language in multilingual sites
 - sign the encoded path in upload_file
 - harden subdomain field — IME safety, length cap, invalid-char hint, submit guard
 - always slugify subdomain input, strip invalid chars as typed
@@ -1523,7 +1523,7 @@ Active branches not yet in this release — landing in a future version:
 - snapshots regen + tooltip selector + search step for new UX
 - tolerate missing `active` field from whoami
 - update hero CSS test and domain dropdown scenarios for shipped UX
-- typecheck failures blocking PR #502
+- typecheck failures blocking a PR
 - P0/P1 findings from post-v0.6.1 code review
 - off-session consent disclosure + drop handleNextAction any-cast
 - accept requires_capture status for phase 2 manual capture
@@ -1657,7 +1657,7 @@ Active branches not yet in this release — landing in a future version:
 - run cache GC on blocking thread to avoid UI freeze
 - only count bytes_freed after successful file removal
 - HTML-escape notebook title to prevent XSS from metadata
-- truncate breadcrumb segments on mobile to prevent overflow (#481)
+- truncate breadcrumb segments on mobile to prevent overflow
 - breadcrumb dot spacing above and below
 - enforce content height constraint with min-height: 0
 - spacing, card sizing, colophon, and alignment

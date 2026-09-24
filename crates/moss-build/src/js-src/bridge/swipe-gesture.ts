@@ -32,8 +32,6 @@
  *
  * Direction follows the macOS convention under natural scrolling: fingers
  * moving right produce negative deltaX and mean "back".
- *
- * Design: docs/archive/2026-07-10-preview-swipe-navigation-design.md
  */
 
 export type SwipeDirection = "back" | "forward";

@@ -1,15 +1,13 @@
 //! The open crates (`moss-core`, `moss-build`, `moss-cli`) must build and
-//! test from `open/` alone — the public repo the F-track flip
-//! (docs/archive/2026-09-10-open-repo-flip-and-stack-lifecycle-plan.md)
-//! exports has nothing above `open/`. F5's dry run found three tests that
-//! violated this by joining a `..`-laden literal onto
-//! `env!("CARGO_MANIFEST_DIR")` (which is the *crate* root, e.g.
-//! `open/crates/moss-build`) and climbing out of `open/` entirely to read a
-//! desktop-only fixture (`playwright/fixtures/nav-island/live-css.html`,
-//! `frontend/design-system/index.html`, `src-tauri/tauri.conf.json`); all
-//! three moved to `src-tauri/tests/` (desktop-side, calling the open crates'
-//! public API or reading their source text, same as the F1 plugin-manifest
-//! precedent).
+//! test from `open/` alone — the public repo the F-track flip exports has
+//! nothing above `open/`. F5's dry run found three tests that violated this
+//! by joining a `..`-laden literal onto `env!("CARGO_MANIFEST_DIR")` (which
+//! is the *crate* root, e.g. `open/crates/moss-build`) and climbing out of
+//! `open/` entirely to read desktop-only fixtures (a Playwright nav-island
+//! fixture, the frontend design system's index page, and the app's own
+//! tauri config); all three moved into the desktop app's own tests (calling
+//! the open crates' public API or reading their source text, same as the F1
+//! plugin-manifest precedent).
 //!
 //! This is the guard that stops the class from coming back. It resolves
 //! every `..`-containing quoted string literal against the base its call

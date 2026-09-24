@@ -140,7 +140,7 @@ impl SiteDirectoryState {
     /// Returns whether the directory actually changed. Callers log the switch,
     /// and the `initial-build-complete` listener that drives it fires on every
     /// rebuild rather than only the first — so without this it announced 63
-    /// switches in one session's log, none of which moved anything (moss#1174).
+    /// switches in one session's log, none of which moved anything.
     pub fn switch_to(&self, new_dir: std::path::PathBuf) -> bool {
         let mut current = self.current_dir.write().unwrap();
         if *current == new_dir {
@@ -368,7 +368,7 @@ impl Default for ChildProcessRegistry {
 ///
 /// # Architecture: cancellation moved to `FolderSession`
 ///
-/// As of #614 G4 (Track A), cancellation is driven exclusively by
+/// As of a later refactor (Track A), cancellation is driven exclusively by
 /// `FolderSession::cancel`. This state retains:
 /// - `conversion_id`: monotonically increasing epoch for filtering stale
 ///   progress events and for inter-task epoch checks
@@ -584,7 +584,7 @@ impl VideoConversionState {
 
 /// Field-less placeholder for image conversion lifecycle.
 ///
-/// As of #614 G4 (Track A), image cancellation flows through
+/// As of a later refactor (Track A), image cancellation flows through
 /// `FolderSession::cancel`. This type stays in managed state to preserve
 /// `BuildServices.image_cancellation` plumbing; the legacy methods remain
 /// as deprecated no-ops to keep API churn local.
@@ -618,7 +618,7 @@ impl ImageConversionState {
 
 /// Field-less placeholder for notebook (JupyterLite) processing lifecycle.
 ///
-/// As of #614 G4 (Track A), notebook cancellation flows through
+/// As of a later refactor (Track A), notebook cancellation flows through
 /// `FolderSession::cancel`. This type stays in managed state to preserve
 /// `BuildServices.notebook_cancellation` plumbing; the legacy methods remain
 /// as deprecated no-ops to keep API churn local.
@@ -854,7 +854,7 @@ mod tests {
         // Re-switching to the same directory is not a switch. The caller logs
         // off this, and its `initial-build-complete` listener fires on every
         // rebuild — 63 announced switches in one session's log, none of which
-        // moved anything (moss#1174).
+        // moved anything.
         assert!(!state.switch_to(std::path::PathBuf::from("/folder_b/.moss/build.nosync/current")));
 
         let current = state.current_dir.read().unwrap();

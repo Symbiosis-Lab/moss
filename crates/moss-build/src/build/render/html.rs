@@ -287,7 +287,7 @@ fn generate_html_inner(
     // The language moss's own interface is drawn in: the page's own when it
     // declares one moss has strings for, else the site default. Distinct from
     // `<html lang>`, which describes the content and may name a language moss
-    // has no interface for at all (#977).
+    // has no interface for at all.
     let ui_lang = doc.map(|d| d.lang).unwrap_or(site_lang);
 
     // The page's effective typesetting — its own, else the site's. Computed
@@ -301,7 +301,7 @@ fn generate_html_inner(
 
     // `<html lang>`, hreflang and Schema.org `inLanguage` all emit THIS one
     // string, so they cannot contradict each other — deriving it three times
-    // below is how they drifted apart (moss#1177).
+    // below is how they drifted apart.
     let page_lang_tag = doc
         .and_then(|d| d.lang_tag.clone())
         .unwrap_or_else(|| layout_config.lang_tag.clone());
@@ -482,7 +482,7 @@ fn generate_html_inner(
             // an authored leading `# Foo` is the author's content and is kept
             // verbatim. (Removed the pre-2026-05-30 dedup that stripped a
             // leading <h1> matching doc.title — it only ever deleted the
-            // author's heading.) See docs/reference/title-rendering.md.
+            // author's heading.)
 
             // Build the media lookup once: shared between folder-card
             // color resolution and the post-pass placeholder enrichment.
@@ -571,7 +571,6 @@ fn generate_html_inner(
         (Some(doc), false) => {
             // Regular page content. Body H1 (if any) is preserved verbatim and
             // is the sole source of the visible heading — moss never injects one.
-            // See docs/archive/2026-04-17-title-simplification.md.
             // Build the media lookup once: shared between folder-card
             // color resolution and the post-pass placeholder enrichment.
             let media_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(
@@ -660,7 +659,7 @@ fn generate_html_inner(
                 // (`filename_text`), NEVER body content (Obsidian-match,
                 // 2026-05-30). An author's body `# Custom` is kept verbatim as
                 // content and renders below this injected folder-title h1; moss
-                // no longer dedups it. See docs/reference/title-rendering.md.
+                // no longer dedups it.
                 let h1_text = &doc.title;
                 // `layout: article` on a folder-index page reads as a plain
                 // article: no auto-inserted cover component (row or hero) at
@@ -691,7 +690,7 @@ fn generate_html_inner(
                     // column is squeezed to a fraction of its intended width
                     // (`Illuminated Books.md` — `cover:` + `:::grid 2`), and a
                     // long-form article body is read in a ~20-character measure
-                    // with half the viewport empty beside it (moss#903 bug 4).
+                    // with half the viewport empty beside it.
                     //
                     // `BodyPlan::lede_segments` is where the plan says the lede
                     // ends. Everything past it re-appends as a plain sibling
@@ -749,7 +748,7 @@ fn generate_html_inner(
                 // the SAME book-open layout a folder index uses: cover on the
                 // left, lede beside it, rest of the body released back to
                 // full width — gone are the days of a bare cover-row with
-                // nothing but empty space beside the image (moss#903 bug 4's
+                // nothing but empty space beside the image (that same
                 // fix now applies here too). `folder_cover::render` takes an
                 // empty label rather than `h1_text`: this shell's own visible
                 // `<h1>` is already the head of `lead` (the pipeline-injected
@@ -882,7 +881,7 @@ fn generate_html_inner(
 
     // Single unified navigation for all pages
     let navigation = nav_builder.generate_navigation();
-    // …plus its floating continuation for long pages (ADR-049). Empty unless
+    // …plus its floating continuation for long pages. Empty unless
     // this page has a breadcrumb trail, and empty site-wide when the author
     // turned the island off in Settings → Services.
     let nav_island = if layout_config.floating_nav {
@@ -960,7 +959,7 @@ fn generate_html_inner(
                 };
 
                 if let Some(ref siblings) = sorted_siblings {
-                    // By url_path: every folder index's clean_stem is "index" (#1012).
+                    // By url_path: every folder index's clean_stem is "index".
                     if let Some(pos) = siblings.iter().position(|pd| pd.url_path == d.url_path) {
                         let prev = if pos > 0 {
                             // chrome; plain-text label
@@ -1103,8 +1102,8 @@ fn generate_html_inner(
             //     only when truncation actually happened.
             //
             // The `from_alias` branch exists to keep today's "More always on cross-ref"
-            // semantics for sites still using `sidebar:`. When the alias is removed
-            // (#633), every sidebar feed uses the truncation-only rule — same as
+            // semantics for sites still using `sidebar:`. When the alias is removed,
+            // every sidebar feed uses the truncation-only rule — same as
             // the body feed.
             let from_alias = doc.map_or(false, |d| d.from_sidebar_alias.unwrap_or(false));
             // `Some(0)` is treated as "no limit" rather than "render zero items"
@@ -1225,8 +1224,7 @@ fn generate_html_inner(
     // every article page, with or without a date, so dateless reviews keep their
     // colophon; an unfilled marker is stripped by inject_slots. See
     // splice_after_title_block in html_post.rs for the title-block detection
-    // (matches the # H1 + > blockquote deck pattern documented in
-    // docs/reference/content-structure.md).
+    // (matches the # H1 + > blockquote deck pattern).
     if is_article_page {
         let mut after_title_block = article_date_line_html.unwrap_or_default();
         // Byline rows (frontmatter `byline:`) sit between the date row and the
@@ -1592,7 +1590,7 @@ fn generate_html_inner(
         comments_attr: resolve_comments_attr(
             doc.and_then(|d| d.comments), layout_config.comments),
         // The content's language, not the chrome's: `ui_lang`'s three variants
-        // said `en` on a `fr` site while site-languages.json said `fr` (#977).
+        // said `en` on a `fr` site while site-languages.json said `fr`.
         lang: page_lang_tag.clone(),
         ui_lang,
         user_css_link: if has_user_css {
@@ -1634,7 +1632,7 @@ fn generate_html_inner(
 ///    is a doorway, not a step, so it is not threaded into its siblings'
 ///    prev/next chain. `layout: article` overrides that: the author has said
 ///    "this is a piece", and a piece that happens to own an appendix folder is
-///    still something you read in order (#1012). Kind comes from the kind-aware
+///    still something you read in order. Kind comes from the kind-aware
 ///    `SortableDoc::is_folder_index`, never the URL — under pretty URLs *every*
 ///    article also ends with `<stem>/index.html`.
 /// 2. **`series: false` on a leaf page.** It stays in the listing but steps

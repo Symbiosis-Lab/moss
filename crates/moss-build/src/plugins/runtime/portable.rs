@@ -1,6 +1,5 @@
 //! The headless half of the plugin runtime — everything here runs with no
-//! Tauri dependency (open-CLI plan slice 1,
-//! docs/archive/2026-08-28-open-cli-engine-and-thin-binary-plan.md). At slice 2
+//! Tauri dependency (open-CLI plan slice 1). At slice 2
 //! this file moves verbatim under `crates/moss-build/src/plugins/runtime/`;
 //! every `crate::` path below spells the same in both crates (the app's
 //! `crate::build`, `crate::tasks`, `crate::advisory`, `crate::plugins::types`
@@ -225,7 +224,7 @@ pub fn get_plugin_env_var_impl(
 }
 
 // ============================================================================
-// PanelTask lifecycle bridge (ADR-015 Phase 2 entry — T8a)
+// PanelTask lifecycle bridge (Phase 2 entry — T8a)
 // ============================================================================
 //
 // `report_plugin_task_lifecycle` is the Rust entry point for the
@@ -303,7 +302,7 @@ impl PluginTaskHandleStore {
     }
 
     /// Inspection accessors for the app-side lifecycle tests
-    /// (src-tauri runtime_tests.rs); the maps themselves stay private so
+    /// (the desktop app's runtime_tests.rs); the maps themselves stay private so
     /// prod code cannot bypass the store's API.
     #[cfg(any(test, feature = "test-fixtures"))]
     pub fn task_count(&self) -> usize {
@@ -322,8 +321,8 @@ impl PluginTaskHandleStore {
 }
 
 /// Lifecycle payload emitted from the TS `TaskHandle` shim in
-/// `packages/moss-api/src/utils/messaging.ts`. Mirrors ADR-015 § Layer 2
-/// `TaskLifecycle` — see that section for the state machine.
+/// `packages/moss-api/src/utils/messaging.ts`. Mirrors the
+/// `TaskLifecycle` state machine used elsewhere in this crate.
 ///
 /// `Started` is the spawn signal (carries hook + trigger + label + flags).
 /// Other variants carry only the `TaskId` returned by `Started` plus
@@ -715,7 +714,7 @@ use crate::build::assets::git::git_binary_config;
 /// `on_progress` (bytes downloaded, total if the server declared one).
 ///
 /// Shared body behind both seams. The progress sink is the ONLY thing the app
-/// was ever needed for here, so the headless path (#1019) passes `None` and
+/// was ever needed for here, so the headless path passes `None` and
 /// resolves the same binary — quietly.
 pub async fn resolve_git_path_impl(
     on_progress: Option<std::sync::Arc<DownloadProgress>>,

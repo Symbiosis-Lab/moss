@@ -58,8 +58,7 @@ pub fn render_item_with_typesetting(
 /// `list_has_covers`: when true and THIS card has no cover of its own, the
 /// cover slot becomes a quote card (`data-cover="quote"`) carrying the
 /// page's description — or its title, with no description — instead of
-/// the empty `.moss-card-no-cover` placeholder. Per
-/// docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §1: a
+/// the empty `.moss-card-no-cover` placeholder. A
 /// uniformly coverless list (e.g. a term index) keeps the plain
 /// placeholder, because there every card is the same shape and the
 /// placeholder is invisible CSS (`moss-card-cover { display: none }`);
@@ -122,11 +121,10 @@ fn render_item(
 
     // Slot order: kicker, meta, title (horizontal-mode layout).
     //
-    // Per docs/reference/design/preview-cards.md:22-30: "Meta — a small kicker
-    // above (horizontal) or to the right of (vertical) the title…
-    // Production callers populate meta and leave kicker empty." Meta IS the
-    // visual kicker — same uppercase overline treatment, same position above
-    // the title. Emitting `kicker, meta, title` matches both the spec and
+    // Meta IS the visual kicker — a small kicker above (horizontal) or to the
+    // right of (vertical) the title, since production callers populate meta
+    // and leave kicker empty: same uppercase overline treatment, same
+    // position above the title. Emitting `kicker, meta, title` matches
     // the parallel emitter at child_summary::render_with_sort (line 64) so
     // the two card surfaces agree on slot order.
     //
@@ -180,7 +178,6 @@ fn render_item(
 /// a bare `data-embed` attribute on the `.moss-cards-container` this
 /// function builds, distinguishing a body embed from the frontmatter-
 /// synthesized listing for CSS block-rhythm purposes.
-/// docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §6.
 pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     cards: &[C],
     root: Option<&Path>,

@@ -357,7 +357,7 @@ interface LiveComment {
     return html;
   }
 
-  // Append-only reconcile (ADR-025 §6): the baked SSR list (all sources,
+  // Append-only reconcile: the baked SSR list (all sources,
   // Rust-rendered + sanitized at ingest) is the archive and is AUTHORITATIVE.
   // The live fetch ONLY ADDS Artalk comments newer than the bake — it never
   // removes baked comments. Moderation (hide/delete) is applied at build time

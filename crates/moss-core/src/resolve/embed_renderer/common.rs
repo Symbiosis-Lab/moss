@@ -52,7 +52,7 @@ pub(super) fn dim_attrs(alias: Option<&str>) -> (String, String) {
 /// Escapes `& < > "`. Apostrophe is safe inside `"..."` attributes per HTML5.
 ///
 /// Canonical 4-char attribute escaper for synthesizer output. Used by
-/// Phase 1's Stage 2 dispatcher (still emits HTML) and by the src-tauri
+/// Phase 1's Stage 2 dispatcher (still emits HTML) and by the desktop app's
 /// typed-embed synthesizers (pdf / iframe / model / audio / video) which
 /// import this single source rather than each inlining a private copy.
 pub fn html_escape_attr(s: &str) -> String {

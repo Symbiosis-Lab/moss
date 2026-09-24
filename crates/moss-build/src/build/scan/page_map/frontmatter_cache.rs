@@ -41,7 +41,7 @@ const SCHEMA: u32 = 2;
 /// EVERY build — full time regardless of how many pages changed, and
 /// `external_url_map` costs the same whether it finds 0 entries or 20,
 /// because the cost is the read+parse of every file, not the size of the
-/// result. See docs/archive/2026-08-20-rebuild-loop-incrementality.md.
+/// result.
 ///
 /// Correctness: an entry is trusted only when the file's `(size, mtime,
 /// mtime_nanos)` match exactly AND any ctime/inode recorded on both sides
@@ -115,7 +115,7 @@ impl FrontmatterScanCache {
     }
 
     /// Persist to disk. Goes through `io_utils` because this file lives
-    /// under `.moss/build.nosync/` (ADR-043 — dataless is absent there).
+    /// under `.moss/build.nosync/` (dataless is treated as absent there).
     pub(crate) fn save(&self, path: &Path) -> std::io::Result<()> {
         let json = serde_json::to_vec_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
@@ -199,7 +199,7 @@ fn scan_frontmatter_urls_with_evicted(
             }
         };
 
-        // ONE parser (ADR-020), one pass, both fields — same parse
+        // ONE parser, one pass, both fields — same parse
         // `build_page_map`/`build_external_url_map` used to run separately.
         let (frontmatter_url, external_url_raw, lang_raw) =
             if crate::build::markdown::is_simplified_frontmatter(&content) {
@@ -232,7 +232,7 @@ fn scan_frontmatter_urls_with_evicted(
         if let Some(raw) = external_url_raw.as_deref() {
             // http(s) only — same safety guard as the card-href substitution
             // in page.rs and the wikilink resolver in pipeline.rs. Warn
-            // before silently dropping so the user knows why. See moss#684.
+            // before silently dropping so the user knows why.
             super::warn_invalid_external_url(raw, file_path);
         }
         let external_url = external_url_raw.filter(|u| super::is_valid_external_url(u));
@@ -296,8 +296,7 @@ pub(crate) fn build_page_map_and_external_urls_cached(
 }
 
 /// Same as [`build_page_map_and_external_urls_cached`] with an injectable
-/// eviction predicate — see docs/archive/2026-07-31-cloud-download-waiting-mode.md
-/// Stage 3, and `build_page_map_with_evicted` for the same pattern.
+/// eviction predicate — see `build_page_map_with_evicted` for the same pattern.
 pub(crate) fn build_page_map_and_external_urls_cached_with_evicted(
     markdown_files: &[crate::types::content::FileInfo],
     source_path: &Path,

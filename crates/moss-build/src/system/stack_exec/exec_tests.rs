@@ -19,7 +19,7 @@ fn stack_with_argv(start: Vec<&str>, uninstall: Vec<&str>) -> StackContribution 
 }
 
 /// A stand-in for a stack's binary: a `#!/bin/sh` script, in the same shape
-/// as `fake_onionpress` at `src-tauri/src/system/stack_install.rs:2734`,
+/// as `fake_onionpress` in the desktop app's stack installer tests,
 /// lifted here stack-agnostic. It prints its own argv, working directory and
 /// one env var, one per line, so a test can pin all three from
 /// [`super::run`]'s `BoundedOutput::stdout` without a real subprocess

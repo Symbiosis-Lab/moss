@@ -3,8 +3,8 @@
  * fails to load, and the restore that swaps it back when the bytes land.
  *
  * These replace thumb-swap.test.ts (that module was absorbed; a missing
- * `.thumb.jpg` is just one image) and two Rust tests in
- * src-tauri/src/build/page/template_tests.rs that asserted on tokens in the
+ * `.thumb.jpg` is just one image) and two Rust tests in the app's own
+ * template tests that asserted on tokens in the
  * MINIFIED script — `swaps_src_in_place_not_replace_element` and
  * `strips_picture_source_children`. Both intents are covered here against a real
  * DOM instead of a grep: element identity survives, and source-set selection is

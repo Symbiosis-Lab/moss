@@ -110,8 +110,7 @@ fn test_script_contains_external_link_handler() {
 
 #[test]
 fn test_script_suppresses_native_context_menu() {
-    // Cut 2 of the context-menu vocabulary (docs/archive/2026-08-15-context-
-    // menu-vocabulary.md): the bridge owns right-click inside the previewed
+    // Cut 2 of the context-menu vocabulary: the bridge owns right-click inside the previewed
     // page — it suppresses the native WebKit menu and posts the click's
     // context ("moss-context-menu") for the shell to render. Both strings
     // survive minification.
@@ -173,7 +172,7 @@ fn style_tag_carries_no_chrome_geometry() {
     // The injected stylesheet must NOT displace the document body, inject
     // chrome elements, or carry the titlebar height in ANY form. Chrome
     // (titlebar overlay, fake scrollbar) is painted by the parent shell,
-    // and since ADR-039 the shell also owns the chrome OFFSET by insetting
+    // and the shell also owns the chrome OFFSET by insetting
     // the preview iframe — so the iframe side has no chrome geometry at
     // all. This invariant prevents the class of bug where chrome geometry
     // leaks into nested cover or embed iframes (e.g. a site's embedded p5
@@ -192,7 +191,7 @@ fn style_tag_carries_no_chrome_geometry() {
         !css.contains("moss-mobile"),
         "style tag must NOT gate on .moss-mobile (no chrome geometry to gate); got: {css}"
     );
-    // ADR-039: with the iframe inset below the chrome, the iframe viewport's
+    // With the iframe inset below the chrome, the iframe viewport's
     // top row is already fully visible, so scroll padding would push anchor
     // targets down by a titlebar height for no reason. Asserting its ABSENCE
     // keeps TITLEBAR_HEIGHT from creeping back into a second location.

@@ -7,7 +7,7 @@
 //!
 //! [`parse`] then deserializes the YAML dialect with `serde_yaml` directly
 //! (NOT `gray_matter`, whose `Pod` type doesn't properly deserialize YAML
-//! arrays — see ADR-008). The simplified dialect is typed by
+//! arrays). The simplified dialect is typed by
 //! [`crate::frontmatter_typed::parse_simplified_frontmatter`], which reads the
 //! same span.
 //!
@@ -63,7 +63,7 @@ pub struct FrontmatterSpan {
 /// example — never a delimiter. Asking the weaker question ("is there a `---`
 /// at the top level?") is what made the original bug destructive: uid stamping
 /// **writes its answer back to the author's file**, so a false positive splices
-/// `uid:` into the middle of their prose (moss#932).
+/// `uid:` into the middle of their prose.
 ///
 /// ## Bail-outs, and why each is the safe answer
 ///
@@ -113,7 +113,7 @@ fn yaml_span(content: &str, start: usize) -> Option<FrontmatterSpan> {
     let mut lines = content[start..].split_inclusive('\n');
     let opening = lines.next()?;
     // `trim_end`, not `trim`: three leading spaces is a legal CommonMark thematic
-    // break, and accepting it as an opening delimiter re-opens moss#932's failure
+    // break, and accepting it as an opening delimiter re-opens that earlier failure
     // one notch over — uid stamping would splice `uid:` into the author's prose
     // and save it. The CLOSING test stays `trim()`, matching every prior
     // implementation.
@@ -165,7 +165,7 @@ fn simplified_span(content: &str, start: usize) -> Option<FrontmatterSpan> {
 /// has. A caller that just wants to read a field — the file tree's `date:` and
 /// `home:` probe, for one — wants this instead: a simplified-frontmatter file
 /// used to come back empty from `parse`, so its page showed no date in the tree
-/// and its `home: true` never flagged (moss#937).
+/// and its `home: true` never flagged.
 ///
 /// A bare flag (`nav`) is `true`. A simplified value is coerced only when YAML
 /// reads it as a SCALAR — so `date: 2025-11-15` and `home: true` mean the same
@@ -299,7 +299,7 @@ pub fn parse(content: &str) -> ParsedDocument {
             // warning — the "Europe - A Prophecy.md" bug). `body` stays the
             // WHOLE document so the editor can still show/repair the block and a
             // re-serialize save preserves the file; the build renders
-            // `render_body()` (block-excluded) so nothing leaks. See ADR-020.
+            // `render_body()` (block-excluded) so nothing leaks.
             return ParsedDocument {
                 frontmatter: HashMap::new(),
                 body: content.to_string(),
@@ -365,7 +365,7 @@ pub fn serialize(
 /// `tauri-apps/tauri#10194` (open upstream issue).
 ///
 /// The frontend guards this at the DOM `beforeinput` boundary (see
-/// `frontend/app/shared/ui/control-char-guard.ts`), but this Rust strip mirrors it
+/// the frontend's control-char guard), but this Rust strip mirrors it
 /// at the write boundary as defense-in-depth — any control char that reaches
 /// this point (e.g. a value set before the guard was installed, or via a
 /// path that bypasses the DOM entirely) is stripped before it is ever
@@ -404,7 +404,7 @@ fn is_stray_control_char(c: char) -> bool {
 ///
 /// The shared control-char stripper: this is the same string-level primitive
 /// `strip_control_chars` (above) applies recursively to `serde_yaml::Value`
-/// trees. It is `pub` so other crates (e.g. `src-tauri`'s scrape/email write
+/// trees. It is `pub` so other crates (e.g. the desktop app's scrape/email write
 /// paths) can apply the identical defense-in-depth strip at their own
 /// hand-rolled or `serde_yaml`-based frontmatter funnels — see
 /// `tauri-apps/tauri#10194`.
@@ -470,7 +470,7 @@ pub fn value_as_string(value: &serde_yaml::Value) -> Option<String> {
 /// [`frontmatter_span`] does not normalize — its offsets index the raw source
 /// this is about to rewrite — so the boundary is its call here too, and both
 /// dialects are covered: a simplified-frontmatter page's `cover:` used to get no
-/// span at all and go un-rewritten on publish (moss#937). Only the LINE TABLE is
+/// span at all and go un-rewritten on publish. Only the LINE TABLE is
 /// local, because the fields have to be walked as YAML mapping lines.
 ///
 /// # Why this does not use the inert mask

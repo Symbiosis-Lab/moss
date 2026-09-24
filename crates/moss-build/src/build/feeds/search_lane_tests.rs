@@ -50,7 +50,7 @@ fn disabled_search_registers_nothing_and_indexes_nothing() {
     assert!(!mp.staging_dir().join("_moss/pagefind").exists());
 }
 
-// ── Nothing to adopt (ADR-045's first hole) ─────────────────────────────────
+// ── Nothing to adopt (the rule's first hole) ─────────────────────────────────
 
 /// The first build after search is enabled has no receipt to adopt. Registering
 /// nothing would be a silent bug rather than a slow path: mark-and-sweep would
@@ -182,7 +182,7 @@ fn a_build_with_no_lane_reindexes_rather_than_adopting_its_own_stale_receipt() {
     );
 }
 
-// ── Receipt/disk divergence (ADR-045's second hole) ─────────────────────────
+// ── Receipt/disk divergence (the rule's second hole) ─────────────────────────
 
 /// An external delete or a cloud eviction of the holding area leaves a receipt
 /// naming files that are gone. Registering them would put a path in the

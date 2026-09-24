@@ -5,8 +5,7 @@
 //! do: at build time each page's term values derive membership claims into
 //! pseudo-folders (`authors/<slug>`, `tags/<slug>`), the same slot `also_in`
 //! occupies, so the canonical listing selector and the synthetic folder-index
-//! machinery serve term pages with zero new modes. Design:
-//! `docs/archive/2026-09-01-tags-and-authors-design.md`.
+//! machinery serve term pages with zero new modes.
 //!
 //! This module is the single owner of term identity: how a term name folds
 //! for equality, how it slugs into a URL segment, and how a claim field

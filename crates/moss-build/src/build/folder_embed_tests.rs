@@ -151,7 +151,7 @@ fn full_listing_renders_all_articles_in_date_order() {
 
 #[test]
 fn also_in_doc_outside_folder_is_included_in_direct_listing() {
-    // moss#907 gap-4 sweep changed `select_children_by_slug`'s depth check
+    // A gap-4 sweep changed `select_children_by_slug`'s depth check
     // (folder_embed.rs, the `strip_prefix(folder_prefix).is_none_or(...)`
     // arm): an `also_in` doc that is NOT physically under the folder used to
     // be excluded from a "direct" (non-flatten, the default) listing by the
@@ -1354,7 +1354,6 @@ fn synthesize_marker_folder_index_no_depth_default() {
 }
 
 // ---- Multilingual children scoping (location model) ----
-// See docs/archive/2026-06-06-multilingual-children-scoping-design.md.
 
 fn multilingual_project() -> ProjectStructure {
     let mut p = test_project();
@@ -1774,7 +1773,7 @@ fn grid_embed_iframe_cover_gets_dark_default_color() {
     );
 }
 
-/// docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §6: CSS needs
+/// CSS needs
 /// to tell a body `![[folder/|…]]` embed apart from the frontmatter-
 /// synthesized listing (homepage / folder index), so only the embed follows
 /// block rhythm while the trailing automatic listing keeps its larger
@@ -1839,9 +1838,9 @@ fn body_embed_is_tagged_data_embed_but_the_frontmatter_listing_is_not() {
     );
 }
 
-/// A real site's regression (moss#1101): a page that is NOT the home
-/// embeds the vault root (`![[/|...]]`) — the same construct `Archive.md`
-/// carries on the real site. The root's own home doc is a `PageKind::Folder`
+/// A regression where a page that is NOT the home
+/// embeds the vault root (`![[/|...]]`) — the same construct a page named
+/// `Archive.md` might carry. The root's own home doc is a `PageKind::Folder`
 /// whose SOURCE lives at the vault root but whose `url_path` a caller could
 /// get wrong (home election is a separate concern from this lookup); the
 /// embed must still resolve from a page other than the home, because
@@ -2297,7 +2296,6 @@ fn skip_resort_summary_year_still_groups_by_year() {
 /// which is summary-only), so ordering is the only thing left carrying the
 /// section/page distinction; and codepoint order used to exile a lowercase
 /// label past every capitalised one.
-/// Design: docs/archive/2026-09-06-authors-index-design-decision.md
 #[test]
 fn undated_grid_puts_folders_first_then_folds_case() {
     let zebra = make_folder_doc("zebra", "Zebra");
@@ -2428,7 +2426,6 @@ fn children_covers_absent_keeps_default_behavior() {
 /// Under the old `any()` quantifier a single claimed author who wrote one
 /// paragraph flipped the whole roster to "summary" — 56 archive rows, no action
 /// by the other 55 authors and no signal that it happened.
-/// Design: docs/archive/2026-09-07-listing-style-bulk-test.md
 #[cfg(test)]
 mod bulk_style_tests {
     use super::*;

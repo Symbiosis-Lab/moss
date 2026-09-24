@@ -5,8 +5,8 @@
 //! - **Absent must never be substituted for unreadable.** A build that cannot
 //!   read the record and pretends nothing was published emits no forwarding
 //!   stub for a page it renamed (a permanent 404) and rewrites a published
-//!   note's identity on a coin flip (no undo). That is moss#1079.
-//! - **The pre-moss#1079 copy of the whole article map must leave** — but only
+//!   note's identity on a coin flip (no undo). That is the uid-remint bug.
+//! - **The pre-fix copy of the whole article map must leave** — but only
 //!   once something else holds what it says.
 
 use super::*;
@@ -34,7 +34,7 @@ fn record(target: &str, pages: &[(&str, &str, &str)]) -> PublishedSnapshot {
     }
 }
 
-/// A record as `record_landed` writes it since moss#1093: `triples` populated
+/// A record as `record_landed` writes it since the triples migration: `triples` populated
 /// directly from the same source `record`'s `uids`/`source_to_output` came
 /// from, so there is nothing to join.
 fn record_with_triples(target: &str, pages: &[(&str, &str, &str)]) -> PublishedSnapshot {
@@ -53,7 +53,7 @@ fn record_with_triples(target: &str, pages: &[(&str, &str, &str)]) -> PublishedS
     snap
 }
 
-/// The pre-moss#1079 file: a serialized `ArticleMap`, keyed by pretty URL.
+/// The pre-fix file: a serialized `ArticleMap`, keyed by pretty URL.
 fn legacy_bytes(pages: &[(&str, &str, &str)]) -> String {
     let mut map = ArticleMap::default();
     for (url, source_path, uid) in pages {
@@ -98,7 +98,7 @@ fn every_targets_record_is_read_into_one_baseline() {
     assert_eq!(by_uid.get("bbbb2222"), Some(&"b/"));
 }
 
-/// The moss#1079 shape: bytes that are there and do not parse. The caller must
+/// The corrupt-record shape: bytes that are there and do not parse. The caller must
 /// be able to tell that apart from "nothing was ever published", because the
 /// two license opposite actions.
 #[test]
@@ -134,11 +134,12 @@ fn a_folder_that_never_published_reads_as_absent() {
 }
 
 /// A legacy (no-`triples`) record whose `uids` names a source path with no
-/// matching `source_to_output` entry is the moss#1089 half-updated shape.
+/// matching `source_to_output` entry is the half-updated shape.
 /// Joining it anyway would drop that uid — source path and all — out of the
 /// baseline entirely, which is exactly what lets a later duplicate-uid
-/// collision fall through to the heuristic and mint a fresh uid (moss#1079,
-/// reopened). moss#1093: the record defers instead, and the OTHER record's
+/// collision fall through to the heuristic and mint a fresh uid (the
+/// uid-remint bug, reopened). Since the triples migration, the record defers
+/// instead, and the OTHER record's
 /// entries do not paper over it — an inconsistent record is unusable for
 /// everyone, the same rule `read_legacy`'s `Unreadable` already applies.
 #[test]

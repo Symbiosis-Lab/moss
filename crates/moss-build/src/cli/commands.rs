@@ -20,7 +20,7 @@ use moss_core::contract::describe::CliCommandInfo;
 ///
 /// Both `--help` screens and `moss describe` render from here, so the prose
 /// cannot drift from the table. The one thing the table does not generate is
-/// the dispatch arms — `src-tauri/src/startup/run_mode.rs` and
+/// the dispatch arms — the desktop app's startup dispatcher and
 /// `crates/moss-cli/src/main.rs` — so a command added here with no arm is
 /// advertised by both binaries and answered by neither.
 pub fn cli_commands() -> Vec<CliCommandInfo> {
@@ -116,7 +116,7 @@ const OWN_HELP: [&str; 7] = ["list", "doctor", "rename", "domain", "env", "impor
 /// Every one of those reads as "your argument is wrong" rather than "that flag
 /// landed in an argument slot" — and `<cmd> --help` is the first thing anyone
 /// types at a CLI they do not know, an agent most of all. Observed in the
-/// 2026-08-05 trial (docs/archive/2026-08-05-agent-surface-vs-hugo.md).
+/// 2026-08-05 trial.
 ///
 /// Drawing the text from [`cli_commands`] means a command cannot describe
 /// itself one way in `moss describe --json` and another way at `--help`.
@@ -266,7 +266,7 @@ USING MOSS FROM A CODING AGENT:
     )
 }
 
-/// What `moss compile` gets. Renamed to `moss build` on 2026-04-24 (#554),
+/// What `moss compile` gets. Renamed to `moss build` on 2026-04-24,
 /// but shell history and old docs still carry it, and both binaries have to
 /// say the same thing — the open binary is the one an old script finds first.
 pub fn renamed_compile_hint(folder: Option<&str>) -> String {

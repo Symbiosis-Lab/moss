@@ -8,7 +8,7 @@
  *   - Wikilink embed           `![[file.png]]`  → `WikilinkEmbed`, whole node range
  *
  * The two are DIFFERENT node types and are told apart by NAME, via
- * [`isEmbedNode`] — never by probing for an absent `URL` child. See ADR-041.
+ * [`isEmbedNode`] — never by probing for an absent `URL` child.
  *
  * For standard images the `from`/`to` span is the URL child node — i.e. the
  * path text only, not the surrounding `(…)`.
@@ -30,7 +30,7 @@ import { shortcodeAssetRef } from '../shortcode.js';
  * markdown image `![alt](url)` (`Image`) and a wikilink embed `![[file]]`
  * (`WikilinkEmbed`).
  *
- * ADR-041 invariant: an embed is identified by node NAME. The old
+ * Invariant: an embed is identified by node NAME. The old
  * `node.name === 'Image' && !getChild('URL')` discriminator was a negative
  * test four modules re-derived independently; this is the one predicate.
  */
@@ -152,10 +152,10 @@ interface DocSlice { sliceString(from: number, to: number): string }
  *
  * This is the single accessor that replaced four independent hand-rolled
  * re-scans of the raw source (in this module, cm-live-preview and
- * cm-email-guard) — the ADR-036 "parse once, lower to many" rule: never a
+ * cm-email-guard) — the "parse once, lower to many" rule: never a
  * second hand-rolled scan of source the Lezer tree already models.
  *
- * Discriminates on `node.name` (ADR-041), never on the presence of a `URL`
+ * Discriminates on `node.name`, never on the presence of a `URL`
  * child. Returns null when the node is not an embed, is structurally
  * incomplete, or has an empty target — `![[]]` (which the slash menu inserts
  * on every image verb) and `![]()` must NOT enter the resolve batch.
@@ -456,7 +456,7 @@ export function extractImageTargets(state: EditorState): ImageTarget[] {
         return; // descend — nothing else on the line, but no reason to prune
       }
       // `![alt](url)` is an `Image`; `![[file]]` is a `WikilinkEmbed`.
-      // Identified by NAME (ADR-041) — not by probing for a URL child.
+      // Identified by NAME — not by probing for a URL child.
       if (!isEmbedNode(node.name)) return;
       const parts = embedParts(node, state.doc);
       if (parts) {
@@ -535,7 +535,7 @@ export function imageNodeAtWidget(
 /**
  * Resolve the embed node enclosing `pos` — the source span a width rewrite
  * replaces. Handles BOTH `![alt](url)` and every `![[…]]` form (folder, PDF,
- * video, iframe), because both are embeds by name (ADR-041).
+ * video, iframe), because both are embeds by name.
  *
  * The one owner of the resolveInner-and-climb, so a caller cannot climb for
  * `'Image'` only and silently no-op on every wikilink embed.

@@ -564,7 +564,7 @@ impl std::error::Error for CardError {}
 /// skips, and `remove_stale_files` deletes any `image_outputs` entry this
 /// build didn't re-register — so without this the card of an unmodified page
 /// would be pruned and its `og:image` would 404 until that page next
-/// re-rendered (moss#966).
+/// re-rendered.
 ///
 /// Cards are content-addressed by (title, site_name, colors) under
 /// `_moss/og/`, and a carry only happens when no page's surface moved, so
@@ -1381,7 +1381,7 @@ mod tests {
         // multiple workers call render_card on that shared path at once and
         // then read it back to hash for the manifest. A non-atomic save_png
         // tears the PNG and lets a reader observe partial bytes (→ corrupt
-        // shipped card + manifest/disk hash mismatch, ADR-013). render_card
+        // shipped card + manifest/disk hash mismatch). render_card
         // must write atomically (temp + rename) so every reader sees a
         // complete, identical file regardless of interleaving.
         use std::sync::{Arc, Barrier};

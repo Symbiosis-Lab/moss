@@ -2,7 +2,7 @@ use super::*;
 
 /// What `generate_native_slots` used to read for itself: is the `email`
 /// channel installed for this project? The function now takes it as an
-/// argument (ADR-050 keeps plugin discovery out of the compiler), so these
+/// argument (keeping plugin discovery out of the compiler), so these
 /// tests answer it the same way the production caller does — from the
 /// `[channels]` table the test wrote to disk.
 fn email_installed(project_path: &str) -> bool {
@@ -201,7 +201,7 @@ fn test_comment_form_gets_inactive_class_without_endpoint() {
     );
 }
 
-/// #1013: folder-index pages are deliberately absent from the article map, so
+/// Folder-index pages are deliberately absent from the article map, so
 /// the comment page set used to end at the articles and a folder page could
 /// never hold a conversation — however its author configured it. Nothing about
 /// having children decides that, so the set now includes every folder index,
@@ -267,7 +267,7 @@ fn folder_index_pages_default_off_articles_default_on() {
         );
     }
 
-    // `[site] comments` is now a caller-resolved parameter (ADR-050 §1 — the
+    // `[site] comments` is now a caller-resolved parameter (the
     // same reason `email_installed`/`matters_domain` are parameters rather
     // than re-reads: `pipeline.rs::build_inner` already parses
     // `.moss/config.toml` once for `render::SiteConfig`; a second parse here
@@ -1771,7 +1771,7 @@ fn colophon_slot_merge_emits_class_even_without_lookup() {
     );
     // Phase 1 B1 (2026-05-25): the synthesizer always wraps raster
     // originals in `<picture>` regardless of manifest presence per
-    // ADR-013's "honest mirror" invariant — the preview server fills
+    // the "honest mirror" invariant — the preview server fills
     // in placeholder bytes when the variant hasn't landed yet. The
     // prior "no manifest → no `<picture>`" expectation was a quirk of
     // the old MediaDimensionLookup-gated emission. Falls back to
@@ -1878,7 +1878,7 @@ fn apply_only_page_slice_does_not_hit_early_return() {
 }
 
 // The `project_has_inline_subscribe` filesystem-scan tests were deleted
-// along with the function in PR7b (moss#599). Detection now reads
+// along with the function in PR7b. Detection now reads
 // `ParsedDocument.features.inline_subscribe` directly from the parsed
 // page slice produced by `pipeline::run`; `should_inject_subscribe_assets`
 // (above) tests cover the new path.

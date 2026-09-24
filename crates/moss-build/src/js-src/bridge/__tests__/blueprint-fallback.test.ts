@@ -1,6 +1,6 @@
 /**
  * Tests for the preview/editor-only missing-image placeholder upgrade
- * (frontend/bridge/blueprint-fallback.ts).
+ * (js-src/bridge/blueprint-fallback.ts).
  *
  * Unlike iframe-bridge.ts (an IIFE with load-bearing side effects), this module
  * exports a plain installer, so we import and drive it directly against a jsdom

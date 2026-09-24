@@ -17,7 +17,7 @@
 //! (slot injection, the fingerprint write, notebook registration) and the
 //! pipeline had to fabricate a stub `DeferredWork` after `take()` just to keep
 //! `dir_overrides` reachable. The manifest is the coordinator's, the config is
-//! this struct's, and neither needs a copy of the other (moss#618).
+//! this struct's, and neither needs a copy of the other.
 //!
 //! Split out of `types.rs` 2026-08-10 (M5a); `types.rs` re-exports every
 //! item at its old path, so consumers are unchanged.
@@ -30,7 +30,7 @@ use super::runtime::{
     ChildProcessRegistry, ImageConversionState, NotebookConversionState, VideoConversionState,
 };
 
-/// Context for background video conversion (ADR-001: Two-Phase Build).
+/// Context for background video conversion (Two-Phase Build).
 ///
 /// Holds data needed for video conversion tasks that run in the background
 /// after the blocking phase completes. This allows the preview to open
@@ -96,7 +96,7 @@ pub struct BackgroundContext {
     /// (`layout_config.assets.search` at the end of the blocking phase). The
     /// pipeline caller uses this to build the search index *after*
     /// `remove_stale_html` and with every page already on disk — see
-    /// `build/feeds/search.rs` and `docs/reference/search.md`.
+    /// `build/feeds/search.rs`.
     pub search_enabled: bool,
     /// Pre-resolved FFmpeg binary path from scan phase (Task 4: lazy resolution).
     /// When Some, `run_video_conversion` reuses this path instead of calling
@@ -115,7 +115,7 @@ pub struct BackgroundContext {
     /// collided rung paths with the SAME membership test registration used —
     /// the worker must never recompute it (no ProjectStructure there; a
     /// divergent set means a registered-but-never-encoded rung ⇒
-    /// sealed-deploy 404, ADR-013).
+    /// sealed-deploy 404).
     pub rung_collisions: std::collections::HashMap<String, std::path::PathBuf>,
     /// Advisories `dispatch_video_conversions` carried forward for videos it
     /// skipped this round (fingerprint matched or healed, output present) —
@@ -236,7 +236,7 @@ pub struct BuildServices {
     /// When multiple concurrent rebuilds try to convert the same image to WebP,
     /// only the first runs the encoder — all others block until the first completes
     /// and then receive a clone of its outcome. Generalizes the video-only dedup
-    /// pattern to all pipeline tasks per ADR-010.
+    /// pattern to all pipeline tasks.
     pub in_flight_images: std::sync::Arc<crate::build::cache::Singleflight<crate::build::media::image::ImageConversionOutcome>>,
     /// Singleflight dedup for metadata extraction keyed by "meta:{content_hash}".
     /// When multiple concurrent scans (build + plugin hooks) hit a TransformCache miss
@@ -298,8 +298,8 @@ pub struct BuildServices {
     ///
     /// Handed in by whoever started the build. The video worker used to read it
     /// itself, which meant `build/media/video.rs` — a leaf of the compiler —
-    /// imported plugin discovery AND the manifest schema, both of which ADR-050
-    /// §1 keeps out of moss-build by name. `run_pipeline` fills it at the one
+    /// imported plugin discovery AND the manifest schema, both of which this
+    /// crate's design keeps out of moss-build by name. `run_pipeline` fills it at the one
     /// site that fills `CacheKeyInputs`, and for the same reason: two callers
     /// that disagree would encode the same video two different ways.
     pub deploy_video_max_size_mb: Option<u32>,
@@ -340,8 +340,8 @@ impl BuildServices {
             // still reaches the HTTP carrier's SSE stream.
             reporter: std::sync::Arc::new(crate::build::ports::reporter::HeadlessReporter),
             spawner: None,
-            // A real registry, not None (2026-08-24, #1097 step 3): the seal
-            // tail's moss#867 degrade pass reads `Failed` entries from here,
+            // A real registry, not None (2026-08-24): the seal
+            // tail's degrade pass reads `Failed` entries from here,
             // and a `None` made every headless `set_failed` a silent no-op —
             // so a variant that failed to encode shipped as a live 404 inside
             // <picture> from `moss build` while the app degraded it. Fresh
@@ -722,7 +722,7 @@ mod tests {
         assert!(services.reporter.is_terminal());
         assert!(services.spawner.is_none());
         // A registry, not None: headless set_failed must be recorded so the
-        // seal tail's degrade pass can see it (#1097 step 3).
+        // seal tail's degrade pass can see it.
         assert!(services.assets.is_some());
     }
 

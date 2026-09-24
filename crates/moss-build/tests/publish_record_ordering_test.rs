@@ -1,9 +1,8 @@
 //! Source test: what every publish path owes once it has landed — the record
 //! written AFTER the landing and never before.
 //!
-//! Open-half twin of three checks in
-//! `src-tauri/tests/publish_record_ordering_test.rs` (desktop repo) (class B
-//! per docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md):
+//! Open-half twin of three checks in the desktop app's
+//! `publish_record_ordering_test.rs`:
 //!
 //! 1. `last_published_record_is_saved_after_the_commit` — reads
 //!    `src/deploy/push.rs`, wholly this crate's own source. Moved verbatim.
@@ -20,9 +19,9 @@
 //! `deploy_site_message_matches_the_frontend`,
 //! `the_plugin_path_publishes_under_the_publish_guard`, and
 //! `every_app_publish_path_stamps_the_folder` — each reads a desktop-only file
-//! (`src-tauri/src/preview/commands.rs`, `src-tauri/src/deploy.rs`,
-//! `src-tauri/src/startup/headless.rs`) or the frontend tree, none of which
-//! this row classifies as splittable.
+//! (the app's preview commands, its deploy driver, its headless-startup
+//! module) or the frontend tree, none of which this row classifies as
+//! splittable.
 
 use std::path::Path;
 
@@ -135,9 +134,10 @@ fn the_shared_helper_is_what_writes_the_record() {
         src.contains("read_live_article_mapping"),
         "`deploy::landed` must also record which note ID is live at which page — and where \
          that page is served, so the mapping cannot drift out of step with the note IDs the \
-         way it did in moss#1089 — for the same reason the two ordering tests exist: it is \
+         way a past bug let it — for the same reason the two ordering tests exist: it is \
          what the NEXT build diffs to find renamed pages. This lived in `push_site_inner_impl` \
          alone until 2026-08-17, so a site published through a deploy plugin never got a \
-         redirect stub when a page moved; it was a second file of its own until moss#1079."
+         redirect stub when a page moved; it was a second file of its own until a fix folded \
+         it into this one."
     );
 }

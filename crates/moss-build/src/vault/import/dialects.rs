@@ -2,8 +2,7 @@
 //!
 //! Heuristics are the default; a dialect row records only the deltas
 //! heuristics get wrong (sentinel URL values, active-child wrappers, chrome
-//! component names). A future builder costs a table row, not a module —
-//! design: `docs/archive/2026-07-27-import-conventions-engine-design.md`.
+//! component names). A future builder costs a table row, not a module.
 
 /// How the walker treats one component `type` value. A type may carry
 /// SEVERAL rules — they all apply, in table order (Blog.Section has both a

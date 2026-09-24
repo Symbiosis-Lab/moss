@@ -1,8 +1,7 @@
 //! Synthetic homepage for empty folders.
 //!
 //! When the user opens a folder containing zero markdown files
-//! (`articles.is_empty()` per the onboarding spec at
-//! `docs/archive/2026-05-28-onboarding-design.md`), moss still needs to emit
+//! (`articles.is_empty()` per the onboarding spec), moss still needs to emit
 //! a real `index.html` so the preview shows a moss-rendered site rather than
 //! a 404. This module produces the synthetic `ParsedDocument` for that page.
 //!

@@ -1,4 +1,5 @@
-//! Page facade fingerprints and the cross-build diff cache (moss#922 Stage 4).
+//! Page facade fingerprints and the cross-build diff cache (Stage 4 of the
+//! incremental-build work).
 //!
 //! A "facade" is a content fingerprint over every field of a `ParsedDocument`
 //! another page's render could observe. It is computed from the `Debug`
@@ -117,15 +118,14 @@ fn normalized(doc: &ParsedDocument) -> ParsedDocument {
 ///
 /// The facade answers "does THIS page need re-rendering"; the surface answers
 /// "could this page's change alter some OTHER page's HTML by a route the
-/// dependency graph cannot see" (moss#922 Stage 5b). Only a handful of fields
+/// dependency graph cannot see" (Stage 5b of the incremental-build work). Only a handful of fields
 /// are excluded, and the exclusion is written as a blank-out on a clone rather
 /// than a hand-picked include list, so a field added to `ParsedDocument`
 /// lands in the surface by default — the rot direction is "more full
 /// renders," never "silently skip a page that should have rendered."
 ///
-/// **The surface alone is not a safety argument.** An audit of every
-/// cross-page read of another document's body (2026-07-31, recorded in
-/// `docs/archive/2026-07-31-incremental-build-facade-diff.md`) found three
+/// **The surface alone is not a safety argument.** A 2026-07-31 audit of every
+/// cross-page read of another document's body found three
 /// routes by which one page's raw markdown reaches another page's HTML with
 /// no metadata field moving and no link edge to follow:
 ///
@@ -139,9 +139,9 @@ fn normalized(doc: &ParsedDocument) -> ParsedDocument {
 /// So the surface is only half the gate. Routes 2 and 3 are closed by a
 /// full-render fallback when a homepage or slot page changes. **Route 1 is
 /// closed by a THIRD fingerprint** — the listing group digest
-/// (`build/render/incremental/listing.rs`, ADR-044), which hashes the
+/// (`build/render/incremental/listing.rs`), which hashes the
 /// *resolved* excerpt and the member-derived listing plan per folder group.
-/// Until moss#968 it was closed instead by rendering every listing host
+/// It used to be closed instead by rendering every listing host
 /// unconditionally, which cost 114 of 214 pages on every save.
 ///
 /// The listing projection is deliberately NOT folded in here. A non-empty
@@ -196,14 +196,12 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // `reading_time` is `word_count / 200` (`markdown/pipeline.rs`) — a
     // non-monotone function of the body, so it steps on any edit that crosses
     // a 200-word boundary. Same class as `hero_html`: an audit for this fix
-    // (docs/archive/2026-08-20-rebuild-loop-incrementality.md, "The leaf,
-    // explained on the instrument's first use: `lang`") found no cross-page
+    // found no cross-page
     // render consumer — every production read is the page's own
     // `ParsedDocument` (`pipeline.rs` sets it once per doc) and every other
     // hit is a test fixture. It stays in the FACADE and out of the surface.
     stripped.reading_time = 0;
-    // `lang` — moss#1041 audit, redone after
-    // docs/archive/2026-08-20-rebuild-loop-incrementality.md called `lang`
+    // `lang` — audited again after an earlier pass called `lang`
     // "genuinely cross-page-visible" and stopped there. Re-auditing every
     // cross-page read of another document's `lang` (not just this page's own —
     // that stays in the FACADE and re-renders this page as normal) found
@@ -229,7 +227,8 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     //    field can carry this; it is closed instead by
     //    `render::lang_roots::lang_switcher_globals`, a build-global digest
     //    (`FullCause::LangGlobalsMoved`) hashing what those three functions
-    //    actually compute, mirroring how ADR-044 closed the listing-host case.
+    //    actually compute, mirroring how the listing group digest closed the
+    //    listing-host case above.
     //
     // What would break this: a NEW consumer that reads some OTHER document's
     // raw `.lang` outside `translations` and outside `lang_switcher_globals`'s
@@ -424,7 +423,7 @@ pub struct FacadeCache {
     /// Fail-safe in the correct direction.
     #[serde(default)]
     asset_versions: String,
-    /// Per-listing-group digests (moss#968 Stage 2, ADR-044), keyed by
+    /// Per-listing-group digests, keyed by
     /// `GroupKey::id()`.
     ///
     /// **Only digests cross builds.** The group graph itself is rebuilt from

@@ -1,5 +1,5 @@
 //! `RenderVerdict` — the one authority on "which pages must this build
-//! re-render" (moss#968 Finding 1, moss#922 Stage 5b).
+//! re-render".
 //!
 //! Moved here verbatim from `render/blocking.rs`, where the computation was
 //! produced, logged, and then consumed by exactly one `partition` fifty lines
@@ -8,7 +8,7 @@
 //!
 //! The verdict is **unforgeable**: `RenderVerdict` has no public constructor
 //! from a raw set, so a downstream pass can ask it but cannot invent one — the
-//! same discipline `BuildStopped::Deferred` uses (moss#964).
+//! same discipline `BuildStopped::Deferred` uses.
 //!
 //! Produces the set of SOURCE paths whose page the render loop may leave
 //! alone because nothing about this build can have changed their HTML.
@@ -34,7 +34,7 @@
 //!   * [`FullCause::AssetVersionsMoved`] — a content-addressed asset moved, so
 //!     the hashed filename every page references moved with it.
 //!   * [`FullCause::ListingGlobalsMoved`] — a build-global input to card
-//!     rendering moved (moss#968 FM-4).
+//!     rendering moved.
 //!   * [`FullCause::LangGlobalsMoved`] — a build-global input to the nav
 //!     language switcher or the subscribe-form language sections moved
 //!     (`render::lang_roots::lang_switcher_globals`).
@@ -233,8 +233,8 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // Each page's fingerprint is a pure function of that page alone (no
     // cross-page state), same independence the markdown-parse and html-render
     // loops already exploit with par_iter — this loop was the one left serial,
-    // and at 216+ pages it dominated wall time on a single core (moss#928
-    // follow-up, 2026-08-01).
+    // and at 216+ pages it dominated wall time on a single core (follow-up,
+    // 2026-08-01).
     let current: HashMap<String, PageFingerprints> = documents
         .par_iter()
         .filter_map(|doc| {
@@ -268,7 +268,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // harbor). A slot page has no such narrowing: its rendered body IS
     // spliced into every page, so its whole facade stays the contribution.
     //
-    // SEE ALSO — moss#922 has TWO whole-build bypasses, not one, and they are
+    // SEE ALSO — there are TWO whole-build bypasses, not one, and they are
     // computed by entirely separate code paths. This one is POST-parse and
     // CONTENT-based; its pre-parse, input-SHAPE-based sibling is
     // `build::parse_cache::inputs_fingerprint`, which bypasses the Loop A
@@ -288,7 +288,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // moss binary.
     let asset_versions_changed = previous.asset_versions_changed(inputs.asset_versions);
 
-    // Fourth: the build-global inputs to card rendering (moss#968 FM-4).
+    // Fourth: the build-global inputs to card rendering.
     let listing_globals = listing::listing_globals(
         inputs.project,
         inputs.dir_overrides,
@@ -351,10 +351,10 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                         .map(|p| (p.clone(), doc.outgoing_links.as_slice()))
                 })
                 .collect();
-            // Transclusion edges (moss#922 Stage 7). Until `embed_deps` was
+            // Transclusion edges. Until `embed_deps` was
             // threaded onto `ParsedDocument`, `back_embeds` was real machinery
             // over an empty relation for pages — `![[note.md]]` never produces
-            // a `LinkType::Embed` outgoing link (Stage 5b finding #2). Folding
+            // a `LinkType::Embed` outgoing link. Folding
             // them in here widens the render set to the pages a changed page's
             // bytes are spliced into, which is strictly more rendering, never
             // less.
@@ -380,10 +380,10 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
 
             // Listing hosts read each listed child's RAW BODY at render time,
             // and folder membership is a URL prefix rather than a link, so the
-            // dependency graph has no edge for it. Before moss#968 every page
+            // dependency graph has no edge for it. Before this model every page
             // that COULD host a listing rendered unconditionally — 114 of 214
             // on the reference vault. It now renders iff a group it reads has
-            // a moved digest (ADR-044).
+            // a moved digest.
             //
             // An inline `![[/dir/]]` folder embed does NOT need to be listed
             // here: `expand_markers_in_documents` splices its listing into the

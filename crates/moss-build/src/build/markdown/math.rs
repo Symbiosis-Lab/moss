@@ -1,4 +1,4 @@
-//! LaTeX → inline SVG: the single, defended gateway to RaTeX (ADR-030 §3.1).
+//! LaTeX → inline SVG: the single, defended gateway to RaTeX.
 //!
 //! P1 renders every `$…$` / `$$…$$` as its own escaped LaTeX source in a
 //! `<code class="moss-math">` node — honest, never blank. P2 (this module)
@@ -15,7 +15,7 @@
 //! stacks rayon build workers run with. moss builds under `panic = "abort"`,
 //! so a stack overflow does not unwind — it **aborts the whole app**
 //! (`catch_unwind` is proven useless here, exit 134). The defense is layered
-//! and every layer is load-bearing (ADR-030 §3.3):
+//! and every layer is load-bearing:
 //!
 //! - **A — input envelope** ([`guard`]): length ≤ [`MAX_TEX_BYTES`], nesting ≤
 //!   [`MAX_NESTING`], and a codepoint allowlist that rejects the crash- and
@@ -32,7 +32,7 @@
 //! - **D — fallback**: every [`MathRefusal`] returns to the caller, which emits
 //!   the P1 escaped-source node. The floor. Ships in P1, exercised from day one.
 //!
-//! ## CJK inside math (ADR-030 §3.6) — verify + pin a system font
+//! ## CJK inside math — verify + pin a system font
 //!
 //! CJK is no longer a blanket refusal. When a system CJK font is present and
 //! **verified**, [`mod@font`] pins it via `RATEX_UNICODE_FONT` (once, before the
@@ -152,8 +152,8 @@ pub fn render_math(tex: &str, display: bool) -> Result<String, MathRefusal> {
 }
 
 /// A validated raw typeset: the engine's SVG plus the layout metrics, before
-/// any surface-specific assembly. The email/RSS PNG projection (ADR-030 §3.5,
-/// `build::emit::math_png`) rasterizes exactly these bytes so the equation a
+/// any surface-specific assembly. The email/RSS PNG projection
+/// (`build::emit::math_png`) rasterizes exactly these bytes so the equation a
 /// feed reader or inbox shows is the one the website inlines.
 pub struct TypesetMath {
     /// The engine's raw SVG, already past [`validate_svg`] (path-only, sane

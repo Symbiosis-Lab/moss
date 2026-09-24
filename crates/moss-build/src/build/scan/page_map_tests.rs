@@ -444,7 +444,7 @@ mod build_page_map_tests {
     }
 
     /// The `home: true` marker promotes a non-INDEX_STEM, non-self-named
-    /// file to be the folder home — issue #587. `en/Mountain Home.md` should
+    /// file to be the folder home. `en/Mountain Home.md` should
     /// land at `en/index.html`, not at the slug-based
     /// `en/mountain-home/index.html`.
     #[test]
@@ -494,7 +494,7 @@ mod build_page_map_tests {
         let (map, _) = build_page_map(&files, dir.path(), "site", &winners, &overrides);
 
         // Without the home marker, falls back to slug-based URL.
-        // (This is the issue-#587 behavior; user opt-in via
+        // (This is the documented behavior; user opt-in via
         // home: true is required to promote.)
         assert_eq!(map.get("en/Mountain Home.md").unwrap(), "en/mountain-home/index.html");
     }
@@ -743,7 +743,7 @@ mod build_page_map_tests {
 }
 
 // =========================================================================
-// external_url validation tests (moss#684)
+// external_url validation tests
 //
 // These tests cover `is_valid_external_url` (pure predicate) and the
 // downstream `external_url()` accessor which must return None for anything
@@ -913,7 +913,7 @@ mod video_path_mapping_tests {
     use super::*;
     use std::collections::HashMap;
 
-    // test_placeholder_svg_uses_mapped_path was removed in #615
+    // test_placeholder_svg_uses_mapped_path was removed
     // (generate_svg_placeholder deleted — Pattern E removed).
 
     /// AssetRegistry keys must match HTML <video src> paths (page-tree).
@@ -952,8 +952,7 @@ mod video_path_mapping_tests {
     }
 }
 
-/// Tests for the `_with_evicted` injectable-predicate seam added by
-/// docs/archive/2026-07-31-cloud-download-waiting-mode.md Stage 3 — proves
+/// Tests for the `_with_evicted` injectable-predicate seam — proves
 /// the guarded read sites skip a "cloud-dataless" file exactly like a read
 /// error, without needing real `SF_DATALESS` state to exercise the path.
 mod with_evicted_seam_tests {
@@ -1072,7 +1071,6 @@ mod with_evicted_seam_tests {
 /// file's extraction without re-reading it, but never serve a changed file
 /// from a stale entry — and the merged cached scan must return exactly what
 /// the two separate uncached scans it replaced would have.
-/// See docs/archive/2026-08-20-rebuild-loop-incrementality.md.
 mod frontmatter_scan_cache_tests {
     use super::*;
     use std::fs;

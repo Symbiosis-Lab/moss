@@ -589,7 +589,7 @@ pub fn validate_binary_request(
     Ok(())
 }
 
-/// Headless half of the #1019 split: validation + timeout + blocking
+/// Headless half of the split: validation + timeout + blocking
 /// execution, no AppHandle anywhere. The QuickJS engine's `execute_binary`
 /// arm calls this directly (it never streams); the webview command's
 /// streaming branch lives app-side in `binary.rs`.
@@ -822,7 +822,7 @@ mod tests {
 #[cfg(test)]
 mod execute_binary_tests {
     //! Moved beside their subject when `execute_binary_blocking` crossed
-    //! into moss-build (#1019 slice-2 fix-forward): these exercise the
+    //! into moss-build: these exercise the
     //! process-spawning core, not the app-side streaming adapter.
     use super::execute_binary_blocking;
     use crate::plugins::runtime::portable::BinaryExecutionResult;

@@ -1,6 +1,6 @@
 //! THE write primitive for moss's regenerable output tree (`.moss/build.nosync/**`).
 //!
-//! Per ADR-043 (`docs/decisions/ADR-043-regenerable-output-dataless-is-absent.md`):
+//! The rule this module upholds:
 //! **under `.moss/build.nosync/`, a dataless destination is absent.** Nothing here
 //! reads the destination's bytes, waits for them, or asks the cloud provider
 //! for them — the file is regenerable by definition and moss already holds the
@@ -12,7 +12,7 @@
 //! the process-wide fail-fast policy (`platform::macos::iopolicy`), it returns
 //! `EDEADLK` — "Resource deadlock avoided (os error 11)". Every raw `fs::write`
 //! landing in the output tree therefore failed the whole build whenever iCloud
-//! had evicted moss's own output (moss#964).
+//! had evicted moss's own output.
 //!
 //! So every write here is **temp + `rename(2)`**. `rename` does not touch data
 //! extents, so it cannot materialize and cannot `EDEADLK`; it is also atomic
@@ -24,12 +24,12 @@
 //! `.tmp` from sync, which is the wrong signal for a file about to become a
 //! real output. Same convention as `emit/math_png.rs` and `og_card.rs`.
 //!
-//! This module owns atomic site-output writes today. ADR-052 sketched folding
+//! This module owns atomic site-output writes today. A sketch once explored folding
 //! it into a future `StageWriter` with a per-build path-claim registry (M6b);
 //! that registry was never built, and the correctness gap it was later
 //! invoked for — a concurrent build racing the shared staging tree between
-//! seal and ship — shipped instead as content-addressed manifest entries. See
-//! ADR-052's 2026-09-17 update for what, if anything, a registry still owns.
+//! seal and ship — shipped instead as content-addressed manifest entries, as
+//! of a 2026-09-17 revisit that found no registry was needed after all.
 //! `output_write_invariant_test` keeps raw writes out of `src/build/` unless
 //! they carry an `// allow:raw_write <reason>` marker.
 
@@ -54,7 +54,7 @@ fn ensure_parent(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// `create_dir_all` for the output tree: ADR-043's rule, applied to directories.
+/// `create_dir_all` for the output tree: the same rule, applied to directories.
 ///
 /// Every *file* write here already treats a dataless destination as absent. The
 /// directories those files live in had no such rule, and a plain
@@ -67,7 +67,7 @@ fn ensure_parent(path: &Path) -> io::Result<()> {
 /// It is not hypothetical: it took down the *first* preview of a Google Drive
 /// vault with `Failed to create staging directory: Resource deadlock avoided
 /// (os error 11)` on the onboarding overlay, before the build could reach the
-/// cloud gate that would have explained itself (moss#982 follow-up).
+/// cloud gate that would have explained itself.
 ///
 /// **Why replace rather than wait.** A regenerable directory is absent when it
 /// is unreadable, exactly as a regenerable file is. Waiting is not merely slow
@@ -115,7 +115,7 @@ pub fn create_output_dir_all(dir: &Path) -> io::Result<()> {
                 log::warn!(
                     "[output-dir] {} could not be created — the cloud provider refused to \
                      materialize it. It is regenerable output, so it is being replaced rather \
-                     than waited for (ADR-043).",
+                     than waited for.",
                     built.display()
                 );
                 fs::remove_dir_all(&built).or_else(|rm| {
@@ -242,7 +242,7 @@ pub fn write_output(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// The copy lands in a temp sibling first, so `fs::copy`'s `O_TRUNC` open never
 /// sees the real destination. On APFS `fs::copy` still becomes a COW reflink
 /// (`fclonefileat(2)`) into the temp, so this keeps the near-zero disk cost the
-/// iCloud hardlink rule (CLAUDE.md, ADR-013) depends on — and, because the
+/// iCloud hardlink rule depends on — and, because the
 /// result is a fresh inode, it subsumes `ship::unlink_if_hardlinked_to` on the
 /// paths that use it.
 ///
@@ -265,7 +265,7 @@ pub fn copy_output(src: &Path, dst: &Path) -> io::Result<()> {
 /// Returns `Ok(true)` if the file was written, `Ok(false)` if it was already
 /// identical. The comparison read is best-effort by design: an unreadable
 /// destination (missing, or dataless under the fail-fast policy) simply means
-/// "different", and the write proceeds. Per ADR-043 there is nothing there to
+/// "different", and the write proceeds. There is nothing there to
 /// preserve, so there is nothing to wait for.
 pub fn write_output_if_changed(path: &Path, bytes: &[u8]) -> io::Result<bool> {
     if let Ok(existing) = fs::read(path) {
@@ -342,7 +342,7 @@ pub fn replace_with_symlink(target: &Path, dest: &Path) -> io::Result<()> {
 ///
 /// `Absent` and `Evicted` are answers; `Unverified` is the absence of one. The
 /// distinction is the whole point: under `.moss/build.nosync/` a dataless or 0-byte
-/// output is regenerable and counts as gone (ADR-043), but an I/O error other
+/// output is regenerable and counts as gone, but an I/O error other
 /// than a positive `NotFound` says nothing about whether the bytes are there.
 /// On a cloud-managed build tree `EDEADLK`, `EACCES` and a `NotFound` with a
 /// `.name.icloud` stub beside it are ordinary inputs, and a caller that reads
@@ -409,7 +409,7 @@ pub fn probe_output(path: &Path, mode: &str) -> Presence {
 
 /// Is there an output at `path` that moss can ship without reading it back?
 ///
-/// The read half of ADR-043's "dataless is absent", for callers whose "not
+/// The read half of the "dataless is absent" rule, for callers whose "not
 /// present" arm only produces a replacement through temp-and-rename and
 /// removes nothing. A caller that drops, strips, fails or deletes on the
 /// answer must use [`probe_output`] instead, because this collapses

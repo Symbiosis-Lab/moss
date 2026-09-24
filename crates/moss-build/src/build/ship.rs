@@ -112,7 +112,7 @@ pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
 // not zero the source out from under the read. `io_utils::copy_output` and
 // `io_utils::write_output` never open the destination at all — they populate a
 // temp sibling and `rename(2)` it into place — so the hazard is closed by
-// construction and the helper had no callers left. See ADR-043.
+// construction and the helper had no callers left.
 
 // ---------------------------------------------------------------------------
 // Ship-by-OID: read from an immutable CAS blob instead of the mutable stage
@@ -257,7 +257,7 @@ fn verify_ship_integrity(
 ///
 /// `cancel` is checked between entries. When fired (folder switch / window
 /// close) this returns `Ok(())`, matching the cancellation semantics of the
-/// `copy_dir_all` it replaced (see #506).
+/// `copy_dir_all` it replaced.
 pub fn ship_phase(
     stage_dir: &Path,
     site_dir: &Path,
@@ -302,8 +302,8 @@ pub fn ship_phase(
         let (mode, _) = crate::types::content::parse_entry(entry);
 
         // `drop_absent_outputs` has already removed every entry with no output
-        // — except the `_moss/math/` exemption it keeps deliberately
-        // (ADR-030), whose bytes may be evicted. Reading one here is the
+        // — except the `_moss/math/` exemption it keeps deliberately,
+        // whose bytes may be evicted. Reading one here is the
         // EDEADLK that failed the whole generation and left `current` where it
         // was, so the exemption is skipped rather than copied.
         //
@@ -409,7 +409,7 @@ pub fn ship_phase(
                         let stripped = apply_transform(ShipTransform::StripPreviewAttrs, &bytes);
                         // `write_output` renames a fresh inode into place, so it
                         // can neither truncate an inode shared with `source_path`
-                        // nor materialize a dataless destination (ADR-043).
+                        // nor materialize a dataless destination.
                         if let Err(e) = crate::build::io_utils::write_output(&site_path, &stripped) {
                             log::warn!("[ship_phase] write failed for {:?}: {}", site_path, e);
                             failures += 1;
@@ -428,8 +428,7 @@ pub fn ship_phase(
                 // provider evicting that inode turns BOTH stage and generation
                 // into 0-byte stubs. `copy_output` copies into a temp sibling and
                 // renames, so the destination is never opened with `O_TRUNC`
-                // and a cloud-evicted `site_path` cannot force materialization
-                // (ADR-043).
+                // and a cloud-evicted `site_path` cannot force materialization.
                 if let Err(e) = crate::build::io_utils::copy_output(&source_path, &site_path) {
                     log::warn!("[ship_phase] copy failed for {:?}: {}", source_path, e);
                     failures += 1;
@@ -468,13 +467,13 @@ pub enum Promotion {
     /// Frozen on disk, and `current` was repointed at it.
     Promoted,
     /// Frozen on disk, but a newer build had already promoted, so this tail's
-    /// swap was refused (moss#968 §5d). Not an error — the newer generation is
+    /// swap was refused. Not an error — the newer generation is
     /// the right one.
     Superseded,
     /// Not frozen at all: either the folder closed before this build finished
-    /// (`PipelineRunOutput::publishable` was already `false`, moss#1042 —
-    /// structural-source incompleteness stopped being a reason as of the
-    /// 2026-09-17 ADR-056 revision) or the presence pass could not stand
+    /// (`PipelineRunOutput::publishable` was already `false` —
+    /// structural-source incompleteness stopped being a reason as of a
+    /// 2026-09-17 revision) or the presence pass could not stand
     /// behind what it registered (`WithholdReason::Unverified` /
     /// `ImplausibleLoss`).
     ///
@@ -501,9 +500,9 @@ pub enum ShipVerdict {
 pub enum WithholdReason {
     /// The folder closed before this build finished
     /// (`PipelineRunOutput::publishable == false`). Named for its original
-    /// cause (moss#1042: a build whose structural sources were still
+    /// cause (a build whose structural sources were still
     /// downloading) — structural incompleteness stopped constructing this
-    /// variant in the 2026-09-17 ADR-056 revision, and cancellation is now
+    /// variant in a 2026-09-17 revision, and cancellation is now
     /// the only path that does.
     SourcesDownloading,
     /// The presence pass or a producer met an I/O error that was not a positive
@@ -640,7 +639,7 @@ pub fn materialize_and_promote(
     let gen_dir = mp.generation_dir(sealed.generation_id());
     crate::build::io_utils::create_output_dir_all(&gen_dir)
         .map_err(|e| format!("Failed to create generation dir: {}", e))?;
-    // Ship-by-OID (moss#867-adjacent): read a `staged_oid` entry from its
+    // Ship-by-OID: read a `staged_oid` entry from its
     // immutable CAS blob instead of the mutable `stage_dir` copy. Depends on
     // the entry's CAS blob surviving a concurrent build's GC across this
     // whole call — see `CacheWriteLease` at this function's own call sites.
@@ -653,9 +652,9 @@ pub fn materialize_and_promote(
 }
 
 /// Drop unreferenced `.webp` variants from `sealed`, before anything persists
-/// or ships this generation (moss#976 B2). Called from
+/// or ships this generation. Called from
 /// [`crate::build::degrade::repair_staged_html`], the tail of
-/// `advertise_sealed`, which since #1097 is the one seal tail on every path —
+/// `advertise_sealed`, which is the one seal tail on every path —
 /// it writes `hashes.json` and materializes from `stage_dir` right after.
 ///
 /// **It does not touch `stage_dir`.** `ship_phase` copies `sealed.files()` and
@@ -668,7 +667,7 @@ pub fn materialize_and_promote(
 /// one path that proves there is no next build to wait for.
 ///
 /// Opt-out via `[build].prune_orphaned_images = false`. Default on: the win
-/// is upload bytes and seta quota (moss-seta#297 S1), NOT local disk — the
+/// is upload bytes and seta quota, NOT local disk — the
 /// pruned blob stays in `cache/objects`, kept reachable by its transform
 /// record for as long as the source image is in the vault, so `cache::gc`
 /// will not collect it. See `build::site_config` for why the off switch exists.
@@ -676,7 +675,7 @@ pub fn materialize_and_promote(
 /// Returns the condemned keys. A converged build must return NONE: heal-then-
 /// prune leaves the same bytes on disk either way, so the end state is
 /// identical whether the two agree or fight, and only this set distinguishes
-/// them (moss#1085).
+/// them.
 ///
 /// `scan` is passed in rather than taken here because
 /// [`unregistered_referenced_variants`] reads the same one: the two passes
@@ -697,7 +696,7 @@ pub(crate) fn prune_orphaned_webp_before_ship(
         // Fail closed. An unreadable page shrinks the reference set, and a
         // smaller reference set authorizes MORE deletion — so a single
         // eviction or mid-flight write could delete every variant only that
-        // page referenced (moss#976: 525 files deleted, 207 images 404-ing).
+        // page referenced (an earlier incident: 525 files deleted, 207 images 404-ing).
         // Skipping costs this generation some upload bytes; deleting wrongly
         // costs the site. The verdict is deliberately left untouched: a prune
         // that did not run has judged nothing, and writing an empty or partial
@@ -730,7 +729,7 @@ pub(crate) fn prune_orphaned_webp_before_ship(
     }
     sealed.remove_entries(&removed_keys);
 
-    // Carry the verdict forward for the next build's producers (moss#1085).
+    // Carry the verdict forward for the next build's producers.
     // `removed_keys` alone is NOT the verdict: a converged build removes
     // nothing — precisely because the producers honored the last answer — so
     // storing only this build's removals empties the set and restarts the
@@ -762,15 +761,15 @@ pub(crate) fn prune_orphaned_webp_before_ship(
 ///
 /// `prune_orphaned_webp_before_ship` and `drop_absent_outputs` only ever drop
 /// entries from `sealed` — see their docs — because the preview server may
-/// still be reading `stage_dir` while the seal tail runs (moss#1187-adjacent;
-/// see `build::pipeline::sweep_staging`'s doc for the 404 this avoids).
+/// still be reading `stage_dir` while the seal tail runs
+/// (see `build::pipeline::sweep_staging`'s doc for the 404 this avoids).
 /// `sweep_staging` is how those bytes are normally reclaimed, but it runs at
 /// the START of a FUTURE build in the same folder, using the manifest that
 /// build inherits. A build that is the last one in its process never gets a
 /// future build to do that, so without this call its orphaned `.webp` bytes
 /// sit in `stage_dir` forever and ship in anything that reads that tree
 /// directly — a raw copy of staging, a snapshot test comparing it
-/// byte-for-byte. moss#976 B2 measured exactly that shape on a real site.
+/// byte-for-byte. Measured exactly that shape on a real site.
 ///
 /// `sealed` must be the FINAL manifest — call this after every pass that can
 /// drop an entry (`degrade::repair_staged_html`), never before. The permit is
@@ -807,7 +806,7 @@ pub(crate) fn reclaim_staging_now(
 /// looks, but at a moment when the preview server is no longer reading
 /// staging.
 ///
-/// `_moss/math/` is the exception and keeps its entry (ADR-030): those PNGs
+/// `_moss/math/` is the exception and keeps its entry: those PNGs
 /// are append-only and the published site still serves them, so un-promising
 /// one deletes it from a live site. A download is requested instead —
 /// fire-and-forget, the same pattern the Wait arm and theme assets use — and
@@ -864,7 +863,7 @@ pub(crate) fn drop_absent_outputs(
     // Returned for the same reason the prune returns its keys: dropping a
     // manifest entry removes the file from the live site at the generation
     // swap, so its `<source>` must go too. `_moss/math/` never reaches this
-    // set — the ADR-030 carve-out above keeps those entries, so a math PNG
+    // set — the carve-out above keeps those entries, so a math PNG
     // awaiting download is never stripped from a published page.
     absent
 }
@@ -895,7 +894,7 @@ pub(crate) fn drop_absent_outputs(
 /// vault, which is why this pass needs no eviction carve-out of its own.
 ///
 /// Scope is `.webp` only, which keeps `.png` (including the `_moss/math/`
-/// tier ADR-030 carves out), OG cards and video keys out. `<video>` must not
+/// tier the carve-out above covers), OG cards and video keys out. `<video>` must not
 /// ride along: video has no `set_failed` path, and an emptied `<video>` falls
 /// through to nothing where a `<picture>` falls through to its `<img>`.
 ///
@@ -1090,7 +1089,7 @@ mod tests {
     ///
     /// The scan's token matching errs wide, but its I/O used to err into an
     /// irreversible delete: an unreadable page silently shrank the reference
-    /// set, and a smaller reference set authorizes more deletion (moss#976).
+    /// set, and a smaller reference set authorizes more deletion.
     /// The control arm runs first so "condemned nothing" cannot pass because
     /// the orphan was unprunable to begin with.
     #[cfg(unix)]
@@ -1247,7 +1246,7 @@ mod tests {
     }
 
     /// One absent condition, two fates. Skipping the math exemption is what
-    /// keeps an evicted PNG from failing the whole generation (ADR-030);
+    /// keeps an evicted PNG from failing the whole generation;
     /// skipping anything else would promote a generation short of a file its
     /// own manifest names, which only moves the failure to the next publish.
     #[test]
@@ -1365,7 +1364,7 @@ mod tests {
         //
         // The fix: `io_utils::copy_output` never opens site_path at all — it
         // copies into a temp sibling and rename(2)s it into place, so the
-        // shared inode is replaced rather than truncated (ADR-043).
+        // shared inode is replaced rather than truncated.
         use std::os::unix::fs::MetadataExt;
 
         let stage = tempdir().unwrap();
@@ -1435,7 +1434,7 @@ mod tests {
         assert!(!out.contains("moss:no-preview"), "marker comments must be stripped on ship");
     }
 
-    // ─── Promotion ordering (#968 §5d) ──────────────────────────────────────
+    // ─── Promotion ordering ──────────────────────────────────────
 
     fn promo_paths(tmp: &tempfile::TempDir, gens: &[&str]) -> crate::moss_paths::MossPaths {
         let mp = crate::moss_paths::MossPaths::new(tmp.path());
@@ -1651,7 +1650,7 @@ mod tests {
         assert!(!strip.contains("assets/real.webp"), "{strip:?}");
         assert!(
             !strip.contains("_moss/math/eq1.png"),
-            "ADR-030 math PNGs are append-only and served from the live site; the \
+            "math PNGs are append-only and served from the live site; the \
              `.webp` scope is what keeps them (and OG cards) out: {strip:?}"
         );
         assert!(
@@ -1661,7 +1660,7 @@ mod tests {
         );
     }
 
-    // ─── Ship-by-OID (moss#867-adjacent) ────────────────────────────────────
+    // ─── Ship-by-OID ────────────────────────────────────
 
     /// The property ship-by-OID exists for: between this build sealing a
     /// path's hash and shipping its bytes, a second concurrent build can

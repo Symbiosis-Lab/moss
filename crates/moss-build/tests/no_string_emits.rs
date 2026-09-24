@@ -1,20 +1,18 @@
 //! Regression guard: no new string-literal `app.emit("channel-name", ...)` calls
 //! may appear outside the allowlist below.
 //!
-//! Open-half twin of `src-tauri/tests/no_string_emits.rs` (desktop repo) —
-//! that file scans its own `src_dir()` (desktop) and this crate's own `src`
-//! independently (class B per
-//! docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md).
-//! This crate has no Tauri dependency (see crates/moss-build/Cargo.toml's
-//! "No tauri or wry, direct or transitive" rule), so a real `app.emit(...)`
-//! call site cannot exist here — this twin's job is a JS-embedded string
-//! constant matching the same literal shape (`plugin-message`, injected via
-//! `__TAURI__.event.emit(...)` inside a bundled-plugin JS shim), which the
-//! allowlist below already covers.
+//! Open-half twin of the desktop app's `no_string_emits.rs` — that file
+//! scans its own `src_dir()` (desktop) and this crate's own `src`
+//! independently. This crate has no Tauri dependency (see
+//! crates/moss-build/Cargo.toml's "No tauri or wry, direct or transitive"
+//! rule), so a real `app.emit(...)` call site cannot exist here — this
+//! twin's job is a JS-embedded string constant matching the same literal
+//! shape (`plugin-message`, injected via `__TAURI__.event.emit(...)` inside
+//! a bundled-plugin JS shim), which the allowlist below already covers.
 //!
 //! Background: moss migrated ad-hoc string-literal events to a typed `MossEvent`
-//! bus in moss#523. Channels that legitimately remain on legacy strings are
-//! listed in docs/reference/typed-event-bus.md §"Channels NOT on this bus".
+//! bus. Channels that legitimately remain on legacy strings are listed
+//! alongside the typed event bus's own documentation.
 
 use regex::Regex;
 use std::path::PathBuf;

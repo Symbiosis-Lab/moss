@@ -1,11 +1,11 @@
-//! The tauri-free stack executor (ADR-080 item 1, S4 of
-//! `docs/archive/2026-09-11-stack-executor-s4-plan.md`).
+//! The tauri-free stack executor (S4 of the plugin-owned stack lifecycle
+//! design).
 //!
 //! `obtain` / `stage` / `run` are the whole surface an app-side caller needs
 //! to acquire, unpack and drive a plugin-declared stack
 //! (`plugins::contributions::stack::StackContribution`). This module owns
 //! none of the app's own concerns — progress UI, `AppHandle`, the receiver
-//! HTTP probe, the typed `Stop` reason — those stay in `src-tauri` (S4 §1,
+//! HTTP probe, the typed `Stop` reason — those stay in the desktop app (S4 §1,
 //! S5). If any signature here needed one of them, this crate would be the
 //! wrong home for it, and `check-crate-dag.mjs` rule 2 would say so at the
 //! first compile.

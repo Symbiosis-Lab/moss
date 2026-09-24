@@ -359,7 +359,7 @@ pub fn apply_last_known_good_fallback(
     })
 }
 
-// `render_footer_pages_from_disk` was removed in PR7b (moss#599).
+// `render_footer_pages_from_disk` was removed in PR7b.
 //
 // It was a temporary stand-in that read `<folder>/footer.md` on demand,
 // synthesized a `title: ""` line into the frontmatter to suppress the
@@ -588,7 +588,7 @@ mod tests {
         }
     }
 
-    // PR7b (moss#599): the `render_footer_pages_from_disk` tests were
+    // PR7b: the `render_footer_pages_from_disk` tests were
     // deleted along with the function. The behavior they covered —
     // footer.md flows through the markdown pipeline, the auto-injected
     // article H1 is suppressed even when the author writes
@@ -596,7 +596,7 @@ mod tests {
     //
     // - `crates/moss-core/src/heading/state.rs` tests `slot_only_hides_heading_*`
     //   (the heading rule consults `HeadingInputs.slot_only`).
-    // - `src-tauri/src/build/markdown/pipeline.rs` integration: every
+    // - `crates/moss-build/src/build/markdown/pipeline.rs` integration: every
     //   markdown file routed through `process_markdown_file` populates
     //   `ParsedDocument.slot_only` from `is_excluded_from_pages`, so the
     //   pipeline that produces the `documents` slice naturally handles

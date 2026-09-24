@@ -11,8 +11,7 @@
 // and the form floats mid-column instead of sitting at the content's
 // block-end (visually: bottom) edge. Horizontally the two spellings agree,
 // so no horizontal-only gate can see this — only an engine laying out a
-// vertical body can. See docs/archive/2026-09-17-subscribe-footer-vertical-
-// alignment-design.md.
+// vertical body can.
 //
 // Fixture: email.css's `footer .moss-subscribe` rule is injected the same
 // way `enhance::wrap_style_blocks_in_layer` wraps it in production — nested

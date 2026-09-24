@@ -15,7 +15,7 @@
 //! built for the second one silently caged the first: moss's own Analytics
 //! dashboard read `.moss/data/events.jsonl` through the plugin door and got a
 //! refusal on every load, for eleven days, rendered as a plausible "no data
-//! yet" (moss#997). The lesson is not "pick the right function" — it is that a
+//! yet". The lesson is not "pick the right function" — it is that a
 //! policy repeated at N call sites cannot say *which* door it guards.
 //!
 //! So the two policies are separate, and the plugin one is a **type**:
@@ -184,7 +184,7 @@ pub fn delete_entry_inner(project_root: &Path, path: &str) -> Result<(), String>
     // busy Finder under the default ~60s AppleEvent ceiling — on a cloud
     // File Provider vault it timed out (-1712) where trashItemAtURL took
     // 30ms (measured 2026-09-05, Google Drive) — and it needs the
-    // Automation permission whose denial (-1743) was moss#1171. Both
+    // Automation permission whose denial (-1743) was a real regression. Both
     // failure modes cease to exist on this route. Known cost: Finder may
     // not offer "Put Back" for items trashed this way; drag-out recovery
     // still works.
@@ -257,7 +257,7 @@ pub fn delete_entry_inner(project_root: &Path, path: &str) -> Result<(), String>
 /// `renameEntry` and assert on its relative-path argument, which baked in the
 /// origin bug (a relative `old`/`new` slipped past a boundary check that was
 /// only ever exercised through a mock). The cross-boundary regression lives in
-/// `tests/rename_boundary_test.rs` and calls this fn directly (#715/#731).
+/// `tests/rename_boundary_test.rs` and calls this fn directly.
 ///
 /// `old`/`new` must be ABSOLUTE paths under `project_root` — the same contract
 /// the command receives from the frontend (which resolves to absolute at the FS
@@ -440,8 +440,7 @@ fn create_entry_path(
     Ok(path)
 }
 
-/// Create one empty note. Monotonic mode: the filename IS the title (see
-/// docs/archive/2026-05-25-editor-heading-monotonic.md), so a new file starts
+/// Create one empty note. Monotonic mode: the filename IS the title, so a new file starts
 /// with no frontmatter and no `title:`; authors add fields through the ChipBar,
 /// which writes them on first edit.
 pub fn create_file_inner(
@@ -549,7 +548,7 @@ pub fn create_folder_inner(
 ///
 /// First-party code has no reason to construct one; if you are reaching for
 /// this from moss's own UI, the file you want has an owning module that should
-/// read it for you (see moss#997).
+/// read it for you.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginPath(String);
 
@@ -596,7 +595,7 @@ impl PluginPath {
     }
 
     /// The one documented exception to the `.moss/` fence above: the shared
-    /// comment-data directories from docs/reference/social-data-standard.md —
+    /// comment-data directories —
     /// but only for the **caller's own** file.
     ///
     /// `.moss/data/social/` is a genuinely multi-writer directory by design —
@@ -612,7 +611,7 @@ impl PluginPath {
     /// plugin owns outright. Without this, any plugin could overwrite
     /// first-party `.moss/data/social/review.json`
     /// (`build/features/review.rs`) or a sibling plugin's comment file.
-    /// `.moss/social/` is the pre-#793 legacy home of the same data; it stays
+    /// `.moss/social/` is the legacy home of the same data; it stays
     /// reachable, under the same one-file-per-plugin rule plus its
     /// `.migrated-bak` archive copy, only so the plugin's one-time reconcile
     /// can find and migrate a straggler file.

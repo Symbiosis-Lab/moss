@@ -751,7 +751,7 @@ pub struct CachedMediaMeta {
     /// Whether the source is an animated gif/webp. `#[serde(default)]` so
     /// cache entries written before this field existed deserialize as
     /// `false` — a bounded, self-healing gap (the next content change
-    /// re-sniffs and writes the real value); see moss#919.
+    /// re-sniffs and writes the real value).
     #[serde(default)]
     pub is_animated: bool,
 }
@@ -1207,7 +1207,7 @@ thread_local! {
 }
 
 // ---------------------------------------------------------------------------
-// Singleflight — Go's x/sync/singleflight for Rust (ADR-010, Phase 4)
+// Singleflight — Go's x/sync/singleflight for Rust
 // ---------------------------------------------------------------------------
 
 /// Dedup concurrent work on the same key (Go's x/sync/singleflight).

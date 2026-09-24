@@ -3,7 +3,7 @@
 //! An evicted file raises one question — *the bytes are not here; now what?* —
 //! and moss answers it at seven sites in five ways. Before this module none of
 //! those answers were recorded anywhere the rest of the build could see, with
-//! two consequences that moss#982 measured on a live Google Drive vault:
+//! two consequences measured on a live Google Drive vault:
 //!
 //! 1. **The gate could not see the images.** `pipeline.rs`'s cloud gate read
 //!    `ProjectStructure::evicted_count`, a count taken by the *source scan* —
@@ -48,9 +48,6 @@
 //! most reason to fail open are the ones with the least reason to remember they
 //! did, so this module is deliberately a single free function they can call
 //! without holding any context.
-//!
-//! Design: `docs/archive/2026-08-06-cloud-availability-design.md` §3.1.
-//! Evidence: `docs/archive/2026-08-06-google-drive-preview-incident.md`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -169,8 +166,8 @@ pub fn structural_outstanding(root: &Path) -> usize {
 /// and that is not a corner case, it is the other reported shape: a vault whose
 /// page sources were all still downloading produced no documents at all, so the
 /// render pass synthesized the empty-folder home page and the user was shown
-/// moss's onboarding blueprint grid with their whole site missing behind it
-/// (moss#1042). No `read_page_source` call happened, so the ledger alone would
+/// moss's onboarding blueprint grid with their whole site missing behind it.
+/// No `read_page_source` call happened, so the ledger alone would
 /// still have called that build complete.
 ///
 /// **`evicted_at_scan` must already be filtered to what is still in the cloud**
@@ -186,7 +183,7 @@ pub fn structural_outstanding(root: &Path) -> usize {
 /// `cloud_ledger::structural_outstanding()` — a live read, asking about a
 /// different moment than the one the decision was made in — so a build
 /// withheld on the scan's evidence alone printed "0 structural source(s) are
-/// still downloading" (moss#1061). The number is now the decision's own.
+/// still downloading". The number is now the decision's own.
 ///
 /// The two halves are combined with `max`, exactly as `cloud_outstanding`
 /// combines its own two: they are overlapping views of one set, so a source
@@ -207,7 +204,7 @@ pub fn structural_missing_count(
 ///
 /// The path-returning twin of [`structural_missing_count`]: that function
 /// answers "is the build's own decision required" with a count meant to
-/// explain itself in a log line (moss#1061); this answers the different
+/// explain itself in a log line; this answers the different
 /// question a publish-time refusal has to — which files, so a person can act
 /// on the list rather than a number. Same two sources, **unioned** rather than
 /// `max`'d, because a name is either on the list or not — there is no double

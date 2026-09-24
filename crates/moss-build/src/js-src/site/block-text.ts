@@ -48,9 +48,6 @@
  * The `CardSegment`/`CardBlock` types still come from `share-card/text.ts`,
  * and that is fine: they are `import type`, erased before esbuild sees them,
  * so they create no runtime edge.
- *
- * See `docs/archive/2026-08-04-ship-what-the-site-needs.md` §4 Milestone B and
- * `docs/archive/2026-08-10-share-card-audit.md`.
  */
 
 import type { CardSegment, CardLine } from "./share-card/text";

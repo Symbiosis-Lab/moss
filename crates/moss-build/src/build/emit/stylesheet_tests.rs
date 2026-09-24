@@ -618,8 +618,7 @@ fn colophon_font_covers_the_wordmark() {
 /// list still retires to `display: none`. The notes end up broken and missing
 /// at the same time, on exactly the pages someone was trying to protect.
 ///
-/// Added 2026-08-30 with the front-page scope-out
-/// (docs/archive/2026-08-30-sidenote-gutter-page-kind.md), which was the first
+/// Added 2026-08-30 with the front-page scope-out, which was the first
 /// change that had to edit all three.
 #[test]
 fn sidenote_eligibility_selector_is_written_identically() {
@@ -683,8 +682,7 @@ fn sidenote_eligibility_selector_is_written_identically() {
     ] {
         assert!(
             selectors[0].contains(condition),
-            "the eligibility selector no longer scopes out {condition}; \
-             see docs/archive/2026-08-30-sidenote-gutter-page-kind.md"
+            "the eligibility selector no longer scopes out {condition}"
         );
     }
 }

@@ -2,7 +2,7 @@
  * Tests for asset-urls.ts — the URL conversions shared by the blueprint
  * placeholder and the preview's asset swap.
  *
- * These replace frontend/app/preview/__tests__/iframe-bridge-image-handler.test.ts,
+ * These replace the app's own old iframe-bridge-image-handler test,
  * which declared its own private copy of an image handler keyed on
  * `data-placeholder-src` — an attribute iframe-bridge stopped using for images in
  * 2026-05. It tested its own fixture, so no regression in the real swap could

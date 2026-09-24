@@ -7,7 +7,7 @@
 //! `+++` was chosen over `---` because `---` is a CommonMark thematic
 //! break inside a markdown body; reusing it would force a per-shortcode
 //! body-parsing rule and break the grammar's "body is always markdown"
-//! invariant. See `docs/archive/2026-05-02-shortcode-grammar-design.md`.
+//! invariant.
 //!
 //! Backward-compatible by design: a body without any `+++` returns a
 //! single-cell list, so existing buttons content (one link per line, no

@@ -3,7 +3,7 @@
 //! Parses the `{ ... }` portion of an opening fence into structured
 //! classes, an optional id, and key/value pairs. Pure, no I/O.
 //!
-//! Grammar (from `docs/archive/2026-05-02-shortcode-grammar-design.md`):
+//! Grammar:
 //!
 //! ```text
 //! Attrs    := "{" AttrItem (whitespace AttrItem)* "}"

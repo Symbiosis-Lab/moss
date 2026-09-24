@@ -139,7 +139,7 @@ fn derive_folder_identity_from_disk(
 /// Three answers, not two, because a read failure is not a fact about the
 /// folder: under the dataless fail-fast policy a `home: true` marker on an
 /// evicted file cannot be proven, and folding that into "there is no home"
-/// is what put the "Create home file" CTA over a real home (moss#1062).
+/// is what put the "Create home file" CTA over a real home.
 pub enum HomeVerdict {
     /// A home file, named relative to the folder.
     File(String),
@@ -289,8 +289,8 @@ pub fn root_page_source(
 /// article map lags a freshly-seeded folder (a folder template's home), so
 /// the URL resolve reaches here with a `FolderHome` takeover for a folder
 /// that may already have a home: the elected file is the source, a marker
-/// still in the cloud is pending (the root's moss#1062 rule, applied to every
-/// folder), and only a folder with provably no home keeps the offer. Root
+/// still in the cloud is pending (the root's HomeVerdict rule, applied to
+/// every folder), and only a folder with provably no home keeps the offer. Root
 /// goes through [`root_page_source`], whose election gates the fallback.
 pub fn folder_page_source(takeover: super::takeover::Takeover) -> super::links::PageSource {
     let dir = takeover.files.first().map(|f| std::path::PathBuf::from(&f.dir));

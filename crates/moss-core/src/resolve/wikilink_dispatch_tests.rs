@@ -579,8 +579,7 @@ fn dispatch_video_sizing_alias_propagates_dims() {
 
 // --- Image display-attr dispatch (fit / position threading) ----------
 //
-// The polish-pass plan (docs/archive/2026-05-27-polish-passes-followups.md
-// Item B) flagged that `![[hero.jpg|cover]]` and
+// The polish-pass plan flagged that `![[hero.jpg|cover]]` and
 // `![[hero.jpg|fit=cover position=left]]` were silently dropping
 // fit/position. `ImageRenderer::render_to_markdown` builds `TitleParams`
 // from the alias / pothole, then explicitly discards them with

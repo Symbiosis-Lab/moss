@@ -7,8 +7,6 @@ use std::path::Path;
 
 /// The set of installed channels read from `[channels.<id>]` tables in `.moss/config.toml`.
 /// Presence of a key = installed. Value holds per-channel settings (may be empty).
-///
-/// See `docs/reference/channels.md`.
 #[derive(Debug, Default, Clone)]
 pub struct ChannelsConfig {
     pub channels: BTreeMap<String, toml::value::Table>,
@@ -69,7 +67,7 @@ fn default_deployer() -> &'static str {
 ///
 /// Since the M6a move this reader never writes: the on-disk migration (backup,
 /// save, gitignore rewrite) is the app's job, run once per build/session via
-/// `HostStore::run_vault_migrations` (ADR-059 — readers cross, writers stay).
+/// `HostStore::run_vault_migrations` (readers cross, writers stay).
 /// Migrating the parsed value here keeps every read correct in the window
 /// before that runner has persisted.
 fn read_and_migrate_raw(project_path: &str) -> Result<Option<toml::Table>, String> {
@@ -89,8 +87,6 @@ fn read_and_migrate_raw(project_path: &str) -> Result<Option<toml::Table>, Strin
 /// Channels are recorded as `[channels.<id>]` tables. Presence = installed.
 /// A legacy config (which still carried `[hooks].syndicate`) is migrated in
 /// memory for this read; the app persists the migration separately.
-///
-/// See `docs/reference/channels.md`.
 pub fn get_channels_config(project_path: &str) -> Result<ChannelsConfig, String> {
     let Some(raw) = read_and_migrate_raw(project_path)? else {
         return Ok(ChannelsConfig::default());
@@ -142,8 +138,8 @@ pub fn discover_installed_plugins(project_path: &str) -> Result<Vec<Plugin>, Str
                 // Counted as well as logged: a plugin that does not load means
                 // its content is missing from this build, so `--strict` must
                 // fail on it and the CLI must print it — a consent refusal
-                // that only reached the log file exited 0 with a page missing
-                // (ADR-077). Other plugins still load.
+                // that only reached the log file exited 0 with a page missing.
+                // Other plugins still load.
                 crate::build::cli_output::log_warn_problem!(target: "plugin", "⚠️ Plugin at {:?} will not run: {}", path, e);
             }
         }
@@ -418,7 +414,7 @@ pub fn get_hook_config(project_path: &str) -> Result<HookConfig, String> {
         };
 
         hook_config.process = parse_array("process");
-        // `[hooks] generate` / `[hooks] enhance` are no longer read (ADR-055).
+        // `[hooks] generate` / `[hooks] enhance` are no longer read.
         // An old config carrying either still parses — unknown keys in this
         // table have always been ignored — the key is simply inert.
         if let Some(deploy) = parse_single("deploy") {
@@ -484,8 +480,7 @@ pub fn resolve_sole_deploy_plugin(plugins: &[Plugin]) -> Result<Option<String>, 
 /// - deploy: Deploy to hosting platform (single plugin)
 ///
 /// Channels (what used to live as `hooks.syndicate`) are recorded separately
-/// under `[channels.<id>]` tables. See `ChannelsConfig` and
-/// `docs/reference/channels.md`.
+/// under `[channels.<id>]` tables. See `ChannelsConfig`.
 #[derive(Debug, Clone, Default)]
 pub struct HookConfig {
     /// Plugins for process hook (array) - pre-process content before build
@@ -532,7 +527,7 @@ pub fn plugin_is_bound(project_path: &str, plugin_id: &str) -> bool {
 }
 
 // The `[hooks]` writer, `save_hook_config`, lives in `domain::config`
-// (ADR-059: readers travel with the pipeline into `crates/moss-build`;
+// (readers travel with the pipeline into `crates/moss-build`;
 // config.toml writers stay app-side).
 
 #[cfg(test)]
@@ -707,7 +702,7 @@ mod tests {
         let config_dir = temp_dir.path().join(".moss");
         fs::create_dir_all(&config_dir).unwrap();
 
-        // `enhance` is a retired key (ADR-055) and must not break the parse
+        // `enhance` is a retired key and must not break the parse
         // of the table it sits in — an old config keeps working, inert.
         let config_content = r#"
 [hooks]
@@ -1058,8 +1053,8 @@ syndicate = ["email"]
         assert!(channels.is_installed("email"));
 
         // In-memory only: the crate-side read never writes the vault. The
-        // persist (rewrite + .bak-v0) is the app's, through the host seam
-        // (ADR-059) — asserted in `infra/config_migrations_tests.rs`.
+        // persist (rewrite + .bak-v0) is the app's, through the host seam —
+        // asserted in `infra/config_migrations_tests.rs`.
         let after = std::fs::read_to_string(dir.path().join(".moss/config.toml")).unwrap();
         assert!(after.contains("syndicate"), "after = {}", after);
         assert!(!dir.path().join(".moss/config.toml.bak-v0").exists());
@@ -1096,9 +1091,7 @@ schema_version = {}
     /// config carries only `[channels.email.send_mode]` (no bare
     /// `[channels.email]` table). The parser must still surface `email` as
     /// installed; otherwise the syndicator-plugins backend silently drops
-    /// the channel and the control-panel icon goes missing — see the
-    /// "Unconfirmed open questions" section of
-    /// `docs/archive/2026-05-22-email-channel-control-panel.md`.
+    /// the channel and the control-panel icon goes missing.
     ///
     /// Locking this with a test (instead of a one-off REPL check) means a
     /// future refactor of `get_channels_config` cannot regress on the

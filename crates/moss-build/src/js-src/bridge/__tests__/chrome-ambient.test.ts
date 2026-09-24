@@ -1,5 +1,5 @@
 /**
- * Tests for the chrome ambient sampler (`frontend/bridge/chrome-ambient.ts`).
+ * Tests for the chrome ambient sampler (`js-src/bridge/chrome-ambient.ts`).
  *
  * The behaviour that matters, and that a naive implementation gets wrong:
  *

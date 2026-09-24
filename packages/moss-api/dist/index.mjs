@@ -31,7 +31,7 @@ function isTauriAvailable() {
 *
 * Plugins run inside a webview (no Node `process.env`), so reading host
 * environment variables requires a Rust→TS bridge. The
-* `get_plugin_env_var` Tauri command in `src-tauri/src/plugins/runtime.rs`
+* `get_plugin_env_var` Tauri command in the app's plugin runtime module
 * enforces a server-side allow-list — plugins cannot read arbitrary
 * environment variables, only the ones moss has whitelisted for test /
 * harness use.
@@ -244,7 +244,7 @@ async function invokeLifecycle(pluginName, hook, trigger, taskId, lifecycle) {
 * surface; they just describe what they're doing and why.
 *
 * Preferred over `reportProgress()` for new code. The legacy API stays
-* supported until ADR-015 Phase 3 sweeps all 151 call sites.
+* supported until a later phase sweeps the remaining call sites.
 *
 * @example
 * const task = await startTask("Importing 42 articles", {

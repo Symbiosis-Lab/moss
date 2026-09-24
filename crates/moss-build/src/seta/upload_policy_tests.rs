@@ -305,7 +305,7 @@ fn a_site_of_small_files_still_learns_the_link_before_it_meets_a_big_one() {
     );
 }
 
-// ── Deploy summary (#1133) ───────────────────────────────────────────────────
+// ── Deploy summary ───────────────────────────────────────────────────────────
 
 /// The summary line is the deploy's feedback loop: the 2026-08-27 baseline had
 /// to be reconstructed from a rotated DEBUG log, and this line is what replaces
@@ -363,7 +363,7 @@ fn confirmed_bytes_count_even_below_the_sample_gate() {
     assert!(tp.deploy_summary(Duration::from_secs(1)).contains("4096 bytes"));
 }
 
-// ── Adaptive concurrency (#1135) ─────────────────────────────────────────────
+// ── Adaptive concurrency ──────────────────────────────────────────────────────
 
 /// Drive one goodput window: pin occupancy to `occ`, then feed `n` completions
 /// of `bytes` each spread across `span`, advancing `*t`. With `n` at the

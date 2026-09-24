@@ -22,7 +22,7 @@ fn evicted(names: &[&str]) -> impl Fn(&Path) -> Option<bool> {
     }
 }
 
-/// moss#1062. A `home: true` home that is neither index-named nor self-named
+/// A `home: true` home that is neither index-named nor self-named
 /// is provable ONLY by reading it. While its bytes are in the cloud that read
 /// fails, and folding the failure into `false` turns "I could not check" into
 /// "it is not the home" — so the site root resolved to nothing and the editor

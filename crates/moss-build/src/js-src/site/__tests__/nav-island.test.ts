@@ -1,6 +1,6 @@
 /**
  * Tests for `foldPlan` — which ancestors the island's trail drops at a given
- * width (ADR-049 §5).
+ * width.
  *
  * jsdom does no layout, so it cannot measure a crumb; that is the engine's job
  * and it is asserted in tests/render-gates/site/nav-island.spec.ts. What lives
@@ -72,7 +72,7 @@ describe("foldPlan", () => {
   });
 
   test("the current page truncates before an ancestor is dropped", () => {
-    // The current page is the ONE crumb allowed to ellipsise (ADR-049 §4), so
+    // The current page is the ONE crumb allowed to ellipsise, so
     // the room it can give back has to be spent before any ancestor leaves the
     // screen: a cut title still says which page you are on, a dropped ancestor
     // says nothing at all. Charging it full width instead — which is what the
@@ -182,7 +182,7 @@ describe("initNavIsland — the contents gate and the sections panel", () => {
   });
 
   test("one heading is not a contents table — the island stays dormant", () => {
-    // ADR-049 §10 as amended 2026-08-30. A single row names the page's only
+    // As amended 2026-08-30: a single row names the page's only
     // section, which the title directly above it already said; the island
     // would be a bar summoned to repeat the heading the reader just read.
     setPage(["一"]);

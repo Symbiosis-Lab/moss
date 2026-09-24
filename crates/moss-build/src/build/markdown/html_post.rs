@@ -299,8 +299,8 @@ pub fn strip_percent_comments(text: &str) -> std::borrow::Cow<'_, str> {
 /// ASCII space. Newlines are kept, so byte offsets and line positions in the
 /// mask index the original text.
 ///
-/// This is [`moss_core::inert_regions`], the one shared scanner (moss#903
-/// bug 2). It used to be a private fence-and-inline-code copy here, which is
+/// This is [`moss_core::inert_regions`], the one shared scanner. It used to
+/// be a private fence-and-inline-code copy here, which is
 /// why CriticMarkup and `%%` stripping still fired inside authored HTML
 /// comments and indented code blocks — a `{++draft++}` parked in a comment
 /// was accepted and unwrapped, and an indented documentation example showing
@@ -379,8 +379,8 @@ pub fn strip_html_tags(html: &str) -> String {
 /// frontmatter cascade or the title-cased filename, so we treat it as
 /// untrusted relative to the HTML output context.
 ///
-/// See `docs/archive/2026-04-28-auto-h1-injection-design.md` for why injection
-/// is article-only and why the `moss-article-title` class is stable contract.
+/// Injection is article-only, and the `moss-article-title` class is a stable
+/// contract.
 pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_lines: bool) -> String {
     let escaped = html_escape(title);
     let fm_attr = if emit_source_lines { r#" data-source-fm="title""# } else { "" };
@@ -400,7 +400,7 @@ pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_
 /// Layout intent: the date row and reading-preferences control go
 /// immediately after the resolved-title `<h1>`. No walking past blockquotes
 /// or other "title block" tail elements. The strict-contract title pipeline
-/// (see `docs/reference/title-rendering.md`) injects a single `<h1>` at
+/// injects a single `<h1>` at
 /// the top of the body; the date row goes right under it. Predictable
 /// position over inference.
 ///
@@ -602,7 +602,7 @@ fn filter_srcset_candidates(
     Some(surviving.join(", "))
 }
 
-/// Post-seal honest-degradation pass (moss#867): drop webp `srcset`
+/// Post-seal honest-degradation pass: drop webp `srcset`
 /// candidates that reference a terminally-failed image variant, in BOTH
 /// shapes moss-core's `synthesize_inner` (zero I/O) can emit them:
 ///
@@ -619,8 +619,7 @@ fn filter_srcset_candidates(
 /// in both shapes: per the HTML spec's "update-the-source-set" /
 /// "update-the-image-data" algorithms, the browser commits to the picked
 /// candidate and does NOT retry a different one, and does NOT fall back to
-/// a `<picture>`'s inner `<img>` or an `<img>`'s bare `src`
-/// (`docs/decisions/ADR-013-asset-publish-invariant.md`).
+/// a `<picture>`'s inner `<img>` or an `<img>`'s bare `src`.
 ///
 /// Run this once, post-seal — after the background encoder drain, so every
 /// `AssetState` has settled to `Ready` or `Failed`, none still `Pending` —
@@ -1237,9 +1236,9 @@ mod tests {
 
     #[test]
     fn cm_accept_skips_html_comments() {
-        // Same fix as moss#903 bug 2 one layer over: an annotation parked in
-        // an authored comment stays parked instead of being unwrapped inside
-        // it.
+        // Same fix as the inert-scanner regression, one layer over: an
+        // annotation parked in an authored comment stays parked instead of
+        // being unwrapped inside it.
         let input = "<!-- draft: {++new text++} -->\n\nlive";
         assert_eq!(accept_criticmarkup(input), input);
     }
@@ -2005,7 +2004,7 @@ mod tests {
     // `get_attribute` hands that text back raw, entities intact. A repair pass
     // that skips the entity decode derives `assets/a&amp;b.w800.webp` for a
     // registry key of `assets/a&b.w800.webp`, matches nothing, and ships a
-    // chosen-source 404 that `<picture>` cannot fall back from (ADR-013).
+    // chosen-source 404 that `<picture>` cannot fall back from.
 
     /// One asset path, encoded the way the real emitter encodes it into an
     /// attribute: percent-encode the segments, then HTML-escape. Building the

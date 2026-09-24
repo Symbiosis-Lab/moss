@@ -10,7 +10,7 @@
 //! resolver — what remains is worker admission, the stage-lock probe, the
 //! content-hash gate and one `run_pipeline` call, all of which already live
 //! in this crate. Both headless hosts — the app binary's `moss build` arm
-//! (`src-tauri/src/build_shell/watch.rs::start_file_watching_headless`, which
+//! (the desktop app's `start_file_watching_headless`, which
 //! adds the app-side sweep on top) and `moss-cli` — construct through here,
 //! so the CLI gaining `--watch` did not mint a second copy of these bodies.
 //!

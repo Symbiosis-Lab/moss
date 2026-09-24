@@ -1450,7 +1450,7 @@ fn test_singleflight_default() {
 }
 
 // =========================================================================
-// Singleflight Design Invariant Tests (ADR-010, Phase 4)
+// Singleflight Design Invariant Tests
 // =========================================================================
 
 /// INVARIANT: After completion, key is cleaned up from in-flight map.
@@ -1864,7 +1864,7 @@ fn test_singleflight_media_metadata_concurrent_dedup() {
 }
 
 // -----------------------------------------------------------------------
-// Singleflight error-propagation invariant tests (ADR-010, Phase 4)
+// Singleflight error-propagation invariant tests
 //
 // These tests lock the invariant fixed by the singleflight error-channel
 // refactor: when the primary closure returns an outcome with an error, all
@@ -2019,7 +2019,7 @@ fn test_cached_media_meta_backward_compat_no_lqip() {
 #[test]
 fn test_cached_media_meta_backward_compat_no_is_animated() {
     // JSON from before the is_animated field existed must still deserialize,
-    // defaulting to false (a bounded, self-healing gap — see moss#919: the
+    // defaulting to false (a bounded, self-healing gap: the
     // next content change re-sniffs and writes the real value).
     let json = r##"{"dimensions":[800,600],"dominant_color":"#ff5733"}"##;
     let meta: CachedMediaMeta = serde_json::from_str(json).expect("deser");

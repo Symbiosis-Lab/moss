@@ -6,7 +6,7 @@
 //! fall back to a file link (Obsidian parity) — that fallback lives in the
 //! caller, not here.
 //!
-//! # moss-core ↔ src-tauri boundary
+//! # moss-core ↔ desktop-app boundary
 //!
 //! moss-core is pure: no filesystem, no network, no async. This constrains
 //! what a renderer can do:
@@ -15,18 +15,18 @@
 //!   `RenderedEmbed::Inline(markdown)` or `RenderedEmbed::Html(html)`. No I/O.
 //!   The string is spliced directly into the compiled output.
 //! - **I/O-bound renderers** (markdown transclusion, notebook, PDF preview) —
-//!   return `RenderedEmbed::Deferred { marker }`. src-tauri runs a post-pass
+//!   return `RenderedEmbed::Deferred { marker }`. The desktop app runs a post-pass
 //!   (`resolve_embeds` in `embeds.rs`) that reads the target file and splices
 //!   its rendered content into the marker.
 //!
 //! Plugin-registered renderers (Phase E) must follow the same rule: if they
 //! need I/O, they emit a marker and register a corresponding resolver on the
-//! src-tauri side.
+//! desktop app's side.
 
 mod common;
 pub mod folder_list;
 
-// Re-export the canonical 4-char attribute escaper so src-tauri synthesizers
+// Re-export the canonical 4-char attribute escaper so the desktop app's synthesizers
 // (pdf / iframe / model / audio / video) can share one definition instead of
 // inlining private copies that drifted apart (moss-core's was 4 chars; some
 // synthesizers via `moss_core::media::html_escape` was 5 chars including
@@ -37,15 +37,14 @@ pub use common::{file_stem, html_escape_attr};
 use crate::media::Placement;
 
 // ---------------------------------------------------------------------------
-// Reserved classnames (HTML/CSS contract, per moss#508)
+// Reserved classnames (HTML/CSS contract)
 // ---------------------------------------------------------------------------
 
 /// Base class applied to all typed-embed output elements.
 ///
 /// Theme authors may target `.moss-embed` to style the wrapper of any embed;
 /// renderer-specific classes (e.g. [`CLASS_EMBED_IFRAME`]) extend the base.
-/// The CSS that ships with moss is defined in src-tauri (see issue #508 for
-/// the HTML/CSS contract).
+/// The CSS that ships with moss is defined in the desktop app.
 pub const CLASS_EMBED: &str = "moss-embed";
 
 /// Applied to iframe renderer output (Phase B).
@@ -70,14 +69,14 @@ pub const CLASS_EMBED_3D: &str = "moss-embed-3d";
 pub const CLASS_EMBED_TABLE: &str = "moss-embed-table";
 
 // ---------------------------------------------------------------------------
-// Deferred-marker prefixes (contract with src-tauri resolvers)
+// Deferred-marker prefixes (contract with the desktop app's resolvers)
 // ---------------------------------------------------------------------------
 
 /// Marker prefix for a markdown transclusion embed (`![[file.md]]`).
 ///
 /// Format: `<!-- moss-embed:PATH[#anchor] -->`. Emitted by `resolve.rs`'s
 /// pre-pass (`lower_transclusion_and_folder_wikilinks`) and resolved by
-/// src-tauri's `resolve_embeds` (inlines target markdown content).
+/// the desktop app's `resolve_embeds` (inlines target markdown content).
 ///
 /// No `-<type>` suffix for historical reasons: this was the original embed
 /// marker before typed embeds existed. New typed markers use
@@ -87,13 +86,13 @@ pub const MARKER_MARKDOWN: &str = "moss-embed";
 /// Marker prefix for a Jupyter notebook embed (`![[file.ipynb]]`).
 ///
 /// Format: `<!-- moss-embed-ipynb:PATH[?query] -->`. Emitted by `resolve.rs`'s
-/// pre-pass and resolved by src-tauri via nbconvert.
+/// pre-pass and resolved by the desktop app via nbconvert.
 pub const MARKER_IPYNB: &str = "moss-embed-ipynb";
 
 /// Marker prefix for a tabular-data embed (`![[file.csv]]`/`![[file.tsv]]`).
 ///
 /// Format: `<!-- moss-embed-table:PATH -->`. Emitted by `resolve.rs`'s
-/// pre-pass; src-tauri reads the file and calls [`crate::csv_table::render`]
+/// pre-pass; the desktop app reads the file and calls [`crate::csv_table::render`]
 /// (a pure renderer).
 pub const MARKER_TABLE: &str = "moss-embed-table";
 
@@ -110,7 +109,7 @@ pub struct ParsedEmbed<'a> {
     pub from_path: &'a str,
     /// The URL the site serves [`Self::resolved_path`] at, pinned once by the
     /// dispatcher via `ContentGraph::pinned_url`. Emit it verbatim; re-deriving
-    /// a URL per referencing page is moss#903 bug 3.
+    /// a URL per referencing page is a recurring regression.
     pub pinned_url: &'a str,
     /// `?query` from the source wikilink, without the leading `?`.
     pub query: Option<&'a str>,
@@ -135,18 +134,18 @@ pub struct ParsedEmbed<'a> {
     pub placement: Placement,
     /// Trailing Pandoc `{.class key=value}` attribute block, if present.
     ///
-    /// Per Decision #8 of the unified-image-emission architecture, Pandoc-
+    /// Per the unified-image-emission architecture, Pandoc-
     /// style attribute blocks are the canonical author surface for moss-
     /// vocabulary attributes; the pipe-keyword form remains as compat sugar.
     /// When both are present, the attribute block wins on typed-field
-    /// conflicts (Decision #11); class lists union+dedupe.
+    /// conflicts; class lists union+dedupe.
     pub attrs: Option<crate::ast::attrs::AttrBlock>,
 }
 
 /// Output of a renderer.
 ///
 /// The variant tells the caller what further processing (if any) the string
-/// needs. See the module-level doc for the moss-core ↔ src-tauri boundary rule.
+/// needs. See the module-level doc for the moss-core ↔ desktop-app boundary rule.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RenderedEmbed {
     /// Markdown-level text that will be processed by CommonMark downstream.
@@ -163,7 +162,7 @@ pub enum RenderedEmbed {
     /// `<target>` is the body the resolver parses (commonly a path,
     /// optionally with `?query#fragment|alias`).
     ///
-    /// The resolver lives in src-tauri (where async and I/O are allowed).
+    /// The resolver lives in the desktop app (where async and I/O are allowed).
     /// Built-in prefixes are exported as pub const: [`MARKER_MARKDOWN`],
     /// [`MARKER_IPYNB`], [`MARKER_TABLE`]. Plugin-registered renderers
     /// emit `moss-embed-plugin-<plugin-name>:` — see

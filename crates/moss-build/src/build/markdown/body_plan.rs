@@ -13,9 +13,9 @@
 //!   right. Everything past the lede has to be released back to full width, as
 //!   a sibling AFTER the cover row.
 //!
-//! Before ADR-034 both were answered by re-parsing the page's own rendered HTML
+//! Before this module existed, both were answered by re-parsing the page's own rendered HTML
 //! with regexes and a hand-rolled `<div>`-depth counter. That is what produced
-//! moss#903: a byte cursor advanced past a multi-byte character aborted the
+//! a regression where a byte cursor advanced past a multi-byte character aborted the
 //! build (`start byte index 66 is not a char boundary; it is inside '在'`), and
 //! the release point could only ever be a literal `.moss-grid` match, so a
 //! long-form article with no grid stayed in the ~20-character column forever.
@@ -252,11 +252,12 @@ impl BodyPlan {
 /// Index into `blocks` where the narrow folder-cover column ends.
 ///
 /// The cover thumbnail sits beside the *lede*; content past it has half the
-/// viewport empty to its right, which is exactly what moss#903 bug 4 reported.
+/// viewport empty to its right, which is exactly what a real long-form
+/// article once did with no release point to fall back on.
 /// Release happens at whichever comes first:
 ///
 /// - a block that is inherently full-width — `:::grid`, `:::gallery`, a table,
-///   or a figure carrying a non-`body` width token (ADR-021);
+///   or a figure carrying a non-`body` width token;
 /// - the end of the lede — the first heading that follows at least one
 ///   paragraph, i.e. where the intro stops and the article proper starts.
 ///
@@ -336,7 +337,7 @@ fn is_full_width_block(block: &Block) -> bool {
     match block {
         Block::Shortcode(Shortcode::Grid(_)) | Block::Shortcode(Shortcode::Gallery(_)) => true,
         Block::Table { .. } => true,
-        // ADR-021 width tokens: `body` is the default measure, so only a
+        // Width tokens: `body` is the default measure, so only a
         // widened figure forces a release.
         Block::Figure { width: Some(w), .. } => w != "body",
         _ => false,

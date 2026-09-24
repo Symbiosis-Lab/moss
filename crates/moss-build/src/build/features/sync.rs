@@ -30,7 +30,6 @@
 //!
 //! - [build.rs](../build.rs) for where this is invoked.
 //! - [comment.rs](comment.rs) and [review.rs](review.rs) for the sync work itself.
-//! - moss issue #570 for the bug this prevents.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

@@ -673,8 +673,8 @@ fn missing_dimensions_fall_back_to_800x600() {
 // Phase 2E v5 PR5 (2026-05-26) retired the Stage 3 regex post-pass; the
 // image synthesizer in this module is now the sole emitter of width /
 // height / loading / LQIP / dominant-color attributes for moss-emitted
-// <img> tags. The three idempotency tests at
-// `src-tauri/tests/image_synth_regex_parity.rs` that guarded the
+// <img> tags. The three idempotency tests in the desktop app's
+// `image_synth_regex_parity.rs` that guarded the
 // regex+synth byte-shape parity were deleted alongside the regex.
 
 // --- TrackingPixel (Phase 2C, 2026-05-25) ---
@@ -1160,7 +1160,7 @@ fn comma_named_webp_source_encodes_img_srcset_commas_but_not_base_src() {
 
 #[test]
 fn comma_named_raster_with_no_ladder_encodes_single_url_srcset() {
-    // Bug B (docs/archive/2026-08-06-orphan-prune-false-negative-and-parse-cache-gate.md):
+    // Bug B:
     // when dims are unknown (snapshot miss → `resolve_ladder` returns
     // `None`), `synthesize_inner` takes the LEGACY single-URL `<source
     // srcset="X.webp">` branch instead of the ladder branch. That branch
@@ -1229,8 +1229,7 @@ fn hero_context_uses_full_bleed_sizes() {
 //
 // `:::hero {.plate}` renders whole, never upscaled — the srcset `sizes=`
 // value has to say so or the ladder resolves against viewport width and
-// starves a wide plate into a blurry upscale (docs/archive/
-// 2026-09-11-hero-plate-variant.md). `hero_context_uses_full_bleed_sizes`
+// starves a wide plate into a blurry upscale. `hero_context_uses_full_bleed_sizes`
 // above is the same fixture shape with `plate: false`, so a diff of the
 // two tests is the whole behavioral delta this variant adds.
 
@@ -1288,7 +1287,7 @@ fn hero_plate_false_is_byte_identical_to_unit_hero() {
 
 #[test]
 fn markdown_standalone_width_wide_uses_wide_band_sizes() {
-    // ADR-021 Corollary 2 content-width escape (2026-07-30): site.css now
+    // Content-width escape (2026-07-30): site.css now
     // sizes data-width bands, so a wide figure declares the wide band —
     // min(63rem, 100vw) above the 48rem breakpoint — not the content
     // column. (Pre-escape this mapped to SIZES_BODY because the attribute

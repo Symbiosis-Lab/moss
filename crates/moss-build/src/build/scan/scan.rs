@@ -4,14 +4,14 @@
 //! to understand its content and structure. It scans folders recursively, categorizes
 //! files by type, and makes intelligent decisions about how the site should be organized.
 //!
-//! ## Media Metadata Extraction (ADR-006)
+//! ## Media Metadata Extraction
 //!
 //! For image and video files, we extract additional metadata:
 //! - **Dimensions**: Read from image headers (fast, ~1ms per file)
 //! - **Dominant color**: Extracted from 100x100 thumbnail for speed
 //! - **EXIF orientation**: Used to swap dimensions for rotated images
 //!
-//! This metadata enables ADR-002 (dynamic SVG placeholders) during page rendering.
+//! This metadata enables dynamic SVG placeholders during page rendering.
 
 use crate::types::content::{FileInfo, MediaMetadata, ProjectStructure};
 use crate::build::cache::{CachedMediaMeta, FileStat, HashIndex, ObjectStore, TransformCache, TransformEntry, TransformRecord};
@@ -87,12 +87,12 @@ impl ScanEventEmitter {
 }
 
 // =========================================================================
-// Media Metadata Extraction Functions (ADR-006)
+// Media Metadata Extraction Functions
 // =========================================================================
 
 /// Extract image dimensions from file header.
 ///
-/// ADR-006: reads the header only (~1ms per file) via
+/// Reads the header only (~1ms per file) via
 /// `media::decode::sniff_dimensions`, much faster than loading the entire
 /// image into memory.
 ///
@@ -103,7 +103,7 @@ impl ScanEventEmitter {
 /// * `Some((width, height))` - Dimensions if successfully read
 /// * `None` - If file cannot be read or is not a valid image
 pub fn extract_image_dimensions(path: &Path) -> Option<(u32, u32)> {
-    // ADR-006: header-only read (~1ms per file). Content-sniffed (not
+    // Header-only read (~1ms per file). Content-sniffed (not
     // extension-only) via `media::decode::sniff_dimensions` — a file whose
     // extension lies about its format (a PNG saved as `x.jpg`) still decodes
     // correctly instead of silently returning `None` and falling back to an
@@ -254,7 +254,7 @@ fn sniff_is_animated(path: &Path, extension: &str) -> bool {
 
 /// Extract complete media metadata for an image or video file.
 ///
-/// ADR-006: Combines dimension extraction, EXIF handling, and dominant color
+/// Combines dimension extraction, EXIF handling, and dominant color
 /// into a single MediaMetadata struct for efficient scanning.
 ///
 /// # Arguments
@@ -625,8 +625,7 @@ fn extract_media_metadata_cached(
         // Skip singleflight (which is hash-keyed, not applicable here). A
         // miss is the routine first-scan case, not a problem to flag — TRACE
         // like the cache-hit branch above, not DEBUG (measured ~520
-        // lines/session in a real upload, 2026-09-15,
-        // docs/archive/2026-09-15-open-feedback-design.md).
+        // lines/session in a real upload, 2026-09-15).
         log::trace!("Media meta stat-cache miss for {} (skipping hash)", relative_path);
         let meta = extract_media_metadata(
             abs_path, relative_path, extension, size, modified, ffmpeg,
@@ -819,7 +818,7 @@ pub fn file_has_home_marker(path: &std::path::Path) -> bool {
 /// under the dataless fail-fast policy that read fails on an evicted file.
 /// Folded to `false`, "I could not check" becomes "it is not the home" — the
 /// root resolves to nothing and the editor offers to create a home page over
-/// the one that exists (moss#1062).
+/// the one that exists.
 ///
 /// `is_offline_not_absent` is the classifier — the same `outcome::io_stop` and
 /// `cloud_readiness` consult. Any other read failure (permissions, bad I/O) is
@@ -1108,10 +1107,10 @@ pub fn scan_folder_with_dedup_emit(
             .to_lowercase();
 
         // Categorize files by extension. `classify_extension` is the single
-        // definition of this match (moss#1087) — a caller outside this crate
+        // definition of this match — a caller outside this crate
         // that needs the same verdict calls it directly instead of
         // hand-maintaining its own extension list that can drift from this one.
-        // ADR-006: Images and videos use MediaMetadata for dimensions and dominant color
+        // Images and videos use MediaMetadata for dimensions and dominant color.
         match classify_extension(&extension) {
             ScanBucket::Page => {
                 markdown_files.push(FileInfo {
@@ -1130,7 +1129,7 @@ pub fn scan_folder_with_dedup_emit(
                 });
             }
             ScanBucket::Image => {
-                // ADR-006 metadata (dimensions + dominant color/LQIP or stat-key
+                // Media metadata (dimensions + dominant color/LQIP or stat-key
                 // cache I/O) is the dominant cold-scan cost; defer it to the
                 // parallel phase 2 below and just record the entry here (walk
                 // order preserved). The synthesizer always emits `<picture>` for
@@ -1145,7 +1144,7 @@ pub fn scan_folder_with_dedup_emit(
                 });
             }
             ScanBucket::Video => {
-                // ADR-006: Videos use FFmpeg for dimensions and dominant color, with caching.
+                // Videos use FFmpeg for dimensions and dominant color, with caching.
                 // Lazy resolution (Task 4): FFmpeg is only downloaded/detected when
                 // the first video file is encountered during the directory walk.
                 let ffmpeg = ffmpeg_cell.get_or_init(|| {
@@ -1389,8 +1388,7 @@ pub fn scan_folder_with_dedup_emit(
     // using a code outside that list silently won't be scoped — extend the list, or
     // adopt the filed explicit-`languages`-config direction, to cover it.
     // Gates the root homepage's default-language-tree listing scope (the root home
-    // lists only the default tree on a multilingual site). See
-    // docs/archive/2026-06-06-multilingual-children-scoping-design.md.
+    // lists only the default tree on a multilingual site).
     let has_language_trees = markdown_files.iter().chain(html_files.iter())
         .any(|f| moss_core::home::lang_tree_prefix(&f.path).is_some());
 

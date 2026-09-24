@@ -44,7 +44,7 @@
 //!
 //! - **For retrying.** Obsidian's materialize-modal retries the same OS
 //!   mechanism and "eventually succeeds" where a single attempt does not.
-//! - **Against a ladder.** #986's per-file backoff paced moss *slower* than the
+//! - **Against a ladder.** A per-file backoff once paced moss *slower* than the
 //!   provider — ~4 minutes of escalation before the rung that worked. What
 //!   failed there was the cadence, not the act of asking twice.
 //! - **Unknown.** Whether a fresh read re-arms materialization after our
@@ -75,7 +75,7 @@
 //! thread, inside three nested locks. A `read` has no timeout and no interrupt,
 //! so the thread was gone for the life of the process. moss never reached
 //! `build_folder`; the waiting screen that had already shipped never fired
-//! once. See docs/archive/2026-08-03-dataless-fail-fast-and-build-driven-cloud-gate.md.
+//! once.
 //!
 //! Preview survives the same wedge because the blast radius is one document the
 //! user can close. moss's is the app.
@@ -98,7 +98,7 @@
 //! progress is possible by any means, which the supervisor reports as a stall.
 //!
 //! So this is not a download mechanism. It is an isolation boundary around the
-//! OS's download mechanism. See ADR-047.
+//! OS's download mechanism.
 //!
 //! Everything here is cross-platform and unit-tested on Linux against an
 //! injected [`Materializer`]; the OS-specific part is one syscall, in
@@ -119,7 +119,7 @@ use std::time::{Duration, Instant};
 ///
 /// It does also bound throughput, and pretending otherwise would be wrong: only
 /// eight files can be materializing at a time, and at the 13–16 s per-file floor
-/// observed on the vault behind #986 that is ~21 minutes for 724 files. The
+/// observed on a real vault that is ~21 minutes for 724 files. The
 /// provider batches behind the scenes, so the real figure is better than that —
 /// but the ceiling is moss's, not the provider's.
 ///
@@ -221,7 +221,7 @@ fn drain_to_eof<R: std::io::Read>(r: &mut R) -> std::io::Result<()> {
 /// Row 2 is why the vault stalled for days rather than merely slowly: after the
 /// first window lands, every retry returns instantly having fetched nothing and
 /// reported success, so moss's 60 s re-ask is an infinite no-op. That is the
-/// whole of moss#1077 — `deployed-article-map.json` is 4,827,583 bytes, needed
+/// whole regression: `deployed-article-map.json` is 4,827,583 bytes, needed
 /// two windows, got one. Files under 4 MiB were never affected, which is why it
 /// survived so long.
 ///

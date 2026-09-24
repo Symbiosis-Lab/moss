@@ -2,7 +2,7 @@
 //! starts and owns, as opposed to the one-shot pipeline under [`crate::build`].
 //!
 //! NORTH-STAR charters this family: `ops/serve` (the preview server, crossed
-//! at S1 of the 2026-08-28 relocation plan, ADR-067) and `ops/watch` (the
+//! at S1 of the 2026-08-28 relocation plan) and `ops/watch` (the
 //! debouncer driver, crossed at slice W1 of the same plan).
 
 pub mod serve;
@@ -33,7 +33,8 @@ pub type WatchStarter = Box<
 impl HostPorts {
     /// The host with no shell — what `moss-cli build` and the app binary's
     /// headless `moss build` both run the pipeline with, so the two cannot
-    /// drift (#1154 folded the twin they used to be). It lives here, beside
+    /// drift — they used to be a twin implementation, since folded together.
+    /// It lives here, beside
     /// its consumer [`HeadlessBuildRun`], because `build/` must not reach
     /// into `ops/`; the struct itself is a port shape. Every `Option` is
     /// `None`; Tier-2 events, seal announcements, the services reporter and
@@ -73,7 +74,7 @@ impl HostPorts {
 /// app binary's `moss build` both call [`BuildArgs::parse`] on everything
 /// after the verb and hand the result to [`HeadlessBuildRun`]. Before this
 /// the two parsers were a six-line `contains` twin edited in step by hand
-/// (ADR-077 added `--allow-plugins` to both that way).
+/// (`--allow-plugins` was added to both that way).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct BuildFlags {
     /// `--serve`: start the preview server and block until ctrl-C.
@@ -97,19 +98,19 @@ pub struct BuildFlags {
     /// only safe if something later renders what it writes — under `--serve`
     /// alone no watcher will, so the site would serve pre-import content
     /// forever. A Config decision at the entry point, not a fork inside the
-    /// pipeline (ADR-010).
+    /// pipeline.
     pub wait_plugins: bool,
     /// `--no-plugins`: skip plugin hooks in the initial build and the watch
     /// rebuilds alike. Otherwise the initial build runs them (`NonBlocking`,
     /// or `Blocking` when waiting) and a watch rebuild replays cached slots
     /// without re-running them (`SlotsOnly`, the GUI rebuild rule). Derived
-    /// once, below, for both binaries — since the manager crossed (ADR-076)
-    /// neither has a plugin policy of its own.
+    /// once, below, for both binaries — since the manager crossed into this
+    /// crate, neither has a plugin policy of its own.
     pub no_plugins: bool,
     /// `--allow-plugins`: this command is the consent for the plugins the
     /// folder carries. Without it a plugin the app has never been told to
-    /// allow is refused, as it is in the app before the user clicks Allow
-    /// (ADR-077). Meaningless under `no_plugins`.
+    /// allow is refused, as it is in the app before the user clicks Allow.
+    /// Meaningless under `no_plugins`.
     pub allow_plugins: bool,
     /// `--site-url=<url>`: the URL baked into og:image, canonical links,
     /// sitemap and RSS, for one-off staging builds or a site not deployed via
@@ -254,7 +255,7 @@ pub fn run_headless_build(run: HeadlessBuildRun) -> ! {
         if run.flags.serve {
             let slot = server_shutdown.clone();
             // The same registry this build fills, so the server can answer for
-            // a variant that is still encoding (ADR-013).
+            // a variant that is still encoding.
             let assets = host.services.assets.clone();
             host.launch_server = Some(Arc::new(move |moss_dir, cell| {
                 let slot = slot.clone();

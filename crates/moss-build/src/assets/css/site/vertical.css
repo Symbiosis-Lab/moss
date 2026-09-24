@@ -1,6 +1,6 @@
 /* moss site stylesheet partial: vertical
    Shipped only when `SiteAssets::vertical` is true — see
-   src-tauri/src/build/emit/stylesheet.rs (CSS_PARTIALS).
+   `build::emit::stylesheet::CSS_PARTIALS`.
    Wrapped in @layer shortcodes to match the position these rules
    held inside site.css; multiple @layer blocks of the same name merge. */
 
@@ -164,8 +164,7 @@ body[data-typesetting="vertical"] .font-pill.visible {
    (physical width). `max-width: 100vw` bounds it; `vw` because body's
    `width: 100%` is circular here. `flex-shrink: 0` because `overflow:
    hidden` zeroes its minimum size: a long page squeezed the section below
-   its plate and cropped it (2026-09-23).
-   See docs/archive/2026-09-11-hero-plate-variant.md. */
+   its plate and cropped it (2026-09-23). */
 body[data-typesetting="vertical"] .moss-hero {
   padding-inline: var(--moss-container-padding);
   max-width: 100vw;
@@ -235,9 +234,9 @@ body[data-typesetting="vertical"] .moss-table-scroll {
    question, not a cleanup: `--moss-font-heading` is the serif stack (Iowan Old
    Style / Palatino / Songti SC) and is the obvious candidate. Wiring it would
    change how every vertical-typesetting site renders, so it wants a look at the
-   result first. Tracked in #955. */
+   result first. */
 /* ── Grid cards (vertical mode) ── */
-/* One rule, stated once in docs/reference/design/preview-cards.md, holds at
+/* One rule holds at
    every viewport: the grid's line count (`:::grid N`) runs along the INLINE
    axis, which vertical-rl points down the page, so `grid-template-columns`
    (site.css, unrestated here) stacks N cards down the column with no
@@ -256,7 +255,7 @@ body[data-typesetting="vertical"] .moss-table-scroll {
 
    `aspect-ratio` is the one property this rule cannot state once: it is
    width/height, physical, with no flow-relative spelling. The design ratio
-   is inline:block = 4:3 (docs/reference/design/preview-cards.md); under
+   is inline:block = 4:3; under
    horizontal-tb that IS width:height, so site.css's default reads 4/3
    directly, but under vertical-rl inline is the physical height, so the
    same 4:3 ratio inverts to width:height = 3/4. This is the transposed
@@ -276,7 +275,7 @@ body[data-typesetting="vertical"] .moss-table-scroll {
    read this rule's own 3/4, never a narrower override). This is the same
    fact the grid-flow rule above already rests on ("a vertical page's column
    height is `100svh`-derived, not viewport WIDTH"), just met here on the
-   ratio instead of the column count: docs/archive/2026-09-15-card-cover-ratio-scope.md. */
+   ratio instead of the column count. */
 
 [data-typesetting="vertical"] :is(.moss-cards[data-layout="grid"], .moss-grid) .moss-card-cover {
   aspect-ratio: var(--moss-card-cover-ratio, 3 / 4);
@@ -431,8 +430,7 @@ body[data-typesetting="vertical"] .moss-table-scroll {
    site.css; what remains here is typography only. This reverts the two
    ordering hacks that briefly stood in their place — `order: -1` on the
    cover (2026-09-10) and `display: contents` on the body with `order: -2`
-   on the title (2026-09-11) — superseded the same day per
-   docs/archive/2026-09-11-vertical-card-title-first.md.
+   on the title (2026-09-11) — superseded the same day.
    Bare [data-typesetting] selector works whether attr is on body or any ancestor. */
 
 [data-typesetting="vertical"] .moss-cards[data-layout="list"] .moss-card-meta,

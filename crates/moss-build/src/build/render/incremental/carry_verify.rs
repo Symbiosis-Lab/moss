@@ -1,4 +1,4 @@
-//! Shadow verification of the incremental carry decision (moss#968 §10 gate 4).
+//! Shadow verification of the incremental carry decision.
 //!
 //! `MOSS_INCREMENTAL_VERIFY=1` makes the render phase render the *carried* set
 //! anyway and then asks the one question the whole narrowing rests on: **does

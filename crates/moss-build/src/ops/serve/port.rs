@@ -58,7 +58,7 @@ pub fn find_available_port(start_port: u16) -> Result<u16, String> {
 /// IPv6 wildcard while leaving IPv4 free — a single-family probe would
 /// erroneously declare the port available, moss would bind IPv4, and the
 /// `http://localhost:` iframe URL (IPv6-first on macOS) would silently route
-/// to the foreign server. See `docs/archive/2026-05-22-preview-port-dual-stack-collision.md`.
+/// to the foreign server.
 ///
 /// This is defense-in-depth — the authoritative collision check is the
 /// dual-stack server bind in `router.rs::start_server`.

@@ -3,8 +3,8 @@ use super::*;
 // ── the rule, pinned across languages ───────────────────────────────────────
 //
 // Where an image lands is decided twice: here (the real placement, read at
-// store time) and in TypeScript (`frontend/app/settings/attachment-placement.ts`,
-// which draws the live "posts/on-gardens.md → posts/assets/photo.png" line the
+// store time) and in TypeScript (the site-settings preview, which draws the live
+// "posts/on-gardens.md → posts/assets/photo.png" line the
 // user reads while typing the folder name). A preview that disagreed with the
 // placement would be worse than no preview, so both sides are checked against
 // ONE file — open/crates/moss-core/tests/fixtures/attachment-placement.vectors.json

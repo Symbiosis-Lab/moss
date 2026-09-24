@@ -471,7 +471,7 @@ async fn a_fatal_failure_still_deletes_the_session() {
 /// request off the socket. reqwest checks its overall timeout before it checks
 /// the response, so the request then failed without the mock ever seeing it,
 /// `sizes` stayed empty, and the first assertion below read `None`. That is the
-/// macOS-only failure of PR #1000; measured here, 123 of 200 loopback requests
+/// macOS-only failure seen in CI; measured here, 123 of 200 loopback requests
 /// issued through reqwest under `start_paused` timed out spuriously.
 ///
 /// So: **do not put `start_paused` back on this test, and do not widen the
@@ -581,11 +581,11 @@ async fn a_slow_link_walks_the_escalation_ladder_down() {
     assert!(result.is_err(), "nothing ever succeeded; the upload must fail");
     let sizes = sizes.lock().unwrap().clone();
     // "No request arrived" and "escalation didn't happen" are different
-    // failures; conflating them cost an hour of diagnosis on #992.
+    // failures; conflating them once cost an hour of diagnosis.
     assert!(
         !sizes.is_empty(),
         "the mock server recorded no request at all — the upload failed before \
-         the first chunk went out (#992's flake shape), not per-chunk as this \
+         the first chunk went out, not per-chunk as this \
          test intends"
     );
     assert_eq!(sizes.first(), Some(&size), "the first request is the planned size");

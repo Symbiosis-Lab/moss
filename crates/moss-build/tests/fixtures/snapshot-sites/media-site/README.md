@@ -19,13 +19,4 @@ See `basic-site/README.md` for the regeneration procedure.
 
 ## Note on `expected/llms.txt`
 
-`llms.txt` is built from `ParsedDocument::content`, which is the
-post-frontmatter body straight from `gray_matter`'s splitter (see
-`src-tauri/src/build/markdown/pipeline.rs:803`). Phase 3 PR2 retired the
-Stage 1 wikilink rewriter (commit `ee102b7d1`), so image-form wikilinks
-like `![[logo.png]]` and plain `[[images]]` now reach this output
-unchanged — Stage 2's wikilink dispatcher operates inside pulldown-cmark
-and only touches HTML emission. If you're regenerating snapshots after a
-Stage 1 / `markdown_refs` / `markdown_links` change, expect raw wikilinks
-here, not the pre-Phase-3 `![](logo.png)` / `[text](moss-resolved:…)`
-shapes.
+`llms.txt` is built from `ParsedDocument::content`, which is the post-frontmatter body straight from `gray_matter`'s splitter. Phase 3 PR2 retired the Stage 1 wikilink rewriter (commit `ee102b7d1`), so image-form wikilinks like `![[logo.png]]` and plain `[[images]]` now reach this output unchanged — Stage 2's wikilink dispatcher operates inside pulldown-cmark and only touches HTML emission. If you're regenerating snapshots after a Stage 1 / `markdown_refs` / `markdown_links` change, expect raw wikilinks here, not the pre-Phase-3 `![](logo.png)` / `[text](moss-resolved:…)` shapes.

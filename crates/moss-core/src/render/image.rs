@@ -1,8 +1,7 @@
 //! Image HTML synthesizer — the single entry point for emitting `<img>` /
 //! `<picture>` markup in moss output.
 //!
-//! See [`docs/reference/structural-html-emission.md`](../../../../../docs/reference/structural-html-emission.md)
-//! for the architectural principle: structural HTML decisions are made at the
+//! The architectural principle: structural HTML decisions are made at the
 //! typed-data layer (pulldown-cmark events, shortcode AST, typed component
 //! props), with all three call sites converging on the function in this
 //! module. Regex post-passes are reserved for non-markdown-origin attribute
@@ -50,8 +49,7 @@
 //! caption-pattern branches collapse into a single `Event::Html(
 //! synthesize_image_html(..., MarkdownStandalone { caption }))` emission.
 //! The `<figcaption>` becomes the synthesizer's responsibility, NOT
-//! `transform_events`. Captures the spec at
-//! `docs/reference/structural-html-emission.md#output-shape`.
+//! `transform_events`.
 //!
 //! # Carve-outs: bare `<img>` emitters not routed through the synthesizer
 //!
@@ -617,7 +615,7 @@ fn synthesize_inner(
     //     surfaces a warning SVG (preview/server/placeholder.rs).
     //   • Publish: the seal/persist task AWAITS the background drain barrier
     //     before sealing, so the sealed/deployed generation always contains the
-    //     encoded .webp on disk (ADR-013 by construction).
+    //     encoded .webp on disk (by construction).
     // So the URL is always live in both modes.
     //
     // We must never emit a <source> that might 404 because a chosen <source>
@@ -629,8 +627,7 @@ fn synthesize_inner(
     // For non-raster sources (svg, favicons via Favicon context), no variant
     // exists; emit the bare <img>.
     //
-    // Pattern: explicit promise model. See
-    // docs/archive/2026-05-20-image-variant-honest-mirror.md (Layer 3).
+    // Pattern: explicit promise model.
     if is_raster_original(src) {
         // to_webp(src) inherits the dir_overrides + relative-prefix already
         // applied to `src` by the upstream renderer. Swapping the extension
@@ -706,7 +703,7 @@ fn is_webp_source(src: &str) -> bool {
 /// Non-body contexts are fixed. A body image takes, on a vertical page, its
 /// grid cell's scope (a definite box) else the column height × its aspect —
 /// `data-width` is inert there; on a horizontal page, its `data-width` escape
-/// band (ADR-021 Corollary 2) → its grid cell's scope → the content column.
+/// band → its grid cell's scope → the content column.
 fn sizes_for<'s>(
     src: &str,
     assets: &AssetSnapshot,
@@ -967,10 +964,9 @@ pub(crate) fn render_img_tag(
 
     // `data-placeholder-src` removed 2026-05-20: the iframe-bridge handler
     // now matches by URL substring against `src` / `srcset` (see
-    // frontend/bridge/iframe-bridge.ts, moss-asset-ready branch). The
+    // the desktop app's iframe bridge, moss-asset-ready branch). The
     // AssetRegistry's promise model + the preview server's URL-keyed lookup
-    // make the attribute redundant. See
-    // docs/archive/2026-05-20-image-variant-honest-mirror.md (Layer 3).
+    // make the attribute redundant.
     //
     // Inline LQIP via `background-image: url(data:image/jpeg;base64,…)` is
     // kept — legitimate production technique (cf. Vercel `blurDataURL`,

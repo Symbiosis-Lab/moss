@@ -22,8 +22,7 @@
 //! context. That made the children-listing filter impossible to get right.
 //! A third `Asset` variant (synthetic per-image pages) existed until the
 //! image-as-page feature was removed in 2026-07; nothing produced it, so it
-//! was dropped rather than left as an unreachable state. See
-//! `moss/docs/reference/page-kinds.md`.
+//! was dropped rather than left as an unreachable state.
 
 use serde::{Deserialize, Serialize};
 

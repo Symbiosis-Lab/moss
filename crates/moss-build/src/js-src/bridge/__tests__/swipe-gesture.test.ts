@@ -6,8 +6,6 @@
  * WebKit exposes no wheel phase to JS, so gestures are segmented by quiet
  * gaps between events; momentum events after the fingers lift arrive within
  * the gap and must be swallowed.
- *
- * Design: docs/archive/2026-07-10-preview-swipe-navigation-design.md
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {

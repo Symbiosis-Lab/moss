@@ -49,7 +49,7 @@ fn mask_preserves_byte_length_and_newlines() {
 
 #[test]
 fn mask_is_utf8_safe_across_cjk_prose() {
-    // The #903 bug-1 shape: byte scanning that lands inside a multi-byte
+    // The earlier regression's shape: byte scanning that lands inside a multi-byte
     // char. Every ASCII byte we match is a full char, so this must not panic
     // and must not corrupt the CJK text.
     let md = "潮汐《紀念》— see `代碼` and <!-- 註解 --> 然後結束\n";
@@ -161,7 +161,7 @@ fn single_tick_does_not_close_a_double_tick_span() {
     assert_inert(md, "a ` b", true);
 }
 
-// ── HTML comments (moss#903 bug 2) ────────────────────────────────────
+// ── HTML comments ────────────────────────────────────
 
 #[test]
 fn single_line_html_comment_is_inert() {
@@ -170,7 +170,7 @@ fn single_line_html_comment_is_inert() {
 
 #[test]
 fn multi_line_html_comment_is_inert() {
-    // Verbatim shape from the #903 report.
+    // Verbatim shape from the original regression report.
     let md = "intro\n\n<!-- TODO owner assets:\n     :::gallery 8\n     some-image.jpg\n     ::: -->\n\nreal content\n";
     assert_inert(md, ":::gallery 8", true);
     let flags = inert_lines(md);

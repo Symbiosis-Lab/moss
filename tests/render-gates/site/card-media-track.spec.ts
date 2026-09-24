@@ -12,7 +12,6 @@
 // sized by the real covers in that row and collapses to zero when there are
 // none. Both paths ship, so both are proved here, in both engines.
 //
-// Design: docs/archive/2026-09-07-card-media-track-subgrid.md
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -166,7 +165,7 @@ test.describe('subgrid path', () => {
     }
   });
 
-  // docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §5: measured
+  // Measured
   // on a real site at 1280px, a 4:3 cover box 157px tall left the content
   // band starting ~40px below it — bare page colour between picture and
   // band. The media track is sized by the cover (proved above), so the gap

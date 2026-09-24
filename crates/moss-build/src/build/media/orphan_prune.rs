@@ -1,10 +1,10 @@
-//! Ship-time pruning of unreferenced `.webp` variants (moss#976 B2).
+//! Ship-time pruning of unreferenced `.webp` variants.
 //!
 //! `scan.rs` walks and encodes every image file under the site folder — there
-//! is no reference-graph filter anywhere in the encode path (moss#976
-//! measured 534 orphaned `.webp` files / 31.1 MB per generation on a real
-//! site: vault images under `assets/` that no markdown, template, feed, or
-//! plugin output ever links to).
+//! is no reference-graph filter anywhere in the encode path. Measurement on a
+//! real site found 534 orphaned `.webp` files / 31.1 MB per generation:
+//! vault images under `assets/` that no markdown, template, feed, or
+//! plugin output ever links to.
 //!
 //! **Scope: `.webp` only, deliberately not the raster (`.png`/`.jpg`)
 //! fallback tier.** The raster fallback is referenced a third way that never
@@ -16,7 +16,7 @@
 //! out-of-band consumer — the WebP `<source>` only ever exists inside
 //! rendered `<picture>` markup that IS in `stage_dir` — so pruning them is
 //! safe under invariant 6 without also solving the email case. Pruning the
-//! raster tier is moss#976 follow-up work, gated on either scanning
+//! raster tier is follow-up work, gated on either scanning
 //! newsletter-eligible content or accepting that risk explicitly.
 //!
 //! ## How "referenced" is decided
@@ -39,10 +39,10 @@
 //! delimiters (whitespace, quotes, `<>()`, and `:` to block a URL scheme),
 //! not an enumerated allowlist of "safe" bytes. An enumerated allowlist is
 //! only ever as complete as the encoder it was copied from — moss shipped
-//! exactly that failure once (docs/archive/2026-08-06-orphan-prune-false-negative-and-parse-cache-gate.md
-//! Bug A: one un-encoded asset-URL emitter produced raw non-ASCII bytes the
-//! old ASCII-only class couldn't span, so the match backtracked to a
-//! truncated tail and a live reference read as an orphan). The negated
+//! exactly that failure once: one un-encoded asset-URL emitter produced raw
+//! non-ASCII bytes the old ASCII-only class couldn't span, so the match
+//! backtracked to a truncated tail and a live reference read as an orphan.
+//! The negated
 //! class survives *any* future emitter that ships raw bytes — CJK,
 //! Cyrillic, Arabic, Devanagari, combining marks, emoji — because it does
 //! not need to enumerate them in advance. See the inline comment on the
@@ -88,10 +88,11 @@ const SCAN_EXTENSIONS: &[&str] = &["html", "xml", "json", "js", "txt", "css", "s
 /// the other way: an unreadable page (a cloud eviction, a mid-flight write, a
 /// permission fault) was skipped silently, which SHRINKS `tails`, and a smaller
 /// reference set authorizes MORE deletion. One unreadable page could therefore
-/// permit deleting every variant only that page referenced — and since moss#1085
-/// the deletion is persisted as a cross-build verdict, so recovery takes several
-/// builds. That is the mechanism behind moss#976 (525 files deleted, 207 images
-/// 404-ing for real readers). Pruning saves bytes; deleting wrongly costs the
+/// permit deleting every variant only that page referenced — and the
+/// deletion is persisted as a cross-build verdict, so recovery takes several
+/// builds. That is the mechanism behind an earlier incident on a real site
+/// (525 files deleted, 207 images 404-ing for real readers). Pruning saves
+/// bytes; deleting wrongly costs the
 /// site, so the scan reports its own blindness and the caller fails closed.
 pub struct ReferenceScan {
     pub tails: HashSet<String>,
@@ -114,9 +115,8 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
     // delimiters, not an enumerated allowlist — every byte that isn't a
     // structural delimiter is a legal filename byte, ASCII or not. This is
     // the defence-in-depth fix for moss's own contract violation that
-    // shipped one un-encoded asset-URL emitter (see
-    // docs/archive/2026-08-06-orphan-prune-false-negative-and-parse-cache-gate.md
-    // Bug A): the pruner is correct against a fully-percent-encoded URL, but
+    // shipped one un-encoded asset-URL emitter: the pruner is correct
+    // against a fully-percent-encoded URL, but
     // an enumerated allowlist is only ever as complete as the encoder it was
     // copied from, and a *future* un-encoded emitter — raw CJK, Cyrillic,
     // Arabic, Devanagari, combining marks, emoji, whatever a plugin author
@@ -265,7 +265,7 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
             // to their own file — `gallery/style.css` with
             // `url(assets/x.webp)` means `gallery/assets/x.webp`, and by
             // suffixes alone it reads as `assets/x.webp`, matches no key, and
-            // the live reference is pruned. Before moss#1085 that was a
+            // the live reference is pruned. That used to be a
             // deletion the next build undid; now the verdict is persisted and
             // `suppressed_variants` reads it back through this same set, so
             // the variant would stay missing while a stylesheet still asks
@@ -296,7 +296,7 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
 /// encoder in `run_image_conversion`, and the fingerprint-skip self-heal in
 /// `dispatch_image_conversions`.
 ///
-/// Before moss#1085 both derived it themselves, from `scan.rs`'s walk of every
+/// Before this fix both derived it themselves, from `scan.rs`'s walk of every
 /// image file under the vault, so on any site holding an unreferenced image
 /// the producers and the prune disagreed by construction and each build
 /// re-created exactly what the previous build had deleted. Measured on

@@ -105,7 +105,7 @@ type ExtKind = 'Image' | 'Iframe' | 'Pdf' | 'Video' | 'Audio' | 'Model' | 'Trans
  * `link_completions::LinkSyntax` (serde kebab-case); declared locally for the
  * same reason `ExtKind` is. The backend reads it, with the typed prefix, to
  * decide the FORM every row inserts — the author links to a thing, moss
- * writes the address (docs/archive/2026-09-05-link-target-completion-audit-and-design.md).
+ * writes the address.
  */
 type LinkSyntax = 'wikilink' | 'embed' | 'inline' | 'asset-path';
 /** One completion returned by the backend (mirrors Rust `WikilinkCompletion`). */
@@ -392,7 +392,7 @@ declare function findEnclosingBlockName(doc: DocLines, lineNumber: number): stri
  * hosts without a `@lezer/markdown` seam need (Obsidian's markdown language
  * is closed to grammar extensions; see
  * packages/obsidian-moss/src/syntax/shortcode-parser.ts, the stub this
- * replaces, and #1020).
+ * replaces).
  *
  * The line predicates are REUSED from ./shortcode.ts, not copied: an open
  * fence is exactly `SHORTCODE_OPEN_RE` + `isOpenMatch`, a close fence is

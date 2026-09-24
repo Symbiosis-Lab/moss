@@ -39,7 +39,7 @@ pub enum Shortcode {
     /// Optional `{.classname}` extra classes attach to the wrapping div.
     ///
     /// URLs flow through [`Url::Unresolved`] at parse time;
-    /// [`crate::ast::visit::visit_urls_mut`] (or src-tauri's
+    /// [`crate::ast::visit::visit_urls_mut`] (or the desktop app's
     /// `apply_typed_shortcodes`) classifies them into [`Url::Resolved`]
     /// before rendering. The resolver-bypass class is closed by
     /// construction: `RenderHooks::render_shortcode` reads `Url::Resolved`,
@@ -65,7 +65,7 @@ pub enum Shortcode {
     /// `:::grid {cols=N}` or `:::grid N` — flexible multi-cell layout.
     ///
     /// Cells are split on `+++` (new grammar) or `---` (legacy moss-releases
-    /// backward-compat — Step 3 of #613 rewrites these to `+++`). Each cell
+    /// backward-compat — a migration step rewrites these to `+++`). Each cell
     /// stores its raw markdown source; the renderer is responsible for any
     /// nested-shortcode extraction and markdown processing per cell.
     Grid(GridShortcode),
@@ -248,7 +248,7 @@ pub struct HeroShortcode {
     /// consecutive leading body media line after the first. Non-empty →
     /// the hero renders an ambient crossfade (one slide visible at a
     /// time, no controls — no slide may carry information the others
-    /// don't; design: docs/archive/2026-07-27-import-conventions-engine-design.md).
+    /// don't).
     /// Empty for `image=`-attribute and directive-line heroes.
     pub extra_images: Vec<Url>,
     /// Pipe-suffix media attributes verbatim (e.g. "cover top",
@@ -325,7 +325,7 @@ pub struct ApplyShortcode {
 ///
 /// Parameters parsed at shortcode-extract time; the query runs at render
 /// time against the full post set. Renderer lives in
-/// `src-tauri/src/build/markdown/recent.rs`.
+/// the desktop app's `recent.rs`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecentShortcode {
     /// `since="YYYY-MM-DD"` — posts on or after this date. Stored as the
@@ -394,8 +394,8 @@ impl ShortcodeKind {
     /// application form, meaningful only on sites configured for it, so it
     /// parses and renders but is never suggested. The decision lives here,
     /// in Rust, once — the generated catalog
-    /// (`frontend/app/editor/shortcodes.generated.ts`) carries it as the
-    /// `authorable` flag (design: docs/archive/2026-08-11-cm6-extraction-design.md §4, §7.1).
+    /// (the frontend editor's `shortcodes.generated.ts`) carries it as the
+    /// `authorable` flag.
     pub fn authorable(self) -> bool {
         !matches!(self, ShortcodeKind::Apply)
     }

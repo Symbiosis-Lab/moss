@@ -1,4 +1,4 @@
-//! Loop A parse cache (moss#922 Stage 7).
+//! Loop A parse cache.
 //!
 //! Stage 0 measured Loop A — read + Obsidian-resolve + parse, `render/blocking.rs` —
 //! at ~70-74% of render wall time (~16-18s of ~22s on the 216-page harbor/潮汐
@@ -25,7 +25,7 @@
 //! facts moved it in-process instead:
 //!
 //! 1. `ParsedDocument` is not round-trippable through serde. `body_plan`
-//!    (ADR-034 — what the render phase actually renders) and `outgoing_links`
+//!    (what the render phase actually renders) and `outgoing_links`
 //!    are `#[serde(skip)]`, and `BodyPlan`/`OutgoingLink` do not implement
 //!    `Serialize` at all. A JSON cache would silently replay documents with no
 //!    body plan, i.e. HTML missing every grid/cover enhancement — the exact
@@ -550,7 +550,7 @@ pub fn site_scalars<'a>(
     (site_lang, site_id, seta_url, site, emit_source_lines, has_content_folders)
 }
 
-/// Fingerprint of Loop A's non-content inputs (moss#922 Stage 7).
+/// Fingerprint of Loop A's non-content inputs.
 ///
 /// Every one of these is a whole-corpus pre-scan result threaded into
 /// `process_markdown_file`, so a change to any of them can alter a page's parse
@@ -567,7 +567,7 @@ pub fn site_scalars<'a>(
 /// (`event_level_image_lookup`, the asset snapshot) — see the module docs for
 /// why those are handled by the whole-build markdown-only gate instead.
 ///
-/// SEE ALSO — moss#922 has TWO whole-build bypasses, not one, and they are
+/// SEE ALSO — there are TWO whole-build bypasses, not one, and they are
 /// computed by entirely separate code paths. This one is PRE-parse and input-
 /// SHAPE-based; its post-parse, CONTENT-based sibling is the
 /// `global_invalidator_changed` check in `render/incremental/verdict.rs`,

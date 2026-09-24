@@ -8,8 +8,7 @@
 //! write `save_domain_selection` (desktop) already makes, dns-observation reset
 //! included, rather than a second hand-rolled one.
 //!
-//! [ADR-059](../../../../../docs/decisions/ADR-059-config-reader-and-migration-runner-after-the-crate-split.md)
-//! keeps the app the owner of this file: its settings modals write it, the CLI
+//! A design decision keeps the app the owner of this file: its settings modals write it, the CLI
 //! reads it, advanced users hand-edit it. The 2026-09-07 amendment moved the
 //! *primitive* here — a load that substitutes an empty table only for a file
 //! proven absent, a render that edits the original bytes instead of

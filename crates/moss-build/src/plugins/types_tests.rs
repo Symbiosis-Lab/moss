@@ -727,7 +727,7 @@ fn contributes_jobs_round_trips_as_a_bare_map() {
 
 // ── PluginHook / TriggerContext / Capability::Import ──────────────────
 //
-// Foundational types for ADR-015 (PanelTask). These tests pin the
+// Foundational types for PanelTask. These tests pin the
 // serde wire format (JSON-side spelling) so the closed enums stay
 // stable across the router (T1), the matters manifest, and bindings.ts.
 
@@ -823,7 +823,7 @@ fn project_info_folder_name_survives_a_dot_path_root() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
-// --- ADR-055: contributions fold forward into capabilities ---
+// --- contributions fold forward into capabilities ---
 
 #[test]
 fn a_contributed_deploy_target_is_a_deploy_capability() {
@@ -897,7 +897,7 @@ fn a_legacy_capability_list_still_works() {
 
     assert!(
         manifest.has_capability(&Capability::Deploy),
-        "every installed plugin predates ADR-055; none may break on the \
+        "every installed plugin predates this capability fold; none may break on the \
          release that ships it"
     );
 }

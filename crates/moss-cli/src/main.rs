@@ -1,16 +1,16 @@
-//! The open moss CLI (ADR-050, #1019): `moss build` with no window system in
+//! The open moss CLI: `moss build` with no window system in
 //! the dependency graph. `preview` and `edit` hand off to moss desktop rather
-//! than running a window here (E2', `desktop.rs`).
+//! than running a window here (`desktop.rs`).
 //!
 //! `build` drives the same headless driver the app binary's CLI interception
-//! does (`moss_build::ops::run_headless_build` — slice C1 of the ADR-067
-//! relocation folded the two mirrored bodies into it), so a `moss-cli build`
+//! does (`moss_build::ops::run_headless_build` — the server relocation
+//! folded the two mirrored bodies into it), so a `moss-cli build`
 //! and an app-binary `moss build` are byte-identical (the build-parity
 //! harness runs this binary as one leg). `--serve`/`--watch` run the crossed
 //! preview server and watch driver (`moss_build::ops::{serve,watch}`), and
-//! plugin hooks run through the crossed manager (ADR-076): plugins follow
+//! plugin hooks run through the crossed manager: plugins follow
 //! `--no-plugins`/`--allow-plugins`/`--wait-plugins` exactly as they do in
-//! the app binary, because the one headless driver decides (ADR-077).
+//! the app binary, because the one headless driver decides.
 
 use std::sync::Arc;
 

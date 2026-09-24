@@ -151,9 +151,9 @@ fn a_vault_named_dot_mossy_has_no_moss_staging() {
 }
 
 /// `disposition` is a vault-path predicate, so it is held to the same
-/// relocation invariant as the watcher predicates it delegates to: a client's
+/// relocation invariant as the watcher predicates it delegates to: a
 /// Google shared-drive vault used to classify EVERY dataless read as `Report`,
-/// so the user saw a raw OS error where the waiting screen belonged (#1067).
+/// so the user saw a raw OS error where the waiting screen belonged.
 #[test]
 fn a_relocated_vault_gets_the_same_disposition() {
     use crate::build::watch::scope::{mount_join, VAULT_MOUNTS};

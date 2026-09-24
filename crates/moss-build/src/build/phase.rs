@@ -38,7 +38,7 @@
 //!
 //! ## Design choices
 //!
-//! - Logged at DEBUG (demoted from INFO 2026-09-15, docs/archive/2026-09-15-open-feedback-design.md):
+//! - Logged at DEBUG (demoted from INFO 2026-09-15):
 //!   a real upload showed these start/completed pairs as noise once a build ran
 //!   many times in a session, and the information they carry — which phase,
 //!   how long — now survives in the one `build.summary` INFO line `run_pipeline`
@@ -46,7 +46,7 @@
 //! - Logged on `Drop` so an early `?` return still records the partial elapsed.
 //! - `target: "phase"` so users can filter (`MOSS_LOG_LEVEL=debug` shows
 //!   these; future: per-target level filter).
-//! - Per-phase budgets (#579): a phase that overruns its budget additionally
+//! - Per-phase budgets: a phase that overruns its budget additionally
 //!   logs WARN at 1× and ERROR at 2× the budget. Observability ONLY — no
 //!   panic, no changed return value, and explicitly NO CI wall-clock gate
 //!   (shared-runner wall-clock tests are flake). Budget overrun lines stay at
@@ -84,14 +84,14 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Per-phase build-time budgets in milliseconds (#579).
+/// Per-phase build-time budgets in milliseconds.
 ///
 /// A phase elapsed >= budget logs WARN; >= 2x budget logs ERROR. Phases not
 /// listed here are unbudgeted (no threshold logging) — add a row when adding
 /// a new `PhaseTrace::start(...)` call site.
 ///
-/// These are INITIAL values to tune as real-world timing data accrues
-/// (#579). Seeds: the observed timings in this module's doc examples
+/// These are INITIAL values to tune as real-world timing data accrues.
+/// Seeds: the observed timings in this module's doc examples
 /// (scan ~312ms, process_hooks ~13.4s, native_process_spawn ~1ms) plus
 /// generous headroom for network-bound phases (link-meta prewarm, plugin
 /// process-hook syncs such as the Matters import legitimately run tens of
@@ -118,11 +118,11 @@ const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     ("slot_resolution", 10_000),
     // Loop A: parse + resolve every markdown file (blocking.rs). Dominant
     // render-phase cost on image/link-heavy vaults — measured ~16-18s on a
-    // 216-page reference vault (moss#922 Stage 0); budget set loosely above
+    // 216-page reference vault; budget set loosely above
     // that until real-world timing data accrues across vault sizes.
     ("render_markdown", 60_000),
     // Loop B: HTML emission for every page (blocking.rs). Measured ~5-7s on
-    // the same 216-page vault (moss#922 Stage 0).
+    // the same 216-page vault.
     ("render_html_pages", 20_000),
     // Stage 5a shadow-mode: facade hashing + DepGraph build + cache diff over
     // all documents. In-memory hashing/diffing only (no I/O beyond a small
@@ -151,7 +151,7 @@ fn budget_ms(phase: &str) -> Option<u64> {
         .map(|&(_, ms)| ms)
 }
 
-/// Classify an elapsed duration against the phase's budget (#579).
+/// Classify an elapsed duration against the phase's budget.
 ///
 /// Pure function so the thresholds are unit-testable without log capture.
 /// WARN at budget, ERROR at 2x budget; unbudgeted phases are always `Ok`.
@@ -345,20 +345,20 @@ impl Drop for PhaseTrace {
         let elapsed = self.started.elapsed();
         log::debug!(target: "phase", "{} completed in {:?}", self.name, elapsed);
         record_phase(self.name, elapsed);
-        // Budget overrun logging (#579). Observability only: never panics,
+        // Budget overrun logging. Observability only: never panics,
         // never changes control flow, and there is no CI wall-clock gate.
         match budget_class(self.name, elapsed) {
             BudgetClass::Ok => {}
             BudgetClass::Warn => log::warn!(
                 target: "phase",
-                "{} exceeded its {}ms budget ({:?}) — initial budget per #579, tune as timing data accrues",
+                "{} exceeded its {}ms budget ({:?}) — initial budget, tune as timing data accrues",
                 self.name,
                 budget_ms(self.name).unwrap_or_default(),
                 elapsed
             ),
             BudgetClass::Error => log::error!(
                 target: "phase",
-                "{} exceeded 2x its {}ms budget ({:?}) — initial budget per #579, tune as timing data accrues",
+                "{} exceeded 2x its {}ms budget ({:?}) — initial budget, tune as timing data accrues",
                 self.name,
                 budget_ms(self.name).unwrap_or_default(),
                 elapsed

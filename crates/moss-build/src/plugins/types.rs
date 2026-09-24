@@ -102,7 +102,7 @@ pub struct PluginManifest {
     /// Optional schema contributions (frontmatter fields, etc.)
     /// Follows the VS Code `contributes.configuration` pattern: plugins declare
     /// field definitions in their manifest; moss merges them into the active schema
-    /// at runtime. See docs/reference/plugin-schema-contributions.md.
+    /// at runtime.
     #[serde(default)]
     pub contributes: Option<PluginContributes>,
 
@@ -128,7 +128,7 @@ pub struct PluginManifest {
 
     /// Not ready to be offered by default: the catalog omits this channel
     /// unless preview features are on. Travels to the registry index as the
-    /// entry's `preview` key — `registry::channel_is_listed`, ADR-053.
+    /// entry's `preview` key — `registry::channel_is_listed`.
     #[serde(default)]
     pub preview: bool,
 
@@ -138,7 +138,7 @@ pub struct PluginManifest {
     /// alias granting everything, with a warning per run. Enforced fail-closed
     /// at the QuickJS seam (`require_binary_grant`, engine/host_fns/grants.rs);
     /// `moss-plugins`' `validate.yml` checks the same field. The keystore is
-    /// NOT gated — a caller signs only with its own scoped key (ADR-032).
+    /// NOT gated — a caller signs only with its own scoped key.
     #[serde(default)]
     pub requires: Option<Vec<String>>,
 }
@@ -183,10 +183,10 @@ impl PluginManifest {
 /// Each capability maps directly to a hook function that moss will call.
 /// Plugins declare which capabilities they implement in their manifest.
 ///
-/// `generate` and `enhance` were removed 2026-08-29 (ADR-055): both were
+/// `generate` and `enhance` were removed 2026-08-29: both were
 /// declared here for three months and implemented by nothing — no bundled,
-/// WIP or archived plugin ever carried either. They remain designed, in the
-/// docs the ADR cites; an implementer re-adds the variant with its first
+/// WIP or archived plugin ever carried either. They remain designed;
+/// an implementer re-adds the variant with its first
 /// real caller.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
@@ -208,7 +208,7 @@ pub enum Capability {
     /// Hook function: `import(ctx)`
     ///
     /// Added 2026-05-28 alongside `PluginHook::Import` to support the
-    /// onboarding flow's "Plugin" card (per ADR-015 and the onboarding spec).
+    /// onboarding flow's "Plugin" card.
     Import,
 
     /// Plugin requires a user login to operate and exposes a standalone
@@ -245,7 +245,7 @@ impl Capability {
 
 /// Plugin hook — the set of operations a plugin can perform.
 ///
-/// Strict subset of `TaskKind` (introduced in T1 per ADR-015): exactly the
+/// Strict subset of `TaskKind` (introduced in T1): exactly the
 /// kinds plugins can produce. Internal-only kinds (Save, Validate, Lint,
 /// Format, Resolve, Build, Rebuild, AssetTransform) live in `TaskKind` and
 /// are NOT in `PluginHook` because plugins cannot perform those operations.
@@ -258,8 +258,6 @@ impl Capability {
 ///
 /// **Closed enum.** Adding a variant is a compile-time event that requires
 /// updating every exhaustive match (notably the router). No wildcard arms.
-///
-/// See [ADR-015](../../../../../docs/decisions/ADR-015-panel-task-primitive.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum PluginHook {
@@ -296,8 +294,7 @@ impl PluginHook {
 /// decides UI surface (`TaskScope`) and `TaskTone`.
 ///
 /// **Closed enum.** Adding a variant is a compile-time event — every router
-/// row must be updated explicitly. See [ADR-015 § Why the router is
-/// exhaustive](../../../../../docs/decisions/ADR-015-panel-task-primitive.md).
+/// row must be updated explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum TriggerContext {
@@ -354,7 +351,7 @@ pub struct ProcessContext {
     #[serde(default)]
     pub config: HashMap<String, serde_json::Value>,
 
-    /// Why moss is invoking this hook. moss owns this context (ADR-015):
+    /// Why moss is invoking this hook. moss owns this context:
     /// the plugin reads it to declare task intent via `startTask`, it does
     /// NOT guess it. Onboarding card → `OnboardingFlow` (drives the ambient
     /// hairline); every build/preview rebuild → `Background` (quiet). Defaults
@@ -374,7 +371,7 @@ impl Default for TriggerContext {
 impl ProcessContext {
     /// Construct a `ProcessContext`, deriving `moss_dir` from `project_path`.
     ///
-    /// The `trigger` is the load-bearing input (ADR-015): it decides whether the
+    /// The `trigger` is the load-bearing input: it decides whether the
     /// plugin's tasks reach the ambient hairline (`OnboardingFlow`) or the quiet
     /// Workspace surface (`Background`). Prefer the named constructors
     /// [`ProcessContext::for_onboarding`] / [`ProcessContext::for_build`] at call
@@ -539,7 +536,7 @@ pub struct SyndicateContext {
     #[serde(default)]
     pub config: HashMap<String, serde_json::Value>,
 
-    /// Why moss is invoking this hook (ADR-015). The one production caller,
+    /// Why moss is invoking this hook. The one production caller,
     /// `syndicate_to_platforms`, runs only from the user's Publish click —
     /// always `ManualOne`, never the quiet `Background` default.
     #[serde(default)]

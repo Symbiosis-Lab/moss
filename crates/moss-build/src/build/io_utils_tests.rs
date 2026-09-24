@@ -1,4 +1,4 @@
-//! Tests for the output-write primitive (ADR-043).
+//! Tests for the output-write primitive.
 //!
 //! The property that actually matters — "a write over a cloud-evicted
 //! destination succeeds" — cannot be tested on any CI moss has: it needs a real
@@ -28,9 +28,9 @@ fn overwrites_an_existing_file() {
     assert_eq!(fs::read(&path).unwrap(), b"new");
 }
 
-/// The whole point of ADR-043: the destination is replaced, never opened for
+/// The whole point of this write primitive: the destination is replaced, never opened for
 /// truncation. A fresh inode is the observable consequence — and it is also
-/// what makes the CAS-hardlink hazard (CLAUDE.md `fs::hard_link` rule) unable
+/// what makes the CAS-hardlink hazard unable
 /// to arise on these paths.
 #[test]
 #[cfg(unix)] // .ino() — Windows has no stable file-identity API; the temp+rename mechanism is shared code
@@ -161,7 +161,7 @@ fn an_unreadable_destination_is_treated_as_different() {
     assert_eq!(fs::read(&path).unwrap(), b"fresh");
 }
 
-// ----- create_output_dir_all: ADR-043 for directories -----
+// ----- create_output_dir_all: the same rule, for directories -----
 //
 // The branch that matters — `EDEADLK` from a provider refusing to materialize a
 // directory entry — needs a real macOS File Provider vault and cannot run on any
@@ -196,7 +196,7 @@ fn an_existing_directory_is_left_alone() {
 }
 
 /// A real error that is NOT a cloud refusal must still fail. Removing-and-
-/// remaking is licensed by ADR-043 for regenerable output the provider will not
+/// remaking is licensed for regenerable output the provider will not
 /// hand back; it is not a general "retry harder" for permission errors, which
 /// would delete a user's directory to work around a misconfiguration.
 #[test]

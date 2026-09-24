@@ -49,7 +49,7 @@
 //!     ├── current -> generations/<gen-id>/  Symlink to active generation
 //!     ├── staging/          In-progress build (atomic swap target)
 //!     ├── index/            Search-bundle holding area, OUTSIDE the swept tree
-//!     │   ├── receipt.json  What the lane last published (ADR-045)
+//!     │   ├── receipt.json  What the lane last published
 //!     │   └── <page-set-fp>/  One bundle per indexed page set
 //!     ├── hashes.json       File hash manifest for change detection
 //!     ├── article-map.json  Content index (all pages with metadata)
@@ -81,7 +81,7 @@
 //! either direction. So the tree is split by what "download and wait" can
 //! mean. `cache/` — the content-addressed store, `objects/` and
 //! `transforms/` — is the same bytes on every machine and every blob carries
-//! its checksum, so it syncs with the folder and is waited for (ADR-043's
+//! its checksum, so it syncs with the folder and is waited for (the
 //! shared-cache amendment; `ObjectStore::ready_blob`). Everything else lives
 //! under `build.nosync/` — the suffix iCloud honours unconditionally — is
 //! marked for File Provider as well, and is never relied on to be excluded:
@@ -233,8 +233,8 @@ impl MossPaths {
     /// `<project>/.moss`. Feeding it to `domain::config::get_*`, which all join
     /// `.moss/config.toml` themselves, silently reads `<project>/.moss/.moss/`
     /// — a path that never exists, so every knob quietly took its default. That
-    /// shipped twice (moss#976 Part A's `keep_generations`, and the generation
-    /// GC on the interactive path, which ran against an empty directory).
+    /// shipped twice: once in `keep_generations`, and again in the generation
+    /// GC on the interactive path, which ran against an empty directory.
     /// Reach for this whenever the callee expects a *folder path*.
     pub fn project_root(&self) -> &Path {
         // `new()` always appends `.moss`, so a parent always exists.
@@ -318,7 +318,7 @@ impl MossPaths {
         self.root.join("data").join("social")
     }
 
-    /// `.moss/deploy/deployed-article-map.json` — the pre-moss#1079 record of
+    /// `.moss/deploy/deployed-article-map.json` — the old record of
     /// what went live: a byte copy of the whole article map, 4.83 MB on the
     /// vault that reported the incident to carry the ~7 KB its readers used.
     /// Nothing writes it any more — the publish record carries the note IDs
@@ -419,7 +419,7 @@ impl MossPaths {
     }
 
     /// `.moss/build.nosync/cache/dep-cache.json` — per-page facade fingerprints from
-    /// the previous build (moss#922 Stage 4), keyed by source path.
+    /// the previous build, keyed by source path.
     pub fn cache_dep_graph(&self) -> PathBuf {
         self.cache_dir().join("dep-cache.json")
     }
@@ -431,8 +431,8 @@ impl MossPaths {
         self.cache_dir().join("frontmatter-scan.json")
     }
 
-    /// `.moss/build.nosync/cache/folder-lang.json` — per-folder inferred language
-    /// (ADR-065), keyed by folder path, alongside the file-set fingerprint it
+    /// `.moss/build.nosync/cache/folder-lang.json` — per-folder inferred language,
+    /// keyed by folder path, alongside the file-set fingerprint it
     /// was inferred from. A folder whose file set is unchanged since the
     /// last build reuses its stored language rather than re-inferring from
     /// content — an edit to one file's body must never move the folder's
@@ -461,7 +461,7 @@ impl MossPaths {
         self.cache_dir().join("manifest-hash-memo.json")
     }
 
-    /// `.moss/build.nosync/index/` — holding area for the search bundle (ADR-045).
+    /// `.moss/build.nosync/index/` — holding area for the search bundle.
     ///
     /// Deliberately NOT under `staging/` or a generation: the search lane runs
     /// on its own schedule, so its output must survive `remove_stale_files`,
@@ -523,7 +523,7 @@ impl MossPaths {
     ///
     /// **Unordered.** Production seal tails must go through
     /// `build::lifecycle::promote`, which refuses a promotion from a build older
-    /// than the one already on `current` (moss#968 §5d).
+    /// than the one already on `current`.
     pub fn set_current_ptr(&self, gen_id: &str) -> std::io::Result<()> {
         let gen_dir = self.generation_dir(gen_id);
         let current = self.current_ptr();
@@ -569,7 +569,7 @@ impl MossPaths {
         }
         // The marker is the answer to "which generation is current" on every
         // platform; on unix `current` remains the served pointer. Under
-        // `.moss/build.nosync/`, so through io_utils, not a raw write (ADR-043).
+        // `.moss/build.nosync/`, so through io_utils, not a raw write.
         crate::build::io_utils::write_output(&self.current_generation_marker(), gen_id.as_bytes())?;
         Ok(())
     }
@@ -637,11 +637,10 @@ impl MossPaths {
     /// Deliberately `cfg(test)`: production never called it. The build creates
     /// what it needs where it needs it, and the owner of site-output writes is
     /// `build::io_utils` (atomic temp+rename). A per-build path-claim registry
-    /// (`StageWriter`, M6b) was proposed alongside it in ADR-052 but was never
+    /// (`StageWriter`, M6b) was proposed alongside it but was never
     /// built; the correctness gap it was later invoked for (a concurrent
     /// build racing the shared staging tree between seal and ship) shipped
-    /// instead as content-addressed manifest entries — see ADR-052's
-    /// 2026-09-17 update for what a registry would and would not still cover.
+    /// instead as content-addressed manifest entries.
     /// Wiring this up instead would install a second, weaker writer for a
     /// concern that already has a designated owner — and it failed the
     /// three-question gate outright at zero production callers.
@@ -651,9 +650,9 @@ impl MossPaths {
     /// should not pretend to be production API.
     ///
     /// Seven of those ten now live in the app crate, on the far side of the
-    /// ADR-057 move, and a plain `#[cfg(test)]` is invisible to them — it arms
+    /// crate split, and a plain `#[cfg(test)]` is invisible to them — it arms
     /// only while *this* crate's own tests compile. The `test-fixtures` feature
-    /// is what carries the gate across the crate line: `src-tauri` enables it
+    /// is what carries the gate across the crate line: the desktop app enables it
     /// from `[dev-dependencies]` only, so a production build still cannot see
     /// this method and the argument above is unchanged.
     #[cfg(any(test, feature = "test-fixtures"))]
@@ -688,7 +687,7 @@ impl MossPaths {
     }
 }
 
-// ─── The moss-written path registry (issue #960) ─────────────────────────────
+// ─── The moss-written path registry ───────────────────────────────────────────
 //
 // One enumeration of every path moss itself writes, plus the handful inside
 // `.moss/` the user edits. Everything that needs to answer "is this moss's own
@@ -697,7 +696,7 @@ impl MossPaths {
 //
 // It exists because that question had five independent answers. Five times a
 // build's own output reached moss's own watcher, and five times the fix was an
-// exclusion at one more filter site (#960 tabulates them). The fifth could not
+// exclusion at one more filter site. The fifth could not
 // be fixed that way at all: the triggering event carries no path on Linux.
 //
 // Adding a path moss writes? Add it HERE, with its three attributes, and the
@@ -707,25 +706,26 @@ impl MossPaths {
 ///
 /// Root-relative because `AGENTS.md`/`CLAUDE.md`/`GEMINI.md` are moss-written
 /// and live at the root — a `.moss`-relative table cannot express them, which
-/// is how instance 3 of this bug class (#955) got in.
+/// is how instance 3 of this bug class got in.
 ///
 /// Four independent flags, not one `is_moss_written` boolean. The concerns are
 /// genuinely different sets and collapsing them would be a new bug:
 /// `data/social/` is moss-written but **must** stay watched, while `identity/`
 /// and `keys/` matter for gitignore and are irrelevant to cloud sync.
 ///
-/// `watched` and `materialized` are the pair most easily confused, and moss#986
-/// is what happens when they are treated as one. "Should an edit here rebuild
+/// `watched` and `materialized` are the pair most easily confused — conflating
+/// them is how the identity key ended up unmaterialized and broke publish
+/// once already. "Should an edit here rebuild
 /// the site?" and "must moss be able to READ these bytes?" are different
 /// questions with different answers: nothing rebuilds when the identity key
 /// changes, and publish cannot start without it.
 /// What a cloud provider may do with a moss-written path.
 ///
-/// An enum rather than a bool, and the reason is moss#1079: a path whose
+/// An enum rather than a bool, and the reason is a past regression: a path whose
 /// exclusion is a real decision must state it, and a bool is a decision you can
 /// make by not thinking. Every entry names its regime or the crate does not
 /// compile — and the one entry that keeps a provider's hands on something moss
-/// cannot rebuild has to say why that is right (ADR-062).
+/// cannot rebuild has to say why that is right.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloudPolicy {
     /// The provider is welcome to it. Either the user's own content, or state a
@@ -734,14 +734,14 @@ pub enum CloudPolicy {
     /// of which URLs are live — a fact about the SITE, so a second machine that
     /// publishes after a rename can still leave a forwarding link.
     Synced,
-    /// Regenerable output — ADR-043's regime. Nothing here is authoritative:
+    /// Regenerable output. Nothing here is authoritative:
     /// moss holds the replacement bytes at every build start, so a dataless
     /// file here **is** absent and writes go through `build::io_utils`.
     ExcludedRegenerable,
     /// Regenerable AND worth waiting for: the content-addressed store. Same
     /// key ⇒ same bytes on every machine, and every blob carries its own
     /// checksum, so a dataless one is a download to wait for — bounded, then
-    /// a miss — rather than an absence (ADR-043's shared-cache amendment).
+    /// a miss — rather than an absence.
     /// Never marked: on iCloud Drive the marker un-syncs a directory the
     /// cloud already holds, which for a shared store is a delete.
     SyncedRegenerable,
@@ -762,7 +762,7 @@ pub struct MossPathRule {
     pub gitignore: bool,
     /// What a cloud provider may do with this path.
     ///
-    /// Not a bool, and the reason is moss#1079: the entry that held the only
+    /// Not a bool, and the reason is a past regression: the entry that held the only
     /// record of which URLs are live carried a `false` nobody had decided —
     /// `false` is what a new entry gets by not thinking about it — under a
     /// comment claiming the opposite. An enum has no default, and the test
@@ -778,8 +778,8 @@ pub struct MossPathRule {
     /// Strictly wider than `watched`: `.moss/identity/` is the file publish
     /// cannot proceed without and the file no edit ever rebuilds on — which is
     /// how the one file a publish dies on became the one nobody asked the
-    /// provider for (moss#986). Not the same as "important": `.moss/build.nosync/` is
-    /// read back but regenerable, and ADR-043 says a dataless file there is
+    /// provider for. Not the same as "important": `.moss/build.nosync/` is
+    /// read back but regenerable, and a dataless file there is defined as
     /// *absent*, so it stays false and stays pruned.
     pub materialized: bool,
     /// The user may legitimately want to commit ONE file from here, so the
@@ -813,14 +813,14 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // hashes the change set is computed from and the note ID that was live at
     // each URL.
     //
-    // NOT gitignored, since v6 (moss#993). The record is a fact about the
+    // NOT gitignored, since v6. The record is a fact about the
     // SITE, not this computer — the same reasoning that keeps it in cloud
-    // sync (reconsidered from moss#1079) keeps it in git: a fresh clone
+    // sync keeps it in git: a fresh clone
     // without it thinks nothing was ever published — blank composition ring,
     // no forwarding link after a rename. It was ignored to spare a
-    // collaborator a stale "up to date"; the CPHS re-clone (2026-08-31)
+    // collaborator a stale "up to date"; a real re-clone (2026-08-31)
     // showed the blank costs more, and every reader already treats the record
-    // as advisory (ADR-062: unreadable is never "nothing published"). The v6
+    // as advisory: unreadable is never "nothing published". The v6
     // gitignore migration prunes the old `deploy/` line from existing projects.
     r(".moss/deploy/", false, CloudPolicy::Synced, false, true),
     // Declared under `.moss/build.nosync/` anyway: a row is what creates and marks
@@ -830,7 +830,7 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // Born 2026-07-22 with no row: on the CPHS vault its 6 GB carried
     // `com.dropbox.attrs` while the marked `staging/` and `cache/` beside it
     // stayed clean. `gitignore: false` — a line would rewrite every existing
-    // project's `.moss/.gitignore` as a side effect (#960).
+    // project's `.moss/.gitignore` as a side effect.
     r(".moss/build.nosync/generations/", false, CloudPolicy::ExcludedRegenerable, false, false),
     r(".moss/agents/", true, CloudPolicy::Synced, false, false),
     // Gitignored: a git user already has git's own history, and moss must never
@@ -858,7 +858,7 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // Kept in step with the app crate's `build::scan::classify::ROOT_AGENT_CONFIG_FILES`
     // by `moss::infra::moss_paths::tests::root_agent_files_match_the_classifier`,
     // which stays on that side of the crate line because the list it compares
-    // against is still there (ADR-057).
+    // against is still there.
     r("AGENTS.md", false, CloudPolicy::Synced, false, false),
     r("CLAUDE.md", false, CloudPolicy::Synced, false, false),
     r("GEMINI.md", false, CloudPolicy::Synced, false, false),
@@ -916,8 +916,8 @@ pub fn rule_for(rel: &str) -> Option<&'static MossPathRule> {
         };
         // `best.is_none_or(…)` says this more directly but is stable only from
         // 1.82, and this crate declares the workspace MSRV (1.80) where the app
-        // crate declares none — so the same line that was silent in `src-tauri`
-        // is a clippy::incompatible_msrv warning here. "No best yet" is length 0.
+        // crate declares none — so the same line that was silent in the desktop
+        // app is a clippy::incompatible_msrv warning here. "No best yet" is length 0.
         if matches && rule.rel.len() > best.map_or(0, |b| b.rel.len()) {
             best = Some(rule);
         }
@@ -1002,7 +1002,7 @@ pub fn retire_legacy_roots(mp: &MossPaths) {
 /// Create every directory moss keeps out of cloud sync, and mark it.
 ///
 /// Named for the question rather than for the answer: what a path's
-/// [`CloudPolicy`] is, is the table's business, and moss#1079 was a case of
+/// [`CloudPolicy`] is, is the table's business, and a past regression came from
 /// reading the sweep's old name (`exclude_regenerable_dirs`) as if it were
 /// evidence about a path's regime.
 ///
@@ -1018,7 +1018,7 @@ pub fn exclude_dirs_from_cloud_sync(moss_root: &std::path::Path) {
         let dir = moss_root.join(sub.trim_end_matches('/'));
         // The create is what gives the marker something to attach to, so a
         // failure here means the directory goes UNMARKED and syncs — one of the
-        // three candidate causes #965 is trying to tell apart. It was silent
+        // three candidate causes worth telling apart. It was silent
         // before; a cloud provider refusing to materialize the entry
         // (`EDEADLK`) looks identical to a permissions error without this line.
         match crate::build::io_utils::create_output_dir_all(&dir) {
@@ -1057,7 +1057,7 @@ pub fn moss_gitignore() -> String {
 /// Each gitignored rule paired with the line it contributes.
 ///
 /// Public because the writer that consumes it — `ensure_moss_gitignore` — stays
-/// in the app crate until the cloud-readiness cluster crosses (ADR-057).
+/// in the app crate until the cloud-readiness cluster crosses.
 pub fn gitignore_rules() -> impl Iterator<Item = (&'static MossPathRule, String)> {
     MOSS_PATH_RULES.iter().filter(|r| r.gitignore).filter_map(|rule| {
         let rel = rule.rel.strip_prefix(".moss/")?;
@@ -1175,8 +1175,8 @@ fn exclude_from_cloud_sync(dir: &std::path::Path) {
     // never a build, and a read-only or non-xattr filesystem is fine. But the
     // return value is no longer *silent*: on one live iCloud vault the marker
     // was measured ABSENT on `.moss/build.nosync` while present on `.moss/cache`, with
-    // 24 cross-machine conflict copies of the `current` symlink to show for it
-    // (moss#964 §4). Whether the call fails, the marker is stripped on a
+    // 24 cross-machine conflict copies of the `current` symlink to show for it.
+    // Whether the call fails, the marker is stripped on a
     // cross-machine round trip, or it was applied only after the directory had
     // already synced is unresolved, and this log line is what the next
     // investigation starts from.
@@ -1192,8 +1192,8 @@ fn exclude_from_cloud_sync(dir: &std::path::Path) {
         return;
     }
     // Verify after set: a call that returned 0 is not the same as a marker on
-    // the directory, and which of the two failed is the question moss#965
-    // could not answer from the return code alone.
+    // the directory, and which of the two failed is a question the return
+    // code alone could not answer.
     if !has_cloud_sync_marker(dir) && crate::infra::warn_once::should_warn_once(dir.to_path_buf(), warned_dirs()) {
         log::warn!(
             "[cloud-exclude] com.apple.fileprovider.ignore#P is absent on {} right after it was set — \
@@ -1240,7 +1240,7 @@ mod tests {
         MossPaths::new(root)
     }
 
-    // ─── The moss-written path registry (#960) ──────────────────────────────
+    // ─── The moss-written path registry ──────────────────────────────────────
 
     /// `.moss/.gitignore` is now generated. Its contents are a promise to every
     /// project already on disk — `ensure_moss_gitignore` only ever ADDS lines,
@@ -1255,9 +1255,9 @@ mod tests {
              that it lands in every existing project on its next build"
         );
     }
-    // ─── Which cloud regime each path is in (moss#1079, ADR-062) ────────────
+    // ─── Which cloud regime each path is in ──────────────────────────────────
 
-    /// The trap moss#1079 fell into, stated as a test.
+    /// The trap a past regression fell into, stated as a test.
     ///
     /// Two questions decide it. Is this path **authoritative** — is moss the
     /// only thing that knows what is in it, so nothing can rebuild it? And can
@@ -1277,7 +1277,7 @@ mod tests {
     ///
     /// Listing an entry is not a rubber stamp: each of these is synced because
     /// a second machine legitimately needs it, and each therefore also owes its
-    /// reader the "unreadable is not absent" handling (icloud-awareness.md).
+    /// reader the "unreadable is not absent" handling.
     #[test]
     fn every_authoritative_synced_path_says_why_it_is_safe() {
         // rel => why sharing it is right, despite the provider owning it.
@@ -1292,7 +1292,7 @@ mod tests {
             (".moss/assets/", "the user's own assets — content"),
             (".moss/data/social/", "background comment/social sync results, re-fetchable from the server that produced them"),
             (".moss/places.toml", "the user's own gazetteer — content, same reasoning as config.toml"),
-            (".moss/deploy/", "what is live at each target, which is a fact about the SITE: a second machine needs it to leave a forwarding link for a page this one renamed. Read through `manifest::live_baseline`, whose tri-state keeps unreadable apart from absent (moss#1079)"),
+            (".moss/deploy/", "what is live at each target, which is a fact about the SITE: a second machine needs it to leave a forwarding link for a page this one renamed. Read through `manifest::live_baseline`, whose tri-state keeps unreadable apart from absent"),
         ];
 
         let unlisted: Vec<&str> = MOSS_PATH_RULES
@@ -1305,7 +1305,7 @@ mod tests {
         assert!(
             unlisted.is_empty(),
             "these paths are authoritative (moss reads them and cannot rebuild them) AND \
-             synced (a provider can decline to hand them back) — the moss#1079 trap. \
+             synced (a provider can decline to hand them back) — the past-regression trap. \
              Either exclude it from sync, or add it to DELIBERATELY_SHARED with the \
              reason a second machine needs it — AND give its reader the tri-state that \
              keeps unreadable apart from absent: {unlisted:?}"
@@ -1318,8 +1318,8 @@ mod tests {
     /// about the site, and a machine without it thinks nothing was ever
     /// published — blank ring, no forwarding link after a rename. Git carried
     /// the opposite decision until v6 (a committed record can tell a
-    /// collaborator "up to date" when their checkout is not), and the CPHS
-    /// re-clone (moss#993) is why it flipped: every reader already treats the
+    /// collaborator "up to date" when their checkout is not), and a real
+    /// re-clone is why it flipped: every reader already treats the
     /// record as advisory, and the blank cost more than the staleness.
     /// Materialized — moss reads it back and cannot rebuild it, so it stays
     /// in the set the sweep asks the provider for.
@@ -1330,13 +1330,13 @@ mod tests {
         assert!(
             !rule.gitignore,
             "an ignored publish record leaves a fresh clone with no ring and \
-             no rename forwarding (moss#993) — flipping this back also needs a \
+             no rename forwarding — flipping this back also needs a \
              gitignore migration to re-add the line to existing projects"
         );
         assert!(
             rule.materialized,
             "unlike regenerable output, this one is read back — it must stay in the \
-             set the cloud supervisor asks the provider for (moss#986)"
+             set the cloud supervisor asks the provider for"
         );
         assert!(!rule.watched, "a deploy writing it must not wake the watcher");
     }
@@ -1387,7 +1387,7 @@ mod tests {
     /// them iterates the table, so the interesting question is what the WHOLE
     /// table asks for. Everything in it is regenerable — that is the only
     /// reason moss has to take a path away from a provider, and a path that
-    /// needs a second reason needs an ADR first (ADR-062).
+    /// needs a second reason needs a design decision first.
     #[test]
     fn the_marker_covers_the_regenerable_tree_and_nothing_else() {
         let mut excluded: Vec<&str> =
@@ -1407,7 +1407,7 @@ mod tests {
                 .iter()
                 .filter(|r| r.cloud.is_excluded())
                 .all(|r| !r.materialized),
-            "an excluded path moss reads back and cannot rebuild is the moss#1079 trap"
+            "an excluded path moss reads back and cannot rebuild is the past-regression trap"
         );
     }
 
@@ -1478,7 +1478,7 @@ mod tests {
         assert!(is_watchable_rel("index.md"));
         assert!(is_watchable_rel("posts/hello.md"));
         // …except root agent-instruction files, which are tooling, not
-        // content, whoever wrote them (#955).
+        // content, whoever wrote them.
         assert!(!is_watchable_rel("AGENTS.md"));
         assert!(!is_watchable_rel("CLAUDE.md"));
     }
@@ -1502,7 +1502,7 @@ mod tests {
     fn make_tmp() -> TempDir {
         // `CARGO_MANIFEST_DIR` is `crates/moss-build/`, so the repo's
         // `target/test-tmp` is two levels up — not one, as it was when this
-        // file lived in `src-tauri/` (ADR-057 move).
+        // file lived in the desktop app crate, before the crate split.
         let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/test-tmp");
         std::fs::create_dir_all(&base).expect("create target/test-tmp");
@@ -1563,7 +1563,7 @@ mod tests {
 
     #[test]
     fn project_root_is_the_folder_moss_lives_in_not_the_moss_dir() {
-        // Regression (moss#976): `root()` reads like "the project root" but is
+        // Regression: `root()` reads like "the project root" but is
         // `<project>/.moss`. Passing it to `domain::config::get_*` (which join
         // `.moss/config.toml` themselves) or back into `MossPaths::new` builds
         // `<project>/.moss/.moss/...` — a path that never exists, so knobs
@@ -1583,7 +1583,7 @@ mod tests {
         // dir, .moss/build.nosync/, not the CWD), so the preview fell back to a stale or
         // empty site/ — the coldstart-blank class, re-exposed on the relative path.
         let tmp = make_tmp(); // absolute, under CARGO_MANIFEST_DIR/../target/test-tmp
-        // Unit-test CWD is CARGO_MANIFEST_DIR (src-tauri); express the same dir as
+        // Unit-test CWD is CARGO_MANIFEST_DIR; express the same dir as
         // a RELATIVE root so we exercise the path that used to dangle.
         let rel_root = std::path::Path::new("..")
             .join("target")
@@ -1740,7 +1740,7 @@ mod tests {
         assert!(paths.generations_dir().exists());
     }
 
-    // ─── setxattr-failure warn-once gate (#964 §4 visibility) ───────────────
+    // ─── setxattr-failure warn-once gate ─────────────────────────────────────
 
     /// What the verify-after-set warning reads: absent before the marker is
     /// set, present after.
@@ -1780,8 +1780,8 @@ pub(crate) fn ensure_moss_gitignore(moss_root: &std::path::Path) -> Result<(), S
     // vault, and an evicted `.gitignore` reports NotFound on pre-Sonoma macOS
     // (the bytes move to a hidden `.gitignore.icloud` sibling). Treating that as
     // "absent" takes the first branch and REPLACES the user's file with the
-    // stock one, dropping every line they added — the erase-vs-merge failure
-    // moss#986 found in `redirects.json`, one directory over.
+    // stock one, dropping every line they added — the same erase-vs-merge failure
+    // found in `redirects.json`, one directory over.
     let existing = match crate::build::cloud_readiness::read_input_if_present(&path) {
         Ok(Some(existing)) => existing,
         // Genuinely absent — the ordinary first-build case.
@@ -1833,7 +1833,7 @@ mod gitignore_writer_tests {
         TempDir::new_in(&base).expect("create test tempdir")
     }
 
-    // ─── `.moss/.gitignore` upkeep (moss#1001) ──────────────────────────────
+    // ─── `.moss/.gitignore` upkeep ────────────────────────────────────────────
 
     /// The exact file a real site ships so it can keep `redirects.json` — the
     /// list of old URLs it still answers — in git. `data/*` plus the negation is
@@ -1868,7 +1868,7 @@ history/
         assert!(
             !after.lines().any(|l| l.trim() == "data/"),
             "appending a bare `data/` below the negation silently untracks \
-             redirects.json — that is moss#1001:\n{after}"
+             redirects.json:\n{after}"
         );
         assert!(
             after.starts_with(SITE_THAT_COMMITS_ITS_REDIRECTS),
@@ -1977,7 +1977,7 @@ history/
     }
 
     /// Two lists of the same three filenames, kept in step by this test rather
-    /// than by memory — the drift between exactly this pair is what #955 was.
+    /// than by memory — a real drift between exactly this pair happened once.
     #[test]
     fn root_agent_files_match_the_classifier() {
         for name in crate::build::scan::classify::ROOT_AGENT_CONFIG_FILES {

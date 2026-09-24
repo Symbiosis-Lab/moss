@@ -215,6 +215,6 @@ your plugin exports will be read from your code at install time rather than
 declared. `capabilities` keeps working for at least a release after that, so
 there is no version where you must have migrated.
 
-The rationale is in the moss repository as ADR-055: a manifest should say what
+The rationale: a manifest should say what
 the user is choosing, and anything that merely restates what the code already
 says will drift from it.

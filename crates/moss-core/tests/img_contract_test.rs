@@ -1,16 +1,15 @@
 //! Phase 2E v5 PR6 — `<img>` contract test, wikilinks half.
 //!
-//! Open-half twin of two tests in `src-tauri/tests/img_contract_test.rs`
-//! (desktop repo). That file's `all_parser_new_ext_sites_enable_wikilinks`
-//! is "mostly a uniform `Parser::new_ext`/`ENABLE_WIKILINKS` source scan over
-//! `src-tauri/src` + `open/crates/moss-core/src`"; its
-//! `shared_parser_options_grants_wikilinks` sub-check is "entirely about
-//! moss-core's own source and doesn't need desktop input at all" (class B
-//! per docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md).
+//! Open-half twin of two tests in the desktop app's `img_contract_test.rs`.
+//! That file's `all_parser_new_ext_sites_enable_wikilinks`
+//! is a uniform `Parser::new_ext`/`ENABLE_WIKILINKS` source scan over
+//! the desktop app's own source plus `open/crates/moss-core/src`; its
+//! `shared_parser_options_grants_wikilinks` sub-check is entirely about
+//! moss-core's own source and doesn't need desktop input at all.
 //! `shared_parser_options_grants_wikilinks` moves here outright; the
 //! wikilinks scan is split by root — this is moss-core's own copy, scoped to
 //! `src`. moss-build carries the twin for its own `src`. The desktop half
-//! keeps scanning `src-tauri/src`.
+//! keeps scanning its own source.
 //!
 //! Not carried here: `img_contract_holds_across_all_fixtures` and
 //! `no_moss_prefix_titles_in_rendered_html`, which walk desktop's own

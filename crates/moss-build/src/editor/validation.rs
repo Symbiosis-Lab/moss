@@ -37,7 +37,7 @@ impl From<moss_core::validation::Diagnostic> for EditorDiagnostic {
 /// Compose the effective schema by merging builtin fields with plugin
 /// contributions.
 ///
-/// Merge rules (see docs/reference/plugin-schema-contributions.md):
+/// Merge rules:
 /// - Additive only: plugins add fields, cannot modify/remove builtin fields
 /// - Builtin wins: if a plugin tries to redefine a builtin field, it is ignored
 ///   with a warning
@@ -105,8 +105,6 @@ pub fn diagnose(
 /// vault that has never been built) — an absent record is "not known", never
 /// "no collision", and inventing a clean verdict is how a stale surface
 /// becomes worse than no surface.
-///
-/// See docs/archive/2026-09-02-url-collision-as-a-frontmatter-diagnostic.md.
 pub(crate) fn url_collision_diagnostic(project_root: &std::path::Path, file_path: &std::path::Path) -> Vec<EditorDiagnostic> {
     let Ok(relative) = file_path.strip_prefix(project_root) else {
         return Vec::new();

@@ -1,11 +1,10 @@
 //! Sync test: no raw file write inside this crate's build tree may land in the
 //! regenerable output tree without going through `build::io_utils`.
 //!
-//! Twin of `src-tauri/tests/output_write_invariant_test.rs` (desktop repo) —
-//! that file's `SOURCE_ROOTS` had narrowed to only
-//! `../open/crates/moss-build/src`, so this is the wholly-open half moved
-//! here verbatim, minus the desktop-relative path math (class A per
-//! docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md).
+//! Twin of the desktop app's `output_write_invariant_test.rs` — that file's
+//! `SOURCE_ROOTS` had narrowed to only `../open/crates/moss-build/src`, so
+//! this is the wholly-open half moved here verbatim, minus the
+//! desktop-relative path math.
 //!
 //! ## Why this exists
 //!
@@ -13,13 +12,13 @@
 //! moss's own output. `std::fs::write` opens with `O_WRONLY|O_CREAT|O_TRUNC`,
 //! and `O_TRUNC` *requires* materialization — against a cloud-evicted
 //! (`SF_DATALESS`) destination, under the process-wide fail-fast policy, it
-//! returns `EDEADLK`. Measured in moss#964 §1, alongside the two facts that
-//! make a fix possible: `unlink` and `rename` over a dataless file both
-//! succeed, because neither touches data extents.
+//! returns `EDEADLK`. Measured directly, alongside the two facts that make a
+//! fix possible: `unlink` and `rename` over a dataless file both succeed,
+//! because neither touches data extents.
 //!
-//! ADR-043 states the rule: **under `.moss/build.nosync/`, dataless is absent**, and
-//! every write into that tree goes through `build::io_utils`, which writes to a
-//! temp sibling and `rename(2)`s it into place.
+//! **Under `.moss/build.nosync/`, dataless is absent**, and every write into
+//! that tree goes through `build::io_utils`, which writes to a temp sibling
+//! and `rename(2)`s it into place.
 //!
 //! ## The marker convention
 //!
@@ -140,7 +139,7 @@ fn raw_writes_in_the_build_tree_carry_allow_marker() {
         "Found raw file write(s) in a stage-writing module without an `// allow:raw_write <reason>` marker.\n\n\
          `.moss/build.nosync/` lives inside the vault, so the sync client evicts moss's own output.\n\
          `fs::write` / `fs::copy` / `File::create` open the destination with O_TRUNC, which\n\
-         requires materialization and fails EDEADLK against a cloud-evicted file (moss#964, ADR-043).\n\n\
+         requires materialization and fails EDEADLK against a cloud-evicted file.\n\n\
          Recovery:\n  \
          1. If the destination is under `.moss/build.nosync/`: use `crate::build::io_utils`\n     \
             (`write_output`, `write_output_if_changed`, `copy_output`, and for directories\n     \

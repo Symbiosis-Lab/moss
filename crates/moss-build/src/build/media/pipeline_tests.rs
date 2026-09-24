@@ -132,7 +132,7 @@ fn copy_deferred_assets_preserves_directory_symlink() {
     let stats = copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
 
     // The per-symlink log line is DEBUG, so this count is the only trace a
-    // preserved symlink leaves in an uploaded log (issue #1005). Asserted here
+    // preserved symlink leaves in an uploaded log. Asserted here
     // rather than in its own test because this fixture already has one.
     assert_eq!(
         stats.preserved_symlinks, 1,
@@ -231,7 +231,7 @@ async fn copy_deferred_assets_registers_symlink_in_manifest() {
     .await
     .unwrap();
 
-    // Drain the coordinator (post-#620 Item 2: hashes.json is no longer
+    // Drain the coordinator (hashes.json is no longer
     // written by `copy_deferred_assets`; the coordinator owns the manifest).
     let sealed = test_utils::drain_into_sealed(rx, crate::types::content::SiteHashes::default()).await;
 
@@ -339,7 +339,7 @@ fn copy_deferred_assets_resolves_finder_alias() {
     }
 }
 
-/// Regression guard for the deferred-phase stale-cleanup race (#620 Item 4).
+/// Regression guard for the deferred-phase stale-cleanup race.
 ///
 /// The race window:
 /// 1. A background image worker writes `fresh.webp` to `staging/` AND queues
@@ -365,9 +365,9 @@ fn copy_deferred_assets_resolves_finder_alias() {
 /// written but not yet sent the EmitMessage." We do NOT send a matching
 /// EmitMessage in the test — the only protection comes from carry-forward
 /// (variant B), or the bug being fixed at the layer above (variant A, after
-/// #621 moved cleanup past the seal).
+/// cleanup moved past the seal).
 ///
-/// As of #621, variant A passes because `copy_deferred_assets` no longer runs
+/// Variant A passes because `copy_deferred_assets` no longer runs
 /// `remove_stale_files` inline at all — cleanup moved to the seal+persist
 /// side task in `build.rs`, where it operates on a stable `SealedManifest`
 /// view that has already merged in-flight `EmitMessage`s.
@@ -479,7 +479,7 @@ async fn copy_deferred_assets_stale_cleanup_does_not_delete_in_flight_image_vari
     let _sealed = coord.run_until_drained().await;
 }
 
-/// Regression test for #621: after the fix, `copy_deferred_assets` must NOT
+/// Regression test: `copy_deferred_assets` must NOT
 /// remove stale files inline. Cleanup is deferred to the seal+persist side
 /// task in `build.rs`, which operates on `SealedManifest::site_hashes_view()`.
 ///
@@ -502,10 +502,10 @@ async fn copy_deferred_assets_does_not_run_stale_file_cleanup_inline() {
     std::fs::create_dir_all(&site).unwrap();
     std::fs::create_dir_all(moss.join("cache/objects")).unwrap();
 
-    // Pre-create a "stale" file in BOTH staging and site — pre-#621, the
-    // in-band cleanup would have removed it because it's not in any bucket
-    // of `site_hashes`. After #621, cleanup has moved to the seal+persist
-    // side task, so `copy_deferred_assets` must leave it alone.
+    // Pre-create a "stale" file in BOTH staging and site — the old in-band
+    // cleanup would have removed it because it's not in any bucket
+    // of `site_hashes`. Now that cleanup has moved to the seal+persist
+    // side task, `copy_deferred_assets` must leave it alone.
     let stale_staging = staging.join("stale.txt");
     let stale_site = site.join("stale.txt");
     std::fs::write(&stale_staging, b"stale bytes").unwrap();
@@ -530,12 +530,12 @@ async fn copy_deferred_assets_does_not_run_stale_file_cleanup_inline() {
 
     assert!(
         stale_staging.exists(),
-        "stale file in staging must survive copy_deferred_assets after #621 fix; \
+        "stale file in staging must survive copy_deferred_assets; \
              cleanup is now deferred to the seal+persist side task in build.rs"
     );
     assert!(
         stale_site.exists(),
-        "stale file in site must survive copy_deferred_assets after #621 fix; \
+        "stale file in site must survive copy_deferred_assets; \
              cleanup is now deferred to the seal+persist side task in build.rs"
     );
 
@@ -543,12 +543,12 @@ async fn copy_deferred_assets_does_not_run_stale_file_cleanup_inline() {
 }
 
 // -----------------------------------------------------------------------
-// remove_stale_files: orphan *.placeholder.svg cleanup (post-#615)
+// remove_stale_files: orphan *.placeholder.svg cleanup
 // -----------------------------------------------------------------------
 
 #[test]
 fn remove_stale_files_always_unlinks_placeholder_svg_orphans() {
-    // Vaults built with pre-#615 moss have *.placeholder.svg files in
+    // Vaults built with an older moss have *.placeholder.svg files in
     // build/site/assets/ AND entries in hashes.json#files for them.
     // Without a special-case, remove_stale_files preserves them
     // indefinitely because they appear in `files`. Current code never
@@ -778,7 +778,7 @@ fn remove_stale_files_idempotent_with_no_placeholders() {
     );
 }
 
-/// Issue #697: verify that audio/PDF/static assets are registered as Ready
+/// Verify that audio/PDF/static assets are registered as Ready
 /// in the AssetRegistry after `copy_deferred_assets` runs. This ensures
 /// the editor's hover-preview can resolve these asset types even though they
 /// are not registered in the blocking phase (unlike images and videos).
@@ -887,7 +887,7 @@ fn copy_deferred_assets_counts_broken_symlink_in_stats() {
     );
 }
 
-/// Issue #1005: the summary line must name preserved symlinks and resolved
+/// The summary line must name preserved symlinks and resolved
 /// aliases. Counting them in the struct is not enough — the demotion of the
 /// per-item log to DEBUG traded N lines for zero unless the count reaches the
 /// one line that actually gets logged. Zero-valued counts stay off the line.
@@ -1253,7 +1253,7 @@ async fn copy_deferred_assets_sizes_raster_originals_and_copies_others_verbatim(
 // fast cache-link copy wins the race and ships the full-res source while the
 // emitted `<img srcset>` base descriptor advertises the smaller deployed
 // width. A should_skip'd webp (AlreadySmall / AnimatedWebp) is NOT touched
-// by the converter and must still be copied verbatim (else a 404, ADR-013).
+// by the converter and must still be copied verbatim (else a 404).
 // -----------------------------------------------------------------------
 
 /// A real, non-animated WebP of the given pixel dimensions. A smooth
@@ -1419,7 +1419,7 @@ async fn oversized_webp_base_owned_by_converter_cold_and_warm() {
 
 /// A SMALL webp (600×400, AlreadySmall) is NOT in the conversion set — the
 /// converter never writes it — so copy_deferred MUST still copy it verbatim,
-/// or the base 404s (ADR-013). Guards the fix against dropping small webp.
+/// or the base 404s. Guards the fix against dropping small webp.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn small_webp_source_lands_verbatim() {
     use std::fs;
@@ -1557,7 +1557,7 @@ fn webp_unreadable_source_fails_safe_to_converter_owned() {
 }
 
 // -----------------------------------------------------------------------
-// maybe_inject_spa_cached (moss#919)
+// maybe_inject_spa_cached
 // -----------------------------------------------------------------------
 
 fn spa_test_cache(
@@ -2144,7 +2144,7 @@ async fn ship_phase_reflects_a_post_seal_repair_not_a_stale_cas_entry() {
     assert!(
         !shipped.contains("photo.webp"),
         "ship_phase must ship the REPAIRED bytes, not the stale CAS object recorded before \
-         the repair — shipping it would resurrect the failed variant reference moss#867 \
-         exists to strip: {shipped}"
+         the repair — shipping it would resurrect the failed variant reference the \
+         post-seal degrade pass exists to strip: {shipped}"
     );
 }

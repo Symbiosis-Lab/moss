@@ -332,7 +332,7 @@ fn test_serialize_strips_stray_control_chars() {
     // path can insert the arrow key's legacy control code (Right =
     // U+001D GROUP SEPARATOR) into a plain input instead of just moving
     // the caret. The frontend guards this at `beforeinput`
-    // (frontend/app/shared/ui/control-char-guard.ts); this write-boundary strip
+    // (the control-char guard); this write-boundary strip
     // is the defense-in-depth backstop so a corrupted value can never
     // reach disk even if it slips past the DOM guard.
     let corrupted = format!("websites.{}", "\u{1D}".repeat(8));
@@ -627,7 +627,7 @@ fn frontmatter_span_splits_both_dialects() {
         ("four dashes are a thematic break", "----\nprose\n---\nmore\n", None),
         ("`---yaml` is not an opening delimiter", "---yaml\ntitle: T\n---\nBody\n", None),
         // Three spaces is a legal CommonMark thematic break. Accepting it would
-        // re-open moss#932 one notch over: uid stamping writes its answer back
+        // re-open that earlier bug one notch over: uid stamping writes its answer back
         // to the author's file, so this would splice `uid:` into their prose.
         ("an indented opening delimiter is a thematic break", "   ---\nprose\n---\nmore\n", None),
         ("a leading blank line matches neither dialect", "\n---\ntitle: T\n---\nBody\n", None),
@@ -696,7 +696,7 @@ fn parse_does_not_claim_a_thematic_break_as_frontmatter() {
 /// `frontmatter_map` is the untyped read for EITHER dialect; `parse` answers
 /// the YAML one only. A simplified block used to come back empty from every
 /// caller that reached for `parse` — the file tree's date and `home:` probe
-/// among them (moss#937).
+/// among them.
 #[test]
 fn frontmatter_map_reads_both_dialects() {
     let yaml = frontmatter_map("---\ndate: 2025-11-15\nhome: true\n---\nbody\n");

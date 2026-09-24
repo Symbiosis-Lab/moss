@@ -7,7 +7,7 @@
 //! - **Filtering** ([`path_is_watchable`], [`path_passes_filter`]) — the
 //!   per-event predicates applied to whatever still arrives.
 //!
-//! ## Why registration, not filtering (#960)
+//! ## Why registration, not filtering
 //!
 //! moss watched the project root recursively and filtered moss's own output
 //! back out per event. That works only for events that carry a path. A build
@@ -20,8 +20,7 @@
 //! Four earlier instances of the same class were each fixed by adding an
 //! exclusion at one more filter site. This one cannot be, so registration
 //! changed instead: **moss's output is never subscribed to in the first
-//! place.** Verified against the vendored notify sources (see
-//! `docs/archive/2026-08-04-watch-self-trigger-fix.md` for the table):
+//! place.** Verified against the vendored notify sources:
 //!
 //! - `RecursiveMode::NonRecursive` does **not** narrow the macOS kernel
 //!   stream. `fsevent.rs` registers the path either way and filters recursion
@@ -125,7 +124,7 @@ pub fn watch_targets(root: &Path) -> Vec<WatchTarget> {
             // `stamp_published_folder` writes into the project root on every
             // publish — would become a target and buy a full rebuild of the
             // site moss just published. That is instance 6 of the very class
-            // #960 is about.
+            // this module exists to close.
             if !path_passes_filter(root, &entry) {
                 continue;
             }
@@ -194,7 +193,7 @@ pub fn watch_set_content_change(
 /// It says what it dropped, which is unusual for a predicate and is the point:
 /// this is the rebuild pump's FIRST filter, and it fails by `continue` — so a
 /// vault whose every event was rejected looked exactly like a vault nobody was
-/// editing, for weeks, with the watcher alive and delivering (#1080).
+/// editing, for weeks, with the watcher alive and delivering.
 pub fn any_path_watchable(root: &Path, paths: &[PathBuf]) -> bool {
     if paths.iter().any(|p| path_is_watchable(root, p)) {
         return true;
@@ -339,15 +338,15 @@ fn after_last_moss(rel: &str) -> Option<&str> {
 /// under a different ancestor.**
 ///
 /// Shared with `outcome_tests` and `sweep_tests` deliberately. The bug this
-/// exists for has now been fixed three times at three call sites (#1067, the
-/// sweep, the rebuild pump in #1080); what wants pinning is the shape, so the
+/// exists for has now been fixed three times at three call sites (the outcome
+/// classifier, the sweep, and the rebuild pump); what wants pinning is the shape, so the
 /// next predicate that consumes a vault path inherits the coverage instead of
 /// re-earning it.
 // Not cfg(test): consumed by the app crate's tests across the crate
 // boundary, where a cfg(test) item would be configured out.
 pub const VAULT_MOUNTS: &[(&str, &str)] = &[
     ("a plain path", "/home/u/Sites/blog"),
-    // The harbor vault of #1080: a Google shared drive reached through a
+    // A real-world vault this bug hit: a Google shared drive reached through a
     // shortcut, which is the NORMAL layout for one — the user never chose it.
     (
         "a Google shared-drive shortcut",
@@ -387,7 +386,7 @@ pub fn mount_join(mount: &str, rel: &str) -> PathBuf {
 /// every directory the user happens to keep the vault UNDER cast a vote: a
 /// Google shared-drive vault lives below `.shortcut-targets-by-id`, and every
 /// file in it was therefore judged unwatchable — the rebuild pump dropped
-/// every event and the sweep that backstops it saw nothing either (#1080).
+/// every event and the sweep that backstops it saw nothing either.
 /// Where the vault sits is the user's business; only the path inside it is
 /// moss's. The signature carries the root so that mistake cannot be made
 /// again by a caller that forgets to strip it, the same reason

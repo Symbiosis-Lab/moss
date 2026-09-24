@@ -7,7 +7,7 @@
 //! separating the file format from the sole thing that produces it would put
 //! the two halves of one invariant in two modules.
 //!
-//! Crossed out of `src-tauri/src/domain/events_sync.rs` on 2026-09-09 (track
+//! Crossed out of the desktop app's events-sync module on 2026-09-09 (track
 //! C4e) because the publish body calls `sync_events` and had to stop naming an
 //! app-crate path to cross itself. The Tauri command that reads this log for
 //! the Analytics panel stayed behind — it needs `AppState` to learn which
@@ -82,7 +82,7 @@ pub(crate) fn cursor_path(project_root: &Path) -> PathBuf {
 /// frontend, which reached the file by name through the *plugin* file API — and
 /// that API fences off `.moss/` to keep third-party plugins away from the
 /// identity secret, so moss's own dashboard was refused on every load for
-/// eleven days (moss#997). Naming this file is now this module's privilege and
+/// eleven days. Naming this file is now this module's privilege and
 /// nobody else's.
 ///
 /// Two answers, deliberately distinguishable:
@@ -111,7 +111,7 @@ pub(crate) fn read_local_cursor(project_root: &Path) -> u64 {
     // Both answers land on 0 here (the caller then rebuilds from events.jsonl,
     // which is what keeps a re-fetch from duplicating rows) — the materialize
     // wait is here so the ordinary evicted case gets the real cursor back
-    // instead of paying for a full rebuild scan (moss#986).
+    // instead of paying for a full rebuild scan.
     let contents = match crate::build::cloud_readiness::read_input_if_present(&path) {
         Ok(Some(s)) => s,
         Ok(None) => return 0,
@@ -213,7 +213,7 @@ pub(crate) fn append_events(
         // User state under `.moss/data`, not regenerable output — and O_APPEND,
         // so nothing here truncates a destination the cloud may have evicted.
         // Flagged only now because crossing into moss-build put it where the
-        // ADR-043 scanner can see it; the write itself is unchanged.
+        // cloud-policy scanner can see it; the write itself is unchanged.
         // allow:raw_write appends to the author's own event log
         let file = OpenOptions::new()
             .create(true)
@@ -344,7 +344,7 @@ mod tests {
     //
     // No mocks here on purpose. The Analytics panel's every existing test stubs
     // out the call that fetches this file, which is exactly why a read that
-    // failed 100% of the time shipped green through three releases (moss#997).
+    // failed 100% of the time shipped green through three releases.
     // These write with the real writer and read with the real reader.
 
     #[test]

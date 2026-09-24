@@ -14,7 +14,7 @@
         "crates/moss-build/src/build/markdown/pipeline.rs": 2200,
         "crates/moss-build/src/build/media/ffmpeg.rs": 1800,
         "crates/moss-build/src/build/media/image.rs": 3100,
-        "crates/moss-build/src/build/media/pipeline.rs": 1900,
+        "crates/moss-build/src/build/media/pipeline.rs": 1800,
         "crates/moss-build/src/build/media/video.rs": 2100,
         "crates/moss-build/src/build/page/meta.rs": 1400,
         "crates/moss-build/src/build/pipeline.rs": 2100,
@@ -22,7 +22,7 @@
         "crates/moss-build/src/build/render/html.rs": 1700,
         "crates/moss-build/src/build/scan/scan.rs": 1600,
         "crates/moss-build/src/build/ship.rs": 1000,
-        "crates/moss-build/src/build/types.rs": 1000,
+        "crates/moss-build/src/build/types.rs": 900,
         "crates/moss-build/src/build/watch.rs": 1200,
         "crates/moss-build/src/build.rs": 2300,
         "crates/moss-build/src/engine.rs": 1000,
@@ -68,7 +68,7 @@
       "oversized": {
         "crates/moss-core/src": "Flat by charter: pure, zero-I/O leaf modules (parse, schema, contract, resolve) that are named-scanned, not navigated. ast/ and resolve/ are the two clusters that earned subdirectories. (carried over from the desktop baseline's open/crates/moss-core/src entry, dated pre-2026-09-16.)",
         "crates/moss-build/src/build": "M6a/M6b own it — the pipeline splits when moss_build::ops exists, and splitting the directory first would move files twice. (carried over from the desktop baseline's open/crates/moss-build/src/build entry, dated pre-2026-09-16; see that entry's own history there.)",
-        "crates/moss-build/src": "35 as of the ADR-067 relocation; the crate root mirrors src-tauri's module names by design (the M6a move rule: files keep their crate:: spellings), so its child count tracks how many families have crossed, not disorganization — the mandated split already exists as the per-family subdirs (build/, engine/, editor/, ops/, plugins/, config/, ...). (carried over from the desktop baseline's open/crates/moss-build/src entry, dated pre-2026-09-16; see that entry's own history there.)"
+        "crates/moss-build/src": "35 as of the relocation; the crate root mirrors the desktop app's module names by design (the M6a move rule: files keep their crate:: spellings), so its child count tracks how many families have crossed, not disorganization — the mandated split already exists as the per-family subdirs (build/, engine/, editor/, ops/, plugins/, config/, ...). (carried over from the desktop baseline's open/crates/moss-build/src entry, dated pre-2026-09-16; see that entry's own history there.)"
       }
     },
     "mirror_markers": {

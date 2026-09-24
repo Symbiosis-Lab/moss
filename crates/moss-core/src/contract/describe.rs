@@ -57,7 +57,7 @@ pub struct DescribePayload<'a> {
 /// Plugin hook entry emitted in `plugin_hooks`.
 ///
 /// Describes one capability a plugin may implement. Populated by
-/// `src-tauri/src/describe.rs` from the Tauri-layer `Capability` enum.
+/// the desktop app's `describe.rs` from the Tauri-layer `Capability` enum.
 #[derive(Serialize)]
 pub struct PluginHookInfo {
     /// Lowercase hook name (e.g. "process"). Matches the JS function name.
@@ -73,7 +73,7 @@ pub struct PluginHookInfo {
 /// Plugin manifest field entry emitted in `manifest_fields`.
 ///
 /// Describes one field of `PluginManifest`. Populated by
-/// `src-tauri/src/describe.rs` from the Rust struct definition.
+/// the desktop app's `describe.rs` from the Rust struct definition.
 #[derive(Serialize)]
 pub struct ManifestFieldInfo {
     /// Field name as it appears in the JSON manifest (snake_case).
@@ -89,7 +89,7 @@ pub struct ManifestFieldInfo {
 /// Template slot entry emitted in `slots`.
 ///
 /// Describes one named injection point in the moss HTML templates. Populated
-/// by `src-tauri/src/describe.rs` from `SLOT_NAMES` and the `Slot` enum.
+/// by the desktop app's `describe.rs` from `SLOT_NAMES` and the `Slot` enum.
 #[derive(Serialize)]
 pub struct SlotInfo {
     /// Slot name (e.g. "head-end"). Matches the `<!-- slot:NAME -->` marker.
@@ -253,7 +253,7 @@ impl<'a> DescribePayload<'a> {
                 .collect(),
             frontmatter: frontmatter_fields(),
             languages: crate::home::known_language_codes(),
-            // Populated by the Tauri layer (src-tauri/src/describe.rs) which
+            // Populated by the Tauri layer (the desktop app's `describe.rs`) which
             // has access to the Tauri-layer plugin types. Callers using
             // DescribePayload::new() directly (e.g. moss-core unit tests) get
             // empty vecs here; the CLI path fills them via with_plugin_contract().

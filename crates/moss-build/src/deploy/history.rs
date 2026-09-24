@@ -1,14 +1,13 @@
 //! Publish history: a content-addressed copy of every source file a vault
 //! published, kept inside the vault itself at `.moss/history/`
-//! ([ADR-083](../../../../../docs/decisions/ADR-083-publish-history-lives-in-the-vault.md),
-//! revised) — gitignored, so a git user's own history is never turned into
+//! — gitignored, so a git user's own history is never turned into
 //! commits nobody made, and left to whatever cloud sync (iCloud, Dropbox,
 //! Google Drive) the vault's folder already has, the same way `.moss/config.toml`
 //! and `.moss/identity/` already travel with it. There is no site key: one
 //! vault has exactly one history store, at a fixed path, so nothing needs
 //! disambiguating.
 //!
-//! Slice 1 — the design's ["How it lands"](../../../../../docs/archive/2026-09-11-publish-history-design.md)
+//! Slice 1 covers
 //! item 1: the store ([`store`]), the record and its three writers
 //! ([`record`]), page and site restore ([`restore`]), and the page/site
 //! timeline folds ([`timeline`]). Slice 2 adds the `moss history` CLI verb

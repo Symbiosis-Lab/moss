@@ -1,14 +1,12 @@
 //! Sync test: every publish path in this crate asks the gates that refuse a
 //! publish.
 //!
-//! Open-half twin of `src-tauri/tests/publish_gate_invariant_test.rs`
-//! (desktop repo) — that file's `GATES` table is a flat list of
-//! `(path, call, consequence)` rows mixing `src/*` (desktop) and
-//! `../open/crates/moss-build/src/deploy/*.rs` rows, each checked
-//! independently with no cross-row comparison (class B per
-//! docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md).
-//! This twin carries only the two open-half rows (the `must_precede` pair
-//! that shares one file); the desktop half keeps its own rows.
+//! Open-half twin of the desktop app's `publish_gate_invariant_test.rs` —
+//! that file's `GATES` table is a flat list of `(path, call, consequence)`
+//! rows mixing `src/*` (desktop) and `../open/crates/moss-build/src/deploy/*.rs`
+//! rows, each checked independently with no cross-row comparison. This twin
+//! carries only the two open-half rows (the `must_precede` pair that shares
+//! one file); the desktop half keeps its own rows.
 //!
 //! Not carried here: `a_headless_build_leaves_the_verdict_the_gate_reads`,
 //! which drives `moss::build_sync` — a desktop-crate-only entry point with no
@@ -34,7 +32,7 @@ const BROKEN_IMAGE: &str = "a site with a broken image can be published from it.
      call AFTER the in-flight drain and the pre-publish rebuild — earlier reads \
      a half-encoded site as a broken one";
 const SETUP_MISSING: &str = "a publish with no credential stored now reaches the plugin, which \
-     fails inside its own upload with the remote service's words instead of moss's (ADR-072). \
+     fails inside its own upload with the remote service's words instead of moss's. \
      Restore the call BEFORE the build — what the target declared is knowable at t=0";
 
 const GATES: &[Gate] = &[

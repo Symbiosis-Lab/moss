@@ -22,8 +22,8 @@ const STACK_MAX_ENTRIES: usize = 100_000;
 /// - `"zip"` goes through the same hardened path `plugins::install::zip_extract`
 ///   already enforces for plugin archives, with ceilings sized for a stack.
 /// - `"tar.gz"` is written fresh: `tar::Archive::unpack` is never called —
-///   it can follow symlinks and crafted paths outside `into`, and ADR-080
-///   item 5 removed the hardcoded-checksum premise that waiver used to rest
+///   it can follow symlinks and crafted paths outside `into`, and a later
+///   ruling removed the hardcoded-checksum premise that waiver used to rest
 ///   on (`build::assets::binary_resolver::extract_tar_gz_to_cache`).
 /// - `"dmg"` is macOS-only: attach, copy the sole top-level item out of the
 ///   mounted volume, detach, and assert no quarantine xattr survived.
@@ -39,8 +39,7 @@ pub fn extract(format: &str, artifact: &Path, into: &Path) -> Result<(), StackEx
         )
         .map_err(|e| StackExecError::Extract(e.to_string())),
         // Hardened `.tar.gz` extraction, via the module both this executor
-        // and `moss desktop install` share (`crate::system::tar_safe`,
-        // docs/archive/2026-09-12-tar-safe-unification-plan.md). A stack
+        // and `moss desktop install` share (`crate::system::tar_safe`). A stack
         // artifact never needs a symlink — `SymlinkPolicy::Reject` — and
         // `STACK_MAX_ENTRIES`/`STACK_MAX_TOTAL_UNCOMPRESSED` stay here,
         // since this module remains the single owner of the stack's

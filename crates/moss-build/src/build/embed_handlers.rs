@@ -2,8 +2,8 @@
 //!
 //! Typed embed renderers in moss-core (Phase A–E) can't perform I/O. When a
 //! renderer needs file content (notebook rendering, CSV parsing, plugin
-//! scripts), it emits a `RenderedEmbed::Deferred { marker }` that src-tauri
-//! resolves in a post-pass via
+//! scripts), it emits a `RenderedEmbed::Deferred { marker }` that the desktop
+//! app resolves in a post-pass via
 //! [`moss_core::resolve::embeds::resolve_deferred_markers`].
 //!
 //! This module builds a [`MarkerHandlers`] registry pre-populated with the
@@ -12,8 +12,7 @@
 //! - `moss-embed-table:<path>` → `<table>` via `moss_core::csv_table`
 //!
 //! Plugin-registered handlers (for `moss-embed-plugin-<name>:` markers) are
-//! added by the plugin runtime at pipeline init; see
-//! `src-tauri/src/plugins/embed_adapter.rs`.
+//! added by the desktop app's plugin runtime at pipeline init.
 
 use std::path::{Path, PathBuf};
 
@@ -323,9 +322,9 @@ mod tests {
     // End-to-end integration: real markdown → resolved HTML via the full pipeline
     // -------------------------------------------------------------------------
     //
-    // Exercises the full moss-core RESOLVE phase with src-tauri marker handlers.
+    // Exercises the full moss-core RESOLVE phase with these marker handlers.
     //
-    // Primary fixture: `src-tauri/tests/fixtures/embed_handlers/` — minimal
+    // Primary fixture: `crates/moss-build/tests/fixtures/embed_handlers/` — minimal
     // .ipynb + .csv checked into the repo. Always runs.
     //
     // Extended fixture: a real site's notebooks + CSVs, kept outside the
@@ -523,7 +522,6 @@ mod tests {
     }
 
     // Boundary regression tests for the typed embed renderer →
-    // post-processor seam now live in
-    // `src-tauri/tests/boundary_renderer_post_process.rs` (Cargo integration
-    // test), since they cross two crates and are broader than this module.
+    // post-processor seam now live in the desktop app's own integration
+    // tests, since they cross two crates and are broader than this module.
 }

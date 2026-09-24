@@ -2,13 +2,11 @@
  * `.moss-card-cover`'s default `aspect-ratio` is a landscape plate (4/3)
  * under horizontal-tb at container widths above 36rem, and a research-backed
  * portrait plate (3/4) below it — not a phone-only special case grafted onto
- * every width. a9db42542d6 (2026-09-15) took the 3/4 value that
- * docs/archive/2026-09-14-phone-card-composition-fix.md measured at phone
+ * every width. a9db42542d6 (2026-09-15) took the 3/4 value measured at phone
  * width and promoted it into the unscoped base rule while deleting the
  * `@container (max-width: 36rem)` override that used to hold it, so every
  * grid card and hand-picked `:::grid` card cover turned portrait at every
- * width, not just narrow ones. docs/archive/2026-09-15-card-cover-ratio-scope.md
- * records the reversal: the phone research still stands, scoped to where it
+ * width, not just narrow ones. This records the reversal: the phone research still stands, scoped to where it
  * was measured. Golden-string Rust tests (shell_tests.rs) and the reciprocal
  * check (`test_css_vertical_card_cover_ratio_is_reciprocal_of_horizontal_default`)
  * both stayed green through the original regression: 3/4 and its vertical.css

@@ -16,7 +16,7 @@ pub struct ResolvedAsset {
     pub height: Option<u32>,
     pub size_bytes: u64,
     /// How the path was resolved: literal, bare-fuzzy, separator-fallback, or
-    /// case-mismatch. Carried from the shared engine (ADR-018).
+    /// case-mismatch. Carried from the shared engine.
     ///
     /// Read directly by the editor's asset-advisory lint (cm-asset-lint.ts),
     /// which pulls `env.resolved.provenance` off the unified reference envelope
@@ -111,7 +111,7 @@ impl AssetIndex for FsAssetIndex {
     /// suffix matches `suffix`. Breadth + exclusions match the BUILD scan
     /// (`crate::build::scan::classify::is_excluded_dir_name`, applied inside `walk_collect`) so the editor
     /// and build resolve the same source-file set — no depth cap, no hardcoded
-    /// asset-folder allow-list. (Parity: see plan-b / ADR-020.)
+    /// asset-folder allow-list.
     fn find_by_suffix(&self, suffix: &str) -> Vec<String> {
         let mut results = Vec::new();
         walk_collect(&self.project_root, suffix, &self.project_root, usize::MAX, &mut results);
@@ -224,7 +224,7 @@ pub fn enrich_root_rel(
 /// to a known asset.
 ///
 /// Path resolution is delegated to the shared engine (`resolve_asset_ref` in
-/// moss-core, ADR-018). The engine drives an `FsAssetIndex` that does exact-case
+/// moss-core). The engine drives an `FsAssetIndex` that does exact-case
 /// `read_dir` checks — bypassing `Path::exists()` which is case-blind on macOS
 /// APFS — so `CaseMismatch` provenance is correctly produced when the authored
 /// path differs only in case from the real file.

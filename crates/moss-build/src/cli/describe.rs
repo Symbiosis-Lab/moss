@@ -337,7 +337,7 @@ fn print_human(payload: &DescribePayload) {
     }
     println!();
     // No URL here. This used to print landing.mosspub.com/contract/v1/reference.md,
-    // which 404s (#653) — and any URL would be a second source of truth that can
+    // which 404s — and any URL would be a second source of truth that can
     // go stale between releases, which is the whole reason this command exists.
     // Point at the flags of this same binary instead.
     println!("Everything above in full: moss describe --json");

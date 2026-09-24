@@ -440,7 +440,7 @@ fn a_rewritten_loser_round_trips_through_the_frontmatter_parser() {
     // build reads a 13-digit string: a silent identity flip that orphans
     // the comment thread with no advisory. The quoted write is the fix;
     // prove the misparse is dead at the ONE parser the pipeline uses
-    // (parse_typed_frontmatter, ADR-020). The uid is `753659e7` — the shape
+    // (parse_typed_frontmatter). The uid is `753659e7` — the shape
     // whose float FITS in f64 (unquoted it parses to "7536590000000");
     // larger exponents like `12e45678` overflow and accidentally round-trip
     // as strings, so they would not detect an unquoted regression.
@@ -687,7 +687,7 @@ fn a_corrupt_record_defers_the_same_way_a_withheld_one_does() {
 }
 
 // ---------------------------------------------------------------
-// moss#1093 — a triples-bearing record answers the collision directly, and a
+// A triples-bearing record answers the collision directly, and a
 // half-updated legacy record defers rather than reaching the heuristic.
 // ---------------------------------------------------------------
 
@@ -739,9 +739,9 @@ fn a_record_with_triples_resolves_the_collision_without_the_heuristic() {
     assert_eq!(reassignments[0].reassigned_path, "posts/copy.md");
 }
 
-/// A half-updated legacy record (moss#1089's shape) defers the collision
+/// A half-updated legacy record defers the collision
 /// instead of dropping the uid out of the baseline and falling through to the
-/// heuristic — the invariant moss#1093 exists to make structurally true.
+/// heuristic — an invariant this pass exists to make structurally true.
 #[test]
 fn a_half_updated_record_defers_instead_of_reaching_the_heuristic() {
     let tmp = tempdir();

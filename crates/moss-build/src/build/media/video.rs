@@ -194,7 +194,7 @@ const MP4_ANALYSIS_SHARE: f64 = 0.3;
 ///
 /// Success carries the just-staged outputs' CAS oids: they were once on this
 /// struct and removed because nothing read them (see git history) — ship-by-
-/// OID (moss#867-adjacent) is the real reader this reintroduces them for, so
+/// OID is the real reader this reintroduces them for, so
 /// `run_video_conversion` can hand `ship_phase` an immutable blob instead of
 /// the mutable stage path a concurrent build can rewrite.
 #[derive(Clone, Debug)]
@@ -635,7 +635,7 @@ impl DeliveryKind {
     /// promises the `.mp4` with `set_pending`, and the ladder's rungs — whose
     /// count is known only after the encode, so never promised at render time —
     /// are registered late by the `set_ready` here. The poster is tracked by
-    /// neither; marking it ready would invent an entry nobody looks up (ADR-013).
+    /// neither; marking it ready would invent an entry nobody looks up.
     fn registry_tracked(self) -> bool {
         matches!(self, Self::Video)
     }
@@ -3534,9 +3534,8 @@ pub(crate) mod tests {
     // ── The honest mirror: a failure the author has to hear ───────────────
     // Both tests below drive the real worker against a real vault, because both
     // defects were in the WIRING — each unit they sit in already returned the
-    // right value, and the call site dropped it (`docs/reference/proving-a-change.md`:
-    // "watch, rebuild, cache, atomic write, path handling → Rust test + a run
-    // against a real vault").
+    // right value, and the call site dropped it ("watch, rebuild, cache, atomic
+    // write, path handling → Rust test + a run against a real vault").
 
     /// The progressive MP4 is the floor under every can't-encode path. When
     /// even the fallback copy fails, nothing at all reaches the site — and that

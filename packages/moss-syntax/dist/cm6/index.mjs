@@ -198,7 +198,7 @@ function extractLinkTargets(state) {
 * markdown image `![alt](url)` (`Image`) and a wikilink embed `![[file]]`
 * (`WikilinkEmbed`).
 *
-* ADR-041 invariant: an embed is identified by node NAME. The old
+* Invariant: an embed is identified by node NAME. The old
 * `node.name === 'Image' && !getChild('URL')` discriminator was a negative
 * test four modules re-derived independently; this is the one predicate.
 */
@@ -248,10 +248,10 @@ function widthFromPipe(text) {
 *
 * This is the single accessor that replaced four independent hand-rolled
 * re-scans of the raw source (in this module, cm-live-preview and
-* cm-email-guard) — the ADR-036 "parse once, lower to many" rule: never a
+* cm-email-guard) — the "parse once, lower to many" rule: never a
 * second hand-rolled scan of source the Lezer tree already models.
 *
-* Discriminates on `node.name` (ADR-041), never on the presence of a `URL`
+* Discriminates on `node.name`, never on the presence of a `URL`
 * child. Returns null when the node is not an embed, is structurally
 * incomplete, or has an empty target — `![[]]` (which the slash menu inserts
 * on every image verb) and `![]()` must NOT enter the resolve batch.
@@ -578,7 +578,7 @@ function imageNodeAtWidget(view, dom, intraLineOffset) {
 /**
 * Resolve the embed node enclosing `pos` — the source span a width rewrite
 * replaces. Handles BOTH `![alt](url)` and every `![[…]]` form (folder, PDF,
-* video, iframe), because both are embeds by name (ADR-041).
+* video, iframe), because both are embeds by name.
 *
 * The one owner of the resolveInner-and-climb, so a caller cannot climb for
 * `'Image'` only and silently no-op on every wikilink embed.
@@ -964,8 +964,7 @@ function flattenBlocks(blocks) {
 * block answers that question in one pass.
 *
 * Exists so the editor can render a fence body at STRUCTURE density (media
-* become one-line tokens) while ordinary body text is untouched — see
-* docs/archive/2026-08-21-editor-container-media-density-design.md. Lives here
+* become one-line tokens) while ordinary body text is untouched. Lives here
 * rather than in the editor so there stays exactly one reader of the block
 * tree; two readers of the same structure drift.
 */
@@ -1448,7 +1447,7 @@ const unresolvedDimDecoration = Decoration.mark({ class: "cm-link-unresolved-dim
 *
 * Embeds get the hand but never the dim, which is why they are a separate walk
 * rather than an addition to `extractLinkTargets`: that extractor skips
-* `WikilinkEmbed` on purpose (ADR-041) because a lint underline belongs on link
+* `WikilinkEmbed` on purpose because a lint underline belongs on link
 * text, not on a rendered card. The CURSOR is a different question — an embed
 * is exactly as followable as a link, and cm-link-nav has followed one since
 * `followTargetAt` learned about embeds. While the card is rendered its source
@@ -1557,7 +1556,7 @@ function childrenNamed(node, name) {
 * definition is "the" one when a label is defined twice.
 *
 * Duplicate labels: FIRST wins, on both sides. The build renders the first
-* definition's body and back-links to the first reference (ADR-035), so the
+* definition's body and back-links to the first reference, so the
 * editor's jump lands where the reader's would.
 */
 function footnoteIndex(state) {

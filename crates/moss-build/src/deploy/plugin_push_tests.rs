@@ -1,7 +1,7 @@
 //! The two decisions in [`super`] that need no plugin, no build and no vault.
 //!
 //! What the driver as a whole does is proved a layer up, by
-//! `src-tauri/tests/deploy_plugin_route_test.rs`, which runs both binaries
+//! the app's own deploy-plugin route test, which runs both binaries
 //! over a vault carrying a real deploy plugin. These are the pieces that would
 //! otherwise only be exercised on their happy path there.
 
@@ -132,9 +132,9 @@ fn a_generation_that_was_not_promoted_refuses_rather_than_shipping_the_old_one()
 /// A folder that closes mid-build (`PipelineRunOutput::publishable == false`)
 /// is how a real build lands here: promotion is withheld
 /// (`ship::Promotion::Withheld`), the seal tail skips `adopt_sealed`, and the
-/// slot the driver captured stays empty. Originally (moss#1042) a dehydrated
+/// slot the driver captured stays empty. Originally, a dehydrated
 /// cloud folder whose sources could not be read reached the same withhold;
-/// that path was removed in the 2026-09-17 ADR-056 revision, leaving
+/// that path was removed on 2026-09-17, leaving
 /// cancellation as the only cause.
 #[tokio::test]
 async fn a_publish_with_no_promoted_generation_refuses() {

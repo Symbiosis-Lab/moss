@@ -3,7 +3,6 @@
 # Interface: SocialComment
 
 One comment in the .moss/data/social/*.json shared standard.
- See moss/docs/reference/social-data-standard.md.
 
 ## Properties
 

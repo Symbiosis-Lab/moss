@@ -58,7 +58,7 @@ pub fn compute_binary_hash_file(path: &std::path::Path) -> Result<String, String
 /// on (`deploy::drain_in_flight_work`, `STALL_TIMEOUT` 300s), so a single file
 /// whose read SUCCEEDS but takes over 300s with no other build event in the
 /// window would now abort a publish that was progressing fine. Narrow, and not
-/// nothing: moss#1060. Closing it properly is a reporter-shaped concern, which
+/// nothing. Closing it properly is a reporter-shaped concern, which
 /// is the port seam's business (NORTH-STAR:88, ratchet row (o)) — not a
 /// re-added `crate::deploy` call.
 pub fn compute_binary_hash_file_with_heartbeat(
@@ -268,8 +268,7 @@ impl PathResolver {
     /// has to RECOGNISE a URL then saw a shape it was not written against —
     /// `orphan_prune`'s reference scanner reads its token class straight off the
     /// encoder's output set, so raw non-ASCII covers read as unreferenced and
-    /// were deleted, 404ing the live site (2026-08-06, `LOG-8D03-T1529-08-06`;
-    /// diagnosis in docs/archive/2026-08-06-orphan-prune-false-negative-and-parse-cache-gate.md).
+    /// were deleted, 404ing the live site (2026-08-06, `LOG-8D03-T1529-08-06`).
     /// A second implementation of a conversion is a second answer; keep one.
     ///
     /// Examples (without overrides):
@@ -342,7 +341,7 @@ impl PathResolver {
     /// This is the one owner of runtime `<script>` tag construction — of ONE
     /// tag. Which tags the shell block contains, in what order and with which
     /// `defer`, is `emit::scripts::ScriptAssets::shell_tags` reading the
-    /// `SITE_SCRIPTS` table (#1149); the direct callers left here are the
+    /// `SITE_SCRIPTS` table; the direct callers left here are the
     /// media-collection page, which places its own. It was four byte-identical
     /// copies (preview, heading-anchor, math-copy,
     /// search), each with its own path helper whose only caller was its own
@@ -660,7 +659,6 @@ mod tests {
     // file was pruned as an orphan and 404'd. These assert the one property
     // that closes the class: whatever a caller hands `resolve_url`, what comes
     // back is a URL, encoded exactly once.
-    // See docs/archive/2026-08-06-orphan-prune-false-negative-and-parse-cache-gate.md
     // -----------------------------------------------------------------------
 
     #[test]

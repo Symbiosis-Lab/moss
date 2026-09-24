@@ -1,8 +1,7 @@
 //! Plugin/theme installation from the registry (M2) and the build-time
 //! plugin downloader (`build.rs`).
 //!
-//! Target-architecture home for install/download code (per
-//! `docs/reference/target/03-module-tree.md`). The registry client lives
+//! Target-architecture home for install/download code. The registry client lives
 //! here as `registry_client`, in three layers split by what each is blind to.
 //! `discovery`/`bundled`/`registry` migrate under this module later.
 

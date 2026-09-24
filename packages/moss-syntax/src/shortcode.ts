@@ -19,8 +19,8 @@ import type { MarkdownConfig, BlockContext, Line } from '@lezer/markdown';
 import { SHORTCODES } from './contract/shortcodes.generated.js';
 
 // Opener: optional indent, >=3 colons, a name starting [A-Za-z], rest = attrs.
-// The name is OPTIONAL — `:::{.class}` (docs/reference/shortcode-grammar.md
-// "Pure-CSS region") has none, only an attrs block starting with `{`. A bare
+// The name is OPTIONAL — `:::{.class}` ("Pure-CSS region") has none, only
+// an attrs block starting with `{`. A bare
 // `:::` (no name, no `{`) is a close fence, not an opener — callers must
 // still reject that case themselves (see `isOpenMatch`).
 export const SHORTCODE_OPEN_RE = /^(\s*)(:{3,})([A-Za-z][\w-]*)?(.*)$/;

@@ -32,7 +32,7 @@ use super::html_post::{
     prepare_markdown_source, resolve_to_root_relative, strip_percent_comments,
 };
 
-/// Reproduce gray_matter's body normalization byte-for-byte (ADR-020 Phase 2b).
+/// Reproduce gray_matter's body normalization byte-for-byte.
 ///
 /// The traditional-YAML branch historically took the markdown body from
 /// `gray_matter`'s `result.content`. gray_matter (0.2.9) builds the body by
@@ -49,7 +49,7 @@ use super::html_post::{
 /// line walk (CRLF already normalized to LF by `moss_core::frontmatter::parse`),
 /// and `trim_start_matches('\n')` drops the leading blanks.
 ///
-/// FOLLOW-UP (ADR-020): the verbatim body is the *correct* output; this shim
+/// FOLLOW-UP: the verbatim body is the *correct* output; this shim
 /// only exists to keep the snapshot fixtures byte-stable across the gray_matter
 /// removal. A future cleanup should regenerate the snapshots against the
 /// verbatim body and delete this function — do NOT "simplify" the call site to
@@ -59,22 +59,22 @@ fn normalize_body_like_gray_matter(body: &str) -> String {
     joined.trim_start_matches('\n').to_string()
 }
 
-/// Builds a [`moss_core::asset_snapshot::AssetSnapshot`] from src-tauri's
-/// in-flight asset state. Phase 0 Task F1 — packages the data moss-core's
+/// Builds a [`moss_core::asset_snapshot::AssetSnapshot`] from the desktop
+/// app's in-flight asset state. Phase 0 Task F1 — packages the data moss-core's
 /// pure-Rust resolve/synthesize layers need (dimensions, LQIP, dominant
 /// color, registered WebP/AVIF variants) into a single typed contract.
 ///
 /// Phase 0 only **threads** the snapshot through the resolve pipeline;
 /// nothing reads it yet. Phase 1 wires the consumption side in moss-core's
 /// Stage 2 synthesizer. Mirrors the architectural shape of `ContentGraph`:
-/// src-tauri does the I/O, moss-core takes typed data IN.
+/// the desktop app does the I/O, moss-core takes typed data IN.
 ///
 /// `MediaMaps` keys are `String` (the path as it appears in markdown/HTML),
 /// converted to `PathBuf` at the iteration boundary. Taking the maps and not
 /// the whole lookup is what lets this run before the lookup that owns it exists.
 ///
 /// `AssetRegistry::iter_registered_variants` already produces a stem-keyed
-/// `HashMap<PathBuf, VariantKindSet>` (per ADR-013 + the asset_snapshot
+/// `HashMap<PathBuf, VariantKindSet>` (per the asset_snapshot
 /// module docs), so its output is folded directly into `snapshot.variants`.
 pub(crate) fn build_asset_snapshot(
     maps: &crate::build::media::dimensions::MediaMaps,
@@ -250,7 +250,7 @@ static BUILTIN_SCHEMA: std::sync::OnceLock<moss_core::schema::ContentSchema> =
 /// - **Only fields the author actually wrote.** A diagnostic whose `path` names
 ///   a key absent from the frontmatter is a missing-required-field report, and
 ///   the only required field is `title` — which moss legitimately falls back to
-///   the filename for (see `docs/reference/title-rendering.md`). Warning "required
+///   the filename for. Warning "required
 ///   field 'title' is missing" would fire on most correct pages. Filtering on
 ///   key presence rather than on the message text also keeps this from breaking
 ///   when the wording changes.
@@ -299,7 +299,7 @@ pub struct SiteMarkdown<'a> {
     /// `[site].implicit_figure`: an image alone in a paragraph with alt text
     /// renders as a captioned `<figure>`.
     pub implicit_figure: bool,
-    /// `[site].math` (ADR-030): when false, `$` stays an ordinary character —
+    /// `[site].math`: when false, `$` stays an ordinary character —
     /// the escape hatch for prose where `$` pairs up by accident.
     pub math: bool,
     /// `[site].hard_line_breaks`: a single newline renders as `<br>`
@@ -359,7 +359,7 @@ pub fn process_markdown_file(
     // serializer (the test/fragment-rendering fallback); production call sites
     // at `build/render/blocking.rs` always pass `Some`.
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
-    // 2026-05 (linkblog / `external_url` frontmatter, moss#679): maps
+    // 2026-05 (linkblog / `external_url` frontmatter): maps
     // `source_path → external_url` for pages declaring an absolute external
     // destination (JSON Feed 1.1 linkblog pattern). When provided, the
     // wikilink resolver substitutes the external URL for any `moss-resolved:`
@@ -390,7 +390,7 @@ pub fn process_markdown_file(
     // Test and fragment-render callers pass `None` → production URL is used,
     // preserving existing test behavior.
     seta_url: Option<&str>,
-    // ADR-065: the language inferred for this file's FOLDER, computed once
+    // The language inferred for this file's FOLDER, computed once
     // in the scan/reduce phase (`scan::page_map::folder_lang`) over every
     // file in the folder, not per-page here. Only consulted when the path
     // itself carries no naming convention (`ancestor_lang_from_path` is
@@ -422,12 +422,12 @@ pub fn process_markdown_file(
             let fm_lines = content.lines().count().saturating_sub(body.lines().count());
             (fm, body, std::collections::BTreeMap::new(), fm_lines)
         } else {
-            // Traditional YAML frontmatter. ONE parser (ADR-020): the same
+            // Traditional YAML frontmatter. ONE parser: the same
             // moss_core::frontmatter::parse the editor/chips use, projected to
             // the typed FrontMatter via project_typed. gray_matter is gone.
             let parsed = moss_core::frontmatter::parse(content);
             // Surface malformed YAML instead of letting it leak verbatim into
-            // HTML (ADR-020 authoritative warning surface; mirrors the
+            // HTML (the authoritative warning surface; mirrors the
             // project_typed loop below). The block is excluded from the render
             // body via `render_body()` so nothing reaches `markdown_content_raw`.
             // The warning text is built by the pure `frontmatter_invalid_yaml_warning`
@@ -470,7 +470,7 @@ pub fn process_markdown_file(
             for warning in schema_frontmatter_warnings(file_path, &parsed.frontmatter) {
                 crate::build::cli_output::cli_warn!("{}", warning);
             }
-            // Body reconciliation (ADR-020 Phase 2b): gray_matter's `result.content`
+            // Body reconciliation: gray_matter's `result.content`
             // — which the downstream pipeline + every snapshot fixture were built
             // against — strips leading blank lines and drops the trailing newline,
             // because it reconstructs the body line-by-line and then
@@ -529,11 +529,10 @@ pub fn process_markdown_file(
     // Visible heading text — filename with hyphens/underscores → spaces, with
     // folder notes resolving to the parent folder name. Source of truth is
     // `moss_core::heading`, shared with the editor's pinned heading element so
-    // the two never drift. Root-aware (#775): a root `index.md` (no path
+    // the two never drift. Root-aware: a root `index.md` (no path
     // parent) resolves to the project folder name, not the bare "index" stem —
     // this feeds the index-page `title`/`label` fallback below and must agree
     // with `heading.text` (which `compute` resolves with the same root name).
-    // See docs/reference/title-rendering.md.
     let filename_title =
         moss_core::heading::filename_text_with_root(file_path, Some(root_folder_name));
 
@@ -546,21 +545,19 @@ pub fn process_markdown_file(
     // that treats other shortcode output as opaque cell content. Running
     // buttons and gallery BEFORE grid means `::::buttons` inside `:::grid`
     // gets pre-rendered to HTML before grid scans the cell. Reordering breaks
-    // nested shortcodes. See Task 2.5 in
-    // docs/archive/2026-04-20-moss-dogfood-tier-1-fixes.md
+    // nested shortcodes.
     //
-    // Hero extraction moved into the typed-AST path in Step 2 of
-    // docs/archive/2026-05-02-shortcode-grammar-design.md. apply_typed_shortcodes
+    // Hero extraction moved into the typed-AST path. apply_typed_shortcodes
     // intercepts :::hero blocks: it renders them through the resolver and
     // returns the HTML separately for hoisting into the article template,
     // substituting the body placeholder with empty.
     //
     // Grid shortcodes are processed AFTER the link resolver is built (below),
     // so grid card links can resolve through the PageMap.
-    // Note: callouts use `> [!type]` syntax handled by callouts.rs (see ADR-011)
+    // Note: callouts use `> [!type]` syntax handled by callouts.rs
     //
-    // `:::toc` was removed in Step 2c of the unified grammar migration
-    // (#613). Authors who write `:::toc` now see the moss-unknown-shortcode
+    // `:::toc` was removed in the unified grammar migration.
+    // Authors who write `:::toc` now see the moss-unknown-shortcode
     // fallback and a build warning. TOCs become a theme/template concern.
     let markdown_content = markdown_content_raw.clone();
 
@@ -569,7 +566,7 @@ pub fn process_markdown_file(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("untitled");
-    // ADR-065: `ancestor_lang` is the folder's NAME (when an ancestor
+    // `ancestor_lang` is the folder's NAME (when an ancestor
     // component parses as a language code) or else the language INFERRED for
     // the folder upstream in scan/reduce (`folder_lang`, computed once per
     // folder, never from this file's own content). `resolve_document_language`
@@ -583,7 +580,7 @@ pub fn process_markdown_file(
     );
     // `doc_lang` is the INTERFACE language, three values; this is what the page
     // says its CONTENT is, in any language moss recognizes — `None` only when
-    // the page declares nothing at all (#977).
+    // the page declares nothing at all.
     let fm_lang = frontmatter.lang.as_deref();
     let doc_lang_tag =
         crate::i18n::declared_lang_tag(fm_lang, filename_stem, file_path, ancestor_lang);
@@ -606,8 +603,8 @@ pub fn process_markdown_file(
     // Index detection: a doc is a folder index iff (a) its filename
     // matches a recognized index pattern (INDEX_STEMS or self-named
     // folder note), OR (b) it's been promoted to its folder's home via
-    // the `home: true` marker (issue #587 — see
-    // `compute_home_overrides`).
+    // the `home: true` marker — see
+    // `compute_home_overrides`.
     //
     // We must detect (a) by filename, *not* by page_map URL: a folder
     // index with a slug override (e.g. `posts/index.md` carrying
@@ -708,7 +705,7 @@ pub fn process_markdown_file(
                 // No `wikilink:` sentinel here (nor in the external_url_map
                 // branch above): a link to an internal page is a plain
                 // internal link. The hover-preview `class="wikilink"` (see
-                // frontend/site/link-preview.ts) must reflect the link's
+                // the client-side link-preview script) must reflect the link's
                 // SYNTAX — `[[wikilink]]` vs `[text](page)` — not the fact
                 // that its target resolves to a page. Genuine wikilinks carry
                 // the AST `is_wikilink` flag (parser sets it for
@@ -723,8 +720,7 @@ pub fn process_markdown_file(
             // re-derivation (relative path from the referencing file →
             // `slugify_dir_path` case-folding → `../` if the page is served one
             // level deeper), each step guessing at something the graph already
-            // knew: moss#903 bug 3, and the case-normalization bug in
-            // docs/archive/2026-05-07-output-path-normalization.md.
+            // knew, plus a separate case-normalization bug.
             let pinned = match graph {
                 Some(g) => g.pinned_url(target_source),
                 // No graph (fragment / test callers): pin without the build's
@@ -817,7 +813,7 @@ pub fn process_markdown_file(
     //        raw-body offset  — lines of `content` before the parser body's
     //          first non-blank line, leading-blank-corrected. Locates the body
     //          past the frontmatter so a body line equal to a frontmatter value
-    //          line isn't matched inside it (#771 edge b); leading-only so it is
+    //          line isn't matched inside it (edge case B, below); leading-only so it is
     //          immune to the trailing-newline drop.
     //        − editor strip   — lines the EDITOR's `frontmatter::parse` removed
     //          (`frontmatter_range`). On `---`-fenced files this is the
@@ -832,9 +828,9 @@ pub fn process_markdown_file(
     //      an editor believed to hold "the raw file (frontmatter + body)". That
     //      premise was never true (the editor has been body-only since its first
     //      commit, 7b4c79b30); the raw offset was a constant frontmatter-sized
-    //      error → "preview always lower". See docs/reference/editor-preview-sync.md.
+    //      error → "preview always lower".
     //
-    //      KNOWN LIMITATION (#771 edge a): a single scalar offset assumes the
+    //      KNOWN LIMITATION (edge case A): a single scalar offset assumes the
     //      body's interior line count is preserved. Shortcode placeholders
     //      preserve it, but MULTI-LINE CriticMarkup that `accept_criticmarkup`
     //      collapses to fewer lines shifts every annotation AFTER the span. A
@@ -891,7 +887,7 @@ pub fn process_markdown_file(
         crate::build::cli_output::cli_warn!("[{}] {}", file_path, w);
     }
 
-    // Inline #tags (issue #649 P1) are read from the author's OWN parsed
+    // Inline #tags are read from the author's OWN parsed
     // body — before dispatch_wikilink_embeds splices in blocks from other
     // files, whose tags belong to their source doc. Merged into doc.tags
     // below, where frontmatter tags are unpacked.
@@ -1038,7 +1034,7 @@ pub fn process_markdown_file(
     //    each top-level block's opening tag when set. The ship-stage
     //    `apply_strip` regex scrubs the attribute from the published
     //    site/ tree (preview only).
-    //    ADR-034: emitted in segments, byte-identical to `render_document`
+    //    Emitted in segments, byte-identical to `render_document`
     //    when re-joined, so the render phase gets typed grid cells and a lede
     //    boundary instead of having to re-parse this HTML.
     let mut body_plan = super::body_plan::render_segmented(&doc, &pipeline_hooks);
@@ -1066,8 +1062,8 @@ pub fn process_markdown_file(
     // `resolve_link`. Idempotent on already-decoded hrefs.
     body_plan.map_html(&|html| sweep_unresolved_hrefs(html, &resolve_link));
 
-    // `:::toc` was removed in Step 2c of issue #613; the post-pass that
-    // replaced its placeholder is gone. Tables of contents are now a
+    // `:::toc` was removed in the unified grammar migration; the post-pass
+    // that replaced its placeholder is gone. Tables of contents are now a
     // theme/template concern.
 
     // Title resolution — single source of truth in moss_core::heading::compute.
@@ -1085,7 +1081,7 @@ pub fn process_markdown_file(
     //      H1 — like Obsidian with "Show inline title" on.
     //
     // The injected `<h1 class="moss-article-title">` carries a stable class so
-    // themes/sites can target it. See docs/reference/title-rendering.md.
+    // themes/sites can target it.
 
 
     // Single source of truth: compute() resolves heading text + visibility +
@@ -1095,7 +1091,7 @@ pub fn process_markdown_file(
     // pipeline so their HTML is available for `collect_footer_slots_by_language`, but
     // they must never receive the auto-injected `<h1 class="moss-article-title">`
     // — the fragment lands inside a `<footer>` slot, and an article-level
-    // heading there is structurally wrong. PR7b (moss#599) routes that
+    // heading there is structurally wrong. PR7b routes that
     // suppression through `HeadingInputs::slot_only` rather than the
     // pre-2026-05-28 frontmatter-synthesis hack (`title: ""` injected by the
     // now-deleted `render_footer_pages_from_disk`).
@@ -1125,8 +1121,7 @@ pub fn process_markdown_file(
     // which resolves index/self-named notes to their folder name). For
     // articles, the chrome `label` (which itself derives from
     // `title:`/filename via heading::compute). Matches Obsidian: a body
-    // `# H1` is content, not the page title. See
-    // docs/reference/title-rendering.md.
+    // `# H1` is content, not the page title.
     let title = if is_index_file {
         match frontmatter.title.as_deref() {
             Some(t) if !t.trim().is_empty() => t.trim().to_string(),
@@ -1309,7 +1304,7 @@ pub fn process_markdown_file(
     let series = frontmatter.series;
     let breadcrumb = frontmatter.breadcrumb;
     let footer = frontmatter.footer;
-    // BTreeMap, not HashMap (moss#922 PageFacade determinism — see the doc
+    // BTreeMap, not HashMap (PageFacade determinism — see the doc
     // comment on ParsedDocument::cascade); moss_core's typed FrontMatter
     // keeps HashMap since it's a broader public/frontend-facing type.
     let cascade = frontmatter.cascade.map(|m| m.into_iter().collect());
@@ -1429,8 +1424,7 @@ pub fn process_markdown_file(
         // through the standard pipeline but is NEVER emitted as a page;
         // `collect_footer_slots_by_language` picks up its `html_content` for the
         // `footer-left` slot. The flag is set structurally (by filename),
-        // not from any YAML key. See PR7b in
-        // `docs/archive/2026-05-27-phase4-typed-ast-completion.md` for the
+        // not from any YAML key. See PR7b's
         // typed-AST mirror on `moss_core::ast::Document::slot_only`.
         slot_only: crate::build::footer::is_excluded_from_pages(file_path),
         kind: if is_index_file {
@@ -1683,7 +1677,7 @@ pub fn render_markdown_to_html(markdown: &str) -> String {
 /// optional media-dimension lookup, and the site's `heading_anchors`
 /// preference (the public no-config wrapper above always passes `true`;
 /// `Shortcode::Recent`'s fallback-markdown call site passes the real
-/// `self.heading_anchors` it was constructed with — see moss#915).
+/// `self.heading_anchors` it was constructed with).
 ///
 /// Phase 4 PR7a-fragment (2026-05-28): the body now routes through the
 /// typed AST (`moss_core::ast::parse` → `render_document`), matching the
@@ -1709,10 +1703,10 @@ pub fn render_markdown_to_html(markdown: &str) -> String {
 /// was deleted; grid cells now render through the typed AST in
 /// `moss_core::ast::hooks::DefaultHooks::render_shortcode`. Hero overlay
 /// HTML likewise routes through `render_blocks` inside `DefaultHooks`.
-/// moss#915: `Shortcode::Recent`'s fallback-markdown render (this file's
+/// `Shortcode::Recent`'s fallback-markdown render (this file's
 /// `RenderHooks::render_shortcode`) is a production caller again — it
 /// previously hand-rolled a bare `pulldown_cmark::Parser::new` scan, which
-/// silently mishandled footnotes/wikilinks/tables (ADR-036's "parse once"
+/// silently mishandled footnotes/wikilinks/tables (the "parse once"
 /// bug class). This helper's parse->resolve->render pipeline is the
 /// sanctioned fix, not a new one-off parser.
 pub fn render_markdown_to_html_with(
@@ -2006,7 +2000,7 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         );
     }
 
-    /// ADR-030 P2: typeset the equation to an inline SVG via RaTeX, behind the
+    /// Typeset the equation to an inline SVG via RaTeX, behind the
     /// crash-prevention envelope in [`crate::build::markdown::math`]. On any
     /// refusal — a guard rejection (over-length, deep nesting, CJK/emoji, a
     /// dangerous macro), a parse failure, or output validation — fall back to

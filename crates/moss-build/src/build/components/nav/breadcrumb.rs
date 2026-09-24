@@ -83,8 +83,8 @@ impl<'a> NavigationBuilder<'a> {
                 // the site name and the parent segment both always survive —
                 // so a shallow trail carries no `…` and no panel at all,
                 // rather than controls that can never unhide. With three or
-                // more, the masthead folds exactly like the island (ADR-049
-                // §4, extended to the masthead): the `…` opens the folded
+                // more, the masthead folds exactly like the island, extended
+                // to the masthead: the `…` opens the folded
                 // levels, and only the last segment may ellipsise. The panel
                 // is a sibling of `.nav-left` because `.nav-left` clips its
                 // own overflow — its containing block is `.nav-content`.

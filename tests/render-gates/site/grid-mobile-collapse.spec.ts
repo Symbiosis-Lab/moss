@@ -80,9 +80,7 @@ test.describe("grid mobile collapse", () => {
    * checked identically at 390px and at 1280px, because nothing about the
    * COMPOSITION (this box-arithmetic) is a function of viewport width. The
    * cover's own aspect-ratio is a separate claim and IS width-dependent
-   * (site.css's `@container (max-width: 36rem)` override, research-backed:
-   * docs/archive/2026-09-14-phone-card-composition-fix.md,
-   * docs/archive/2026-09-15-card-cover-ratio-scope.md) — 390px is narrow
+   * (site.css's `@container (max-width: 36rem)` override, research-backed) — 390px is narrow
    * enough to trigger it (36rem = 576px), 1280px is not. */
   async function assertCardComposition(page: Page, selector: string) {
     for (const viewport of [MOBILE, DESKTOP]) {

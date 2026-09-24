@@ -603,8 +603,8 @@ fn ladder_params(config: &VideoCompressionConfig) -> serde_json::Value {
 /// build of latency for never being wrong. The cache knows a ladder exists
 /// sooner — it is what causes this build to link the files into staging — so a
 /// cache-sourced answer would emit markup one build earlier on a fresh checkout
-/// with a warm cache. But what makes an emitted URL true is a file at that URL
-/// (ADR-013), and only disk answers that question. The `master.m3u8` is the
+/// with a warm cache. But what makes an emitted URL true is a file at that URL,
+/// and only disk answers that question. The `master.m3u8` is the
 /// gate: `hls_master_stem` is what marks a stem as laddered, and a directory
 /// without one is a half-written ladder that must not be advertised.
 ///

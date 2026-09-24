@@ -27,8 +27,6 @@
  * (≤20rem, where the links are an overlay) are left to the shipped CSS
  * untouched. With JS off nothing here runs and the shipped wrap is the
  * fallback: toggles on row 2's end edge — the wrong corner, but aligned.
- *
- * Design: docs/archive/2026-08-09-nav-two-line-split-and-touch-hints.md
  */
 
 /** Widths (px) of everything a one-row masthead has to seat. */

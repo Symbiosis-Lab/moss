@@ -18,7 +18,7 @@
 //! failed in both directions:
 //!
 //! - the byte cursor sliced mid-character and aborted whole builds
-//!   (moss#903: `start byte index 66 is not a char boundary; it is inside
+//!   (`start byte index 66 is not a char boundary; it is inside
 //!   '在'`);
 //! - the regexes silently stopped matching when the emitter's attribute order
 //!   changed. `<a href="…"` never matches moss-core's external-link output,
@@ -265,7 +265,7 @@ fn push_inlines_text(out: &mut String, inlines: &[Inline]) {
 ///
 /// A document without a plan — synthesized outside the markdown pipeline —
 /// keeps its `html_content` as one opaque segment and picks up no enhancements,
-/// which is what those pages did before ADR-034 too.
+/// which is what those pages did before the typed grid cells too.
 pub(crate) fn resolve_page_body(
     doc: &ParsedDocument,
     all_docs: &[ParsedDocument],
@@ -302,7 +302,7 @@ pub(crate) fn resolve_page_body(
         // Critical-path I/O policy: render reads cache only and explicitly
         // records URLs for the next build's background prewarm. The first build
         // may render empty cards; the next sees populated metadata after sync
-        // has run. See moss issue #574.
+        // has run.
         crate::build::page::link_meta::record_urls_for_prewarm(&url_refs, &moss_dir);
         Some(crate::build::page::link_meta::read_link_meta_from_cache(
             &url_refs, &moss_dir,
@@ -696,7 +696,7 @@ fn find_document<'a>(folder_url: &str, index: &BuildIndex<'a>) -> Option<&'a Par
     // from it instead (drop `.md`, collapse a home file to its folder, append
     // `index.html`) re-implemented three rules page_map already applied — and
     // spelled the folder in the source's case, so a mixed-case folder matched
-    // nothing and the card silently vanished (moss#903 bug 3).
+    // nothing and the card silently vanished.
     index
         .documents
         .iter()

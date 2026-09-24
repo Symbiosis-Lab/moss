@@ -1,8 +1,7 @@
 //! Does the disk still match what we built? The sweep's verdict, judged
 //! against the manifest baseline.
 //!
-//! Phase 2 of `docs/archive/2026-08-18-watcher-reliability-architecture.md`
-//! ("Piece 1 — the sweep"). The walk itself — walkdir, cloud-stub mapping,
+//! "Piece 1 — the sweep": the walk itself — walkdir, cloud-stub mapping,
 //! the pass deadline — is the app-side driver's job
 //! (`build_shell::watch::sweep`); this module owns only the *comparison*:
 //! given what the walk found and what the manifest promised, is anything
@@ -59,8 +58,7 @@ use super::{source_metadata_verdict, SourceVerdict};
 /// without a clock (pre-field) counts as behind any stash that has one, and
 /// a manifest NEWER than the stash — one this process never stashed: an app
 /// restart, or another moss process building the same vault — is the newest
-/// truth and is judged as is. History and the log that bought this:
-/// `docs/archive/2026-09-05-sweep-baseline-generation-rule.md`.
+/// truth and is judged as is.
 ///
 /// `sealed` is read lazily: when the stash still matches `cache` (the
 /// previous pass's copy, carrying the sweep's stat-identity refreshes)

@@ -1,5 +1,5 @@
 //! The floating nav island — the second, smaller navigation object that
-//! appears part-way down a long page (ADR-049).
+//! appears part-way down a long page.
 //!
 //! A child module of `nav` rather than a sibling file for one reason: it
 //! builds from `NavigationBuilder`'s private state, and a child module can
@@ -12,7 +12,7 @@ use super::NavigationBuilder;
 /// The `…` disclosure a folding breadcrumb trail opens, plus the separator
 /// that follows it — ONE fragment for both trails (masthead and island), so
 /// the two cannot drift. Both ship `hidden`: the fold script
-/// (`frontend/site/nav/breadcrumb-fold.ts`) unhides them only once the trail
+/// (`breadcrumb-fold.ts`) unhides them only once the trail
 /// has actually had to fold, so with JavaScript off neither exists.
 ///
 /// No `aria-haspopup="menu"` and no `role="menu"` on the panel it opens:
@@ -29,7 +29,7 @@ pub(super) fn fold_more_fragment(class: &str, more_label: &str) -> String {
 
 impl<'a> NavigationBuilder<'a> {
     /// Generates the floating nav island — the small bar that appears when the
-    /// reader scrolls back up past the masthead ([ADR-049]).
+    /// reader scrolls back up past the masthead.
     ///
     /// It is **not** the masthead pinned. It is a second, smaller object: the
     /// same breadcrumb trail continued one level (the current page becomes the
@@ -37,16 +37,16 @@ impl<'a> NavigationBuilder<'a> {
     /// links, no theme toggle, no language switcher — those are set-once
     /// preferences that belong at the top of the document. No search either:
     /// the masthead has it and an inert icon in shipped chrome is worse than no
-    /// icon (ADR-049 §8).
+    /// icon.
     ///
     /// Reached only when the site opted in with `[site].floating_nav = true`
-    /// (default off since 2026-08-30 — ADR-049 §1 as amended), and returns an
+    /// (default off since 2026-08-30), and returns an
     /// empty string when the page has no breadcrumb trail: the homepage
     /// (nowhere to go "up" to) and any site that has turned breadcrumbs off.
     ///
     /// Whether an emitted island ever SHOWS is decided at runtime by
     /// `nav-island.ts`: only on a page with two or more section headings — a
-    /// real contents table (ADR-049 §10 as amended). That half of the rule
+    /// real contents table. That half of the rule
     /// lives in the script because heading depth is a rendered-DOM question it
     /// already answers for the sections panel, and duplicating it here would
     /// invite drift for the price of a few hundred `display: none` bytes.
@@ -55,13 +55,11 @@ impl<'a> NavigationBuilder<'a> {
     ///
     /// Everything here is a link the masthead also carries, so nothing is
     /// reachable only through this bar. The island is `display: none` until
-    /// `frontend/site/nav/nav-island.ts` writes `data-shown` on it, so with no
+    /// `nav-island.ts` writes `data-shown` on it, so with no
     /// script the page behaves exactly as it does today. The `…` ships
     /// `hidden` because the fold may never need it; the sections button does
     /// not, because an emitted island that is never shown without a contents
     /// table is an island whose sections button always has something to open.
-    ///
-    /// [ADR-049]: ../../../../../docs/decisions/ADR-049-floating-nav-is-a-second-smaller-object.md
     pub fn generate_nav_island(&self) -> String {
         let Some(segments) = &self.breadcrumb_segments else {
             return String::new();
@@ -78,11 +76,11 @@ impl<'a> NavigationBuilder<'a> {
         // The trail is the masthead's markup continued: same
         // `site-name` / `breadcrumb-segment` / `breadcrumb-label` /
         // `breadcrumb-separator` classes, same order, so "it matches the nav
-        // bar" is true by construction rather than by eye (ADR-049 §3). The one
+        // bar" is true by construction rather than by eye. The one
         // difference is the tail: `generate_navigation` skips
         // `segment.is_current` because the page title is directly below it on
         // screen. In the island it is not, so the island appends it as the
-        // final crumb with `aria-current="page"` (ADR-049 §4).
+        // final crumb with `aria-current="page"`.
         let mut crumbs: Vec<String> = Vec::new();
         for segment in segments {
             let is_home = !segment.is_current && segment.url == home_path;
@@ -104,10 +102,10 @@ impl<'a> NavigationBuilder<'a> {
                 //
                 // Because it is the one crumb that CAN be cut, it is also the
                 // one that needs a way to say what was cut off:
-                // `frontend/site/nav/breadcrumb-hint.ts` promotes `data-hint-label`
+                // `breadcrumb-hint.ts` promotes `data-hint-label`
                 // to a real tooltip exactly while the label is truncated, and
-                // drops it again when the window widens (ADR-049 §6 — reveal
-                // the full text only when it is genuinely cut off).
+                // drops it again when the window widens — reveal
+                // the full text only when it is genuinely cut off.
                 crumbs.push(format!(
                     r#"<span class="breadcrumb-segment moss-nav-island-current" aria-current="page" data-island-crumb data-hint-label="{}">{}</span>"#,
                     crate::build::page::meta::escape_html_attr(&segment.title),

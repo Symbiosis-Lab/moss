@@ -4,13 +4,12 @@
 //! Plainly: the editor's slash menu and fence autocomplete used to hand-copy
 //! this knowledge in TypeScript (`SHORTCODE_CATALOG`, `ASSET_ATTR_BY_SHORTCODE`)
 //! and the copies drifted (`apply` was missing). This table is generated into
-//! `frontend/app/editor/shortcodes.generated.ts` by the `shortcode-catalog`
-//! emitter in `src-tauri/dev-bin/generate-artifacts.rs`, CI-diff-gated like
+//! the frontend editor's `shortcodes.generated.ts` by the `shortcode-catalog`
+//! emitter in the desktop app's codegen binary, CI-diff-gated like
 //! `bindings.ts` — so the fact lives in Rust, once.
 //!
 //! Presentation (labels, hints, translations) is deliberately NOT here: hosts
-//! overlay their own i18n on the structural catalog (design:
-//! docs/archive/2026-08-11-cm6-extraction-design.md §4).
+//! overlay their own i18n on the structural catalog.
 //!
 //! The `entry()` match is total over [`ShortcodeKind`] — adding a variant
 //! fails compilation HERE until the catalog describes it.

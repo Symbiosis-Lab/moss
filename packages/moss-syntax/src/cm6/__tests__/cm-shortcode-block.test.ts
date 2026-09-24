@@ -400,7 +400,7 @@ describe('revealed-fence token highlighting (active block)', () => {
   // The reveal contract shows an active block's fences as raw source; raw is
   // token-highlighted, not plain: colons/braces muted (cm-sc-delim), the name
   // in keyword weight (cm-sc-name), attr keys secondary (cm-sc-attr-key),
-  // values plain. See docs/archive/2026-08-14-raw-markup-token-highlight.md.
+  // values plain.
   const has = (
     marks: { cls: string; from: number; to: number }[],
     cls: string, from: number, to: number,

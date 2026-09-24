@@ -123,8 +123,7 @@ export function flattenBlocks(blocks: ShortcodeBlockInfo[]): ShortcodeBlockInfo[
  * block answers that question in one pass.
  *
  * Exists so the editor can render a fence body at STRUCTURE density (media
- * become one-line tokens) while ordinary body text is untouched — see
- * docs/archive/2026-08-21-editor-container-media-density-design.md. Lives here
+ * become one-line tokens) while ordinary body text is untouched. Lives here
  * rather than in the editor so there stays exactly one reader of the block
  * tree; two readers of the same structure drift.
  */
@@ -449,7 +448,6 @@ const REPLACE = Decoration.replace({});
 // highlighting — delimiters muted, payload styled — mirroring Obsidian's
 // formatting/payload class split. Resting fences never carry these marks;
 // their lines are REPLACE'd (micro-tag / rule) so there is nothing to color.
-// See docs/archive/2026-08-14-raw-markup-token-highlight.md.
 const MARK_SC_DELIM = Decoration.mark({ class: 'cm-sc-delim' });      // ::: { }
 const MARK_SC_NAME = Decoration.mark({ class: 'cm-sc-name' });        // grid
 const MARK_SC_ATTR_KEY = Decoration.mark({ class: 'cm-sc-attr-key' }); // cols=

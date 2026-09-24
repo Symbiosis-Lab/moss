@@ -1,8 +1,8 @@
 //! Remote sync for Artalk comments: fetch, translate, reconcile, persist.
 //!
-//! FIXME(ADR-025): the comment mirror is still persisted as `comment.json`
-//! (materialized JSON), not the planned append-only `comment.jsonl` event log
-//! (impl-plan §1.3). This is an INTENTIONAL deferral: the mirror is a rebuildable
+//! FIXME: the comment mirror is still persisted as `comment.json`
+//! (materialized JSON), not the planned append-only `comment.jsonl` event log.
+//! This is an INTENTIONAL deferral: the mirror is a rebuildable
 //! cache, and the precious local-first artifact (`moderation.jsonl`) already uses
 //! the JSONL `event_log` substrate. Migrate the mirror to JSONL when convenient.
 
@@ -18,7 +18,7 @@ fn normalize_artalk_comment(raw: &serde_json::Value) -> Option<NormalizedComment
     // Prefer Artalk's rendered HTML (`content_marked`) over the raw markdown
     // source (`content`), and SANITIZE at ingest: comment HTML is attacker-
     // controlled and is rendered into baked pages + the dehydrated store. Never
-    // trust the upstream server's sanitization (ADR-025 §11).
+    // trust the upstream server's sanitization.
     let raw_html = raw
         .get("content_marked")
         .and_then(|c| c.as_str())
@@ -220,7 +220,7 @@ fn migrate_tombstones_to_signed_events(
 /// server-wins. Deletions propagate (a comment absent from the server is
 /// dropped). Signed `hide` events in `moderation.jsonl` are the sole
 /// bake-time moderation path (`reduce::retain_visible`); tombstones in
-/// `comment.json` are no longer created or consulted. See ADR-025.
+/// `comment.json` are no longer created or consulted.
 fn reconcile_article_comments(
     _existing: Vec<NormalizedComment>,
     incoming: Vec<NormalizedComment>,
@@ -377,7 +377,7 @@ fn load_comment_data_strict(
 /// **`pub(in crate::build::features)` — do not widen.** This function does
 /// blocking network I/O (each request can take 30s+ when the upstream is
 /// unreachable). Calling it from the build's critical path hangs the
-/// whole pipeline — see moss issue #570.
+/// whole pipeline.
 ///
 /// The legitimate caller is
 /// [`crate::build::features::sync::spawn_native_process_sync`], which runs

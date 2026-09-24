@@ -1,4 +1,4 @@
-//! Verdict tests (moss#968 Stage 1 + Stage 2).
+//! Verdict tests.
 //!
 //! The escape hatches are asserted by NAME here — the whole point of
 //! `FullCause` is that a site permanently taking the full path stops looking
@@ -50,7 +50,7 @@ fn doc(url: &str, kind: PageKind, body: &str, description: Option<&str>) -> Pars
 
 /// One folder index (a listing host) over two described articles, plus the
 /// root home. The two hosts are what re-rendered unconditionally before
-/// moss#968.
+/// this model.
 fn vault() -> Vec<ParsedDocument> {
     vec![
         doc("index.html", PageKind::Folder, "home body", Some("Home")),
@@ -140,7 +140,7 @@ fn a_no_op_rebuild_skips_every_page_including_every_listing_host() {
 }
 
 /// A body edit to a child that carries a frontmatter `description:` renders
-/// that page and nothing else. Before moss#968 it rendered the page *and*
+/// that page and nothing else. Before this model it rendered the page *and*
 /// both listing hosts.
 #[test]
 fn a_body_edit_below_the_lede_renders_one_page_and_no_host() {
@@ -241,7 +241,7 @@ fn each_full_render_says_why() {
     assert_full(&h.run(&docs), FullCause::LangGlobalsMoved);
 }
 
-/// The actual false positive moss#1041 reports: an ordinary leaf page with
+/// The actual false positive: an ordinary leaf page with
 /// NO translation-group siblings has its `lang` re-decided (frontmatter edit,
 /// or content-detection flipping on a rewritten paragraph). Nothing else in
 /// the corpus reads this page's raw `.lang` — `translations` on every OTHER
@@ -272,7 +272,7 @@ fn a_lang_change_with_no_translation_group_stays_incremental() {
 }
 
 /// A genuine translation PAIR is a different case, and this test's original
-/// form (see moss#1041 investigation) wrongly expected it to also stay
+/// form wrongly expected it to also stay
 /// incremental. It can't: `translations` has a real cross-page reader the
 /// dependency graph cannot see — `render/blocking.rs`'s auto-index folder
 /// filter reads an arbitrary OTHER document's `.translations` (via
@@ -370,7 +370,7 @@ fn a_cache_without_listing_digests_renders_every_host_exactly_once() {
     let h = Harness::new();
     h.run(&vault());
 
-    // Strip the two moss#968 fields, leaving a moss#922-era cache.
+    // Strip the two listing-digest fields, leaving an older-era cache.
     let raw = std::fs::read_to_string(&h.cache).unwrap();
     let mut value: serde_json::Value = serde_json::from_str(&raw).unwrap();
     let obj = value.as_object_mut().unwrap();

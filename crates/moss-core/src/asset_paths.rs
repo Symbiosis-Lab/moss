@@ -1,6 +1,6 @@
 //! Pure URL/path transform helpers — no filesystem access, no env lookups.
 //! Used by moss-core's render functions (see crate::render::*) and by
-//! upstream src-tauri call sites.
+//! upstream call sites in the desktop app.
 //!
 //! # Design Intent
 //!
@@ -252,7 +252,6 @@ pub fn deployed_long_edge(natural_w: u32, natural_h: u32, max_edge: u32) -> u32 
 /// vocabulary (named in the moss-core CHANGELOG); consumers should prefer
 /// [`ladder_rungs`] / [`deployed_width`] over indexing `LADDER` directly, so
 /// ladder policy stays in one place.
-/// See docs/archive/2026-07-22-responsive-image-variants-design.md.
 pub const LADDER: [u32; 2] = [800, 1600];
 
 /// Width the deployed base variant actually has after the encoder's
@@ -365,7 +364,7 @@ pub fn deployed_width(natural_w: u32, natural_h: u32) -> u32 {
 /// input to this function — e.g. copying the Y1 sized-raster APNG
 /// verbatim-keep guard (build/media/image.rs ~line 830) onto rung encodes —
 /// would create emitted-but-never-encoded rungs, i.e. the non-recoverable
-/// chosen-`<source>` 404 (ADR-013). Task 5 must NOT copy that guard.
+/// chosen-`<source>` 404. Task 5 must NOT copy that guard.
 pub fn ladder_rungs(natural_w: u32, natural_h: u32, is_animated: bool) -> &'static [u32] {
     if is_animated {
         return &[];
@@ -426,8 +425,7 @@ impl VideoRung {
 /// three times leaner per pixel than the rung it turned away.
 ///
 /// 0.045 is measured, not chosen. Encoding the same source at 45 kbps and
-/// 320x180 (docs/archive/2026-08-27-video-delivery-on-slow-networks.md, Stage 0):
-/// at 30 fps — 0.0260 — faces and wall texture dissolve; at 15 fps — 0.0521 —
+/// 320x180: at 30 fps — 0.0260 — faces and wall texture dissolve; at 15 fps — 0.0521 —
 /// the picture holds. Apple's own leanest published rung, 145 kbps at 416x234x30,
 /// sits at 0.0497, and every other rung in [`VIDEO_LADDER`] is above 0.05.
 ///

@@ -14,7 +14,7 @@ Fixture for CLI plugin hook integration tests. Renamed from `plugin-test-site`.
   against `expected/`.
 
 Referenced by:
-- `src-tauri/tests/plugin_integration_tests.rs` (via `get_hooks_site_path()`).
+- the desktop app's plugin integration tests (via `get_hooks_site_path()`).
 - `tests/e2e/tests/cli-hooks.test.ts` (via `FIXTURE_PATH`).
 
 See `basic-site/README.md` for the regeneration procedure.

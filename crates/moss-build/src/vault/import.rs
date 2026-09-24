@@ -1,7 +1,6 @@
 //! Importing external content into the vault.
 //!
-//! One conventions engine instead of per-builder adapters (design:
-//! `docs/archive/2026-07-27-import-conventions-engine-design.md`). The
+//! One conventions engine instead of per-builder adapters. The
 //! scrape pipeline enters through [`engine::extract_with_evidence`] via
 //! [`scrape::converter::extract_article_with_snapshot`].
 //!

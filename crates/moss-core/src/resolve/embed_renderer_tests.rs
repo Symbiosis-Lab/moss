@@ -104,7 +104,7 @@ fn test_sizing_parse_empty_returns_none() {
 
 #[test]
 fn test_embed_class_constants_stable() {
-    // These strings are part of moss's HTML/CSS contract (#508).
+    // These strings are part of moss's HTML/CSS contract.
     // Changing them is a breaking change for theme authors; this test
     // exists to force an explicit decision if anyone tries.
     assert_eq!(CLASS_EMBED, "moss-embed");
@@ -120,7 +120,7 @@ fn test_embed_class_constants_stable() {
 #[test]
 fn test_embed_marker_prefixes_stable() {
     // Marker prefixes are a contract between moss-core (emit) and
-    // src-tauri (resolve). Changing them breaks the resolver.
+    // the desktop app (resolve). Changing them breaks the resolver.
     assert_eq!(MARKER_MARKDOWN, "moss-embed");
     assert_eq!(MARKER_IPYNB, "moss-embed-ipynb");
     assert_eq!(MARKER_TABLE, "moss-embed-table");

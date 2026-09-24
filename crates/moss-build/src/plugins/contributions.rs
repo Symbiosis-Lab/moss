@@ -1,12 +1,12 @@
 //! What a plugin contributes — the manifest's answer to "what does the user
-//! gain by installing this?" (ADR-055).
+//! gain by installing this?"
 //!
 //! Split out of `types.rs` because it is a vocabulary that grows: every new
 //! kind of contribution lands here, while `PluginManifest` itself stays a flat
 //! record of fields.
 //!
-//! Since 2026-08-30 this is also where the plugin setup contract lives
-//! (docs/archive/2026-08-30-plugin-setup-contract.md): one `setup` block per
+//! Since 2026-08-30 this is also where the plugin setup contract lives:
+//! one `setup` block per
 //! contribution, with `needs` (host-evaluated preconditions), `settings` (a
 //! list of [`Field`]s moss draws), and `check` (the `check_setup` hook). The
 //! six declaration surfaces that grew ad hoc — `capabilities`,
@@ -27,14 +27,14 @@ use std::collections::HashMap;
 ///
 /// Modeled after VS Code's `contributes` manifest key — plugins declare
 /// field definitions in their manifest; moss merges them into the active
-/// schema at runtime. See docs/reference/plugin-schema-contributions.md.
+/// schema at runtime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginContributes {
     /// Frontmatter field definitions contributed by this plugin.
     #[serde(default)]
     pub frontmatter: Option<ContributedFrontmatter>,
 
-    /// Typed-embed renderers contributed by this plugin (moss#556).
+    /// Typed-embed renderers contributed by this plugin.
     ///
     /// Each entry declares one or more file extensions and a script that
     /// renders them. At pipeline init, moss wraps each in a
@@ -43,18 +43,17 @@ pub struct PluginContributes {
     /// that invokes the script via plugin IPC when the Deferred marker
     /// is encountered.
     ///
-    /// See docs/reference/obsidian-compatibility.md § Plugin renderers.
     #[serde(default)]
     pub embed_renderers: Vec<EmbedRendererContribution>,
 
-    /// A place the user's writing can be sent to, and read back from
-    /// (ADR-055). Replaces the `syndicate` / `login` / `import` capabilities:
+    /// A place the user's writing can be sent to, and read back from.
+    /// Replaces the `syndicate` / `login` / `import` capabilities:
     /// those three said which hook the plugin exported, this says what the
     /// user gains — "moss can post to Matters for you".
     #[serde(default)]
     pub channel: Option<ChannelContribution>,
 
-    /// A place the user's site can be published to (ADR-055). Replaces the
+    /// A place the user's site can be published to. Replaces the
     /// `deploy` capability.
     #[serde(default)]
     pub deploy_target: Option<DeployTargetContribution>,
@@ -77,7 +76,7 @@ pub struct PluginContributes {
     pub jobs: Option<ContributedJobs>,
 
     /// The long-lived local companion process this plugin declares and moss
-    /// installs/runs on its behalf (ADR-080). A plugin declares at most one.
+    /// installs/runs on its behalf. A plugin declares at most one.
     /// Never synthesized from `requires_stack` — that legacy alias states
     /// only the *need*, not an artifact pin; see [`PluginManifest::stack_id`].
     #[serde(default)]
@@ -143,7 +142,7 @@ pub struct ContributedFrontmatter {
 }
 
 /// A channel the plugin adds — somewhere the user's writing goes, and
-/// possibly comes back from (ADR-055).
+/// possibly comes back from.
 ///
 /// Syndication is what a channel *is*, so it needs no flag. `imports` and
 /// `login` each name an export the plugin also provides, and
@@ -173,7 +172,7 @@ pub struct ChannelContribution {
     /// [`ContributionReadiness::setup`] — a channel whose setup is one API
     /// token has nothing to connect, and would otherwise get a connection
     /// row in settings and an auto-opening login prompt for an account that
-    /// does not exist. ADR-072 plans to read the export itself at install
+    /// does not exist. A future version plans to read the export itself at install
     /// time; until then the manifest says it.
     ///
     /// Reads `requires_login` too, the name it carried before 2026-08-30, so
@@ -187,7 +186,7 @@ pub struct ChannelContribution {
 }
 
 /// A place the site can be published to — GitHub Pages, IPFS, an onion
-/// service (ADR-055).
+/// service.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeployTargetContribution {
     /// Name shown to the user; defaults to the plugin's display name.
@@ -228,8 +227,7 @@ pub struct ProcessorContribution {
 /// Hoisted out of `DeployTargetContribution` on 2026-08-30: a channel could
 /// say nothing at all about what it needed, so whether a plugin could name a
 /// credential depended on what kind of plugin it was rather than on what it
-/// held
-/// (docs/archive/2026-08-30-credential-custody-beyond-deploy-targets.md).
+/// held.
 /// A new contribution kind gains the whole vocabulary by flattening this in.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ContributionReadiness {
@@ -461,7 +459,7 @@ impl PluginManifest {
     }
 
     /// The id of the stack this plugin declares, if it declares one. `Need`
-    /// carries no payload for the id (ADR-080 item 3, amended 2026-09-10):
+    /// carries no payload for the id (amended 2026-09-10):
     /// this accessor is what a caller reads instead.
     pub fn stack_id(&self) -> Option<&str> {
         Some(self.contributes.as_ref()?.stack.as_ref()?.id.as_str())
@@ -486,7 +484,7 @@ impl PluginManifest {
     /// to itself:
     /// 1. Contributions are synthesized from declared `capabilities`
     ///    (`process` → `processor`, `deploy` → `deploy_target`,
-    ///    `syndicate`/`import`/`login` → `channel`), so the pre-ADR-055
+    ///    `syndicate`/`import`/`login` → `channel`), so the legacy
     ///    spelling keeps working.
     /// 2. Natively-declared `settings` pass [`validate_declared_fields`] —
     ///    the strict rules bind the surface that was born with them.
@@ -514,7 +512,7 @@ impl PluginManifest {
         Ok(manifest)
     }
 
-    /// The pre-ADR-055 spelling: a bare `capabilities` list with no
+    /// The legacy spelling: a bare `capabilities` list with no
     /// `contributes` block. Each declared capability synthesizes the
     /// contribution that now grants it, so the fold below can stay the only
     /// source of capabilities without unloading an installed plugin.
@@ -1062,7 +1060,7 @@ mod tests {
     /// `capabilities` in a manifest that also declares `contributes` is parsed
     /// and never trusted — the contributions are the only source. A declared
     /// capability no contribution grants is synthesized INTO a contribution
-    /// first (the pre-ADR-055 spelling), so nothing an installed plugin could
+    /// first (the legacy spelling), so nothing an installed plugin could
     /// say is lost; what cannot happen is the two lists disagreeing.
     #[test]
     fn capabilities_are_derived_from_contributions() {

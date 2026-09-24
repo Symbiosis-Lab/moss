@@ -17,8 +17,8 @@
 //!   reflink. See [`supports_cow`].
 //!
 //! - **The content-addressed cache** — `cache::gc` is a correct mark-and-sweep
-//!   that, until moss#976, had no automatic caller at all: the only entry point
-//!   was the `run_cache_gc` Tauri command, which nothing in the frontend ever
+//!   that used to have no automatic caller at all: the only entry point
+//!   was the `run_cache_gc` Tauri command, which nothing in the app's UI ever
 //!   invoked. Measured on a real site: 10,143 objects on disk against 923
 //!   referenced — ~0.5 GB of genuinely unreachable blobs, growing forever.
 //!   [`maybe_gc_cache`] supplies the missing trigger, modelled on git's
@@ -62,7 +62,7 @@ use super::cache;
 ///
 /// It is deliberately NOT larger. moss is a client that owns the source and has
 /// git; deep history of a *derived* tree is not moss's job, and only the newest
-/// generation is ever read (the full reader inventory in moss#976 resolves
+/// generation is ever read (a full reader inventory found this resolves
 /// `current_ptr()`, with one exception — see [`gc_roots`]). The prior value was
 /// 5, a hardcoded literal with no knob, matching Capistrano's `keep_releases`
 /// default — but Capistrano retains on the *server*, where the source is absent
@@ -126,7 +126,7 @@ pub fn effective_keep_generations(configured: Option<usize>, build_dir: &Path) -
 ///    from several fast rebuilds cannot `remove_dir_all` the directory an upload
 ///    is streaming from.
 /// 3. `last_deployed` — `last_deployed_generation_id` from `.moss/state.toml`.
-///    This is the non-obvious one, and the reason moss#976 files it as a
+///    This is the non-obvious one, and the reason this is a
 ///    correctness fix rather than a cleanup: `email/commands.rs`'s
 ///    publish-before-send gate resolves that id and checks the math PNGs exist
 ///    inside it. Once that generation aged past the retention window it was
@@ -237,8 +237,8 @@ fn save_watermark(build_dir: &Path, objects_after_gc: usize) {
         return;
     };
     // `.moss/build.nosync/**` is regenerable output, so this goes through io_utils:
-    // a cloud-evicted destination is *absent*, not something to materialize
-    // (ADR-043). A raw `fs::write` here would `EDEADLK` the build.
+    // a cloud-evicted destination is *absent*, not something to materialize.
+    // A raw `fs::write` here would `EDEADLK` the build.
     if let Err(e) = super::io_utils::write_output(&watermark_path(build_dir), json.as_bytes()) {
         log::warn!("cache GC: failed to record watermark: {}", e);
     }
@@ -335,7 +335,7 @@ pub fn maybe_gc_cache(mp: &crate::moss_paths::MossPaths) -> Option<cache::GcResu
 /// back, and `du` reports the same number either way, so the difference was
 /// invisible until the disk filled.
 ///
-/// Hardlinking is not the fallback — ADR-013 bans it in the output tree because
+/// Hardlinking is not the fallback — it is banned in the output tree because
 /// iCloud "optimize storage" zeroes by inode, turning every hardlinked copy into
 /// a 0-byte stub at once. The only lever is retaining fewer generations, which is
 /// what [`effective_keep_generations`] does with this answer.

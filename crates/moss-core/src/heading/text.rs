@@ -24,7 +24,7 @@
 //!
 //! The `&[Inline]` half of the policy (and its adapter,
 //! [`crate::ast::plain_text::inlines_to_plain_text`]) moved to
-//! `ast/plain_text.rs` (ADR-036) once a third non-heading consumer
+//! `ast/plain_text.rs` once a third non-heading consumer
 //! (`build::page::meta::extract_description`) appeared — exactly the
 //! trigger that module's promotion doc comment named in advance. This
 //! module keeps only [`events_to_text`], the mid-parse event-stream half
@@ -55,8 +55,8 @@ use pulldown_cmark::Event;
 /// caller passes the range *inside* the heading tags (exclusive of the
 /// matching `Event::End(TagEnd::Heading)`).
 ///
-/// Mirrors production's `transform_events` heading-text collection at
-/// `src-tauri/src/build/markdown/pipeline.rs`. Inline HTML
+/// Mirrors production's `transform_events` heading-text collection in
+/// the desktop app's markdown pipeline. Inline HTML
 /// (`Event::InlineHtml` / `Event::Html`) is intentionally skipped, so
 /// `# HELLO,<br>AND GOODBYE` slugs as `HELLO,AND GOODBYE` with no `<br>`
 /// in the anchor. Link and image *labels* are captured: pulldown walks the

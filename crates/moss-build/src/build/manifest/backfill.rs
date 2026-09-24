@@ -8,7 +8,7 @@
 //! record for it under `.moss/deploy/records/`, so `change_set::classify(None,
 //! …)` is blank: no verbs, and — until this module — no counts either. The
 //! publish button then said *nothing at all*, which reads as "nothing to publish"
-//! rather than "moss cannot tell you" (moss#993 defect 2).
+//! rather than "moss cannot tell you".
 //!
 //! moss is not actually ignorant there. `.moss/state.toml` has carried
 //! `last_deployed_generation_id` since 2026-06-15, generation directories are
@@ -47,9 +47,8 @@
 //! over-reporting rather than under-reporting a publish:
 //!
 //! - `ship_phase` walks the filesystem rather than the manifest, so a
-//!   generation can hold a file the manifest never listed (see
-//!   `docs/reference/deploy-generations.md`). Such a file was never uploaded,
-//!   but reads here as one removal.
+//!   generation can hold a file the manifest never listed. Such a file was
+//!   never uploaded, but reads here as one removal.
 //! - A page that slot injection did not touch keeps its pre-strip hash in the
 //!   manifest and so reads as one upload.
 //!
@@ -166,7 +165,7 @@ pub async fn for_seal(
 /// The server's own `(need, remove)` for a sealed manifest — the arm for a
 /// vault with NO local trace of its last publish: a re-cloned vault whose
 /// `state.toml` was gitignored and whose generations are gone, but whose site
-/// is live (the CPHS vault, moss#993's worst case). The counts pass through
+/// is live (a real vault's worst case). The counts pass through
 /// [`change_set::flat`] and stay verbless.
 ///
 /// Advisory like everything here: no answer (host refusal, network failure,

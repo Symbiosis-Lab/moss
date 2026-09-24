@@ -50,7 +50,7 @@ fn resolves_standard_markdown_link_to_internal() {
 
     // Phase 4 PR7a-stage1b (2026-05-28): the visitor emits a
     // `moss-resolved:` sentinel for internal links (Url::Unresolved)
-    // so src-tauri's host classifier can decode it via page_map.
+    // so the desktop app's host classifier can decode it via page_map.
     // The renderer doesn't see this state — the host's
     // `classify_url_prod` pass replaces Unresolved before render.
     match &doc.blocks[0] {
@@ -313,7 +313,7 @@ fn standard_markdown_link_emits_sentinel() {
     assert_eq!(visitor[0].target_path, "文字/文字.md");
     assert_eq!(visitor[0].display_text, "文字");
     assert_eq!(visitor[0].link_type, LinkType::Standard);
-    // The sentinel shape is what `classify_url_prod` in src-tauri
+    // The sentinel shape is what `classify_url_prod` in the desktop app
     // expects to decode via `page_map` / `external_url_map`.
     match &doc.blocks[0] {
         Block::Paragraph(children) => match &children[0] {
@@ -642,7 +642,7 @@ fn hero_body_wikilink_href_does_not_depend_on_referencing_depth() {
     // string pass had to patch again (the referencing page is served at
     // `/articles/post/`, one level deeper than `articles/post.md`, so `../`
     // pointed at `/articles/assets/`). Depth is now structurally out of the
-    // answer instead of being compensated for. moss#903 bug 3.
+    // answer instead of being compensated for.
     let mut doc = parse(":::hero\n![[hero.jpg]]\n:::\n");
     let mut b = ContentGraphBuilder::new();
     b.add_file("articles/post.md", "post");
@@ -858,7 +858,7 @@ fn image_case_mismatch_emits_canonical() {
 
 #[test]
 fn image_href_is_identical_from_root_and_from_a_nested_note() {
-    // moss#903 bug 3, at the unit level: one asset under a MIXED-CASE folder,
+    // The same regression, at the unit level: one asset under a MIXED-CASE folder,
     // referenced from the vault root and from a note two folders deep. Both
     // emit the same pinned URL, and its directory segment is the slug the
     // asset copier writes (`MIRROR/` → `/mirror/`) — not the source spelling,

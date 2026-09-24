@@ -28,9 +28,9 @@ export const GUTTER = 8;
  * NOT `window.innerWidth`, and NOT `100vw`: both include the classic scrollbar
  * gutter, so on a desktop engine that reserves one they over-report the visible
  * band by its width and every clamp derived from them lands that far too far
- * right. `documentElement.clientWidth` is the band itself. (The editor's portal
- * tooltip reached the same conclusion independently — see the `viewportWidth`
- * note in `frontend/app/components/tooltip.ts`.)
+ * right. `documentElement.clientWidth` is the band itself. (The desktop app's
+ * editor portal tooltip reached the same conclusion independently, in its own
+ * `viewportWidth` note.)
  */
 export function visibleWidth(): number {
   return document.documentElement?.clientWidth || window.innerWidth;

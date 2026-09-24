@@ -5,7 +5,7 @@
 //! covering the whole token. The offsets let callers rewrite the source without
 //! re-scanning.
 //!
-//! **No resolution** happens here. The caller (src-tauri) resolves each
+//! **No resolution** happens here. The caller (the desktop app) resolves each
 //! `RawRef` against the project's indexes.
 //!
 //! Recognition runs over [`crate::inert_regions`]'s mask rather than a
@@ -16,7 +16,7 @@
 //! authored `<!-- … -->` comment and inside an indented code block are no
 //! longer extracted. The old doc justified scanning comments with
 //! build-internal `<!-- moss-embed:… -->` sentinels, which never appear in
-//! the author files this module's only consumer (src-tauri's
+//! the author files this module's only consumer (the desktop app's
 //! `editor::ref_scan`) reads from disk.
 
 /// Which surface syntax produced this reference.
@@ -83,7 +83,7 @@ pub struct RawRef {
 /// whether to filter them out.
 ///
 /// **Nested references are reported too.** The label of a markdown link is
-/// re-scanned, so `[![[hero.png]]](/album/)` — ADR-041's link-wrapped embed —
+/// re-scanned, so `[![[hero.png]]](/album/)` — a link-wrapped embed —
 /// yields the outer `MarkdownLink` AND the inner `WikilinkStemEmbed`, and
 /// `[![a](hero.png)](/album/)` yields the outer link and the inner image.
 /// Before that, the inner reference existed only as a substring of the outer
@@ -219,7 +219,7 @@ fn scan_range(source: &str, bytes: &[u8], from: usize, to: usize, refs: &mut Vec
                         ref_from: link.path_from,
                         ref_to: link.path_to,
                     });
-                    // The label can itself hold references — ADR-041's
+                    // The label can itself hold references —
                     // `[![[hero.png]]](/album/)`, or the CommonMark spelling
                     // `[![a](hero.png)](/album/)`. Scan it, bounded by the
                     // label's own end.
@@ -370,8 +370,8 @@ mod tests;
 // `:::gallery` body line, a `:::hero {image=…}` attribute and a frontmatter
 // `cover:` value are asset references with no reference syntax around them,
 // so they were invisible to rename tracking and silently broke on rename.
-// The types below are the second half of the answer; `ref_scan` (src-tauri)
-// unions the two.
+// The types below are the second half of the answer; `ref_scan` (the desktop
+// app) unions the two.
 
 /// Which container a structurally-extracted path was found in.
 /// Decides quoting when the value is rebuilt.
@@ -468,7 +468,7 @@ pub(crate) fn line_table(source: &str) -> Vec<(usize, usize, usize)> {
 ///
 /// Complements [`extract_md_references`], which sees only bracketed markdown
 /// tokens. A caller that REWRITES must union the two and resolve overlaps —
-/// see `apply_edits` in src-tauri's `editor::ref_scan`.
+/// see `apply_edits` in the desktop app's `editor::ref_scan`.
 pub fn extract_structural_asset_refs(source: &str) -> Vec<AssetPathSpan> {
     let mut v = crate::ast::shortcode_extract::shortcode_asset_spans(source);
     v.extend(crate::frontmatter::frontmatter_asset_spans(source));

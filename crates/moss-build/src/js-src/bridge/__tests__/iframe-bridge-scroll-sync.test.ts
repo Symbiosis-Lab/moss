@@ -185,7 +185,7 @@ describe("scrollToSourceLine at line 1", () => {
 //
 // This PR adds an explicit `atTop: boolean` to moss-scroll-position and to
 // the scrollToSourceLine RPC, AND removes the legacy `line <= 1` backstops
-// from both call sites. See docs/archive/2026-05-28-scroll-sync-atTop-wire-field.md.
+// from both call sites.
 
 describe("scrollToSourceLine RPC — atTop arg", () => {
   let scrollToCalls: Array<{ top: number; behavior: string }>;
@@ -318,7 +318,7 @@ describe("iframe-bridge atTop bundle regression", () => {
 
 // ── interpolatedScrollTop: the extracted, shipped interpolation geometry ──────
 //
-// This is the exact function the bridge calls (frontend/bridge/iframe-bridge.ts
+// This is the exact function the bridge calls (js-src/bridge/iframe-bridge.ts
 // scrollToSourceLine). Testing it directly closes the gap that let the
 // best.offsetHeight undershoot bug ship untested — the older harness above
 // reimplements a simplified path and never exercised the interpolation branch.

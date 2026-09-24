@@ -88,7 +88,7 @@ fn create_test_dir() -> (std::path::PathBuf, impl Drop) {
 /// `SealedManifest` to `.moss/build.nosync/hashes.json` so the next build's
 /// `load_previous_hashes` sees a complete manifest.
 ///
-/// Pre-#620 Item 2 the synchronous path was supported by:
+/// The old synchronous path was supported by:
 ///   1. a no-tokio-runtime fallback in `build_inner` (gone — sees
 ///      `debug_assert!` on tokio::runtime::Handle);
 ///   2. a legacy on-disk `hashes.json` write inside the runners (gone —
@@ -142,7 +142,7 @@ fn build_test_full(
     // `every_completion_reports_the_port_that_came_up_during_the_build`).
     let preview_port = crate::build::ports::port_of_this_build(server_port, None);
     rt.block_on(async move {
-        // PR7b (moss#599): `PipelineRunOutput::build_documents` carries the parsed
+        // `PipelineRunOutput::build_documents` carries the parsed
         // page slice. This test path doesn't consume it (snapshot tests inspect
         // the on-disk output), so we discard it here.
         let slots = resolved_slots.clone();
@@ -918,7 +918,7 @@ fn test_pointer_sequence_during_rebuild() {
 }
 
 // =========================================================================
-// Two-Phase Build Tests (ADR-001: Staged Build)
+// Two-Phase Build Tests (Staged Build)
 // =========================================================================
 // These tests verify the two-phase build architecture:
 // - Blocking phase (~1s): scan, markdown->HTML, document_setup, server start
@@ -932,7 +932,7 @@ fn test_pointer_sequence_during_rebuild() {
 
 #[test]
 fn test_build_returns_before_assets_copied() {
-    // ADR-001: build() should return quickly after blocking phase
+    // build() should return quickly after blocking phase
     // Assets copying happens in background
     let (test_dir, _cleanup) = create_test_dir();
     let folder_path = test_dir.to_str().unwrap();
@@ -965,13 +965,13 @@ fn test_build_returns_before_assets_copied() {
     );
 
     // Note: In the current implementation, assets are copied synchronously.
-    // After implementing ADR-001, assets may still be copying in background.
+    // Under the two-phase build, assets may still be copying in background.
     // The test verifies that build() returns before assets are fully copied.
 }
 
 #[test]
 fn test_html_available_immediately_after_build() {
-    // ADR-001: Core HTML content must be available immediately
+    // Core HTML content must be available immediately
     // This is the key user-facing requirement - browser can open right away
     let (test_dir, _cleanup) = create_test_dir();
     let folder_path = test_dir.to_str().unwrap();
@@ -1031,7 +1031,7 @@ fn test_html_available_immediately_after_build() {
 
 #[test]
 fn test_blocking_phase_includes_essential_files() {
-    // ADR-001: Blocking phase must include all files needed for initial page load
+    // Blocking phase must include all files needed for initial page load
     // This means: HTML, CSS, JS, favicon (if exists)
     let (test_dir, _cleanup) = create_test_dir();
     let folder_path = test_dir.to_str().unwrap();
@@ -1084,7 +1084,7 @@ fn test_blocking_phase_includes_essential_files() {
 }
 
 // =========================================================================
-// Background Video Conversion Tests (ADR-001: Phase 2)
+// Background Video Conversion Tests (Phase 2)
 // =========================================================================
 
 #[test]
@@ -2260,8 +2260,8 @@ fn test_stale_directory_removed_after_article_deletion() {
         copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
     }
 
-    // Stale-dir cleanup moved to the seal+persist side task in build.rs
-    // (#621). The tx=None path no longer runs cleanup inline. Simulate
+    // Stale-dir cleanup moved to the seal+persist side task in build.rs.
+    // The tx=None path no longer runs cleanup inline. Simulate
     // the new flow by calling cleanup explicitly with the same site_hashes
     // the in-band call would have used.
     let expected_dirs = compute_expected_dirs(&site_hashes);
@@ -2315,7 +2315,7 @@ fn test_stale_directory_with_stale_files_removed() {
         copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
     }
 
-    // Stale-file + stale-dir cleanup moved to seal+persist side task (#621);
+    // Stale-file + stale-dir cleanup moved to seal+persist side task;
     // simulate that step here so this test continues to exercise the
     // cleanup logic.
     remove_stale_files(&output, &site_hashes, "test", &crate::build::lifecycle::permit_for_test());
@@ -2402,7 +2402,7 @@ fn remove_stale_files_unlinks_unkept_symlinks_without_descending_into_them() {
     assert_eq!(report.symlink, 1);
 }
 
-/// `_moss/math/` is append-only (ADR-030 §3.4): no `<hash>.png` there is ever
+/// `_moss/math/` is append-only: no `<hash>.png` there is ever
 /// stale. The `.pending.` temp a crashed write left beside one is.
 #[test]
 fn remove_stale_files_takes_math_png_temps_but_keeps_every_png() {
@@ -2514,7 +2514,7 @@ fn test_remove_stale_files_deletes_untracked_webp() {
     );
 }
 
-/// ADR-030 §3.4 append-only retention: a math PNG whose equation was
+/// Append-only retention: a math PNG whose equation was
 /// edited or deleted has NO entry in the new build's hashes, but its URL
 /// is baked into already-sent emails (Gmail's proxy caches it forever).
 /// Stale-file cleanup must never touch `_moss/math/`.
@@ -2570,7 +2570,7 @@ fn remove_stale_dirs_never_deletes_math_dir() {
 /// `/resources/habitable-zone.html` and `/jupyter/**`.
 ///
 /// The walk now owns only the static-asset slice, seeded from the PREVIOUS
-/// build's manifest (moss#618), so it has no way to sweep an entry belonging
+/// build's manifest, so it has no way to sweep an entry belonging
 /// to another phase. This test holds that: the notebook entry is registered
 /// into the pending manifest the coordinator carries — as
 /// `run_notebook_processing` registers it in `build_inner` — and must still be
@@ -2830,8 +2830,8 @@ fn test_copy_deferred_assets_cleans_staging_dir() {
         copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
     }
 
-    // Stale-file cleanup moved to the seal+persist side task in build.rs
-    // (#621). Simulate that step here so this test continues to exercise
+    // Stale-file cleanup moved to the seal+persist side task in build.rs.
+    // Simulate that step here so this test continues to exercise
     // the staging+site cleanup logic.
     remove_stale_files(&site, &site_hashes, "site", &crate::build::lifecycle::permit_for_test());
     remove_stale_files(&staging, &site_hashes, "staging", &crate::build::lifecycle::permit_for_test());
@@ -3335,9 +3335,9 @@ fn test_copy_deferred_assets_skips_root_script_js() {
 /// recorded under `SealedManifest::video_outputs` and NOT under
 /// `files` / `blocking_keys`.
 ///
-/// Pre-Track A this lived as `test_update_video_hashes_uses_mapped_paths`
+/// This used to live as `test_update_video_hashes_uses_mapped_paths`
 /// and asserted the on-disk hashes.json contained the mapped paths after
-/// `update_video_hashes(&ctx)`. The on-disk fallback is gone (#620 Item 2);
+/// `update_video_hashes(&ctx)`. The on-disk fallback is gone;
 /// the runner now sends EmitMessage::VideoOutputs through the coordinator
 /// channel. The mapping itself (file-tree → page-tree) happens inside the
 /// runner's path-derivation; this test exercises the coordinator wiring
@@ -4473,7 +4473,6 @@ fn test_image_compression_pipeline_end_to_end() {
     // data-placeholder-src removed 2026-05-20 from both the synthesizer
     // and the regex pass. iframe-bridge matches by URL substring now;
     // AssetRegistry + preview server handle the placeholder lifecycle.
-    // See docs/archive/2026-05-20-image-variant-honest-mirror.md.
     assert!(
         !html.contains("data-placeholder-src"),
         "data-placeholder-src must not be emitted post-2026-05-20, got: {}",
@@ -4521,9 +4520,9 @@ fn test_image_compression_pipeline_end_to_end() {
 /// well-meaning cleanup that drops the `sources` map writes would
 /// silently regress to the slow path.
 ///
-/// Pre-#620 Item 2: this test ran two `copy_deferred_assets(... None)`
-/// calls and roundtripped the persisted `hashes.json` between them.
-/// Post-#620 Item 2: the on-disk fallback is gone. The test now seals
+/// This test used to run two `copy_deferred_assets(... None)`
+/// calls and roundtrip the persisted `hashes.json` between them.
+/// Now the on-disk fallback is gone. The test instead seals
 /// the run-1 manifest from the coordinator, then feeds the sealed
 /// `SiteHashes` as `previous_hashes` to run 2 — mirroring the
 /// production flow where `seal+persist` writes to disk and the next
@@ -4594,7 +4593,7 @@ async fn copy_deferred_assets_warm_cache_zero_misses() {
 /// `current_sealed_manifest` was never populated → deploy hard-errored with
 /// "Deploy artifacts are not sealed yet."
 ///
-/// The first fix added an `else` branch making a zero-worker handle. moss#618
+/// The first fix added an `else` branch making a zero-worker handle. A later fix
 /// removed the gate instead: every build now dispatches the asset walk, so
 /// there is always a worker and always a seal, and the branch this test was
 /// written against no longer exists. The assertion is kept because it states
@@ -4793,7 +4792,7 @@ fn build_test_shipped(
 /// `publishable` the way `build.rs::advertise_sealed` does, instead of always
 /// shipping. `build_test_shipped` hardcodes `ShipVerdict::Ship` because none
 /// of its callers care about the withhold branch; the tests that care about
-/// `publishable` (moss#1042 / the 2026-09-17 ADR-056 revision) need exactly
+/// `publishable` (the 2026-09-17 revision) need exactly
 /// the branch it skips.
 ///
 /// Deliberately does not call `degrade::repair_staged_html` — the presence
@@ -4887,7 +4886,7 @@ fn stage_snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<String, u
 
 /// A build that changes nothing must DO nothing.
 ///
-/// The general shape of moss#1085: one part of the build derives a set by
+/// The general shape of this bug: one part of the build derives a set by
 /// walking the disk, another derives "the same" set by reading what the render
 /// referenced, the two disagree, and every build redoes work that can never
 /// settle. On harbor that ran for sixteen consecutive builds — 96 `.webp`
@@ -4950,8 +4949,8 @@ fn a_build_that_changes_nothing_does_nothing() {
     )
     .unwrap();
 
-    // The colocated case from moss#1085, stated rather than stumbled into. On
-    // harbor that was `0ba912901f865c42.jpg` colocated in
+    // The colocated case, stated rather than stumbled into. On
+    // a real site that was `0ba912901f865c42.jpg` colocated in
     // `awards/film/s1/assets/` and `awards/film/s2/assets/`: one referrer, two
     // staged copies. `make_big_jpeg_at` is deterministic, so this file is
     // byte-identical to `posts/assets/inline.jpg` and the two share ONE cache
@@ -4985,8 +4984,7 @@ fn a_build_that_changes_nothing_does_nothing() {
     assert!(
         pruned.is_empty(),
         "a converged build must condemn nothing — {pruned:?} means something \
-         re-materialized variants the previous build had already dropped \
-         (moss#1085)"
+         re-materialized variants the previous build had already dropped"
     );
 
     let changed: Vec<&String> = before
@@ -5010,7 +5008,7 @@ fn a_build_that_changes_nothing_does_nothing() {
     assert!(
         !stage_dir.join("gallery/assets/inline.webp").exists(),
         "the colocated copy nobody references must stay gone, not be re-healed \
-         from the object its referenced twin keeps alive (moss#1085)"
+         from the object its referenced twin keeps alive"
     );
 
     // ---- and suppression is a latch, not a one-way door ----------------
@@ -5019,7 +5017,7 @@ fn a_build_that_changes_nothing_does_nothing() {
     // unreferenced is only safe if pointing a page at that image brings it
     // straight back. Otherwise the build ships a `<source srcset>` for a file
     // it deliberately did not write, and `<picture>` has no fallback from a
-    // chosen source that 404s (ADR-013). The escape hatch is unit-tested on
+    // chosen source that 404s. The escape hatch is unit-tested on
     // `suppressed_variants` alone; only here does the whole chain have to
     // agree — persisted verdict → suppression lifted by HTML already staged
     // this build → encode → the offered URL naming real bytes.
@@ -5052,7 +5050,7 @@ fn a_build_that_changes_nothing_does_nothing() {
         stage_dir.join("gallery/assets/inline.webp").is_file(),
         "a suppressed variant a page now references must be produced again on \
          that same build, not one build later — the page already promises it, \
-         and <picture> does not recover from a chosen source that 404s (ADR-013)"
+         and <picture> does not recover from a chosen source that 404s"
     );
 }
 
@@ -5289,7 +5287,7 @@ fn gate_raises_when_an_unmarked_home_loses_to_an_evicted_alphabetical_winner() {
     assert!(home_page_is_a_substitute(&ps, tmp.path().to_str().unwrap()));
 }
 
-// ----- moss#982: the gate is monotonic, and sees post-scan evictions -----
+// ----- the gate is monotonic, and sees post-scan evictions -----
 
 #[test]
 fn the_gate_holds_on_a_cold_open_with_files_still_in_the_cloud() {
@@ -5304,7 +5302,7 @@ fn the_gate_never_holds_once_a_generation_is_sealed() {
     // Monotonicity. This is what makes a screen with no dismissal control safe:
     // `home_waiting` is re-emitted by every build and arrivals trigger builds,
     // so a re-armable gate can slam a full-window screen over a site the user is
-    // already reading (2026-08-05-cloud-waiting-screen-redesign.md §1).
+    // already reading.
     assert!(
         !cloud_gate_should_hold(false, true, 553, false),
         "a sealed generation is servable — blocking it is never right"
@@ -5326,7 +5324,7 @@ fn the_gate_is_silent_when_nothing_is_in_the_cloud() {
 
 #[test]
 fn a_post_scan_eviction_still_raises_the_gate() {
-    // The blindness moss#982 measured: the scan count is taken before the build
+    // A known blindness: the scan count is taken before the build
     // and prunes dot-directories, so it is 0 for anything evicted afterwards.
     // The caller folds the ledger into `cloud_outstanding` precisely so this
     // case reaches the gate at all; here that is the difference between the
@@ -5379,10 +5377,10 @@ fn a_fully_local_build_leaves_the_gate_exactly_where_it_was() {
     assert!(!cloud_gate_should_hold(true, false, 553, false));
 }
 
-// ----- moss#1042: the publish decision is not the screen decision -----
+// ----- the publish decision is not the screen decision -----
 //
 // `should_publish` — which used to withhold promotion whenever
-// `structural_incomplete` was true — was deleted in the 2026-09-17 ADR-056
+// `structural_incomplete` was true — was deleted in a 2026-09-17
 // revision (see `pipeline.rs`'s comment where it stood). The showing
 // question below is unchanged; the publish question now lives in full-build
 // tests instead of a pure function of `structural_incomplete` — see
@@ -5405,7 +5403,7 @@ fn a_sealed_generation_keeps_the_screen_down_even_when_this_build_is_incomplete(
 }
 
 /// Withholding the SCREEN on a cold vault rolls nothing back — there is
-/// nothing sealed to roll back to. This is the moss#1042 case at the
+/// nothing sealed to roll back to. This is the same case at the
 /// `cloud_gate_should_hold` level; the full-pipeline version lives in
 /// `a_cold_vault_with_unreadable_pages_still_shows_the_waiting_screen`.
 #[test]
@@ -5451,7 +5449,7 @@ fn structural_absence_always_implies_a_nonzero_cloud_count() {
     }
 }
 
-/// The publish half of the 2026-09-17 ADR-056 revision. Before it, a page still
+/// The publish half of a 2026-09-17 revision. Before it, a page still
 /// in the cloud made `structural_incomplete` true, and `should_publish` used
 /// that to withhold the WHOLE generation — so editing `index.md` while
 /// `keeper.md` sat offline meant neither page reached a reader. Ablate by
@@ -5613,7 +5611,7 @@ fn an_unreadable_config_toml_still_lets_the_build_publish() {
 /// than `build.rs`'s seal tail, so unlike production this build's
 /// `stale_sources` never reaches `BuildRecords` on its own — this test wires
 /// it in the same way `build.rs` does before checking `deploy::refuse_publish`,
-/// which is the other half of the moss#1042 revision this pins: showing
+/// which is the other half of the revision this pins: showing
 /// forgives a carried-forward footer, publish must not.
 #[cfg(target_os = "macos")]
 #[test]
@@ -5659,7 +5657,7 @@ fn a_carried_forward_footer_reaches_the_staleness_gate() {
     assert!(err.contains("footer.md"), "{err}");
 }
 
-/// The moss#1042 regression this whole revision must not reopen: a cold vault
+/// The regression this whole revision must not reopen: a cold vault
 /// — nothing sealed yet — whose only page source is unreadable must still show
 /// the waiting screen, never a placeholder home. This is a property of
 /// `cloud_gate_should_hold`/`home_ready`, which sit upstream of and are
@@ -5921,8 +5919,8 @@ fn a_vault_whose_media_all_exists_leaves_the_publish_gate_open() {
 /// sync client evicted between builds is dropped; a 0-byte stub is dropped
 /// too, so the next build's pre-render sweep unlinks it rather than a producer
 /// trusting it; a `_moss/math/`
-/// entry survives unreadable because the published site still serves it
-/// (ADR-030) and un-promising one deletes it from a live site; a symlink
+/// entry survives unreadable because the published site still serves it,
+/// and un-promising one deletes it from a live site; a symlink
 /// entry survives, since `output_present` reads the link, not the target.
 #[cfg(unix)]
 #[test]
@@ -6116,10 +6114,10 @@ fn a_cmyk_jpeg_ships_as_the_original_with_no_webp_source() {
     // promises `<picture><source srcset="plate.webp">` for every jpg from the
     // extension alone. Until 2026-09-05 the collector dropped the source, the
     // promise was never registered, and the published page carried a
-    // `<source>` that 404ed — which `<picture>` does not recover from
-    // (ADR-013): a real site's painting rendered as nothing. Now the verdict rides
+    // `<source>` that 404ed — which `<picture>` does not recover from:
+    // a real site's painting rendered as nothing. Now the verdict rides
     // to the registration loop, the variant settles `Failed`, and the
-    // post-seal degrade pass (moss#867) removes the `<source>` so the page
+    // post-seal degrade pass removes the `<source>` so the page
     // falls through to the original `<img>`.
     let (test_dir, _cleanup) = create_test_dir();
     let folder_path = test_dir.to_str().unwrap();

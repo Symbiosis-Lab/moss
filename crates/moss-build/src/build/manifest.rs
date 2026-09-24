@@ -4,7 +4,7 @@
 //! deferred processing phases. Calling [`PendingManifest::seal`] transitions it
 //! to a [`SealedManifest`], which is the read-only deploy contract.
 //!
-//! The transition point is where the #552 invariant is checked:
+//! The transition point is where the manifest invariant is checked:
 //! every key in `blocking_keys` must also appear in `inner.files` OR
 //! `inner.image_outputs`. Moving this check from per-site convention to a
 //! single `seal()` call makes it impossible to deploy with a
@@ -52,10 +52,10 @@ pub mod change_set;
 /// What is LIVE — uid, URL and source path per page — read out of the publish
 /// records for rename detection and duplicate-uid resolution. The record can be
 /// withheld by a cloud provider, so "could not read it" is a value rather than
-/// an empty map (ADR-062).
+/// an empty map.
 pub mod live_baseline;
 /// Every root-relative `href`/`src` the emitted HTML asks for that this
-/// manifest does not promise — the set difference moss#1187 was never taking.
+/// manifest does not promise — a set difference nothing checked before.
 /// Lives here because the sealed file set is what it reads; advisory only.
 pub mod link_audit;
 /// Durable record of what the last confirmed publish shipped, one per target
@@ -118,7 +118,6 @@ pub enum HashBucket {
 /// reach into the in-memory `files` map, so orphan entries (e.g., from a
 /// slug rename) leaked into successive `hashes.json` writes and broke
 /// deploy with `"Manifest claims '<path>' exists but it's missing on disk."`
-/// See `docs/archive/2026-05-18-manifest-integrity.md`.
 ///
 /// The **cache fields** (`sources`, `builder_fingerprint`)
 /// carry forward without sweeping — they belong to a separate concern
@@ -134,7 +133,7 @@ pub enum HashBucket {
 pub struct PendingManifest {
     inner: SiteHashes,
     /// Paths that the blocking phase generated. Must be a subset of
-    /// `(inner.files ∪ inner.image_outputs)` at seal time (the #552 invariant).
+    /// `(inner.files ∪ inner.image_outputs)` at seal time (the manifest invariant).
     /// Consumed by stale-HTML cleanup (C1–C4).
     blocking_keys: HashSet<String>,
     /// Output-bucket paths registered during this build (mark set). At seal
@@ -463,7 +462,7 @@ impl PendingManifest {
     /// flow through to the `SealedManifest::write_to_disk` output so the next
     /// build's `load_previous_hashes` can detect plugin/builder changes.
     ///
-    /// Pre-#620 Item 2 the fingerprints were set on `site_result.hashes` and
+    /// Before this, the fingerprints were set on `site_result.hashes` and
     /// `deferred.site_hashes`, then written to `hashes.json` by the legacy
     /// on-disk fallback in `media/pipeline.rs::copy_deferred_assets`. With
     /// the fallback gone, the only writer is the seal+persist task, so the
@@ -484,7 +483,7 @@ impl PendingManifest {
     /// A `pub(crate)` escape hatch for the blocking phase: after all Pattern A
     /// emits have routed through `BuildContext::emit`, `generate_blocking_content`
     /// needs the accumulated state back as `(SiteHashes, HashSet<String>)` for
-    /// `SiteResult` and `BackgroundContext::blocking_keys` (#524 Phase 3). It
+    /// `SiteResult` and `BackgroundContext::blocking_keys`. It
     /// clones because `pending` is `&mut` there, not owned, and the hatch is
     /// deliberately narrow — `inner` and `blocking_keys` stay private.
     /// Superseded by `seal()` once every background phase routes through
@@ -545,7 +544,7 @@ impl PendingManifest {
     /// than through `register_with_hash`, which would prepend a second `100644:` to
     /// an already-prefixed one; verbatim is what keeps the sealed manifest
     /// byte-identical to the previous build here. Cancel only: a run that finished
-    /// with fewer outputs really did lose a notebook. Before moss#618 the deferred
+    /// with fewer outputs really did lose a notebook. Before this, the deferred
     /// asset walk masked both cases, re-emitting every key that survived its prune.
     pub(crate) fn carry_forward_notebook_outputs(&mut self, previous: &SiteHashes) {
         for key in &previous.notebook_outputs {
@@ -568,9 +567,9 @@ impl PendingManifest {
     /// Two callers, one shape. A **receipt**: the writer hashed the bytes as it
     /// wrote them (the notebook bundle's ~440 files, an injected page, a
     /// rasterized OG card), so re-reading them to recompute a digest moss
-    /// already knows would be waste — and, under ADR-043, a read that can fail.
+    /// already knows would be waste — and a read that can fail.
     /// A **carry-forward**: the previous build's manifest entry, verbatim, for
-    /// an artifact this build did not re-emit (moss#922 Stage 5b — an
+    /// an artifact this build did not re-emit (an
     /// incrementally skipped page keeps `index.html` exactly as the previous
     /// build wrote it, and without re-registration `remove_stale_html` deletes
     /// it). Same family as
@@ -630,8 +629,7 @@ impl PendingManifest {
         // `register_with_hash`). At seal time, the four output buckets are
         // pruned to retain only paths in `touched`, so any carry-forward
         // entry from the previous build that this build did not re-register
-        // is dropped. See module docs and
-        // `docs/archive/2026-05-18-manifest-integrity.md`.
+        // is dropped. See module docs.
         self.touched.insert(rel_path.clone());
 
         // The last registration of a path wins, its CAS object included: an oid
@@ -784,8 +782,7 @@ pub struct SealedManifest {
     /// Output path → how `ship_phase` resolves this entry's bytes. An entry
     /// carries a `Cas` source or a `Fingerprint`, never both — that is a
     /// property of the map itself now, rather than two same-keyed maps kept
-    /// disjoint by discipline at their two write sites (moss#867-adjacent
-    /// hardening). See [`PendingManifest::ship_sources`] for the `Cas` half
+    /// disjoint by discipline at their two write sites. See [`PendingManifest::ship_sources`] for the `Cas` half
     /// (carried through `seal()` unchanged apart from the mark-and-sweep
     /// prune every other bucket also gets) and
     /// [`stamp_all_ship_fingerprints`][Self::stamp_all_ship_fingerprints] /
@@ -877,12 +874,12 @@ impl SealedManifest {
     ///
     /// Used by the seal+persist side task in `build.rs` to run stale-file
     /// cleanup AFTER background workers' EmitMessages have been merged into
-    /// the manifest, closing the deferred-phase race in #621.
+    /// the manifest, closing the deferred-phase race.
     pub fn site_hashes_view(&self) -> &SiteHashes {
         &self.inner
     }
 
-    /// Apply post-seal HTML rewrites (moss#867 honest degradation): update
+    /// Apply post-seal HTML rewrites (honest degradation): update
     /// the hash entry for each rewritten page and recompute `generation_id`
     /// so the corrected content becomes deploy-visible.
     ///
@@ -907,7 +904,7 @@ impl SealedManifest {
         self.generation_id = compute_manifest_generation_id(&self.inner.files);
     }
 
-    /// Drop pruned image-variant keys from the manifest (moss#976 B2): the
+    /// Drop pruned image-variant keys from the manifest: the
     /// bytes were deleted from `stage_dir` by `media::orphan_prune` because
     /// nothing in the emitted output references them, so the manifest must
     /// stop advertising them too — otherwise the NEXT build's incremental

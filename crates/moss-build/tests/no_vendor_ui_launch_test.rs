@@ -1,16 +1,12 @@
 //! Sync test: moss must not launch another application's UI.
 //!
-//! Open-half twin of `src-tauri/tests/no_vendor_ui_launch_test.rs` (desktop
-//! repo) — that file scans two independent `SOURCE_ROOTS` (desktop `src`,
-//! plus `../open/crates/moss-build/src`) with no cross-root comparison
-//! (class B per
-//! docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md).
-//! This twin runs the same lint over this crate's own `src`; the desktop
-//! half keeps scanning its own `src`.
+//! Open-half twin of the desktop app's `no_vendor_ui_launch_test.rs` — that
+//! file scans two independent `SOURCE_ROOTS` (desktop `src`, plus
+//! `../open/crates/moss-build/src`) with no cross-root comparison. This
+//! twin runs the same lint over this crate's own `src`; the desktop half
+//! keeps scanning its own `src`.
 //!
-//! moss drives OnionPress's CLI. It does not open OnionPress's windows — see
-//! docs/reference/plugin-architecture-boundary.md for the present-tense
-//! statement of the rule.
+//! moss drives OnionPress's CLI. It does not open OnionPress's windows.
 //!
 //! ## The marker convention
 //!
@@ -92,8 +88,7 @@ fn app_launches_carry_allow_marker() {
              1. If moss is starting a vendor service: drive its CLI and surface progress\n     \
                 yourself.\n  \
              2. If the user explicitly asked to open something: add\n     \
-                `// allow:vendor_ui <reason>` naming that action.\n  \
-             3. The rule, present tense: docs/reference/plugin-architecture-boundary.md\n\n\
+                `// allow:vendor_ui <reason>` naming that action.\n\n\
              Violations:\n",
         );
         for (path, line_num, line) in &violations {

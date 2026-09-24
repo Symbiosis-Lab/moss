@@ -4,7 +4,7 @@ version = "0.8.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "UI-free build pipeline for moss. Seeded with vault-root identity (ADR-051) and the .moss layout (ADR-057); the pipeline moves in at M6a."
+description = "UI-free build pipeline for moss. Seeded with vault-root identity and the .moss layout; the pipeline moves in at M6a."
 publish = false
 
 [lints]
@@ -13,7 +13,7 @@ workspace = true
 [features]
 # `MossPaths::ensure_dirs` — a `.moss` skeleton builder with zero production
 # callers, kept as a test fixture (see its doc comment). Enabled ONLY from
-# `src-tauri`'s `[dev-dependencies]`, so it stays absent from every shipped build.
+# the desktop app's `[dev-dependencies]`, so it stays absent from every shipped build.
 test-fixtures = []
 
 # No tauri or wry, direct or transitive — enforced by scripts/check-crate-dag.mjs
@@ -27,11 +27,11 @@ dirs = "5.0"
 # the logger, this crate only emits.
 log = "0.4"
 
-# `config.rs` reads `.moss/config.toml`. Same version as src-tauri so the crate
-# is compiled once for the workspace. The settings writers stay app-side
-# (ADR-059); `toml_edit` is here for `infra::toml_rewrite`, the surgical editor
+# `config.rs` reads `.moss/config.toml`. Same version as the desktop app's so
+# the crate is compiled once for the workspace. The settings writers stay
+# app-side; `toml_edit` is here for `infra::toml_rewrite`, the surgical editor
 # the plugin uninstaller uses to drop a plugin's keys without touching the
-# user's comments (ADR-076).
+# user's comments.
 toml = "0.8"
 toml_edit = { version = "0.20", default-features = false }
 # `plugins::install` compares manifest versions against the running moss.
@@ -43,12 +43,12 @@ semver = "1"
 serde = { version = "1", features = ["derive"] }
 specta = { version = "=2.0.0-rc.20", features = ["derive", "serde_json", "chrono"] }
 # `advisory::Action::InApp` carries op-specific arguments as free-form JSON.
-# Already in the workspace tree via src-tauri, so this duplicates nothing.
+# Already in the workspace tree via the desktop app, so this duplicates nothing.
 serde_json = "1"
 
 # ── The build tree's dependencies (M6a move, 2026-08-28) ─────────────────────
-# Copied verbatim from src-tauri/Cargo.toml so each crate is compiled once for
-# the workspace. Versions and feature sets must stay aligned with the app's;
+# Copied verbatim from the desktop app's Cargo.toml so each crate is compiled
+# once for the workspace. Versions and feature sets must stay aligned with the app's;
 # `cargo tree -d` is the check.
 base64 = "0.21"
 bytes = "1"
@@ -85,10 +85,10 @@ tiny-skia = "0.11"
 tokio = { version = "1.0", features = ["rt-multi-thread", "net", "process", "io-util", "sync", "time", "signal", "macros"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 # `vault::fs::delete_entry_inner` — recoverable OS-trash delete shared by the
-# desktop command and the HTTP mutation arm. Same version as src-tauri.
+# desktop command and the HTTP mutation arm. Same version as the desktop app's.
 trash = "5"
 ureq = { version = "2", features = ["json", "tls", "socks-proxy"] }
-# The async client the moss-seta half of this crate is written on (ADR-078).
+# The async client the moss-seta half of this crate is written on.
 # "socks" mirrors ureq's "socks-proxy" so both clients honour the same system
 # proxy. reqwest 0.13 resolves to hyper 1.x, which the tree requires.
 reqwest = { version = "0.13", features = ["json", "query", "socks"] }
@@ -113,7 +113,7 @@ webp = "0.3"
 # Prod use too: `build::feeds::search` unpacks the pagefind bundle via a tempdir.
 tempfile = "3.0"
 
-# ── The QuickJS plugin engine (open-CLI slice 2, #1019) ──────────────────────
+# ── The QuickJS plugin engine (open-CLI slice 2) ──────────────────────────────
 # futures⇄ES Promises + drive(); `macro` → #[rquickjs::function] host fns.
 rquickjs = { version = "=0.12.0", features = ["futures", "macro"] }
 # `plugins::runtime::portable::html_to_markdown` — the engine's markdown arm.
@@ -123,9 +123,9 @@ futures = "0.3"
 # `identity::keystore` — the file-based vault keypair store.
 ed25519-dalek = { version = "2", default-features = false, features = ["std", "rand_core", "zeroize"] }
 
-# ── The preview server (ops/serve, S1 server relocation, ADR-067) ────────────
-# Exactly src-tauri's versions and feature sets so each crate compiles once for
-# the workspace (`cargo tree -d` is the check). hyper-1.x stack only.
+# ── The preview server (ops/serve, S1 server relocation) ─────────────────────
+# Exactly the desktop app's versions and feature sets so each crate compiles
+# once for the workspace (`cargo tree -d` is the check). hyper-1.x stack only.
 axum = "0.7"
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["fs"] }
@@ -137,7 +137,7 @@ http-body-util = "0.1"
 # below it would silently become macOS-only.
 [target.'cfg(target_os = "macos")'.dependencies]
 # `platform/{iopolicy,file_coordination}` (M6a move): Foundation file
-# coordination + the file-provider I/O policy. Feature sets mirror src-tauri's.
+# coordination + the file-provider I/O policy. Feature sets mirror the desktop app's.
 core-foundation = "0.9"
 core-foundation-sys = "0.8"
 objc2 = { version = "0.6", features = ["relax-sign-encoding"] }
@@ -148,7 +148,7 @@ objc2-foundation = { version = "0.3", features = ["NSFileManager", "NSFileCoordi
 block2 = "0.6"
 # `build::media::symlink` computes the relative target of a synthesized alias
 # symlink — inside `handle_alias_entry`, which is macOS-only (the other arm is a
-# detect-and-skip stub). Moved here from src-tauri, which no longer uses it.
+# detect-and-skip stub). Moved here from the desktop app, which no longer uses it.
 pathdiff = "0.2"
 
 [target.'cfg(windows)'.dependencies]

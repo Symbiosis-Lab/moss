@@ -45,7 +45,7 @@ pub const SIZES_FULL_BLEED: &str = "100vw";
 /// therefore ask the srcset ladder to resolve against viewport width,
 /// which under-selects a wide plate (a 7.6:1 handscroll can render near
 /// its full deployed width while `sizes=100vw` picks a mid rung — a
-/// blurry upscale; see `docs/archive/2026-09-11-hero-plate-variant.md`).
+/// blurry upscale).
 /// So `sizes=` names a fixed value wider than every ladder rung, which
 /// always selects the base — the same trade every institutional
 /// handscroll viewer makes (serve one high-resolution asset rather than
@@ -92,8 +92,7 @@ pub const SIZES_BODY: &str = "(min-width: 48rem) 47.25rem, 100vw";
 /// an engine that doesn't support `auto` yet, e.g. WebKit as of 2026-09).
 /// It stays a viewport-width guess, and stays safe only because a
 /// generic <picture> `sizes` overstatement over-fetches rather than
-/// blurs — see the module doc's caveat on theme overrides. Prior history
-/// of the fallback value itself: docs/archive/2026-09-14-phone-card-composition-fix.md.
+/// blurs — see the module doc's caveat on theme overrides.
 pub const SIZES_CARD: &str = "auto, (min-width: 48rem) 24rem, 100vw";
 
 /// Gallery thumbnails: 2–3 across on desktop.
@@ -118,8 +117,7 @@ pub fn sizes_for_data_width(width: &str) -> Option<&'static str> {
 /// The `sizes=` value for an image inside a `.moss-grid` cell: the cell
 /// track is the grid's band width divided by its column count (gaps are
 /// ignored — a slight, safe over-declaration). The band is the content
-/// column, or the escape band when the grid carries `data-width`
-/// (ADR-021 Corollary 2).
+/// column, or the escape band when the grid carries `data-width`.
 ///
 /// Leads with `auto,` for the same reason as [`SIZES_CARD`]: `:::grid N`
 /// keeps N tracks at every width on a vertical site but collapses to 1

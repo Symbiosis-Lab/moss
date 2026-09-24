@@ -11,18 +11,18 @@
 //! **Nowhere in the build.** This module is the pure indexing engine: hand it a
 //! directory of rendered HTML, get a bundle back. Scheduling, publication and
 //! manifest registration live in its sibling [`search_lane`], which owns the
-//! whole of ADR-045's adopt-don't-await contract.
+//! whole of the adopt-don't-await contract.
 //!
 //! Pagefind is the archetypal **generation-free** worker: its output is a pure
 //! function of the emitted page set, referenced by a fixed URL, and its cost
 //! scales with *corpus size* (386 pages) rather than *delta size* (1 page).
-//! Indexing harbor/潮汐 takes ~5.2 s, and most of that is not even the index
+//! Indexing a real 386-page site takes ~5.2 s, and most of that is not even the index
 //! build: `get_files()` is `build_indexes()` (790–1070 ms) plus
 //! `write_files_to_memory()`, which gzips the ~8 MB bundle at
 //! `Compression::best()` single-threaded (2987–3723 ms). It used to be
 //! dispatched into the build's worker `JoinSet`, where the seal awaited it and
 //! the seal in turn held the stage-write lock the *next* build needed — so
-//! every save paid for the previous save's index (moss#968 Finding 3).
+//! every save paid for the previous save's index.
 //!
 //! [`search_lane`]: super::search_lane
 //!
@@ -33,14 +33,13 @@
 //! `SiteConfig` construction site in `build/pipeline.rs` into
 //! `LayoutConfig::assets.search` and read by both the nav button and the
 //! lane. (Search graduated out of `experimental.preview_features`
-//! 2026-08-31 — ADR-037 "Gating".)
+//! 2026-08-31.)
 //!
 //! There is deliberately no second, mode-dependent switch. There used to be —
 //! `site_url.is_deployed()` — and it meant an author who enabled search saw
 //! nothing in preview at all. It was deleted rather than replaced with a
 //! preview-mode bit, because build output is mode-independent by design; see
-//! the amended Gating section of ADR-037 and `render/blocking.rs`'s
-//! `has_search`.
+//! `render/blocking.rs`'s `has_search`.
 //!
 //! # Chinese segmentation
 //!
@@ -124,13 +123,13 @@ const SKIP_TEXT_IN: &str = "script,style,code,pre";
 
 /// Wall-clock breakdown of one index build, in milliseconds.
 ///
-/// Which phase dominates was the load-bearing unknown behind moss#927, and it
+/// Which phase dominates was a load-bearing unknown, and it
 /// is now measured: neither segment nor fossick, and not the index build
 /// either — `emit_bundle` is ~78% of the run and ~78% of THAT is a
 /// single-threaded gzip of the whole bundle. A retained per-page
-/// `PagefindIndex` would not shrink it, which is why moss#927 Stage 5 should
-/// close. Nothing in Pagefind's API has an incremental form; the answer is to
-/// stop *awaiting* the index rather than to make it smaller (ADR-045).
+/// `PagefindIndex` would not shrink it. Nothing in Pagefind's API has an
+/// incremental form; the answer is to
+/// stop *awaiting* the index rather than to make it smaller.
 ///
 /// Exposed through [`last_index_timing`] rather than returned, mirroring
 /// `build::parse_cache::last_stats` — the measurement is for a `--ignored`
@@ -180,7 +179,7 @@ pub(crate) fn lock_index_counter() -> std::sync::MutexGuard<'static, ()> {
 ///
 /// `Jieba::new()` parses a ~5 MB embedded dictionary. It used to be built once
 /// per index build, which is per-publish today and would be per-*save* once
-/// preview indexes (moss#927) — a fixed cost paid again for every rebuild, and
+/// preview indexes — a fixed cost paid again for every rebuild, and
 /// one that no per-page cache could ever collapse. It is immutable and `Sync`,
 /// so the segmentation threads share this one.
 static JIEBA: LazyLock<Jieba> = LazyLock::new(Jieba::new);
@@ -491,7 +490,7 @@ pub fn build_search_index_cancellable(
                 //
                 // This field used to be named `build_indexes_ms`, which attributed
                 // all of it to the index build. That conflation is what hid the
-                // real cost for the whole of moss#927: it made a retained per-page
+                // real cost: it made a retained per-page
                 // index look like the lever, when ~78% of the time is a
                 // compression pass that a per-page index would not shrink.
                 // Renamed to `emit_bundle_ms` so the name cannot mislead again.

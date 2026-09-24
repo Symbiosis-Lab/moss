@@ -185,7 +185,7 @@ fn test_render_item_no_cover_no_img() {
 
 // ── Quote card: coverless card in a covered list ─────────────
 
-/// docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §1: a card
+/// A card
 /// with no cover, inside a list where other cards DO have one, fills the
 /// cover slot with its description text (`data-cover="quote"`) instead of
 /// the empty `.moss-card-no-cover` placeholder — and does not also print

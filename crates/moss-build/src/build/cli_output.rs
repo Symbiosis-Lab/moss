@@ -10,8 +10,7 @@
 //! Sentry breadcrumb ring — app-side code the build must not name. The macros
 //! below are called 27 times from `build/`, and a `pub(crate)` macro does not
 //! cross a crate boundary, so leaving them there blocked the `moss-build`
-//! extraction twice over (see
-//! `docs/archive/2026-08-17-open-cli-without-tauri-plan.md` §4 step 2 item 7).
+//! extraction twice over.
 //! `crate::diagnostics` keeps the ring and the log targets and nothing else.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -159,7 +158,7 @@ pub(crate) fn problem_summary_line(n: usize, strict: bool) -> Option<String> {
 #[path = "cli_output_tests.rs"]
 mod tests;
 
-// ─── The headless process logger (crossed from `startup/headless.rs`, #1019) ─
+// ─── The headless process logger (crossed from the desktop app's startup path) ─
 
 /// The only `log::Log` a headless build ever installs.
 ///
@@ -168,7 +167,7 @@ mod tests;
 /// both run with `log`'s default no-op logger and every `log::warn!` under
 /// `build/` (including `log_warn_problem!`, whose entire purpose is to reach
 /// both this stream and the `--strict` problem counter) is formatted, then
-/// discarded (moss#1088). A disposable, stderr-only sink scoped to the one
+/// discarded. A disposable, stderr-only sink scoped to the one
 /// process the CLI runs.
 struct HeadlessLogger {
     level: log::LevelFilter,
@@ -194,8 +193,9 @@ impl log::Log for HeadlessLogger {
 /// is deliberate — CLI stderr is output an agent or a script reads, not a log
 /// pane a developer opens on demand. `Warn` is also the level
 /// `log_warn_problem!` and the `[phase]` hang-detector traces are pitched at,
-/// so the default is exactly "the two things #1088 named as broken," with
-/// `MOSS_LOG_LEVEL` still available to turn the rest back on.
+/// so the default is exactly the level that keeps the log stream and the
+/// `--strict` counter working, with `MOSS_LOG_LEVEL` still available to turn
+/// the rest back on.
 fn headless_log_level() -> log::LevelFilter {
     match std::env::var("MOSS_LOG_LEVEL").ok().as_deref() {
         Some("error") => log::LevelFilter::Error,

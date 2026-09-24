@@ -530,7 +530,7 @@ function findEnclosingBlockName(doc, lineNumber) {
 * hosts without a `@lezer/markdown` seam need (Obsidian's markdown language
 * is closed to grammar extensions; see
 * packages/obsidian-moss/src/syntax/shortcode-parser.ts, the stub this
-* replaces, and #1020).
+* replaces).
 *
 * The line predicates are REUSED from ./shortcode.ts, not copied: an open
 * fence is exactly `SHORTCODE_OPEN_RE` + `isOpenMatch`, a close fence is

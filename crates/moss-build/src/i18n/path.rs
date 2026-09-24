@@ -20,9 +20,8 @@
 //! keeps the lookup logic in one place and makes the intent explicit.
 //!
 //! If the project ever lands an explicit opt-in (folder note `lang:`,
-//! project-level `[site] languages = ["en", "zh-hans"]`, or similar —
-//! tracked as "Issue 1" in
-//! `docs/archive/2026-04-27-multilingual-vault-issues.md`), update
+//! project-level `[site] languages = ["en", "zh-hans"]`, or similar),
+//! update
 //! **only** this helper and all callers inherit the new policy
 //! automatically.
 

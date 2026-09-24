@@ -1,11 +1,11 @@
 /**
  * Copy table for the comment widget's client-side status messages.
  *
- * Follows the `frontend/site/subscribe/i18n.ts` pattern: a tiny set
+ * Follows the `js-src/site/subscribe/i18n.ts` pattern: a tiny set
  * (6 strings × 3 locales) duplicated by hand rather than plumbed through
  * the DOM. The server-rendered parts of the comment section (form labels,
  * counts, dates) come from the Rust registry
- * (`src-tauri/src/i18n/strings.rs`); this table covers only the strings
+ * (`i18n::strings`); this table covers only the strings
  * the widget JS itself injects after page load.
  *
  * Bucketing reuses `langBucket` from the subscribe module — the blessed

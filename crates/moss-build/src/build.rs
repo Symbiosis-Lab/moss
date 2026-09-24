@@ -52,7 +52,7 @@
 //!
 //! - `manifest::PendingManifest` / `SealedManifest` — typestate seal pattern.
 //!   `seal()` enforces the `blocking_keys ⊆ (files ∪ image_outputs)` invariant
-//!   at one point (closes #552).
+//!   at one point.
 //! - `manifest::HashBucket` — disambiguates registration buckets.
 //! - `context::BuildContext` — the blocking phase's emit handle (`for_render`:
 //!   writes to stage, registers in the pending manifest). Background workers
@@ -63,10 +63,6 @@
 //! - `background::BackgroundHandle` — JoinSet wrapper. `await_completion`
 //!   joins all workers, awaits coordinator, returns `SealedManifest`.
 //! - `ship::ship_phase` — writes the generation from the sealed manifest.
-//!
-//! See `docs/archive/2026-05-03-generated-artifact-plan.md` for the refactor's
-//! issue context (#524 single emit API, #552 seal invariant) and the audit
-//! tables of the 18 emit sites Phase 3 will convert.
 
 pub mod pipeline;
 pub mod cloud_ledger;
@@ -147,17 +143,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
-// Pipeline configuration types (ADR-010, Phase 2)
+// Pipeline configuration types
 // ---------------------------------------------------------------------------
 
 /// How progress events are delivered.
 ///
-/// Design note (ADR-010): Progress is a property of the pipeline, not a
+/// Design note: Progress is a property of the pipeline, not a
 /// separate concept. The pipeline emits events; the sink decides where they go.
 ///
 /// This was an enum with a `Channel(tauri::ipc::Channel, tauri::AppHandle)`
 /// variant until 2026-08-17. Naming tauri in the type meant every file that
-/// held a sink named tauri too, which `moss-build` may not do (ADR-050). The
+/// held a sink named tauri too, which `moss-build` may not do. The
 /// three variants became the three implementations in [`reporter`]; the
 /// tauri-backed one is `crate::events::TauriReporter`, app-side.
 ///
@@ -176,7 +172,7 @@ pub fn stdout_sink() -> ProgressSink {
 
 /// How plugins participate in the build.
 ///
-/// Design note (ADR-010): Inspired by Rollup's hook ordering -- the pipeline
+/// Design note: Inspired by Rollup's hook ordering -- the pipeline
 /// is mode-agnostic, branching via config not code path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginMode {
@@ -192,9 +188,9 @@ pub enum PluginMode {
     Skip,
 }
 
-/// Classification of what triggered this build (moss#922 Stage 2).
+/// Classification of what triggered this build.
 ///
-/// Read by `incremental_gates` (moss#968), which resolves both incremental
+/// Read by `incremental_gates`, which resolves both incremental
 /// gates from it at the entry point. The watch path classifies a debounced
 /// batch once, where the raw `notify` event kinds are still available, instead
 /// of re-deriving that classification later from a `Vec<PathBuf>` with no kind
@@ -264,7 +260,7 @@ pub use ports::host::{HostPorts, HostStore, ServerDiff, ServerDiffFuture, Server
 
 /// Single configuration struct for all pipeline behavior.
 ///
-/// Design note (ADR-010): Inspired by Vite's mode-agnostic config.
+/// Design note: Inspired by Vite's mode-agnostic config.
 /// Each entry point builds a PipelineConfig and calls run_pipeline().
 /// There is no branching logic inside the build -- all behavioral
 /// differences are expressed in the config.
@@ -281,8 +277,7 @@ pub struct PipelineConfig {
     pub watch: bool,
     /// Start the embedded preview server after this build completes.
     /// Orchestration ONLY — never read this as "is this a preview build":
-    /// build output is mode-independent by design
-    /// (docs/archive/2026-06-10-email-footer-mode-independent-design.md).
+    /// build output is mode-independent by design.
     /// The folder-open build passes true; watch rebuilds pass false because
     /// the server is already running — any content gated on this flag
     /// flip-flops on disk between those two triggers (the 2026-06-10 email
@@ -292,7 +287,7 @@ pub struct PipelineConfig {
     /// replaced `app: Option<tauri::AppHandle>` (2026-08-27, M6a plan C1).
     pub host: HostPorts,
     /// What triggered this build (watch mode) — see `BuildTrigger`.
-    /// Read by `allows_incremental_skip` (moss#922 Stage 5b).
+    /// Read by `allows_incremental_skip`.
     pub trigger: BuildTrigger,
     /// True when this build is invoked from a process that will exit shortly
     /// after `run_pipeline` returns (CLI subcommands, snapshot tests). Such
@@ -323,8 +318,7 @@ pub struct PipelineConfig {
     /// folder at promotion time (`lifecycle::promote`). Minting it when the
     /// worker dequeues the request — rather than when the build finishes —
     /// means a build that wedges and un-wedges after its successor can never
-    /// mint a newer epoch and promote stale output over it (phase 1a of
-    /// docs/archive/2026-08-18-watcher-reliability-architecture.md; the
+    /// mint a newer epoch and promote stale output over it (the
     /// zombie-promotes-stale defect). `None` preserves the old post-build
     /// mint exactly, which is safe wherever builds of a folder are strictly
     /// serialized (CLI, deploy, plugin install).
@@ -383,13 +377,12 @@ pub fn quick_detect_homepage(root: &VaultRoot) -> Option<String> {
 ///
 /// The structural index-stem-vs-folder-name decision is owned by
 /// `moss_core::home::site_name` — the SAME owner the render pipeline's
-/// `<title>`/`og:title` route through (#775) — so this no longer duplicates
+/// `<title>`/`og:title` route through — so this no longer duplicates
 /// the pipeline's title logic. The only work done here is the legitimate I/O:
 /// reading the homepage file to recover its frontmatter `title:`.
 ///
 /// Body-`# H1` is intentionally NOT consulted: moss never sources a page title
-/// from body content (Obsidian-match, 2026-05-30; see
-/// `docs/reference/title-rendering.md`). The previous `extract_h1_heading`
+/// from body content (Obsidian-match, 2026-05-30). The previous `extract_h1_heading`
 /// fallback here contradicted that rule and was the duplicate this consolidates
 /// away.
 ///
@@ -419,7 +412,7 @@ pub fn resolve_site_name(root: &VaultRoot, homepage_file: Option<&str>) -> Optio
 /// Performs a lightweight line-by-line parse -- no full YAML parser needed.
 fn extract_frontmatter_title(content: &str) -> Option<String> {
     // Where the block ends is `frontmatter_span`'s call, for both dialects; a
-    // simplified-frontmatter page used to come back titleless (moss#937).
+    // simplified-frontmatter page used to come back titleless without it.
     let span = moss_core::frontmatter::frontmatter_span(content)?;
     // Char-aligned: `fields` is a line-boundary range from the splitter.
     #[allow(clippy::string_slice)]
@@ -452,7 +445,7 @@ fn collect_native_slots_for_documents(
     site_comments: Option<bool>, // see generate_native_slots's own param doc
 ) -> crate::build::enhance::ResolvedSlots {
     // The frontmatter-analytics migration runs at build entry
-    // (`HostStore::run_vault_migrations`, ADR-059), so this read already sees
+    // (`HostStore::run_vault_migrations`), so this read already sees
     // the migrated value.
     let services_config = crate::build::site_config::get_services_config(folder_path)
         .unwrap_or_default();
@@ -512,8 +505,7 @@ fn collect_native_slots_for_documents(
         // build just resolved. It used to be prepended by `email_site_langs`
         // from `[site] lang` in config.toml — a value the build wrote there and
         // read back. The build knows the language; writing it into the artifact
-        // it already emits every build is what let the config write go away
-        // (docs/archive/2026-08-31-site-lang-derived-state.md).
+        // it already emits every build is what let the config write go away.
         let sections =
             crate::build::features::email::site_audience_list(Some(site_lang), &pages);
         let meta_path =
@@ -570,7 +562,7 @@ fn collect_native_slots_for_documents(
 }
 
 // ---------------------------------------------------------------------------
-// Unified pipeline entry point (ADR-010, Phase 2)
+// Unified pipeline entry point
 // ---------------------------------------------------------------------------
 
 /// Unified pipeline function -- the single source of truth for build.
@@ -597,8 +589,8 @@ fn collect_native_slots_for_documents(
 /// `video_max_size_mb` setting, otherwise `None` (the caller uses the generic
 /// default). Read once per build by `run_pipeline` and carried on
 /// `BuildServices`; the video worker used to call this itself, which put plugin
-/// discovery and the manifest schema inside the compiler (ADR-050 §1 forbids
-/// both by name).
+/// discovery and the manifest schema inside the compiler — both forbidden
+/// there by name.
 pub fn deploy_video_max_size_mb(folder_path: &str) -> Option<u32> {
     use crate::plugins::discovery::{get_plugin_config_with_defaults, load_installed_plugin};
     let plugin_name = crate::build::site_config::current_deploy_plugin(folder_path)?;
@@ -639,7 +631,7 @@ pub fn video_cap_for_build(skip_plugins: bool, folder_path: &str) -> Option<u32>
 /// while silently disabling "the moss binary changed, re-render everything".
 ///
 /// Took a `folder_path` for the second key, a digest over installed enhance
-/// plugins, until ADR-055 retired that capability.
+/// plugins, until that capability was retired.
 pub fn sample_cache_keys() -> crate::build::ports::CacheKeyInputs {
     crate::build::ports::CacheKeyInputs {
         builder: crate::plugins::fingerprint::builder_fingerprint(),
@@ -706,9 +698,9 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // feeds the native-process sync — so a site still on the pre-v2 schema
     // spawned comment/review sync with default service settings on its first
     // build after upgrading, `v1_to_v2` being the step that reshapes
-    // `[services]`. Hoisting it to the entry point is what ADR-059 rules
-    // ("migration persistence becomes a precondition the entry point
-    // satisfies"), and it closes that ordering hole on the way.
+    // `[services]`. Hoisting it to the entry point makes migration persistence
+    // a precondition the entry point satisfies, and it closes that ordering
+    // hole on the way.
     config.host.store.run_vault_migrations(&config.root);
 
     // Derive the .moss dir — always present, used as the preview-server dedup key.
@@ -790,7 +782,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
 
     // Retire what an older moss left behind: the synced ~5 MB copy of the
     // record of what is live in `.moss/data/`, which on one vault was the
-    // single file a provider would not hand back (moss#1079), plus the legacy
+    // single file a provider would not hand back, plus the legacy
     // output roots and a directory-shaped `current` that fails every
     // promotion. Per build, not per folder-open — neither location is watched,
     // so a file that finally syncs mid-session has no other trigger.
@@ -813,8 +805,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // otherwise showing staging at build completion writes a disconnected Arc
     // the server never sees. Share the managed Arc (GUI) or a fresh one (CLI).
     // The CLI case is NOT "no live server" — `moss build --serve` runs one here,
-    // so the fresh Arc is handed to `start_preview_server` below. See
-    // docs/reference/editor-preview-sync.md 1 + 2.
+    // so the fresh Arc is handed to `start_preview_server` below.
     let shared_dir = config
         .host
         .site_dir
@@ -942,9 +933,9 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // Execute process hooks (unless plugins are skipped or SlotsOnly).
     // SlotsOnly skips process hooks — they fetch external data (e.g., Matters sync)
     // and should only run on the initial build, not on every file-edit rebuild.
-    // Whether plugins run is a Config decision, never a routing fork (ADR-010):
+    // Whether plugins run is a Config decision, never a routing fork:
     // a missing `AppHandle` is not a licence to build a plugin-less site behind
-    // the user's back. Since #1019 the process path needs no app.
+    // the user's back. The process path needs no app.
     let process_hooks_handle: Option<crate::build::ports::spawner::Joining> =
         if !skip_plugins && !skip_process {
             Some(spawn_process_hooks(
@@ -1013,7 +1004,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // re-render the same empty snapshot.
     // The app supplies only the metadata dedup cache, which is an optimization —
     // gating the whole re-scan on it made a headless build render the pre-import
-    // snapshot and left every imported page one generation behind (#1019).
+    // snapshot and left every imported page one generation behind.
     if wait_process && !skip_plugins && !skip_process {
         let _rescan_trace = PhaseTrace::start("scan_after_process_hooks");
         match scan::scan::scan_folder_with_dedup_emit(
@@ -1054,7 +1045,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // never fetch inline — the background task handles them async.
     // If you find yourself wanting to add a NEW network fetch — don't.
     // Spawn it from `features::sync` so build still returns immediately
-    // when the upstream is slow or unreachable. See moss issue #570.
+    // when the upstream is slow or unreachable.
     //
     // Skipped during SlotsOnly (watch rebuilds) — those run frequently and
     // would otherwise pile up sync tasks. The `features::sync` module also has
@@ -1087,13 +1078,13 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // own handle on the shared Arcs.
     let mut services = config.host.services.clone();
     // Read the deploy plugin's video cap HERE, once: the video worker is a
-    // leaf of the compiler and may not ask the plugin layer anything
-    // (ADR-050 §1). One reader means the GUI and the CLI cannot encode the same
+    // leaf of the compiler and may not ask the plugin layer anything.
+    // One reader means the GUI and the CLI cannot encode the same
     // video two different ways.
     // Guarded on `skip_plugins`: the read reaches `load_installed_plugin`, and
     // a `--no-plugins` build asks the plugin layer nothing at all.
     services.deploy_video_max_size_mb = video_cap_for_build(skip_plugins, &folder_path);
-    // moss#867: each pipeline attempt below moves its own clone of `services`
+    // Each pipeline attempt below moves its own clone of `services`
     // into `spawn_blocking`, so both `advertise_sealed` call sites (seal task,
     // exits-after-build tail) take the registry handle from here instead.
     let assets_for_advertise = services.assets.clone();
@@ -1127,12 +1118,13 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // (`features.inline_subscribe`) and reach slot-only files (`footer.md`)
     // through the same data path the rest of the build uses. Replaces the
     // pre-PR7b filesystem-scan stand-ins `project_has_inline_subscribe`
-    // and `render_footer_pages_from_disk` (moss#599).
+    // and `render_footer_pages_from_disk`.
     //
     // Slots come from moss's own features only — the comment section, the
     // subscribe form, the analytics beacon. A plugin could contribute one
-    // through the `enhance` capability until ADR-055 retired it, having gone
-    // three months with no implementation in any plugin, bundled or WIP.
+    // through the `enhance` capability until that capability was retired,
+    // having gone three months with no implementation in any plugin, bundled
+    // or WIP.
     let make_slot_resolver = |folder_path_for_slots: String,
                               cached_domain_config_for_slots: crate::config::deployment::DomainDeploymentConfig,
                               project_structure_for_slots: ProjectStructure|
@@ -1154,8 +1146,9 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
 
     let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_media, cancelled, home_ready: _home_ready, publishable, render_seq, stale_sources } = {
         // moss's own generator, always. A plugin could replace it wholesale
-        // through the `generate` capability until ADR-055 retired it: three
-        // months, no implementation, and the branch had already decayed into
+        // through the `generate` capability until that capability was
+        // retired: three months, no implementation, and the branch had
+        // already decayed into
         // a GUI-only path whose headless arm re-ran this same code with a
         // warning.
         // One attempt: its own clones, its own `SlotResolver`.
@@ -1241,7 +1234,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // because only failures were ever recorded.
     crate::system::build_records::records().record_stale_sources(&folder_path, stale_sources);
 
-    // This build's promotion epoch (moss#968 §5d). The rebuild worker mints
+    // This build's promotion epoch. The rebuild worker mints
     // it at ADMISSION and passes it in (see `PipelineConfig::admission_epoch`
     // for why that survives a wedged predecessor); every other caller mints
     // here, not in the seal — for them this is the last point still ordered
@@ -1276,12 +1269,12 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
             // was three arms — app-with-AppState, an app-sans-AppState
             // "legacy" arm that awaited the workers and threw the seal away,
             // and NO arm at all for headless watch, whose rebuilds updated
-            // staging forever without ever promoting a generation (#1097).
+            // staging forever without ever promoting a generation.
             //
             // Compute paths for this build's source folder. We need:
             //   - hashes.json (manifest persistence target)
             //   - staging (stale-cleanup target — moved here from
-            //     copy_deferred_assets to fix #621: cleanup must run AFTER the
+            //     copy_deferred_assets: cleanup must run AFTER the
             //     coordinator has merged in-flight worker EmitMessages, otherwise
             //     a freshly-written `.webp` can be deleted as "stale" before its
             //     registration is observed).
@@ -1311,9 +1304,9 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
             // Clone folder_path so the spawn can construct MossPaths for materialize.
             // (MossPaths is not Clone; we pass the root string and construct inside.)
             let folder_path_for_mat = folder_path.clone();
-            // moss#867: the registry the render/blocking phase registered
-            // variants into, cloned so the 'static spawned task can pass
-            // it to advertise_sealed's degrade step.
+            // The encode-degrade pass's registry: the render/blocking phase
+            // registered variants into it, cloned so the 'static spawned task
+            // can pass it to advertise_sealed's degrade step.
             let assets_for_seal = assets_for_advertise.clone();
             let seal_freshness =
                 crate::build::feeds::search_lane::Freshness::of(config.exits_after_build);
@@ -1399,11 +1392,11 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
             // leaving deferred assets missing from the current generation — so
             // this arm awaits the SAME tail inline. Until 2026-08-24 it was a
             // hand-copied subset of that tail, which is how it silently lacked
-            // the moss#867 degrade pass (#1097): a background encode failure
+            // the encode-degrade pass: a background encode failure
             // shipped a live 404 inside <picture> from `moss build` while the
             // app degraded it. The host's announcer, as in the detached arm:
             // hardcoding `LogAnnouncer` here dropped the manifest a C4f hosted
-            // deploy publishes. `tier2_reporter(None)` because ADR-066's
+            // deploy publishes. `tier2_reporter(None)` because the
             // headless carrier is the one publisher here. The session
             // is the one the CLI entry point registered — BOTH of them, since
             // 2026-08-24; `run_cli_build` (the path an ordinary `moss build`
@@ -1474,8 +1467,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     }
 
     // Emit build-complete progress for CLI. Skipped for a `cancelled` result
-    // (docs/archive/2026-07-31-cloud-download-waiting-mode.md Stage 2's
-    // folder-switch-mid-wait early return): that placeholder result's
+    // (a folder-switch-mid-wait early return): that placeholder result's
     // `is_empty: true` doesn't describe a real build, and this event's
     // `port`/GUI progress channel is shared app-wide (not folder-scoped on
     // the frontend) — emitting it here could flip the CURRENT (different)
@@ -1762,8 +1754,8 @@ pub(crate) struct SealGuards {
 /// cases pinned in `link_audit_tests.rs`.
 ///
 /// This closes a race rather than narrowing it: `FolderSession::has_ui_bound`
-/// / `wait_for_in_flight_work` (the desktop shell's
-/// `src-tauri/src/build_shell.rs`) can still observe "no in-flight work" in
+/// / `wait_for_in_flight_work` (the desktop shell's own build-shell module)
+/// can still observe "no in-flight work" in
 /// the gap between a video's own `end_ui_bound()` and the follow-up
 /// rebuild's admission — that gap is unaffected by this change. What changes
 /// is that a publish landing in it can no longer ship a page whose asset it
@@ -1875,7 +1867,7 @@ async fn advertise_sealed(
     // guard that `build_inner` (pipeline.rs) holds across its own
     // stage-writing span. This task runs detached — well after the
     // watcher's `is_rebuilding` lock has already released — so without this
-    // guard, the moss#867 degrade pass and step 1 below (which read and
+    // guard, the encode-degrade pass and step 1 below (which read and
     // rewrite the live, possibly-being-served `stage_dir`) can interleave
     // with a NEXT rebuild's writes into that same directory, corrupting the
     // generation that gets promoted to `current`. See
@@ -1920,17 +1912,17 @@ async fn advertise_sealed(
     }
 
     // Last moment the manifest and the stage agree on what shipped — the one
-    // place a whole-site link check can run (moss#1187). Advisory for almost
+    // place a whole-site link check can run. Advisory for almost
     // every dead link it finds; the one exception is this build's own
     // still-unfulfilled promise, which `record_promise_gate` below carries to
     // `refuse_publish` — see that function's doc and `link_audit`'s module
-    // docs on the moss#1187-adjacent publish/media race this closes.
+    // docs on the publish/media race this closes.
     record_promise_gate(stage_dir, &sealed, assets.as_ref(), folder_path);
 
     // 1. Copy stage_dir → generations/<gen-id>/ and swap `current`. mat_ok gates
     //    advertisement to deploy: a failed materialize must NOT publish a
     //    manifest whose generation_dir is partial/absent.
-    //    `Superseded` (moss#968 §5d) is the third outcome: a NEWER build already
+    //    `Superseded` is the third outcome: a NEWER build already
     //    promoted, so this tail's swap was refused. Not an error — but not
     //    `mat_ok` either, since advertising this older manifest to deploy rolls
     //    the published site back exactly as the symlink swap would have.
@@ -2030,7 +2022,7 @@ async fn advertise_sealed(
         // pinned now cannot become unpinned in a way that matters — unpinning
         // only ever makes a directory *more* collectable, and missing that
         // costs one extra retained generation, not a deleted live upload.
-        // Also fold in the search lane's in-flight set (ADR-045): a
+        // Also fold in the search lane's in-flight set: a
         // generation the lane is still indexing must survive GC exactly like
         // an in-flight deploy does — this is the same skip
         // `ship::gc_old_generations` used to apply directly.
@@ -2044,13 +2036,13 @@ async fn advertise_sealed(
             collect_build_store(&mp, &gen_id, &pinned);
         })
         .await;
-        // 3b. Hand the FROZEN generation to the search lane (ADR-045) — staging
+        // 3b. Hand the FROZEN generation to the search lane — staging
         //     is wrong, the next build rewrites it. Nothing here awaits.
         //     `Freshness::Now` (a process that exits when the build returns)
         //     already indexed synchronously inside the build, and a request
         //     issued here would die with the runtime mid-index — so the
-        //     promise and its keeper now gate on the SAME value (ADR-010's
-        //     first corollary; they used to sit on different predicates).
+        //     promise and its keeper now gate on the SAME value (they used
+        //     to sit on different predicates).
         use crate::build::feeds::search_lane as lane;
         if matches!(freshness, lane::Freshness::Lane) && lane::enabled_for(mp) {
             let want = lane::PageSet::of(&sealed.site_hashes_view().files);
@@ -2102,8 +2094,7 @@ async fn advertise_sealed(
     //     the AskServer arm pays a clone, and only when a port exists — the
     //     price of resolving the network ask after step 5. Here because this
     //     is the one point where a complete manifest exists — on every path,
-    //     including the one-shot, which awaits this same function inline
-    //     since #1097.
+    //     including the one-shot, which awaits this same function inline.
     use crate::build::manifest::backfill::{self, SealVerdict};
     let verdict =
         backfill::for_seal(mp, backfill::tail_speaks(&sealed, mat_ok, owns_shared)).await;
@@ -2252,8 +2243,8 @@ fn trigger_media_settle_rerender(
 
 /// Retain generations and sweep the content-addressed cache after a successful
 /// materialize. Called from `advertise_sealed`, the one seal tail on every
-/// path since #1097 — the CLI's hand-copied predecessor had no retention call
-/// at all before moss#976, so `moss build` grew `generations/` without bound.
+/// path — the CLI's hand-copied predecessor had no retention call
+/// at all, so `moss build` used to grow `generations/` without bound.
 ///
 /// Both collectors are non-fatal: a GC failure never invalidates a build that
 /// already succeeded.

@@ -124,7 +124,7 @@ pub fn generate_favicons(source_svg: &Path, output_root: &Path) -> Result<Favico
         // Encode to memory and write through `io_utils`, rather than
         // `pixmap.save_png(&out_path)`. `save_png` does its own `File::create`
         // — an `O_TRUNC` open that a grep for `fs::write` would never find, and
-        // that fails `EDEADLK` against a cloud-evicted destination (ADR-043).
+        // that fails `EDEADLK` against a cloud-evicted destination.
         // Third-party APIs that take a path and write it themselves are the
         // blind spot in any call-site-shaped audit.
         let png = pixmap.encode_png().map_err(|e| FaviconError::Encode(e.to_string()))?;

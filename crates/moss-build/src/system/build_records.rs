@@ -7,7 +7,7 @@
 //! folder*. Until 2026-08-29 they were fields on `AppState`, reached through
 //! `app.manage`, so the only process that could write or read them was one
 //! with a `tauri::AppHandle`. The headless arms of the host seam were
-//! therefore no-ops, with two measured consequences (moss#1116):
+//! therefore no-ops, with two measured consequences:
 //!
 //! - `moss build --serve --watch` had no race-free refresh baseline, so every
 //!   rebuild diffed against the asynchronously-sealed `hashes.json` and

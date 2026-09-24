@@ -6,14 +6,14 @@
 
 // Re-export slug functions needed by callers who historically imported them
 // from the markdown module. generate_slug and slugify_path_segments are now
-// in moss-core (ADR-018) and forwarded via scan::slug.
+// in moss-core and forwarded via scan::slug.
 pub use crate::build::scan::slug::{
     generate_slug, generate_uid, insert_uid_into_frontmatter, replace_uid_in_frontmatter,
     resolve_duplicate_slugs_with_lang,
 };
 
 // AnalyticsConfig, FrontMatter, compute_url_path, and their helpers moved to
-// moss-core (ADR-018). Re-exported for backward compat.
+// moss-core. Re-exported for backward compat.
 pub use moss_core::frontmatter_typed::{
     AnalyticsConfig,
     FrontMatter,
@@ -27,7 +27,7 @@ pub use moss_core::frontmatter_typed::{
 };
 
 /// Parse a document's traditional-YAML frontmatter into the typed
-/// [`FrontMatter`] using the ONE parser the editor/chips use (ADR-020):
+/// [`FrontMatter`] using the ONE parser the editor/chips use:
 /// `moss_core::frontmatter::parse` + `project_typed`. gray_matter is gone.
 ///
 /// This is the YAML-branch counterpart to `parse_simplified_frontmatter`.

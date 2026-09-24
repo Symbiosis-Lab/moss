@@ -24,14 +24,14 @@ use super::cache::{self, CachedRegistry};
 use super::index::{accept_index, accept_revoked, RejectReason};
 use crate::system::large_download::{plan_transport, Transport};
 
-/// The one origin. See the module header and ADR-074 before changing it.
+/// The one origin. See the module header before changing it.
 pub const PRODUCTION_ORIGIN: &str = "https://symbiosis-lab.org/moss-registry";
 
 /// [`PRODUCTION_ORIGIN`], unless the binary was BUILT with
 /// `MOSS_REGISTRY_ORIGIN` set — the e2e suite's static fixture, and nothing
 /// else. Compile-time like `MOSS_SETA_URL`, for the same reason
 /// (tauri-driver passes no runtime env to the app) and for a better one: a
-/// runtime override would be the configurable origin ADR-074 rules out, and
+/// runtime override would be a configurable origin, which this design rules out, and
 /// a shipped binary built without the variable has no way to be pointed
 /// anywhere else.
 pub const REGISTRY_ORIGIN: &str = match option_env!("MOSS_REGISTRY_ORIGIN") {

@@ -13,7 +13,7 @@
 //! bytes vs final bytes", and this is the first point where the stage holds
 //! this build's final bytes.
 //!
-//! Lifted out of `build::pipeline` (moss#968) where it was a private helper.
+//! Lifted out of `build::pipeline` where it was a private helper.
 
 use crate::build::outcome::BuildStopped;
 use crate::build::manifest::PendingManifest;
@@ -30,7 +30,7 @@ pub fn apply_to_stage_and_manifest(
     slots: &ResolvedSlots,
     pending: &mut PendingManifest,
     site_result: &mut SiteResult,
-    // Shadow-verification snapshots (moss#968 §10 gate 4). `Some` only under
+    // Shadow-verification snapshots. `Some` only under
     // `MOSS_INCREMENTAL_VERIFY=1`; consumed at the END of this function because
     // that is the first moment the stage holds post-injection bytes.
     carry_verification: Option<CarryVerification>,

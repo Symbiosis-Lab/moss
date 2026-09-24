@@ -93,7 +93,7 @@ struct GroupMember {
 /// stranger never gets to clean up. Measured on a Mac 2026-08-18 while chasing
 /// the OnionPress menu-bar SIGTERM: pids ran 99230 → 231 → 4063 inside four
 /// minutes, i.e. the whole pid space wrapped twice over between two ordinary
-/// installs. See `docs/archive/2026-08-18-onionpress-sigterm.md`.
+/// installs.
 ///
 /// The rule costs nothing on the path it has to protect: everything the wedged
 /// child started is younger than the child, so a genuine subtree is still

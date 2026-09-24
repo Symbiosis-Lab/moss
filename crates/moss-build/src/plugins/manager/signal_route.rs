@@ -1,4 +1,4 @@
-//! Engine-agnostic hook-signal routing (#789 Phase 2, report 4 §3).
+//! Engine-agnostic hook-signal routing (Phase 2).
 //!
 //! Every hook signal — from the `plugin_message` Tauri command or from the
 //! QuickJS host dispatch's interception of the same call — lands in the SAME

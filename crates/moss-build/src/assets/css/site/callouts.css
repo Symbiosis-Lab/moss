@@ -1,6 +1,6 @@
 /* moss site stylesheet partial: callouts
    Shipped only when `SiteAssets::callouts` is true — see
-   src-tauri/src/build/emit/stylesheet.rs (CSS_PARTIALS).
+   `build::emit::stylesheet::CSS_PARTIALS`.
    Wrapped in @layer shortcodes to match the position these rules
    held inside site.css; multiple @layer blocks of the same name merge. */
 

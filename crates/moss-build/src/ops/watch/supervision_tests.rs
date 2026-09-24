@@ -199,7 +199,7 @@ fn an_unreadable_root_disarms_the_candidate() {
 
 /// The heartbeat that exists to make a dead loop diagnosable printed full
 /// health over a folder whose eligible set was empty — 585 passes of it, on a
-/// client's live vault (#1080). So a blind folder says so, and says it once:
+/// live vault. So a blind folder says so, and says it once:
 /// the condition is standing, and a line per sweep pass would bury the log it
 /// exists to make readable.
 #[test]

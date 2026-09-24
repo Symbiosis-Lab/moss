@@ -101,7 +101,7 @@ declare function reportProgress(phase: string, current: number, total: number, m
 declare function reportError(error: string, context?: string, fatal?: boolean): Promise<void>;
 /**
  * `PluginHook` mirrors the closed Rust enum in
- * `src-tauri/src/plugins/types.rs`. The router (T1) cross-products
+ * the app's plugin types module. The router (T1) cross-products
  * `PluginHook × TriggerContext` to pick a UI surface for the task.
  * Plugin authors pick the hook that matches what they're doing; they
  * do NOT pick the surface (the router owns that).
@@ -240,7 +240,7 @@ interface StartTaskOptions {
  * tracking store; calling any further method on the same handle will
  * reject with "unknown plugin task id".
  *
- * The state machine matches ADR-015 § Layer 2:
+ * The state machine:
  *
  *   Running ↔ Awaiting → Succeeded | Failed | Cancelled
  *
@@ -300,7 +300,7 @@ interface TaskHandle {
   succeeded(receipt?: string, amount?: number): Promise<void>;
   /**
    * Terminal: failure. `recoverable=false` (default) also fires the
-   * toast subscriber (ADR-015 § "Plugin-originated failure toasts").
+   * toast subscriber.
    */
   failed(error: string, recoverable?: boolean): Promise<void>;
   /** Terminal: explicit user cancellation. */
@@ -317,7 +317,7 @@ interface TaskHandle {
  * surface; they just describe what they're doing and why.
  *
  * Preferred over `reportProgress()` for new code. The legacy API stays
- * supported until ADR-015 Phase 3 sweeps all 151 call sites.
+ * supported until a later phase sweeps the remaining call sites.
  *
  * @example
  * const task = await startTask("Importing 42 articles", {
@@ -350,7 +350,7 @@ interface BaseContext {
 /**
  * Context for before_build hook (process capability)
  *
- * `trigger` is stamped by moss (ADR-015): the plugin reads it to declare task
+ * `trigger` is stamped by moss: the plugin reads it to declare task
  * intent via `startTask`, it does NOT guess it. Onboarding card → "onboarding_flow"
  * (drives the ambient hairline); every build/preview rebuild → "background".
  * Optional for backward compatibility; absent ⇒ treat as "background".
@@ -451,7 +451,7 @@ interface SetupContext {
 /**
  * Context for after_deploy hook (syndicator plugins)
  *
- * `trigger` is stamped by moss (ADR-015), same contract as
+ * `trigger` is stamped by moss, same contract as
  * {@link ProcessContext.trigger}. Syndication has exactly one production
  * caller — the Publish click — so this is always `"manual_one"`; absent
  * (older moss) ⇒ treat as `"background"`.
@@ -722,7 +722,6 @@ interface LegacySetupVerdict {
 //#endregion
 //#region src/types/social.d.ts
 /** One comment in the .moss/data/social/*.json shared standard.
- *  See moss/docs/reference/social-data-standard.md.
  *  @category Social */
 interface SocialComment {
   id: string;
@@ -787,7 +786,7 @@ declare function getTauriCore(): TauriCore;
  *
  * Plugins run inside a webview (no Node `process.env`), so reading host
  * environment variables requires a Rust→TS bridge. The
- * `get_plugin_env_var` Tauri command in `src-tauri/src/plugins/runtime.rs`
+ * `get_plugin_env_var` Tauri command in the app's plugin runtime module
  * enforces a server-side allow-list — plugins cannot read arbitrary
  * environment variables, only the ones moss has whitelisted for test /
  * harness use.

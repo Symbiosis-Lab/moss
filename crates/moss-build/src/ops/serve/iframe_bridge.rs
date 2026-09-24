@@ -26,7 +26,7 @@ const IFRAME_BRIDGE_SCRIPT: &str = include_str!("js/iframe-bridge.js");
 
 /// Preview-only blueprint placeholder for media that isn't there yet.
 ///
-/// Built from `frontend/bridge/asset-placeholder.ts`. Injected into `<head>`, not
+/// Built from the desktop app's asset-placeholder bridge script. Injected into `<head>`, not
 /// before `</body>` like everything else in this module: it registers a
 /// capture-phase `error` listener, and an image that fails while the parser is
 /// still working through the body would fire before a body-end script existed.
@@ -220,8 +220,8 @@ content-visibility:auto;contain-intrinsic-size:auto none auto 600px}\
 /// is theme-aware, so the wash stays legible in dark mode.
 ///
 /// `.moss-fm-flash` is the hover-driven strength of the same wash: hovering a
-/// chip in the property bar flashes the element(s) the field renders as
-/// (docs/archive/2026-08-14-frontmatter-hints.md, tier 2). Class-based rather
+/// chip in the property bar flashes the element(s) the field renders as.
+/// Class-based rather
 /// than an inline `animation` write because hover needs a clean clear on
 /// hover-out and a reduced-motion form: under `prefers-reduced-motion` the
 /// animation is dropped and the class holds a static tint for as long as the
@@ -254,7 +254,7 @@ to{background-color:transparent}}\
 ///     (set in shell CSS) shows through, avoiding WKWebView's white
 ///     default.
 ///
-/// # Chrome clearance: owned by the shell (ADR-039)
+/// # Chrome clearance: owned by the shell
 ///
 /// The preview iframe is inset below the floating titlebar by the shell
 /// (`#moss-preview-iframe { top: var(--moss-titlebar-height) }`), so the
@@ -265,7 +265,7 @@ to{background-color:transparent}}\
 /// The `moss-shell-frame` class described below is still injected but is
 /// now **inert**: `site.css` defines no rules for it. It is retained so
 /// this change stays trivially revertable; removing the marker middleware
-/// and the topology check is follow-up work on #926. The historical
+/// and the topology check is follow-up work. The historical
 /// two-mechanism design was:
 ///
 ///   1. **Server-side, before first paint (primary path):** when the
@@ -292,7 +292,7 @@ to{background-color:transparent}}\
 /// # Marker propagation
 ///
 /// The shell stamps `__moss_shell=1` onto every iframe URL it constructs
-/// (see `frontend/app/preview/shell-marker.ts`). The bridge's link-click
+/// (see the desktop app's shell-marker module). The bridge's link-click
 /// interceptor re-stamps the marker when navigating internally (see the
 /// link interceptor in `iframe-bridge.ts`). Together this covers ~99% of
 /// in-iframe navigation paths: link clicks, programmatic Navigation API
@@ -320,7 +320,7 @@ to{background-color:transparent}}\
 /// served-on-web layout is unchanged. (The `__moss_shell` query param is
 /// stamped only by the moss shell, never by published links.)
 ///
-/// # No chrome-height constant here (ADR-039)
+/// # No chrome-height constant here
 ///
 /// This used to emit `scroll-padding-top: 48px` so anchor targets cleared the
 /// floating titlebar, duplicating `system::utils::TITLEBAR_HEIGHT` and the

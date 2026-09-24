@@ -352,7 +352,7 @@ fn a_grid_link_to_a_mixed_case_folder_finds_its_card() {
 #[test]
 fn a_grid_link_naming_no_document_stays_uncarded() {
     // The resolver's job on a miss is to answer "nothing", never to synthesize
-    // a folder URL that no document occupies (moss#903 bug 3).
+    // a folder URL that no document occupies.
     let docs = vec![folder_note("Mirror", "mirror/index.html", "MIRROR/index.md")];
     let graph = moss_core::content_graph::ContentGraph::from_paths(&["MIRROR/index.md"]);
     let page = Page::new("index.html", &docs).with_graph(&graph);
@@ -748,7 +748,7 @@ fn a_two_link_cell_is_left_alone_by_both_passes() {
     assert_eq!(both_passes(md, &page, None), plan_of(md).to_html());
 }
 
-// ── moss#903 bug 1: CJK prose before a grid ────────────────────────────
+// ── CJK prose before a grid ────────────────────────────
 
 #[test]
 fn cjk_prose_immediately_before_a_grid_builds_and_places_the_grid_correctly() {
@@ -792,11 +792,11 @@ fn cjk_prose_immediately_before_a_grid_builds_and_places_the_grid_correctly() {
     assert_eq!(lead.matches('<').count(), lead.matches('>').count());
 }
 
-// ── moss#903 bug 4: long-form body trapped in the cover column ─────────
+// ── long-form body trapped in the cover column ─────────
 
 #[test]
 fn a_long_article_on_a_cover_page_is_not_trapped_in_the_narrow_column() {
-    // Before ADR-034 the ONLY release point was a literal `.moss-grid` match,
+    // Before typed grid cells the ONLY release point was a literal `.moss-grid` match,
     // so a cover-bearing folder home whose body is a long article typeset its
     // entire body in the narrow cover-body column, with half the viewport empty
     // beside it.
@@ -831,8 +831,7 @@ fn a_cell_of_image_label_and_heading_link_is_opaque() {
     // The shape an author reaches for when hand-building what they wanted a
     // card to be: the cover, a kicker, and the title as a linked heading. It is
     // three blocks, so no card is built and the author gets exactly what they
-    // typed. Documented in docs/reference/shortcode-grammar.md as the trap,
-    // because the fix is counter-intuitive — DELETE the hand-built parts and
+    // typed. This is a known trap, and the fix is counter-intuitive — DELETE the hand-built parts and
     // let the linked page's own `cover:` and `description:` supply them.
     let md = ":::grid 1\n![](poster.png)\n\nPart One\n\n### [Title](/works/one/)\n:::\n";
     assert!(matches!(classify_nth(md, 0), GridCell::Opaque));

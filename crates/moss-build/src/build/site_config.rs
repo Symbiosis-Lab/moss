@@ -1,12 +1,12 @@
 //! The build's config readers — `.moss/config.toml`, `.moss/state.toml`, and
 //! the one app-level flag the pipeline consults.
 //!
-//! Moved from `domain/config.rs` (2026-08-27, M6a B3 / ADR-059): the reader
+//! Moved from `domain/config.rs` (2026-08-27): the reader
 //! family crosses into the build tree so it travels into `crates/moss-build`
 //! with the pipeline; the modal-driven writers stay app-side in
 //! `domain/config.rs`, which re-exports these readers so existing paths keep
 //! working. `ManagedToml` and the one write primitive joined this crate on
-//! 2026-09-07 (`vault::config`, the ADR-059 amendment) so `moss env` writes in
+//! 2026-09-07 (`vault::config`) so `moss env` writes in
 //! both binaries. The eviction-aware read lives here because the
 //! cloud-readiness machinery is already in-cluster.
 
@@ -46,7 +46,7 @@ pub fn read_managed_toml(path: &Path) -> Result<Option<String>, String> {
 /// than from a stat, so an iCloud-evicted config never reads as "no settings".
 /// The parsing and every lookup are [`crate::config::ConfigFile`]'s, in
 /// the open crate, so a `moss-cli` that reads the same file with
-/// `std::fs::read_to_string` interprets it identically (ADR-059).
+/// `std::fs::read_to_string` interprets it identically.
 ///
 /// Parsed once per call, so a caller that wants several keys should hold the
 /// result rather than ask again — asking again is a second read of a file that
@@ -132,7 +132,7 @@ pub fn get_site_search(project_path: &str) -> Result<Option<bool>, String> {
     get_site_bool_field(project_path, "search")
 }
 
-/// Read `[site].floating_nav` — the floating nav island (ADR-049).
+/// Read `[site].floating_nav` — the floating nav island.
 /// None = not set (caller uses its own default, which is ON).
 pub fn get_site_floating_nav(project_path: &str) -> Result<Option<bool>, String> {
     get_site_bool_field(project_path, "floating_nav")
@@ -325,7 +325,7 @@ fn get_site_bool_field(project_path: &str, field: &str) -> Result<Option<bool>, 
 }
 
 /// Get the site-wide LaTeX-math preference from `.moss/config.toml`
-/// `[site]` section (ADR-030). Returns `None` when the key is absent —
+/// `[site]` section. Returns `None` when the key is absent —
 /// which is every site today, since nothing writes it. The caller treats
 /// absence as `true`: math is on by default, and authors whose prose
 /// makes `$` pair up opt out with `[site].math = false`.
@@ -375,7 +375,7 @@ pub fn get_build_keep_generations(project_path: &str) -> Option<usize> {
 /// is a plugin building a src by concatenation, where the literal path never
 /// appears in the JS — reads as unreferenced and the image is deleted from a
 /// published site, silently. Until the reference set comes from the emitter
-/// rather than a regex (moss#976 B2 follow-up), a user hitting that has no
+/// rather than a regex, a user hitting that has no
 /// other recourse and support has nothing to suggest.
 pub fn get_build_prune_orphaned_images(project_path: &str) -> Option<bool> {
     read_project_config(project_path)

@@ -1,8 +1,7 @@
 //! Watcher supervision: the sweep judges the watcher by outcomes, and this
 //! module carries the evidence between the two.
 //!
-//! Phase 3 of `docs/archive/2026-08-18-watcher-reliability-architecture.md`
-//! ("The sweep is also the watcher's supervisor"). The incident that design
+//! Phase 3 ("The sweep is also the watcher's supervisor"). The incident that design
 //! answers — notify's macOS FSEvents stream dying with no flag, no error, no
 //! Rescan (LOG-8D03-T0942-08-18) — emits nothing a health check could poll,
 //! so the watcher is judged by the one signal a silent-but-dead stream cannot
@@ -236,7 +235,7 @@ impl WatcherHealth {
 /// matures it. Extracted from the sweep loop so the arming → maturity →
 /// recreate path is pinned by unit tests against a real ledger (spec review
 /// should-fix 2); the end-to-end fault-injection replay (kill the event
-/// stream under a live watcher) is tracked as moss#1076.
+/// stream under a live watcher) is tracked separately.
 pub struct StrikeArm {
     candidate: Option<HealthMark>,
 }
@@ -335,7 +334,7 @@ static BLIND_REPORTED: LazyLock<Mutex<std::collections::HashSet<String>>> =
 /// eligible set is empty. Those two states were indistinguishable in the log,
 /// so the heartbeat that exists to make a dead loop diagnosable reported full
 /// health while the loop compared nothing at all, 585 times, over a client's
-/// live folder with an unrebuilt edit sitting on disk (#1080).
+/// live folder with an unrebuilt edit sitting on disk.
 ///
 /// A log line and nothing else. The vaults this fires on are real people's
 /// folders, open in an editor right now; a mid-edit banner over a diagnostic

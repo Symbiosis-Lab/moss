@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn test_quoted_true_false_strings_accepted_for_boolean() {
-        // #925: the typed build path (deserialize_bool_lenient) coerces
+        // The typed build path (deserialize_bool_lenient) coerces
         // "true"/"false" strings for bool fields; this diagnostic must agree,
         // or the editor would show a fresh "wrong type" error for a value the
         // build path already accepts.

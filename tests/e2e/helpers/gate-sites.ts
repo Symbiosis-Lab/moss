@@ -31,7 +31,7 @@ lang = "en"
 
 /**
  * The same config plus the floating nav island, for the one gate that measures
- * it. The island has been opt-in since ADR-049 §1's 2026-08-30 amendment, so a
+ * it. The island has been opt-in since a 2026-08-30 amendment, so a
  * site that says nothing gets none — and the footnote gate's forward-jump case
  * is specifically about landing clear of the island.
  */
@@ -471,7 +471,6 @@ search = true
 // `children_style: grid` folder (three children, each with a cover, reusing
 // `tile.svg`) whose listing must become phone ROWS — thumbnail left, title
 // right — below `36rem`, and stay the normal cover-on-top column above it.
-// docs/archive/2026-09-11-home-feed-cards-and-archive-link.md §2.
 //
 // A fifth, for the same reason: the `Shelf` section is a `:::grid 3` of
 // wikilinks to covered pages — the cards a directive makes are a different
@@ -1235,7 +1234,7 @@ nav: true
   },
 };
 
-// ── Footnote `:target` landing (docs/archive/2026-08-24-footnote-landing-fix-plan.md) ──
+// ── Footnote `:target` landing ──
 // Two footnotes are enough to prove both directions of the fix without the
 // 152-note stress case (that belongs to the sidenote feature's own gates):
 //   - forward, `#fn-1`: a reader following the superscript marker down to the
@@ -1255,7 +1254,7 @@ nav: true
 // Three things have to hold at once for the forward-jump test to have an
 // island to observe, and all three are load-bearing here: the site opts in
 // (`CONFIG_TOML_WITH_ISLAND`), the page has a trail, and the page carries two
-// `##` sections — since ADR-049 §10 as amended the island shows only where
+// `##` sections — the island shows only where
 // there is a contents table to build. Do not thin the Notes page down to one
 // section.
 //
@@ -1272,8 +1271,7 @@ export const FOOTNOTE_TARGET_GATE: ScratchSiteSpec = {
     // so a page with no notes of its own still gets whatever the reserve does
     // to the page box. The home page is that page, and it carries a hero
     // because that IS the reported shape: a front page of hero plus card grids
-    // on a site whose articles happen to cite sources
-    // (docs/archive/2026-08-30-sidenote-gutter-page-kind.md). The front page is
+    // on a site whose articles happen to cite sources. The front page is
     // now scoped out of the reserve, so the escape itself is proven on
     // /banner/ below, which keeps one.
     "cover.svg": FOOTNOTE_HERO_SVG,

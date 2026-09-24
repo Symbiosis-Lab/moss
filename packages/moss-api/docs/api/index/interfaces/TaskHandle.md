@@ -9,7 +9,7 @@ applied the transition to the PanelTask registry. Terminal calls
 tracking store; calling any further method on the same handle will
 reject with "unknown plugin task id".
 
-The state machine matches ADR-015 § Layer 2:
+The state machine:
 
   Running ↔ Awaiting → Succeeded | Failed | Cancelled
 
@@ -117,7 +117,7 @@ failed(error, recoverable?): Promise<void>;
 ```
 
 Terminal: failure. `recoverable=false` (default) also fires the
-toast subscriber (ADR-015 § "Plugin-originated failure toasts").
+toast subscriber.
 
 #### Parameters
 

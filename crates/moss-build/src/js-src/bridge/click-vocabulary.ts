@@ -1,4 +1,4 @@
-// Preview-click disambiguation (docs/archive/2026-08-14-preview-click-vocabulary.md).
+// Preview-click disambiguation.
 //
 // Single click = reveal (editor scrolls + flashes, focus stays in the preview).
 // Double click = jump (editor focused, caret at the mapped position).

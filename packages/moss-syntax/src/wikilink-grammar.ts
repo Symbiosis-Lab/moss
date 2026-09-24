@@ -1,6 +1,6 @@
 /**
  * @lezer/markdown inline grammar extension for `[[wikilink]]` and `![[embed]]`
- * syntax. See ADR-041 — how `![[…]]` parses is load-bearing for four modules.
+ * syntax. How `![[…]]` parses is load-bearing for four modules.
  *
  * Without this, `[[Research]]` mis-parses as a destination-less `Link` node
  * because the outer `[` starts a link bracket and the inner `[Research]`

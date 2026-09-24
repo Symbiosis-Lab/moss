@@ -3,10 +3,10 @@
 //! Comment HTML (Artalk `content_marked`, or raw `content`) is attacker-controlled
 //! and is rendered both into baked SSR pages and the dehydrated store, so it MUST
 //! be sanitized at ingest — never trust the upstream comment server's sanitization
-//! (defense in depth). See ADR-025 §11 and `docs/reference/comment-system-design.md` §0/§11.
+//! (defense in depth).
 //!
 //! The allowlist here MUST stay byte-for-byte equivalent to the TypeScript client
-//! sanitizer (DOMPurify config in `frontend/site/comments/`): the cross-language
+//! sanitizer (DOMPurify config): the cross-language
 //! golden test renders the same fixture through both and asserts identical HTML,
 //! so any divergence in allowed tags fails CI.
 

@@ -324,7 +324,7 @@ pub(crate) fn show_render(mp: &MossPaths, publishable: bool) -> (u64, Option<Pat
 /// Repoint `current` at `gen_id` unless a newer build already has, and record
 /// that `current` now holds `render`. `Ok(false)` is refused-as-stale.
 ///
-/// moss#968 §5d: a `generation_id` is a content hash with no order, and seal
+/// A `generation_id` is a content hash with no order, and seal
 /// tails run detached, so build N's tail can land after build N+1's. The epoch
 /// is what orders them. The swap runs under its own lock and the render is
 /// recorded only after it, so a reader between the two sees the older render

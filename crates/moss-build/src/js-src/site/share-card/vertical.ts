@@ -30,10 +30,6 @@
  * still gives the column advance, so `wrapText`'s kinsoku wrapping is
  * unchanged — only how a wrapped line paints changed.
  *
- * Design, probes and the geometry: docs/archive/2026-09-13-share-card-vertical-v2-redesign.md
- * (v1's layout and its own history: docs/archive/2026-09-11-share-card-vertical-design.md).
- * The two-column meta and the blocks-aware quote: docs/archive/2026-09-14-vertical-transposition-thermo-review.md.
- *
  * Contract: takes `text` and, when `options.blocks` is given (long mode, a
  * real selection), wraps the quote from those blocks instead of from `text`
  * — each authored line becomes one or more columns, and a line outside the

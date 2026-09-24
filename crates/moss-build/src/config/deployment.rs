@@ -8,7 +8,7 @@
 //! The build tree threads a `DomainDeploymentConfig` value through slot
 //! resolution and feature sync, so the type must be reachable from
 //! `moss-build` when the pipeline crosses. Reading and writing `state.toml`
-//! stays app-side (ADR-059's shape: vocabulary crosses, file access does not).
+//! stays app-side: vocabulary crosses, file access does not.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};

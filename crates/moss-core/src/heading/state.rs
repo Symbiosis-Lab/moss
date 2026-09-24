@@ -1,9 +1,9 @@
 //! Article heading rule — single source of truth for the auto-injected
 //! `<h1 class="moss-article-title">` and the editor's pinned heading element.
 //!
-//! Both consumers — the build pipeline (`src-tauri/src/build/markdown/pipeline.rs`)
+//! Both consumers — the build pipeline (in the desktop app's markdown pipeline)
 //! and the editor command `compute_heading_state`
-//! (`src-tauri/src/editor/commands.rs`) — feed the same inputs into [`compute`]
+//! (in the desktop app's editor commands) — feed the same inputs into [`compute`]
 //! and act on the same answer. Without this module the two paths silently
 //! desync the next time the rule changes.
 //!
@@ -18,8 +18,6 @@
 //!     auto-injection regardless of title — but only if the block has
 //!     something in it. An image-only hero renders no title of its own, so
 //!     letting it claim the slot loses the title outright.
-//!
-//! See `docs/reference/title-rendering.md`.
 
 use crate::home;
 
@@ -76,14 +74,14 @@ pub struct HeadingInputs<'a> {
     /// indexes).
     pub root_folder_name: Option<&'a str>,
     /// `true` iff the file is promoted to its folder's home via the
-    /// `home: true` frontmatter marker (issue #587). Pipeline-only input;
+    /// `home: true` frontmatter marker. Pipeline-only input;
     /// editor passes `false`.
     pub is_home_override: bool,
     /// `true` iff the file is a layout-slot source (e.g. root `footer.md`)
     /// rather than an article. Slot files are embedded as fragments into a
     /// surrounding layout; the auto-injected `<h1 class="moss-article-title">`
     /// would render as an unwanted heading inside that fragment. PR7b
-    /// (moss#599) replaces the pre-2026-05-28 frontmatter-synthesis hack
+    /// replaces the pre-2026-05-28 frontmatter-synthesis hack
     /// (`title: ""` injected at the call site to drive `empty_title=true`)
     /// with this structural input. Editor passes `false`.
     pub slot_only: bool,
@@ -95,14 +93,14 @@ pub struct HeadingInputs<'a> {
 /// Not root-aware: a root-level index-stem (`index.md` with no path parent)
 /// resolves to the stem itself ("index"). Use [`filename_text_with_root`]
 /// when the project's root folder name is available so the site root's home
-/// page reads the folder name instead. See #775.
+/// page reads the folder name instead.
 pub fn filename_text(file_path: &str) -> String {
     filename_text_with_root(file_path, None)
 }
 
 /// Like [`filename_text`], but root-aware: for an index stem at the project
 /// root (where `Path::parent()` has no `file_name`), the resolved text is
-/// `root_folder_name` rather than the bare stem. This is the fix for #775 —
+/// `root_folder_name` rather than the bare stem. This is the fix —
 /// a root `index.md` home page must read the folder name in `<title>`/chrome,
 /// not "index".
 ///
@@ -214,7 +212,7 @@ pub fn compute(input: HeadingInputs<'_>) -> HeadingState {
     // Resolve text + source from frontmatter.title before all other rules.
     // Some(_) → Title source (empty allowed); None → Filename source.
     // Filename mode is root-aware: a root index-stem / self-named home
-    // resolves to the project's folder name, not the bare "index" stem (#775).
+    // resolves to the project's folder name, not the bare "index" stem.
     let (text, source) = match input.frontmatter_title {
         Some(t) => (t.trim().to_string(), HeadingSource::Title),
         None => (
@@ -323,11 +321,11 @@ mod tests {
         assert_eq!(filename_text_with_root("index.zh-hans.md", Some("My Site")), "My Site");
     }
 
-    // ── filename_text_with_root: root-aware home title (#775) ─────────
+    // ── filename_text_with_root: root-aware home title ─────────
 
     #[test]
     fn text_root_index_uses_root_folder_name() {
-        // Bug #775: a root `index.md` has no path parent, so the bare
+        // A root `index.md` has no path parent, so the bare
         // `filename_text` resolves it to the stem "index". With the root
         // folder name threaded in, the resolved text must be the folder
         // name (no title-casing — matches filename_text's hyphen/underscore
@@ -665,7 +663,7 @@ mod tests {
 
     #[test]
     fn slot_only_hides_heading_regardless_of_title() {
-        // PR7b (moss#599): `footer.md` flows through the normal pipeline
+        // PR7b: `footer.md` flows through the normal pipeline
         // with `slot_only = true`. The auto-injected H1 must be suppressed
         // even when the author writes `title: "Custom"` in the
         // frontmatter — the rendered HTML lands inside a `<footer>` slot,

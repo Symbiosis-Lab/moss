@@ -17,7 +17,7 @@
 //!   be undone, because a uid is random and joins live comment threads and
 //!   signed moderation history.
 //!
-//! Until moss#1079 that came from a second file, `deployed-article-map.json`: a
+//! Until the uid-remint fix landed, that came from a second file, `deployed-article-map.json`: a
 //! byte copy of the working `ArticleMap`, carrying every article's full markdown
 //! *and* its rendered HTML. On the vault that reported the incident, 4.83 MB
 //! across 108 articles — 98.7% of it prose — to convey the `{uid, url,
@@ -32,16 +32,16 @@
 //! computed once by the writer, as `PublishedSnapshot::triples`.
 //!
 //! `uids` and `source_to_output` — the two fields `triples` replaced as this
-//! module's source (moss#1093) — are kept on the record for one release as the
-//! fallback a legacy record (written before `triples` existed) reads through.
-//! They come from different sources (the article map, the sealed manifest)
-//! that can advance independently, so joining them at read time can be
-//! half-updated; `triples` cannot, because it is written whole by one read.
-//! See `docs/archive/2026-08-20-publish-record-triples-migration-design.md`.
+//! module's source (the triples migration) — are kept on the record for one
+//! release as the fallback a legacy record (written before `triples` existed)
+//! reads through. They come from different sources (the article map, the
+//! sealed manifest) that can advance independently, so joining them at read
+//! time can be half-updated; `triples` cannot, because it is written whole by
+//! one read.
 //!
 //! # Why unreadable is a value here, not a log line
 //!
-//! `.moss/deploy/` is gitignored but **synced** (ADR-062): what is live at a
+//! `.moss/deploy/` is gitignored but **synced**: what is live at a
 //! target is a fact about the SITE, so a second machine that publishes after
 //! this one renamed a page still has the baseline that lets it leave a
 //! forwarding link. The price of that decision is paid here — a provider may
@@ -57,7 +57,7 @@ use crate::build::manifest::change_set::PublishedSnapshot;
 use crate::build::scan::article_map::{to_pretty_url, ArticleMap};
 use crate::moss_paths::MossPaths;
 
-// `LiveEntry` is persisted as `PublishedSnapshot::triples` (moss#1093), so it
+// `LiveEntry` is persisted as `PublishedSnapshot::triples` (since the triples migration), so it
 // lives on the record type in `change_set` — re-exported here so every
 // existing `live_baseline::LiveEntry` reference keeps resolving.
 pub use crate::build::manifest::change_set::LiveEntry;
@@ -93,10 +93,10 @@ pub enum Unreadable {
     PredatesUids,
     /// A legacy (pre-`triples`) record whose `uids` and `source_to_output`
     /// disagree: some source path with a live uid has no matching entry in
-    /// `source_to_output`. That is the exact shape moss#1089 could produce
-    /// before it was fixed — half-updated, not merely absent. Joining it
+    /// `source_to_output`. That is the exact shape the half-updated-shape fix
+    /// addressed — half-updated, not merely absent. Joining it
     /// anyway would drop the uid, source path, and all, from the baseline
-    /// entirely, which is the moss#1079 mint reopened. Waiting cannot end
+    /// entirely, which is the uid-remint bug reopened. Waiting cannot end
     /// this, like `Corrupt` — the fix is the next publish, which now always
     /// writes `triples` directly and cannot re-diverge.
     Inconsistent,
@@ -141,7 +141,7 @@ pub enum Baseline {
     /// Provably nothing published: no record, and no legacy snapshot.
     Absent,
     /// Something is there and could not be used. **Never** substitute an empty
-    /// baseline for this — that is the moss#1079 bug.
+    /// baseline for this — that is the uid-remint bug.
     Unreadable(Unreadable),
 }
 
@@ -190,7 +190,7 @@ enum RecordFacts {
 /// Decidable from the record alone: every source path `uids` names must have a
 /// matching entry in `source_to_output`, or the join would drop that uid (and
 /// its source path) out of the baseline entirely rather than just its URL —
-/// the moss#1089 shape. An empty `uids` trivially passes (nothing to place),
+/// the half-updated shape. An empty `uids` trivially passes (nothing to place),
 /// which is correct: that case answers zero entries either way, and it is
 /// `PredatesUids`'s job — decided in [`load`] from the aggregate result, not
 /// here — to name it, not `Inconsistent`'s.
@@ -243,7 +243,7 @@ pub fn uids_of(map: &ArticleMap) -> HashMap<String, String> {
         .collect()
 }
 
-/// The pre-moss#1079 file, in the two places it has lived.
+/// The pre-fix file, in the two places it has lived.
 ///
 /// `.moss/deploy/` since 2026-08-17, `.moss/data/` before that. A project that
 /// last published before this change has its only uid history in one of them,
@@ -260,7 +260,7 @@ fn legacy_paths(paths: &MossPaths) -> [PathBuf; 2] {
 
 /// Read what is live, keeping absent and unreadable apart.
 ///
-/// Records and the pre-moss#1079 snapshot are UNIONED rather than ranked. They
+/// Records and the pre-fix snapshot are UNIONED rather than ranked. They
 /// disagree only by being written at different publishes, and a URL either of
 /// them knows is a URL someone can have linked to — so preferring one would
 /// drop live pages for the duration of the migration, which is the permanent
@@ -282,7 +282,7 @@ pub fn load(paths: &MossPaths) -> Baseline {
             RecordFacts::Inconsistent => {
                 log::warn!(
                     "a publish record has a note ID with no matching page mapping — this is \
-                     the half-updated shape moss#1089 fixed the last writer of, so this \
+                     a half-updated shape from before the last writer of it was fixed, so this \
                      build treats what is live as unknown rather than guessing at it. The \
                      next publish rewrites the record whole."
                 );
@@ -399,7 +399,7 @@ fn read_legacy(paths: &MossPaths) -> Baseline {
                 }
                 Err(e) => {
                     log::warn!(
-                        "the pre-moss#1079 record at {} does not parse ({e}) — treating \
+                        "the pre-fix record at {} does not parse ({e}) — treating \
                          it as unreadable; the next publish replaces it",
                         path.display()
                     );
@@ -409,7 +409,7 @@ fn read_legacy(paths: &MossPaths) -> Baseline {
             Ok(None) => continue,
             Err(e) => {
                 log::warn!(
-                    "the pre-moss#1079 record at {} could not be read ({e}) — treating what \
+                    "the pre-fix record at {} could not be read ({e}) — treating what \
                      is live as unknown rather than as nothing",
                     path.display()
                 );
@@ -458,7 +458,7 @@ fn sorted(mut entries: Vec<LiveEntry>) -> LiveBaseline {
 /// - [`backfill_triples`]: freeze a legacy record's `uids` + `source_to_output`
 ///   pair into `triples`, but only when the pair is decidably complete — see
 ///   its own doc for why that is safe and when it is not attempted at all.
-/// - the pre-moss#1079 snapshot retirement, below: unrelated to triples, and
+/// - the pre-fix snapshot retirement, below: unrelated to triples, and
 ///   unaffected by this change (`load` unions its entries in exactly as
 ///   before).
 pub fn migrate(paths: &MossPaths) {
@@ -477,7 +477,7 @@ pub fn migrate(paths: &MossPaths) {
 /// [`Unreadable::Inconsistent`] until an actual publish writes real triples via
 /// `deploy::landed::record_landed`. Freezing an incomplete join would persist
 /// a drop as if it were authoritative, which is worse than re-deriving it: a
-/// later, better-informed read (e.g. once the pre-moss#1079 snapshot migration
+/// later, better-informed read (e.g. once the pre-fix snapshot migration
 /// below has run) could still improve on it, and a frozen bad join cannot.
 fn backfill_triples(paths: &MossPaths) {
     let Ok(records) = read_records(paths) else { return };
@@ -499,7 +499,7 @@ fn backfill_triples(paths: &MossPaths) {
     }
 }
 
-/// Retire the pre-moss#1079 snapshot, on every build.
+/// Retire the pre-fix snapshot, on every build.
 ///
 /// Three arms, and the asymmetry between the first and the last is the point:
 ///
@@ -574,7 +574,7 @@ fn retire_legacy_snapshot(paths: &MossPaths) {
         if let Err(e) = crate::build::manifest::published_record::save(paths, &record) {
             log::warn!(
                 "could not move the note IDs into the publish record ({e}) — leaving the \
-                 pre-moss#1079 file where it is; the next build retries"
+                 pre-fix file where it is; the next build retries"
             );
             return;
         }
@@ -585,13 +585,13 @@ fn retire_legacy_snapshot(paths: &MossPaths) {
         // every live page and the first arm collects it.
         log::info!(
             "moved the note IDs into the publish record, but {stranded} published page(s) \
-             are not in any record's output map — keeping the pre-moss#1079 file until a \
+             are not in any record's output map — keeping the pre-fix file until a \
              publish can place them"
         );
         return;
     }
     log::info!(
-        "moved the note IDs into the publish record — the pre-moss#1079 copy of the \
+        "moved the note IDs into the publish record — the pre-fix copy of the \
          whole article map is retired"
     );
     present.iter().for_each(|p| remove_superseded(p));
@@ -606,8 +606,8 @@ fn remove_superseded(legacy: &Path) {
             legacy.display()
         ),
         // Unreadable does not block the unlink: `remove_file` never opens the
-        // file, so a dataless entry deletes exactly like a materialized one
-        // (ADR-043's measurement). A failure here is a real permissions
+        // file, so a dataless entry deletes exactly like a materialized one.
+        // A failure here is a real permissions
         // problem, and costs only that the file keeps syncing.
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => log::warn!(
             "could not remove the superseded record at {} ({e}) — it will keep syncing",

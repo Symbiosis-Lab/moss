@@ -1,4 +1,4 @@
-//! Per-folder inferred language (ADR-065), computed once per build in the
+//! Per-folder inferred language, computed once per build in the
 //! scan/reduce phase and fed into `crate::i18n::resolve_document_language`
 //! (via `process_markdown_file`'s `folder_lang` parameter) as a richer
 //! source for rung 3 — the same slot [`crate::i18n::path::ancestor_lang_from_path`]
@@ -8,8 +8,8 @@
 //!
 //! moss used to call `i18n::detect::detect_language` on every page's own
 //! body, on every build. That made a document's language move on a typo
-//! fix, which fed a fingerprint and could force a full site render (see
-//! ADR-065). The fix is not to delete content detection — a vault with no
+//! fix, which fed a fingerprint and could force a full site render. The
+//! fix is not to delete content detection — a vault with no
 //! naming convention still needs SOME answer better than the site default
 //! — it's to run it once per FOLDER, over the folder's whole file set,
 //! instead of once per PAGE, over one file's bytes.
@@ -71,7 +71,7 @@ impl FolderLangCache {
     }
 
     /// Persist to disk. Goes through `io_utils` because this file lives
-    /// under `.moss/build.nosync/` (ADR-043 — dataless is absent there).
+    /// under `.moss/build.nosync/` (dataless is treated as absent there).
     pub(crate) fn save(&self, path: &Path) -> std::io::Result<()> {
         let json = serde_json::to_vec_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
@@ -197,7 +197,7 @@ pub(crate) fn resolve_folder_languages(
 /// `Language`. A folder declaring `fr` therefore gets NO folder-level answer at
 /// all — it is a declaration, so it stops the inference from overruling it, and
 /// its pages fall through to the site default (the same ceiling `<html lang>`
-/// had before #977, and tracked with it).
+/// has, and tracked with it).
 ///
 /// Read on every build rather than through the FILE-SET cache: that cache
 /// exists so that editing a body cannot move a folder's language, and a `lang:`

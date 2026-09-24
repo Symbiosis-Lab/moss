@@ -2,8 +2,7 @@
 //!
 //! This module is the sole dispatcher for `[[…]]` / `![[…]]` events
 //! emitted by pulldown-cmark with `Options::ENABLE_WIKILINKS`. The
-//! src-tauri pipeline's `transform_events` (in
-//! `src-tauri/src/build/markdown/pipeline.rs`) calls
+//! desktop app's markdown pipeline `transform_events` calls
 //! [`dispatch_wikilink_embed_with_registry`] once per WikiLink-typed
 //! event, swallows the event range, and substitutes the renderer-
 //! produced HTML.
@@ -297,7 +296,7 @@ fn build_anchor(section: Option<&str>) -> String {
 ///
 /// This function compiles and is unit-tested, but no caller wires it in
 /// at runtime yet. PR2 enables `ENABLE_WIKILINKS` and adds the call from
-/// `src-tauri/src/build/markdown/pipeline.rs::transform_events`.
+/// the desktop app's `pipeline.rs::transform_events`.
 pub fn dispatch_wikilink_embed(
     dest_url: &str,
     pothole: Option<&str>,
@@ -485,7 +484,7 @@ fn dispatch_embed_form(
             // that already worked.
             let ext = path_extension(&target_path);
             // Page-independent and case-canonical: same href from the vault root
-            // and from a note nested three folders down (moss#903 bug 3).
+            // and from a note nested three folders down.
             let url = pinned_url.clone();
             if let Some(synth_kind) = ext.as_deref().and_then(synth_kind_for_ext) {
                 // What the placement did not take is a caption only when the
@@ -934,7 +933,7 @@ enum SynthKind {
 /// Classify a file extension into a [`SynthKind`] when the dispatcher should
 /// emit final HTML directly. Returns `None` for image (`png`/`jpg`/...) —
 /// which keeps its inline-markdown round-trip — and for deferred kinds
-/// (`md`/`ipynb`/`csv`/`tsv`) which still need src-tauri post-passes.
+/// (`md`/`ipynb`/`csv`/`tsv`) which still need the desktop app's post-passes.
 ///
 /// The built-in renderers and their `EmbedRenderer::extensions()` slices
 /// were deleted as unreachable; `ext_kind::reference_kind_for_ext` is the

@@ -2,9 +2,7 @@
 // ratchet.mjs — shrink-only architecture ratchet for THIS tree (the public
 // open repo), ported from the desktop repo's scripts/ratchet.mjs.
 //
-// Landing-order step 8 (public half) of
-// docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md:
-// once the desktop repo can no longer scan `open/crates` / `open/packages`
+// Once the desktop repo can no longer scan `open/crates` / `open/packages`
 // (the flip retires the submodule), the size/marker debt those roots used to
 // carry has to be ratcheted here instead, by this tree's own copy of the same
 // three rows. Only the machinery those three rows need is ported — the
@@ -26,8 +24,8 @@
 // only — mirror_markers never scanned packages) as one of several
 // independently-checked roots. Here, with `open/` gone, that is simply this
 // repo's own `crates/*/src` and `packages/*/src` — the `open/` prefix
-// dropped, nothing else added (no `frontend/`, no `docs/`, no `src-tauri/`:
-// those roots belong to the desktop repo's own copies of these rows).
+// dropped, nothing else added: the desktop repo's other roots have no
+// equivalent here and stay in its own copies of these rows.
 //
 // Commands (same shape as desktop's):
 //   node scripts/ratchet.mjs check           exit 0 green / 1 red

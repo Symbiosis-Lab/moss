@@ -67,7 +67,7 @@
 //! no frontmatter write, and an advisory saying so. The heuristic is not a
 //! safe floor here. On a synced vault it is reversed, so the case where moss
 //! knows least is exactly the case where it was most likely to rewrite the
-//! published note's uid (moss#1079).
+//! published note's uid.
 //!
 //! Every reassignment is returned to the caller so it can be surfaced to the
 //! user (`progress::make_duplicate_uid_advisory`); a silent identity change is
@@ -243,7 +243,7 @@ pub struct UidResolution {
 /// then file birth time) is not merely uninformative on a synced vault, it is
 /// systematically *reversed* — the copy carries the original's date and gets a
 /// fresh btime on every device that receives it — so an unreadable record made
-/// moss most likely to rewrite the uid of the published note (moss#1079).
+/// moss most likely to rewrite the uid of the published note.
 ///
 /// It defers less than it used to. `built_before` answers whether a source path
 /// was in the previous build's manifest, and a path this install has never
@@ -377,7 +377,7 @@ pub fn resolve_duplicate_uids(
             // re-minting its uid cannot orphan a comment thread. That is the
             // whole safety argument, and it holds without any timestamp: the
             // signal is moss's own build manifest, not file metadata that
-            // iCloud and Obsidian Sync rewrite (moss#1079).
+            // iCloud and Obsidian Sync rewrite.
             //
             // Duplicating a note — the action that causes essentially every
             // collision — produces exactly this shape: one path moss knows and

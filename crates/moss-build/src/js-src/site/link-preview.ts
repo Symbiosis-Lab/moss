@@ -179,7 +179,7 @@ import { clampLeft, maxSurfaceWidth, verticalSlot } from "./viewport";
 })();
 
 // Page-colour extraction used to live here. It now lives in the bridge
-// (frontend/bridge/iframe-bridge-theme.ts), because this file ships as
+// (js-src/bridge/iframe-bridge-theme.ts), because this file ships as
 // preview.js only when `[site].link_preview` is true — so with hover previews
 // switched off, the shell's chrome tint had no reporter at all and wedged on
 // whatever backdrop it last measured. The bridge is injected unconditionally.

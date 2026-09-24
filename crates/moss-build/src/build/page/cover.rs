@@ -17,8 +17,7 @@
 //! HOME page's `cover:`, hero and body image. It read the home page's own
 //! picture as the site's brand, and on a site whose home page is a portrait
 //! every text-only letter shared with that portrait. The tail's motivating
-//! case (`docs/archive/2026-05-16-homepage-hero-og-fallback-design.md`, a hero
-//! banner standing in for the site) was an inference from the home page's
+//! case (a hero banner standing in for the site) was an inference from the home page's
 //! picture, not a declared site image, and it is the client quote card's rule
 //! that holds here too: `data-share-cover` is the page's own picture or absent.
 //! `meta.rs`'s description chain keeps its homepage tail — the site's tagline
@@ -57,8 +56,7 @@
 //!   than picking up a feed thumbnail.
 //!
 //! Users wanting any of the above as cover should set frontmatter
-//! `cover:` or use the `:::hero` cascade. See
-//! `docs/reference/structural-html-emission.md`.
+//! `cover:` or use the `:::hero` cascade.
 
 use crate::build::served_path::ServedPath;
 use crate::build::page::meta::CoverRef;
@@ -85,7 +83,7 @@ use std::path::Path;
 ///
 /// The guard belongs on whatever number sizes the bytes behind `og:image`, not
 /// on any particular name. That is `FALLBACK_MAX_EDGE` (1200, a literal
-/// independent of the ladder since moss#976 B1) and NOT `DEPLOY_MAX_EDGE`
+/// independent of the ladder) and NOT `DEPLOY_MAX_EDGE`
 /// (2400): a local cover resolves to the deployed raster original, which is
 /// the `<picture>` fallback, and the fallback is what that constant sizes.
 const OG_IMAGE_LONG_EDGE_FLOOR: u32 = 600;
@@ -256,7 +254,7 @@ fn cover_from_filename_convention(
 /// External URLs are dropped rather than emitted. The value is read back by
 /// `share-card.ts` through a `crossOrigin = "anonymous"` `<img>` and drawn onto
 /// a canvas, so a cross-origin cover either taints the canvas or fails CORS;
-/// a same-origin URL is also, per ADR-013, guaranteed registered in the
+/// a same-origin URL is also guaranteed registered in the
 /// `AssetRegistry` and therefore cannot 404 in preview.
 ///
 /// `resolve_cover` turns a raw frontmatter path into a root-relative URL
@@ -703,7 +701,6 @@ mod tests {
 /// the full image in Feed without any cropping"; LinkedIn help a521928
 /// (1200x627, 1.91:1); X card docs (2:1, min 300x157); Slack's
 /// `page_attachments.md` (max width 360 / max height 500, aspect preserved).
-/// Full survey: `docs/archive/2026-09-11-share-card-vertical-design.md`.
 pub const PASSTHROUGH_MIN_AR: f32 = 1.25;
 pub const PASSTHROUGH_MAX_AR: f32 = 2.4;
 

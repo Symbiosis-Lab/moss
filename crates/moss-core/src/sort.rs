@@ -3,8 +3,6 @@
 //! Pure Rust, zero I/O. Consumed by:
 //!   - the build pipeline (scan pass, card renderer, series-nav)
 //!   - the editor form (to show "inferred: date" next to undeclared sort:)
-//!
-//! See docs/archive/2026-05-17-listing-sort-and-embeds-design.md.
 
 use serde::{Deserialize, Serialize};
 
@@ -48,7 +46,7 @@ impl ResolvedSort {
     }
 }
 
-/// Minimal document trait for sort inference. Both src-tauri's
+/// Minimal document trait for sort inference. Both the desktop app's
 /// ParsedDocument and the editor's in-memory document model implement this.
 pub trait SortableDoc {
     fn url_path(&self) -> &str;
@@ -78,7 +76,7 @@ pub fn resolve_folder_sort<D: SortableDoc>(
     // wrong under pretty URLs — every article also ends with
     // `<stem>/index.html` — so we delegate to the impl. The default
     // `is_folder_index() == false` keeps moss-core's existing single-file
-    // tests (`a.url = "a.html"`) green; src-tauri's `ParsedDocument`
+    // tests (`a.url = "a.html"`) green; the desktop app's `ParsedDocument`
     // returns true when `kind == Folder`.
     let article_children: Vec<&&D> = children
         .iter()
@@ -325,7 +323,6 @@ pub trait SortableLabel {
 /// site whose resident script is Han, so it needs the site language, which is
 /// not a parameter here. Both ship together as their own reviewed change;
 /// this function exists so that change lands in one place.
-/// Provenance: docs/archive/2026-09-06-authors-index-design-decision.md
 pub fn cmp_labels(a: &str, b: &str) -> std::cmp::Ordering {
     fn folded(s: &str) -> impl Iterator<Item = char> + '_ {
         s.chars().flat_map(char::to_lowercase)

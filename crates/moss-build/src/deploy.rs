@@ -8,9 +8,9 @@
 //! mass-removal safety gate, the record a landed publish writes ([`landed`]),
 //! and the progress vocabulary they report through. What the app adds is a
 //! *sink* ([`progress::DeploySink`]) and four answers ([`crate::build::ports::deploy`]);
-//! `src-tauri/src/deploy/app_seam.rs` is both, in one file, deliberately.
+//! the app's own deploy seam module is both, in one file, deliberately.
 //!
-//! What stays in `src-tauri/src/deploy.rs` is everything *before* a publish
+//! What stays in the app's own deploy module is everything *before* a publish
 //! body, and it is app-shaped for one reason: a long-lived process with a file
 //! watcher has in-flight build work to drain and a sealed manifest sitting in
 //! session state. A terminal publish has neither. So the Tauri commands, that
@@ -19,7 +19,7 @@
 pub mod freeze;
 pub mod mass_remove;
 pub mod landed;
-// The bytes and one record behind every landed publish (ADR-083), read from
+// The bytes and one record behind every landed publish, read from
 // the same sealed-manifest pass `landed::record_landed` already makes. No CLI
 // verb yet — `moss history` and restore are later slices.
 pub mod history;
@@ -39,7 +39,7 @@ pub mod plugin_push;
 pub mod prebuilt;
 // The gate that reads the deploy target's declared `setup` block against this
 // user's settings and credential store: what is still missing, and the refusal
-// a publish gets when something is (ADR-072). It sits beside the other publish
+// a publish gets when something is. It sits beside the other publish
 // refusal, `refuse_publish` below, rather than under `plugins/contributions`:
 // it reads the manifest but depends on discovery, the registry and the
 // credential store, and the two refusals are asked by the same call sites.
@@ -48,7 +48,7 @@ pub mod push;
 // Cross-process exclusion for the machine-scoped OnionPress stack: the install
 // lock the app takes, and the publish lease a terminal publish writes. Here
 // rather than app-side because `moss deploy` is the second process the
-// exclusion exists for, and it cannot see `src-tauri`.
+// exclusion exists for, and it cannot see the desktop app.
 pub mod stack_activity;
 pub mod progress;
 pub mod route;
@@ -275,8 +275,8 @@ mod view_site_url_tests {
 /// vault, so a plain read of an evicted one returns `EDEADLK` under the
 /// dataless fail-fast policy. `resolve_sealed_manifest_for_deploy` loads the
 /// identity in its LAST step, after draining the whole media queue, so on the
-/// reported site (moss#986) the user waited minutes at "Preparing to publish…"
-/// to be told `Resource deadlock avoided (os error 11)`.
+/// reported site (the EDEADLK identity-file bug) the user waited minutes at
+/// "Preparing to publish…" to be told `Resource deadlock avoided (os error 11)`.
 ///
 /// Here, the failure arrives in seconds — and usually stops being a failure at
 /// all, because asking is what makes a file arrive.
@@ -285,12 +285,12 @@ mod view_site_url_tests {
 /// mint an identity on first use, and `materialize_input` answers only the
 /// cloud question. Only "present, but the bytes are elsewhere" stops here.
 ///
-/// Crossed here at C4f, from `src-tauri/src/deploy.rs`, because it had become
+/// Crossed here at C4f, from the app's own deploy module, because it had become
 /// the app's private answer to a question every publish asks. `moss deploy
 /// --prebuilt` had never asked it — that path loads the same key with a plain
-/// read and would have reported the raw `EDEADLK` moss#986 was closed for. It
-/// now calls this, as does the hosted route the terminal gained in the same
-/// slice.
+/// read and would have reported the raw `EDEADLK` the identity-file bug was
+/// closed for. It now calls this, as does the hosted route the terminal
+/// gained in the same slice.
 pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(), String> {
     use crate::build::cloud_readiness::{materialize_input, INTERACTIVE_DEADLINE};
 
@@ -346,7 +346,7 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 /// a headless build records its verdict here too, so the CLI is refused on the
 /// same evidence the app is.
 ///
-/// Crossed here at C4f. It had sat in `src-tauri/src/missing_media.rs` with a
+/// Crossed here at C4f. It had sat in the app's own missing-media module with a
 /// doc promising the guarantee held "for every other caller too: the CLI, a
 /// plugin deploy, a second call site added later" — which the CLI could not
 /// honour, because it could not name the function. The evidence it reads
@@ -363,7 +363,7 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 /// "fix this" would be the wrong thing to tell an author about a video moss
 /// itself hasn't finished encoding yet.
 ///
-/// A third rule joined 2026-09-17, alongside the ADR-056 revision that deleted
+/// A third rule joined 2026-09-17, alongside the revision that deleted
 /// `pipeline::should_publish`: a structural source (a page, `config.toml`, the
 /// user stylesheet) this build could not read now has somewhere real to fall
 /// back to, so a build built without one is no longer refused the SCREEN — see
@@ -393,7 +393,7 @@ pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
 }
 
 /// The refusal a user reads. Says what did not happen, not which subsystem said
-/// no — see `docs/reference/operating/writing-release-notes.md`.
+/// no.
 pub(crate) fn refusal_text(count: usize) -> String {
     let subject = if count == 1 {
         "1 file is missing".to_string()
@@ -579,8 +579,8 @@ mod stale_copy_tests {
 /// with the same four steps in the same order, and the twin had already
 /// drifted before it was noticed: only the app asked
 /// [`preflight_publish_inputs`], so `moss deploy --prebuilt` on an evicted
-/// iCloud folder reported the raw `Resource deadlock avoided` that moss#986
-/// was closed for. A gate added to a publish now goes in one place, which is
+/// iCloud folder reported the raw `Resource deadlock avoided` that the
+/// identity-file bug was closed for. A gate added to a publish now goes in one place, which is
 /// the property that failure cost.
 ///
 /// The last gate here is [`refuse_stale_copy`], skipped when `overwrite_newer`
@@ -598,7 +598,7 @@ mod stale_copy_tests {
 ///
 /// `Err` is not `false`. An evicted `.moss/config.toml` fails to parse, and
 /// answering that with "you never ran `moss env`" sends the author to fix a
-/// thing that is not wrong — the moss#986 shape, one file over. The read's own
+/// thing that is not wrong — the identity-file bug's shape, one file over. The read's own
 /// error carries what happened.
 ///
 /// Pure and separate from [`resolve_publish_inputs`] so a test can assert it
@@ -649,7 +649,7 @@ pub async fn resolve_publish_inputs(
     // reachable bug rather than tidiness. A refused publish leaves an identity
     // behind (see the note under it), so a folder can hold a key and no
     // `site_id`; reading that key on the retry with no materialize wait is the
-    // raw `Resource deadlock avoided` moss#986 was closed for.
+    // raw `Resource deadlock avoided` the identity-file bug was closed for.
     preflight_publish_inputs(folder).await?;
 
     // Mint one if this folder has never published. A publish that cannot sign
@@ -912,7 +912,7 @@ mod derive_site_id_tests {
 /// took an `tauri::AppHandle` that its body never once names, and every read it
 /// does is either a value the caller already holds or a function that had
 /// already crossed: `active_environment()` is `resolve_environment(folder)`
-/// (C4d), the client is ADR-078's, and the config doors are `vault::config`'s.
+/// (C4d), the client crossed separately, and the config doors are `vault::config`'s.
 /// The same shape C4d found on the publish body, one function later. That is
 /// why a first publish no longer needs a window, and why the deploy route model
 /// has two variants rather than three.

@@ -155,7 +155,7 @@ const unresolvedDimDecoration = Decoration.mark({ class: 'cm-link-unresolved-dim
  *
  * Embeds get the hand but never the dim, which is why they are a separate walk
  * rather than an addition to `extractLinkTargets`: that extractor skips
- * `WikilinkEmbed` on purpose (ADR-041) because a lint underline belongs on link
+ * `WikilinkEmbed` on purpose because a lint underline belongs on link
  * text, not on a rendered card. The CURSOR is a different question — an embed
  * is exactly as followable as a link, and cm-link-nav has followed one since
  * `followTargetAt` learned about embeds. While the card is rendered its source

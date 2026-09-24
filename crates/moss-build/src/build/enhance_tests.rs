@@ -289,7 +289,7 @@ fn serde_roundtrip_per_page() {
     }
 }
 
-// --- inject_slots_into_directory_cached tests (moss#919 item 2) ---
+// --- inject_slots_into_directory_cached tests ---
 
 fn slot_test_cache(
     tmp: &std::path::Path,
@@ -777,7 +777,7 @@ fn slot_inject_record_residual_round_trips_through_the_cache() {
     // directly (as a miss legitimately would if that bug occurred) and
     // confirm it reads back intact — which is exactly the plumbing
     // `inject_slots_into_directory_cached`'s hit branch depends on to
-    // still call `log_residual_slot_markers` on a hit (moss#919 item 2,
+    // still call `log_residual_slot_markers` on a hit (a
     // prior-art requirement from `4dca6d3fc`).
     let cache_dir = tempfile::tempdir().unwrap();
     let (objects, transforms) = slot_test_cache(cache_dir.path());

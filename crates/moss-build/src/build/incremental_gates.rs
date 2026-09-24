@@ -4,7 +4,7 @@
 //! together, away from `build.rs`, because they are one concept answered twice:
 //! "is it safe to skip work because nothing that feeds it moved?"
 //!
-//! Per ADR-010 both are resolved HERE, at the entry point, from the build
+//! Both are resolved HERE, at the entry point, from the build
 //! trigger and the environment — the render phase reads neither. It receives
 //! the answers as plain bools on `SiteConfig`.
 
@@ -37,7 +37,7 @@ pub struct IncrementalGates {
 
 impl PipelineConfig {
     /// Whether the render phase may skip re-rendering pages whose fingerprint
-    /// is unchanged (moss#922 Stage 5b).
+    /// is unchanged.
     ///
     /// Four conditions, all necessary, in the "over-approximate, never
     /// under-approximate" discipline the whole design rests on:
@@ -80,7 +80,7 @@ impl PipelineConfig {
     }
 
     /// Whether Loop A may replay the previous build's `ParsedDocument`s
-    /// (moss#922 Stage 7 — see `build/parse_cache.rs`).
+    /// (see `build/parse_cache.rs`).
     ///
     /// Conditions 1 and 4 above hold verbatim — same kill switch, same
     /// non-empty batch. The other two differ, and both differences are the
@@ -109,7 +109,7 @@ impl PipelineConfig {
     /// read while a document is parsed. Images are NOT in the list and must
     /// never be — `event_level_image_lookup` bakes dimensions, LQIP and the
     /// `<picture><source>` wrap into parsed HTML, so an image edit replaying a
-    /// cached parse is an ADR-013 violation (stale `<picture>` markup).
+    /// cached parse would leave the `<picture>` markup stale.
     /// `.moss/config.toml` is likewise excluded: it moves site scalars that
     /// `process_markdown_file` reads.
     ///

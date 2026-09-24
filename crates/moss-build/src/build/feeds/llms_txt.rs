@@ -138,8 +138,8 @@ pub fn generate_llms_txt(
 
     // Collect publishable documents (exclude drafts and slot-only
     // files). Slot-only files like `footer.md` exist in `documents` so the
-    // standard pipeline can wire their HTML into layout slots (PR7b /
-    // moss#599), but they're chrome — not articles — and don't belong in
+    // standard pipeline can wire their HTML into layout slots (PR7b),
+    // but they're chrome — not articles — and don't belong in
     // llms.txt. `is_listable` is the canonical four-rule predicate.
     let mut docs: Vec<&ParsedDocument> = documents
         .iter()
@@ -159,8 +159,8 @@ pub fn generate_llms_txt(
     for doc in docs {
         out.push_str("---\n\n");
         // Heading is consumer-facing chrome — use plain-text label, not
-        // the cascade-source `title`. Mirrors the chrome decisions from
-        // docs/archive/2026-04-17-title-simplification.md (Task 5).
+        // the cascade-source `title`. Mirrors the chrome decisions made
+        // for the nav link text.
         out.push_str(&format!("## {}\n\n", doc.label));
         // Strip raw HTML <style>/<script> blocks (tags + contents) before
         // trimming so leftover blank lines at the edges are removed too.

@@ -4,7 +4,7 @@
 //! The FOURTH string surface, after:
 //!   - `infra::app_strings` — native tray/menu chrome (`AppLanguage`)
 //!   - `i18n::strings` — generated-site output (`i18n::Language`, per-site)
-//!   - `frontend/app/i18n/ui-strings.ts` — webview UI (TypeScript)
+//!   - the app's own webview UI strings (TypeScript)
 //!
 //! Keyed by `AppLanguage` and resolved against the process-global app language
 //! (`app_config::app_language()`, seeded once at the top of `run()`), so it is
@@ -55,8 +55,7 @@ advisory_strings! {
     // Two files carry the same `url:` — usually a folder copied in Finder,
     // which keeps the original's frontmatter verbatim. Shown on the `url`
     // chip of the file that has to change, so it says "this page" and names
-    // only the other file. See
-    // docs/archive/2026-09-02-url-collision-as-a-frontmatter-diagnostic.md.
+    // only the other file.
     url_taken => {
         en: "Another page already uses this address: {keeper}. This page is being published at /{moved_to} instead. Change this url to give it an address of its own.",
         zh_hans: "另一个页面已经在用这个网址：{keeper}。这个页面暂时发布在 /{moved_to}。请修改这里的 url，给它一个自己的网址。",
@@ -116,7 +115,7 @@ advisory_strings! {
     // writes and owns is not something an author should have to hear about, and
     // every remedy on offer was one moss could take itself. It now does — see
     // the never-built rule in `build::render::uid_dedup`.
-    // Six strings about `.moss/deploy/`'s record of what is live (moss#1079)
+    // Six strings about `.moss/deploy/`'s record of what is live
     // stood here and were deleted on 2026-08-29. Nothing in that condition is
     // the author's to fix, and the next publish ends it — so the panel showed
     // a non-technical writer a noun she has never seen ("the record of what's
@@ -184,8 +183,8 @@ pub fn t(key: &str) -> String {
     lookup(app_language(), key).unwrap_or(key).to_string()
 }
 
-/// Resolve a key with `{name}` placeholder interpolation — mirror of the TS
-/// `interpolate()` in `frontend/app/i18n/index.ts`.
+/// Resolve a key with `{name}` placeholder interpolation — mirror of the app's
+/// own TS `interpolate()`.
 pub fn fmt(key: &str, params: &[(&str, &str)]) -> String {
     let mut s = lookup(app_language(), key).unwrap_or(key).to_string();
     for (k, v) in params {
@@ -207,7 +206,7 @@ mod tests {
         }
     }
 
-    /// Twin of frontend/app/i18n/__tests__/comment-sync-reason-parity.test.ts.
+    /// Twin of the app's own comment-sync-reason-parity test.
     /// The Services row (TS, services.comments.reason_*) and this advisory
     /// table (sync_reason_*) must tell the same story per locale — these nine
     /// strings are asserted byte-for-byte on BOTH sides, so drift in either
@@ -259,7 +258,7 @@ mod tests {
     /// sentence with a bare Latin "moss" in it is drift, not a brand decision;
     /// it shipped for a whole release in these advisories before an author asked
     /// what "moss" was (2026-08-29). The TS twin is
-    /// `frontend/app/i18n/no-untranslated-leakage.test.ts`.
+    /// the app's own no-untranslated-leakage test.
     #[test]
     fn chinese_values_call_the_product_qingtai() {
         /// Keys whose Chinese value legitimately keeps the Latin name — e.g. a

@@ -69,7 +69,7 @@
   --moss-color-text: #2c2825;
   /* [B] diverges from tokens.json (dark): app-shell dark #8a8580 vs site dark
      #9a9080. Light values match — this one is darkened from #8a8580 to clear
-     4.5:1 (WCAG 1.4.3, moss#1047); the app dark value already clears it. */
+     4.5:1 (WCAG 1.4.3); the app dark value already clears it. */
   --moss-color-muted: #716d69;
   /* [B] diverges from tokens.json (dark): app-shell dark #242018 vs site dark
      #252017. Light values match. */
@@ -100,8 +100,8 @@
   /* [C] App-only — not in tokens.json. */
   --moss-accent-light: rgba(45, 90, 45, 0.15);
   /* [A] MIRRORED in both themes — tokens.json gained the dark variant this file
-     already had (moss#1047), so the two now agree and the test guards them.
-     Quiet accent for ambient indicators (hairlines, tree-row left-borders). ADR-015.
+     already had, so the two now agree and the test guards them.
+     Quiet accent for ambient indicators (hairlines, tree-row left-borders).
      Ambient only — never a focus ring; it is too close to the page to pass 1.4.11. */
   --moss-color-accent-quiet: rgba(45, 90, 45, 0.28);
   /* [B] diverges from tokens.json (dark): app-shell dark #3a362f vs site dark
@@ -113,7 +113,7 @@
   /* [A] mirrored from tokens.json. The only border that carries MEANING rather
      than decoration — an input's underline is the sole thing distinguishing a
      text field from the prose around it, so it has to clear 3:1 against the
-     surface (WCAG 1.4.11, moss#1047). border-medium does not, and is fine
+     surface (WCAG 1.4.11). border-medium does not, and is fine
      because a rule or a card edge conveys nothing on its own. */
   --moss-border-strong: #8e8b85;
 
@@ -219,7 +219,7 @@
      AND below the frame. Vertical sibling of --moss-safe-center-x. */
   --moss-safe-center-y: calc(50% + var(--moss-titlebar-height) / 2);
   /* Window corner radius. Keep in sync with WINDOW_CORNER_RADIUS in
-     src-tauri/src/system/utils.rs — both are sources of truth; the Rust
+     the desktop app's native window code — both are sources of truth; the Rust
      constant applies to the native NSWindow CALayer, this token applies
      in CSS for nested surfaces (mobile preview frame) that should visually
      match the window corner. */
@@ -266,8 +266,8 @@
      shell-painted ambient band, which `backdrop-filter` really can blur, so its
      glass premise holds and it is unchanged. The panel is a READING surface:
      wrapping sentences in three type registers and three locales, hanging below
-     the titlebar over the preview iframe — where ADR-039 records that
-     `backdrop-filter` "cannot cross" the webview boundary, so the blur behind
+     the titlebar over the preview iframe — `backdrop-filter` "cannot cross"
+     the webview boundary, so the blur behind
      it is inert and alpha alone decides legibility.
 
      It carries INK as well as material, and both on this axis. Everything the
@@ -279,10 +279,9 @@
 
      0.94, not the pill's 0.14/0.9: at this density the author's page can no
      longer move the text's contrast (spread 1.15-1.19x, floor 4.4:1, versus
-     6.8x and 1.3:1 before). That is R8 of
-     docs/archive/2026-06-07-unified-job-advisory-sync-design.md as written —
+     6.8x and 1.3:1 before). That matches the original design intent —
      "glass ... + an opaque cream underlay (--moss-color-bg) for legibility" —
-     which the shipped CSS had deleted while citing R8 for the deletion. */
+     which the shipped CSS had deleted while citing that same intent for the deletion. */
   --moss-chrome-panel-bg: rgba(250, 248, 245, 0.94);
   --moss-chrome-panel-fg: #2c2825;
   --moss-chrome-panel-fg-secondary: #5d5853;
@@ -390,7 +389,7 @@
      it is declared, not where it is read). On the app root that is the same
      node as :root and the repeat is inert; it binds wherever data-theme lands
      on a subtree — the design-system strips, a themed site section — where an
-     inherited level would keep the light umbra. docs/reference/design/elevation.md */
+     inherited level would keep the light umbra. */
   --moss-light-x: 0;
   --moss-light-y: -0.5;
   --moss-shadow-color: #2b2117;
@@ -422,8 +421,7 @@ body.own-titlebar {
    to distinguish at all. */
 body.own-titlebar.controls-trailing {
   --moss-traffic-light-inset: 0px;
-  /* Decision 3 (docs/archive/2026-09-14-windows-custom-caption-design.md):
-     the reserved zone for the three 46px caption buttons Task 9 draws at the
+  /* The reserved zone for the three 46px caption buttons Task 9 draws at the
      window's top-right corner (138px = 3 * --moss-caption-btn-w). Constant
      across maximize/resize — a function of platform, not window state, since
      Windows never resizes the caption buttons on maximize — so this is a
@@ -476,7 +474,7 @@ body.fullscreen-mode {
   --moss-accent-light: rgba(74, 124, 74, 0.2);
   /* Dark variant of --moss-color-accent-quiet — slightly higher opacity
      for legibility against dark titlebar / preview backgrounds. Mirrored into
-     tokens.json (moss#1047) so site and app agree; guarded by the token test. */
+     tokens.json so site and app agree; guarded by the token test. */
   --moss-color-accent-quiet: rgba(74, 124, 74, 0.4);
   --moss-border-light: #3a362f;
   --moss-border-medium: #4a453c;
@@ -615,9 +613,9 @@ body.fullscreen-mode {
  * deliberately neither `--moss-font-size` (app-chrome UI text, 1.125rem) nor
  * the site contract's `--moss-reading-size` (tokens.json, which themes may
  * retune per site; the editor must not inherit a site's typographic choices
- * — ADR-022 keeps the editor rendering SOURCE, not the theme).
+ * — the editor renders SOURCE, not the theme, by design).
  *
- * `--moss-editor-measure` follows ADR-021's rule: a content column is a
+ * `--moss-editor-measure` follows the rule that a content column is a
  * FONT-STABLE length — a multiple of a single inherited reading size, never
  * `ch`. `ch` is font-relative and resolves against each element's own
  * font-size, so a `ch` cap silently means different widths on the heading,
@@ -636,7 +634,7 @@ body.fullscreen-mode {
  * Before it, the title hardcoded a Georgia serif stack while the body used the
  * UI sans, so the surface disagreed with itself. It is the editor's own face,
  * not `--moss-font-body`: that token is the SITE's, and a loose file in
- * document mode has no site (ADR-038), which would make the same file look
+ * document mode has no site, which would make the same file look
  * different depending on which folder it sits in. */
 :root {
   /* --moss-editor-font-scale is the app's editor-font-size dial (Settings ▸
@@ -722,7 +720,7 @@ body.fullscreen-mode {
   border: none;
   /* Not border-medium: the underline is the only thing that says "type here",
      so it is a meaningful non-text element and owes 3:1 against the surface
-     (WCAG 1.4.11, moss#1047). Mirrors .moss-input in site.css. */
+     (WCAG 1.4.11). Mirrors .moss-input in site.css. */
   border-bottom: 1px solid var(--moss-border-strong);
   border-radius: 0;
   padding: var(--moss-space-xs) 0;
@@ -750,7 +748,7 @@ body.fullscreen-mode {
 }
 
 /* Select dropdown — chevron only. moss's settings surfaces have one control
-   family (docs/reference/design-vocabulary.md): compose this with
+   family: compose this with
    .moss-select--pill below for the box — there is no other boxed select.
    Usage: <select class="moss-select moss-select--pill">
    Lives in primitives (not style.css) so the launcher webview — which
@@ -891,8 +889,7 @@ body.fullscreen-mode {
 .moss-info-grid > .moss-field--inline > .moss-field-body {
   min-width: 0;
 }
-/* Row grammar additions — docs/archive/2026-09-12-settings-form-controls.md
-   (D2, D5-open-question). A grid-spanning heading for grouped rows, a
+/* Row grammar additions. A grid-spanning heading for grouped rows, a
    `[hidden]` override for `when`-driven rows, and switch-row alignment. */
 .moss-info-grid > .moss-settings-section-title {
   grid-column: 1 / -1;
@@ -1902,7 +1899,6 @@ body.fullscreen-mode {
    InlineEdit primitive — click-to-edit field with idle/active/validating/error
    states. Native <input> always in DOM (never swapped). CSS-only appearance
    switch via data-state. No aria-readonly toggling (Roselli 2024).
-   Spec: docs/archive/2026-06-18-email-composer-minimal-redesign-design.md §2a
    ========================================================================== */
 
 .moss-inline-edit {
@@ -2116,12 +2112,12 @@ body.fullscreen-mode {
    click; these rules are what make the first one visible.
 
    The trigger KEEPS its pointer events on purpose. This rule used to say
-   `pointer-events: none`, which quietly cost two things (#1004): an element
+   `pointer-events: none`, which quietly cost two things: an element
    that takes no pointer events shows no cursor, so `cursor: progress` never
    rendered; and a repeat click never reached the element, so the documented
    "a repeat click re-asserts the busy paint" behaviour could not happen. The
    re-entrancy guard in run-action.ts is what refuses the second invocation —
-   it always was — and every surface using this class was audited (#1004) for
+   it always was — and every surface using this class was audited for
    an ancestor handler that a bubbled second click could trip. There is none.
 
    The selector is doubled to raise specificity from one class to two. Both
@@ -2137,13 +2133,12 @@ body.fullscreen-mode {
 }
 
 /* ============================================================================
-   The Domain row (custom domains, #1025)
+   The Domain row (custom domains)
    ============================================================================
    Ported from the accepted 13-panel prototype. Every rule here answers a
    question the prototype settled; the comments record which, because several
    of them look like arbitrary pixel choices and are not.
 
-   Design: docs/archive/2026-08-12-custom-domain-two-state-design.md
    ---------------------------------------------------------------------- */
 
 /* The label sits on the PILL's line, whatever the body height.
@@ -2473,8 +2468,7 @@ body.fullscreen-mode {
   font-size: var(--moss-size-xs);
 }
 
-/* Minimize/maximize/close button visuals — Windows caption, Decision 2/5 in
-   docs/archive/2026-09-14-windows-custom-caption-design.md. Shared by both
+/* Minimize/maximize/close button visuals — Windows caption. Shared by both
    webviews that can draw the row: the main shell (style.css's .moss-titlebar,
    Task 2) and the editor (editor.css's caption row, Task 9, full-width and
    document mode). Lives here (already imported by both, ADR-worthy primitives
@@ -2581,7 +2575,7 @@ body.own-titlebar.controls-trailing .moss-caption-btn {
 
 /* ============================================================
    Shared progress vocabulary — ONE spin keyframe, ONE ring, ONE
-   reduced-motion rule (design: docs/archive/2026-08-14-progress-language.md).
+   reduced-motion rule.
 
    Before this file the app carried five spin keyframes (`moss-spin`,
    `channel-icon-spin`, `moss-setup-spin`, `moss-publish-progress-spin`,
@@ -2605,8 +2599,7 @@ body.own-titlebar.controls-trailing .moss-caption-btn {
    The plugin tile's install affordance: a plus that bends into a ring around
    the 48px icon and collapses into a minus. This file styles PAINT ONLY —
    every bit of geometry is in `d`, rewritten per frame from JS, because CSS
-   `d: path()` is unshipped in stable WebKit (see the module header and
-   docs/reference/design-vocabulary.md "Icon morphing").
+   `d: path()` is unshipped in stable WebKit (see the module header).
 
    64 units over a 48px tile, offset −8px, so the ring encircles the icon with
    8px of air. `overflow: visible` because the strokes deliberately leave the
@@ -2783,7 +2776,7 @@ body.own-titlebar.controls-trailing .moss-caption-btn {
 
    The base `.moss-modal-backdrop { inset: 0 }` already achieves that in BOTH
    placement models, so the backdrop deliberately gets NO left override:
-     • Tiled (editor — ADR-027 Approach A): the preview webview is origin-tiled to
+     • Tiled (editor): the preview webview is origin-tiled to
        the seam and the shell `body` is inset to the visible band
        (`width: calc(100% - --preview-width-inset)` + `contain: layout`, style.css),
        so `body`'s left edge sits AT the seam and `--action-panel-width` is 0.
@@ -2806,7 +2799,7 @@ body.own-titlebar.controls-trailing .moss-caption-btn {
    the backdrop's stale inset). In the tiled case `--action-panel-width` is 0, so
    this collapses to the base `left: 50%`. Gated behind `body.moss-action-panel-open`,
    a class only ever set on the shell body — inert in the editor webview, where the
-   base `left: 50%` centering stands. See docs/reference/layout-zones.md I9. */
+   base `left: 50%` centering stands. */
 body.moss-action-panel-open .moss-modal {
   left: calc(50% + var(--action-panel-width) / 2);
   max-width: calc(100% - var(--action-panel-width) - 32px);
@@ -2874,8 +2867,7 @@ body.moss-action-panel-open .moss-modal {
 /* ============================================================
    DeleteConfirmModal — the EDITOR webview's one delete surface: it opens in
    the click's frame asking "Move X to Trash?" while the reference scan runs,
-   and becomes the link disclosure in place when the scan finds any (design:
-   docs/archive/2026-09-05-delete-modal-opens-before-the-reference-scan.md).
+   and becomes the link disclosure in place when the scan finds any.
    Reuses the shared title/body/actions classes, the `.moss-inline-status`
    badge for the scan's status line, and the `.moss-stack` rhythm; only the
    box geometry, the stacked action row, and the reference list are bespoke.
@@ -3011,8 +3003,7 @@ body.moss-action-panel-open .moss-modal {
    2026-09-10) points at the trigger only when the clamp did not fire. In the
    action panel it fired constantly — the ＋ button's arrow landed 82px off the
    button. The `50%` fallbacks below are for a tooltip painted before `show()`
-   has run; nothing renders one, and they keep the rule readable on its own.
-   Design: docs/archive/2026-09-10-tooltip-anchor-and-overlay-occlusion.md. */
+   has run; nothing renders one, and they keep the rule readable on its own. */
 .moss-tooltip::after {
   content: "";
   position: absolute;
@@ -3058,8 +3049,8 @@ body.moss-action-panel-open .moss-modal {
   border-bottom-color: var(--moss-color-text-secondary);
 }
 
-/* moss context menu — the shared primitive's styles
-   (frontend/app/shared/ui/ctx-menu.ts). Used by both the main shell
+/* moss context menu — the shared primitive's styles.
+   Used by both the main shell
    (style.css) and the editor action panel (editor.css) — the rules moved
    here verbatim from editor.css (2026-08-15) so a shell-webview menu renders
    styled instead of unstyled. Design-vocabulary: every surface owns its
@@ -3092,7 +3083,7 @@ body.moss-action-panel-open .moss-modal {
 .ctx-item .ctx-kbd { margin-left: auto; color: var(--moss-color-muted); font-size: 11px; }
 .ctx-hint { font-size: 11px; color: var(--moss-color-muted); padding: 5px 10px 4px; }
 .ctx-hint b { color: var(--moss-color-text); font-weight: 500; }
-/* Drill-in levels (docs/archive/2026-09-05-menu-hierarchy-and-template-menu-design.md):
+/* Drill-in levels:
    the chevron is keyed off the attribute a submenu row already carries — no
    node to create or hide — and takes the kbd chip's slot (a submenu row never
    has one). The back row paints as every other row; no swap animation, a
@@ -3506,13 +3497,13 @@ body.moss-action-panel-open .moss-modal {
 }
 
 /* ============================================================================
-   Inline status badge (ADR-015 § Visual language)
-   Driven by frontend/app/editor/inline-status.ts
+   Inline status badge
+   Driven by the app's inline-status module
 
    SHARED, not shell-only. inline-status.ts finds its anchor with a bare
    `document.querySelector('[data-inline-task-anchor=…]')`, so the badge renders
    in whichever webview holds the anchor — and the editor holds the `save` one.
-   These rules lived in frontend/app/style.css, which the editor does not
+   These rules lived in the app shell's stylesheet, which the editor does not
    import, so a failed save painted as unstyled inline text there. Any webview
    that can host an anchor must import this file.
    ============================================================================ */
@@ -3608,8 +3599,7 @@ body.moss-action-panel-open .moss-modal {
    only resting signal, applied with no dwell. After the standard 150ms hover
    dwell a mark fades in. Clicking unfolds the pane.
 
-   What is painted comes in two tiers, and the split is the point
-   (docs/archive/2026-08-17-collapsed-edge-mark.md):
+   What is painted comes in two tiers, and the split is the point:
 
      1. A 2px × 64px `--moss-color-muted` capsule flush against the edge —
         THE PLACE. It is what the just-in-time reveal shows. The 2px is
@@ -3674,11 +3664,7 @@ body.moss-action-panel-open .moss-modal {
    (+ ⌘E) and the editor's layout button (+ ⌘⇧E) stay visible. That is what
    keeps a hover-only edge legal under "stable chrome, never hover-revealed
    triggers", and what satisfies WCAG 2.2 SC 2.5.8's "Equivalent" exception —
-   which asks for a different control, not a keyboard shortcut.
-
-   Spec: docs/archive/2026-08-15-collapsed-pane-edge-affordance.md (the
-   affordance) + docs/archive/2026-08-17-collapsed-edge-mark.md (what it
-   paints, and the bounded hold). */
+   which asks for a different control, not a keyboard shortcut. */
 
 .moss-edge-restore {
   position: fixed;
@@ -4185,8 +4171,8 @@ body.moss-action-panel-open .moss-modal {
   color: var(--moss-color-muted);
 }
 
-/* The title bar as a navigation stack (tree/title-bar.ts), round six of
- * docs/archive/2026-09-17-versions-mode-chrome-reuse.md — supersedes round
+/* The title bar as a navigation stack (tree/title-bar.ts), round six —
+ * supersedes round
  * five's `is-back-mode` (a relabeled root crumb): the strip is REPLACED, not
  * relabeled. `.is-mode` on the strip fades every crumb that is a DIRECT
  * child of the strip (the `>` combinator is load-bearing: `mkBackCrumb`
@@ -4309,7 +4295,7 @@ body.moss-action-panel-open .moss-modal {
  * host the rail ::before, but it is LAYOUT-NEUTRAL by construction — it mirrors
  * .nav-body's flex column so rows/pills/gaps/scroll behave exactly as when the
  * rows were direct .nav-body children (2026-07-03, replaces the measured
- * .vline; see docs/archive/2026-07-03-file-tree-connector-rail.md).
+ * .vline).
  *   • align-items:flex-start keeps each ROW shrink-wrapped (pill hugs icon+name)
  *   • align-self:stretch + width:100% keep the WRAPPER at panel width, so a row's
  *     max-width:100% / rename align-self:stretch / --ft-offset margin still
@@ -4518,8 +4504,7 @@ body.moss-action-panel-open .moss-modal {
    padded root. This applies to BLOCK widgets only — `block: true` on the
    decoration. An inline replace renders inside a `.cm-line` and is measured as
    part of it, so `.cm-lp-hr` keeps its margins (verified, see the diagnosis).
-   Regression spec: tests/render-gates/editor-visual/widget-height-drift.spec.ts
-   Diagnosis: docs/archive/2026-08-02-cm6-block-widget-margin-height-drift.md */
+   Regression spec: tests/render-gates/editor-visual/widget-height-drift.spec.ts */
 
 /* ── Live Preview: Headings ──────────────────────────────────────────── */
 
@@ -4536,7 +4521,7 @@ body.moss-action-panel-open .moss-modal {
 .cm-lp-strong { font-weight: 700; }
 .cm-lp-strike { text-decoration: line-through; color: var(--moss-color-muted); }
 .cm-lp-code { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.9em; background: var(--moss-hover-overlay); padding: 1px 4px; border-radius: 3px; }
-/* Math SOURCE spans `$…$` / `$$…$$` — highlight-only (ADR-022 / design D8):
+/* Math SOURCE spans `$…$` / `$$…$$` — highlight-only (design D8):
    a subtle accent-tinted wash over the raw TeX, `$` delimiters included and
    always visible. Mono face because the payload is TeX source, not prose; the
    accent tint (vs .cm-lp-code's neutral overlay) says "the build will typeset
@@ -5124,7 +5109,7 @@ body.moss-action-panel-open .moss-modal {
 /**
  * folder-mode.css — T5 styles for the editor's folder-mode component.
  *
- * Layout per docs/archive/2026-05-28-onboarding-design.md lines 209-246:
+ * Layout:
  *
  *   - Site-header band on top: folder-name heading + microcopy + theme
  *     picker + hover-reveal "Open in Finder" button.
@@ -5134,11 +5119,11 @@ body.moss-action-panel-open .moss-modal {
  *     file.
  *
  * Blueprint grid: copies the gradient stack from
- * frontend/app/launcher/launcher.css so empty-folder mode visually
+ * the launcher's own stylesheet so empty-folder mode visually
  * carries over from the launcher window. Token-driven so a global
  * accent change picks up automatically.
  *
- * Tokens consumed here are in frontend/app/styles/shared/tokens.css.
+ * Tokens consumed here are in the app-shell's shared tokens file.
  * The T5/Wave2 follow-up mirrored two values from site.css's internal
  * scale into the app-shell tokens file (--moss-font-heading serif
  * stack, --moss-size-2xl 1.625rem) so the editor heading matches T3's
@@ -5160,7 +5145,7 @@ body.moss-action-panel-open .moss-modal {
 
 /* Empty state: animated blueprint-grid canvas carried through from the
    launcher window. Same particle-physics module
-   (`frontend/app/components/blueprint-grid.ts`) the preview empty-state uses,
+   the preview empty-state uses,
    so the user gets the same tuned visual from "I picked a folder" through
    "moss opened on it" through "I emptied a folder".
 
@@ -5212,7 +5197,7 @@ body.moss-action-panel-open .moss-modal {
 .moss-folder-mode__heading {
   margin: 0;
   /* Matches T3's `.moss-folder-title` typography in
-     `src-tauri/src/assets/css/site.css` (lines 2335-2358) so the editor
+     the app's own site stylesheet (lines 2335-2358) so the editor
      heading and the preview heading render with the same serif face,
      size, weight and letter-spacing. This is the "folder name = site
      name" teaching moment: the two surfaces must read as the same
@@ -5222,7 +5207,7 @@ body.moss-action-panel-open .moss-modal {
      Tokens:
        --moss-font-heading : serif stack (Source Han Serif …) — sourced
          from tokens.json (`moss-font-heading`) and mirrored in this
-         app-shell `frontend/app/styles/shared/tokens.css`. The mirror
+         app-shell's tokens file. The mirror
          previously aliased to body-sans; revised in T5/Wave2 follow-up
          to the same serif stack as tokens.json so the editor honours
          the design contract.
@@ -5391,8 +5376,7 @@ body.moss-action-panel-open .moss-modal {
      (~280px); without an explicit width the "Start writing" primary
      card collapses to a narrow pill in the middle of the row instead
      of mirroring the 3-column grid below it. `width: 100%` makes the
-     primary row a full-width band, which is what the mockup at
-     docs/archive/2026-05-28-onboarding-design.md (lines 224-246) shows. */
+     primary row a full-width band, which is what the design calls for. */
   width: 100%;
   padding: 28px 24px;
   /* Slightly stronger accent for the primary card so the eye lands on
@@ -6155,8 +6139,7 @@ body.moss-action-panel-open .moss-modal {
  * round of feedback: a real but rarely-needed capability, not worth the
  * screen real estate.
  *
- * 2026-09-17 chrome-reuse amendment
- * (docs/archive/2026-09-17-versions-mode-chrome-reuse.md): screen one's own
+ * 2026-09-17 chrome-reuse amendment: screen one's own
  * `__title-row` (back + subject) is gone — the editor's own breadcrumb
  * stays on screen instead of being hidden and redrawn, so `__caption-row`
  * is now the header's only row and sits directly under it. `__save-toggle`
@@ -6169,8 +6152,7 @@ body.moss-action-panel-open .moss-modal {
  * pattern. `__detail-caption`/`__detail-note` are deleted (dead): the note
  * text moved to the Restore button's own tooltip.
  *
- * Round five amendment (docs/archive/2026-09-17-versions-mode-chrome-reuse.md,
- * "what the render actually showed", items 4-5): one header grid for both
+ * Round five amendment ("what the render actually showed", items 4-5): one header grid for both
  * screens. `--moss-versions-head-h`/`-col`/`-gap` are declared once on
  * `.moss-versions` and consumed by `__caption-row`, `__title-row` and `__row`
  * alike — a fixed-height header row (no vertical padding, `align-items:
@@ -6186,7 +6168,7 @@ body.moss-action-panel-open .moss-modal {
  * `__save-field-slot:not(:empty) { display: inline-flex }` is gone with it —
  * moot once the parent is itself a flex container.
  *
- * Round six (docs/archive/2026-09-17-versions-mode-chrome-reuse.md, "the
+ * Round six ("the
  * title bar is a navigation stack"): the breadcrumb is REPLACED, not
  * relabeled, so every bit of chrome that used to live in THIS surface's own
  * header row moves to the strip's title-bar layer (tree/title-bar.ts,
@@ -6403,8 +6385,8 @@ body.moss-action-panel-open .moss-modal {
 }
 
 /* Screens two/three (Task C5) — "A page's version" / "A folder or site
- * version". `__row`/`__by` are shared with screen one above. Round six
- * (docs/archive/2026-09-17-versions-mode-chrome-reuse.md): these screens
+ * version". `__row`/`__by` are shared with screen one above. Round six:
+ * these screens
  * have no header of their own any more — the back link, the version's own
  * moment/label (+ Live badge) and Restore all live in the strip's title-bar
  * layer (tree/title-bar.ts, `.mode-subject`/`.mode-subject-name`/
@@ -6610,8 +6592,8 @@ body {
  *
  * Fixed-indent contract (replaces the 7917b30c0 subgrid invariant): bc-seg[d]
  * and tree-row[d] icons both sit at --ft-tl + --ft-base + d*--ft-indent, so the
- * spine aligns by construction. See docs/archive/2026-05-29-file-tree-fixed-indent.md
- * and the playwright/fixtures/file-tree-fixed-indent harness (WebKit-verified). */
+ * spine aligns by construction. See the playwright/fixtures/file-tree-fixed-indent
+ * harness (WebKit-verified). */
 .nav-grid {
   display: flex;
   flex-direction: column;
@@ -6713,8 +6695,7 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 }
 
 /* Versions mode's chrome hide (editor-main.ts hideEditorChromeForSurface,
- * round five of docs/archive/2026-09-17-versions-mode-chrome-reuse.md, item
- * 3): #nav-right/#nav-caption fade rather than pop, keeping their boxes —
+ * round five, item 3): #nav-right/#nav-caption fade rather than pop, keeping their boxes —
  * unlike `.nav-body`/`#editor-heading`, which still go to `display: none`
  * and must release their space — so the breadcrumb strip's own width
  * allocation (navReserve, tree/*.ts) stays untouched while they're hidden. */
@@ -6846,8 +6827,7 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
    flex-shrink, and do NOT re-introduce a pixel "reserve" for the button —
    any of those re-collapses the two boxes and lets a wide promoted chip clip
    the more menu (the 2026-06-02 bug). The button's reachability must stay a
-   layout invariant, never a width prediction.
-   See docs/archive/2026-06-02-chip-bar-overflow-two-box-design.md (Principle 1). */
+   layout invariant, never a width prediction. */
 /* Site-wide scope note — one muted line above the document for `.moss/`
    inputs. Same band as the chip bar so the two never stack. */
 .preview-note { flex-shrink: 0; padding: 8px 16px; font-size: 12px; color: var(--moss-color-text-secondary); border-bottom: 1px solid var(--moss-border-light); }
@@ -7128,7 +7108,7 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 .pop-input.mono { font-family: ui-monospace, SFMono-Regular, monospace; }
 
 /* Asset Browse button — the "pick it from my disk" escape hatch beside every
-   asset search (docs/archive/2026-08-21-asset-picker-affordance-design.md).
+   asset search.
    The word is visible rather than hovered: both mounts are floating overlays,
    where data-tooltip is forbidden, so the glyph never carries the meaning
    alone. Quiet at rest, accent on hover — an escape, not the main verb. */
@@ -7234,7 +7214,7 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 .moss-editor-cm .cm-editor { height: 100%; background-color: var(--moss-color-bg); color: var(--moss-color-text); cursor: text; }
 /* font-size is the SAME token the measure is a multiple of (42×). Keep them
    linked: --moss-editor-measure is font-stable only if the column and the text
-   scale together (ADR-021). 1.0625rem === the previous hard-coded 17px, so this
+   scale together. 1.0625rem === the previous hard-coded 17px, so this
    is a no-op by value. */
 .moss-editor-cm .cm-scroller { font-family: var(--moss-editor-reading-font); font-size: var(--moss-editor-reading-size); line-height: 1.85; }
 .moss-editor-cm .cm-content { padding: 20px 0 60px; cursor: text; }
@@ -7273,8 +7253,7 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 .dd-sec { font-size: 10px; color: var(--moss-color-muted); padding: 6px 10px 2px; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
 
 /* ── Insert bar — persistent context-adaptive bottom toolbar ─────────── */
-/* Presence = focus, contents = caret context; stillness over motion.
-   Design: docs/archive/2026-07-27-editor-insert-toolbar-design.md */
+/* Presence = focus, contents = caret context; stillness over motion. */
 
 /* ── The bottom band: undo · redo · save badge on the left, the pill centred ──
    Absolute, not fixed: the band is anchored inside #moss-editor-cm (which gets
@@ -7360,8 +7339,7 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 /* ── The band's right slot: the writing-mode control ────────────────────── */
 /* Expand-pick-collapse in place (iOS Camera flash / Photoshop flyout pattern):
    collapsed it is the current mode's icon alone; expanded, three icon-only
-   segments (names live in the up-pointing tooltips). See editor-mode-control.ts
-   and docs/archive/2026-08-31-editor-modes-and-chip-bar-redesign.md Amend. II. */
+   segments (names live in the up-pointing tooltips). See editor-mode-control.ts. */
 .mode-control {
   grid-row: 1;
   grid-column: 3;
@@ -7869,8 +7847,7 @@ body.focus-mode .chip-bar:focus-within { opacity: 1; }
  * build generates. CM6 renders `.cm-completionIcon-<Completion.type>` and the
  * type is the row's kind, so no per-row markup is needed. The ring alone
  * would collide with the status-mark meaning "pending", so a generated row
- * also carries the word in its detail column. Design:
- * docs/archive/2026-09-05-link-target-completion-audit-and-design.md */
+ * also carries the word in its detail column. */
 .cm-tooltip-autocomplete .cm-completionIcon {
   width: 18px;
   height: 18px;
@@ -8200,8 +8177,7 @@ body.focus-mode .chip-bar:focus-within { opacity: 1; }
    every "moss did this" confirmation shares one calm ambient vocabulary. No
    border (and no bright `--moss-success`): the soft background tint alone
    carries it. Lives here because the chip bar and breadcrumb are in the
-   editor webview (loads editor.css, not style.css).
-   See docs/reference/title-rendering.md visual vocabulary. */
+   editor webview (loads editor.css, not style.css). */
 .moss-just-committed {
   animation: moss-just-committed 0.6s ease-out;
 }
@@ -8348,8 +8324,7 @@ body.focus-mode .chip-bar:focus-within { opacity: 1; }
  *      line at the pane's top edge carries the "not hung" signal across the
  *      ~2s deploy; it encodes no progress (no start, end, or proportion), so
  *      it cannot be misread as a second progress indicator competing with the
- *      ship ring. Design: docs/archive/2026-08-13-editor-seal-scrim-visual-design.md
- */
+ *      ship ring. */
 .cm-editor.sealed { position: relative; }
 
 .cm-seal-scrim {
@@ -8551,8 +8526,7 @@ body.focus-mode .chip-bar:focus-within { opacity: 1; }
              so no static data-i18n-tooltip here. -->
         <!-- New-document glyph (Lucide file-plus), NOT a bare "+": the property
              bar below owns "+"/"+N" for add-property, and two bare plusses on
-             one narrow panel clash (2026-08-14 amendment in
-             docs/archive/2026-08-14-raw-markup-token-highlight.md). -->
+             one narrow panel clash (2026-08-14 amendment). -->
         <button class="editor-create-btn" id="editor-create-btn" data-tooltip-position="bottom" data-tooltip-kbd="⌘N">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h6"/><path d="M12 18v-6"/><path d="M9 15h6"/></svg>
         </button>
@@ -8579,7 +8553,7 @@ body.focus-mode .chip-bar:focus-within { opacity: 1; }
 
       <!-- Where THIS webview draws the Windows caption — full-width editor and
            document mode only (body.own-titlebar.controls-trailing.owns-caption,
-           Decision 2 in docs/archive/2026-09-14-windows-custom-caption-design.md,
+           Decision 2,
            Task 9); split/preview-only leaves it to the preview webview's own
            row in index.html, unchanged. Same three buttons/ids, so the SHIPPED
            wireMainShellCaptionButtons (utils/fullscreen-class.ts) — called
@@ -8638,8 +8612,7 @@ body.focus-mode .chip-bar:focus-within { opacity: 1; }
 
     <!-- Preview note: one line saying why the preview is showing what it is,
          for the files that never move it — a .moss/ input that paints on every
-         page, or a file with no page of its own. See
-         docs/archive/2026-09-03-moss-folder-in-the-file-tree-audit-and-design.md. -->
+         page, or a file with no page of its own. -->
     <div class="preview-note" id="preview-note" data-i18n="editor.preview_note_site_wide" hidden>Site-wide · shows on every page</div>
 
     <!-- Article heading — bound to filename, edit to rename -->

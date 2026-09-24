@@ -8,7 +8,7 @@
 //! There is no other way to write a file inside the build output, and no
 //! other way to emit a URL into HTML, RSS, sitemap, manifest, or JSON-LD.
 //! Reviewers: any format!() or string concat producing a "/..." path in
-//! src-tauri/src/build/ outside this module is a blocker.
+//! the build pipeline outside this module is a blocker.
 //!
 //! Construction is fallible via `from_source` (returns
 //! `Result<Self, ServedPathError>`); the type rejects `.moss/`,
@@ -29,20 +29,18 @@
 //! On case-insensitive APFS this worked; on Dropbox CloudStorage (case-sensitive
 //! FUSE) and Linux servers, the on-disk file landed at lowercase while the
 //! manifest registered the capital path, causing deploy ENOENT on canonicalize.
-//!
-//! See `docs/archive/2026-05-07-output-path-normalization.md` for the full design.
 
 use crate::build::scan::slug::slugify_dir_path;
 use std::fmt;
 
 /// Directory every auto-generated OG card is written under, shared by
 /// [`ServedPath::for_og_card`] and the incremental render skip's card
-/// carry-forward (`build/render/blocking.rs`, moss#922 Stage 5b), which
+/// carry-forward (`build/render/blocking.rs`), which
 /// recognizes cards by this prefix alone.
 pub const OG_CARD_PREFIX: &str = "_moss/og/";
 
-/// Reserved prefix for the email-fallback math PNGs. Append-only by design
-/// (ADR-030): an entry here is never dropped for being unreadable, because
+/// Reserved prefix for the email-fallback math PNGs. Append-only by design:
+/// an entry here is never dropped for being unreadable, because
 /// the published site still serves it and un-promising it would delete it
 /// from a live site.
 pub const MATH_PNG_PREFIX: &str = "_moss/math/";
@@ -178,7 +176,7 @@ impl ServedPath {
         Ok(ServedPath(format!("{}{}.png", OG_CARD_PREFIX, content_hash)))
     }
 
-    /// Email/RSS math PNG (ADR-030 §3.4/§3.5). Hash is 16 lowercase hex chars
+    /// Email/RSS math PNG. Hash is 16 lowercase hex chars
     /// (validated), produced by `emit::math_png::content_hash` — SHA-256 over
     /// the full render input tuple, truncated to 8 bytes. Passthrough
     /// constructor on purpose: `from_source` slug-lowercases directory
@@ -249,8 +247,8 @@ impl ServedPath {
         ServedPath("_moss/default-icon.png".to_string())
     }
 
-    /// Default theme CSS, emitted from the binary-embedded
-    /// `src-tauri/src/assets/default.css`.
+    /// Default theme CSS, emitted from the binary-embedded default stylesheet
+    /// asset.
     pub fn for_default_stylesheet() -> Self {
         ServedPath("_moss/style.css".to_string())
     }
@@ -347,8 +345,7 @@ impl ServedPath {
     /// directory segment here would 404 at query time.
     ///
     /// Path-traversal-safe: rejects empty input, absolute paths, and `..`.
-    /// Planned as `for_search_index()` in
-    /// `docs/archive/2026-05-13-served-path-consolidation.md`; named
+    /// Originally planned as `for_search_index()`; named
     /// `for_search_asset` because it addresses one file in a tree, not a
     /// single index blob.
     pub fn for_search_asset(rel: &str) -> Result<Self, ServedPathError> {

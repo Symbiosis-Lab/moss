@@ -4,7 +4,7 @@
 //
 // Ground truth for the parsers (verified against moss 0.11.1, 2026-08-11):
 // `moss build <folder> --serve` prints ALL status to **stderr** via
-// `cli_eprintln!` (src-tauri/src/diagnostics.rs). The lines that matter:
+// `cli_eprintln!` (crates/moss-build/src/build/cli_output.rs). The lines that matter:
 //
 //   Building website from: /path/to/vault
 //   📁 'name': Site generated at /path/.moss/build.nosync/current
@@ -12,7 +12,7 @@
 //   moss: 2 problems reported above — the site was still generated.
 //   Build failed: <reason>
 //
-// The port is dynamic (scan starts at 8080, src-tauri/src/preview/server/port.rs),
+// The port is dynamic (scan starts at 8080, crates/moss-build/src/ops/serve/port.rs),
 // so the "Access at" line is the only machine-discoverable source of the URL.
 // Every moss preview server also serves GET /__moss_health/ whose JSON body
 // contains "moss-preview-server" — used to validate a fallback port.

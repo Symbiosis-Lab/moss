@@ -39,7 +39,7 @@ pub(crate) fn is_language_root(url_path: &str) -> bool {
 /// a page fell back to the site tag for its own `<html lang>`, while every
 /// sibling's link to that page fell back to the three-variant UI enum. On a
 /// `fr` site the page said `<html lang="fr">` and was advertised as
-/// `hreflang="en"` — which is moss#1177 itself, one layer down. Owning the
+/// `hreflang="en"` — the same contradiction, one layer down. Owning the
 /// fallback in exactly one place is what closes it; downstream code reads the
 /// field and never substitutes.
 pub(crate) fn fill_missing_lang_tags(docs: &mut [ParsedDocument], site_lang: &str) {
@@ -69,7 +69,7 @@ pub(crate) fn site_lang_roots(
         // collapsed every language moss has no interface for onto `En`, so an
         // `en`+`fr`+`de` site minted ONE root, `site_publishes_multiple_languages`
         // then said no, and no switcher rendered at all — while hreflang, already
-        // tag-keyed, advertised all three editions (moss#1177's other half).
+        // tag-keyed, advertised all three editions (the other half of that bug).
         if is_language_root(&d.url_path)
             && !roots.iter().any(|r| Some(&r.lang_tag) == d.lang_tag.as_ref())
         {
@@ -140,7 +140,7 @@ pub(crate) fn site_lang_roots(
 /// folder's code to resolve through [`Language::from_code`], which knows six
 /// codes against `lang_tree_prefix`'s ~51 — a guard against the folder name
 /// coinciding with a detected language, and the reason a `de/`, `ja/`,
-/// `en-us/` or `en-gb/` tree got no switcher at all (moss#949). Comparing
+/// `en-us/` or `en-gb/` tree got no switcher at all. Comparing
 /// declared tags needs no such guard: an `it/` folder on an all-Chinese site
 /// declares `it` only if its pages actually say so.
 ///
@@ -162,8 +162,8 @@ pub(crate) fn site_lang_roots(
 ///   that a look-alike folder WITH an index — `it/index.md` holding Chinese —
 ///   still mints a second root, and on a site whose homepage has no prose to
 ///   detect from the spurious switcher returns in full. Fixing that needs a
-///   root's label to carry whether it was authored or guessed, which is
-///   moss#947 rather than a tighter folder test.
+///   root's label to carry whether it was authored or guessed, rather than
+///   a tighter folder test.
 ///
 /// Takes `lang_roots` rather than recomputing it: every caller has already
 /// called [`site_lang_roots`] to build the switcher's destinations.
@@ -192,10 +192,9 @@ pub(crate) fn site_publishes_multiple_languages(
 
 /// Build-global inputs to the nav language switcher, the auto-generated
 /// nav/footer link lists, and the subscribe-form language sections — the
-/// site-wide, non-graph consumers of a page's OWN `lang` (moss#1041 audit:
-/// docs/archive/2026-08-20-rebuild-loop-incrementality.md found `lang`
-/// "genuinely cross-page-visible" and stopped there; this closes the gap the
-/// same way ADR-044 closed listing hosts' — by hashing the actual downstream
+/// site-wide, non-graph consumers of a page's OWN `lang` (an earlier audit
+/// found `lang` "genuinely cross-page-visible" and stopped there; this closes the gap the
+/// same way the listing-group model closed listing hosts' — by hashing the actual downstream
 /// VALUE rather than the field that feeds it, so a page's `lang` need not
 /// force a site-wide render just because it MIGHT move one of these).
 ///
@@ -484,8 +483,8 @@ mod tests {
     // `zh-hant/` holding Traditional Chinese IS an edition. Guards against
     // "fix the false positive by deleting evidence 3". The false positive it
     // used to be paired with — an `it/` folder of Chinese prose — is now a real
-    // edition, because ADR-065's folder rung declares it and `<html lang>` has
-    // said so since #977; `nav_lang_switcher_gate` pins that through the real
+    // edition, because the per-folder-language rung declares it and `<html lang>` has
+    // said so ever since; `nav_lang_switcher_gate` pins that through the real
     // pipeline, which is the only layer that can see the declaration happen.
     #[test]
     fn lang_tree_matching_its_documents_language_is_an_edition() {
@@ -497,7 +496,7 @@ mod tests {
     }
 
     // An index-less tree in a language moss ships no interface for is an
-    // edition like any other. This was moss#949: routing evidence 3 through
+    // edition like any other. Routing evidence 3 through
     // `Language::from_code`, which knows six codes, silently excluded every
     // tree `lang_tree_prefix` accepts and `from_code` does not — `en-gb/`,
     // `de/`, `ja/` — so those readers got no switcher at all. Comparing
@@ -532,7 +531,7 @@ mod tests {
     // the look-alike trap this gate does not close: on an all-Chinese site whose
     // homepage has no prose (root label falls through to `site.lang`), adding
     // `it/index.md` returns the spurious switcher. Closing it requires knowing a
-    // root's label was authored rather than guessed — moss#947. When that lands,
+    // root's label was authored rather than guessed. When that lands,
     // this assertion flips.
     #[test]
     fn look_alike_folder_with_an_index_still_mints_a_root() {
@@ -544,7 +543,7 @@ mod tests {
         assert_eq!(site_lang_roots(&docs, Language::En).len(), 2, "structural root test");
         assert!(
             publishes_multiple(&docs, Language::En),
-            "known gap: evidence 1 fires; see moss#947"
+            "known gap: evidence 1 fires"
         );
     }
 

@@ -16,7 +16,7 @@
 //! block contains. Until 2026-08-28 the block was six template variables, so
 //! each script cost a hash `let`, a tag `let`, a `ShellVars` field and a
 //! `shell.rs` mapping — twice over, because `render/html.rs` paid for the
-//! same set again on the isolated-page path (#1149).
+//! same set again on the isolated-page path.
 //!
 //! ## Eager and lazy
 //!
@@ -27,8 +27,6 @@
 //! reader selected text and tapped Share, and `hls.js`, which only a browser
 //! with MSE and no native HLS ever needs. Lazy scripts are `format: "esm"` in
 //! `scripts/build-backend-scripts.mjs`; the rest are `iife`.
-//!
-//! See `docs/archive/2026-08-04-ship-what-the-site-needs.md` §4 Milestone B.
 
 use crate::build::assets::paths::{compute_binary_hash, PathResolver};
 use crate::build::render::html::load_js_asset;

@@ -1,14 +1,13 @@
 //! The Versions surface's five command bodies, and the plain-data types they
 //! answer with.
 //!
-//! Slice 3 of [the publish-history design](../../../../../docs/archive/2026-09-11-publish-history-design.md)
-//! shipped these as five `#[tauri::command]` functions in the app crate. They
-//! live here now for the reason ADR-067 gives: the command surface has two
-//! carriers, and a body that only the Tauri shell can reach is a feature the
-//! HTTP carrier has to re-implement. Nothing below is Tauri-shaped — the app's
-//! commands are one-line wrappers over these (`src-tauri/src/deploy/history.rs`),
-//! and the carrier's arms are the same one line with a different source for the
-//! sealed manifest (`ops/serve/invoke.rs`).
+//! Slice 3 of the publish-history design shipped these as five
+//! `#[tauri::command]` functions in the app crate. They live here now
+//! because the command surface has two carriers, and a body that only the
+//! Tauri shell can reach is a feature the HTTP carrier has to re-implement.
+//! Nothing below is Tauri-shaped — the app's own commands are one-line
+//! wrappers over these, and the carrier's arms are the same one line with a
+//! different source for the sealed manifest (`ops/serve/invoke.rs`).
 //!
 //! Every backend rule — `[history] enabled`, the size ceiling, "moss never
 //! writes a vault's `.git`", best-effort restore — still lives entirely in

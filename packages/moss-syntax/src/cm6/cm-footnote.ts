@@ -23,7 +23,7 @@
 //
 // The editor does NOT number the markers and does NOT hoist definitions into
 // an endnote section, both of which the build does at render time. The editor
-// renders source (ADR-022): the label is what the author typed, and the note
+// renders source: the label is what the author typed, and the note
 // stays on the line they put it on. A document whose markers read 2, 1, 3 is
 // showing the author something true about their file.
 
@@ -95,7 +95,7 @@ export interface FootnoteSite {
  * definition is "the" one when a label is defined twice.
  *
  * Duplicate labels: FIRST wins, on both sides. The build renders the first
- * definition's body and back-links to the first reference (ADR-035), so the
+ * definition's body and back-links to the first reference, so the
  * editor's jump lands where the reader's would.
  */
 export function footnoteIndex(state: EditorState): {

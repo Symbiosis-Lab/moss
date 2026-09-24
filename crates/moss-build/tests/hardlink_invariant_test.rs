@@ -1,12 +1,11 @@
 //! Sync test: every `fs::hard_link` invocation must carry a `// allow:hard_link <reason>` marker.
 //!
-//! Open-half twin of `src-tauri/tests/hardlink_invariant_test.rs` (desktop
-//! repo) — that file's `SOURCE_ROOTS` scans `src`, `tests` (desktop) plus
+//! Open-half twin of the desktop app's `hardlink_invariant_test.rs` — that
+//! file's `SOURCE_ROOTS` scans `src`, `tests` (desktop) plus
 //! `../open/crates/moss-build/src`, `../open/crates/moss-build/tests`
-//! independently, with no cross-root comparison (class B per
-//! docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md).
-//! This twin runs the same lint over this crate's own `src` and `tests`; the
-//! desktop half keeps scanning its own `src`/`tests`.
+//! independently, with no cross-root comparison. This twin runs the same
+//! lint over this crate's own `src` and `tests`; the desktop half keeps
+//! scanning its own `src`/`tests`.
 //!
 //! ## Why this exists
 //!

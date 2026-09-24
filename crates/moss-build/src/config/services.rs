@@ -4,11 +4,8 @@
 //! build tree decides footer chrome and slot resolution from these types, so
 //! they must be reachable from `moss-build` when the pipeline crosses. The
 //! path-taking readers live in `build::site_config` and the write primitive in
-//! `vault::config` (ADR-059 and its amendment) — this module is the vocabulary,
+//! `vault::config` — this module is the vocabulary,
 //! not the file access.
-//!
-//! See docs/archive/2026-04-24-services-schema-design.md and
-//! docs/reference/services-schema.md for the canonical design.
 //!
 //! One concept: `[services.<kind>]` is the single place a site says HOW an
 //! integration is wired. Presence of a section implies the service is enabled
@@ -53,8 +50,7 @@ pub struct ServiceCommon {
     /// moss-hosted site.
     pub enabled: Option<bool>,
     /// Provider identifier. Required whenever the service is enabled on a
-    /// self-hosted site. Allowed values per kind are documented in
-    /// docs/reference/services-schema.md.
+    /// self-hosted site.
     pub provider: Option<String>,
 }
 
@@ -150,7 +146,7 @@ impl ServicesConfig {
     /// Validate provider values and wiring coherence. Returns the first error.
     /// Called from `get_services_config`; also safe to call after in-memory edits.
     ///
-    /// Rules (see docs/reference/services-schema.md):
+    /// Rules:
     /// - `provider` values must be in the per-kind allowlist.
     /// - For analytics/email: a section with `enabled = true` and no provider is
     ///   a load error on self-hosted sites. On moss-hosted sites, "enabled with

@@ -206,8 +206,6 @@ fn format_root_block_normalizes_3digit_hex_to_6digit() {
 // Only tokens whose value is a literal hex are checked. `var()` aliases and
 // `color-mix()` expressions need a cascade to resolve and belong in the
 // render-gate suite, which has an engine; see .claude/CLAUDE.md.
-//
-// Provenance: the six values this locks in were derived in moss#1047.
 
 /// Relative luminance per WCAG 2.1 §relative-luminance.
 fn relative_luminance(hex: &str) -> f64 {
@@ -368,6 +366,6 @@ fn contrast_ratio_matches_known_wcag_values() {
     assert!((contrast_ratio("#ffffff", "#ffffff") - 1.0).abs() < 0.001);
     // Order independence.
     assert!((contrast_ratio("#8a8580", "#faf8f5") - contrast_ratio("#faf8f5", "#8a8580")).abs() < 1e-9);
-    // The value moss#1047 measured for the old muted token on the page background.
+    // The value measured for the old muted token on the page background.
     assert!((contrast_ratio("#8a8580", "#faf8f5") - 3.45).abs() < 0.01);
 }

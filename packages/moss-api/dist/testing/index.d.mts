@@ -319,7 +319,7 @@ declare function setupMockTauri(options?: SetupMockTauriOptions): MockTauriConte
  *
  * Mirrors the real guard: `PluginPath::sandboxed` in
  * open/crates/moss-build/src/vault/fs.rs, and its one documented exception,
- * `PluginPath::shared_social_data` (docs/reference/social-data-standard.md),
+ * `PluginPath::shared_social_data`,
  * which is bound to the calling plugin's own `<plugin_id>.json` file — not
  * the whole shared directory. Before this mirror existed, mock-tauri.ts's
  * `write_project_file` / `read_project_file` handlers never enforced the

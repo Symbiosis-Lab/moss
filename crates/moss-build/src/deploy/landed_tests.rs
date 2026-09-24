@@ -44,7 +44,7 @@ fn sealed(pages: &[(&str, &str, &str, &[u8])]) -> SealedManifest {
 /// What lands is `{source path → uid}` inside the record that was already being
 /// written, and nothing else. The article map carries every page's markdown and
 /// rendered HTML, and copying it put a second copy of the user's whole site in
-/// their Drive (moss#1079).
+/// their Drive.
 #[tokio::test]
 async fn a_landed_publish_records_what_went_live() {
     let dir = tempfile::tempdir().unwrap();
@@ -80,7 +80,7 @@ async fn a_landed_publish_records_what_went_live() {
 /// The article map is regenerable build output, so a build can legitimately
 /// reach the record with none to read. That must not CLEAR what is live: an
 /// empty map is read as "nothing was ever published", which is the whole
-/// moss#1079 failure arrived at from the writing side.
+/// failure this guards against, arrived at from the writing side.
 #[tokio::test]
 async fn an_unreadable_article_map_does_not_erase_the_note_ids() {
     let dir = tempfile::tempdir().unwrap();
@@ -186,7 +186,7 @@ async fn a_publish_summarizes_a_rename_and_a_new_page_since_the_last_one() {
     assert_eq!(added.title, "Page B");
 }
 
-// ── Publish history (ADR-083, slice 1) ──────────────────────────────────
+// ── Publish history (slice 1) ──────────────────────────────────
 
 /// The end-to-end wiring: `record_landed` — not just the lower-level
 /// `record_what_is_live` the tests above exercise directly — must itself

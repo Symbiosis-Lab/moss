@@ -438,7 +438,7 @@ fn seal_succeeds_when_image_served_path_is_in_blocking_keys() {
 
 
 // -----------------------------------------------------------------------
-// site_hashes_view (#621 — deferred stale-cleanup borrow)
+// site_hashes_view (deferred stale-cleanup borrow)
 // -----------------------------------------------------------------------
 
 #[test]
@@ -841,7 +841,7 @@ fn site_url_round_trips_through_serde() {
 }
 
 // -----------------------------------------------------------------------
-// apply_post_seal_rewrites (moss#867)
+// apply_post_seal_rewrites (honest degradation)
 // -----------------------------------------------------------------------
 
 #[test]
@@ -1039,7 +1039,7 @@ fn replace_sources_preserves_page_hashes() {
 }
 
 // -----------------------------------------------------------------------
-// Cancelled notebook run (moss#618)
+// Cancelled notebook run
 // -----------------------------------------------------------------------
 
 /// The previous build's JupyterLite bundle is carried forward but never

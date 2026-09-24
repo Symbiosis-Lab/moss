@@ -11,7 +11,7 @@
 //! one reason: a long-lived process with a file watcher has in-flight build work
 //! to drain and a sealed manifest sitting in session state. A terminal publish
 //! has neither — it builds once, synchronously, and holds the manifest it just
-//! sealed. So `src-tauri/src/deploy.rs` keeps the resolution, and each binary
+//! sealed. So the app's own deploy module keeps the resolution, and each binary
 //! reaches this function with its own answers.
 
 use std::path::Path;
@@ -67,8 +67,7 @@ fn deploy_status_label(result: &Result<PushResult, String>) -> &'static str {
 /// Type-gated entry point for deploy work, and the one all internal callers
 /// (CLI, tests, plugins, future parallel deploy paths) should use. The
 /// `&SealedManifest` parameter is the deploy contract: the signature makes it
-/// impossible to call deploy before all artifacts are registered (see
-/// `docs/reference/build-pipeline.md`). The `push_site` Tauri command
+/// impossible to call deploy before all artifacts are registered. The `push_site` Tauri command
 /// resolves the manifest from `AppState` and forwards here.
 ///
 /// Brackets the deploy with `=== DEPLOY START/END … status=… ===` boundary
@@ -110,8 +109,7 @@ fn credit_upload_bytes(st: &progress::UploadProgressState, n: u64) {
 /// [`push_site_inner`], which brackets this with the `=== DEPLOY START/END ===`
 /// boundary markers; calling `_impl` directly bypasses them. The
 /// `&SealedManifest` contract (deploy cannot run before artifacts are
-/// registered) is documented on the wrapper and in
-/// `docs/reference/build-pipeline.md`.
+/// registered) is documented on the wrapper.
 async fn push_site_inner_impl(
     sealed: &SealedManifest,
     cx: &PushContext<'_>,
@@ -149,11 +147,10 @@ async fn push_site_inner_impl(
     sink.stage(progress::DeployStage::Syncing, 0, 0, "Comparing with server...");
 
     // 7. Create seta client. Client-side subscription pre-flight removed
-    // 2026-04-22: the server-side per-site subscription rewrite (moss-seta#106)
+    // 2026-04-22: the server-side per-site subscription rewrite
     // moved access enforcement into the sync/commit endpoints themselves. This
     // pre-flight was reading a `whoami.subscription` field that no longer
     // exists, causing false `subscription_expired` errors on every deploy.
-    // See moss#538 for the proper rebuild against `/api/subscriptions/:siteId`.
     let client =
         crate::seta::client::MossSetaClient::for_environment(identity, &environment);
 
@@ -200,8 +197,7 @@ async fn push_site_inner_impl(
     // and putting two questions on one channel is what forced the frontend to
     // guess which one it was holding. The same two numbers now ride
     // `DeployProgress` — from the process that owns them, at 4 Hz, for every
-    // publish rather than only the unrecorded ones. See
-    // `docs/archive/2026-08-09-upload-readout-and-publish-reset.md` §5.
+    // publish rather than only the unrecorded ones.
 
     // Safety backstop: refuse a deploy that would wipe most/all of the live
     // site. A near-total removal is the signature of an empty or stale build
@@ -235,8 +231,7 @@ async fn push_site_inner_impl(
 
     // Sum the bytes to upload (regular files only — symlinks transfer instantly
     // and would otherwise keep the byte total from ever being reached). One stat
-    // per needed file: negligible vs the upload. (Design
-    // docs/archive/2026-06-11-deploy-upload-progress.md §1b. file-count progress is
+    // per needed file: negligible vs the upload. (File-count progress is
     // misleading for video-heavy sites — it hits ~97% before the videos start.)
     //
     // The same pass records each file's size, because the upload window admits
@@ -712,7 +707,7 @@ async fn push_site_inner_impl(
 /// needs moss's own build, and the whole of what `moss deploy <folder>` does in
 /// a process with no window. The app does not call this: it publishes from a
 /// manifest a watcher already sealed, which is the resolution
-/// `src-tauri/src/deploy.rs` keeps.
+/// the app's own deploy module keeps.
 ///
 /// The build is synchronous and one-shot (`exits_after_build`), so the seal
 /// happens inline and [`super::one_shot::build_and_seal`] has the manifest by the time

@@ -8,10 +8,10 @@
 //!   module's own doc comment: "a THIRD non-heading consumer appearing is
 //!   the signal to promote this walker to its own `ast/plain_text.rs`."
 //!   `ast::extract_hero`'s hero-overlay rung was the second consumer;
-//!   `newsletter.rs`'s email plain text (ADR-036) is the third.
+//!   `newsletter.rs`'s email plain text is the third.
 //!
 //!   **`build::page::meta::extract_description` deliberately does NOT use
-//!   this policy**, despite being named alongside email in ADR-036's
+//!   this policy**, despite being named alongside email in that migration's
 //!   initial scope. Investigation during that migration found the two
 //!   functions disagree on what an image contributes: this walker folds an
 //!   image's `alt` into the flattened text (right for a heading whose only
@@ -22,11 +22,10 @@
 //!   `meta_tests.rs` pin this). That is a deliberate excerpt-quality choice
 //!   — an image's alt attribute, or a footnote reference that broke an
 //!   image's alt bracket, is not SEO-description material even though a
-//!   heading slug or hero overlay may reasonably want it. See ADR-036's
-//!   "meta.rs" note for the full reasoning.
+//!   heading slug or hero overlay may reasonably want it.
 //! - [`render_plain_text`] — a full `Document` → plain-text LOWERING,
 //!   parallel to [`super::render::render_document`]'s HTML lowering. This is
-//!   new: nothing before ADR-036 walked the whole typed tree into a
+//!   new: nothing before this migration walked the whole typed tree into a
 //!   plain-text document. `newsletter.rs`'s email plain-text body used to be
 //!   a fourth independent `pulldown_cmark::Event` walk, hand-tracking its
 //!   own list/quote/image nesting state; this function derives the same
@@ -131,7 +130,7 @@ pub fn inlines_to_plain_text(inlines: &[Inline]) -> String {
 /// Structural parallel to [`super::render::render_document`]: one pass
 /// builds the document's [`FootnoteIndex`] and the hoisted-body map, then
 /// walks every top-level block, then appends the hoisted endnote section.
-/// Conventions (matching `newsletter.rs`'s pre-ADR-036 hand-rolled walker,
+/// Conventions (matching `newsletter.rs`'s pre-migration hand-rolled walker,
 /// which this supersedes):
 ///
 /// - Paragraphs and headings: flattened text followed by a blank line.
@@ -193,7 +192,7 @@ fn hoist_emptied(children: &[Block], rendered: &str) -> bool {
 
 /// Prefix every non-empty line of `body` with `> `. A blank line (a
 /// paragraph separator) stays blank rather than becoming a bare `>` —
-/// matching the pre-ADR-036 email walker's convention, which never wrote
+/// matching the pre-migration email walker's convention, which never wrote
 /// the prefix on a separator line. Nested quotes compose for free: an
 /// inner quote's own `> `-prefixed lines are non-empty, so the outer quote
 /// adds its own `> ` on top, producing `> > ` for doubly-nested content.
@@ -379,7 +378,7 @@ fn render_block(
         }
         Block::Other(_) => {
             // Raw HTML (block-level) is not text-bearing in a plain-text
-            // lowering — matches the pre-ADR-036 walker, which never
+            // lowering — matches the pre-migration walker, which never
             // arm'd `Event::Html`.
         }
     }
@@ -387,7 +386,7 @@ fn render_block(
 
 /// Reconstruct the Obsidian callout marker line (`[!note]+`) from the
 /// typed `kind`/`fold` fields — the inverse of the parser's callout
-/// detection. The pre-ADR-036 walker never saw this: callouts didn't exist
+/// detection. The pre-migration walker never saw this: callouts didn't exist
 /// as a distinct construct at the raw-event level it operated on, so a
 /// `[!note]` blockquote just rendered as an ordinary quote carrying its
 /// marker line as literal paragraph text. The typed parser now consumes
@@ -482,7 +481,7 @@ fn render_inline_plain(inline: &Inline, index: &FootnoteIndex, out: &mut String)
                 out.push('`');
             }
             // A non-math `Inline::Other` is raw inline HTML — invisible in
-            // plain text, matching the pre-ADR-036 walker (no Html arm).
+            // plain text, matching the pre-migration walker (no Html arm).
         }
     }
 }

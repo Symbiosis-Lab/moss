@@ -87,8 +87,8 @@ pub async fn record_landed(
 /// establishes both at the same instant: the page hashes the next change set
 /// diffs against, and the `{source path → uid}` map that rename detection and
 /// duplicate-uid resolution read (`manifest::live_baseline`). They were two
-/// files until moss#1079, and the second one was a byte copy of the whole
-/// article map — 4.83 MB on a real vault to carry about 7 KB.
+/// files until a fix merged them, and the second one was a byte copy of the
+/// whole article map — 4.83 MB on a real vault to carry about 7 KB.
 ///
 /// One shape since track P slice P3. There was a second — a publish with no
 /// manifest advanced the uids and the page mapping on the STANDING record and
@@ -108,7 +108,8 @@ pub async fn record_landed(
 /// they read — the same "before" the redirect stubs above already read for
 /// the same reason. `PageChangeSummary::default()` when this build's own
 /// article map cannot be read: with no `current_map` there is nothing to
-/// diff, and guessing here is the moss#1079 mistake one call site over.
+/// diff, and guessing here is the same mistake that produced the duplicate
+/// live-baseline file, one call site over.
 async fn record_what_is_live(
     mp: &MossPaths,
     sealed: &SealedManifest,
@@ -227,10 +228,10 @@ pub fn record_prebuilt_landed(folder: &Path, generation_id: &str, target: &str, 
 }
 
 /// What one publish record advances together, read off the same article map so
-/// none of it can land out of step with the rest (moss#1089: the sealless
+/// none of it can land out of step with the rest (the sealless
 /// writer, deleted at track P slice P3, used to advance `uids` alone and leave
 /// `source_to_output` frozen as of the last SEALED publish). `triples` is that
-/// pair's replacement as `live_baseline`'s source (moss#1093) — read here
+/// pair's replacement as `live_baseline`'s source — read here
 /// beside `uids` rather than derived from it, because deriving it would be
 /// exactly the join this struct exists to make unnecessary.
 ///
@@ -255,7 +256,7 @@ struct LiveArticleMapping {
 /// Async fs so a slow (e.g. iCloud-syncing) file cannot block a runtime worker.
 async fn read_live_article_mapping(mp: &MossPaths) -> Option<LiveArticleMapping> {
     let src = mp.article_map();
-    // allow:raw_read regenerable build output under `.moss/build.nosync/` (ADR-043),
+    // allow:raw_read regenerable build output under `.moss/build.nosync/`,
     // where dataless is absent — and an unreadable one is handled either way.
     let bytes = match tokio::fs::read(&src).await {
         Ok(bytes) => bytes,

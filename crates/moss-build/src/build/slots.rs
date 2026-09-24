@@ -27,9 +27,9 @@
 //! separates the two surfaces, and [`Slot::position`] carries the prose
 //! `moss describe` prints.
 //!
-//! ## Public contract surface (#508)
+//! ## Public contract surface
 //!
-//! Per `docs/reference/html-css-contract.md`, the `slot:` frontmatter
+//! The `slot:` frontmatter
 //! value space (the strings authors are allowed to write) is exactly the
 //! set of `Slot::as_str()` outputs FOR variants where `is_authorable()`
 //! returns true. Adding new variants is a minor-version contract addition;
@@ -77,7 +77,7 @@ pub enum Slot {
     BeforeArticleEnd,
     /// Between `</article>` and `</main>` — comments and reactions, which are
     /// *not* part of the article. Both content templates carry this marker, so
-    /// it reaches folder-index and `layout: page` pages too (#1013); the other
+    /// it reaches folder-index and `layout: page` pages too; the other
     /// three article-area markers are article-only.
     AfterArticle,
     /// Before `</body>`. Scripts.
@@ -104,7 +104,7 @@ impl Slot {
     /// Where this slot sits in the page, in the words `moss describe` prints.
     ///
     /// Part of the published contract surface, not a code comment: the strings
-    /// land in `moss describe --json` and in `docs/reference/contract.md`.
+    /// land in `moss describe --json`.
     pub fn position(&self) -> &'static str {
         match self {
             Slot::HeadEnd => "Before </head> — for stylesheets, scripts, and meta tags.",

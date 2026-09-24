@@ -1,5 +1,5 @@
 # The open repo's PR gate. Written under open/.github/workflows/ in the
-# desktop repo per docs/archive/2026-09-13-f3-open-repo-ci-plan.md (F3); GitHub
+# desktop repo (F3); GitHub
 # does not execute a nested .github/, so this file is inert until open/
 # becomes a repo root at F6. Once the flip lands, every `open/crates/…` /
 # `open/packages/…` path the lifted steps below read becomes `crates/…` /
@@ -27,14 +27,14 @@ jobs:
   # ==========================================================================
   # Rust tests for the three crates. Authored fresh, not lifted: the desktop's
   # own `rust-tests` (pr.yml:862-1055) runs `cargo test --tests --all-features`
-  # from `working-directory: src-tauri`, without `--workspace`, so it is not a
+  # from the app's own working directory, without `--workspace`, so it is not a
   # template for a workspace-wide pass. Modeled instead on maint.yml's
   # `rust-tests-windows` "Run Rust tests (workspace)" step (maint.yml:750-752,
   # `cargo test --workspace --all-features --no-fail-fast`), scoped to the
   # three open crates. Surrounding scaffolding (checkout, toolchain, cache,
   # apt install, pnpm install) is lifted from `rust-tests` (pr.yml:862-981);
   # the "Build frontend", "Check for duplicate dependencies", and "Verify
-  # generated artifacts" steps are dropped — none apply without src-tauri.
+  # generated artifacts" steps are dropped — none apply without the desktop app.
   rust-tests:
     name: Rust Tests
     runs-on: ubuntu-latest
@@ -176,7 +176,7 @@ jobs:
 
   # ==========================================================================
   # NEW, not lifted — no existing desktop job runs an end-to-end check against
-  # moss-cli alone. `src-tauri/tests/cli_binary_parity_test.rs`'s non-parity
+  # moss-cli alone. The app's own CLI-parity test's non-parity
   # assertions cannot run here (there is no app binary in this repo to compare
   # against), so that half of CLI coverage stays desktop-only. The shape below
   # follows pr.yml's `render-gates` job, which already drives `moss-cli`
@@ -265,9 +265,8 @@ jobs:
 
       # This tree's own copy of the desktop repo's architecture ratchet (rows
       # a/b/e — prod-lines-per-file, children-per-dir, mirror-comment
-      # markers), ported per docs/archive/
-      # 2026-09-16-boundary-gates-remeasured-for-dependency-model.md step 8:
-      # once the desktop side can no longer scan `open/crates`/`open/packages`,
+      # markers).
+      # Once the desktop side can no longer scan `open/crates`/`open/packages`,
       # this repo has to ratchet its own tree.
       - name: Ratchet (architecture size/marker budget)
         run: node scripts/ratchet.mjs check

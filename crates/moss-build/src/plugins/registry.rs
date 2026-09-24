@@ -6,7 +6,7 @@
 //!
 //! All bundled plugins appear in the installer (a `preview` manifest
 //! declaration hides a row from users who haven't opted into preview
-//! features — see `channel_is_listed` and ADR-053). No plugin is
+//! features — see `channel_is_listed`). No plugin is
 //! auto-installed — users install them from the catalog or by dev sideload.
 //! The frontend uses capabilities to decide rendering behavior (e.g., syndicators
 //! get control panel icons, process plugins get toast + settings integration).
@@ -591,8 +591,7 @@ pub fn get_available_channels_with_status(
 ///
 /// An installed copy is real state: it stays visible and manageable whatever
 /// its readiness says. Being listed is a presentation choice, not an
-/// entitlement — `install_plugin` deliberately does not consult this (ADR-053,
-/// ADR-032 clause 2). Being *revoked* is not a presentation choice: the
+/// entitlement — `install_plugin` deliberately does not consult this. Being *revoked* is not a presentation choice: the
 /// refusal lives at the loader (`crate::plugins::admission`), and this
 /// only decides whether the row explaining it is on screen.
 pub fn channel_is_listed(channel: &AvailablePlugin, show_preview: bool) -> bool {
@@ -733,7 +732,6 @@ pub fn uninstall_plugin(plugin_id: &str, project_path: &str) -> Result<(), Strin
 
     // Ensure config is migrated before raw-TOML surgery. We log but don't fail —
     // uninstall should proceed even if migration is unhappy (defensive cleanup path).
-    // See docs/reference/config-migrations.md.
     if let Err(e) = super::discovery::get_channels_config(project_path) {
         log::warn!("config migration failed during uninstall_plugin: {}. Proceeding with raw TOML surgery.", e);
     }

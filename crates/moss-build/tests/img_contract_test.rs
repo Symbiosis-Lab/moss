@@ -1,15 +1,13 @@
 //! Phase 2E v5 PR6 — `<img>` contract test, wikilinks half.
 //!
-//! Open-half twin of `all_parser_new_ext_sites_enable_wikilinks` in
-//! `src-tauri/tests/img_contract_test.rs` (desktop repo) — that test is
-//! "mostly a uniform `Parser::new_ext`/`ENABLE_WIKILINKS` source scan over
-//! `src-tauri/src` + `open/crates/moss-core/src` + `open/crates/moss-build/src`"
-//! (class B per
-//! docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md),
+//! Open-half twin of `all_parser_new_ext_sites_enable_wikilinks` in the
+//! desktop app's `img_contract_test.rs` — that test is a uniform
+//! `Parser::new_ext`/`ENABLE_WIKILINKS` source scan over the desktop app's
+//! own source plus `open/crates/moss-core/src` and `open/crates/moss-build/src`,
 //! split by root. This is moss-build's own copy, scoped to `src`; moss-core
 //! carries the twin (plus the wholly-open `shared_parser_options_grants_wikilinks`
-//! sub-check) for its own `src`. The desktop half keeps scanning
-//! `src-tauri/src`.
+//! sub-check) for its own `src`. The desktop half keeps scanning its own
+//! source.
 //!
 //! Phase 3 PR2 (`ee102b7d1`) flipped `ENABLE_WIKILINKS` at every parser
 //! site, retiring the Stage-1 wikilink rewriter in favor of native

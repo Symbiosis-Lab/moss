@@ -12,11 +12,9 @@ import { build } from "esbuild";
  * The two destinations are two runtimes, not two folders that drifted apart:
  * `js-src/site/` is the published site a visitor loads (moss-build compiles
  * it), `js-src/bridge/` is preview-only JS the app injects into its iframe
- * and never deploys. See docs/reference/target/02-target-architecture.md L2,
- * rows 8 and 9 — the entry path and the outfile crate always agree.
+ * and never deploys. The entry path and the outfile crate always agree.
  *
- * Ported from the desktop repo's scripts/build-backend-scripts.mjs (landing
- * order step 7, docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md):
+ * Ported from the desktop repo's scripts/build-backend-scripts.mjs:
  * these 15 outputs (plus the hand-written comment-owner-controls.js) already
  * live in this repo, so their TS sources and the bundler that produces them
  * belong here too. Desktop's own build.rs stops invoking this script once

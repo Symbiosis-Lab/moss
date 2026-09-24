@@ -217,8 +217,7 @@ pub fn read_site_languages(project_root: &std::path::Path) -> Option<Vec<EmailAu
 /// Render the Buttondown subscribe form HTML for the footer.
 ///
 /// No production caller in Phase 1 — kept for Phase 2 (3rd-party providers
-/// render path), see
-/// docs/archive/2026-06-10-email-footer-mode-independent-design.md.
+/// render path).
 ///
 /// When `active` is false, adds `moss-service-inactive` class and an
 /// `aria-label` naming the inactive state. Not `title=`: the inactive
@@ -270,8 +269,7 @@ fn subscribe_label(lang: Language) -> &'static str {
 
 /// Fetch the Buttondown newsletter username from the API.
 ///
-/// No production caller in Phase 1 — the build path no longer fetches
-/// (docs/archive/2026-06-10-email-footer-mode-independent-design.md). Kept,
+/// No production caller in Phase 1 — the build path no longer fetches. Kept,
 /// with its bounded-timeout test, for Phase 2's Settings-time wiring
 /// acquisition, which persists the username into `[services.email]`.
 pub fn fetch_buttondown_username(api_key: &str) -> Option<String> {
@@ -279,7 +277,7 @@ pub fn fetch_buttondown_username(api_key: &str) -> Option<String> {
         .unwrap_or_else(|_| "https://api.buttondown.com".to_string());
     let url = format!("{}/v1/newsletters", base);
     // Bound TCP connect time so an unreachable host can't tie up the build.
-    // See #576. Both the connect timeout and overall timeout apply.
+    // Both the connect timeout and overall timeout apply.
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(3))
         .timeout(std::time::Duration::from_secs(10))
@@ -302,7 +300,7 @@ pub fn fetch_buttondown_username(api_key: &str) -> Option<String> {
 
 /// Copy set for the moss-hosted subscribe form.
 ///
-/// Must stay in sync with `COPY` in `frontend/site/subscribe/i18n.ts`. The
+/// Must stay in sync with `COPY` in `crates/moss-build/src/js-src/site/subscribe/i18n.ts`. The
 /// set is small enough (5 strings × 3 locales) that duplication beats
 /// plumbing the strings as data- attributes through the DOM.
 struct MossSubscribeCopy {
@@ -400,7 +398,7 @@ fn subscribe_form_inner(
 /// - `button_override`: `Some(non-empty)` emits `data-button-override="true"`
 ///   so subscribe.ts leaves the author's button label (and placeholder) alone.
 ///
-/// Public contract (see `docs/reference/html-css-contract.md`):
+/// Public contract:
 /// - classes `moss-subscribe`, `moss-subscribe-form`
 /// - data-position `"inline"`; data-moss-hosted `"true"`
 /// - data-state value space `"idle" | "loading" | "success" | "error"`
@@ -445,7 +443,7 @@ pub fn render_hosted_subscribe_form(
 
 /// Copy set for the moss-hosted apply form.
 ///
-/// Must stay in sync with `ApplyCopy` in `frontend/site/subscribe/i18n.ts`. The
+/// Must stay in sync with `ApplyCopy` in `crates/moss-build/src/js-src/site/subscribe/i18n.ts`. The
 /// set is small (11 strings × 3 locales) — duplication beats DOM plumbing.
 struct MossApplyCopy {
     /// Accessible name for the email input (rendered as `aria-label`; the field
@@ -456,7 +454,7 @@ struct MossApplyCopy {
     /// Accessible name for the second field (rendered as `aria-label`).
     matters_label: &'static str,
     /// Placeholder for the second field — a Matters username OR a one-line pitch.
-    /// Must stay in sync with `matters_ph` in `frontend/site/subscribe/i18n.ts`.
+    /// Must stay in sync with `matters_ph` in `crates/moss-build/src/js-src/site/subscribe/i18n.ts`.
     matters_ph: &'static str,
     /// Helper line beneath the second field: the "or tell us what you write" hint.
     matters_helper: &'static str,
@@ -608,7 +606,7 @@ pub fn render_inline_apply_form(
 }
 
 /// The bundled subscribe.js IIFE — produced by vite.config.js from
-/// `frontend/site/subscribe/subscribe.ts`. Embed once per page that
+/// `crates/moss-build/src/js-src/site/subscribe/subscribe.ts`. Embed once per page that
 /// contains a moss-hosted subscribe form.
 pub const SUBSCRIBE_JS: &str = include_str!("../../assets/js/subscribe.js");
 
@@ -1083,7 +1081,7 @@ mod tests {
 
     #[test]
     fn test_moss_form_lang_bucket_via_language_enum() {
-        // This is the Rust side of the sync contract with frontend/site/subscribe/i18n.ts.
+        // This is the Rust side of the sync contract with crates/moss-build/src/js-src/site/subscribe/i18n.ts.
         // Any change here needs a mirroring change in langBucket() over there.
         use crate::i18n::Language;
         assert_eq!(Language::from_bcp47_lenient("en"), Language::En);
@@ -1312,7 +1310,7 @@ mod tests {
         assert!(result.is_none());
         assert!(
             elapsed < std::time::Duration::from_secs(5),
-            "must fail fast (regression for #576): took {:?}", elapsed
+            "must fail fast (regression for an unreachable host hanging the build): took {:?}", elapsed
         );
     }
 

@@ -37,7 +37,7 @@
 //!   entry is in the snapshot.
 //! - `data-placeholder-src` is the ORIGINAL src (e.g. `clip.mov`). The
 //!   iframe-bridge swaps `src` to the `.mp4` payload once the transcode
-//!   completes (`frontend/bridge/iframe-bridge.ts:666`).
+//!   completes (the desktop app's iframe bridge).
 //! - `poster` and `data-thumb-src` both reference `to_thumb(original_src)`.
 //!   The iframe-bridge listens for `moss-asset-ready` and swaps `poster`
 //!   in when the thumbnail lands.
@@ -81,7 +81,7 @@
 //!   moss renders HTML before the video worker runs, so a video's first build
 //!   ships the single-src form with live hydration and the ladder appears on
 //!   the next build, off the transform cache. That ordering is also what keeps
-//!   ADR-013's never-404 rule. A `<video>` does advance past a failed
+//!   the never-404 rule. A `<video>` does advance past a failed
 //!   `<source>` (that is what the MP4 last-resort below relies on), but only
 //!   before `readyState` reaches HAVE_METADATA; after that the resource is
 //!   chosen for good, and a 404 inside a chosen ladder plays nothing. So a
@@ -554,8 +554,8 @@ mod tests {
     // Phase 2E v5 PR5 (2026-05-26) retired the Stage 3 regex post-pass; the
     // video synthesizer in this module is now the sole emitter of width /
     // height / poster / data-thumb-src / .mov→.mp4 src rewriting for
-    // moss-emitted <video> tags. The two regex-parity tests at
-    // `src-tauri/tests/video_synth_regex_parity.rs` were deleted alongside
+    // moss-emitted <video> tags. The two regex-parity tests in the desktop
+    // app's `video_synth_regex_parity.rs` were deleted alongside
     // the regex.
 
     // --- |loop ambient-video attribute (spec §3.6) -----------------------

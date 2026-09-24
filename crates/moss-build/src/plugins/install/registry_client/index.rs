@@ -9,8 +9,6 @@
 //! persistence is [`super::cache`] — and `cache` runs every document back
 //! through the functions here on the way OUT of the disk as well as in, so
 //! these rules hold on both sides of it.
-//!
-//! Schema and its client-facing invariants: `docs/archive/2026-07-23-plugin-registry-design.md`.
 
 use serde::{Deserialize, Serialize};
 
@@ -70,7 +68,7 @@ pub struct IndexEntry {
     pub icon_url: Option<String>,
     /// The publisher does not consider this version ready to be offered by
     /// default. Presentation only — it decides who is SHOWN the row, never
-    /// who may install it (ADR-053).
+    /// who may install it.
     #[serde(default)]
     pub preview: bool,
     /// The plugin's runtime is a machine-wide companion stack downloaded on

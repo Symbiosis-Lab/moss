@@ -10,8 +10,6 @@
 //! with regex (`first_body_image` in `cover.rs`, etc.). Phase 4
 //! retires those by walking the typed AST instead. Each `find_*` helper
 //! is the typed equivalent of one historical regex.
-//!
-//! See `docs/reference/typed-body-ast.md` (principle: AST is data).
 
 use super::document::Document;
 use super::node::{Block, Inline};
@@ -43,7 +41,7 @@ use std::collections::HashMap;
 ///
 /// Replaces the `body_cover_path` capture currently in
 /// `pipeline.rs::transform_events`. Closes the acceptance criteria of
-/// issue #643 (first-body-image AST walker) on top of the typed AST.
+/// the first-body-image AST walker on top of the typed AST.
 /// # Render order, not source order (2026-07-29)
 ///
 /// The walk is depth-first over the source tree, but a footnote definition

@@ -5,8 +5,6 @@
 //! [`handle_symlink_entry`] to recreate the symlink in the output instead of
 //! copying bytes. The webserver dereferences at request time, so both the
 //! alias path and the canonical path serve the same bytes.
-//!
-//! Design: docs/archive/2026-04-27-preserve-source-symlinks-design.md
 
 use std::path::{Path, PathBuf};
 

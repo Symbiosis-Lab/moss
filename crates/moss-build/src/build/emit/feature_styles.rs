@@ -39,8 +39,6 @@
 //! where its rules load. That property is exactly what makes moving these from
 //! inline `<style>` at head-end to a `<link>` a safe move rather than a
 //! cascade change.
-//!
-//! See `docs/archive/2026-08-04-ship-what-the-site-needs.md` §4 Milestone C.
 
 use crate::build::assets::paths::compute_content_hash;
 use crate::build::render::html::load_js_asset;
@@ -50,7 +48,7 @@ use crate::build::served_path::ServedPath;
 pub struct FeatureStyle {
     /// Basename, without `.css`. Becomes `_moss/css/<name>.<hash>.css`.
     pub name: &'static str,
-    /// Path under `src-tauri/` for dev hot-reload.
+    /// Path under the desktop app's source tree for dev hot-reload.
     pub dev_path: &'static str,
     /// The file's bytes, `include_str!`-ed at compile time.
     pub source: &'static str,

@@ -1,7 +1,7 @@
 /**
  * breadcrumb-fold.ts — ONE folding behaviour for both breadcrumb trails.
  *
- * The floating island (ADR-049 §4) and the masthead show the same trail and
+ * The floating island and the masthead show the same trail and
  * used to shrink it two different ways: the island folded whole ancestors
  * into a `…` button, the masthead ellipsised every middle segment down to an
  * unreadable stub ("獎.. / 寫.. / 第.."). The fold is the better answer —
@@ -63,8 +63,8 @@ export const FOLD_FLOOR_EM = 7;
  * Returns the indices to hide, ascending. Empty means the trail fits as it is.
  *
  * The last crumb is charged its FLOOR, not its natural width, when asking
- * whether a plan fits — because it is the one crumb allowed to ellipsise
- * (ADR-049 §4). Charging it full width would make the trail buy room it
+ * whether a plan fits — because it is the one crumb allowed to ellipsise.
+ * Charging it full width would make the trail buy room it
  * already has by dropping an ancestor, which is the more expensive of the two:
  * a truncated title still shows its first characters and the reader knows what
  * page they are on, whereas a dropped ancestor leaves the screen entirely.

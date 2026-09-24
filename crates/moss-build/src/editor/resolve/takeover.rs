@@ -9,14 +9,12 @@
 //! that recipe from the build's own record so the pane that shows the button
 //! carries no per-kind branch and guesses nothing about the site.
 //!
-//! The record is the article-map (ADR-019): `terms` says which term URLs are
+//! The record is the article-map: `terms` says which term URLs are
 //! unclaimed, `generated` says which indexes the build synthesized,
 //! `dir_overrides` says which real directory already serves a URL. Disk is
 //! consulted only where the map cannot answer — [`derive_folder_identity`]'s
 //! contract, which this module keeps: a directory it names either exists or
 //! is stated as one to create, never invented as if it existed.
-//!
-//! Design: `docs/archive/2026-09-05-term-page-takeover-from-the-editor.md`.
 
 use std::path::Path;
 

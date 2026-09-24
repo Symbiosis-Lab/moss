@@ -1,4 +1,4 @@
-//! Keeping the watcher's subscription set in step with the project (#960).
+//! Keeping the watcher's subscription set in step with the project.
 //!
 //! Since the project root is no longer watched recursively
 //! ([`crate::build::watch::scope`]),

@@ -1,4 +1,4 @@
-//! Unit tests for the watcher's subscription set (#960).
+//! Unit tests for the watcher's subscription set.
 //!
 //! The predicates moved here from `watch_tests.rs` keep their coverage there;
 //! what is new is `watch_targets`, whose whole job is to never name a path moss
@@ -61,7 +61,7 @@ fn watch_targets_never_name_a_moss_written_path() {
         assert!(
             crate::infra::moss_paths::is_watchable_rel(&rel),
             "watch_targets subscribed to {rel:?}, which the registry says moss owns — \
-             a build writing there re-triggers the build (#960)"
+             a build writing there re-triggers the build"
         );
     }
 }
@@ -124,8 +124,8 @@ fn root_level_files_are_covered_on_every_platform() {
 /// directory does not: the reconciler treats a newly appeared target as a
 /// content change and so bypasses every per-event filter. `Icon\r` is written
 /// into the project root by moss's own publish, so admitting it would make
-/// publishing rebuild the site it just published — instance 6 of the class
-/// #960 is about.
+/// publishing rebuild the site it just published — one more instance of the
+/// same class of bug as the rest of this file.
 #[test]
 fn root_level_files_moss_writes_are_never_targets() {
     let dir = fixture();
@@ -163,7 +163,7 @@ fn watch_targets_pick_up_a_new_top_level_folder() {
     );
 }
 
-/// Instance 3 of the class (#955), now caught at the event filter rather than
+/// Another instance of the same class, now caught at the event filter rather than
 /// by a hand-maintained second list: a root `AGENTS.md` is excluded from watch
 /// triggers regardless of who wrote it, and on Linux/Windows the non-recursive
 /// root watch would otherwise hear every write to it.
@@ -354,7 +354,7 @@ fn social_changes_are_exempt_both_ways() {
 // let every directory the user happens to keep the vault under cast a vote:
 // a Google shared-drive vault lives below `.shortcut-targets-by-id`, and the
 // whole vault was therefore condemned — the rebuild pump dropped every event,
-// and the sweep that backstops the pump saw nothing either (#1080, #1067).
+// and the sweep that backstops the pump saw nothing either.
 //
 // The invariant, stated so it outlives the five call sites that had the bug:
 // **a predicate's verdict on a file does not change when the vault is

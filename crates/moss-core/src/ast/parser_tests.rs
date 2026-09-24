@@ -1725,8 +1725,7 @@ fn parse_implicit_figure_off_leaves_a_footnote_definition_image_unpromoted() {
 // The implicit-figure caption is the image's alt content parsed as
 // inline markdown — `*em*`, links, `` `code` `` and typeset math — while
 // the `alt=` attribute keeps the flat plain-text source (math verbatim).
-// Matches Pandoc's implicit-figure model. See
-// docs/reference/target and the caption fix design.
+// Matches Pandoc's implicit-figure model.
 // -----------------------------------------------------------------
 
 #[test]

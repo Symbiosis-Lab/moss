@@ -1,7 +1,6 @@
 //! moss-seta HTTP client — struct, auth helpers, error types, base URL resolution.
 //!
-//! Split out of the app-side `domain/moss_seta_client.rs` (since deleted) per
-//! docs/archive/2026-04-24-codebase-restructure-continuation-plan.md Task 7.
+//! Split out of the app-side `domain/moss_seta_client.rs` (since deleted).
 
 use crate::identity::Identity;
 use crate::seta::signing::sign_request;
@@ -81,8 +80,7 @@ const RETRY_BASE_DELAY_MS: u64 = 500;
 /// It measures *futile* time, not total time — [`RetryBudget::note_progress`]
 /// restarts the stopwatch on every success. Until 2026-08-04 it measured total
 /// time, which made a per-file deadline a function of file size, the shape
-/// invariant I1 forbids (`docs/archive/2026-08-04-publish-deadlines-vs-bandwidth.md`
-/// §8.1). A 100 MB file at 50 KB/s needs ~2000 s of honest transfer; sharing one
+/// invariant I1 forbids. A 100 MB file at 50 KB/s needs ~2000 s of honest transfer; sharing one
 /// 600 s stopwatch across its chunks it could not retry a single blip past
 /// t=600 s no matter how well it was doing.
 pub(crate) const UPLOAD_RETRY_BUDGET: Duration = Duration::from_secs(600);
@@ -786,7 +784,8 @@ impl MossSetaClient {
     ///
     /// Takes the canonical wire-form path (already percent-encoded for any
     /// user-controlled segments) and uses the same string for both signing
-    /// and URL construction. See issue #541 for known dot-segment limitation.
+    /// and URL construction. Known limitation: dot-segments in a path are not
+    /// specially handled.
     ///
     /// # Errors
     /// Returns `SetaError::Identity` if the client was created without an identity.

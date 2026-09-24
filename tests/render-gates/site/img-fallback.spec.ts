@@ -361,8 +361,7 @@ test('a <video> advances past a failed <source>, and the placeholder does not st
   // in the engines moss ships against. Unlike <picture>, a media element's
   // resource selection (WHATWG HTML 4.8.11.5) re-enters its search loop when a
   // candidate fails, so the dead first <source> is not the end of the story;
-  // what moss cannot recover from is a failure AFTER HAVE_METADATA. Research
-  // and engine-source citations: docs/archive/2026-09-09-asset-reference-ledger.md.
+  // what moss cannot recover from is a failure AFTER HAVE_METADATA.
   //
   // The placeholder must stay out of the way, and does: the failure fires
   // `error` at the <source> element, and the capture-phase listener only acts on

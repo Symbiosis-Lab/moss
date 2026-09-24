@@ -1,7 +1,6 @@
 //! `[editor] attachment_folder` — where a page's images live.
 //!
-//! Three placements, path-intuitive encoding (decision:
-//! `docs/archive/2026-08-14-site-settings-and-attachments.md`):
+//! Three placements, path-intuitive encoding:
 //!
 //! | config value | meaning | example for `posts/on-gardens.md` |
 //! |---|---|---|
@@ -18,7 +17,7 @@
 //! wherever the file lands — changing the setting never breaks existing links.
 //!
 //! The rules live here, in the pure crate, because two callers on opposite
-//! sides of a crate boundary need them: the editor (`src-tauri`) resolves where
+//! sides of a crate boundary need them: the editor (the desktop app) resolves where
 //! to *write* an image, and the build (`moss-build`) asks which scanned
 //! directories are storage rather than sections of the site.
 

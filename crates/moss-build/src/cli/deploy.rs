@@ -21,7 +21,7 @@
 //! the last one to say it, and stopped at P2b — no route needs a window now,
 //! which is why the app's `intercept` never returns.
 //!
-//! Plugins in the deploy build follow ADR-077, and `--allow-plugins` is the
+//! Plugins in the deploy build need consent, and `--allow-plugins` is the
 //! consent here that it is for `moss build`: without it a plugin the app has
 //! allowed runs and one nobody allowed is refused, so its content is missing
 //! from what gets published. The flag used to be named by that refusal and
@@ -87,7 +87,7 @@ fn printing() -> Arc<dyn DeploySink> {
 /// Same reason `moss build`'s live in [`crate::ops::BuildFlags`]: two argument
 /// parsers holding one policy drift silently, and the two here are decisions
 /// rather than spellings — `--prebuilt` picks the route, `--allow-plugins` is
-/// consent for code the folder carries (ADR-077).
+/// consent for code the folder carries.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct DeployFlags {
     /// `--prebuilt=<dir>`: a static site another tool produced, uploaded
@@ -98,7 +98,7 @@ pub struct DeployFlags {
     /// the one derived from the folder name.
     pub site_id: Option<String>,
     /// `--allow-plugins`: this command is the consent for the plugins the
-    /// folder carries, exactly as it is for `moss build` (ADR-077). Without
+    /// folder carries, exactly as it is for `moss build`. Without
     /// it a plugin the app has never been told to allow is refused — which,
     /// on the route that publishes THROUGH a plugin, refuses the publish.
     pub allow_plugins: bool,
@@ -210,7 +210,7 @@ pub fn check_folder(path: &std::path::Path, display: &str) -> Result<(), i32> {
 ///
 /// The caller keeps the [`DeployReport`] rather than this printing it, because
 /// the app has one thing to do on success that cannot cross: stamping the
-/// folder for Finder is objc2/AppKit, behind the platform seam (ADR-079).
+/// folder for Finder is objc2/AppKit, behind the platform seam.
 pub fn publish(
     folder: &std::path::Path,
     route: &DeployRoute,
@@ -231,7 +231,7 @@ pub fn publish(
     // markers a failed publish is grepped by go nowhere, which is how this
     // route shipped its first version.
     crate::build::cli_output::install_headless_logger();
-    // The admission verdict, before any plugin can load (ADR-077). `moss
+    // The admission verdict, before any plugin can load. `moss
     // deploy --allow-plugins` is the same consent `moss build --allow-plugins`
     // is: without it a plugin the app never allowed is refused, and its
     // content is missing from what gets published.

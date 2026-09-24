@@ -1002,7 +1002,7 @@ async fn a_cloud_evicted_source_is_never_opened_for_passthrough() {
     // dataless-fail-fast policy a plain `open` of an evicted file SUCCEEDS, so
     // `ServeFile` would answer 200 with a full Content-Length and a body that
     // dies on first poll. A truncated 200 is as unrecoverable for `<picture>` as
-    // the 404 ADR-013 forbids, so the probe has to be asked BEFORE the open.
+    // the 404 the promise model forbids, so the probe has to be asked BEFORE the open.
     //
     // Injecting the verdict is not faking the test: the bytes, the registry, the
     // router and the response are all real, and the assertion is that a `true`
@@ -1413,8 +1413,8 @@ fn a_directory_url_is_resolved_to_its_index_before_the_cloud_check() {
     );
 }
 
-/// ADR-022 in one assertion: `/__moss/source/` serves the VAULT's bytes, never
-/// the build output's.
+/// One assertion for the invariant that `/__moss/source/` serves the VAULT's
+/// bytes, never the build output's.
 ///
 /// The fixture puts a different file at the same relative path in both places,
 /// so the test can tell them apart. Wiring this route to the served site dir —
@@ -1683,7 +1683,7 @@ async fn invoke_carrier_resolves_an_asset_using_the_derived_project_root() {
 }
 
 /// A command that is NOT in the read-only allowlist is ABSENT from the carrier:
-/// the router returns 404 (ADR-032 §5 — unexposed is not gated, it does not
+/// the router returns 404 (unexposed is not gated, it does not
 /// exist here), never a runtime 403. `reveal_entry` is a real registered command,
 /// so this proves the *allowlist* subsets the registry, not merely that unknown
 /// strings 404.
@@ -1855,7 +1855,7 @@ async fn mutate_carrier_without_or_with_wrong_token_is_401() {
     let _ = shutdown_tx.send(());
 }
 
-/// A token is bound to the vault it was minted for (ADR-075 rule 4). Point the
+/// A token is bound to the vault it was minted for. Point the
 /// SAME server at a second vault — the reused-server folder switch the app
 /// performs by rewriting `site_dir` — and the first vault's token is 401 on the
 /// very next request, while the token the switch published under the second
@@ -2297,7 +2297,7 @@ async fn dual_path_parity_create_folder_effect_matches_the_pure_core() {
 
 // The `save_editor_content` dual-path parity test (HTTP arm vs the REAL Tauri
 // command inner, `save_editor_content_with_task`) lives app-side in
-// src-tauri/src/preview/server.rs tests: the command inner and its
+// the desktop app's preview server tests: the command inner and its
 // TaskRegistry wiring stay in the app crate, and the parity claim is about
 // THAT code, so the test follows it.
 

@@ -1,5 +1,5 @@
 //! The desktop-shaped `MossEvent` payload vocabulary that crossed from the app
-//! crate at S1 of the ADR-067 relocation (2026-08-28, plan decision 4): these
+//! crate at S1 of the relocation (2026-08-28, plan decision 4): these
 //! types ride `MossEvent` variants, and the event contract lives crate-side so
 //! the SSE carrier can publish it. The machinery that PRODUCES each payload —
 //! the login probe, the updater, the publish-verification supervisor, the
@@ -51,8 +51,7 @@ pub struct ActionPanelOpened {
     /// Whether the browser-panel is showing a login URL (matters.town/matters.icu
     /// login path). When true, the shell renders the login chrome (identity +
     /// back + close) instead of the generic plugin-title strip. Always false for
-    /// non-browser occupants (editor, composer). Design: C1–C4 in
-    /// docs/archive/2026-06-23-matters-login-lifecycle-and-minimal-browser-design.md
+    /// non-browser occupants (editor, composer). Design: C1–C4.
     pub is_login_browser: bool,
 }
 
@@ -62,8 +61,8 @@ pub struct ActionPanelOpened {
 /// because `UpdateCheckResult` carries it.
 ///
 /// Serializes snake_case to match the hand-written `NetworkFailureClass` in
-/// `frontend/app/bindings.ts` (central `pnpm run bindings` regen is the source
-/// of truth and must reproduce this).
+/// the desktop app's bindings module (central `pnpm run bindings` regen is
+/// the source of truth and must reproduce this).
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum NetworkFailureClass {
@@ -220,10 +219,8 @@ pub struct PageVerdict {
 
 /// The verification state machine's announcable states. `Checking`/`Live`/
 /// `Unreachable` are OnionPress's; the other three are moss-hosting's,
-/// produced by `classify_moss_verification` (design
-/// `docs/archive/2026-09-10-publish-receipt-design.md` §4a's table, as
-/// amended by ADR-084 — `Live` is that table's first row, shared rather than
-/// duplicated).
+/// produced by `classify_moss_verification` — `Live` is shared rather than
+/// duplicated between the two.
 /// `rename_all` is `snake_case`, not the old `lowercase`, so `UnreachableHere`
 /// serializes as `"unreachable_here"`; every pre-existing variant is a single
 /// word, so its wire value is unchanged by the switch.
@@ -231,7 +228,7 @@ pub struct PageVerdict {
 /// There is deliberately no "the public address is serving an older version"
 /// state. A CDN that rewrites HTML on the way out makes the served bytes
 /// differ from the published bytes on every request, so that state was
-/// unfalsifiable from the client and fired on healthy sites (ADR-084).
+/// unfalsifiable from the client and fired on healthy sites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum PublishVerdictState {
@@ -266,7 +263,7 @@ pub enum PublishVerdictOrigin {
 
 // ── The threshold screen's wire vocabulary ───────────────────────────────────
 // Crossed with `MossEvent::ThresholdPrompt`; mirrors
-// `frontend/app/preview/threshold/seam.ts` exactly. The rendezvous (PENDING,
+// the desktop app's threshold seam exactly. The rendezvous (PENDING,
 // the ack/decision commands) stays app-side in
 // `system/nested_site_guard/wire.rs`, which re-exports these shapes.
 
@@ -517,8 +514,7 @@ pub struct PublishReceiptPage {
 /// this is a snapshot taken once, at receipt-build time — a moss-hosted
 /// publish starts at `Checking` (`PublishReceipt::from_moss_push`) and the
 /// frontend patches it in place from the `PublishVerdict` event task 3b's
-/// burst emits once the check settles (task 3c,
-/// `docs/archive/2026-09-10-publish-receipt-design.md` §4a). `Unverifiable`
+/// burst emits once the check settles (task 3c). `Unverifiable`
 /// is the only value a non-moss target (or a target step 3 never wires) ever
 /// carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
@@ -550,8 +546,8 @@ pub struct PublishReceiptDomain {
 
 /// The single record a finished publish hands to the frontend, replacing
 /// the `deploy_success_toast`/`announce_deploy_success` pair (step 2 of the
-/// publish-receipt plan, `docs/archive/2026-09-10-publish-receipt-design.md`).
-/// `generation_id` joins the receipt to the publish-history record (ADR-083)
+/// publish-receipt plan).
+/// `generation_id` joins the receipt to the publish-history record
 /// so the two never grow a second, competing "what did I just publish"
 /// answer.
 #[derive(Debug, Clone, PartialEq, Serialize, Type)] // PartialEq only, not Eq — DeployAddress doesn't derive Eq
@@ -570,9 +566,9 @@ pub struct PublishReceipt {
 }
 
 /// Derive a receipt's `host` from a publish URL — the same reading
-/// `deploy_success_toast` used (`src-tauri/src/system/feedback_router.rs:131-137`)
+/// `deploy_success_toast` used in the desktop app's feedback router,
 /// and shared by every `PublishReceipt` assembly site (moss-hosted push here,
-/// and `plugin_publish_receipt` in `src-tauri/src/preview/commands.rs`) so the
+/// and `plugin_publish_receipt` in the desktop app's preview commands) so the
 /// two never drift.
 pub fn host_from_url(url: &str) -> String {
     url.trim_start_matches("https://")

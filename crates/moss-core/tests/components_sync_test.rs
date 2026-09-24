@@ -1,20 +1,19 @@
 //! Source-scanner sync tests for the moss component contract, open half.
 //!
-//! Open-half twin of two checks in `src-tauri/tests/components_sync_test.rs`
-//! (desktop repo) (class B per
-//! docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md):
+//! Open-half twin of two checks in the desktop app's
+//! `components_sync_test.rs`:
 //!
 //! 1. `css_selectors_match_components_table` — desktop's version "only
 //!    touches open files (site.css + `COMPONENTS`) and could move wholesale."
 //!    Moved here outright.
 //! 2. `emitter_classes_match_components_table` — desktop's `EMITTER_ROOTS`
-//!    scans `src-tauri/src/build` and `open/crates/moss-core/src`
+//!    scans its own build tree and `open/crates/moss-core/src`
 //!    independently for class-emission call sites against the same
 //!    `COMPONENTS` table. This is the moss-core half; the desktop half keeps
-//!    scanning `src-tauri/src/build`.
+//!    scanning its own build tree.
 //!
 //! Not carried here: `site_js_selectors_match_components_table` (reads
-//! `frontend/site`, a desktop-tree path outside this row's classification),
+//! the frontend site tree, a desktop-tree path outside this row's classification),
 //! `every_escape_hatch_is_declared` / `every_declared_custom_prop_is_read` /
 //! `nav_width_is_a_custom_prop_not_a_token` (not named by this row — though
 //! they also only read open files, they are a separate concern this

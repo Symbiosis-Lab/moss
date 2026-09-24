@@ -14,7 +14,7 @@
 //!   push back.
 //!
 //! It lives here, in the crate with no I/O, because both sides call it: the
-//! registry client in `src-tauri`, and in `moss-build` the settings-field
+//! registry client in the desktop app, and in `moss-build` the settings-field
 //! parser, the setup-verdict deserializer and `Verb::normalized`. The
 //! placement was a bet when it was written and the second caller has since
 //! landed, which is what the `children_per_dir` waiver bought.

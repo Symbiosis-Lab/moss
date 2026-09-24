@@ -1,9 +1,9 @@
 //! The build's plugin-process seam: the one spawn.
 //!
 //! Split out of `build.rs` when `spawn_process_hooks` stopped needing an
-//! `AppHandle` (#1019). It once also ran the login-needed scan and forked its
+//! `AppHandle`. It once also ran the login-needed scan and forked its
 //! failure report on `shell_attached`; both folded into the manager (the scan
-//! reports `PipelineEvent::PluginNeedsConnection`, ADR-076) and into
+//! reports `PipelineEvent::PluginNeedsConnection`) and into
 //! `log_warn_problem!`, which reaches the headless logger on the CLI and the
 //! log file in the app.
 
@@ -35,7 +35,7 @@ pub fn spawn_process_hooks(
         // Counted AND logged: a process hook that fails means plugin content is
         // missing from this build, so `--strict` must fail on it — a plugin-
         // bearing `moss build` once dropped the content, printed "Build
-        // complete" and exited 0, the silent outcome ADR-050 exists to prevent.
+        // complete" and exited 0, the silent outcome this guard exists to prevent.
         // Resolving the manager is part of the run: an engine that cannot
         // start is a failed process hook, reported the same way.
         let run = async {

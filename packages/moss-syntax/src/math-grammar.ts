@@ -1,6 +1,6 @@
 /**
  * @lezer/markdown inline grammar extension for `$…$` / `$$…$$` math SOURCE
- * spans — HIGHLIGHT-ONLY (ADR-022 "editor renders source" / design D8).
+ * spans — HIGHLIGHT-ONLY (design D8).
  * The editor styles the raw TeX; it renders NO glyphs. The preview pane
  * already shows the build's real typeset output.
  *

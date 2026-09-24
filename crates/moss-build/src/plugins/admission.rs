@@ -28,7 +28,7 @@
 //! Nothing installed means nothing refused — the honest answer for a process
 //! that never fetched the list, which is every test binary. The app installs
 //! at setup; a headless build of either binary installs in
-//! `run_headless_build` (ADR-077).
+//! `run_headless_build`.
 
 use std::path::Path;
 use std::sync::OnceLock;

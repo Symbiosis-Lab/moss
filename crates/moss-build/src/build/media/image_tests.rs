@@ -914,7 +914,7 @@ async fn base_failed_advisory_names_the_full_nested_source_path() {
 /// and every rung `blocking.rs` had promised stayed Pending forever. The
 /// author saw a placeholder that never resolved and no advisory explaining
 /// it, and the published site referenced a `.webp` that was never staged —
-/// a `<source>` 404 `<picture>` cannot recover from (ADR-013).
+/// a `<source>` 404 `<picture>` cannot recover from.
 ///
 /// The cloud gate above this arm, and the arm before it for a source that
 /// went back to the cloud since, claim the one transient reason a readable
@@ -1804,7 +1804,7 @@ fn should_skip_not_an_image_real_jpeg_passes() {
     );
 }
 
-// ----- format-probe cache (moss#920) -----
+// ----- format-probe cache -----
 
 /// Build a handcrafted CMYK JPEG: SOI, then SOF0 with a 4-component frame.
 /// Mirrors `is_cmyk_jpeg_handcrafted_sof_components4`'s fixture — a real
@@ -1827,7 +1827,7 @@ pub(crate) fn make_cmyk_jpeg(path: &Path) {
 #[test]
 fn format_probe_cache_hit_survives_source_deletion() {
     // A cache HIT must never re-touch `source_path` — that's the entire
-    // point of the cache (moss#920). Prove it: after the first call caches
+    // point of the cache. Prove it: after the first call caches
     // a verdict, delete the source file entirely. A second call with the
     // same (source_oid, params) must still return the identical verdict
     // instead of erroring or silently recomputing (which would see a
@@ -1852,7 +1852,7 @@ fn format_probe_cache_hit_survives_source_deletion() {
     );
 }
 
-// ----- moss#982: a source still in the cloud yields no verdict, and no
+// ----- a source still in the cloud yields no verdict, and no
 // CACHED verdict -----
 
 #[test]
@@ -1877,7 +1877,7 @@ fn a_source_in_the_cloud_gets_its_own_verdict_not_not_an_image() {
 
 #[test]
 fn a_verdict_about_a_source_in_the_cloud_is_never_cached() {
-    // The severe half of moss#982. The format-probe cache is keyed by the
+    // The severe half of this concern. The format-probe cache is keyed by the
     // source's CONTENT oid, and the content of an evicted file never changes —
     // so a verdict computed while the bytes were absent would outlive the
     // eviction FOREVER, permanently breaking an image that had merely been
@@ -1966,8 +1966,8 @@ fn format_probe_cache_key_includes_extension() {
     // Regression pin for a real review finding: without `ext` in the cache
     // key, two calls sharing a `source_oid` but differing only in extension
     // could leak one's verdict into the other's. `raster_with_picture`
-    // forbids AlreadySmall for png/jpg/jpeg specifically (ADR-013 — the
-    // synthesizer emits an unconditional `<picture><source>` for those), so a
+    // forbids AlreadySmall for png/jpg/jpeg specifically (the synthesizer
+    // emits an unconditional `<picture><source>` for those), so a
     // webp's AlreadySmall verdict leaking into a png lookup would strand that
     // `<source>` — the exact 2026-05-19 failure class. Deliberately reuses
     // ONE literal `source_oid` across two different real files/extensions to
@@ -2464,7 +2464,7 @@ fn a_cmyk_jpeg_is_collected_with_its_verdict_so_its_source_can_be_settled() {
     // The synthesizer promises `<picture><source srcset="plate.webp">` for
     // every jpg from the extension alone. A CMYK source is never encoded, so
     // the collector used to drop it and the promised URL 404ed — which
-    // `<picture>` does not recover from (ADR-013). It must reach the
+    // `<picture>` does not recover from. It must reach the
     // registration loop carrying the verdict.
     let (mut structure, _tmp) = build_project_with_images(&[("plate.jpg", "jpg", None, true)]);
     let plate = _tmp.path().join("plate.jpg");
@@ -2660,7 +2660,7 @@ fn test_image_dispatch_applies_dir_overrides_to_served_path() {
 ///
 /// Pre-Track A this lived as `test_update_image_hashes_registers_outputs`
 /// and asserted the on-disk `hashes.json` contained the .webp path after
-/// `update_image_hashes(&ctx)`. The on-disk fallback is gone (#620 Item 2);
+/// `update_image_hashes(&ctx)`. The on-disk fallback is gone;
 /// the runner now sends `EmitMessage::ImageVariants` through the
 /// coordinator channel.
 #[tokio::test]
@@ -2739,9 +2739,9 @@ async fn test_image_outputs_emitted_via_coordinator_mapped_path() {
 /// from `remove_stale_files`. This is the exact bug the architecture
 /// review flagged for CRITICAL-1.
 ///
-/// Pre-Track A this used the on-disk `hashes.json` round-trip (the
+/// This used to rely on the on-disk `hashes.json` round-trip (the
 /// `update_image_hashes` fallback). Now uses the coordinator path —
-/// the only path post-#620 Item 2.
+/// the only path since that fallback was removed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_webp_survives_stale_cleanup_after_dispatch() {
     use crate::build::media::pipeline::remove_stale_files;
@@ -3594,7 +3594,7 @@ async fn emit_image_outputs_skips_missing_staged_files() {
     );
     // Skipping registration is only half the job: the promise must settle
     // `Failed` too, or `degrade` leaves a live <source> for a URL that never
-    // shipped and `<picture>` renders blank (ADR-013 amendment 2026-09-09).
+    // shipped and `<picture>` renders blank (a rule added 2026-09-09).
     assert!(
         matches!(registry.get("missing.webp"), Some(AssetState::Failed(_))),
         "a variant missing at emit must settle Failed so degrade can strip its \
@@ -3608,8 +3608,8 @@ async fn emit_image_outputs_skips_missing_staged_files() {
     );
 }
 
-/// moss#1085 gated the self-heal on the ship-time prune's suppressed set but
-/// not the violation report, so every settled vault logged a permanent false
+/// An earlier fix gated the self-heal on the ship-time prune's suppressed set
+/// but not the violation report, so every settled vault logged a permanent false
 /// "coherence violation: staged .webp missing" for each orphan-pruned
 /// variant. A suppressed path absent from staging is the *expected* state
 /// (the prune deleted it on purpose) — it must produce no violation line.
@@ -4266,12 +4266,12 @@ fn sized_raster_oid_keeps_png_verbatim_when_palette_cannot_beat_it() {
 
 #[test]
 fn sized_raster_oid_caps_the_fallback_at_fallback_max_edge() {
-    // The deployed raster fallback is sized to FALLBACK_MAX_EDGE — since
-    // moss#976 B1 a literal (1200), independent of both DEPLOY_MAX_EDGE
+    // The deployed raster fallback is sized to FALLBACK_MAX_EDGE — a literal
+    // (1200), independent of both DEPLOY_MAX_EDGE
     // (2400) and the ladder's top rung (1600). At 2400 the fallback was the
     // highest-resolution asset in the build — bigger than every webp a
     // modern browser actually fetches — while being served only to the ~4%
-    // of installs without WebP support; B1 measured 1200 as a further
+    // of installs without WebP support; measurement showed 1200 as a further
     // near-zero-risk cut (~39.5% smaller JPEG, ~29.5% smaller PNG) on top of
     // that first fix.
     use crate::build::cache::{ObjectStore, TransformCache};
@@ -5166,7 +5166,7 @@ async fn skip_path_carry_forward_registers_with_no_oid_not_a_stale_one() {
 /// this per-item fix, this file's `self_heal_leaves_a_not_yet_encoded_
 /// variant_pending_rather_than_failed` asserted `pending.webp` stayed
 /// `Pending` forever under a matching WHOLE-SET fingerprint; the never-
-/// mark-Failed half of that concern (moss#1044) still holds and is
+/// mark-Failed half of that concern still holds and is
 /// asserted below, now satisfied by actually encoding the image instead of
 /// leaving it stuck.
 #[test]
@@ -5298,7 +5298,7 @@ fn a_missing_output_is_dispatched_while_its_unaffected_sibling_takes_the_skip_pa
 }
 
 /// The same minimal 1×1 PNG `should_skip_not_an_image_real_png_passes` uses,
-/// hoisted so the moss#985 tests below assert about a file that really is a
+/// hoisted so the tests below assert about a file that really is a
 /// valid image — the whole point being that it was classified as not one.
 #[cfg(test)]
 fn real_png_bytes() -> &'static [u8] {
@@ -5316,7 +5316,7 @@ fn real_png_bytes() -> &'static [u8] {
 }
 
 // ---------------------------------------------------------------------------
-// An unreadable source is not a verdict about its content (moss#985)
+// An unreadable source is not a verdict about its content
 //
 // Every other NotAnImage test above feeds the probe a READABLE file, which is
 // why a suite of 8,608 tests stayed green while a valid PNG could be cached as
@@ -5370,7 +5370,7 @@ fn an_unreadable_source_is_never_cached_as_not_an_image() {
 /// The end of the story the previous test starts, and the one that actually
 /// bit: the bytes arrive, and the image converts normally. Before the fix this
 /// build emitted zero `.webp` variants while the synthesizer went on emitting
-/// `<source srcset="…webp">` for the same file — ADR-013's unrecoverable
+/// `<source srcset="…webp">` for the same file — an unrecoverable
 /// chosen-source 404, reached permanently through a transient cloud state.
 #[cfg(unix)]
 #[test]

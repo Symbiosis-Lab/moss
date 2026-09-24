@@ -1,5 +1,5 @@
-//! The reqwest adapter over [`crate::system::proxy`]. It lived app-side until
-//! ADR-078 so this crate carried no reqwest; the seta client crossed and
+//! The reqwest adapter over [`crate::system::proxy`]. It lived app-side so this
+//! crate carried no reqwest; the seta client crossed and
 //! brought reqwest with it, so the adapter follows the caller.
 //! Callers: the seta client, the domain orchestrator, and the setup probes.
 

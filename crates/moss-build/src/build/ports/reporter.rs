@@ -4,7 +4,7 @@
 //! The pipeline reports what happened; the caller decides what that means.
 //! The desktop app forwards to the loading screen and the typed event bus, the
 //! CLI prints to stderr, tests discard. Nothing here names tauri, which is the
-//! point: `build/` is scheduled to become the open `moss-build` crate (ADR-050),
+//! point: `build/` is scheduled to become the open `moss-build` crate,
 //! and `check-crate-dag.mjs` rule 2 forbids a path to tauri from it.
 //!
 //! The tauri-backed implementation lives app-side in `crate::events`.
@@ -35,7 +35,7 @@ pub struct CloudSync<'a> {
     /// emits (`home_waiting`/`home_ready`) already answers the same question,
     /// and a listener that sees no count falls back to `remaining`, which is
     /// what every producer meant before this field existed. The supervisor's
-    /// sweep always fills it in (moss#1077).
+    /// sweep always fills it in.
     pub blocking: Option<usize>,
     /// Named files the provider will not hand over, base names only. Empty for
     /// every phase but `unavailable`.
@@ -54,7 +54,7 @@ pub struct CloudSync<'a> {
 /// — they are untyped, separately-listened-to signals, and the first is a
 /// *control* call that sets the root the preview server serves rather than a
 /// description of anything. That argues for a second trait, and a second trait
-/// is what this was until NORTH-STAR was re-read: the moss-build seam is
+/// is what this was until the target-architecture note was re-read: the moss-build seam is
 /// **five ports**, `BuildReporter` is specified as "progress + `stage_ready`",
 /// and a **fourth channel-shaped port trips the pre-approved abort threshold**
 /// — the signal that the crate line is drawn too low. Splitting them would have
@@ -66,7 +66,7 @@ pub struct CloudSync<'a> {
 /// shell signal could arrive as one more default method and the detector would
 /// never fire. Four channel-shaped concerns cross this seam (progress,
 /// `stage_ready`, `cloud_sync`, `download_progress`) and all four are methods on
-/// this one trait, so the fold was not hypothetical. ADR-058 (accepted
+/// this one trait, so the fold was not hypothetical. The abort-threshold rule (adopted
 /// 2026-08-18) replaces the trait count with a width count — ratchet row (o)
 /// `seam_surface` — which a fold moves exactly as much as a new port does. Add a
 /// method here and the tripwire goes red.

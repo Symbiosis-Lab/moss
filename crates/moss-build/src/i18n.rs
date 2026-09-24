@@ -9,8 +9,8 @@
 //!   filename suffix > ancestor folder > site default). Returns
 //!   `(Language, clean_stem)`. Use this from the markdown pipeline where
 //!   the doc's resolved language matters downstream (template rendering,
-//!   `<html lang>`, language switcher, per-lang grouping). Per ADR-065,
-//!   this is a pure function of the doc's path and frontmatter — it never
+//!   `<html lang>`, language switcher, per-lang grouping). This
+//!   is a pure function of the doc's path and frontmatter — it never
 //!   reads the body. Content-based inference still happens, but for a
 //!   whole FOLDER at once (`build::scan::page_map::folder_lang`), and the
 //!   result is folded into the `ancestor_lang` argument by the caller.
@@ -74,7 +74,7 @@ impl Language {
     /// garbage.
     ///
     /// Must stay in sync with `langBucket()` in
-    /// `frontend/site/subscribe/i18n.ts` — any reshape here needs a TS
+    /// `js-src/site/subscribe/i18n.ts` — any reshape here needs a TS
     /// counterpart.
     ///
     /// This is the ONE place that buckets zh tags (see
@@ -206,7 +206,7 @@ pub fn clean_stem_only(filename_stem: &str) -> String {
 /// 3. Ancestor folder lang (e.g. `en/post.md` inherits English from `en/`)
 /// 4. Site default language (passed in)
 ///
-/// ADR-065: a document's language is a pure function of its path plus its
+/// A document's language is a pure function of its path plus its
 /// frontmatter — it no longer reads the document's own body at all. There
 /// used to be a fifth rung here that called `detect::detect_language` on
 /// `content` directly, per page, on every build; a content edit could flip
@@ -346,7 +346,7 @@ pub(crate) fn canonical_bcp47(code: &str) -> String {
 /// `None` used to mean two different things: "nothing here" and "declares one
 /// of moss's three, so read it off the UI language instead". Every emission
 /// site therefore had to keep a `ui_lang` fallback that could not tell those
-/// apart, which is how a site declaring `fr` served pages saying `en` (#977).
+/// apart, which is how a site declaring `fr` served pages saying `en`.
 /// One meaning now: nothing at this page or its folder, use the site's.
 pub fn declared_lang_tag(
     frontmatter_lang: Option<&str>,
@@ -355,7 +355,7 @@ pub fn declared_lang_tag(
     ancestor_lang: Option<Language>,
 ) -> Option<String> {
     declared_only(frontmatter_lang, filename_stem, file_path)
-        // The folder-inferred rung (ADR-065) — evidence about this page's
+        // The folder-inferred rung — evidence about this page's
         // neighbourhood, and the last one that is about the page at all.
         .or_else(|| ancestor_lang.map(|l| l.as_bcp47_attr().to_string()))
 }
@@ -424,7 +424,7 @@ fn declared_only(
 }
 
 /// Test fixtures shared across the i18n test suite AND
-/// `build::scan::page_map::folder_lang`'s tests (ADR-065's folder-level
+/// `build::scan::page_map::folder_lang`'s tests (folder-level
 /// inference moved content detection out of this module, but its
 /// stability proof still needs the same real bytes). A separate,
 /// `pub(crate)` module rather than living inside `mod tests` below, which
@@ -438,9 +438,7 @@ pub(crate) mod fixtures {
     /// `/awards/writing/s4/…` link destinations outweigh it — which is
     /// exactly the shape that used to flip this page to English on a
     /// trivial edit and force a 223-page full rebuild for a 1-page
-    /// change. See docs/archive/2026-08-20-rebuild-loop-incrementality.md,
-    /// "The leaf, explained on the instrument's first use: `lang`", and
-    /// ADR-065.
+    /// change.
     pub(crate) const REAL_UKRAINE_DERUSSIFICATION_BODY: &str = "\n\n:::hero {image=ukraine-derussification-cover.jpg}\n:::\n\n一座前線城市的文學博物館收下了仇烏作家的檔案；一位俄羅斯文學研究者在戰時的烏克蘭走了二十幾天；基輔的歷史在一個夏天裡洶洶降臨。俄羅斯全面入侵之後，烏克蘭人如何重新選擇自己的語言、文學與身份，而所謂「去俄化」又在日常裡長成什麼模樣。\n\n## 全文\n\n:::grid 3 {.fs-parts}\n![[assets/36b53bd90ac0f689.jpg]]\n\n上篇\n\n### [在前線，一座文學博物館的抵抗](/awards/writing/s4/ukraine-derussification/museum-harbor/)\n+++\n![[assets/a98150d81cfa4c49.jpg]]\n\n中篇\n\n### [在烏克蘭的兩極之間遊蕩](/awards/writing/s4/ukraine-derussification/between-poles/)\n+++\n![[assets/068be02906b7788d.jpg]]\n\n下篇\n\n### [歷史在基輔洶洶降臨](/awards/writing/s4/ukraine-derussification/kyiv-history/)\n:::\n\n## 場外\n\n- [場外手記：進入戰爭很容易，但走出來很難](/awards/writing/s4/ukraine-derussification/memo/)\n- [編輯手記：謝丁 x 糜緒洋](/awards/writing/s4/ukraine-derussification/editor-memo/)\n- [發佈會記錄：糜緒洋 x 湯舒雯 x 謝丁 | 戰火裡的文學選擇：烏克蘭去俄化之後](/awards/writing/s4/ukraine-derussification/launch/)\n";
 }
 
@@ -715,7 +713,7 @@ mod tests {
         );
     }
 
-    // resolve_document_language tests. ADR-065 dropped rung 4 (per-page
+    // resolve_document_language tests. This module dropped rung 4 (per-page
     // content detection) from this function entirely — it is now a pure
     // function of path + frontmatter, so `content` is no longer a
     // parameter. Tests that only existed to exercise that removed rung
@@ -786,7 +784,7 @@ mod tests {
         assert_eq!(stem, "post");
     }
 
-    // ---- declared_lang_tag: document language vs UI language (#977) ----
+    // ---- declared_lang_tag: document language vs UI language ----
 
     /// The bug this split fixed: a `ja/` tree resolved to the site default and
     /// `<html lang>` was written from it, so a Japanese page announced itself
@@ -815,7 +813,7 @@ mod tests {
         }
     }
 
-    /// The folder-inferred rung (ADR-065). It is still the PAGE's evidence, so
+    /// The folder-inferred rung. It is still the PAGE's evidence, so
     /// it beats the site default — a `None` here must mean the page declared
     /// nothing at all, or a site declaring a language moss cannot render chrome
     /// in would lose it at every page.
@@ -856,7 +854,7 @@ mod tests {
     }
 }
 
-/// The last-resort default language for a SITE build (issue #545: a non-English
+/// The last-resort default language for a SITE build (a non-English
 /// user's empty/ambiguous site defaults to their language, not `en`).
 ///
 /// Seeded once at process start by the app (`init_app_language` calls

@@ -20,7 +20,7 @@
 //! that cannot say no is worse than none, because a reader takes it for a
 //! live distinction. The app's `startup::headless::intercept` now diverges on
 //! `RunMode::Deploy` unconditionally and never reaches `tauri::Builder` for a
-//! publish (moss#989).
+//! publish.
 //!
 //! What is deliberately NOT a variant: "this folder has no site yet".
 //! Registration is not a route, it is the first step of one — the drivers
@@ -50,8 +50,8 @@ pub enum DeployRoute {
     /// ([`crate::deploy::plugin_push`]).
     ///
     /// It needed the app until P2b, and what needed it was the driver rather
-    /// than the runtime: `ManagerCache` has had a headless constructor since
-    /// ADR-076. A plugin that reaches for something only a window has — the
+    /// than the runtime: `ManagerCache` has had a headless constructor for a
+    /// while now. A plugin that reaches for something only a window has — the
     /// github plugin's WebKit cookie jar — is refused by `need_app` in
     /// `engine/host_fns.rs`, which names the command it refused, rather than
     /// by this route pre-emptively refusing every plugin.

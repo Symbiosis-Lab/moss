@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Site-accent reporting — the iframe half of the identity tint
- * (docs/archive/2026-08-03-site-identity-tint.md).
+ * Site-accent reporting — the iframe half of the identity tint.
  *
  * jsdom resolves neither `var()` in `color` nor non-sRGB colour spaces, so
  * these tests inject the style reader and canvas (the chrome-ambient idiom)

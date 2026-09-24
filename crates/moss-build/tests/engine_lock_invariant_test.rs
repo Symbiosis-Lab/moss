@@ -1,4 +1,4 @@
-//! CI grep-invariant (#789, design spec §5): no sync-blocking call inside an
+//! CI grep-invariant: no sync-blocking call inside an
 //! async_with!/ctx.with closure — that single rule defuses the single-runtime-mutex
 //! deadlock. Scans plugins/engine/*.rs for forbidden tokens within closure bodies.
 

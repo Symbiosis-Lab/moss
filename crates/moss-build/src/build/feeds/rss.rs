@@ -12,7 +12,7 @@ use std::collections::HashSet;
 
 /// True when the document has an absolute `external_url:` in its frontmatter —
 /// a linkblog page whose canonical home is the outlet, not the local site.
-/// Thin wrapper over the shared `scan::page_map::external_url` helper. See moss#679.
+/// Thin wrapper over the shared `scan::page_map::external_url` helper.
 fn has_external_url(doc: &ParsedDocument) -> bool {
     crate::build::scan::page_map::external_url(&doc.raw_frontmatter).is_some()
 }
@@ -198,7 +198,7 @@ pub fn generate_rss_feed(
     // Filter to only documents with dates (articles) and sort by date descending.
     // Skip linkblog pages (`external_url:` in frontmatter) — their canonical
     // home is the outlet, which has its own feed; including them here would
-    // duplicate the outlet's content under our domain. See moss#679.
+    // duplicate the outlet's content under our domain.
     let mut articles: Vec<&ParsedDocument> = documents
         .iter()
         .filter(|doc| doc.date.is_some())
@@ -277,7 +277,7 @@ pub fn generate_rss_feed(
         let scoped_html = scope_footnote_anchors(&article.html_content, &scope);
         let mut description_html = add_utm_to_internal_links(&scoped_html, site_url);
 
-        // ADR-030 §3.5: the website HTML inlines typeset math as <svg>, which
+        // The website HTML inlines typeset math as <svg>, which
         // feed readers sanitize away — the equation would silently VANISH for
         // every reader subscriber. Swap each math <svg> for the same hosted
         // 2× PNG <img> (absolute URLs) email uses; refused-math <code> nodes
@@ -844,7 +844,7 @@ mod tests {
         );
     }
 
-    /// ADR-030 §3.5: item content built from the web HTML would carry inline
+    /// Item content built from the web HTML would carry inline
     /// math `<svg>`, and feed readers sanitize `<svg>` away — the equation
     /// vanishes for every reader subscriber. RSS must ship the hosted-PNG
     /// `<img>` form (absolute, content-addressed URLs) instead.

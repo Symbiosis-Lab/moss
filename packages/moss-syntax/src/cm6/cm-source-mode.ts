@@ -1,6 +1,5 @@
-// Document-wide SOURCE MODE — the explicit escape hatch the live view keeps
-// (docs/archive/2026-08-14-raw-markup-token-highlight.md, "source mode
-// approved"). In source mode the whole document behaves as if the selection
+// Document-wide SOURCE MODE — the explicit escape hatch the live view keeps.
+// In source mode the whole document behaves as if the selection
 // touched every line: no widget replacements, no hidden spans — raw source,
 // token-highlighted with the SAME classes the revealed states already use.
 //

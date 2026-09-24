@@ -25,7 +25,7 @@ too_many_lines = "warn"
 # PR's master base) keeps every other behavior identical to what moss ships —
 # no `$`-math / currency drift, no `std`-feature requirement.
 # The flag is applied only under moss-core's `cjk-friendly-emphasis` feature
-# (src-tauri turns it on); with it off the published moss-core still builds
+# (the desktop app turns it on); with it off the published moss-core still builds
 # against crates.io. RETIRE when #1059 lands + pulldown releases the flag: drop
 # this block, `cargo update -p pulldown-cmark`, keep the gated insert.
 [patch.crates-io]

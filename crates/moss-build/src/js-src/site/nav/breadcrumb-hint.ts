@@ -26,8 +26,8 @@ export {};
 /**
  * Any breadcrumb segment carrying a full title, link or not. The island's
  * current-page crumb is a `<span>` — it is the page you are already on, so it
- * is not a link — and it is also the ONE crumb the island allows to truncate
- * (ADR-049 §4), which makes it the crumb that most needs this.
+ * is not a link — and it is also the ONE crumb the island allows to truncate,
+ * which makes it the crumb that most needs this.
  */
 const SEGMENT = ".breadcrumb-segment[data-hint-label]";
 const LABEL = ".breadcrumb-label";

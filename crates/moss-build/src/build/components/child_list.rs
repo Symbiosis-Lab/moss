@@ -239,7 +239,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
     // page itself is still built at its slug; direct visits keep working.
     // Pattern from JSON Feed 1.1. The local archive URL is preserved as the
     // card's `permalink` so child_summary can emit a `★` mark next to the
-    // kicker (the Daring-Fireball linkblog convention — see #680).
+    // kicker (the Daring-Fireball linkblog convention).
     let external_url = crate::build::scan::page_map::external_url(&doc.raw_frontmatter);
     let local_url =
         path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(&doc.url_path));

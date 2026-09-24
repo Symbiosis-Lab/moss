@@ -1,10 +1,10 @@
 /**
- * nav-island.ts — the floating nav island's behaviour (ADR-049).
+ * nav-island.ts — the floating nav island's behaviour.
  *
  * The markup ships from `build/components/nav.rs` and is complete without this
  * file: every link in the island is one the masthead also carries, and the
  * island is `display: none` until this module writes `data-shown` on it. So
- * with JavaScript off, a moss page behaves exactly as it did before ADR-049.
+ * with JavaScript off, a moss page behaves exactly as it did before this island existed.
  * What this module adds is the four things CSS cannot do:
  *
  * 1. **Reveal.** Show the bar when the reader scrolls back UP past the
@@ -34,7 +34,7 @@ import { applyFold, inlineAvailableExtent, placePanel } from "./breadcrumb-fold"
  * counts as "the section you are in", used only when the root carries no
  * `scroll-padding-top` (see `scrollspyLine`). The LINE itself is measured
  * from the bar — hard-coding the whole thing was a guess at the island's
- * height, and the same species of guess ADR-049 §5 rejects for folding:
+ * height, and the same species of guess folding rejects too:
  * change the bar's padding and the scrollspy quietly stops agreeing with
  * the screen.
  */
@@ -50,8 +50,8 @@ const JITTER = 2;
 const LANDING_TOLERANCE = 1;
 
 /**
- * How many sections make a contents table — and so, since ADR-049 §10 as
- * amended 2026-08-30, whether the island appears at all.
+ * How many sections make a contents table — and so, as revised 2026-08-30,
+ * whether the island appears at all.
  *
  * Two. A list of one names the page's only section, which the title directly
  * above it already said, so the bar would be summoned to repeat what the
@@ -130,8 +130,8 @@ export function initNavIsland(): void {
 
   const crumbs = [...trail.querySelectorAll<HTMLElement>("[data-island-crumb]")];
 
-  // Which headings become the sections panel — and, since ADR-049 §10 as
-  // amended 2026-08-30, whether there is an island at all.
+  // Which headings become the sections panel — and, as revised 2026-08-30,
+  // whether there is an island at all.
   //
   // One level only. A flat list stays scannable at a glance, and every heading
   // moss emits already carries an `id`, so each row is a real link that works
@@ -166,13 +166,12 @@ export function initNavIsland(): void {
   // bind nothing, so the markup is left exactly as emitted.
   //
   //  1. No contents table. The island appears only where the page has two or
-  //     more sections (ADR-049 §10 as amended 2026-08-30, design note
-  //     docs/archive/2026-08-30-nav-island-heading-gate-design.md). Everything
-  //     else it carries — the trail, the progress rule — is a second copy of
-  //     something the masthead holds one scroll-to-top away; the sections
-  //     panel is the only thing it alone offers, so it is the only thing that
-  //     earns a bar. Trail depth used to rescue a heading-less page and no
-  //     longer does: that spared the rare deep essay without sections and made
+  //     more sections. Everything else it carries — the trail, the progress
+  //     rule — is a second copy of something the masthead holds one
+  //     scroll-to-top away; the sections panel is the only thing it alone
+  //     offers, so it is the only thing that earns a bar. Trail depth used
+  //     to rescue a heading-less page and no longer does: that spared the
+  //     rare deep essay without sections and made
   //     every short page on every site pay for it.
   //  2. The theme's off-switch, `--moss-nav-island-display: none`. Read as a
   //     computed value rather than as a custom property so a site can disable
@@ -221,7 +220,7 @@ export function initNavIsland(): void {
    * from the other direction.
    *
    * It also settles what "reveal on focus" was for. The island holds no
-   * destination the masthead does not also hold (ADR-049 §1), so there is
+   * destination the masthead does not also hold, so there is
    * nothing a keyboard reader loses by it being unreachable while invisible —
    * and scrolling up, which is how they reveal it, is a key press away.
    */

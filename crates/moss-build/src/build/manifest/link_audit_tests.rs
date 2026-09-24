@@ -65,7 +65,7 @@ fn a_path_escaping_the_site_root_is_ignored_rather_than_reported() {
     assert_eq!(candidate_keys("/a/./b/"), None);
 }
 
-/// The CJK case moss#1187 names: moss emits the same file's URL percent-encoded
+/// The CJK case this module exists to handle: moss emits the same file's URL percent-encoded
 /// from one code path and literal from another. Decoding the href is what makes
 /// the encoded form find the literal manifest key.
 #[test]
@@ -120,7 +120,7 @@ fn an_unterminated_attribute_ends_the_scan_without_hanging() {
 
 // ── the comparison ─────────────────────────────────────────────────────────
 
-/// The moss#1187 shape itself: the namespace the links were written against no
+/// The namespace-rename shape itself: the namespace the links were written against no
 /// longer exists, and the one that replaced it does.
 #[test]
 fn a_link_into_a_renamed_namespace_is_reported() {
@@ -174,7 +174,7 @@ fn promised(keys: &[&str]) -> HashSet<String> {
     keys.iter().map(|k| k.to_string()).collect()
 }
 
-/// The moss#1187-adjacent race this exists for: a video's page seals before
+/// The adjacent race this exists for: a video's page seals before
 /// its encode lands, so the mp4 and the poster both read as dead links, and
 /// both are keys this build itself promised (`AssetRegistry::pending_keys()`
 /// for the mp4, its derived poster key for the other).

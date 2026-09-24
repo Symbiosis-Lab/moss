@@ -8,8 +8,7 @@
 //! prod-line budget; the split is the boundary the budget was pointing at.
 //!
 //! Sizing (chunk size, concurrency, request timeout, retry escalation) lives in
-//! `upload_policy`. Diagnosis of the failure that reshaped this file:
-//! `docs/archive/2026-08-03-publish-resilience-slow-uplinks.md`.
+//! `upload_policy`.
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -81,7 +80,7 @@ impl MossSetaClient {
         );
         throughput.note_chunked_file();
         let file_started = std::time::Instant::now();
-        // Per-file request accounting for the completion INFO line (#1133).
+        // Per-file request accounting for the completion INFO line.
         // `requests - requests_ok` is every attempt that bought nothing:
         // transient retries, escalation re-sends, resynced offsets alike.
         let file_requests = std::sync::atomic::AtomicU64::new(0);
@@ -96,7 +95,7 @@ impl MossSetaClient {
 
         // 2. Upload chunks sequentially.
         let encoded_id = urlencoding::encode(&upload_id).into_owned();
-        // allow:raw_read built output being uploaded — regenerable, dataless is absent (ADR-043)
+        // allow:raw_read built output being uploaded — regenerable, dataless is absent
         let mut file = tokio::fs::File::open(local_path).await.map_err(|e| {
             SetaError::Io(format!("open {}: {}", local_path.display(), e))
         })?;
@@ -118,7 +117,7 @@ impl MossSetaClient {
         // half of sizing is the per-chunk plan below; this is the reactive
         // half's memory — evidence that a size did not fit this link must not
         // be overruled by a rising estimate mid-file. Replaying an identical
-        // request after a 524 is what spent okagaki's whole 600s budget on
+        // request after a 524 is what spent that vault's whole 600s budget on
         // three failures that each took exactly as long as the first.
         let mut escalation_cap: usize = usize::MAX;
 
@@ -358,7 +357,7 @@ impl MossSetaClient {
             }
         }
 
-        // The per-file half of the #1133 summary: everything a support log has
+        // The per-file half of the completion summary: everything a support log has
         // to say about this file's transfer, greppable as `chunked upload
         // complete`. Rate is over the bytes this session actually sent — a
         // resumed prefix is progress, not throughput.
@@ -638,7 +637,7 @@ async fn rehash_prefix(
     len: usize,
 ) -> Result<Sha256, SetaError> {
     use tokio::io::AsyncReadExt;
-    // allow:raw_read built output being uploaded — regenerable, dataless is absent (ADR-043)
+    // allow:raw_read built output being uploaded — regenerable, dataless is absent
     let mut file = tokio::fs::File::open(path)
         .await
         .map_err(|e| SetaError::Io(format!("reopen {}: {}", path.display(), e)))?;

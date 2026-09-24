@@ -47,8 +47,7 @@ impl<'a> FolderIndex for BuildFolderIndex<'a> {
         // predicate that re-derives "index.html" independently can drift
         // from whatever decided `url_path` in the first place and silently
         // stop matching, exactly what happened when a root folder-note's
-        // home election missed and its `url_path` became an ordinary slug
-        // (moss#1101).
+        // home election missed and its `url_path` became an ordinary slug.
         //
         // Every OTHER directory still compares against `url_path`: that is
         // where `url:` overrides live (a source directory can be renamed for
@@ -86,7 +85,7 @@ impl<'a> FolderIndex for BuildFolderIndex<'a> {
 ///
 /// A doc with a source file answers from that file's own location (no parent
 /// directory = the vault root), which is what stays right when the doc's
-/// `url_path` doesn't (moss#1101). A doc with no source file at all — a
+/// `url_path` doesn't. A doc with no source file at all — a
 /// synthesized folder index; term/language namespace roots have no backing
 /// markdown — has no location to read, so it falls back to the one
 /// unambiguous `url_path` check: a synthesized page is only ever the root's

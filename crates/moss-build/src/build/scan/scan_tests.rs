@@ -482,13 +482,13 @@ fn test_scan_folder_videos_in_subdirectory() {
 }
 
 // =========================================================================
-// MediaMetadata Extraction Tests (TDD - Phase B: ADR-002/006)
+// MediaMetadata Extraction Tests (TDD - Phase B)
 // =========================================================================
 
 #[test]
 fn test_media_metadata_extracts_image_dimensions() {
     // Test that extract_image_dimensions correctly reads image header
-    // ADR-006: Uses image_dimensions() which reads header only (~1ms per file)
+    // Uses image_dimensions() which reads header only (~1ms per file)
     let temp_dir = std::env::temp_dir().join(format!("moss_test_dims_{}", std::process::id()));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -540,7 +540,7 @@ fn test_media_metadata_extracts_dimensions_from_a_mislabeled_extension() {
 #[test]
 fn test_media_metadata_handles_exif_rotation() {
     // Test that EXIF orientation 5-8 swaps dimensions
-    // ADR-006: Handle EXIF orientation (swap dims for orientations 5-8)
+    // Handle EXIF orientation (swap dims for orientations 5-8)
     let temp_dir = std::env::temp_dir().join(format!("moss_test_exif_{}", std::process::id()));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -868,7 +868,7 @@ fn test_media_metadata_handles_corrupt_file() {
 #[test]
 fn test_extract_dominant_color_uses_thumbnail() {
     // Test that dominant color extraction works and uses thumbnail for speed
-    // ADR-006: Use 100x100 thumbnail for fast dominant color extraction
+    // Use 100x100 thumbnail for fast dominant color extraction
     let temp_dir = std::env::temp_dir().join(format!("moss_test_color_{}", std::process::id()));
     fs::create_dir_all(&temp_dir).unwrap();
 

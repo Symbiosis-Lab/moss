@@ -1,10 +1,9 @@
 //! The shipped agent skill may not cite paths that only exist in moss's repo.
 //!
-//! Twin of `src-tauri/tests/skill_package_paths_test.rs` (desktop repo) —
-//! that file only ever read this crate's own
-//! `src/assets/skills/moss/`, so it is a wholly-open test (class A per
-//! docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md)
-//! moved here verbatim minus the desktop-relative path math.
+//! Twin of the desktop app's `skill_package_paths_test.rs` — that file only
+//! ever read this crate's own `src/assets/skills/moss/`, so it is a
+//! wholly-open test moved here verbatim minus the desktop-relative path
+//! math.
 //!
 //! `src/assets/skills/moss/` is `include_dir!`-embedded and copied
 //! **verbatim** into a user's site on every full build (`cli::agents::sync`) —

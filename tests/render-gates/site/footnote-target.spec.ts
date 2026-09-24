@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 
 // Verifies the fix for: clicking a footnote backlink scrolled the marker
 // under the floating nav island with no visual indication of which note
-// was landed on. See docs/archive/2026-08-24-footnote-landing-fix-plan.md.
+// was landed on.
 //
 // The fixture puts its footnotes on /notes/, one level under a
 // `breadcrumb: true` home — `generate_nav_island` (island.rs) emits nothing

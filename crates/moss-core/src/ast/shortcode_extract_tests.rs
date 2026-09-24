@@ -268,7 +268,7 @@ fn extracts_grid_with_nested_buttons_via_arity() {
     // in `parse_cell_to_blocks`), not at render time.
     let md = ":::grid 2\n::::buttons\n[Tickets](go/)\n::::\n+++\nfooter cell\n:::\n";
     let result = extract_shortcodes(md);
-    // A HIGHER-arity inner is supported nesting — the #1014 warning
+    // A HIGHER-arity inner is supported nesting — the warning
     // must stay silent here.
     assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     assert_eq!(result.extracted.len(), 1);
@@ -1010,7 +1010,7 @@ fn nested_grid_via_arity_keeps_the_inner_grids_cells_inside_it() {
     // outer body on any `+++` it saw, so a one-cell outer grid came out
     // with two cells, each holding half of the inner block's source.
     // Nothing warned — the page built and looked plausible. Unlike the
-    // same-arity case (#1014) there is no ambiguity here about what the
+    // same-arity case there is no ambiguity here about what the
     // author meant, so the fix is to parse it, not to warn about it.
     let md = "::::grid 1\nOuter cell content\n\n:::grid 2\ninner a\n+++\ninner b\n:::\n::::\n";
     let result = extract_shortcodes(md);
@@ -1195,7 +1195,7 @@ fn compound_link_wikilink_image_cell_with_linked_caption_still_becomes_card_plus
     // A caption that itself contains a link (e.g. a translator credit)
     // must NOT fall back to the plain parser — the cell would render as an
     // ordinary paragraph and lose its card chrome (see the doc comment on
-    // `detect_compound_link` and moss#928-adjacent).
+    // `detect_compound_link`).
     let md = ":::grid 1\n\
               [![[poster.png]]](/awards/one/)\n\n\
               Translated by [Yo-Ling Chen](/people/yo-ling-chen/).\n\
@@ -1279,7 +1279,7 @@ fn compound_link_text_cell_with_trailing_caption_stays_uncarded() {
 
 #[test]
 fn compound_link_markdown_image_cell_with_caption_stays_uncarded() {
-    // moss#928-adjacent review finding: an ORDINARY markdown image link
+    // A related review finding: an ORDINARY markdown image link
     // (not a wikilink embed) followed by a caption must NOT become a
     // LinkCard — pulldown-cmark already parses `![alt](src)` fine on its
     // own, so this cell reaches the plain block parser as
@@ -1473,7 +1473,7 @@ fn nested_css_region_outer_closes_at_first_inner_close() {
     // (`::::{.outer}` containing `:::{.inner}`).
     //
     // This test pins the current behavior so a future regression
-    // surfaces. Since #1014 the author is also warned (the warning's
+    // surfaces. The author is also warned (the warning's
     // own wording is pinned below in the same-arity section).
     let md = ":::{.outer}\n:::{.inner}\nbody\n:::\n:::\n";
     let result = extract_shortcodes(md);
@@ -1715,18 +1715,18 @@ fn grid_per_line_wins_over_cols_but_cols_still_warns() {
     );
 }
 
-// ---- Same-arity nesting warns (#1014) ----
+// ---- Same-arity nesting warns ----
 //
 // A `:::` fence nested inside another `:::` fence steals the outer
 // block's closer: the outer ends early and the rest of it — dividers
 // included — spills into the prose as literal text. The page still
-// builds, so before #1014 nothing said a word. The parse is unchanged;
+// builds, so before this fix nothing said a word. The parse is unchanged;
 // these tests pin the diagnostic and, just as importantly, its silence
 // on documents that are fine.
 
 #[test]
 fn same_arity_nesting_inside_grid_warns_and_names_the_higher_arity_fix() {
-    // The #1014 reproduction. `:::grid 2` is closed by the nested
+    // The reproduction that motivated this fix. `:::grid 2` is closed by the nested
     // `::: {.some-class}` block's fence, so `+++` and `Cell two` land
     // outside the grid.
     let md = ":::grid 2\nCell one\n\n::: {.some-class}\nquiet text\n:::\n+++\nCell two\n:::\n";
@@ -2294,7 +2294,7 @@ fn extracts_recent_end_to_end_with_sentinel() {
         .contains(&placeholder_for(&result.nonce, 0)));
 }
 
-// ── Inert regions: `:::` that is not live syntax (moss#903 bug 2) ──────
+// ── Inert regions: `:::` that is not live syntax ──────
 
 /// Parse + render the way the build does, so these tests pin the OUTPUT,
 /// not just the extraction bookkeeping.
@@ -2305,7 +2305,7 @@ fn render_markdown(md: &str) -> String {
 
 #[test]
 fn shortcode_inside_an_html_comment_is_not_extracted() {
-    // moss#903 bug 2, verbatim from the report: a harborweekly page
+    // Verbatim from a real regression report: a site
     // parked a gallery inside a TODO comment. The extractor knew about code
     // fences and nothing else, so it extracted the `:::gallery`, replaced
     // lines 2-4 of the comment with a sentinel, and left the comment's own

@@ -23,8 +23,8 @@ import { clampLeft, verticalSlot } from "./viewport";
  * text and taps Share. They ship as a separate `format: "esm"` bundle so this
  * `import()` is a real network boundary.
  *
- * **The specifier must be computed, not literal.** Everything else in
- * `frontend/site/` is bundled `format: "iife"` with no `splitting`, so a
+ * **The specifier must be computed, not literal.** Everything else in this
+ * bundle is `format: "iife"` with no `splitting`, so a
  * literal `import("./share-card")` is resolved and *inlined* by esbuild —
  * which is precisely how this code ended up eager in the first place. A
  * runtime-computed URL is opaque to the bundler; the same trick loads pagefind

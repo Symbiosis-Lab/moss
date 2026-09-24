@@ -86,14 +86,14 @@ pub(crate) fn save_key_to_file(path: &Path, key_bytes: &[u8]) -> Result<(), Iden
 /// case `ensure_signing_key()`'s caller must NOT treat as license to
 /// regenerate and overwrite the site's identity. A dataless-fail-fast
 /// `EDEADLK` (Sonoma+) is a *different* error kind and always maps to
-/// [`IdentityError::Read`], never to `PrivateKeyNotFound` — see design doc
-/// docs/archive/2026-08-03-dataless-fail-fast-and-build-driven-cloud-gate.md §4.
+/// [`IdentityError::Read`], never to `PrivateKeyNotFound`.
 ///
 /// Reads through [`cloud_readiness::read_to_string_with_materialize_wait`], not
 /// `fs::read_to_string`. The key lives at `.moss/identity/secret-key` — inside
 /// the synced vault, so Google Drive and iCloud both evict it — and under the
 /// process-wide fail-fast policy a plain read of an evicted key returns
-/// `EDEADLK` immediately. That is what killed publish outright in moss#986:
+/// `EDEADLK` immediately. That is what killed publish outright in the
+/// identity-file bug:
 /// "Identity error: Failed to read identity file: Resource deadlock avoided
 /// (os error 11)", with nothing in the system that would ever fix the state on
 /// its own. Asking for the file back is the missing half of failing fast.
@@ -241,7 +241,7 @@ impl Identity {
         // `read_to_string_with_materialize_wait` the way the key file does: the
         // handle is held open, locked, and — for a v1/v2 identity — migrated in
         // place, so the file must be opened once and kept. `materialize_input`
-        // is the same bounded wait expressed as a pre-flight (moss#986). A
+        // is the same bounded wait expressed as a pre-flight (the identity-file bug). A
         // timeout falls through deliberately: the open below then produces the
         // real `EDEADLK`, which `IdentityError::Read` carries, and NOTHING on
         // this path may look like `PrivateKeyNotFound` — that is what would let

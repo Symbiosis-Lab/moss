@@ -7,8 +7,6 @@
 //! `await_completion` joins all workers, then awaits the coordinator. The
 //! returned `SealedManifest` is the only path to a deploy-ready manifest —
 //! callers that take `&SealedManifest` cannot run before this barrier resolves.
-//!
-//! See: moss#524 (single emit API), moss#552 (debug-assert blocking_keys ⊆ files).
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;

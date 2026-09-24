@@ -1,8 +1,7 @@
 # @symbiosis-lab/moss-syntax
 
 moss's markdown syntax layer, extracted so **one implementation** serves every
-host (the moss editor today, the Obsidian plugin next). Design:
-`docs/archive/2026-08-11-cm6-extraction-design.md` (#1020).
+host (the moss editor today, the Obsidian plugin next).
 
 Workspace-private until the Obsidian plugin ships publicly.
 
@@ -20,7 +19,7 @@ Works anywhere a string works (Obsidian mobile included).
   extension (Obsidian's markdown language is closed to grammar extensions).
   Also `KNOWN_SHORTCODES`, the authorable-name vocabulary.
 - `wikilink-grammar` / `math-grammar` — `[[wikilink]]` / `$math$` inline
-  grammars (ADR-041; math contract-tested against the shared Rust vectors).
+  grammars (math contract-tested against the shared Rust vectors).
 - `wikilink-syntax` — `[[…]]` strip/wrap helpers.
 - `completion-core` — pure completion-context line parsers and DTO types.
 - `contract/shortcodes.generated` — the shortcode catalog, generated from
@@ -40,7 +39,7 @@ as a structural type the host's own model satisfies — no import back into moss
 ## Constraints
 
 Three facts that bind code outside this package. They were the surviving half of
-the Obsidian hub issue (#897) when it closed.
+the Obsidian hub issue when it closed.
 
 **A second copy of `@codemirror/state` breaks dispatch, silently.** Obsidian
 supplies `@codemirror/*` and `@lezer/{common,lr,highlight}` as externals, and
@@ -53,9 +52,9 @@ today: moss `@codemirror/state ^6.7.1` / `@codemirror/view ^6.43.6` against
 Obsidian's `6.7.0` / `6.43.5`). Check before bumping either side.
 
 **Adding a `moss-core` AST variant is a one-way door.**
-[ADR-030](../../../docs/decisions/ADR-030-latex-math-rendering.md) §4: the `Inline`
+The `Inline`
 and `Block` enums are published, serialized and not `#[non_exhaustive]`, so a
-new variant is a semver break and needs its own ADR. A syntax feature that
+new variant is a semver break and needs its own design review. A syntax feature that
 seems to want one should first be tried as a transform over the existing
 `Other` passthrough — which is how math itself ships.
 

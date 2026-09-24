@@ -17,10 +17,10 @@
 //!
 //! # Why not `build::io_utils`
 //!
-//! `io_utils` exists for `.moss/build.nosync/**`, where ADR-043's "regenerable output:
+//! `io_utils` exists for `.moss/build.nosync/**`, where the "regenerable output:
 //! dataless is absent" rule applies — moss always holds the replacement bytes,
 //! so it may truncate freely. This record is the opposite: it is durable and
-//! cannot be regenerated from the project (ADR-062). Losing it costs a
+//! cannot be regenerated from the project. Losing it costs a
 //! degraded change set until the next publish lands. So it goes through
 //! `infra::atomic_write`, the one writer in the tree that replaces a file:
 //! a uniquely named sibling temp, fsync, then rename.

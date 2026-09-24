@@ -76,13 +76,13 @@ pub struct PublishedSnapshot {
     /// duplicate-uid resolution from rewriting a published note's identity
     /// (`manifest::live_baseline`). It lived in a second file — a byte copy of
     /// the whole article map, 4.8 MB on a real vault to carry ~7 KB — until
-    /// moss#1079.
+    /// the uid-remint fix landed.
     ///
     /// `#[serde(default)]`, so a record written before this field still loads.
     /// An empty map on a record that exists is NOT "nothing was published": the
     /// reader reports it as unreadable-for-this-purpose rather than guessing.
     ///
-    /// Superseded as the baseline's SOURCE by `triples` below (moss#1093) —
+    /// Superseded as the baseline's SOURCE by `triples` below (the triples migration) —
     /// kept only as the fallback `live_baseline` reads for a record that
     /// predates `triples`, and as the input `manifest::live_baseline::migrate`
     /// backfills `triples` FROM. Nothing new should read `uids` directly; read
@@ -101,8 +101,9 @@ pub struct PublishedSnapshot {
     /// and the join's `?` then drops the uid from the baseline ENTIRELY rather
     /// than just its URL — which is what let a duplicate-uid collision fall
     /// through to the date/birth-time heuristic and mint a fresh uid into a
-    /// live article's frontmatter (moss#1079, reopened one level up by the gap
-    /// moss#1089 closed for the one writer that could produce it). A triple
+    /// live article's frontmatter — the uid-remint bug, reopened one level up
+    /// by the gap the half-updated-shape fix closed for the one writer that
+    /// could produce it. A triple
     /// cannot be half-updated: it is written whole or not written at all.
     ///
     /// `Option`, not a bare `Vec` with `#[serde(default)]`, so "this record
@@ -116,7 +117,7 @@ pub struct PublishedSnapshot {
 /// One live page: the uid that owns it, where it is served, and which source
 /// file produced it.
 ///
-/// Persisted as [`PublishedSnapshot::triples`] since moss#1093; also the type
+/// Persisted as [`PublishedSnapshot::triples`] since the triples migration; also the type
 /// `manifest::live_baseline` returns a baseline's entries as, re-exported from
 /// there as `live_baseline::LiveEntry`. One type for both roles because a
 /// triple needs no join to go from "on disk" to "in memory" — unlike the

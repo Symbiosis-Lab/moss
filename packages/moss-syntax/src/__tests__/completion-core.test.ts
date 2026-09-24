@@ -9,8 +9,8 @@
  * provably what the build reads back.
  *
  * `parseCompletionContext` — the dispatcher over these helpers —
- * lives app-side (it consults the app's presentation catalog) and is tested in
- * frontend/app/editor/__tests__/cm-completion-context.test.ts.
+ * lives app-side (it consults the app's presentation catalog) and is tested
+ * on the app's own side.
  */
 
 import { readFileSync } from 'node:fs';

@@ -7,9 +7,9 @@
 //! The split form exists because a structural decision about a grid *cell* —
 //! "is this cell a link to a collection, and if so what is that collection's
 //! title, cover and child count?" — depends on facts no single page can see.
-//! Before ADR-034 the host answered it by regex-scraping its own emitted
+//! Previously the host answered it by regex-scraping its own emitted
 //! markup; that scraping is what aborted the build when a CJK character sat in
-//! front of a `:::grid` (moss#903 bug 1). With the pieces kept separate the
+//! front of a `:::grid`. With the pieces kept separate the
 //! host pairs each cell's HTML with the typed [`Block`] cell it came from, so
 //! recognition reads exactly what emission read.
 
@@ -33,7 +33,7 @@ pub struct GridParts {
 /// Kept apart rather than pre-joined because a host pass that re-wraps a cell
 /// (an internal-link cell becomes one big `<a>`) needs the content WITHOUT the
 /// chrome, and the alternative — handing it the joined string to cut the
-/// wrapper back off — is the string surgery ADR-034 exists to delete.
+/// wrapper back off — is the string surgery this split form exists to delete.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GridCellParts {
     /// The cell's rendered content, before any card chrome.

@@ -2,8 +2,7 @@
  * context-menu.ts — right-click context for the preview iframe.
  *
  * Design-vocabulary rule: "Every surface owns its right-click; the native
- * webview menu never leaks" (docs/reference/design-vocabulary.md, provenance
- * docs/archive/2026-08-15-context-menu-vocabulary.md). Inside the previewed
+ * webview menu never leaks." Inside the previewed
  * page the native WebKit menu offered Reload/Back/Forward (bypassing the
  * shell's navigation orchestration) and "Copy Link" (handing out localhost
  * dev-server URLs), so the bridge suppresses it and reports the click's

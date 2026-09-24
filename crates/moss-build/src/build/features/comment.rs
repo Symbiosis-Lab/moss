@@ -146,7 +146,7 @@ fn normalize_social_comment(raw: &serde_json::Value, fallback_source: &str, matt
 
     // Defense-in-depth: sanitize at render-load too. Newly-synced entries are
     // already sanitized at ingest (sync_remote), but legacy comment.json entries
-    // and syndicated mirrors may hold unsanitized HTML. Idempotent (ADR-025 §11).
+    // and syndicated mirrors may hold unsanitized HTML. Idempotent.
     let content = sanitize::sanitize_comment_html(raw.get("content").and_then(|c| c.as_str())?);
 
     // Filter inactive
@@ -225,7 +225,7 @@ pub const MATTERS_DOMAIN_FALLBACK: &str = "matters.town";
 ///
 /// Lived in `plugins::runtime` until 2026-08-27; it is a pure function of the
 /// environment, and the build's slot resolver needs it, so it lives with the
-/// fallback it completes (ADR-050 §1: the compiler never names the runtime).
+/// fallback it completes (the compiler never names the runtime).
 pub fn resolve_matters_domain(
     env: &crate::config::environment::HostingEnvironment,
     explicit: Option<String>,
@@ -250,7 +250,7 @@ pub fn load_all_social_comments(
     project_path: &str,
     // The Matters domain to attribute matters.json comments to. Handed in
     // rather than resolved here: resolving it means calling
-    // `plugins::runtime::resolve_matters_domain`, and ADR-050 §1 keeps the
+    // `plugins::runtime::resolve_matters_domain`, which keeps the
     // compiler clear of the plugin runtime. Callers that have no opinion pass
     // `MATTERS_DOMAIN_FALLBACK`.
     matters_domain: &str,
@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn test_normalize_social_comment_sanitizes_content_at_render_load() {
         // Defense-in-depth: a legacy/syndicated entry whose stored content carries
-        // a script must be neutralized when loaded for render (ADR-025 §11).
+        // a script must be neutralized when loaded for render.
         let raw = serde_json::json!({
             "id": "z1",
             "content": "<p>ok</p><script>alert(1)</script><img src=x onerror=alert(1)>",
@@ -474,7 +474,7 @@ mod tests {
     /// (the build-side reader) sees the result. A regression in the `.moss/`
     /// sandbox that blocks this path would leave the write silently refused
     /// while this test still compiles against a mock-free real reader — the
-    /// gap `docs/reference/social-data-standard.md`'s writers actually hit.
+    /// gap real social-data writers actually hit.
     #[tokio::test]
     async fn social_data_written_through_write_project_file_is_visible_to_the_reader() {
         let tmp = tempfile::TempDir::new().unwrap();

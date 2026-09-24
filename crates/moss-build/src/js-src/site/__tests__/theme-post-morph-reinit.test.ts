@@ -3,7 +3,7 @@
  * morph introduces its markup for the first time" bug.
  *
  * Background: `.font-anchor`/`.font-trigger`/`#fontPill` are only emitted
- * when the page has `date:` frontmatter (src-tauri/src/build/page/html.rs).
+ * when the page has `date:` frontmatter (`build::render::html`).
  * `create_files` writes brand-new files completely empty, so the FIRST load
  * of a just-created page has no font-panel markup at all — `initFontPanel()`
  * (which runs once at module-init / DOMContentLoaded) legitimately no-ops.

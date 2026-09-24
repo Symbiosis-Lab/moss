@@ -69,7 +69,7 @@ pub struct PageSource {
     pub takeover: Option<super::takeover::Takeover>,
     /// The editable source for this URL exists but could not be *identified*
     /// yet, because a file the resolve had to read is still coming down from
-    /// the cloud (moss#1062).
+    /// the cloud.
     ///
     /// Distinct from `source_path: None`, which is a positive claim that this
     /// URL has nothing to edit. The two render different surfaces — a waiting
@@ -102,7 +102,6 @@ pub fn resolve_url_for_file_inner(
     // `.moss/build.nosync/current/` on disk — and a generation built BEFORE that fix
     // still has a stale `footer/index.html` sitting there. Gate structurally so
     // the answer does not depend on which build produced the output tree.
-    // See docs/archive/2026-08-02-footer-slot-preview-and-chip-bar.md.
     let slot_probe = moss_core::slug::normalize_separators(rel_path);
     if crate::build::footer::is_excluded_from_pages(slot_probe.trim_matches('/')) {
         return Ok(None);
@@ -296,7 +295,6 @@ pub fn resolve_expected_url_for_file(
     // immediate preview URL before the first build), so it cannot learn the
     // exclusion from the article map the way `resolve_url_for_file_inner` does;
     // it has to consult the same structural predicate the build uses.
-    // See docs/archive/2026-08-02-footer-slot-preview-and-chip-bar.md.
     if crate::build::footer::is_excluded_from_pages(normalized) {
         return None;
     }
@@ -470,7 +468,7 @@ mod tests {
     use tempfile::TempDir;
 
     /// Repo-local temp dir (test artifacts must live inside the repo —
-    /// `src-tauri/target/test-tmp/` is gitignored).
+    /// `target/test-tmp/` is gitignored).
     fn repo_temp() -> TempDir {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target")
@@ -749,7 +747,6 @@ mod tests {
     /// the preview where it is. This is the exact regression that produced the
     /// 404: `build_article_map` used to insert `footer.md` under `footer/`, and
     /// this resolver handed that key straight to the preview follower.
-    /// See docs/archive/2026-08-02-footer-slot-preview-and-chip-bar.md.
     #[test]
     fn slot_file_resolves_to_none() {
         let project = repo_temp();
@@ -942,7 +939,6 @@ mod tests {
     /// immediate preview URL, so it is the path a freshly-created `footer.md`
     /// takes. It must refuse slot files too, or creating one jumps the preview
     /// to a `/footer/` that will never exist.
-    /// See docs/archive/2026-08-02-footer-slot-preview-and-chip-bar.md.
     #[test]
     fn expected_url_for_slot_file_is_none() {
         let project = repo_temp();

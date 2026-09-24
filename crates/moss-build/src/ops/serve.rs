@@ -1,5 +1,5 @@
 //! The preview server — one Axum server, two hosts (desktop GUI and headless
-//! CLI), crossed from the app crate at S1 of the ADR-067 relocation.
+//! CLI), crossed from the app crate at S1 of the relocation.
 //!
 //! # The `/__moss/*` HTTP contract
 //!
@@ -37,7 +37,7 @@
 //! world-unreadable, so a local client (coding agent, Playwright) can
 //! authenticate before its first request. A request with a bad or absent token
 //! gets 401; a command absent from a tier's allowlist gets 404 (absent, not
-//! gated — ADR-032 §5).
+//! gated).
 //!
 //! ## Trust boundary
 //!
@@ -46,13 +46,11 @@
 //! non-loopback `Host` (DNS-rebinding defence) and a foreign `Origin` with 403
 //! before any handler runs — including on the token-gated tiers, so the token
 //! is never even inspected for a foreign caller. Which carrier a given moss
-//! instance mounts is governed by ADR-066 (one carrier per instance): the
+//! instance mounts is governed by a one-carrier-per-instance rule: the
 //! routes exist only when the host threads an `InvokeCtx` into [`ServeConfig`].
 //!
 //! No behavioral change crossed with the code: this module doc is the contract
-//! statement the relocation plan's decision 7 called for, and a
-//! `docs/reference/` page is owed when the open repo ships (decision #32's
-//! publishing half), not before.
+//! statement the relocation plan called for.
 //!
 //! ## Module layout
 //! - `router` — Axum router construction, [`ServeConfig`]/[`start_server`], middleware stack
@@ -63,11 +61,11 @@
 //! - `events` — the SSE event carrier + headless announcer/reporter
 //! - `placeholder` — SVG placeholders for assets still being processed
 //! - `asset_rewriter` / `content_wrapper` / `iframe_bridge` / `comment_stub` —
-//!   the response-transform layers (bridge injection stays a host-mounted layer
-//!   per ADR-067 clause 4; today every host mounts all of them)
+//!   the response-transform layers (bridge injection stays a host-mounted layer;
+//!   today every host mounts all of them)
 
 // `pub` only where a consumer outside this crate actually reads the module.
-// `asset_rewriter` earns it (src-tauri/tests/instant_preview_media_parity_test.rs);
+// `asset_rewriter` earns it (exercised by the desktop app's media parity test);
 // the rest of the response-transform layers, the token and the trust boundary are
 // internal to the server and stay `pub(crate)` — they are the security-relevant
 // half, and the open repo will make "crate-external" mean "public".
@@ -123,14 +121,14 @@ pub async fn start_server_headless(
     let site_dir_state =
         cli_site_dir.unwrap_or_else(|| Arc::new(std::sync::RwLock::new(serve_dir)));
     // Headless mode: the HTTP command carrier is the entire point — typing
-    // `moss build --serve` IS the opt-in (ADR-066). Standalone context, no
+    // `moss build --serve` IS the opt-in. Standalone context, no
     // Tauri shell (mirrors host_fns::HostState::standalone).
     let invoke_ctx = Some(InvokeCtx::standalone());
     // The build's own registry, so a variant still being encoded answers with
     // the source bytes or a placeholder rather than 404. `<picture>` does not
-    // recover from a chosen-source 404 (ADR-013), and until 2026-08-29 this
+    // recover from a chosen-source 404, and until 2026-08-29 this
     // arm passed no registry at all — so the never-404 promise held in the app
-    // and not under `moss build --serve` (#1113).
+    // and not under `moss build --serve`.
     let (port, shutdown_tx) = start_server(ServeConfig {
         invoke: invoke_ctx,
         asset_registry,

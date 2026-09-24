@@ -1,4 +1,4 @@
-//! The app-only half of the engine host — ADR-050's flag column as a seam.
+//! The app-only half of the engine host — a flag-column seam.
 //!
 //! Every method here needs a desktop: the live webview cookie jar, the action
 //! panel, the system browser, or the app's managed state. The engine holds an
@@ -8,11 +8,11 @@
 //!
 //! The one implementation is `plugins::tauri_app_host::TauriAppHost`, a thin
 //! wrapper over `tauri::AppHandle`. This trait exists so the engine itself
-//! never names tauri — the ADR-050 amendment moves the engine into
+//! never names tauri — a later amendment moves the engine into
 //! `moss-build`, and this file crosses with it while the impl stays app-side.
 //!
-//! Explicit methods, not a stringly `dispatch(cmd, args)` arm: ADR-058 counts
-//! seam width, and a string-routed method would hide exactly the surface this
+//! Explicit methods, not a stringly `dispatch(cmd, args)` arm: seam width
+//! matters, and a string-routed method would hide exactly the surface this
 //! trait is supposed to declare.
 
 /// Shared, clonable handle for the threads that outlive a borrow — the engine

@@ -84,8 +84,7 @@ path prefix, and re-import the missing sections into the same folder.
 
 ## A frontmatter field didn't take effect
 
-A value that cannot satisfy its typed field is dropped **alone** — every other
-key survives (ADR-020). The build prints one line per dropped field:
+A value that cannot satisfy its typed field is dropped **alone** — every other key survives. The build prints one line per dropped field:
 
 ```
 [essays/piece.md] frontmatter: weight: invalid type: string "high", expected i32

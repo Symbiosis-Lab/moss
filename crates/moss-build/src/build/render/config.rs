@@ -35,7 +35,7 @@ pub struct SiteConfig {
     /// bool so consumers don't have to re-decide the default.
     pub implicit_figure: bool,
     /// `[site].math` — when true, `$…$` and `$$…$$` are parsed as LaTeX
-    /// equations (ADR-030). Default ON: an absent key resolves to `true`
+    /// equations. Default ON: an absent key resolves to `true`
     /// at the construction site, so every site gets math without writing
     /// any config.
     ///
@@ -76,7 +76,7 @@ pub struct SiteConfig {
     ///
     /// Stored resolved, like `math`, so consumers never re-decide the default.
     pub heading_anchors: bool,
-    /// `[site].floating_nav` — the floating nav island (ADR-049). Default OFF
+    /// `[site].floating_nav` — the floating nav island. Default OFF
     /// since 2026-08-30: an absent key resolves to `false` at the construction
     /// site, so a site gets no floating nav until it asks for one. Authors who
     /// want it write `[site].floating_nav = true` (or flip the Services-tab
@@ -94,7 +94,7 @@ pub struct SiteConfig {
     pub ai_policy: Option<String>,
     /// `[site].search` — full-text search, resolved at the construction site
     /// in `build/pipeline.rs`: `true` when the author turned the Services-tab
-    /// toggle on. Per ADR-010, the gate is expressed here in the
+    /// toggle on. By design, the gate is expressed here in the
     /// per-invocation config, not as a side-channel read inside the pipeline.
     ///
     /// Note this is still not the final "is search live" answer — the render
@@ -106,8 +106,8 @@ pub struct SiteConfig {
     /// namespace, built-in (`authors`, `tags`) and declared alike. The one
     /// thing `build::terms::derive_terms` reads to decide term membership.
     pub term_kinds: Vec<crate::build::terms::TermKind>,
-    /// moss#922 — what this build may reuse from the last one. Both bits are
-    /// resolved at the entry point (ADR-010: the render phase reads neither the
+    /// What this build may reuse from the last one. Both bits are
+    /// resolved at the entry point (by design, the render phase reads neither the
     /// build trigger nor the environment). See [`IncrementalGates`].
     pub incremental: IncrementalGates,
 }

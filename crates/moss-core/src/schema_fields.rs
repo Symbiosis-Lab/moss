@@ -957,7 +957,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         // and returns 8 RANDOM hex chars, so a uid can never be recomputed
         // from the path or the bytes. This string is the SSOT that
         // `frontmatter_fields()` copies into `moss describe --json`,
-        // `docs/reference/contract.md` and the hooks-site contract fixture —
+        // the generated contract documentation and the hooks-site contract fixture —
         // a plugin author who believed it was derivable and recomputed it to
         // re-join `.moss/social/*.json` would miss on every single key.
         description: "Stable note identity: 8 random hex chars minted at first build. NOT derived from the path or the content, and unrecoverable once lost (auto-generated)",

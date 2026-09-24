@@ -35,10 +35,8 @@ pub fn detect_language(text: &str) -> Option<Language> {
     // threshold on its own; settling it here means that document still
     // resolves correctly instead of falling through to the raw-text
     // fallback below, which would reintroduce the bug this function exists
-    // to close. See docs/archive/2026-08-20-rebuild-loop-incrementality.md
-    // ("The leaf, explained on the instrument's first use: `lang`"), where
-    // appending 35 ASCII characters flipped a real 1,254-byte Traditional
-    // Chinese article from `None` to `Some(En)`.
+    // to close. Appending 35 ASCII characters once flipped a real
+    // 1,254-byte Traditional Chinese article from `None` to `Some(En)`.
     if is_cjk_dominant(&prose) {
         return Some(if is_traditional_chinese(&prose) {
             Language::ZhHant
@@ -147,8 +145,8 @@ fn strip_non_prose(text: &str) -> String {
 /// Strip `<!-- ... -->` comments from markdown SOURCE text.
 ///
 /// Written as a manual char scan rather than `Regex::new`/`.replace_all`
-/// with a `<!--` needle on purpose: ratchet row (p) (`html_string_mutation`,
-/// ADR-034) counts any `Regex::new`/`.replace*`/`.find`-family call whose
+/// with a `<!--` needle on purpose: ratchet row (p) (`html_string_mutation`)
+/// counts any `Regex::new`/`.replace*`/`.find`-family call whose
 /// string argument contains `<` as evidence of a tag-aware pass over
 /// ALREADY-EMITTED HTML bypassing the structural `Vec<Block>` pipeline. This
 /// function does the opposite: it runs on the raw markdown an author typed,
@@ -227,7 +225,7 @@ fn is_cjk_dominant(text: &str) -> bool {
 /// never Simplified, so everything it failed to prove was reported as
 /// Simplified. A real user's vault was pinned to `zh-hans` that way — none of
 /// 測, 試 or 場, the discriminating characters in their own text, were on the
-/// one-sided list (`docs/archive/2026-08-31-site-lang-derived-state.md`).
+/// one-sided list.
 ///
 /// A tie — including the no-evidence case — is Simplified, matching the
 /// shorthand [`Language::from_code`] already applies to a bare `"zh"`.
@@ -350,7 +348,7 @@ pub(crate) fn strip_frontmatter(content: &str) -> String {
     // Language is detected from BODY text. Leaked field lines skew the vote, so
     // the boundary is `frontmatter_span`'s call for both dialects — this used to
     // see the YAML dialect only, and match the first `\n---` anywhere in the
-    // file rather than a standalone delimiter line (moss#937).
+    // file rather than a standalone delimiter line.
     match moss_core::frontmatter::frontmatter_span(content) {
         #[allow(clippy::string_slice)]
         // Char-aligned: `body` is a line-boundary offset from the splitter.
@@ -502,7 +500,7 @@ pub fn resolve_site_default_lang(
 ///
 /// It used to reach the render path indirectly: the build copied it into
 /// `[site] lang` and every consumer read it back from there. With that write
-/// gone (docs/archive/2026-08-31-site-lang-derived-state.md) the ladder reads
+/// gone, the ladder reads
 /// the declaration where the author wrote it.
 fn homepage_frontmatter_lang(
     homepage_file: Option<&str>,
@@ -761,7 +759,7 @@ mod tests {
     /// iteration order — randomized per process — so the SAME two texts picked
     /// a different winner from one build to the next
     /// (`build_parity_test::parity_cjk_unicode_filenames`, discovered via
-    /// ADR-065's per-folder inference, which ties far more often than the
+    /// per-folder inference, which ties far more often than the
     /// whole-site sample this function was written for).
     ///
     /// The fixtures are length-matched ON PURPOSE, and the test asserts that
@@ -850,7 +848,7 @@ mod tests {
     #[test]
     fn strip_frontmatter_removes_the_simplified_dialect_too() {
         // Language is a majority vote over body text. These field lines used to
-        // survive into it and skew the count (moss#937).
+        // survive into it and skew the count.
         let content = "nav\ntitle: Hello\n---\nThis is the body text.";
         assert_eq!(strip_frontmatter(content), "This is the body text.");
     }
@@ -900,7 +898,7 @@ mod tests {
         assert_eq!(detect_project_language(&files, "/nonexistent", &never_evicted), None);
     }
 
-    /// Stage 3 (docs/archive/2026-07-31-cloud-download-waiting-mode.md): a
+    /// Stage 3: a
     /// cloud-dataless file must be skipped from the sample exactly like a
     /// read error, not read/blocked on. The injectable predicate lets this
     /// be tested without real `SF_DATALESS` state.

@@ -2,7 +2,7 @@
 //!
 //! The editor renders the source the user typed, pre-transformation: this path
 //! does NOT go through the build's AssetRegistry, and never serves anything out
-//! of `.moss/build.nosync` (ADR-022).
+//! of `.moss/build.nosync`.
 //!
 //! [`serve_source_asset`] is the whole behaviour. Two carriers wrap it:
 //!

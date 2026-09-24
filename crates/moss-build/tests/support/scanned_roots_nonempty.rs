@@ -4,9 +4,8 @@
 //! moved, typoed — would otherwise look identical to a passing run: no
 //! violations found because nothing was scanned.
 //!
-//! Twin of `src-tauri/tests/support/scanned_roots_nonempty.rs` (desktop repo)
-//! — moved here as part of the class-A/B open-half split
-//! (docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md).
+//! Twin of the desktop app's `support/scanned_roots_nonempty.rs` — moved
+//! here as part of the open-half split of the scanner tests.
 
 /// `scanned` is the count the caller already produced by walking `roots`
 /// (each scanner test walks its own way — `walk_rust_files` differs slightly

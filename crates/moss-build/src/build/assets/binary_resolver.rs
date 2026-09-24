@@ -838,7 +838,7 @@ fn extract_tar_gz_to_cache(
     // `tmp_dir` if the archive contains crafted path entries. Acceptable here because archives
     // are (a) fetched from a pinned URL, verified against a hardcoded SHA-256 — NEVER a
     // plugin-declared one; those extract through the hardened `system::stack_exec::extract`
-    // instead (S4, ADR-080 item 5) — or (b) fetched from GitHub Releases over HTTPS (trusted,
+    // instead — or (b) fetched from GitHub Releases over HTTPS (trusted,
     // signed). The atomic rename ensures partial extraction never becomes the final state.
     let decoder = GzDecoder::new(data);
     let mut archive = Archive::new(decoder);

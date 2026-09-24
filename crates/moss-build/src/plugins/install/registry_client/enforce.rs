@@ -35,7 +35,7 @@ static SNAPSHOT: RwLock<Option<CachedRegistry>> = RwLock::new(None);
 /// app-data directory, where nothing is refused for want of it (the same
 /// posture as a kill list moss never fetched). `Some((None, _))`: enforced
 /// with nothing on disk — a headless build on a box with no app data, where
-/// nothing was ever approved because nothing was ever asked (ADR-077).
+/// nothing was ever approved because nothing was ever asked.
 /// `Some((Some(dir), _))`: the app's record, read from and written to `dir`.
 static CONSENT: RwLock<Option<(Option<PathBuf>, Approvals)>> = RwLock::new(None);
 
@@ -96,7 +96,7 @@ pub fn install(app_data_dir: Option<&Path>) {
     crate::plugins::admission::install_check(refusal);
 }
 
-/// The headless build's verdict (ADR-077). Reads the same cached kill list
+/// The headless build's verdict. Reads the same cached kill list
 /// and the same approvals the app wrote — never fetches — and installs one of
 /// two checks. Without `--allow-plugins`, the full verdict: a plugin the app
 /// has not been told to allow is refused, with the two ways out in the
@@ -136,7 +136,7 @@ fn put_in_force(app_data_dir: Option<&Path>) {
 ///
 /// Called once at setup. The refresh is a separate thread rather than an async
 /// task because [`super::fetch`] is blocking and a slow or hostile origin must
-/// not hold up the first window (ADR-023).
+/// not hold up the first window.
 pub fn install_and_refresh() {
     let dir = crate::infra::app_data::app_data_dir_early();
     if dir.is_none() {
@@ -268,7 +268,7 @@ pub fn verdict(manifest: &PluginManifest, plugin_dir: &Path) -> Option<Refusal> 
     verdict_when(manifest, plugin_dir, false)
 }
 
-/// [`verdict`] with consent already given (`--allow-plugins`, ADR-077): the
+/// [`verdict`] with consent already given (`--allow-plugins`): the
 /// same two withholding grounds, and the consent step skipped.
 fn verdict_when(manifest: &PluginManifest, plugin_dir: &Path, consent_given: bool) -> Option<Refusal> {
     let shipped = code_of(manifest, plugin_dir).is_some_and(|code| code.shipped);

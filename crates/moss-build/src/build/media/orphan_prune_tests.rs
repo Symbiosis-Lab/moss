@@ -56,12 +56,11 @@ fn file_literally_named_after_a_rung_with_no_reference_is_still_pruned() {
     assert!(removed.contains("w800.webp"));
 }
 
-/// Invariant 6 (moss#976): an image reference must survive pruning no
+/// Invariant 6: an image reference must survive pruning no
 /// matter which scannable text format carries it — `<source srcset>`,
 /// CSS `url()`, an RSS/Atom enclosure, or a plugin's bare `data-*`
-/// attribute all put the same shape of token in the output. Table-driven
-/// per docs/archive/2026-08-06-orphan-prune-false-negative-and-parse-cache-gate.md
-/// P3 — collapses what were three near-identical tests into one.
+/// attribute all put the same shape of token in the output. Table-driven —
+/// collapses what were three near-identical tests into one.
 #[test]
 fn image_referenced_only_from_non_html_wrapper_survives() {
     struct Case {
@@ -208,7 +207,7 @@ fn decoding_strips_query_and_fragment_but_keeps_the_relative_prefix() {
 /// This is the ordinary shape for every non-HTML type in `SCAN_EXTENSIONS` —
 /// a stylesheet's `url()` is relative to the stylesheet. Before the token was
 /// also resolved against the file it was found in, this stylesheet's live
-/// reference read as an orphan and the variant was deleted; with moss#1085's
+/// reference read as an orphan and the variant was deleted; with that
 /// verdict persisted, `suppressed_variants` would then have kept it deleted,
 /// leaving a CSS rule pointing at nothing for good.
 #[test]
@@ -255,9 +254,8 @@ fn a_data_file_below_the_root_listing_root_relative_keys_still_protects_them() {
     assert!(removed.is_empty(), "removed {removed:?}");
 }
 
-/// Explicit rows for the non-ASCII scripts and shapes named in
-/// docs/archive/2026-08-06-orphan-prune-false-negative-and-parse-cache-gate.md
-/// P3/Part 3 — CJK, Cyrillic, Arabic, Devanagari, emoji, and a comma in the
+/// Explicit rows for the non-ASCII scripts and shapes covered above —
+/// CJK, Cyrillic, Arabic, Devanagari, emoji, and a comma in the
 /// filename — each using the REAL variant shape (`.wNNN.webp`, a rung under
 /// an `assets/` directory), since no fixture before this used a rung, which
 /// is part of why Bug A shipped.
@@ -672,7 +670,7 @@ fn non_utf8_bytes_in_a_scannable_extension_are_skipped_not_reported() {
 }
 
 // ---------------------------------------------------------------------------
-// suppressed_variants — the carried verdict the producers read (moss#1085)
+// suppressed_variants — the carried verdict the producers read
 // ---------------------------------------------------------------------------
 
 /// The steady state the whole mechanism exists to reach: a variant a complete
@@ -712,7 +710,7 @@ fn a_variant_this_build_references_again_is_not_suppressed() {
 }
 
 /// A cold vault has no verdict to carry, so nothing is suppressed and the
-/// first build behaves exactly as it did before moss#1085 — encode everything,
+/// first build behaves exactly as it did before this fix — encode everything,
 /// let the ship-time prune decide with complete information. This is also the
 /// early return that keeps the staging scan off the first build's critical
 /// path.

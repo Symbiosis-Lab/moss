@@ -18,11 +18,11 @@
 //! ```text
 //! Pass 1 (moss-core, pure):
 //!   ![[diagram.dot]]
-//!     → PluginEmbedRenderer::render(&parsed)     (src-tauri adapter)
+//!     → PluginEmbedRenderer::render(&parsed)     (desktop-app adapter)
 //!     → RenderedEmbed::Deferred { marker: "<!-- moss-embed-plugin-graphviz:... -->" }
 //!     → marker spliced into content
 //!
-//! Pass 2 (src-tauri, async + I/O):
+//! Pass 2 (the desktop app, async + I/O):
 //!   resolve_embeds_with_handlers scans for marker prefix
 //!     → MarkerHandlers registry dispatches to plugin IPC
 //!     → plugin script runs `dot -Tsvg`

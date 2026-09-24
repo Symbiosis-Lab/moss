@@ -1,19 +1,17 @@
 //! Regression guard: only `vault_root` derives a vault root or its name.
 //!
-//! Open-half twin of `src-tauri/tests/root_identity_owner_test.rs` (desktop
-//! repo) — that file's `scan_roots()` walks `src-tauri/src` plus every
+//! Open-half twin of the desktop app's `root_identity_owner_test.rs` — that
+//! file's `scan_roots()` walks the desktop app's own source plus every
 //! `open/crates/*/src` dynamically, applying one ownership-prefix rule per
-//! file with no cross-root comparison (class B per
-//! docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md).
-//! This twin runs the same four rules over every `crates/*/src` in THIS repo
-//! (moss-core, moss-build, moss-cli); the desktop half keeps scanning its
-//! own `src`.
+//! file with no cross-root comparison. This twin runs the same four rules
+//! over every `crates/*/src` in THIS repo (moss-core, moss-build,
+//! moss-cli); the desktop half keeps scanning its own `src`.
 //!
 //! Not carried here: the desktop file's
 //! `the_scanner_scope_follows_the_code_into_crates` test, which asserts the
-//! app crate (`src-tauri/src`) is part of the scan — that assertion is about
-//! the desktop/open boundary specifically and has no equivalent in a
-//! standalone open-repo scan.
+//! app crate's own source is part of the scan — that assertion is about the
+//! desktop/open boundary specifically and has no equivalent in a standalone
+//! open-repo scan.
 //!
 //! Four rules, guarding the two halves of "which folder is the root, and what
 //! is it called": three catch a re-derived NAME; the fourth catches a
@@ -29,8 +27,8 @@ mod support;
 use support::scanned_roots_nonempty;
 
 /// The one module allowed to answer "which folder, and what is it called".
-/// Only the open-repo spelling — the desktop-side re-export shim
-/// (`src-tauri/src/vault/paths.rs`) has no equivalent here.
+/// Only the open-repo spelling — the desktop app's own re-export shim has
+/// no equivalent here.
 const OWNER_PREFIXES: &[&str] = &["crates/moss-build/src/vault_root"];
 
 fn is_owner(name: &str) -> bool {

@@ -343,7 +343,7 @@ function detectDarkMode(): boolean {
  * whenever the page has an author-chosen cover: its `:::hero` image, else its
  * `cover:` frontmatter. No attribute means no cover, and the card draws none.
  * The value is a same-origin URL for an image the page already loads, so it
- * is registered in the AssetRegistry (ADR-013) and survives the
+ * is registered in the AssetRegistry and survives the
  * `crossOrigin = "anonymous"` fetch below.
  *
  * One writer, one reader, and nothing in between to rot. The previous version
@@ -435,7 +435,7 @@ async function loadCoverImage(): Promise<HTMLImageElement | null> {
  *
  * This function used to be `qrKeyForPathname`, which rebuilt the filename from
  * `location.pathname` and had to stay byte-identical to `qr_key_for_url_path` in
- * `src-tauri/src/build/media/qr.rs`. A mismatch 404s in silence and a missing QR
+ * the desktop app's QR media module. A mismatch 404s in silence and a missing QR
  * looks exactly like a site that never had one, so both halves shipped broken to
  * real sites at once — one serving fourteen codes for the wrong page, another
  * missing every folder note's code. The reader derives nothing now, so there is

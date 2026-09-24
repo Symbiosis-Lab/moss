@@ -7,14 +7,13 @@
 //! `tags/<slug>`, or a declared kind's own namespace) — pushed into the same
 //! `also_in` slot an authored cross-listing uses — so the canonical selector
 //! (`folder_embed::select_children_by_slug`), the synthetic-index loops in
-//! `render/blocking.rs`, and the ADR-044 listing digest all serve term pages
+//! `render/blocking.rs`, and the listing-group digest all serve term pages
 //! with zero new modes. A page claiming a term (`author_page:` / `tag_page:`
 //! / `editor_page:` / `jury_page:`) gets the resolved key in
 //! `ParsedDocument::term_listing` — the one field the renderer and the
 //! listing digest read — and suppresses the generated page for that term.
 //! Term identity rules (fold, slug, key) are owned by `moss_core::terms`;
-//! this pass only applies them to documents. Design:
-//! `docs/archive/2026-09-01-tags-and-authors-design.md`.
+//! this pass only applies them to documents.
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -159,7 +158,7 @@ impl TermIndex {
 
     /// Every derived term, keyed by pseudo-folder key, in key order. What the
     /// article map records so the editor reads claims instead of re-deriving
-    /// them (ADR-019: one owner of link semantics).
+    /// them (one owner of link semantics).
     pub fn sites(&self) -> &BTreeMap<String, TermSite> {
         &self.sites
     }
@@ -342,7 +341,7 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
     // resolves through stem extraction (`frontmatter_ref_to_stem` keeps only
     // the last path segment), which would mangle a pseudo-folder key like
     // `authors/馬欣宜`. A dedicated resolved field keeps the render layer and
-    // the ADR-044 listing digest reading one unambiguous value.
+    // the listing-group digest reading one unambiguous value.
     for doc in documents.iter_mut() {
         let claim_key = claimed_key(doc, &kinds, &index);
         let Some(key) = claim_key else { continue };

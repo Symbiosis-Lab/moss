@@ -1,6 +1,6 @@
 //! Blocking content generation phase: produces all HTML/CSS/JS needed for immediate preview.
 //!
-//! Part of the two-phase build pipeline (ADR-001). The blocking phase
+//! Part of the two-phase build pipeline. The blocking phase
 //! writes every file that must exist before the preview iframe can render.
 //! Asset-heavy work (images, static dirs, video conversion) is deferred to
 //! `BackgroundContext` and handled by the background phase in `pipeline.rs`.
@@ -56,15 +56,15 @@ use super::html::{generate_html_collect_og, tab_title};
 /// Tuple returned by [`generate_blocking_content`].
 ///
 /// `documents` is the parsed page slice the caller (`pipeline::run`) hands
-/// back to `build.rs` for post-build native-slot collection. Per PR7b
-/// (moss#599), it includes both renderable pages AND slot-only files
+/// back to `build.rs` for post-build native-slot collection. An earlier
+/// change made it include both renderable pages AND slot-only files
 /// (e.g. `footer.md`) so `collect_footer_slots_by_language` and
 /// `should_inject_subscribe_assets` can read the typed page set
 /// directly — replacing the previous filesystem-scan hacks
 /// (`render_footer_pages_from_disk`, `project_has_inline_subscribe`).
 ///
-/// The fourth element is the shadow-verification snapshot (moss#968 §10 gate
-/// 4): `Some` only under `MOSS_INCREMENTAL_VERIFY=1`, and only ever consumed
+/// The fourth element is the shadow-verification snapshot: `Some` only under
+/// `MOSS_INCREMENTAL_VERIFY=1`, and only ever consumed
 /// AFTER the enhance hook has run — see `render::incremental::carry_verify`.
 pub type BlockingContentOutput = (
     SiteResult,
@@ -122,7 +122,7 @@ fn synthetic_folder_lang(
 /// mangle a hyphenated slug like "david-yang"); a term namespace root takes
 /// its i18n heading; any other folder its ORIGINAL on-disk name (proper
 /// case, "Writings") over the lowercased URL-slug leaf ("writings"), routed
-/// through `filename_text` (no title-casing, #775) so a folder named
+/// through `filename_text` (no title-casing) so a folder named
 /// `tech-tips` renders "tech tips" with or without an `index.md`. Falls
 /// back to the slug leaf for URL-override/also_in folders with no matching
 /// on-disk dir.
@@ -249,7 +249,7 @@ pub fn generate_blocking_content(
     site_config: SiteConfig,
     pending: &mut PendingManifest,
     // `BuildStopped`, not `String`: this runs before the cloud gate is emitted,
-    // so an `Err` here is what used to silence it. See `build::outcome` (#964).
+    // so an `Err` here is what used to silence it. See `build::outcome`.
 ) -> Result<BlockingContentOutput, BuildStopped> {
     let total_start = std::time::Instant::now();
 
@@ -259,9 +259,10 @@ pub fn generate_blocking_content(
     // Pattern D (OG cards, Sites 4/14b) register from the receipt the render returns
     //   (`CardOutput::register`): the file is already written, so nothing is re-written.
     //
-    // Pattern E (SVG video placeholder) was removed in #615; in the PREVIEW the
-    // blueprint placeholder (`frontend/bridge/asset-placeholder.ts`, injected by
-    // the preview server) stands in for a thumbnail that hasn't landed yet. A
+    // Pattern E (SVG video placeholder) was removed; in the PREVIEW the
+    // blueprint placeholder (injected client-side by the desktop app's preview
+    // bridge, on top of what the preview server serves) stands in for a
+    // thumbnail that hasn't landed yet. A
     // published site gets no placeholder — it can't contain a broken reference,
     // because moss refuses to deploy one. The previously-required
     // `blocking_insert!` macro is gone too.
@@ -356,7 +357,7 @@ pub fn generate_blocking_content(
     // A doc with the `home: true` marker wins its folder's home slot regardless
     // of filename — lets `en/Mountain Home.md` (or any non-INDEX_STEM, non-self-named
     // file) be the EN homepage at `/en/` instead of getting a slug URL while
-    // moss synthesizes an empty `en/index.html` titled `"En"`. Issue #587.
+    // moss synthesizes an empty `en/index.html` titled `"En"`.
     let home_overrides = compute_home_overrides(&project_structure.markdown_files, root);
     let home_file_winners = compute_home_file_winners(
         &project_structure.markdown_files,
@@ -368,14 +369,13 @@ pub fn generate_blocking_content(
     // This includes cascading url overrides from folder index files, so child pages
     // get their final url_path before the main processing loop.
     //
-    // Merged with the `external_url_map` pre-scan below (linkblog pattern,
-    // moss#679) into ONE read+parse pass per file, cached across builds by
+    // Merged with the `external_url_map` pre-scan below (linkblog pattern)
+    // into ONE read+parse pass per file, cached across builds by
     // `FrontmatterScanCache` — both fields live on the same parsed
     // frontmatter struct, and on an unchanged file neither needs re-reading
     // at all. Before this, both scans ran full-corpus on EVERY build
     // regardless of what changed: measured on a 226-page vault, ~150ms +
-    // ~180ms on a rebuild that touched exactly one file. See
-    // docs/archive/2026-08-20-rebuild-loop-incrementality.md.
+    // ~180ms on a rebuild that touched exactly one file.
     let frontmatter_scan_cache_path = paths.cache_frontmatter_scan();
     let mut frontmatter_scan_cache = FrontmatterScanCache::load(&frontmatter_scan_cache_path);
     let (page_map, dir_overrides, external_url_map) = build_page_map_and_external_urls_cached(
@@ -391,7 +391,7 @@ pub fn generate_blocking_content(
     }
     log::debug!(target: "timing", "[render] page_map ({} entries): {:?}", page_map.len(), total_start.elapsed());
 
-    // ADR-065: per-folder language for folders with no naming convention —
+    // Per-folder language for folders with no naming convention —
     // declared in the folder's index, else inferred — computed ONCE here (not
     // per page below) and keyed to each folder's file SET so an edited body
     // never moves it; only adding/removing a file, or declaring, does. See
@@ -410,11 +410,11 @@ pub fn generate_blocking_content(
     log::debug!(target: "timing", "[render] folder_languages ({} folders): {:?}", folder_languages.len(), total_start.elapsed());
 
     // With the build's slug-overrides installed, the graph answers "what URL is
-    // this file served at" for every emitter downstream (moss#903 bug 3).
+    // this file served at" for every emitter downstream.
     let content_graph = content_graph.with_output_overrides(dir_overrides.clone());
 
     // Same shape as `page_map` but keyed on source paths whose frontmatter
-    // declares an absolute `external_url:` (linkblog pattern, moss#679).
+    // declares an absolute `external_url:` (linkblog pattern).
     // Empty when no page in the site sets the field. Passed into
     // `process_markdown_file` so the wikilink resolver routes cross-references
     // to the external destination instead of the local archive.
@@ -442,8 +442,8 @@ pub fn generate_blocking_content(
         .seta_url()
         .to_string();
 
-    // moss#922 Stage 7: open the Loop A parse cache. Eligibility is
-    // `site_config.incremental.parse_cache` — a SIBLING of Stage 5b's render
+    // Open the Loop A parse cache. Eligibility is
+    // `site_config.incremental.parse_cache` — a SIBLING of the render
     // skip, not the same bit: both are off under `MOSS_NO_INCREMENTAL` and for
     // any non-`ContentOnly` trigger (there is still no second kill switch by
     // design), but the parse cache tolerates a batch containing stylesheets,
@@ -510,7 +510,6 @@ pub fn generate_blocking_content(
     // The synthesizer in moss-core owns all attribute emission; no downstream
     // regex pass runs at the end of the per-doc loop.
     //
-    // See `docs/reference/structural-html-emission.md`.
     // Ladders encoded by a previous build, read off disk BEFORE the lookup below
     // folds the registry into its snapshot. Order is the whole point: the
     // snapshot is built once, in the constructor, so a ladder registered after
@@ -546,7 +545,7 @@ pub fn generate_blocking_content(
         use rayon::prelude::*;
         use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-        // Durable timing, all builds (moss#922 Stage 1) — the cpu-sum log below is debug-only.
+        // Durable timing, all builds — the cpu-sum log below is debug-only.
         let _phase_markdown = PhaseTrace::start("render_markdown");
 
         // Parallel markdown: read → resolve → process is independent per file
@@ -565,8 +564,7 @@ pub fn generate_blocking_content(
         let processed = AtomicUsize::new(0);
         let md_wall = std::time::Instant::now();
 
-        // Stage 3 of docs/archive/2026-07-31-cloud-download-waiting-mode.md:
-        // paths skipped this build because their source (or an embedded
+        // Paths skipped this build because their source (or an embedded
         // reference) was a cloud-dataless placeholder. Non-empty means this
         // build is incomplete — callers use it to skip `remove_stale_html`
         // (its previous-generation HTML must survive) and to suppress a
@@ -619,7 +617,7 @@ pub fn generate_blocking_content(
                     }
                     let source_file_path = Path::new(source_path).join(&file_info.path);
 
-                    // moss#922 Stage 7: replay the previous build's parse when
+                    // Replay the previous build's parse when
                     // this page's bytes AND every file transcluded into it are
                     // provably unchanged. A hit skips the read, the Obsidian
                     // resolve and the parse — Loop A's whole per-file cost.
@@ -653,7 +651,7 @@ pub fn generate_blocking_content(
                     // callouts, block refs) into standard markdown before HTML
                     // conversion.  This is transparent for non-Obsidian content.
                     //
-                    // Typed embeds (moss#556) flow through here too:
+                    // Typed embeds flow through here too:
                     // - Pure renderers (image, iframe, pdf, audio, video, 3D)
                     //   produce final HTML inline during wikilink resolution.
                     // - Deferred renderers (notebook, table, plugins) emit
@@ -698,7 +696,7 @@ pub fn generate_blocking_content(
 
                     let resolved_content = &resolve_result.content_markdown;
 
-                    // ADR-065: this file's folder's inferred language, when
+                    // This file's folder's inferred language, when
                     // its path carries no naming convention — computed once
                     // above the loop, over the whole folder, never here.
                     let folder_lang = folder_languages.get(&folder_of(&file_info.path)).copied();
@@ -707,7 +705,7 @@ pub fn generate_blocking_content(
                         Ok(doc) => doc,
                         Err(_) => return None,
                     };
-                    // moss#922 Stage 7 prerequisite: keep the transclusion
+                    // Keep the transclusion
                     // edges the resolve phase just computed instead of dropping
                     // them on the floor. These are the ONLY page→page embed
                     // edges in the build — `![[note.md]]` is spliced from disk
@@ -773,7 +771,6 @@ pub fn generate_blocking_content(
                             doc.is_root_level = false;
                             // Home translations should use the Page template (not Article)
                             // to match the homepage's chrome (no article-style heading).
-                            // See docs/archive/2026-04-17-title-simplification.md.
                             if doc.layout.is_none() {
                                 doc.layout = Some("page".to_string());
                             }
@@ -825,8 +822,7 @@ pub fn generate_blocking_content(
 
                     // Auto-assign uid if missing: generate from relative path and write back.
                     // Slot files are excluded — a uid identifies a PUBLISHED page, and
-                    // minting one made the footer participate in detect_renames. See
-                    // docs/archive/2026-08-02-footer-slot-preview-and-chip-bar.md.
+                    // minting one made the footer participate in detect_renames.
                     if doc.uid.is_none() && !doc.slot_only {
                         let uid = crate::build::markdown::generate_uid(&file_info.path);
                         let updated = crate::build::markdown::insert_uid_into_frontmatter(&content, &uid);
@@ -859,10 +855,7 @@ pub fn generate_blocking_content(
                     // (`render::{image,video,audio,iframe,model,pdf}`), which read
                     // from the `AssetSnapshot` built once per run. The Stage 3
                     // regex post-pass (`add_placeholder_attributes`) was retired in
-                    // Phase 2E v5 PR5 (2026-05-26). See:
-                    // - ADR-002 (placeholder SVGs), ADR-006 (thumbnail extraction)
-                    // - docs/reference/structural-html-emission.md
-                    // - docs/archive/2026-05-26-phase2e-v5-synth-into-moss-core.md
+                    // Phase 2E v5 PR5 (2026-05-26).
 
                     md_process_ns.fetch_add(t_process.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     // No-op unless MOSS_PARSE_CACHE_SHADOW is set, in which
@@ -920,7 +913,7 @@ pub fn generate_blocking_content(
         )
     };
 
-    // moss#922 Stage 7: THE cache-snapshot boundary. `documents` here is Loop
+    // THE cache-snapshot boundary. `documents` here is Loop
     // A's per-file output and nothing else — the next statement begins the
     // whole-corpus Reduce chain (uid dedup, slug dedup, cascade, children
     // sorts, marker expansion, translation linking), every pass of which folds
@@ -939,7 +932,7 @@ pub fn generate_blocking_content(
         None,
     );
 
-    // moss#928 item 2: profile the whole-corpus Reduce chain, starting here
+    // Profile the whole-corpus Reduce chain, starting here
     // (uid_dedup is the first pass after Loop A's cache-snapshot boundary).
     let reduce_pre_start = std::time::Instant::now();
     // Detect and fix duplicate UIDs — before slug resolution so each article
@@ -993,7 +986,7 @@ pub fn generate_blocking_content(
     }
     log::debug!(target: "timing", "[reduce] uid_dedup: {:?}", reduce_pre_start.elapsed());
 
-    // Empty-folder onboarding (per docs/archive/2026-05-28-onboarding-design.md):
+    // Empty-folder onboarding:
     // when zero markdown files were discovered, push a synthetic homepage
     // BEFORE the layout-config / sitemap / llms.txt blocks so every
     // downstream `documents`-keyed consumer sees the empty-folder homepage:
@@ -1028,7 +1021,7 @@ pub fn generate_blocking_content(
     // Out here because the article map, written far below, carries these to the editor's `url` chip.
     let mut url_collisions: Vec<crate::build::scan::slug::UrlCollision> = Vec::new();
     let (layout_config, site_url, has_rss, show_rss_in_footer, analytics_script) = {
-        // moss#928 item 2: profile the whole-corpus Reduce chain. Each pass
+        // Profile the whole-corpus Reduce chain. Each pass
         // below folds OTHER pages' state into `documents`, so (unlike Loop A)
         // none of it is skippable by the parse cache — this is the floor on
         // a warm content-only rebuild once Loop A is a cache hit.
@@ -1040,7 +1033,7 @@ pub fn generate_blocking_content(
         }
         log::debug!(target: "timing", "[reduce] slug_dedup ({} docs): {:?}", documents.len(), reduce_start.elapsed());
 
-        // PR7b (moss#599): slot files (reserved-name `footer.md`) STAY in
+        // Slot files (reserved-name `footer.md`) STAY in
         // `documents` so the per-page emission loop can see them — they're
         // structurally flagged via `ParsedDocument.slot_only` and the HTML
         // loop below short-circuits on that flag (`if doc.slot_only { continue }`).
@@ -1054,8 +1047,8 @@ pub fn generate_blocking_content(
         // excluded files — the HTML loop's `slot_only` gate enforces the
         // exact same exclusion.
         //
-        // History: docs/archive/2026-04-30-footer-file.md (Task 4) introduced
-        // the retain; this PR replaces it with the structural flag.
+        // History: an earlier design introduced
+        // the retain; this change replaces it with the structural flag.
 
         // Apply frontmatter cascade: parent pages push values to descendants.
         // Drafts now flow through cascade too, so cascade-defined sort/nav/layout
@@ -1134,7 +1127,7 @@ pub fn generate_blocking_content(
         log::debug!(target: "timing", "[reduce] total (uid_dedup..translation_links): {:?}", reduce_pre_start.elapsed());
 
         // Create layout configuration.
-        // Site name is one STRUCTURAL decision (#775) — `moss_core::home::site_name`
+        // Site name is one STRUCTURAL decision — `moss_core::home::site_name`
         // — shared with the bundled-SPA og:title path below so `<title>` and
         // `og:title` always agree. It keys off the home FILENAME stem (index /
         // readme / self-named → folder name), NOT the title VALUE, so a page
@@ -1188,7 +1181,7 @@ pub fn generate_blocking_content(
         // and heading-anchor.js script tags off LayoutConfig, not SiteConfig.
         let layout_config = layout_config.with_link_preview(site_config.link_preview);
         let layout_config = layout_config.with_heading_anchors(site_config.heading_anchors);
-        // [site].floating_nav (ADR-049, default false — opt-in) rides along for
+        // [site].floating_nav (default false — opt-in) rides along for
         // the same reason: the emitter reads LayoutConfig, not SiteConfig.
         let layout_config = layout_config.with_floating_nav(site_config.floating_nav);
 
@@ -1207,12 +1200,12 @@ pub fn generate_blocking_content(
         // Footer RSS link: additionally controlled by [features].rss_footer toggle.
         let has_rss = site_url.is_deployed();
         // Search does NOT ride RSS's `is_deployed()` gate, and deliberately no
-        // longer rides any mode bit (moss#927): build output is mode-independent
+        // longer rides any mode bit: build output is mode-independent
         // by design, so preview and publish index alike, and the latency that
         // justified excluding preview is fixed at the source (indexing is a
         // background-phase worker). `site_config.search` is `[site].search`
         // as resolved in pipeline.rs, and stays the ONE value button and
-        // emitter read. Why: ADR-037 "Gating".
+        // emitter read.
         let has_search = site_config.search;
         let layout_config = layout_config.with_search(has_search);
         let show_rss_in_footer = crate::build::site_config::get_site_rss_footer(source_path)
@@ -1278,7 +1271,7 @@ pub fn generate_blocking_content(
             // live here, written by the config phase above. Re-reading them
             // from `site_config` would be a second copy of the same four
             // facts, which is how the tag gate and the CSS gate came to be
-            // able to disagree (#1149).
+            // able to disagree.
             ..layout_config.assets
         },
     );
@@ -1409,7 +1402,7 @@ pub fn generate_blocking_content(
     // The shell's whole runtime `<script>` block, from the SITE_SCRIPTS
     // table: order, `defer` and gate all live on the row, so a seventh script
     // is one row rather than a tag `let` here plus a `ShellVars` field plus
-    // a `shell.rs` mapping (#1149).
+    // a `shell.rs` mapping.
     let runtime_js_tags = scripts.shell_tags(&layout_config.assets, &aux_path_resolver);
     // Compute site-wide sidebar layout flag: true when ANY document has `sidebar` set.
     // Used by templates to adjust content width (Task 3).
@@ -1421,7 +1414,7 @@ pub fn generate_blocking_content(
     // Consumed by both folder-index synthesis blocks below.
     let folder_display = folder_display_leaves(&project_structure.dirs, &dir_overrides);
 
-    // Term derivation (docs/archive/2026-09-01-tags-and-authors-design.md):
+    // Term derivation:
     // every declared kind's fields become membership claims in term
     // pseudo-folders (`authors/<slug>`, `tags/<slug>`, or a declared kind's
     // own namespace) via the `also_in` slot, and their `*_page:` claims
@@ -1448,7 +1441,6 @@ pub fn generate_blocking_content(
     // Synthesize folder index entries for folders that have child documents but
     // no explicit index file. This completes the page tree so parent folder pages
     // can discover auto-generated subfolders as direct children during HTML rendering.
-    // See docs/reference/build-pipeline.md "Content track: page tree computation".
     {
         use std::collections::HashSet;
 
@@ -1458,7 +1450,7 @@ pub fn generate_blocking_content(
             if doc.url_path == "index.html" {
                 continue;
             }
-            // PR7b (moss#599): slot files are layout chrome, not content
+            // Slot files are layout chrome, not content
             // pages; they must not trigger synthetic folder-index creation.
             if doc.slot_only {
                 continue;
@@ -1524,12 +1516,12 @@ pub fn generate_blocking_content(
         }
     }
 
-    // The incremental render verdict (moss#922 Stage 5b, moss#968 Stage 1).
+    // The incremental render verdict.
     //
     // The computation itself lives in `render/incremental/verdict.rs`: it was
     // produced here, logged here, and consumed by exactly one `partition`
-    // fifty lines below, so nothing else in the build could learn it
-    // (moss#968 Finding 1). `RenderVerdict` is a typed value with one owner
+    // fifty lines below, so nothing else in the build could learn it.
+    // `RenderVerdict` is a typed value with one owner
     // and no public constructor from a raw set.
     let verdict = crate::build::render::incremental::verdict::compute(
         &documents,
@@ -1550,10 +1542,10 @@ pub fn generate_blocking_content(
     // tiny posts in one flat folder. It fingerprints every document, loads and
     // re-saves the facade cache, and builds the dep graph — all sized by the
     // vault, not by the edit. The partition it feeds costs 1.0ms and the one
-    // page it spares costs 3.5ms. Medians of 7 rebuilds. moss#968.
+    // page it spares costs 3.5ms. Medians of 7 rebuilds.
     log::debug!(target: "timing", "[render] verdict computed: {:?}", total_start.elapsed());
 
-    // moss#968 (the render-prelude cut): the literal homepage (`index.html`)
+    // The render-prelude cut: the literal homepage (`index.html`)
     // is excluded from the to_render/to_carry partition below (it is looked
     // up via `documents.iter().find`, not iterated) and used to be rendered
     // unconditionally every build — ~230-260ms on the 226-page reference
@@ -1562,7 +1554,7 @@ pub fn generate_blocking_content(
     // full card synthesis (title/excerpt/cover/dimensions per child) over
     // every listed document regardless of what changed.
     //
-    // ADR-044 already models the root homepage as listing-group host (a) in
+    // The listing-group model already models the root homepage as listing-group host (a) in
     // `listing::groups_read_by`, so `verdict.may_skip` already proves — via
     // the same per-page facade diff plus listing-group digest every other
     // carried page relies on — whether the homepage's own content AND every
@@ -1590,7 +1582,7 @@ pub fn generate_blocking_content(
     // loop result, emitting completion, then propagating with `?`.
     let html_total = documents.len() as u32;
     const HTML_PROGRESS_STRIDE: usize = 5;
-    // Shadow verification (moss#968 §10 gate 4), opt-in via
+    // Shadow verification, opt-in via
     // `MOSS_INCREMENTAL_VERIFY=1`. Only the SNAPSHOT is taken here — the
     // comparison happens in `build::pipeline` after the enhance hook, because
     // what this render phase produces is pre-slot-injection and the bytes on
@@ -1601,7 +1593,7 @@ pub fn generate_blocking_content(
         use rayon::prelude::*;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        // Durable timing, all builds (moss#922 Stage 1).
+        // Durable timing, all builds.
         let _phase_html_pages = PhaseTrace::start("render_html_pages");
 
         // A page rendered in phase 1 (parallel). Manifest registration is
@@ -1632,11 +1624,10 @@ pub fn generate_blocking_content(
         // separately below with is_homepage: true), synthetic folder indexes
         // (source_path == None — rendered by the auto-generate loop below; they
         // live in `documents` only so parent pages discover them as children),
-        // and slot-only files (moss#599 — footer.md etc. parse for their HTML
+        // and slot-only files (footer.md etc. parse for their HTML
         // but emit no standalone page).
         //
-        // Of those that DO emit, the `RenderVerdict` (moss#922 Stage 5b,
-        // moss#968) spares the ones nothing can have changed. Two
+        // Of those that DO emit, the `RenderVerdict` spares the ones nothing can have changed. Two
         // disqualifiers on top of the verdict make page loss structurally
         // impossible rather than merely unlikely: the page must still be on
         // disk in the persistent stage dir, and the previous build's manifest
@@ -1661,7 +1652,7 @@ pub fn generate_blocking_content(
                 !skippable
             });
 
-        // Shadow verification (moss#968 §10 gate 4). Move the carried set into
+        // Shadow verification. Move the carried set into
         // the render set and remember which pages those were; each one snapshots
         // the previous build's final bytes on its way through the loop below,
         // and `pipeline` compares them once slot injection has produced this
@@ -1694,7 +1685,7 @@ pub fn generate_blocking_content(
         // the first error propagated is identical to the sequential loop's.
         let render_total = to_render.len();
         let rendered_atomic = AtomicUsize::new(0);
-        // moss#968 open question 3: how much of this span is per-PAGE work
+        // Open question: how much of this span is per-PAGE work
         // (which a narrower render set reclaims) vs per-BUILD prelude above
         // (which it does not). Answered by the checkpoint below — with the
         // INFO after the loop it cuts the span into before / render / phase-2,
@@ -1805,7 +1796,7 @@ pub fn generate_blocking_content(
 
         log::info!(
             target: "timing",
-            "[render] html pages: parallel render of {} pages took {:?} ({} carried); the rest of this span is per-build prelude (moss#968)",
+            "[render] html pages: parallel render of {} pages took {:?} ({} carried); the rest of this span is per-build prelude",
             render_total,
             t_render_pages.elapsed(),
             to_carry.len(),
@@ -1847,8 +1838,8 @@ pub fn generate_blocking_content(
                 *count += 1;
             }
 
-            // Manifest carry-forward for the skipped pages (moss#922 Stage 5b,
-            // design finding #6). `remove_stale_html` deletes every
+            // Manifest carry-forward for the skipped pages.
+            // `remove_stale_html` deletes every
             // `index*.html` under the stage dir whose key is absent from THIS
             // build's `blocking_keys`, so a page we chose not to re-render is
             // a page we must re-register or destroy. The previous entry is
@@ -2087,9 +2078,9 @@ pub fn generate_blocking_content(
             .map(|analytics| analytics.to_script_tag());
 
         // The synthetic folder indexes — real directories with no `index.md`.
-        // In no `PhaseTrace` until moss#968, and outside the skip machinery
+        // Outside the skip machinery
         // entirely (no source document → no facade entry → nothing to carry),
-        // so all of them re-render on every save. moss#968's target. How many
+        // so all of them re-render on every save. That is the target here. How many
         // there are is a fact about the vault: an earlier count here (171 of
         // 386 pages) matched neither vault measured since — a 226-post bench
         // vault and a real 223-page site each emit exactly ONE.
@@ -2103,7 +2094,7 @@ pub fn generate_blocking_content(
             }
 
             // Filter to direct children through the CANONICAL selector
-            // (moss#968 Stage 1b / ADR-044 rule 3). This loop used to carry an
+            // (the listing-group model's rule 3). This loop used to carry an
             // inlined second copy of the membership filter — prefix test,
             // `also_in`, `is_listable`, direct-child remainder — which meant
             // "one selector, therefore no drift" was false and the listing
@@ -2138,8 +2129,7 @@ pub fn generate_blocking_content(
             // translation root, Block 1 only language-named ones, so an
             // arbitrarily named translation root's subfolder has a document
             // and no page. Both are why this loop still computes its own
-            // folder set instead of iterating the synthetic documents
-            // (moss#1183).
+            // folder set instead of iterating the synthetic documents.
             let synthetic_path = format!("{}/index.md", folder);
             let auto_url_path = format!("{}/index.html", folder);
             let matching_doc = documents.iter().find(|d| d.url_path == auto_url_path);
@@ -2216,8 +2206,7 @@ pub fn generate_blocking_content(
             // Synthetic folder index: no markdown source, so prepend the shared
             // <h1 class="moss-folder-title"> via folder_title::render. Same
             // helper used by folder_cover::render (cover branch) and
-            // render/html.rs (no-cover branch). See
-            // docs/reference/title-rendering.md.
+            // render/html.rs (no-cover branch).
             //
             // Intentionally NOT nav-gated (unlike the no-cover branch in
             // render/html.rs): a synthetic index has no `ParsedDocument`, and
@@ -2286,7 +2275,7 @@ pub fn generate_blocking_content(
             // term page read `Site › 馬欣宜 › 馬欣宜`. The home crumb is
             // `site_name`, as it always was here; an authored page under a
             // nested language folder derives a per-language site title
-            // instead (`render/html.rs`), a remaining twin noted in moss#1183.
+            // instead (`render/html.rs`), a remaining twin noted elsewhere.
             let nav_builder = match compute_breadcrumb_segments(
                 folder_doc,
                 &documents,
@@ -2298,8 +2287,8 @@ pub fn generate_blocking_content(
             };
 
             // Same split as an authored page: `folder_lang` picks the interface
-            // strings, this picks what `<html lang>` claims about the content
-            // (#977). A synthetic index has no authored doc to read it from, so
+            // strings, this picks what `<html lang>` claims about the content.
+            // A synthetic index has no authored doc to read it from, so
             // it takes its tree's.
             let page_lang_tag = matching_doc.and_then(|d| d.lang_tag.clone())
                 .unwrap_or_else(|| crate::i18n::lang_tag_in_tree(&synthetic_path, folder_lang));
@@ -2432,20 +2421,19 @@ pub fn generate_blocking_content(
             page_count += 1;
             auto_index_count += 1;
             // Per-folder DEBUG line removed 2026-09-15 (measured ~650
-            // lines/session in a real upload,
-            // docs/archive/2026-09-15-open-feedback-design.md) — redundant
+            // lines/session in a real upload) — redundant
             // with the one INFO summary just below, which already carries
             // the total; no build-affecting behavior depended on it.
         }
         drop(_phase_auto_index);
         log::info!(
             target: "timing",
-            "[render] auto folder indexes: {auto_index_count} rendered (none skippable — no source document, so no facade entry to carry; moss#968)",
+            "[render] auto folder indexes: {auto_index_count} rendered (none skippable — no source document, so no facade entry to carry)",
         );
         // All vault SHAPE, so measure before optimizing: each index costs in
         // proportion to the children it lists. One flat `posts/` folder of 225
         // children is 259ms of a 388ms call; a real 223-page site with a deep
-        // tree is 0.4ms. Medians of 7 rebuilds. moss#968.
+        // tree is 0.4ms. Medians of 7 rebuilds.
         log::debug!(target: "timing", "[render] auto folder indexes rendered: {:?}", total_start.elapsed());
     }
 
@@ -2492,7 +2480,7 @@ pub fn generate_blocking_content(
     // emit that used to sit here wrote the same bytes to the same path a second
     // time.
 
-    // moss#968 prelude instrumentation: everything from here to `[render]
+    // Prelude instrumentation: everything from here to `[render]
     // total` runs unconditionally on the DOCUMENT COUNT, not on what changed —
     // so on a single-page edit it is pure prelude. These checkpoints (added
     // while investigating why that prelude did not shrink) are cumulative
@@ -2560,7 +2548,7 @@ pub fn generate_blocking_content(
     // sources haven't been cleaned up — indexing here would miss pages and
     // index 404s. The pipeline caller runs it after `remove_stale_html` and
     // after `generate_blocking_content` returns, using `BackgroundContext::search_enabled`
-    // (set below). See `build/feeds/search.rs` and `docs/reference/search.md`.
+    // (set below). See `build/feeds/search.rs`.
 
     // Generate llms.txt — full site content for LLM consumption (unconditional)
     {
@@ -2598,7 +2586,7 @@ pub fn generate_blocking_content(
     // NOTE: This runs BEFORE blocking_keys snapshot so index.html is included
     // in the blocking-phase key set and won't be deleted by stale cleanup.
     //
-    // Empty-folder onboarding (per docs/archive/2026-05-28-onboarding-design.md):
+    // Empty-folder onboarding:
     // a synthetic homepage was pushed into `documents` earlier — just after
     // markdown processing finished and before slug/layout/sitemap loops —
     // so the lookup below finds it identically to a real `index.md`.
@@ -2608,7 +2596,7 @@ pub fn generate_blocking_content(
         let homepage_doc = documents.iter().find(|d| d.url_path == "index.html");
 
         if homepage_carried {
-            // moss#968 Stage 2c: `homepage_carried` (computed above, before
+            // `homepage_carried` (computed above, before
             // the render loop) already proved via `verdict.may_skip` that
             // neither the homepage's own facade nor any listing group it
             // reads has moved — reuse the previous build's index.html
@@ -2729,7 +2717,7 @@ pub fn generate_blocking_content(
     let mut sitemap_pages: std::collections::BTreeSet<String> = pending.pages_registered().cloned().collect();
 
     // All asset copying (images, other files, static dirs, colocated assets) is
-    // deferred to the background phase. Per PR #242's principle: "every source file
+    // deferred to the background phase. The guiding principle: "every source file
     // either becomes HTML (markdown) or gets copied to the same relative path."
     // The background phase does a single filesystem walk instead of maintaining
     // separate lists per category.
@@ -2792,7 +2780,7 @@ pub fn generate_blocking_content(
         pending,
     ) {
         // A build that could not read what is live cannot notice a rename, and
-        // an unnoticed rename 404s the old URL for good (moss#1079).
+        // an unnoticed rename 404s the old URL for good.
         //
         // Logged, not shown. The author cannot make the record readable, and
         // the risk is conditional on a rename she has not made — so the app
@@ -2922,8 +2910,8 @@ pub fn generate_blocking_content(
     // conventions (filename, folder/index.md, slug overrides, etc.).
     //
     // Hash format: xxHash3 via ctx.emit (was sha2::Sha256 in the pipeline.rs version).
-    // One-time deploy diff for subscribe/{confirmed,expired}/index.html — documented
-    // as expected in moss#524 Task 5.
+    // One-time deploy diff for subscribe/{confirmed,expired}/index.html — this is
+    // an expected, documented behavior.
     {
         let domain_cfg =
             crate::build::site_config::get_domain_config(source_path).unwrap_or_default();
@@ -2963,7 +2951,7 @@ pub fn generate_blocking_content(
         registry.clear();
     }
 
-    // ADR-001: Non-blocking video conversion
+    // Non-blocking video conversion:
     // Collect video items for background processing instead of converting inline.
     // Videos will be converted in a background task AFTER the preview opens.
     let video_items = {
@@ -2975,7 +2963,7 @@ pub fn generate_blocking_content(
                 items.len()
             );
 
-            // ADR-002: Populate AssetRegistry with pending assets for placeholder support
+            // Populate AssetRegistry with pending assets for placeholder support.
             // This allows the preview server to serve SVG placeholders while videos convert
             if let Some(registry) = services.and_then(|s| s.assets.as_deref()) {
                 for item in &items {
@@ -3118,7 +3106,7 @@ pub fn generate_blocking_content(
     // `if gate { emit }` blocks; see `build::emit::scripts`.
     scripts.emit(&site_assets, output_dir, pending)?;
 
-    // ADR-030 §3.4/§3.5: email/RSS math PNG projection. This is only the GATE
+    // Email/RSS math PNG projection. This is only the GATE
     // (the fullscreen.js conditional-emission precedent above) — the emission
     // itself lives emit-shaped in `build::emit::math_png`, never in this file.
     // Runs even with `[site].math = false`: the retention half re-registers
@@ -3266,8 +3254,7 @@ pub fn generate_blocking_content(
     // intermediate manifest at this point would land a pre-sweep, pre-deferred
     // snapshot on disk; if anything reads it during the window before
     // seal+persist (or seal+persist fails midway), it would observe stale
-    // entries and the deploy validation would trip. See
-    // `docs/archive/2026-05-18-manifest-integrity.md`. Confirmed-safe consumers
+    // entries and the deploy validation would trip. Confirmed-safe consumers
     // of `hashes.json` during this window: deferred-phase mtime check
     // (file-missing → mtime=0 → safe re-hash); `load_previous_hashes` (next
     // build start only, gated by `FolderSession`); `push_site_inner` (waits
@@ -3316,7 +3303,7 @@ pub fn generate_blocking_content(
             .and_then(|d| d.description.clone())
             .filter(|s| !s.trim().is_empty());
         // og:title routes through the SAME structural decision the static
-        // `<title>` uses (#775) — `home::site_name` keys off the home filename
+        // `<title>` uses — `home::site_name` keys off the home filename
         // stem, so a no-`title:` root index yields the folder name here too
         // (previously this path used `doc.title` UNFILTERED and could leak the
         // stem). `<title>` and `og:title` now agree on every path.
@@ -3471,7 +3458,7 @@ pub fn generate_blocking_content(
         // collisions in HEADLESS builds too (no services/registry there) —
         // recomputing it in the worker is forbidden (no ProjectStructure;
         // divergence ⇒ registered-but-never-encoded rung ⇒ sealed-deploy
-        // 404, ADR-013).
+        // 404).
         let rung_collisions = crate::build::media::rungs::rung_collision_map(
             project_structure,
             &dir_overrides,
@@ -3492,9 +3479,9 @@ pub fn generate_blocking_content(
         (items, rung_collisions)
     };
 
-    // ADR-001: Create BackgroundContext with video items for async processing
-    // canonical_dir is set to None here; build.rs sets it during rebuilds
-    // Task 4: Thread ffmpeg_bin_path from scan so build.rs doesn't re-download
+    // Create BackgroundContext with video items for async processing.
+    // canonical_dir is set to None here; build.rs sets it during rebuilds.
+    // Thread ffmpeg_bin_path from scan so build.rs doesn't re-download
     let background_ctx = BackgroundContext {
         video_items,
         image_items,
@@ -3524,7 +3511,7 @@ pub fn generate_blocking_content(
             missing_media,
         },
         background_ctx,
-        // PR7b (moss#599): surface the parsed page slice to the caller so
+        // Surface the parsed page slice to the caller so
         // post-build native-slot generation (`generate_native_slots` in
         // `build.rs`) can consult typed `features.inline_subscribe` flags
         // and pick up slot-only files (root `footer.md`) through the same
@@ -3532,7 +3519,7 @@ pub fn generate_blocking_content(
         // filesystem-scan hacks `project_has_inline_subscribe` and
         // `render_footer_pages_from_disk`.
         documents,
-        // Shadow-verification snapshots (moss#968 §10 gate 4). `None` unless
+        // Shadow-verification snapshots. `None` unless
         // `MOSS_INCREMENTAL_VERIFY=1`; the comparison belongs to the caller,
         // which is the only place that has run the enhance hook.
         carry_verification,
@@ -3612,9 +3599,9 @@ pub(super) fn resolve_favicon(
         }
     });
 
-    // Both writes go through `io_utils` — see ADR-043. The default-favicon
+    // Both writes go through `io_utils`. The default-favicon
     // write below is the pipeline's FIRST output write, which is why an evicted
-    // `.moss/build.nosync/` surfaced here first (moss#964 §3): it failed `EDEADLK`, the
+    // `.moss/build.nosync/` surfaced here first: it failed `EDEADLK`, the
     // `?` returned from the whole pipeline, and the cloud gate four hundred
     // lines below never got to speak. The read above already guarded that
     // hazard for the user's favicon; the write did not.

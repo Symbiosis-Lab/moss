@@ -104,7 +104,6 @@ pub struct FieldDefinition {
     /// Source of this field definition.
     /// `None` for builtin fields, `Some("review")` for plugin-contributed fields.
     /// Used by the frontend to group fields by source in the editor form.
-    /// See docs/reference/plugin-schema-contributions.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     /// UI group name for the add-property dropdown (e.g. "Common", "Children").

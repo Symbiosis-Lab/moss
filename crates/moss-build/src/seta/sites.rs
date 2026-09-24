@@ -1,7 +1,6 @@
 //! Site registration, metadata, publish/push, and analytics endpoints for moss-seta.
 //!
-//! Split out of the app-side `domain/moss_seta_client.rs` (since deleted) per
-//! docs/archive/2026-04-24-codebase-restructure-continuation-plan.md Task 7.
+//! Split out of the app-side `domain/moss_seta_client.rs` (since deleted).
 
 use serde::{Deserialize, Serialize};
 use super::client::{MossSetaClient, SetaError};
@@ -256,7 +255,7 @@ impl MossSetaClient {
     /// * `generation_id` - The deploy generation being uploaded; sent as `X-Moss-Generation`
     ///   so the server writes the file into the correct generation directory.
     /// * `stats` - The deploy's shared [`upload_policy::Throughput`], counting
-    ///   attempts for the upload summary (#1133). `None` from contexts with no
+    ///   attempts for the upload summary. `None` from contexts with no
     ///   deploy-level accounting (tests).
     pub async fn upload_file(
         &self,
@@ -311,9 +310,6 @@ impl MossSetaClient {
     /// Server-side `writeSymlink` validates target containment and creates a
     /// real POSIX symlink at the link's path. Caddy serves it at request time
     /// (it follows symlinks by default in v2.7+).
-    ///
-    /// See `docs/reference/deploy-upload-contract.md` for the full
-    /// wire-format contract.
     ///
     /// # Arguments
     /// * `generation_id` - The deploy generation being uploaded; sent as `X-Moss-Generation`

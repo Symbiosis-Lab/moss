@@ -5,8 +5,8 @@
 //! own hosting, and this one builds and hands the result to whichever plugin
 //! `[hooks] deploy` names. It is the last one that needed a window, and it
 //! needed one only because nobody had written it: the plugin RUNTIME crossed
-//! at ADR-076, so `HostPorts::plugins` already yields a manager whose
-//! `execute_deploy` is pure moss-build (track P slice P2b, moss#989).
+//! over, so `HostPorts::plugins` already yields a manager whose
+//! `execute_deploy` is pure moss-build (track P slice P2b).
 //!
 //! Shaped like [`super::push::run_hosted_deploy`] on purpose — resolve, build,
 //! gate, then an inner body over what the build produced — because the app's
@@ -18,7 +18,7 @@
 //! preamble got the folder built.
 //!
 //! **What this route does NOT do.** It brings no stack up. The app preflights
-//! the Tor stack before any bytes move (`system::stack_serving`, ADR-050) and
+//! the Tor stack before any bytes move (`system::stack_serving`) and
 //! a one-shot does not; a terminal publish to a stopped OnionPress is refused
 //! by the plugin itself, whose refusal is what tells the author to start it —
 //! that wording is the plugin's, not moss's. And moss runs no probe of its own
@@ -115,7 +115,7 @@ pub async fn run_plugin_deploy(
 
     // The setup gate FIRST, before the build — a credential the target
     // declared and moss does not hold is knowable at t=0, and refusing after a
-    // build spends minutes to say something that was already true (ADR-072).
+    // build spends minutes to say something that was already true.
     // This is the one route the gate can refuse: moss's own hosting has no
     // deploy plugin to be unset up.
     crate::deploy::publish_setup::refuse_publish(&folder_str)?;

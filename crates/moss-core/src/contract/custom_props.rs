@@ -9,7 +9,7 @@
 //! `--moss-escape` is set by `[data-width]` on any block, and `data-page` lives
 //! on `<body>`, which carries no `moss-*` class. Inventing a `moss-body` entry
 //! to give it a home would have added an orphan contract entry for a class moss
-//! never emits — precisely what teaches agents to target dead selectors (#777).
+//! never emits — precisely what teaches agents to target dead selectors.
 //!
 //! ## Adding a hook
 //!
@@ -59,7 +59,7 @@ pub struct CustomProp {
 /// `--moss-escape` is set by `[data-width]` on any block).
 ///
 /// Enforced by `every_escape_hatch_is_declared` in
-/// `src-tauri/tests/components_sync_test.rs`: a `var(--moss-*, …)` read that no
+/// the desktop app's `components_sync_test.rs`: a `var(--moss-*, …)` read that no
 /// entry here declares fails the build. That test is the point of the table —
 /// a hook nothing declares is a hook no agent can find.
 pub const CUSTOM_PROPS: &[CustomProp] = &[
@@ -79,7 +79,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-nav-island-display",
         owner: "moss-nav-island",
         default: "block",
-        description: "Forces the floating nav island off from CSS, media queries included — the page then behaves as it did before ADR-049: the masthead scrolls away and nothing replaces it. Not the main switch: the island is opt-in and ships off, so `[site].floating_nav = true` (the Settings → Services toggle) is what turns it on in the first place, and this property is for a theme that wants it off at some widths and not others. Appearance is otherwise tuned through the island's contract-registered classes; its measure already tracks `--moss-nav-width`/`--moss-content-width`, so widening the nav widens the island with it.",
+        description: "Forces the floating nav island off from CSS, media queries included — the page then behaves as it did before this feature shipped: the masthead scrolls away and nothing replaces it. Not the main switch: the island is opt-in and ships off, so `[site].floating_nav = true` (the Settings → Services toggle) is what turns it on in the first place, and this property is for a theme that wants it off at some widths and not others. Appearance is otherwise tuned through the island's contract-registered classes; its measure already tracks `--moss-nav-width`/`--moss-content-width`, so widening the nav widens the island with it.",
     },
     CustomProp {
         name: "--moss-sidenote-reserve",
@@ -219,10 +219,10 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
 ///
 /// `<body data-page="home">` is the case that forced this to exist. It is a
 /// first-class part of the contract — the only thing that tells a stylesheet
-/// which page it is on, and okagaki's entire front page hangs off it — but
+/// which page it is on, and a site's entire front page can hang off it — but
 /// `<body>` has no class, so declaring it would have meant inventing a
 /// `moss-body` entry for a class moss never emits. That is the orphan-entry
-/// problem (#777) in miniature: a contract that names selectors moss does not
+/// problem in miniature: a contract that names selectors moss does not
 /// produce teaches agents to target dead ones.
 pub struct ScopeAttr {
     /// CSS selector for the element carrying it (e.g. `"body"`).

@@ -11,7 +11,7 @@ use crate::i18n::link::TranslationLink;
 /// so it can build from `NavigationBuilder`'s private state without widening
 /// any of it.
 mod breadcrumb;
-/// The floating nav island (ADR-049). A child module for the same reason.
+/// The floating nav island. A child module for the same reason.
 mod island;
 
 /// A single segment of a breadcrumb trail
@@ -144,7 +144,7 @@ impl<'a> NavigationBuilder<'a> {
         // The tree segment the page ACTUALLY lives under, never a code spelled
         // back out of the interface enum. `en-us/` and `en-gb/` are language
         // trees moss accepts but `Language::code()` cannot spell, so their
-        // pages linked home to `/en/` — a path no build emits (#949). The
+        // pages linked home to `/en/` — a path no build emits. The
         // folder name is the path, by construction.
         match self.current_page_url.and_then(moss_core::home::lang_tree_prefix) {
             Some(tree) if self.effective_lang() != self.lang => {
@@ -221,8 +221,7 @@ impl<'a> NavigationBuilder<'a> {
 
         let page_items: Vec<String> = nav_documents.iter()
             .map(|doc| {
-                // Nav link text uses the chrome label (plain text). See
-                // docs/archive/2026-04-17-title-simplification.md.
+                // Nav link text uses the chrome label (plain text).
                 let label = doc.label.clone();
                 let pretty = crate::build::scan::article_map::to_pretty_url(&doc.url_path);
                 let href = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (nav href to user content page, not a framework asset)
@@ -243,7 +242,7 @@ impl<'a> NavigationBuilder<'a> {
         // theme.ts's toggleMobileMenu keeps it in sync on open/close, and the
         // outside-click handler resets it on close. aria-controls points at
         // the nav-links id below, so a screen reader can name what the button
-        // discloses (WCAG 4.1.2, moss#1047).
+        // discloses (WCAG 4.1.2).
         let hamburger = if has_nav_items {
             format!(
                 r#"<button class="mobile-menu-button" onclick="toggleMobileMenu()" aria-label="{}" aria-expanded="false" aria-controls="nav-links"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>"#,
@@ -256,7 +255,7 @@ impl<'a> NavigationBuilder<'a> {
         // Nav links (only if nav items exist). `id="nav-links"` is the
         // aria-controls target above; theme.ts also uses it to toggle `inert`
         // on the closed mobile menu so its (invisible) links leave the tab
-        // order (WCAG 2.4.7/2.4.3, moss#1047).
+        // order (WCAG 2.4.7/2.4.3).
         let nav_links = if has_nav_items {
             format!(r#"<div class="nav-links" id="nav-links">{}</div>"#, page_items.join(""))
         } else {
@@ -273,7 +272,7 @@ impl<'a> NavigationBuilder<'a> {
 
         // Search icon — only when this build actually shipped an index
         // (`_moss/pagefind/`).
-        // The client runtime (frontend/site) binds the click; with JS off the
+        // The client runtime binds the click; with JS off the
         // button is inert, which is why it is a `<button>` and not a link.
         if self.has_search {
             let search_label = crate::i18n::t(self.current_lang, "nav_search");
@@ -296,7 +295,7 @@ impl<'a> NavigationBuilder<'a> {
                     r#"<a href="{}" class="nav-lang-link" hreflang="{}">{}</a>"#,
                     // The declared tag, not `code()` — whose own doc says to use
                     // the BCP-47 form for an hreflang, and which collapses an
-                    // unshipped language onto one of three variants (moss#1177).
+                    // unshipped language onto one of three variants.
                     href, t.lang_tag, t.display_name
                 )
             }).collect();
@@ -318,7 +317,7 @@ impl<'a> NavigationBuilder<'a> {
         // exist only where they carry information the row has hidden — a
         // truncated breadcrumb label, a fold's `…` levels — and those are
         // JS-promoted (breadcrumb-hint.ts, breadcrumb-fold.ts), never emitted
-        // here. See docs/archive/2026-08-09-nav-two-line-split-and-touch-hints.md.
+        // here.
         let theme_label = crate::i18n::t(self.current_lang, "nav_toggle_theme");
         icon_items.push(format!(
             r#"<button class="nav-theme-btn" type="button" aria-label="{}" onclick="toggleTheme()"><svg class="theme-toggle-icon" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="1em" height="1em" fill="currentColor" stroke-linecap="round" viewBox="0 0 32 32"><clipPath id="theme-toggle__classic__cutout"><path d="M0-5h30a1 1 0 0 0 9 13v24H0Z"/></clipPath><g clip-path="url(#theme-toggle__classic__cutout)"><circle cx="16" cy="16" r="9.34"/><g stroke="currentColor" stroke-width="1"><path d="M16 5.5v-4"/><path d="M16 30.5v-4"/><path d="M1.5 16h4"/><path d="M26.5 16h4"/><path d="m23.4 8.6 2.8-2.8"/><path d="m5.7 26.3 2.9-2.9"/><path d="m5.8 5.8 2.8 2.8"/><path d="m23.4 23.4 2.9 2.9"/></g></g></svg></button>"#,
@@ -344,9 +343,8 @@ impl<'a> NavigationBuilder<'a> {
     ///
     /// Three-segment vertical stack: leading author chrome (footer.md) →
     /// auto-generated link list → trailing widget (subscribe form). The
-    /// trailing-widget position is the design B decision from
-    /// `docs/archive/2026-05-06-footer-default-order.md` — links lead, the
-    /// auto-injected widget trails.
+    /// trailing-widget position is a deliberate design decision — links lead,
+    /// the auto-injected widget trails.
     ///
     /// Flat HTML — authored content sits as direct children of `<footer>`.
     /// The default visual chrome (border-top divider, padding, muted
@@ -598,7 +596,7 @@ pub fn titlecase_segment(segment: &str) -> String {
 /// **Translation roots**: A folder whose index page is a translation of the site
 /// homepage (linked via `translationKey` or stem convention) is transparent in
 /// breadcrumbs — it doesn't appear as a segment. Instead, the home segment links
-/// to that folder's URL. See `docs/reference/breadcrumb-navigation.md`.
+/// to that folder's URL.
 pub fn compute_breadcrumb_segments(
     doc: &ParsedDocument,
     all_docs: &[ParsedDocument],

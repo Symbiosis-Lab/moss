@@ -18,7 +18,7 @@ fn article_doc(source_path: &str, url_path: &str) -> ParsedDocument {
     }
 }
 
-/// The regression this predicate exists to close (moss#1101): a root
+/// The regression this predicate exists to close: a root
 /// folder-note's `url_path` can end up NOT being `index.html` (its home
 /// election can miss for reasons entirely upstream of this predicate), while
 /// its `PageKind::Folder` + source location still correctly say it IS the

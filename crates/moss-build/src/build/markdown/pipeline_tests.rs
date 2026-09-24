@@ -161,8 +161,8 @@ fn build_asset_snapshot_slug_collision_is_deterministic() {
 /// content too short for `whatlang` to detect, the doc should fall back
 /// to the site's default language — not a hard-coded English.
 ///
-/// Regression for issue #545. Mirrors the real-world failure on a
-/// Chinese-default site with `视频/山间小曲.md` (~13 CJK chars
+/// Regression: mirrors a real-world failure on a
+/// Chinese-default site where a short post (~13 CJK chars
 /// of body) was rendering with `lang=en`, mislabeling it across the
 /// HTML lang attribute, language switcher, and pages-by-lang queries.
 #[test]
@@ -353,8 +353,7 @@ fn frontmatter_lang_overrides_site_default() {
 /// Article with no frontmatter title and no body H1 — the page must render
 /// with an injected <h1 class="moss-article-title"> derived from the
 /// title-cased filename. This matches the Obsidian convention where the
-/// filename IS the document title. See
-/// docs/archive/2026-04-28-auto-h1-injection-design.md.
+/// filename IS the document title.
 #[test]
 fn article_without_h1_or_title_injects_filename_as_h1() {
     let md = "短文章正文。\n";
@@ -846,10 +845,9 @@ fn article_with_empty_title_suppresses_injection() {
 /// Index page (folder index) with no body H1 — moss must NOT inject.
 /// Index pages typically open with a hero or designed landing layout
 /// where a stacked text H1 would compete with the visual header.
-/// See docs/archive/2026-04-28-auto-h1-injection-design.md.
 #[test]
 fn index_page_without_h1_does_not_inject() {
-    let md = "---\ntitle: Yin Lab @ NYU\n---\n\nWelcome.\n";
+    let md = "---\ntitle: Ocean Lab @ Example University\n---\n\nWelcome.\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
         "main.md",
@@ -1555,7 +1553,7 @@ fn filename_suffix_overrides_site_default() {
 }
 
 /// `is_index_file` must stay true for a folder index that has a
-/// frontmatter slug override. After the issue-#587 promotion fix, an
+/// frontmatter slug override. After the home-override promotion fix, an
 /// earlier draft used "page_map URL parent equals source parent" as
 /// the only signal, which would silently regress this case:
 /// `posts/index.md` with `url: blog` produces page_map URL
@@ -1595,7 +1593,7 @@ fn folder_index_with_slug_override_is_still_index() {
 /// The `home: true` marker promotes a non-INDEX_STEM file to be its
 /// folder's home — the translated index page lands at
 /// `<folder>/index.html` and is treated as a folder index by the
-/// pipeline. Issue #587.
+/// pipeline.
 #[test]
 fn home_override_is_index_via_page_map() {
     let md = "---\ntitle: Mountain Home\nlang: en\nhome: true\n---\n\n# Hello\n";
@@ -1852,7 +1850,7 @@ fn test_pipeline_no_site_id_yields_pending_form() {
 /// preview-scroll paragraph-precision feature that PR7a's
 /// `transform_events` deletion temporarily disabled.
 ///
-/// The downstream consumer is `frontend/bridge/iframe-bridge.ts`'s
+/// The downstream consumer is the preview bridge's
 /// `scrollToSourceLine` RPC, which queries
 /// `[data-source-line], [data-source-range]` and scrolls to the
 /// element whose source line ≤ target line.
@@ -1983,7 +1981,7 @@ fn frontmatter_invalid_yaml_warning_fires_only_on_malformed_block() {
     );
 }
 
-/// #771 edge (b): the source-line-offset search must NOT match a body line
+/// Edge case B: the source-line-offset search must NOT match a body line
 /// against an identical line INSIDE the frontmatter, or the offset is
 /// under-counted and every annotation lands too high (into the frontmatter
 /// region). Reachable via the simplified-frontmatter path, which silently
@@ -2550,8 +2548,6 @@ Para with [link](docs/) and *em* and `code`.
 // All three share the empty-alt a11y guard: an image with empty alt does
 // not produce `<figure>` even when a caption is supplied, so screen-reader
 // users never get an undescribed image with a captioned wrapper.
-//
-// See docs/archive/2026-05-05-figure-captions-design.md.
 
 /// Render with an explicit `[site].math` answer, everything else at
 /// production defaults.
@@ -2752,7 +2748,7 @@ fn site_heading_anchors_off_omits_permalink_anchor() {
 }
 
 /// `render_markdown_to_html_with` is the fragment renderer `Shortcode::Recent`
-/// uses for its authored fallback_markdown (moss#915) — it must honor the
+/// uses for its authored fallback_markdown — it must honor the
 /// caller's `heading_anchors` value rather than hardcoding one, or a site
 /// with `[site].heading_anchors = false` still leaks anchors from `:::recent`
 /// fallback blocks.
@@ -2799,7 +2795,7 @@ fn tags_of(content: &str) -> Option<Vec<String>> {
     doc.tags
 }
 
-/// Inline `#tags` (issue #649 P1) must actually reach `doc.tags` alongside
+/// Inline `#tags` must actually reach `doc.tags` alongside
 /// frontmatter `tags:` — frontmatter first, inline appended. The union is
 /// made HERE at the document level, deliberately NOT in the folder cascade:
 /// cascade's rule stays uniform child-overrides-folder (cascade.rs), so a
@@ -3210,7 +3206,7 @@ fn implicit_figure_html_shape_satisfies_gallery_regex() {
 //   - moss-core `embed_renderer::tests` (bare-markdown emission)
 //   - snapshot tests (end-to-end HTML shape for wikilink fixtures)
 //
-// The contract test in `src-tauri/tests/img_contract_test.rs` is the
+// The desktop app's own contract test is the
 // regression guard against a `moss:` title reviving on any `<img>` in
 // rendered output (planned extension in PR6).
 
@@ -3528,7 +3524,7 @@ fn wikilink_image_percent_with_graph_still_figure() {
     );
 }
 
-/// moss#754: an image embed's sizing tokens must survive inside a `:::hero`
+/// A regression where an image embed's sizing tokens must survive inside a `:::hero`
 /// overlay, exactly as they do in body prose. The overlay renders through
 /// hero-overlay hooks. Those used to be a partially-delegating wrapper that
 /// forwarded only the styleless image entry point, so `object-fit`/
@@ -3785,8 +3781,8 @@ fn schema_bad_date_format_warns_at_build() {
 
 /// The critical negative: `title` is the schema's one required field, and
 /// `validate_frontmatter` reports an `Error` when it is absent — but moss
-/// deliberately falls back to the filename (docs/reference/title-rendering.md),
-/// so most correct pages omit it. Emitting that error would fire on nearly
+/// deliberately falls back to the filename, so most correct pages omit it.
+/// Emitting that error would fire on nearly
 /// every page and train authors to ignore the whole channel.
 #[test]
 fn missing_title_does_not_warn_at_build() {

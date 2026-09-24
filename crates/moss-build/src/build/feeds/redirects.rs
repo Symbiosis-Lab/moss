@@ -198,10 +198,10 @@ pub fn emit_redirect_stubs(
     // suppresses the SAVE, not the build: the stubs already on disk keep
     // serving, and the next build (after the download lands) writes the real
     // merge. Only a file that is provably absent is legitimately "no redirects
-    // yet" (moss#986).
+    // yet".
     let existing: Option<BTreeMap<String, String>> = load_redirects(&data_dir);
     // An unreadable baseline detects NO new renames — not "no renames". The
-    // difference is the one moss#1079 is about: a build that decides against a
+    // difference is the one the uid-remint bug is about: a build that decides against a
     // record it could not read publishes that decision. Every stub already in
     // `redirects.json` keeps serving (they are merged below and re-emitted),
     // so the site loses nothing it has already earned; what it cannot do is
@@ -318,7 +318,7 @@ pub fn load_redirects(data_dir: &Path) -> Option<BTreeMap<String, String>> {
 ///
 /// Deliberately NOT an `io_utils` output write. `.moss/data` is user state —
 /// this file is a site's rename history, it syncs on purpose, and it is not
-/// regenerable — so ADR-043's "dataless is absent" rule does not reach it. If
+/// regenerable — so the "dataless is absent" rule for regenerable output does not reach it. If
 /// the sync client has evicted it, clobbering it with a map that has lost the
 /// history is worse than failing, and "unreadable is not absent" applies in its
 /// original, unqualified form.
@@ -909,7 +909,7 @@ mod tests {
         );
     }
 
-    /// The moss#1079 shape on the redirect side: the record exists and cannot
+    /// The uid-remint bug's shape on the redirect side: the record exists and cannot
     /// be read. Every stub the site has already earned must keep being emitted
     /// — the accumulated `redirects.json` is a separate file and is readable —
     /// while the rename this build would otherwise have detected is NOT

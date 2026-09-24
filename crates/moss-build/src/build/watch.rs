@@ -8,8 +8,8 @@
 //! [`crate::build_shell::watch`], which calls everything here and decides
 //! nothing itself. The two files are one feature; read them together.
 //!
-//! The split is why this half names no tauri — it travels to `moss-build`
-//! (ADR-050), and the other half cannot.
+//! The split is why this half names no tauri — it travels to `moss-build`,
+//! and the other half cannot.
 //!
 //! ## The debouncer delays; it does not enforce a quiet period
 //!
@@ -25,8 +25,7 @@
 //! This said the opposite until 2026-08-31 ("a resetting 250ms quiet window;
 //! 10 plugin downloads, one rebuild"), which is why a user's paired triggers
 //! read as a debounce artefact instead of as two real disk events. Coalescing
-//! past one drain happens downstream, in the worker's capacity-1 slot. See
-//! `docs/archive/2026-08-31-rebuild-pairs-per-save.md`.
+//! past one drain happens downstream, in the worker's capacity-1 slot.
 //!
 //! The loop lives inside [`notify_debouncer_full::new_debouncer`]; our wrapper
 //! forwards its batched callback onto `trigger_rebuild_with_lock`.
@@ -45,9 +44,7 @@
 //! — into a single `Modify(Name(Both))` event with `paths = [from, to]`,
 //! using inode/file-id matching. This is the unified path for both in-app
 //! and external (Finder/CLI/git) renames, replacing the previous
-//! `RebuildState.pending_renames` queue (closes issue #637).
-//!
-//! See `docs/archive/2026-05-22-editor-state-architecture.md` PR-1.
+//! `RebuildState.pending_renames` queue.
 //!
 //! ## Rebuild Coordination
 //!
@@ -82,7 +79,7 @@ use super::pipeline::load_previous_hashes;
 use super::BuildTrigger;
 
 
-/// Classify an actionable debounced batch (moss#922 Stage 2).
+/// Classify an actionable debounced batch.
 ///
 /// `Structural` if ANY event in the batch is a create/remove/rename — a
 /// mixed batch (e.g. one content edit + one new file) cannot be salvaged as
@@ -197,9 +194,6 @@ fn previous_hashes_for_diff(folder_path: &str, output: &Path) -> SiteHashes {
 /// disk artifact a background task may have rewritten): Vite HMR's per-module
 /// version/timestamp stamping <https://vite.dev/guide/api-hmr> and webpack's
 /// `currentHash`/`lastHash` <https://webpack.js.org/concepts/hot-module-replacement/>.
-/// Full survey + references: docs/reference/editor-preview-sync.md
-/// ("Prior art & references"). This closes the §6 "baseline parity" caveat in
-/// docs/archive/2026-05-31-preview-refresh-stale-hash-race.md.
 pub fn baseline_for_rebuild(
     in_memory: Option<SiteHashes>,
     folder_path: &str,
@@ -238,7 +232,7 @@ fn compute_rebuild_event(
     // (and, when the morph declines, a full reload with a flash) to avoid that
     // is the worse trade. This is the PREVIEW-REFRESH decision only — the
     // manifest and the deploy diff still carry `_moss/pagefind/**` in full,
-    // which ADR-045 requires (see `feeds/search_lane.rs`: an exemption there
+    // which is required (see `feeds/search_lane.rs`: an exemption there
     // would have the deploy read the bundle as removed and delete it live).
     let is_search = crate::build::served_path::ServedPath::is_search_asset;
     let changed_output_files: Vec<String> = new_hashes
@@ -375,7 +369,6 @@ fn compute_source_change_set(
 /// behaviors:
 ///
 /// PATTERN 6 — INODE+FILE-ID PAIRING via notify-debouncer-full
-/// see docs/archive/2026-05-22-editor-state-architecture.md
 ///
 /// 1. For each `(old_source_path, new_source_path)` pair from the watcher's
 ///    stitched rename events, looks up the OLD output path in
@@ -497,8 +490,7 @@ fn build_rebuild_event_with_renames(
 
     // Source-domain fields: surface the per-source changes the watcher detected
     // (and that compute_rebuild_event/output_pairs intentionally collapsed to
-    // output-domain). Consumed by the EntryRegistry per
-    // docs/archive/2026-05-25-entry-id-architecture.md.
+    // output-domain). Consumed by the EntryRegistry.
     let source_changes_present = !source_creates.is_empty()
         || !source_deletes.is_empty()
         || !rename_pairs.is_empty();
@@ -555,8 +547,7 @@ pub fn decide_rebuild_event(
 // Content-hash gate: suppress watcher events when the files they reference are
 // byte-identical to the prior build's source manifest. Breaks the runaway
 // rebuild loop induced by cloud-sync providers (Dropbox, iCloud) that re-emit
-// metadata events for files moss just read. See
-// docs/archive/2026-04-23-watcher-content-hash-gate.md.
+// metadata events for files moss just read.
 // ---------------------------------------------------------------------------
 
 /// Outcome of comparing a watcher event's file against the stored source manifest.
@@ -871,9 +862,8 @@ pub(crate) fn should_gate_modify_event(kind: notify::EventKind) -> bool {
 
 /// What the pump may decide about one event WITHOUT touching file contents.
 ///
-/// Phase 1b of `docs/archive/2026-08-18-watcher-reliability-architecture.md`
-/// ("The pump … never touches the disk — the content-hash gate's stat+SHA-256
-/// moves to the build worker"): the event loop applies only the cheap
+/// The pump … never touches the disk — the content-hash gate's stat+SHA-256
+/// moves to the build worker: the event loop applies only the cheap
 /// verdicts here; the hash tier (`should_rebuild_for_paths`) runs at the
 /// worker's admission, where a wedged read costs one parked build instead of
 /// the whole event loop.
@@ -1091,7 +1081,7 @@ pub fn collect_raw_create_keys(
 /// second list had already drifted: it excluded `.moss/`, `.git/` and `node_modules/`,
 /// but not a root `AGENTS.md`/`CLAUDE.md`/`GEMINI.md`, which the tree hides and which
 /// **moss writes itself** when agent-file sync is on. So the common case — moss creating
-/// the very file it hides — announced a path no row could match (#955).
+/// the very file it hides — announced a path no row could match.
 fn raw_create_key(root: &Path, abs: &Path) -> Option<String> {
     // path_is_watchable rejects dotfiles/dirs (e.g. `.git`, `.secret.md`) ANYWHERE in the
     // path and `node_modules`. It is still needed alongside `is_hidden`, which only

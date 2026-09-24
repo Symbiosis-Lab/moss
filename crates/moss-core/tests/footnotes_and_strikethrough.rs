@@ -13,8 +13,6 @@
 //! tests over hand-built `Block`s cannot catch the wiring failures here: the
 //!1598 in-crate tests all passed while the bug shipped for two months,
 //! because zero of them contained a `~~` or a `[^`.
-//!
-//! See ADR-035.
 
 use moss_core::ast::{classify_remaining_urls, parse, render_document, DefaultHooks};
 use std::collections::HashSet;
@@ -135,7 +133,7 @@ fn strikethrough_in_blockquote_and_heading_survives() {
 /// span — both halves render as ordinary text.
 ///
 /// Pinned here because the description stripper in
-/// `src-tauri/src/build/page/meta.rs` mirrors exactly this rule. If the body
+/// the desktop app's `meta.rs` mirrors exactly this rule. If the body
 /// ever starts consuming an undefined token, the page and its own
 /// <meta name="description"> would disagree about the same characters — which
 /// is the bug that made the stripper gate on definitions in the first place.
@@ -296,7 +294,7 @@ fn repeated_label_first_definition_wins_endnote_and_repeat_renders_in_place() {
     // FootnoteIndex::definition is explicitly first-wins ("a repeated label
     // is an authoring error; first wins"): the FIRST definition is hoisted
     // into the endnote, and the repeat renders in place in the body — wrong
-    // but visible, which beats GFM's silent drop. ADR-035 § render contract.
+    // but visible, which beats GFM's silent drop.
     let html = render("A[^1].\n\n[^1]: first\n\n[^1]: second\n");
     assert_eq!(html.matches(r#"<li id="fn-1" tabindex="-1">"#).count(), 1, "{html}");
     let (_, after_li) = html
@@ -394,7 +392,7 @@ fn a_document_without_footnotes_gains_no_endnote_section() {
 }
 
 // ---------------------------------------------------------------------------
-// Task lists render as checkboxes (ADR-035 § Task lists, amended)
+// Task lists render as checkboxes
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -730,8 +728,8 @@ fn two_hoisted_headings_are_numbered_in_endnote_order() {
 // ---------------------------------------------------------------------------
 //
 // Grid cells, the hero overlay and compound-link cards render through the
-// context-free `render_blocks` entry point with a fresh `FootnoteCtx`
-// (ADR-035), and `FootnoteIndex`'s collector stops at shortcode bodies — so a
+// context-free `render_blocks` entry point with a fresh `FootnoteCtx`,
+// and `FootnoteIndex`'s collector stops at shortcode bodies — so a
 // definition written in a cell is never hoisted to the endnotes. It renders
 // IN PLACE, first in the DOM. Bucketing its headings as "hoisted" numbered
 // them after the entire body, handing the bare slug to a copy that renders

@@ -8,10 +8,10 @@
 //!
 //! 1. Emit the class from your renderer module (`build/markdown/*`, `build/components/*`).
 //! 2. Add a `ComponentEntry` to [`COMPONENTS`] here.
-//! 3. Run `cargo test --test components_sync_test` from src-tauri/ — the
+//! 3. Run `cargo test --test components_sync_test` from the desktop app — the
 //!    scanner test will fail if you forget.
 //! 4. Run `cargo run --bin generate-artifacts --features dev-tools -- contract-docs` to
-//!    refresh `docs/reference/contract.md`.
+//!    refresh the generated contract documentation.
 //!
 //! ## Why a const table, not a derive macro?
 //!
@@ -145,7 +145,7 @@ pub const UNPREFIXED_LEGACY_CLASSES: &[&str] = &[
     // sync test learned to read escaped-quote emission and the feature
     // stylesheets (2026-08-21). These are not "legacy parity" cases like the
     // callout and nav families above — no theme predates them. They are simply
-    // names moss emits without a prefix, which under ADR-063 is what the whole
+    // names moss emits without a prefix, which is what the whole
     // contract is heading towards; they are listed here because the prefix
     // rule is still in force until that migration runs.
     "active",
@@ -469,7 +469,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "Type-aware metadata slot (date for articles, count for folders, domain for links). Renders ABOVE the title in horizontal mode — filling the kicker position when the explicit `kicker` slot is unset, per `docs/reference/design/preview-cards.md:22-30`. To the right of the title in vertical CJK mode (the horizontal kicker position transposed). Meta IS the visual kicker, with the same uppercase overline treatment.",
+        description: "Type-aware metadata slot (date for articles, count for folders, domain for links). Renders ABOVE the title in horizontal mode — filling the kicker position when the explicit `kicker` slot is unset. To the right of the title in vertical CJK mode (the horizontal kicker position transposed). Meta IS the visual kicker, with the same uppercase overline treatment.",
     },
     ComponentEntry {
         class: "moss-card-kicker",
@@ -546,7 +546,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "Trailing \"More →\" link on a truncated children listing (emitted when `children_limit` caps the embed); links to the folder's full index. Rendered as a sibling immediately after `.moss-cards-container`, so it sits outside the listing's flex `gap` and binds to the list via its own `margin-top` (see docs/reference/design/spacing.md).",
+        description: "Trailing \"More →\" link on a truncated children listing (emitted when `children_limit` caps the embed); links to the folder's full index. Rendered as a sibling immediately after `.moss-cards-container`, so it sits outside the listing's flex `gap` and binds to the list via its own `margin-top`.",
     },
     ComponentEntry {
         class: "moss-card-grid",
@@ -1161,7 +1161,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-width",
                 values: &["body", "wide", "page", "screen"],
                 default: "body",
-                description: "Display width — text-column (body), wider than text (wide), page-width (page), or viewport-width (screen). See spec § P9. Emitted from the authoring shortcode (e.g. `:::hero {full}` -> `data-width=\"screen\"`); on article children, site.css sizes the band via the content-width escape (ADR-021 Corollary 2). The hero itself escapes by DOM position (outside `<main>`), not by these rules.",
+                description: "Display width — text-column (body), wider than text (wide), page-width (page), or viewport-width (screen). See spec § P9. Emitted from the authoring shortcode (e.g. `:::hero {full}` -> `data-width=\"screen\"`); on article children, site.css sizes the band via the content-width escape. The hero itself escapes by DOM position (outside `<main>`), not by these rules.",
             },
             DataAttr {
                 name: "data-slides",
@@ -2274,7 +2274,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "Runtime marker the preview bridge adds to `<html>` when the shell is in mobile device-preview mode. Since ADR-039 the shell owns chrome clearance by insetting the preview iframe, so no CSS keys off this class and it currently has no effect; it is retained as a revert path and may be removed.",
+        description: "Runtime marker the preview bridge adds to `<html>` when the shell is in mobile device-preview mode. The shell now owns chrome clearance by insetting the preview iframe, so no CSS keys off this class and it currently has no effect; it is retained as a revert path and may be removed.",
     },
     ComponentEntry {
         class: "main-nav",
@@ -2562,7 +2562,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         since: "0",
         description: "A link to another edition of the same page. Carries `hreflang`, so `[hreflang=\"en\"]` is a stable hook for per-language styling.",
     },
-    // The floating nav island (ADR-049) — the small bar that appears when the
+    // The floating nav island — the small bar that appears when the
     // reader scrolls back up past the masthead on a long page. A SECOND object,
     // not the masthead re-pinned, which is why it has its own `moss-`-prefixed
     // vocabulary. Its trail is the one exception: it deliberately reuses
@@ -2583,7 +2583,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "Floating navigation island: a one-line bar, aligned to the text column, revealed on scroll-up once the masthead has left the screen. Opt-in — a site gets none until it sets `[site].floating_nav = true` (the Services-tab toggle writes that key). On a site that opted in, the markup is emitted on every page with a breadcrumb trail but only ever shows where the page has a contents table to offer: two or more section headings (ADR-049 §10). `--moss-nav-island-display: none` forces it off from CSS, media query included.",
+        description: "Floating navigation island: a one-line bar, aligned to the text column, revealed on scroll-up once the masthead has left the screen. Opt-in — a site gets none until it sets `[site].floating_nav = true` (the Services-tab toggle writes that key). On a site that opted in, the markup is emitted on every page with a breadcrumb trail but only ever shows where the page has a contents table to offer: two or more section headings. `--moss-nav-island-display: none` forces it off from CSS, media query included.",
     },
     ComponentEntry {
         class: "moss-nav-island-bar",
@@ -2999,7 +2999,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "Chrome-free pause/play toggle button for ambient loop videos. Injected by ambient-video.ts. Keyboard-focusable; `aria-label` toggles between \"Pause video\" and \"Play video\". Visible on hover/focus of `.moss-ambient-video` and always visible when `[data-paused]`. Satisfies WCAG 2.2.2 Level A (Pause, Stop, Hide).",
     },
     // -------------------------------------------------------------------
-    // LaTeX math (ADR-030). P1 emits the escaped source in a marked
+    // LaTeX math. P1 emits the escaped source in a marked
     // `<code>`; P2 replaces the element's *contents* with a typeset
     // `<svg>` while keeping the class and `data-moss-math` stable, so a
     // theme selector written against P1 keeps working across the upgrade.
@@ -3251,7 +3251,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
     // class name. So a class the script queries is as much a published name as
     // one a stylesheet targets — rename it and the feature dies silently, since
     // a selector that matches nothing does not throw. `site_js_selectors_match_
-    // components_table` (src-tauri/tests/components_sync_test.rs) now checks
+    // components_table` (the desktop app's `components_sync_test.rs`) now checks
     // that direction; these are the twenty classes it found undeclared. All of
     // them predate the `moss-` convention, hence the block below in
     // `UNPREFIXED_LEGACY_CLASSES`.
@@ -3496,7 +3496,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "The top-level comment thread, rendered server-side at build time and then hydrated in place (ADR-025). New comments are appended here by the client rather than replacing the list, so server-rendered and live comments share one shape.",
+        description: "The top-level comment thread, rendered server-side at build time and then hydrated in place. New comments are appended here by the client rather than replacing the list, so server-rendered and live comments share one shape.",
     },
     ComponentEntry {
         class: "comment-item",
@@ -3893,7 +3893,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
 
 /// Implementation classes that are emitted by moss for internal functionality
 /// but must not appear in the public theme-facing contract (`moss describe` /
-/// `docs/reference/contract.md`). These classes ARE present in `COMPONENTS` for
+/// the generated contract documentation). These classes ARE present in `COMPONENTS` for
 /// the sync-test to validate their HTML class literals, but `is_public()` hides
 /// them from agents, themes, and `reference.md` generation.
 const INTERNAL_CLASSES: &[&str] = &[
@@ -3911,7 +3911,7 @@ impl ComponentEntry {
     ///
     /// Internal classes (e.g. all `moss-apply*`) stay in COMPONENTS so the
     /// sync-test can validate them, but they must not surface in `moss describe`
-    /// or `docs/reference/contract.md` — they are subject to change at any time.
+    /// or the generated contract documentation — they are subject to change at any time.
     pub fn is_public(&self) -> bool {
         self.status != Status::Retired && !INTERNAL_CLASSES.contains(&self.class)
     }

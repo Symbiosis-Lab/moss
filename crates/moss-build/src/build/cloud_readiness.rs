@@ -14,9 +14,7 @@
 //! eviction check — see that module for the per-platform detail), and
 //! `request_download` hands the path to `crate::build::cloud_prefetch`, the
 //! bounded pool that downloads by reading on a materialization-enabled
-//! thread. See
-//! docs/archive/2026-06-08-icloud-aware-video-conversion.md and
-//! docs/archive/2026-07-31-cloud-download-waiting-mode.md.
+//! thread.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -241,8 +239,6 @@ pub const INTERACTIVE_DEADLINE: Duration = Duration::from_secs(15);
 /// file stayed in the cloud. Suppressing the wait rather than the read keeps
 /// the answer honest: the caller still gets the real error, so "unreadable"
 /// can never be mistaken for "absent".
-///
-/// See docs/archive/2026-08-03-dataless-fail-fast-and-build-driven-cloud-gate.md.
 pub fn retry_after_materialize<T>(
     path: &Path,
     deadline: Duration,
@@ -395,7 +391,7 @@ pub fn read_input_if_present(path: &Path) -> std::io::Result<Option<String>> {
 /// three copies drifted: one tested `is_evicted` first and one did not, which
 /// is the difference between failing fast and blocking the render pass on a
 /// platform with no fail-fast policy. Three spellings of one question is how a
-/// fix lands in two of them (moss#986).
+/// fix lands in two of them.
 #[derive(Debug)]
 pub enum Found {
     /// The bytes are local, and here they are.
@@ -507,7 +503,7 @@ pub fn read_page_source(
             // this page's existing HTML; it never reached the gate, so a vault
             // whose page sources were all still downloading rendered titles
             // from directory names and dates as `Unknown`, and moss published
-            // that over the good site it already had (moss#1042).
+            // that over the good site it already had.
             crate::build::cloud_ledger::note_unavailable(path);
             None
         }
@@ -521,7 +517,7 @@ pub fn read_page_source(
 }
 
 /// Raise the cloud gate for a build that stopped because the cloud had not
-/// handed a file back (moss#964).
+/// handed a file back.
 ///
 /// The gate verdict is emitted from inside `build_inner`, just before the
 /// `complete` progress event, because the verdict is the build's own output.
@@ -553,7 +549,7 @@ pub fn raise_gate_for_a_deferred_build(
     reporter: &dyn crate::build::ports::reporter::BuildReporter,
     message: &str,
 ) {
-    // The same monotonicity rule the build's own gate follows (moss#982): a
+    // The same monotonicity rule the build's own gate follows: a
     // sealed generation never becomes unsealed, so once one exists the preview
     // has something to serve and a full-window screen is never the right answer.
     // Two producers of one gate must not disagree about that — this one fires
@@ -596,7 +592,7 @@ pub fn raise_gate_for_a_deferred_build(
         total: evicted_count,
         remaining,
         // The build does not compute the blocking subset; its own gate
-        // verdict is the answer to that question (moss#1077).
+        // verdict is the answer to that question.
         blocking: None,
         unavailable: &[],
     });
@@ -655,7 +651,7 @@ mod tests {
     /// The classifier every no-wait reader now shares. A file that is simply
     /// missing must come back as `Err`, never as `InCloud`: the callers that
     /// write their file back (`redirects.json`, `state.toml`) decide between
-    /// merge and erase on exactly this distinction (moss#986).
+    /// merge and erase on exactly this distinction.
     #[test]
     fn the_probe_separates_readable_from_missing() {
         let dir = tempfile::tempdir().unwrap();
@@ -697,7 +693,7 @@ mod tests {
     /// The scan prunes dot-directories and runs before the build, so a file the
     /// provider evicted afterwards contributes nothing to `evicted_count`. An
     /// `evicted_count > 0` precondition here would swallow the gate in exactly
-    /// that case — which is most of them (moss#964 review round 1).
+    /// that case — which is most of them.
     #[test]
     fn a_deferred_build_is_gated_even_when_the_scan_counted_no_evictions() {
         let folder = "/tmp/moss-post-scan-eviction-probe";

@@ -41,14 +41,13 @@
  * still grid) remains — no canvas, no rAF, no motion.
  */
 // SHARED MODULE, duplicated on purpose: `./blueprint-grid.ts` in this
-// directory is a byte-for-byte copy of the desktop repo's
-// `frontend/app/components/blueprint-grid.ts`, which the desktop Tauri
-// frontend also imports directly (preview screen, launcher, editor pane
+// directory is a byte-for-byte copy of the desktop app's own
+// `blueprint-grid.ts` component, which the desktop app's own UI
+// also imports directly (preview screen, launcher, editor pane
 // state). It has no I/O and no desktop-only dependency, so duplicating it
 // here is the whole fix for now; the desktop copy should be retired in favor
 // of importing this one from the published moss-build crate/package once
-// that path exists (see docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md
-// step 7). Keep the two copies identical by hand until then.
+// that path exists. Keep the two copies identical by hand until then.
 import { startBlueprintGrid } from "./blueprint-grid";
 
 /** Only <img> the shell already tagged as a missing-image fallback. */

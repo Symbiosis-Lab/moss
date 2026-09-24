@@ -263,7 +263,7 @@ impl ContentGraph {
     /// graph the authority on emitted URLs as well as on resolution.
     ///
     /// The host calls this once, right after the overrides are computed
-    /// (`build_page_map` in src-tauri), and every emitter downstream reads the
+    /// (`build_page_map` in the desktop app), and every emitter downstream reads the
     /// answer off the same graph it already holds. Sites that don't map any
     /// directory still benefit: base slugification (`MIRROR/` → `mirror/`) runs
     /// with an empty map.
@@ -282,7 +282,7 @@ impl ContentGraph {
     ///
     /// **Never** re-derive an emitted URL from a folder name, a referencing
     /// page's depth, or a case-insensitive retry: those are the four-times-
-    /// recurring bug class this method exists to end (moss#903 bug 3). A
+    /// recurring bug class this method exists to end. A
     /// reference that does not resolve gets a `Diagnostic`, not a guessed path.
     pub fn pinned_url(&self, root_rel: &str) -> String {
         crate::resolve::output_url::pinned_url(root_rel, &self.output_overrides)
@@ -293,8 +293,7 @@ impl ContentGraph {
     /// Every link syntax — wikilinks `[[x]]`, standard markdown links
     /// `[t](x)`, image refs `![](x)`, embeds `![[x]]`, frontmatter refs —
     /// MUST resolve through this function. See the resolve pipeline in
-    /// [`crate::resolve::resolve_content`] and the prose overview in
-    /// `moss/docs/reference/link-resolution.md` for the per-syntax call sites.
+    /// [`crate::resolve::resolve_content`] for the per-syntax call sites.
     ///
     /// Downstream code (the compiler's URL-prettifier, for instance)
     /// receives already-resolved hrefs and MUST NOT reimplement any

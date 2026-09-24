@@ -29,7 +29,7 @@ pub(crate) use folder_lang::{folder_of, resolve_folder_languages, FolderLangCach
 /// Without this, moss falls back to the filename-only detection
 /// in [`moss_core::home::detect_home_file_in_folder`] and the file lands
 /// at a slug-based URL (`en/mountain-home/`) while moss synthesizes an empty
-/// `en/index.html` titled `"En"` (issue #587).
+/// `en/index.html` titled `"En"`.
 ///
 /// # Election rules
 ///
@@ -66,8 +66,7 @@ pub(crate) fn compute_home_overrides(
     compute_home_overrides_with_evicted(markdown_files, root, &crate::build::icloud::is_evicted)
 }
 
-/// Same as [`compute_home_overrides`] with an injectable eviction predicate —
-/// see docs/archive/2026-07-31-cloud-download-waiting-mode.md Stage 3. A
+/// Same as [`compute_home_overrides`] with an injectable eviction predicate. A
 /// dataless (cloud-evicted) source file is skipped exactly like a read
 /// error (`Err(_) => continue`, just below) rather than blocking this
 /// serial, single-threaded scan on the OS materializing it.
@@ -115,7 +114,7 @@ pub(crate) fn compute_home_overrides_with_evicted(
             }
         };
 
-        // ONE parser (ADR-020): same path the editor + build pipeline use.
+        // ONE parser: same path the editor + build pipeline use.
         let (home, translation_key): (Option<bool>, Option<String>) =
             if crate::build::markdown::is_simplified_frontmatter(&content) {
                 let (fm, _) = crate::build::markdown::parse_simplified_frontmatter(&content);
@@ -473,8 +472,7 @@ pub(crate) fn build_page_map(
     )
 }
 
-/// Same as [`build_page_map`] with an injectable eviction predicate — see
-/// docs/archive/2026-07-31-cloud-download-waiting-mode.md Stage 3.
+/// Same as [`build_page_map`] with an injectable eviction predicate.
 #[cfg(test)]
 pub(crate) fn build_page_map_with_evicted(
     markdown_files: &[crate::types::content::FileInfo],
@@ -510,7 +508,7 @@ pub(crate) fn build_page_map_with_evicted(
             }
         };
 
-        // Parse frontmatter to get url override (ONE parser, ADR-020).
+        // Parse frontmatter to get url override (ONE parser).
         let frontmatter_url: Option<String> = if crate::build::markdown::is_simplified_frontmatter(&content) {
             let (fm, _) = crate::build::markdown::parse_simplified_frontmatter(&content);
             fm.url
@@ -587,7 +585,7 @@ pub(super) fn page_map_entry(
     // Promote home-override files (the `home: true` marker) — files
     // that won the home slot via frontmatter, not filename. These need
     // to go to `<folder>/index.html` so the folder home is the file's
-    // URL, not a synthesized empty page (issue #587).
+    // URL, not a synthesized empty page.
     let is_home_override = home_overrides.values().any(|p| p == file_path);
     if !filename_match_is_home && is_home_override {
         is_index = true;
@@ -706,8 +704,8 @@ pub(super) fn apply_cascading_dir_overrides(
 /// and returns a `source_path → external_url` map of the entries that have
 /// one set to an absolute http(s) URL.
 ///
-/// Mirrors `build_page_map`'s pre-scan but extracts a different field. See
-/// moss#679 (JSON Feed 1.1 linkblog pattern) for why `external_url:` exists.
+/// Mirrors `build_page_map`'s pre-scan but extracts a different field
+/// (JSON Feed 1.1 linkblog pattern) for why `external_url:` exists.
 ///
 /// Production now calls [`build_page_map_and_external_urls_cached`] instead,
 /// which folds this scan into the same cached read+parse pass as
@@ -722,8 +720,7 @@ pub(crate) fn build_external_url_map(
     build_external_url_map_with_evicted(markdown_files, source_path, &crate::build::icloud::is_evicted)
 }
 
-/// Same as [`build_external_url_map`] with an injectable eviction predicate —
-/// see docs/archive/2026-07-31-cloud-download-waiting-mode.md Stage 3.
+/// Same as [`build_external_url_map`] with an injectable eviction predicate.
 #[cfg(test)]
 pub(crate) fn build_external_url_map_with_evicted(
     markdown_files: &[crate::types::content::FileInfo],
@@ -749,7 +746,7 @@ pub(crate) fn build_external_url_map_with_evicted(
             }
         };
 
-        // ONE parser (ADR-020): same path the editor + build pipeline use.
+        // ONE parser: same path the editor + build pipeline use.
         let external_url: Option<String> = if crate::build::markdown::is_simplified_frontmatter(&content) {
             let (fm, _) = crate::build::markdown::parse_simplified_frontmatter(&content);
             fm.external_url
@@ -761,7 +758,7 @@ pub(crate) fn build_external_url_map_with_evicted(
             // http(s) only — same safety guard as the card-href substitution
             // in page.rs and the wikilink resolver in pipeline.rs.
             // Warn before silently dropping so the user knows why the field
-            // is being ignored. See moss#684.
+            // is being ignored.
             warn_invalid_external_url(&url, file_path);
             if is_valid_external_url(&url) {
                 out.insert(file_path.clone(), url);
@@ -778,7 +775,7 @@ pub(crate) fn build_external_url_map_with_evicted(
 /// warning — see `warn_invalid_external_url`.
 ///
 /// Pure predicate with no side effects; kept separate so it can be tested
-/// independently of the logger. See moss#684.
+/// independently of the logger.
 pub(crate) fn is_valid_external_url(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
 }
@@ -787,7 +784,7 @@ pub(crate) fn is_valid_external_url(url: &str) -> bool {
 /// URL.  `file_path` is used only for the diagnostic message.
 ///
 /// Call this before the http(s) guard that silently drops the value so the
-/// user learns *why* the field is being ignored. See moss#684.
+/// user learns *why* the field is being ignored.
 pub(super) fn warn_invalid_external_url(raw_url: &str, file_path: &str) {
     if !raw_url.is_empty() && !is_valid_external_url(raw_url) {
         log::warn!(
@@ -806,10 +803,9 @@ pub(super) fn warn_invalid_external_url(raw_url: &str, file_path: &str) {
 /// site that consumes this field (card href, canonical link, sitemap, RSS).
 ///
 /// Emits a build warning when the field is set to a non-http(s) value so the
-/// user is informed rather than silently ignored. See moss#684.
+/// user is informed rather than silently ignored.
 ///
 /// Centralized here so future call sites can't accidentally weaken the guard.
-/// See moss#679.
 pub fn external_url(
     raw_frontmatter: &std::collections::BTreeMap<String, serde_json::Value>,
 ) -> Option<String> {

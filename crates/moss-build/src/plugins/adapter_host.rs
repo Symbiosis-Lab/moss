@@ -7,7 +7,7 @@
 //! asked "app or standalone?" first. The state is now resolved ONCE, where the
 //! manager is built (`tauri_app_host::adapter_host_for` app-side,
 //! [`AdapterHost::headless`] elsewhere), and every reader takes `state.hooks`.
-//! Nothing in here names tauri (ADR-050, ADR-076).
+//! Nothing in here names tauri.
 
 use std::sync::Arc;
 
@@ -23,7 +23,7 @@ pub struct AdapterHost {
     /// clone of this record is a second handle on the same state.
     pub state: HostState,
     /// The desktop, when there is one. `None` is the headless build, where the
-    /// app-only command arms refuse by name (ADR-050).
+    /// app-only command arms refuse by name.
     pub app: Option<SharedAppHost>,
     /// Where the manager reports plugin progress and failures.
     pub reporter: Arc<dyn BuildReporter>,

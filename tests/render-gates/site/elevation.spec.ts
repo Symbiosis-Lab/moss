@@ -1,4 +1,4 @@
-// One declared light (docs/reference/design/elevation.md): every floating
+// One declared light: every floating
 // surface in the emitted site reads a `--moss-elevation-N` token and casts the
 // way the light says; content casts nothing. Only a browser can see this:
 // jsdom does not compute a box-shadow through calc() and color-mix(), and a

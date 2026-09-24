@@ -185,7 +185,7 @@ fn cols_alias_warning(shortcode_name: &str) -> String {
 ///   [`per_line_attr`].
 ///
 /// Cells are split on lines containing only `+++` (new grammar) or
-/// `---` (legacy moss-releases). Step 3 of #613 rewrites `---` to `+++`
+/// `---` (legacy moss-releases). A migration step rewrites `---` to `+++`
 /// in moss-releases content; the parser accepts both during the
 /// migration window.
 ///
@@ -405,9 +405,9 @@ fn detect_bare_url_cell(cell_text: &str) -> Option<String> {
 /// image-link-plus-caption shape described below; it is `""` for the
 /// classic whole-cell-is-the-link shape.
 ///
-/// Ported from src-tauri's `crate::build::markdown::typed_renderers::
+/// Ported from the desktop app's `crate::build::markdown::typed_renderers::
 /// detect_compound_link` (Phase 4 PR4.5, 2026-05-28) — the AST-level
-/// equivalent of the same string-level detection. The src-tauri version
+/// equivalent of the same string-level detection. The desktop app's version
 /// is deleted in PR4.5. NOT the general cure for `[![[x.png]]](/url)` —
 /// [`super::linked_embed`] is; this is the block-level grid *card*.
 ///
@@ -423,7 +423,7 @@ fn detect_bare_url_cell(cell_text: &str) -> Option<String> {
 /// - There is content after the closing `)`, separated by a blank line,
 ///   but the inner content does not lead with a WIKILINK image (`![[`).
 ///   Trailing caption paragraphs are only recognized for this exact shape,
-///   the image-card-plus-caption cell (see moss#928-adjacent). A cell led by
+///   the image-card-plus-caption cell. A cell led by
 ///   an ordinary markdown image (`![alt](src)`) is deliberately excluded:
 ///   pulldown-cmark parses `![alt](src)` fine on its own, so
 ///   `[![alt](src)](url)\n\ncaption` already reaches the plain block
@@ -627,7 +627,7 @@ pub(super) fn detect_compound_link(cell_text: &str) -> Option<(String, String, S
 /// grammar) or `---` (legacy moss-releases backward-compat).
 ///
 /// Mirrors [`super::cells::split_cells`] but accepts either divider.
-/// Step 3 of #613 rewrites `---` to `+++` in moss-releases content;
+/// A migration step rewrites `---` to `+++` in moss-releases content;
 /// after that, this helper retires in favor of `split_cells`.
 ///
 /// **A divider only counts when it belongs to THIS grid.** A `+++` inside a
@@ -1275,7 +1275,7 @@ fn extract_with_state(
     // this module used to track fenced code itself and knew nothing about
     // HTML comments, which is how a `:::gallery` inside an authored
     // `<!-- TODO … -->` block got extracted, spliced a sentinel into the
-    // middle of the comment, and deleted the rest of the page (#903 bug 2).
+    // middle of the comment, and deleted the rest of the page.
     let inert = crate::inert_regions::inert_lines(markdown);
     let is_inert = |idx: usize| inert.get(idx).copied().unwrap_or(false);
     let mut i = 0;
@@ -1350,7 +1350,7 @@ fn extract_with_state(
             // the fence we just stopped on belongs to THAT block, and this
             // one ended early. Nothing about the parse changes; the author
             // just gets told, because the page still builds and only looks
-            // wrong (stray `+++`, cells outside the grid). See #1014.
+            // wrong (stray `+++`, cells outside the grid).
             if let Some(inner) = nested_same_arity {
                 warnings.push(nested_arity_warning(arity, trimmed, inner));
             }
@@ -1408,7 +1408,7 @@ fn extract_with_state(
                     // preview scroll sync (the home page grid scrolled the preview
                     // to the bottom). Trailing blank lines after the sentinel HTML
                     // comment produce no pulldown-cmark events, so the AST is
-                    // unchanged. See docs/reference/editor-preview-sync.md.
+                    // unchanged.
                     for _ in 0..(j - i) {
                         output.push('\n');
                     }
@@ -1458,7 +1458,7 @@ fn extract_with_state(
     output
 }
 
-/// Word the "this block ended at someone else's fence" warning (#1014).
+/// Word the "this block ended at someone else's fence" warning.
 ///
 /// `arity` and `outer_line` describe the OUTER opener; `inner_line` is the
 /// trimmed text of the nested opener that has the same colon count. Says what

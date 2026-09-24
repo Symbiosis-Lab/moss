@@ -92,7 +92,7 @@ fn test_navigation_only_shows_nav_true_docs() {
     );
     // Note: nav-divider removed for cleaner design
 
-    // Hamburger ARIA state (WCAG 4.1.2, moss#1047): aria-expanded starts
+    // Hamburger ARIA state (WCAG 4.1.2): aria-expanded starts
     // false (theme.ts keeps it faithful to .mobile-open at runtime), and
     // aria-controls names the id nav-links actually carries.
     assert!(
@@ -809,7 +809,7 @@ fn test_breadcrumb_current_page_is_absent() {
 
 #[test]
 fn deep_masthead_trail_ships_fold_controls_shallow_does_not() {
-    // The masthead folds like the island (ADR-049 §5, amended 2026-08-09):
+    // The masthead folds like the island (as of 2026-08-09):
     // with three or more crumbs there is a middle to sacrifice, so nav.rs
     // ships the `…` button and the levels panel — hidden, because whether
     // anything actually folds is a measurement only masthead-fold.ts can
@@ -1442,7 +1442,7 @@ fn the_switcher_advertises_the_declared_tag_not_the_ui_variant() {
     // A `fr` page resolves to `Language::En` for the interface. The switcher
     // used to label its link `hreflang="en"` — from `code()`, whose own doc
     // says to use the BCP-47 form here — contradicting the `<html lang>` of the
-    // page it points at (moss#1177).
+    // page it points at.
     let documents = vec![make_doc("index.html", "Home", None, None)];
     let translations = vec![TranslationLink {
         lang_tag: "fr".to_string(),
@@ -1663,7 +1663,7 @@ fn page_inside_language_tree_keeps_lang_prefixed_home() {
     );
 }
 
-/// #949's second symptom. `en-us/` is a language tree `lang_tree_prefix`
+/// The other symptom of the same regression: `en-us/` is a language tree `lang_tree_prefix`
 /// accepts and `Language::code()` cannot spell, so this link used to be
 /// `/en/` — which no build emits, and which 404s from inside the one tree
 /// whose readers most need the way out.
@@ -1828,7 +1828,7 @@ fn footer_page_appears_as_link() {
     );
     // Default link list lives in <p class="footer-default"> alongside the
     // footer.md slot marker (verbatim contract — no .footer-left/.footer-right
-    // chrome). See docs/archive/2026-04-30-footer-verbatim-design.md.
+    // chrome).
     assert!(
         html.contains(r#"<p class="footer-default">"#),
         "default link list missing: {html}"
@@ -1909,8 +1909,7 @@ fn footer_contains_both_slot_markers() {
     // Two slot markers: footer-left (author chrome / footer.md) and
     // footer-end (auto-injected subscribe form on moss-hosted sites
     // without footer.md). Both are always emitted; injection happens at
-    // post-processing time. See
-    // docs/archive/2026-05-06-footer-default-order.md.
+    // post-processing time.
     let docs = vec![make_footer_doc("About", "about.html", Some(true), None)];
     let html = footer_builder(&docs, None).generate_footer(true);
     assert!(
@@ -2458,8 +2457,7 @@ fn test_icon_cluster_order_is_search_language_theme() {
     // tapped toggle's hint stuck on screen (no un-hover). The nav's only
     // hints are truncation hints, JS-promoted onto breadcrumb elements.
     // Asserted here rather than left to the snapshot fixtures, which would
-    // report a regression as an opaque byte diff. See
-    // docs/archive/2026-08-09-nav-two-line-split-and-touch-hints.md.
+    // report a regression as an opaque byte diff.
     assert!(
         !html.contains("data-tooltip"),
         "nav toggles must not emit data-tooltip — hover hints are reserved \
@@ -2495,7 +2493,7 @@ fn test_search_button_label_is_localized() {
 }
 
 // =========================================================================
-// Floating nav island (ADR-049)
+// Floating nav island
 //
 // The island is a SECOND object, not the masthead re-pinned. These tests pin
 // the two properties that make that claim checkable from the emitted text:
@@ -2503,7 +2501,7 @@ fn test_search_button_label_is_localized() {
 // masthead stops — on the current page. Everything about how it behaves
 // (reveal, folding, panels) is measured, so it is tested in the render gate
 // (tests/render-gates/site/nav-island.spec.ts) and in
-// frontend/site/__tests__/nav-island.test.ts, not here.
+// crates/moss-build/src/js-src/site/__tests__/nav-island.test.ts, not here.
 // =========================================================================
 
 /// Build the island for a page at `posts/hello/index.html` on a 3-level site.
@@ -2528,7 +2526,7 @@ fn island_for_deep_page() -> String {
 
 #[test]
 fn island_trail_reuses_the_mastheads_breadcrumb_classes() {
-    // ADR-049 §3: "looks the same as the nav bar" is a property someone has to
+    // "Looks the same as the nav bar" is a property someone has to
     // maintain by eye if the two are separate markup. Sharing the classes makes
     // it true by construction.
     let island = island_for_deep_page();
@@ -2540,7 +2538,7 @@ fn island_trail_reuses_the_mastheads_breadcrumb_classes() {
 
 #[test]
 fn island_appends_the_current_page_the_masthead_skips() {
-    // ADR-049 §4. In the masthead the page title is directly below, on screen;
+    // In the masthead the page title is directly below, on screen;
     // in the island it is not, so the island supplies it — as the last crumb,
     // not as a separate bold title field.
     let island = island_for_deep_page();
@@ -2594,8 +2592,8 @@ fn island_folds_only_when_there_is_a_middle_to_sacrifice() {
     assert!(deep.contains(r#"aria-expanded="false""#), "got: {deep}");
 
     // A top-level page has two crumbs — site name and the page — and neither is
-    // ever droppable, so there is no "…" at all. This is the answer to the open
-    // question ADR-049 left about top-level pages: the island still ships,
+    // ever droppable, so there is no "…" at all. This is the answer to an open
+    // question about top-level pages: the island still ships,
     // because "back to the site root" is the one route a long page's reader
     // cannot otherwise take, and an affordance that vanishes at depth 1 reads
     // as a bug.
@@ -2654,8 +2652,8 @@ fn no_island_without_a_breadcrumb_trail() {
 
 #[test]
 fn island_buttons_ship_inert_so_a_scriptless_page_shows_no_dead_chrome() {
-    // ADR-049's consequence: the base state must work with JavaScript off, and
-    // §8's rule that an inert icon in shipped chrome is worse than no icon.
+    // The base state must work with JavaScript off, and
+    // an inert icon in shipped chrome is worse than no icon.
     // The `…` is `hidden` in the emitted HTML because the trail may never need
     // to fold. The sections button is not: since 2026-08-30 an island only
     // ever shows on a page with a contents table, so its button always has
@@ -2673,13 +2671,13 @@ fn island_buttons_ship_inert_so_a_scriptless_page_shows_no_dead_chrome() {
         island.contains(r#"data-island-menu="sections" hidden></div>"#),
         "got: {island}"
     );
-    // And no search: the masthead has it (ADR-049 §8).
+    // And no search: the masthead has it.
     assert!(!island.contains("nav-search-btn"), "got: {island}");
 }
 
 #[test]
 fn island_claims_no_interaction_model_it_does_not_implement() {
-    // ADR-049 §9. `role="menu"` / `role="menuitem"` / `aria-haspopup` all
+    // `role="menu"` / `role="menuitem"` / `aria-haspopup` all
     // promise arrow-key roving focus. The panels are a popover of plain links
     // and have no such thing, and a screen-reader user told "menu" will press
     // ArrowDown and find that nothing moves — worse than never claiming it.
@@ -2696,10 +2694,10 @@ fn island_claims_no_interaction_model_it_does_not_implement() {
 
 #[test]
 fn island_current_crumb_can_say_what_it_truncated() {
-    // The current page is the ONE crumb the island lets ellipsise (§4), which
+    // The current page is the ONE crumb the island lets ellipsise, which
     // makes it the one that needs a way to reveal the rest. `data-hint-label`
-    // is what `frontend/site/nav/breadcrumb-hint.ts` promotes to a real tooltip
-    // while — and only while — the label is genuinely cut off (§6).
+    // is what `breadcrumb-hint.ts` promotes to a real tooltip
+    // while — and only while — the label is genuinely cut off.
     let island = island_for_deep_page();
     assert!(
         island.contains(r#"aria-current="page" data-island-crumb data-hint-label="Hello World""#),

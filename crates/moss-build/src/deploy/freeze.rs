@@ -4,8 +4,7 @@
 //!
 //! - *May this publish start?* — at most one publish runs per process
 //!   (2026-07-21 incident, see `with_publish_guard`).
-//! - *May the build admit new work?* — no, while a publish is in flight
-//!   (moss#959, `docs/archive/2026-08-04-freeze-the-build-during-publish.md`).
+//! - *May the build admit new work?* — no, while a publish is in flight.
 //!
 //! The second is the first read from the other side. Two separate flags could
 //! disagree; one cannot. `PublishGuard` is the only type that may write it, so
@@ -30,8 +29,7 @@ pub const PUBLISH_IN_PROGRESS_MSG: &str =
 /// `push_site` and `push_prebuilt`. A separate `moss deploy` OS process is NOT
 /// serialized.
 ///
-/// Holding it also FREEZES the build (moss#959,
-/// docs/archive/2026-08-04-freeze-the-build-during-publish.md). The rebuild
+/// Holding it also FREEZES the build. The rebuild
 /// worker checks this at ADMISSION (`build_shell/watch.rs::
 /// attempt_admitted_rebuild`): a frozen-out request stays parked in its own
 /// folder's request slot, and the thaw pokes every slot. The old global
@@ -92,7 +90,7 @@ impl Drop for PublishGuard {
 /// while ~1522 uploads and two builds pegged the CPU). Rejecting rather than
 /// coalescing is deliberate: the user learns their newer edits were NOT shipped.
 ///
-/// Holding the guard also **freezes the build** for the duration (moss#959);
+/// Holding the guard also **freezes the build** for the duration;
 /// the thaw on drop pokes every folder's rebuild worker so frozen-out
 /// requests catch up. `sink` is only for the terminal progress emits; a
 /// path with nobody watching passes [`progress::silent`].
@@ -163,7 +161,7 @@ pub(crate) mod single_flight_tests {
     /// process-global, so a test that reads it observes any other running
     /// concurrently.
     ///
-    /// `src-tauri`'s own publish tests take a twin of this. That is not
+    /// The desktop app's own publish tests take a twin of this. That is not
     /// duplication to fold: a `#[cfg(test)]` static compiles only into its own
     /// crate's test binary, so the two are never live in the same process.
     pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -336,7 +334,7 @@ pub(crate) mod single_flight_tests {
         );
     }
 
-    // ── The freeze (moss#959) ───────────────────────────────────────────────
+    // ── The freeze ───────────────────────────────────────────────
     //
     // These pin the property the whole fix rests on: while the guard is held,
     // `publish_in_flight()` reads true, so the rebuild worker's admission

@@ -2,8 +2,8 @@
 //! if not, what credential is missing?
 //!
 //! The gate resolves setup for a **(plugin, capability)** pair, not for the
-//! deploy target — a channel declares the same block a deploy target does
-//! (ADR-072 as amended 2026-08-30), so the answer must not be reachable only
+//! deploy target — a channel declares the same block a deploy target does,
+//! so the answer must not be reachable only
 //! from the deploy path. Publish is the one caller today: it resolves the
 //! active target and asks about [`Capability::Deploy`].
 //!
@@ -14,7 +14,7 @@
 //! token fails deep inside its own upload with whatever the remote service
 //! says. The plugin's own probe (`check_setup`) costs an engine dispatch and
 //! needs a person to answer it, so it stays app-side with the modal, in
-//! `src-tauri`'s `plugins::commands::publish_setup`.
+//! the desktop app's `plugins::commands::publish_setup`.
 //!
 //! It sits under `deploy` because that is what it gates. What it reads is a
 //! contribution's `setup` block, but what it depends on is plugin discovery,

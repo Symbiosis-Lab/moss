@@ -12,10 +12,8 @@
 //!   (`child/.moss` is a directory), so it is safe on evicted File Provider
 //!   trees where file *bytes* fail but directory metadata is local.
 //!
-//! The app-side decision layer (`src-tauri/src/system/nested_site_guard.rs`)
-//! consumes the [`NestedRootsReport`] and turns it into a dialog/decision; this
-//! module never decides anything. Design:
-//! `docs/archive/2026-08-19-nested-moss-folder-design.md` (Part 1).
+//! The app-side decision layer consumes the [`NestedRootsReport`] and turns it
+//! into a dialog/decision; this module never decides anything.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};

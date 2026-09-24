@@ -1,4 +1,4 @@
-//! The search lane: a generation-free worker, adopted from a receipt (ADR-045).
+//! The search lane: a generation-free worker, adopted from a receipt.
 //!
 //! Pagefind's cost scales with **corpus size**, not with this build's delta —
 //! ~5.2 s on a 386-page vault, on every save, including the ones whose own
@@ -6,9 +6,9 @@
 //! build's worker `JoinSet`; the seal awaited every worker, then took the
 //! per-folder stage-write mutex, which the *next* build takes before doing any
 //! work — so the next save's latency was a function of the previous build's
-//! slowest background worker (moss#968 Finding 3).
+//! slowest background worker.
 //!
-//! ADR-045's rule: **a generation-free worker may never be a manifest
+//! The rule: **a generation-free worker may never be a manifest
 //! registrant, and no seal may await one.** Instead:
 //!
 //! ```text
@@ -25,7 +25,7 @@
 //! `PendingManifest` is mark-and-sweep: `seal()` prunes each output bucket to
 //! the paths this build touched, and `remove_stale_files` deletes every staging
 //! file the sealed manifest omits. `_moss/pagefind/**` gets no exemption —
-//! ADR-045 rejects that as the first hole in a total invariant — so a build
+//! this rule rejects that as the first hole in a total invariant — so a build
 //! that skipped re-registering would have the deploy diff read the bundle as
 //! *removed* and delete it off the live site. Hence [`adopt_into`] runs on
 //! **every** build, inside the build's own stage-write span, registering the
@@ -191,7 +191,7 @@ fn read_receipt(index_dir: &Path) -> Option<BundleReceipt> {
 /// lane's [`gc_holding`] deletes `<fpA>/` while a build is halfway through
 /// copying it into staging, the build then registers nothing *and* deletes the
 /// receipt the lane just wrote for `<fpB>`, and the sweep takes the bundle off
-/// the live site — the mark-and-sweep hole ADR-045 closes, from the other side.
+/// the live site — the mark-and-sweep hole this rule closes, from the other side.
 ///
 /// Not a substitute for the build's stage-write guard, which orders builds
 /// against each other; this orders the *lane* against a build. The lane never
@@ -337,7 +337,7 @@ pub enum Adoption {
 /// seal tail and the deploy pre-flight both need it long after the
 /// `SiteConfig` that resolved it was consumed (off the critical path, so the
 /// read costs nothing). The toggle alone decides — search graduated out of
-/// `experimental.preview_features` 2026-08-31 (ADR-037 "Gating").
+/// `experimental.preview_features` 2026-08-31.
 pub fn enabled_for(mp: &MossPaths) -> bool {
     let Some(project_root) = mp.root().parent() else {
         return false;
@@ -350,7 +350,7 @@ pub fn enabled_for(mp: &MossPaths) -> bool {
 
 /// Whether a lane will ever run for this build.
 ///
-/// ADR-045's staleness budget is a promise about the *edit loop*, payable only
+/// The staleness budget is a promise about the *edit loop*, payable only
 /// because a next build is coming. A process that exits when the build returns
 /// — CLI `moss build`, `build_sync`, the snapshot harness — spawns no lane and
 /// calls [`request`] from no seal, so a receipt adopted verbatim would freeze
@@ -361,7 +361,7 @@ pub enum Freshness {
     /// A seal will hand the frozen generation to the lane. Adopt the receipt.
     Lane,
     /// Nothing will index after this build. Index now, every time — which is
-    /// what the pre-ADR-045 worker did on this path anyway.
+    /// what the earlier worker did on this path anyway.
     Now,
 }
 
@@ -407,7 +407,7 @@ pub fn adopt_into(
             // own sweep delete a bundle that no *future* build is scheduled to
             // rebuild — under the old ticket scheme a newer worker was queued
             // by construction, and under adoption none is. So fall through to a
-            // synchronous index (ADR-045, "nothing to adopt").
+            // synchronous index ("nothing to adopt").
             //
             // It indexes `staging/`, not a generation, and that is deliberate:
             // this build's own HTML is complete and, under the stage-write
@@ -746,7 +746,7 @@ async fn quiesce(
 /// published a receipt for this exact page set, which is what makes this a
 /// no-cost check on an idle vault.
 ///
-/// This is ADR-045's "the publish path calls `settle()`": the staleness budget
+/// This is the rule that "the publish path calls `settle()`": the staleness budget
 /// the lane buys for the edit loop is explicitly not extended to deploy.
 pub fn settle_for_publish(mp: &MossPaths, enabled: bool) -> bool {
     if !enabled {

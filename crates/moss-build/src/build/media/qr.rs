@@ -22,8 +22,7 @@
 //! folder-note article on one site had no code at all, while another served
 //! fourteen codes pointing at the wrong page.
 //!
-//! The reader no longer computes anything. See
-//! `docs/archive/2026-08-10-share-card-audit.md`.
+//! The reader no longer computes anything.
 
 use fast_qr::convert::svg::SvgBuilder;
 use fast_qr::convert::{Builder, Shape};

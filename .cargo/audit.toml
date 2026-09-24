@@ -1,6 +1,5 @@
 # Read by `cargo audit` in open/.github/workflows/pr.yml, lifted from the
-# desktop repo's own .cargo/audit.toml (docs/archive/
-# 2026-09-13-f3-open-repo-ci-plan.md §2). The desktop file's only two entries
+# desktop repo's own .cargo/audit.toml. The desktop file's only two entries
 # (RUSTSEC-2026-0194, RUSTSEC-2026-0195) are both against tauri's own
 # quick-xml dependency, which moss-core/moss-build/moss-cli do not pull in —
 # so there is nothing to trim in, and this file starts with an empty ignore

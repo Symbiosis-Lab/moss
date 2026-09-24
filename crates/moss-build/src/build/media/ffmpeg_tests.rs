@@ -210,9 +210,9 @@ fn plan_puts_a_short_video_on_its_top_rung() {
 
 #[test]
 fn plan_re_encodes_a_small_file_that_is_too_fat_to_stream() {
-    // The headline case of moss#1130: a 30 s 4K clip at 24 Mbps is only ~90 MB,
-    // so the old size gate never sent it to the encoder at all and it shipped at
-    // its camera bitrate. Size was the wrong question.
+    // A 30 s 4K clip at 24 Mbps is only ~90 MB, so the old size gate never sent
+    // it to the encoder at all and it shipped at its camera bitrate. Size was
+    // the wrong question.
     let config = VideoCompressionConfig::default();
     assert!(matches!(
         plan_video_encode(&source(30.0, 3840, Some(24_000.0), true), &config),

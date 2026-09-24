@@ -7,7 +7,7 @@
 //! `[site].math` defaults ON, which means pulldown-cmark's `ENABLE_MATH` is
 //! live for every vault that never mentions math in its config. That is safe
 //! for the vaults we measured (zero `$` outside fenced code in any published
-//! vault — ADR-030 D4), but pulldown's open/close rule is an ASCII byte test:
+//! vault), but pulldown's open/close rule is an ASCII byte test:
 //! **any non-whitespace byte before the closing `$` closes the span.** So
 //! prose that merely quotes two prices becomes an equation:
 //!
@@ -290,7 +290,7 @@ mod tests {
         assert_eq!(spans[0].source, "$5，两个$");
     }
 
-    /// The ASCII sibling from ADR-030 §2. Same rule, same finding.
+    /// The ASCII sibling of the CJK case above. Same rule, same finding.
     #[test]
     fn parenthesized_prices_are_reported() {
         let spans = scan_markdown("(cost: $5) and ($10)\n");

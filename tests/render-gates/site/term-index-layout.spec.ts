@@ -7,13 +7,12 @@
 //
 // Only a browser can see any of this. A Rust test proves which style string
 // was selected; it cannot see a track count, a name broken across two lines,
-// or a cover box still occupying height. Per docs/reference/proving-a-change.md
-// ("a layout that depends on glyph widths, locale, or panel width -> sweep a
-// BAND of widths"), the track assertions run across a band rather than at
+// or a cover box still occupying height. Per the rule that a layout
+// depending on glyph widths, locale, or panel width should sweep a BAND of
+// widths, the track assertions run across a band rather than at
 // three sampled widths, in both engines — glyph advance for CJK differs
 // between Chromium and WebKit, and that is exactly what decides a wrap.
 //
-// Design: docs/archive/2026-09-06-authors-index-design-decision.md
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';

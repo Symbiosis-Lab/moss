@@ -1,4 +1,4 @@
-// Vite server for the floating nav island's layout gate (ADR-049).
+// Vite server for the floating nav island's layout gate.
 //
 // Root is the repo root, not the fixture dir, so the harness page can load the
 // production stylesheet and the production module by absolute path — the point

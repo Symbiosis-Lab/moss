@@ -125,7 +125,7 @@ fn absent_previous_snapshot_yields_classified_false_and_zero_verbs() {
     assert_eq!(flat_set.added, 0, "degraded mode never invents a verb");
 }
 
-/// The second degraded source (moss#993 #2): a published FILE SET, recovered
+/// The second degraded source: a published FILE SET, recovered
 /// locally by `backfill` from the last deployed generation. Same arithmetic the
 /// server's `need`/`remove` would produce, and the same refusal to name a verb.
 #[test]

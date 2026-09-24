@@ -7,7 +7,7 @@
 //!
 //! 1. The Stage 2 dispatcher in `pipeline.rs`, after pulldown-cmark parses a
 //!    `Tag::Link` carrying `moss:kind=iframe`.
-//! 2. `src-tauri/src/build/folder_embed.rs`'s folder-as-iframe feature, which
+//! 2. The desktop app's `folder_embed.rs` folder-as-iframe feature, which
 //!    has no pulldown-cmark involvement and calls this synthesizer directly
 //!    with an empty `TitleParams`.
 //!

@@ -1,7 +1,7 @@
 //! Build-local types: parsed document model, series metadata, and source file metadata.
 //!
 //! These types are consumed exclusively within the build pipeline and are co-located
-//! here per the codebase restructure plan (docs/archive/2026-04-24-codebase-restructure-continuation-plan.md Task 5).
+//! here as part of an earlier codebase restructure plan.
 //!
 //! Consumers import these directly from `crate::build::types` — the old
 //! `crate::types` back-compat re-exports were removed 2026-08-12 (M5a landing 3).
@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-// SeriesField moved to moss-core (ADR-018). Re-exported for backward compat.
+// SeriesField moved to moss-core. Re-exported for backward compat.
 pub use moss_core::frontmatter_typed::SeriesField;
 
 /// One media reference that resolves to nothing.
@@ -70,7 +70,7 @@ pub struct ParsedDocument {
     /// Document title.
     ///
     /// For ARTICLE pages: always equals `label` (frontmatter `title:` if non-
-    /// empty, else filename) — per `docs/reference/title-rendering.md`.
+    /// empty, else filename).
     ///
     /// For INDEX/folder pages: frontmatter `title:` if non-empty, else the
     /// filename/folder name (`filename_text`). NEVER sourced from body content
@@ -123,8 +123,8 @@ pub struct ParsedDocument {
     pub is_root_level: bool,
     /// True iff this document is its folder's home via the `home: true`
     /// frontmatter marker rather than its filename — i.e. it won the home
-    /// slot in [`crate::build::scan::page_map::compute_home_overrides`]
-    /// (issue #587). This is the ONE centralized home-override signal: the
+    /// slot in [`crate::build::scan::page_map::compute_home_overrides`].
+    /// This is the ONE centralized home-override signal: the
     /// markdown pipeline derives it once (from the page_map URL shape) and
     /// every consumer reads it from here instead of re-deriving from
     /// `translation_key == "home"`. Render code uses it to suppress the
@@ -165,9 +165,9 @@ pub struct ParsedDocument {
     /// may target additional slots via the `slot:` frontmatter field above,
     /// but reserved-name detection is the canonical signal.
     ///
-    /// Lands in PR7b of the typed-AST migration (moss#599); replaces the
+    /// Lands as part of the typed-AST migration; replaces the
     /// filesystem-scan + on-demand re-render at `build/footer.rs::render_footer_pages_from_disk`
-    /// (deleted in the same PR) by letting `footer.md` flow through the
+    /// (deleted in the same change) by letting `footer.md` flow through the
     /// normal parse pipeline with this flag set, and the page-emission
     /// loop in `build/render/blocking.rs` skip it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -255,7 +255,7 @@ pub struct ParsedDocument {
     /// member listing this page hosts. Set by `build::terms::derive_terms`
     /// on the page that WINS a term claim — and only when the author didn't
     /// route `children` explicitly (their routing wins) — so `render/html.rs`
-    /// and the ADR-044 listing digest read one resolved field instead of
+    /// and the listing-group digest read one resolved field instead of
     /// re-running claim resolution.
     #[serde(skip)]
     #[specta(skip)]
@@ -348,7 +348,7 @@ pub struct ParsedDocument {
     /// Frontmatter values to cascade to all descendants
     ///
     /// `BTreeMap`, not `HashMap`: this field is part of the `Debug` string
-    /// `PageFacade` hashes (moss#922) for the incremental-build facade
+    /// `PageFacade` hashes for the incremental-build facade
     /// diff. `HashMap`'s per-process-random hasher makes its `Debug`
     /// iteration order — and thus the facade hash — differ between build
     /// invocations for byte-identical content; `BTreeMap` iterates in
@@ -373,7 +373,7 @@ pub struct ParsedDocument {
     /// answers "which interface strings" and `<html lang>` asks "what language
     /// is this text", and those diverge for a `ja/` tree: the chrome is
     /// honestly the site default's, but the content is Japanese and used to say
-    /// otherwise (#977). Set by `i18n::declared_lang_tag`.
+    /// otherwise. Set by `i18n::declared_lang_tag`.
     #[serde(skip)]
     #[specta(skip)]
     pub lang_tag: Option<String>,
@@ -407,8 +407,7 @@ pub struct ParsedDocument {
     /// parse time by `transform_events`. Feeds the body-image rung of
     /// `cover.rs::resolve_cover_chain` so the cover fallback no longer
     /// requires a regex post-pass over rendered HTML (Step 5 of the
-    /// structural-html-emission migration; see
-    /// `docs/reference/structural-html-emission.md`).
+    /// structural-html-emission migration).
     ///
     /// Intentionally excludes raw HTML `<img>` tags embedded in markdown
     /// source (pulldown-cmark passes them as `Event::Html`, not
@@ -439,8 +438,6 @@ pub struct ParsedDocument {
     /// or at synthesis time (for per-asset pages, in `render.rs`). All downstream
     /// code classifies pages by reading this field — do not infer kind from filename,
     /// extension, or other fields.
-    ///
-    /// See `moss/docs/reference/page-kinds.md`.
     #[serde(skip)]
     #[specta(skip)]
     pub kind: moss_core::PageKind,
@@ -472,7 +469,7 @@ pub struct ParsedDocument {
     /// Raw frontmatter as generic key-value pairs (preserves all fields including plugin-specific ones like `syndicated`)
     ///
     /// `BTreeMap`, not `HashMap` — see the doc comment on `cascade` above
-    /// for why (moss#922 `PageFacade` determinism).
+    /// for why (`PageFacade` determinism).
     #[serde(skip)]
     #[specta(skip)]
     pub raw_frontmatter: std::collections::BTreeMap<String, serde_json::Value>,
@@ -489,19 +486,19 @@ pub struct ParsedDocument {
     /// Populated by `build::scan::sort_inference::populate_direct_children_sorts`.
     pub(crate) direct_children_sort: Option<moss_core::sort::ResolvedSort>,
     /// `html_content` in the pieces the serializer emitted it in, plus the
-    /// typed grid cells behind them (ADR-034).
+    /// typed grid cells behind them.
     ///
     /// Rendering happens per page, before any page knows about the others, so
     /// two structural decisions have to wait for whole-build state: which grid
     /// cells link to a collection, and where a cover-bearing folder home
     /// releases its narrow column. The render phase makes them on the typed
     /// `Block`s recorded here instead of re-parsing `html_content` — the
-    /// scanning that produced moss#903's char-boundary abort.
+    /// scanning that produced an earlier char-boundary abort.
     ///
     /// `None` for documents synthesized outside `process_markdown_file`
     /// (tests, generated index pages); those fall back to `html_content`
-    /// treated as one opaque segment, which is exactly the pre-ADR-034
-    /// behavior minus the grid/cover enhancements they never needed.
+    /// treated as one opaque segment, which is exactly the behavior before
+    /// typed grid cells, minus the grid/cover enhancements they never needed.
     ///
     /// Not serialized: it is derived build state, and the frontend has no use
     /// for a second copy of the body.
@@ -515,15 +512,14 @@ pub struct ParsedDocument {
     /// `![[embed]]` transclusions (`LinkType::Embed`) — there is no separate
     /// "embed_deps" field to duplicate that split.
     ///
-    /// Not read by anything yet (moss#922 Stage 3 — the future `DepGraph`,
-    /// Stage 4, is the first consumer). Not serialized: it's derived build
+    /// Not read by anything yet (the future `DepGraph` is the first
+    /// consumer). Not serialized: it's derived build
     /// state the frontend has no use for, same rationale as `body_plan`.
     #[serde(skip)]
     #[specta(skip)]
     pub outgoing_links: Vec<moss_core::resolve::OutgoingLink>,
     /// `(target, immediate_embedder)` pairs for every `![[transclusion]]` the
-    /// resolve phase spliced into this document's markdown, transitively
-    /// (moss#922 Stage 7).
+    /// resolve phase spliced into this document's markdown, transitively.
     ///
     /// Verbatim `ResolveResult::embed_deps` (`moss_core::resolve`). NOT the
     /// same relation as `outgoing_links`' `LinkType::Embed` entries: a
@@ -562,7 +558,7 @@ impl ParsedDocument {
     /// Rewrite the page body, keeping the typed plan and the flattened
     /// `html_content` in sync.
     ///
-    /// `html_content` IS [`Self::body_plan`] flattened (ADR-034), and the render
+    /// `html_content` IS [`Self::body_plan`] flattened, and the render
     /// phase renders from the plan. So a pass that edited only the string would
     /// be silently discarded at render time, and a pass that edited only the
     /// plan would be invisible to the ~38 places that read the bytes (RSS,
@@ -636,7 +632,7 @@ impl ParsedDocument {
     /// 3. `slot_only == true` — layout chrome (e.g. `footer.md`) that fills a
     ///    layout slot rather than rendering as a page. Structurally detected by
     ///    `crate::build::footer::is_excluded_from_pages`; see
-    ///    `ParsedDocument::slot_only` and PR7b (moss#599).
+    ///    `ParsedDocument::slot_only`.
     ///
     /// All list-emitting sites call this helper so any future visibility flag
     /// is added in one place.
@@ -665,8 +661,7 @@ impl ParsedDocument {
 /// Set during markdown processing as shortcodes/blocks fire. Aggregated by
 /// the build feature pass to decide which feature-CSS modules and JS
 /// bundles to embed. This is the prototype for the eventual `SiteFeatures`
-/// registry described in `docs/reference/html-css-contract.md` (roadmap
-/// step 8). When that lands, `PageFeatures` becomes a typed enum-set or
+/// registry (a later roadmap step). When that lands, `PageFeatures` becomes a typed enum-set or
 /// bitset; today it's a struct of `bool`s for legibility.
 ///
 /// **Adding a new feature flag:** add a field here, set it where the feature
@@ -853,8 +848,7 @@ pub struct SourceMetadata {
     /// mtime-preserving editors); ctime cannot. A ctime disagreement never
     /// suppresses — it only demotes the size+mtime fast path to the hash
     /// tier, so false positives (a permission change bumps ctime) cost one
-    /// hash and self-absorb. git's index does exactly this. See
-    /// docs/archive/2026-08-18-watcher-reliability-architecture.md.
+    /// hash and self-absorb. git's index does exactly this.
     #[serde(default)]
     pub ctime: Option<i64>,
     /// Inode number, where the platform reports one. Replace-via-rename (the

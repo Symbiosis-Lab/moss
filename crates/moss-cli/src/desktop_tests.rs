@@ -1,7 +1,7 @@
 //! Unit tests for the pure halves of the handoff: `locate_in`, `executable`
 //! and `hint`. The full `Test 1` (binary-level, driving `moss-cli edit` as a
-//! subprocess with `MOSS_DESKTOP_SEARCH_ROOT` and `HOME` set) lives in
-//! `src-tauri/tests/desktop_handoff_test.rs` — `locate()`'s env-var reads and
+//! subprocess with `MOSS_DESKTOP_SEARCH_ROOT` and `HOME` set) lives in the
+//! desktop app's own test suite — `locate()`'s env-var reads and
 //! `hand_off`'s `eprintln!` are not observable from an in-process unit test
 //! without either mutating shared process environment across parallel test
 //! threads or adding a test-only output sink neither `locate()` nor

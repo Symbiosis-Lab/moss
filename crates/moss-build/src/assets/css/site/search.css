@@ -3,8 +3,7 @@
 
    Gated partial: ships only when `[site].search` is on, which is OFF by
    default (it also requires `experimental.preview_features`). Registered in
-   `build/emit/stylesheet.rs`'s CSS_PARTIALS; see
-   docs/archive/2026-08-04-ship-what-the-site-needs.md.
+   `build/emit/stylesheet.rs`'s CSS_PARTIALS.
 
    Extracted from site.css lines 1469-1705 on 2026-08-04. The section's comment
    header ran to line 1975, but the rules from 1707 on are theme-toggle,
@@ -37,7 +36,7 @@
 
    Rows are flat and hairline-separated — no cards, no shadows. Selection is a
    2px accent left-border plus a ~4% accent tint, never a solid fill block.
-   Runtime: frontend/site/search.ts.
+   Runtime: js-src/site/search.ts.
    --------------------------------------------------------------------------- */
 
 .nav-search-btn {

@@ -1,4 +1,4 @@
-//! The CLI's handoff to moss desktop (ADR-082 Decision 2 and 3, E2').
+//! The CLI's handoff to moss desktop.
 //!
 //! `moss-cli` has no window system, so `preview` and `edit` cannot run here.
 //! Today they refuse; this module turns the refusal into a handoff when the
@@ -18,17 +18,14 @@ use moss_build::system::tar_safe::{extract_tar_gz, SymlinkPolicy, TarSafeError};
 /// Same ceilings the stack executor's tar.gz arm uses
 /// (`crates/moss-build/src/system/stack_exec/extract.rs`); a `moss.app`
 /// tarball is two orders of magnitude below both. Defined here rather than
-/// shared, because `stack_exec::extract` keeps its own ceilings private —
-/// see the unification plan's "Callers after the change" section
-/// (docs/archive/2026-09-12-tar-safe-unification-plan.md).
+/// shared, because `stack_exec::extract` keeps its own ceilings private.
 const INSTALL_MAX_ENTRIES: usize = 100_000;
 const INSTALL_MAX_TOTAL_UNCOMPRESSED: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
 
 /// Where the updater manifest lives — the same endpoint `tauri.conf.json:52`
 /// gives the app's own auto-updater, so `moss desktop install` reads the
 /// release the app would offer itself. Names the repository the current
-/// release repo becomes at the F6 flip, deliberately ahead of that rename —
-/// see `docs/archive/2026-09-13-f6-flip-day-runbook.md`.
+/// release repo becomes at the F6 flip, deliberately ahead of that rename.
 const MANIFEST_URL: &str =
     "https://github.com/Symbiosis-Lab/moss/releases/latest/download/latest.json";
 
@@ -37,14 +34,14 @@ const MANIFEST_URL: &str =
 /// design (it verifies signatures; it cannot make any).
 const PUBKEY_B64: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc4QThBN0ZCNjg5NUJGNzIKUldSeXY1Vm8rNmVvZU1rUzQ5TlBWN3JXZ0lWbUExaUszVU9zb29nQXNlekVTaEhGQnEwZVpWZ1AK";
 
-/// The only platform entry this binary ever installs — macOS only (ADR-082
-/// Decision 3) and universal rather than per-architecture, so one download
-/// works on both Apple silicon and Intel.
+/// The only platform entry this binary ever installs — macOS only and
+/// universal rather than per-architecture, so one download works on both
+/// Apple silicon and Intel.
 const PLATFORM_KEY: &str = "darwin-universal";
 
 /// Where an installed moss desktop is, if anywhere.
 ///
-/// macOS only today (ADR-082 Decision 3). Two `stat`s, in order:
+/// macOS only today. Two `stat`s, in order:
 /// `/Applications/moss.app`, then `~/Applications/moss.app` — the two places
 /// `moss desktop install` can put it, and no others. **No `mdfind`**: a
 /// developer box carries a debug build, a release build and often a
@@ -99,7 +96,7 @@ pub const fn hint() -> &'static str {
 /// and return the exit code the caller exits with.
 ///
 /// Spawned, never `open -a`: single-instance forwards argv only on a real
-/// launch (`src-tauri/src/lib.rs:330-332`). Detached and NOT waited on — the
+/// launch, in the app's own startup path. Detached and NOT waited on — the
 /// app outlives the CLI by design.
 pub fn hand_off(verb: &str, path: &str) -> i32 {
     let Some(app) = locate() else {

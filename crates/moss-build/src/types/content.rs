@@ -15,8 +15,7 @@ use crate::build::types::SourceMetadata;
 use crate::config::deployment::DeploymentConfig;
 
 /// Manifest entry mode tags. POSIX file-mode octal strings, matching
-/// `git ls-tree` and POSIX tar typeflag conventions. See
-/// `docs/reference/deploy-upload-contract.md` for the full wire spec.
+/// `git ls-tree` and POSIX tar typeflag conventions.
 pub const MODE_FILE: &str = "100644";
 pub const MODE_SYMLINK: &str = "120000";
 
@@ -163,8 +162,8 @@ pub struct FileInfo {
 
 /// Metadata for media files (images/videos) including dimensions for placeholder generation.
 ///
-/// ADR-006: Thumbnail-based extraction for performance
-/// ADR-002: Dynamic SVG placeholders with dominant color
+/// Thumbnail-based extraction for performance, and dynamic SVG placeholders
+/// with dominant color.
 ///
 /// This struct extends FileInfo with media-specific metadata that enables:
 /// - Generating properly-sized placeholder SVGs before images load
@@ -180,10 +179,10 @@ pub struct MediaMetadata {
     pub size: u64,
     /// Unix timestamp as string, if available
     pub modified: Option<String>,
-    /// Image/video dimensions (width, height) - ADR-002: for placeholder SVG generation
+    /// Image/video dimensions (width, height) - for placeholder SVG generation
     pub dimensions: Option<(u32, u32)>,
     /// Dominant color (raw scan format — see below) for placeholder
-    /// backgrounds and folder-card colors. ADR-002.
+    /// backgrounds and folder-card colors.
     ///
     /// The scan layer stores this in two formats depending on file type:
     /// - Image scan (`extract_color_and_lqip`) → `#RRGGBB` raw average.
@@ -204,11 +203,10 @@ pub struct MediaMetadata {
     /// ≤4 KB read, gif/webp extensions only — every other extension is
     /// `false` without touching the file). Animated sources must never be
     /// resized/re-encoded, so this flag gates the responsive ladder
-    /// (Phase B of docs/archive/2026-07-22-responsive-image-variants-plan.md).
+    /// (Phase B of the responsive image variants plan).
     #[serde(default)]
     pub is_animated: bool,
-    // `webp_variant` field deleted 2026-05-20 — see
-    // docs/archive/2026-05-20-image-variant-honest-mirror.md (Layer 4).
+    // `webp_variant` field deleted 2026-05-20.
     // The snapshot mechanism was the parallel-oracle root cause of the
     // broken-hero bug. Synthesizer now always emits <picture>, AssetRegistry
     // handles placeholder lifecycle at request time.
@@ -219,7 +217,7 @@ pub struct MediaMetadata {
 /// Contains categorized file listings and inferred project characteristics
 /// used to determine the optimal site generation strategy.
 ///
-/// ADR-006: Media files use MediaMetadata to include dimensions and dominant color
+/// Media files use MediaMetadata to include dimensions and dominant color
 /// for placeholder SVG generation during page load.
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct ProjectStructure {
@@ -267,7 +265,7 @@ pub struct ProjectStructure {
     /// Same classification as `evicted_count`, kept as a list (not just a
     /// count) so the home-page bounded wait and the cloud-sync progress
     /// counter (`pipeline::build_inner`) can re-check materialization
-    /// per-file. See docs/archive/2026-07-31-cloud-download-waiting-mode.md.
+    /// per-file.
     #[serde(skip)]
     #[specta(skip)]
     pub evicted_paths: Vec<std::path::PathBuf>,
@@ -281,8 +279,7 @@ pub struct ProjectStructure {
     /// with a known language code, e.g. `en/`, `zh-hans/`). Used to gate the root
     /// homepage's default-language-tree listing scope: when true, the root home lists
     /// only the default tree (docs not under a language-prefix folder). Computed once
-    /// at scan, parallel to `has_content_folders`. See
-    /// docs/archive/2026-06-06-multilingual-children-scoping-design.md.
+    /// at scan, parallel to `has_content_folders`.
     #[serde(skip)]
     #[specta(skip)]
     pub has_language_trees: bool,
@@ -357,7 +354,6 @@ pub struct SiteResult {
     /// them) were cloud-dataless placeholders. Non-empty means this build is
     /// incomplete — `pipeline::build_inner` uses it to skip
     /// `remove_stale_html` and to suppress a false cloud-sync "done" event.
-    /// See docs/archive/2026-07-31-cloud-download-waiting-mode.md Stage 3.
     #[serde(skip)]
     #[specta(skip)]
     pub deferred_paths: Vec<std::path::PathBuf>,
@@ -380,7 +376,7 @@ pub struct SiteResult {
 pub struct SiteHashes {
     /// Map of output path to mode-tagged content hash.
     ///
-    /// Wire format (see [docs/reference/deploy-upload-contract.md]):
+    /// Wire format:
     ///   `<octal-mode>:<sha256>`
     ///   - `100644:<hash>` — regular file, hash of bytes
     ///   - `120000:<hash>` — symlink, hash of the target path string
@@ -432,7 +428,7 @@ pub struct SiteHashes {
     #[serde(default)]
     pub image_outputs: HashSet<String>,
     /// Variants a COMPLETE ship-time reference scan judged unreferenced, so
-    /// the next build's producers do not make them again (moss#1085).
+    /// the next build's producers do not make them again.
     ///
     /// The prune is the only pass that knows what "referenced" means with full
     /// information — it runs after every plugin, notebook and feed has written
@@ -451,7 +447,7 @@ pub struct SiteHashes {
     /// `media::pipeline::remove_stale_html`, and
     /// `media::pipeline::compute_expected_dirs`.
     ///
-    // TODO(#524): unify with video_outputs/image_outputs into a single
+    // TODO: unify with video_outputs/image_outputs into a single
     // background_outputs set (or absorb into BuildContext::emit_artifact).
     #[serde(default)]
     pub notebook_outputs: HashSet<String>,
@@ -497,8 +493,7 @@ pub struct SiteHashes {
     ///   OG cards) — no `source_path`.
     /// - Notebook (`.ipynb`) sources — emitted via `HashBucket::NotebookOutputs`,
     ///   not through `ParsedDocument`. In-app `.ipynb` renames fall through
-    ///   to the deletion path (iframe redirects home). See plan
-    ///   `docs/archive/2026-05-06-rename-event-propagation.md` "Out of scope".
+    ///   to the deletion path (iframe redirects home) — out of scope here.
     /// - Asset/media files (`.jpg`, `.mp4`, etc.) — same emission path,
     ///   same fall-through behavior.
     #[serde(default)]
@@ -645,7 +640,7 @@ mod tests {
     // without also bumping a major version and accepting that every
     // pre-rename `.moss/build.nosync/hashes.json` will trigger a silent full
     // rebuild on first load. The alias can be dropped once all active
-    // sites have rebuilt post-rename (see issue #554).
+    // sites have rebuilt post-rename.
     #[test]
     fn site_hashes_deserializes_legacy_compiler_fingerprint() {
         let legacy = r#"{

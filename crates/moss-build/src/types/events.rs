@@ -58,7 +58,7 @@ pub struct SystemInfo {
 /// - `moved_output_paths`: triggers URL update when current page's output moved
 ///
 /// **Source-domain** (consumed by `EntryRegistry` in the action panel — added
-/// by the entry-id architecture, see `docs/archive/2026-05-25-entry-id-architecture.md`):
+/// by the entry-id architecture):
 /// - `source_creates`: new source files appearing this rebuild
 /// - `source_deletes`: source files removed this rebuild
 /// - `source_renames`: `(old_source_path, new_source_path)` pairs for the
@@ -73,7 +73,7 @@ pub struct FileChangeEvent {
     /// the rebuild. Frontend triggers redirect-home when the current iframe
     /// path matches one of these. Same domain as `changed_output_files` and
     /// `moved_output_paths` — see `pathMatchesCurrentPage` in
-    /// `frontend/app/preview/path-matcher.ts` for the matching rules.
+    /// the desktop app's preview path-matcher for the matching rules.
     pub deleted_paths: Option<Vec<String>>,
     /// `(old_output_path, new_output_path)` pairs for any iframe target that
     /// should follow rather than redirect-home. Two producers feed in here:
@@ -89,7 +89,7 @@ pub struct FileChangeEvent {
     /// root-relative paths, forward-slash separators). Deduped against
     /// `source_renames` — a path that's the NEW side of a rename does not
     /// appear here. Consumed by `EntryRegistry.upsert` to mint EntryIds for
-    /// newly-visible files. See `docs/archive/2026-05-25-entry-id-architecture.md`.
+    /// newly-visible files.
     pub source_creates: Option<Vec<String>>,
     /// **Source-domain.** Source files removed this rebuild. Deduped against
     /// `source_renames` — a path that's the OLD side of a rename does not
@@ -157,20 +157,20 @@ pub struct ScanComplete {
     ///
     /// TODO: switch to sending the enum key (`"icloud"`, `"dropbox"`, …) and
     /// localise the display string on the frontend. Part of the typed-event
-    /// migration tracked in issue #523.
+    /// migration.
     pub cloud_provider: Option<String>,
 }
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The typed moss→frontend event bus — crossed from `src-tauri/src/events.rs`
-// at S1 of the ADR-067 relocation (2026-08-28, plan decision 4): the SSE event
+// The typed moss→frontend event bus — crossed from the desktop app's events
+// module at S1 of the relocation (2026-08-28, plan decision 4): the SSE event
 // carrier (`crate::ops::serve::events`) publishes `MossEvent`s, so the contract
 // TYPES live crate-side while the Tauri emitters (`emit_moss_event*`) stay
 // app-side. Desktop-only variants (toast, fullscreen, panel, updater) ride
 // along deliberately — one contract, two envelopes; a browser client ignoring
 // `FullscreenChanged` is cheaper than two event vocabularies drifting.
-// Routing table, legacy channels, and the emit helpers: `src-tauri/src/events.rs`.
+// Routing table, legacy channels, and the emit helpers stay in the desktop app.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Re-export domain payload types so the enum stays a thin tag.
@@ -184,7 +184,7 @@ pub use crate::tasks::PanelTaskWire;
 pub use crate::types::toast::ToastPayload;
 
 /// Tauri channel name for the typed bus (the SSE carrier frames events under
-/// the same name). Frontend mirror lives at `frontend/app/utils/moss-events.ts`.
+/// the same name). Frontend mirror lives in the desktop app's utils module.
 pub const MOSS_EVENT_CHANNEL: &str = "moss-event";
 
 // The S1-crossed payload vocabulary lives in the sibling
@@ -266,7 +266,7 @@ pub enum MossEvent {
     /// progress bar, so the download is visible while it runs instead of only
     /// when it ends.
     UpdateDownloadProgress(UpdateDownloadProgress),
-    /// `PanelTask` lifecycle event (ADR-015). Emitted by `TaskRegistry`
+    /// `PanelTask` lifecycle event. Emitted by `TaskRegistry`
     /// after every spawn / progress / awaiting / terminal transition.
     /// Frontend renderers (`breadcrumb-hairline.ts`, the progress panel,
     /// future Inline/Narrated/Awaiting renderers) filter on `payload.tone`
@@ -335,8 +335,7 @@ pub enum MossEvent {
     /// region) and renders the failure overlay.  Retry re-shows the webview and
     /// triggers a reload.  Routed via `emit_to("main", …)` — NOT broadcast.
     ///
-    /// Design: C3 in
-    /// docs/archive/2026-06-23-matters-login-lifecycle-and-minimal-browser-design.md
+    /// Design: C3.
     LoginBrowserFailed { reason: LoginFailureReason },
 
     /// Matters is installed in the current project but has no valid session
@@ -352,8 +351,7 @@ pub enum MossEvent {
     /// `project_path` lets the frontend tie the signal to the correct folder
     /// and verify it hasn't been superseded by a folder switch.
     ///
-    /// Design: Phase 4b B3 in
-    /// docs/archive/2026-06-23-matters-login-lifecycle-and-minimal-browser-design.md
+    /// Design: Phase 4b B3.
     MattersNeedsConnection { project_path: String },
 
     /// The app UI language changed at runtime (live switch, no restart).
@@ -374,8 +372,6 @@ pub enum MossEvent {
     /// TRANSITIONS ONLY — the supervisor's fold returns at most one per
     /// probe; steady states are silent, and `get_publish_verdict` is the
     /// pull-side catch-up for a webview that mounted mid-check.
-    ///
-    /// Design: docs/archive/2026-08-16-publish-verified-live-design.md §2.
     PublishVerdict(PublishVerdict),
 
     /// The Rust-assembled record of a finished publish, replacing the
@@ -383,8 +379,6 @@ pub enum MossEvent {
     /// through the workspace feedback queue
     /// (`queue_workspace_feedback_and_ping`, pull-only) to the preview
     /// surface — the same routing `ShowToast` uses today.
-    ///
-    /// Design: docs/archive/2026-09-10-publish-receipt-design.md.
     PublishReceipt(PublishReceipt),
 
     /// The nested-site guard is scanning the folder the user just opened —
@@ -401,7 +395,7 @@ pub enum MossEvent {
     /// one `submit_threshold_decision` quoting the prompt's token; a closed
     /// window resolves the wait to Cancel, and an un-acked prompt falls back
     /// to the dialog. Wire contract: the threshold types above, mirrored by
-    /// `frontend/app/preview/threshold/seam.ts`.
+    /// the desktop app's threshold seam.
     /// Routed via `emit_to("preview", …)` — NOT broadcast.
     ThresholdPrompt(ThresholdPrompt),
     /// The guard pass named by `token` ended. `cancelled: true` → the
@@ -421,7 +415,7 @@ pub enum MossEvent {
     /// (`submit_credential_prompt`).
     CredentialRequest(CredentialRequest),
 
-    /// The open folder's health verdicts, surfaced (moss#1075, phase 3 of the
+    /// The open folder's health verdicts, surfaced (phase 3 of the
     /// watcher-reliability design). Re-judged by the folder's sweep every
     /// tick (~2s) and emitted on TRANSITIONS ONLY — a healthy folder is
     /// silent, and both flags going quiet is itself a transition, so the
@@ -440,8 +434,8 @@ pub enum MossEvent {
     FolderHealthChanged { folder: String, unavailable: bool, degraded: bool },
 
     /// Windows only: the invisible `HTMAXBUTTON` Snap Layouts overlay
-    /// (`platform/windows/snap_overlay.rs`, Tasks 6-7 of
-    /// docs/archive/2026-09-14-windows-custom-caption-design.md) was entered
+    /// (`platform/windows/snap_overlay.rs`, Tasks 6-7 of the windows custom
+    /// caption design) was entered
     /// or left. The overlay covers the HTML maximize button and answers
     /// non-client hit-testing itself, so ordinary CSS `:hover` never fires on
     /// that button; this is the substitute signal. `hovering: true` on

@@ -1,5 +1,5 @@
 //! Pure asset-reference resolver shared by editor + build (single source of truth).
-//! Mirrors `link_class.rs`. Zero I/O — data injected via `AssetIndex` (ADR-018).
+//! Mirrors `link_class.rs`. Zero I/O — data injected via `AssetIndex`.
 
 use crate::resolve::parent_dir;
 

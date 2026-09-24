@@ -1,7 +1,7 @@
 //! Typed frontmatter structs for the build pipeline.
 //!
-//! Lives in moss-core so validation, the resolver, and src-tauri's pipeline
-//! all share one definition. See ADR-018 for the boundary rule.
+//! Lives in moss-core so validation, the resolver, and the desktop app's
+//! pipeline all share one definition.
 
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
@@ -360,7 +360,7 @@ pub struct FrontMatter {
     /// The sidebar callsite reads this flag (not `sidebar.is_some()`) so a
     /// conflict like `sidebar: "[[A]]" + children: "[[B]]"` — where the alias
     /// yields and warns "sidebar ignored" — actually skips the right rail
-    /// rather than rendering it. Removed alongside the alias itself (#633).
+    /// rather than rendering it. Removed alongside the alias itself.
     #[serde(skip_serializing, default)]
     pub _from_sidebar_alias: Option<bool>,
     /// Listing sort: axis (date/weight/title) or explicit list of child stems.
@@ -386,10 +386,10 @@ pub struct FrontMatter {
     /// Translation key for linking arbitrary files as translations
     #[serde(rename = "translationKey")]
     pub translation_key: Option<String>,
-    /// Whether to show comments on this page: default true on an article; default FALSE on a folder-index page (homepage included), which needs explicit `comments: true` to opt in (#1013)
+    /// Whether to show comments on this page: default true on an article; default FALSE on a folder-index page (homepage included), which needs explicit `comments: true` to opt in
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub comments: Option<bool>,
-    /// Durable page identity: 8 RANDOM hex chars minted at first build — never derivable, never changed once published (docs/reference/social-data-standard.md)
+    /// Durable page identity: 8 RANDOM hex chars minted at first build — never derivable, never changed once published
     #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub uid: Option<String>,
     /// Typesetting direction: "horizontal" (default) or "vertical"
@@ -424,7 +424,7 @@ impl FrontMatter {
     }
 }
 
-/// One dropped field, for build advisories and (later) chip diagnostics (ADR-020).
+/// One dropped field, for build advisories and (later) chip diagnostics.
 ///
 /// Only `Dropped` outcomes exist today — a field whose value couldn't satisfy
 /// its typed field and was removed so its neighbours survive. Severity tiers
@@ -445,7 +445,7 @@ pub struct FieldWarning {
 /// `deserialize_with` on `FrontMatter` — no per-field code — and serde_yaml
 /// coerces YAML scalars, so a numeric uid/title becomes a string here.
 ///
-/// Resilience (ADR-020): if a value genuinely cannot satisfy its typed field
+/// Resilience: if a value genuinely cannot satisfy its typed field
 /// (e.g. `weight: high`, or an `analytics` object missing its required `url`),
 /// that ONE field is dropped and every good neighbour survives. Offending
 /// fields are found by deserializing each field in ISOLATION — this is
@@ -665,8 +665,7 @@ where
 /// one such field fails the WHOLE `FrontMatter` (and the pipeline blanks every
 /// field). Stringify int/float/bool scalars so a numeric value can't poison its
 /// neighbors. Integer round-trips exactly; a float token is lossy (YAML already
-/// collapsed it to f64) — accepted because losing the whole block is worse. See
-/// ADR-020.
+/// collapsed it to f64) — accepted because losing the whole block is worse.
 pub fn deserialize_string_lenient<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -933,7 +932,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                 "url" => frontmatter.url = Some(value.to_string()),
                 "cover" => frontmatter.cover = Some(value.to_string()),
                 // D1: children is boolean — "true" → Some(true), "false" → Some(false)
-                // D5: `list` alias removed (breaking change) — see docs/archive/2026-03-05-sidebar-redesign.md
+                // D5: `list` alias removed (breaking change)
                 "children" => {
                     match value {
                         "true" | "" => frontmatter.children = Some(true),
@@ -996,12 +995,12 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                 // Handle boolean with explicit value. Strip quotes first: authors
                 // copying YAML habits into simplified frontmatter (`nav: 'true'`)
                 // would otherwise compare "'true'" != "true" and silently land on
-                // `false` — a worse variant of #925 (miscoercion, not just drop).
+                // `false` — a worse variant of that failure mode (miscoercion, not just drop).
                 "nav" | "home" | "draft" | "listed" | "breadcrumb" | "footer" | "comments" => {
                     let unquoted = value.trim_matches(|c| c == '\'' || c == '"');
                     // Anything other than "true"/"false" is a likely typo (e.g.
                     // "yes", "Ture"); warn rather than silently defaulting to
-                    // false — the same #925 failure mode in this hand-rolled
+                    // false — the same failure mode in this hand-rolled
                     // parser, mirroring the "children"/"children_in" warnings above.
                     let flag = match unquoted {
                         "true" | "" => Some(true),
@@ -1368,7 +1367,7 @@ mod tests {
     // serde_json::Value (Pod::Integer => json!(val)) then serde_json::from_value,
     // which — unlike serde_yaml — does NOT coerce numbers to String. Without
     // deserialize_string_lenient these FAIL ("invalid type: integer, expected a
-    // string") and the whole FrontMatter would blank. See ADR-020.
+    // string") and the whole FrontMatter would blank.
     #[test]
     fn numeric_uid_via_json_path_coerces_and_preserves_siblings() {
         let v = serde_json::json!({ "title": "Kept Title", "uid": 46160604u64, "date": "2025-05-28" });
@@ -1436,7 +1435,7 @@ mod tests {
 
     #[test]
     fn quoted_nav_string_coerces_instead_of_vanishing() {
-        // Regression for #925: `nav: 'true'` (quoted YAML string) must not
+        // Regression: `nav: 'true'` (quoted YAML string) must not
         // silently drop the field. Every Option<bool> field shares the same
         // lenient deserializer, so this is a single behavior, not per-field.
         let fm: FrontMatter = serde_yaml::from_str("nav: 'true'\n").expect("parse");
@@ -1494,7 +1493,7 @@ mod tests {
     #[test]
     fn simplified_frontmatter_invalid_bool_value_is_unset_not_false() {
         // A typo'd bool value (not "true"/"false") must not silently become
-        // `Some(false)` — that's the same #925 failure mode (a page author
+        // `Some(false)` — that's the same failure mode (a page author
         // writes `nav: yes` expecting it to show, and it silently doesn't)
         // in this parser's own hand-rolled bool matching.
         let (fm, _) = parse_simplified_frontmatter("nav: yes\n---\nbody\n");

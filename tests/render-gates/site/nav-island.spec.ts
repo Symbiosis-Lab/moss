@@ -1,5 +1,5 @@
 /**
- * Floating nav island — the assertions that need a real engine (ADR-049).
+ * Floating nav island — the assertions that need a real engine.
  *
  * Everything provable from emitted text lives in Rust
  * (`build/components/nav_tests.rs`), and the fold *decision* lives in vitest
@@ -197,7 +197,7 @@ test.describe('behaviour at desktop width', () => {
   });
 
   test('every label in the sections panel starts at the same x', async ({ page }) => {
-    // ADR-049 §7, and the regression this whole gate exists for. Measured with
+    // The regression this whole gate exists for. Measured with
     // a Range around the text node: an in-flow marker moves the TEXT while
     // leaving the row box where it was, so a box measurement would pass.
     await reveal(page);
@@ -314,7 +314,7 @@ test.describe('behaviour at desktop width', () => {
   });
 
   test('a hidden island is inert — one Tab at the top cannot reach it', async ({ page }) => {
-    // ADR-049 §9, and the inversion of what this test asserted first. The old
+    // The inversion of what this test asserted first. The old
     // rule was "focus reveals it, so it can never trap a keyboard reader",
     // which made the island the FIRST focusable thing on every breadcrumbed
     // page: one Tab at scroll 0 revealed an invisible bar on top of the
@@ -372,7 +372,7 @@ test.describe('behaviour at desktop width', () => {
   });
 
   test('the fold is minimal — the current page truncates before an ancestor goes', async ({ page }) => {
-    // ADR-049 §4: the current page is the ONLY crumb allowed to truncate, so
+    // The current page is the ONLY crumb allowed to truncate, so
     // its slack has to be spent before any ancestor leaves the screen. The
     // first implementation charged it full width and dropped an ancestor that
     // did not need to go.
@@ -462,7 +462,7 @@ test.describe('behaviour at desktop width', () => {
   });
 
   test('the panels claim no interaction model they do not implement', async ({ page }) => {
-    // ADR-049 §9. `role="menu"` promises arrow-key roving focus; a popover of
+    // `role="menu"` promises arrow-key roving focus; a popover of
     // plain links does not have it, and claiming it strands a screen-reader
     // user pressing ArrowDown.
     await reveal(page);
@@ -486,7 +486,7 @@ test.describe('behaviour at desktop width', () => {
 /**
  * The island appears only where the page has a contents table to show.
  *
- * ADR-049 §10 as amended 2026-08-30: two or more section headings, and nothing
+ * Since a 2026-08-30 amendment: two or more section headings, and nothing
  * else — a deep trail no longer rescues a page that has nothing to jump to
  * within itself. The harness carries a five-crumb trail, so serving it with a
  * single section is exactly the case the old or-rule showed and the new rule

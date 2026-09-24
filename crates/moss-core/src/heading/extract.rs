@@ -122,7 +122,7 @@ mod tests {
     /// any markdown-active character inside it is consumed before slugging:
     /// `$f*g$ and $h*k$` has its two `*` eaten as emphasis, and `$V^*$ and
     /// $W^*$` — plain dual-space notation — likewise. See the `*` cases
-    /// below and ADR-030 §"Upgrade-time anchor movement".
+    /// below.
     #[test]
     fn math_heading_slug_is_identical_across_every_surface() {
         let md = "# Euler $e^{i\\pi}=-1$ identity\n";
@@ -164,7 +164,7 @@ mod tests {
     ///
     /// `*` inside TeX is emphasis to a math-OFF parser. Turning `[site].math`
     /// on therefore MOVES these anchors — a real, user-visible upgrade cost
-    /// recorded in ADR-030 and the moss-core CHANGELOG. What must still hold
+    /// recorded in the moss-core CHANGELOG. What must still hold
     /// is graph agreement: math-ON slug == the raw-line slug the wikilink
     /// scanner computes, so links and anchors never disagree on a live site.
     #[test]
@@ -189,7 +189,7 @@ mod tests {
             );
 
             // The documented divergence: emphasis ate the `*` with math off.
-            assert_eq!(off[0].slug, expect_off, "math-OFF slug drifted from what ADR-030 records");
+            assert_eq!(off[0].slug, expect_off, "math-OFF slug drifted from the documented behavior");
             assert_ne!(
                 on[0].slug, off[0].slug,
                 "expected this heading's anchor to MOVE when math is enabled"

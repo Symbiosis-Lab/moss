@@ -116,22 +116,22 @@ fn section_walks_a_missing_path_without_panicking() {
     assert!(config.section(&["site", "lang", "nope"]).is_none());
 }
 
-// The hand-editability ruling (ADR-059) is NOT asserted here, deliberately.
+// The hand-editability ruling is NOT asserted here, deliberately.
 // A read-side "the text is unchanged afterwards" test in this crate cannot
 // fail: `parse` takes `&str` and every accessor takes `&self`, so the borrow
 // checker already forbids the mutation, and no edit to production code can
 // turn such a test red. It was written, reviewed, and deleted for exactly
-// that reason. The ruling is asserted where a writer actually exists —
-// `src-tauri/tests/config_hand_editability_test.rs`, which reads a
+// that reason. The ruling is asserted where a writer actually exists — the
+// app's own config hand-editability test, which reads a
 // hand-written config through this reader and then compares the file
 // byte-for-byte after a settings modal writes to it.
 
-/// Open-CLI slice 3 (#1019): the one parse funnel migrates in memory, so a
+/// Open-CLI slice 3: the one parse funnel migrates in memory, so a
 /// host that never persists (moss-cli) still reads a legacy config at its
 /// migrated meaning. Mirrors the parity fixture's v0 shape — pre-v1
 /// `[features]`/`[analytics]` and no `schema_version` — whose analytics slot
 /// and RSS footer are exactly what diverge if one host migrates and the
-/// other does not (ADR-059's silent-defaults hazard).
+/// other does not (a silent-defaults hazard).
 #[test]
 fn parse_migrates_a_v0_config_in_memory() {
     let v0 = "[site]\nlang = \"en\"\n\n[features]\nrss = true\n\n[analytics]\nscript = \"<script src=\\\"https://stats.example.org/js/script.js\\\"></script>\"\n";

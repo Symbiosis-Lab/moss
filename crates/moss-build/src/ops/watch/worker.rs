@@ -1,8 +1,7 @@
 //! The per-folder rebuild worker: a capacity-1 request slot drained by one
 //! dedicated task per watched folder.
 //!
-//! Phase 1a of `docs/archive/2026-08-18-watcher-reliability-architecture.md`
-//! ("Piece 2 — a rebuild path that cannot wedge"). Before this, every producer
+//! Phase 1a ("Piece 2 — a rebuild path that cannot wedge"). Before this, every producer
 //! of a rebuild — the watcher's select loop, the target reconciler, the cloud
 //! supervisor, the publish thaw — awaited the ENTIRE build inline through
 //! `trigger_rebuild_with_lock`, so one wedged build parked event processing,
@@ -245,7 +244,7 @@ impl WorkerHandle {
     /// Is the in-flight build past its deadline? (Diagnostics/UX surface;
     /// never a coordination mechanism.) Read by the sweep every tick and
     /// surfaced to the preview as `FolderHealthChanged` — a corner-panel
-    /// advisory (moss#1075).
+    /// advisory.
     pub fn is_degraded(&self) -> bool {
         self.degraded.load(Ordering::SeqCst)
     }

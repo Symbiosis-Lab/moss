@@ -1,4 +1,4 @@
-//! Tests for build-store retention and GC policy (moss#976 Part A).
+//! Tests for build-store retention and GC policy.
 
 use super::*;
 use std::collections::HashSet;
@@ -49,7 +49,7 @@ fn keeps_the_n_newest_generations() {
 /// A1 — the regression that made this a correctness fix rather than a cleanup.
 ///
 /// `email/commands.rs`'s publish-before-send gate opens
-/// `last_deployed_generation_id` to check math PNGs. Before moss#976 that
+/// `last_deployed_generation_id` to check math PNGs. Before this fix that
 /// generation was not a GC root, so once it aged out the gate failed closed
 /// with "Publish the site first" on a site that HAD been published.
 #[test]

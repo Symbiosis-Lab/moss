@@ -87,9 +87,9 @@ pub struct ImageConversionItem {
     /// URLs instead of leaving them unregistered. The synthesizer emits
     /// `<picture><source srcset="…webp">` for every png/jpg/jpeg from the
     /// extension alone and cannot see registration, and a chosen `<source>`
-    /// that 404s is not recoverable (ADR-013).
+    /// that 404s is not recoverable.
     ///
-    /// - [`SkipReason::SourceInTheCloud`] (moss#982): registered Pending with
+    /// - [`SkipReason::SourceInTheCloud`]: registered Pending with
     ///   a source passthrough, because the bytes are on their way down. It
     ///   must NOT reach the encoder, which would read the source, take an
     ///   `EDEADLK`, and mark the variant `Failed` — turning "still
@@ -97,7 +97,7 @@ pub struct ImageConversionItem {
     ///   `build::cloud_ledger` for why the absence is recorded rather than
     ///   silently handled here.
     /// - [`SkipReason::Cmyk`] / [`SkipReason::NotAnImage`]: registered
-    ///   `Failed`, so the post-seal degrade pass (moss#867) drops the
+    ///   `Failed`, so the post-seal degrade pass drops the
     ///   `<source>` and the page falls through to the original `<img>`.
     ///   Before this a CMYK JPEG shipped a `<source>` that 404ed and the
     ///   browser showed nothing at all (a painting on a real site, 2026-09-05).
@@ -229,7 +229,7 @@ pub(crate) enum SkipReason {
     /// doesn't see a red advisory for a file that was never a real image.
     NotAnImage,
     /// The source bytes are still in the cloud, so nothing about this file's
-    /// CONTENT can be decided yet (moss#982).
+    /// CONTENT can be decided yet.
     ///
     /// Unlike every other variant, this one is **never cached** — see the
     /// guard at the top of [`should_skip`]. It is also not really a skip: the
@@ -246,7 +246,7 @@ pub(crate) enum SkipReason {
 /// a verdict keyed by content OID, about content nobody read, for a file whose
 /// content never changes. Reproduced end to end on a real vault — three valid
 /// images, zero `.webp` variants emitted, `<source srcset>` still emitted for
-/// all three, and no warning printed (moss#985).
+/// all three, and no warning printed.
 ///
 /// `should_skip` has a cloud guard upstream of this, but that guard asks
 /// `icloud::is_evicted`, which is macOS-only and answers about *now* while the
@@ -337,9 +337,7 @@ fn image_magic(path: &Path) -> MagicVerdict {
 /// verdict itself, stored via `ObjectStore::store_bytes` so it can reuse the
 /// exact same content-addressed, params-aware, existence-verified cache
 /// already trusted for real conversion outputs (`image/webp`,
-/// `image/sized-raster`). See
-/// docs/archive/2026-07-31-image-format-probe-cache-design.md for the design
-/// rationale and prior art.
+/// `image/sized-raster`).
 const FORMAT_PROBE_TRANSFORM: &str = "format-probe";
 
 /// Bump whenever `probe_cmyk_magic_already_small`'s decision rules change
@@ -354,7 +352,7 @@ const FORMAT_PROBE_TRANSFORM: &str = "format-probe";
 /// Folded into `params` below so a version bump is an ordinary cache miss,
 /// exactly like a config change.
 ///
-/// **1 → 2** (moss#985): an unreadable source used to be indistinguishable from
+/// **1 → 2**: an unreadable source used to be indistinguishable from
 /// a file that is not an image, so a cloud-evicted PNG could be cached as
 /// `NotAnImage` — permanently, since the verdict is keyed by content OID and an
 /// evicted file's content never changes. The decision rule changed, so the
@@ -435,7 +433,7 @@ pub(crate) fn should_skip(
     source_in_the_cloud: bool,
 ) -> Option<SkipReason> {
     // A source still in the cloud gets NO verdict, and — the part that matters
-    // — no CACHED verdict (moss#982).
+    // — no CACHED verdict.
     //
     // This must precede every branch below, including the cheap extension ones,
     // because the cache read/write straddles them. The failure it prevents:
@@ -452,7 +450,7 @@ pub(crate) fn should_skip(
     // build, so nothing calls `set_pending` and nothing registers a
     // passthrough, while the synthesizer keeps emitting
     // `<picture><source srcset="…webp">` from the extension alone. A chosen
-    // `<source>` that 404s is not recoverable (ADR-013), and the image-set
+    // `<source>` that 404s is not recoverable, and the image-set
     // fingerprint is stat-keyed while eviction preserves size and mtime, so the
     // heal pass never revisits it either. A transient cloud state became
     // permanent corruption of the published site.
@@ -488,14 +486,14 @@ pub(crate) fn should_skip(
     // `ext_lower` is ALSO part of the key, even though the source content is
     // what's hashed into `source_oid` — two files can share identical bytes
     // under different extensions (e.g. a small icon saved as both `.bmp` and
-    // `.png`), and `probe_cmyk_magic_already_small` branches on extension in
-    // ADR-013-relevant ways: `raster_with_picture` forbids `AlreadySmall` for
-    // png/jpg/jpeg specifically because the synthesizer emits an unconditional
-    // `<picture><source>` for those. Without `ext` in the key, probing the
-    // `.bmp` copy first would cache `Some(AlreadySmall)` and the `.png` copy
-    // would then inherit that verdict, skip conversion, and strand the
-    // `<source>` the synthesizer still emits — the exact 2026-05-19 failure
-    // class ADR-013 documents.
+    // `.png`), and `probe_cmyk_magic_already_small` branches on extension for
+    // the same reason as the guard above: `raster_with_picture` forbids
+    // `AlreadySmall` for png/jpg/jpeg specifically because the synthesizer
+    // emits an unconditional `<picture><source>` for those. Without `ext` in
+    // the key, probing the `.bmp` copy first would cache `Some(AlreadySmall)`
+    // and the `.png` copy would then inherit that verdict, skip conversion,
+    // and strand the `<source>` the synthesizer still emits — the exact
+    // 2026-05-19 failure class this guards against.
     let params = serde_json::json!({
         "min_size_kb": config.min_size_kb,
         "max_edge": config.max_edge,
@@ -630,8 +628,8 @@ fn probe_cmyk_magic_already_small(
     // `raster_with_picture` so it falls into the carve-out below.
     //
     // A webp that DOES carry rungs must encode them — skipping would strand
-    // emitted-but-unencoded rung candidates (non-recoverable srcset 404,
-    // ADR-013). The `webp_carries_rungs` sub-test below draws that line.
+    // emitted-but-unencoded rung candidates (a non-recoverable srcset 404).
+    // The `webp_carries_rungs` sub-test below draws that line.
     //
     // The `is_animated=false` literal is provably correct (an animated webp
     // returned SkipReason::AnimatedWebp above and never reaches here) — full
@@ -642,7 +640,7 @@ fn probe_cmyk_magic_already_small(
     // 5-8 dims for ladder sources (design follow-up #1). Else an EXIF-rotated
     // webp whose ORIENTED ladder is non-empty but STORED ladder is empty gets
     // AlreadySmall-skipped while emission still promises its rung → stranded,
-    // never-encoded rung (non-recoverable publish-404, ADR-013). Only width-
+    // never-encoded rung (a non-recoverable publish-404). Only width-
     // derived emptiness is orientation-sensitive; `w.max(h)` is invariant, and
     // the extra bounded EXIF read is webp-only.
     let raster_with_picture = moss_core::asset_paths::is_ladder_source_ext(ext_lower)
@@ -680,8 +678,7 @@ fn probe_cmyk_magic_already_small(
 // The synthesizer now always emits `<picture>` for raster originals; the
 // preview server's AssetRegistry intercept handles the placeholder
 // lifecycle at request time; publish-mode synchronous encoding ensures
-// production parity. See docs/archive/2026-05-20-image-variant-honest-
-// mirror.md (Layer 4).
+// production parity.
 
 /// Collects images that need WebP conversion from the scanned project.
 ///
@@ -1005,7 +1002,7 @@ pub(crate) fn convert_single_image(
 
     // Rung gate: png/jpg/jpeg AND webp (Phase B, Task 12) — the SAME extension
     // set the registration loop (blocking.rs) and the synthesizer gate on, so a
-    // rung is encoded iff it was registered iff it was emitted (ADR-013).
+    // rung is encoded iff it was registered iff it was emitted.
     // Derived from the source extension, which is what `item.ext` carries too.
     // For a webp source the base pass below re-encodes webp→webp at the SAME
     // relative path (to_webp(webp)==webp), and the rung encodes reuse the same
@@ -1036,7 +1033,7 @@ pub(crate) fn convert_single_image(
         if blob_path.is_some() && actual_size == recorded_size && recorded_size > 0 {
             // debug!, not info!: this fires once per cached image and is pure
             // per-file confirmation noise. One real "Send logs" bundle had 7,881
-            // of these lines (see docs/archive/2026-06-03-send-logs-redesign.md).
+            // of these lines.
             log::trace!("Image cache hit for {} ({})", filename, cached_oid);
 
             // Track per-link success. The previous "warn-and-return-Ok"
@@ -1054,8 +1051,7 @@ pub(crate) fn convert_single_image(
             // served path that the preview server reads from.
             //
             // Pattern: Bazel's FindMissingBlobs invariant
-            // (bazel.build/remote/caching). See
-            // docs/archive/2026-05-20-image-variant-honest-mirror.md (Layer 5B).
+            // (bazel.build/remote/caching).
             if let Err(e) = objects.link_to(&cached_oid, &output_webp) {
                 log::warn!("Failed to link cached WebP to staging: {}", e);
             }
@@ -1063,8 +1059,8 @@ pub(crate) fn convert_single_image(
             // THIS build's staging even when the base is a cache hit — on
             // the first build after upgrading to a rung-aware moss, the
             // base cache is warm while every rung is cold, and skipping
-            // here would seal a deploy with 404ing srcset candidates
-            // (ADR-013). `encode_rungs` decodes lazily only on a rung
+            // here would seal a deploy with 404ing srcset candidates.
+            // `encode_rungs` decodes lazily only on a rung
             // cache miss, so the all-warm rebuild stays decode-free.
             let rungs = if rungs_gated {
                 encode_rungs(
@@ -1140,8 +1136,7 @@ pub(crate) fn convert_single_image(
     // never happen (the router's source passthrough already outranked it) and,
     // under the rule this audit settled, must not — an author judging a photo
     // cannot tell a blurred stand-in from a badly-encoded result, so the preview
-    // shows the real original instead. See
-    // docs/archive/2026-08-21-pending-variant-source-passthrough-audit.md.
+    // shows the real original instead.
     if let Some(key) = meta_stat_key {
         // Computed INSIDE the `if let`: the cache entry is the only consumer
         // now that `on_decoded` is gone, so a caller that passes no stat key
@@ -1554,7 +1549,7 @@ pub(crate) struct ImageRunContext {
     /// there — keys are not only rung-shaped names). The worker tests
     /// candidate rung URLs for KEY membership before writing — the same test
     /// registration ran — so a user's file named like a rung is never
-    /// clobbered. Never recomputed here (ADR-013 agreement).
+    /// clobbered. Never recomputed here.
     pub rung_collisions: HashMap<String, PathBuf>,
     /// Advisories `dispatch_image_conversions` carried forward for images it
     /// skipped this round (fingerprint matched, output present) — read from
@@ -2019,7 +2014,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         // dataless: each was hashed, decoded and re-decoded per rung, failed
         // `EDEADLK` every time (591 events in one session) and ended up Failed,
         // so the work was wasted AND the site shipped full-size originals in
-        // place of its `w800`/`w1600` rungs (moss#986).
+        // place of its `w800`/`w1600` rungs.
         //
         // Unlike video this does NOT wait. The video gate spends up to 90s per
         // file because videos are few and a re-encode is expensive to redo; this
@@ -2070,7 +2065,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         };
 
         // Nothing points at this one, and the last COMPLETE reference scan is
-        // what says so (moss#1085). Encoding it writes bytes the ship-time
+        // what says so. Encoding it writes bytes the ship-time
         // prune deletes again seconds later. Rungs need no separate test — a
         // rung only ever appears in a srcset beside its base. The item is
         // dropped after blocking.rs already ran `set_pending`, so its promise
@@ -2086,7 +2081,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
 
         // Singleflight dedup: if another task is already converting this source_oid,
         // block until it finishes and reuse its result. Only the first caller runs
-        // the encoder — generalizes the video-only dedup pattern to images (ADR-010).
+        // the encoder — generalizes the video-only dedup pattern to images.
         //
         // The error is carried inside ImageConversionOutcome.error so all waiters
         // (shared callers) receive the full error message, not just a silent sentinel.
@@ -2186,8 +2181,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                 // error the unpack turned into `Err` — but answered with a
                 // retraction anyway, because silence here is the exact shape of
                 // the "warn-and-return-Ok" pattern that caused the broken-hero
-                // bug (docs/archive/2026-05-20-image-variant-honest-mirror.md,
-                // Layer 5B).
+                // bug (a live `<picture>` 404 on a real site, 2026-05-19).
                 let Some(ref base_oid) = outcome.webp_oid.clone().filter(|_| outcome.error.is_none())
                 else {
                     return ItemStep::base_failed(
@@ -2309,8 +2303,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             }
             // Bazel's FindMissingBlobs invariant — a manifest-level "hit" must
             // not stand in for a filesystem-level "present". Failed is the
-            // negative form; see docs/archive/2026-05-20-image-variant-honest-
-            // mirror.md (Layer 5B).
+            // negative form.
             Err(e) => {
                 if is_headless {
                     eprintln!("  [{}/{}] Failed: {}: {}", index + 1, total, filename, e);
@@ -2413,8 +2406,8 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
 
     // Register .webp output paths in the manifest coordinator. Without
     // registration, generated WebP files get deleted on the next rebuild
-    // because they have no entry in `image_outputs`. Pre-#620 Item 2 this
-    // had a `tx.is_none()` fallback to `update_image_hashes` (on-disk
+    // because they have no entry in `image_outputs`. This used to have a
+    // `tx.is_none()` fallback to `update_image_hashes` (on-disk
     // hashes.json read+write); that fallback is gone — every caller goes
     // through the coordinator now.
     emit_image_outputs_via_channel(&ctx.tx, &produced_webp_paths, &ctx.staging_dir, &objects, &suppressed, services.assets.as_deref());
@@ -2484,8 +2477,8 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
 /// `suppressed` (the ship-time prune's verdict, `suppressed_variants_for`)
 /// excludes paths from the violation report only — an absent suppressed path
 /// is an expected prune, not a bug. Registration is unaffected: it still
-/// depends only on presence (moss#1085 gated the self-heal on this set but
-/// not the report, hence the false violation on every settled vault).
+/// depends only on presence (an earlier fix gated the self-heal on this set
+/// but not the report, hence the false violation on every settled vault).
 ///
 /// Returns the violation lines logged, for tests (no log-capture harness here).
 fn emit_image_outputs_via_channel(
@@ -2513,7 +2506,7 @@ fn emit_image_outputs_via_channel(
     let mut read_failures: Vec<(String, String)> = Vec::new();
     // Settling `Failed` — not merely skipping — is what lets `degrade` strip the
     // `<source>`; a skipped variant left `Pending` ships a live 404 that
-    // `<picture>` cannot fall back from (ADR-013 amendment 2026-09-09).
+    // `<picture>` cannot fall back from (a rule added 2026-09-09).
     // Suppressed paths stay excluded: absent by the prune's intent, and failing
     // each would make `degrade` read every page on every build of a settled vault.
     let settle_failed = |path: &String, why: String| {
@@ -2615,7 +2608,7 @@ fn emit_image_outputs_via_channel(
 /// representative sample — journald "suppressed N" style. Without this, one
 /// root cause (e.g. iCloud evicting every staged `.webp` in a build) logs once
 /// per file: a real "Send logs" bundle had 5,967 identical lines from a single
-/// build (see docs/archive/2026-06-03-send-logs-redesign.md).
+/// build.
 fn summarize_coherence_violations(
     missing: &[String],
     read_failures: &[(String, String)],
@@ -2642,8 +2635,8 @@ fn summarize_coherence_violations(
     lines
 }
 
-// `update_image_hashes` removed in #620 Item 2. Pre-Track A this performed
-// a read-modify-write on `hashes.json::image_outputs`; the runner now sends
+// `update_image_hashes` was removed. It used to perform a read-modify-write
+// on `hashes.json::image_outputs`; the runner now sends
 // every produced `.webp` path through the coordinator channel
 // (`emit_image_outputs_via_channel`) and the coordinator merges into the
 // SealedManifest. There is no longer an on-disk fallback.
@@ -2701,7 +2694,7 @@ pub(crate) fn dispatch_image_conversions(
         let heal_root = Path::new(&ctx.source_path);
 
         // WHAT to heal is the ship-time prune's verdict, not the disk scan
-        // this loop walks (moss#1085): `ctx.image_items` is every image
+        // this loop walks: `ctx.image_items` is every image
         // file under the vault, and the prune keeps only what something
         // points at. See `orphan_prune::suppressed_variants`.
         let heal_suppressed = suppressed_variants_for(&heal_paths, &ctx.staging_dir);
@@ -2882,8 +2875,7 @@ pub(crate) fn dispatch_image_conversions(
         // `Pending` and preview serves the original. `Failed` would kill
         // that passthrough — and since `output_present` is false for a
         // cloud-evicted file, it would strip the `<source>` of a healthy
-        // variant on a synced vault. See
-        // docs/archive/2026-05-20-image-variant-honest-mirror.md (Layer 5A).
+        // variant on a synced vault.
         if !skip_paths.is_empty() {
             emit_image_outputs_via_channel(
                 &tx, &skip_paths, &ctx.staging_dir, &heal_objects, &heal_suppressed, None,

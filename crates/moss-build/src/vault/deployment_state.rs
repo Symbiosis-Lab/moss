@@ -4,8 +4,8 @@
 //! Its sibling [`super::config`] writes `config.toml`, the file a person
 //! hand-edits; this one is written only by moss and read back only by moss.
 //! They share the same write frame (`load_managed_toml` / `write_managed_toml`)
-//! because a rewrite that re-emits a whole TOML document is the bug ADR-059
-//! was written about, and that lesson does not stop being true because the
+//! because a rewrite that re-emits a whole TOML document is the bug this
+//! design was written about, and that lesson does not stop being true because the
 //! file is machine-owned.
 //!
 //! Crossed here 2026-09-07 ahead of track C4c, which gives `moss-cli` a

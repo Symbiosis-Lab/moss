@@ -1,4 +1,4 @@
-//! Off-webview plugin execution engine (#789, Phase 2).
+//! Off-webview plugin execution engine (Phase 2).
 //!
 //! **Architecture C — the integration core.** An rquickjs / quickjs-ng runtime is
 //! `!Send` (single-threaded; we deliberately do NOT enable the experimental
@@ -187,7 +187,7 @@ impl QuickJsEngine {
     /// Spawn the engine. Returns the engine handle plus the `DispatchRequest`
     /// receiver the caller MUST drain on a host task, which routes
     /// `__TAURI__.core.invoke`. `app` is `None` on a headless `moss build`
-    /// (#1019) and in tests, where `__TAURI__.event.emit` becomes a no-op and
+    /// and in tests, where `__TAURI__.event.emit` becomes a no-op and
     /// dispatch routes through the injected `HostState` instead.
     pub fn new(app: Option<SharedAppHost>) -> (Self, mpsc::UnboundedReceiver<DispatchRequest>) {
         let (jobs, rx) = mpsc::unbounded_channel::<Job>();

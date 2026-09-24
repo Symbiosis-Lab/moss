@@ -56,7 +56,7 @@ impl ShellRegistry {
     ///
     /// Ask this — never the resolved `ShellType` — when the behaviour should
     /// follow from the author calling the page a piece. Series navigation is the
-    /// case that forced the distinction (#1012): a folder index is skipped by
+    /// case that forced the distinction: a folder index is skipped by
     /// its siblings' prev/next chain *because it is a doorway*, and `layout:
     /// article` is how an author says this particular one is a step instead. If
     /// that had been keyed on the resolved template, every nested folder index
@@ -144,7 +144,7 @@ pub struct ShellVars {
     /// video ladder.
     pub lazy_chunk_attrs: String,
     pub navigation: String,
-    /// Floating nav island markup (ADR-049), or empty when the page has no
+    /// Floating nav island markup, or empty when the page has no
     /// breadcrumb trail to continue. Emitted as a sibling *before* `<header>`
     /// so it is `position: fixed` against the viewport rather than against any
     /// transformed ancestor the masthead might acquire.
@@ -279,7 +279,7 @@ pub struct ShellVars {
     /// `SITE_SCRIPTS` table, so which scripts appear is decided in one place
     /// and a new script needs no new template variable. Whole-block rather
     /// than one var per script because every gate is SITE-level: the set is
-    /// identical on every page of a build (#1149).
+    /// identical on every page of a build.
     pub runtime_js_tags: String,
     /// Robots meta tag (e.g. noindex for drafts). Empty when omitted.
     pub robots_meta: Option<String>,
@@ -301,7 +301,7 @@ impl ShellProcessor {
     ///
     /// Placeholder substitution is a SINGLE PASS over template text only
     /// (`substitute_template_tokens`); substituted values are never rescanned,
-    /// so author content can contain literal `{name}`-style text (#847).
+    /// so author content can contain literal `{name}`-style text.
     pub fn process(&self, shell_type: ShellType, vars: ShellVars) -> String {
         // Compose FIRST: splice the per-type `<main>` content fragment into the
         // shared shell's `{main_content}` slot. Both operands are static
@@ -458,7 +458,7 @@ impl ShellProcessor {
 /// - Known token (present in `values`) → the value is appended VERBATIM and
 ///   never rescanned, so values carrying author content (`{content}`,
 ///   `{title}`, `{navigation}`, …) can contain literal `{name}`-style text
-///   without it being re-substituted or stripped (#847).
+///   without it being re-substituted or stripped.
 /// - Unknown token matching `{lowercase_with_underscores}` → dropped. This is
 ///   the safety net for template/code mismatches (a placeholder present in a
 ///   template but missing from `ShellVars`), and it can only ever fire on
@@ -580,7 +580,7 @@ pub fn minify_css(css: &str) -> String {
             // (all :hover descendants of .foo) into ".foo:hover" (.foo itself when
             // hovered), which is a different set of elements entirely. Property-value
             // colons ("color: red") never have whitespace before them in well-formed
-            // source CSS, so they are not affected by this rule. (#631)
+            // source CSS, so they are not affected by this rule.
             let last = result.as_bytes().last().copied().unwrap_or(0);
             let next = if i < len { bytes[i] } else { 0 };
             if !matches!(last, b'{' | b'}' | b';' | b':' | b',' | b'>' | b'(' | 0)

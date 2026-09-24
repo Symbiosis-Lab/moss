@@ -28,8 +28,7 @@
 //! shipped for CVE-2018-5702, applied here *before* a mutating surface exists
 //! rather than after a disclosure. Today the only network route is read-only
 //! (`/__moss/source/*` serves authored source bytes), so this layer needs no
-//! token yet; the token floor arrives with the first carrier that mutates. See
-//! ADR-022 §6.
+//! token yet; the token floor arrives with the first carrier that mutates.
 //!
 //! The helpers are pure and validate the **hostname only**, never the port: the
 //! preview port is dynamic (8080–8179) and is implicitly correct because the

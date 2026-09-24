@@ -69,8 +69,7 @@ pub struct InventoryEntry {
     /// to confirm its change had landed.
     ///
     /// This is the document's own language, not the interface language — a
-    /// `ja/` tree reads `ja` here while its chrome stays the site default's
-    /// (#977).
+    /// `ja/` tree reads `ja` here while its chrome stays the site default's.
     ///
     /// `#[serde(default)]` because this file is written by one build and read
     /// by a later `moss list`, and the two can be different moss versions —
@@ -154,7 +153,7 @@ pub fn build_inventory(
             // Same precedence the renderer uses (`html.rs`), so this column
             // reports what the page will actually say rather than a second
             // guess at it — including the fallback, which is the SITE's tag
-            // and not the page's UI language (#977: a `fr` site serving
+            // and not the page's UI language (a `fr` site serving
             // English chrome still says `lang="fr"`).
             lang: doc.lang_tag.clone().unwrap_or_else(|| site_lang_tag.to_string()),
         })
@@ -171,7 +170,7 @@ pub fn build_inventory(
 /// clones a handful of short strings per document and serializes them.
 ///
 /// Goes through `build::io_utils` because everything landing under
-/// `.moss/build.nosync/` must (ADR-043) — a raw `fs::write` there fails against a
+/// `.moss/build.nosync/` must — a raw `fs::write` there fails against a
 /// cloud-evicted destination and is caught by `output_write_invariant_test`.
 pub fn write_inventory(
     documents: &[crate::build::types::ParsedDocument],

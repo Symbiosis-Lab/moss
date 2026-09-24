@@ -94,8 +94,8 @@ pub trait DeployPorts: Send + Sync {
     /// `record_landed` returns (task 4-6 moved this past landing: the page
     /// rows below only exist once landing has computed them). This crate
     /// cannot fold them into a verdict: `classify_moss_verification` and the
-    /// `PublishVerdict` event it feeds live app-side
-    /// (`src-tauri/src/system/stack_serving/verify.rs`), beside the
+    /// `PublishVerdict` event it feeds live in the desktop app's stack-serving
+    /// verification code, beside the
     /// OnionPress supervisor whose announce path they never enter. So an
     /// implementation with real work to do constructs its own seta client
     /// (mirroring `push.rs`'s), spawns the burst, and returns immediately;
@@ -107,7 +107,7 @@ pub trait DeployPorts: Send + Sync {
     /// recomputed. No manifest entries ride along: the public half of the
     /// burst proves reachability, not byte identity, since an HTML-rewriting
     /// CDN in front of a site makes the served bytes differ from the
-    /// published bytes on every request (ADR-084).
+    /// published bytes on every request.
     async fn begin_moss_verification(
         &self,
         identity: &crate::identity::Identity,

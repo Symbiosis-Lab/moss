@@ -9,7 +9,7 @@
     "pluginId": "matters",
     "path": ".moss/social/matters.json",
     "allowed": true,
-    "note": "a plugin's own file in the pre-#793 legacy directory"
+    "note": "a plugin's own file in the legacy directory from before this path moved"
   },
   {
     "pluginId": "matters",

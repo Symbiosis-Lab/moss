@@ -3,7 +3,7 @@
 //! A `<a href="/authors/ling/">` is unambiguous: no base to guess, nothing to
 //! fetch. Either the build wrote something at that path or it did not, and moss
 //! holds the complete list of what it wrote by the time the manifest seals. So
-//! the check is a set difference, and until moss#1187 it was simply never made
+//! the check is a set difference, and until this module existed it was simply never made
 //! — a term-page namespace rename (`/author/` → `/authors/`, same day, one
 //! release apart) turned 36 already-authored links on a live site into 404s and
 //! the build said `Build complete` and nothing else.
@@ -121,7 +121,7 @@ pub fn candidate_keys(href: &str) -> Option<Vec<String>> {
 /// Every `href`/`src` attribute value in `html`, in document order.
 ///
 /// A substring scan, not a parse. The alternative is a second HTML parser in a
-/// tree that has fought to keep one markdown parser (ADR-036), for a check whose
+/// tree that has fought to keep one markdown parser, for a check whose
 /// worst failure mode is a missing advisory. The `=` must follow the attribute
 /// name immediately and the name must be preceded by whitespace, so `data-src`,
 /// `xlink:href` and `srcset` are all left alone.

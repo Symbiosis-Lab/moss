@@ -40,7 +40,7 @@ describe('langBucket', () => {
     expect(langBucket(null)).toBe('en');
     expect(langBucket('fr')).toBe('en');
   });
-  // Kept in sync with Rust `from_bcp47_lenient` (src-tauri/src/i18n.rs).
+  // Kept in sync with Rust `from_bcp47_lenient` (crates/moss-build/src/i18n.rs).
   test('underscore forms bucket by region, not collapse to Simplified', () => {
     expect(langBucket('zh_TW')).toBe('zh-hant');
     expect(langBucket('zh_HK')).toBe('zh-hant');

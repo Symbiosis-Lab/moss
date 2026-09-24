@@ -1,13 +1,11 @@
 //! Sync test: no raw file read of a **vault input** in this crate may bypass
 //! `build::cloud_readiness`.
 //!
-//! Open-half twin of `src-tauri/tests/read_input_invariant_test.rs` (desktop
-//! repo) — that file's `SOURCE_ROOTS` mixes `src/*` (desktop) and
+//! Open-half twin of the desktop app's `read_input_invariant_test.rs` —
+//! that file's `SOURCE_ROOTS` mixes `src/*` (desktop) and
 //! `../open/crates/moss-build/*` rows, one rule applied per path
-//! independently (class B per
-//! docs/archive/2026-09-16-boundary-gates-remeasured-for-dependency-model.md).
-//! This twin carries only the open-half roots; the desktop half keeps its
-//! own.
+//! independently. This twin carries only the open-half roots; the desktop
+//! half keeps its own.
 //!
 //! ## Why this exists
 //!
@@ -16,7 +14,7 @@
 //! instead of blocking, and pre-Sonoma macOS evicts by *replacing* the file
 //! with a hidden `.name.icloud` sibling, so an evicted input answers
 //! `path.exists() == false` — every `if !path.exists() { treat as fresh }` in
-//! front of a read-modify-write is therefore an erase (moss#986).
+//! front of a read-modify-write is therefore an erase.
 //!
 //! ## The marker convention
 //!
@@ -100,7 +98,7 @@ fn raw_reads_outside_the_build_carry_allow_marker() {
 
     let mut msg = String::from(
         "Found raw file read(s) without an `// allow:raw_read <reason>` marker.\n\n\
-         A file inside the user's vault can be cloud-evicted (moss#986).\n\n\
+         A file inside the user's vault can be cloud-evicted.\n\n\
          Recovery:\n  \
          1. If the path is a vault input: use `crate::build::cloud_readiness`.\n  \
          2. If it is NOT a vault input — add a same-line or preceding-line\n     \

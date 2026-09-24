@@ -1,4 +1,4 @@
-//! Listing-group tests (moss#968 Stage 1b + Stage 2, ADR-044).
+//! Listing-group tests.
 //!
 //! Three of the four correctness gates the design requires with Stage 2 live
 //! here (the fourth, shadow verification, is an end-to-end switch), plus the
@@ -90,7 +90,7 @@ fn members(docs: &[ParsedDocument], slug: &str, flatten: bool) -> Vec<String> {
 /// inlined second copy of this filter, which is why "one selector, therefore
 /// no drift" was false and why the digest could not honour a rule the renderer
 /// honours. It now calls the selector; this fixture pins every rule the copy
-/// had to reimplement. ADR-044 rule 3.
+/// had to reimplement.
 #[test]
 fn the_selector_is_the_single_source_of_truth_for_membership() {
     let docs = vault();
@@ -364,7 +364,7 @@ fn hosts_are_mapped_to_the_groups_they_actually_read() {
 
 /// An unrecognised host shape re-renders. Over-approximation is the only safe
 /// default (rustc keeps `eval_always` for the same reason), and it is what
-/// every host shape did before moss#968.
+/// every host shape did before this model.
 #[test]
 fn an_unmodelled_host_shape_yields_no_groups_and_therefore_renders() {
     let mut override_home = article("en/mountain-home/index.html", "a language home override");

@@ -40,8 +40,8 @@
 //! time without also taking it off the published site, which is the one place it
 //! belongs.
 //!
-//! So it comes off HERE, at serve time, which is precisely the layer ADR-013
-//! assigns the job: "HTML is structural and stable. Servers handle availability."
+//! So it comes off HERE, at serve time, which is precisely the layer this
+//! design assigns the job: "HTML is structural and stable. Servers handle availability."
 //! The bytes on disk keep their LQIP for the deploy; the preview response does
 //! not carry one.
 //!
@@ -51,9 +51,9 @@
 //! anyway — until the moment it is not. If the passthrough cannot read the
 //! source (cloud-evicted, deleted mid-session), the fallback is a 1×1
 //! **transparent** WebP, and a transparent image over an LQIP background paints
-//! the LQIP, scaled to the `width`/`height` attributes. That is the failure
-//! `docs/reference/structural-html-emission.md` records from a production
-//! incident: "Users saw the LQIP placeholder permanently in place of the photo."
+//! the LQIP, scaled to the `width`/`height` attributes. That is the failure a
+//! production incident recorded: "Users saw the LQIP placeholder permanently
+//! in place of the photo."
 
 use axum::{
     body::Body,

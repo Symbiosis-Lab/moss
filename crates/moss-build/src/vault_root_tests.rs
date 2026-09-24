@@ -186,7 +186,7 @@ fn target_resolve_rejects_non_markdown_and_missing_paths() {
     ));
 }
 
-// ---- RootKind: telling a real vault from the walk's fallback (ADR-038) ----
+// ---- RootKind: telling a real vault from the walk's fallback ----
 
 #[test]
 fn find_containing_returns_none_when_no_ancestor_owns_dot_moss() {

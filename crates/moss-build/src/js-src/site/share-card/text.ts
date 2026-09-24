@@ -52,7 +52,7 @@ const NO_END = new Set(
 // ideographs (non-BMP) fall into unbreakable runs, an accepted rarity.
 // CJK punctuation (U+3000-303F) needs no range of its own: it already sits
 // inside the U+2E80-9FFF range below. It had one, which is what CodeQL's
-// js/overly-large-range alert #92 pointed at. The two forms match identically
+// js/overly-large-range check flagged. The two forms match identically
 // across all of Unicode, so dropping the redundant range is a no-op.
 const CJK_CHAR_RE =
   /[⺀-鿿豈-﫿＀-￯가-힯]/;

@@ -2,7 +2,7 @@
 //! `tauri::async_runtime::spawn_blocking` calls in the media pipeline.
 //!
 //! Nothing here names tauri, which is the point: `build/` becomes the open
-//! `moss-build` crate (ADR-050), and `check-crate-dag.mjs` rule 2 forbids a path
+//! `moss-build` crate, and `check-crate-dag.mjs` rule 2 forbids a path
 //! to tauri from it. The tauri-backed implementation lives app-side in
 //! `crate::events`, beside `TauriReporter`.
 //!

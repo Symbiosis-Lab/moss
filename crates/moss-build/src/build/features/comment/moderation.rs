@@ -1,4 +1,4 @@
-//! Owner-signed comment moderation events (ADR-025).
+//! Owner-signed comment moderation events.
 //!
 //! The owner's BIP-340 Schnorr identity signs hide/unhide/pin/unpin events
 //! appended to `moderation.jsonl`; the reducer (`reduce.rs`) folds them into the
@@ -95,7 +95,7 @@ pub fn verify_schnorr(pubkey_hex: &str, message: &[u8], sig_hex: &str) -> bool {
 /// `signing_key_loaded()`, which now happens (and is reported) where the key
 /// is obtained.
 ///
-/// REFACTOR-LATER (ADR-031 keystore): like seta auth, this signs with the
+/// REFACTOR-LATER (keystore): like seta auth, this signs with the
 /// identity key directly. It should become a keystore caller at the `System`
 /// scope (`identity::keystore`) so all signing goes through one path. Deferred
 /// with the same rationale as `seta::signing::sign_request` — a separate,

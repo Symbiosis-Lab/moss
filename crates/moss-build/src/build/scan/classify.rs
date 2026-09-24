@@ -359,7 +359,6 @@ pub const HIDDEN_ENTRIES: &[&str] = &[".git", "node_modules", "target"];
 /// siblings were never listed for the same reason: `subscribers.csv` is a PII
 /// list Settings edits with a real UI, `events*.json*` is the analytics stream,
 /// and `email/drafts/` is auto-saved newsletter scratch.
-/// See `docs/archive/2026-09-03-moss-folder-in-the-file-tree-audit-and-design.md`.
 pub const MOSS_INTERNAL_ALLOWLIST: &[&str] = &[".moss/config.toml", ".moss/theme", ".moss/places.toml"];
 
 /// Why `is_hidden_reason` filtered an entry out of the file tree.
@@ -484,7 +483,7 @@ pub enum ScanBucket {
 /// caller outside this crate that needs to know whether a path is one the
 /// scan would treat as site content — rather than re-deriving its own
 /// extension list and drifting from the scan the way the file-watch sweep's
-/// hand-maintained mirror did (moss#1087) — calls this one instead.
+/// hand-maintained mirror once did — calls this one instead.
 pub fn classify_extension(extension: &str) -> ScanBucket {
     if is_page_source(extension) {
         return ScanBucket::Page;
@@ -685,7 +684,7 @@ mod tests {
     /// Pins `classify_extension` against every extension `scan.rs`'s own
     /// match block recognizes, so a bucket added there and forgotten here (or
     /// the reverse) fails immediately rather than silently drifting the way
-    /// the sweep's hand-maintained mirror did (moss#1087). An extension
+    /// the sweep's hand-maintained mirror once did. An extension
     /// outside all of these is `Other` — the scan still consumes it, just
     /// uncategorized — which is why the fallback cases below assert `Other`
     /// rather than being left unchecked.

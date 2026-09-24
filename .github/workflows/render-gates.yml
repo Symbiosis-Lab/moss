@@ -1,6 +1,5 @@
 # Site/cascade render gates — published-page CSS and cascade behavior,
-# ported from the private desktop repo per
-# docs/archive/2026-09-20-ci-cost-cut-plan.md (C2a/C2b).
+# ported from the private desktop repo.
 #
 # A separate workflow rather than a job in pr.yml: pr.yml has no
 # detect-changes/path-filtering machinery today (every job in it runs on

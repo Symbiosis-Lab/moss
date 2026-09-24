@@ -19,8 +19,7 @@
  * 62% of the viewport. Nothing is cloned, opened, or re-parented: lifting is
  * a class, and scrolling the page to the section's true place docks it back
  * into flow — the same element, so the dock is a layout identity, not a
- * choreographed handover. Design and prior-art record:
- * docs/archive/2026-08-25-sidenote-sheet-one-surface-redesign.md.
+ * choreographed handover.
  *
  * The sheet is non-modal: no scrim, and the page scrolls freely behind it —
  * that freedom is what lets the reader scroll to the end and watch the sheet

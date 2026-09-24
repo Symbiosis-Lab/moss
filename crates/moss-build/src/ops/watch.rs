@@ -1,7 +1,7 @@
 //! The file-watch driver: debouncer sessions, the event pump, and the
 //! per-folder rebuild worker — the long-running loop behind `--watch`.
 //!
-//! Crossed from `src-tauri/src/build_shell/watch.rs` at slice W1 of the
+//! Crossed from the desktop app's build-shell watch module at slice W1 of the
 //! 2026-08-28 preview-server relocation plan (NORTH-STAR charters exactly this
 //! home: "watch — loop in `ops/watch.rs` behind Spawner; the app-side task
 //! stays UiBound"). The *decisions* — whether a change should rebuild, the
@@ -99,8 +99,7 @@ pub struct WatchConfig {
 /// (tick = 250/4 = 62.5ms). It coalesces the sub-millisecond burst one write
 /// emits; it does NOT coalesce two events hundreds of milliseconds apart, and
 /// raising this value would not — it would only delay both. See the
-/// `build::watch` module doc and
-/// `docs/archive/2026-08-31-rebuild-pairs-per-save.md`.
+/// `build::watch` module doc.
 ///
 /// CROSS-LAYER CONTRACT: the frontend's `PreviewManager.REFRESH_COALESCE_MS`
 /// (preview-manager.ts, currently 200ms) merges the FileChanged + BuildComplete
@@ -141,8 +140,7 @@ pub fn register_worker(
     attempt: RebuildAttempt,
 ) -> Arc<worker::WorkerHandle> {
     // The folder's rebuild worker: drains the request slot one build at a
-    // time, so no producer ever awaits a build inline (phase 1a of
-    // docs/archive/2026-08-18-watcher-reliability-architecture.md). Spawned
+    // time, so no producer ever awaits a build inline. Spawned
     // even when the kill switch routes triggers to the inline body — the
     // publish thaw's catch-up rides the slot either way, and an idle worker
     // costs one parked task.
@@ -187,8 +185,7 @@ pub fn register_worker(
 /// calling `register_worker` early, a trigger landing between folder-open and
 /// the watcher's own `start()` found no worker at all and fell back to
 /// building inline — a second, uncoordinated `run_pipeline` against the same
-/// `stage_dir` the open build was still writing. See
-/// `docs/archive/2026-09-15-open-double-build-race.md`.
+/// `stage_dir` the open build was still writing.
 pub fn ensure_worker(
     folder_path: &str,
     spawner: &Arc<dyn Spawner>,
@@ -242,7 +239,6 @@ pub async fn start(config: WatchConfig) {
         // fresh debouncer + subscription set; only Shutdown leaves the loop.
         'session: loop {
             // PATTERN 6 — INODE+FILE-ID PAIRING via notify-debouncer-full
-            // see docs/archive/2026-05-22-editor-state-architecture.md
             // Adopted from: notify-debouncer-full (canonical),
             // Spacedrive crates/fs-watcher/src/platform/macos.rs
             //
@@ -282,7 +278,7 @@ pub async fn start(config: WatchConfig) {
                 }
             };
 
-            // Subscribe to the project's content — NOT to the project root (#960).
+            // Subscribe to the project's content — NOT to the project root.
             //
             // Watching the root recursively subscribed moss to its own build
             // output. A build writes ~5700 files, which overflows the FSEvents
@@ -318,7 +314,7 @@ pub async fn start(config: WatchConfig) {
                 );
             }
 
-            // Success log (#572). Without this, "watcher started fine but no events"
+            // Success log. Without this, "watcher started fine but no events"
             // and "watcher silently never started" look identical in the log.
             log::info!(
                 "✅ File watcher active: {} ({} target(s))",
@@ -457,9 +453,7 @@ async fn handle_debounced_batch(
     // image extension — previously nothing was emitted here, so the editor's
     // reference resolver revalidated only if a `FileChanged` happened to follow,
     // and stayed stale forever when the rebuild was gated out or its output
-    // diff came up empty. See `source_asset_request_paths` for the event policy
-    // and docs/archive/2026-08-14-site-settings-and-attachments.md (folded-in
-    // bug) for the observed failure.
+    // diff came up empty. See `source_asset_request_paths` for the event policy.
     let root_path = Path::new(folder_path);
     for ev in &events {
         for request_path in source_asset_request_paths(root_path, ev.kind, &ev.paths) {
@@ -514,7 +508,7 @@ async fn handle_debounced_batch(
         }
         // The root-relative question `path_is_watchable` cannot ask: is every
         // path in this event something moss wrote? A root `AGENTS.md` is, and
-        // the non-recursive root watch on Linux/Windows still hears it (#960).
+        // the non-recursive root watch on Linux/Windows still hears it.
         if scope::all_paths_moss_written(root_path, &ev.paths) {
             continue;
         }

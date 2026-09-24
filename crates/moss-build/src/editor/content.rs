@@ -74,7 +74,7 @@ pub struct ParsedFrontmatter {
     #[serde(default)]
     pub frontmatter_error: Option<String>,
     /// The file is real and its bytes are not here yet — a cloud placeholder
-    /// the provider has not handed back (moss#1062). Every other field is
+    /// the provider has not handed back. Every other field is
     /// empty, and the editor must mount its "still arriving" pane rather than
     /// this document: an empty CM6 buffer over a file with content is the same
     /// lie as the errno toast this replaced.
@@ -117,7 +117,7 @@ pub struct EditorBootstrap {
     /// elected as `/` by `moss_core::home::is_home_file`.
     pub root_name: Option<String>,
     /// The editor's path-domain root when there is NO project: the loose file's
-    /// parent directory (ADR-038 document mode).
+    /// parent directory (document mode).
     ///
     /// Never `Some` at the same time as `project_path` — they are the two arms
     /// of one choice, kept as separate fields so the frontend can tell "a site
@@ -156,7 +156,7 @@ pub struct SourceRole {
     pub can_be_page: bool,
 }
 
-// ── Reading a source file (the moss#1062 seam) ─────────────────────────────
+// ── Reading a source file (the pending-read seam) ─────────────────────────────
 
 /// Reads a vault text file for a user-initiated action, waiting briefly for a
 /// cloud-evicted source. Someone is watching, so the wait is short and bounded.
@@ -164,7 +164,6 @@ pub struct SourceRole {
 /// **Blocks.** Call it from `spawn_blocking` (see
 /// `commands::read_vault_text_off_runtime`) or from a genuinely synchronous
 /// context — never directly from an `async` command body.
-/// See docs/archive/2026-08-03-dataless-fail-fast-and-build-driven-cloud-gate.md.
 pub fn read_vault_text(file_path: &str) -> Result<Option<String>, String> {
     let path = std::path::Path::new(file_path);
     classify_source_read(
@@ -176,7 +175,7 @@ pub fn read_vault_text(file_path: &str) -> Result<Option<String>, String> {
     )
 }
 
-/// The editor's ONE translation of a failed source read (moss#1062).
+/// The editor's ONE translation of a failed source read.
 ///
 /// `Ok(None)` — "still arriving" — is reserved for
 /// [`crate::build::icloud::is_offline_not_absent`], the same classifier
@@ -280,7 +279,7 @@ pub fn parse_frontmatter_of(content: String) -> Result<ParsedFrontmatter, String
 
 // ── editor_bootstrap cores ─────────────────────────────────────────────────
 
-/// The editor's path-domain root when there is no project (ADR-038 document
+/// The editor's path-domain root when there is no project (document
 /// mode): the loose file's parent directory.
 ///
 /// A project always wins — the two are the arms of one choice, never both.
@@ -308,7 +307,7 @@ fn bootstrap_root_name(project_path: Option<&str>) -> Option<String> {
 /// typically absolute (baked by `build_editor_url` from `resolve_page_source`),
 /// but the file-tree event domain is project-root-relative — accept both:
 /// absolute passes through, relative joins onto the project path (mirror of
-/// `toAbsolute` in frontend/app/editor/path-domain.ts).
+/// the app's own `toAbsolute`).
 fn resolve_bootstrap_source(project_path: Option<&str>, source: &str) -> Option<String> {
     if std::path::Path::new(source).is_absolute() {
         return Some(source.to_string());
@@ -405,7 +404,7 @@ pub fn bootstrap_for_carrier(
 /// Core of `compute_heading_state`: the JSON `Value` → `HeadingInputs` bridge
 /// over `moss_core::heading::compute` — the single source of truth shared with
 /// the build pipeline's `<h1 class="moss-article-title">` injection gate
-/// (src-tauri/src/build/markdown/pipeline.rs).
+/// (`build::markdown::pipeline`).
 pub fn compute_heading_state_inner(
     file_path: &str,
     frontmatter: &serde_json::Value,
@@ -434,7 +433,6 @@ pub fn compute_heading_state_inner(
         // editor's heading state is already a "best effort" preview vs
         // the build pipeline's authoritative answer; this is one of the
         // pre-existing gaps documented at HeadingInputs::root_folder_name.
-        // Folding the workspace name in is tracked in issue #609.
         root_folder_name: None,
         is_home_override: false,
         // PR7b: the editor doesn't render slot files (`footer.md`) inline
@@ -609,7 +607,7 @@ fn coerce_union_fields(fm_map: &mut std::collections::HashMap<String, serde_yaml
     // uid is moss-owned metadata and is always semantically a string. YAML may
     // have parsed an all-digit uid as a number (e.g. `uid: 46160604`). Re-quote
     // it on write so the on-disk file self-heals to `uid: "46160604"` — closing
-    // the loop on the build-side coercion (ADR-020 Phase 3b). Author-owned
+    // the loop on the build-side coercion. Author-owned
     // fields are never silently rewritten; uid is the one field moss owns.
     if let Some(v) = fm_map.get("uid") {
         if matches!(v, Value::Number(_) | Value::Bool(_)) {
@@ -683,7 +681,7 @@ mod tests {
 
     #[test]
     fn coerce_union_fields_quotes_numeric_uid() {
-        // ADR-020 Phase 3b: a uid YAML parsed as a number must be re-quoted to a
+        // A uid YAML parsed as a number must be re-quoted to a
         // string on write so the on-disk file self-heals.
         let mut m = std::collections::HashMap::new();
         m.insert("uid".to_string(), serde_yaml::Value::Number(46160604u64.into()));
@@ -699,7 +697,7 @@ mod tests {
         assert_eq!(m.get("uid"), Some(&serde_yaml::Value::String("54ddc5c0".to_string())));
     }
 
-    // ── the editor's read seam (moss#1062) ────────────────────────────────────
+    // ── the editor's pending-read seam ────────────────────────────────────
 
     /// The seam defers on exactly the errors `icloud::is_offline_not_absent`
     /// classifies as offline — no second, parallel notion of "the cloud has it"

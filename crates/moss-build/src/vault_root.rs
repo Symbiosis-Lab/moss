@@ -195,7 +195,7 @@ impl VaultRoot {
     /// a site") and silently wrong for a file. Because the fallback was
     /// indistinguishable from a hit, opening a loose `~/Downloads/notes.md` built
     /// and served all of `~/Downloads`. A caller that must decline needs to SEE
-    /// that there was nothing to find — see ADR-038 (document mode).
+    /// that there was nothing to find (document mode).
     ///
     /// `containing` is implemented in terms of this, so the two can never drift.
     pub fn find_containing(path: &Path) -> Option<Self> {
@@ -275,7 +275,7 @@ pub enum RootKind {
     /// For a FILE target it means a loose document — nobody has asked for a site
     /// here, so building the containing folder would be an unrequested scan of
     /// whatever the file happens to sit in (`~/Downloads`, `~/Desktop`). That is
-    /// the document-mode trigger; see ADR-038.
+    /// the document-mode trigger.
     Unowned,
 }
 
@@ -292,7 +292,7 @@ pub struct VaultTarget {
 
 impl VaultTarget {
     /// True when this target is a loose document: a FILE with no `.moss/`
-    /// ancestor. The document-mode predicate (ADR-038).
+    /// ancestor. The document-mode predicate.
     ///
     /// Deliberately requires BOTH conditions. A directory with no `.moss/` is a
     /// new project and must keep building; a file inside a real vault belongs to
@@ -322,7 +322,7 @@ impl VaultTarget {
         let (root, root_kind) = match VaultRoot::find_containing(&resolved) {
             Some(vault) => (vault, RootKind::Vault),
             // Same fallback `VaultRoot::containing` applies — but recorded as
-            // such, so a caller can tell a real vault from a guess (ADR-038).
+            // such, so a caller can tell a real vault from a guess.
             None => (VaultRoot::containing(&resolved), RootKind::Unowned),
         };
         let target_file = resolved
