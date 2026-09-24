@@ -1789,15 +1789,34 @@ pub fn generate_blocking_content_for_build(
         // already fresh-cached, so `fetch_new_link_meta_for_build`'s own
         // freshness filter skips them for free. Candidate URLs come from
         // the ALREADY-PARSED `body_plan`, no extra markdown parse.
-        if exits_after_build {
-            let urls = crate::build::render::grid_cells::external_urls_across_build(
-                documents.iter(),
+        let external_urls_this_build = crate::build::render::grid_cells::external_urls_across_build(
+            documents.iter(),
+        );
+        if exits_after_build && !external_urls_this_build.is_empty() {
+            let url_refs: Vec<&str> = external_urls_this_build.iter().map(String::as_str).collect();
+            let _trace = PhaseTrace::start("link_meta_build_fetch");
+            crate::build::page::link_meta::fetch_new_link_meta_for_build(&url_refs, &moss_dir);
+        }
+
+        // Materialize any downloaded cover into THIS build's output — every
+        // build, not gated on `exits_after_build`: `output_dir` is fresh
+        // each time, so a cover fetched on a previous build still needs
+        // its files linked into today's staging even when nothing new was
+        // fetched above. Cheap on a warm cache (a CAS copy, not a
+        // re-encode). Reads the link-meta cache directly rather than
+        // reusing whatever the fetch above returned, so a URL fetched by
+        // the DESKTOP APP's background sync (never this `if` above) still
+        // gets its cover materialized here.
+        if !external_urls_this_build.is_empty() {
+            let url_refs: Vec<&str> = external_urls_this_build.iter().map(String::as_str).collect();
+            let mut link_meta_cache = crate::build::page::link_meta::read_link_meta_from_cache(&url_refs, &moss_dir);
+            let _trace = PhaseTrace::start("remote_cover_materialize");
+            crate::build::media::remote_cover::materialize_remote_covers(
+                &mut link_meta_cache,
+                &moss_dir,
+                output_dir,
+                pending,
             );
-            if !urls.is_empty() {
-                let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
-                let _trace = PhaseTrace::start("link_meta_build_fetch");
-                crate::build::page::link_meta::fetch_new_link_meta_for_build(&url_refs, &moss_dir);
-            }
         }
 
         // Phase 1 — render in parallel. Progress is emitted on a monotonic

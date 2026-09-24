@@ -8697,3 +8697,230 @@ mod build_time_link_meta_fetch_tests {
         );
     }
 }
+
+/// End-to-end proof that a downloaded og:image becomes a real local cover
+/// (`build::media::remote_cover`), rendered exactly like an internal page's
+/// cover — never the remote URL — on the SAME build that introduces the
+/// link, mirroring `build_time_link_meta_fetch_tests` above for the cover
+/// half of the "one card kind" story.
+mod remote_cover_end_to_end_tests {
+    use crate::build::manifest::PendingManifest;
+    use crate::build::render::blocking::SiteConfig;
+    use crate::build::render::generate_blocking_content_for_build;
+    use crate::build::scan_folder;
+    use crate::types::content::SiteHashes;
+    use std::fs;
+
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn tiny_png_bytes() -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(4, 3, image::Rgb([30, 120, 200]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        buf.into_inner()
+    }
+
+    /// A server that answers `/page` with HTML carrying an `og:image`
+    /// pointing at `/cover.png` on the SAME server, and `/cover.png` with a
+    /// real decodable PNG. One connection per path, `requests` total.
+    fn spawn_page_with_cover_server(requests: usize) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}");
+        let base_for_thread = url.clone();
+        let handle = std::thread::spawn(move || {
+            let png = tiny_png_bytes();
+            for _ in 0..requests {
+                let Ok((mut stream, _)) = listener.accept() else { return };
+                let mut req = [0u8; 2048];
+                let n = stream.read(&mut req).unwrap_or(0);
+                let req_text = String::from_utf8_lossy(&req[..n]);
+                let first_line = req_text.lines().next().unwrap_or("");
+                if first_line.contains("/cover.png") {
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: image/png\r\n\r\n",
+                        png.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(&png);
+                } else {
+                    let html = format!(
+                        r#"<html><head><meta property="og:title" content="Cover Page"><meta property="og:image" content="{base_for_thread}/cover.png"></head></html>"#
+                    );
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n",
+                        html.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(html.as_bytes());
+                }
+            }
+        });
+        (url, handle)
+    }
+
+    fn build_site(test_dir: &std::path::Path) -> String {
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        fs::create_dir_all(&output_dir).unwrap();
+        let project_structure =
+            scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
+        generate_blocking_content_for_build(
+            &crate::vault::paths::VaultRoot::resolve(test_dir),
+            &project_structure,
+            &output_dir,
+            None,
+            None,
+            true,
+            SiteConfig::default(),
+            &mut PendingManifest::new(SiteHashes::default()),
+            true,
+        )
+        .expect("generate_blocking_content_for_build should succeed");
+        fs::read_to_string(output_dir.join("index.html")).expect("index.html should exist")
+    }
+
+    #[test]
+    fn an_og_image_becomes_a_local_cover_on_the_first_build() {
+        let (base, server) = spawn_page_with_cover_server(2);
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_remote_cover_e2e_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+        fs::write(test_dir.join("index.md"), format!(":::grid 1\n<{base}/page>\n:::\n")).unwrap();
+
+        let index_html = build_site(&test_dir);
+
+        assert!(
+            index_html.contains(r#"class="moss-card-cover">"#),
+            "og:image present must produce a real cover, not the no-cover placeholder: {index_html}"
+        );
+        assert!(index_html.contains("_moss/link/"), "cover must be a local asset: {index_html}");
+        assert!(index_html.contains(".webp"), "must go through the webp pipeline: {index_html}");
+        // The card's own href legitimately points at the external page (and
+        // the favicon is hotlinked by existing, unrelated design), so the
+        // "never emit the remote URL" check is scoped to the cover's own
+        // <picture> — its src/srcset must be local paths, not the origin
+        // that served the downloaded image.
+        let picture_start = index_html.find("<picture>").expect("cover must render a <picture>");
+        let picture_end = index_html[picture_start..].find("</picture>").unwrap() + picture_start;
+        let picture_markup = &index_html[picture_start..picture_end];
+        assert!(
+            !picture_markup.contains(&base),
+            "the cover's own markup must never reference the remote origin: {picture_markup}"
+        );
+
+        let _ = server.join();
+    }
+
+    #[test]
+    fn a_manually_titled_link_still_gets_a_fetched_cover_and_favicon() {
+        // Owner decision (2026-09): author-written link text wins the
+        // TITLE slot only — it must not suppress the fetch, the favicon,
+        // or the cover. The owner's real case is a row of podcast
+        // episodes written as `[episode title](https://…)` that need
+        // covers like every other card.
+        let (base, server) = spawn_page_with_cover_server(2);
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_remote_cover_manual_title_e2e_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+        fs::write(test_dir.join("index.md"), format!(":::grid 1\n[Real Title]({base}/page)\n:::\n")).unwrap();
+
+        let index_html = build_site(&test_dir);
+
+        assert!(
+            index_html.contains(r#"<span class="moss-card-title">Real Title</span>"#),
+            "the author's own link text must win the title slot: {index_html}"
+        );
+        assert!(
+            index_html.contains(r#"class="moss-card-cover">"#),
+            "a manual title must not suppress the fetched cover: {index_html}"
+        );
+        assert!(index_html.contains("_moss/link/"), "cover must be a local asset: {index_html}");
+        assert!(
+            index_html.contains(r#"class="moss-card-kicker-favicon""#),
+            "a manual title must not suppress the fetched favicon: {index_html}"
+        );
+
+        let _ = server.join();
+    }
+
+    #[test]
+    fn a_link_with_no_og_image_gets_the_placeholder() {
+        let html_no_image = r#"<html><head><meta property="og:title" content="No Cover Here"></head></html>"#;
+        let (base, server) = {
+            use std::io::{Read, Write};
+            use std::net::TcpListener;
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let url = format!("http://127.0.0.1:{port}");
+            let handle = std::thread::spawn(move || {
+                let Ok((mut stream, _)) = listener.accept() else { return };
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n",
+                    html_no_image.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(html_no_image.as_bytes());
+            });
+            (url, handle)
+        };
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_remote_cover_no_image_e2e_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+        fs::write(test_dir.join("index.md"), format!(":::grid 1\n<{base}/page>\n:::\n")).unwrap();
+
+        let index_html = build_site(&test_dir);
+
+        assert!(
+            index_html.contains(r#"class="moss-card-cover moss-card-no-cover"></div>"#),
+            "no og:image must fall back to the plain placeholder: {index_html}"
+        );
+        let _ = server.join();
+    }
+
+    #[test]
+    fn an_authored_image_still_wins_over_a_fetched_cover() {
+        let (base, server) = spawn_page_with_cover_server(2);
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_remote_cover_author_wins_e2e_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+        fs::write(
+            test_dir.join("author.jpg"),
+            b"not a real jpeg but the render path never decodes it",
+        )
+        .unwrap();
+        fs::write(
+            test_dir.join("index.md"),
+            format!(":::grid 1\n[![Author photo](author.jpg)]({base}/page)\n:::\n"),
+        )
+        .unwrap();
+
+        let index_html = build_site(&test_dir);
+
+        assert!(index_html.contains("author.jpg"), "authored image must survive: {index_html}");
+        assert!(!index_html.contains("_moss/link/"), "must not also emit a fetched cover: {index_html}");
+        let _ = server.join();
+    }
+}

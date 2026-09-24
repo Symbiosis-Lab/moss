@@ -45,6 +45,10 @@ pub const OG_CARD_PREFIX: &str = "_moss/og/";
 /// from a live site.
 pub const MATH_PNG_PREFIX: &str = "_moss/math/";
 
+/// Directory every downloaded external-link cover image is written under.
+/// See [`ServedPath::for_remote_cover`].
+pub const REMOTE_COVER_PREFIX: &str = "_moss/link/";
+
 /// A normalized served path. Directory segments are slugged; the basename
 /// is preserved verbatim.
 ///
@@ -194,6 +198,32 @@ impl ServedPath {
             return Err(ServedPathError::InvalidInput("math png hash must be lowercase hex"));
         }
         Ok(ServedPath(format!("{}{}.png", MATH_PNG_PREFIX, content_hash)))
+    }
+
+    /// A downloaded external-link cover image (an external `:::grid` card's
+    /// `og:image`/`twitter:image`), named by the content hash of the
+    /// downloaded IMAGE BYTES (16 hex chars of the object-store oid) —
+    /// never by the linked page's URL or the remote image URL, and never
+    /// under a source-derived path (`from_source` rejects `_moss/`
+    /// entirely). Two pages whose og:image resolves to identical bytes
+    /// share one cover. See `build::media::remote_cover`. `ext` is the
+    /// format the download was sniffed as (never trusted from the URL or a
+    /// `Content-Type` header alone) — one of the raster extensions the
+    /// synthesizer's `<picture>` gate recognizes.
+    pub fn for_remote_cover(content_hash: &str, ext: &str) -> Result<Self, ServedPathError> {
+        if content_hash.is_empty() {
+            return Err(ServedPathError::InvalidInput("remote cover hash is empty"));
+        }
+        if content_hash.len() != 16 {
+            return Err(ServedPathError::InvalidInput("remote cover hash must be 16 hex chars"));
+        }
+        if !content_hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+            return Err(ServedPathError::InvalidInput("remote cover hash must be lowercase hex"));
+        }
+        if !matches!(ext, "jpg" | "jpeg" | "png" | "webp") {
+            return Err(ServedPathError::InvalidInput("remote cover extension must be jpg, jpeg, png, or webp"));
+        }
+        Ok(ServedPath(format!("{}{}.{}", REMOTE_COVER_PREFIX, content_hash, ext)))
     }
 
     /// Site favicon. `ext` is a bare extension (no dot, no slash).
@@ -719,6 +749,33 @@ mod tests {
         let sp = ServedPath::for_og_card("87ba30f2b3c09ca9").unwrap();
         assert_eq!(sp.as_str(), "_moss/og/87ba30f2b3c09ca9.png");
         assert_eq!(sp.to_relative_url(), "/_moss/og/87ba30f2b3c09ca9.png");
+    }
+
+    #[test]
+    fn for_remote_cover_lives_under_underscore_moss_link() {
+        let sp = ServedPath::for_remote_cover("87ba30f2b3c09ca9", "jpg").unwrap();
+        assert_eq!(sp.as_str(), "_moss/link/87ba30f2b3c09ca9.jpg");
+        assert_eq!(sp.to_relative_url(), "/_moss/link/87ba30f2b3c09ca9.jpg");
+    }
+
+    #[test]
+    fn for_remote_cover_rejects_non_hex_hash() {
+        assert!(matches!(
+            ServedPath::for_remote_cover("not-hex!", "png"),
+            Err(ServedPathError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn for_remote_cover_rejects_a_disallowed_extension() {
+        assert!(matches!(
+            ServedPath::for_remote_cover("87ba30f2b3c09ca9", "svg"),
+            Err(ServedPathError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ServedPath::for_remote_cover("87ba30f2b3c09ca9", "gif"),
+            Err(ServedPathError::InvalidInput(_))
+        ));
     }
 
     #[test]

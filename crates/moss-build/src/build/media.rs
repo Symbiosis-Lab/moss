@@ -44,6 +44,7 @@ pub mod pipeline;
 pub(crate) mod promise;
 pub mod qr;
 pub mod raw_img_warning;
+pub(crate) mod remote_cover;
 pub mod rungs;
 pub(crate) mod sniff;
 pub mod symlink;

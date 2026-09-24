@@ -610,6 +610,8 @@ fn external_card_markup(
         fetched_title.unwrap_or_else(|| moss_core::ast::link_card::domain_and_path(link.href))
     };
     let cover_html = match link.cover_image {
+        // Author content always wins: an authored image is never displaced
+        // by a fetched og:image, even when one is cached below.
         Some((href, alt)) => {
             let (cover_path, attrs_str) = moss_core::media::split_pipe(href);
             let cover_attrs = moss_core::media::parse_media_attrs(attrs_str);
@@ -625,7 +627,8 @@ fn external_card_markup(
                 false,
             )
         }
-        None => r#"<div class="moss-card-cover moss-card-no-cover"></div>"#.to_string(),
+        None => remote_cover_html(link_meta.and_then(|m| m.get(link.href)), &title)
+            .unwrap_or_else(|| r#"<div class="moss-card-cover moss-card-no-cover"></div>"#.to_string()),
     };
     Some(render_external_card(
         link.href,
@@ -633,6 +636,50 @@ fn external_card_markup(
         &moss_core::ast::link_card::extract_domain(link.href),
         favicon.as_deref(),
         &cover_html,
+    ))
+}
+
+/// The cover for an external cell with no authored image of its own: the
+/// linked page's downloaded og:image, once `build::media::remote_cover`
+/// has materialized it into THIS build's output — same as an internal
+/// card's cover, going through `render_cover_html` with a real
+/// `MediaDimensionLookup` entry so it gets the same `<picture>`/webp/LQIP
+/// treatment. `None` when there's nothing materialized yet (no og:image,
+/// the download failed, or the encode failed and there's no previously-
+/// materialized copy to fall back to) — the caller's placeholder wins.
+///
+/// Trusts `cover_served_path` without re-checking the file on disk: the
+/// build's pre-render pass (`materialize_remote_covers`) runs before ANY
+/// page renders and writes this field back to the SAME cache this reads,
+/// clearing it whenever materialization fails and no prior file survives.
+fn remote_cover_html(meta: Option<&LinkMeta>, alt: &str) -> Option<String> {
+    let meta = meta?;
+    let served_path = meta.cover_served_path.clone()?;
+    let media_meta = crate::types::content::MediaMetadata {
+        path: served_path.clone(),
+        file_type: served_path.rsplit('.').next().unwrap_or("jpg").to_string(),
+        size: 0,
+        modified: None,
+        dimensions: Some((meta.cover_width.unwrap_or(800), meta.cover_height.unwrap_or(600))),
+        dominant_color: meta.cover_color.clone(),
+        lqip_data_uri: meta.cover_lqip.clone(),
+        is_animated: false,
+    };
+    let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(
+        std::slice::from_ref(&media_meta),
+        &[],
+        &HashMap::new(),
+        None,
+    );
+    Some(crate::build::media::cover::render_cover_html(
+        &served_path,
+        detect_cover_type(&served_path, None),
+        alt,
+        "moss-card-cover",
+        &moss_core::media::parse_media_attrs(""),
+        true,
+        Some(&lookup),
+        false,
     ))
 }
 

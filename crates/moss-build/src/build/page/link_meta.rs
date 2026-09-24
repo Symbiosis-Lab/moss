@@ -22,6 +22,44 @@ pub struct LinkMeta {
     pub description: Option<String>,
     #[serde(default)]
     pub favicon: Option<String>,
+    /// The linked page's `og:image` (falling back to `twitter:image`),
+    /// resolved to an absolute `http(s)://` URL. This is the REMOTE URL
+    /// only — never emitted in built HTML. The build downloads it into
+    /// moss's own content-addressed cache and stores the resulting LOCAL
+    /// asset in a separate cache (see `build::media::remote_cover`); this
+    /// field exists so that download step knows what to fetch, and so a
+    /// change in the remote URL (a site swapping its social-preview image)
+    /// is visible on the next refresh even though the LOCAL cover cache is
+    /// keyed by content hash, not by this URL.
+    #[serde(default)]
+    pub og_image: Option<String>,
+    /// Content-store id of the downloaded `og_image` bytes (sha256, via
+    /// `ObjectStore::store_bytes`), and the format it was sniffed as
+    /// (never trusted from the URL or a `Content-Type` header). `None`
+    /// when there's no `og_image`, or the download/decode failed.
+    #[serde(default)]
+    pub cover_oid: Option<String>,
+    #[serde(default)]
+    pub cover_ext: Option<String>,
+    /// The rest of these are filled in by
+    /// `build::media::remote_cover::materialize_remote_covers`, once the
+    /// downloaded bytes above have actually been encoded into THIS build's
+    /// output — a separate step from the network fetch above, run with
+    /// `output_dir`/`PendingManifest` in scope. `cover_served_path` is a
+    /// root-relative path already staged on disk (checked with
+    /// `io_utils::output_present` before use — a stale entry whose file
+    /// didn't survive a rebuild must fall back to the placeholder, not
+    /// synthesize a 404ing `<source>`).
+    #[serde(default)]
+    pub cover_served_path: Option<String>,
+    #[serde(default)]
+    pub cover_width: Option<u32>,
+    #[serde(default)]
+    pub cover_height: Option<u32>,
+    #[serde(default)]
+    pub cover_lqip: Option<String>,
+    #[serde(default)]
+    pub cover_color: Option<String>,
     pub fetched_at: String, // ISO 8601
 }
 
@@ -68,6 +106,32 @@ pub fn parse_link_meta(url: &str, html: &str) -> LinkMeta {
         .filter(|s| !s.is_empty());
 
     let origin = extract_origin(url);
+
+    // Cover image: og:image, falling back to twitter:image (the same
+    // priority order as title). Resolved with the same `resolve_url` a
+    // relative favicon uses, but restricted to http(s) — unlike a favicon,
+    // this is never inlined; the build downloads it, so a `data:` or other
+    // opaque-scheme value is simply not a fetchable image. Computed before
+    // the favicon match below, which consumes `origin` by value on its
+    // `None` arm.
+    let og_image_content = Selector::parse(r#"meta[property="og:image"]"#)
+        .ok()
+        .and_then(|sel| document.select(&sel).next())
+        .and_then(|el| el.value().attr("content"))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            Selector::parse(r#"meta[name="twitter:image"]"#)
+                .ok()
+                .and_then(|sel| document.select(&sel).next())
+                .and_then(|el| el.value().attr("content"))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        });
+    let og_image = og_image_content
+        .map(|href| resolve_url(&href, &origin))
+        .filter(|url| is_http_url(url));
+
     let favicon = match favicon_href {
         Some(href) => {
             let resolved = resolve_url(&href, &origin);
@@ -93,8 +157,27 @@ pub fn parse_link_meta(url: &str, html: &str) -> LinkMeta {
         title,
         description: None,
         favicon,
+        og_image,
+        // Filled in by `fetch_link_meta_with_timeout` after this returns —
+        // downloading the image is I/O, and this function stays pure so it
+        // can be unit-tested with a plain HTML string, no network.
+        cover_oid: None,
+        cover_ext: None,
+        cover_served_path: None,
+        cover_width: None,
+        cover_height: None,
+        cover_lqip: None,
+        cover_color: None,
         fetched_at: now_iso8601(),
     }
+}
+
+/// True for a URL a build may issue an HTTP(S) request against. Used to
+/// gate `og_image`: a favicon may be inlined as `data:`, but a cover image
+/// is always downloaded, so anything without an http(s) scheme is simply
+/// not a candidate.
+fn is_http_url(url: &str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://")
 }
 
 /// Extract origin (scheme + host) from a URL string.
@@ -326,7 +409,7 @@ fn read_fresh_cache(moss_dir: &Path, url: &str) -> Option<LinkMeta> {
 /// (concurrent render or another prewarm worker) can't observe a half-written
 /// file. Same pattern as `write_url_list_atomic` further down. Same-FS
 /// rename is atomic on POSIX, which is enough here.
-fn write_cache(moss_dir: &Path, meta: &LinkMeta) {
+pub(crate) fn write_cache(moss_dir: &Path, meta: &LinkMeta) {
     let dir = cache_dir(moss_dir);
     let _ = crate::build::io_utils::create_output_dir_all(&dir);
     let path = cache_path(moss_dir, &meta.url);
@@ -393,6 +476,64 @@ fn ureq_agent_with_timeout(timeout: std::time::Duration) -> ureq::Agent {
         .build()
 }
 
+/// The bare host from an `http(s)://` URL — same lightweight ad-hoc parsing
+/// style as [`extract_origin`] above, not the `url` crate (not already a
+/// direct dependency of this crate). Handles a bracketed IPv6-with-port form
+/// (`[::1]:8080`) and a plain `host:port`/`host` form; anything else
+/// (malformed input) falls through to the raw string, which then simply
+/// fails the `IpAddr` parse in [`is_unsafe_fetch_target`] and is treated as
+/// an ordinary hostname.
+fn bare_host(url: &str) -> &str {
+    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or(after_scheme);
+    let authority = authority.rsplit('@').next().unwrap_or(authority); // drop userinfo
+    match authority.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(rest),
+        None => authority.split(':').next().unwrap_or(authority),
+    }
+}
+
+/// True when `url`'s literal host is private (RFC1918), link-local
+/// (169.254.0.0/16 — the address every major cloud provider serves instance
+/// metadata from — and its IPv6 twin `fe80::/10`), unspecified, multicast, or
+/// unique-local IPv6 (`fc00::/7`).
+///
+/// Deliberately does NOT include loopback: this crate's own test suite fakes
+/// "a real remote server" with a `127.0.0.1` `TcpListener` throughout (every
+/// `spawn_*_server` helper in this file and in `html_tests.rs`), so blocking
+/// it here would make the fetch this guards untestable in this codebase's
+/// own idiom, not just harder to exploit. Loopback is also the narrower
+/// threat of the two: reaching the build machine's OWN local services is
+/// less valuable to an attacker than reaching its private network or its
+/// cloud metadata endpoint, which is what link-local and RFC1918 actually
+/// gate.
+///
+/// A build fetches a URL the VAULT AUTHOR wrote in their own content — on a
+/// human's own machine that is not a privilege boundary, since they already
+/// have whatever network access this check would otherwise be guarding.
+/// This exists for the case this fetch actually runs unattended
+/// (`exits_after_build`: a CI runner or a hosted build), where a linked
+/// THIRD-PARTY page's own link could otherwise point the build machine's
+/// request at its own private network or cloud metadata endpoint. It is a
+/// literal-host check only: a hostname that resolves to one of these
+/// addresses only at connect time (DNS rebinding), or a redirect `Location`
+/// pointing at one, is NOT caught here — closing those needs a custom
+/// resolver/connector, more machinery than this proportional guard is
+/// trying to be.
+fn is_unsafe_fetch_target(url: &str) -> bool {
+    let host = bare_host(url);
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => v4.is_private() || v4.is_link_local() || v4.is_unspecified() || v4.is_multicast(),
+        Ok(std::net::IpAddr::V6(v6)) => {
+            v6.is_unspecified()
+                || v6.is_multicast()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00 // unique-local, fc00::/7
+                || (v6.segments()[0] & 0xffc0) == 0xfe80 // link-local unicast, fe80::/10
+        }
+        Err(_) => false,
+    }
+}
+
 /// Fetch (or serve from a fresh cache) one URL's link metadata. Cache TTL:
 /// 7 days.
 ///
@@ -415,7 +556,12 @@ fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::
         return cached;
     }
 
-    // 2. Try HTTP fetch
+    // 2. Refuse an unsafe target rather than fetch it — see `is_unsafe_fetch_target`.
+    if is_unsafe_fetch_target(url) {
+        return stale_or_empty(moss_dir, url);
+    }
+
+    // 3. Try HTTP fetch
     let result = ureq_agent_with_timeout(timeout)
         .get(url)
         .set("User-Agent", "moss/0.1 (+https://moss.sh)")
@@ -425,7 +571,33 @@ fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::
         Ok(resp) => {
             let (html, read_ok) = read_capped_body(resp.into_reader());
             if read_ok {
-                let meta = parse_link_meta(url, &html);
+                let mut meta = parse_link_meta(url, &html);
+                // Author content always wins over anything fetched — but
+                // there's no author content to compare against here, only
+                // the fetch itself. "Keep the last successful copy until a
+                // refresh succeeds": carry the PREVIOUS entry's cover
+                // forward whenever this fetch doesn't produce a new one
+                // (no og:image this time, or the download/decode failed),
+                // so a transient failure or a page that dropped its
+                // og:image doesn't blank out a cover that was working.
+                let previous = read_cache(moss_dir, url);
+                match meta.og_image.as_deref().and_then(|img| download_og_image(img, moss_dir, timeout)) {
+                    Some((oid, ext)) => {
+                        meta.cover_oid = Some(oid);
+                        meta.cover_ext = Some(ext);
+                    }
+                    None => {
+                        if let Some(prev) = previous {
+                            meta.cover_oid = prev.cover_oid;
+                            meta.cover_ext = prev.cover_ext;
+                            meta.cover_served_path = prev.cover_served_path;
+                            meta.cover_width = prev.cover_width;
+                            meta.cover_height = prev.cover_height;
+                            meta.cover_lqip = prev.cover_lqip;
+                            meta.cover_color = prev.cover_color;
+                        }
+                    }
+                }
                 write_cache(moss_dir, &meta);
                 meta
             } else {
@@ -437,6 +609,81 @@ fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::
     }
 }
 
+/// Response body size cap for a downloaded cover image — generous enough
+/// for a real social-preview image, small enough that a misconfigured
+/// server pointed at a large file can't tie up a fetch worker.
+const MAX_OG_IMAGE_DOWNLOAD_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Decode-time dimension cap for a downloaded cover image. No real
+/// social-preview image is anywhere near this large; the point is rejecting
+/// a "decompression bomb" — a few compressed bytes whose header claims an
+/// enormous canvas — from its declared dimensions alone, before the decoder
+/// allocates a pixel buffer for it. `image::Limits::default()`'s 512MiB
+/// allocation ceiling alone still lets every one of `FETCH_CONCURRENCY`'s
+/// parallel workers hold up to 512MiB decoding one at once; this tightens
+/// that ceiling rather than replacing it.
+const MAX_OG_IMAGE_DIMENSION: u32 = 10_000;
+
+/// Download `image_url`, verify it's actually a raster image moss's
+/// pipeline can re-encode, and store the bytes in the site's
+/// content-addressed cache. Returns `(oid, ext)` — `ext` is derived from
+/// the SNIFFED format (magic bytes via `image::guess_format`), never
+/// trusted from the URL or a `Content-Type` header alone, since both come
+/// from an untrusted server. `None` on any failure: non-image content
+/// type, oversized body, bytes that don't actually decode, or a target
+/// [`is_unsafe_fetch_target`] refuses — every case degrades to "no cover
+/// this build" (or the carried-forward previous cover), never a build
+/// failure.
+fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Duration) -> Option<(String, String)> {
+    if is_unsafe_fetch_target(image_url) {
+        return None;
+    }
+    let resp = ureq_agent_with_timeout(timeout)
+        .get(image_url)
+        .set("User-Agent", "moss/0.1 (+https://moss.sh)")
+        .call()
+        .ok()?;
+    // Cheap early exit on an explicit non-image Content-Type. Not the
+    // authoritative check — a server can omit or lie about it — but avoids
+    // downloading a body we're going to discard.
+    if let Some(ct) = resp.header("Content-Type") {
+        let ct = ct.split(';').next().unwrap_or(ct).trim();
+        if !ct.is_empty() && !ct.starts_with("image/") {
+            return None;
+        }
+    }
+    let mut buf = Vec::new();
+    {
+        use std::io::Read as _;
+        resp.into_reader()
+            .take(MAX_OG_IMAGE_DOWNLOAD_BYTES)
+            .read_to_end(&mut buf)
+            .ok()?;
+    }
+    // The authoritative check: sniff the magic bytes and require moss's
+    // pipeline to actually be able to decode it. `should_skip`'s CMYK/
+    // animated/SVG rejections in the real conversion still apply later —
+    // this only rules out "not an image at all" and a truncated download
+    // (a cap mid-stream will usually fail to decode as a complete image).
+    let format = image::guess_format(&buf).ok()?;
+    let ext = match format {
+        image::ImageFormat::Jpeg => "jpg",
+        image::ImageFormat::Png => "png",
+        image::ImageFormat::WebP => "webp",
+        _ => return None,
+    };
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_OG_IMAGE_DIMENSION);
+    limits.max_image_height = Some(MAX_OG_IMAGE_DIMENSION);
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(&buf));
+    reader.set_format(format);
+    reader.limits(limits);
+    reader.decode().ok()?;
+    let store = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.to_path_buf()));
+    let oid = store.store_bytes(&buf).ok()?;
+    Some((oid, ext.to_string()))
+}
+
 /// Return stale cached data if available, otherwise empty LinkMeta.
 fn stale_or_empty(moss_dir: &Path, url: &str) -> LinkMeta {
     read_cache(moss_dir, url).unwrap_or(LinkMeta {
@@ -444,6 +691,14 @@ fn stale_or_empty(moss_dir: &Path, url: &str) -> LinkMeta {
         title: None,
         description: None,
         favicon: None,
+        og_image: None,
+        cover_oid: None,
+        cover_ext: None,
+        cover_served_path: None,
+        cover_width: None,
+        cover_height: None,
+        cover_lqip: None,
+        cover_color: None,
         fetched_at: now_iso8601(),
     })
 }
@@ -837,6 +1092,14 @@ pub fn read_link_meta_from_cache(urls: &[&str], moss_dir: &Path) -> HashMap<Stri
                         title: None,
                         description: None,
                         favicon: None,
+                        og_image: None,
+                        cover_oid: None,
+                        cover_ext: None,
+                        cover_served_path: None,
+                        cover_width: None,
+                        cover_height: None,
+                        cover_lqip: None,
+                        cover_color: None,
                         fetched_at: now_iso8601(),
                     },
                 );
@@ -885,6 +1148,71 @@ mod tests {
         // Description is intentionally not parsed for new entries (renderer
         // ignores it; saves bandwidth + bytes per cache file).
         assert_eq!(meta.description, None);
+    }
+
+    #[test]
+    fn test_parse_og_image() {
+        let html = r#"
+        <html><head>
+            <meta property="og:image" content="https://example.com/cover.jpg">
+        </head><body></body></html>
+        "#;
+        let meta = parse_link_meta("https://example.com", html);
+        assert_eq!(meta.og_image.as_deref(), Some("https://example.com/cover.jpg"));
+    }
+
+    #[test]
+    fn test_parse_og_image_relative_resolves_against_origin() {
+        let html = r#"
+        <html><head>
+            <meta property="og:image" content="/assets/cover.png">
+        </head></html>
+        "#;
+        let meta = parse_link_meta("https://example.com/post", html);
+        assert_eq!(meta.og_image.as_deref(), Some("https://example.com/assets/cover.png"));
+    }
+
+    #[test]
+    fn test_parse_twitter_image_fallback_when_no_og_image() {
+        let html = r#"
+        <html><head>
+            <meta name="twitter:image" content="https://example.com/twitter-card.jpg">
+        </head></html>
+        "#;
+        let meta = parse_link_meta("https://example.com", html);
+        assert_eq!(meta.og_image.as_deref(), Some("https://example.com/twitter-card.jpg"));
+    }
+
+    #[test]
+    fn test_parse_og_image_prefers_og_over_twitter() {
+        let html = r#"
+        <html><head>
+            <meta property="og:image" content="https://example.com/og.jpg">
+            <meta name="twitter:image" content="https://example.com/twitter.jpg">
+        </head></html>
+        "#;
+        let meta = parse_link_meta("https://example.com", html);
+        assert_eq!(meta.og_image.as_deref(), Some("https://example.com/og.jpg"));
+    }
+
+    #[test]
+    fn test_parse_og_image_absent_when_no_meta_tag() {
+        let html = "<html><head><title>No cover here</title></head></html>";
+        let meta = parse_link_meta("https://example.com", html);
+        assert_eq!(meta.og_image, None);
+    }
+
+    #[test]
+    fn test_parse_og_image_data_url_is_not_a_fetch_candidate() {
+        // Unlike a favicon, a cover image is never inlined — the build
+        // downloads it, and a `data:` URL is not something to download.
+        let html = r#"
+        <html><head>
+            <meta property="og:image" content="data:image/png;base64,iVBORw0KGgo=">
+        </head></html>
+        "#;
+        let meta = parse_link_meta("https://example.com", html);
+        assert_eq!(meta.og_image, None);
     }
 
     #[test]
@@ -939,6 +1267,14 @@ mod tests {
             title: Some("Test Title".to_string()),
             description: Some("Test Desc".to_string()),
             favicon: None,
+            og_image: None,
+            cover_oid: None,
+            cover_ext: None,
+            cover_served_path: None,
+            cover_width: None,
+            cover_height: None,
+            cover_lqip: None,
+            cover_color: None,
             fetched_at: now_iso8601(),
         };
 
@@ -984,6 +1320,14 @@ mod tests {
             title: Some("Cached".to_string()),
             description: None,
             favicon: None,
+            og_image: None,
+            cover_oid: None,
+            cover_ext: None,
+            cover_served_path: None,
+            cover_width: None,
+            cover_height: None,
+            cover_lqip: None,
+            cover_color: None,
             fetched_at: now_iso8601(),
         };
         write_cache(&tmp, &cached);
@@ -1148,6 +1492,14 @@ mod tests {
             title: Some("Old Title".to_string()),
             description: None,
             favicon: None,
+            og_image: None,
+            cover_oid: None,
+            cover_ext: None,
+            cover_served_path: None,
+            cover_width: None,
+            cover_height: None,
+            cover_lqip: None,
+            cover_color: None,
             fetched_at: "2020-01-01T00:00:00Z".to_string(), // Very old
         };
 
@@ -1368,6 +1720,14 @@ mod tests {
             title: Some(title.to_string()),
             description: None,
             favicon: None,
+            og_image: None,
+            cover_oid: None,
+            cover_ext: None,
+            cover_served_path: None,
+            cover_width: None,
+            cover_height: None,
+            cover_lqip: None,
+            cover_color: None,
             fetched_at: now_iso8601(),
         };
         write_cache(moss_dir, &meta);
@@ -1392,6 +1752,14 @@ mod tests {
             title: Some(title.to_string()),
             description: None,
             favicon: None,
+            og_image: None,
+            cover_oid: None,
+            cover_ext: None,
+            cover_served_path: None,
+            cover_width: None,
+            cover_height: None,
+            cover_lqip: None,
+            cover_color: None,
             fetched_at: stale_ts,
         };
         write_cache(moss_dir, &meta);
@@ -1889,6 +2257,286 @@ mod tests {
         let url = format!("{base}/big");
         let meta = fetch_link_meta_with_timeout(&url, &tmp, std::time::Duration::from_secs(10));
         assert_eq!(meta.title.as_deref(), Some("Oversized"));
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── og:image download ───────────────────────────────────────────────
+
+    /// A tiny real (encoded) PNG, generated in-memory — a genuine decodable
+    /// image, not a hand-rolled byte guess.
+    fn tiny_png_bytes() -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(2, 2, image::Rgb([200, 40, 40]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        buf.into_inner()
+    }
+
+    /// A server that responds once with `body` under `content_type` (or no
+    /// header at all when `content_type` is `None`), then a 404 for every
+    /// request after the first — mirrors a real "image present at first
+    /// path, missing everywhere else" origin without a second listener.
+    fn spawn_byte_server(
+        body: Vec<u8>,
+        content_type: Option<&'static str>,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}");
+        let handle = std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else { return };
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let ct_header = content_type
+                .map(|ct| format!("Content-Type: {ct}\r\n"))
+                .unwrap_or_default();
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n{ct_header}\r\n", body.len());
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&body);
+        });
+        (url, handle)
+    }
+
+    fn spawn_404_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}");
+        let handle = std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else { return };
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn download_og_image_stores_a_real_image_and_returns_its_oid_and_format() {
+        let png = tiny_png_bytes();
+        let (base, server) = spawn_byte_server(png.clone(), Some("image/png"));
+        let tmp = fresh_tmp("download_og_image_ok");
+        let result = download_og_image(&format!("{base}/cover.png"), &tmp, std::time::Duration::from_secs(5));
+        let (oid, ext) = result.expect("a real PNG must download and decode");
+        assert_eq!(ext, "png");
+        let store = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(tmp.clone()));
+        let stored = store.ready_blob(&oid).expect("oid must resolve in the object store");
+        assert_eq!(std::fs::read(stored).unwrap(), png, "stored bytes should be identical to the download");
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_og_image_rejects_a_non_image_content_type() {
+        let (base, server) = spawn_byte_server(b"<html>not a real image</html>".to_vec(), Some("text/html"));
+        let tmp = fresh_tmp("download_og_image_wrong_ct");
+        let result = download_og_image(&format!("{base}/page.html"), &tmp, std::time::Duration::from_secs(5));
+        assert!(result.is_none(), "an explicit non-image Content-Type must short-circuit before decoding");
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_og_image_rejects_bytes_that_dont_actually_decode() {
+        // A server can claim any Content-Type it likes — the sniff+decode
+        // is the real gate, not the header.
+        let (base, server) = spawn_byte_server(b"this is not image data at all".to_vec(), Some("image/jpeg"));
+        let tmp = fresh_tmp("download_og_image_fake_ct");
+        let result = download_og_image(&format!("{base}/fake.jpg"), &tmp, std::time::Duration::from_secs(5));
+        assert!(result.is_none(), "a lying Content-Type must not bypass the decode check");
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_og_image_returns_none_on_404() {
+        let (base, server) = spawn_404_server();
+        let tmp = fresh_tmp("download_og_image_404");
+        let result = download_og_image(&format!("{base}/missing.png"), &tmp, std::time::Duration::from_secs(5));
+        assert!(result.is_none());
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn fetch_link_meta_carries_forward_the_previous_cover_when_a_refresh_fails() {
+        // "Keep serving the last successfully cached copy until the
+        // metadata refresh succeeds": seed a cache entry with a cover
+        // already materialized-looking, then fetch again against a page
+        // whose og:image now 404s. The cover fields must survive.
+        let tmp = fresh_tmp("carry_forward_cover");
+        let html_with_dead_image = r#"<html><head>
+            <meta property="og:title" content="Still Here">
+            <meta property="og:image" content="/gone.png">
+        </head></html>"#;
+        let (base, server) = spawn_test_server(html_with_dead_image, 1);
+        let url = format!("{base}/post");
+
+        let previous = LinkMeta {
+            url: url.clone(),
+            title: Some("Old Title".to_string()),
+            description: None,
+            favicon: None,
+            og_image: Some(format!("{base}/old-cover.png")),
+            cover_oid: Some("deadbeefdeadbeef".to_string()),
+            cover_ext: Some("png".to_string()),
+            cover_served_path: Some("_moss/link/deadbeefdeadbeef.png".to_string()),
+            cover_width: Some(400),
+            cover_height: Some(300),
+            cover_lqip: Some("data:image/webp;base64,AAAA".to_string()),
+            cover_color: Some("#ff0000".to_string()),
+            fetched_at: "2020-01-01T00:00:00Z".to_string(),
+        };
+        write_cache(&tmp, &previous);
+
+        let meta = fetch_link_meta_with_timeout(&url, &tmp, std::time::Duration::from_secs(5));
+        assert_eq!(meta.title.as_deref(), Some("Still Here"), "title still refreshes normally");
+        assert_eq!(
+            meta.cover_served_path.as_deref(),
+            Some("_moss/link/deadbeefdeadbeef.png"),
+            "the old cover must survive a failed image refresh"
+        );
+        assert_eq!(meta.cover_width, Some(400));
+
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── unsafe fetch targets (SSRF-style guard) ─────────────────────────
+
+    #[test]
+    fn bare_host_strips_scheme_port_userinfo_and_ipv6_brackets() {
+        assert_eq!(bare_host("https://example.com/a?b#c"), "example.com");
+        assert_eq!(bare_host("http://example.com:8080/"), "example.com");
+        assert_eq!(bare_host("http://user:pass@example.com/"), "example.com");
+        assert_eq!(bare_host("http://[::1]:8080/"), "::1");
+        assert_eq!(bare_host("http://[fe80::1]/"), "fe80::1");
+    }
+
+    #[test]
+    fn is_unsafe_fetch_target_blocks_private_and_link_local_v4() {
+        assert!(is_unsafe_fetch_target("http://10.0.0.5/"));
+        assert!(is_unsafe_fetch_target("http://172.16.0.1/"));
+        assert!(is_unsafe_fetch_target("http://192.168.1.1/"));
+        // The address every major cloud provider serves instance metadata
+        // from — the highest-value real-world target this guard exists for.
+        assert!(is_unsafe_fetch_target("http://169.254.169.254/latest/meta-data/"));
+        assert!(is_unsafe_fetch_target("http://0.0.0.0/"));
+    }
+
+    #[test]
+    fn is_unsafe_fetch_target_blocks_link_local_and_unique_local_v6() {
+        assert!(is_unsafe_fetch_target("http://[fe80::1]/"));
+        assert!(is_unsafe_fetch_target("http://[fc00::1]/"));
+        assert!(is_unsafe_fetch_target("http://[fd12:3456::1]/"));
+        assert!(is_unsafe_fetch_target("http://[::]/"));
+    }
+
+    #[test]
+    fn is_unsafe_fetch_target_allows_loopback_and_ordinary_hosts() {
+        // Loopback is deliberately NOT blocked — see the doc comment on
+        // `is_unsafe_fetch_target`: this crate's own test suite fakes a real
+        // remote server with a `127.0.0.1` listener throughout, so blocking
+        // it would make the guarded fetch untestable in this codebase's own
+        // idiom, for a narrower threat than link-local/private already cover.
+        assert!(!is_unsafe_fetch_target("http://127.0.0.1:4000/"));
+        assert!(!is_unsafe_fetch_target("http://[::1]/"));
+        assert!(!is_unsafe_fetch_target("http://localhost/"));
+        assert!(!is_unsafe_fetch_target("https://example.com/post"));
+        assert!(!is_unsafe_fetch_target("https://slykiten.com/"));
+    }
+
+    #[test]
+    fn fetch_link_meta_with_timeout_refuses_a_private_target_without_a_cache_entry() {
+        // Elapsed time, not just the `None` result, is the decisive proof:
+        // 169.254.169.254 is unreachable from this machine either way, so a
+        // guard that quietly did nothing would still return `None` here —
+        // just after actually attempting (and timing out on) the connection.
+        // The guard's whole point is to skip that attempt, so a real network
+        // round trip taking any meaningful fraction of the 5s timeout would
+        // mean it didn't fire.
+        let tmp = fresh_tmp("unsafe_target_no_cache");
+        let start = std::time::Instant::now();
+        let meta = fetch_link_meta_with_timeout(
+            "http://169.254.169.254/latest/meta-data/",
+            &tmp,
+            std::time::Duration::from_secs(5),
+        );
+        let elapsed = start.elapsed();
+        assert_eq!(meta.title, None, "an unsafe target must never be fetched");
+        assert!(read_cache(&tmp, "http://169.254.169.254/latest/meta-data/").is_none());
+        assert!(
+            elapsed < std::time::Duration::from_millis(200),
+            "must reject before attempting any connection, not after timing one out: {elapsed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_og_image_refuses_a_private_target() {
+        let tmp = fresh_tmp("unsafe_image_target");
+        let start = std::time::Instant::now();
+        let result = download_og_image(
+            "http://169.254.169.254/latest/meta-data/iam/",
+            &tmp,
+            std::time::Duration::from_secs(5),
+        );
+        let elapsed = start.elapsed();
+        assert!(result.is_none(), "an unsafe target must never be downloaded");
+        assert!(
+            elapsed < std::time::Duration::from_millis(200),
+            "must reject before attempting any connection, not after timing one out: {elapsed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── og:image decompression-bomb guard ───────────────────────────────
+
+    /// A REAL, validly-encoded, small (well under a megabyte on the wire)
+    /// PNG that is nonetheless absurdly wide — the shape a "declared
+    /// dimensions far past what a real image needs" bomb takes, but genuinely
+    /// decodable if nothing capped it. Deliberately real rather than a
+    /// truncated/fake file: a fake one would be rejected by the decode step
+    /// regardless of any dimension limit, which would prove nothing about
+    /// `MAX_OG_IMAGE_DIMENSION` specifically. Deliberately narrow height (10px)
+    /// so the total pixel count — and so `image::Limits::default()`'s
+    /// pre-existing 512MiB allocation ceiling — stays far under its own
+    /// threshold, isolating THIS cap rather than riding on that one.
+    fn absurdly_wide_png_bytes() -> Vec<u8> {
+        let width = MAX_OG_IMAGE_DIMENSION * 5;
+        let img = image::RgbImage::from_pixel(width, 10, image::Rgb([10, 10, 10]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        buf.into_inner()
+    }
+
+    #[test]
+    fn download_og_image_rejects_a_canvas_over_the_dimension_cap() {
+        let bomb = absurdly_wide_png_bytes();
+        // Real image, but its declared width alone (5x the cap) already
+        // dwarfs anything a real og:image needs — the point of the test.
+        let (base, server) = spawn_byte_server(bomb, Some("image/png"));
+        let tmp = fresh_tmp("og_image_over_cap");
+        let result = download_og_image(&format!("{base}/wide.png"), &tmp, std::time::Duration::from_secs(5));
+        assert!(result.is_none(), "a canvas over MAX_OG_IMAGE_DIMENSION must be rejected");
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_og_image_accepts_a_real_image_well_under_the_dimension_cap() {
+        // Guards against an over-tight cap breaking the ordinary case.
+        let (base, server) = spawn_byte_server(tiny_png_bytes(), Some("image/png"));
+        let tmp = fresh_tmp("og_image_normal");
+        let result = download_og_image(&format!("{base}/cover.png"), &tmp, std::time::Duration::from_secs(5));
+        assert!(result.is_some(), "an ordinary small image must still download");
         let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }
