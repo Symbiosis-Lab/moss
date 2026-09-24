@@ -15,7 +15,7 @@ use crate::build::site_url::SiteUrl;
 
 /// Returns the canonical URL for a given page on a given site host.
 ///
-/// * `host` — bare hostname, e.g. `"yinlab.io"` or `"www.yinlab.io"`. Strip
+/// * `host` — bare hostname, e.g. `"example.org"` or `"www.example.org"`. Strip
 ///   scheme and path before passing in.
 /// * `path` — typed served path for the page. Built from the page's url_path
 ///   (e.g. `"about/index.html"`). The function strips the trailing
@@ -136,15 +136,15 @@ mod tests {
     #[test]
     fn www_canonical_gets_www_prefix() {
         let path = ServedPath::from_source("about/index.html").unwrap();
-        assert_eq!(canonical_url("yinlab.io", &path, true), "https://www.yinlab.io/about/");
+        assert_eq!(canonical_url("example.org", &path, true), "https://www.example.org/about/");
     }
 
     #[test]
     fn already_www_is_left_alone() {
         let path = ServedPath::from_source("about/index.html").unwrap();
         assert_eq!(
-            canonical_url("www.yinlab.io", &path, true),
-            "https://www.yinlab.io/about/"
+            canonical_url("www.example.org", &path, true),
+            "https://www.example.org/about/"
         );
     }
 

@@ -416,11 +416,11 @@ mod tests {
             NormalizedComment {
                 id: "8".into(),
                 source: "artalk".into(),
-                content: "orz你们全家都手太巧了。".into(),
+                content: "第一条评论。".into(),
                 created_at: "2026-03-24 11:36:57".into(),
                 author: CommentAuthor {
-                    display_name: Some("Marcus".into()),
-                    name: Some("Marcus".into()),
+                    display_name: Some("Alex".into()),
+                    name: Some("Alex".into()),
                     url: None,
                 },
                 reply_to_id: None,
@@ -429,11 +429,11 @@ mod tests {
             NormalizedComment {
                 id: "9".into(),
                 source: "artalk".into(),
-                content: "自己设计装修确实会很增加幸福感。".into(),
+                content: "第二条评论。".into(),
                 created_at: "2026-03-25 08:00:00".into(),
                 author: CommentAuthor {
-                    display_name: Some("刘果".into()),
-                    name: Some("刘果".into()),
+                    display_name: Some("小明".into()),
+                    name: Some("小明".into()),
                     url: None,
                 },
                 reply_to_id: Some("8".into()),
@@ -597,8 +597,8 @@ mod tests {
             &[],
             0,
         );
-        assert!(html.contains("Marcus"));
-        assert!(html.contains("orz你们全家都手太巧了。"));
+        assert!(html.contains("Alex"));
+        assert!(html.contains("第一条评论。"));
     }
 
     #[test]
@@ -615,7 +615,7 @@ mod tests {
             0,
         );
         assert!(html.contains("comment-replies"));
-        assert!(html.contains("刘果"));
+        assert!(html.contains("小明"));
     }
 
     #[test]

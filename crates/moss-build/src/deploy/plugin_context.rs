@@ -105,8 +105,8 @@ const GITHUB_DEPLOY_PLUGIN: &str = "github";
 /// moss hosting serves from the root of `<site_id>.mosspub.com`.
 ///
 /// Without that check, putting a moss vault under version control on GitHub
-/// was enough to make Publish refuse. That is what happened to the William
-/// Blake site: `git init` + `git remote add origin .../william-blake.git` on
+/// was enough to make Publish refuse. That is what happened to a real
+/// site: `git init` + `git remote add origin .../my-site.git` on
 /// 2026-08-02 silently disabled publishing to its onion, and every attempt
 /// after that failed with "Custom domain required" while `[hooks] deploy =
 /// "onionpress"` was pinned in config.toml.

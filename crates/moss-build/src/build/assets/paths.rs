@@ -591,8 +591,8 @@ mod tests {
         // markdown page URL, which compute_url_path also slugifies.
         let resolver = PathResolver::new();
         assert_eq!(
-            resolver.resolve_url("News/chps-new-hub.png"),
-            "/news/chps-new-hub.png"
+            resolver.resolve_url("News/new-hub.png"),
+            "/news/new-hub.png"
         );
     }
 
@@ -628,8 +628,8 @@ mod tests {
         // extension; only the directory is slugified.
         let resolver = PathResolver::new();
         assert_eq!(
-            resolver.resolve_url("News/chps-new-hub.webp"),
-            "/news/chps-new-hub.webp"
+            resolver.resolve_url("News/new-hub.webp"),
+            "/news/new-hub.webp"
         );
         assert_eq!(
             resolver.resolve_url("Photos/GiorgioDeChirico.webp"),
@@ -645,8 +645,8 @@ mod tests {
         overrides.insert("News".to_string(), "blog".to_string());
         let resolver = PathResolver::new().with_dir_overrides(overrides);
         assert_eq!(
-            resolver.resolve_url("News/chps-new-hub.png"),
-            "/blog/chps-new-hub.png"
+            resolver.resolve_url("News/new-hub.png"),
+            "/blog/new-hub.png"
         );
     }
 

@@ -1725,7 +1725,7 @@ fn should_skip_returns_none_for_normal_jpeg() {
 
 #[test]
 fn should_skip_html_saved_as_png() {
-    // The Yi-website case: server returned a 404 HTML page that was saved
+    // A real site's case: server returned a 404 HTML page that was saved
     // with a .png extension.
     let h = harness();
     let src = h._tmp.path().join("Test.png");
@@ -2303,7 +2303,7 @@ fn test_collect_images_filters_skipped() {
         ("pic.heic", "heic", None, false),
     ]);
 
-    // Add a .png whose content is an HTML 404 page (the Yi-website case).
+    // Add a .png whose content is an HTML 404 page (a real site's case).
     // build_project_with_images writes dummy zero bytes; overwrite with HTML.
     let html_png = _tmp.path().join("Test.png");
     fs::write(

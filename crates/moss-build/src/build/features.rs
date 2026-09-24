@@ -293,7 +293,7 @@ pub fn generate_native_slots(
     // Honor explicit `enabled = false` by filtering the Option itself: a
     // present-but-disabled section behaves like an absent section (comments
     // are opt-in on every host — see ServicesConfig::is_enabled).
-    // See SoCiviC dogfood report 2026-04-30 / docs/archive/2026-04-30-filename-as-canonical-title.md.
+    // Found while dogfooding a real site, 2026-04-30.
     //
     // Design §7: the baked artifact is mode-independent. The preview shim
     // (injected at serve time by iframe_bridge.rs, never written to disk)

@@ -54,7 +54,7 @@ pub const MATH_PNG_PREFIX: &str = "_moss/math/";
 /// p5.js) load asset files by their exact filenames. Slug-rewriting
 /// `MathJax_Main-Bold.woff` to `mathjax-main-bold.woff` produces a 404 at
 /// runtime. Directory segments, however, leak into URL routing on
-/// case-sensitive servers (the chps-site bug) so they must be normalized.
+/// case-sensitive servers (a real site's bug) so they must be normalized.
 ///
 /// For *pretty URLs* of articles, the filename slug is applied separately
 /// inside `compute_url_path` via `generate_slug(stem)` — that's intentional.

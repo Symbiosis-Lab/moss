@@ -201,7 +201,7 @@ fn v1_to_v2_promotes_analytics_section() {
         r#"
             schema_version = 1
             [analytics]
-            script = "https://guo.goatcounter.com/count"
+            script = "https://mysite.goatcounter.com/count"
         "#,
     )
     .unwrap();
@@ -214,7 +214,7 @@ fn v1_to_v2_promotes_analytics_section() {
         .expect("services.analytics");
     assert_eq!(
         analytics.get("script").and_then(|v| v.as_str()),
-        Some("https://guo.goatcounter.com/count")
+        Some("https://mysite.goatcounter.com/count")
     );
     assert_eq!(
         analytics.get("provider").and_then(|v| v.as_str()),
@@ -428,18 +428,18 @@ fn v1_to_v2_endpoint_scrub_coexists_with_comments_promotion() {
 }
 
 #[test]
-fn v1_to_v2_liu_guo_worked_example() {
-    // End-to-end: the 刘果 legacy config goes from pre-v1 through v2 in one call.
+fn v1_to_v2_legacy_worked_example() {
+    // End-to-end: a real site's legacy config goes from pre-v1 through v2 in one call.
     let mut raw: toml::Table = toml::from_str(
         r#"
             [analytics]
-            script = "https://guo.goatcounter.com/count"
+            script = "https://mysite.goatcounter.com/count"
 
             [comments]
             server_url = "https://api.moss.host/comments"
 
             [email]
-            api_key = "71a1403a-7c4f-4818-aa5a-1d75366684c2"
+            api_key = "00000000-0000-0000-0000-000000000000"
 
             [features]
             comments = true

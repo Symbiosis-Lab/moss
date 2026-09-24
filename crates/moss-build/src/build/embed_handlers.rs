@@ -328,9 +328,9 @@ mod tests {
     // Primary fixture: `src-tauri/tests/fixtures/embed_handlers/` — minimal
     // .ipynb + .csv checked into the repo. Always runs.
     //
-    // Extended fixture: chps-site (real client-site notebooks + CSVs), used
-    // when `MOSS_CHPS_FIXTURE` env var points to a valid chps-site root.
-    // Skipped silently when unset.
+    // Extended fixture: a real site's notebooks + CSVs, kept outside the
+    // repo, used when the `MOSS_NOTEBOOK_FIXTURE` env var points to that
+    // site's root. Skipped silently when unset.
 
     use moss_core::content_graph::ContentGraphBuilder;
     use moss_core::resolve::registry::RendererRegistry;
@@ -341,11 +341,11 @@ mod tests {
         PathBuf::from("tests/fixtures/embed_handlers")
     }
 
-    /// Optional extended fixture with real client-site content. Set
-    /// `MOSS_CHPS_FIXTURE` to the chps-site root to opt in. Returns None
+    /// Optional extended fixture with real site content. Set
+    /// `MOSS_NOTEBOOK_FIXTURE` to that site's root to opt in. Returns None
     /// when unset or the path doesn't exist.
     fn extended_fixture_root() -> Option<PathBuf> {
-        let path = std::env::var("MOSS_CHPS_FIXTURE").ok()?;
+        let path = std::env::var("MOSS_NOTEBOOK_FIXTURE").ok()?;
         let p = PathBuf::from(path);
         p.exists().then_some(p)
     }
@@ -476,20 +476,20 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Extended fixture (opt-in): real client-site content.
+    // Extended fixture (opt-in): real site content.
     //
-    // Run with `MOSS_CHPS_FIXTURE=/path/to/test-sites/chps-site cargo test`.
+    // Run with `MOSS_NOTEBOOK_FIXTURE=/path/to/site cargo test`.
     // -------------------------------------------------------------------------
 
     #[test]
-    fn test_e2e_chps_habitable_zone_notebook() {
+    fn test_e2e_external_site_notebook() {
         let Some(root) = extended_fixture_root() else {
-            eprintln!("skipping: MOSS_CHPS_FIXTURE not set");
+            eprintln!("skipping: MOSS_NOTEBOOK_FIXTURE not set");
             return;
         };
         let nb = "resources/habitable-zone.ipynb";
         if !root.join(nb).exists() {
-            eprintln!("skipping: {} not under MOSS_CHPS_FIXTURE", nb);
+            eprintln!("skipping: {} not under MOSS_NOTEBOOK_FIXTURE", nb);
             return;
         }
 

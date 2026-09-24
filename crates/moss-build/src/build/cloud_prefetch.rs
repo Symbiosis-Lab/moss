@@ -68,7 +68,7 @@
 //! Because a wedged dataless read cannot be abandoned, and moss reads thousands
 //! of files where Preview reads one.
 //!
-//! Opening a real vault (SoCivic Theatre, 724 dataless files) froze the whole
+//! Opening a real vault (724 dataless files) froze the whole
 //! app permanently. `.moss/identity/secret-key` hit a materialization the OS
 //! **cancelled and never retried** (`downloadCancelled(byUser: false)` →
 //! `materializationFailed`) and **that read never returned** — on the main

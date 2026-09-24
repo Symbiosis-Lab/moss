@@ -354,7 +354,7 @@ pub fn generate_blocking_content(
     // lines down, read `""` from the same string.)
     let root_folder_name = root.name();
     // A doc with the `home: true` marker wins its folder's home slot regardless
-    // of filename — lets `en/Liu Guo.md` (or any non-INDEX_STEM, non-self-named
+    // of filename — lets `en/Mountain Home.md` (or any non-INDEX_STEM, non-self-named
     // file) be the EN homepage at `/en/` instead of getting a slug URL while
     // moss synthesizes an empty `en/index.html` titled `"En"`. Issue #587.
     let home_overrides = compute_home_overrides(&project_structure.markdown_files, root);
@@ -494,7 +494,7 @@ pub fn generate_blocking_content(
     // Process markdown files. Emits `MossEvent::BackgroundProgress` under task
     // "markdown" every MARKDOWN_PROGRESS_STRIDE files so both the GUI
     // deploy panel and watch-mode preview show a live counter during
-    // long renders (~1s/file on large sites like William Blake recordings,
+    // long renders (~1s/file on large image-heavy sites,
     // where 131 files took ~97s before this instrumentation). The event
     // is emitted by every caller that passes an `AppHandle` — deploy,
     // watch, first-build — so this is the single source of truth for
@@ -736,7 +736,7 @@ pub fn generate_blocking_content(
                     let mut uid_writeback: Option<(std::path::PathBuf, String)> = None;
                     // Demote non-winner index files to normal pages.
                     // When multiple files qualify as home files (e.g., index.md and
-                    // a self-named file like 刘果.md), only the winner keeps kind = Folder.
+                    // a self-named file like 山居.md), only the winner keeps kind = Folder.
                     // The loser gets a slug-based URL so it doesn't collide.
                     if doc.kind == PageKind::Folder && !home_file_winners.contains(&file_info.path) {
                         doc.kind = PageKind::Article;
@@ -1299,7 +1299,7 @@ pub fn generate_blocking_content(
 
     // Warn when user placed style.css / script.js at the project root instead
     // of the canonical `.moss/theme/` directory. Silently ignoring these files
-    // cost a dogfood user ~3 hours of debugging on SoCiviC Theatre — surface it.
+    // cost a dogfood user ~3 hours of debugging on a real site — surface it.
     for warning in check_misplaced_theme_files(source_path_buf) {
         log::warn!("{}", warning);
         cli_warn!("[warn] {}", warning);
@@ -3293,7 +3293,7 @@ pub fn generate_blocking_content(
     //                           templates emit (user's `assets/favicon.{svg,png,ico}`,
     //                           or moss's default logo SVG when none was provided).
     //                           Without this, bundled SPAs fall back to the browser's
-    //                           tab default — yinlab.io/city-heat-map/ shipped without
+    //                           tab default — a real site's bundled SPA shipped without
     //                           a favicon link for exactly this reason.
     // * apple-touch-icon     — left None for now; needs raster PNG sizes (TODO 4.3c).
     let spa_defaults = {
@@ -3653,7 +3653,7 @@ pub(super) fn resolve_favicon(
 
     // A raster trio left by an earlier default-SVG build is not removed here:
     // the pages read `has_raster_pngs`, never the directory, so a leftover
-    // file ships no `<link>` tag (zhu-da, 2026-09-14), and the permitted
+    // file ships no `<link>` tag (2026-09-14), and the permitted
     // staging sweep removes it once no manifest names it.
 
     Ok(ResolvedFavicon {

@@ -170,7 +170,7 @@ mod tests {
         assert_eq!(classify_link("/research/", "a.md", &idx()),
                    LinkClass::Resolved { url: "/research/".into() });
     }
-    #[test] fn absolute_case_mismatch() { // the yinlab bug
+    #[test] fn absolute_case_mismatch() { // a real site's bug
         assert_eq!(classify_link("/Research/", "a.md", &idx()),
                    LinkClass::Mismatch { canonical: "/research/".into() });
     }

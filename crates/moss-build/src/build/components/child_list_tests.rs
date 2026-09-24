@@ -166,7 +166,7 @@ fn test_render_child_article() {
     assert!(html.contains(r#"href="/blog/my-article/""#));
 }
 
-/// The bug this exists for: blakesnotebook.com's flat `writings/the-notebook`
+/// The bug this exists for: a site's flat `writings/journal`
 /// listing printed a bare "06" for a "1793-06" date, with no year anywhere on
 /// the page. `render_child` has no year heading above it (unlike the
 /// year-grouped rows), so it must never truncate to month-only.
@@ -174,7 +174,7 @@ fn test_render_child_article() {
 fn flat_row_shows_year_for_month_precision_date() {
     let props = ChildItemProps {
         title: "June Entry".to_string(),
-        url: "/writings/the-notebook/june.html".to_string(),
+        url: "/writings/journal/june.html".to_string(),
         date_display: None,
         date_raw: Some("1793-06".to_string()),
         child_count: None,
@@ -222,7 +222,7 @@ fn flat_row_passes_through_display_only_date_as_is() {
 fn flat_row_shows_bare_year_for_year_precision_date() {
     let props = ChildItemProps {
         title: "1793 Entry".to_string(),
-        url: "/writings/the-notebook/year.html".to_string(),
+        url: "/writings/journal/year.html".to_string(),
         date_display: None,
         date_raw: Some("1793".to_string()),
         child_count: None,

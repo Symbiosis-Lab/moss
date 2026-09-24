@@ -189,7 +189,7 @@ impl ServicesConfig {
         if let Some(c) = &self.comments {
             // Comments are always wired post-v4: env-derived server URL means
             // `enabled = true` with no explicit `server_url` is valid on any host
-            // (GitHub-hosted sites like liu-guo.com use the moss-operated server
+            // (GitHub-hosted sites use the moss-operated server
             // via env derivation; the old "no wiring" error was a false alarm).
             // Provider allowlist check (`["artalk"]`) is kept.
             check("comments", &c.common, &["artalk"], /*wired=*/ true, hosted_on_moss)?;

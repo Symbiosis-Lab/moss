@@ -156,7 +156,7 @@ fn resolve_image_urls(
     // URLs through the same bare-filename resolver so wikilink targets
     // like `![[hero.jpg]]` resolve to `assets/hero.jpg` against the
     // graph, mirroring the `Inline::Image` path. Regression fix for
-    // the chps-site home hero (2026-05-29): the previous skip left
+    // a real site's home hero (2026-05-29): the previous skip left
     // `args.image` as `Url::Unresolved("hero.jpg")` → the renderer
     // emitted `<img src="hero.jpg">` instead of the depth-correct
     // `assets/hero.jpg`.
@@ -310,7 +310,7 @@ fn resolve_shortcode_image_urls(
                 }
                 // Multi-image hero: every extra slide resolves exactly like
                 // the primary — skipping this re-creates the 2026-05-29
-                // chps-site regression (raw filenames at depth) per slide.
+                // home-hero regression (raw filenames at depth) per slide.
                 for image_url in &mut args.extra_images {
                     resolve_asset_url(image_url, "", graph, source_path, found);
                 }

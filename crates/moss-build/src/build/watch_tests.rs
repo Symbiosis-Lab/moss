@@ -402,7 +402,7 @@ fn test_metadata_any_on_directory_is_suppressed() {
     use notify::EventKind;
 
     let kind = EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any));
-    let dir_path = vec![PathBuf::from("/some/Yi-website")];
+    let dir_path = vec![PathBuf::from("/some/my-website")];
 
     assert!(
         !super::should_recompile_for_event_with(kind, &dir_path, |_| true),
@@ -435,13 +435,13 @@ fn test_metadata_any_mixed_batch_triggers() {
 
     let kind = EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any));
     let paths = vec![
-        PathBuf::from("/some/Yi-website"),
+        PathBuf::from("/some/my-website"),
         PathBuf::from("/some/note.md"),
     ];
 
     assert!(
         super::should_recompile_for_event_with(kind, &paths, |p| {
-            p.to_string_lossy().ends_with("Yi-website")
+            p.to_string_lossy().ends_with("my-website")
         }),
         "Metadata(Any) on mixed dir+file batch should trigger (file is real signal)"
     );
@@ -1945,9 +1945,9 @@ fn build_rebuild_event_pairs_source_stable_slug_change_as_rename() {
     let pairs: [(String, String); 0] = [];
 
     let mut prev = SiteHashes::new();
-    prev.insert("works/yi-liu/index.html".into(), "hash_a".into());
+    prev.insert("works/article-slug/index.html".into(), "hash_a".into());
     prev.source_to_output
-        .insert("works/article.md".into(), "works/yi-liu/index.html".into());
+        .insert("works/article.md".into(), "works/article-slug/index.html".into());
 
     let mut new = SiteHashes::new();
     new.insert("works/article/index.html".into(), "hash_b".into());
@@ -1963,7 +1963,7 @@ fn build_rebuild_event_pairs_source_stable_slug_change_as_rename() {
     assert_eq!(
         renamed,
         vec![(
-            "works/yi-liu/index.html".to_string(),
+            "works/article-slug/index.html".to_string(),
             "works/article/index.html".to_string(),
         )]
     );
@@ -1989,11 +1989,11 @@ fn build_rebuild_event_combines_fs_rename_with_slug_change() {
 
     let mut prev = SiteHashes::new();
     prev.insert("blog/foo/index.html".into(), "hash_foo".into());
-    prev.insert("works/yi-liu/index.html".into(), "hash_yiliu".into());
+    prev.insert("works/article-slug/index.html".into(), "hash_slug".into());
     prev.source_to_output
         .insert("blog/foo.md".into(), "blog/foo/index.html".into());
     prev.source_to_output
-        .insert("works/article.md".into(), "works/yi-liu/index.html".into());
+        .insert("works/article.md".into(), "works/article-slug/index.html".into());
 
     let mut new = SiteHashes::new();
     new.insert("blog/bar/index.html".into(), "hash_bar".into());
@@ -2017,7 +2017,7 @@ fn build_rebuild_event_combines_fs_rename_with_slug_change() {
                 "blog/bar/index.html".to_string(),
             ),
             (
-                "works/yi-liu/index.html".to_string(),
+                "works/article-slug/index.html".to_string(),
                 "works/article/index.html".to_string(),
             ),
         ],
@@ -2359,12 +2359,12 @@ fn build_rebuild_event_resolves_slugified_rename_via_manifest() {
     );
 }
 
-/// Home-override page_map promotion: `en/Liu Guo.md` is configured
+/// Home-override page_map promotion: `en/Mountain Home.md` is configured
 /// as the home for the `en/` locale (frontmatter `home: true`),
 /// so `compute_home_overrides` promotes it to `en/index.html`
 /// during page_map construction. The HTML write loop registers this
 /// promoted mapping in `source_to_output`. The rename-hint resolver must
-/// pick it up — the heuristic alone would try `en/Liu Guo/index.html`
+/// pick it up — the heuristic alone would try `en/Mountain Home/index.html`
 /// (slugified incorrectly), which would never match the manifest.
 #[test]
 fn find_output_for_source_resolves_home_override_via_manifest() {
@@ -2372,10 +2372,10 @@ fn find_output_for_source_resolves_home_override_via_manifest() {
     hashes.insert("en/index.html".into(), "h1".into());
     hashes
         .source_to_output
-        .insert("en/Liu Guo.md".into(), "en/index.html".into());
+        .insert("en/Mountain Home.md".into(), "en/index.html".into());
 
     assert_eq!(
-        find_output_for_source("en/Liu Guo.md", &hashes),
+        find_output_for_source("en/Mountain Home.md", &hashes),
         Some("en/index.html".to_string()),
         "translation-home promotion must be resolved via the manifest"
     );

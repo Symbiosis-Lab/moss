@@ -431,7 +431,7 @@ fn test_get_duration_nonexistent_file() {
 
 #[test]
 fn test_ffprobe_binary_config_targets_separate_artifact() {
-    // Root cause of the liu-guo.com video 404s: moss downloaded ffmpeg-only.
+    // Root cause of a real site's video 404s: moss downloaded ffmpeg-only.
     // ffprobe must be provisioned from its OWN evermeet artifact on macOS —
     // the ffmpeg getrelease/zip does not contain it.
     let config = ffprobe_binary_config();

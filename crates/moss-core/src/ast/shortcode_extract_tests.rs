@@ -260,7 +260,7 @@ fn extracts_quadruple_colon_buttons() {
 
 #[test]
 fn extracts_grid_with_nested_buttons_via_arity() {
-    // SoCiviC pattern: `::::buttons` (4-colon) nested inside `:::grid`
+    // A common site pattern: `::::buttons` (4-colon) nested inside `:::grid`
     // (3-colon). Phase 4 PR4.5 (2026-05-28) promoted cells from raw
     // markdown strings to `Vec<Vec<Block>>`. The inner `::::buttons`
     // now extracts into a typed `Block::Shortcode(Buttons)` inside the
@@ -1053,7 +1053,7 @@ fn nested_non_grid_block_keeps_its_own_dividers() {
     // `:::buttons` splits on `+++` too. Inside a wider grid, those
     // dividers are the buttons block's, not the grid's.
     //
-    // Also covers the SoCiviC nesting shape end to end: a cell whose
+    // Also covers that nesting shape end to end: a cell whose
     // content is a nested block comes back as a typed
     // `Block::Shortcode(Buttons)`, parsed by the recursive
     // `parse_cell_to_blocks` call, not left as literal text.
@@ -1103,7 +1103,7 @@ fn divider_inside_a_code_fence_does_not_split_a_grid_cell() {
 
 #[test]
 fn extracts_grid_with_compound_link_cell_typed_as_link_card() {
-    // SoCiviC pattern: a cell whose entire body is a single markdown
+    // Poster-card pattern: a cell whose entire body is a single markdown
     // link wrapping multiple block children. Phase 4 PR4.5
     // (2026-05-28) detects this at the cell-string level (before
     // pulldown-cmark, which can't represent `[heading](url)`) and
@@ -1329,13 +1329,13 @@ fn toc_now_renders_as_unknown_shortcode() {
 
 #[test]
 fn extracts_hero_block_with_no_image() {
-    let md = ":::hero\n# A House of Daowu\n:::\n";
+    let md = ":::hero\n# A House of Paper\n:::\n";
     let result = extract_shortcodes(md);
     assert_eq!(result.extracted.len(), 1, "hero should be extracted");
     match &result.extracted[0].shortcode {
         Shortcode::Hero(args) => {
             assert!(args.image.is_none());
-            assert_eq!(args.overlay_text, "# A House of Daowu");
+            assert_eq!(args.overlay_text, "# A House of Paper");
         }
         other => panic!("expected Hero, got {other:?}"),
     }
@@ -1410,7 +1410,7 @@ fn extracts_hero_block_with_classes() {
 
 #[test]
 fn extracts_hero_block_with_directive_line_path() {
-    // Legacy syntax used by Yi-website and chps-site:
+    // Legacy syntax used by existing sites:
     // `:::hero ./path.jpg` (image path on the directive line, empty body).
     // Step 3 rewrites these blocks to `:::hero {image=./path.jpg}`,
     // but the typed extractor must keep producing the same Hero AST
@@ -1536,7 +1536,7 @@ fn higher_arity_wrapper_recursively_extracts_typed_subscribe() {
 
 #[test]
 fn lower_arity_outer_wraps_higher_arity_typed_inner() {
-    // SoCiviC pattern: `:::{.support-band}` (arity 3) wraps
+    // A common site pattern: `:::{.support-band}` (arity 3) wraps
     // `::::buttons` (arity 4). The outer arity-3 closer at the end
     // closes the outer, so the inner arity-4 buttons block lives
     // intact inside the outer's body. Recursive extraction picks
@@ -1561,7 +1561,7 @@ fn lower_arity_outer_wraps_higher_arity_typed_inner() {
 
 #[test]
 fn lower_arity_outer_wraps_grid_with_buttons_in_cell() {
-    // SoCiviC index pattern: 3-colon `:::{.hero-split}` outer,
+    // A home-page pattern: 3-colon `:::{.hero-split}` outer,
     // 4-colon `::::grid 2 {.no-cards}` middle, 5-colon
     // `:::::buttons {.inverted}` innermost. The middle grid block
     // is the recursive-extraction target — its body in turn

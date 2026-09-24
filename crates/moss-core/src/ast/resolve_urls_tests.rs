@@ -546,7 +546,7 @@ fn absolute_path_passes_through() {
 // Hero / Gallery shortcode image resolution
 // -----------------------------------------------------------------
 //
-// Regression coverage for the chps-site home hero regression
+// Regression coverage for a real site's home hero regression
 // (2026-05-29): `:::hero` with a body-image fallback `![[hero.jpg]]`
 // (or `image=hero.jpg` attribute) stores the wikilink target as a
 // `Url::Unresolved("hero.jpg")` on `HeroShortcode::image`. Before the
@@ -572,7 +572,7 @@ fn extract_hero_image_href(doc: &Document) -> Option<String> {
 
 #[test]
 fn hero_body_wikilink_resolves_against_graph_at_depth_0() {
-    // chps-site home page shape: `:::hero` with `![[hero.jpg]]`
+    // The home page shape: `:::hero` with `![[hero.jpg]]`
     // wikilink as the body-image fallback. The asset lives at
     // `assets/hero.jpg` on disk, so the emitted href is that file's pinned
     // URL — not the bare wikilink target.
@@ -599,7 +599,7 @@ fn hero_body_wikilink_resolves_against_graph_at_depth_0() {
 fn hero_extra_images_resolve_against_graph_like_the_primary() {
     // Multi-image hero: every extra slide resolves through the content
     // graph exactly like the primary and registers a dependency edge —
-    // review finding on 06585a7cd (the chps-site regression class,
+    // review finding on 06585a7cd (the home-hero regression class,
     // re-introduced per slide).
     let mut doc = parse(":::hero\n![[hero.jpg]]\n![[second.jpg]]\n# Welcome\n:::\n");
     let mut b = ContentGraphBuilder::new();

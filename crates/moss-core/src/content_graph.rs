@@ -86,10 +86,10 @@ fn ext_match_score(ref_ext: Option<&str>, candidate: &str) -> u8 {
 /// Score a candidate's page-ness against a bare (extensionless) reference.
 ///
 /// A reference that names no extension can't express asset intent, so a
-/// stem collision between a page and a same-named asset — `古梅圖.md` next
-/// to `古梅圖.jpg` — must not fall through to the alphabetical tiebreaker,
+/// stem collision between a page and a same-named asset — `示例圖.md` next
+/// to `示例圖.jpg` — must not fall through to the alphabetical tiebreaker,
 /// where an asset's extension can sort ahead of `.md` for no reason a reader
-/// would recognize (`[[古梅圖]]` resolved to the plate, not the page). Once
+/// would recognize (`[[示例圖]]` resolved to the plate, not the page). Once
 /// the reference already carries an extension, `ext_match_score` is the
 /// authority on what the caller wants and this term must not fight it, so
 /// it stays 0 for every candidate in that case.
@@ -137,8 +137,8 @@ fn lang_tree_match(candidate: &str, from_lang: Option<&str>) -> u8 {
 /// Examples:
 /// - `"posts/Hello World.md"` -> `"posts/hello-world"`
 /// - `"guides/Setup.md"` -> `"guides/setup"`
-/// - `"news/Farewell, and Erase on BroadwayWorld.md"`
-///   -> `"news/farewell-and-erase-on-broadwayworld"`
+/// - `"news/Hello, and Goodbye on NewsWire.md"`
+///   -> `"news/hello-and-goodbye-on-newswire"`
 /// - `"posts/Hello (World)!.md"` -> `"posts/hello-world"`
 /// - `"posts/foo--bar.md"` -> `"posts/foo-bar"`
 /// - `"image.png"` -> `"image"`
@@ -317,7 +317,7 @@ impl ContentGraph {
     /// (e.g. `![[scale-compare.png]]` prefers a `.png` sibling over a `.html`
     /// sibling — only applies when the reference carries an extension); then,
     /// only when the reference is bare (no extension), a `.md` candidate
-    /// wins over a same-stem asset (`[[古梅圖]]` prefers the page over the
+    /// wins over a same-stem asset (`[[示例圖]]` prefers the page over the
     /// sibling `.jpg` — a bare reference can't express asset intent, so a
     /// caller that wants the asset must name its extension); candidates in
     /// the same language tree as the source are preferred next;
@@ -386,7 +386,7 @@ impl ContentGraph {
 
         // 2b. Suffix match for partial paths (Obsidian shortest-path resolution).
         // e.g. "游记/index.md" matches "文字/游记/index.md"
-        // Also handles vault-root prefix: "刘果/交互实验/index.md" → try
+        // Also handles vault-root prefix: "山居/交互实验/index.md" → try
         // progressively shorter sub-paths until a match is found.
         if norm_ref.contains('/') {
             let parts: Vec<&str> = norm_ref.split('/').collect();
@@ -1044,8 +1044,8 @@ mod tests {
     #[test]
     fn test_generate_slug_strips_ascii_punctuation() {
         assert_eq!(
-            generate_slug("news/Farewell, and Erase on BroadwayWorld.md"),
-            "news/farewell-and-erase-on-broadwayworld"
+            generate_slug("news/Hello, and Goodbye on NewsWire.md"),
+            "news/hello-and-goodbye-on-newswire"
         );
         assert_eq!(generate_slug("posts/Hello (World)!.md"), "posts/hello-world");
         assert_eq!(generate_slug("posts/it's-mine.md"), "posts/its-mine");
@@ -1146,7 +1146,7 @@ mod tests {
         );
     }
 
-    // Vault-root prefix: "刘果/交互实验/index.md" should resolve to "交互实验/index.md"
+    // Vault-root prefix: "山居/交互实验/index.md" should resolve to "交互实验/index.md"
     // by stripping the leading component that doesn't match any graph path.
     // This matches Obsidian's behavior where vault name can prefix markdown links.
     #[test]
@@ -1158,7 +1158,7 @@ mod tests {
 
         // Should resolve to 交互实验/index.md, NOT 文字/分布式信息网络/index.md
         assert_eq!(
-            g.resolve_path("刘果/交互实验/index.md", ""),
+            g.resolve_path("山居/交互实验/index.md", ""),
             Some("交互实验/index.md".into())
         );
     }
@@ -1294,21 +1294,21 @@ mod tests {
 
     #[test]
     fn stem_collision_bare_ref_prefers_page_over_asset() {
-        // A folder holding both a page and a same-stem asset — 古梅圖.md
-        // beside 古梅圖.jpg, one per work in the zhu-da vault — must resolve
-        // a bare `[[古梅圖]]` to the page. Before this test, the ambiguity
+        // A folder holding both a page and a same-stem asset — 示例圖.md
+        // beside 示例圖.jpg, one per work in a painting archive — must resolve
+        // a bare `[[示例圖]]` to the page. Before this test, the ambiguity
         // fell through to the alphabetical tiebreaker, where ".jpg" sorts
         // ahead of ".md" and the link silently became a dead label card
         // pointing at the plate. ".jpg" alphabetically precedes ".md", so
         // this fails without the page-preference term.
         let mut b = ContentGraphBuilder::new();
-        b.add_file("畫/古梅圖.md", "/畫/古梅圖.md");
-        b.add_file("畫/古梅圖.jpg", "/畫/古梅圖.jpg");
+        b.add_file("作品/示例圖.md", "/作品/示例圖.md");
+        b.add_file("作品/示例圖.jpg", "/作品/示例圖.jpg");
         let g = b.build();
 
         assert_eq!(
-            g.resolve_path("古梅圖", "其他/note.md"),
-            Some("畫/古梅圖.md".into())
+            g.resolve_path("示例圖", "其他/note.md"),
+            Some("作品/示例圖.md".into())
         );
     }
 
@@ -1318,13 +1318,13 @@ mod tests {
         // — page preference only applies to a bare reference, which can't
         // express asset intent in the first place.
         let mut b = ContentGraphBuilder::new();
-        b.add_file("畫/古梅圖.md", "/畫/古梅圖.md");
-        b.add_file("畫/古梅圖.jpg", "/畫/古梅圖.jpg");
+        b.add_file("作品/示例圖.md", "/作品/示例圖.md");
+        b.add_file("作品/示例圖.jpg", "/作品/示例圖.jpg");
         let g = b.build();
 
         assert_eq!(
-            g.resolve_path("古梅圖.jpg", "其他/note.md"),
-            Some("畫/古梅圖.jpg".into())
+            g.resolve_path("示例圖.jpg", "其他/note.md"),
+            Some("作品/示例圖.jpg".into())
         );
     }
 
@@ -1368,13 +1368,13 @@ mod tests {
         // reference — the two arms carry duplicated tiebreaker logic and both
         // must apply the rule.
         let mut b = ContentGraphBuilder::new();
-        b.add_file("vault/畫/古梅圖.md", "/vault/畫/古梅圖.md");
-        b.add_file("vault/畫/古梅圖.jpg", "/vault/畫/古梅圖.jpg");
+        b.add_file("vault/作品/示例圖.md", "/vault/作品/示例圖.md");
+        b.add_file("vault/作品/示例圖.jpg", "/vault/作品/示例圖.jpg");
         let g = b.build();
 
         assert_eq!(
-            g.resolve_path("畫/古梅圖", "vault/other/note.md"),
-            Some("vault/畫/古梅圖.md".into())
+            g.resolve_path("作品/示例圖", "vault/other/note.md"),
+            Some("vault/作品/示例圖.md".into())
         );
     }
 

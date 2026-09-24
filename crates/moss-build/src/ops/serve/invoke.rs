@@ -910,7 +910,7 @@ mod tests {
     }
 
     /// `delete_entry` is ON the mutation carrier (the file tree's delete failed
-    /// with a 404 in a browser, 刘果 2026-09-01), and its arm holds the same
+    /// with a 404 in a browser, 2026-09-01), and its arm holds the same
     /// line the desktop path holds: escapes and the project root are refused.
     /// The success path is not exercised here — it would move a real file into
     /// the OS trash, and the shared core's guards are what this test pins.

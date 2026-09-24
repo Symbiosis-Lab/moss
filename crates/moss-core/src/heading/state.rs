@@ -132,11 +132,11 @@ pub fn filename_text_with_root(file_path: &str, root_folder_name: Option<&str>) 
         .or(root_folder_name);
     // Deliberately the index-stem test, not `is_home_file`: substituting the
     // parent name is right for an `index.md`, whose stem carries no text worth
-    // keeping, and wrong for a self-named note (`William Blake.md` in
-    // `william-blake/`), whose stem already IS the title, properly cased.
+    // keeping, and wrong for a self-named note (`Garden Path.md` in
+    // `garden-path/`), whose stem already IS the title, properly cased.
     // `is_home_file` says yes to both, so using it here title-cased the
-    // parent's raw disk name and lost the casing — blakesnotebook.com's site
-    // name, docs/archive/2026-09-14-blakesnotebook-five-fixes-plan.md.
+    // parent's raw disk name and lost the casing of a real site's name
+    // (2026-09-14).
     let is_folder_note = home::is_index_stem_any_lang(stem);
     let source_name = if is_folder_note {
         parent_name.unwrap_or(stem)
@@ -233,8 +233,8 @@ pub fn compute(input: HeadingInputs<'_>) -> HeadingState {
 
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     // Resolve parent folder name. For nested files (`recipes/recipes.md`)
-    // we pull from the path. For ROOT-level files (`刘果.md` in a vault
-    // named `刘果`) Path::parent() returns the empty path with no
+    // we pull from the path. For ROOT-level files (`山居.md` in a vault
+    // named `山居`) Path::parent() returns the empty path with no
     // file_name, so we fall back to `root_folder_name` — letting
     // self-named-home detection work at the project root.
     let parent_from_path = path
@@ -346,10 +346,10 @@ mod tests {
 
     #[test]
     fn text_root_self_named_uses_root_folder_name() {
-        // `刘果.md` at the root of a vault named `刘果`.
+        // `山居.md` at the root of a vault named `山居`.
         assert_eq!(
-            filename_text_with_root("刘果.md", Some("刘果")),
-            "刘果"
+            filename_text_with_root("山居.md", Some("山居")),
+            "山居"
         );
     }
 
@@ -373,17 +373,17 @@ mod tests {
         );
     }
 
-    /// blakesnotebook.com's root folder-note (moss's 2026-09-14 fix): a
+    /// A site's root folder-note (moss's 2026-09-14 fix): a
     /// self-named note whose stem case doesn't match the disk folder's
     /// kebab-case name must keep its OWN casing, not the folder's. Before
     /// the fix this went through `is_home_file`'s self-named branch and
-    /// substituted the raw disk name ("william-blake" → "william blake"),
+    /// substituted the raw disk name ("garden-path" → "garden path"),
     /// throwing away the file's properly-cased stem.
     #[test]
     fn text_root_self_named_mismatched_case_keeps_own_stem() {
         assert_eq!(
-            filename_text_with_root("William Blake.md", Some("william-blake")),
-            "William Blake"
+            filename_text_with_root("Garden Path.md", Some("garden-path")),
+            "Garden Path"
         );
     }
 
@@ -436,15 +436,15 @@ mod tests {
 
     #[test]
     fn hidden_for_root_self_named_home_with_root_folder_name() {
-        // Regression: a vault opened at `刘果/`, with `刘果.md` at the project
+        // Regression: a vault opened at `山居/`, with `山居.md` at the project
         // root, must be detected as the home file. Path::parent() returns
         // the empty path (no file_name), so without `root_folder_name` the
         // path-based check misses the self-named case.
         let s = compute(HeadingInputs {
-            file_path: "刘果.md",
+            file_path: "山居.md",
             frontmatter_title: None,
             body_markdown: "",
-            root_folder_name: Some("刘果"),
+            root_folder_name: Some("山居"),
             is_home_override: false,
             slot_only: false,
         });

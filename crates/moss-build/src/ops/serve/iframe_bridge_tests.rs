@@ -176,7 +176,7 @@ fn style_tag_carries_no_chrome_geometry() {
     // and since ADR-039 the shell also owns the chrome OFFSET by insetting
     // the preview iframe — so the iframe side has no chrome geometry at
     // all. This invariant prevents the class of bug where chrome geometry
-    // leaks into nested cover or embed iframes (e.g. the 刘果 `交互` p5
+    // leaks into nested cover or embed iframes (e.g. a site's embedded p5
     // sketch regression).
     let css = build_style_tag();
     // Reject `padding-top` selectors that would displace content.
@@ -441,8 +441,8 @@ fn inject_class_only_affects_first_html_tag() {
 /// `&html[..scan_limit]`. The fix walks `scan_limit` back to the
 /// nearest char boundary before slicing.
 ///
-/// Reproducer pattern from the wild: a 刘果 article with `<title>` text
-/// like "民歌、锤子与卡在工业革命中的我们 - 刘果" and enough head
+/// Reproducer pattern from the wild: a CJK article with a long `<title>`
+/// (a full Chinese headline plus the site name) and enough head
 /// content (meta tags, syndication links, etc.) to push a CJK char
 /// across byte 4096.
 #[test]

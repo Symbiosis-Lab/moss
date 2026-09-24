@@ -24,11 +24,11 @@ pub(crate) use folder_lang::{folder_of, resolve_folder_languages, FolderLangCach
 /// map from `parent_directory → file_path`. A file in this map wins its
 /// folder's home slot regardless of filename — see [`compute_home_file_winners`].
 ///
-/// This is the supported way to make `en/Liu Guo.md` (or any other
+/// This is the supported way to make `en/Mountain Home.md` (or any other
 /// non-INDEX_STEM, non-self-named filename) the homepage of a folder.
 /// Without this, moss falls back to the filename-only detection
 /// in [`moss_core::home::detect_home_file_in_folder`] and the file lands
-/// at a slug-based URL (`en/liu-guo/`) while moss synthesizes an empty
+/// at a slug-based URL (`en/mountain-home/`) while moss synthesizes an empty
 /// `en/index.html` titled `"En"` (issue #587).
 ///
 /// # Election rules
@@ -430,7 +430,7 @@ pub(crate) fn compute_home_file_winners(
 /// Given `dir_overrides = {"视频" → "video"}`:
 /// - `"视频/aimeili.mov"` → `"video/aimeili.mov"`
 /// - `"视频/sub/clip.mp4"` → `"video/sub/clip.mp4"`
-/// - `"News/chps-new-hub.png"` (no override) → `"news/chps-new-hub.png"`
+/// - `"News/new-hub.png"` (no override) → `"news/new-hub.png"`
 /// - `"News/Winter-Song.mov"` (no override) → `"news/Winter-Song.mov"`
 /// - `"News"` (directory only, no override) → `"News"`
 pub(crate) fn resolve_path_with_overrides(

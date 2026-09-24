@@ -161,13 +161,13 @@ fn build_asset_snapshot_slug_collision_is_deterministic() {
 /// content too short for `whatlang` to detect, the doc should fall back
 /// to the site's default language — not a hard-coded English.
 ///
-/// Regression for issue #545. Mirrors the real-world failure on the 刘果
-/// vault: a Chinese-default site with `视频/冬日之歌.md` (~13 CJK chars
+/// Regression for issue #545. Mirrors the real-world failure on a
+/// Chinese-default site with `视频/山间小曲.md` (~13 CJK chars
 /// of body) was rendering with `lang=en`, mislabeling it across the
 /// HTML lang attribute, language switcher, and pages-by-lang queries.
 #[test]
 fn short_doc_with_no_signal_uses_site_default_lang() {
-    let md = "---\ntitle: 冬日之歌\n---\n\n短。";
+    let md = "---\ntitle: 山间小曲\n---\n\n短。";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
         "videos/winter-song.md",
@@ -876,14 +876,14 @@ fn index_page_without_h1_does_not_inject() {
     );
 }
 
-/// Self-named folder index (`刘果/刘果.md`) — recognized as an index by
+/// Self-named folder index (`山居/山居.md`) — recognized as an index by
 /// moss_core::home::is_home_file. Must not inject.
 #[test]
 fn self_named_folder_index_does_not_inject() {
     let md = "欢迎。\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
-        "刘果/刘果.md",
+        "山居/山居.md",
         md,
         "site",
         &empty_map,
@@ -1036,9 +1036,9 @@ fn article_body_h1_matching_title_is_not_deduped() {
 /// inject. The hero block is extracted out of the markdown body before
 /// rendering and placed at template level, so a body-H1 lookup against
 /// `html_content` alone returns None. The injection gate must also check
-/// `hero_html`. Regression for the SoCiviC daowu page.
+/// `hero_html`. Regression from a real site's hero page.
 /// Filename case is preserved verbatim. An author who writes a stem like
-/// `Farewell, and Erase on BroadwayWorld` gets exactly that as the
+/// `Hello, and Goodbye on NewsWire` gets exactly that as the
 /// injected H1 — no per-word title-casing that would change `and` to
 /// `And` or `on` to `On`. Hyphens and underscores still become spaces.
 #[test]
@@ -1046,7 +1046,7 @@ fn filename_title_preserves_case_verbatim() {
     let md = "Body text.\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
-        "news/Farewell, and Erase on BroadwayWorld.md",
+        "news/Hello, and Goodbye on NewsWire.md",
         md,
         "site",
         &empty_map,
@@ -1065,7 +1065,7 @@ fn filename_title_preserves_case_verbatim() {
     .expect("should parse");
     assert!(
         doc.html_content
-            .contains("<h1 class=\"moss-article-title\">Farewell, and Erase on BroadwayWorld</h1>"),
+            .contains("<h1 class=\"moss-article-title\">Hello, and Goodbye on NewsWire</h1>"),
         "expected verbatim filename heading, got: {}",
         doc.html_content
     );
@@ -1107,10 +1107,10 @@ fn filename_title_no_longer_capitalizes_kebab_case() {
 
 #[test]
 fn article_with_h1_inside_hero_block_does_not_inject() {
-    let md = "---\ntitle: A House of Daowu\n---\n\n:::hero\n# A House of Daowu\n:::\n\nBody.\n";
+    let md = "---\ntitle: A House of Paper\n---\n\n:::hero\n# A House of Paper\n:::\n\nBody.\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
-        "work/daowu.md",
+        "work/paper-house.md",
         md,
         "site",
         &empty_map,
@@ -1143,10 +1143,10 @@ fn article_with_an_image_only_hero_still_renders_its_title() {
     // page with no visible heading at all. One site adopted covers site-wide
     // and lost the title on 87 pages; nothing failed, because `<title>`, the
     // OG tags and RSS resolve the same text by other paths.
-    let md = "---\ntitle: A House of Daowu\n---\n\n:::hero {image=assets/cover.jpg}\n:::\n\nBody.\n";
+    let md = "---\ntitle: A House of Paper\n---\n\n:::hero {image=assets/cover.jpg}\n:::\n\nBody.\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
-        "work/daowu.md",
+        "work/paper-house.md",
         md,
         "site",
         &empty_map,
@@ -1169,7 +1169,7 @@ fn article_with_an_image_only_hero_still_renders_its_title() {
         doc.html_content
     );
     assert!(
-        doc.html_content.contains("A House of Daowu"),
+        doc.html_content.contains("A House of Paper"),
         "and it must be the page's own title, got: {}",
         doc.html_content
     );
@@ -1249,7 +1249,7 @@ fn moss_resolved_link_preserves_query_when_target_in_page_map() {
 /// HTML assets are NOT in page_map (only markdown files are). The href
 /// must be relative to the page's served URL directory, which is one
 /// level deeper than the source for non-index pages. Regression for the
-/// 刘果 vault `音阶对比.md` 404: source `交互/音阶对比.md` (url:
+/// `音阶对比.md` 404 on a real site: source `交互/音阶对比.md` (url:
 /// scale-compare) serves at `interactive/scale-compare/index.html`. The href
 /// must reach `assets/scale-compare.html` from there. It used to do that by
 /// counting `../` from the source file and then adding one more for pretty-URL
@@ -1486,7 +1486,7 @@ fn moss_resolved_link_to_html_asset_from_root_page() {
     );
 }
 
-/// Regression for 刘果 vault `音阶对比.md`:
+/// Regression for a real site's `音阶对比.md`:
 /// `[![[scale-compare.png]]](scale-compare.html?a=...)` — markdown link
 /// wrapping a wikilink-image. After the wikilinks pass converts
 /// `![[scale-compare.png]]` to `![alt](path)` and markdown_links rewrites
@@ -1598,11 +1598,11 @@ fn folder_index_with_slug_override_is_still_index() {
 /// pipeline. Issue #587.
 #[test]
 fn home_override_is_index_via_page_map() {
-    let md = "---\ntitle: Liu Guo\nlang: en\nhome: true\n---\n\n# Hello\n";
+    let md = "---\ntitle: Mountain Home\nlang: en\nhome: true\n---\n\n# Hello\n";
     let mut page_map = HashMap::new();
-    page_map.insert("en/Liu Guo.md".to_string(), "en/index.html".to_string());
+    page_map.insert("en/Mountain Home.md".to_string(), "en/index.html".to_string());
     let doc = process_markdown_file(
-        "en/Liu Guo.md",
+        "en/Mountain Home.md",
         md,
         "site",
         &page_map,
@@ -1622,7 +1622,7 @@ fn home_override_is_index_via_page_map() {
     assert_eq!(
         doc.kind,
         moss_core::PageKind::Folder,
-        "en/Liu Guo.md should be detected as a folder index after translation-home promotion"
+        "en/Mountain Home.md should be detected as a folder index after translation-home promotion"
     );
 }
 
@@ -2125,7 +2125,7 @@ fn data_source_line_matches_editor_cm6_body_line() {
 #[test]
 fn data_source_line_matches_editor_on_malformed_frontmatter() {
     // `uid: blk: "x"` is invalid YAML (mapping value inside a scalar) —
-    // mirrors the shipped William-Blake malformed-frontmatter case.
+    // mirrors a shipped malformed-frontmatter case.
     let content = "---\nuid: blk: \"x\"\n---\n\nHello\n";
 
     let editor_body = moss_core::frontmatter::parse(content).body;

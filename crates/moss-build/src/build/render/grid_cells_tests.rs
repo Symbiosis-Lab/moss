@@ -225,7 +225,7 @@ fn a_heading_cell_is_opaque() {
 
 #[test]
 fn a_compound_link_cell_carries_its_inner_text() {
-    // The SoCiviC pattern: a whole cell wrapped in one link spanning block
+    // The poster-card pattern: a whole cell wrapped in one link spanning block
     // content. The old scanner recovered the name by stripping tags out of the
     // rendered anchor, which also swept up a heading's permalink `#`.
     let md = ":::grid 1\n[![](poster.png)\n\n### Show Title\n\nA description](/shows/one/)\n:::\n";
@@ -376,7 +376,7 @@ fn a_relative_href_resolves_inside_the_page_language_tree() {
     // A grid card link on a non-root page uses a relative href the browser
     // resolves against the page's own directory. With a same-named folder at
     // the site root, the href must anchor to the PAGE's url_path. Regression:
-    // the 刘果 `/en/` home's `:::grid [Music](videos.md)` linked to root
+    // a bilingual site's `/en/` home's `:::grid [Music](videos.md)` linked to root
     // `/video/` instead of `/en/video/` — both carry `url: video`.
     let docs = vec![
         make_folder("视频", "video/index.html", None),
@@ -889,7 +889,7 @@ fn a_cell_that_became_a_card_keeps_the_cards_own_color() {
 /// that a title plus a count has no vertical variant. It does: the count runs
 /// through `i18n::article_count_label`, which writes 四篇 rather than `4 篇`
 /// under vertical CJK — and `4` in a vertical column lies on its side
-/// (zhu-da home, 2026-09-11).
+/// (a vertical site's home, 2026-09-11).
 #[test]
 fn a_grid_folder_card_counts_in_chinese_under_vertical_cjk() {
     let docs = vec![
@@ -1063,7 +1063,7 @@ fn an_unresolvable_cell_keeps_the_author_markup() {
     );
 }
 
-/// The zhu-da case, and the regression `render_item_with_typesetting` had to be
+/// The vertical-site case, and the regression `render_item_with_typesetting` had to be
 /// taught on 2026-09-11: the count runs through `i18n::article_count_label`,
 /// which writes 四篇 rather than `4 篇` under vertical CJK. Fails if
 /// `typesetting` is not threaded into `render_with_sort`.

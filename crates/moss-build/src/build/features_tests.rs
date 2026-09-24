@@ -623,7 +623,7 @@ fn comments_disabled_fixture() -> ServicesConfig {
 /// (when services.comments is None) correctly consulted `is_enabled()`,
 /// but the explicit-disabled path slipped through.
 ///
-/// SoCiviC's config.toml on 2026-04-30:
+/// A real site's config.toml on 2026-04-30:
 ///   [services.comments]
 ///   enabled = false
 /// produced `<section class="moss-comments">` markup with "0 comments"
@@ -1079,7 +1079,7 @@ fn email_slots_identical_across_build_modes() {
 }
 
 /// Robustness: seta form injects whenever site_id is present, even when
-/// deploy_method is absent or stale. This covers the Yi-website class of
+/// deploy_method is absent or stale. This covers a real site's class of
 /// bug where state.toml was never written with deploy_method but site_id
 /// was present from a previous publish.
 #[test]
@@ -1111,7 +1111,7 @@ fn seta_form_injects_with_site_id_but_no_deploy_method() {
     // a site whose state.toml was written before deploy_method was added
     // or whose state.toml is missing entirely.
     let deploy = DomainDeploymentConfig {
-        site_id: Some("yinlab".into()),
+        site_id: Some("my-lab".into()),
         deploy_method: None,
         ..Default::default()
     };
@@ -1137,7 +1137,7 @@ fn seta_form_injects_with_site_id_but_no_deploy_method() {
     );
     let html = footer_end.unwrap();
     assert!(
-        html.contains("/sites/yinlab/subscribe"),
+        html.contains("/sites/my-lab/subscribe"),
         "form must POST to the seta endpoint for the site: {html}"
     );
 }
@@ -1899,7 +1899,7 @@ fn apply_only_page_slice_does_not_hit_early_return() {
 /// time, not by omitting the tag). Pins the oscillation fix.
 #[test]
 fn analytics_present_in_both_build_modes() {
-    let config = analytics_fixture("https://guo.goatcounter.com/count");
+    let config = analytics_fixture("https://mysite.goatcounter.com/count");
     for start_server in [true, false] {
         let slots = generate_native_slots(
             &config,

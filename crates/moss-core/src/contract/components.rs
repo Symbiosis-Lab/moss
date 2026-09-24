@@ -283,7 +283,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "1",
-        description: "Retired: the additional co-class on `.moss-cards[data-layout=\"list\"]` had no matching rules in the default CSS once `children_style: summary` collapsed into the list-layout block, and its lingering emission broke themes that hid the class (e.g. SoCiviC's `.moss/theme/style.css` keyed `display: none` on it, erasing folder-embed listings). Theme authors targeting summary listings should use `.moss-cards[data-layout=\"list\"]` directly.",
+        description: "Retired: the additional co-class on `.moss-cards[data-layout=\"list\"]` had no matching rules in the default CSS once `children_style: summary` collapsed into the list-layout block, and its lingering emission broke themes that hid the class (e.g. a site theme's `.moss/theme/style.css` keyed `display: none` on it, erasing folder-embed listings). Theme authors targeting summary listings should use `.moss-cards[data-layout=\"list\"]` directly.",
     },
     // -------------------------------------------------------------------
     // Cards family — current emitted vocabulary (pre-Phase 1c collapsing).

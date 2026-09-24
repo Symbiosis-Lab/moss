@@ -615,7 +615,7 @@ impl NotebookConversionState {
 /// Replace the user's home directory prefix with `~` for privacy in logs.
 ///
 /// Production logs are sent to our server when users click "Send Logs".
-/// Full absolute paths like `/Users/liuguo/Library/Mobile Documents/...`
+/// Full absolute paths like `/Users/alice/Library/Mobile Documents/...`
 /// reveal the macOS username, iCloud usage, and vault locations.
 /// This function strips that information before logging.
 pub fn redact_home_dir(path: &str) -> String {

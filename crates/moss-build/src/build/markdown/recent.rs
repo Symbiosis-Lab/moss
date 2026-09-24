@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn parse_doc_date_accepts_month_precision() {
-        // "1795-06" (blakesnotebook.com's dating precision) used to fail
+        // "1795-06" (a real site's dating precision) used to fail
         // every shape this function tries and come back None, which the
         // caller reads as dateless.
         let d = doc("posts/a.html", "A", Some("1795-06"), None);

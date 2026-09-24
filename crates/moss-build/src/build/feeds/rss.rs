@@ -801,7 +801,7 @@ mod tests {
 
         let analytics = AnalyticsConfig {
             provider: Some("goatcounter".to_string()),
-            url: "https://guo.goatcounter.com/count".to_string(),
+            url: "https://mysite.goatcounter.com/count".to_string(),
             site_id: None,
         };
 
@@ -815,7 +815,7 @@ mod tests {
 
         // Description should contain tracking pixel with article path
         assert!(
-            rss.contains(r#"<img src="https://guo.goatcounter.com/count?p=/posts/test-post/"#),
+            rss.contains(r#"<img src="https://mysite.goatcounter.com/count?p=/posts/test-post/"#),
             "Should contain GoatCounter pixel. RSS:\n{}",
             rss
         );

@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn walk_skips_dot_moss_build_staging_shadow() {
-        // Exact replica of the Yi-website resolve-not-found repro: a bare-filename
+        // Exact replica of a real site's resolve-not-found repro: a bare-filename
         // image reference (`![](forest.jpg)`) with the real source under `assets/`
         // and TWO build-output shadows under `.moss/build.nosync/{staging,current}/assets/`.
         // Both shadows live below `.moss`, which the walker now skips, so the real

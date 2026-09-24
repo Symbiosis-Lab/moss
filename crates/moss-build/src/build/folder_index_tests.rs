@@ -26,7 +26,7 @@ fn article_doc(source_path: &str, url_path: &str) -> ParsedDocument {
 /// pair, never the first, or the two can silently disagree.
 #[test]
 fn dir_has_markdown_index_root_ignores_url_path_and_reads_kind() {
-    let docs = vec![folder_doc("William Blake.md", "william-blake/index.html")];
+    let docs = vec![folder_doc("Garden Path.md", "garden-path/index.html")];
     let idx = BuildFolderIndex { docs: &docs, html_files: &[] };
     assert!(
         idx.dir_has_markdown_index(""),
@@ -48,7 +48,7 @@ fn dir_has_markdown_index_root_rejects_a_root_article() {
 fn dir_has_markdown_index_nested_folder_matches_its_own_source_dir_only() {
     let docs = vec![
         folder_doc("notes/daily/daily.md", "notes/daily/index.html"),
-        folder_doc("William Blake.md", "index.html"),
+        folder_doc("Garden Path.md", "index.html"),
     ];
     let idx = BuildFolderIndex { docs: &docs, html_files: &[] };
     assert!(idx.dir_has_markdown_index("notes/daily"));

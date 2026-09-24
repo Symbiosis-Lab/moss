@@ -315,7 +315,7 @@ pub fn ffmpeg_binary_config() -> BinaryConfig {
 ///
 /// ffprobe ships from the same ffmpeg project but is distributed as its own
 /// download. moss must own provisioning it separately: assuming a sibling next
-/// to the ffmpeg binary is the root cause of the liu-guo.com video 404s — the
+/// to the ffmpeg binary is the root cause of a real site's video 404s — the
 /// macOS evermeet `getrelease/zip` contains ffmpeg ONLY, so the derived ffprobe
 /// path did not exist and conversion failed with `Failed to run ffprobe`.
 ///

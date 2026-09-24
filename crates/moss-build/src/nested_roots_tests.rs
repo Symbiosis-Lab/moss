@@ -56,11 +56,11 @@ fn preview_only_state_without_site_id_is_not_published() {
 #[test]
 fn published_root_carries_site_id() {
     let tmp = tempfile::tempdir().unwrap();
-    published(&tmp.path().join("blog"), "chps");
+    published(&tmp.path().join("blog"), "my-blog");
 
     let report = find_nested_roots(tmp.path(), None, &limits());
     assert_eq!(report.nested[0].published, Some(true));
-    assert_eq!(report.nested[0].site_id.as_deref(), Some("chps"));
+    assert_eq!(report.nested[0].site_id.as_deref(), Some("my-blog"));
 }
 
 #[test]

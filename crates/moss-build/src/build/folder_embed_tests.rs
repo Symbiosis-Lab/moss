@@ -620,10 +620,10 @@ fn root_self_named_home_self_listing_suppresses_more_link() {
     // A root home that is self-named / marker / inherited (NOT literally
     // `index.md`) is still its folder's index, so its own depth listing with a
     // limit must NOT emit a `More →`. Regresses the `is_index_source` root /
-    // home-override gap: `is_home_file("刘果","")` is false (empty parent), so the
+    // home-override gap: `is_home_file("山居","")` is false (empty parent), so the
     // filename heuristic alone misses it — the doc lookup (kind == Folder) catches it.
     let mut folder = make_folder_doc("index.html", "Home");
-    folder.source_path = Some("刘果.md".to_string()); // root self-named home (kind=Folder)
+    folder.source_path = Some("山居.md".to_string()); // root self-named home (kind=Folder)
     let a = make_doc("a.html", "A", Some("2025-01-01"));
     let b = make_doc("b.html", "B", Some("2025-03-01"));
     let c = make_doc("c.html", "C", Some("2025-02-01"));
@@ -634,12 +634,12 @@ fn root_self_named_home_self_listing_suppresses_more_link() {
         limit: Some(2),
         ..Default::default()
     };
-    // from = 刘果.md (the root self-named home), path = / (self-listing).
+    // from = 山居.md (the root self-named home), path = / (self-listing).
     let marker =
-        moss_core::resolve::embed_renderer::folder_list::emit_marker("/", "刘果.md", &params);
+        moss_core::resolve::embed_renderer::folder_list::emit_marker("/", "山居.md", &params);
     let out = resolve_markers(
         &marker,
-        "刘果.md",
+        "山居.md",
         &docs,
         &project,
         &dir_overrides,
@@ -1081,7 +1081,7 @@ fn iframe_src_uses_relative_path_from_nested_page() {
 
 #[test]
 fn iframe_src_is_slugified_lowercase_when_source_lacks_shared_prefix() {
-    // Regression (yinlab.io): ![[/Resources/cities-heat-map-app/]] embedded
+    // Regression (a real site): ![[/Resources/cities-heat-map-app/]] embedded
     // from a ROOT page. moss slugifies output directories to lowercase
     // ("resources/cities-heat-map-app/"), but the iframe src was emitted
     // from the case-preserving folder_id ("Resources/..."), so it 404'd on
@@ -1647,7 +1647,7 @@ fn root_wikilink_without_depth_lists_direct_folders_only() {
 /// `from` is anchored on whichever page the embed is written in — which is
 /// where the root-slash bug actually bit: a nested `from` used to resolve
 /// `/` to the EMBEDDING page's own folder instead of the site root, a bug
-/// invisible as long as every test (and the Blake homepage itself) happened
+/// invisible as long as every test (and the real homepage itself) happened
 /// to embed from a root-level page.
 #[test]
 fn root_body_embed_with_depth_all_lists_whole_site_from_a_nested_page() {
@@ -1839,7 +1839,7 @@ fn body_embed_is_tagged_data_embed_but_the_frontmatter_listing_is_not() {
     );
 }
 
-/// blakesnotebook.com regression (moss#1101): a page that is NOT the home
+/// A real site's regression (moss#1101): a page that is NOT the home
 /// embeds the vault root (`![[/|...]]`) — the same construct `Archive.md`
 /// carries on the real site. The root's own home doc is a `PageKind::Folder`
 /// whose SOURCE lives at the vault root but whose `url_path` a caller could
@@ -1851,10 +1851,10 @@ fn body_embed_is_tagged_data_embed_but_the_frontmatter_listing_is_not() {
 fn root_self_embed_resolves_from_a_page_that_is_not_the_home() {
     let home = ParsedDocument {
         url_path: "index.html".to_string(),
-        source_path: Some("William Blake.md".to_string()),
-        label: "William Blake".to_string(),
-        title: "William Blake".to_string(),
-        clean_stem: "william-blake".to_string(),
+        source_path: Some("Garden Path.md".to_string()),
+        label: "Garden Path".to_string(),
+        title: "Garden Path".to_string(),
+        clean_stem: "garden-path".to_string(),
         kind: PageKind::Folder,
         direct_children_sort: Some(ResolvedSort {
             axis: SortAxis::Date,
@@ -2154,8 +2154,8 @@ fn no_group_skip_resort_stays_flat() {
     );
 }
 
-/// The actual bug this fix exists for (docs/archive/2026-09-14-blakesnotebook-five-fixes-plan.md
-/// item 3, blakesnotebook.com's `Writings/`): a `children_style: summary`
+/// The actual bug this fix exists for (a real site's `Writings/` folder,
+/// 2026-09-14): a `children_style: summary`
 /// folder with an author-chosen `weight:` order (skip_resort=true, axis
 /// Weight, group != "year") interleaved folders and articles before this
 /// fix, because the folder/article partition was only applied on the

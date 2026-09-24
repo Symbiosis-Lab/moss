@@ -657,7 +657,7 @@ async fn test_request_reverify_sends_mode_and_site_id() {
     let url = format!("http://{}", addr);
     let client = MossSetaClient::with_url(&url);
     client
-        .request_reverify("user@example.com", "abcd1234", "sess-xyz", "socivic")
+        .request_reverify("user@example.com", "abcd1234", "sess-xyz", "my-site")
         .await
         .expect("reverify request should succeed");
     handle.await.unwrap();
@@ -669,7 +669,7 @@ async fn test_request_reverify_sends_mode_and_site_id() {
         .expect("server captured request");
     assert!(req.starts_with("POST /auth/request"), "path: {}", req);
     assert!(req.contains("\"mode\":\"re_verify\""), "payload: {}", req);
-    assert!(req.contains("\"site_id\":\"socivic\""), "payload: {}", req);
+    assert!(req.contains("\"site_id\":\"my-site\""), "payload: {}", req);
     assert!(
         req.contains("\"email\":\"user@example.com\""),
         "payload: {}",

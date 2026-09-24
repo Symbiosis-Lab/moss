@@ -374,12 +374,11 @@ mod tests {
         }
     }
 
-    /// A download link naming the private repo ships a 404 to every user.
-    /// Keyed to the private repo's post-flip name (`Symbiosis-Lab/moss-desktop`,
-    /// per `docs/archive/2026-09-13-f6-flip-day-runbook.md`) rather than its
-    /// pre-flip name, since the pre-flip name becomes the PUBLIC repo at F6.
+    /// A download link naming a private repo ships a 404 to every user, so
+    /// every organisation link in shipped text must name this public repo.
     #[test]
     fn no_shipped_text_links_the_private_repo() {
+        const ORG: &str = "github.com/Symbiosis-Lab/";
         for (name, text) in [
             ("pointer", render_pointer()),
             ("cursor", render_cursor_mdc()),
@@ -387,11 +386,16 @@ mod tests {
             ("skill source", all_skill_text()),
         ] {
             for line in text.lines() {
-                assert!(
-                    !line.contains("github.com/Symbiosis-Lab/moss-desktop/")
-                        && !line.trim_end().ends_with("github.com/Symbiosis-Lab/moss-desktop"),
-                    "{name} links the PRIVATE source repo: {line}"
-                );
+                for (at, _) in line.match_indices(ORG) {
+                    let repo: String = line[at + ORG.len()..]
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+                        .collect();
+                    assert_eq!(
+                        repo, "moss",
+                        "{name} links a repo other than the public one: {line}"
+                    );
+                }
             }
         }
     }

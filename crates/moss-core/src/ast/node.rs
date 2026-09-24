@@ -84,9 +84,9 @@ impl CalloutKind {
     /// - `error` → `Danger`
     /// - `cite` → `Quote`
     ///
-    /// `pending` is also accepted as an alias for `Todo` (used by
-    /// SoCiviC Theatre voices.md; carried over from pre-Phase-4 Stage 1
-    /// support in `crates/moss-core/src/resolve/callouts.rs`).
+    /// `pending` is also accepted as an alias for `Todo` (used by a real
+    /// site's pages; carried over from pre-Phase-4 Stage 1 support in
+    /// `crates/moss-core/src/resolve/callouts.rs`).
     ///
     /// Note: the [`CalloutKind`] enum reserves `Important`, `Summary`,
     /// and `Help` as canonical variants for future Stage 2 use (e.g.
@@ -121,8 +121,8 @@ impl CalloutKind {
             "error" => Self::Danger,
             "cite" => Self::Quote,
             // Legacy alias retained from pre-Phase-4 Stage 1
-            // (`crates/moss-core/src/resolve/callouts.rs`). SoCiviC
-            // Theatre's voices.md uses `> [!pending]`; map to Todo.
+            // (`crates/moss-core/src/resolve/callouts.rs`). Existing sites
+            // use `> [!pending]`; map to Todo.
             "pending" => Self::Todo,
             _ => return None,
         };
@@ -339,7 +339,7 @@ pub enum Block {
     },
     /// Compound-link grid cell: the entire cell is a single markdown
     /// link `[inner](url)` whose `inner` is parsed as block-level content
-    /// (images, headings, paragraphs, emphasis). The SoCiviC Theatre
+    /// (images, headings, paragraphs, emphasis). The poster-card
     /// pattern: `[![[poster]] ### Title *date* description](/url)`.
     ///
     /// Phase 4 PR4.5 (2026-05-28): added because CommonMark restricts
@@ -767,7 +767,7 @@ mod tests {
         assert_eq!(CalloutKind::from_raw("missing"), Some(CalloutKind::Failure));
         assert_eq!(CalloutKind::from_raw("error"), Some(CalloutKind::Danger));
         assert_eq!(CalloutKind::from_raw("cite"), Some(CalloutKind::Quote));
-        // Legacy alias for SoCiviC Theatre's `> [!pending]` syntax.
+        // Legacy alias for the `> [!pending]` syntax existing sites use.
         assert_eq!(CalloutKind::from_raw("pending"), Some(CalloutKind::Todo));
     }
 

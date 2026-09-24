@@ -607,7 +607,7 @@ pub struct ProjectInfo {
     /// Homepage file path (if detected)
     pub homepage_file: Option<String>,
 
-    /// Root folder basename (e.g. "刘果"), if resolvable from the project path.
+    /// Root folder basename (e.g. "My Site"), if resolvable from the project path.
     /// Plugins that generate a folder home name it self-named (`<folder_name>.md`)
     /// with a `home: true` marker, matching moss's folder-home convention.
     pub folder_name: Option<String>,

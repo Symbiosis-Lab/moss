@@ -489,7 +489,7 @@ fn card_markup(
         // The cell content is a title plus a count, and the count IS
         // typesetting-dependent: `article_count_label` writes 四篇 rather than
         // `4 篇` under vertical CJK. Passing `None` here left an Arabic digit
-        // lying on its side in every `:::grid` folder card (zhu-da, 2026-09-11).
+        // lying on its side in every `:::grid` folder card (2026-09-11).
         index.typesetting,
         index.media_lookup,
         eager,

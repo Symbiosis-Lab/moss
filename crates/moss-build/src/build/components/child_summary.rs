@@ -54,7 +54,7 @@ pub fn render_with_sort(
 
     // Linkblog cards (with `external_url:`) get a `★` inside the kicker
     // pointing to the local archive — the card title links to the
-    // outlet, the `★` to Yi's copy. The kicker stays inside the card
+    // outlet, the `★` to the author's copy. The kicker stays inside the card
     // head (matching the design for ordinary cards) so the visual
     // layout doesn't shift. Putting `<a>★</a>` inside the kicker is
     // valid IFF the card's outer element is NOT an anchor; the card

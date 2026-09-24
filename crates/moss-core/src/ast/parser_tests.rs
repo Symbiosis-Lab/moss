@@ -288,8 +288,8 @@ fn callout_case_insensitive_kind() {
 
 #[test]
 fn callout_pending_alias_canonicalizes_to_todo() {
-    // SoCiviC Theatre's voices.md uses `> [!pending]` — carried
-    // over from Stage 1 support.
+    // Existing sites use `> [!pending]` — carried over from Stage 1
+    // support.
     match first_block("> [!pending] Trailer video\n> Add when ready.\n") {
         Block::Callout { kind, title, .. } => {
             assert_eq!(kind, CalloutKind::Todo);
@@ -785,7 +785,7 @@ fn heading_id(md: &str) -> Option<String> {
 
 #[test]
 fn heading_id_simple_phrase() {
-    // SoCiviC `## Mission` baseline case.
+    // A plain `## Mission` baseline case.
     assert_eq!(heading_id("## Mission\n"), Some("mission".to_string()));
 }
 
@@ -832,18 +832,18 @@ fn heading_id_with_inline_code_includes_code_payload() {
 
 #[test]
 fn heading_id_with_inline_html_strips_html() {
-    // SoCiviC `# FAREWELL,<br>AND ERASE` — the `<br>` is Event::InlineHtml
+    // `# HELLO,<br>AND GOODBYE` — the `<br>` is Event::InlineHtml
     // and must NOT appear in the slug. Production's slug for this is
-    // derived from "FAREWELL,AND ERASE".
-    let id = heading_id("# FAREWELL,<br>AND ERASE\n").expect("heading id");
+    // derived from "HELLO,AND GOODBYE".
+    let id = heading_id("# HELLO,<br>AND GOODBYE\n").expect("heading id");
     // No `<br>` or `br` injected; punctuation preserved (`,`), spaces → `-`.
     assert!(!id.contains("br"), "got: {id}");
-    assert_eq!(id, "farewell,and-erase");
+    assert_eq!(id, "hello,and-goodbye");
 }
 
 #[test]
 fn heading_id_cjk_preserved() {
-    // 刘果's CJK headings exercise Unicode anchor normalization —
+    // CJK headings exercise Unicode anchor normalization —
     // characters pass through unchanged (lowercase already, no whitespace).
     assert_eq!(heading_id("## 视频\n"), Some("视频".to_string()));
     assert_eq!(heading_id("## 中文标题\n"), Some("中文标题".to_string()));
@@ -935,7 +935,7 @@ fn duplicate_suffix_descends_into_hero_overlay() {
 
 #[test]
 fn duplicate_suffix_descends_into_link_card() {
-    // The SoCiviC compound-link cell: `Block::LinkCard { children }` holds
+    // The compound-link cell: `Block::LinkCard { children }` holds
     // block-level content, headings included.
     let doc = parse(":::grid\n[### Notes\n\ntext](/a)\n:::\n\n## Notes\n");
     let mut found_ids: Vec<String> = Vec::new();
@@ -1033,7 +1033,7 @@ fn image_only_paragraph_with_empty_alt_stays_as_paragraph() {
     // visual noise (no figcaption text) without a11y benefit. The
     // bytes match production's `<p><img></p>` shape.
     //
-    // Parity-probe evidence: pre-guard, 7 CJK 刘果 fixtures with
+    // Parity-probe evidence: pre-guard, 7 CJK real-site fixtures with
     // trailing empty-alt images flipped to "other" because the AST
     // emitted `<figure>` and prod did not. Guard restores parity.
     match first_block("![](logo.png)\n") {

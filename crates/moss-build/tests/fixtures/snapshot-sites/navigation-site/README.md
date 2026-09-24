@@ -6,7 +6,7 @@ Exercises navigation features: nav bar (auto-populated from subfolders), nav ord
 via `weight`, explicit `nav: true` / `nav: false` overrides, `footer: true`,
 `footer_align: right`, `breadcrumb: true` via cascade, and deeply nested pages.
 
-Absorbed `test-sites/docs-with-nav/` (api/, changelog.md, contributing.md,
+Absorbed an earlier docs-with-nav test site (api/, changelog.md, contributing.md,
 getting-started/, index.md). Supplemental frontmatter was added to exercise
 all documented navigation features:
 

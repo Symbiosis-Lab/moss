@@ -156,8 +156,8 @@ mod tests {
 
     #[test]
     fn test_site_name_uses_homepage_title() {
-        let config = LayoutConfig::new("my-blog", Some("刘果"));
-        assert_eq!(config.site_name, "刘果");
+        let config = LayoutConfig::new("my-blog", Some("山居"));
+        assert_eq!(config.site_name, "山居");
     }
 
     #[test]

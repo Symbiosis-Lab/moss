@@ -266,7 +266,7 @@ fn accept_self_heal(
 /// Upload one regular file, choosing single-PUT or chunked by size.
 ///
 /// This is the routing decision that was silently deleted by a refactor once
-/// (`b1df2298a`) and cost liu-guo.com six 100 MB videos, and that
+/// (`b1df2298a`) and cost a real site six 100 MB videos, and that
 /// `deploy/prebuilt.rs` never had at all. One implementation, one place to pin
 /// with a test.
 ///

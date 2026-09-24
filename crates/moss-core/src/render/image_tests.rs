@@ -1576,7 +1576,7 @@ fn snapshot_dims_animated(path: &str, w: u32, h: u32, animated: bool) -> AssetSn
 
 #[test]
 fn webp_source_wide_emits_img_srcset_no_picture() {
-    // The yinlab.io case: a non-animated 1866×1866 webp original. Exact
+    // A real site's case: a non-animated 1866×1866 webp original. Exact
     // byte shape — srcset on the <img>, no <picture>, base descriptor is
     // `photo.webp` itself at the deployed width (1866, under the cap).
     let assets = snapshot_dims("photo.webp", 1866, 1866);

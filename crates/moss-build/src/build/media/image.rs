@@ -23,7 +23,7 @@
 //! raster original; a missing variant 404s the `<source>` and the browser
 //! does NOT fall back to the sibling `<img>` (HTML spec § update-the-source-set).
 //! Skipping the encode to save bytes broke ~95% of imported journalism covers
-//! on test-sites/yi-liu in the moss-import dogfood (2026-05-21).
+//! on an imported site in the moss-import dogfood (2026-05-21).
 //!
 //! ## Cross-crate caveat
 //!
@@ -100,7 +100,7 @@ pub struct ImageConversionItem {
     ///   `Failed`, so the post-seal degrade pass (moss#867) drops the
     ///   `<source>` and the page falls through to the original `<img>`.
     ///   Before this a CMYK JPEG shipped a `<source>` that 404ed and the
-    ///   browser showed nothing at all (zhu-da's 河上花圖, 2026-09-05).
+    ///   browser showed nothing at all (a painting on a real site, 2026-09-05).
     ///
     /// Every other verdict is a bare `<img>` on the emission side and needs
     /// no registration; those items are dropped in the collector.
@@ -1555,7 +1555,7 @@ impl ImageRunContext {
 /// already absorbs (rung buffers are ≤ 1600px wide, small next to their
 /// sources); no accounting change. Bounding by *worker count* is wrong — a
 /// handful of huge images
-/// (William Blake: max 34 MP ≈ 135 MB decoded, several × that with scratch)
+/// (a large demo vault: max 34 MP ≈ 135 MB decoded, several × that with scratch)
 /// decoding at once OOM-SIGKILLs the process. Bounding by *megapixels in flight*
 /// instead means many small images pack in (full parallelism) while huge images
 /// self-throttle (a 34 MP image against a 64 MP budget runs ~alone). A permit is
@@ -1892,7 +1892,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     // Use raw OS THREADS, not rayon. convert_single_image → image::open decodes
     // JPEGs via jpeg-decoder, which parallelizes with rayon INTERNALLY. Driving
     // this fan-out with rayon `par_iter` NESTS rayon on the same pool and
-    // DEADLOCKS under load — verified: William Blake's 846 images stalled the
+    // DEADLOCKS under load — verified: a demo vault's 846 images stalled the
     // background encode at ~220 converted, 0% CPU, every worker parked. Raw OS
     // threads keep jpeg-decoder's rayon at top level. Mirrors the preview scan's
     // image fan-out (build/scan/scan.rs). The Mutex/atomic accumulators are
@@ -1911,7 +1911,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         // resize/encode scratch → comfortably under a GB even with a couple of
         // huge images, and safe running alongside the editor + a browser. This
         // replaced an unbounded per-core encode that OOM-SIGKILLed the process
-        // on large-photo vaults (William Blake, max 34 MP). Overridable via
+        // on large-photo vaults (max 34 MP). Overridable via
         // MOSS_ENCODE_MP_BUDGET so a future OOM on lower-RAM hardware (or a
         // throughput bump on a big machine) needs no recompile.
         let budget_mp = std::env::var("MOSS_ENCODE_MP_BUDGET")

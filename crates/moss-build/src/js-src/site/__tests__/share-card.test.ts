@@ -693,10 +693,10 @@ describe("extractDomain", () => {
     // the card DISPLAYS the memorable apex.
     const link = document.createElement("link");
     link.setAttribute("rel", "canonical");
-    link.setAttribute("href", "https://www.liu-guo.com/writings/post/");
+    link.setAttribute("href", "https://www.example.com/writings/post/");
     document.head.appendChild(link);
     try {
-      expect(extractDomain()).toBe("liu-guo.com");
+      expect(extractDomain()).toBe("example.com");
     } finally {
       link.remove();
     }
@@ -705,10 +705,10 @@ describe("extractDomain", () => {
   test("reads hostname from link[rel=canonical]", () => {
     const link = document.createElement("link");
     link.rel = "canonical";
-    link.href = "https://liu-guo.com/writings/test";
+    link.href = "https://example.com/writings/test";
     document.head.appendChild(link);
 
-    expect(extractDomain()).toBe("liu-guo.com");
+    expect(extractDomain()).toBe("example.com");
   });
 
   test("reads hostname from meta[property=og:url] when no canonical", () => {

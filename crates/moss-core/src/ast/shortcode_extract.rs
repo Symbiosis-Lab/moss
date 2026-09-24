@@ -251,7 +251,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
     //
     // - A "compound-link" cell whose entire content is wrapped in a markdown
     //   link `[inner](url)` and whose `inner` carries block-level content
-    //   (image + heading + paragraphs — the SoCiviC pattern). CommonMark's
+    //   (image + heading + paragraphs — the poster-card pattern). CommonMark's
     //   inline parser cannot represent a `[](url)` with `### heading` inside,
     //   so we detect this shape at the cell-string level FIRST and emit a
     //   typed [`Block::LinkCard { url, children }`] where `children` is the
@@ -1375,7 +1375,7 @@ fn extract_with_state(
             if name.is_empty() {
                 // CssRegion (Task D). Recurse into the body so typed
                 // shortcodes nested inside the styling wrapper (the
-                // common SoCiviC pattern of `:::{.support-band}` around
+                // common site pattern of `:::{.support-band}` around
                 // `::::buttons`) also get extracted into sentinels.
                 // Higher-arity inner blocks survive because the outer
                 // closer-search only matches the outer's exact arity;

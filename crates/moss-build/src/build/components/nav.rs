@@ -356,14 +356,14 @@ impl<'a> NavigationBuilder<'a> {
     ///
     /// 1. Override `footer.container { ... }` to replace the default chrome.
     /// 2. Use `body > footer.container > selector` rules to target individual
-    ///    elements for custom designs (the SoCiviC pattern: brand text +
+    ///    elements for custom designs (e.g. brand text +
     ///    :::grid + copyright + :::subscribe stack with custom flex layout).
     ///
     /// History: An earlier "verbatim footer" design (commit 6e47a8024)
     /// stripped the `.footer-content` wrapper but left no chrome on
     /// `<footer>` either, removing the divider + muted typography from the
     /// default look. The current shape restores the chrome on `footer.container`
-    /// directly so SoCiviC's existing `body > footer.container > *` direct-
+    /// directly so existing sites' `body > footer.container > *` direct-
     /// child selectors keep working.
     ///
     /// When `footer.md` is absent, the wrapper still emits with default
@@ -432,7 +432,7 @@ impl<'a> NavigationBuilder<'a> {
         // padding, muted typography) lives on `<footer class="container">`
         // directly. This keeps the HTML flat — author content sits as direct
         // children of <footer>, which lets sites use `body > footer.container
-        // > selector` rules (SoCiviC pattern) to target individual elements
+        // > selector` rules to target individual elements
         // for their custom design.
         let default_inner = if default_links.is_empty() {
             String::new()

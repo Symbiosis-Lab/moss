@@ -367,7 +367,7 @@ fn hosts_are_mapped_to_the_groups_they_actually_read() {
 /// every host shape did before moss#968.
 #[test]
 fn an_unmodelled_host_shape_yields_no_groups_and_therefore_renders() {
-    let mut override_home = article("en/liu-guo/index.html", "a language home override");
+    let mut override_home = article("en/mountain-home/index.html", "a language home override");
     override_home.is_home_override = true;
     assert!(hosts_listing(&override_home));
     assert!(

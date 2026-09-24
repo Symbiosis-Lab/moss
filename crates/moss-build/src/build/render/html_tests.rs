@@ -103,10 +103,10 @@ mod homepage_og_tests {
     /// Homepage with frontmatter description should use it for meta description.
     #[test]
     fn test_homepage_description_from_frontmatter() {
-        let frontmatter_desc = Some("看星星，食烟火。".to_string());
+        let frontmatter_desc = Some("第一段。".to_string());
         let content = "Some body content here.";
         let desc = meta::resolve_page_description(frontmatter_desc.as_deref(), content, true);
-        assert_eq!(desc.as_deref(), Some("看星星，食烟火。"));
+        assert_eq!(desc.as_deref(), Some("第一段。"));
     }
 
     /// Homepage without frontmatter description falls back to content extraction.
@@ -2852,7 +2852,7 @@ mod children_field_tests {
     }
 
     /// Regression: `children: false` must suppress BOTH auto-listings on the homepage.
-    /// On SoCiviC we observed `.moss-cards[data-layout="grid"]` emitted above the hero and
+    /// On a real site we observed `.moss-cards[data-layout="grid"]` emitted above the hero and
     /// `.moss-cards[data-layout="list"]` after the footer on zh-hans home. This pins the
     /// behavior so custom homepages can fully opt out of auto-emitted listings.
     /// See docs/archive/2026-04-20-moss-dogfood-tier-1-fixes.md Task 2.9.
@@ -3336,7 +3336,7 @@ mod children_field_tests {
         article_home.layout = Some("article".to_string());
         cases.push(("`layout: article` homepage", article_home, true));
 
-        let mut home_override = make_doc("Liu Guo", "en/index.html");
+        let mut home_override = make_doc("Mountain Home", "en/index.html");
         home_override.kind = PageKind::Folder;
         home_override.is_home_override = true;
         cases.push(("`home: true` folder page", home_override, false));
@@ -3570,10 +3570,10 @@ mod children_field_tests {
         );
 
         // Authored heading: the byline sits under it, as on any other page kind.
-        homepage.html_content = "<h1>Liu Guo</h1>\n<p>Welcome.</p>".to_string();
+        homepage.html_content = "<h1>Mountain Home</h1>\n<p>Welcome.</p>".to_string();
         let all_docs = vec![homepage.clone()];
         let html = render_page(Some(&homepage), &all_docs, true);
-        let h1_at = html.find("<h1>Liu Guo</h1>").expect("authored h1 is kept");
+        let h1_at = html.find("<h1>Mountain Home</h1>").expect("authored h1 is kept");
         let byline_at = html.find(r#"class="moss-byline""#).expect("byline renders");
         let body_at = html.find("Welcome.").expect("body renders");
         assert!(
@@ -4842,7 +4842,7 @@ mod children_field_tests {
 
     #[test]
     fn test_homepage_children_limit_picks_latest_when_input_order_disagrees() {
-        // Regression for the chps-site bug: `take(n)` ran before the date sort,
+        // Regression for a real site's bug: `take(n)` ran before the date sort,
         // so `children_limit: N` returned the lex/iteration-first N rather than
         // the latest N by date. Articles below are ordered so that BOTH input
         // order AND lexical url_path order put the OLDEST items first — only a
@@ -5127,7 +5127,7 @@ mod children_field_tests {
     /// the renderer must re-resolve the sort axis on the flattened
     /// scope. The scan cache (`direct_children_sort`) only reflects
     /// direct-children inference and misrepresents the corpus the
-    /// reader actually sees. liu-guo's home had only folder children
+    /// reader actually sees. A real site's home had only folder children
     /// at the root (dateless), which cached as Title axis even though
     /// the flattened descendants are mostly dated essays.
     #[test]
@@ -5752,7 +5752,7 @@ fn test_auto_folder_index_includes_h1_heading() {
 
 /// Folder-index pages with no cover prepend `<h1 class="moss-folder-title">`
 /// before the body content. Closes the previous gap where files like
-/// `chps-site/Projects/Projects.md` rendered with zero h1s. Same helper
+/// a site's `Projects/Projects.md` rendered with zero h1s. Same helper
 /// as the cover branch — single source of the class string.
 #[test]
 fn folder_index_without_cover_prepends_folder_title_h1() {
@@ -5835,18 +5835,18 @@ mod home_file_demotion_tests {
 
     #[test]
     fn test_self_named_demoted_when_index_exists() {
-        // Simulate: root folder "刘果" contains both index.md and 刘果.md
+        // Simulate: root folder "山居" contains both index.md and 山居.md
         // Both are processed by process_markdown_file, both get is_index=true.
         // After demotion, only the winner (index.md) stays is_index.
 
         let index_content = "---\ntitle: Home\n---\nWelcome home";
-        let self_named_content = "---\ntitle: 刘果\n---\nThis is me";
+        let self_named_content = "---\ntitle: 山居\n---\nThis is me";
 
         let empty_map = std::collections::HashMap::new();
         let index_doc =
-            process_markdown_file("index.md", index_content, "刘果", &empty_map, true).unwrap();
+            process_markdown_file("index.md", index_content, "山居", &empty_map, true).unwrap();
         let self_named_doc =
-            process_markdown_file("刘果.md", self_named_content, "刘果", &empty_map, true).unwrap();
+            process_markdown_file("山居.md", self_named_content, "山居", &empty_map, true).unwrap();
 
         // Before demotion, both should be PageKind::Folder
         assert!(
@@ -5855,10 +5855,10 @@ mod home_file_demotion_tests {
         );
         assert!(
             self_named_doc.kind == PageKind::Folder,
-            "刘果.md should be Folder before demotion (per is_home_file)"
+            "山居.md should be Folder before demotion (per is_home_file)"
         );
 
-        // Simulate demotion for 刘果.md (it's not the winner)
+        // Simulate demotion for 山居.md (it's not the winner)
         let mut doc = self_named_doc;
         doc.kind = PageKind::Article;
         let slug = generate_slug(&doc.clean_stem);
@@ -5878,7 +5878,7 @@ mod home_file_demotion_tests {
             "Demoted doc should have slug-based url_path, got: {}",
             doc.url_path
         );
-        // The slug should be based on the clean_stem "刘果"
+        // The slug should be based on the clean_stem "山居"
         assert_eq!(doc.url_path, format!("{}/index.html", slug));
     }
 
@@ -6193,7 +6193,7 @@ mod og_url_tests {
             None,  // user_js_version
             None,
             &std::collections::HashMap::new(),
-            &SiteUrl::parse("https://liu-guo.com").unwrap(),
+            &SiteUrl::parse("https://example.com").unwrap(),
             true,
             false,
             "favicon.svg",
@@ -6203,7 +6203,7 @@ mod og_url_tests {
         .expect("generate_html should succeed");
 
         assert!(
-            html.contains(r#"og:url" content="https://liu-guo.com/writings/test/"#),
+            html.contains(r#"og:url" content="https://example.com/writings/test/"#),
             "og:url should contain absolute URL with configured domain"
         );
     }
@@ -6322,7 +6322,7 @@ mod og_url_tests {
     /// A favicon raster trio an earlier default-SVG build left in the output
     /// tree is not this build's: once a vault grows its own `favicon.png`, no
     /// PNG sizes are rasterized, and pages must not link the leftovers
-    /// (zhu-da, 2026-09-14). The page reads the build's answer, never the
+    /// (2026-09-14). The page reads the build's answer, never the
     /// directory, so the trio can wait for the permitted staging sweep.
     #[test]
     fn a_leftover_favicon_raster_trio_links_nothing() {
@@ -7559,14 +7559,14 @@ mod homepage_translation_tests {
     }
 
     /// The `home: true` marker promotes a non-index file in a subfolder
-    /// (e.g. `en/Liu Guo.md` → `en/index.html`) to that folder's home
+    /// (e.g. `en/Mountain Home.md` → `en/index.html`) to that folder's home
     /// page. The promoted page must NOT carry an injected
     /// `<h1 class="moss-folder-title">` — it's the language-specific
     /// equivalent of the site root, not a generic folder listing. The root
     /// home (`/index.html`) already skips this H1; home-marker pages must
     /// do the same so toggling languages doesn't reveal a stray heading.
     ///
-    /// Regression for the 刘果 vault (en/Liu Guo.md): user reported "extra
+    /// Regression from a bilingual site (en/Mountain Home.md): user reported "extra
     /// H1 rendered in the English home page, but home page should not
     /// have this extra H1." Guards the re-keyed path: the marker drives
     /// `doc.is_home_override`, NOT `translationKey == "home"`.
@@ -7578,16 +7578,16 @@ mod homepage_translation_tests {
         fs::create_dir_all(&output_dir).unwrap();
         fs::create_dir_all(test_dir.join("en")).unwrap();
 
-        // Mirror the 刘果 vault: site-root file is the Chinese home,
-        // en/Liu Guo.md is promoted to en/index.html via the home marker.
+        // Mirror a bilingual vault: site-root file is the Chinese home,
+        // en/Mountain Home.md is promoted to en/index.html via the home marker.
         fs::write(
-            test_dir.join("刘果.md"),
-            "---\ntitle: 刘果\nlang: zh-hans\nhome: true\n---\n看星星，食烟火。\n",
+            test_dir.join("山居.md"),
+            "---\ntitle: 山居\nlang: zh-hans\nhome: true\n---\n第一段。\n",
         )
         .unwrap();
         fs::write(
-            test_dir.join("en/Liu Guo.md"),
-            "---\ntitle: Liu Guo\nlang: en\nhome: true\n---\nWatch the stars.\n",
+            test_dir.join("en/Mountain Home.md"),
+            "---\ntitle: Mountain Home\nlang: en\nhome: true\n---\nFirst page.\n",
         )
         .unwrap();
 
@@ -7688,7 +7688,7 @@ mod homepage_translation_tests {
 
     /// og:image on a translated page should resolve a cover wikilink
     /// (`cover: "[[Winter-Song.mov]]"`) into the assets directory, NOT to
-    /// the article's own markdown source path. Regression for the 刘果-vault
+    /// the article's own markdown source path. Regression for a real vault's
     /// bug where en/videos/ articles emitted
     /// `<meta property="og:image" content="/en/video/winter-song.md">`.
     ///
@@ -7704,7 +7704,7 @@ mod homepage_translation_tests {
         let output_dir = test_dir.join(".moss/build.nosync/staging");
         fs::create_dir_all(&output_dir).unwrap();
 
-        // Mirror the 刘果 vault layout: language-neutral assets/ + a per-language
+        // Mirror a bilingual vault layout: language-neutral assets/ + a per-language
         // articles folder where each article has the same stem as an asset.
         fs::create_dir_all(test_dir.join("assets")).unwrap();
         fs::create_dir_all(test_dir.join("en/videos")).unwrap();
@@ -7765,7 +7765,7 @@ mod homepage_translation_tests {
 
     /// `og:site_name` should reflect the canonical site, not bleed
     /// the EN homepage's filename onto every Chinese page. The plan
-    /// reports the user's `刘果` vault (Chinese-default site with
+    /// reports a user's vault (Chinese-default site with
     /// `en/en.md` as English homepage) emitted og:site_name="En" on
     /// every page including Chinese pages.
     #[test]
@@ -7779,15 +7779,15 @@ mod homepage_translation_tests {
         // root home AND a self-named English home in the en/ subfolder.
         fs::create_dir_all(test_dir.join("en")).unwrap();
         fs::write(
-            test_dir.join("刘果.md"),
-            "---\ntitle: 刘果\nlang: zh-hans\n---\n# 你好\n这是一个网站。",
+            test_dir.join("山居.md"),
+            "---\ntitle: 山居\nlang: zh-hans\n---\n# 你好\n这是一个网站。",
         )
         .unwrap();
         // en/en.md — self-named folder note; the plan reports this filename
         // pattern leaked "En" as the site name.
         fs::write(
             test_dir.join("en/en.md"),
-            "---\ntitle: Liu Guo\nlang: en\n---\n# Hello\nThis is a site.",
+            "---\ntitle: Mountain Home\nlang: en\n---\n# Hello\nThis is a site.",
         )
         .unwrap();
         fs::write(
@@ -7810,7 +7810,7 @@ mod homepage_translation_tests {
         assert!(result.is_ok(), "generate_blocking_content should succeed");
 
         // Walk every emitted HTML page and assert og:site_name is NOT "En".
-        // The acceptable site_name is either the canonical home title (刘果)
+        // The acceptable site_name is either the canonical home title (山居)
         // or the source folder name. Either way, NEVER the EN-folder filename.
         for entry in walkdir::WalkDir::new(&output_dir)
             .into_iter()

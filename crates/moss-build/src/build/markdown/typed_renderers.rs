@@ -796,7 +796,7 @@ mod tests {
     #[test]
     fn hero_overlay_heading_has_no_permalink_anchor() {
         // Headings inside :::hero are visual titles; the moss-heading-anchor
-        // permalink link must not appear (Yi-website main.md regression).
+        // permalink link must not appear (a real site's main.md regression).
         use moss_core::ast::{parse, HeroShortcode, Url};
         let overlay_md = "# Understanding climate extremes\n\nSubtitle prose.";
         let parsed = parse(overlay_md);

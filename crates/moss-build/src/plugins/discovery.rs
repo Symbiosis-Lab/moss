@@ -1092,7 +1092,7 @@ schema_version = {}
     }
 
     /// Pre-check (2026-05-22 plan): refute the "nested-only TOML breaks
-    /// email installation detection" hypothesis. Yi's `test-sites/yi-liu`
+    /// email installation detection" hypothesis. A real imported site's
     /// config carries only `[channels.email.send_mode]` (no bare
     /// `[channels.email]` table). The parser must still surface `email` as
     /// installed; otherwise the syndicator-plugins backend silently drops
@@ -1119,7 +1119,7 @@ lang = "en"
         assert!(
             channels.is_installed("email"),
             "is_installed(\"email\") must be true for nested [channels.email.send_mode] config — \
-             this is the exact byte shape from test-sites/yi-liu/.moss/config.toml; \
+             this is the exact byte shape from a real site's .moss/config.toml; \
              a regression here means the control-panel icon goes missing."
         );
     }

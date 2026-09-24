@@ -403,7 +403,7 @@ body[data-typesetting="vertical"] .moss-table-scroll {
 /* The horizontal two-line clamp is a valid rotation (it would clamp to two
    columns), but a vertical card is a column-group whose block length is
    free: a full description costs columns, not band height, so the clamp is
-   undone deliberately (zhu-da, 2026-09-06; base rule no longer forces
+   undone deliberately (2026-09-06; base rule no longer forces
    `display: -webkit-box`, so there is no writing-mode override left to
    undo here — the base's `max-block-size` two-line cap is what remains to
    lift). */
@@ -449,7 +449,7 @@ body[data-typesetting="vertical"] .moss-collection-cover-body {
   /* Vertical-only: the 年表 title outweighs the date beside it (ef68272ab0).
      Relocated from site.css, which applied this unconditionally to every
      site regardless of typesetting mode — a horizontal simple title listing
-     (e.g. 刘果's homepage) has no such distinction and should just inherit
+     (e.g. a plain homepage) has no such distinction and should just inherit
      body's size/weight like its sibling .date does. */
   font-size: var(--moss-size-md);
   font-weight: var(--moss-font-heading-weight);

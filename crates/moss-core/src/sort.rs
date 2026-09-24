@@ -279,7 +279,7 @@ mod inference_tests {
     }
 
     #[test]
-    fn chps_style_root_with_only_subfolders_falls_to_title() {
+    fn root_with_only_subfolders_falls_to_title() {
         let f = folder("root/index.html", None);
         let sub_a = folder("root/news/index.html", None);
         let sub_b = folder("root/projects/index.html", None);

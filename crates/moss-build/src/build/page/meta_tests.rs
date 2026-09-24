@@ -923,7 +923,7 @@ fn test_extract_description_keeps_css_region_prose_no_nested_shortcode() {
 #[test]
 fn test_extract_description_css_region_wrapping_only_typed_shortcode_is_empty() {
     // A CSS region whose ONLY content is a nested typed shortcode (the
-    // common SoCiviC `:::{.support-band}` around `::::buttons` pattern)
+    // common `:::{.support-band}` around `::::buttons` pattern)
     // has no surrounding prose — the excerpt is empty, not the leaked
     // button text.
     let content = "\
@@ -1433,12 +1433,12 @@ fn test_build_twitter_tags_skips_description_when_empty() {
 
 #[test]
 fn og_image_becomes_absolute_when_cover_is_local() {
-    let site_url = SiteUrl::parse("https://chps.mosspub.com").unwrap();
+    let site_url = SiteUrl::parse("https://my-site.mosspub.com").unwrap();
     let cover = CoverRef::Local(ServedPath::for_og_card("abc1234567890def").unwrap());
     let tags = build_og_tags(
         "Page Title",
         "Description",
-        "https://chps.mosspub.com/page/",
+        "https://my-site.mosspub.com/page/",
         "Site",
         None,
         Some(&cover),
@@ -1449,7 +1449,7 @@ fn og_image_becomes_absolute_when_cover_is_local() {
     );
     assert!(
         tags.contains(
-            r#"og:image" content="https://chps.mosspub.com/_moss/og/abc1234567890def.png"#
+            r#"og:image" content="https://my-site.mosspub.com/_moss/og/abc1234567890def.png"#
         ),
         "og:image must be absolute; got: {}",
         tags
@@ -1458,12 +1458,12 @@ fn og_image_becomes_absolute_when_cover_is_local() {
 
 #[test]
 fn og_image_passes_through_already_absolute_cover() {
-    let site_url = SiteUrl::parse("https://chps.mosspub.com").unwrap();
+    let site_url = SiteUrl::parse("https://my-site.mosspub.com").unwrap();
     let cover = CoverRef::External("https://cdn.example.com/photo.jpg".to_string());
     let tags = build_og_tags(
         "Page Title",
         "Description",
-        "https://chps.mosspub.com/page/",
+        "https://my-site.mosspub.com/page/",
         "Site",
         None,
         Some(&cover),
@@ -1481,12 +1481,12 @@ fn og_image_passes_through_already_absolute_cover() {
 
 #[test]
 fn twitter_image_becomes_absolute_when_cover_is_local() {
-    let site_url = SiteUrl::parse("https://chps.mosspub.com").unwrap();
+    let site_url = SiteUrl::parse("https://my-site.mosspub.com").unwrap();
     let cover = CoverRef::Local(ServedPath::for_og_card("abc1234567890def").unwrap());
     let tags = build_twitter_tags("Page Title", "Description", Some(&cover), None, &site_url);
     assert!(
         tags.contains(
-            r#"twitter:image" content="https://chps.mosspub.com/_moss/og/abc1234567890def.png"#
+            r#"twitter:image" content="https://my-site.mosspub.com/_moss/og/abc1234567890def.png"#
         ),
         "twitter:image must be absolute; got: {}",
         tags
@@ -1596,15 +1596,15 @@ fn og_image_is_relative_when_site_url_is_not_deployed() {
 fn og_image_is_absolute_when_site_url_is_deployed() {
     // NOTE: plan called for ServedPath::from_source("_moss/og/abc123.png")
     // but `_moss/` is reserved; use for_og_card(hex16) instead.
-    let real = SiteUrl::parse("https://liu-guo.com").unwrap();
+    let real = SiteUrl::parse("https://example.com").unwrap();
     let cover_hash = "abc1230000000000";
     let cover =
         CoverRef::Local(crate::build::served_path::ServedPath::for_og_card(cover_hash).unwrap());
     let result = build_og_tags(
         "Test",
         "desc",
-        "https://liu-guo.com/",
-        "Liu Guo",
+        "https://example.com/",
+        "Mountain Home",
         None,
         Some(&cover),
         Some((1200, 630)),
@@ -1614,7 +1614,7 @@ fn og_image_is_absolute_when_site_url_is_deployed() {
     );
     assert!(
         result.contains(&format!(
-            r#"og:image" content="https://liu-guo.com/_moss/og/{}.png"#,
+            r#"og:image" content="https://example.com/_moss/og/{}.png"#,
             cover_hash
         )),
         "deployed must emit absolute og:image. Got: {}",
@@ -1739,7 +1739,7 @@ fn homepage_hero_overlay_when_no_homepage_description() {
 
 #[test]
 fn homepage_body_when_no_homepage_hero() {
-    // Mirrors the Yi-website case: home page has no `description:`, hero
+    // Mirrors a real site's case: home page has no `description:`, hero
     // overlay is empty, but the body has a usable first paragraph.
     let inputs = desc_inputs(
         None,

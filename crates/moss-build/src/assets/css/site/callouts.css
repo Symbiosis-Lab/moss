@@ -40,7 +40,7 @@
   --callout-todo:      #7c4dff;
   --callout-example:   #536dfe;
   --callout-quote:     #9e9e9e;
-  --callout-pending:   #d4a017; /* mustard — "content not ready yet" (SoCiviC dogfood) */
+  --callout-pending:   #d4a017; /* mustard — "content not ready yet" (from dogfooding) */
 }
 
 /* Base callout container */
@@ -97,7 +97,7 @@
 .callout[data-type="pending"]  { --callout-color: var(--callout-pending); }
 
 /* Pending callout — "content not ready yet" placeholder.
-   Visual language (from SoCiviC Theatre dogfood):
+   Visual language (from dogfooding on a real site):
      - Dashed left border (vs solid) signals unfinished work
      - Pale yellow fill distinguishes from live content
      - Monospace body reads as "draft/spec", not prose
@@ -105,7 +105,7 @@
 */
 .callout[data-type="pending"] {
   border-left-style: dashed;
-  background-color: #fff8e7; /* pale yellow — SoCiviC dogfood */
+  background-color: #fff8e7; /* pale yellow — from dogfooding */
 }
 
 .callout[data-type="pending"] .callout-title::before {

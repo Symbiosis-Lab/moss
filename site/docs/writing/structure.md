@@ -18,9 +18,9 @@ moss maps your folder tree directly to your URL tree. A file at `work/farewell.m
 work/
 ├── index.md            →  /work/
 ├── farewell.md         →  /work/farewell/
-└── daowu/
-    ├── index.md        →  /work/daowu/
-    └── gallery.md      →  /work/daowu/gallery/
+└── orchard/
+    ├── index.md        →  /work/orchard/
+    └── gallery.md      →  /work/orchard/gallery/
 about.md                →  /about/
 index.md                →  /
 ```

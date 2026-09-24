@@ -223,7 +223,7 @@ describe('tagParams (micro-tag hint)', () => {
     expect(tagParams('{cols=3}')).toBe('cols 3');
   });
   test('positional arg (`:::grid 3`) → echoes the bare token verbatim', () => {
-    // The real Yi-website grid; previously this returned "" (bare ▦grid).
+    // A real site's grid; previously this returned "" (bare ▦grid).
     expect(tagParams('3')).toBe('3');
   });
   test('positional word arg echoed as-is', () => {
@@ -361,7 +361,7 @@ describe('cell divider (+++) recognition', () => {
   });
 
   test('dividesCellsAt: `+++` at grid level (after a nested buttons) divides the GRID', () => {
-    // The SoCiviC shape: buttons nested in cell 1, `+++` separates the grid cells.
+    // The homepage shape: buttons nested in cell 1, `+++` separates the grid cells.
     const doc = ':::grid 2\n::::buttons\n[a](#)\n::::\n+++\nright\n:::\n';
     const subtree = flattenBlocks(collectShortcodeBlocks(stateFor(doc)));
     expect(dividesCellsAt(doc.indexOf('+++'), subtree)).toBe(true);
@@ -370,7 +370,7 @@ describe('cell divider (+++) recognition', () => {
 
 describe('resting render: nested fences + dividers (Bugs 1 & 2)', () => {
   test('nested ::::buttons fences and `+++` are hidden, not leaked as text', () => {
-    // SoCiviC homepage shape. Resting (cursor above) must hide both inner `::::`
+    // Homepage shape. Resting (cursor above) must hide both inner `::::`
     // fences and the `+++`, and draw a divider line — none of it leaks as raw text.
     // Prose prefix so the cursor at 0 is genuinely ABOVE the block (resting).
     const doc =

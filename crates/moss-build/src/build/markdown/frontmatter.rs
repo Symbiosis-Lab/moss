@@ -116,14 +116,14 @@ Some content.
     #[test]
     fn test_frontmatter_breadcrumb_string_true() {
         let markdown = r#"---
-title: 刘果
+title: 山居
 breadcrumb: "true"
 ---
-看星星，食烟火。
+第一段。
 "#;
         let frontmatter: FrontMatter = parse_typed_frontmatter(markdown);
 
-        assert_eq!(frontmatter.title, Some("刘果".to_string()));
+        assert_eq!(frontmatter.title, Some("山居".to_string()));
         assert_eq!(frontmatter.breadcrumb, Some(true));
     }
 
@@ -583,8 +583,8 @@ analytics: "https://analytics.mysite.com/script.js"
     }
 
     #[test]
-    fn alias_translates_yi_website_pattern_sidebar_plus_children_false() {
-        // Yi-website's literal frontmatter: sidebar: '[[news]]' + children: false.
+    fn alias_translates_sidebar_plus_children_false() {
+        // A real site's literal frontmatter: sidebar: '[[news]]' + children: false.
         // children: false is redundant when sidebar is set (today: !has_sidebar gate);
         // alias must treat both unset and false as "no real children intent".
         let mut fm = fm_with_sidebar("[[news]]");
@@ -683,7 +683,7 @@ analytics: "https://analytics.mysite.com/script.js"
 
     #[test]
     fn order_with_wikilinks_parses_into_sort_list() {
-        // Real-world 刘果 form: order: ["[[Ch 1]]", "[[Ch 2]]"]
+        // Real-world form: order: ["[[Ch 1]]", "[[Ch 2]]"]
         let fm: FrontMatter = serde_yaml::from_str("title: T\norder:\n  - \"[[Ch 1]]\"\n  - \"[[Ch 2]]\"\n").unwrap();
         match fm.sort {
             Some(moss_core::sort::SortField::List(items)) => {

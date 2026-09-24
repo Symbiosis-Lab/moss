@@ -1166,17 +1166,17 @@ mod tests {
     #[test]
     fn is_home_flags_self_named_root_home() {
         // The root-name parity case: the PROJECT ROOT's own basename elects a
-        // self-named note (`William Blake/William Blake.md`), because the
+        // self-named note (`Garden Path/Garden Path.md`), because the
         // election receives the REAL basename, not ''.
         let dir = tempfile::tempdir().unwrap();
-        let proj = dir.path().join("William Blake");
+        let proj = dir.path().join("Garden Path");
         std::fs::create_dir(&proj).unwrap();
-        std::fs::write(proj.join("William Blake.md"), "# home").unwrap();
+        std::fs::write(proj.join("Garden Path.md"), "# home").unwrap();
         std::fs::write(proj.join("poems.md"), "# poems").unwrap();
 
         let tree = list_named_project(&proj);
         let flags = home_flags(&tree);
-        assert!(flags.contains(&("William Blake.md".to_string(), true)));
+        assert!(flags.contains(&("Garden Path.md".to_string(), true)));
         assert!(flags.contains(&("poems.md".to_string(), false)));
     }
 

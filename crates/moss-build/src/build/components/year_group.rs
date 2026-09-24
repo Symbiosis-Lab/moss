@@ -149,7 +149,7 @@ fn render_internal(
 /// four leading ASCII digits — so on a vertical CJK page, where the display
 /// date is already `一七〇三年十二月`, EVERY row returned `None`, the whole
 /// listing collapsed into one headingless section, and 59 works lost their
-/// chronology (zhu-da home, 2026-09-11). The raw date is the same ISO string
+/// chronology (a vertical site's home, 2026-09-11). The raw date is the same ISO string
 /// the sort above already trusts.
 fn year_of(article: &ArticleListItemProps) -> Option<i32> {
     article

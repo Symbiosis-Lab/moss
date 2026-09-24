@@ -128,7 +128,7 @@ pub struct ParsedDocument {
     /// markdown pipeline derives it once (from the page_map URL shape) and
     /// every consumer reads it from here instead of re-deriving from
     /// `translation_key == "home"`. Render code uses it to suppress the
-    /// folder-title `<h1>` on a language home (e.g. `en/Liu Guo.md` →
+    /// folder-title `<h1>` on a language home (e.g. `en/Mountain Home.md` →
     /// `en/index.html`), which is the language-specific site root, not a
     /// generic folder listing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -313,7 +313,7 @@ pub struct ParsedDocument {
     /// Wrapped in [`moss_core::Resolved`] so the renderer can tell
     /// author intent apart from auto-detected defaults — explicit
     /// `children_group: year` survives a non-Date sort axis (the
-    /// liu-guo regression). Only auto-detected values are overridden.
+    /// regression on a real site). Only auto-detected values are overridden.
     pub children_group: Option<moss_core::Resolved<String>>,
     /// What children to include: "direct" (default), "all" descendants
     pub children_depth: Option<String>,

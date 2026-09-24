@@ -8,7 +8,7 @@ url: apply
 uid: a7710001
 ---
 
-<!-- Copy is PENDING native-writer (刘果) review + double-opt-in reconciliation. -->
+<!-- Copy is PENDING native-writer review + double-opt-in reconciliation. -->
 
 moss turns your folder into a website in one click. You write locally, moss configures and publishes to your domain, syncs to an email list and platforms. We're now inviting macOS users to test in waves; we'll send you an email when your turn comes.
 

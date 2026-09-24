@@ -168,7 +168,7 @@ pub struct GridShortcode {
     /// [`crate::ast::parser::parse`] recursion in
     /// [`crate::ast::shortcode_extract::parse_grid`].
     ///
-    /// Compound-link cells (the SoCiviC `[![[poster]] ### Title ...](/url)`
+    /// Compound-link cells (the `[![[poster]] ### Title ...](/url)`
     /// pattern, where the entire cell is wrapped in a markdown link that
     /// spans block-level inner content) are represented as a single-element
     /// `vec![Block::LinkCard { url, children }]`. See

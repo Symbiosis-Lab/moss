@@ -104,7 +104,7 @@ The embed fills the page width in a 16:9 frame, so design the file to read well 
 A wikilink whose path ends with `/` embeds a folder's children inline:
 
 ```markdown
-# William Blake's Notebooks
+# A Reader's Notebooks
 
 A personal record of my reading and writing.
 

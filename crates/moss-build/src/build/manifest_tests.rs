@@ -815,9 +815,9 @@ fn generation_id_determinism_across_bucket_types_and_orders() {
 #[test]
 fn site_url_flows_from_pending_through_seal() {
     let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
-    pending.set_site_url("https://liuguo.mosspub.com");
+    pending.set_site_url("https://my-site.mosspub.com");
     let sealed = pending.seal();
-    assert_eq!(sealed.site_url(), Some("https://liuguo.mosspub.com"));
+    assert_eq!(sealed.site_url(), Some("https://my-site.mosspub.com"));
 }
 
 #[test]
@@ -834,10 +834,10 @@ fn hashes_json_without_site_url_deserializes_to_none() {
 #[test]
 fn site_url_round_trips_through_serde() {
     let mut hashes = crate::types::content::SiteHashes::default();
-    hashes.site_url = Some("https://www.liu-guo.com".to_string());
+    hashes.site_url = Some("https://www.example.com".to_string());
     let json = serde_json::to_string(&hashes).unwrap();
     let back: crate::types::content::SiteHashes = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.site_url.as_deref(), Some("https://www.liu-guo.com"));
+    assert_eq!(back.site_url.as_deref(), Some("https://www.example.com"));
 }
 
 // -----------------------------------------------------------------------

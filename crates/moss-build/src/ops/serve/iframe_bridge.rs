@@ -302,7 +302,7 @@ to{background-color:transparent}}\
 /// # Nested iframes (chrome leak guard)
 ///
 /// Nested `<iframe src="./sketch.html">` loads from previewed content
-/// (e.g. p5 sketches in the 刘果 `交互` pages) bypass the bridge entirely
+/// (e.g. p5 sketches in a site's interactive pages) bypass the bridge entirely
 /// when constructing the URL — the browser fires the request directly
 /// from the parent document's parser. So the marker is never present on
 /// the nested URL, the middleware doesn't add the class, and the bridge's
@@ -314,7 +314,7 @@ to{background-color:transparent}}\
 ///
 /// # Real-browser parity
 ///
-/// A real-browser visit (e.g. liu-guo.com served from GitHub Pages) never
+/// A real-browser visit (e.g. a site served from GitHub Pages) never
 /// hits this middleware and never loads the bridge script. The HTML is
 /// served byte-identical to what the moss build wrote out, so the
 /// served-on-web layout is unchanged. (The `__moss_shell` query param is

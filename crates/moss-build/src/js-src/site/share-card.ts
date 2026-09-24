@@ -369,7 +369,7 @@ export function findCoverSource(): string | null {
  *
  * `data-share-cover` names the *source* file, but the page renders it through a
  * `<picture>` and every current browser takes the WebP variant — so loading the
- * attribute URL fetched a file the reader had never downloaded (on zhu-da, the
+ * attribute URL fetched a file the reader had never downloaded (on one site, the
  * 174 KB original beside the 78 KB `w800.webp` already in cache) and raced it
  * against a 1500 ms deadline. Cold, over a phone connection, that lost, and the
  * card came out with no cover band at all.

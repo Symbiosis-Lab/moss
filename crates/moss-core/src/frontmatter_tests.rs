@@ -354,7 +354,7 @@ fn test_serialize_strips_stray_control_chars() {
 }
 
 /// THE anti-regression test for the "malformed frontmatter leaks verbatim"
-/// bug (William Blake "Europe - A Prophecy.md"). Two YAML keys collapsed onto
+/// bug (a vault's "Europe - A Prophecy.md"). Two YAML keys collapsed onto
 /// one line (`uid: blk-europecover: "006.jpg"`) make serde_yaml fail. The
 /// parser must (a) report the error, (b) keep the WHOLE document as `body`
 /// (no data loss — the editor must still see and be able to repair the block),

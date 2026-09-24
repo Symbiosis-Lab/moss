@@ -30,8 +30,8 @@
 //!
 //! # Why top-level only
 //!
-//! Per the current SoCiviC + chps fixtures (the 4 client sites at Phase 4
-//! cutover), `:::hero` blocks only appear at the document top level
+//! Per the real-site fixtures in use at the Phase 4 cutover, `:::hero`
+//! blocks only appear at the document top level
 //! (or as the only block in the document). The extractor doesn't descend
 //! into shortcode bodies. If a future fixture nests Hero inside Grid
 //! cells, this function will not extract it — the renderer's hooks
@@ -380,7 +380,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
 ///
 /// Phase 4 PR4.5 (2026-05-28): mirrors `parse_cell_to_blocks` for the
 /// grid-cell path but without compound-link detection (an overlay is not
-/// a compound-link surface; the SoCiviC pattern is grid-cell-specific).
+/// a compound-link surface; that pattern is grid-cell-specific).
 /// Returns an empty vec (and no warnings) when the overlay is empty.
 /// Otherwise returns `(blocks, warnings)` — the fragment `Document`'s
 /// warnings (e.g. a misspelled `:::name` shortcode nested inside the

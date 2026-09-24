@@ -1,7 +1,7 @@
 //! Tests for the shared upload routing and the sliding window.
 //!
 //! The routing test exists because this exact routing was silently deleted by a
-//! refactor once (`b1df2298a`) and cost liu-guo.com six 100 MB videos. The
+//! refactor once (`b1df2298a`) and cost a real site six 100 MB videos. The
 //! algorithm test exists because a shared verifier that hard-coded one hash
 //! would break 100% of `moss deploy --prebuilt` while every `deploy.rs` test
 //! stayed green.

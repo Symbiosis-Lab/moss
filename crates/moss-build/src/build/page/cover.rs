@@ -338,13 +338,13 @@ mod tests {
     fn local_video_cover_resolves_to_its_thumbnail() {
         // `og:image` pointing at a `.mov` is doubly broken: crawlers want a
         // still, and the author's original is never deployed, so the URL
-        // 404s. Observed live on liu-guo.com/video/lusheng-yelang/.
+        // 404s. Observed live on a real site's video page.
         let root = std::path::PathBuf::from("/tmp");
         let mut inputs = empty_inputs(&root);
-        inputs.page_cover = Some("assets/Yelanggu-Lusheng.mov");
+        inputs.page_cover = Some("assets/Evening-Song.mov");
         let choice = resolve_cover_chain(&inputs).unwrap();
         match choice {
-            CoverRef::Local(sp) => assert_eq!(sp.as_str(), "assets/Yelanggu-Lusheng.thumb.jpg"),
+            CoverRef::Local(sp) => assert_eq!(sp.as_str(), "assets/Evening-Song.thumb.jpg"),
             other => panic!("expected Local thumbnail, got {other:?}"),
         }
     }

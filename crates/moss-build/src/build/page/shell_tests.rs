@@ -1111,8 +1111,7 @@ fn test_css_footer_container_provides_default_chrome() {
     // nested `.footer-content` wrapper. This keeps the HTML flat:
     // authored content (footer.md HTML or default link list) sits as
     // direct children of <footer>, allowing site CSS to use
-    // `body > footer.container > selector` rules for custom designs
-    // (the SoCiviC pattern).
+    // `body > footer.container > selector` rules for custom designs.
     //
     // Footer renders at the default body font-size; sites that want a
     // smaller footer override `footer.container > * { font-size: ... }`
@@ -1639,11 +1638,11 @@ fn test_template_has_sidebar_layout_false_no_class() {
 fn test_homepage_template_includes_description_and_og_tags() {
     let processor = ShellProcessor::new();
     let mut vars = make_test_vars(false);
-    vars.description = Some("看星星，食烟火。".to_string());
+    vars.description = Some("第一段。".to_string());
     vars.og_tags = Some(r#"<meta property="og:type" content="website">"#.to_string());
     let result = processor.process(ShellType::Page, vars);
     assert!(
-        result.contains(r#"<meta name="description" content="看星星，食烟火。">"#),
+        result.contains(r#"<meta name="description" content="第一段。">"#),
         "Homepage should contain meta description when provided"
     );
     assert!(
@@ -3297,7 +3296,7 @@ fn test_css_list_layout_container_has_section_break_margin() {
     .expect("List-layout container should carry a section-break margin rule");
     // Block-start, not top: under vertical-rl the section break is the gap to
     // the RIGHT of the listing, and a physical `margin-top` pushed the cards
-    // 96px down the column instead (zhu-da home, 2026-09-05).
+    // 96px down the column instead (a vertical site's home, 2026-09-05).
     assert!(
         rule.contains("margin-block-start: var(--moss-space-2xl)"),
         "List-layout container should add a 2xl block-start margin (section break), got: {}",

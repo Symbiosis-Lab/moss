@@ -294,7 +294,7 @@ mod tests {
         let meta = ArticleMetadata {
             title: Some("Finding China's Voice".into()),
             description: Some("The new diaspora.".into()),
-            author: Some("Yi Liu".into()),
+            author: Some("Jane Doe".into()),
             date: Some("2024-12-22".into()),
             publisher: Some("The Wire China".into()),
             lang: Some("en".into()),
@@ -305,7 +305,7 @@ mod tests {
         assert!(fm.starts_with("---\n"));
         assert!(fm.contains("title: \"Finding China's Voice\""));
         assert!(fm.contains("date: \"2024-12-22\""));
-        assert!(fm.contains("author: \"Yi Liu\""));
+        assert!(fm.contains("author: \"Jane Doe\""));
         assert!(fm.contains("publisher: \"The Wire China\""));
         assert!(fm.contains("lang: \"en\""));
         assert!(fm.contains("description: \"The new diaspora.\""));

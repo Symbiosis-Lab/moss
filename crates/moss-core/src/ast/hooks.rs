@@ -867,8 +867,8 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
     /// earlier PR1 iteration used `MarkdownStandalone` here, which wrapped
     /// EVERY inline image in `<figure>` even when the paragraph carried
     /// sibling content (image + italic caption text + prose). The parity
-    /// probe surfaced 9 false-positive divergences (刘果/文字/* CJK
-    /// content with image+caption-inline patterns) where the AST emitted
+    /// probe surfaced 9 false-positive divergences (a real site's CJK
+    /// articles with image+caption-inline patterns) where the AST emitted
     /// `<figure>` and production correctly did not. Fix: use
     /// `MarkdownInline` here; let PR3's `Block::Figure` own the figure
     /// wrap for the legitimate image-only-paragraph case.
@@ -1721,8 +1721,8 @@ mod tests {
         // Before v2 (early PR1) used `MarkdownStandalone` here and applied
         // figure wrap to every inline image — incorrect for paragraphs
         // with sibling content (image + italic caption + prose). Parity
-        // probe surfaced this as 9 false-positive divergences on 刘果
-        // CJK fixtures.
+        // probe surfaced this as 9 false-positive divergences on a real
+        // site's CJK fixtures.
         let src = "photos/cat.jpg";
         let mut snap = AssetSnapshot::new();
         snap.dimensions.insert(PathBuf::from(src), (800, 600));
@@ -1808,7 +1808,7 @@ mod tests {
 
     #[test]
     fn default_hooks_hero_overlay_heading_has_no_permalink_anchor() {
-        // Regression for Yi-website: headings inside :::hero overlays must not
+        // Regression from a real site: headings inside :::hero overlays must not
         // carry moss-heading-anchor when rendered through DefaultHooks
         // (the moss-core test-harness path). The DefaultHooks::render_shortcode
         // Hero arm delegates overlay rendering to render_hero_overlay_blocks

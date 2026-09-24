@@ -139,8 +139,8 @@ pub fn takeover_for(
         && !project_root.join(key).is_dir()
     {
         // A language home is a translation of the root home, named after it:
-        // `index.zh-hans.md` beside `index.md`, `刘果.zh-hans.md` beside
-        // `刘果.md`. No root home means nothing to translate yet.
+        // `index.zh-hans.md` beside `index.md`, `山居.zh-hans.md` beside
+        // `山居.md`. No root home means nothing to translate yet.
         let root_home = map.pages.get("")?;
         let stem = Path::new(root_home).file_stem()?.to_str()?;
         return Some(Takeover {
@@ -593,8 +593,8 @@ mod tests {
         assert_eq!((t.kind, t.display.as_str()), (TakeoverKind::LangHome, "简体中文"));
         assert_eq!(only(&t).name, "index.zh-hans.md");
         let mut m = map();
-        m.pages.insert("".into(), "刘果.md".into());
-        assert_eq!(only(&takeover_for(&m, dir.path(), "s", "zh-hans/", Language::En).unwrap()).name, "刘果.zh-hans.md");
+        m.pages.insert("".into(), "山居.md".into());
+        assert_eq!(only(&takeover_for(&m, dir.path(), "s", "zh-hans/", Language::En).unwrap()).name, "山居.zh-hans.md");
         m.pages.clear();
         assert!(takeover_for(&m, dir.path(), "s", "zh-hans/", Language::En).is_none());
     }

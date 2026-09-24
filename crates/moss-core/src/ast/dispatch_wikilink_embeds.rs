@@ -28,7 +28,7 @@
 //!
 //! # Inline vs block-level
 //!
-//! Per the SoCiviC + chps fixtures (the 4 client sites at Phase 4 cutover),
+//! Per the real-site fixtures in use at the Phase 4 cutover,
 //! every wikilink embed in production is a "lone embed paragraph": a
 //! paragraph whose only `Inline::Image { is_wikilink: true, .. }` plus
 //! whitespace/linebreaks. The visitor detects this shape and replaces the
@@ -561,7 +561,7 @@ mod tests {
     fn hero_overlay_wikilink_embed_is_dispatched() {
         // A `:::hero` whose overlay contains a lone wikilink embed paragraph.
         // The visitor must descend into Hero.overlay and dispatch the embed.
-        // SoCiviC's fixtures rely on this — hero overlays carry markdown
+        // Real-site fixtures rely on this — hero overlays carry markdown
         // that may include `![[...]]` references.
         use super::super::shortcode::{HeroShortcode, Shortcode};
 

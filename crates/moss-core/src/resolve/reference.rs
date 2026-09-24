@@ -568,13 +568,13 @@ mod tests {
 
     #[test]
     fn bare_embed_path_qualified_note_is_transclusion() {
-        // `![[work/daowu]]` (path, no extension) resolves work/daowu.md.
-        let a = FakeAssetIndex::new(&["work/daowu.md"]);
+        // `![[work/orchard]]` (path, no extension) resolves work/orchard.md.
+        let a = FakeAssetIndex::new(&["work/orchard.md"]);
         let f = FakeFolderIndex::new();
         let u = FakeUrlIndex::new();
-        let r = classify_reference("work/daowu", "index.md", true, &ctx(&a, &f, &u));
+        let r = classify_reference("work/orchard", "index.md", true, &ctx(&a, &f, &u));
         assert_eq!(r.kind, ReferenceKind::Transclusion);
-        assert_eq!(r.target_path.as_deref(), Some("work/daowu.md"));
+        assert_eq!(r.target_path.as_deref(), Some("work/orchard.md"));
     }
 
     #[test]

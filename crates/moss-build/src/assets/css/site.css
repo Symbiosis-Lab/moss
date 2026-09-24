@@ -626,7 +626,7 @@ html {
 /* Paragraphs. The measure is an inline-axis limit, so every consumer of
    --moss-content-width caps `max-inline-size`, never `max-width`: under
    `writing-mode: vertical-rl` a physical max-width binds the BLOCK axis and
-   a listing's cards overflow leftward through the footer (zhu-da, 2026-09-05).
+   a listing's cards overflow leftward through the footer (2026-09-05).
    Horizontally the two names are the same property. */
 p {
   margin-block: 0 var(--moss-space-md);
@@ -718,7 +718,7 @@ a:where(:not(.moss-btn)):focus {
    colophon all inherit this padding, so under vertical-rl every band shares
    the same y extent by construction; a physical `padding: 0 X` here became a
    block-axis inset on a vertical page and left the nav rule, the cards and
-   the footer rule each starting at a different height (zhu-da, 2026-09-05). */
+   the footer rule each starting at a different height (2026-09-05). */
 .container {
   max-inline-size: var(--moss-site-max-width);
   margin-inline: auto;
@@ -3120,8 +3120,9 @@ article .moss-cards[data-layout="minimal"] .moss-card a,
    from the next one or a heading from its rows — both BLOCK-axis jobs, which
    under vertical-rl run horizontally. Written physically they did neither: the
    heading hung 24px down the column off its rows' head line, and successive
-   year groups touched, so a 21-year 年表 read as one undivided run (zhu-da
-   home, 2026-09-11). Horizontally the two spellings are the same property. */
+   year groups touched, so a 21-year 年表 read as one undivided run (a
+   vertical site's home, 2026-09-11). Horizontally the two spellings are the
+   same property. */
 .moss-cards-minimal-year-group {
   margin-block-end: var(--moss-space-md);
 }
@@ -3750,7 +3751,7 @@ article .moss-image figcaption {
    — and physical top/bottom only spells that correctly in horizontal-tb.
    Under vertical-rl the block axis is horizontal, so a physical bottom
    margin lands on the INLINE axis instead: the very axis the column's
-   height comes from, so a bare inline plate (zhu-da's album leaves, no
+   height comes from, so a bare inline plate (a site's album leaves, no
    figure wrap since `implicit_figure = false`) rendered short of the full
    column height the hero plate already reaches. Identical in horizontal-tb
    — this is a bug fix, not a behavior change there. */
@@ -5568,7 +5569,7 @@ article a:where(:not(.moss-btn)):focus {
    width/height attributes, and under vertical-rl `inline-size` only beats the
    `height` one — with `width="2339"` still standing both dimensions are set,
    `aspect-ratio` is ignored, and the plate renders 2339px wide, cropped to a
-   landscape strip (zhu-da 畫/, 2026-09-05). */
+   landscape strip (a vertical site's paintings folder, 2026-09-05). */
 .moss-collection-cover img {
   inline-size: 100%;
   block-size: auto;
@@ -5722,7 +5723,7 @@ article a:where(:not(.moss-btn)):focus {
      specificity (0,2,1) beats the mobile reset below (`.moss-hero img`,
      0,1,1) at every viewport without depending on a `--moss-hero-max-height`
      custom-property fallback the way a plain theme override would — the
-     zhu-da `.plate` class hack this replaces relied on exactly that
+     site-theme `.plate` class hack this replaces relied on exactly that
      fallback and mobile silently defeated it (see the archive note). */
   inline-size: auto;
   max-inline-size: 100%;

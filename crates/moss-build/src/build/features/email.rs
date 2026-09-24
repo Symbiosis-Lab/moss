@@ -800,7 +800,7 @@ mod tests {
     fn derive_supported_scopes_mints_any_language_folder_with_content() {
         // A top-level folder named a language code mints its scope from the mere
         // presence of content — NO <folder>/index.html homepage required (this is
-        // the 刘果 case: `de/posts/c.html` and `en/posts/a.html` both count).
+        // a real bilingual site's case: `de/posts/c.html` and `en/posts/a.html` both count).
         // /about/ and /posts/ are not language codes → not scopes. Output is the
         // sorted, de-duplicated RAW folder names.
         let urls = [
@@ -912,13 +912,13 @@ mod tests {
 
     #[test]
     fn test_render_form_contains_action_url() {
-        let html = render_subscribe_form("liuguo", Language::ZhHans, true);
-        assert!(html.contains("https://buttondown.com/api/emails/embed-subscribe/liuguo"));
+        let html = render_subscribe_form("mynewsletter", Language::ZhHans, true);
+        assert!(html.contains("https://buttondown.com/api/emails/embed-subscribe/mynewsletter"));
     }
 
     #[test]
     fn test_render_form_contains_email_input() {
-        let html = render_subscribe_form("liuguo", Language::ZhHans, true);
+        let html = render_subscribe_form("mynewsletter", Language::ZhHans, true);
         assert!(html.contains("type=\"email\""));
         assert!(html.contains("name=\"email\""));
         assert!(html.contains("class=\"moss-input\""));
@@ -927,7 +927,7 @@ mod tests {
 
     #[test]
     fn test_render_form_contains_hidden_embed() {
-        let html = render_subscribe_form("liuguo", Language::ZhHans, true);
+        let html = render_subscribe_form("mynewsletter", Language::ZhHans, true);
         assert!(html.contains("type=\"hidden\""));
         assert!(html.contains("name=\"embed\""));
         assert!(html.contains("value=\"1\""));
@@ -935,14 +935,14 @@ mod tests {
 
     #[test]
     fn test_render_form_contains_submit_button() {
-        let html = render_subscribe_form("liuguo", Language::ZhHans, true);
+        let html = render_subscribe_form("mynewsletter", Language::ZhHans, true);
         assert!(html.contains("type=\"submit\""));
         assert!(html.contains("class=\"moss-btn\""));
     }
 
     #[test]
     fn test_render_form_zh_labels() {
-        let html = render_subscribe_form("liuguo", Language::ZhHans, true);
+        let html = render_subscribe_form("mynewsletter", Language::ZhHans, true);
         assert!(html.contains("placeholder=\"邮箱\""));
         assert!(html.contains("订阅"));
     }
@@ -956,7 +956,7 @@ mod tests {
 
     #[test]
     fn test_render_form_structure() {
-        let html = render_subscribe_form("liuguo", Language::ZhHans, true);
+        let html = render_subscribe_form("mynewsletter", Language::ZhHans, true);
         assert!(html.contains("class=\"moss-subscribe-form\""));
         assert!(html.contains("data-position=\"footer\""));
         assert!(html.starts_with("<form"));
@@ -965,21 +965,21 @@ mod tests {
 
     #[test]
     fn test_render_form_inactive_has_class_and_label() {
-        let html = render_subscribe_form("liuguo", Language::En, false);
+        let html = render_subscribe_form("mynewsletter", Language::En, false);
         assert!(html.contains("moss-service-inactive"), "Inactive form should have moss-service-inactive class");
         assert!(html.contains("aria-label=\"Available after publishing\""), "Inactive form should name its state");
     }
 
     #[test]
     fn test_render_form_inactive_zh_label() {
-        let html = render_subscribe_form("liuguo", Language::ZhHans, false);
+        let html = render_subscribe_form("mynewsletter", Language::ZhHans, false);
         assert!(html.contains("moss-service-inactive"));
         assert!(html.contains("aria-label=\"发布后启用\""));
     }
 
     #[test]
     fn test_render_form_active_no_inactive_class() {
-        let html = render_subscribe_form("liuguo", Language::En, true);
+        let html = render_subscribe_form("mynewsletter", Language::En, true);
         assert!(!html.contains("moss-service-inactive"), "Active form should NOT have inactive class");
     }
 

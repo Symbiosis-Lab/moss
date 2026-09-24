@@ -58,7 +58,7 @@ use pulldown_cmark::Event;
 /// Mirrors production's `transform_events` heading-text collection at
 /// `src-tauri/src/build/markdown/pipeline.rs`. Inline HTML
 /// (`Event::InlineHtml` / `Event::Html`) is intentionally skipped, so
-/// `# FAREWELL,<br>AND ERASE` slugs as `FAREWELL,AND ERASE` with no `<br>`
+/// `# HELLO,<br>AND GOODBYE` slugs as `HELLO,AND GOODBYE` with no `<br>`
 /// in the anchor. Link and image *labels* are captured: pulldown walks the
 /// events inside `Tag::Link` / `Tag::Image` transparently and their
 /// `Event::Text` payloads land here, matching production; the href does

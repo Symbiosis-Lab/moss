@@ -945,8 +945,8 @@ fn parse_block_with_tag(
 /// (a `<figure>` whose caption duplicates a missing alt would be useless
 /// for assistive tech and adds visual noise). The empty-alt image stays
 /// as `<p><img></p>`, matching the production byte shape for the same
-/// input — verified via the parity probe's `other` category on 刘果 CJK
-/// fixtures (image-only paragraphs with empty alt).
+/// input — verified via the parity probe's `other` category on a real
+/// site's CJK fixtures (image-only paragraphs with empty alt).
 ///
 /// On qualification, returns `Ok(Block::Figure { image, caption })`. For a
 /// standard-markdown image the caption renders the alt as INLINE MARKDOWN
@@ -1276,8 +1276,8 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
         // byte shape — SoftBreak emits `\n` between inline siblings, not a
         // space. The space form was a long-standing AST quirk surfaced
         // by Grid cells now flowing through the AST renderer; production
-        // baselines (chps-site, SoCiviC, snapshot fixtures) preserve the
-        // newline (e.g. `Flamboyan Theater · The Clemente\n107 Suffolk
+        // baselines (real sites and snapshot fixtures) preserve the
+        // newline (e.g. `Main Hall · Riverside Center\n12 Example
         // Street`). Aligning here closes one row of the parity probe's
         // `whitespace_attribute_order` category.
         Event::SoftBreak => (Some(Inline::Text("\n".to_string())), 1),

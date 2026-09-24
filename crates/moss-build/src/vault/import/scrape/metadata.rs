@@ -542,30 +542,30 @@ mod tests {
             r#"{
               "@type": "Article",
               "author": [
-                {"@type": "Person", "name": "Yi Liu"},
-                {"@type": "Person", "name": "Ella Apostoaie"}
+                {"@type": "Person", "name": "Jane Doe"},
+                {"@type": "Person", "name": "John Roe"}
               ]
             }"#,
         );
         let empty: std::collections::HashMap<String, String> = Default::default();
         assert_eq!(
             pick_author(&empty, Some(&article)).as_deref(),
-            Some("Yi Liu and Ella Apostoaie")
+            Some("Jane Doe and John Roe")
         );
     }
 
     #[test]
     fn author_from_single_object() {
-        let article = entry(r#"{"@type": "Article", "author": {"name": "Yi Liu"}}"#);
+        let article = entry(r#"{"@type": "Article", "author": {"name": "Jane Doe"}}"#);
         let empty: std::collections::HashMap<String, String> = Default::default();
-        assert_eq!(pick_author(&empty, Some(&article)).as_deref(), Some("Yi Liu"));
+        assert_eq!(pick_author(&empty, Some(&article)).as_deref(), Some("Jane Doe"));
     }
 
     #[test]
     fn author_from_bare_string() {
-        let article = entry(r#"{"@type": "Article", "author": "Yi Liu"}"#);
+        let article = entry(r#"{"@type": "Article", "author": "Jane Doe"}"#);
         let empty: std::collections::HashMap<String, String> = Default::default();
-        assert_eq!(pick_author(&empty, Some(&article)).as_deref(), Some("Yi Liu"));
+        assert_eq!(pick_author(&empty, Some(&article)).as_deref(), Some("Jane Doe"));
     }
 
     #[test]
@@ -586,7 +586,7 @@ mod tests {
         let html = r##"<html><head>
           <script type="application/ld+json">
           {"@context":"https://schema.org","@graph":[
-            {"@type":"Article","headline":"Hello","author":{"name":"Yi Liu"}},
+            {"@type":"Article","headline":"Hello","author":{"name":"Jane Doe"}},
             {"@type":"Organization","@id":"#org","name":"The Outlet"}
           ]}
           </script>
@@ -616,7 +616,7 @@ mod tests {
           {"@type":"NewsArticle",
            "headline":"Real Title",
            "datePublished":"2024-12-22T00:00:00Z",
-           "author":{"@type":"Person","name":"Yi Liu"},
+           "author":{"@type":"Person","name":"Jane Doe"},
            "publisher":{"@id":"#org"}}
           </script>
           <script type="application/ld+json">
@@ -625,7 +625,7 @@ mod tests {
         </head><body><h1>Real Title</h1><p>Body.</p></body></html>"##;
         let m = derive(html);
         assert_eq!(m.title.as_deref(), Some("Real Title"));
-        assert_eq!(m.author.as_deref(), Some("Yi Liu"));
+        assert_eq!(m.author.as_deref(), Some("Jane Doe"));
         assert_eq!(m.date.as_deref(), Some("2024-12-22"));
         assert_eq!(m.publisher.as_deref(), Some("The Site"));
         assert_eq!(m.lang.as_deref(), Some("en"));

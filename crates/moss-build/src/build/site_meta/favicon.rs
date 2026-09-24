@@ -55,7 +55,7 @@ const DEFAULT_FAVICON_VIEWBOX_ATTR: &str = r#"viewBox="-647 -373 3145 3145""#;
 /// scale (3145x3145) and scanning alpha for the ink's pixel bounding box:
 /// x=[9,1776] y=[8,2111] within the shipped box — about 56% of the width and
 /// 67% of the height, which read as a barely-there speck in a browser tab
-/// (docs/archive/2026-09-14-blakesnotebook-five-fixes-plan.md item 2). This
+/// (reported on a real site, 2026-09-14). This
 /// box centers that bbox with an even ~12%-of-side margin on all four edges:
 /// `x0 = cx - side/2 - margin`, `side = max(bbox_w, bbox_h)`, so the ink
 /// fills roughly 68-80% of the canvas instead of ~38% of its area.
@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(height, expected_size);
     }
 
-    /// blakesnotebook.com's too-small favicon glyph (moss's 2026-09-14 fix):
+    /// A real site's too-small favicon glyph (moss's 2026-09-14 fix):
     /// tightening the default mark's viewBox must touch only that attribute,
     /// never the path data — path coordinates are the ~2000-unit fidelity
     /// floor `mark_sync_test` compares byte-for-byte.

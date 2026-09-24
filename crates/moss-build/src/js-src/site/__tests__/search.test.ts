@@ -161,7 +161,7 @@ describe("site search runtime", () => {
     // still stuck true, this `input` event would be silently swallowed.
     document.querySelector<HTMLButtonElement>(".nav-search-btn")!.click();
     el = searchInput()!;
-    el.value = "blake";
+    el.value = "garden";
     el.dispatchEvent(new Event("input", { bubbles: true }));
     await settle();
     expect(status()!.textContent).not.toBe(idle);
@@ -178,7 +178,7 @@ describe("site search runtime", () => {
 
     document.querySelector<HTMLButtonElement>(".nav-search-btn")!.click();
     const el = searchInput()!;
-    el.value = "blake";
+    el.value = "garden";
     el.dispatchEvent(new Event("input", { bubbles: true }));
     await settle();
     expect(status()!.textContent).not.toBe(idle);
@@ -191,7 +191,7 @@ describe("site search runtime", () => {
     expect(status()!.hidden).toBe(true);
     expect(status()!.textContent).toBe("");
 
-    el.value = "blake";
+    el.value = "garden";
     el.dispatchEvent(new Event("input", { bubbles: true }));
     await settle();
     expect(status()!.hidden).toBe(false);

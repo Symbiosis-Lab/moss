@@ -217,6 +217,6 @@ export function extractDomain(): string {
     } catch {}
   }
   // 3. Fall back to runtime hostname
-  return display(window.location.hostname) || "liu-guo.com";
+  return display(window.location.hostname) || "example.com";
 }
 

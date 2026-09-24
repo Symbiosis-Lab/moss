@@ -289,7 +289,7 @@ mod tests {
             <script type="application/ld+json">
             {"@type":"NewsArticle","headline":"Title",
              "datePublished":"2024-12-22T00:00:00Z",
-             "author":{"@type":"Person","name":"Yi Liu"},
+             "author":{"@type":"Person","name":"Jane Doe"},
              "publisher":{"@id":"#org"}}
             </script>
             <script type="application/ld+json">
@@ -307,7 +307,7 @@ mod tests {
         let art = extract_article(html, "https://example.com/p");
         assert_eq!(art.metadata.title.as_deref(), Some("Title"));
         assert_eq!(art.metadata.date.as_deref(), Some("2024-12-22"));
-        assert_eq!(art.metadata.author.as_deref(), Some("Yi Liu"));
+        assert_eq!(art.metadata.author.as_deref(), Some("Jane Doe"));
         assert_eq!(art.metadata.publisher.as_deref(), Some("The Site"));
         assert_eq!(art.metadata.lang.as_deref(), Some("en"));
         assert!(art.markdown.contains("Lede paragraph"));

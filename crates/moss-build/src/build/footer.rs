@@ -600,9 +600,9 @@ mod tests {
     //   markdown file routed through `process_markdown_file` populates
     //   `ParsedDocument.slot_only` from `is_excluded_from_pages`, so the
     //   pipeline that produces the `documents` slice naturally handles
-    //   footer.md correctly. Snapshot tests on the four client sites
-    //   (chps, 刘果, SoCiviC, plus bilingual SoCiviC zh-hans/footer.md)
-    //   guard end-to-end byte-equivalence with the pre-PR7b output.
+    //   footer.md correctly. Snapshot tests on real sites (including a
+    //   bilingual one with a zh-hans/footer.md) guard end-to-end
+    //   byte-equivalence with the pre-PR7b output.
 
     #[test]
     fn test_footer_md_via_pipeline_suppresses_h1() {

@@ -205,7 +205,7 @@ pub fn is_index_stem(stem: &str) -> bool {
 /// ```
 /// assert!(moss_core::home::is_index_stem_any_lang("index.zh-hans"));
 /// assert!(moss_core::home::is_index_stem_any_lang("README"));
-/// assert!(!moss_core::home::is_index_stem_any_lang("William Blake"));
+/// assert!(!moss_core::home::is_index_stem_any_lang("Garden Path"));
 /// ```
 pub fn is_index_stem_any_lang(stem: &str) -> bool {
     is_index_stem(stem) || strip_lang_suffix(stem).is_some_and(is_index_stem)
@@ -221,11 +221,11 @@ pub fn is_home_file(stem: &str, parent_folder_name: &str) -> bool {
     }
 
     // Self-named folder note. Compared as slugs, not raw lowercase strings:
-    // a folder on disk is conventionally kebab-case (`william-blake/`) while
-    // the note inside it carries the human title (`William Blake.md`) — the
+    // a folder on disk is conventionally kebab-case (`garden-path/`) while
+    // the note inside it carries the human title (`Garden Path.md`) — the
     // same normalization `generate_slug` already applies to every URL
     // segment in the site. A raw-string compare never matched that pair
-    // (blakesnotebook.com's root folder-note, moss#1101): the file silently
+    // (a real site's root folder-note, moss#1101): the file silently
     // stopped being the folder's home and fell back to an ordinary slugged
     // page, which is what let a ROOT vault with no other home candidate
     // synthesize an empty index at `/`.
@@ -280,8 +280,8 @@ pub fn detect_home_file_in_folder<'a>(
     }
 
     // Priority 4: self-named folder note. Slug-compared, not raw-lowercase —
-    // see `is_home_file`'s comment: a kebab-case folder (`william-blake/`)
-    // and the titled note inside it (`William Blake.md`) are the same
+    // see `is_home_file`'s comment: a kebab-case folder (`garden-path/`)
+    // and the titled note inside it (`Garden Path.md`) are the same
     // identity once normalized through the same `generate_slug` every URL
     // segment already goes through.
     let folder_slug = crate::content_graph::generate_slug(folder_name);
@@ -354,7 +354,7 @@ pub fn detect_home_file_in_folder_marked<'a>(
 ///
 /// Inputs:
 /// - `homepage_filename`: the home file's basename (e.g. `"index.md"`,
-///   `"刘果.md"`), or `None` when the project has no home page.
+///   `"山居.md"`), or `None` when the project has no home page.
 /// - `homepage_title`: the home page's title candidate — either the genuine
 ///   frontmatter `title:` (callers that read frontmatter directly, e.g.
 ///   `resolve_site_name`) or the pipeline's already-resolved `doc.title` (the
@@ -565,10 +565,10 @@ mod tests {
     /// neither string is a literal substring of the other.
     #[test]
     fn test_self_named_beats_alphabetical_fallback_across_hyphen_and_space() {
-        let files = vec!["Archive.md", "William Blake.md"];
+        let files = vec!["Archive.md", "Garden Path.md"];
         assert_eq!(
-            detect_home_file_in_folder(&files, "william-blake"),
-            Some("William Blake.md")
+            detect_home_file_in_folder(&files, "garden-path"),
+            Some("Garden Path.md")
         );
     }
 
@@ -627,7 +627,7 @@ mod tests {
     #[test]
     fn test_is_home_file_self_named() {
         assert!(is_home_file("recipes", "recipes"));
-        assert!(is_home_file("刘果", "刘果"));
+        assert!(is_home_file("山居", "山居"));
     }
 
     #[test]
@@ -636,14 +636,14 @@ mod tests {
         assert!(is_home_file("recipes", "Recipes"));
     }
 
-    /// blakesnotebook.com's root folder-note: a titled file (`William
-    /// Blake.md`, spaces and capitals) inside a kebab-case vault folder
-    /// (`william-blake/`). Both slugify to the same string, so this is the
+    /// A site's root folder-note: a titled file (`Garden
+    /// Path.md`, spaces and capitals) inside a kebab-case vault folder
+    /// (`garden-path/`). Both slugify to the same string, so this is the
     /// same self-named identity a raw lowercase compare cannot see (moss#1101).
     #[test]
     fn test_is_home_file_self_named_across_case_space_and_hyphen() {
-        assert!(is_home_file("william blake", "william-blake"));
-        assert!(is_home_file("William Blake", "william-blake"));
+        assert!(is_home_file("garden path", "garden-path"));
+        assert!(is_home_file("Garden Path", "garden-path"));
     }
 
     /// The slug normalization must not turn genuinely different names into a
@@ -651,8 +651,8 @@ mod tests {
     /// same" self-named note.
     #[test]
     fn test_is_home_file_self_named_slug_mismatch_still_rejected() {
-        assert!(!is_home_file("archive", "william-blake"));
-        assert!(!is_home_file("william blakes", "william-blake"));
+        assert!(!is_home_file("archive", "garden-path"));
+        assert!(!is_home_file("garden paths", "garden-path"));
     }
 
     #[test]
@@ -836,7 +836,7 @@ mod tests {
         );
     }
 
-    /// blakesnotebook.com end-to-end (moss's 2026-09-14 fix): a self-named
+    /// A real site end to end (moss's 2026-09-14 fix): a self-named
     /// root folder-note whose stem case doesn't match the disk folder name
     /// must keep its own casing as the site name. `homepage_title` here is
     /// the pipeline's already-resolved `doc.title`, i.e. the output of
@@ -846,11 +846,11 @@ mod tests {
     fn test_site_name_self_named_mismatched_case_keeps_own_title() {
         assert_eq!(
             site_name(
-                Some("William Blake.md"),
-                Some("William Blake"),
-                "william-blake"
+                Some("Garden Path.md"),
+                Some("Garden Path"),
+                "garden-path"
             ),
-            "William Blake"
+            "Garden Path"
         );
     }
 }

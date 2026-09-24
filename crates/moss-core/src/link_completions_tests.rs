@@ -73,10 +73,10 @@ fn embed_ranks_assets_before_pages() {
 
 #[test]
 fn cjk_prefix_matches() {
-    let t = vec![page("刘果的笔记.md"), page("about.md")];
-    let ranked = rank(&t, &ctx(Wikilink, "刘果", ""));
+    let t = vec![page("山居的笔记.md"), page("about.md")];
+    let ranked = rank(&t, &ctx(Wikilink, "山居", ""));
     assert_eq!(ranked.len(), 1);
-    assert_eq!(ranked[0].label(), "刘果的笔记");
+    assert_eq!(ranked[0].label(), "山居的笔记");
 }
 
 #[test]

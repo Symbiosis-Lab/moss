@@ -415,7 +415,7 @@ fn test_auto_nav_opt_out_with_nav_false() {
 
 #[test]
 fn test_auto_nav_combined_scenario() {
-    // Comprehensive test matching yi-website structure (organized mode)
+    // Comprehensive test matching a real site's structure (organized mode)
     let documents = vec![
         make_doc_with_root_level("index.html", "Home", None, None, true), // Root index - excluded
         make_doc_with_root_level("research/index.html", "Research", None, None, true), // Root-level - auto
@@ -1994,7 +1994,7 @@ fn footer_emits_flat_html_no_inner_wrapper() {
     // visual chrome (divider, padding, muted typography) lives on
     // `footer.container` directly via CSS. Flat HTML keeps the
     // `body > footer.container > selector` design space open for
-    // sites with custom footer designs (SoCiviC pattern).
+    // sites with custom footer designs.
     //
     // The opening tag is a plain `<footer class="container">` (no
     // `data-moss-shape` — retired; footer layout keys on the CSS

@@ -2633,8 +2633,8 @@ async fn test_copy_deferred_assets_preserves_notebook_hash_entries_for_deploy() 
 /// deleted on every rebuild because their source is .ipynb but the outputs
 /// have different extensions — matching the webp pattern exactly.
 ///
-/// Regression test for a 404 on /resources/habitable-zone.html observed in
-/// test-sites/chps-site: rebuild → stale cleanup deletes the viewer HTML →
+/// Regression test for a 404 on /resources/habitable-zone.html observed on
+/// a real site: rebuild → stale cleanup deletes the viewer HTML →
 /// iframe 404 until the next full notebook regeneration completes.
 #[test]
 fn test_remove_stale_files_preserves_notebook_outputs() {
@@ -3598,7 +3598,7 @@ fn stage_copy_writes_the_file_and_returns_its_hash() {
 
 #[test]
 fn stage_write_creates_parents_normalizes_dirs_and_returns_its_hash() {
-    // Regression test for the chps-site bug: a source dir with capital case
+    // Regression test for a real site's bug: a source dir with capital case
     // (Resources/) emits to the lowercase form. Per the lowercase-only dir rule
     // (a21573395), directory segments are lowercased but the basename is
     // preserved verbatim so JupyterLite assets like `MathJax_Main-Bold.woff`
@@ -4516,7 +4516,7 @@ fn test_image_compression_pipeline_end_to_end() {
 /// `sources` write-back or the `check_source_cache` call, this test
 /// fails.
 ///
-/// The win it locks in: on the William Blake recordings site this took
+/// The win it locks in: on a large image-heavy demo site this took
 /// `copy_deferred_assets` from ~35s to ~1s. Without this assertion any
 /// well-meaning cleanup that drops the `sources` map writes would
 /// silently regress to the slow path.
@@ -5064,7 +5064,7 @@ fn a_build_that_changes_nothing_does_nothing() {
 /// under a live preview server — a real bug, correctly fixed) and deferred it
 /// to `pipeline::sweep_staging`, which only runs at the START of a NEXT
 /// build. `build_test_shipped` here, a real `moss build`, and every
-/// moss-desktop snapshot-test fixture are all one-shot: the process exits
+/// snapshot-test fixture are all one-shot: the process exits
 /// after this one build, so a next build that would do the sweeping never
 /// comes, and the orphaned bytes shipped in anything that read `stage_dir`
 /// directly. `ship::reclaim_staging_now` closes that gap for exactly the
@@ -5111,7 +5111,7 @@ fn a_dropped_reference_reclaims_its_webp_bytes_on_the_same_build() {
     assert!(
         !stage_dir.join("gone.webp").exists(),
         "the orphaned .webp must be gone from staging after THIS build — a \
-         real `moss build` (and every moss-desktop snapshot-test fixture) is \
+         real `moss build` (and every snapshot-test fixture) is \
          a one-shot process with no next build to defer the reclaim to"
     );
 }
@@ -6117,7 +6117,7 @@ fn a_cmyk_jpeg_ships_as_the_original_with_no_webp_source() {
     // extension alone. Until 2026-09-05 the collector dropped the source, the
     // promise was never registered, and the published page carried a
     // `<source>` that 404ed — which `<picture>` does not recover from
-    // (ADR-013): zhu-da's 河上花圖 rendered as nothing. Now the verdict rides
+    // (ADR-013): a real site's painting rendered as nothing. Now the verdict rides
     // to the registration loop, the variant settles `Failed`, and the
     // post-seal degrade pass (moss#867) removes the `<source>` so the page
     // falls through to the original `<img>`.

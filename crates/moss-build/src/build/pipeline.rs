@@ -92,15 +92,15 @@ use super::video::{cleanup_legacy_video_cache, dispatch_video_conversions};
 /// Promoted to a module-level const so future work — e.g. a configurable
 /// build-timeout setting or surfacing the timeout in a `PipelineEvent::Warning`
 /// — has a single named knob to reach for. See investigation 2026-05-16
-/// (chps deploy stuck at "Generating pages... (1 / 2)") and the corresponding
+/// (a site's deploy stuck at "Generating pages... (1 / 2)") and the corresponding
 /// arch review note recommending this lift.
 const NOTEBOOK_IO_TIMEOUT_SECS: u64 = 30;
 
 /// Above this, a stage-write lock wait is reported at `warn`, not `debug` — a
 /// release preview build is where a user feels it and it was invisible there.
 /// Well above the lock's own measured cost — moss#968's Stage 0 clocked the
-/// wait at 57µs–288µs on the issue's vault and 57µs–12ms in a later run
-/// (moss-desktop `9d52b0716`) — so this is a tripwire for an unexplained
+/// wait at 57µs–288µs on the issue's vault and 57µs–12ms in a later
+/// run — so this is a tripwire for an unexplained
 /// stall, not a fraction of a known worst case. moss#968 raised the lock as
 /// one hypothesis (H-lock) for a separate, unexplained 1–3s foreground gap;
 /// measurement rejected it (the wait above is nowhere near 1–3s) along with
@@ -620,7 +620,7 @@ fn run_notebook_processing(
         // similar dehydration-prone cloud storage) leaves the progress panel
         // frozen on the *previous* notebook's "done" message with no
         // indication of which file is stuck. See investigation 2026-05-16
-        // (chps deploy stuck at "Generating pages... (1 / 2)").
+        // (a site's deploy stuck at "Generating pages... (1 / 2)").
         reporter.report(&PipelineEvent::BackgroundProgress {
             task: "notebooks".to_string(),
             current: i as u32,

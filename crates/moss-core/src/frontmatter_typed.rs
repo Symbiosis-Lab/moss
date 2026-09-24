@@ -22,7 +22,7 @@ pub enum SeriesField {
 /// Analytics configuration for script injection.
 ///
 /// Supports two frontmatter formats:
-/// - String shorthand: `analytics: "https://guo.goatcounter.com/count"` (provider auto-detected from URL)
+/// - String shorthand: `analytics: "https://mysite.goatcounter.com/count"` (provider auto-detected from URL)
 /// - Object form: `analytics: { provider: goatcounter, url: "..." }`
 #[derive(Debug, Serialize, Default, Clone)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]

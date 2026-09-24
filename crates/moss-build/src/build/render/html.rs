@@ -585,7 +585,7 @@ fn generate_html_inner(
                 doc.kind == PageKind::Folder && doc.url_path.ends_with("/index.html") && doc.url_path != "index.html";
 
             // A home-override page (`home: true` on a non-root file like
-            // `en/Liu Guo.md` → `en/index.html`) is the language-specific
+            // `en/Mountain Home.md` → `en/index.html`) is the language-specific
             // homepage, not a folder listing. The root home (`/index.html`)
             // skips the folder-title H1 because its `is_homepage: true` branch
             // never enters this block; home-override pages must do the same to

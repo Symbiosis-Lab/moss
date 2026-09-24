@@ -13,7 +13,7 @@ export interface ProjectInfo {
   total_files: number;
   homepage_file?: string;
   /**
-   * Root folder basename (e.g. "刘果"). Plugins that generate a folder home
+   * Root folder basename (e.g. "My Site"). Plugins that generate a folder home
    * should name it self-named (`<folder_name>.md`) with a `home: true` marker
    * to match moss's folder-home convention.
    */

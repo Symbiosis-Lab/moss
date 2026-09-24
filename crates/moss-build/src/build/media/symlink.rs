@@ -936,7 +936,7 @@ mod tests {
     // slugified output tree. Source dirs like `Resources/` are emitted as
     // `resources/` by `slugify_dir_path`; if the symlink target keeps the
     // source casing, deploys to a case-sensitive filesystem 404.
-    // (See `https://www.yinlab.io/city-heat-map` 2026-05-18.)
+    // (Seen on a real site's city-heat-map page, 2026-05-18.)
 
     #[cfg(unix)]
     #[test]
@@ -1139,7 +1139,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn finder_alias_target_lowercases_dir_segments() {
-        // Yi-website regression: a Finder Alias at the project root pointing
+        // Real-site regression: a Finder Alias at the project root pointing
         // at `Resources/cities-heat-map-app/` was deploying as a symlink whose
         // target preserved the source casing `Resources/...`. The deploy tree
         // serves `resources/...` (lowercased by `slugify_dir_path`), so the
