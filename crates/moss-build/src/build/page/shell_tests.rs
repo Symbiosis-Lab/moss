@@ -1409,8 +1409,10 @@ fn test_css_cjk_body_size_and_leading_bump() {
     // --moss-reading-size, not on `body { font-size }`: everything built on
     // that size — headings, captions, the content column — takes it too, which
     // is what keeps the hierarchy from compressing by 6% on the one script that
-    // cannot show a small size step. Latin body line-height (1.75) is left
-    // untouched — only CJK gets 1.8 here.
+    // cannot show a small size step. Leading now lives on the --moss-read-leading
+    // token (body reads it, and --moss-read-line — the prose spacing unit —
+    // is built on it too) rather than on a separate `html[lang^="zh"] body`
+    // rule: Latin stays the token's 1.75 default, CJK overrides it to 1.8 here.
     let bump = get_css_rule(DEFAULT_CSS, "html[lang^=\"zh\"]")
         .expect("html[lang^=\"zh\"] CSS rule should exist");
     assert!(
@@ -1419,19 +1421,15 @@ fn test_css_cjk_body_size_and_leading_bump() {
              reading scale and survives browser zoom, got: {}",
         bump
     );
-
-    let rule = get_css_rule(DEFAULT_CSS, "html[lang^=\"zh\"] body")
-        .expect("html[lang^=\"zh\"] body CSS rule should exist");
     assert!(
-        rule.contains("line-height: 1.8"),
-        "CJK body should use looser 1.8 leading, got: {}",
-        rule
+        bump.contains("--moss-read-leading: 1.8"),
+        "CJK should override --moss-read-leading to the looser 1.8 leading, got: {}",
+        bump
     );
     assert!(
-        !rule.contains("font-size"),
-        "CJK body must NOT re-declare a font-size — that is the collision the \
-             reading scale removed, got: {}",
-        rule
+        get_css_rule(DEFAULT_CSS, "html[lang^=\"zh\"] body").is_none(),
+        "the leading bump lives on the --moss-read-leading token now, not a separate \
+             `html[lang^=\"zh\"] body` rule"
     );
 }
 

@@ -322,7 +322,7 @@ body {
   font-family: var(--moss-font-body);
   font-size: var(--moss-reading-size);
   font-weight: var(--moss-font-weight-body);
-  line-height: 1.75;
+  line-height: var(--moss-read-leading);
   color: var(--moss-color-text);
   background: var(--moss-color-bg);
   margin: 0;
@@ -403,23 +403,23 @@ h6 {
   margin-inline: 0;
 }
 
-/* Ma 間: asymmetric margins per heading level. Large above = section break signal.
-   Small below = heading gravitates toward its content. The ladder is 64/48/32, and
-   the floor is load-bearing: `p` carries `margin-bottom: var(--moss-space-md)` (24px),
-   so a heading given 24px above it collapses to exactly a paragraph gap and reads as
-   body text with no separation at all. h3 sat there until 2026-08-31. Every level's
-   top margin must exceed 24px or the level has no space cue, which matters most in
-   Han text, where there is no capitalisation or ascender to carry the hierarchy.
-   h4–h6 keep the shared rule above (they appear rarely in prose). */
+/* Ma 間: asymmetric margins per heading level — large above (section break signal),
+   small below (heading gravitates toward its content). Fixed --moss-space-* chrome
+   geometry, for a heading outside <article> (footer.md, and anywhere else without
+   its own margin rule) with no reading size of its own to measure a line against.
+   Prose gets the same ladder expressed in lines of body text instead — see the
+   article-scoped rules by the reading-scale block below (~line 500), which is
+   also where this ladder's provenance (h3's 2026-08-31 fix, the paragraph-floor
+   reasoning) now lives. */
 h1:not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) { margin-block: var(--moss-space-2xl) var(--moss-space-sm); }
 h2:not(.moss-card-title) { margin-block: var(--moss-space-xl) var(--moss-space-sm); }
 h3:not(.moss-card-title) { margin-block: var(--moss-space-lg) var(--moss-space-xs); }
 
-/* Hero-led pages: the hero acts as the visual H1, so top-level `## section`
-   headings (rendered as h2) should read as chapter breaks, not mid-section
-   sub-headings. Bump their top margin to H1 scale. The hero is emitted as a
-   preceding sibling of <main> in the index template. */
-.moss-hero ~ main article h2:not(.moss-card-title) { margin-block-start: var(--moss-space-2xl); }
+/* Hero-led pages: the hero acts as the visual H1, so a `## section` heading
+   reads as a chapter break, not a mid-section sub-heading — top margin
+   matches h1's own scale. The hero sits as a preceding sibling of <main>
+   in the index template. */
+.moss-hero ~ main article h2:not(.moss-card-title) { margin-block-start: calc(var(--moss-read-line) * 2); }
 
 /* Section-header h1s (from `# heading` markdown) inherit the default top margin
    from the `h1,h2,...h6` rule above. The auto-injected article-title h1 zeroes
@@ -503,6 +503,58 @@ article h3 { font-size: var(--moss-read-h3); }
 article h4 { font-size: var(--moss-read-h4); }
 article h5 { font-size: var(--moss-read-h5); }
 article h6 { font-size: var(--moss-read-h6); }
+
+/* The reading RHYTHM, for ARTICLE PROSE only — the vertical-spacing counterpart
+ * to the reading scale above, and article-scoped for the same reason: chrome
+ * (footer.md, cards, and anywhere else without its own margin rule) keeps the
+ * fixed --moss-space-* ladder above; only prose measures against the text it
+ * separates. --moss-read-line (tokens.json) is one line of body text — reading
+ * size times leading — so a gap expressed as a multiple of it holds steady
+ * relative to the text at every reader font-scale step and script, where a
+ * fixed rem gap didn't: the paragraph gap used to be 0.78 of a line at the
+ * smallest Aa step and 0.56 at the largest, and the gap above a `##` (48px)
+ * tied the figure gap (48px) instead of standing apart from it. `p`'s own
+ * rule is further below; duplicated here rather than converted in place
+ * because footer.md content sits outside <article> with no font-size of its
+ * own to size a line against — see `p`'s comment for the p+p history this
+ * mirrors. */
+article p { margin-block: 0 calc(var(--moss-read-line) * 0.75); }
+article p + p { margin-block-start: calc(var(--moss-read-line) * 0.75); }
+
+article h4, article h5, article h6 {
+  margin-block: calc(var(--moss-read-line) * 1.5) calc(var(--moss-read-line) * 0.75);
+}
+
+/* Ma 間: asymmetric margins per heading level, in lines of body text (L =
+   --moss-read-line) rather than fixed px — large above (section break signal),
+   small below (heading gravitates toward its content). h1 2L/0.5L, h2 1.5L/0.5L,
+   h3 1L/0.25L; h4–h6 keep the shared rule above (they appear rarely in prose).
+   Every level's top margin still clears the paragraph gap (0.75L) — h3 sat at
+   the floor until 2026-08-31 — which matters most in Han text, where there is
+   no capitalisation or ascender to carry the hierarchy. */
+article h1:not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
+  margin-block: calc(var(--moss-read-line) * 2) calc(var(--moss-read-line) * 0.5);
+}
+article h2:not(.moss-card-title) {
+  margin-block: calc(var(--moss-read-line) * 1.5) calc(var(--moss-read-line) * 0.5);
+}
+article h3:not(.moss-card-title) {
+  margin-block: var(--moss-read-line) calc(var(--moss-read-line) * 0.25);
+}
+
+/* Two headings back to back, with no prose between them: the ladder above
+ * assumes a heading is closing out a block of prose above it, which doubles
+ * up awkwardly when the "prose" is really just the previous heading. The
+ * second heading's top margin drops to a flat 0.5L regardless of level.
+ * Needs more specificity than the :not() rules just above to win for h1–h3 —
+ * the same .moss-card-title/.moss-folder-title/.moss-article-title exclusions
+ * repeated on both sides of the `+` get it there, and are also correct on
+ * their own terms (an embedded card's title, or the masthead, should never
+ * pick up this rule either). */
+article :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title)
+  + :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
+  margin-block-start: calc(var(--moss-read-line) * 0.5);
+}
 
 /* Face + weight for article prose SECTION headings ("serif-title-only" model).
  *
@@ -634,6 +686,14 @@ p {
   max-inline-size: var(--moss-content-width);
 }
 
+/* Not redundant with `p`'s own bottom margin, even though adjoining block-flow
+   margins already collapse to their max: a flex/grid parent doesn't collapse
+   margins at all, so without this rule a second paragraph there would sit flush
+   against the first (`p`'s own top margin is 0). `.moss-grid-card p + p` (below)
+   overrides this down to space-xs for exactly that reason — it only has
+   anything to override because this rule exists. Prose has its own copy in L
+   units, `article p + p` (by the reading-rhythm block above), for the same
+   reason `p` itself does. */
 p + p {
   margin-block-start: var(--moss-space-md);
 }
@@ -3328,14 +3388,14 @@ html[lang^="zh"] h6 {
    body copy, and the whole hierarchy compressed by 6% on exactly the script
    least able to show a small size step. It stays proportional at every
    reader-toggle step and on both viewports, so it survives browser zoom (WCAG).
-   Latin body line-height (1.75) is deliberately left untouched; only CJK gets
-   the looser 1.8 leading. */
+   Latin body line-height stays the --moss-read-leading default (1.75); CJK
+   overrides the token to 1.8 here rather than setting `body { line-height }`
+   directly, so --moss-read-line (one line of body text, the prose spacing
+   unit — see the article margin rules below) picks up the looser CJK leading
+   from this one place instead of needing its own per-script branch. */
 html[lang^="zh"] {
   --moss-reading-script-scale: 1.06;
-}
-
-html[lang^="zh"] body {
-  line-height: 1.8;
+  --moss-read-leading: 1.8;
 }
 
 
@@ -3636,12 +3696,13 @@ article img {
   max-inline-size: 100%;
   block-size: auto;
   border-radius: 6px;
-  /* Match the figure gap (space-xl) so a bare, uncaptioned image gets the same
+  /* Match the figure gap (1.25 lines of body text, --moss-read-line — see that
+     rule's comment below) so a bare, uncaptioned image gets the same
      full-bandwidth breathing room as a captioned figure. Consecutive-image
      rules (.moss-image + .moss-image, and the p:has(> img:only-child) rules
      below) still collapse gallery stacks, so this only widens the gap around a
      lone standalone image. */
-  margin-block: var(--moss-space-xl);
+  margin-block: calc(var(--moss-read-line) * 1.25);
 }
 
 /* Standalone images — Step 8 of the structural-html-emission migration.
@@ -7106,16 +7167,24 @@ main.has-sidebar > .moss-series-nav {
    Pandoc-derived rules section in docs/reference/obsidian-compatibility.md. */
 article figure:not(.video-figure) {
   /* Figures are full-bandwidth objects and get the largest gap in the reading
-     rhythm — ~2× the paragraph break (space-xl/48px vs the md/24px between
-     paragraphs) — so an image reads as a deliberate pause, not another line of
-     prose. Was space-lg/32px, only 8px more than a paragraph, so images didn't
-     stand apart. Bare <img> (below) tracks the same margin to stay in step.
-     This top margin IS the pre-figure gap: <article> is normal block flow, so
-     it margin-collapses with the preceding block's bottom margin to max(the
-     two) = 48px. (An earlier `:has(+ figure)` lead-in bump on the preceding
-     block was removed as a no-op — 32px < 48px never changes the collapsed
-     max; only a value >48px would, which would over-space.) */
-  margin: var(--moss-space-xl) 0;
+     rhythm — 1.25 lines of body text (--moss-read-line) vs the paragraph
+     break's 0.75 — so an image reads as a deliberate pause, not another line
+     of prose. Was a fixed space-xl/48px (space-lg/32px before that, only 8px
+     more than a paragraph, so images didn't stand apart); moving to a line
+     multiple holds that ratio to the surrounding text at every reader
+     font-scale step and script instead of only coincidentally matching one
+     fixed number — at the 18px Latin default that's ~39px, deliberately
+     tighter than the old 48 (see the CHANGELOG entry), not a preserved value.
+     Bare <img> (below) tracks the same margin to stay in step. This top
+     margin IS the pre-figure gap:
+     <article> is normal block flow, so it margin-collapses with the preceding
+     block's bottom margin to max(the two) — always this figure's own margin,
+     since every other prose block's own bottom margin (the paragraph gap,
+     0.75L) is smaller than 1.25L by construction. (An earlier `:has(+ figure)`
+     lead-in bump on the preceding block was removed as a no-op on that same
+     basis, back when both were fixed px; a value ever exceeding 1.25L would
+     change that and over-space.) */
+  margin: calc(var(--moss-read-line) * 1.25) 0;
 }
 
 /* Reset margins inside captioned figures so the gap below the image is

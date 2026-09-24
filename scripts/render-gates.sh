@@ -85,6 +85,7 @@ GATES_NOBUILD=(
   article-date-alignment
   footer-subscribe-alignment
   float-mobile-collapse
+  prose-spacing-ladder
 )
 
 # One linear-search helper, not three copies of the same loop. No namerefs —

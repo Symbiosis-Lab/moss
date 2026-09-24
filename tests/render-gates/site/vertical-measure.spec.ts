@@ -413,11 +413,16 @@ test.describe('vertical-rl folder page', () => {
     const c1 = await rect(page, '.moss-card:nth-of-type(2)');
     expect(Math.round(c0.left - c1.right)).toBe(32);
 
-    // `p + p { margin-block-start }`: the second paragraph sits one space-md
-    // to the LEFT of the first. A physical margin-top would stack it below.
+    // `article p + p { margin-block-start }`: the second paragraph sits 0.75
+    // lines of body text to the LEFT of the first, not the old fixed space-md.
+    // A physical margin-top would stack it below. 26, not 24: this fixture's
+    // <html lang="zh-Hant"> makes the paragraph gap's own line (--moss-read-line)
+    // 19.08px x 1.8 CJK leading, and 0.75 of that rounds to 26 — a real move
+    // from the old fixed 24px, the same on this page whether it's laid out
+    // vertical-rl or horizontal-tb, since neither changes --moss-reading-size.
     const p1 = await rect(page, '#p1');
     const p2 = await rect(page, '#p2');
-    expect(Math.round(p1.left - p2.right)).toBe(24);
+    expect(Math.round(p1.left - p2.right)).toBe(26);
     expect(Math.abs(p1.top - p2.top)).toBeLessThanOrEqual(1);
   });
 
@@ -704,9 +709,12 @@ test('horizontally the logical spellings change nothing', async ({ page }) => {
   const crumb = await rect(page, '.breadcrumb-segment:last-child .breadcrumb-label');
   expect(Math.abs(crumb.centerY - site.centerY)).toBeLessThanOrEqual(1);
 
+  // 26, not 24 — see the vertical-rl variant of this fixture's own comment:
+  // lang="zh-Hant" moves the paragraph gap from the old fixed space-md to
+  // 0.75 lines of the CJK-leading --moss-read-line, which rounds to 26 here.
   const p1 = await rect(page, '#p1');
   const p2 = await rect(page, '#p2');
-  expect(Math.round(p2.top - p1.bottom)).toBe(24);
+  expect(Math.round(p2.top - p1.bottom)).toBe(26);
 
   // The card's cover is 120px at the inline end, stretched to the body's own
   // cross extent (height) instead of a fixed 90 that used to overhang three
