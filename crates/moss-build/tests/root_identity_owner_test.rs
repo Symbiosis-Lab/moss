@@ -113,6 +113,19 @@ fn rel(path: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// The largest char-boundary index of `s` that is `<= idx`. `flat` is built
+/// one whole `char` at a time (see `flatten`), so it is valid UTF-8
+/// throughout, but a fixed byte-count window (`offset + N`) can still land
+/// inside a multi-byte character — CJK fixture text a few bytes past a
+/// matched pattern is enough to panic a raw `flat[start..end]` slice.
+fn char_boundary_floor(s: &str, idx: usize) -> usize {
+    let mut i = idx.min(s.len());
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 fn flatten(source: &str) -> (String, Vec<usize>) {
     let mut flat = String::with_capacity(source.len());
     let mut lines = Vec::with_capacity(source.len());
@@ -222,7 +235,7 @@ fn no_second_basename_algorithm() {
 
         for (opener, finisher) in BANNED_ALGORITHMS {
             for (offset, _) in flat.match_indices(opener) {
-                let end = (offset + CHAIN_WINDOW).min(flat.len());
+                let end = char_boundary_floor(&flat, offset + CHAIN_WINDOW);
                 let stmt = flat[offset..end].split(';').next().unwrap_or("");
                 if !stmt.contains(finisher) {
                     continue;
@@ -260,7 +273,7 @@ fn no_canonicalize_of_a_root_ident_outside_the_owner() {
         let (flat, line_of) = flatten(&source);
 
         for (start, _) in flat.match_indices("canonicalize(") {
-            let end = (start + 240).min(flat.len());
+            let end = char_boundary_floor(&flat, start + 240);
             let Some(hit) = flat[start..end].find(".file_name(") else {
                 continue;
             };

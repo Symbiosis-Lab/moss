@@ -82,23 +82,6 @@ pub(crate) fn apply_edits(source: &str, edits: Vec<Edit>) -> String {
     result
 }
 
-/// Whether a bare reference to the renamed entry can be rewritten safely.
-///
-/// Two independent questions, because the two ref shapes ask different ones:
-/// - `stem_unique` — no remaining `.md`/`.markdown` file carries the old
-///   STEM. Gates extensionless refs (`[[note]]`). Deliberately still
-///   `.md`-only: widening it to all files would stop a legitimate `[[note]]`
-///   rewrite whenever an unrelated `note.png` happened to exist.
-/// - `name_unique` — no remaining file of ANY extension carries the old FILE
-///   NAME. Gates extension-carrying refs (a bare gallery line `photo.jpg`).
-///   This guard did not exist for assets: the old walk `continue`d on every
-///   non-`.md` file, so for an image rename it was vacuously true.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RefAmbiguity {
-    pub(crate) stem_unique: bool,
-    pub(crate) name_unique: bool,
-}
-
 /// Rebuild a structural (syntax-free) value for writing back into the source.
 pub(crate) fn render_bare_value(
     container: &PathContainer,
@@ -210,7 +193,6 @@ pub(crate) fn match_and_retarget(
     old_root_rel: &str,
     new_root_rel: &str,
     target_is_dir: bool,
-    amb: RefAmbiguity,
 ) -> Option<String> {
     let text_no_anchor = text.split_once('#').map_or(text, |(head, _)| head);
     let text_ref = text_no_anchor
@@ -218,7 +200,7 @@ pub(crate) fn match_and_retarget(
         .map_or(text_no_anchor, |(head, _)| head);
 
     // ── Attempt 1: root-relative (today's rules, byte for byte) ──────────
-    if let Some(new_text) = retarget_root_relative(text_ref, old_root_rel, new_root_rel, target_is_dir, amb) {
+    if let Some(new_text) = retarget_root_relative(text_ref, old_root_rel, new_root_rel, target_is_dir) {
         return Some(new_text);
     }
 
@@ -238,7 +220,7 @@ pub(crate) fn match_and_retarget(
         let trailing_slash = rest.ends_with('/');
         let abs = normalize_rel(rest)?;
         let new_abs =
-            retarget_root_relative(&abs, old_root_rel, new_root_rel, target_is_dir, amb)?;
+            retarget_root_relative(&abs, old_root_rel, new_root_rel, target_is_dir)?;
         let suffix = if trailing_slash { "/" } else { "" };
         return Some(format!("/{new_abs}{suffix}"));
     }
@@ -252,7 +234,7 @@ pub(crate) fn match_and_retarget(
         return None;
     }
     let abs = normalize_rel(&format!("{from_dir}/{text_ref}"))?;
-    let new_abs = retarget_root_relative(&abs, old_root_rel, new_root_rel, target_is_dir, amb)?;
+    let new_abs = retarget_root_relative(&abs, old_root_rel, new_root_rel, target_is_dir)?;
     // Re-emit document-relative when the new location is still under
     // `from_dir`; otherwise fall back to the root-relative form.
     Some(
@@ -263,13 +245,18 @@ pub(crate) fn match_and_retarget(
     )
 }
 
-/// The historical root-relative match rules, plus extension awareness.
+/// Produce a same-shaped replacement for `text_ref`, given it is already
+/// known (by the caller, via the resolver) to name `old_root_rel`. A FORMATTER,
+/// not a matcher: it never decides WHETHER a reference points at the renamed
+/// entry — the caller resolves that with `classify_reference` first — only
+/// HOW to spell the new target in the same shape the author wrote. `None`
+/// means this shape can't express `old_root_rel` at all (the caller escalates
+/// to an explicit document-relative or root-absolute form instead).
 pub(crate) fn retarget_root_relative(
     text_ref: &str,
     old_root_rel: &str,
     new_root_rel: &str,
     target_is_dir: bool,
-    amb: RefAmbiguity,
 ) -> Option<String> {
     if target_is_dir {
         // Folder rename: any ref whose path starts with the old folder.
@@ -318,7 +305,7 @@ pub(crate) fn retarget_root_relative(
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or(new_root_rel);
-        (amb.name_unique && text_ref == old_name).then(|| new_name.to_string())
+        (text_ref == old_name).then(|| new_name.to_string())
     } else {
         // Extensionless bare ref — a wikilink into the markdown name space.
         let old_stem = Path::new(old_root_rel)
@@ -329,7 +316,7 @@ pub(crate) fn retarget_root_relative(
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(new_root_rel);
-        (amb.stem_unique && text_ref == old_stem).then(|| new_stem.to_string())
+        (text_ref == old_stem).then(|| new_stem.to_string())
     }
 }
 
@@ -347,60 +334,6 @@ pub(crate) fn normalize_rel(path: &str) -> Option<String> {
         }
     }
     Some(out.join("/"))
-}
-
-/// Rewrite every reference to `old_root_rel` in `source` to `new_root_rel`.
-///
-/// Both passes run: generic markdown tokens and structural asset spans.
-/// TOKEN EDITS ARE LISTED FIRST, so on overlap the narrow, syntax-preserving
-/// edit wins — a `![](x.png)` gallery line keeps its markdown syntax rather
-/// than being flattened into a bare path by the structural edit covering the
-/// same bytes.
-pub(crate) fn rewrite_refs_by_raw_match(
-    source: &str,
-    from_dir: &str,
-    old_root_rel: &str,
-    new_root_rel: &str,
-    target_is_dir: bool,
-    amb: RefAmbiguity,
-) -> String {
-    let mut edits: Vec<Edit> = Vec::new();
-
-    for rr in extract_md_references(source) {
-        let Some(new_text) =
-            match_and_retarget(&rr.text, from_dir, old_root_rel, new_root_rel, target_is_dir, amb)
-        else {
-            continue;
-        };
-        // Preserve an `#anchor` suffix if the original ref carried one.
-        let anchor_suffix = match rr.text.split_once('#') {
-            Some((_, anchor)) => format!("#{anchor}"),
-            None => String::new(),
-        };
-        // Replace the TARGET SPAN, not the whole token. The surrounding
-        // syntax — brackets, alias, label, alt, link title — is left byte for
-        // byte, and a nested reference (`[![[hero.png]]](/album/)`) does not
-        // overlap its enclosing link's destination, so both get rewritten.
-        // Rebuilding the token from `RefSyntax` re-emitted the stale label and
-        // dropped the inner rewrite.
-        edits.push(Edit {
-            from: rr.ref_from,
-            to: rr.ref_to,
-            text: format!("{new_text}{anchor_suffix}"),
-        });
-    }
-
-    for span in extract_structural_asset_refs(source) {
-        let Some(new_text) =
-            match_and_retarget(&span.path, from_dir, old_root_rel, new_root_rel, target_is_dir, amb)
-        else {
-            continue;
-        };
-        let replacement = render_bare_value(&span.container, span.quote, &new_text, &span.attrs);
-        edits.push(Edit { from: span.value.start, to: span.value.end, text: replacement });
-    }
-
-    apply_edits(source, edits)
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

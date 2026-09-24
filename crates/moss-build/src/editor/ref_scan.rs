@@ -17,9 +17,7 @@ use crate::build::scan::article_map::ArticleMap;
 use crate::editor::resolve::asset_resolver::FsAssetIndex;
 use crate::editor::resolve::folder_index::EditorFolderIndex;
 use crate::editor::resolve::url_index::ArticleMapIndex;
-use crate::editor::ref_rewrite::{
-    matches_target, rewrite_for_removal, rewrite_refs_by_raw_match, RefAmbiguity,
-};
+use crate::editor::ref_rewrite::{matches_target, rewrite_for_removal};
 use moss_core::resolve::md_extract::{
     extract_md_references, extract_structural_asset_refs, AssetPathSpan,
 };
@@ -39,7 +37,7 @@ pub struct FileReferenceHit {
 
 /// Build the three indexes from the project root (canonicalized).
 /// Reused by scan and rewrite to avoid rebuilding per-file.
-fn build_indexes(root: &Path) -> (FsAssetIndex, EditorFolderIndex, ArticleMapIndex) {
+pub(crate) fn build_indexes(root: &Path) -> (FsAssetIndex, EditorFolderIndex, ArticleMapIndex) {
     let fs_assets = FsAssetIndex::new(root);
     // ArticleMap: empty is fine for LINK resolution — we never use
     // is_embed:false (see module doc). It is NOT optional for the folder
@@ -242,145 +240,22 @@ fn clean_references_to(
 /// `[text](link)` reference to it. The project root is passed in explicitly:
 /// the app's `rename_entry_with_refs` command and `moss rename` in both
 /// binaries (`cli::rename`) call this same body.
+///
+/// The one-element wrapper around [`crate::editor::rename_plan`]'s
+/// resolver-driven plan/apply engine — see that module for what changed and
+/// why (a rename used to rewrite references by pattern-matching their raw
+/// text against the renamed entry's own path, which missed any reference the
+/// real resolver would find through a route the pattern-matcher didn't know).
 pub fn rename_entry_with_refs_core(
     project_root: std::path::PathBuf,
     old_path: &str,
     new_path: &str,
 ) -> Result<(), String> {
-    // Perform the OS rename first (same logic as rename_entry_inner).
-    crate::vault::fs::rename_entry_inner(&project_root, old_path, new_path)?;
-
-    // Now rewrite references project-wide.
-    let canonical_root = std::fs::canonicalize(&project_root)
-        .map_err(|e| format!("Cannot canonicalize root: {}", e))?;
-
-    // Compute old root-relative (before rename, so use the path string directly).
-    // The old path no longer exists on disk (it has been renamed), so we cannot
-    // canonicalize it — strip the root prefix from the raw string instead.
-    let old_root_rel = Path::new(&old_path)
-        .strip_prefix(&canonical_root)
-        .map(|r| r.to_string_lossy().replace('\\', "/"))
-        .unwrap_or_else(|_| {
-            // Fallback: strip the root prefix exactly ONCE (a repeated
-            // trim_start_matches could chew through later path segments that
-            // happen to equal the root string), then drop a single leading '/'.
-            let stripped = old_path
-                .strip_prefix(canonical_root.to_str().unwrap_or(""))
-                .unwrap_or(&old_path);
-            let stripped = stripped.strip_prefix('/').unwrap_or(stripped);
-            stripped.replace('\\', "/")
-        });
-
-    // Compute new root-relative (after rename, the new path now exists)
-    let new_abs = Path::new(&new_path);
-    let new_abs_canonical = std::fs::canonicalize(new_abs)
-        .map_err(|e| format!("Cannot canonicalize new path '{}': {}", new_path, e))?;
-    let new_root_rel = new_abs_canonical
-        .strip_prefix(&canonical_root)
-        .map(|r| r.to_string_lossy().replace('\\', "/"))
-        .unwrap_or_else(|_| new_path.trim_start_matches('/').to_string());
-
-    let target_is_dir = new_abs_canonical.is_dir();
-
-    // For a FILE rename, decide whether a BARE reference to the old entry is
-    // safe to rewrite. One walk, two answers — see `RefAmbiguity`. The
-    // newly-renamed file already carries the NEW name, so any remaining hit
-    // is a genuine collision.
-    let old_stem = Path::new(&old_root_rel)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(old_root_rel.as_str())
-        .to_string();
-    let old_name = Path::new(&old_root_rel)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or(old_root_rel.as_str())
-        .to_string();
-    let amb = if target_is_dir {
-        RefAmbiguity { stem_unique: true, name_unique: true } // unused for folders
-    } else {
-        let mut same_stem = 0usize;
-        let mut same_name = 0usize;
-        for entry in walkdir::WalkDir::new(&canonical_root)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let p = entry.path();
-            if !p.is_file() {
-                continue;
-            }
-            let rel = p
-                .strip_prefix(&canonical_root)
-                .map(|r| r.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_default();
-            if rel.starts_with(".moss/") || rel.starts_with(".git/") {
-                continue;
-            }
-            if p.file_name().and_then(|s| s.to_str()) == Some(old_name.as_str()) {
-                same_name += 1;
-            }
-            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext != "md" && ext != "markdown" {
-                continue;
-            }
-            if p.file_stem().and_then(|s| s.to_str()) == Some(old_stem.as_str()) {
-                same_stem += 1;
-            }
-        }
-        RefAmbiguity { stem_unique: same_stem == 0, name_unique: same_name == 0 }
-    };
-
-    // Walk every .md and rewrite references from old to new.
-    // Since the file has already been renamed, the old path no longer exists —
-    // we use raw text matching via rewrite_refs_by_raw_match.
-    for entry in walkdir::WalkDir::new(&canonical_root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let p = e.path();
-            if !p.is_file() { return false; }
-            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext != "md" && ext != "markdown" { return false; }
-            let rel = p.strip_prefix(&canonical_root)
-                .map(|r| r.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_default();
-            !rel.starts_with(".moss/") && !rel.starts_with(".git/")
-        })
-    {
-        let file_path = entry.path();
-        let source = match std::fs::read_to_string(file_path) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-
-        // For rewrite, we need to find refs to old_root_rel (which no longer exists
-        // on disk). The indexes are built from new state — the old path won't resolve.
-        // We use raw text matching: any ref whose raw text matches old_root_rel or
-        // whose stem matches the old filename stem.
-        // Directory of the referencing file, for document-relative refs.
-        let from_dir = file_path
-            .parent()
-            .and_then(|d| d.strip_prefix(&canonical_root).ok())
-            .map(|r| r.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_default();
-
-        let rewritten = rewrite_refs_by_raw_match(
-            &source,
-            &from_dir,
-            &old_root_rel,
-            &new_root_rel,
-            target_is_dir,
-            amb,
-        );
-        if rewritten != source {
-            // allow:raw_write the vault's own .md source, rewritten in place after a rename -- not build output
-            std::fs::write(file_path, &rewritten)
-                .map_err(|e| format!("Failed to write '{}': {}", file_path.display(), e))?;
-        }
-    }
-
+    let plan = crate::editor::rename_plan::plan_moves(
+        &project_root,
+        &[(old_path.to_string(), new_path.to_string())],
+    )?;
+    crate::editor::rename_plan::apply_planned_moves(&project_root, &plan)?;
     Ok(())
 }
 
