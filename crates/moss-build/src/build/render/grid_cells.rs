@@ -531,6 +531,29 @@ pub(crate) fn external_urls_needing_fetch(plan: &BodyPlan) -> Vec<String> {
     urls
 }
 
+/// Every external grid-cell URL across a whole build's already-parsed
+/// documents, deduplicated — the candidate set for
+/// `link_meta::fetch_new_link_meta_for_build`'s once-per-build,
+/// short-budget fetch (`build::render::blocking`'s pre-render step).
+///
+/// Safe to read a document's RAW `body_plan`, before any per-page pass has
+/// run on it: [`apply_collection_cards`] and [`apply_summary_grids`] only
+/// ever replace INTERNAL cells, so which cells are external is fixed at
+/// parse time regardless of pipeline order — reading it early costs
+/// nothing and avoids threading per-page `BuildIndex`es through a
+/// whole-build pre-pass that doesn't otherwise need one.
+pub(crate) fn external_urls_across_build<'a>(
+    documents: impl IntoIterator<Item = &'a ParsedDocument>,
+) -> Vec<String> {
+    let mut urls = std::collections::BTreeSet::new();
+    for doc in documents {
+        if let Some(plan) = &doc.body_plan {
+            urls.extend(external_urls_needing_fetch(plan));
+        }
+    }
+    urls.into_iter().collect()
+}
+
 /// Turn single-link cells that leave the site into `.moss-card`s — the same
 /// card kind [`apply_collection_cards`] gives an internal page (the owner's
 /// "one card kind" decision). Internal cells are untouched here: a

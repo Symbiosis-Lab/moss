@@ -71,7 +71,7 @@ use super::media::pipeline::{
     remove_stale_dirs, remove_stale_files, remove_stale_html,
 };
 use crate::build::background::BackgroundHandle;
-use crate::build::render::generate_blocking_content;
+use crate::build::render::generate_blocking_content_for_build;
 use crate::build::manifest::PendingManifest;
 use crate::build::outcome::BuildStopped;
 use super::progress::PipelineEvent;
@@ -1375,7 +1375,8 @@ fn build_inner(
     // hacks (`project_has_inline_subscribe`, `render_footer_pages_from_disk`).
     // When the typed-AST migration completes (Phase 4+), this evolves to
     // `Vec<moss_core::ast::Document>`.
-    let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending)?;
+    let exits_after_build = matches!(search_freshness, crate::build::feeds::search_lane::Freshness::Now);
+    let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build)?;
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
     // Step 3b: Resolve and inject slots into the marked stage BEFORE hash

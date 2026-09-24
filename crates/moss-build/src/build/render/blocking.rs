@@ -255,6 +255,36 @@ pub fn generate_blocking_content(
     // `BuildStopped`, not `String`: this runs before the cloud gate is emitted,
     // so an `Err` here is what used to silence it. See `build::outcome`.
 ) -> Result<BlockingContentOutput, BuildStopped> {
+    // `false`: never the synchronous link-metadata fetch — the right default
+    // for the many callers (tests, and any future caller) that don't know or
+    // care about it. `pipeline::run`'s real build path calls
+    // `generate_blocking_content_for_build` instead, so this name's contract
+    // ("just render the site") never quietly changed under existing callers.
+    generate_blocking_content_for_build(
+        root, project_structure, output_dir, services, progress_sender, emit_source_lines,
+        site_config, pending, false,
+    )
+}
+
+/// Same as [`generate_blocking_content`], with the synchronous link-metadata
+/// fetch gated by `exits_after_build` — `true` only for a process that exits
+/// when the build returns (CLI, snapshot tests), same condition
+/// `search_lane::Freshness::of` already reads for the same reason: an
+/// interactive rebuild must not block on the network, so it keeps relying on
+/// `spawn_native_process_sync`'s background task instead. The only caller
+/// that needs this distinction is `pipeline::run`; every other caller wants
+/// [`generate_blocking_content`]'s plain default.
+pub fn generate_blocking_content_for_build(
+    root: &crate::vault::paths::VaultRoot,
+    project_structure: &ProjectStructure,
+    output_dir: &Path,
+    services: Option<&crate::types::services::BuildServices>,
+    progress_sender: Option<&dyn crate::build::ports::reporter::BuildReporter>,
+    emit_source_lines: bool,
+    site_config: SiteConfig,
+    pending: &mut PendingManifest,
+    exits_after_build: bool,
+) -> Result<BlockingContentOutput, BuildStopped> {
     let total_start = std::time::Instant::now();
 
     // `pending` is pre-seeded with previous_hashes by the caller (PendingManifest::new).
@@ -1743,6 +1773,32 @@ pub fn generate_blocking_content(
         let page_rss_link = if has_rss {
             Some(format!(r#"<link rel="alternate" type="application/rss+xml" title="RSS" href="{rss_href}">"#))
         } else { None };
+
+        // Fetch metadata for external grid-cell links THIS build's own pages
+        // introduce, before ANY page below reads the cache — so a card is
+        // complete on its first build rather than waiting for the next
+        // build's prewarm (moss's usual one-build lag). Gated on
+        // `exits_after_build`: an interactive rebuild must not block on the
+        // network (see the parameter's doc comment on
+        // `generate_blocking_content_for_build`). Reads all of `documents`,
+        // not just `to_render`: the homepage and the folder/term
+        // auto-generated indexes are rendered by their own dedicated code
+        // further down this function, outside the `to_render`/`to_carry`
+        // partition, and their grid cells are candidates too. A page this
+        // build carries unchanged costs nothing extra here — its URLs are
+        // already fresh-cached, so `fetch_new_link_meta_for_build`'s own
+        // freshness filter skips them for free. Candidate URLs come from
+        // the ALREADY-PARSED `body_plan`, no extra markdown parse.
+        if exits_after_build {
+            let urls = crate::build::render::grid_cells::external_urls_across_build(
+                documents.iter(),
+            );
+            if !urls.is_empty() {
+                let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+                let _trace = PhaseTrace::start("link_meta_build_fetch");
+                crate::build::page::link_meta::fetch_new_link_meta_for_build(&url_refs, &moss_dir);
+            }
+        }
 
         // Phase 1 — render in parallel. Progress is emitted on a monotonic
         // completion counter (tasks finish out of order). `reporter` is

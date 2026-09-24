@@ -47,7 +47,8 @@
         "crates/moss-build/src/build/feeds/search_lane.rs": 900,
         "crates/moss-build/src/ops/serve/invoke.rs": 900,
         "crates/moss-build/src/build/terms.rs": 1000,
-        "crates/moss-core/src/asset_paths.rs": 900
+        "crates/moss-core/src/asset_paths.rs": 900,
+        "crates/moss-build/src/build/page/link_meta.rs": 900
       }
     },
     "children_per_dir": {

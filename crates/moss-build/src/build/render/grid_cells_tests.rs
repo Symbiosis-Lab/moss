@@ -752,6 +752,30 @@ fn every_external_cell_is_reported_for_prewarm_even_with_a_manual_title() {
 }
 
 #[test]
+fn external_urls_across_build_collects_from_every_document_deduplicated() {
+    // The pre-render pass `blocking.rs` runs before ANY page's collection-
+    // card pass — this reads straight off each doc's raw `body_plan`.
+    let mut doc_a = make_doc("A", "a/index.html", None);
+    doc_a.body_plan = Some(plan_of(":::grid 1\n<https://a.example/>\n:::\n"));
+    let mut doc_b = make_doc("B", "b/index.html", None);
+    doc_b.body_plan = Some(plan_of(
+        ":::grid 2\n<https://a.example/>\n+++\n<https://b.example/>\n:::\n",
+    ));
+    let mut doc_c = make_doc("C", "c/index.html", None);
+    doc_c.body_plan = Some(plan_of("Just prose, no grid at all.\n"));
+    let doc_d = make_doc("D", "d/index.html", None); // no body_plan at all
+    let docs = vec![doc_a, doc_b, doc_c, doc_d];
+
+    let mut urls = external_urls_across_build(docs.iter());
+    urls.sort();
+    assert_eq!(
+        urls,
+        vec!["https://a.example/".to_string(), "https://b.example/".to_string()],
+        "deduplicated across documents, and a doc with no body_plan or no grid contributes nothing"
+    );
+}
+
+#[test]
 fn a_cell_already_turned_into_a_card_is_not_reclassified() {
     // The passes run in sequence on one plan. A cell replaced by pass 1 has its
     // typed content cleared, which is what keeps pass 2 off generated markup.

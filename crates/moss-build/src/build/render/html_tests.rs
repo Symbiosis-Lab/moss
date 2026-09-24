@@ -8550,3 +8550,150 @@ mod registry_clear_tests {
         );
     }
 }
+
+/// End-to-end proof that the build-time link-metadata fetch
+/// (`build::page::link_meta::fetch_new_link_meta_for_build`, wired in
+/// `blocking.rs` right before the per-page render loop) actually reaches a
+/// real build: a fresh site with an external grid link against a local
+/// (loopback) HTTP server, built ONCE, must show the fetched title on that
+/// SAME build — the one-build lag the owner's decision explicitly rejects
+/// ("New links: FETCH DURING THE BUILD... so a card is complete on its
+/// first build").
+mod build_time_link_meta_fetch_tests {
+    use crate::build::manifest::PendingManifest;
+    use crate::build::render::blocking::SiteConfig;
+    use crate::build::render::generate_blocking_content_for_build;
+    use crate::build::scan_folder;
+    use crate::types::content::SiteHashes;
+    use std::fs;
+
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A server that answers every request with the same fixed HTML,
+    /// `requests` times — same shape as `link_meta.rs`'s own test helper
+    /// (kept as a local copy: that one is private to its module).
+    fn spawn_test_server(html: &'static str, requests: usize) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}");
+        let handle = std::thread::spawn(move || {
+            for _ in 0..requests {
+                let Ok((mut stream, _)) = listener.accept() else { return };
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let body = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{}",
+                    html.len(),
+                    html
+                );
+                let _ = stream.write_all(body.as_bytes());
+            }
+        });
+        (url, handle)
+    }
+
+    fn build_site(test_dir: &std::path::Path, exits_after_build: bool) {
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        fs::create_dir_all(&output_dir).unwrap();
+        let project_structure =
+            scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
+        generate_blocking_content_for_build(
+            &crate::vault::paths::VaultRoot::resolve(test_dir),
+            &project_structure,
+            &output_dir,
+            None,
+            None,
+            true,
+            SiteConfig::default(),
+            &mut PendingManifest::new(SiteHashes::default()),
+            exits_after_build,
+        )
+        .expect("generate_blocking_content_for_build should succeed");
+    }
+
+    #[test]
+    fn a_new_external_link_shows_its_fetched_title_on_the_first_build() {
+        let html = r#"<html><head><meta property="og:title" content="Fetched On First Build"></head></html>"#;
+        let (base, server) = spawn_test_server(html, 1);
+
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_build_fetch_e2e_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+
+        fs::write(
+            test_dir.join("index.md"),
+            format!(":::grid 1\n<{base}/first-build>\n:::\n"),
+        )
+        .unwrap();
+
+        build_site(&test_dir, true);
+
+        let index_html = fs::read_to_string(
+            test_dir.join(".moss").join("build.nosync").join("site").join("index.html"),
+        )
+        .expect("index.html should exist");
+        assert!(
+            index_html.contains("Fetched On First Build"),
+            "the title fetched DURING this build must appear in this build's own \
+             output, not just the next one's: {index_html}"
+        );
+
+        let _ = server.join();
+    }
+
+    #[test]
+    fn an_offline_build_with_an_unreachable_link_still_finishes_promptly() {
+        // Bind then drop, so the port is guaranteed to refuse connections —
+        // the "server down" case the owner's report has to speak to.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_build_fetch_offline_e2e_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+
+        fs::write(
+            test_dir.join("index.md"),
+            format!(":::grid 1\n<http://127.0.0.1:{port}/unreachable>\n:::\n"),
+        )
+        .unwrap();
+
+        let start = std::time::Instant::now();
+        build_site(&test_dir, true);
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "an unreachable link must not stall the build near the budget's ceiling: {elapsed:?}"
+        );
+
+        let index_html = fs::read_to_string(
+            test_dir.join(".moss").join("build.nosync").join("site").join("index.html"),
+        )
+        .expect("index.html should exist even though the link never resolved");
+        assert!(
+            index_html.contains("moss-card"),
+            "the cell still renders its card, just without fetched metadata: {index_html}"
+        );
+    }
+}

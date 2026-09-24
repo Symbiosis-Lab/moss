@@ -352,33 +352,79 @@ fn write_cache(moss_dir: &Path, meta: &LinkMeta) {
 /// Fetch metadata for a URL, using cache if available and fresh.
 ///
 /// Cache location: `{moss_dir}/build/cache/link-meta/{sha256-of-url}.json`
-/// Cache TTL: 7 days.
+/// Response body size cap for a link-metadata fetch. Title and favicon
+/// live in `<head>`, so nothing legitimate needs more; a page that never
+/// closes its head or a misconfigured server pointed at a large binary
+/// must not tie up a fetch worker copying megabytes it will never parse.
+/// Enforced by capping the reader (`Read::take`), not by trusting a
+/// `Content-Length` header — an untrusted server can lie about or omit it.
+const MAX_LINK_META_RESPONSE_BYTES: u64 = 512 * 1024;
+
+/// Read at most [`MAX_LINK_META_RESPONSE_BYTES`] from `reader`, lossy-UTF8
+/// decoded, and whether the read itself succeeded (a genuine I/O error, not
+/// hitting the cap, is the only way this is `false`). Split out from
+/// [`fetch_link_meta_with_timeout`] so the cap's behavior can be pinned
+/// with a plain in-memory reader — no network, no timing — rather than a
+/// wall-clock race against a throttled test server.
+fn read_capped_body(reader: impl std::io::Read) -> (String, bool) {
+    use std::io::Read as _;
+    let mut buf = Vec::new();
+    let read_ok = reader
+        .take(MAX_LINK_META_RESPONSE_BYTES)
+        .read_to_end(&mut buf)
+        .is_ok();
+    (String::from_utf8_lossy(&buf).into_owned(), read_ok)
+}
+
+/// Build a ureq agent with `timeout` set THREE ways: the overall per-call
+/// timeout (`.timeout`, already in use), plus the connect and read phases
+/// individually. Belt and suspenders, not redundant: ureq's overall/connect
+/// timeout has been found unreliable against some stalls, so a
+/// caller that only trusted `.timeout()` could still hang past the budget
+/// it asked for. Neither line alone is proven reliable in every case; the
+/// orchestrator (`fetch_all_link_meta_parallel_bounded`) is the actual
+/// backstop — it stops WAITING on a stuck worker at the deadline regardless
+/// of what ureq does internally. These are the second line, not the fix.
+fn ureq_agent_with_timeout(timeout: std::time::Duration) -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout(timeout)
+        .timeout_connect(timeout)
+        .timeout_read(timeout)
+        .build()
+}
+
+/// Fetch (or serve from a fresh cache) one URL's link metadata. Cache TTL:
+/// 7 days.
+///
+/// The two callers — [`fetch_all_link_meta_parallel`] (10s per request,
+/// [`FETCH_BUDGET`] total) and [`fetch_new_link_meta_for_build`]
+/// ([`BUILD_FETCH_PER_REQUEST_TIMEOUT`], [`BUILD_FETCH_BUDGET`] total) —
+/// both go through [`fetch_all_link_meta_parallel_bounded`]'s worker pool,
+/// so this function itself takes the timeout as a parameter rather than
+/// picking one.
 ///
 /// # Visibility
 ///
-/// **`pub(crate)` only — do not widen.** This function does blocking
-/// network I/O (10s timeout, but ureq's connect
-/// timeout is unreliable and can stall ~30s). Calling it from the build's
-/// render path freezes the pipeline. The legitimate caller is
-/// [`crate::build::features::sync::spawn_native_process_sync`], which runs
-/// it on a `spawn_blocking` worker as a background task.
-pub(crate) fn fetch_link_meta(url: &str, moss_dir: &Path) -> LinkMeta {
+/// **`private` only — do not widen.** This function does blocking network
+/// I/O (ureq's connect timeout is unreliable and can stall well past the
+/// timeout given). Calling it from the build's render path freezes the
+/// pipeline; both real callers run it on a background thread pool instead.
+fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::Duration) -> LinkMeta {
     // 1. Check fresh cache
     if let Some(cached) = read_fresh_cache(moss_dir, url) {
         return cached;
     }
 
     // 2. Try HTTP fetch
-    let result = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
+    let result = ureq_agent_with_timeout(timeout)
         .get(url)
         .set("User-Agent", "moss/0.1 (+https://moss.sh)")
         .call();
 
     match result {
         Ok(resp) => {
-            if let Ok(html) = resp.into_string() {
+            let (html, read_ok) = read_capped_body(resp.into_reader());
+            if read_ok {
                 let meta = parse_link_meta(url, &html);
                 write_cache(moss_dir, &meta);
                 meta
@@ -430,10 +476,51 @@ const FETCH_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
 /// # Visibility
 ///
 /// **`pub(crate)` only — do not widen.** Same blocking-I/O constraint as
-/// [`fetch_link_meta`].
+/// `fetch_link_meta_with_timeout`.
 pub(crate) fn fetch_all_link_meta_parallel(urls: &[&str], moss_dir: &Path) -> usize {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
+    fetch_all_link_meta_parallel_bounded(
+        urls,
+        moss_dir,
+        FETCH_BUDGET,
+        std::time::Duration::from_secs(10),
+        "prewarm",
+    )
+}
+
+/// Shared worker pool behind both [`fetch_all_link_meta_parallel`] (the
+/// next-build prewarm, generous budget) and
+/// [`fetch_new_link_meta_for_build`] (this build's own short-budget fetch).
+/// `log_label` names the caller in the budget-exceeded warning, so a log
+/// line can tell which pass ran out of time.
+/// Enforces `budget` in the ORCHESTRATOR, not per request. A prior version
+/// of this function used `std::thread::scope`, which JOINS every worker
+/// before returning — so a single stuck fetch (ureq's own timeout is
+/// unreliable, and a blackholed public host can stall ~30s past whatever
+/// timeout it was given) held the whole call hostage regardless of
+/// `per_request_timeout`, defeating `budget` entirely. This version spawns
+/// detached workers (plain `std::thread::spawn`, never joined) that each
+/// send a completion signal over a channel as they finish; the orchestrator
+/// only waits on that channel via `recv_timeout`, so it returns at the
+/// deadline no matter how long a straggler worker keeps running.
+///
+/// A straggler is ABANDONED for this build's purposes: its result never
+/// reaches this function's return value, so the render that follows never
+/// sees it. But `fetch_link_meta_with_timeout` writes the cache internally
+/// as its very last step before returning — a straggler that eventually
+/// finishes (while the process is still alive; a one-shot CLI build that
+/// exits right after this call kills it first) still leaves a fresh cache
+/// entry for whatever reads it next, exactly like a URL this budget never
+/// reached at all. Nothing needs to special-case that: it falls out of
+/// simply not cancelling the thread (ureq has no cancellation API, and Rust
+/// threads can't be force-killed either).
+fn fetch_all_link_meta_parallel_bounded(
+    urls: &[&str],
+    moss_dir: &Path,
+    budget: std::time::Duration,
+    per_request_timeout: std::time::Duration,
+    log_label: &'static str,
+) -> usize {
+    use std::sync::{mpsc, Arc, Mutex};
     use std::time::Instant;
 
     // Filter out URLs that are already cached fresh — those need no fetch.
@@ -447,48 +534,110 @@ pub(crate) fn fetch_all_link_meta_parallel(urls: &[&str], moss_dir: &Path) -> us
         return 0;
     }
 
-    let queue = Mutex::new(cold.clone().into_iter());
-    let fetched = AtomicUsize::new(0);
-    let deadline = Instant::now() + FETCH_BUDGET;
+    let queue = Arc::new(Mutex::new(cold.clone().into_iter()));
+    let moss_dir_owned = moss_dir.to_path_buf();
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let worker_count = FETCH_CONCURRENCY.min(cold.len());
 
-    std::thread::scope(|scope| {
-        for _ in 0..FETCH_CONCURRENCY.min(cold.len()) {
-            scope.spawn(|| {
-                loop {
-                    if Instant::now() >= deadline {
-                        // Budget exhausted; drop remaining URLs. They'll be
-                        // picked up next build (cache stays cold for them).
-                        break;
-                    }
-                    let next = match queue.lock() {
-                        Ok(mut q) => q.next(),
-                        Err(e) => {
-                            // Mutex poisoning means a sibling worker panicked.
-                            // Bail loudly rather than silently swallowing work.
-                            log::warn!(
-                                target: "link-meta",
-                                "prewarm queue mutex poisoned ({e}), worker exiting"
-                            );
-                            break;
-                        }
-                    };
-                    let Some(url) = next else { break };
-                    let _ = fetch_link_meta(&url, moss_dir);
-                    fetched.fetch_add(1, Ordering::SeqCst);
-                }
-            });
+    for _ in 0..worker_count {
+        let queue = Arc::clone(&queue);
+        let moss_dir = moss_dir_owned.clone();
+        let done_tx = done_tx.clone();
+        // Not joined, not scoped: a worker that outlives this function's
+        // deadline is exactly the case this design exists to not wait on.
+        std::thread::spawn(move || {
+            loop {
+                let next = match queue.lock() {
+                    Ok(mut q) => q.next(),
+                    // Mutex poisoning means a sibling worker panicked. Bail
+                    // quietly rather than propagating a poison panic here —
+                    // the orchestrator's own budget-exceeded warning below
+                    // already reports an incomplete run.
+                    Err(_) => break,
+                };
+                let Some(url) = next else { break };
+                let _ = fetch_link_meta_with_timeout(&url, &moss_dir, per_request_timeout);
+                // A send error means the receiver was already dropped (the
+                // orchestrator returned at its deadline) — that IS the
+                // abandonment this function provides; nothing to do about it.
+                let _ = done_tx.send(());
+            }
+        });
+    }
+    // Drop our own sender: once every worker's clone is ALSO dropped (they
+    // all reach the end of their loop), `recv`/`recv_timeout` correctly
+    // reports the channel as disconnected instead of hanging forever.
+    drop(done_tx);
+
+    let deadline = Instant::now() + budget;
+    let mut completed = 0usize;
+    while completed < cold.len() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
         }
-    });
+        match done_rx.recv_timeout(remaining) {
+            Ok(()) => completed += 1,
+            Err(mpsc::RecvTimeoutError::Timeout) => break,
+            // Every worker finished (queue drained) before the deadline —
+            // not the timeout path, but the same "nothing left to wait for"
+            // outcome.
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
 
-    let n = fetched.load(Ordering::SeqCst);
-    if n < cold.len() {
+    if completed < cold.len() {
         log::warn!(
             target: "link-meta",
-            "prewarm budget ({:?}) exceeded: {} of {} cold URLs fetched; remainder will retry next build",
-            FETCH_BUDGET, n, cold.len()
+            "{log_label} budget ({:?}) exceeded: {} of {} cold URLs fetched before the deadline; \
+             stragglers keep running and may still warm the cache for a later reader, but this build won't wait on them",
+            budget, completed, cold.len()
         );
     }
-    n
+    completed
+}
+
+/// Total wall-time budget for THIS build's own link-metadata fetch — the
+/// short pass that runs before render so a card can be complete on the
+/// very build that introduces its link, rather than waiting for the next
+/// build's prewarm to catch up. Deliberately much shorter than
+/// [`FETCH_BUDGET`] (60s): this one is on the critical path of every
+/// build, prewarm is a best-effort catch-up for URLs already known from a
+/// previous build's `.urls.json`.
+pub(crate) const BUILD_FETCH_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Per-request timeout for the build-time fetch. Shorter than the prewarm
+/// path's 10s: on a 3s total budget, one slow host must not be allowed to
+/// spend the whole thing.
+const BUILD_FETCH_PER_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Fetch metadata for external grid-cell links this build's own pages
+/// introduce, before render — so a card is complete on its first build
+/// instead of showing the no-metadata form until the next one. `urls` is
+/// this build's candidate set (gathered from the already-parsed documents;
+/// see `build::render::grid_cells`); a URL with no fresh cache entry is
+/// fetched, under [`BUILD_FETCH_BUDGET`] total and
+/// [`BUILD_FETCH_PER_REQUEST_TIMEOUT`] per request.
+///
+/// A URL the budget doesn't reach, or that fails/times out, is left cold —
+/// its card renders in the no-metadata form, and `record_urls_for_prewarm`
+/// (called by render as usual) still records it, so the *next* build's
+/// prewarm picks it up exactly as it always has. This function only closes
+/// the one-build lag for the common case (a fast, reachable host); it
+/// never removes the fallback.
+///
+/// # Visibility
+///
+/// **`pub(crate)` only — do not widen.** Same blocking-I/O constraint as
+/// `fetch_link_meta_with_timeout`.
+pub(crate) fn fetch_new_link_meta_for_build(urls: &[&str], moss_dir: &Path) -> usize {
+    fetch_all_link_meta_parallel_bounded(
+        urls,
+        moss_dir,
+        BUILD_FETCH_BUDGET,
+        BUILD_FETCH_PER_REQUEST_TIMEOUT,
+        "build-time link-meta fetch",
+    )
 }
 
 /// Synchronously prewarm the link-meta cache for the persisted URL list,
@@ -1371,8 +1520,8 @@ mod tests {
     #[test]
     fn test_parallel_fetch_actually_populates_cold_cache() {
         // Exercise the genuine parallel-fetch path: cold URLs, real (loopback)
-        // HTTP, real `fetch_link_meta` writing real cache files. Closes the
-        // gap that the other tests leave open by only seeding fresh caches.
+        // HTTP, real cache files written by the fetch. Closes the gap that
+        // the other tests leave open by only seeding fresh caches.
         let html: &'static str = r#"<html><head>
             <meta property="og:title" content="Test Title">
             <link rel="icon" href="/favicon.ico">
@@ -1430,6 +1579,317 @@ mod tests {
         // Stale: read_cache returns Some, but read_fresh_cache returns None.
         assert!(read_cache(&tmp, "https://stale.example.test/").is_some());
         assert!(read_fresh_cache(&tmp, "https://stale.example.test/").is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── build-time fetch: budget, per-request timeout, response cap ────────
+
+    fn fresh_tmp(label: &str) -> PathBuf {
+        let tmp = std::env::temp_dir().join(format!(
+            "moss_{label}_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        tmp
+    }
+
+    #[test]
+    fn build_fetch_budget_and_timeout_are_short_and_named() {
+        // Pins the numbers this feature reports: a regression that silently
+        // widened them back toward the prewarm path's 60s/10s would still
+        // compile and pass every other test here.
+        assert_eq!(BUILD_FETCH_BUDGET, std::time::Duration::from_secs(3));
+        assert_eq!(
+            BUILD_FETCH_PER_REQUEST_TIMEOUT,
+            std::time::Duration::from_millis(1500)
+        );
+        assert!(BUILD_FETCH_BUDGET < FETCH_BUDGET, "must stay well under the prewarm budget");
+    }
+
+    /// A server that sleeps `delay_ms` before responding, `requests` times —
+    /// each accepted connection handled on its OWN thread, so the client's
+    /// concurrent workers are actually served in parallel rather than
+    /// serialized behind a single accept loop (which is fine for the other
+    /// tests' instant responses, but would hide the budget's effect here).
+    fn spawn_slow_test_server(
+        html: &'static str,
+        delay_ms: u64,
+        requests: usize,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}");
+        let handle = std::thread::spawn(move || {
+            let mut workers = Vec::with_capacity(requests);
+            for _ in 0..requests {
+                let Ok((mut stream, _)) = listener.accept() else { break };
+                workers.push(std::thread::spawn(move || {
+                    let mut buf = [0u8; 1024];
+                    let _ = stream.read(&mut buf);
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    let body = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{}",
+                        html.len(),
+                        html
+                    );
+                    let _ = stream.write_all(body.as_bytes());
+                }));
+            }
+            for w in workers {
+                let _ = w.join();
+            }
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn a_short_total_budget_leaves_the_slow_remainder_cold() {
+        // More URLs than `FETCH_CONCURRENCY` (8), each slow enough that the
+        // budget expires before a second round starts. Real proof the
+        // budget bounds WALL TIME, not just a per-request timeout: with no
+        // budget at all this would take 2 rounds * 150ms. The 200ms budget
+        // is comfortably above one 150ms round (so it isn't testing the
+        // stricter "shorter than any single response" case — that's
+        // `the_orchestrator_never_waits_on_a_stuck_worker` below) and
+        // comfortably below two.
+        let html = "<html><head><title>Slow</title></head></html>";
+        let url_count = 16;
+        let (base, server) = spawn_slow_test_server(html, 150, url_count);
+        let urls: Vec<String> = (0..url_count).map(|i| format!("{base}/{i}")).collect();
+        let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+        let tmp = fresh_tmp("short_budget");
+
+        let start = std::time::Instant::now();
+        let fetched = fetch_all_link_meta_parallel_bounded(
+            &url_refs,
+            &tmp,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            "test",
+        );
+        let elapsed = start.elapsed();
+
+        assert!(
+            fetched < url_count,
+            "a 200ms budget must not let a second 150ms round start: fetched {fetched} of {url_count}"
+        );
+        assert!(fetched > 0, "a budget comfortably above one round's response time should still see it complete");
+        assert!(
+            elapsed < std::time::Duration::from_millis(800),
+            "must not run anywhere near the un-budgeted 2-round time: {elapsed:?}"
+        );
+
+        // Deliberately not joined: the whole point of this test is that the
+        // budget stops the client short of `url_count` connections, so the
+        // server's accept loop is left waiting for ones that never arrive.
+        // Joining it here would hang the test on exactly the behavior being
+        // proven correct.
+        drop(server);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn the_orchestrator_never_waits_on_in_flight_work_past_the_deadline() {
+        // A budget SHORTER than a single response: the old `thread::scope`
+        // implementation joined every worker before returning, so it would
+        // have waited out the in-flight 150ms request regardless of the
+        // 20ms budget. The fix returns AT the deadline — zero completions
+        // is the correct answer here, not a flake.
+        let html = "<html><head><title>Slow</title></head></html>";
+        let (base, server) = spawn_slow_test_server(html, 150, 1);
+        let url = format!("{base}/only");
+        let urls = [url.as_str()];
+        let tmp = fresh_tmp("never_waits");
+
+        let start = std::time::Instant::now();
+        let fetched = fetch_all_link_meta_parallel_bounded(
+            &urls,
+            &tmp,
+            std::time::Duration::from_millis(20),
+            std::time::Duration::from_secs(5),
+            "test",
+        );
+        let elapsed = start.elapsed();
+
+        assert_eq!(fetched, 0, "the in-flight request had not finished by the 20ms deadline");
+        assert!(
+            elapsed < std::time::Duration::from_millis(100),
+            "must return at the deadline, not wait for the 150ms response: {elapsed:?}"
+        );
+
+        drop(server); // straggler left running deliberately — see the test above
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn build_time_fetch_returns_within_budget_against_a_blackholed_connection() {
+        // ureq's own timeout has been unreliable in the
+        // past, and a genuinely blackholed PUBLIC host (packets silently
+        // dropped mid-CONNECT, no RST) can stall well past the timeout
+        // given, up to ~30s in the worst case. A local listener can't
+        // reproduce that exact phase (loopback always completes the TCP
+        // handshake instantly) — this reproduces the nearest local analog,
+        // an accepted connection that never responds, which on this
+        // ureq/OS combination `.timeout_read()` alone already catches in
+        // ~1.5s (measured by ablating `ureq_agent_with_timeout`'s explicit
+        // connect/read lines: same result, timeout() alone also caught it
+        // here). The orchestrator fix is what removes the DEPENDENCY on
+        // that being reliable at all: `the_orchestrator_never_waits_on_in_
+        // flight_work_past_the_deadline` above proves its own budget
+        // enforcement against a real, fast, non-hanging response, with no
+        // ureq timeout involved either way. This test stays as the
+        // regression guard for the scenario actually named in the issue —
+        // generous slack, hard ceiling, proving "nowhere near 30s".
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            // Accept and hold — never read the request, never write a
+            // response, never close. The listener (and every accepted
+            // stream) leaks for the rest of the test process's life, which
+            // is fine: nothing here is ever joined or waited on.
+            while let Ok((stream, _)) = listener.accept() {
+                std::mem::forget(stream);
+            }
+        });
+        let url = format!("http://127.0.0.1:{port}/blackhole");
+        let urls = [url.as_str()];
+        let tmp = fresh_tmp("blackhole_budget");
+
+        let start = std::time::Instant::now();
+        let _ = fetch_new_link_meta_for_build(&urls, &tmp);
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < BUILD_FETCH_BUDGET + std::time::Duration::from_secs(3),
+            "the orchestrator must enforce the budget itself rather than trust ureq's own \
+             (documented-unreliable) timeout — nowhere near the ~30s a blackholed \
+             host can otherwise cause: {elapsed:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn fetch_new_link_meta_for_build_populates_cache_for_a_fast_server() {
+        // The actual public entry point `blocking.rs` calls, against a real
+        // (loopback) server — proves the wiring end to end, not just the
+        // shared bounded-fetch helper.
+        let html = r#"<html><head><meta property="og:title" content="Build Fetched"></head></html>"#;
+        let (base, server) = spawn_test_server(html, 5);
+        let urls: Vec<String> = (0..5).map(|i| format!("{base}/{i}")).collect();
+        let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+        let tmp = fresh_tmp("build_fetch_fast");
+
+        let fetched = fetch_new_link_meta_for_build(&url_refs, &tmp);
+        assert_eq!(fetched, 5);
+        for u in &urls {
+            let cached = read_cache(&tmp, u).expect("cache miss after build-time fetch");
+            assert_eq!(cached.title.as_deref(), Some("Build Fetched"));
+        }
+
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn fetch_new_link_meta_for_build_finishes_promptly_when_the_server_is_down() {
+        // "Offline build still finishes promptly": bind an ephemeral port,
+        // then drop the listener before fetching — nothing listens there
+        // any more, so the connection is refused immediately (a real local
+        // refusal, not a guess about some fixed port's behavior under a
+        // sandboxed network stack), well under the per-request timeout.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let url = format!("http://127.0.0.1:{port}/unreachable");
+        let urls = [url.as_str()];
+        let tmp = fresh_tmp("build_fetch_offline");
+        let start = std::time::Instant::now();
+        let fetched = fetch_new_link_meta_for_build(&urls, &tmp);
+        let elapsed = start.elapsed();
+        assert_eq!(fetched, 1, "a failed fetch still counts as attempted, not skipped");
+        assert!(
+            elapsed < BUILD_FETCH_BUDGET,
+            "connection-refused must fail fast, not eat the whole budget: {elapsed:?}"
+        );
+        let cached = read_cache(&tmp, urls[0]);
+        assert!(
+            cached.map(|c| c.title.is_none()).unwrap_or(true),
+            "no metadata on a failed fetch, but no panic either"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn read_capped_body_stops_at_the_byte_ceiling_not_the_stream_end() {
+        // Deterministic — no network, no timing race. `io::repeat` is an
+        // infinite reader; if the cap didn't apply, `.take()` inside
+        // `read_capped_body` would never stop and this test would hang
+        // rather than fail, which is exactly why the size is finite but
+        // still 100x the cap: enough to prove truncation, never enough to
+        // make an ablated cap's "read everything" branch slow.
+        use std::io::Read as _;
+        let source = std::io::repeat(b'x').take(100 * MAX_LINK_META_RESPONSE_BYTES);
+        let (body, read_ok) = read_capped_body(source);
+        assert!(read_ok);
+        assert_eq!(body.len() as u64, MAX_LINK_META_RESPONSE_BYTES);
+    }
+
+    #[test]
+    fn read_capped_body_passes_through_a_response_under_the_cap_untouched() {
+        let html = "<html><head><title>Small</title></head></html>";
+        let (body, read_ok) = read_capped_body(html.as_bytes());
+        assert!(read_ok);
+        assert_eq!(body, html);
+    }
+
+    /// A server that sends a real `<title>` immediately, then pads the body
+    /// far past the response cap. Proves the cap is actually WIRED into the
+    /// network fetch path (`read_capped_body` above pins the cap's own byte
+    /// logic in isolation) — the outcome checked is the parsed title, not a
+    /// timing race, so this stays reliable under parallel test-suite load.
+    fn spawn_oversized_test_server(body_len: usize, requests: usize) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}");
+        let handle = std::thread::spawn(move || {
+            for _ in 0..requests {
+                let Ok((mut stream, _)) = listener.accept() else { return };
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let prefix = "<html><head><title>Oversized</title></head><body>";
+                let suffix = "</body></html>";
+                let pad_len = body_len.saturating_sub(prefix.len() + suffix.len());
+                let mut body = String::with_capacity(body_len);
+                body.push_str(prefix);
+                body.extend(std::iter::repeat('x').take(pad_len));
+                body.push_str(suffix);
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(body.as_bytes());
+            }
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn a_response_far_over_the_cap_still_yields_the_title_that_fits_near_the_front() {
+        let (base, server) = spawn_oversized_test_server(4 * 1024 * 1024, 1);
+        let tmp = fresh_tmp("oversized_ok");
+        let url = format!("{base}/big");
+        let meta = fetch_link_meta_with_timeout(&url, &tmp, std::time::Duration::from_secs(10));
+        assert_eq!(meta.title.as_deref(), Some("Oversized"));
+        let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

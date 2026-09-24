@@ -15,6 +15,7 @@ pub mod uid_dedup;
 
 // From blocking — main generation entry point + site config
 pub use blocking::generate_blocking_content;
+pub use blocking::generate_blocking_content_for_build;
 pub use blocking::SiteConfig;
 pub use crate::build::incremental_gates::IncrementalGates;
 
