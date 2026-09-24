@@ -46,6 +46,90 @@ fn scan_finds_markdown_link_ref() {
 }
 
 #[test]
+fn scan_finds_angle_bracket_destination_ref() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(root, "my note.md", "# My note");
+    write(root, "index.md", "See [it](<my note.md>) here.");
+
+    let target = root.join("my note.md");
+    let hits = scan_project_references_to(&target, root).expect("scan");
+    assert!(!hits.is_empty(), "should find [it](<my note.md>)");
+}
+
+#[test]
+fn scan_finds_query_suffixed_ref() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(root, "note.md", "# Note");
+    write(root, "index.md", "See [it](note.md?v=1) here.");
+
+    let target = root.join("note.md");
+    let hits = scan_project_references_to(&target, root).expect("scan");
+    assert!(!hits.is_empty(), "should find [it](note.md?v=1)");
+}
+
+#[test]
+fn scan_finds_reference_style_definition() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(root, "note.md", "# Note");
+    write(root, "index.md", "See [it][id] here.\n\n[id]: note.md\n");
+
+    let target = root.join("note.md");
+    let hits = scan_project_references_to(&target, root).expect("scan");
+    assert!(!hits.is_empty(), "should find the [id]: note.md definition");
+}
+
+#[test]
+fn scan_finds_definition_inside_a_list_item() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(root, "note.md", "# Note");
+    write(root, "index.md", "- [id]: note.md\n");
+
+    let target = root.join("note.md");
+    let hits = scan_project_references_to(&target, root).expect("scan");
+    assert!(!hits.is_empty(), "should find the definition inside the list item");
+}
+
+#[test]
+fn scan_finds_definition_inside_a_blockquote() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(root, "note.md", "# Note");
+    write(root, "index.md", "> [id]: note.md\n");
+
+    let target = root.join("note.md");
+    let hits = scan_project_references_to(&target, root).expect("scan");
+    assert!(!hits.is_empty(), "should find the definition inside the blockquote");
+}
+
+#[test]
+fn scan_ignores_definition_inside_code_fence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(root, "note.md", "# Note");
+    write(root, "index.md", "```\n[id]: note.md\n```\n");
+
+    let target = root.join("note.md");
+    let hits = scan_project_references_to(&target, root).expect("scan");
+    assert!(hits.is_empty(), "a definition inside a code fence must not be found");
+}
+
+#[test]
+fn scan_finds_percent_encoded_destination_ref() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(root, "my note.md", "# My note");
+    write(root, "index.md", "See [it](my%20note.md) here.");
+
+    let target = root.join("my note.md");
+    let hits = scan_project_references_to(&target, root).expect("scan");
+    assert!(!hits.is_empty(), "should find [it](my%20note.md)");
+}
+
+#[test]
 fn scan_no_false_positives() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();

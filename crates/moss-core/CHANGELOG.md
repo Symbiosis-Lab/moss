@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Renaming or deleting a file no longer skips a link written with the angle-bracket destination form (`[text](<a note.md>)`), the syntax Markdown allows so a destination can contain a space. Renaming now updates it and keeps the brackets, since the new path may still need them; deleting now finds it.
+- Deleting a file no longer misses a link to it that carries a `?query` string (`[text](note.md?v=1)`) — the query used to be read as part of the path, so the reference never matched.
+- Deleting a file no longer misses a reference-style link to it — `[text][id]` plus a `[id]: note.md` definition elsewhere in the document. The definition's destination is now read the same way a plain link's destination is; a definition inside a fenced code block is correctly left alone.
+- A link written the way Obsidian writes it with wikilinks turned off — a percent-encoded destination such as `[text](my%20note.md)` for a file actually named "my note.md" — now renders as a working link instead of a dead one; renaming or deleting the file finds it too. A file whose name literally contains a `%` still resolves by that name; renaming keeps a percent-encoded link's style so a destination that still needs a space stays valid.
 - **`cover` picker offers `.html`/`.htm`.** `cover`'s `file_kinds` now includes `Iframe`, so the chip-bar search dropdown and the OS Browse dialog stop excluding files the build has rendered as iframe covers since 2026-03-09 — an author no longer has to hand-type `cover: "[[page.html]]"` to get what the picker wouldn't offer.
 - An image's float was lost when combined with a caption or a percent (`align-right|Caption` printed "align-right|Caption" as its caption; `align-right 33%` did nothing). Both now float, size and caption correctly.
 - Video and audio embeds dropped `wide`/`page`/`screen`; audio embeds now also carry `data-type="audio"` like every other kind.

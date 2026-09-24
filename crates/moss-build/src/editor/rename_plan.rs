@@ -26,17 +26,22 @@
 //! both the app's rename command and `moss rename` — is now a one-element
 //! wrapper: `plan_moves` + `apply_planned_moves` for a batch of exactly one.
 
+mod path_list_folder_index;
+
 use std::collections::HashSet;
 use std::path::Path;
 
 use moss_core::ast::resolve_urls::GraphAssetIndex;
-use moss_core::content_graph::ContentGraph;
+use moss_core::content_graph::{ContentGraph, ContentGraphBuilder};
 use moss_core::resolve::md_extract::{extract_md_references, extract_structural_asset_refs, RefSyntax};
-use moss_core::resolve::folder_class::FolderIndex;
+use moss_core::resolve::fuzzy_path::{
+    percent_decoded_fallback, percent_encode_path_segments, resolve_reference_with_percent_fallback, ResolvedRef,
+};
 use moss_core::resolve::reference::{classify_reference, ReferenceContext, ReferenceKind};
 
 use crate::build::folder_index::NoUrlIndex;
 use crate::editor::ref_rewrite::{apply_edits, match_and_retarget, render_bare_value, Edit};
+use path_list_folder_index::{collect_dirs, PathListFolderIndex};
 
 // ── Public, serializable plan/apply/undo types ──────────────────────────────
 // Derives mirror `FileReferenceHit` (ref_scan.rs): the desktop passes these
@@ -192,78 +197,6 @@ fn dirname(root_rel: &str) -> &str {
     root_rel.rsplit_once('/').map_or("", |(d, _)| d)
 }
 
-// ── Internal: in-memory FolderIndex over a plain path list ─────────────────
-// `GraphAssetIndex` (moss-core, already `pub`) adapts `ContentGraph` to
-// `AssetIndex`; nothing equivalent exists for `FolderIndex`, so this is the
-// one genuinely new adapter the pure planner needs — everything else
-// (`resolve_asset_ref`, `classify_reference`, `ContentGraph`) was already
-// zero-I/O and trait-injected.
-
-pub(crate) struct PathListFolderIndex {
-    dirs: HashSet<String>,
-    files: HashSet<String>,
-}
-
-impl PathListFolderIndex {
-    fn build(paths: &[String]) -> Self {
-        let mut dirs = HashSet::new();
-        let mut files = HashSet::new();
-        for p in paths {
-            files.insert(p.clone());
-            let mut cur = p.as_str();
-            while let Some((parent, _)) = cur.rsplit_once('/') {
-                dirs.insert(parent.to_string());
-                cur = parent;
-            }
-        }
-        PathListFolderIndex { dirs, files }
-    }
-}
-
-impl FolderIndex for PathListFolderIndex {
-    fn is_dir(&self, root_rel: &str) -> bool {
-        root_rel.is_empty() || self.dirs.contains(root_rel)
-    }
-
-    fn dir_has_markdown_index(&self, root_rel: &str) -> bool {
-        let join = |name: &str| {
-            if root_rel.is_empty() {
-                name.to_string()
-            } else {
-                format!("{root_rel}/{name}")
-            }
-        };
-        for stem in moss_core::home::INDEX_STEMS {
-            if self.files.contains(join(&format!("{stem}.md")).as_str())
-                || self.files.contains(join(&format!("{stem}.markdown")).as_str())
-            {
-                return true;
-            }
-        }
-        if !root_rel.is_empty() {
-            let leaf = root_rel.rsplit('/').next().unwrap_or(root_rel);
-            if self.files.contains(join(&format!("{leaf}.md")).as_str()) {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn dir_has_static_index(&self, root_rel: &str) -> Option<String> {
-        for name in ["index.html", "index.htm"] {
-            let p = if root_rel.is_empty() {
-                name.to_string()
-            } else {
-                format!("{root_rel}/{name}")
-            };
-            if self.files.contains(p.as_str()) {
-                return Some(name.to_string());
-            }
-        }
-        None
-    }
-}
-
 /// Minimal `../`-relative spelling of `to_path` from `from_dir` (both
 /// root-relative, filesystem shape). Deliberately NOT `fuzzy_path`'s
 /// `relative_asset_path`: that percent-encodes segments for an HTML `href`,
@@ -325,7 +258,11 @@ fn ref_route(syntax: &RefSyntax) -> RefRoute {
         | RefSyntax::WikilinkStemEmbed
         | RefSyntax::WikilinkPathEmbed
         | RefSyntax::WikilinkAliasedEmbed { .. } => RefRoute::AssetOrEmbed,
+        // A definition's destination is what `[text][id]` resolves into once
+        // pulldown-cmark inlines it — the build renders it as an ordinary
+        // link, so it takes the same resolver a MarkdownLink does.
         RefSyntax::MarkdownLink { .. }
+        | RefSyntax::Definition { .. }
         | RefSyntax::WikilinkStem
         | RefSyntax::WikilinkPath
         | RefSyntax::WikilinkAliased { .. } => RefRoute::PageGraph,
@@ -345,9 +282,34 @@ fn resolve_by_route(
     match route {
         RefRoute::AssetOrEmbed => classify_reference(text, from_source, true, ctx).target_path,
         RefRoute::PageGraph => {
-            let base = text.split_once('#').map_or(text, |(head, _)| head);
-            graph.resolve_path(base, from_source)
+            let (base, _) = split_ref_suffix(text);
+            // Same resolver + percent-decode fallback `resolve_link_urls`
+            // (ast/resolve_urls.rs) uses for the build's own link
+            // resolution, so the two never disagree on a percent-encoded
+            // destination.
+            match resolve_reference_with_percent_fallback(base, graph, from_source) {
+                ResolvedRef::Found(p) => Some(p),
+                ResolvedRef::Unresolved => None,
+            }
         }
+    }
+}
+
+/// Split a reference's `?query`/`#anchor` suffix off its path (earliest of
+/// the two wins, mirroring `ast::resolve_urls::split_path_suffix`). Both
+/// halves are opaque; a rewrite reattaches `suffix` verbatim.
+fn split_ref_suffix(text: &str) -> (&str, &str) {
+    let q = text.find('?');
+    let h = text.find('#');
+    let cut = match (q, h) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    };
+    match cut {
+        Some(pos) => (&text[..pos], &text[pos..]),
+        None => (text, ""),
     }
 }
 
@@ -415,34 +377,56 @@ fn plan_one_ref(
         return Ok(None); // still resolves to the same (mapped) place, byte-identical
     }
 
-    let (base_text, anchor_suffix) = match raw_text.split_once('#') {
-        Some((head, a)) => (head, format!("#{a}")),
-        None => (raw_text, String::new()),
+    // A PageGraph target with no REGISTERED file behind it is the synthetic
+    // `<dir>/index.md` the folder-note fallback manufactures for an
+    // auto-index dir (content_graph.rs ~512-523); no authored text ever
+    // equals that string, so retargeting swaps in `dirname(t)`/`dirname(map_t)`
+    // with `target_is_dir = true`, same as a real AssetOrEmbed folder ref.
+    let synthetic_auto_index = route == RefRoute::PageGraph && !target_is_dir && !graph_pre.contains_path(&t);
+    let (retarget_t, retarget_map_t, target_is_dir) = if synthetic_auto_index {
+        (dirname(&t).to_string(), dirname(&map_t).to_string(), true)
+    } else {
+        (t.clone(), map_t.clone(), target_is_dir)
     };
+
+    let (base_text, suffix) = split_ref_suffix(raw_text);
     let from_dir_post = dirname(from_source_post);
     let verify = |candidate: &str| -> bool {
         resolve_by_route(route, candidate, from_source_post, ctx_post, graph_post).as_deref()
             == Some(map_t.as_str())
     };
 
+    // Obsidian (wikilinks off) writes a percent-encoded destination
+    // (`my%20note.md`) for a path with a space or non-ASCII character; the
+    // resolvers above already decode it as a fallback. A rewrite has to
+    // reproduce that authored style, or an escalated candidate with a
+    // literal space would emit a destination CommonMark can't parse as one
+    // path.
+    // `retarget_root_relative`'s own "same authored shape" comparisons are
+    // never fooled by this: they run on `base_text` before this encoding is
+    // applied, so an already-encoded reference that still needs no rewrite
+    // is untouched by any of this.
+    let needs_percent_encoding = percent_decoded_fallback(base_text).is_some();
+    let maybe_encode = |s: String| if needs_percent_encoding { percent_encode_path_segments(&s) } else { s };
+
     // Attempt 1: same authored shape. Produced against the PRE-move
     // directory (the context the text was actually written in) — the shape
     // survives even when the referencing file itself moved; correctness is
     // never assumed, only what `verify` (against the POST-move context)
     // confirms.
-    if let Some(candidate) = match_and_retarget(base_text, from_dir_pre, &t, &map_t, target_is_dir) {
-        let full = format!("{candidate}{anchor_suffix}");
+    if let Some(candidate) = match_and_retarget(base_text, from_dir_pre, &retarget_t, &retarget_map_t, target_is_dir) {
+        let full = format!("{}{suffix}", maybe_encode(candidate));
         if verify(&full) {
             return Ok(Some(full));
         }
     }
 
     // Attempt 2: explicit document-relative from the (possibly new) location.
-    let mut doc_rel = relative_root_path(from_dir_post, &map_t);
+    let mut doc_rel = relative_root_path(from_dir_post, &retarget_map_t);
     if target_is_dir {
         doc_rel.push('/');
     }
-    let full = format!("{doc_rel}{anchor_suffix}");
+    let full = format!("{}{suffix}", maybe_encode(doc_rel));
     if verify(&full) {
         return Ok(Some(full));
     }
@@ -450,11 +434,11 @@ fn plan_one_ref(
     // Attempt 3: explicit root-absolute — always resolves for a real path
     // on either route (an exact leading-`/` match is each resolver's first
     // tier).
-    let mut abs = format!("/{map_t}");
+    let mut abs = format!("/{retarget_map_t}");
     if target_is_dir {
         abs.push('/');
     }
-    let full = format!("{abs}{anchor_suffix}");
+    let full = format!("{}{suffix}", maybe_encode(abs));
     if verify(&full) {
         return Ok(Some(full));
     }
@@ -473,8 +457,15 @@ struct Indexes {
 
 impl Indexes {
     fn build(paths: &[String]) -> Self {
-        let refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
-        Indexes { graph: ContentGraph::from_paths(&refs), folders: PathListFolderIndex::build(paths) }
+        let mut builder = ContentGraphBuilder::new();
+        for p in paths {
+            builder.add_file(p, "");
+        }
+        // Mirrors `build_content_graph`'s own call: without it, a bare
+        // `[[Folder]]` wikilink to a note-less, auto-indexed folder resolved
+        // on the real site but looked unresolved here, so rename left it alone.
+        crate::build::scan::classify::register_auto_index_dirs(&mut builder, &collect_dirs(paths));
+        Indexes { graph: builder.build(), folders: PathListFolderIndex::build(paths) }
     }
 }
 

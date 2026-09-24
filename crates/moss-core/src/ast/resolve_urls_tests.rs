@@ -68,6 +68,33 @@ fn resolves_standard_markdown_link_to_internal() {
     }
 }
 
+// Obsidian (wikilinks off) writes a percent-encoded destination for a path
+// with a space or non-ASCII character: `[x](my%20note.md)` for a file
+// literally named "my note.md". Verifies whether the real render path
+// resolves it — an audit claimed it doesn't decode before the graph lookup.
+#[test]
+fn percent_encoded_link_destination_resolves() {
+    let mut doc = parse("[x](my%20note.md)");
+    let graph = graph_with(&["index.md", "my note.md"]);
+    let outgoing = resolve_urls(&mut doc, &graph, "index.md").outgoing;
+
+    assert_eq!(outgoing.len(), 1, "percent-encoded destination should resolve like the real file");
+    assert_eq!(outgoing[0].target_path, "my note.md");
+}
+
+// A filename that literally contains a `%` must keep resolving by its raw
+// name — decoding must be a fallback tried only after the raw form misses,
+// never applied unconditionally.
+#[test]
+fn literal_percent_in_filename_still_resolves() {
+    let mut doc = parse("[x](100%.png)");
+    let graph = graph_with(&["index.md", "100%.png"]);
+    let outgoing = resolve_urls(&mut doc, &graph, "index.md").outgoing;
+
+    assert_eq!(outgoing.len(), 1, "a literal % filename should resolve by its raw name");
+    assert_eq!(outgoing[0].target_path, "100%.png");
+}
+
 #[test]
 fn passes_through_external_link() {
     let mut doc = parse("[ex](https://example.com)");

@@ -66,6 +66,123 @@ fn folder_note_shorthand_frontmatter_cover_rewritten() {
     assert_eq!(r(root, "page.md"), "---\ncover: 新夹.md\n---\n\nBody\n");
 }
 
+// A folder with NO home file of its own (no `旧夹.md`, no `index.md`) still
+// gets a real page in the build — the renderer auto-generates its index —
+// so a bare wikilink to it must survive the folder's rename. Before the
+// planner registered auto-index dirs on its own graphs, this reference
+// resolved to nothing pre-move (invisible to the resolver, case 4 of the
+// invariant) and rename left it dangling.
+#[test]
+fn bare_wikilink_to_an_auto_index_folder_is_rewritten_after_rename() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "旧夹/note.md", "第一段。\n");
+    w(root, "index.md", "[[旧夹]] here.\n");
+
+    do_move(root, "旧夹", "新夹");
+
+    assert_eq!(r(root, "index.md"), "[[新夹]] here.\n");
+    assert!(root.join("新夹/note.md").exists());
+}
+
+// An angle-bracket destination `(<path>)` is CommonMark's way to let a link
+// destination contain a space; pulldown-cmark strips the brackets before the
+// build resolves it. The rewrite must keep them — the retargeted path still
+// has a space, so bare (unbracketed) syntax would break the link.
+//
+// The decoy at `other/my note.md` matters: without it, "my note" is a
+// globally unique stem and the reference would already resolve correctly by
+// bare-stem fallback post-move (same free pass as
+// `bare_reference_resolving_by_basename_is_untouched_on_folder_rename`),
+// leaving the text untouched and never exercising the bracket-preserving
+// rewrite this test is for.
+#[test]
+fn angle_bracket_destination_is_rewritten_and_keeps_its_brackets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "posts/my note.md", "第一段。\n");
+    w(root, "other/my note.md", "decoy\n");
+    w(root, "index.md", "[x](<posts/my note.md>)\n");
+
+    do_move(root, "posts", "文章");
+
+    assert_eq!(r(root, "index.md"), "[x](<文章/my note.md>)\n");
+}
+
+// A `?query` suffix (`[x](note.md?v=1)`) is opaque to resolution — the build
+// splits it off before the graph lookup — but must survive a rewrite the
+// same way a `#anchor` suffix already does.
+#[test]
+fn query_suffix_survives_rename() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "note.md", "第一段。\n");
+    w(root, "index.md", "[x](note.md?v=1)\n");
+
+    do_move(root, "note.md", "笔记.md");
+
+    assert_eq!(r(root, "index.md"), "[x](笔记.md?v=1)\n");
+}
+
+// A reference-style link: pulldown-cmark resolves `[x][id]` against the
+// `[id]: note.md` definition and renders it as a normal link, so only the
+// definition's destination is a reference to rewrite; the `[x][id]` use
+// itself must survive byte-identical.
+#[test]
+fn reference_style_definition_is_rewritten_use_stays_untouched() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "note.md", "第一段。\n");
+    w(root, "index.md", "See [x][id] here.\n\n[id]: note.md\n");
+
+    do_move(root, "note.md", "笔记.md");
+
+    assert_eq!(r(root, "index.md"), "See [x][id] here.\n\n[id]: 笔记.md\n");
+}
+
+// pulldown-cmark recognizes a link reference definition inside a list item
+// or a blockquote the same way it does at the top level, so the scanner must
+// too — a bare top-level-only definition scanner missed exactly these.
+#[test]
+fn definition_inside_a_list_item_is_rewritten() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "note.md", "第一段。\n");
+    w(root, "index.md", "- [id]: note.md\n");
+
+    do_move(root, "note.md", "笔记.md");
+
+    assert_eq!(r(root, "index.md"), "- [id]: 笔记.md\n");
+}
+
+#[test]
+fn definition_inside_a_blockquote_is_rewritten() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "note.md", "第一段。\n");
+    w(root, "index.md", "> [id]: note.md\n");
+
+    do_move(root, "note.md", "笔记.md");
+
+    assert_eq!(r(root, "index.md"), "> [id]: 笔记.md\n");
+}
+
+// Obsidian (wikilinks off) writes a percent-encoded destination for a path
+// with a space: `my%20note.md` names the real file "my note.md". The
+// rewrite must emit the same encoding style — the renamed file still has a
+// space, so a bare (literal-space) destination would be invalid CommonMark.
+#[test]
+fn percent_encoded_destination_is_rewritten_still_percent_encoded() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "my note.md", "第一段。\n");
+    w(root, "index.md", "[x](my%20note.md)\n");
+
+    do_move(root, "my note.md", "her note.md");
+
+    assert_eq!(r(root, "index.md"), "[x](her%20note.md)\n");
+}
+
 // ── A moved file's own outgoing links ───────────────────────────────────
 
 #[test]

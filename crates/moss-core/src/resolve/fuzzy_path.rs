@@ -34,6 +34,32 @@ pub fn resolve_reference(reference: &str, graph: &ContentGraph, from_path: &str)
     }
 }
 
+/// [`resolve_reference`], retrying a percent-decoded form once the raw text
+/// has already missed. Obsidian (wikilinks off) writes a percent-encoded
+/// destination for any path with a space or non-ASCII character
+/// (`my%20note.md` for a real "my note.md"); the graph is keyed on real
+/// filesystem names, so such a reference never resolves raw. Decoding is a
+/// fallback, not a rewrite of the input — see [`percent_decoded_fallback`]
+/// for why a file whose name literally contains a `%` is unaffected.
+///
+/// Shared by the build's own link resolution
+/// (`ast::resolve_urls::resolve_link_urls`) and the rename planner's
+/// PageGraph route, so both agree on what a percent-encoded destination
+/// resolves to.
+pub fn resolve_reference_with_percent_fallback(
+    reference: &str,
+    graph: &ContentGraph,
+    from_path: &str,
+) -> ResolvedRef {
+    match resolve_reference(reference, graph, from_path) {
+        ResolvedRef::Unresolved => match percent_decoded_fallback(reference) {
+            Some(decoded) => resolve_reference(&decoded, graph, from_path),
+            None => ResolvedRef::Unresolved,
+        },
+        found => found,
+    }
+}
+
 /// Compute the relative URL from one file to another using pretty URL format.
 ///
 /// Both paths should be relative to the source root (e.g. `"posts/hello.md"`).
@@ -240,6 +266,16 @@ pub fn percent_decode_path(path: &str) -> String {
         i += 1;
     }
     String::from_utf8(out).unwrap_or_else(|_| path.to_string())
+}
+
+/// `Some(percent_decode_path(s))` when decoding would actually change `s`,
+/// `None` otherwise — the one decision every percent-decode-as-fallback
+/// resolver shares: retry the decoded form only when there IS one, so a
+/// file whose name literally contains a `%` (`100%.png`) is never
+/// mistakenly re-decoded into a path nobody wrote.
+pub fn percent_decoded_fallback(s: &str) -> Option<String> {
+    let decoded = percent_decode_path(s);
+    (decoded != s).then_some(decoded)
 }
 
 /// Turn an asset URL as it appears **inside emitted HTML** back into the

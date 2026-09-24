@@ -31,7 +31,7 @@ use super::url::{ResolvedUrl, Url, UrlKind};
 use super::visit::visit_urls_mut;
 use crate::content_graph::ContentGraph;
 use crate::resolve::asset_class::{resolve_asset_ref, AssetIndex, AssetResolution};
-use crate::resolve::fuzzy_path::{resolve_reference, ResolvedRef};
+use crate::resolve::fuzzy_path::{resolve_reference_with_percent_fallback, ResolvedRef};
 use crate::resolve::{Diagnostic, DiagnosticKind, LinkType, OutgoingLink};
 
 // ---------------------------------------------------------------------------
@@ -82,8 +82,9 @@ pub struct UrlResolution {
 ///   are left untouched (idempotent on a resolved document).
 /// * `graph` — the content graph for bare-filename / cross-page lookups.
 /// * `source_path` — the file containing the URLs, used by
-///   [`resolve_reference`] for relative-path disambiguation. It does NOT enter
-///   the emitted URL (see [`ContentGraph::pinned_url`]).
+///   [`resolve_reference_with_percent_fallback`] for relative-path
+///   disambiguation. It does NOT enter the emitted URL (see
+///   [`ContentGraph::pinned_url`]).
 pub fn resolve_urls(
     doc: &mut Document,
     graph: &ContentGraph,
@@ -468,7 +469,7 @@ fn resolve_link_urls(
         // visitor must NOT collapse it to a final `Url::Resolved` or
         // page_map decoding silently breaks.
         let (path_part, suffix) = split_path_suffix(&raw);
-        match resolve_reference(path_part, graph, source_path) {
+        match resolve_reference_with_percent_fallback(path_part, graph, source_path) {
             ResolvedRef::Found(resolved) => {
                 found.outgoing.push(OutgoingLink {
                     target_path: resolved.clone(),

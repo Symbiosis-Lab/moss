@@ -176,3 +176,91 @@ fn label_containing_code_span_is_preserved() {
         refs[0].syntax
     );
 }
+
+// ── Angle-bracket destinations ───────────────────────────────────────────
+
+#[test]
+fn angle_bracket_destination_is_unwrapped() {
+    // `[x](<my note.md>)` — CommonMark's alternate destination syntax lets a
+    // path contain a space; pulldown-cmark strips the brackets before the
+    // build resolves it, so the scanner must extract the INNER text, not the
+    // literal "<my note.md>".
+    let src = "[x](<my note.md>)";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "got: {:?}", refs);
+    assert_eq!(refs[0].text, "my note.md");
+    // The span excludes the brackets, so a rewrite of just ref_from..ref_to
+    // leaves them in place around the new text.
+    assert_eq!(&src[refs[0].ref_from..refs[0].ref_to], "my note.md");
+    assert_eq!(&src[refs[0].byte_from..refs[0].byte_to], "[x](<my note.md>)");
+}
+
+// ── Link reference definitions ───────────────────────────────────────────
+
+#[test]
+fn definition_destination_is_extracted_and_use_needs_no_edit() {
+    // pulldown-cmark resolves `[text][id]` against the `[id]: page.md`
+    // definition and renders a normal link — only the definition's own
+    // destination is a reference; the `[text][id]` use names no path of its
+    // own and must not be extracted a second time.
+    let src = "See [text][id] here.\n\n[id]: page.md\n";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "only the definition's destination, got: {:?}", refs);
+    assert_eq!(refs[0].text, "page.md");
+    assert!(matches!(&refs[0].syntax, RefSyntax::Definition { label } if label == "id"));
+    assert_eq!(&src[refs[0].ref_from..refs[0].ref_to], "page.md");
+}
+
+#[test]
+fn definition_inside_code_fence_is_ignored() {
+    let src = "```\n[id]: page.md\n```\n[[find]]";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "only the live ref after the fence, got: {:?}", refs);
+    assert_eq!(refs[0].text, "find");
+}
+
+#[test]
+fn definition_with_angle_bracket_destination_is_unwrapped() {
+    let src = "[id]: <my note.md>\n";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "got: {:?}", refs);
+    assert_eq!(refs[0].text, "my note.md");
+}
+
+#[test]
+fn definition_destination_stops_before_a_title() {
+    let src = "[id]: page.md \"A title\"\n";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "got: {:?}", refs);
+    assert_eq!(refs[0].text, "page.md");
+}
+
+#[test]
+fn definition_inside_a_list_item_is_extracted() {
+    // pulldown-cmark renders `[x][id]` as a working link here — a definition
+    // is recognized inside a list item's content, not just at the top level.
+    let src = "- [id]: page.md\n";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "got: {:?}", refs);
+    assert_eq!(refs[0].text, "page.md");
+    assert_eq!(&src[refs[0].ref_from..refs[0].ref_to], "page.md");
+}
+
+#[test]
+fn definition_inside_a_blockquote_is_extracted() {
+    let src = "> [id]: page.md\n";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "got: {:?}", refs);
+    assert_eq!(refs[0].text, "page.md");
+    assert_eq!(&src[refs[0].ref_from..refs[0].ref_to], "page.md");
+}
+
+#[test]
+fn definition_inside_nested_blockquote_and_list_item_is_extracted() {
+    let src = "> - [id]: page.md\n";
+    let refs = extract_md_references(src);
+    assert_eq!(refs.len(), 1, "got: {:?}", refs);
+    assert_eq!(refs[0].text, "page.md");
+    assert_eq!(&src[refs[0].ref_from..refs[0].ref_to], "page.md");
+}
+

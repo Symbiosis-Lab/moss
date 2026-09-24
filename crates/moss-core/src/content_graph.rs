@@ -551,6 +551,16 @@ impl ContentGraph {
         self.slug_map.get(&norm).map(|s| s.as_str())
     }
 
+    /// `true` iff `path` names a real, registered file — O(1) via the same
+    /// normalized-path index `resolve_path`'s exact-match tier uses, rather
+    /// than a linear scan of [`all_files`](Self::all_files). Distinguishes a
+    /// real file from a synthetic path `resolve_path` only ever manufactures
+    /// (the auto-index folder-note fallback's `<dir>/index.md`), which by
+    /// construction is never itself registered.
+    pub fn contains_path(&self, path: &str) -> bool {
+        self.path_index.contains_key(&normalize_path(path))
+    }
+
     /// All file paths in insertion order.
     pub fn all_files(&self) -> &[String] {
         &self.files
@@ -953,6 +963,19 @@ mod tests {
         assert_eq!(g.get_slug("posts/hello.md"), Some("/posts/hello"));
         assert_eq!(g.get_slug("Posts/Hello.md"), Some("/posts/hello"));
         assert_eq!(g.get_slug("nope.md"), None);
+    }
+
+    #[test]
+    fn test_contains_path() {
+        let g = sample_graph();
+
+        assert!(g.contains_path("posts/hello.md"));
+        // Case-insensitive, like every other path_index lookup.
+        assert!(g.contains_path("Posts/Hello.md"));
+        // A synthetic path resolve_path can manufacture (an auto-index
+        // folder's home page) but never registers as a real file.
+        assert!(!g.contains_path("posts/index.md"));
+        assert!(!g.contains_path("nope.md"));
     }
 
     // all_files preserves insertion order

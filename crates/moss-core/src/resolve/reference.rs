@@ -114,6 +114,29 @@ fn filename_ext(path: &str) -> String {
     }
 }
 
+/// Resolve `target` via `resolve_asset_ref`, retrying a percent-decoded form
+/// only once the raw text has already missed — the same fallback order
+/// `resolve_link_urls` (ast/resolve_urls.rs) uses for the build's own link
+/// resolution, so a rename/delete scan sees a percent-encoded destination
+/// (`my%20note.md`, the form Obsidian writes with wikilinks off) the same
+/// way the build does, while a file whose name literally contains a `%`
+/// keeps resolving by that literal name.
+fn resolve_asset_with_percent_fallback(
+    target: &str,
+    from_source: &str,
+    index: &dyn AssetIndex,
+) -> crate::resolve::asset_class::AssetResolution {
+    use crate::resolve::asset_class::{resolve_asset_ref, AssetResolution};
+    use crate::resolve::fuzzy_path::percent_decoded_fallback;
+    match resolve_asset_ref(target, from_source, index) {
+        AssetResolution::NotFound => match percent_decoded_fallback(target) {
+            Some(decoded) => resolve_asset_ref(&decoded, from_source, index),
+            None => AssetResolution::NotFound,
+        },
+        other => other,
+    }
+}
+
 /// Classify a reference's inner text (target + optional |pothole / #anchor /
 /// ?query) into a kind + resolved source path. Pure.
 pub fn classify_reference(
@@ -140,10 +163,17 @@ pub fn classify_reference(
         return r;
     }
 
-    // Split off |pothole, then #anchor.
+    // Split off |pothole, then ?query, then #anchor. A query string is
+    // opaque here — it carries no resolution meaning, same as an anchor —
+    // so it's dropped the same way, before the anchor split runs on what's
+    // left.
     let (path_part, pothole) = match inner.split_once('|') {
         Some((p, rest)) => (p.trim(), Some(rest)),
         None => (inner, None),
+    };
+    let (path_part, _query) = match path_part.split_once('?') {
+        Some((p, q)) => (p.trim(), Some(q)),
+        None => (path_part, None),
     };
     let (path_no_anchor, anchor) = match path_part.split_once('#') {
         Some((p, a)) => (p.trim(), Some(a.to_string())),
@@ -205,7 +235,7 @@ pub fn classify_reference(
         };
     }
 
-    use crate::resolve::asset_class::{resolve_asset_ref, AssetResolution};
+    use crate::resolve::asset_class::AssetResolution;
     use crate::resolve::ext_kind::{reference_kind_for_ext, ExtKind};
 
     // Folder arm: trailing slash, or the target resolves to a directory.
@@ -277,7 +307,7 @@ pub fn classify_reference(
     let query_ext_kind = reference_kind_for_ext(&filename_ext(path_no_anchor));
 
     let resolved: Option<(String, AssetProvenance)> =
-        match resolve_asset_ref(path_no_anchor, from_source, ctx.assets) {
+        match resolve_asset_with_percent_fallback(path_no_anchor, from_source, ctx.assets) {
             AssetResolution::Resolved { root_rel, provenance } => Some((root_rel, provenance)),
             AssetResolution::Ambiguous { candidates, .. } => {
                 let mut r = ResolvedReference::not_found();
@@ -295,7 +325,7 @@ pub fn classify_reference(
             {
                 let mut hit = None;
                 for note_ext in ["md", "markdown"] {
-                    match resolve_asset_ref(
+                    match resolve_asset_with_percent_fallback(
                         &format!("{path_no_anchor}.{note_ext}"),
                         from_source,
                         ctx.assets,
