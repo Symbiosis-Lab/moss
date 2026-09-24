@@ -6403,6 +6403,9 @@ a.moss-grid-card:hover {
    contains it. The row scrolls without JS; `scroll-row.js` adds dots and
    wheel scrolling on top. No `scroll-behavior: smooth`, no hidden scrollbar. */
 .moss-grid[data-scroll] {
+  /* Containing block for an absolutely positioned descendant (e.g. a
+     theme's visually-hidden `figcaption`), so this row clips it. */
+  position: relative;
   grid-auto-flow: column;
   overflow-x: auto;
   scroll-snap-type: inline proximity;

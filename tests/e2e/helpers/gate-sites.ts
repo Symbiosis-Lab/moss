@@ -645,6 +645,32 @@ implicit_figure = false
 const CARD_IMAGE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30" viewBox="0 0 40 30"><rect width="40" height="30" fill="#a47"/></svg>
 `;
 
+// Ten cells over three visible columns: enough that the row genuinely
+// scrolls, and — before `.moss-grid[data-scroll]` gained `position:
+// relative` — enough that a visually-hidden figcaption (see
+// SCROLL_OVERFLOW_THEME_CSS below) landing at its static position against
+// the initial containing block could reach far past the viewport, dragging
+// the whole document wide with it.
+const SCROLL_OVERFLOW_CELLS = Array.from(
+  { length: 10 },
+  (_, i) => `[![Card ${i + 1}](tile.svg)](https://example.org/card-${i + 1}/)`,
+).join("\n+++\n");
+
+// The standard visually-hidden pattern a site theme uses to keep a caption
+// readable to assistive tech while removing it from view — scoped to scroll
+// rows because that is where a card caption is common, not because the bug
+// is scroll-row-specific. Without the fix below this escapes the row's
+// `overflow-x: auto` (its containing block is outside the row), which is
+// exactly what scroll-row-overflow.spec-level assertions below catch.
+const SCROLL_OVERFLOW_THEME_CSS = `.moss-grid[data-scroll] figcaption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+`;
+
 export const GRID_CARD_IMAGE_INLINE_SIZE_GATE: ScratchSiteSpec = {
   name: "grid-card-image-inline-size-gate",
   files: {
@@ -711,9 +737,44 @@ uid: "gcis0104"
 [Elsewhere](https://example.org/elsewhere/)
 :::
 `,
+    // A scroll row long enough to overflow, on a page with nothing else on
+    // it: SCROLL_OVERFLOW_THEME_CSS visually hides every card caption, so
+    // this page's own document width should never depend on how many cards
+    // scroll past.
+    "scroll-overflow.md": `---
+title: Scroll Row Overflow
+uid: "gcis0105"
+---
+
+# Scroll Row Overflow
+
+:::grid 3 {scroll}
+${SCROLL_OVERFLOW_CELLS}
+:::
+`,
+    // Same row, vertical typesetting: the row's own scroll axis transposes
+    // to the block axis (site/vertical.css), but a caption escaping to the
+    // initial containing block still lands in physical page coordinates, so
+    // the page's own scroll axis (still physically horizontal — see
+    // site/vertical.css's scroll-row comment) is the one at risk here too.
+    "scroll-overflow-vertical.md": `---
+title: Scroll Row Overflow Vertical
+uid: "gcis0106"
+typesetting: vertical
+---
+
+# Scroll Row Overflow Vertical
+
+:::grid 3 {scroll}
+${SCROLL_OVERFLOW_CELLS}
+:::
+`,
     ".moss/config.toml": CONFIG_TOML,
-    // No user theme: this gate is about moss's own defaults.
-    ".moss/theme/style.css": null,
+    // A theme is what actually surfaces this bug (see
+    // SCROLL_OVERFLOW_THEME_CSS above): a real caption-hiding rule, not
+    // moss's own defaults, is what leaves a scroll row's captions positioned
+    // against the page instead of the row.
+    ".moss/theme/style.css": SCROLL_OVERFLOW_THEME_CSS,
   },
 };
 

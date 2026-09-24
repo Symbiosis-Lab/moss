@@ -160,3 +160,65 @@ test("a scroll row's page-card cells get the same snap treatment as its .moss-gr
     expect.soft(scrollSnapAlign, `${className} should snap`).toBe("start");
   }
 });
+
+const MOBILE = { width: 390, height: 844 };
+
+/**
+ * `overflow-x: auto` on `.moss-grid[data-scroll]` only clips a descendant
+ * positioned against the ROW's own containing block. A theme's visually
+ * hidden `figcaption` (`position: absolute` with no positioned ancestor of
+ * its own) is instead positioned against the initial containing block, so
+ * its static position — far to the right for a card late in a long row —
+ * escaped the row's clip entirely and widened the whole document, not just
+ * the row. `scroll-overflow.md` mixes ten cards with
+ * SCROLL_OVERFLOW_THEME_CSS's caption hider (see gate-sites.ts) to force
+ * exactly that.
+ */
+for (const viewport of [DESKTOP, MOBILE] as const) {
+  test(`a scroll row's hidden captions do not widen the page (${viewport.width}px)`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/scroll-overflow/");
+
+    const row = page.locator(".moss-grid[data-scroll]");
+    const rowMetrics = await row.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+    expect(rowMetrics.scrollWidth, "the row itself should still scroll").toBeGreaterThan(rowMetrics.clientWidth);
+
+    const docMetrics = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }));
+    expect(
+      docMetrics.scrollWidth,
+      "a scroll row's hidden captions must not widen the whole page",
+    ).toBeLessThanOrEqual(docMetrics.clientWidth);
+  });
+}
+
+/**
+ * Under vertical typesetting the row transposes (site/vertical.css): it
+ * scrolls along the block axis, physical height, instead. But the page's OWN
+ * scroll axis stays physically horizontal either way (columns run
+ * right-to-left), so an escaped caption is still a page-width regression
+ * here, not a page-height one — the same fix, checked on the axis that
+ * actually matters for this typesetting mode.
+ */
+test("a scroll row's hidden captions do not widen a vertical-typesetting page", async ({ page }) => {
+  await page.setViewportSize(DESKTOP);
+  await page.goto("/scroll-overflow-vertical/");
+
+  const row = page.locator(".moss-grid[data-scroll]");
+  const rowMetrics = await row.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }));
+  expect(
+    rowMetrics.scrollHeight,
+    "the row itself should still scroll along its own (block) axis",
+  ).toBeGreaterThan(rowMetrics.clientHeight);
+
+  const docMetrics = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(
+    docMetrics.scrollWidth,
+    "a vertical page's own scroll axis is still physically horizontal; hidden captions must not widen it",
+  ).toBeLessThanOrEqual(docMetrics.clientWidth);
+});
