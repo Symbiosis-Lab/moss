@@ -236,7 +236,8 @@ const BASELINE = {
   // 278771 -> 286090 (2026-09-23): measured, set after correctness -- the three-phase transition's engine half (dissolve recorder, mass fixer, SHOWK/FIX), net of pour()'s deleted clock and the sheen floor.
   // 286090 -> 289151 (2026-09-23): measured -- the dissolve shown as the real film, replayed from checkpoints (seek, checkpoint save/load, the mass fixer's interpolation), net of the stored-frame bookkeeping it replaced.
   // 289151 -> 295117 (2026-09-23): measured -- membership (memberPrint, artifactNow, a recomposable scene 3 print, deployPrint's two halves, the members' hide and fade in watercolor-morph.js's caller), the fixer read every 6 steps, and the warmer kept off a capture in flight.
-  scriptBytes: 295117,
+  // 295117 -> 295300 (2026-09-24): measured -- mobileEntranceProgress touch-gated (item A), replacing the #col-pin read with #c2's own text and its explanatory comment.
+  scriptBytes: 295300,
 };
 
 function countWindowAssignments(text) {

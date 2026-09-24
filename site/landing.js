@@ -2142,25 +2142,29 @@ function mobileInkProgress(text, earlyBy = 0) {
   const rect = text.getBoundingClientRect();
   return clamp01((band.bottom - rect.top) / (band.height + rect.height - earlyBy));
 }
-// The first visual enters with its own copy. Morph once fully visible,
-// finishing before the second scene's text arrives at the viewport edge.
-// A ratio over a span, never a boolean (owner: dissolve only after pinned,
-// and never a swap) -- the old Math.min(entrance, pinned) let entrance read
-// near 1 up to 60px before #vis's real pinned top, so the boolean's own
-// flip jumped progress in one scroll step instead of ramping it. `top` is
-// #vis's own not-yet-stuck position (#col is absolute, not sticky, so it
-// keeps moving after #vis sticks): equals band.top exactly at the pin
-// instant, so band.top-top is 0 there and grows with every further px.
-// Span = 0.55 * band.height: BEFORE (probe-progress-grid.mjs) spanned 342px
-// for this leg; a bare band.height (~351px at 390x844) matches that order
-// but leaves no room, on this layout, for check-landing-mobile.mjs's own
-// "solid interval" floor before scene 2 starts dissolving into scene 3
-// (~330px total separates this ramp's start from that floor's trigger) --
-// 0.55 keeps the ramp inside that budget, still scaled to the visual itself.
+// Owner (2026-09-24): "morph from scene 1 to scene 2 should start a bit
+// later, once text of scene 2 touches the animation" -- the #col-pin gate
+// below read close to 1 while #c2's own text was still hundreds of px below
+// the visual, so scene 1 was already dissolving with nowhere for the reader
+// to see it land. Touch-gated instead, the same shape mobileInkProgress
+// already gives every later leg: held at exactly 0 until #c2's text top
+// reaches band.bottom, then a ratio over MOBILE_LEG0_RAMP_SPAN px.
+// That span is deliberately short and independent of mobileInkProgress's
+// own (much longer) span for the *next* leg, 1->2, which is also gated by
+// #c2 -- reusing that leg's own MOBILE_LEG1_EARLY_BY-adjusted ramp here
+// would make this leg's own completion land at the exact scroll position
+// leg 1->2's gate also reads 1, i.e. two legs finishing on the same frame,
+// which collapses the plateau between them to nothing. A short span keeps
+// leg 1->2's own gate (mobileInkProgress(#c2, 40), still counting from the
+// same touch point) close to its own start when this leg hands off --
+// MOBILE_LEG0_RAMP_SPAN/726 =~ 0.09, comfortably inside the dissolve's own
+// first phase (A_END = 0.35 in watercolor-morph.js) so the handoff reads as
+// a continuation of #c2 still-mostly-undissolved, not a cut.
+const MOBILE_LEG0_RAMP_SPAN = 64;
 function mobileEntranceProgress() {
-  const col = document.getElementById('col'), band = mobileVisualBand();
-  const top = col.getBoundingClientRect().top + parseFloat(getComputedStyle(col).paddingTop);
-  return clamp01((band.top - top) / Math.max(1, band.height * 0.55));
+  const band = mobileVisualBand();
+  const rect = scenesEl[LIVE].firstElementChild.getBoundingClientRect();
+  return clamp01((band.bottom - rect.top) / MOBILE_LEG0_RAMP_SPAN);
 }
 // Ends at closingRestY() (the reader's actual last pixel of scroll), not
 // mobileInkProgress's own text-height span, which saturated at 1 hundreds
