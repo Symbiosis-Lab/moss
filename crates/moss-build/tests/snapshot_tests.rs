@@ -283,6 +283,47 @@ fn is_content_compared(extension: &str) -> bool {
     )
 }
 
+/// Build the "First diff at char N: ..." debug suffix `compare_directories`
+/// appends when two content-compared files differ. Pulled out on its own so
+/// the char/byte-index handling can be pinned by a unit test independent of
+/// running a full fixture build.
+fn diff_preview(expected: &str, actual: &str) -> String {
+    // Find first difference position for debugging
+    let first_diff = expected
+        .chars()
+        .zip(actual.chars())
+        .enumerate()
+        .find(|(_, (a, b))| a != b)
+        .map(|(i, _)| i);
+
+    if let Some(pos) = first_diff {
+        // `pos` is a CHAR index (from `.chars().enumerate()` above), so the
+        // window bounds below must stay in char indices too — slicing a
+        // `str` on a byte offset derived from a char count only happens to
+        // work when every character is one byte.
+        let start = pos.saturating_sub(20);
+        let end = pos + 50;
+        format!(
+            "\n  First diff at char {}: expected '{}' vs actual '{}'",
+            pos,
+            char_window(expected, start, end),
+            char_window(actual, start, end)
+        )
+    } else if expected.len() != actual.len() {
+        format!("\n  Length differs: {} vs {}", expected.len(), actual.len())
+    } else {
+        String::new()
+    }
+}
+
+/// The substring of `s` covering char indices `[start_char, end_char)`,
+/// clamped to `s`'s length. Indexes by chars rather than bytes so the result
+/// always falls on a char boundary, however many bytes each character takes.
+fn char_window(s: &str, start_char: usize, end_char: usize) -> &str {
+    let at = |n| s.char_indices().nth(n).map(|(b, _)| b).unwrap_or(s.len());
+    &s[at(start_char)..at(end_char)]
+}
+
 fn compare_directories(actual: &Path, expected: &Path) -> Vec<String> {
     let mut diffs = Vec::new();
 
@@ -334,28 +375,7 @@ fn compare_directories(actual: &Path, expected: &Path) -> Vec<String> {
             let normalized_actual = normalize_html(&actual_content);
 
             if normalized_expected != normalized_actual {
-                // Find first difference position for debugging
-                let first_diff = normalized_expected
-                    .chars()
-                    .zip(normalized_actual.chars())
-                    .enumerate()
-                    .find(|(_, (a, b))| a != b)
-                    .map(|(i, _)| i);
-
-                let diff_info = if let Some(pos) = first_diff {
-                    let start = pos.saturating_sub(20);
-                    let end = (pos + 50).min(normalized_expected.len()).min(normalized_actual.len());
-                    format!(
-                        "\n  First diff at char {}: expected '{}' vs actual '{}'",
-                        pos,
-                        &normalized_expected[start..end],
-                        &normalized_actual[start..end.min(normalized_actual.len())]
-                    )
-                } else if normalized_expected.len() != normalized_actual.len() {
-                    format!("\n  Length differs: {} vs {}", normalized_expected.len(), normalized_actual.len())
-                } else {
-                    String::new()
-                };
+                let diff_info = diff_preview(&normalized_expected, &normalized_actual);
 
                 diffs.push(format!(
                     "Content differs: {}\n  Expected ({} chars): {}...\n  Actual ({} chars): {}...{}",
@@ -494,6 +514,30 @@ fn normalize_html_is_idempotent() {
     ] {
         assert!(!once.contains(leaked), "{leaked:?} survived normalization");
     }
+}
+
+/// `diff_preview`'s `pos` comes from `.chars().enumerate()`, so it counts
+/// characters, not bytes. Slicing `expected[start..end]` with that count used
+/// directly as a byte offset is only safe by coincidence — it breaks as soon
+/// as a multi-byte character sits before the difference and pushes the char
+/// count away from the byte count. This pins the fixed, char-boundary-safe
+/// behavior with invented CJK text: 30 three-byte filler characters place the
+/// difference at char 31, so the naive `pos - 20 == 11` byte offset used to
+/// land mid-character and panic.
+#[test]
+fn diff_preview_handles_difference_after_multibyte_prefix() {
+    let filler = "測".repeat(30);
+    let expected = format!("{filler}第一段。tail");
+    let actual = format!("{filler}第二段。tail");
+
+    let preview = diff_preview(&expected, &actual);
+
+    assert!(
+        preview.contains("First diff at char 31"),
+        "unexpected preview: {preview}"
+    );
+    assert!(preview.contains('一'), "unexpected preview: {preview}");
+    assert!(preview.contains('二'), "unexpected preview: {preview}");
 }
 
 /// Run a snapshot test for a given fixture.
