@@ -621,8 +621,23 @@ async function checkDividerWidthsMatchArticle(browser, engine) {
 // paragraph, the demo frame, and the pressed button's own rect must not move by more than 1px at any
 // point across the WHOLE scene, not just before/after — a mid-scene jump (a superseded
 // scrollIntoView, a reflow from a result appearing) would otherwise slip between two snapshots.
-// Sampled once every 100ms from the moment Play is pressed for `durationMs`, comfortably past the
+// Sampled roughly every 100ms from the moment Play is pressed for `durationMs`, comfortably past the
 // scene's own worst-case length under driver.js's Pace table.
+//
+// Sampling happens inside a requestAnimationFrame loop, not a setInterval — deliberately, not just
+// for convenience. WebKit's own "focus a field inside an iframe" cross-frame reveal (demo-frame.js's
+// WebKit backstop comment) briefly writes an out-of-place window.scrollY on the HOST page, which
+// demo-frame.js's own scroll guard (a 'scroll' listener plus a per-frame poll) corrects before the
+// next paint — confirmed by instrumenting that guard directly: across a captured failing run it read
+// the correct scrollY on every single one of its ~750 rAF checks, never once observing the wrong
+// value a parallel setInterval sampler caught at the same moment. setInterval fires on its own timer,
+// independent of the render pipeline, so it can happen to land inside that pre-paint window and read
+// a value nothing ever painted; requestAnimationFrame callbacks run at the point the render pipeline
+// itself visits, so they see what a reader actually would. Proven both ways against this file's own
+// unmodified guard: 8/8 clean here with the guard active, 3/3 caught here with it deliberately
+// disabled (site/ui/demo/demo-frame.js's onWindowScroll/guardScrollFrame, temporarily gutted to their
+// no-op halves) — this loop is not blind to a real, uncorrected jump, only to one already fixed
+// before it rendered.
 function measureStillness(page, name, durationMs) {
   return page.evaluate(({ n, duration }) => new Promise((resolve) => {
     function snap() {
@@ -637,10 +652,14 @@ function measureStillness(page, name, durationMs) {
     const samples = [base];
     const start = performance.now();
     document.querySelector(`moss-demo-marker[name="${n}"] button`).click();
-    const interval = setInterval(() => {
-      samples.push(snap());
-      if (performance.now() - start > duration) {
-        clearInterval(interval);
+    let lastSampleAt = start;
+    function tick() {
+      const now = performance.now();
+      if (now - lastSampleAt >= 100) {
+        lastSampleAt = now;
+        samples.push(snap());
+      }
+      if (now - start > duration) {
         // Largest top/left drift from the baseline snapshot, across every sample — a rect "moving"
         // means either coordinate changing, so both are checked and the worse one kept.
         const maxDelta = (pick) => Math.max(...samples.map((s) => {
@@ -655,8 +674,11 @@ function measureStillness(page, name, durationMs) {
           maxButtonDelta: maxDelta((s) => s.button),
           sampleCount: samples.length,
         });
+        return;
       }
-    }, 100);
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
   }), { n: name, duration: durationMs });
 }
 
