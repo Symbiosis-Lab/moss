@@ -321,15 +321,17 @@ fn carry_forward_entries_are_preserved_mid_build() {
         HashBucket::Files,
     );
 
-    // Mid-build, the carry-forward entry is still visible so consumers like
-    // sitemap generation (which reads `pending.files()` before seal) see a
-    // coherent working set. Seal-time mark-and-sweep prunes it — see
+    // Mid-build, the carry-forward entry is still visible, so a page this
+    // build could not read can re-register it (`carry_forward_deferred_page`).
+    // Seal-time mark-and-sweep prunes it — see
     // `seal_prunes_untouched_carry_forward_entries` below.
     assert!(
         m.inner.files.contains_key("old.html"),
         "carry-forward must be visible mid-build"
     );
     assert!(m.inner.files.contains_key("new.html"));
+    // ...but it is not a page of this build: it may belong to a deleted source.
+    assert_eq!(m.pages_registered().collect::<Vec<_>>(), vec!["new.html"]);
 }
 
 /// Regression: when a page's slug changes, the previous build's output

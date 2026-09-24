@@ -66,6 +66,29 @@ pub fn generate_sitemap(entries: &[SitemapEntry], site_url: &str) -> String {
     xml
 }
 
+/// The sitemap entries for `pages`, the served paths of the pages a build
+/// produced. Leaves out a page whose document keeps it out of listings, and a
+/// linkblog page (an absolute `external_url:`): its canonical home is
+/// elsewhere on the web, and listing the local URL beside the canonical tag
+/// would split crawler attention between two URLs claiming the same content
+/// (moss#679).
+pub(crate) fn entries_for_pages<'a>(
+    pages: impl IntoIterator<Item = &'a String>,
+    documents: &[crate::build::types::ParsedDocument],
+) -> Vec<SitemapEntry> {
+    let is_linkblog = |d: &crate::build::types::ParsedDocument| -> bool {
+        crate::build::scan::page_map::external_url(&d.raw_frontmatter).is_some()
+    };
+    pages
+        .into_iter()
+        .filter(|k| !documents.iter().any(|d| d.url_path == **k && (!d.is_listable() || is_linkblog(d))))
+        .map(|url_path| SitemapEntry {
+            url_path: url_path.clone(),
+            lastmod: documents.iter().find(|d| d.url_path == *url_path).and_then(|d| d.date.clone()),
+        })
+        .collect()
+}
+
 /// Generates a robots.txt string with an AI-policy preamble and a Sitemap directive.
 ///
 /// # Arguments

@@ -2530,36 +2530,7 @@ pub fn generate_blocking_content(
                 .map_err(|e| format!("Failed to emit rss.xml: {}", e))?;
         }
 
-        // Generate sitemap.xml from all HTML pages registered so far in the manifest.
-        // Skip pages whose frontmatter has an absolute `external_url:` (linkblog
-        // pages — their canonical home is elsewhere on the web; including the
-        // local URL alongside the canonical tag would split crawler attention
-        // between two URLs claiming the same content). See moss#679.
-        let is_linkblog = |d: &crate::build::types::ParsedDocument| -> bool {
-            crate::build::scan::page_map::external_url(&d.raw_frontmatter).is_some()
-        };
-        let sitemap_entries: Vec<crate::build::feeds::sitemap::SitemapEntry> = pending
-            .files()
-            .keys()
-            .filter(|k| k.ends_with(".html"))
-            .filter(|k| {
-                !documents.iter().any(|d| {
-                    d.url_path == **k && (!d.is_listable() || is_linkblog(d))
-                })
-            })
-            .map(|url_path| crate::build::feeds::sitemap::SitemapEntry {
-                url_path: url_path.clone(),
-                lastmod: documents
-                    .iter()
-                    .find(|d| d.url_path == *url_path)
-                    .and_then(|d| d.date.clone()),
-            })
-            .collect();
-        let sitemap_content = crate::build::feeds::sitemap::generate_sitemap(&sitemap_entries, url);
-        // Site 11 (Pattern A): emit sitemap.xml.
-        BuildContext::for_render(output_dir, pending)
-            .emit_held(&ServedPath::for_sitemap(), sitemap_content.into_bytes(), HashBucket::Files)
-            .map_err(|e| format!("Failed to emit sitemap.xml: {}", e))?;
+        // sitemap.xml is emitted further down, once every page is registered.
 
         // Generate robots.txt (user's own will overwrite during background asset copy)
         let robots_content =
@@ -2748,6 +2719,14 @@ pub fn generate_blocking_content(
         page_count += 1;
     }
     log::debug!(target: "timing", "[render] prelude: homepage: {:?}", total_start.elapsed());
+
+    // What sitemap.xml lists: every page a reader is meant to land on. That is
+    // every page registered by now, the home page included; then the media
+    // collection pages, the pages still in the cloud, the static `.html` pages
+    // and the notebook viewers, each added below. Not the redirect stubs and
+    // noindex subscribe pages in between. `pending.files()` would also hand
+    // back the previous build's pages until seal, a deleted source's among them.
+    let mut sitemap_pages: std::collections::BTreeSet<String> = pending.pages_registered().cloned().collect();
 
     // All asset copying (images, other files, static dirs, colocated assets) is
     // deferred to the background phase. Per PR #242's principle: "every source file
@@ -3106,6 +3085,7 @@ pub fn generate_blocking_content(
             BuildContext::for_render(output_dir, pending)
                 .emit(&page_sp, page_html.as_bytes(), HashBucket::Files)
                 .map_err(|e| format!("Failed to emit {} page: {}", page_slug, e))?;
+            sitemap_pages.insert(page_url);
 
             page_count += 1;
             log::info!(
@@ -3208,9 +3188,31 @@ pub fn generate_blocking_content(
                 register_page_source(pending, &page_source_hashes, &src);
                 carried += 1;
                 log::debug!("[build] {} is still in the cloud — keeping its published {}", src, key);
+                sitemap_pages.insert(key);
             }
         }
         if carried > 0 { log::info!("[build] {} page(s) still in the cloud — keeping their published output", carried); }
+    }
+
+    if has_rss {
+        // Static `.html` pages and notebook viewers are written after this, by
+        // the asset walk and the notebook step, at served paths the scan
+        // already fixes.
+        sitemap_pages.extend(project_structure.html_files.iter().filter_map(|f| {
+            let sp = ServedPath::from_source(&resolve_path_with_overrides(&f.path, &dir_overrides)).ok()?;
+            sp.as_str().ends_with(".html").then(|| sp.as_str().to_string())
+        }));
+        sitemap_pages.extend(
+            project_structure.notebook_files.iter()
+                .filter_map(|f| crate::build::notebook::viewer_path(&f.path).ok())
+                .map(|sp| sp.as_str().to_string()),
+        );
+        let entries = crate::build::feeds::sitemap::entries_for_pages(&sitemap_pages, &documents);
+        let sitemap_content = crate::build::feeds::sitemap::generate_sitemap(&entries, site_url.as_str());
+        // Site 11 (Pattern A): emit sitemap.xml.
+        BuildContext::for_render(output_dir, pending)
+            .emit_held(&ServedPath::for_sitemap(), sitemap_content.into_bytes(), HashBucket::Files)
+            .map_err(|e| format!("Failed to emit sitemap.xml: {}", e))?;
     }
 
     // Debug-only safety net for the publish classifier's lockstep invariant:

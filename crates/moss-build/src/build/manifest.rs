@@ -229,12 +229,15 @@ impl PendingManifest {
     /// which is unaffected by this clear.
     ///
     /// The other four output buckets (`files`, `image_outputs`, `video_outputs`,
-    /// `notebook_outputs`) are NOT cleared here — they carry forward so
-    /// mid-build readers (e.g. sitemap generation in
-    /// `generate_blocking_content`) see a coherent view. They are mark-and-sweep
-    /// pruned at [`seal`][PendingManifest::seal] using the `touched` mark set,
-    /// so the on-disk manifest written via `SealedManifest::write_to_disk`
-    /// contains only this build's emissions.
+    /// `notebook_outputs`) are NOT cleared here — they carry forward so a page
+    /// this build could not read can re-register its previous entry
+    /// ([`carry_forward_deferred_page`][PendingManifest::carry_forward_deferred_page]).
+    /// They are mark-and-sweep pruned at [`seal`][PendingManifest::seal] using
+    /// the `touched` mark set, so the on-disk manifest written via
+    /// `SealedManifest::write_to_disk` contains only this build's emissions.
+    /// Until then they also hold the pages of deleted sources, which is why
+    /// the sitemap reads [`pages_registered`][PendingManifest::pages_registered]
+    /// instead.
     pub fn new(carry_forward: SiteHashes) -> Self {
         let mut inner = carry_forward;
         // THIS build's racily-clean clock, not the carried-forward one: the
@@ -490,12 +493,19 @@ impl PendingManifest {
         (self.inner.clone(), self.blocking_keys.clone())
     }
 
-    /// Read-only access to the accumulated `files` map.
-    ///
-    /// Used by `generate_blocking_content` for sitemap generation (reads HTML keys
-    /// accumulated so far) without consuming the manifest or releasing the borrow.
+    /// Read-only access to the accumulated `files` map — this build's
+    /// registrations AND, until `seal` sweeps them, every entry the previous
+    /// build left, including the pages of sources deleted since. To list what
+    /// this build serves, use [`pages_registered`][Self::pages_registered].
     pub(crate) fn files(&self) -> &HashMap<String, String> {
         &self.inner.files
+    }
+
+    /// The `.html` pages this build has registered so far, whether rendered or
+    /// deliberately carried (an unchanged page, a page still in the cloud) —
+    /// never a leftover of the previous build. What `sitemap.xml` is built from.
+    pub(crate) fn pages_registered(&self) -> impl Iterator<Item = &String> {
+        self.touched.iter().filter(|k| k.ends_with(".html"))
     }
 
     /// Read-only access to the accumulated `source_to_output` map.

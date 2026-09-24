@@ -673,11 +673,7 @@ fn run_notebook_processing(
                 "/jupyter",
                 notebook_content.as_deref(),
             );
-            let viewer_relative_raw = std::path::Path::new(&item_source_path)
-                .with_extension("html")
-                .to_string_lossy()
-                .to_string();
-            let viewer_relative = crate::build::served_path::ServedPath::from_source(&viewer_relative_raw).unwrap();
+            let viewer_relative = crate::build::notebook::viewer_path(&item_source_path).unwrap();
             match stage_write(&viewer_html, &viewer_relative, &staging_owned) {
                 Ok(hash) => produced.push((viewer_relative, hash)),
                 Err(e) => log::warn!("Failed to write viewer HTML: {}", e),

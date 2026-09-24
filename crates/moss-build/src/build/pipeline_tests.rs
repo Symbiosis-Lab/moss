@@ -4661,6 +4661,11 @@ async fn text_only_build_returns_bg_handle_for_deploy_seal() {
 /// un-publishing it. Returns the sealed manifest's keys so a test can assert on
 /// the wire manifest, not just on disk.
 fn build_test_sealed(folder_path: &str) -> Result<Vec<String>, String> {
+    build_test_sealed_at(folder_path, None)
+}
+
+/// [`build_test_sealed`], built for `site_url` (`run`'s override).
+fn build_test_sealed_at(folder_path: &str, site_url: Option<&str>) -> Result<Vec<String>, String> {
     let ps = scan_folder(folder_path)?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -4678,7 +4683,7 @@ fn build_test_sealed(folder_path: &str) -> Result<Vec<String>, String> {
             None,
             Some(Box::new(move |_, _, _| Ok(ResolvedSlots::empty()))),
             &ps,
-            None,
+            site_url.map(str::to_string),
             crate::build::render::IncrementalGates::default(),
             crate::build::feeds::search_lane::Freshness::Now,
             &test_cache_keys(),
@@ -6163,4 +6168,136 @@ fn a_cmyk_jpeg_ships_as_the_original_with_no_webp_source() {
     );
     assert!(html.contains(r#"src="/plate.jpg""#), "the original stays the image:\n{html}");
     assert!(staging.join("plate.jpg").exists(), "the original ships");
+}
+
+/// [`build_test_sealed`] with a deployed site URL: the sitemap and the feed
+/// are only written when the build has a real `https://` address to put in
+/// them.
+fn build_test_at_site_url(folder_path: &str) -> Result<Vec<String>, String> {
+    build_test_sealed_at(folder_path, Some("https://example.com"))
+}
+
+/// Pages whose source files disappear from disk without moss being told — a
+/// `git pull` bringing in someone else's deletion — must leave every
+/// whole-site listing on the very next build, not just stop being rendered.
+/// Seen on a real site: 82 pages deleted by a pull stopped rendering, but the
+/// next `sitemap.xml` still listed every one of them, so search engines were
+/// sent to 82 URLs that 404 once deployed.
+#[test]
+fn pages_deleted_outside_moss_leave_the_sitemap_on_the_next_build() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::create_dir_all(test_dir.join("Writings/Letters")).unwrap();
+    // The marked photo gives the site a `photography/` collection page, which
+    // is written after the home page, like the redirect stubs are.
+    fs::write(
+        test_dir.join("Writings/essay.md"),
+        "---\ntitle: Essay\ndate: 2026-01-01\n---\n\nAn essay.\n\n![A photo](photo.png)\n<!-- photography -->\n",
+    )
+    .unwrap();
+    fs::write(
+        test_dir.join("Writings/Letters/first.md"),
+        "---\ntitle: First Letter\ndate: 2026-02-01\n---\n\nDear reader, the first.\n",
+    )
+    .unwrap();
+    fs::write(
+        test_dir.join("Writings/Letters/second.md"),
+        "---\ntitle: Second Letter\ndate: 2026-03-01\n---\n\nDear reader, the second.\n",
+    )
+    .unwrap();
+
+    build_test_at_site_url(folder_path).expect("first build");
+    let staging = test_dir.join(".moss/build.nosync/staging");
+    let read = |rel: &str| fs::read_to_string(staging.join(rel)).unwrap_or_default();
+    let sitemap = read("sitemap.xml");
+    assert!(
+        sitemap.contains("https://example.com/writings/letters/first/"),
+        "premise: the first build lists the letters:\n{sitemap}"
+    );
+
+    fs::remove_dir_all(test_dir.join("Writings/Letters")).unwrap();
+    let keys = build_test_at_site_url(folder_path).expect("second build");
+
+    assert!(
+        !keys.iter().any(|k| k.contains("letters/")),
+        "premise: the deleted pages are no longer published: {keys:?}"
+    );
+    let sitemap = read("sitemap.xml");
+    assert!(sitemap.contains("https://example.com/writings/essay/"), "the surviving page stays listed:\n{sitemap}");
+    assert!(sitemap.contains("<loc>https://example.com/</loc>"), "the home page stays listed:\n{sitemap}");
+    assert!(sitemap.contains("https://example.com/photography/"), "the collection page stays listed:\n{sitemap}");
+    let still_naming: Vec<&str> = ["sitemap.xml", "rss.xml", "llms.txt", "_moss/previews.json", "writings/index.html", "index.html"]
+        .into_iter()
+        .filter(|rel| {
+            let body = read(rel);
+            assert!(!body.is_empty(), "{rel} must exist after the second build");
+            body.contains("letters/") || body.contains("Letter")
+        })
+        .collect();
+    assert!(still_naming.is_empty(), "outputs still naming a page whose source was deleted: {still_naming:?}\n{sitemap}");
+}
+
+/// The other side of the test above: a page this build could not read because
+/// it is still in the cloud keeps serving its last HTML
+/// (`carry_forward_deferred_page`), so it stays in the sitemap too. It must not
+/// be mistaken for a deleted one.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_page_still_in_the_cloud_stays_in_the_sitemap() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::write(test_dir.join("keeper.md"), "---\ntitle: Keeper\n---\n\nKept.\n").unwrap();
+    build_test_at_site_url(folder_path).expect("first build");
+
+    // Pre-Sonoma eviction: keeper.md's real name vanishes from the walk.
+    fs::remove_file(test_dir.join("keeper.md")).unwrap();
+    fs::write(test_dir.join(".keeper.md.icloud"), "").unwrap();
+    let keys = build_test_at_site_url(folder_path).expect("second build, keeper evicted");
+
+    assert!(keys.iter().any(|k| k == "keeper/index.html"), "premise: keeper is still published: {keys:?}");
+    let sitemap = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/sitemap.xml")).unwrap();
+    assert!(sitemap.contains("<loc>https://example.com/keeper/</loc>"), "a page still in the cloud stays listed:\n{sitemap}");
+}
+
+/// The sitemap lists every page a reader is meant to land on, and the same set
+/// on a first build as on a rebuild. Static `.html` pages and notebook viewers
+/// are written after the sitemap, by the asset walk and the notebook step, so a
+/// rebuild used to list them only as the previous build's leftovers and a first
+/// build not at all. Redirect stubs and the noindex subscribe pages are pages
+/// too, and must never be listed.
+#[test]
+fn the_sitemap_lists_static_pages_and_notebooks_but_never_stubs() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::write(test_dir.join("essay.md"), "---\ntitle: Essay\n---\n\nAn essay.\n").unwrap();
+    fs::create_dir_all(test_dir.join("demo")).unwrap();
+    fs::write(test_dir.join("demo/sketch.html"), "<html><body>sketch</body></html>").unwrap();
+    fs::write(
+        test_dir.join("analysis.ipynb"),
+        r#"{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}"#,
+    )
+    .unwrap();
+    // A rename history (a redirect stub at `old-essay/`) and a moss-hosted site
+    // (the subscribe landing pages).
+    fs::create_dir_all(test_dir.join(".moss/data")).unwrap();
+    fs::write(test_dir.join(".moss/data/redirects.json"), r#"{"old-essay/": "essay/"}"#).unwrap();
+    fs::write(test_dir.join(".moss/state.toml"), "[deployment]\nsite_id = \"test-site\"\n").unwrap();
+
+    let staging = test_dir.join(".moss/build.nosync/staging");
+    for build in ["first build", "rebuild"] {
+        build_test_at_site_url(folder_path).expect(build);
+        for stub in ["old-essay/index.html", "subscribe/confirmed/index.html"] {
+            assert!(staging.join(stub).is_file(), "premise, {build}: {stub} is published");
+        }
+        let sitemap = fs::read_to_string(staging.join("sitemap.xml")).unwrap();
+        for listed in ["https://example.com/demo/sketch<", "https://example.com/analysis<"] {
+            assert!(sitemap.contains(listed), "{build}: the sitemap must list {listed}\n{sitemap}");
+        }
+        for unlisted in ["old-essay", "subscribe/"] {
+            assert!(!sitemap.contains(unlisted), "{build}: the sitemap must not list {unlisted}\n{sitemap}");
+        }
+    }
 }
