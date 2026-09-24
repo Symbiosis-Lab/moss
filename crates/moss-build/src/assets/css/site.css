@@ -6432,8 +6432,17 @@ a.moss-grid-card:hover {
    physical `min-width: 0` would do nothing there, and a card with an
    unbreakable long line or a tall image could then push its `grid-
    auto-columns` track taller than the calc() below intends, the vertical
-   twin of the wide-image bug this line was written to stop. */
-.moss-grid[data-scroll] > .moss-grid-card {
+   twin of the wide-image bug this line was written to stop.
+
+   `> *`, not `> .moss-grid-card`: a cell is only sometimes that wrapper. A
+   whole-cell link card and an external link preview render their OWN
+   `<a class="moss-grid-card …">` (no wrapper div — see grid_parts.rs), and a
+   cell whose link names a page in the build is replaced wholesale by that
+   page's own `<a class="moss-card">`, carrying no `moss-grid-card` class at
+   all. All three still land as `.moss-grid`'s direct children — nothing
+   else does — so the untyped selector is what actually covers every card a
+   scroll row can hold. */
+.moss-grid[data-scroll] > * {
   min-inline-size: 0;
   scroll-snap-align: start;
 }

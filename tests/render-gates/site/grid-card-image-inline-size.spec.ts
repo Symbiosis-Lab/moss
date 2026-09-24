@@ -123,3 +123,40 @@ test("grid-card figcaptions run vertical; an ordinary figure's caption still run
   );
   expect(standaloneWritingMode).toBe("horizontal-tb");
 });
+
+/**
+ * `.moss-grid[data-scroll] > .moss-grid-card { min-inline-size: 0;
+ * scroll-snap-align: start }` used to name only ONE of the shapes a scroll
+ * row's direct children actually take. A whole-cell link card and a
+ * generated link preview both render their own `a.moss-grid-card` (site.css
+ * governs them already), but a cell whose bare link names a page in the
+ * build is replaced wholesale by that page's `a.moss-card` — no
+ * `.moss-grid-card` wrapper at all (`grid_cells.rs`'s `card_markup`) — so it
+ * fell through the selector and kept the grid item's default `auto` minimum
+ * size and no scroll-snap stop. `scroll-row.md`'s row mixes all three shapes
+ * over three columns so it actually scrolls; every direct child must show
+ * the same snap behavior regardless of which one it is.
+ */
+test("a scroll row's page-card cells get the same snap treatment as its .moss-grid-card ones", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  await page.goto("/scroll-row/");
+
+  const row = page.locator(".moss-grid[data-scroll]");
+  await expect(row).toHaveAttribute("data-columns", "3");
+
+  const cells = await row.evaluate((el) =>
+    Array.from(el.children).map((child) => ({
+      className: child.className,
+      scrollSnapAlign: getComputedStyle(child).scrollSnapAlign,
+    })),
+  );
+
+  expect(cells).toHaveLength(4);
+  const pageCard = cells.find((c) => c.className.split(" ").includes("moss-card"));
+  expect(pageCard, "the bare link to /about/ should render as a direct a.moss-card child").toBeTruthy();
+  for (const { className, scrollSnapAlign } of cells) {
+    expect.soft(scrollSnapAlign, `${className} should snap`).toBe("start");
+  }
+});

@@ -3567,8 +3567,11 @@ fn grid_scroll_cards_snap_and_do_not_floor_at_content_width() {
     // column axis, i.e. the INLINE axis, physical width under horizontal-tb
     // but physical height under vertical-rl (vertical.css transposes this
     // same row to stack cards down the line there).
-    let rule = get_css_rule(DEFAULT_CSS, ".moss-grid[data-scroll] > .moss-grid-card")
-        .expect(".moss-grid[data-scroll] > .moss-grid-card CSS rule should exist");
+    // `> *`, not `> .moss-grid-card`: a scroll row's direct children are not
+    // all that wrapper — a page-card cell renders `a.moss-card` with no
+    // `.moss-grid-card` class at all (see grid_cells.rs's `card_markup`).
+    let rule = get_css_rule(DEFAULT_CSS, ".moss-grid[data-scroll] > *")
+        .expect(".moss-grid[data-scroll] > * CSS rule should exist");
     assert!(rule.contains("min-inline-size: 0"), "got: {rule}");
     assert!(rule.contains("scroll-snap-align: start"), "got: {rule}");
 }

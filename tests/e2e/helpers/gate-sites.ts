@@ -687,6 +687,30 @@ uid: "gcis0103"
 
 # About
 `,
+    // A scroll row mixing every direct-child card shape `.moss-grid[data-scroll]`
+    // has to size: the two `Block::LinkCard` image cells above
+    // (`a.moss-grid-card`, with or without `.link-preview`), a bare link to a
+    // page in this build (converted to `a.moss-card` by `apply_collection_cards`
+    // — no `.moss-grid-card` wrapper at all, see grid_cells.rs), and a bare
+    // external link (converted to a link-preview by `apply_link_previews`,
+    // which DOES carry `.moss-grid-card`). Four cells over three columns so the
+    // row actually scrolls (`GridShortcode::scrolls`) rather than rendering as
+    // a plain grid.
+    "scroll-row.md": `---
+title: Scroll Row Mixed Cards
+uid: "gcis0104"
+---
+
+:::grid 3 {scroll label="Related"}
+[![被兩地驅逐的人](tile.svg)](https://example.org/)
++++
+[![家鎖：家庭不只是你自己的事](tile.svg)](/about/)
++++
+[About](/about/)
++++
+[Elsewhere](https://example.org/elsewhere/)
+:::
+`,
     ".moss/config.toml": CONFIG_TOML,
     // No user theme: this gate is about moss's own defaults.
     ".moss/theme/style.css": null,
