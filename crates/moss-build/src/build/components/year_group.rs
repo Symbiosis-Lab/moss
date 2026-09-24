@@ -61,22 +61,17 @@ fn render_internal(
     lang: crate::i18n::Language,
     typesetting: Option<&str>,
 ) -> String {
-    // Sort articles by date (newest first) using raw ISO date for precision
-    // Use title as secondary sort key for stable ordering when dates are equal
+    // Dated rows go newest first through the one date-axis comparator, so two
+    // rows on the same date fall in the order the folder's series links walk.
+    // Undated rows lead, as folder listings keep them, ordered by their
+    // display string and then title.
     let mut sorted_articles = articles.to_vec();
-    sorted_articles.sort_by(|a, b| {
-        let date_cmp = match (&b.date_raw, &a.date_raw) {
-            (Some(b_date), Some(a_date)) => b_date.cmp(a_date), // Newest first
-            (Some(_), None) => std::cmp::Ordering::Less,        // Dated items first
-            (None, Some(_)) => std::cmp::Ordering::Greater,     // Undated items last
-            (None, None) => b.date_display.cmp(&a.date_display), // Fallback to display
-        };
-        // Use title as tiebreaker for stable ordering when dates are equal
-        if date_cmp == std::cmp::Ordering::Equal {
-            moss_core::sort::cmp_labels(&a.title, &b.title) // Alphabetical order for same dates
-        } else {
-            date_cmp
-        }
+    sorted_articles.sort_by(|a, b| match (&a.date_raw, &b.date_raw) {
+        (Some(_), Some(_)) => moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key()),
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (None, None) => b.date_display.cmp(&a.date_display)
+            .then_with(|| moss_core::sort::cmp_labels(&a.title, &b.title)),
     });
 
     // Group by year

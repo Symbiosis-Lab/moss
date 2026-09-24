@@ -1024,12 +1024,12 @@ fn generate_html_inner(
                         url: crate::build::scan::article_map::to_pretty_url(&d.url_path),
                         // chrome; plain-text label
                         title: d.label.clone(),
+                        url_path: d.url_path.clone(),
                     }
                 })
                 .collect();
 
-            // Sort by date descending (newest first)
-            dated_articles.sort_by(|a, b| b.date_raw.cmp(&a.date_raw));
+            dated_articles.sort_by(|a, b| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key()));
 
             // Resolve effective limit and More-link rule:
             //   - Alias path (`doc.sidebar` is set): legacy default 3 on cross-ref;

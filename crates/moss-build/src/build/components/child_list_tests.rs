@@ -8,6 +8,7 @@ fn test_render_basic_article() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "My Post".to_string(),
+        url_path: String::new(),
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -24,6 +25,7 @@ fn test_render_escapes_html_in_title() {
         date_raw: None,
         url: "post.html".to_string(),
         title: "<script>alert('xss')</script>".to_string(),
+        url_path: String::new(),
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -38,6 +40,7 @@ fn test_render_escapes_html_in_url() {
         date_raw: None,
         url: "post.html?a=1&b=2".to_string(),
         title: "Test".to_string(),
+        url_path: String::new(),
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -51,6 +54,7 @@ fn test_render_minimal_shows_month_only() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "My Post".to_string(),
+        url_path: String::new(),
     };
     let html = render(&props, true, false, Language::En, None);
 
@@ -66,6 +70,7 @@ fn test_render_minimal_fallback_without_raw_date() {
         date_raw: None,
         url: "post.html".to_string(),
         title: "Test".to_string(),
+        url_path: String::new(),
     };
     let html = render(&props, true, false, Language::En, None);
 
@@ -82,6 +87,7 @@ fn test_render_uses_prefix_link_classes() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "My Post".to_string(),
+        url_path: String::new(),
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -111,6 +117,7 @@ fn test_render_no_date_omits_date_span() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "Series Item".to_string(),
+        url_path: String::new(),
     };
     let html = render(&props, false, true, Language::En, None);
 
@@ -148,6 +155,7 @@ fn test_render_child_article() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -175,6 +183,7 @@ fn flat_row_shows_year_for_month_precision_date() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -199,6 +208,7 @@ fn flat_row_passes_through_display_only_date_as_is() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -221,6 +231,7 @@ fn flat_row_shows_bare_year_for_year_precision_date() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -245,6 +256,7 @@ fn folder_count_uses_chinese_numerals_in_vertical_cjk() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     };
     let vertical = render_child(&props, crate::i18n::Language::ZhHant, Some("vertical"));
     assert!(vertical.contains("三十八篇"), "{vertical}");
@@ -266,6 +278,7 @@ fn test_render_child_folder_without_description() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -291,6 +304,7 @@ fn test_render_child_folder_with_description() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card moss-folder-item">"#));
@@ -317,6 +331,7 @@ fn test_render_child_folder_escapes_html() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains("&lt;b&gt;Bold&lt;/b&gt; &amp; &quot;Quoted&quot;"));
@@ -337,6 +352,7 @@ fn test_render_child_article_no_date() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -354,6 +370,7 @@ fn test_render_no_date_ignores_minimal_flag() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "Series Item".to_string(),
+        url_path: String::new(),
     };
     let html_minimal = render(&props, true, true, Language::En, None);
     let html_normal = render(&props, false, true, Language::En, None);

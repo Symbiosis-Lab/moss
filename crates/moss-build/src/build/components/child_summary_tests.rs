@@ -12,6 +12,7 @@ fn article_props(title: &str, url: &str) -> ChildItemProps {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     }
 }
 
@@ -27,6 +28,7 @@ fn folder_props(title: &str, url: &str, count: usize) -> ChildItemProps {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     }
 }
 
@@ -152,6 +154,7 @@ fn test_render_card_escapes_html() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_with_sort(
         &props,
@@ -356,6 +359,7 @@ fn renders_permalink_star_inside_kicker_when_external_url_overrides_href() {
         cover_type: None,
         kicker: Some("The Wire China".to_string()),
         permalink: Some("/works/article/".to_string()),
+        url_path: String::new(),
     };
     let html = render_with_sort(
         &props,
@@ -412,6 +416,7 @@ fn omits_permalink_when_kicker_is_none_even_with_external_url() {
         cover_type: None,
         kicker: None,
         permalink: Some("/works/article/".to_string()),
+        url_path: String::new(),
     };
     let html = render_with_sort(
         &props,
@@ -451,6 +456,7 @@ fn cjk_date_keeps_separate_meta_inside_card() {
         cover_type: None,
         kicker: Some("端傳媒".to_string()),
         permalink: Some("/archive/foo/".to_string()),
+        url_path: String::new(),
     };
     let html = render_with_sort(
         &props,
@@ -494,6 +500,7 @@ fn omits_permalink_when_no_external_url() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_with_sort(
         &props,
@@ -531,6 +538,7 @@ fn renders_kicker_above_title_horizontal() {
         cover_type: None,
         kicker: Some("ESSAYS".to_string()),
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_with_sort(
         &props,
@@ -578,6 +586,7 @@ fn vertical_head_order_matches_horizontal() {
         cover_type: None,
         kicker: Some("FOLDER".to_string()),
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_with_sort(
         &props,
@@ -619,6 +628,7 @@ fn meta_renders_date_when_axis_is_date() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_with_sort(
         &props,
@@ -644,6 +654,7 @@ fn meta_collapses_when_axis_is_title() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_with_sort(
         &props,
@@ -671,6 +682,7 @@ fn meta_collapses_when_axis_is_weight() {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     };
     let html = render_with_sort(
         &props,

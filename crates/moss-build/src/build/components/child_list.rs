@@ -28,6 +28,20 @@ pub struct ArticleListItemProps {
     pub url: String,
     /// Article title
     pub title: String,
+    /// The page's own `url_path`, which breaks a tie between two rows on the
+    /// same date — the same key the folder's series links use.
+    pub url_path: String,
+}
+
+impl ArticleListItemProps {
+    pub(crate) fn date_sort_key(&self) -> moss_core::sort::DateSortKey<'_> {
+        moss_core::sort::DateSortKey {
+            date: self.date_raw.as_deref(),
+            is_folder: false,
+            label: &self.title,
+            url_path: &self.url_path,
+        }
+    }
 }
 
 /// Renders an article list item as HTML.
@@ -137,6 +151,21 @@ pub struct ChildItemProps {
     /// year-grouped row layout has no slot for a second anchor.
     /// `None` for ordinary cards (where `url` is already the local URL).
     pub permalink: Option<String>,
+    /// The page's own `url_path`. Unlike `url`, neither `external_url:` nor a
+    /// directory override changes it, so it is what breaks a tie between two
+    /// cards on the same date.
+    pub url_path: String,
+}
+
+impl ChildItemProps {
+    pub(crate) fn date_sort_key(&self) -> moss_core::sort::DateSortKey<'_> {
+        moss_core::sort::DateSortKey {
+            date: self.date_raw.as_deref(),
+            is_folder: self.child_count.is_some(),
+            label: &self.title,
+            url_path: &self.url_path,
+        }
+    }
 }
 
 /// Build one card's props from the document it describes.
@@ -230,6 +259,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
             .map(|c| detect_cover_type(c, doc.cover_type.as_deref())),
         kicker: crate::build::scan::page_map::publisher(&doc.raw_frontmatter),
         permalink,
+        url_path: doc.url_path.clone(),
     }
 }
 

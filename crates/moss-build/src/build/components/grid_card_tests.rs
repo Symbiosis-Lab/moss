@@ -13,6 +13,7 @@ fn blank() -> ChildItemProps {
         cover_type: None,
         kicker: None,
         permalink: None,
+        url_path: String::new(),
     }
 }
 

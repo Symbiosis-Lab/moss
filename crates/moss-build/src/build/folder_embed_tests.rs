@@ -775,7 +775,7 @@ fn sort_override_changes_order() {
     );
 }
 
-fn test_project() -> ProjectStructure {
+pub(crate) fn test_project() -> ProjectStructure {
     ProjectStructure {
         root_path: "/tmp".into(),
         markdown_files: vec![],

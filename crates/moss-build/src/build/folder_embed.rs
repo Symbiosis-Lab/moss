@@ -414,39 +414,30 @@ pub(crate) fn generate_children(
     // preserves legacy test behavior.
     let parent_axis = parent_sort_axis.unwrap_or(moss_core::sort::SortAxis::Date);
 
+    // Unless the caller already ordered them (a non-Date axis or an explicit
+    // order), every style lists by date through the same comparator as the
+    // folder's series chain. It re-sorts here because a card's date can come
+    // from somewhere the chain doesn't look: a folder's newest article, a
+    // date in the filename, or the file's creation time.
+    let mut sorted: Vec<&ChildItemProps> = items.iter().collect();
+    if !skip_resort {
+        sorted.sort_by(|a, b| {
+            // Undated children list first here on purpose: in practice they are
+            // the folder's subfolders, which lead its page. The series chain
+            // puts undated pages last, but it never contains subfolders, so the
+            // two disagree only over an undated article inside a series.
+            a.date_raw.is_some().cmp(&b.date_raw.is_some())
+                .then_with(|| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key()))
+        });
+    }
+
     // Grid style: render as collection cards.
     // Bypasses folder/article separation and year grouping — card grids are flat.
     if style == "grid" {
         use crate::build::components::grid_card::render_list_with_typesetting;
 
-        // When the caller did not pre-sort (no explicit series order or
-        // weight ordering), sort cards by date descending — same policy as
-        // the list/summary branch (lines below). Use url_path as tiebreaker
-        // so siblings with equal dates produce deterministic output across
-        // platforms (scan_folder() walk order is not contractually stable).
-        let sorted_pairs: Vec<(&ChildItemProps, &&ParsedDocument)> = if skip_resort {
-            items.iter().zip(folder_docs.iter()).collect()
-        } else {
-            let mut pairs: Vec<(&ChildItemProps, &&ParsedDocument)> =
-                items.iter().zip(folder_docs.iter()).collect();
-            pairs.sort_by(|a, b| {
-                let (item_a, doc_a) = a;
-                let (item_b, doc_b) = b;
-                match (&item_b.date_raw, &item_a.date_raw) {
-                    (Some(bd), Some(ad)) => bd.cmp(ad).then_with(|| doc_a.url_path.cmp(&doc_b.url_path)),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    // Folders first (`child_count` is Some only for folders), then one label comparator.
-                    (None, None) => item_b.child_count.is_some().cmp(&item_a.child_count.is_some())
-                        .then_with(|| moss_core::sort::cmp_labels(&item_a.title, &item_b.title).then_with(|| doc_a.url_path.cmp(&doc_b.url_path))),
-                }
-            });
-            pairs
-        };
-        let cards: Vec<&ChildItemProps> = sorted_pairs.into_iter().map(|(item, _)| item).collect();
-
         return render_list_with_typesetting(
-            &cards,
+            &sorted,
             Some(std::path::Path::new(&project.root_path)),
             lang,
             typesetting,
@@ -462,33 +453,14 @@ pub(crate) fn generate_children(
 
     // Partition once, unconditionally: folders always render above articles.
     // That is a layout decision independent of which axis sorted the
-    // children — `skip_resort` only decides the order WITHIN each partition
-    // (preserve the caller's order for a non-Date axis; date-desc otherwise).
+    // children; the partition keeps the sorted order within each side.
     // Previously this filter was written out three times, once per branch,
     // and skipped entirely for a plain skip_resort (Weight/Title/explicit
     // order) listing — so a manually-ordered folder lost its folder/article
-    // split, which is what a `weight:`-sorted `children_style: summary`
-    // folder (blakesnotebook.com's `Writings/`) hit.
-    let mut folders: Vec<&ChildItemProps> = items.iter().filter(|i| i.child_count.is_some()).collect();
-    let mut articles: Vec<&ChildItemProps> = items.iter().filter(|i| i.child_count.is_none()).collect();
-
-    if !skip_resort {
-        // Sort by date_raw descending, None last. Tiebreaker (url ascending)
-        // keeps order stable when multiple items share a date — without it,
-        // siblings with equal dates inherit the upstream iteration order of
-        // `all_docs`, which is not contractually deterministic and caused
-        // snapshot flakes (#542).
-        let sort_by_date_desc = |a: &&ChildItemProps, b: &&ChildItemProps| -> std::cmp::Ordering {
-            match (&b.date_raw, &a.date_raw) {
-                (Some(bd), Some(ad)) => bd.cmp(ad).then_with(|| a.url.cmp(&b.url)),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => moss_core::sort::cmp_labels(&a.title, &b.title).then_with(|| a.url.cmp(&b.url)),
-            }
-        };
-        folders.sort_by(sort_by_date_desc);
-        articles.sort_by(sort_by_date_desc);
-    }
+    // split, which is what a `children_style: summary` folder of writings,
+    // ordered by `weight:` and holding a subfolder or two, hit.
+    let (folders, articles): (Vec<&ChildItemProps>, Vec<&ChildItemProps>) =
+        sorted.into_iter().partition(|i| i.child_count.is_some());
 
     // Folders always render flat, regardless of group setting.
     for folder in &folders {
@@ -550,8 +522,9 @@ pub(crate) fn generate_children(
                 .collect();
             html.push_str(&sections.join("\n"));
         } else {
-            // Date axis: `render_year_grouped_list` re-sorts (title
-            // tiebreak on equal dates) and buckets in one pass.
+            // Date axis: `render_year_grouped_list` re-sorts (url-path
+            // tiebreak on equal dates, as the series chain) and buckets in
+            // one pass.
             let article_props: Vec<ArticleListItemProps> = articles
                 .iter()
                 .map(|item| ArticleListItemProps {
@@ -559,6 +532,7 @@ pub(crate) fn generate_children(
                     date_raw: item.date_raw.clone(),
                     url: item.url.clone(),
                     title: item.title.clone(),
+                    url_path: item.url_path.clone(),
                 })
                 .collect();
             html.push_str(&components::render_year_grouped_list(&article_props, true, lang, typesetting));
@@ -579,9 +553,9 @@ pub(crate) fn generate_children(
     // the default CSS doesn't style it (summary styling rides on
     // `.moss-cards[data-layout="list"]` and `.moss-card-description`
     // visibility, both of which are still emitted), and its presence
-    // breaks themes that inherited the pre-v1 vocabulary (e.g. SoCiviC's
-    // `.moss/theme/style.css:214` hides anything tagged with the class,
-    // erasing the entire listing).
+    // breaks themes that inherited the pre-v1 vocabulary (one site theme's
+    // `.moss/theme/style.css` hid anything tagged with the class, erasing the
+    // entire listing).
     //
     // `list` is the compact date+title index: one-line `[date] [title]` rows
     // (year-grouped when dated) styled by the item CSS keyed off
@@ -647,6 +621,7 @@ fn render_minimal_year_section(
                 date_raw: a.date_raw.clone(),
                 url: a.url.clone(),
                 title: a.title.clone(),
+                url_path: a.url_path.clone(),
             };
             components::child_list::render(&props, true, false, lang, typesetting)
         })

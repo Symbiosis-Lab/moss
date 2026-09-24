@@ -304,11 +304,11 @@ pub trait SortableLabel {
 
 /// The one comparator for ordering two user-visible listing labels by title.
 ///
-/// All four alphabetical orderings of user-visible labels route here: the
-/// `SortAxis::Title` arm below, the dateless tiebreak in each of
-/// `folder_embed::generate_children`'s two branches, and the same-date
-/// tiebreak in `year_group`. (The `SortAxis::Weight` arm below does not — it
-/// breaks ties on `clean_stem`, a filename, which is not a label.)
+/// All three alphabetical orderings of user-visible labels route here: the
+/// `SortAxis::Title` arm below, the undated tiebreak in [`cmp_date_axis`]
+/// (which folder listings share), and the tiebreak between undated rows in
+/// `year_group`. (The `SortAxis::Weight` arm below does not — it breaks ties
+/// on `clean_stem`, a filename, which is not a label.)
 ///
 /// Case is a tiebreak, not a primary key. Comparing codepoints put `mao`
 /// after every capitalised name on the reference vault's roster, which is a
@@ -333,6 +333,33 @@ pub fn cmp_labels(a: &str, b: &str) -> std::cmp::Ordering {
     folded(a).cmp(folded(b)).then_with(|| a.cmp(b))
 }
 
+/// What the date axis reads off one listing entry.
+pub struct DateSortKey<'a> {
+    pub date: Option<&'a str>,
+    pub is_folder: bool,
+    pub label: &'a str,
+    pub url_path: &'a str,
+}
+
+/// The one date-axis order. A folder's listing and its series chain both
+/// sort through here, so a reader walking the chain meets the pages in the
+/// order the folder's page lists them.
+///
+/// Newest first, undated last; among undated entries folders come first,
+/// then titles in [`cmp_labels`] order. The url path, unique per page,
+/// settles anything still tied — otherwise a tie keeps the order pages were
+/// read from disk, which changes between builds and platforms.
+pub fn cmp_date_axis(a: &DateSortKey<'_>, b: &DateSortKey<'_>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a.date, b.date) {
+        (Some(ad), Some(bd)) => bd.cmp(ad),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => b.is_folder.cmp(&a.is_folder).then_with(|| cmp_labels(a.label, b.label)),
+    }
+    .then_with(|| a.url_path.cmp(b.url_path))
+}
+
 pub fn sort_by_resolved<'a, D>(
     docs: &[&'a D],
     resolved: &ResolvedSort,
@@ -340,13 +367,15 @@ pub fn sort_by_resolved<'a, D>(
 where
     D: SortableDoc + SortableLabel,
 {
+    let date_key = |d: &'a D| DateSortKey {
+        date: d.date(),
+        is_folder: d.is_folder_index(),
+        label: d.label(),
+        url_path: d.url_path(),
+    };
     let axis_cmp = |a: &&'a D, b: &&'a D| -> std::cmp::Ordering {
         match resolved.axis {
-            SortAxis::Date => {
-                let ad = a.date().unwrap_or("");
-                let bd = b.date().unwrap_or("");
-                bd.cmp(ad)
-            }
+            SortAxis::Date => cmp_date_axis(&date_key(a), &date_key(b)),
             SortAxis::Weight => match (a.weight(), b.weight()) {
                 (Some(aw), Some(bw)) => aw.cmp(&bw),
                 (Some(_), None) => std::cmp::Ordering::Less,
@@ -355,6 +384,9 @@ where
             },
             SortAxis::Title => cmp_labels(a.label(), b.label()),
         }
+        // Same settlement on every axis: two pages with one weight or one
+        // title fall back to their url path, as tied dates do above.
+        .then_with(|| a.url_path().cmp(b.url_path()))
     };
 
     match &resolved.explicit_order {
@@ -422,6 +454,42 @@ mod sort_dispatch_tests {
         let sorted = sort_by_resolved(&[&a, &b, &c], &r);
         assert_eq!(sorted[0].clean_stem(), "b");
         assert_eq!(sorted[2].clean_stem(), "a");
+    }
+
+    /// Pages on the same date come out in one order however they arrive:
+    /// by url path, the same order the folder's own listing uses. A tie used
+    /// to keep the order the pages were read in, so a series whose chapters
+    /// share a date read 4, 1, 2, 3 on one build and 4, 3, 2, 1 on another.
+    #[test]
+    fn date_ties_order_by_url_path_whatever_the_input_order() {
+        let c1 = doc_with_label("chapter-1", Some("1804"), None, "Chapter 1");
+        let c2 = doc_with_label("chapter-2", Some("1804"), None, "Chapter 2");
+        let c3 = doc_with_label("chapter-3", Some("1804"), None, "Chapter 3");
+        let c4 = doc_with_label("chapter-4", Some("1804"), None, "Chapter 4");
+        let later = doc_with_label("epilogue", Some("1805"), None, "Epilogue");
+        let r = ResolvedSort { axis: SortAxis::Date, explicit_order: None, series_default: true };
+        let order = |docs: &[&TestDocWithLabel]| -> Vec<String> {
+            sort_by_resolved(docs, &r).iter().map(|d| d.clean_stem().to_string()).collect()
+        };
+        let expected = vec!["epilogue", "chapter-1", "chapter-2", "chapter-3", "chapter-4"];
+        assert_eq!(order(&[&c4, &c1, &later, &c2, &c3]), expected);
+        assert_eq!(order(&[&c4, &c3, &c2, &later, &c1]), expected);
+    }
+
+    /// The same holds for two chapters given the same weight, or two pages
+    /// with the same title in a title-sorted folder.
+    #[test]
+    fn weight_and_title_ties_order_by_url_path_whatever_the_input_order() {
+        let a = doc_with_label("a", None, Some(1), "Same");
+        let b = doc_with_label("b", None, Some(1), "Same");
+        for axis in [SortAxis::Weight, SortAxis::Title] {
+            let r = ResolvedSort { axis, explicit_order: None, series_default: true };
+            let order = |docs: &[&TestDocWithLabel]| -> Vec<String> {
+                sort_by_resolved(docs, &r).iter().map(|d| d.clean_stem().to_string()).collect()
+            };
+            assert_eq!(order(&[&b, &a]), vec!["a", "b"], "{axis:?}");
+            assert_eq!(order(&[&a, &b]), vec!["a", "b"], "{axis:?}");
+        }
     }
 
     #[test]

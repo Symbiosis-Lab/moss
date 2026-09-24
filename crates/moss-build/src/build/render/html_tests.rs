@@ -2984,6 +2984,75 @@ mod children_field_tests {
         );
     }
 
+    /// A folder's sidebar lists pages that share a date in the order its
+    /// series links walk them, not in the order the pages were read.
+    #[test]
+    fn same_date_sidebar_follows_the_series_chain() {
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+
+        let mut folder_index = make_doc("Serial", "serial/index.html");
+        folder_index.kind = PageKind::Folder;
+        folder_index.sidebar = Some("[[Serial]]".to_string());
+        folder_index.from_sidebar_alias = Some(true);
+
+        let chapter = |title: &str, slug: &str| {
+            let mut d = make_doc(title, &format!("serial/{slug}/index.html"));
+            d.date = Some("1804".to_string());
+            d
+        };
+        let all_docs = vec![
+            homepage,
+            chapter("Exile", "exile"),
+            chapter("The Arrival", "arrival"),
+            folder_index.clone(),
+            chapter("Departure", "departure"),
+            chapter("A Crossing", "crossing"),
+        ];
+
+        let html = generate_html(
+            Some(&folder_index),
+            &all_docs,
+            &make_project(),
+            &make_layout(),
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            true,
+            None,
+            false, // has_user_js
+            None,  // user_js_version
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,                     // output_dir — tests skip auto OG card generation
+            std::path::Path::new(""), // source_root
+        )
+        .expect("generate_html should succeed");
+
+        let mut listed = vec!["arrival", "crossing", "departure", "exile"];
+        listed.sort_by_key(|slug| {
+            html.find(&format!("serial/{slug}/\""))
+                .unwrap_or_else(|| panic!("{slug} missing from the sidebar: {html}"))
+        });
+        let chain: Vec<String> = super::super::sequence_siblings(
+            &all_docs,
+            "serial/index.html",
+            "serial/",
+            &folder_index.resolve_for_direct_children(),
+        )
+        .iter()
+        .map(|d| d.url_path.trim_start_matches("serial/").trim_end_matches("/index.html").to_string())
+        .collect();
+        assert_eq!(chain, listed, "the sidebar must follow the series chain's order");
+    }
+
     /// Test that children_style: "summary" renders summaries instead of list.
     #[test]
     fn test_children_style_summary() {
@@ -8060,6 +8129,83 @@ mod sequence_siblings_tests {
             "series: false must remove the page from its siblings' chain, \
              so `one`'s next is `three` and `three`'s prev is `one`"
         );
+    }
+
+    /// A series whose chapters all share a date walks its prev/next chain in
+    /// the order the folder's own page lists them, whatever order the pages
+    /// were read in. Before, the chain kept the read order (4, 1, 2, 3 on one
+    /// build) while the listing broke the tie itself. Filenames, url slugs and
+    /// titles each sort these four differently, so only one shared key can
+    /// make the two agree.
+    #[test]
+    fn same_date_chain_matches_the_folder_listing() {
+        use crate::build::folder_embed::{resolve_markers, synthesize_children_marker};
+        use crate::i18n::Language;
+
+        fn chapter(stem: &str, title: &str) -> ParsedDocument {
+            ParsedDocument {
+                title: title.to_string(),
+                label: title.to_string(),
+                clean_stem: stem.to_string(),
+                url_path: format!("serial/{}/index.html", stem.to_lowercase()),
+                date: Some("1804".to_string()),
+                kind: PageKind::Article,
+                ..Default::default()
+            }
+        }
+
+        let project = crate::build::folder_embed::tests::test_project();
+        for (style, group) in [("grid", "none"), ("summary", "none"), ("list", "none"), ("list", "year")] {
+            let mut index = folder("serial");
+            index.url_path = "serial/index.html".to_string();
+            index.series = Some(SeriesField::Flag(true));
+            index.children_style = Some(moss_core::Resolved::frontmatter(style.to_string()));
+            index.children_group = Some(moss_core::Resolved::frontmatter(group.to_string()));
+            let docs = vec![
+                chapter("Exile", "Exile"),
+                chapter("arrival", "The Arrival"),
+                index,
+                chapter("departure", "Departure"),
+                chapter("Crossing", "A Crossing"),
+            ];
+            let index = &docs[2];
+
+            let marker = synthesize_children_marker(index, "serial", "serial/index.md", false);
+            let listing = resolve_markers(
+                &marker,
+                "serial/index.md",
+                &docs,
+                &project,
+                &std::collections::HashMap::new(),
+                Language::En,
+                None,
+                None,
+                false,
+            );
+            assert_eq!(
+                group == "year",
+                listing.contains("moss-cards-minimal-year-group"),
+                "only the year case renders year sections: {listing}"
+            );
+            let mut listed = vec!["arrival", "crossing", "departure", "exile"];
+            listed.sort_by_key(|slug| {
+                listing
+                    .find(&format!("href=\"/serial/{slug}/\""))
+                    .unwrap_or_else(|| panic!("{slug} missing from the {style}/{group} listing: {listing}"))
+            });
+
+            let chain: Vec<String> = sequence_siblings(
+                &docs,
+                "serial/index.html",
+                "serial/",
+                &index.resolve_for_direct_children(),
+            )
+            .iter()
+            .map(|d| d.url_path.trim_start_matches("serial/").trim_end_matches("/index.html").to_string())
+            .collect();
+
+            assert_eq!(chain, listed, "the chain must follow the {style}/{group} listing's order");
+        }
     }
 }
 
