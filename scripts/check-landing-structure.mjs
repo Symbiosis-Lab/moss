@@ -237,7 +237,8 @@ const BASELINE = {
   // 286090 -> 289151 (2026-09-23): measured -- the dissolve shown as the real film, replayed from checkpoints (seek, checkpoint save/load, the mass fixer's interpolation), net of the stored-frame bookkeeping it replaced.
   // 289151 -> 295117 (2026-09-23): measured -- membership (memberPrint, artifactNow, a recomposable scene 3 print, deployPrint's two halves, the members' hide and fade in watercolor-morph.js's caller), the fixer read every 6 steps, and the warmer kept off a capture in flight.
   // 295117 -> 295300 (2026-09-24): measured -- mobileEntranceProgress touch-gated (item A), replacing the #col-pin read with #c2's own text and its explanatory comment.
-  scriptBytes: 295300,
+  // 295300 -> 297340 (2026-09-24): measured -- item B: holdMorph's carry flag, the Publish control's mobile-only cubic ease-in scale (publishBridge's draw()), and their explanatory comments.
+  scriptBytes: 297340,
 };
 
 function countWindowAssignments(text) {

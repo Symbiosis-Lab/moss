@@ -296,6 +296,37 @@ function memberCheckBrowser(members) {
   });
 }
 
+// The Publish control's live clone (landing.js's publishBridge, #publish-
+// bridge) on a carry leg: present and opaque is "solid" here, not also
+// topmost by a page-wide elementFromPoint search -- #publish-bridge (z-index
+// 110) and #gl, the wash canvas it must stay above (z-index 100), are both
+// direct children of #stage, so the control's own stylesheet rule already
+// guarantees it paints over the wash without a runtime check. A page-wide
+// hit test would also catch #copy (mobile's scene-text column, z-index 1)
+// sitting above #col (the sticky visual's own ancestor, z-index 0) -- a
+// real stacking-context fact (measured live: elementFromPoint at the
+// control's own centre mid-leg returns #c3-h2, and #gl itself reads the
+// same way, not just the control), but a page-wide one, not specific to
+// this leg or this brief, and out of scope for a carry-leg clause to fail
+// on. Recorded anyway (onTop/topId) as a diagnostic, not part of `solid`.
+// width is the scale reading: the clone's own transform is a pure scale, no
+// rotation, so width is proportional to it and needs no matrix decoding.
+function bridgeReadBrowser() {
+  const el = document.getElementById('publish-bridge');
+  if (!el) return { present: false };
+  const cs = getComputedStyle(el);
+  const visible = cs.visibility !== 'hidden' && cs.display !== 'none' && parseFloat(cs.opacity) > 0.95;
+  const r = el.getBoundingClientRect();
+  if (!visible || r.width < 1) return { present: true, visible, solid: false, width: r.width };
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  const priorPE = el.style.pointerEvents;
+  el.style.pointerEvents = 'auto';
+  const top = document.elementFromPoint(cx, cy);
+  el.style.pointerEvents = priorPE;
+  const onTop = top === el || (el.contains && el.contains(top));
+  return { present: true, visible, solid: true, onTop, topId: top ? top.id || top.tagName : null, width: r.width };
+}
+
 // The mounted leg, the p it presented (in this run's own direction), and the
 // wash canvas as optical density, downsampled to `side` columns; the two
 // prints the same way when asked. Density is -ln(pixel / paper), clamped
@@ -344,7 +375,7 @@ function washReadBrowser({ side, withPrints, from, to, maxW = Infinity }) {
     return { dens, foot, alphaSum };
   };
   const shown = read(cv, true);
-  const out = { mounted: true, visible, legFrom: leg.from, legTo: leg.to, p: cur.p, W, H, bg, dens: shown.dens, cleared: shown.alphaSum === 0 };
+  const out = { mounted: true, visible, legFrom: leg.from, legTo: leg.to, carry: !!cur.carry, p: cur.p, W, H, bg, dens: shown.dens, cleared: shown.alphaSum === 0 };
   if (withPrints) { out.a = read(cur.a, false); out.b = read(cur.b, false); }
   return out;
 }
@@ -509,10 +540,20 @@ async function runLegDirection(page, { legIdx, from, to, wash, layout, engine, f
     await settleFrames(page, 1);
     // The frame read must be this position's: a leg still recording a
     // dissolve (a slow software GPU, the page's first leg) presents late, or
-    // the furthest it has, and asks to be rendered again.
+    // the furthest it has, and asks to be rendered again. A carry leg adds
+    // one more thing worth the same wait: publishBridge (landing.js) reads
+    // the Publish control out of an iframe on first mount, which can still
+    // be settling its own layout the very first time this leg is ever
+    // reached in a fresh page -- caught live as bridgeReadBrowser reporting
+    // "not present" at p=0.05/0.1 on a leg that mounted only moments before
+    // this loop's own leg-identity wait passed. mountLeg (landing.js) always
+    // retries on the very next mount (leaving p=0 fires one), so waiting
+    // here is strictly cheaper than a checker flagging a frame nothing else
+    // would ever have shown a reader for more than a tick.
     if (wash) for (let i = 0; i < 60; i++) {
       const ok = await page.evaluate(([from, to]) => { const c = window.__landing.morph?.current?.(), q = (window.__landing.state().progress - from) / (to - from);
-        return !c || (c.exact !== false && Math.abs((c.tag?.from === from ? c.p : 1 - c.p) - Math.min(1, Math.max(0, q))) < 0.01); }, [from, to]);
+        return !c || (c.exact !== false && Math.abs((c.tag?.from === from ? c.p : 1 - c.p) - Math.min(1, Math.max(0, q))) < 0.01
+          && (!c.carry || document.getElementById('publish-bridge'))); }, [from, to]);
       if (ok) break;
       await settleFrames(page, 1);
     }
@@ -539,6 +580,10 @@ async function runLegDirection(page, { legIdx, from, to, wash, layout, engine, f
         shot.wash.pDir = same ? shot.wash.p : 1 - shot.wash.p;
         if (shot.wash.a) prints = same ? { A: shot.wash.a, B: shot.wash.b } : { A: shot.wash.b, B: shot.wash.a };
         delete shot.wash.a; delete shot.wash.b;
+        // A carry leg's readable content is the Publish control, not the
+        // wash -- read alongside it so judgeCarry can replace noBlank below
+        // without a second round trip to the page.
+        if (shot.wash.carry) shot.bridge = await page.evaluate(bridgeReadBrowser);
       }
     }
     if (p === 1) {
@@ -560,8 +605,11 @@ async function runLegDirection(page, { legIdx, from, to, wash, layout, engine, f
     if (FILM_POINTS.includes(p)) await saveFilm(filmDir, legLabel, layout, engine, p, shot.buf);
     samples[p] = shot;
   }
+  // carry doesn't vary with p (site/watercolor-morph.js's leg() mounts it
+  // once for the whole leg) -- read off whichever sample actually mounted.
+  const carry = CHECKPOINTS.some((p) => samples[p]?.wash?.carry);
 
-  return judge({ legIdx, from, to, dir, wash, layout, engine, refFrom, refTo, refFromNames, refFromFineNames, refToNames, samples, prints, bounds, srcGrid });
+  return judge({ legIdx, from, to, dir, wash, carry, layout, engine, refFrom, refTo, refFromNames, refFromFineNames, refToNames, samples, prints, bounds, srcGrid });
 }
 
 function worstCells(refCells, sampleCells, names) {
@@ -573,7 +621,7 @@ function worstCells(refCells, sampleCells, names) {
 }
 
 function judge(ctx) {
-  const { legIdx, from, to, wash, layout, engine, refFrom, refTo, refToNames, samples } = ctx;
+  const { legIdx, from, to, wash, carry, layout, engine, refFrom, refTo, refToNames, samples } = ctx;
   const clauses = {};
 
   // Clause 1: source fidelity at p~=0.05, cell by cell and in colour. By
@@ -649,9 +697,68 @@ function judge(ctx) {
   }
 
   if (wash) Object.assign(clauses, judgeModel(ctx));
+  // Owner: this leg carries scene 4 as scene 3's own Publish control,
+  // scaled up, not as pigment consolidating out of a wash -- so the
+  // pigment-coverage question noBlank asks ("is there ever nothing on
+  // screen") is answered instead by the one thing this leg's readable
+  // content actually is: replaces, not adds to, judgeModel's own noBlank.
+  if (wash && carry) clauses.noBlank = judgeCarry(ctx);
   const _wash = {};
   for (const p of CHECKPOINTS) if (ctx.samples[p]?.wash?.mounted) _wash[p] = ctx.samples[p].wash;
-  return { legIdx, from: SCENES[from], to: SCENES[to], fromIdx: from, toIdx: to, wash, layout, engine, clauses, bounds: ctx.bounds, _wash };
+  return { legIdx, from: SCENES[from], to: SCENES[to], fromIdx: from, toIdx: to, wash, carry, layout, engine, clauses, bounds: ctx.bounds, _wash };
+}
+
+// Carry-leg replacement for noBlank (judge(), above): the Publish control
+// must be present and opaque (bridgeReadBrowser's "solid": its own z-index
+// against #gl, the one thing it must stay above, is a stylesheet fact, not
+// a runtime one -- see that function's own comment for the page-wide
+// stacking issue a naive elementFromPoint search would wrongly fail this
+// leg on) at every sampled p, and its scale must move only toward its
+// target size (monotonic) and spend the first half of the leg's own
+// progress covering less than 35% of its total size change (owner: "scale
+// up slow at first, then faster, so it spends more time being small" --
+// 68a5f708's own number for pour()'s equivalent scale, now also true of
+// renderMorphAt's own scaleP in site/landing.js).
+//
+// Measured against samples[p].wash.p (the mount's own canonical p, SHIPS's
+// print at 0 to DEPLOY's at 1), not this run's own direction-labelled
+// checkpoint: renderMorphAt always mounts this leg from=SHIPS, to=DEPLOY
+// (site/landing.js's from<to floor/+1), so "reverse" is not a second mount
+// with from and to swapped -- it is the same mount's p decreasing, and
+// draw()'s scale is one pure function of that p either way. A checker that
+// measured "half" against its OWN direction-labelled p instead would grade
+// the reverse run against the mirror image of the curve it actually reads
+// (verified live: 28% at the forward run's own p=0.5, 72% -- 100 minus the
+// same 28 -- at the reverse run's, both reading the one shared curve),
+// scoring pass and fail for what is, at the pixel, the same frame. Endpoints
+// read from p=0.05/0.95, not 0/1: samples[0] is a plain reference screenshot
+// (runLegDirection's refFrom), taken before any leg is mounted, so it
+// carries no #publish-bridge reading to compare against.
+function judgeCarry(ctx) {
+  const { samples } = ctx;
+  const bad = [];
+  const raw = [];
+  for (const p of CHECKPOINTS) {
+    if (p <= 0 || p >= 1) continue;
+    const b = samples[p]?.bridge, legP = samples[p]?.wash?.p;
+    if (!b?.present || legP == null) { bad.push({ p, why: 'control not present' }); continue; }
+    raw.push({ p, legP, width: +b.width.toFixed(2), visible: b.visible, onTop: b.onTop, topId: b.topId ?? null });
+    if (!b.visible) bad.push({ p, why: 'control not visible' });
+  }
+  const pts = [...raw].sort((x, y) => x.legP - y.legP);
+  let monotonic = true, worstStep = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const d = pts[i].width - pts[i - 1].width;   // legP increasing == SHIPS toward DEPLOY, always growing
+    if (d < -0.5) { monotonic = false; worstStep = Math.min(worstStep, d); }
+  }
+  if (!monotonic) bad.push({ why: `scale not monotonic toward its target (worst backward step ${worstStep.toFixed(1)}px)` });
+  const w0 = pts[0]?.width, w1 = pts.at(-1)?.width;
+  const half = pts.reduce((best, r) => (best == null || Math.abs(r.legP - 0.5) < Math.abs(best.legP - 0.5)) ? r : best, null);
+  const total = w0 != null && w1 != null ? w1 - w0 : null;
+  const gained = w0 != null && half ? half.width - w0 : null;
+  const halfShare = total != null && Math.abs(total) > 0.5 && gained != null ? gained / total : null;
+  if (halfShare == null || halfShare >= 0.35) bad.push({ why: `scale at half-progress is ${halfShare == null ? 'unmeasurable' : (halfShare * 100).toFixed(1) + '% of its total change'} (want <35%)` });
+  return { carry: true, w0, w1, halfShare: halfShare == null ? null : +halfShare.toFixed(3), pts, bad, pass: bad.length === 0 };
 }
 
 // ---- the three-phase clauses ----
@@ -952,7 +1059,9 @@ function printRow(r) {
   console.log(`  9 reverse ${c.reverse ? JSON.stringify(c.reverse.pairs) : 'not run'}  ${c.reverse ? fmtClause(c.reverse) : ''}`);
   console.log(`  10 arrive shown=${c.arrive.shown} meanDE=${c.arrive.meanDE}  ${fmtClause(c.arrive)}`);
   console.log(`  10b restQuiet recordSteps=${c.restQuiet.steps}  ${fmtClause(c.restQuiet)}`);
-  console.log(`  11 noBlank ${c.noBlank.why || `tau=${c.noBlank.tau} floors cov=${c.noBlank.covFloor} mass=${c.noBlank.massFloor} refs=${JSON.stringify(c.noBlank.refs)} bad=${JSON.stringify(c.noBlank.bad.slice(0, 3))}`}  ${fmtClause(c.noBlank)}`);
+  console.log(`  11 noBlank ${c.noBlank.carry
+    ? `carry control: width ${c.noBlank.w0}->${c.noBlank.w1} (by canonical leg p) halfShare=${c.noBlank.halfShare} bad=${JSON.stringify(c.noBlank.bad.slice(0, 3))}`
+    : c.noBlank.why || `tau=${c.noBlank.tau} floors cov=${c.noBlank.covFloor} mass=${c.noBlank.massFloor} refs=${JSON.stringify(c.noBlank.refs)} bad=${JSON.stringify(c.noBlank.bad.slice(0, 3))}`}  ${fmtClause(c.noBlank)}`);
 }
 
 async function main() {

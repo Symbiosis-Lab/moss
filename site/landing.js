@@ -2060,10 +2060,16 @@ function holdCanvas(src, tgt, scene, fwd, mobileTransition = false) {
 }
 // The same arming for a scene transition: A's print is presented at p = 0
 // before anything live is hidden, so the handover is the same pixels.
-// `members` are memberPrint's for each end, a's then b's.
+// `members` are memberPrint's for each end, a's then b's. carry: only the
+// SHIPS<->DEPLOY pair -- the one leg publishBridge covers, whose readable
+// content is the Publish control it carries solid across the leg rather
+// than anything consolidated from pigment (watercolor-morph.js's own
+// module comment). Declared here, the one place that mounts every leg,
+// rather than left for a checker to reconstruct from scene indices.
 function holdMorph(a, b, from, to, covered, members = [[], []]) {
   groundAt(from);
-  const leg = morph.leg(a, b, { from, to }, [...members[0].map((m) => ({ ...m, side: 'a' })), ...members[1].map((m) => ({ ...m, side: 'b' }))]);
+  const carry = Math.min(from, to) === SHIPS && Math.max(from, to) === DEPLOY;
+  const leg = morph.leg(a, b, { from, to }, [...members[0].map((m) => ({ ...m, side: 'a' })), ...members[1].map((m) => ({ ...m, side: 'b' }))], carry);
   leg.render(0, 0);
   stage.classList.add(covered ? 'mobile-handoff' : 'morphing');
   return leg;
@@ -2415,10 +2421,33 @@ function publishBridge(from, to, prints) {
       // Forward finishes at T_WET, where the reading line reaches scene 4's
       // text, instead of drifting into the cure tail after text has stopped.
       const forward = from === SHIPS;
-      const q = smooth(0, forward ? T_WET : T_TOTAL, t), p = forward ? q : 1 - q;
+      const bound = forward ? T_WET : T_TOTAL;
+      const q = smooth(0, bound, t), p = forward ? q : 1 - q;
+      // Mobile only (owner: "scale up slow at first, then faster, so it
+      // spends more time being small"): the control's own scale reads a
+      // cubic ease-in of the same t/bound ratio p is built from, instead of
+      // p's own symmetric smoothstep -- position (cx/cy) and the fan's
+      // expansion below keep p unchanged, so only the size grows unevenly.
+      // Unconditionally the forward shape (never 1 - easeQ): mountLeg
+      // (renderMorphAt's own leg mounter) always mounts this leg from=SHIPS,
+      // to=DEPLOY (from < to, always), so on mobile `forward` above is
+      // always true and t always counts up from SHIPS's own rest -- a
+      // reader scrolling back from DEPLOY toward SHIPS is t (and easeQ)
+      // counting back down through the same curve, not a second, mirrored
+      // one, which is what "reverse mirrors it" can only mean for a
+      // transform that is a pure function of scroll position: the control
+      // spends the same share of the leg's own p small however it is read.
+      // (desktop's pour() does mount both orders, which is exactly why this
+      // stays mobileLayout()-gated: p itself, unchanged, still drives
+      // desktop's own scale.) Cubed, not squared: at the leg's own half
+      // progress (p=0.5, t=T_TOTAL/2) this reads (T_TOTAL/2/T_WET)**3, 28%
+      // of the control's total size change -- squared read 43%, short of
+      // the owner's own margin under 35%.
+      const easeQ = Math.pow(clamp01(t / bound), 3);
+      const scaleP = mobileLayout() ? easeQ : p;
       const cx = (x + (GEOM.cellW / 2 - x) * p) * SCALE;
       const cy = (y + (GEOM.cellH / 2 - y) * p) * SCALE + (mobileLayout() ? 0 : (1 - SCALE) * GEOM.cellH / 2);
-      const scale = SCALE * (1 + (PUB_SCALE * (mobileLayout() ? 1.4 : 1) - 1) * p);
+      const scale = SCALE * (1 + (PUB_SCALE * (mobileLayout() ? 1.4 : 1) - 1) * scaleP);
       clone.style.left = (cx - size / 2) + 'px'; clone.style.top = (cy - size / 2) + 'px';
       clone.style.transform = `scale(${scale})`;
       if (mobileLayout()) {

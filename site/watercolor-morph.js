@@ -35,6 +35,15 @@
 // The engine is makeSim's instance (landing.js): recordDissolve, advanceRecord,
 // seek, disposeRecord, setPrints, holds and present. This file owns the model,
 // the cache and the members' visibility; nothing about scenes or scroll.
+//
+// One leg (SHIPS<->DEPLOY, landing.js's publishBridge) is not consolidated
+// by this model at all: scene 4 has no pigment identity of its own to
+// consolidate into, since its content is scene 3's own Publish control,
+// scaled up. That leg still dissolves its background the same three-phase
+// way -- SHIPS has other ink to clear -- but is mounted with `carry: true`
+// (leg()'s own parameter) so a caller reading current() knows the leg's
+// readable content is the live control landing.js holds solid over the
+// wash, not anything this file's dissolve produces.
 (function (global) {
   'use strict';
   const A_END = 0.35, B_START = 0.65;
@@ -111,13 +120,24 @@
       // and their dissolves are recorded as the leg is rendered. `tag` is the
       // caller's name for the leg, handed back by current(). `members`:
       // [{ el, side: 'a' | 'b', captured }], the live elements whose pixels
-      // each print carries (captured) or should have and does not.
-      leg(a, b, tag = null, members = []) {
+      // each print carries (captured) or should have and does not. `carry`:
+      // this leg's own dissolve still runs underneath (SHIPS's background
+      // still needs to clear), but the leg's *readable content* is not that
+      // dissolve -- it is a single live element (the Publish control) held
+      // solid across the whole leg by its own caller (publishBridge in
+      // landing.js), scaling continuously between its two scenes' sizes
+      // rather than being carried by pigment consolidating out of a wash.
+      // Declared here, not inferred by a checker from scene indices, so
+      // anything reading current() (check-landing-morph.mjs's noBlank
+      // clause, which the owner asked replaced for this leg with the
+      // control's own visibility and scale instead) has it from the one
+      // place that actually knows.
+      leg(a, b, tag = null, members = [], carry = false) {
         engine.setPrints(a, b);
         release();
         current = null;
         const ra = recordFor(a), rb = recordFor(b);
-        const leg = current = { a, b, ra, rb, tag, p: -1, exact: true, members, hidden: false, hiding: 0 };
+        const leg = current = { a, b, ra, rb, tag, carry, p: -1, exact: true, members, hidden: false, hiding: 0 };
         return {
           // Presents p, spending at most `budget` steps recording a dissolve
           // this leg still lacks (a's first: it is the one shown first), plus
@@ -153,8 +173,8 @@
       // may be released like any other.
       end() { release(); current = null; },
       // For the harness: the leg on screen, the p it last presented, whether
-      // that frame was exactly p's, its prints and tag.
-      current: () => current && { p: current.p, exact: current.exact, a: current.a, b: current.b, tag: current.tag },
+      // that frame was exactly p's, its prints, tag and carry flag.
+      current: () => current && { p: current.p, exact: current.exact, a: current.a, b: current.b, tag: current.tag, carry: current.carry },
     };
   }
 
