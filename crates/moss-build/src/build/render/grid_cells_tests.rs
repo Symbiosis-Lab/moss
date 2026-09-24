@@ -145,7 +145,7 @@ fn root_with_image(rel: &str, rgb: [u8; 3]) -> tempfile::TempDir {
 fn both_passes(md: &str, page: &Page<'_>, link_meta: Option<&HashMap<String, LinkMeta>>) -> String {
     let mut plan = plan_of(md);
     apply_collection_cards(&mut plan, &page.index());
-    apply_link_previews(&mut plan, link_meta);
+    apply_link_previews(&mut plan, &page.index(), link_meta);
     plan.to_html()
 }
 
@@ -523,22 +523,31 @@ fn a_bare_text_internal_link_cell_still_becomes_a_page_card() {
 }
 
 #[test]
-fn an_external_image_link_cell_keeps_its_authored_image() {
-    // The behaviour the internal case above must mirror: an authored image
-    // wrapped in an external link keeps the image, inside the link-preview
-    // anchor the serializer already emitted — left exactly as rendered,
-    // same as `a_whole_cell_link_keeps_the_chrome_the_serializer_gave_it`.
+fn an_external_image_link_cell_becomes_a_moss_card_keeping_its_image() {
+    // The owner's "one card kind" decision: unlike an internal whole-cell
+    // link (which keeps the serializer's own `data-kind="link"` chrome
+    // untouched), an EXTERNAL one is overridden into the same `.moss-card`
+    // shape a collection card uses — with the authored image as its cover,
+    // never the retired link-preview shell.
     let docs: Vec<ParsedDocument> = vec![];
     let page = Page::new("index.html", &docs);
     let md = ":::grid 1\n[![Alt text](a.jpg)](https://example.org/)\n:::\n";
     let html = both_passes(md, &page, None);
-    assert!(html.contains("<img"), "authored image must survive: {html}");
-    assert!(html.contains("link-preview"), "got: {html}");
-    assert_eq!(
-        html,
-        plan_of(md).to_html(),
-        "left exactly as the serializer rendered it"
+    assert!(html.contains(r#"class="moss-card" data-external"#), "got: {html}");
+    assert!(
+        html.contains(r#"<div class="moss-card-cover">"#),
+        "authored image becomes the cover, not the no-cover placeholder: {html}"
     );
+    assert!(html.contains("a.jpg"), "authored image must survive: {html}");
+    assert!(!html.contains("link-preview"), "retired shell must be gone: {html}");
+    // With no cache and no media pipeline in this test's `Page`, moss-core's
+    // own pure `Block::LinkCard` rendering and this pass's override happen
+    // to agree byte-for-byte — both implement the same "one card kind"
+    // shell (see `moss_core::ast::link_card`'s doc comment). That agreement
+    // is itself the point: the plan-with-passes output must equal the
+    // no-passes plan here, unlike before this change where the two shells
+    // (`.moss-card` vs `.moss-grid-card.link-preview`) disagreed.
+    assert_eq!(html, plan_of(md).to_html());
 }
 
 #[test]
@@ -577,7 +586,7 @@ fn a_cjk_href_resolves_after_percent_decoding() {
 // ── link previews ──────────────────────────────────────────────────────
 
 #[test]
-fn an_external_link_cell_becomes_a_link_preview() {
+fn an_external_link_cell_becomes_a_moss_card() {
     // The old scanner matched `<a href="…"`, but moss-core emits
     // `<a target="_blank" rel="noopener" href="…">` for external links, so this
     // conversion silently stopped happening. Reading the typed cell restores it.
@@ -588,9 +597,13 @@ fn an_external_link_cell_becomes_a_link_preview() {
         &page,
         None,
     );
-    assert!(html.contains("link-preview"), "got: {html}");
-    assert!(html.contains("mdn.dev"), "domain row: {html}");
-    assert!(html.contains("MDN"), "manual title from the link text: {html}");
+    assert!(html.contains(r#"class="moss-card" data-external"#), "got: {html}");
+    assert!(html.contains("mdn.dev"), "domain kicker: {html}");
+    assert!(
+        html.contains(r#"<span class="moss-card-title">MDN</span>"#),
+        "manual title from the link text: {html}"
+    );
+    assert!(!html.contains("link-preview"), "retired shell must be gone: {html}");
 }
 
 #[test]
@@ -617,27 +630,124 @@ fn a_bare_url_cell_takes_its_title_from_cached_metadata() {
 }
 
 #[test]
-fn a_bare_url_with_no_cached_metadata_never_fakes_a_title() {
+fn a_bare_url_cell_shows_a_cached_favicon_in_the_kicker() {
     let docs: Vec<ParsedDocument> = vec![];
     let page = Page::new("index.html", &docs);
-    let html = both_passes(":::grid 1\n<https://slykiten.com/>\n:::\n", &page, None);
-    assert!(html.contains("link-preview"), "got: {html}");
-    assert!(html.contains("slykiten.com"), "domain row: {html}");
-    assert!(!html.contains("link-preview-title"), "no fake title: {html}");
+    let mut meta = HashMap::new();
+    meta.insert(
+        "https://slykiten.com/".to_string(),
+        LinkMeta {
+            url: "https://slykiten.com/".to_string(),
+            title: None,
+            description: None,
+            favicon: Some("https://slykiten.com/favicon.ico".to_string()),
+            fetched_at: "2026-07-30T00:00:00Z".to_string(),
+        },
+    );
+    let html = both_passes(
+        ":::grid 1\n<https://slykiten.com/>\n:::\n",
+        &page,
+        Some(&meta),
+    );
+    assert!(
+        html.contains(r#"class="moss-card-kicker-favicon""#),
+        "got: {html}"
+    );
+    assert!(html.contains("https://slykiten.com/favicon.ico"), "got: {html}");
 }
 
 #[test]
-fn bare_url_cells_are_the_ones_reported_for_prewarm() {
+fn an_authored_cover_image_survives_alongside_cached_metadata() {
+    // The owner's rule: author content always wins over fetched metadata —
+    // checked on the cover, which is the one slot the author's image and a
+    // fetch could otherwise both claim. A cached title is free to fill the
+    // title slot here (the cell carries no title text of its own, only an
+    // image), but it must never displace the authored cover.
+    let docs: Vec<ParsedDocument> = vec![];
+    let page = Page::new("index.html", &docs);
+    let mut meta = HashMap::new();
+    meta.insert(
+        "https://example.org/".to_string(),
+        LinkMeta {
+            url: "https://example.org/".to_string(),
+            title: Some("Fetched Title".to_string()),
+            description: None,
+            favicon: None,
+            fetched_at: "2026-07-30T00:00:00Z".to_string(),
+        },
+    );
+    let md = ":::grid 1\n[![Alt text](a.jpg)](https://example.org/)\n:::\n";
+    let html = both_passes(md, &page, Some(&meta));
+    assert!(
+        html.contains(r#"<div class="moss-card-cover"><img src="a.jpg""#),
+        "authored image must remain the cover, not a fetched one: {html}"
+    );
+    assert!(
+        html.contains(r#"<span class="moss-card-title">Fetched Title</span>"#),
+        "a cached title is fine when the cell carries no words: {html}"
+    );
+}
+
+#[test]
+fn external_and_internal_cards_share_the_same_shell() {
+    // The owner's "one card kind" decision, checked structurally: both
+    // renderers must emit the same slot classes, not merely similar-looking
+    // markup that happens to drift apart later.
+    let docs = vec![make_doc("About", "about/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let internal = page.cards(":::grid 1\n[About](about/)\n:::\n");
+    let external = both_passes(":::grid 1\n[Ext](https://example.com)\n:::\n", &page, None);
+    // Kicker is skipped: an internal card only emits one when the linked
+    // page has a `kicker:` of its own, so its absence here isn't a shape
+    // difference. Cover, content, meta and title are unconditional on both
+    // sides and are the real "same shell" claim.
+    for class in [
+        r#"class="moss-card""#,
+        r#"class="moss-card-cover"#,
+        r#"class="moss-card-content""#,
+        r#"class="moss-card-meta""#,
+        r#"class="moss-card-title""#,
+    ] {
+        assert!(internal.contains(class), "internal missing {class}: {internal}");
+        assert!(external.contains(class), "external missing {class}: {external}");
+    }
+}
+
+#[test]
+fn a_bare_url_with_no_cached_metadata_falls_back_to_the_url_itself() {
+    // Never an invented editorial title — but the card still needs
+    // something in its title slot, so it falls back to the URL's own
+    // domain and path rather than a blank space.
+    let docs: Vec<ParsedDocument> = vec![];
+    let page = Page::new("index.html", &docs);
+    let html = both_passes(":::grid 1\n<https://slykiten.com/>\n:::\n", &page, None);
+    assert!(html.contains(r#"class="moss-card" data-external"#), "got: {html}");
+    assert!(html.contains("slykiten.com"), "domain kicker: {html}");
+    assert!(
+        html.contains(r#"<span class="moss-card-title">slykiten.com</span>"#),
+        "domain+path fallback title: {html}"
+    );
+}
+
+#[test]
+fn every_external_cell_is_reported_for_prewarm_even_with_a_manual_title() {
+    // Owner decision (2026-09): author-written link text wins the TITLE
+    // slot only. It must not suppress the fetch itself — a manually
+    // titled cell still wants its favicon and og:image cover — so both
+    // external URLs are candidates here, not just the bare one. Only the
+    // internal link is excluded.
     let docs: Vec<ParsedDocument> = vec![];
     let page = Page::new("index.html", &docs);
     let mut plan = plan_of(
         ":::grid 3\n<https://a.example/>\n+++\n[Manual](https://b.example/)\nDesc.\n+++\n[Local](local/)\n:::\n",
     );
     apply_collection_cards(&mut plan, &page.index());
+    let mut urls = external_urls_needing_fetch(&plan);
+    urls.sort();
     assert_eq!(
-        external_urls_needing_fetch(&plan),
-        vec!["https://a.example/".to_string()],
-        "only the bare URL wants a fetched title"
+        urls,
+        vec!["https://a.example/".to_string(), "https://b.example/".to_string()],
+        "every external cell wants its favicon/cover fetched, manual title or not"
     );
 }
 
@@ -769,7 +879,7 @@ fn cjk_prose_immediately_before_a_grid_builds_and_places_the_grid_correctly() {
 
     let mut plan = plan_of(md);
     apply_collection_cards(&mut plan, &page.index());
-    apply_link_previews(&mut plan, None);
+    apply_link_previews(&mut plan, &page.index(), None);
     let (lead, trailer) = plan.split_at_lede();
 
     // The lede stays in the cover column, the grid is released past it.

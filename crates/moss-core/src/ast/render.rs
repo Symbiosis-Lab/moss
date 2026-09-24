@@ -695,18 +695,22 @@ fn render_block<H: RenderHooks + ?Sized>(
             use super::url::UrlKind;
             let is_external = matches!(resolved.kind, UrlKind::External | UrlKind::AssetNewtab);
             if is_external {
-                out.push_str(r#"<a href=""#);
-                out.push_str(&escape_attr(&resolved.href));
-                out.push_str(
-                    r#"" class="moss-grid-card link-preview" target="_blank" rel="noopener">"#,
-                );
+                // The owner's "one card kind" decision: an external whole-
+                // cell link becomes a `.moss-card`, same as an internal
+                // page card, never the retired `.moss-grid-card.link-preview`
+                // shape. `moss-build`'s `grid_cells::render_external_card`
+                // overrides this with cache/pipeline access for any page
+                // that runs the ordinary body-plan pass; this pure render
+                // is what a plan-less page gets instead. See
+                // `super::link_card`'s doc comment.
+                out.push_str(&super::link_card::render_external_link_card(resolved, children));
             } else {
                 out.push_str(r#"<a href=""#);
                 out.push_str(&escape_attr(&resolved.href));
                 out.push_str(r#"" class="moss-grid-card" data-kind="link">"#);
+                out.push_str(&body);
+                out.push_str("</a>");
             }
-            out.push_str(&body);
-            out.push_str("</a>");
         }
         Block::FootnoteDefinition { label, children } => {
             // The first definition of a label is hoisted into the endnote

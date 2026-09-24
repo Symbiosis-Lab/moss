@@ -14,77 +14,20 @@
 //! - [`render_hero_html_typed`] — Hero rendering. Called from the
 //!   hoisting branch of `apply_typed_shortcodes`; the rendered HTML
 //!   travels separately to the article template's hero slot.
-//! - [`extract_domain`], [`render_link_preview`], [`format_data_width`],
-//!   [`format_class_attr`] — the byte shapes
-//!   `build::render::grid_cells` emits for a grid cell that turns out to
-//!   be an outbound link.
+//! - [`format_data_width`], [`format_class_attr`] — small byte-shape
+//!   helpers `build::render::grid_cells` and the hero renderer share.
 //!
 //! An `<a href=…>`-matching regex (`LINK_RE`) used to live here for
 //! `grid_post.rs`'s post-HTML scanning. That file was deleted: which
 //! cells are links is read off the typed `Vec<Block>` the serializer
 //! rendered from, so nothing re-matches emitted anchors.
-
-/// Extract the registrable domain from a URL for link-preview labeling.
-///
-/// Strips scheme, `www.`, and any path/query/fragment. `"https://www.foo.com/bar"`
-/// → `"foo.com"`. Used by both this file's `render_compound_link_cell`
-/// (compound-link cells inside grids) and `crate::build::render::grid_cells`
-/// (the cell that resolved to an outbound link).
-pub(crate) fn extract_domain(url: &str) -> String {
-    url.trim_start_matches("https://")
-       .trim_start_matches("http://")
-       .trim_start_matches("www.")
-       .split('/')
-       .next()
-       .unwrap_or(url)
-       .to_string()
-}
-
-/// Render a link-preview card: title row (when known) + favicon/domain row.
-///
-/// `title` is the page's `og:title` or `<title>`. When absent, the card
-/// collapses to a single `[favicon] domain.com` row. The raw URL is never
-/// used as a title fallback — that would print the same string twice.
-///
-/// Description and hero image are intentionally not rendered: a personal
-/// site's link list is reading-recommendation territory, not a social-media
-/// preview surface. Less chrome, more legible.
-pub(crate) fn render_link_preview(href: &str, title: Option<&str>, domain: &str, favicon: Option<&str>) -> String {
-    use crate::build::media::cover::html_escape;
-    let title_html = title
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .map(|t| format!(r#"<span class="link-preview-title">{}</span>"#, html_escape(t)))
-        .unwrap_or_default();
-    // Step 4 of structural-html-emission: route the favicon through the
-    // synthesizer with ImageContext::Favicon, which short-circuits to a
-    // bare 16×16 <img> (no manifest, no <picture>, no LQIP). Output is
-    // byte-identical to the prior inline format!() call; the routing is
-    // architectural so every <img> in moss output now flows through one
-    // function.
-    //
-    // Phase 1 B1 (2026-05-25): the synthesizer takes `&AssetSnapshot` after
-    // the data-source switch. `Favicon` short-circuits before any snapshot
-    // probe, so an empty snapshot is correct.
-    let favicon_assets = moss_core::asset_snapshot::AssetSnapshot::new();
-    let favicon_html = favicon
-        .filter(|f| !f.is_empty())
-        .map(|f| moss_core::render::image::synthesize_image_html(
-            f,
-            "",
-            &favicon_assets,
-            moss_core::render::image::ImageContext::Favicon,
-            &moss_core::render::image::ImageRenderOptions {
-                class: Some("link-preview-favicon"),
-                ..Default::default()
-            },
-        ))
-        .unwrap_or_default();
-    format!(
-        r#"<a href="{}" class="moss-grid-card link-preview" target="_blank" rel="noopener">{}<span class="link-preview-domain">{}{}</span></a>"#,
-        html_escape(href), title_html, favicon_html, html_escape(domain)
-    )
-}
+//!
+//! `extract_domain` and the link-preview renderer this file used to hold
+//! were retired with the `.moss-grid-card.link-preview` shell: an external
+//! grid-cell link is now a `.moss-card`, the same shape an internal page
+//! card uses (`build::components::grid_card::render_external_card`), and
+//! `extract_domain` moved to `moss_core::ast::link_card` so the pure
+//! whole-cell renderer in `moss-core` can use it too.
 
 /// Format a CSS class attribute with a base class and optional extra classes.
 ///
@@ -599,57 +542,6 @@ mod tests {
         assert!(!html.contains("moss-hero-caption"), "got: {html}");
         assert!(html.trim_end().ends_with("</section>"), "got: {html}");
     }
-
-    #[test]
-    fn test_render_link_preview_with_favicon() {
-        let html = render_link_preview(
-            "https://example.com",
-            Some("Example"),
-            "example.com",
-            Some("https://example.com/icon.png"),
-        );
-        assert!(html.contains(r#"<img class="link-preview-favicon" src="https://example.com/icon.png""#));
-        assert!(html.contains(r#"width="16" height="16""#));
-        assert!(html.contains(r#"<span class="link-preview-domain"><img class="link-preview-favicon"#));
-        assert_eq!(html.matches("link-preview-title").count(), 1);
-    }
-
-    #[test]
-    fn test_render_link_preview_without_favicon() {
-        let html = render_link_preview(
-            "https://example.com",
-            Some("Example"),
-            "example.com",
-            None,
-        );
-        assert!(!html.contains("link-preview-favicon"));
-        assert!(html.contains(r#"<span class="link-preview-domain">example.com</span>"#));
-    }
-
-    #[test]
-    fn test_render_link_preview_no_title_collapses_to_domain_row() {
-        let html = render_link_preview(
-            "https://example.com",
-            None,
-            "example.com",
-            Some("https://example.com/icon.png"),
-        );
-        assert!(!html.contains("link-preview-title"));
-        assert!(!html.contains("https://example.com<"));
-        assert!(html.contains("link-preview-domain"));
-    }
-
-    #[test]
-    fn test_render_link_preview_never_renders_description() {
-        let html = render_link_preview(
-            "https://example.com",
-            Some("My Page"),
-            "example.com",
-            None,
-        );
-        assert!(!html.contains("link-preview-desc"));
-    }
-
 
     #[test]
     fn format_data_width_none_yields_empty_string() {

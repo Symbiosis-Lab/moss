@@ -39,6 +39,7 @@ pub mod extract_hero;
 pub mod footnotes;
 pub mod grid_parts;
 pub mod line_breaks;
+pub mod link_card;
 pub mod linked_embed;
 pub mod hooks;
 pub mod math_text;

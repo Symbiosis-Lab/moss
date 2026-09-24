@@ -44,9 +44,8 @@ use std::collections::HashMap;
 use moss_core::ast::{Block, Inline, ResolvedUrl, Url, UrlKind};
 
 use crate::build::components::child_list::ChildItemProps;
-use crate::build::components::grid_card::render_item_with_typesetting;
+use crate::build::components::grid_card::{render_external_card, render_item_with_typesetting};
 use crate::build::markdown::body_plan::{BodyPlan, BodySegment, GridCellEmission, GridEmission};
-use crate::build::markdown::typed_renderers::{extract_domain, render_link_preview};
 use crate::build::media::cover::detect_cover_type;
 use crate::build::page::link_meta::LinkMeta;
 use crate::i18n::Language;
@@ -85,16 +84,20 @@ pub(crate) struct CellLink<'a> {
     /// The link's text with markup dropped — the card's title when the linked
     /// page doesn't supply a better one.
     pub text: String,
-    /// The entire cell is the link (a [`Block::LinkCard`]). The serializer
-    /// already emitted final `<a class="moss-grid-card">` chrome for it, so a
-    /// pass that would re-wrap the cell has to leave it alone.
+    /// The entire cell is the link (a [`Block::LinkCard`]). An INTERNAL
+    /// whole-cell link already IS the serializer's final
+    /// `<a class="moss-grid-card">` chrome, so a pass that would re-wrap it
+    /// has to leave it alone. An EXTERNAL one is not left alone the same
+    /// way — see [`render_external_card`], which overrides it with the
+    /// unified `.moss-card` shell regardless of `whole_cell`.
     pub whole_cell: bool,
-    /// The link's own content opens with an authored image — a
-    /// `Block::LinkCard` built around a photo, or a leading link followed by
-    /// a separate caption paragraph (see [`leading_link`]). Either way, no
-    /// pass may replace the cell with a generated page/collection card, or
-    /// re-wrap it in a second `<a>`.
-    pub carries_image: bool,
+    /// The href + alt of an authored cover image, when the link's own
+    /// content opens with one — a `Block::LinkCard` built around a photo,
+    /// or a leading link followed by a separate caption paragraph (see
+    /// [`leading_link`]). No pass may replace such a cell with a generated
+    /// page/collection card, or drop the image in favor of fetched
+    /// metadata: author content always wins.
+    pub cover_image: Option<(&'a str, &'a str)>,
 }
 
 impl CellLink<'_> {
@@ -117,7 +120,7 @@ impl CellLink<'_> {
     /// such a card would throw away. The one check both card-generating
     /// passes ([`card_markup`], [`summary_card_markup`]) share.
     fn ineligible_for_a_generated_card(&self) -> bool {
-        self.external() || self.carries_image
+        self.external() || self.cover_image.is_some()
     }
 }
 
@@ -151,7 +154,7 @@ pub(crate) fn classify_cell(blocks: &[Block]) -> GridCell<'_> {
                 kind: r.kind,
                 text: blocks_text(children),
                 whole_cell: true,
-                carries_image: cover_image_href(children).is_some(),
+                cover_image: moss_core::ast::link_card::cover_image_href(children),
             }),
             None => GridCell::Opaque,
         },
@@ -192,7 +195,12 @@ fn leading_link(inlines: &[Inline]) -> GridCell<'_> {
             // shape rather than `Block::LinkCard` (see
             // `moss_core::ast::shortcode_extract::detect_compound_link`), so
             // the link's own children can still open with an image.
-            carries_image: matches!(children.first(), Some(Inline::Image { .. })),
+            cover_image: match children.first() {
+                Some(Inline::Image { src: Url::Resolved(r), alt, .. }) => {
+                    Some((r.href.as_str(), alt.as_str()))
+                }
+                _ => None,
+            },
         }),
         None => GridCell::Opaque,
     }
@@ -308,7 +316,7 @@ pub(crate) fn resolve_page_body(
             &url_refs, &moss_dir,
         ))
     };
-    apply_link_previews(&mut plan, link_meta.as_ref());
+    apply_link_previews(&mut plan, &index, link_meta.as_ref());
     plan
 }
 
@@ -496,7 +504,16 @@ fn card_markup(
     ))
 }
 
-/// External URLs whose cached metadata the preview pass wants.
+/// External URLs whose cached metadata the card pass wants — every
+/// external cell, whole-cell or not, gets the same fetch. Owner decision
+/// (2026-09): author-written link text wins the TITLE slot only; it must
+/// never suppress the fetch, the favicon, or the og:image cover — the
+/// owner's case is a row of podcast episodes written as
+/// `[episode title](https://…)` that still need covers like every other
+/// card. An authored image in the cell still wins as the cover regardless
+/// (see `external_card_markup`'s `cover_image` match), so a whole-cell
+/// image card's fetch here is purely for its favicon/cover — its title
+/// never depended on it.
 ///
 /// Run after [`apply_collection_cards`]: a cell that became a card is no
 /// longer a candidate, and its cleared blocks say so.
@@ -505,7 +522,7 @@ pub(crate) fn external_urls_needing_fetch(plan: &BodyPlan) -> Vec<String> {
     for grid in grids(plan) {
         for cell in &grid.cells {
             if let GridCell::Link(link) = classify_cell(&cell.blocks) {
-                if !link.whole_cell && link.external() && link.wants_fetched_title() {
+                if link.external() {
                     urls.push(link.href.to_string());
                 }
             }
@@ -514,61 +531,85 @@ pub(crate) fn external_urls_needing_fetch(plan: &BodyPlan) -> Vec<String> {
     urls
 }
 
-/// Turn single-link cells into previews: outbound links get favicon + domain +
-/// title, internal ones become one clickable card.
+/// Turn single-link cells that leave the site into `.moss-card`s — the same
+/// card kind [`apply_collection_cards`] gives an internal page (the owner's
+/// "one card kind" decision). Internal cells are untouched here: a
+/// `leading_link` one already rendered its own `<a>` (wrapping it again
+/// would nest anchors), and a whole-cell one already has the serializer's
+/// `data-kind="link"` chrome.
 pub(crate) fn apply_link_previews(
     plan: &mut BodyPlan,
+    index: &BuildIndex<'_>,
     link_meta: Option<&HashMap<String, LinkMeta>>,
 ) {
     for grid in grids_mut(plan) {
         for cell in &mut grid.cells {
-            if let Some(html) = preview_markup(cell, link_meta) {
+            if let Some(html) = external_card_markup(cell, index, link_meta) {
                 cell.replace(html);
             }
         }
     }
 }
 
-fn preview_markup(
+fn external_card_markup(
     cell: &GridCellEmission,
+    index: &BuildIndex<'_>,
     link_meta: Option<&HashMap<String, LinkMeta>>,
 ) -> Option<String> {
     let GridCell::Link(link) = classify_cell(&cell.blocks) else {
         return None;
     };
-    // A whole-cell link is already final `<a class="moss-grid-card">` markup
-    // from the serializer (`link-preview` chrome included, for an external
-    // one). Re-wrapping it would nest anchors.
-    if link.whole_cell {
-        return None;
-    }
     if !link.external() {
-        // Every cell that reaches here is non-whole-cell (a `leading_link`
-        // paragraph, never a `Block::LinkCard`), so its own `Inline::Link`
-        // already rendered an `<a>` around the cell's content. Wrapping that
-        // in a second one — what this branch used to do — nests anchors for
-        // any input it can receive, not just an image-carrying one.
+        // Every non-external cell that reaches here is non-whole-cell (a
+        // `leading_link` paragraph, never a `Block::LinkCard`), so its own
+        // `Inline::Link` already rendered an `<a>` around the cell's
+        // content. Wrapping that in a second one nests anchors. A whole-cell
+        // internal link keeps the serializer's own `data-kind="link"` shape
+        // (see `moss_core::ast::render`'s `Block::LinkCard` arm) — this
+        // pass is scoped to links that leave the site.
         return None;
     }
-    let (title, favicon) = if link.wants_fetched_title() {
-        // Auto mode: title and favicon come from cache. Missing metadata
-        // renders a bare `[favicon] domain.com` row — never the URL dressed up
-        // as a title.
+    let (fetched_title, favicon) = {
         let meta = link_meta.and_then(|m| m.get(link.href));
         (
             meta.and_then(|m| m.title.clone()),
             meta.and_then(|m| m.favicon.clone()),
         )
-    } else {
-        // Manual mode: the link text is the title, and opting out of the fetch
-        // means opting out of the favicon too.
-        (Some(link.text.clone()), None)
     };
-    Some(render_link_preview(
+    // Author content wins the TITLE slot only (owner decision, 2026-09):
+    // real link text is never replaced by a fetched title, but — unlike an
+    // earlier "manual mode" that also withheld the fetch itself — the
+    // favicon and cover below are never gated on this. Only a titleless
+    // cell falls back further, to the URL itself.
+    let title = if !link.wants_fetched_title() {
+        link.text.clone()
+    } else {
+        fetched_title.unwrap_or_else(|| moss_core::ast::link_card::domain_and_path(link.href))
+    };
+    let cover_html = match link.cover_image {
+        Some((href, alt)) => {
+            let (cover_path, attrs_str) = moss_core::media::split_pipe(href);
+            let cover_attrs = moss_core::media::parse_media_attrs(attrs_str);
+            let cover_type = detect_cover_type(cover_path, None);
+            crate::build::media::cover::render_cover_html(
+                cover_path,
+                cover_type,
+                alt,
+                "moss-card-cover",
+                &cover_attrs,
+                true,
+                index.media_lookup,
+                false,
+            )
+        }
+        None => r#"<div class="moss-card-cover moss-card-no-cover"></div>"#.to_string(),
+    };
+    Some(render_external_card(
         link.href,
-        title.as_deref(),
-        &extract_domain(link.href),
+        &title,
+        &moss_core::ast::link_card::extract_domain(link.href),
         favicon.as_deref(),
+        &cover_html,
     ))
 }
 

@@ -29,8 +29,8 @@ pub struct LinkMeta {
 ///
 /// Priority: og:title > `<title>` for title.
 ///
-/// Description is intentionally not parsed: the link-preview card renders
-/// only title + favicon/domain (see `render_link_preview`). Skipping the
+/// Description is intentionally not parsed: the external grid card renders
+/// only title + favicon/domain (see `build::components::grid_card::render_external_card`). Skipping the
 /// description selectors saves disk bytes per cache entry and parser work
 /// per fetch — both small but free wins.
 pub fn parse_link_meta(url: &str, html: &str) -> LinkMeta {
@@ -73,7 +73,7 @@ pub fn parse_link_meta(url: &str, html: &str) -> LinkMeta {
             let resolved = resolve_url(&href, &origin);
             // The fetched page is untrusted, and this string is copied
             // verbatim into `<img src="…">` on every page that links out
-            // to it (`render_link_preview`). `data:,` (no payload after
+            // to it (`build::components::grid_card::render_external_card`). `data:,` (no payload after
             // the comma) is a deliberate "we have no favicon" placeholder
             // some sites emit to stop browsers guessing /favicon.ico, and
             // anything else that isn't a small http(s)/raster-data URL is
@@ -138,7 +138,7 @@ const ALLOWED_DATA_FAVICON_TYPES: [&str; 5] =
 /// fits a 16×16–32×32 icon.
 const MAX_DATA_FAVICON_BYTES: usize = 8 * 1024;
 
-/// True for a favicon URL safe to hand to `render_link_preview`'s `<img
+/// True for a favicon URL safe to hand to `render_external_card`'s `<img
 /// src="…">`: `http(s)://` (already the fetch origin's own scheme, or an
 /// absolute URL the page named), or a small `data:` URL of a raster image
 /// type with an actual payload. Everything else — `data:,` (the "no
@@ -1140,7 +1140,7 @@ mod tests {
     }
 
     // The favicon string is copied verbatim into `<img src="…">` on every
-    // page that links out to the fetched site (`render_link_preview`). A
+    // page that links out to the fetched site (`render_external_card`). A
     // fetched page is untrusted input, so any scheme other than http(s) or
     // a small raster `data:` image must be dropped to `None` rather than
     // handed to the sink — `has_uri_scheme`/`resolve_url` only decide

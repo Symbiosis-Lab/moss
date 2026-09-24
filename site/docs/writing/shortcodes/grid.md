@@ -117,9 +117,11 @@ Cells are full markdown: headings, paragraphs, lists, images, and links all work
 
 ## Single-link cells
 
-A cell whose only content is exactly one markdown link is rendered as a single `<a>` wrapping the whole cell.
+A cell whose only content is exactly one markdown link is rendered as a single `<a>` wrapping the whole cell — one card kind, whether the link stays on the site or leaves it.
 
-**External link** (`http://` or `https://`) → `.moss-grid-card.friend-card`. moss fetches link metadata if configured. Use for link directories and blogrolls:
+**Bare internal link, no authored content** (`[Get Started](/docs/)`) → an automatic page card, `.moss-card`: moss looks up the target in the build and fills in its cover, title, date or child count. See [folder auto-conversion](#folder-auto-conversion) below.
+
+**External link** (`http://` or `https://`) → also `.moss-card`, with `data-external` and `target="_blank" rel="noopener"`. The kicker shows the link's domain, with a favicon inline when moss has one cached for it. The title is your own link text when you wrote real words; otherwise moss uses a fetched page title if one is cached, falling back to the URL's domain and path:
 
 :::grid 2 {.sc-demo}
 ```markdown
@@ -145,9 +147,9 @@ A memory-safe systems language.
 ::::
 :::
 
-**Internal link** (site-relative path: `/foo`, `./foo`, or a wikilink target) → `.moss-grid-card.link-card`. No metadata fetch. The link's brackets can contain an image, headings, and paragraphs; moss emits one `<a>` wrapping all of them.
+**Internal link that names nothing in the build** (a broken or not-yet-written path) → `.moss-grid-card` with `data-kind="link"`, no metadata, no cover — the link's own brackets rendered as one clickable wrapper.
 
-The link text may be compound. Put the image, heading, and paragraph inside the brackets and moss renders one card-link wrapping all of it:
+Any of these link shapes can be compound: put an image, a heading, and a paragraph inside the brackets, and moss renders one anchor wrapping all of it:
 
 ```markdown
 [![[cover.jpg]] ## Title
@@ -157,15 +159,15 @@ Short description](/target)
 
 Do not hand-write the `<a>` wrapper. Author the single markdown link and let moss emit the anchor.
 
-An image inside the link takes precedence over [folder auto-conversion](#folder-auto-conversion) below: `[![Cover](cover.jpg)](/target)` keeps your image inside the `<a>` even when `/target` names a page in the build — only a bare-text link (no image) is eligible to become an automatic page card.
+An authored image inside the link always wins, on both internal and external cells: `[![Cover](cover.jpg)](/target)` keeps your image as the card's cover even when `/target` names a page in the build, or when `https://…` has metadata cached for it — a fetch never displaces what you wrote. Only a bare-text link (no image) is eligible to be filled in from elsewhere.
 
 A cell with anything else (two links, text plus a link) renders as regular cell content, unwrapped — so you can mix clickable cards and rich cells in the same grid.
 
 Theme CSS targets each flavor independently:
 
 ```css
-.moss-grid-card.friend-card { … }  /* external link cell */
-.moss-grid-card.link-card   { … }  /* internal link cell */
+.moss-card[data-external]          { … }  /* external link cell */
+.moss-grid-card[data-kind="link"]  { … }  /* internal link, unresolved */
 ```
 
 ## Folder auto-conversion

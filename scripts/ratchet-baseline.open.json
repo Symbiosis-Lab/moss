@@ -63,7 +63,7 @@
         "crates/moss-build/src/js-src/site": 24,
         "crates/moss-build/src/plugins": 19,
         "crates/moss-core/src": 40,
-        "crates/moss-core/src/ast": 23,
+        "crates/moss-core/src/ast": 24,
         "crates/moss-core/src/resolve": 16
       },
       "oversized": {

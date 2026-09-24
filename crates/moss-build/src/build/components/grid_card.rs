@@ -239,6 +239,58 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     )
 }
 
+/// Renders a bare external grid-cell link through the SAME `.moss-card`
+/// shell [`render_item_with_typesetting`] builds for an internal page card
+/// — the owner's "one card kind" decision: a link out of the site is a
+/// card too, not a different-looking preview.
+///
+/// `title`, `domain` and `favicon` are the caller's business
+/// (`build::render::grid_cells::external_card_markup` works out author-text-
+/// vs-fetched precedence and reads the link-metadata cache); `cover_html`
+/// is fully-formed HTML — either the author's own image, rendered through
+/// the ordinary cover pipeline, or the plain no-cover placeholder when
+/// there's nothing to show yet. This function only assembles the shell.
+pub fn render_external_card(
+    href: &str,
+    title: &str,
+    domain: &str,
+    favicon: Option<&str>,
+    cover_html: &str,
+) -> String {
+    // Mirrors `render_link_preview`'s favicon handling (deleted alongside
+    // the `.link-preview` shell this replaces): route through the
+    // synthesizer with `ImageContext::Favicon`, which short-circuits to a
+    // bare 16×16 `<img>` — no manifest, no `<picture>`, no LQIP.
+    let favicon_assets = moss_core::asset_snapshot::AssetSnapshot::new();
+    let favicon_html = favicon
+        .filter(|f| !f.is_empty())
+        .map(|f| {
+            moss_core::render::image::synthesize_image_html(
+                f,
+                "",
+                &favicon_assets,
+                moss_core::render::image::ImageContext::Favicon,
+                &moss_core::render::image::ImageRenderOptions {
+                    class: Some("moss-card-kicker-favicon"),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap_or_default();
+    let kicker_html = format!(
+        r#"<span class="moss-card-kicker">{}{}</span>"#,
+        favicon_html,
+        html_escape(domain)
+    );
+    format!(
+        r#"<a href="{}" class="moss-card" data-external target="_blank" rel="noopener">{}<div class="moss-card-content">{}<span class="moss-card-meta"></span><span class="moss-card-title">{}</span></div></a>"#,
+        html_escape(href),
+        cover_html,
+        kicker_html,
+        html_escape(title),
+    )
+}
+
 #[cfg(test)]
 #[path = "grid_card_tests.rs"]
 mod tests;
