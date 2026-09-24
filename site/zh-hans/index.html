@@ -322,6 +322,13 @@
   #c5 .edge { height: 1px; }
   h1, h2 { font: 400 40px/1.14 var(--heading); letter-spacing: -.01em; margin: 0 0 20px; }
   h1 span, h2 span { display: block; }
+  /* Item D: each word of a scene's own h2/.lede, wrapped at runtime
+     (landing.js, initWords) so its background under a mobile wash can be
+     sampled and its own colour flipped independently. display:inline (not
+     h1/h2 span's own block, above -- a class beats a bare type selector)
+     keeps normal text flow; the transition is what makes a flip read as a
+     fade rather than a cut, on mobile only (updateWordContrast's own gate). */
+  .word { display: inline; transition: color .15s ease; }
   /* Scene 3's own kicker, standing above the video's own title — the front
      layer's heading, static now that nothing swaps into or out of it. */
   .crumb { font: 600 12px/1.4 var(--body); letter-spacing: .04em; text-transform: uppercase; color: var(--text2); margin: 0 0 10px; }

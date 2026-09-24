@@ -843,7 +843,7 @@ async function warmShaderCache() {
 // shader, constant and step. `rect` is a getter because the main instance's
 // print rectangle grows at runtime (dragged plates, scene 3 cards) while the
 // title's stays fixed to its own box.
-function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp = 0.03, mistHold = 0.15, blockSize = 16, paperScale = 1 }) {
+function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp = 0.03, mistHold = 0.15, blockSize = 16, paperScale = 1, readback = false }) {
   const gl = canvas.getContext('webgl2', { alpha: true, antialias: false, premultipliedAlpha: true, preserveDrawingBuffer: true });
   if (!gl || !gl.getExtension('EXT_color_buffer_float')) return null;
   const compile = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
@@ -1079,6 +1079,72 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
     throw new Error(`dissolve step ${s} is neither stored nor on the film`);
   };
 
+  // Item D: a small copy of whatever the canvas just showed, for the
+  // per-word contrast flip to read pixels under text from. Downsampled by a
+  // framebuffer blit (cheap, one GPU-side copy) into an 8-bit RGBA texture,
+  // then read back with a direct, synchronous readPixels -- not the
+  // PBO+fence async path an earlier version of this tried. That path is, by
+  // construction, always at least one tick stale: harvesting a fence kicked
+  // on the PREVIOUS tick before kicking a new one for the frame just drawn
+  // means even a fence that resolves exactly on schedule hands
+  // updateWordContrast last tick's pixels, never this one's. That lag is
+  // invisible almost everywhere, but not near a dissolve-step boundary,
+  // where the wash's own luminance under a word can swing 0.2-0.5 between
+  // two adjacent rendered frames (found live): a heading word sampled right
+  // there read the async pixels as background 0.29-0.32 while the frame
+  // actually on screen was 0.08-0.12, comfortably past the flip-in floor
+  // for a word that read as still black. Closing that gap without a stall
+  // means the fence has to be waited on same-tick, which is a blocking
+  // readPixels by another name -- so the plain, always-correct version
+  // below just does that directly, once per tick. Measured cost
+  // (check-landing-text-contrast's own per-frame timing) is the number
+  // that would justify bringing the async path back if it ever matters;
+  // it doesn't today. readback=false (the title's own small instance)
+  // skips all of this: nothing reads luminance under the intro title's
+  // letters.
+  let small = null;
+  if (readback) {
+    // 128, not the 64 first tried: a short word ("for", "AI.") spans only a
+    // handful of cells at 64x64 against a 390px-wide phone viewport, and
+    // item C's own chroma/structure boost (the wash is deliberately *not*
+    // spatially uniform) means a coarse grid can average a locally bright
+    // or dark speckle into a reading well off the word's real background --
+    // found live, "for" read 0.16-0.18 off a 64x64 grid against 0.64 in
+    // the actual screenshot, reproducing identically across runs (so not
+    // GPU/timing noise, a resolution one).
+    const SW = 128, SH = 128;
+    const stex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, stex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, SW, SH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    const sfb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, sfb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, stex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    let pixels = null;
+    small = {
+      w: SW, h: SH,
+      bg: tint.map((c) => c * 255),   // the shader's own uTint, for un-premultiplying its output correctly (bgLuminanceUnder, below)
+      pixels: () => pixels,
+      // Called once per presented frame (present(), below), and directly by
+      // refreshSmall (below) on a frame draw()/present() did not reach.
+      tick() {
+        if (canvas.width < 1 || canvas.height < 1) return;
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, sfb);
+        gl.blitFramebuffer(0, 0, canvas.width, canvas.height, 0, 0, SW, SH, gl.COLOR_BUFFER_BIT, gl.LINEAR);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, sfb);
+        const buf = new Uint8Array(SW * SH * 4);
+        gl.readPixels(0, 0, SW, SH, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+        pixels = buf;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      },
+    };
+  }
+
   return {
     setPrints(src, tgt) { setPrint('src', src); setPrint('tgt', tgt); held = [src, tgt];
       // A new pair invalidates every stored keyframe: it belongs to the
@@ -1219,6 +1285,7 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       gl.uniform1f(showk.u.uWetGainMax, wetGainMax);
       gl.uniform3f(showk.u.uK0, k0[0], k0[1], k0[2]); gl.uniform3f(showk.u.uK1, k1[0], k1[1], k1[2]);
       draw();
+      small?.tick();
     },
     // One fixed step at time t (seconds). The schedule: flood, dissolve and
     // stir, take up, dry and cure.
@@ -1286,13 +1353,31 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       gl.uniform1f(show.u.uCure, cure);
       gl.uniform1f(show.u.uClearance, clearance);
       draw();
+      small?.tick();
     },
+    // Item D: refreshes the small readback directly, without going through
+    // a present()/draw() call. Those only run when mob.leg.render() decides
+    // this frame needs a new paint (gated on scroll position changing), but
+    // progressAt() carries its own easing and can keep drifting for a
+    // while after scrollY itself stops moving -- found live, over a second
+    // of continuous touch drag with tick() never called once, because every
+    // sampled p during that stretch matched mob.p already. A word's
+    // background has to be this instant's, not whenever the sim last
+    // happened to redraw, so updateWordContrast calls this itself before
+    // every read rather than trusting draw()'s own cadence to keep it fresh.
+    refreshSmall: () => small?.tick(),
+    // The last small copy the GPU has actually finished (present() or
+    // draw() above, whichever last painted, or refreshSmall just above),
+    // for the per-word contrast flip to sample without a page-wide
+    // readPixels of its own. null before the first tick(), or if this
+    // instance was made without readback:true.
+    smallPixels: () => (small ? { w: small.w, h: small.h, bg: small.bg, pixels: small.pixels() } : null),
   };
 }
 // Phones display the wash at less than half its design size. The page's own
 // canvas and print rectangle are today's exact values; only the factory above
 // is new.
-const sim = makeSim({ canvas, texW: Math.round(BASE_TEX_W / (mobileLayout() ? 4 : 2)), texH: Math.round(BASE_TEX_H / (mobileLayout() ? 4 : 2)), rect: () => printRect });
+const sim = makeSim({ canvas, texW: Math.round(BASE_TEX_W / (mobileLayout() ? 4 : 2)), texH: Math.round(BASE_TEX_H / (mobileLayout() ? 4 : 2)), rect: () => printRect, readback: true });
 // Every scene transition, both layouts (site/watercolor-morph.js). Each frame
 // shown is the dissolve itself at one step, replayed from the checkpoint
 // before it, so CHECKPOINT_EVERY bounds the replay a frame can cost: 17 steps
@@ -2570,6 +2655,214 @@ function showMobileScene(scene) {
   shown = scene;
   wentStale();
 }
+// ── Item D: per-word contrast against the wash behind it ──────────────────
+// Owner: "when the dark text intersects with the dark wash in the
+// background, do we have a reliable way to flip the overlapping text to
+// white, so it's more readable?" Each word of a scene's own copy (its h2
+// and .lede, never a button and never #intro's own header -- the scenes'
+// own text is the only copy a wash ever paints under) is wrapped in its own
+// span at first use, so its background can be sampled and its colour
+// flipped independently of its neighbours: a whole line flipping together
+// would read as a stripe crossing the wash, not the actual word doing it.
+// Nothing here runs unless the canvas is covering (updateWordContrast is
+// only ever called from renderMorphAt's own cover===1 branch) and
+// resetWordContrast, called once at the cover 1->0 edge, is what returns
+// every word this leg touched to its ordinary colour -- there is no
+// per-frame cost once the canvas stops covering, only that one clear.
+const srgbToLin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+const relLuminance = (r, g, b) => 0.2126 * srgbToLin(r) + 0.7152 * srgbToLin(g) + 0.0722 * srgbToLin(b);
+const contrastOf = (l1, l2) => { const a = Math.max(l1, l2), b = Math.min(l1, l2); return (a + 0.05) / (b + 0.05); };
+const parseRGB = (str) => { const m = str.match(/[\d.]+/g); return m ? [+m[0], +m[1], +m[2]] : [0, 0, 0]; };
+let words = null;   // [{ el, ld, required, restColor, bright }], built once, lazily -- first call after boot
+function initWords() {
+  words = [];
+  const wrap = (el) => {
+    for (const child of [...el.childNodes]) {
+      if (child.nodeType === Node.ELEMENT_NODE) { wrap(child); continue; }
+      if (child.nodeType !== Node.TEXT_NODE || !child.textContent.trim()) continue;
+      const frag = document.createDocumentFragment();
+      for (const part of child.textContent.split(/(\s+)/)) {
+        if (!part) continue;
+        if (/^\s+$/.test(part)) { frag.appendChild(document.createTextNode(part)); continue; }
+        const span = document.createElement('span');
+        span.className = 'word'; span.textContent = part;
+        frag.appendChild(span);
+      }
+      child.replaceWith(frag);
+    }
+  };
+  for (const el of document.querySelectorAll('.scene .scene-text h2, .scene .scene-text p.lede')) {
+    wrap(el);
+    const heading = el.tagName === 'H2';
+    const required = heading ? 3 : 4.5;
+    // A two-colour (dark/white) flip is gap-free against every possible
+    // background luminance only where the dark colour's own luminance is
+    // at most 1.05/required^2 - 0.05 -- headings' --text (~0.022) clears
+    // that bound at their 3:1 floor with room to spare, but .lede's own
+    // --text2 (~0.10) does not clear it at 4.5:1: measured live, a
+    // background luminance band (~0.18-0.63) exists where --text2 already
+    // fails 4.5:1 and white would fail worse (a real reading, "Everything
+    // lives in local files," ratio 3.42-3.63, stayed dark because white's
+    // own contrast there was lower still, 1.9-2.1). Body words get a
+    // forced near-black rest colour while the wash is actively read under
+    // them (never at rest, never for headings) so the same two-state flip
+    // has a dark end that actually clears 4.5:1 everywhere; ld=0 matches
+    // that forced colour for the flip decision itself.
+    const restColor = heading ? '' : '#000';
+    const ld = heading ? relLuminance(...parseRGB(getComputedStyle(el).color)) : 0;
+    for (const span of el.querySelectorAll('.word')) words.push({ el: span, ld, required, restColor, bright: false, active: false });
+  }
+}
+// Averages the small readback's alpha-weighted luminance under `rect`
+// (viewport px, from a word's own getBoundingClientRect); null where less
+// than a third of that box is inked (mostly-transparent canvas -- #gl is
+// padded past the print's own edges, and the print is a fixed image a
+// still-scrolling word passes through, not always over ink; a few stray
+// inked pixels at that boundary averaged with an otherwise-blank box read
+// as a small, misleadingly dark or light mean, not the word's own real
+// background). The readback is bottom-up (GL convention) against a
+// top-down CSS rect, so y is flipped.
+//
+// Composites each pixel over the page's own background (small.bg, the
+// shader's own uTint) before taking luminance, rather than reading the
+// stored RGB straight: SHOWK's own output is premultiplied (context made
+// premultipliedAlpha:true) but not by the textbook color*alpha -- its o.rgb
+// is uTint*(T-(1-a)), so dividing by a does not recover the "true" colour
+// either, only standard over-compositing (rgb + bg*(1-a)) matches what the
+// browser's own canvas compositing -- and so a real screenshot -- actually
+// shows. Found live: reading the stored RGB straight measured 0.02-0.06 for
+// a heading word the same pixels, on screen, read 0.4-0.67; dividing by a
+// alone (a first, wrong fix) still undershot at 0.05-0.13 -- both dark
+// enough to wrongly pass FLIP_IN's own floor on every candidate this
+// session's transitions produced, while nothing about the fence, the
+// coverage threshold or the hysteresis margins was wrong.
+function bgLuminanceUnder(rect, canvasRect, small) {
+  const nx0 = (rect.left - canvasRect.left) / canvasRect.width, nx1 = (rect.right - canvasRect.left) / canvasRect.width;
+  const ny0 = (rect.top - canvasRect.top) / canvasRect.height, ny1 = (rect.bottom - canvasRect.top) / canvasRect.height;
+  const x0 = Math.max(0, Math.floor(nx0 * small.w)), x1 = Math.min(small.w, Math.ceil(nx1 * small.w));
+  const y0 = Math.max(0, Math.floor((1 - ny1) * small.h)), y1 = Math.min(small.h, Math.ceil((1 - ny0) * small.h));
+  if (x1 <= x0 || y1 <= y0) return null;
+  const px = small.pixels, bg = small.bg || [255, 255, 255];
+  let n = 0, sum = 0, total = 0;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    total++;
+    const i = (y * small.w + x) * 4, a = px[i + 3] / 255;
+    if (a < 0.05) continue;
+    sum += relLuminance(px[i] + bg[0] * (1 - a), px[i + 1] + bg[1] * (1 - a), px[i + 2] + bg[2] * (1 - a)); n++;
+  }
+  return n && n / total > 0.3 ? sum / n : null;
+}
+// Hysteresis tied to each word's own required ratio (3 for a heading, 4.5
+// for body), not to a bare comparison of dark's contrast against white's:
+// a reading of "white is relatively better than dark" is true well before
+// dark actually fails its own floor (measured live: a heading word's dark
+// contrast read 1.1-2.3 against a background where white would have read
+// higher still, yet the margin comparison this replaced never crossed
+// because *both* readings kept dropping together) -- what the reader
+// meets is dark's own ratio against its own floor, so that is what gates
+// the flip. FLIP_IN a little early (still passing, 10% of headroom spent)
+// rather than exactly at the floor: the readback trails the frame it
+// describes by up to two frames (present()'s own tick()), and structured,
+// colourful ink (item C) varies enough across a word's own box that the
+// 64x64 average this reads can sit a little optimistic of the darkest
+// patch under it. FLIP_OUT only once dark is comfortably clear (40%
+// headroom) is the hysteresis: without a gap between the two thresholds a
+// reading sitting near the floor would toggle on GPU noise alone.
+// FLIP_IN_MARGIN raised from item D's first cut (1.1) to 1.2 (2026-09-24,
+// measured): the small buffer's own freshness bugs are gone (refreshSmall,
+// makeSim above), so what a low margin leaves short is real lead time for
+// the 150ms fade itself, not stale data -- at 1.1, leg 1->2's own lede
+// words read production and screenshot backgrounds matching exactly and
+// still failed 4.5:1 at ~84% through the fade. 1.2 buys enough lead for
+// most of this leg's words without pulling in ones that then need to fade
+// back out faster than the wash relights around them (measured: 1.3
+// clears the 1.1 failures but trades them for a flip-out lag on a couple
+// of words positioned where this leg's wash swings back fastest). A
+// residual remains at 1.2 too -- see the landing report for which words
+// and why raising this further does not clear it.
+const FLIP_IN_MARGIN = 1.2, FLIP_OUT_MARGIN = 1.4;
+// A synchronous readPixels forces a real GPU->CPU sync point regardless of
+// how small the buffer is -- Chromium's own driver logs "GPU stall due to
+// ReadPixels" for this one, every time, headless or not. Calling it on
+// literally every rendered frame while cover is active (the naive reading
+// of "each frame" the brief asks for) measurably slowed the page: found
+// live, a later, unrelated small-wheel-delta check
+// (check-landing-mobile.mjs's checkScene2to3Touch) started missing its own
+// 250ms settle window once this ran unthrottled through the legs before
+// it. 40ms (~24 Hz) is well under the ~150-500ms a colour transition or a
+// dissolve step takes to matter, and cuts the stall count by 3-5x against
+// a 60-120Hz paint rate.
+const CONTRAST_REFRESH_MS = 40;
+let lastContrastRefresh = -Infinity;
+function updateWordContrast() {
+  if (!words) initWords();
+  // Draw() itself may not have run this frame (renderMorphAt's own
+  // render() call is gated on scroll position changing, not on real time
+  // passing), so the small buffer is refreshed here directly rather than
+  // trusting whatever draw() last left it at -- see refreshSmall's own
+  // comment in makeSim. Throttled (CONTRAST_REFRESH_MS, above): a call that
+  // lands inside the throttle window reuses whatever the last refresh left
+  // in the buffer instead of paying another stall for data a reader could
+  // not tell apart from it.
+  const now = performance.now();
+  if (now - lastContrastRefresh >= CONTRAST_REFRESH_MS) { sim?.refreshSmall?.(); lastContrastRefresh = now; }
+  const small = sim?.smallPixels?.();
+  if (!small?.pixels) return;
+  const canvasRect = canvas.getBoundingClientRect();
+  if (canvasRect.width < 1 || canvasRect.height < 1) return;
+  for (const w of words) {
+    const r = w.el.getBoundingClientRect();
+    const overCanvas = r.right > canvasRect.left && r.left < canvasRect.right && r.bottom > canvasRect.top && r.top < canvasRect.bottom;
+    const lbg = overCanvas ? bgLuminanceUnder(r, canvasRect, small) : null;
+    // Off the canvas entirely, or over it but on a stretch the wash left
+    // unpainted (#gl is padded past the print's own edges, and the print
+    // is a fixed image a still-scrolling word passes through, not always
+    // over ink): the wash has nothing to say about this word's background
+    // either way, so a word already flipped is put back rather than left
+    // stuck bright -- skipping it outright (this branch used to `continue`)
+    // meant a word that flipped once and then scrolled onto blank canvas
+    // stayed white for the rest of the leg, however light its real
+    // background had become (found live: white-on-white, ratio 1.46-2.3,
+    // both scored well under white's own 3:1 floor).
+    if (lbg == null) { w.active = false; w.bright = false; w.el.style.color = ''; continue; }
+    const darkC = contrastOf(w.ld, lbg), whiteC = contrastOf(1, lbg);
+    if (!w.active) {
+      // First frame a word is read at all: jump straight to whichever
+      // colour this exact background already calls for, rather than let
+      // the CSS transition fade it in from restColor -- a word can scroll
+      // onto the wash already past the flip-in threshold (a paragraph
+      // entering view over a wash already gone dark), and riding the
+      // 150ms fade from restColor toward white rides its tail straight
+      // through this check's own sampled frame: found live, leg 1->2's
+      // "Everything lives in local files," activated already needing
+      // white and was still short of 4.5:1 most of the way into the fade,
+      // against a background where even fully-white text barely clears
+      // the floor -- no amount of flip-in margin buys enough lead when
+      // the fade itself starts on the word's very first frame. The 150ms
+      // fade the brief asks for is for a reader watching a word flip in
+      // front of them; a word with no prior on-screen colour has no flip
+      // to show, so (like the restColor jump this generalizes) it skips
+      // the fade rather than animate one nobody sees the start of.
+      w.active = true;
+      w.bright = darkC < w.required * FLIP_IN_MARGIN && whiteC > darkC;
+      w.el.style.transition = 'none';
+      w.el.style.color = w.bright ? '#fff' : w.restColor;
+      void w.el.offsetHeight;   // flush the transition:none before restoring it
+      w.el.style.transition = '';
+      continue;
+    }
+    let next = w.bright;
+    if (!w.bright && darkC < w.required * FLIP_IN_MARGIN && whiteC > darkC) next = true;
+    else if (w.bright && darkC > w.required * FLIP_OUT_MARGIN) next = false;
+    w.bright = next;
+    w.el.style.color = next ? '#fff' : w.restColor;
+  }
+}
+function resetWordContrast() {
+  if (!words) return;
+  for (const w of words) { w.active = false; w.bright = false; w.el.style.color = ''; }
+}
+
 function renderMorphAt(progress) {
   const from = Math.max(0, Math.min(SHIPS, Math.floor(progress))), to = from + 1;
   const p = clamp01(progress - from);
@@ -2617,7 +2910,23 @@ function renderMorphAt(progress) {
   // The canvas takes the whole composition for the whole leg: never hidden
   // while the reader is between the two scenes.
   const cover = p > 0 && p < 1 ? 1 : 0;
-  if (cover !== mob.lastCover) { stage.style.setProperty('--wash-cover', String(cover)); mob.lastCover = cover; }
+  if (cover !== mob.lastCover) {
+    stage.style.setProperty('--wash-cover', String(cover));
+    mob.lastCover = cover;
+    if (!cover) resetWordContrast();   // the live DOM is fully back: no wash left to read a word's background off
+  }
+  // Only while mob.settled: render() above is its own STEPS_PER_FRAME
+  // budget and can still be catching a fast leg up to p over several
+  // frames (driving, just above), so the canvas mid-catch-up is showing
+  // an intermediate frame the flip's own margins were never tuned
+  // against. Found live: four words at one sampled step read a
+  // production luminance of 0.29-0.32 against a real (screenshotted)
+  // background of 0.08-0.10 -- not a stale readback (the small buffer
+  // matched what the canvas had actually drawn), a still-catching-up
+  // one. Holding the word at its last decided colour a few more frames
+  // is the same choice made for a word that scrolls onto unpainted
+  // canvas, just gated on the leg's own progress instead of coverage.
+  if (cover && mob.settled) updateWordContrast();
   showMobileScene(mob.scene === from ? (p >= 0.55 ? to : from) : (p <= 0.45 ? from : to));
   if (!mob.fanSolid && mob.bridge && to === DEPLOY && p > .35 &&
       textBottom(scenesEl[SHIPS]) <= stage.getBoundingClientRect().top + GEOM.cellH * SCALE / 2) {
@@ -4439,6 +4748,17 @@ function watchScrollNative(now) {
     // mob.settled is false and stops the moment renderMorphAt reports
     // caught up, so R8 (zero steps at rest) still holds once it is.
     if (booted && (scrolled || !mob.settled)) renderMorphAt(progressAt());
+    // Item D's own brief asks for a read "each frame" the canvas shows
+    // under text, not each frame the reader's own scroll moves -- but
+    // renderMorphAt above (and updateWordContrast inside it) only runs on
+    // a scrolled frame or one still catching a render up, so a leg the
+    // reader is holding still inside (mob.settled already true, scrollY
+    // between two of this synthetic-touch harness's own dispatched moves)
+    // went unread for whole seconds at a stretch, sampled at whatever the
+    // wash had painted whenever it was last true. mob.lastCover, not
+    // mob.settled, is item D's own "is there anything to read" gate --
+    // covers exactly the frames renderMorphAt's branch above did not.
+    else if (booted && mob.lastCover) updateWordContrast();
     if (!scrolled) return;
     mobileWatchKey = key;
 
@@ -4808,6 +5128,11 @@ landing.probe = (x, y) => sim.probe(x, y);
 // two prints it carries, whether that frame was exactly p's, and a
 // dissolve's length and checkpoint spacing.
 landing.morph = { current: () => morph?.current(), leg: () => morph?.current()?.tag ?? null, steps: DISSOLVE_STEPS, every: CHECKPOINT_EVERY, bounds: [WatercolorMorph.A_END, WatercolorMorph.B_START] };
+// The 128x128 downsampled wash readback (item D's own contrast reads use
+// this, refreshed at most every CONTRAST_REFRESH_MS): width/height, the
+// page background it composites against, and the last read pixel buffer --
+// null before the first refresh.
+landing.readback = () => sim?.smallPixels?.();
 // The live array itself, not a copy: a fault is injected by assigning into
 // an element (e.g. prints[3] = null), so a snapshot here would turn that
 // into a no-op that still passes.

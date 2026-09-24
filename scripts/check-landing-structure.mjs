@@ -66,7 +66,14 @@ const BASELINE = {
   // 86 -> 87 (2026-09-22): e14c2f0f added mobileMount/mobileLiveScene/
   // mobileBridge (89) without updating this baseline; consolidating them
   // into one `mob` record brings it to 87, still below that unrecorded high.
-  topLevelLets: 87,
+  // 87 -> 88 (2026-09-24, measured): item D's `words` (the wrapped-span
+  // records updateWordContrast reads and writes, built once and lazily).
+  // 88 -> 89 (2026-09-24, measured): item D's lastContrastRefresh, the
+  // throttle clock for the small readback (found live: an unthrottled
+  // synchronous GPU readback every rendered frame measurably slowed the
+  // page, enough to break check-landing-mobile.mjs's own small-wheel-delta
+  // check elsewhere on the same run).
+  topLevelLets: 89,
   // Rose 14 -> 15 on 2026-09-21: the last scene's rest is a floor, not a point,
   // so a visitor can reach the footer on a short window. It is written as one
   // comparison against SHARE in the desktop drive. The scene table pays this
@@ -119,7 +126,9 @@ const BASELINE = {
   // 54990 -> 55034 (2026-09-23): measured -- one <script src="watercolor-morph.js"> tag.
   // 55034 -> 54436 (2026-09-23): the siblings' and the video's own fade ramps
   // and their four delays gave way to one membership class.
-  htmlBytes: 54436,
+  // 54436 -> 54941 (2026-09-24, measured): item D's own `.word` rule and
+  // its explanatory comment (site/index.html).
+  htmlBytes: 54941,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a
@@ -239,7 +248,18 @@ const BASELINE = {
   // 295117 -> 295300 (2026-09-24): measured -- mobileEntranceProgress touch-gated (item A), replacing the #col-pin read with #c2's own text and its explanatory comment.
   // 295300 -> 297340 (2026-09-24): measured -- item B: holdMorph's carry flag, the Publish control's mobile-only cubic ease-in scale (publishBridge's draw()), and their explanatory comments.
   // 297340 -> 300637 (2026-09-24): measured -- item C: mobile-only wash bounds/step-ease (MOBILE_MORPH_BOUNDS), the SHOWK shader's wet-chroma gain, and their explanatory comments including the measured tuning numbers.
-  scriptBytes: 300637,
+  // 300637 -> 319748 (2026-09-24, measured): item D itself -- initWords,
+  // bgLuminanceUnder, updateWordContrast/resetWordContrast and the small
+  // downsampled GPU readback they read (makeSim's own refreshSmall/tick),
+  // plus their explanatory comments including the measured tuning numbers.
+  // 319748 -> 320915 (2026-09-24, measured): the CONTRAST_REFRESH_MS
+  // throttle and its own comment, plus the watchScrollNative branch that
+  // calls updateWordContrast on a frame renderMorphAt itself skipped.
+  // 320915 -> 320980 (2026-09-24, measured): a misordered comment above
+  // refreshSmall/smallPixels put back next to the method it describes, and
+  // landing.readback's own comment corrected (64x64 -> 128x128, stale
+  // since item D's own resolution bump).
+  scriptBytes: 320980,
 };
 
 function countWindowAssignments(text) {
