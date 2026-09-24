@@ -60,6 +60,23 @@ pub(crate) fn acquire_encode_permit<'a>(
     }
 }
 
+/// A source's existing transform record, or a fresh empty one keyed to
+/// `source_file`'s current size. Shared load step for both `record_transforms`
+/// and `record_ladder` below, which differ only in what they do to
+/// `record.transforms` before writing it back.
+fn load_transform_record(
+    transforms: &crate::build::cache::TransformCache,
+    source_oid: &str,
+    source_file: &Path,
+) -> crate::build::cache::TransformRecord {
+    use crate::build::cache::TransformRecord;
+    transforms.get(source_oid).unwrap_or_else(|| TransformRecord {
+        source_oid: source_oid.to_string(),
+        source_size: fs::metadata(source_file).map(|m| m.len()).unwrap_or(0),
+        transforms: std::collections::HashMap::new(),
+    })
+}
+
 /// Merge transform entries into a source's record, preserving everything else
 /// already in it — scan metadata, and outputs written by an earlier step of the
 /// same conversion.
@@ -69,15 +86,77 @@ fn record_transforms(
     source_file: &Path,
     entries: impl IntoIterator<Item = (String, crate::build::cache::TransformEntry)>,
 ) {
-    use crate::build::cache::TransformRecord;
-    let mut record = transforms.get(source_oid).unwrap_or_else(|| TransformRecord {
-        source_oid: source_oid.to_string(),
-        source_size: fs::metadata(source_file).map(|m| m.len()).unwrap_or(0),
-        transforms: std::collections::HashMap::new(),
-    });
+    let mut record = load_transform_record(transforms, source_oid, source_file);
     record.transforms.extend(entries);
     if let Err(e) = transforms.put(&record) {
         log::warn!("Failed to write transform record: {}", e);
+    }
+}
+
+/// Record a freshly produced HLS ladder, replacing whatever `video/hls/` keys
+/// the record already carries — a ladder's rungs are a SET, not entries that
+/// only ever accumulate.
+///
+/// `record_transforms`' plain merge is wrong here specifically: `cached_ladder`
+/// (hls.rs) infers a cached ladder's rung count by counting `video/hls/v*.m3u8`
+/// keys in the record, so when a ladder SHRINKS — a tighter per-file budget or
+/// a table edit dropping the top rung — a merge leaves the old top rung's
+/// `video/hls/v5.*` keys behind. `cached_ladder` then counts one rung too many,
+/// looks the extra one up under today's params, misses, and re-encodes the
+/// whole ladder on every subsequent build forever, not just once. Dropping
+/// every `video/hls/` key before inserting the fresh set is what keeps a
+/// shrunk ladder a cache hit.
+///
+/// `pub(crate)`, not private: `hls_tests.rs` exercises this against
+/// `hls::cached_ladder` directly to prove the shrink-stays-a-hit property,
+/// rather than through a full `produce_ladder` encode.
+pub(crate) fn record_ladder(
+    transforms: &crate::build::cache::TransformCache,
+    source_oid: &str,
+    source_file: &Path,
+    entries: impl IntoIterator<Item = (String, crate::build::cache::TransformEntry)>,
+) {
+    let mut record = load_transform_record(transforms, source_oid, source_file);
+    record.transforms.retain(|k, _| !k.starts_with(crate::build::media::hls::HLS_TRANSFORM_PREFIX));
+    record.transforms.extend(entries);
+    if let Err(e) = transforms.put(&record) {
+        log::warn!("Failed to write transform record: {}", e);
+    }
+}
+
+/// Drop a source's `video/hls/` keys after `produce_ladder` returns `Ok(None)`
+/// — the rung count collapsed below 2 (a tighter per-file budget, a shorter
+/// `video_max_size_mb` from a deploy plugin, or a table edit), so no ladder is
+/// owed this build, but a record from an EARLIER build may still carry the
+/// old one's entries.
+///
+/// Left in place, those stale entries are wrong in two ways at once. The
+/// vacuum pass (`cache.rs`) treats every oid a surviving record names as
+/// reachable, so the stale blobs — including the very over-cap file
+/// `record_ladder`'s budget exists to stop shipping — are never collected.
+/// And `cached_ladder` (hls.rs) keeps counting the stale rungs on every later
+/// build, misses looking the extra one up under today's params, and pays a
+/// `probe_source` it would otherwise skip, forever — the same failure mode
+/// `record_ladder` fixes for a SHRUNK ladder, here for a ladder that
+/// disappeared entirely.
+///
+/// A no-op, with no record write, when the record has no `video/hls/` keys to
+/// clear: most sources never had a ladder, this runs on every build's
+/// `Ok(None)` arm, and a write nothing needs is still a write.
+fn clear_stale_ladder(
+    transforms: &crate::build::cache::TransformCache,
+    source_oid: &str,
+    source_file: &Path,
+) {
+    let Some(mut record) = transforms.get(source_oid) else {
+        return;
+    };
+    if !record.transforms.keys().any(|k| k.starts_with(crate::build::media::hls::HLS_TRANSFORM_PREFIX)) {
+        return;
+    }
+    record.transforms.retain(|k, _| !k.starts_with(crate::build::media::hls::HLS_TRANSFORM_PREFIX));
+    if let Err(e) = transforms.put(&record) {
+        log::warn!("Failed to clear stale HLS ladder keys for {}: {}", source_file.display(), e);
     }
 }
 
@@ -224,16 +303,25 @@ pub(crate) fn convert_single_video(
             hls_entries = entries
                 .iter()
                 .filter_map(|(name, entry)| {
-                    name.strip_prefix("video/hls/").map(|bare| (bare.to_string(), entry.oid.clone()))
+                    name.strip_prefix(crate::build::media::hls::HLS_TRANSFORM_PREFIX)
+                        .map(|bare| (bare.to_string(), entry.oid.clone()))
                 })
                 .collect();
             // Recorded here rather than with the MP4's own outputs: four
             // early returns sit between this point and that write, and a
             // ladder that reached the object store without reaching the record
-            // is seventeen blobs re-encoded on every build.
-            record_transforms(transforms, source_oid, source_file, entries);
+            // is seventeen blobs re-encoded on every build. `record_ladder`,
+            // not `record_transforms`: see its own doc for why a plain merge
+            // would strand a shrunk ladder's dropped rung keys.
+            record_ladder(transforms, source_oid, source_file, entries);
         }
-        Ok(None) => log::debug!("No HLS ladder for {}: source fills one rung", filename),
+        Ok(None) => {
+            log::debug!("No HLS ladder for {}: source fills one rung", filename);
+            // A record from an earlier build may still carry a ladder this
+            // one no longer owes — see `clear_stale_ladder`'s own doc for
+            // what leaving it behind costs.
+            clear_stale_ladder(transforms, source_oid, source_file);
+        }
         Err(ref e) if e == "Cancelled" => {
             return VideoConversionOutcome {
                 error: Some("Cancelled".to_string()),
@@ -892,7 +980,12 @@ pub(crate) fn run_video_conversion(
 
     use crate::build::media::ffmpeg::VideoCompressionConfig;
     let compression_config = match services.deploy_video_max_size_mb {
-        Some(mb) => VideoCompressionConfig { max_size_mb: mb, ..Default::default() },
+        // The plugin host's own per-file limit, so it bounds BOTH files this
+        // worker can produce for one video: the progressive MP4 directly, and
+        // every HLS rung/audio file `hls_max_file_mb` gates — a host that caps
+        // uploads at `mb` rejects an oversized ladder rung exactly as it would
+        // an oversized MP4.
+        Some(mb) => VideoCompressionConfig { max_size_mb: mb, hls_max_file_mb: mb, ..Default::default() },
         None => VideoCompressionConfig::default(),
     };
 
@@ -1595,8 +1688,12 @@ pub(crate) fn dispatch_video_conversions(
             // overlap with in-progress conversions. Headless is called once per
             // invocation, so there's no previous dispatch to compare against.
             let compression_config = match svc.deploy_video_max_size_mb {
+                // Mirrors the override arm in `run_video_conversion`: the
+                // plugin host's per-file limit bounds both the MP4 and the
+                // HLS ladder's own files.
                 Some(mb) => crate::build::media::ffmpeg::VideoCompressionConfig {
                     max_size_mb: mb,
+                    hls_max_file_mb: mb,
                     ..Default::default()
                 },
                 None => crate::build::media::ffmpeg::VideoCompressionConfig::default(),
@@ -1906,6 +2003,110 @@ pub(crate) fn cleanup_legacy_video_cache(moss_dir: &Path) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    // ===========================================
+    // clear_stale_ladder: the Ok(None) record cleanup
+    // ===========================================
+
+    /// A record left over from a build where this source HAD a ladder — its
+    /// `video/hls/` keys must be gone after `clear_stale_ladder`, and every
+    /// other key (the mp4, the thumbnail) must survive untouched.
+    #[test]
+    fn clear_stale_ladder_drops_only_the_hls_keys() {
+        use crate::build::cache::{ObjectStore, TransformCache, TransformEntry, TransformRecord};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("clip.mov");
+        std::fs::write(&source, b"source bytes").unwrap();
+        let transforms = TransformCache::new(
+            dir.path().join("transforms"),
+            ObjectStore::new(dir.path().join("objects")),
+        );
+        let entry = |tag: &str| TransformEntry {
+            oid: format!("oid-{tag}"),
+            size: 1,
+            params: serde_json::json!({}),
+        };
+        let source_oid = "oid-collapsed";
+        transforms
+            .put(&TransformRecord {
+                source_oid: source_oid.to_string(),
+                source_size: 0,
+                transforms: [
+                    ("video/mp4".to_string(), entry("mp4")),
+                    ("video/thumbnail".to_string(), entry("thumb")),
+                    ("video/hls/master.m3u8".to_string(), entry("master")),
+                    ("video/hls/v0.m3u8".to_string(), entry("v0")),
+                    ("video/hls/v0.m4s".to_string(), entry("v0seg")),
+                ]
+                .into_iter()
+                .collect(),
+            })
+            .unwrap();
+
+        clear_stale_ladder(&transforms, source_oid, &source);
+
+        let after = transforms.get(source_oid).expect("the record itself must survive");
+        assert!(
+            after.transforms.keys().all(|k| !k.starts_with(crate::build::media::hls::HLS_TRANSFORM_PREFIX)),
+            "every video/hls/ key must be gone: {:?}",
+            after.transforms.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(after.transforms.len(), 2, "the mp4 and thumbnail entries must survive untouched");
+        assert!(after.transforms.contains_key("video/mp4"));
+        assert!(after.transforms.contains_key("video/thumbnail"));
+    }
+
+    /// `clear_stale_ladder` runs on every `Ok(None)` — every video that was
+    /// never wide enough for a ladder in the first place, on every build.
+    /// Most sources never had one, so it must not pay a record write when
+    /// there is nothing to clear: no record where none existed, and no
+    /// rewrite of a record that already carries no `video/hls/` keys.
+    #[test]
+    fn clear_stale_ladder_is_a_no_op_when_there_is_nothing_to_clear() {
+        use crate::build::cache::{ObjectStore, TransformCache, TransformEntry, TransformRecord};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("clip.mov");
+        std::fs::write(&source, b"source bytes").unwrap();
+        let transforms = TransformCache::new(
+            dir.path().join("transforms"),
+            ObjectStore::new(dir.path().join("objects")),
+        );
+
+        // No record at all — a source too narrow for a ladder on its very
+        // first build. Must not fabricate one.
+        let untouched_oid = "oid-never-had-a-record";
+        clear_stale_ladder(&transforms, untouched_oid, &source);
+        assert!(
+            transforms.get(untouched_oid).is_none(),
+            "a source with no record at all must still have none"
+        );
+
+        // A record exists, but carries no video/hls/ keys (mp4 already
+        // converted, ladder never attempted) — must come back byte-for-byte
+        // the same record, not merely an equivalent one written fresh.
+        let mp4_only_oid = "oid-mp4-only";
+        let seeded = TransformRecord {
+            source_oid: mp4_only_oid.to_string(),
+            source_size: 0,
+            transforms: [(
+                "video/mp4".to_string(),
+                TransformEntry { oid: "oid-mp4".to_string(), size: 1, params: serde_json::json!({}) },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        transforms.put(&seeded).unwrap();
+
+        clear_stale_ladder(&transforms, mp4_only_oid, &source);
+
+        assert_eq!(
+            transforms.get(mp4_only_oid).expect("the record must still be there"),
+            seeded,
+            "a record with no video/hls/ keys must come back exactly as seeded"
+        );
+    }
 
     // ===========================================
     // Encode-permit (bounded concurrency) tests

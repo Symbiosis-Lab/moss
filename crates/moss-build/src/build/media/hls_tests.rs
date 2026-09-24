@@ -367,6 +367,163 @@ fn a_missing_rung_invalidates_the_whole_cached_ladder() {
     );
 }
 
+/// A change to the per-file budget must invalidate every cached ladder, the
+/// same way a table edit already does — otherwise a tightened
+/// `hls_max_file_mb` would never re-run and an over-budget file already on
+/// disk would keep being served.
+#[test]
+fn ladder_params_carries_the_per_file_budget() {
+    let loose = ladder_params(&VideoCompressionConfig { hls_max_file_mb: 150, ..VideoCompressionConfig::default() });
+    let tight = ladder_params(&VideoCompressionConfig { hls_max_file_mb: 50, ..VideoCompressionConfig::default() });
+    assert_eq!(loose["max_file_mb"], serde_json::json!(150));
+    assert_eq!(tight["max_file_mb"], serde_json::json!(50));
+    assert_ne!(loose, tight, "a budget-only edit must change the cache key");
+}
+
+/// A ladder that SHRINKS — a tighter `hls_max_file_mb`, or a table edit
+/// dropping the top rung — must be a cache HIT on the very next lookup, not a
+/// permanent miss.
+///
+/// Reproduces exactly what a plain merge-only write left behind: a record
+/// seeded as a complete 6-rung ladder recorded under a looser budget (`stale_
+/// params`), then a fresh 5-rung ladder recorded through `video::record_
+/// ladder` under today's tighter one. The 15 keys the two ladders share get
+/// overwritten either way; what only `record_ladder`'s drop-before-insert
+/// gets right is the two keys that do NOT overlap — the old top rung's
+/// `video/hls/v5.m3u8`/`.m4s`. Left behind, `cached_ladder` counts 6 rungs
+/// where 5 actually exist, expects `video/hls/v5.*` under today's params, and
+/// finds yesterday's — a miss, forever.
+#[test]
+fn a_shrunk_ladder_is_recorded_as_a_hit_not_a_stale_miss() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let transforms = TransformCache::new(
+        dir.path().join("transforms"),
+        ObjectStore::new(dir.path().join("objects")),
+    );
+    let source = dir.path().join("clip.mov");
+    std::fs::write(&source, b"source bytes").unwrap();
+    let source_oid = "oid-shrink";
+
+    // The complete 6-rung ladder a looser budget left in the record.
+    let stale_config =
+        VideoCompressionConfig { hls_max_file_mb: 100_000, ..VideoCompressionConfig::default() };
+    let stale_params = ladder_params(&stale_config);
+    let stale_blob = dir.path().join("stale-blob");
+    std::fs::write(&stale_blob, b"stale ladder file").unwrap();
+    let stale_oid = transforms.objects().store_file(&stale_blob).unwrap();
+    let stale_members = hls_members(video_ladder_rungs(1280));
+    assert_eq!(stale_members.len(), 17, "six rungs and two renditions");
+    let mut record = TransformRecord {
+        source_oid: source_oid.to_string(),
+        source_size: 0,
+        transforms: std::collections::HashMap::new(),
+    };
+    for name in &stale_members {
+        record.transforms.insert(
+            format!("video/hls/{name}"),
+            TransformEntry { oid: stale_oid.clone(), size: 1, params: stale_params.clone() },
+        );
+    }
+    transforms.put(&record).unwrap();
+
+    // The fresh 5-rung ladder `produce_ladder` records after the budget
+    // narrowed it, the way `convert_single_video`'s `Ok(Some(entries))` arm
+    // does: through `record_ladder`, not a plain merge.
+    let config = VideoCompressionConfig::default();
+    let fresh_params = ladder_params(&config);
+    let fresh_members = hls_members(&VIDEO_LADDER[..5]);
+    assert_eq!(fresh_members.len(), 15, "five rungs and two renditions");
+    let fresh_blob = dir.path().join("fresh-blob");
+    std::fs::write(&fresh_blob, b"fresh ladder file").unwrap();
+    let fresh_oid = transforms.objects().store_file(&fresh_blob).unwrap();
+    let fresh_entries: Vec<(String, TransformEntry)> = fresh_members
+        .iter()
+        .map(|name| {
+            (
+                format!("video/hls/{name}"),
+                TransformEntry { oid: fresh_oid.clone(), size: 1, params: fresh_params.clone() },
+            )
+        })
+        .collect();
+
+    crate::build::media::video::record_ladder(&transforms, source_oid, &source, fresh_entries);
+
+    let (members, oids) = cached_ladder(&transforms, source_oid, &fresh_params)
+        .expect("a shrunk ladder must stay a cache hit on the very next lookup");
+    assert_eq!(members, fresh_members, "the shrunk ladder's own 5-rung file set, not the stale 6-rung one");
+    assert!(
+        oids.iter().all(|o| o == &fresh_oid),
+        "every resolved oid must come from the fresh record, not the stale one left behind"
+    );
+}
+
+/// A tiny per-file budget reaches all the way through a real encode: fewer
+/// files land in staging than the same 1280-wide source gets from width
+/// alone, and it is exactly the files a 5-rung ladder promises — not the
+/// unit tests in moss-core, which never invoke ffmpeg or touch staging.
+#[test]
+fn produce_ladder_honors_a_tiny_per_file_budget() {
+    let Some(bin) = real_ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("holiday.mov");
+    if !synthesise(&bin, &source, "1280x720") {
+        eprintln!("skipping: could not synthesise a source");
+        return;
+    }
+
+    let transforms = TransformCache::new(
+        dir.path().join("transforms"),
+        ObjectStore::new(dir.path().join("objects")),
+    );
+    let ffmpeg = FFmpegManager::from_bin_path(bin);
+    let staging = dir.path().join("staging");
+    std::fs::create_dir_all(&staging).unwrap();
+
+    // `synthesise` writes a 4 s clip. At 4 s, the top rung's own video file
+    // (2000 kbps * 4 s * 1.05 margin = 1,050,000 bytes) is just over a 1 MiB
+    // (1,048,576 byte) cap while every rung below it clears that cap
+    // comfortably — a budget picked to drop exactly the top rung, proving
+    // the truncation without relying on width (1280 qualifies every rung by
+    // width alone).
+    let config = VideoCompressionConfig { hls_max_file_mb: 1, ..VideoCompressionConfig::default() };
+    let ladder_dir = staging.join("holiday.hls");
+    let entries = produce_ladder(
+        &ffmpeg,
+        &source,
+        "oid-tiny-budget",
+        &ladder_dir,
+        dir.path(),
+        &transforms,
+        &config,
+        None,
+        None,
+        None,
+    )
+    .expect("produce_ladder")
+    .expect("5 rungs is still a ladder");
+
+    let expected = hls_members(&VIDEO_LADDER[..5]);
+    assert_eq!(expected.len(), 15, "five rungs and two renditions");
+    let rung_count = entries
+        .iter()
+        .filter(|(n, _)| n.starts_with("video/hls/v") && n.ends_with(".m3u8"))
+        .count();
+    assert_eq!(rung_count, 5, "a 1 MiB budget must drop only the top (1280x720) rung");
+    assert_eq!(entries.len(), expected.len(), "exactly the truncated ladder's own census");
+
+    let mut on_disk: Vec<String> = std::fs::read_dir(&ladder_dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    on_disk.sort();
+    let mut expected_sorted = expected;
+    expected_sorted.sort();
+    assert_eq!(on_disk, expected_sorted, "staging holds exactly the truncated ladder's files, no v5");
+}
+
 /// A source too narrow for a second rung gets no ladder, and no ffmpeg run.
 ///
 /// This is where `EncodePlan::KeepOriginal` lands under HLS. It is asserted

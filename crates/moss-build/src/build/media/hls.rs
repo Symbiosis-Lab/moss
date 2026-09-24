@@ -35,7 +35,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use moss_core::asset_paths::{
     audio_groups, hls_members, video_ladder_fingerprint, video_ladder_rungs,
-    video_ladder_rungs_by_count, AudioGroup, VideoRung, HLS_MASTER_NAME,
+    video_ladder_rungs_by_count, video_ladder_rungs_within, AudioGroup, VideoRung, HLS_MASTER_NAME,
 };
 
 use crate::build::cache::{TransformCache, TransformEntry};
@@ -401,11 +401,14 @@ mod hls_tests;
 /// references are exactly what a naming disagreement breaks.
 ///
 /// `Ok(None)` means no ladder was produced and none is owed: the source fills
-/// fewer than two rungs. That is the honest resolution of "`EncodePlan::
-/// KeepOriginal` cannot survive HLS" — segmenting is mandatory, so shipping the
-/// source bytes as a ladder is not available, but *not building one* is: a
-/// ladder is a choice between rungs, and one rung is three extra files offering
-/// a player nothing to switch to. The progressive MP4 already serves it.
+/// fewer than two rungs — too narrow for a second rung, or so long that even
+/// its bottom rung's file only clears `config.hls_max_file_mb` by shipping
+/// alone (`video_ladder_rungs_within` never returns fewer than one). That is
+/// the honest resolution of "`EncodePlan::KeepOriginal` cannot survive HLS" —
+/// segmenting is mandatory, so shipping the source bytes as a ladder is not
+/// available, but *not building one* is: a ladder is a choice between rungs,
+/// and one rung is three extra files offering a player nothing to switch to.
+/// The progressive MP4 already serves it.
 ///
 /// An `Err` means the ladder failed but the video did
 /// not — the progressive MP4 is still the page's video, so the caller logs and
@@ -443,7 +446,23 @@ pub(crate) fn produce_ladder(
         Some(hit) => hit,
         None => {
             let probe = ffmpeg.probe_source(source_file)?;
-            let rungs = video_ladder_rungs(probe.width);
+            let width_rungs = video_ladder_rungs(probe.width);
+            let max_file_bytes = u64::from(config.hls_max_file_mb) * 1024 * 1024;
+            let rungs =
+                video_ladder_rungs_within(probe.width, probe.duration_secs, max_file_bytes);
+            if rungs.len() < width_rungs.len() {
+                // The reader who needs this line is the one wondering why a
+                // long video's top quality is missing: width alone would have
+                // kept more rungs, so the per-file budget is why it didn't.
+                log::info!(
+                    "HLS ladder for {}: kept {} of {} width-eligible rungs within the {} MiB \
+                     per-file budget",
+                    source_file.display(),
+                    rungs.len(),
+                    width_rungs.len(),
+                    config.hls_max_file_mb,
+                );
+            }
             if rungs.len() < 2 {
                 return Ok(None);
             }
@@ -502,15 +521,24 @@ pub(crate) fn produce_ladder(
 ///
 /// The rung count is read back out of the record rather than re-derived from
 /// the source, because the record is the only thing that knows which table the
-/// files were encoded under. `video_ladder_rungs` always truncates from the
-/// top, so a ladder of `k` rungs is `VIDEO_LADDER[..k]` and the expected census
-/// follows from `k` alone. If the record's `video/hls*` entries are not exactly
-/// that census — a rung evicted, a blob swept, a table edited — it is a miss,
-/// because seventeen files that reference each other are only valid together.
+/// files were encoded under. `video_ladder_rungs` AND `video_ladder_rungs_within`
+/// both always truncate from the top, so a ladder of `k` rungs is
+/// `VIDEO_LADDER[..k]` and the expected census follows from `k` alone —
+/// whether width, the per-file budget, or both narrowed it below the full
+/// table is not something this needs to know. If the record's `video/hls*`
+/// entries are not exactly that census — a rung evicted, a blob swept, a table
+/// edited — it is a miss, because seventeen files that reference each other
+/// are only valid together.
+/// The one owner of the transform-cache key prefix every HLS ladder file's
+/// entry is stored under — `video.rs`'s ladder-record writer and cache-key
+/// filters use this rather than repeating the literal, so there is one place
+/// where "is this key part of some video's ladder?" is answered.
+pub(crate) const HLS_TRANSFORM_PREFIX: &str = "video/hls/";
+
 /// The cache key for one file of a ladder. The name is a constant, so the key
 /// says nothing about which video it belongs to beyond the record it sits in.
 fn transform_name(member: &str) -> String {
-    format!("video/hls/{member}")
+    format!("{HLS_TRANSFORM_PREFIX}{member}")
 }
 
 fn cached_ladder(
@@ -532,7 +560,7 @@ fn cached_ladder(
     if record
         .transforms
         .keys()
-        .filter(|k| k.starts_with("video/hls/"))
+        .filter(|k| k.starts_with(HLS_TRANSFORM_PREFIX))
         .count()
         != members.len()
     {
@@ -545,16 +573,19 @@ fn cached_ladder(
     Some((members, oids?))
 }
 
-/// What invalidates a cached ladder: the rung table and the encoder settings
-/// that shape the bytes. Shared by every file in one ladder, so a table edit
-/// re-encodes the whole thing rather than leaving rungs from two generations
-/// referencing each other.
+/// What invalidates a cached ladder: the rung table, the encoder settings that
+/// shape the bytes, and the per-file budget that decides which prefix of the
+/// table this ladder is. Shared by every file in one ladder, so a table edit —
+/// or a budget edit, which changes which rungs a given source is even allowed
+/// to keep — re-encodes the whole thing rather than leaving rungs from two
+/// generations referencing each other.
 fn ladder_params(config: &VideoCompressionConfig) -> serde_json::Value {
     serde_json::json!({
         "ladder": video_ladder_fingerprint(),
         "preset": config.preset,
         "segment_seconds": SEGMENT_SECONDS,
         "keyframe_seconds": KEYFRAME_SECONDS,
+        "max_file_mb": config.hls_max_file_mb,
     })
 }
 

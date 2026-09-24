@@ -42,7 +42,9 @@ use crate::types::{content::ProjectStructure, runtime::ChildProcessRegistry};
 /// `max_size_mb` bounds what the **site owner** has to host, and it is the one
 /// input that can pull an encode *down* the ladder: a film long enough that no
 /// higher rung fits the budget is delivered at a lower one rather than at an
-/// arbitrary bitrate of its own.
+/// arbitrary bitrate of its own. `hls_max_file_mb` is the same idea applied to
+/// the OTHER delivery form this config drives — see its own doc for why the
+/// HLS ladder needs a second, separate budget rather than reusing this one.
 ///
 /// Before 2026-08-27 only the size budget existed, and the bitrate fell out of
 /// it as a by-product: a 5.7-minute video was encoded at 2.15 Mbps purely
@@ -60,6 +62,22 @@ pub struct VideoCompressionConfig {
     /// Default: 100 MB (suitable for web delivery without CDN issues)
     pub max_size_mb: u32,
 
+    /// Maximum size, in MiB, of any single file the HLS ladder writes.
+    /// Default: 150 MiB, matching moss hosting's per-file cap.
+    ///
+    /// This is a SEPARATE budget from `max_size_mb`, not a reuse of it, because
+    /// the two encodes have a different file shape. The progressive MP4 is one
+    /// file for the whole video, so `max_size_mb` bounds it directly. The HLS
+    /// ladder is `-hls_flags single_file`: every rung's video is its OWN file,
+    /// and so is each audio rendition (`alo.m4s`, `ahi.m4s`) — a rung's file
+    /// size is its bitrate times the video's whole duration, which the width
+    /// truncation `asset_paths::video_ladder_rungs` already applies cannot see.
+    /// A 15-minute, 1280 px source whose every rung fit the width still wrote
+    /// a 221 MB top-rung file and a 123 MB rung below it — hosting rejects any
+    /// one of those files over its cap, independent of what the whole ladder
+    /// adds up to. `asset_paths::video_ladder_rungs_within` is where this
+    /// field is applied.
+    pub hls_max_file_mb: u32,
 
     /// x264 encoding preset. Slower = better compression ratio.
     /// Options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
@@ -81,6 +99,7 @@ impl Default for VideoCompressionConfig {
     fn default() -> Self {
         Self {
             max_size_mb: 100,
+            hls_max_file_mb: 150,
             preset: "slow".to_string(),
             target_fill_percentage: 0.97,
             encode_threads: default_encode_threads(),
@@ -103,6 +122,12 @@ impl VideoCompressionConfig {
     /// Inspired by Bazel's action cache where the action descriptor includes
     /// all configuration that affects the output. If any parameter changes
     /// (e.g., CRF 18 → CRF 23), the cache correctly misses and re-converts.
+    ///
+    /// `hls_max_file_mb` is deliberately absent: it affects only the HLS
+    /// ladder, which is cached under its own `video/hls/*` transform names
+    /// keyed by `hls::ladder_params` (which does carry it), never under the
+    /// `video/mp4` name these params key. Folding it in here would bust the
+    /// progressive MP4's cache on a config that never touches it.
     pub fn to_params(&self) -> serde_json::Value {
         serde_json::json!({
             "preset": self.preset,
@@ -179,6 +204,13 @@ pub enum EncodePlan {
 /// ships anyway — an over-budget file that plays beats a video nobody can
 /// watch, and the alternative, shipping the multi-gigabyte original, is worse
 /// for the viewer *and* the bill.
+///
+/// This is the progressive MP4's own decision, over ONE file whose size is
+/// `total_kbps * duration`. The HLS ladder's analogous truncation
+/// (`asset_paths::video_ladder_rungs_within`, applied in `hls::produce_ladder`)
+/// answers a different question — not "which single rung", but "which PREFIX
+/// of rungs", because a ladder ships every surviving rung as its own file — so
+/// it is not a call into this function and does not share `EncodePlan`.
 pub fn plan_video_encode(source: &SourceVideo, config: &VideoCompressionConfig) -> EncodePlan {
     let budget_bytes =
         config.max_size_mb as f64 * 1024.0 * 1024.0 * config.target_fill_percentage;

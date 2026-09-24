@@ -453,7 +453,11 @@ pub const MIN_BITS_PER_PIXEL_PER_FRAME: f64 = 0.045;
 /// The **top rung is also the delivery ceiling**. There is deliberately no
 /// second `max_video_bitrate_kbps` knob beside this table: two independent
 /// statements of how good the best version gets is the overlap that step 1 of
-/// the archive doc deleted, and re-introducing it here would rebuild it.
+/// the archive doc deleted, and re-introducing it here would rebuild it. Both
+/// hosting-budget knobs that narrow a source's ladder — the progressive
+/// path's `max_size_mb` and the HLS ladder's own `hls_max_file_mb`
+/// ([`video_ladder_rungs_within`]) — work the same way: they pick a LOWER rung
+/// off this table, never a bitrate the table doesn't already name.
 pub const VIDEO_LADDER: [VideoRung; 6] = [
     VideoRung { width: 320, height: 180, fps: 15, video_kbps: 45, audio_kbps: 32, audio_channels: 1 },
     VideoRung { width: 416, height: 234, fps: 30, video_kbps: 145, audio_kbps: 32, audio_channels: 1 },
@@ -482,13 +486,82 @@ pub fn video_ladder_rungs(source_width: u32) -> &'static [VideoRung] {
     &VIDEO_LADDER[..n]
 }
 
+/// Estimated size, in bytes, of the single file an HLS rung writes for a
+/// track running at `kbps` over `duration_secs` — `-hls_flags single_file`
+/// makes a rung's video, and each audio group, exactly one file apiece, so
+/// that file's size is just its bitrate times the whole video's duration.
+///
+/// The 5% margin above the raw `kbps * duration` figure is measured, not
+/// guessed: the two production numbers this budget exists to keep under a
+/// cap were 221,843,463 bytes (1280x720, 2000 kbps) and 122,579,638 bytes
+/// (960x540, 1100 kbps) for a 903.47 s source — 98–99% of the VBV-capped
+/// target in both cases. Overshooting the estimate would silently let an
+/// over-cap file through; undershooting it by more than the measured slack
+/// would drop a rung that actually would have fit.
+fn hls_file_bytes(kbps: u32, duration_secs: f64) -> f64 {
+    (kbps as f64) * 1000.0 / 8.0 * duration_secs * 1.05
+}
+
+/// The rungs worth encoding for a source of `source_width` px and
+/// `duration_secs` seconds, further truncated so every file a rung adds to
+/// the ladder — its own video file, AND its audio group's file, since
+/// `-hls_flags single_file` makes each of those one upload too (`v{i}.m4s`,
+/// `alo.m4s`/`ahi.m4s`) — fits under `max_file_bytes`. `video_ladder_rungs`
+/// alone is not enough: it answers "is this rung too wide for the source",
+/// not "is this rung's file too big for the host", and each rung's file size
+/// is bitrate times the WHOLE video's duration, which the width alone cannot
+/// see. A 15-minute, 600 kbps source at 1280 px wide is the case this exists
+/// for: every rung fits the width, and the top two still produced a 221 MB
+/// and a 123 MB single file.
+///
+/// Truncated from the **top only**, by one `take_while` over both conditions
+/// (width and budget) at once — provably safe to stop at the first failure,
+/// not just convenient: `video_kbps` is strictly ascending up the table
+/// ([`video_ladder_is_strictly_ascending`] pins it) and `audio_kbps` is
+/// non-decreasing ([`video_ladder_audio_kbps_is_non_decreasing`] pins it), so
+/// a rung higher up the table can only need as many or more bytes, in both
+/// its video and its audio group, than the rung below it. Once a rung fails
+/// the budget, every rung above it fails too.
+///
+/// Never empty — same `.max(1)` rule as [`video_ladder_rungs`]: an
+/// over-budget bottom rung still ships, because a file too big to host beats
+/// a video nobody can watch.
+///
+/// The result is still a prefix of `VIDEO_LADDER`, exactly like
+/// [`video_ladder_rungs`] — [`video_ladder_rungs_by_count`] does not need to
+/// know or care whether a shorter-than-full ladder was narrowed by width or
+/// by this budget; either way its length names its rungs.
+///
+/// No `has_audio` input: a silent source writes no audio files at all, so
+/// checking the audio group's size for one is pure overhead, never a wrong
+/// answer — `fits(r.audio_kbps)` is implied by `fits(r.video_kbps)` on every
+/// real row, because `video_kbps` exceeds `audio_kbps` at every rung
+/// ([`video_ladder_video_kbps_exceeds_audio_kbps`] pins it). Threading
+/// `has_audio` through to skip a check that never changes the answer would be
+/// a parameter with no observable effect.
+pub fn video_ladder_rungs_within(
+    source_width: u32,
+    duration_secs: f64,
+    max_file_bytes: u64,
+) -> &'static [VideoRung] {
+    let fits = |kbps: u32| hls_file_bytes(kbps, duration_secs) <= max_file_bytes as f64;
+    let n = VIDEO_LADDER
+        .iter()
+        .take_while(|r| r.width <= source_width && fits(r.video_kbps) && fits(r.audio_kbps))
+        .count()
+        .max(1);
+    &VIDEO_LADDER[..n]
+}
+
 /// The rungs a ladder of `n` rungs was built from, or `None` if `n` is not a
 /// ladder this table can produce.
 ///
-/// The inverse of [`video_ladder_rungs`], which truncates from the top only —
-/// so a ladder's length names its rungs. A cache holding a ladder knows how
-/// many files it holds but not the width of the source that produced them, and
-/// this is what lets it identify the ladder without re-reading that source.
+/// The inverse of [`video_ladder_rungs`] AND of [`video_ladder_rungs_within`],
+/// which both truncate from the top only — so a ladder's length names its
+/// rungs regardless of which one produced it. A cache holding a ladder knows
+/// how many files it holds but not the width or duration of the source that
+/// produced them, and this is what lets it identify the ladder without
+/// re-reading that source.
 pub fn video_ladder_rungs_by_count(n: usize) -> Option<&'static [VideoRung]> {
     (2..=VIDEO_LADDER.len()).contains(&n).then(|| &VIDEO_LADDER[..n])
 }
@@ -1077,6 +1150,26 @@ mod tests {
         assert!(VIDEO_LADDER.windows(2).all(|w| w[0].video_kbps < w[1].video_kbps));
     }
 
+    /// `video_ladder_rungs_within`'s `take_while` stops at the first rung that
+    /// fails the budget and never looks past it — sound only because a rung
+    /// higher up the table never needs FEWER bytes than the one below it.
+    #[test]
+    fn video_ladder_audio_kbps_is_non_decreasing() {
+        assert!(VIDEO_LADDER.windows(2).all(|w| w[0].audio_kbps <= w[1].audio_kbps));
+    }
+
+    /// `video_ladder_rungs_within` checks a rung's audio-group file size even
+    /// for a silent source, which writes no audio files at all. That is only
+    /// ever a harmless extra check, never a wrong answer, because this holds:
+    /// the video file is always the pricier of the two at the same duration,
+    /// so a rung that clears the video check always clears the audio one too.
+    /// If a future rung ever violated this, a silent source could get turned
+    /// away by a budget its own ladder would never actually spend.
+    #[test]
+    fn video_ladder_video_kbps_exceeds_audio_kbps() {
+        assert!(VIDEO_LADDER.iter().all(|r| r.video_kbps > r.audio_kbps), "{VIDEO_LADDER:?}");
+    }
+
     /// Truncation is from the top only. A source narrower than every rung still
     /// gets the bottom one — an empty ladder is a video that cannot be played.
     #[test]
@@ -1086,6 +1179,69 @@ mod tests {
         assert_eq!(video_ladder_rungs(640).len(), 3);
         assert_eq!(video_ladder_rungs(200).len(), 1);
         assert_eq!(video_ladder_rungs(200)[0], VIDEO_LADDER[0]);
+    }
+
+    // ── video_ladder_rungs_within ──────────────────────────────────
+
+    const MIB: u64 = 1024 * 1024;
+
+    /// The real bug: a 903.47 s, 1280-wide source's ladder had every rung fit
+    /// the WIDTH, but the top two rungs' single files measured 221,843,463 and
+    /// 122,579,638 bytes — 515 MB for the whole ladder against a hosting cap
+    /// meant to bound one upload. A 150 MiB cap must drop only the top rung
+    /// (its file measured over 200 MB); a 100 MiB cap must drop the next one
+    /// too (its file measured about 123 MB, over a 100 MiB cap once margin is
+    /// applied), landing on the rung one below the one that actually measured
+    /// under 123 MB.
+    #[test]
+    fn video_ladder_rungs_within_matches_the_measured_ladder() {
+        let duration = 903.47;
+        let at_150_mib = video_ladder_rungs_within(1280, duration, 150 * MIB);
+        assert_eq!(at_150_mib.len(), 5, "{at_150_mib:?}");
+        assert_eq!((at_150_mib.last().unwrap().width, at_150_mib.last().unwrap().height), (960, 540));
+
+        let at_100_mib = video_ladder_rungs_within(1280, duration, 100 * MIB);
+        assert_eq!(at_100_mib.len(), 4, "{at_100_mib:?}");
+        assert_eq!((at_100_mib.last().unwrap().width, at_100_mib.last().unwrap().height), (768, 432));
+    }
+
+    /// A short clip's every rung — even the top one — fits comfortably under
+    /// any real hosting budget, so the budget truncates nothing beyond what
+    /// the width already did: same result as [`video_ladder_rungs`] alone.
+    #[test]
+    fn video_ladder_rungs_within_keeps_the_full_ladder_for_a_short_clip() {
+        let got = video_ladder_rungs_within(1280, 10.0, 150 * MIB);
+        assert_eq!(got, video_ladder_rungs(1280), "10s at any real bitrate is nowhere near 150 MiB");
+        assert_eq!(got.len(), VIDEO_LADDER.len());
+    }
+
+    /// However tight the budget, the bottom rung always ships: an over-budget
+    /// file that plays beats a video nobody can watch, and it is the same
+    /// `.max(1)` rule [`video_ladder_rungs`] applies for width.
+    #[test]
+    fn video_ladder_rungs_within_never_returns_empty_for_a_very_long_video() {
+        let got = video_ladder_rungs_within(1280, 20_000.0, 1);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0], VIDEO_LADDER[0]);
+    }
+
+    /// The per-rung check is two conditions, not one: a rung's audio group is
+    /// its own single file (`alo.m4s`/`ahi.m4s`) and can exceed the budget on
+    /// its own. Today's `VIDEO_LADDER` never exercises this side in practice —
+    /// every real rung's `video_kbps` exceeds its own `audio_kbps`, so the
+    /// video half is always at least as tight as the audio half for the
+    /// current table — so this pins the estimator's own "and" directly rather
+    /// than through a `VIDEO_LADDER` row, guarding the mechanism for a future
+    /// table edit that narrows that margin.
+    #[test]
+    fn hls_file_bytes_audio_can_be_pricier_than_video_at_the_same_duration() {
+        let duration = 1000.0;
+        let cheap_video_bytes = hls_file_bytes(100, duration);
+        let costly_audio_bytes = hls_file_bytes(192, duration);
+        assert!(cheap_video_bytes < costly_audio_bytes);
+        let budget = ((cheap_video_bytes + costly_audio_bytes) / 2.0) as u64;
+        assert!(cheap_video_bytes <= budget as f64, "the cheaper file fits");
+        assert!(costly_audio_bytes > budget as f64, "the pricier one alone exceeds the same budget");
     }
 
     #[test]
