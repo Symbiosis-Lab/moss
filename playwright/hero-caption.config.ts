@@ -15,8 +15,9 @@ import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
 import { HERO_CAPTION_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
 
-const PORT = 8751;
+const PORT = gatePort('hero-caption');
 const serveDir = buildScratchSite(HERO_CAPTION_GATE);
 
 export default defineGateConfig({

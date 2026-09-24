@@ -24,8 +24,9 @@ import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
 import { COMMENTS_CASCADE_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
 
-const PORT = 8744;
+const PORT = gatePort('comments-cascade');
 const serveDir = buildScratchSite(COMMENTS_CASCADE_GATE);
 
 export default defineGateConfig({

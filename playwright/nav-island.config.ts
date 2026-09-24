@@ -24,9 +24,12 @@
  */
 import './localhost-no-proxy';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
+
+const PORT = gatePort('nav-island');
 
 export default defineGateConfig({
   gate: 'nav-island',
-  use: { baseURL: 'http://localhost:5404', reducedMotion: 'reduce' },
-  webServer: { configFile: 'playwright/vite.nav-island-harness.config.ts', port: 5404 },
+  use: { baseURL: `http://localhost:${PORT}`, reducedMotion: 'reduce' },
+  webServer: { configFile: 'playwright/vite.nav-island-harness.config.ts', port: PORT },
 });

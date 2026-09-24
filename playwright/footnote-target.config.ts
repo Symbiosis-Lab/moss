@@ -17,8 +17,9 @@ import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
 import { FOOTNOTE_TARGET_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
 
-const PORT = 8761;
+const PORT = gatePort('footnote-target');
 const serveDir = buildScratchSite(FOOTNOTE_TARGET_GATE);
 
 export default defineGateConfig({

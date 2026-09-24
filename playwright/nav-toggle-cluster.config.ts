@@ -19,8 +19,9 @@ import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
 import { NAV_TOGGLE_CLUSTER_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
 
-const PORT = 9376;
+const PORT = gatePort('nav-toggle-cluster');
 const serveDir = buildScratchSite(NAV_TOGGLE_CLUSTER_GATE);
 
 export default defineGateConfig({

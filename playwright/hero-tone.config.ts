@@ -15,8 +15,9 @@ import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
 import { HERO_TONE_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
 
-const PORT = 8757;
+const PORT = gatePort('hero-tone');
 const serveDir = buildScratchSite(HERO_TONE_GATE);
 
 export default defineGateConfig({

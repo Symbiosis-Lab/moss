@@ -25,8 +25,9 @@ import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
 import { SHARE_CARD_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
 
-const PORT = 8757;
+const PORT = gatePort('share-card');
 const serveDir = buildScratchSite(SHARE_CARD_GATE);
 
 export default defineGateConfig({

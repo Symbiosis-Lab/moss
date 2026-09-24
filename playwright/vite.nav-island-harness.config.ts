@@ -9,5 +9,6 @@
 // See vite-harness-plugins.ts for the token-block and build-assets plugins
 // this shares with the other two harness configs.
 import { defineHarnessConfig } from './define-harness-config';
+import { gatePort } from './gate-ports';
 
-export default defineHarnessConfig({ port: 5404 });
+export default defineHarnessConfig({ port: gatePort('nav-island') });

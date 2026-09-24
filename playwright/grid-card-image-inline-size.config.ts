@@ -10,8 +10,9 @@ import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
 import { GRID_CARD_IMAGE_INLINE_SIZE_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
 
-const PORT = 8799;
+const PORT = gatePort('grid-card-image-inline-size');
 const serveDir = buildScratchSite(GRID_CARD_IMAGE_INLINE_SIZE_GATE);
 
 export default defineGateConfig({

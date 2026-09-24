@@ -23,8 +23,9 @@ import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
 import { DARK_LAYER_ORDER_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
 
-const PORT = 9372;
+const PORT = gatePort('dark-layer-order');
 const serveDir = buildScratchSite(DARK_LAYER_ORDER_GATE);
 
 export default defineGateConfig({

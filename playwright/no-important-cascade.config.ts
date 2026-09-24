@@ -23,8 +23,9 @@ import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
 import { NO_IMPORTANT_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
 
-const PORT = 8792;
+const PORT = gatePort('no-important-cascade');
 const serveDir = buildScratchSite(NO_IMPORTANT_GATE);
 
 export default defineGateConfig({

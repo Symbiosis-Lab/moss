@@ -19,8 +19,9 @@ import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
 import { READING_SCALE_ORDER_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
 
-const PORT = 8767;
+const PORT = gatePort('reading-scale-order');
 const serveDir = buildScratchSite(READING_SCALE_ORDER_GATE);
 
 export default defineGateConfig({

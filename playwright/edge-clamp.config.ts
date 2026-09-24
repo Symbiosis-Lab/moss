@@ -22,9 +22,12 @@
  */
 import './localhost-no-proxy';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
+
+const PORT = gatePort('edge-clamp');
 
 export default defineGateConfig({
   gate: 'edge-clamp',
-  use: { baseURL: 'http://localhost:5405', reducedMotion: 'reduce' },
-  webServer: { configFile: 'playwright/vite.edge-clamp-harness.config.ts', port: 5405 },
+  use: { baseURL: `http://localhost:${PORT}`, reducedMotion: 'reduce' },
+  webServer: { configFile: 'playwright/vite.edge-clamp-harness.config.ts', port: PORT },
 });

@@ -17,8 +17,9 @@ import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
 import { HEADING_ANCHOR_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
 
-const PORT = 8759;
+const PORT = gatePort('heading-anchor');
 const serveDir = buildScratchSite(HEADING_ANCHOR_GATE);
 
 export default defineGateConfig({

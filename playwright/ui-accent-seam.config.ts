@@ -4,14 +4,18 @@
  * Runs tests/render-gates/cascade/ui-accent-seam.spec.ts in BOTH chromium and
  * webkit, against two sites — because the seam is only visible as a difference:
  *
- *   SITE A (default, port 9373):  no user theme CSS. --moss-color-ui-accent
+ *   SITE A (default):  no user theme CSS. --moss-color-ui-accent
  *     falls back to var(--moss-color-accent), so #chrome-probe and
  *     #content-probe both resolve to rgb(45, 90, 45) (#2d5a2d, moss accent).
  *
- *   SITE B (override, port 9374): theme CSS points ui-accent at
+ *   SITE B (override): theme CSS points ui-accent at
  *     var(--moss-color-text). #chrome-probe moves to rgb(44, 40, 37) while
  *     #content-probe stays rgb(45, 90, 45) — chrome and content accents are
  *     independently overridable, and only chrome follows ui-accent.
+ *
+ * Each site's port comes from gate-ports.ts (`ui-accent-seam:default` /
+ * `:override`), not a literal — see that file for why, and
+ * tests/render-gates/cascade/ui-accent-seam.spec.ts for the matching URLs.
  *
  * These assertions are only provable by a real browser render — jsdom is blind
  * to custom-property resolution through var() chaining and @layer cascade.
@@ -35,6 +39,7 @@ import {
   UI_ACCENT_SEAM_OVERRIDE,
 } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
 
 const defaultServeDir = buildScratchSite(UI_ACCENT_SEAM_DEFAULT);
 const overrideServeDir = buildScratchSite(UI_ACCENT_SEAM_OVERRIDE);
@@ -46,7 +51,7 @@ export default defineGateConfig({
     colorScheme: 'light', // pin light so dark-mode vars do not interfere
   },
   webServer: [
-    { serveDir: defaultServeDir, port: 9373 },
-    { serveDir: overrideServeDir, port: 9374 },
+    { serveDir: defaultServeDir, port: gatePort('ui-accent-seam:default') },
+    { serveDir: overrideServeDir, port: gatePort('ui-accent-seam:override') },
   ],
 });

@@ -17,9 +17,12 @@
  */
 import './localhost-no-proxy';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
+
+const PORT = gatePort('vertical-nav-chrome');
 
 export default defineGateConfig({
   gate: 'vertical-nav-chrome',
-  use: { baseURL: 'http://localhost:5405', reducedMotion: 'reduce' },
-  webServer: { configFile: 'playwright/vite.vertical-nav-chrome-harness.config.ts', port: 5405 },
+  use: { baseURL: `http://localhost:${PORT}`, reducedMotion: 'reduce' },
+  webServer: { configFile: 'playwright/vite.vertical-nav-chrome-harness.config.ts', port: PORT },
 });

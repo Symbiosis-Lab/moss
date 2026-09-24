@@ -13,8 +13,9 @@ import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
 import { CONTENT_WIDTH_ESCAPE_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
 
-const PORT = 8813;
+const PORT = gatePort('content-width-escape');
 const serveDir = buildScratchSite(CONTENT_WIDTH_ESCAPE_GATE);
 
 export default defineGateConfig({

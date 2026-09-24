@@ -3,10 +3,10 @@
  *
  * Two sites, because the seam only exists as a difference between them:
  *
- *   DEFAULT (9373)   no theme CSS. --moss-color-ui-accent falls back to
- *                    var(--moss-color-accent), so both probes read the accent.
- *   OVERRIDE (9374)  theme CSS points ui-accent at var(--moss-color-text). The
- *                    chrome probe moves; the content probe must NOT.
+ *   DEFAULT    no theme CSS. --moss-color-ui-accent falls back to
+ *              var(--moss-color-accent), so both probes read the accent.
+ *   OVERRIDE   theme CSS points ui-accent at var(--moss-color-text). The
+ *              chrome probe moves; the content probe must NOT.
  *
  * The override site's *unchanged* content probe is the real assertion: if
  * `article a` were ever repointed at --moss-color-ui-accent, a reader opting
@@ -16,15 +16,20 @@
  * nor @layer precedence.
  *
  * The two scratch sites come from tests/e2e/helpers/gate-sites.ts, built by the
- * playwright config at parse time and served by its two webServers.
+ * playwright config at parse time and served by its two webServers, on the
+ * ports gate-ports.ts assigns to `ui-accent-seam:default` / `:override` —
+ * this spec must ask that same helper for the same keys rather than hardcode
+ * a port, or it stops agreeing with the config the moment two worktrees hash
+ * to different bases.
  *
  * Run via:
  *   npx playwright test -c playwright/ui-accent-seam.config.ts
  */
 import { test, expect } from "@playwright/test";
+import { gatePort } from "../../../playwright/gate-ports";
 
-const DEFAULT_BASE = "http://localhost:9373/";
-const OVERRIDE_BASE = "http://localhost:9374/";
+const DEFAULT_BASE = `http://localhost:${gatePort("ui-accent-seam:default")}/`;
+const OVERRIDE_BASE = `http://localhost:${gatePort("ui-accent-seam:override")}/`;
 const PROBE_PAGE = "ui-accent-seam-probe.html";
 
 const EXPECTED_ACCENT = "rgb(45, 90, 45)"; // #2d5a2d

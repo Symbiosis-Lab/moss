@@ -27,8 +27,9 @@ import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
 import { NAV_MOBILE_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
+import { gatePort } from './gate-ports';
 
-const PORT = 9377;
+const PORT = gatePort('nav-mobile');
 const serveDir = buildScratchSite(NAV_MOBILE_GATE);
 
 export default defineGateConfig({

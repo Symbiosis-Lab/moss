@@ -11,6 +11,7 @@
 // without it the gate would pass by never testing anything.
 import type { Plugin } from 'vite';
 import { defineHarnessConfig } from './define-harness-config';
+import { gatePort } from './gate-ports';
 
 /** The one fixture datum: a preview entry long enough to need clamping. */
 function previewsPlugin(): Plugin {
@@ -33,4 +34,4 @@ function previewsPlugin(): Plugin {
   };
 }
 
-export default defineHarnessConfig({ port: 5405, extraPlugins: [previewsPlugin()] });
+export default defineHarnessConfig({ port: gatePort('edge-clamp'), extraPlugins: [previewsPlugin()] });
