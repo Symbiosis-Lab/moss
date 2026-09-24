@@ -159,7 +159,12 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
         // means something once the row IS a scroll region, so it emits
         // `role`/`aria-label` only alongside `scroll` — set on its own it
         // would name a landmark that was never created.
-        if args.scroll {
+        //
+        // `args.scrolls()`, not the bare `scroll` flag: a `{scroll}` grid
+        // whose cells already fit in one row (`cells.len() <= columns`)
+        // needs none of this — no dots, no drag, full-width cards, same as
+        // the grid without `scroll` at all. See `GridShortcode::scrolls`.
+        if args.scrolls() {
             open_tag.push_str(r#" data-scroll tabindex="0""#);
             if let Some(label) = &args.label {
                 open_tag.push_str(r#" role="region" aria-label=""#);

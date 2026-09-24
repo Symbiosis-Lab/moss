@@ -1684,8 +1684,10 @@ fn test_pipeline_features_default_false_without_shortcode() {
     assert!(!doc.features.scroll_rows);
 }
 
-/// `scroll_rows` gates `scroll-row.js`: set by a `{scroll}` grid, including
-/// one nested in a fenced div (the embed/wrapper shape), never by a plain grid.
+/// `scroll_rows` gates `scroll-row.js`: set by a `{scroll}` grid that actually
+/// overflows its row, including one nested in a fenced div (the embed/wrapper
+/// shape), never by a plain grid. See the test below for the grid that asked
+/// for `{scroll}` but doesn't need it.
 #[test]
 fn test_pipeline_sets_scroll_rows_only_for_a_scrolling_grid() {
     let parse = |content: &str| {
@@ -1708,10 +1710,36 @@ fn test_pipeline_sets_scroll_rows_only_for_a_scrolling_grid() {
         )
         .expect("pipeline should succeed")
     };
-    let nested = parse("::::{.wrap}\n:::grid 3 {scroll}\na\n+++\nb\n:::\n::::\n");
+    let nested = parse("::::{.wrap}\n:::grid 3 {scroll}\na\n+++\nb\n+++\nc\n+++\nd\n:::\n::::\n");
     assert!(nested.features.scroll_rows, "nested scroll row must set the flag");
     let plain = parse(":::grid 3\na\n+++\nb\n:::\n");
     assert!(!plain.features.scroll_rows, "a wrapping grid must not set it");
+}
+
+/// Owner's rule: a `{scroll}` grid whose cells all fit in one row (cell
+/// count <= columns) is not a scroll row at all — same emission as a plain
+/// grid — so it must not set the feature flag either.
+#[test]
+fn test_pipeline_scroll_grid_that_fits_does_not_set_scroll_rows() {
+    let doc = process_markdown_file(
+        "test.md",
+        ":::grid 3 {scroll}\na\n+++\nb\n:::\n",
+        "root",
+        &std::collections::HashMap::new(),
+        false,
+        crate::i18n::Language::En,
+        Some("test-site"),
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+        None,
+    )
+    .expect("pipeline should succeed");
+    assert!(!doc.features.scroll_rows, "2 cells over 3 columns fit; must not set the flag");
 }
 
 #[test]

@@ -193,6 +193,22 @@ pub struct GridShortcode {
     pub label: Option<String>,
 }
 
+impl GridShortcode {
+    /// True when this grid actually needs the scroll-row treatment: the
+    /// author wrote `{scroll}` AND the cells don't already fit in one row.
+    /// A `{scroll}` grid with `cells.len() <= columns` renders exactly like
+    /// the same grid without `scroll` — no dots, no sideways drag are
+    /// needed when every card already has the full row to itself. Both the
+    /// emitter ([`crate::ast::grid_parts::render_grid_parts`]) and the
+    /// `scroll_rows` page-feature gate
+    /// ([`crate::ast::visit::has_scroll_row_recursive`]) call this rather
+    /// than reading `scroll` directly, so they cannot disagree about which
+    /// grids get the treatment.
+    pub fn scrolls(&self) -> bool {
+        self.scroll && self.cells.len() > self.columns as usize
+    }
+}
+
 /// Arguments for [`Shortcode::Hero`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeroShortcode {
@@ -578,6 +594,33 @@ mod tests {
         let s = serde_json::to_string(&sc).expect("serialize");
         let back: Shortcode = serde_json::from_str(&s).expect("deserialize");
         assert_eq!(sc, back);
+    }
+
+    // ---- Grid ----
+
+    fn grid_with(columns: u32, cell_count: usize, scroll: bool) -> GridShortcode {
+        GridShortcode {
+            columns,
+            scroll,
+            cells: (0..cell_count).map(|_| vec![Block::Paragraph(vec![])]).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn scrolls_is_false_without_the_scroll_flag_even_when_cells_overflow() {
+        assert!(!grid_with(3, 4, false).scrolls());
+    }
+
+    #[test]
+    fn scrolls_is_false_when_cell_count_is_at_or_under_columns() {
+        assert!(!grid_with(3, 3, true).scrolls());
+        assert!(!grid_with(3, 2, true).scrolls());
+    }
+
+    #[test]
+    fn scrolls_is_true_when_cells_exceed_columns() {
+        assert!(grid_with(3, 4, true).scrolls());
     }
 
     // ---- Recent ----

@@ -1186,12 +1186,21 @@ fn end_to_end_parse_with_config_emits_data_source_line() {
 
 // ── Grid `scroll` emission ───────────────────────────────────────
 
+/// Four cells against three columns, so `scroll: true` actually overflows
+/// the row and `GridShortcode::scrolls()` reads true — the emission tests
+/// below need a grid that genuinely scrolls, not just one that asked to.
 fn grid(scroll: bool, label: Option<&str>) -> Block {
+    grid_with_cells(scroll, label, 4)
+}
+
+fn grid_with_cells(scroll: bool, label: Option<&str>, cell_count: usize) -> Block {
     Block::Shortcode(Shortcode::Grid(GridShortcode {
         columns: 3,
         scroll,
         label: label.map(str::to_string),
-        cells: vec![vec![Block::Paragraph(vec![Inline::Text("A".into())])]],
+        cells: (0..cell_count)
+            .map(|_| vec![Block::Paragraph(vec![Inline::Text("A".into())])])
+            .collect(),
         ..Default::default()
     }))
 }
@@ -1243,4 +1252,25 @@ fn grid_label_without_scroll_emits_nothing_extra() {
     assert!(!html.contains("aria-label"), "got: {html}");
     assert!(!html.contains("role="), "got: {html}");
     assert!(!html.contains("data-scroll"), "got: {html}");
+}
+
+/// Owner's rule: with only as many cards as fit per row, no dots are
+/// needed and the cards should take the full width — the scroll styling
+/// is not needed. A `{scroll}` grid whose cell count is at or under its
+/// column count must emit exactly what the same grid without `scroll`
+/// emits.
+#[test]
+fn grid_scroll_with_cells_at_columns_emits_the_plain_grid() {
+    let scrolling = render(vec![grid_with_cells(true, Some("Ignored"), 3)]);
+    let plain = render(vec![grid_with_cells(false, None, 3)]);
+    assert_eq!(scrolling, plain, "3 cells over 3 columns should not scroll: {scrolling}");
+    assert!(!scrolling.contains("data-scroll"), "got: {scrolling}");
+    assert!(!scrolling.contains("tabindex"), "got: {scrolling}");
+    assert!(!scrolling.contains("aria-label"), "got: {scrolling}");
+}
+
+#[test]
+fn grid_scroll_with_more_cells_than_columns_still_scrolls() {
+    let html = render(vec![grid_with_cells(true, None, 4)]);
+    assert!(html.contains("data-scroll"), "4 cells over 3 columns should scroll: {html}");
 }

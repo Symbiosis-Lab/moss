@@ -303,11 +303,16 @@ pub fn has_shortcode_recursive(doc: &Document, kind: ShortcodeKind) -> bool {
     any_block(doc, |block| matches!(block, Block::Shortcode(sc) if sc.kind() == kind))
 }
 
-/// True if any `:::grid` in the document carries the `scroll` flag
-/// (recursive, like [`has_shortcode_recursive`]). Gates the scroll-row
-/// runtime script, so a site with no scroll row ships none of it.
+/// True if any `:::grid` in the document actually scrolls — see
+/// [`GridShortcode::scrolls`] — recursive, like [`has_shortcode_recursive`].
+/// Gates the scroll-row runtime script, so a site with no scroll row ships
+/// none of it, and a `{scroll}` grid whose cells all fit doesn't ship it
+/// either.
 pub fn has_scroll_row_recursive(doc: &Document) -> bool {
-    any_block(doc, |block| matches!(block, Block::Shortcode(Shortcode::Grid(grid)) if grid.scroll))
+    any_block(
+        doc,
+        |block| matches!(block, Block::Shortcode(Shortcode::Grid(grid)) if grid.scrolls()),
+    )
 }
 
 /// True if any block in the document is a callout (recursive — a callout
