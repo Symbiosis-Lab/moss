@@ -262,6 +262,10 @@ fn encode_ladder_writes_its_census_and_patches_the_master() {
     let mgr = moss_build::build::media::ffmpeg::FFmpegManager::from_bin_path(bin.clone());
     let probe = mgr.probe_source(&src).expect("probe");
     assert!(probe.has_audio, "the synthesised source has a tone");
+    assert!(
+        probe.video_kbps.is_some(),
+        "ffprobe reports the encoded video stream's own bit_rate, not just the container total"
+    );
 
     let out_dir = dir.path().join("out");
     let written = moss_build::build::media::hls::encode_ladder(

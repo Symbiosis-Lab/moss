@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::build::cache::{ObjectStore, TransformCache, TransformEntry, TransformRecord};
-use crate::build::media::ffmpeg::{real_ffmpeg, synthesise};
+use crate::build::media::ffmpeg::{real_ffmpeg, synthesise, synthesise_high_bitrate};
 use moss_core::asset_paths::{AudioGroup, VIDEO_LADDER};
 
 fn args() -> Vec<String> {
@@ -67,6 +67,30 @@ fn every_rung_is_vbv_capped_at_its_own_bitrate() {
             format!("{}k", rung.video_kbps * 2)
         );
     }
+}
+
+#[test]
+fn a_clamped_rung_is_encoded_at_its_effective_not_table_bitrate() {
+    // `build_hls_args` reads `rung.video_kbps` off whatever it's handed —
+    // this pins that it never re-derives a bitrate from `VIDEO_LADDER` by
+    // resolution or index, which would silently undo a caller's clamp. The
+    // 768x432 rung's table value is 730; this hands it a rung already
+    // clamped to 600 (the real case `asset_paths::video_ladder_rungs_within`
+    // pins for a 600 kbps source), the same way `produce_ladder` would.
+    let rungs = [
+        VIDEO_LADDER[0],
+        VIDEO_LADDER[1],
+        VIDEO_LADDER[2],
+        moss_core::asset_paths::VideoRung { video_kbps: 600, ..VIDEO_LADDER[3] },
+    ];
+    let a = build_hls_args("in.mov", "/out/clip.hls", &rungs, 30.0, true, "faster", 4);
+    let val = |flag: &str| {
+        let at = a.iter().position(|x| x == flag).expect(flag);
+        a[at + 1].clone()
+    };
+    assert_eq!(val("-b:v:3"), "600k", "the clamped figure, not the table's 730k");
+    assert_eq!(val("-maxrate:v:3"), "600k");
+    assert_eq!(val("-bufsize:v:3"), "1200k", "2x the clamped figure");
 }
 
 #[test]
@@ -221,6 +245,51 @@ fn a_silent_ladder_keeps_the_bandwidth_ffmpeg_measured() {
 
 // ── produce_ladder: cache, links and the naming contract ───────────
 
+/// A link failure partway through a ladder must never leave the gate file
+/// (`master.m3u8`) behind: `hls_members`' own documented order puts it FIRST,
+/// but it is also what `heal_ladder` (video.rs) and `register_existing_
+/// ladders` both read as "this ladder is complete." Linking in `hls_members`'
+/// order would leave the gate down the moment any LATER member's link fails
+/// (an evicted/vacuumed blob, disk full, any I/O error), advertising a
+/// ladder whose later segments never arrived — a permanent 404, since
+/// neither reader would ever notice the hole and re-heal it. Pure and
+/// ffmpeg-less: an oid that was never stored fails `link_to` deterministically,
+/// no encode or real blob content needed.
+#[test]
+fn link_members_never_leaves_the_gate_behind_a_failed_link() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let transforms = TransformCache::new(
+        dir.path().join("transforms"),
+        ObjectStore::new(dir.path().join("objects")),
+    );
+    let members = hls_members(&VIDEO_LADDER);
+    assert_eq!(members[0], HLS_MASTER_NAME, "sanity: hls_members puts the gate first");
+
+    // Every member gets a real, resolvable blob EXCEPT one non-gate member
+    // (`v0.m3u8`), whose oid names a blob that was never stored.
+    let missing_oid = "0".repeat(64);
+    let oids: Vec<String> = members
+        .iter()
+        .map(|name| {
+            if name == "v0.m3u8" {
+                missing_oid.clone()
+            } else {
+                transforms.objects().store_bytes(format!("blob for {name}").as_bytes()).unwrap()
+            }
+        })
+        .collect();
+
+    let ladder_dir = dir.path().join("clip.hls");
+    let result = link_members(transforms.objects(), &ladder_dir, &members, oids, &serde_json::json!({}));
+
+    assert!(result.is_err(), "a missing blob must fail the link, not silently skip it");
+    assert!(
+        !ladder_dir.join(HLS_MASTER_NAME).exists(),
+        "the gate must not be on disk when a later member's link failed — \
+         a reader that trusts the gate would call this ladder complete"
+    );
+}
+
 /// The one thing the pure tests cannot see: whether the files the worker links
 /// into staging carry the names the master playlist references, whether a
 /// second build re-uses them, and whether that re-use survives the video being
@@ -314,6 +383,14 @@ fn produce_ladder_links_a_self_consistent_ladder_and_reuses_it_under_a_new_name(
     self_consistent(&iceland);
 }
 
+/// A source wide and short enough that the per-file budget never narrows it
+/// under any config this file uses, and lean enough (no known bitrate) that
+/// the source-bitrate clamp never touches it either — the full 6-rung table,
+/// deterministically, everywhere it's fed to `effective_rungs`.
+fn wide_unclamped_source() -> SourceFacts {
+    SourceFacts { width: 1280, duration_secs: 60.0, video_kbps: None, total_kbps: None }
+}
+
 /// A partial ladder is a miss, not a hit: seventeen files that reference each
 /// other are only valid together, and one evicted blob makes the rest garbage.
 #[test]
@@ -323,7 +400,8 @@ fn a_missing_rung_invalidates_the_whole_cached_ladder() {
         dir.path().join("transforms"),
         ObjectStore::new(dir.path().join("objects")),
     );
-    let params = ladder_params(&VideoCompressionConfig::default());
+    let config = VideoCompressionConfig::default();
+    let params = ladder_params(&config, &VIDEO_LADDER, wide_unclamped_source());
     // A real blob: `find_cached_output` checks the object store, so a record
     // pointing at nothing is a miss for a reason this test is not about.
     let blob = dir.path().join("blob");
@@ -356,28 +434,127 @@ fn a_missing_rung_invalidates_the_whole_cached_ladder() {
 
     write_record(None);
     assert!(
-        cached_ladder(&transforms, "oid", &params).is_some(),
+        cached_ladder(&transforms, "oid", &config).is_some(),
         "a complete record is a hit"
     );
 
     write_record(Some("v3.m4s"));
     assert!(
-        cached_ladder(&transforms, "oid", &params).is_none(),
+        cached_ladder(&transforms, "oid", &config).is_none(),
         "one missing segment invalidates the whole ladder"
     );
 }
 
-/// A change to the per-file budget must invalidate every cached ladder, the
-/// same way a table edit already does — otherwise a tightened
-/// `hls_max_file_mb` would never re-run and an over-budget file already on
-/// disk would keep being served.
+/// `cached_ladder` must never probe the source — its whole point is to answer
+/// a hit/miss question from the record alone. A pure, ffmpeg-less test is the
+/// strongest proof of that: nothing in this test's reach even links an
+/// `FFmpegManager`.
 #[test]
-fn ladder_params_carries_the_per_file_budget() {
-    let loose = ladder_params(&VideoCompressionConfig { hls_max_file_mb: 150, ..VideoCompressionConfig::default() });
-    let tight = ladder_params(&VideoCompressionConfig { hls_max_file_mb: 50, ..VideoCompressionConfig::default() });
-    assert_eq!(loose["max_file_mb"], serde_json::json!(150));
-    assert_eq!(tight["max_file_mb"], serde_json::json!(50));
-    assert_ne!(loose, tight, "a budget-only edit must change the cache key");
+fn cached_ladder_hits_a_new_form_record_with_no_probe_needed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let transforms = TransformCache::new(
+        dir.path().join("transforms"),
+        ObjectStore::new(dir.path().join("objects")),
+    );
+    let config = VideoCompressionConfig::default();
+    let source = wide_unclamped_source();
+    let params = ladder_params(&config, &VIDEO_LADDER, source);
+    let blob = dir.path().join("blob");
+    std::fs::write(&blob, b"ladder file").unwrap();
+    let oid = transforms.objects().store_file(&blob).unwrap();
+    let members = hls_members(&VIDEO_LADDER);
+    let mut record = TransformRecord {
+        source_oid: "oid-no-probe".to_string(),
+        source_size: 0,
+        transforms: std::collections::HashMap::new(),
+    };
+    for name in &members {
+        record
+            .transforms
+            .insert(format!("video/hls/{name}"), TransformEntry { oid: oid.clone(), size: 1, params: params.clone() });
+    }
+    transforms.put(&record).unwrap();
+
+    let (hit_members, oids, _) =
+        cached_ladder(&transforms, "oid-no-probe", &config).expect("a new-form record is a hit with no probe");
+    assert_eq!(hit_members, members);
+    assert!(oids.iter().all(|o| o == &oid));
+}
+
+/// A budget edit that does not change what a PARTICULAR video's effective
+/// ladder would be must not re-encode it — the whole point of keying on the
+/// effect rather than the inputs. This source is nowhere near either budget's
+/// ceiling (a 60 s, unknown-bitrate clip is a few MB a rung), so a looser
+/// `hls_max_file_mb` changes nothing about it.
+#[test]
+fn cached_ladder_ignores_a_looser_budget_that_doesnt_change_the_effective_ladder() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let transforms = TransformCache::new(
+        dir.path().join("transforms"),
+        ObjectStore::new(dir.path().join("objects")),
+    );
+    let recorded_under = VideoCompressionConfig { hls_max_file_mb: 150, ..VideoCompressionConfig::default() };
+    let source = wide_unclamped_source();
+    let params = ladder_params(&recorded_under, &VIDEO_LADDER, source);
+    let blob = dir.path().join("blob");
+    std::fs::write(&blob, b"ladder file").unwrap();
+    let oid = transforms.objects().store_file(&blob).unwrap();
+    let members = hls_members(&VIDEO_LADDER);
+    let mut record = TransformRecord {
+        source_oid: "oid-loose".to_string(),
+        source_size: 0,
+        transforms: std::collections::HashMap::new(),
+    };
+    for name in &members {
+        record
+            .transforms
+            .insert(format!("video/hls/{name}"), TransformEntry { oid: oid.clone(), size: 1, params: params.clone() });
+    }
+    transforms.put(&record).unwrap();
+
+    let read_back_under = VideoCompressionConfig { hls_max_file_mb: 500, ..VideoCompressionConfig::default() };
+    assert!(
+        cached_ladder(&transforms, "oid-loose", &read_back_under).is_some(),
+        "a budget change this video's own ladder never felt must stay a hit"
+    );
+}
+
+/// The other half: a budget edit that DOES narrow this source's effective
+/// ladder must invalidate the cache — a 903.47 s source drops to 5 rungs
+/// under the default 150 MiB budget (pinned in asset_paths' own tests), so
+/// reading a record stored under a much looser budget back with the default
+/// one must miss.
+#[test]
+fn cached_ladder_misses_when_a_tighter_budget_narrows_the_effective_ladder() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let transforms = TransformCache::new(
+        dir.path().join("transforms"),
+        ObjectStore::new(dir.path().join("objects")),
+    );
+    let recorded_under = VideoCompressionConfig { hls_max_file_mb: 100_000, ..VideoCompressionConfig::default() };
+    let source = SourceFacts { width: 1280, duration_secs: 903.47, video_kbps: None, total_kbps: None };
+    let params = ladder_params(&recorded_under, &VIDEO_LADDER, source);
+    let blob = dir.path().join("blob");
+    std::fs::write(&blob, b"ladder file").unwrap();
+    let oid = transforms.objects().store_file(&blob).unwrap();
+    let members = hls_members(&VIDEO_LADDER);
+    let mut record = TransformRecord {
+        source_oid: "oid-tight".to_string(),
+        source_size: 0,
+        transforms: std::collections::HashMap::new(),
+    };
+    for name in &members {
+        record
+            .transforms
+            .insert(format!("video/hls/{name}"), TransformEntry { oid: oid.clone(), size: 1, params: params.clone() });
+    }
+    transforms.put(&record).unwrap();
+
+    let tight = VideoCompressionConfig::default();
+    assert!(
+        cached_ladder(&transforms, "oid-tight", &tight).is_none(),
+        "a budget change that narrows this video's own effective ladder must miss"
+    );
 }
 
 /// A ladder that SHRINKS — a tighter `hls_max_file_mb`, or a table edit
@@ -391,8 +568,9 @@ fn ladder_params_carries_the_per_file_budget() {
 /// overwritten either way; what only `record_ladder`'s drop-before-insert
 /// gets right is the two keys that do NOT overlap — the old top rung's
 /// `video/hls/v5.m3u8`/`.m4s`. Left behind, `cached_ladder` counts 6 rungs
-/// where 5 actually exist, expects `video/hls/v5.*` under today's params, and
-/// finds yesterday's — a miss, forever.
+/// where 5 actually exist, recomputes 5 from the fresh entries' own stored
+/// facts, and the length mismatch (6 keys, 5 expected) would be a miss,
+/// forever.
 #[test]
 fn a_shrunk_ladder_is_recorded_as_a_hit_not_a_stale_miss() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -403,11 +581,15 @@ fn a_shrunk_ladder_is_recorded_as_a_hit_not_a_stale_miss() {
     let source = dir.path().join("clip.mov");
     std::fs::write(&source, b"source bytes").unwrap();
     let source_oid = "oid-shrink";
+    // One physical source (903.47 s, 1280 px, no known bitrate): under a huge
+    // budget nothing narrows it (6 rungs); under the default 150 MiB budget
+    // it narrows to 5 (pinned in asset_paths' own tests).
+    let source_facts = SourceFacts { width: 1280, duration_secs: 903.47, video_kbps: None, total_kbps: None };
 
     // The complete 6-rung ladder a looser budget left in the record.
     let stale_config =
         VideoCompressionConfig { hls_max_file_mb: 100_000, ..VideoCompressionConfig::default() };
-    let stale_params = ladder_params(&stale_config);
+    let stale_params = ladder_params(&stale_config, &VIDEO_LADDER, source_facts);
     let stale_blob = dir.path().join("stale-blob");
     std::fs::write(&stale_blob, b"stale ladder file").unwrap();
     let stale_oid = transforms.objects().store_file(&stale_blob).unwrap();
@@ -430,9 +612,9 @@ fn a_shrunk_ladder_is_recorded_as_a_hit_not_a_stale_miss() {
     // narrowed it, the way `convert_single_video`'s `Ok(Some(entries))` arm
     // does: through `record_ladder`, not a plain merge.
     let config = VideoCompressionConfig::default();
-    let fresh_params = ladder_params(&config);
     let fresh_members = hls_members(&VIDEO_LADDER[..5]);
     assert_eq!(fresh_members.len(), 15, "five rungs and two renditions");
+    let fresh_params = ladder_params(&config, &VIDEO_LADDER[..5], source_facts);
     let fresh_blob = dir.path().join("fresh-blob");
     std::fs::write(&fresh_blob, b"fresh ladder file").unwrap();
     let fresh_oid = transforms.objects().store_file(&fresh_blob).unwrap();
@@ -448,7 +630,7 @@ fn a_shrunk_ladder_is_recorded_as_a_hit_not_a_stale_miss() {
 
     crate::build::media::video::record_ladder(&transforms, source_oid, &source, fresh_entries);
 
-    let (members, oids) = cached_ladder(&transforms, source_oid, &fresh_params)
+    let (members, oids, _) = cached_ladder(&transforms, source_oid, &config)
         .expect("a shrunk ladder must stay a cache hit on the very next lookup");
     assert_eq!(members, fresh_members, "the shrunk ladder's own 5-rung file set, not the stale 6-rung one");
     assert!(
@@ -469,7 +651,11 @@ fn produce_ladder_honors_a_tiny_per_file_budget() {
     };
     let dir = tempfile::tempdir().expect("tempdir");
     let source = dir.path().join("holiday.mov");
-    if !synthesise(&bin, &source, "1280x720") {
+    // `synthesise_high_bitrate`, not `synthesise`: this test isolates the
+    // per-file BYTE budget, so the source's own bitrate must sit above every
+    // table rung or the source-bitrate clamp would narrow the ladder before
+    // the budget gets a chance to.
+    if !synthesise_high_bitrate(&bin, &source, "1280x720", 4) {
         eprintln!("skipping: could not synthesise a source");
         return;
     }
@@ -482,12 +668,11 @@ fn produce_ladder_honors_a_tiny_per_file_budget() {
     let staging = dir.path().join("staging");
     std::fs::create_dir_all(&staging).unwrap();
 
-    // `synthesise` writes a 4 s clip. At 4 s, the top rung's own video file
-    // (2000 kbps * 4 s * 1.05 margin = 1,050,000 bytes) is just over a 1 MiB
-    // (1,048,576 byte) cap while every rung below it clears that cap
-    // comfortably — a budget picked to drop exactly the top rung, proving
-    // the truncation without relying on width (1280 qualifies every rung by
-    // width alone).
+    // The clip is 4 s. At 4 s, the top rung's own video file (2000 kbps * 4 s
+    // * 1.05 margin = 1,050,000 bytes) is just over a 1 MiB (1,048,576 byte)
+    // cap while every rung below it clears that cap comfortably — a budget
+    // picked to drop exactly the top rung, proving the truncation without
+    // relying on width (1280 qualifies every rung by width alone).
     let config = VideoCompressionConfig { hls_max_file_mb: 1, ..VideoCompressionConfig::default() };
     let ladder_dir = staging.join("holiday.hls");
     let entries = produce_ladder(
@@ -522,6 +707,302 @@ fn produce_ladder_honors_a_tiny_per_file_budget() {
     let mut expected_sorted = expected;
     expected_sorted.sort();
     assert_eq!(on_disk, expected_sorted, "staging holds exactly the truncated ladder's files, no v5");
+}
+
+/// The real defect this feature exists for, reaching all the way through a
+/// real encode: a rung must never be encoded ABOVE the source's own video
+/// bitrate. A source deliberately capped to ~110 kbps — under the table's
+/// 145k rung, let alone its 365k one — must come out of `produce_ladder`
+/// with its would-be 416x234 rung clamped down near the source's own figure,
+/// leaving only two rungs (width alone would have kept all six), and the
+/// clamped rung's file must be sized off that effective bitrate rather than
+/// the table's 145k. This has to be real ffmpeg: the assertion is on bytes
+/// actually written, which the pure function moss-core already pins cannot
+/// see.
+#[test]
+fn produce_ladder_never_encodes_a_rung_above_the_sources_own_bitrate() {
+    let Some(bin) = real_ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("lean.mp4");
+    let ok = std::process::Command::new(&bin)
+        .args([
+            "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30:duration=3",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-b:v", "150k", "-maxrate", "150k", "-bufsize", "300k",
+            "-c:a", "aac", "-shortest",
+        ])
+        .arg(&source)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        eprintln!("skipping: could not synthesise a low-bitrate source");
+        return;
+    }
+
+    let ffmpeg = FFmpegManager::from_bin_path(bin);
+    let probe = ffmpeg.probe_source(&source).expect("probe");
+    let source_kbps = probe
+        .video_kbps
+        .expect("ffprobe reports the encoded stream's own bit_rate");
+    assert!(
+        (30.0..300.0).contains(&source_kbps),
+        "expected a source well under the 145k/365k table rungs, got {source_kbps} kbps"
+    );
+
+    let transforms = TransformCache::new(
+        dir.path().join("transforms"),
+        ObjectStore::new(dir.path().join("objects")),
+    );
+    let staging = dir.path().join("staging");
+    std::fs::create_dir_all(&staging).unwrap();
+
+    let entries = produce_ladder(
+        &ffmpeg,
+        &source,
+        "oid-lean",
+        &staging.join("lean.hls"),
+        dir.path(),
+        &transforms,
+        &VideoCompressionConfig::default(),
+        None,
+        None,
+        None,
+    )
+    .expect("produce_ladder")
+    .expect("the clamped rung still leaves two rungs");
+
+    let rung_count = entries
+        .iter()
+        .filter(|(n, _)| n.starts_with("video/hls/v") && n.ends_with(".m3u8"))
+        .count();
+    assert_eq!(
+        rung_count, 2,
+        "width alone would have kept all 6 table rungs; the source's own ~{source_kbps} kbps \
+         must leave only the bottom rung and one clamped rung above it: {entries:?}"
+    );
+
+    // The clamped rung's file must be sized off its EFFECTIVE bitrate, not
+    // the table's. At the table's unclamped 145 kbps it would run close to
+    // 145*1000/8*3s*1.05 = 57,094 bytes; clamped near the source's own
+    // ~110 kbps it must come in well under that.
+    let top_m4s_size = entries
+        .iter()
+        .find(|(n, _)| n == "video/hls/v1.m4s")
+        .map(|(_, e)| e.size)
+        .expect("v1.m4s is the clamped top rung");
+    let unclamped_145k_estimate = (145.0_f64 * 1000.0 / 8.0 * probe.duration_secs * 1.05) as u64;
+    assert!(
+        top_m4s_size < unclamped_145k_estimate,
+        "v1.m4s is {top_m4s_size} bytes, not smaller than the {unclamped_145k_estimate}-byte \
+         estimate for the table's unclamped 145 kbps — the encoder was not handed the clamp"
+    );
+}
+
+// ── produce_ladder: migrating a pre-rekey (legacy) cached ladder ───
+//
+// `legacy_form_params`/`LegacyShape` live in `hls::cache` (`#[cfg(test)]`,
+// re-exported here via `super::*`) rather than as a copy in this file: the
+// staging-heal tests in video.rs need the same real legacy shapes to seed a
+// genuinely legacy-form record, and a second reconstruction of git history
+// in a second file is exactly the kind of copy that drifts from the first.
+
+/// A legacy record for a source whose own bitrate sits well above every table
+/// rung is reused, not re-encoded: today's clamp would leave the table's own
+/// bitrates untouched, which is exactly what the legacy bytes were encoded
+/// at. The migration also rewrites the record into the new form — proven by
+/// a SECOND call, source deleted, that still hits, this time with no probe.
+#[test]
+fn produce_ladder_reuses_a_legacy_record_for_a_high_bitrate_source_and_migrates_it() {
+    let Some(bin) = real_ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("legacy-high.mov");
+    if !synthesise_high_bitrate(&bin, &source, "1280x720", 3) {
+        eprintln!("skipping: could not synthesise a source");
+        return;
+    }
+
+    let transforms = TransformCache::new(
+        dir.path().join("transforms"),
+        ObjectStore::new(dir.path().join("objects")),
+    );
+    let ffmpeg = FFmpegManager::from_bin_path(bin);
+    let staging = dir.path().join("staging");
+    std::fs::create_dir_all(&staging).unwrap();
+
+    let config = VideoCompressionConfig::default();
+    let source_oid = "oid-legacy-high";
+    // Covers the newer of the two real legacy shapes; the sibling test below
+    // covers the older one — between them, both are exercised.
+    let legacy_params = legacy_form_params(&config, LegacyShape::WithBudget);
+    let members = hls_members(&VIDEO_LADDER);
+    let fabricated_oids: Vec<String> = members
+        .iter()
+        .map(|name| transforms.objects().store_bytes(format!("legacy blob for {name}").as_bytes()).unwrap())
+        .collect();
+    let mut record = TransformRecord {
+        source_oid: source_oid.to_string(),
+        source_size: 0,
+        transforms: std::collections::HashMap::new(),
+    };
+    for (name, oid) in members.iter().zip(&fabricated_oids) {
+        record.transforms.insert(
+            format!("video/hls/{name}"),
+            TransformEntry { oid: oid.clone(), size: 1, params: legacy_params.clone() },
+        );
+    }
+    transforms.put(&record).unwrap();
+
+    let entries = produce_ladder(
+        &ffmpeg,
+        &source,
+        source_oid,
+        &staging.join("legacy-high.hls"),
+        dir.path(),
+        &transforms,
+        &config,
+        None,
+        None,
+        None,
+    )
+    .expect("produce_ladder")
+    .expect("still a ladder");
+
+    assert_eq!(entries.len(), members.len(), "the whole legacy ladder, not a partial re-encode");
+    for (name, entry) in &entries {
+        let bare = name.strip_prefix(HLS_TRANSFORM_PREFIX).unwrap();
+        let idx = members.iter().position(|m| m == bare).unwrap();
+        assert_eq!(&entry.oid, &fabricated_oids[idx], "{name}: migrated the legacy blob, did not re-encode it");
+    }
+
+    // `produce_ladder` hands entries BACK; it does not persist them — that is
+    // its caller's job (`video::record_ladder`, as `convert_single_video`
+    // calls it). Do that here, the same way, so the SECOND lookup below reads
+    // the migrated new-form params the first call actually produced.
+    crate::build::media::video::record_ladder(&transforms, source_oid, &source, entries.clone());
+
+    // With the record migrated, a second lookup — source gone — must still
+    // hit, this time with no probe at all.
+    std::fs::remove_file(&source).unwrap();
+    let second = produce_ladder(
+        &ffmpeg,
+        &source,
+        source_oid,
+        &staging.join("legacy-high-again.hls"),
+        dir.path(),
+        &transforms,
+        &config,
+        None,
+        None,
+        None,
+    )
+    .expect("produce_ladder after migration")
+    .expect("still a ladder, from the now-new-form record");
+    assert_eq!(
+        entries.iter().map(|(n, e)| (n.clone(), e.oid.clone())).collect::<Vec<_>>(),
+        second.iter().map(|(n, e)| (n.clone(), e.oid.clone())).collect::<Vec<_>>(),
+        "the second lookup is the same ladder, resolved with no probe"
+    );
+}
+
+/// A legacy record for a source whose own bitrate WOULD be clamped under
+/// today's policy is not reused: the cached bytes were encoded at the
+/// table's own (higher, unclamped) rates, wrong once the clamp applies, so
+/// `produce_ladder` re-encodes it once — different oids, and (per
+/// `produce_ladder_never_encodes_a_rung_above_the_sources_own_bitrate`'s own
+/// pin for this exact source shape) a narrower ladder than the legacy
+/// record's 6 rungs.
+#[test]
+fn produce_ladder_re_encodes_a_legacy_record_when_the_source_bitrate_would_clamp_it() {
+    let Some(bin) = real_ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("legacy-lean.mp4");
+    let ok = std::process::Command::new(&bin)
+        .args([
+            "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30:duration=3",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-b:v", "150k", "-maxrate", "150k", "-bufsize", "300k",
+            "-c:a", "aac", "-shortest",
+        ])
+        .arg(&source)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        eprintln!("skipping: could not synthesise a low-bitrate source");
+        return;
+    }
+
+    let transforms = TransformCache::new(
+        dir.path().join("transforms"),
+        ObjectStore::new(dir.path().join("objects")),
+    );
+    let ffmpeg = FFmpegManager::from_bin_path(bin);
+    let staging = dir.path().join("staging");
+    std::fs::create_dir_all(&staging).unwrap();
+
+    let config = VideoCompressionConfig::default();
+    let source_oid = "oid-legacy-lean";
+    // The older of the two real legacy shapes — see `legacy_form_params`.
+    let legacy_params = legacy_form_params(&config, LegacyShape::NoBudget);
+    let members = hls_members(&VIDEO_LADDER);
+    let fabricated_oids: Vec<String> = members
+        .iter()
+        .map(|name| transforms.objects().store_bytes(format!("legacy blob for {name}").as_bytes()).unwrap())
+        .collect();
+    let mut record = TransformRecord {
+        source_oid: source_oid.to_string(),
+        source_size: 0,
+        transforms: std::collections::HashMap::new(),
+    };
+    for (name, oid) in members.iter().zip(&fabricated_oids) {
+        record.transforms.insert(
+            format!("video/hls/{name}"),
+            TransformEntry { oid: oid.clone(), size: 1, params: legacy_params.clone() },
+        );
+    }
+    transforms.put(&record).unwrap();
+
+    let entries = produce_ladder(
+        &ffmpeg,
+        &source,
+        source_oid,
+        &staging.join("legacy-lean.hls"),
+        dir.path(),
+        &transforms,
+        &config,
+        None,
+        None,
+        None,
+    )
+    .expect("produce_ladder")
+    .expect("the clamped rung still leaves two rungs");
+
+    let rung_count = entries
+        .iter()
+        .filter(|(n, _)| n.starts_with("video/hls/v") && n.ends_with(".m3u8"))
+        .count();
+    assert_eq!(
+        rung_count, 2,
+        "a ~110 kbps source must narrow to the same two rungs a fresh encode already gets: {entries:?}"
+    );
+    assert!(
+        entries.iter().all(|(_, e)| !fabricated_oids.contains(&e.oid)),
+        "none of the legacy record's placeholder blobs were reused — the clamp made them stale"
+    );
 }
 
 /// A source too narrow for a second rung gets no ladder, and no ffmpeg run.

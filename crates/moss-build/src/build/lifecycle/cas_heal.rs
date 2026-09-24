@@ -108,7 +108,13 @@ pub(crate) fn rematerialize(
 /// second still hits here and relinks the previous source's cached output. It is
 /// only ever asked for a video, whose own dispatch (and worker) decide what is
 /// encoded — see `VideoStore::stage`.
-fn indexed_hash(
+///
+/// `pub(crate)`, not private: `VideoStore::stage`'s own HLS-ladder heal leg
+/// (video.rs) needs the same source oid `rematerialize` derives internally for
+/// mp4/thumb, to look a cached ladder up directly — `hls::heal_cached_ladder`
+/// takes an oid, not a file, because a ladder is several files, not one
+/// `rematerialize` call.
+pub(crate) fn indexed_hash(
     hash_index: &crate::build::cache::HashIndex,
     source_file: &Path,
     rel_source: &str,

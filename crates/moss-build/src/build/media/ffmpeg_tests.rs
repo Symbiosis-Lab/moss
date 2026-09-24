@@ -185,8 +185,20 @@ fn test_collect_videos_small_mp4_is_thumbnail_only() {
 // ===========================================
 
 /// A 1080p source, comfortably inside the size budget.
+///
+/// `video_kbps` is always `None` here: `plan_video_encode` judges on
+/// `total_kbps` alone (see its own doc for why), so no test in this section
+/// needs a video-stream-only figure.
 fn source(duration_secs: f64, width: u32, total_kbps: Option<f64>, web: bool) -> SourceVideo {
-    SourceVideo { duration_secs, width, fps: 30.0, total_kbps, has_audio: true, web_playable: web }
+    SourceVideo {
+        duration_secs,
+        width,
+        fps: 30.0,
+        total_kbps,
+        video_kbps: None,
+        has_audio: true,
+        web_playable: web,
+    }
 }
 
 #[test]

@@ -168,8 +168,20 @@ pub struct SourceVideo {
     pub has_audio: bool,
     /// Container bitrate in kbps — video plus audio plus overhead, i.e. what a
     /// viewer actually has to sustain. This, not `video_kbps`, is what a rung
-    /// promises, so this is what decides whether a source already meets one.
+    /// promises, so this is what decides whether a source already meets one
+    /// ([`plan_video_encode`]).
     pub total_kbps: Option<f64>,
+    /// The source's own VIDEO-stream bitrate in kbps, read from the video
+    /// stream's `bit_rate` — distinct from `total_kbps`, which also carries
+    /// audio and container overhead. `None` when the container states no
+    /// per-stream figure, which is common for mkv/webm. This is what the HLS
+    /// ladder clamps a rung against (`asset_paths::video_ladder_rungs_within`,
+    /// applied in `hls::produce_ladder`): re-encoding a rung above what the
+    /// source's own picture carries cannot add detail the source never had,
+    /// it only inflates the file. `total_kbps` is the fallback there when this
+    /// is `None` — looser, since it is not the picture alone, but still
+    /// tighter than no clamp at all.
+    pub video_kbps: Option<f64>,
     /// A codec every target browser decodes, in a container they all open. The
     /// container alone does not prove this: HEVC-in-mp4 does not play in Firefox.
     pub web_playable: bool,
@@ -1461,7 +1473,7 @@ impl FFmpegManager {
                 // Every stream, not just `v:0`: whether the source HAS audio
                 // decides the ladder's `-map a:0`, and mapping an audio stream
                 // that is not there fails the whole encode.
-                "-show_entries", "stream=codec_type,codec_name,width,r_frame_rate",
+                "-show_entries", "stream=codec_type,codec_name,width,r_frame_rate,bit_rate",
                 "-show_entries", "format=duration,bit_rate",
                 // Section wrappers stay ON: `bit_rate` appears in BOTH the
                 // stream and the format section, and they mean different
@@ -1525,7 +1537,16 @@ impl FFmpegManager {
         // Missing only for a container that stores no overall figure; then the
         // source is not provably within any rung and gets re-encoded, which is
         // the safe direction — the other error ships an unstreamable video.
-        let total_kbps = format("bit_rate").and_then(kbps);
+        // `> 0.0`, mirroring the `duration_secs` guard above: a zero or
+        // negative figure is not a real bitrate, and treating it as one would
+        // clamp every rung to nothing. The fallback to `total_kbps` still
+        // applies when this filters a bogus `video_kbps` out.
+        let total_kbps = format("bit_rate").and_then(kbps).filter(|v| *v > 0.0);
+
+        // Missing for a container whose video stream states no per-stream
+        // figure — mkv/webm commonly don't. The HLS ladder falls back to
+        // `total_kbps` when this is `None`.
+        let video_kbps = stream("bit_rate").and_then(kbps).filter(|v| *v > 0.0);
 
         let container_ok = input
             .extension()
@@ -1539,6 +1560,7 @@ impl FFmpegManager {
             width,
             fps,
             total_kbps,
+            video_kbps,
             has_audio,
             web_playable: container_ok && codec_ok,
         })
@@ -1711,6 +1733,12 @@ pub(crate) fn real_ffmpeg() -> Option<String> {
 }
 #[cfg(test)]
 /// Synthesise a short test video (with audio) at `size` (e.g. `"320x240"`).
+///
+/// Encoded with no explicit `-b:v`: a busy `testsrc` pattern at `-preset
+/// ultrafast` measures only a few hundred kbps (well under
+/// `asset_paths::VIDEO_LADDER`'s higher rungs), which is fine for a test that
+/// doesn't care about the source's own bitrate — but see
+/// [`synthesise_high_bitrate`] for one that does.
 pub(crate) fn synthesise(bin: &str, dest: &Path, size: &str) -> bool {
     std::process::Command::new(bin)
         .args([
@@ -1718,6 +1746,34 @@ pub(crate) fn synthesise(bin: &str, dest: &Path, size: &str) -> bool {
             "-f", "lavfi", "-i", &format!("testsrc=size={}:rate=30:duration=4", size),
             "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest",
+        ])
+        .arg(dest)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+#[cfg(test)]
+/// Synthesise a short test video at `size` with its video stream forced,
+/// via a CBR-style VBV cap (`nal-hrd=cbr`), to a bitrate comfortably above
+/// `asset_paths::VIDEO_LADDER`'s own top rung — measured at ~7.8 Mbps for a
+/// 1280x720 clip. A plain `-b:v` ceiling is not enough: measured, a simple
+/// `testsrc` pattern under `-preset ultrafast` undershoots even an 8 Mbps
+/// ceiling by 5-6x, because the content is not complex enough to need it.
+/// For a test exercising the per-file BYTE budget in isolation, without also
+/// exercising the source's own bitrate clamp, [`synthesise`]'s default
+/// (unforced) bitrate is too low — it sits under several of the table's own
+/// rungs and would clamp them.
+pub(crate) fn synthesise_high_bitrate(bin: &str, dest: &Path, size: &str, duration_secs: u32) -> bool {
+    let d = duration_secs.to_string();
+    std::process::Command::new(bin)
+        .args([
+            "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", &format!("testsrc=size={size}:rate=30:duration={d}"),
+            "-f", "lavfi", "-i", &format!("sine=frequency=440:duration={d}"),
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-b:v", "8000k", "-minrate", "8000k", "-maxrate", "8000k", "-bufsize", "8000k",
+            "-x264-params", "nal-hrd=cbr:force-cfr=1",
             "-c:a", "aac", "-shortest",
         ])
         .arg(dest)
