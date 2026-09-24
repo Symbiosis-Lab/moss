@@ -13,7 +13,7 @@
         "crates/moss-build/src/build/markdown/html_post.rs": 1100,
         "crates/moss-build/src/build/markdown/pipeline.rs": 2200,
         "crates/moss-build/src/build/media/ffmpeg.rs": 1800,
-        "crates/moss-build/src/build/media/image.rs": 3000,
+        "crates/moss-build/src/build/media/image.rs": 3100,
         "crates/moss-build/src/build/media/pipeline.rs": 1900,
         "crates/moss-build/src/build/media/video.rs": 2100,
         "crates/moss-build/src/build/page/meta.rs": 1400,

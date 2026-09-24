@@ -785,6 +785,7 @@ async fn base_failure_fails_registered_rung_promises() {
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
         rung_collisions: Default::default(),
+        carried_advisories: Vec::new(),
     };
 
     let mut services = BuildServices::headless();
@@ -864,6 +865,7 @@ async fn base_failed_advisory_names_the_full_nested_source_path() {
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
         rung_collisions: Default::default(),
+        carried_advisories: Vec::new(),
     };
 
     let recorder = std::sync::Arc::new(RecordingReporter::default());
@@ -959,6 +961,7 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
         rung_collisions: Default::default(),
+        carried_advisories: Vec::new(),
     };
 
     let mut services = BuildServices::headless();
@@ -1032,6 +1035,7 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
         dir_overrides: std::collections::HashMap::new(),
         tx: Some(tx.clone()),
         rung_collisions,
+        carried_advisories: Vec::new(),
     };
 
     let services = std::sync::Arc::new(BuildServices::headless());
@@ -2187,8 +2191,15 @@ fn test_fingerprint(tag: u64) -> ImageFingerprint {
 /// Record that a worker delivered `path`'s variant for the source `fingerprint` describes,
 /// the way a dispatch queues it and the worker's end reports it.
 fn prime_delivered(path: &str, fingerprint: ImageFingerprint) {
+    prime_delivered_with_advisories(path, fingerprint, &[]);
+}
+
+/// Like [`prime_delivered`], but also records `advisories` as what that
+/// delivery had to say about `path` — the carry-forward fixture for the
+/// partial-dispatch tests below.
+fn prime_delivered_with_advisories(path: &str, fingerprint: ImageFingerprint, advisories: &[Advisory]) {
     mark_image_items_pending([(path.to_string(), fingerprint.clone())]);
-    end_image_item(path, &fingerprint, true);
+    end_image_item(path, &fingerprint, true, advisories);
 }
 
 #[test]
@@ -2975,6 +2986,266 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
 }
 
 // =========================================================================
+// Partial-dispatch advisory carry-forward (moss#1205's remaining gap)
+// =========================================================================
+
+/// `dispatch_image_conversions` carries an unchanged image forward without
+/// ever re-entering `run_image_conversion` — so before this fix, that
+/// image's advisory (e.g. a prior rung failure) was simply absent from every
+/// later completed tick the moment a SIBLING image needed dispatching, and
+/// the app-side sweep (which trusts an absent key as "fixed") deleted a
+/// still-true advisory. The fingerprint cache now carries the advisory
+/// forward alongside the fingerprint it already stores, so the terminal tick
+/// speaks for the whole item set even though only the new image actually ran.
+///
+/// Ablate by reverting the `carried_advisories` plumbing (`ImageLedger`'s
+/// `advisories` map, `ImageRunContext::carried_advisories`) and this goes
+/// red: "broken.jpg" is absent from the terminal tick's advisories.
+#[tokio::test]
+async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
+    use crate::build::coordinator::test_utils;
+    use crate::build::ports::reporter::BuildReporter;
+
+    struct InlineSpawner;
+    impl crate::build::ports::spawner::Spawner for InlineSpawner {
+        fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+            task();
+        }
+        fn spawn(
+            &self,
+            _task: crate::build::ports::spawner::Task,
+        ) -> crate::build::ports::spawner::Joining {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingReporter(std::sync::Mutex<Vec<PipelineEvent>>);
+    impl BuildReporter for RecordingReporter {
+        fn report(&self, event: &PipelineEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+
+    let _guard = image_fingerprint_test_lock().lock();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+
+    let cfg = ImageCompressionConfig::default();
+
+    // "broken.jpg": already converted, fingerprint primed, and a rung-failure
+    // advisory recorded alongside that delivery — the shape `end_image_item`
+    // leaves behind for a real rung failure.
+    let broken_name = "broken.jpg";
+    make_big_jpeg(&root.join(broken_name), 400, 300);
+    fs::write(staging.join("broken.webp"), "SENTINEL").unwrap();
+    let broken_advisory = Advisory::for_source(
+        Scope::File,
+        Severity::ShippedDegraded,
+        broken_name,
+        "800w: rung encode failed".to_string(),
+        Action::None,
+    );
+    let broken_fp = compute_image_item_fingerprint(&root.to_string_lossy(), Path::new(broken_name), &cfg)
+        .expect("source exists and is stat-able");
+    prime_delivered_with_advisories(broken_name, broken_fp, &[broken_advisory]);
+    let broken_oid = crate::build::cache::ObjectStore::hash_file(&root.join(broken_name)).unwrap();
+
+    // "fresh.jpg": brand new, so it dispatches for real and produces no
+    // advisory of its own.
+    let fresh_name = "fresh.jpg";
+    make_big_jpeg(&root.join(fresh_name), 400, 300);
+    let fresh_oid = crate::build::cache::ObjectStore::hash_file(&root.join(fresh_name)).unwrap();
+
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![
+            ImageConversionItem {
+                source_path: PathBuf::from(broken_name),
+                source_oid: broken_oid,
+                ext: "jpg".to_string(),
+                dimensions: None,
+                skip: None,
+                fingerprint: None,
+            },
+            ImageConversionItem {
+                source_path: PathBuf::from(fresh_name),
+                source_oid: fresh_oid,
+                ext: "jpg".to_string(),
+                dimensions: None,
+                skip: None,
+                fingerprint: None,
+            },
+        ],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+
+    let recorder = std::sync::Arc::new(RecordingReporter::default());
+    let mut services = BuildServices::headless();
+    services.spawner = Some(std::sync::Arc::new(InlineSpawner));
+    services.reporter = recorder.clone();
+    let services = std::sync::Arc::new(services);
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    })
+    .await
+    .unwrap();
+    let _sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+    let events = recorder.0.lock().unwrap();
+    let terminal = events
+        .iter()
+        .find(|e| matches!(e, PipelineEvent::BackgroundProgress { task, completed: true, .. } if task == "images"))
+        .expect("the images task must reach its own completed:true tick");
+    let PipelineEvent::BackgroundProgress { advisories, .. } = terminal else { unreachable!() };
+    assert!(
+        advisories.iter().any(|a| a.item.as_deref() == Some(broken_name)),
+        "the skip-carried image's advisory must ride the terminal tick even though only \
+         the new image actually ran, got: {advisories:?}"
+    );
+    assert!(
+        !advisories.iter().any(|a| a.item.as_deref() == Some(fresh_name)),
+        "the freshly-dispatched, successfully-converted image must have no advisory, got: {advisories:?}"
+    );
+}
+
+/// The deletion side of the same gap: the author deletes "broken.jpg"
+/// outright while the only remaining image stays unchanged, so nothing needs
+/// the encoder this round. Before this fix `dispatch_image_conversions`
+/// returned with no tick at all when `to_dispatch` was empty — so a stale
+/// advisory for a file that no longer exists on disk would sit until some
+/// UNRELATED future dispatch happened to touch the images task again, which
+/// is not guaranteed to ever happen.
+///
+/// Ablate by reverting the `dropped_advisory` early-fire branch in
+/// `dispatch_image_conversions` and this goes red: no `images` tick is
+/// observed at all.
+#[tokio::test]
+async fn a_deleted_images_advisory_still_fires_a_tick_with_nothing_to_dispatch() {
+    use crate::build::coordinator::test_utils;
+    use crate::build::ports::reporter::BuildReporter;
+
+    struct InlineSpawner;
+    impl crate::build::ports::spawner::Spawner for InlineSpawner {
+        fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+            task();
+        }
+        fn spawn(
+            &self,
+            _task: crate::build::ports::spawner::Task,
+        ) -> crate::build::ports::spawner::Joining {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingReporter(std::sync::Mutex<Vec<PipelineEvent>>);
+    impl BuildReporter for RecordingReporter {
+        fn report(&self, event: &PipelineEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+
+    let _guard = image_fingerprint_test_lock().lock();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+
+    let cfg = ImageCompressionConfig::default();
+
+    // "broken.jpg" carries an advisory from an earlier delivery; "safe.jpg"
+    // does not. Both are unchanged (fingerprint primed, output present).
+    let broken_name = "broken.jpg";
+    make_big_jpeg(&root.join(broken_name), 400, 300);
+    fs::write(staging.join("broken.webp"), "SENTINEL").unwrap();
+    let broken_advisory = Advisory::for_source(
+        Scope::File,
+        Severity::ShippedDegraded,
+        broken_name,
+        "800w: rung encode failed".to_string(),
+        Action::None,
+    );
+    let broken_fp = compute_image_item_fingerprint(&root.to_string_lossy(), Path::new(broken_name), &cfg)
+        .expect("source exists and is stat-able");
+    prime_delivered_with_advisories(broken_name, broken_fp, &[broken_advisory]);
+
+    let safe_name = "safe.jpg";
+    make_big_jpeg(&root.join(safe_name), 400, 300);
+    fs::write(staging.join("safe.webp"), "SENTINEL").unwrap();
+    let safe_fp = compute_image_item_fingerprint(&root.to_string_lossy(), Path::new(safe_name), &cfg)
+        .expect("source exists and is stat-able");
+    prime_delivered_with_advisories(safe_name, safe_fp, &[]);
+    let safe_oid = crate::build::cache::ObjectStore::hash_file(&root.join(safe_name)).unwrap();
+
+    // "broken.jpg" is deleted: this build's image set names ONLY "safe.jpg".
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![ImageConversionItem {
+            source_path: PathBuf::from(safe_name),
+            source_oid: safe_oid,
+            ext: "jpg".to_string(),
+            dimensions: None,
+            skip: None,
+            fingerprint: None,
+        }],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+
+    let recorder = std::sync::Arc::new(RecordingReporter::default());
+    let mut services = BuildServices::headless();
+    services.spawner = Some(std::sync::Arc::new(InlineSpawner));
+    services.reporter = recorder.clone();
+    let services = std::sync::Arc::new(services);
+
+    let (tx, rx) = test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    })
+    .await
+    .unwrap();
+    let _sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+
+    let events = recorder.0.lock().unwrap();
+    let terminal = events
+        .iter()
+        .find(|e| matches!(e, PipelineEvent::BackgroundProgress { task, completed: true, .. } if task == "images"))
+        .expect(
+            "a deletion that drops a recorded advisory must still fire the images \
+             task's completed:true tick even with nothing to dispatch",
+        );
+    let PipelineEvent::BackgroundProgress { advisories, .. } = terminal else { unreachable!() };
+    assert!(
+        !advisories.iter().any(|a| a.item.as_deref() == Some(broken_name)),
+        "the deleted image's advisory must not ride forward, got: {advisories:?}"
+    );
+}
+
+// =========================================================================
 // Cancel propagation through FolderSession (post-Track A)
 // =========================================================================
 
@@ -3047,6 +3318,7 @@ async fn test_image_cancel_aborts_image_runner() {
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
         rung_collisions: Default::default(),
+        carried_advisories: Vec::new(),
     };
     // Mirror dispatch's bookkeeping (runner decrements on early-exit).
     services.begin_ui_bound();
@@ -3140,6 +3412,7 @@ async fn test_image_hashes_updated_on_cancellation() {
         dir_overrides: std::collections::HashMap::new(),
         tx: Some(tx.clone()),
         rung_collisions: Default::default(),
+        carried_advisories: Vec::new(),
     };
     for _ in 0..2 {
         services.begin_ui_bound();

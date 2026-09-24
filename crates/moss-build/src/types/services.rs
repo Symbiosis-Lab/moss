@@ -117,6 +117,15 @@ pub struct BackgroundContext {
     /// divergent set means a registered-but-never-encoded rung ⇒
     /// sealed-deploy 404, ADR-013).
     pub rung_collisions: std::collections::HashMap<String, std::path::PathBuf>,
+    /// Advisories `dispatch_video_conversions` carried forward for videos it
+    /// skipped this round (fingerprint matched or healed, output present) —
+    /// read from `VideoConversionState::item_advisories`, never recomputed.
+    /// Set by the dispatcher itself right before handing this context to
+    /// `run_video_conversion`, mirroring `ImageRunContext::carried_advisories`
+    /// on the image side (image dispatch takes `&BackgroundContext`, so it
+    /// can't mutate this struct — video dispatch takes it by value and
+    /// already reassigns `video_items` here the same way).
+    pub carried_advisories: Vec<crate::advisory::Advisory>,
 }
 
 impl BackgroundContext {
@@ -141,6 +150,7 @@ impl BackgroundContext {
             ffmpeg_bin_path: None,
             notebook_files: Vec::new(),
             rung_collisions: HashMap::new(),
+            carried_advisories: Vec::new(),
         }
     }
 }
@@ -688,6 +698,7 @@ mod tests {
             ffmpeg_bin_path: None,
             notebook_files: vec![],
             rung_collisions: Default::default(),
+            carried_advisories: Vec::new(),
         };
         assert!(ctx.video_items.is_empty());
         assert_eq!(ctx.source_path, "/test");

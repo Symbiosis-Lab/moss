@@ -114,10 +114,11 @@ pub struct ImageConversionItem {
 
 impl ImageConversionItem {
     /// The worker is done with this image: its dispatch's marker ends and, when the
-    /// worker `delivered`, the source it was queued for is recorded as delivered.
-    fn ended(&self, delivered: bool) {
+    /// worker `delivered`, the source it was queued for is recorded as delivered,
+    /// alongside whatever `advisories` this delivery has to say about it.
+    fn ended(&self, delivered: bool, advisories: &[Advisory]) {
         if let Some(fingerprint) = &self.fingerprint {
-            end_image_item(&self.source_path.to_string_lossy(), fingerprint, delivered);
+            end_image_item(&self.source_path.to_string_lossy(), fingerprint, delivered, advisories);
         }
     }
 }
@@ -1426,6 +1427,13 @@ struct ImageLedger {
     delivered: HashMap<String, ImageFingerprint>,
     /// The source each image was queued under, until the worker that has it is done.
     pending: HashMap<String, ImageFingerprint>,
+    /// The advisories a delivered item's own dispatch produced, alongside the
+    /// fingerprint recorded in `delivered` above. `dispatch_image_conversions`
+    /// re-emits these for an image it carries forward without ever
+    /// re-entering `run_image_conversion`, so that image's terminal tick still
+    /// speaks for it instead of going silent the moment it stops changing.
+    /// Empty for an item with nothing to say; absent for one never delivered.
+    advisories: HashMap<String, Vec<Advisory>>,
 }
 
 fn image_ledger() -> std::sync::MutexGuard<'static, ImageLedger> {
@@ -1460,7 +1468,14 @@ pub(crate) fn mark_image_items_pending(items: impl IntoIterator<Item = (String, 
 /// `delivered`, has delivered that source. Only its own dispatch's mark ends: a newer
 /// dispatch over a rewritten source has marked the image for its own worker, and one
 /// that dropped the path (`retain_image_item_fingerprints`) has said the image left.
-pub(crate) fn end_image_item(path: &str, queued_as: &ImageFingerprint, delivered: bool) {
+///
+/// `advisories` is what THIS delivery has to say about `path` — possibly
+/// empty, which correctly overwrites whatever a stale prior delivery left
+/// behind (e.g. a rung failure since fixed). Recorded only alongside a
+/// `delivered` fingerprint, for the same reason `delivered` itself is gated:
+/// an item that never delivers is always redispatched, so it never needs a
+/// carried-forward advisory.
+pub(crate) fn end_image_item(path: &str, queued_as: &ImageFingerprint, delivered: bool, advisories: &[Advisory]) {
     let mut ledger = image_ledger();
     if ledger.pending.get(path) != Some(queued_as) {
         return;
@@ -1468,7 +1483,16 @@ pub(crate) fn end_image_item(path: &str, queued_as: &ImageFingerprint, delivered
     ledger.pending.remove(path);
     if delivered {
         ledger.delivered.insert(path.to_string(), queued_as.clone());
+        ledger.advisories.insert(path.to_string(), advisories.to_vec());
     }
+}
+
+/// The advisories recorded for `path` alongside its last delivered
+/// fingerprint — what a skip-carried image still has to say, re-emitted by
+/// `dispatch_image_conversions` in that image's stead when it carries the
+/// image forward without re-running it.
+pub(crate) fn image_item_advisories(path: &str) -> Vec<Advisory> {
+    image_ledger().advisories.get(path).cloned().unwrap_or_default()
 }
 
 /// Drop stored fingerprints for paths not in `keep` — called once per
@@ -1478,10 +1502,26 @@ pub(crate) fn end_image_item(path: &str, queued_as: &ImageFingerprint, delivered
 /// changed. Mirrors `VideoConversionState::retain_item_fingerprints`. A path
 /// whose worker is still to finish loses its pending marker too, so that worker
 /// ends without vouching for an image that has left.
-pub(crate) fn retain_image_item_fingerprints(keep: &std::collections::HashSet<String>) {
+///
+/// Returns whether any dropped path still had a non-empty advisory recorded
+/// — a deleted image whose problem the author never saw cleared must not
+/// silently leave its advisory stranded in the app: the caller uses this to
+/// fire a terminal tick even when nothing was dispatched, so the sweep on the
+/// app side (moss-desktop) can drop it.
+pub(crate) fn retain_image_item_fingerprints(keep: &std::collections::HashSet<String>) -> bool {
     let mut ledger = image_ledger();
     ledger.delivered.retain(|path, _| keep.contains(path));
     ledger.pending.retain(|path, _| keep.contains(path));
+    let mut dropped_advisory = false;
+    ledger.advisories.retain(|path, advisories| {
+        if keep.contains(path) {
+            true
+        } else {
+            dropped_advisory |= !advisories.is_empty();
+            false
+        }
+    });
+    dropped_advisory
 }
 
 // ---------------------------------------------------------------------------
@@ -1516,6 +1556,13 @@ pub(crate) struct ImageRunContext {
     /// registration ran — so a user's file named like a rung is never
     /// clobbered. Never recomputed here (ADR-013 agreement).
     pub rung_collisions: HashMap<String, PathBuf>,
+    /// Advisories `dispatch_image_conversions` carried forward for images it
+    /// skipped this round (fingerprint matched, output present) — read from
+    /// the fingerprint cache (`image_item_advisories`), not recomputed here.
+    /// `run_image_conversion` folds these into the same terminal tick as the
+    /// advisories the items it actually dispatches produce, so the tick
+    /// speaks for the whole item set even though only some of it ran.
+    pub carried_advisories: Vec<Advisory>,
 }
 
 impl ImageRunContext {
@@ -1529,6 +1576,7 @@ impl ImageRunContext {
             dir_overrides: ctx.dir_overrides.clone(),
             tx: None,
             rung_collisions: ctx.rung_collisions.clone(),
+            carried_advisories: Vec::new(),
         }
     }
 
@@ -1540,6 +1588,13 @@ impl ImageRunContext {
     /// complete.
     pub(crate) fn with_tx(mut self, tx: mpsc::Sender<EmitMessage>) -> Self {
         self.tx = Some(tx);
+        self
+    }
+
+    /// Attach advisories carried forward for images this dispatch skipped —
+    /// see the field doc on `carried_advisories`.
+    pub(crate) fn with_carried_advisories(mut self, advisories: Vec<Advisory>) -> Self {
+        self.carried_advisories = advisories;
         self
     }
 }
@@ -2269,7 +2324,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     // The one teardown.
                     match step {
                         ItemStep::Handled { delivered, failed, advisories: item_advisories, encoded } => {
-                            item.ended(!delivered.is_empty());
+                            item.ended(!delivered.is_empty(), &item_advisories);
                             record_deliveries(services, &produced_webp_paths, delivered);
                             if let Some(ref registry) = services.assets {
                                 for (url, err) in failed {
@@ -2296,7 +2351,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                             });
                         }
                         ItemStep::Cancelled => {
-                            item.ended(false);
+                            item.ended(false, &[]);
                             any_cancelled.store(true, Ordering::SeqCst);
                             services.end_ui_bound();
                         }
@@ -2331,6 +2386,12 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         emit_image_outputs_via_channel(&ctx.tx, &produced_webp_paths, &ctx.staging_dir, &objects, &suppressed, services.assets.as_deref());
         return;
     }
+
+    // Fold in whatever `dispatch_image_conversions` carried forward for
+    // images it skipped this round (see `ImageRunContext::carried_advisories`)
+    // — the terminal tick below must speak for the whole item set, not just
+    // the subset this run actually dispatched.
+    let advisories: Vec<Advisory> = advisories.into_iter().chain(ctx.carried_advisories.iter().cloned()).collect();
 
     if is_headless {
         if advisories.is_empty() {
@@ -2656,6 +2717,10 @@ pub(crate) fn dispatch_image_conversions(
         let mut joined: usize = 0;
         let mut current_paths: HashSet<String> = HashSet::new();
         let mut healed_count: usize = 0;
+        // Advisories re-emitted on behalf of an image this dispatch skips
+        // (fingerprint matched, output present) — read from the fingerprint
+        // cache, never recomputed. See `ImageRunContext::carried_advisories`.
+        let mut carried_advisories: Vec<Advisory> = Vec::new();
 
         for item in &ctx.image_items {
             let rel_source = item.source_path.to_string_lossy().to_string();
@@ -2724,6 +2789,11 @@ pub(crate) fn dispatch_image_conversions(
                 // existence check drops any key whose staging file is absent
                 // rather than registering a lie.
                 skip_paths.push((relative_webp.clone(), None));
+                // This image will not re-enter `run_image_conversion` this
+                // round, so it cannot re-raise its own advisory there — carry
+                // forward whatever the fingerprint cache still has on file
+                // for it (moss#1205's partial-dispatch gap).
+                carried_advisories.extend(image_item_advisories(&rel_source));
                 if let Some(ref asset_reg) = svc.assets {
                     // Relay an AssetReady swap ONLY when set_ready actually
                     // flips the asset Pending→Ready — e.g. a just-re-dropped
@@ -2794,8 +2864,10 @@ pub(crate) fn dispatch_image_conversions(
         // Drop stored fingerprints for images no longer in the current set,
         // so a removed-then-re-added image starts fresh rather than
         // replaying a stale match against bytes that may since have
-        // changed. Bounds the map to the live image set.
-        retain_image_item_fingerprints(&current_paths);
+        // changed. Bounds the map to the live image set. A dropped image's
+        // own advisory (if it had one) goes with it — see the `to_dispatch.
+        // is_empty()` branch below for why that still needs a tick.
+        let dropped_advisory = retain_image_item_fingerprints(&current_paths);
 
         // ONE line, not one per file: the per-file form was 96% of an upload.
         if healed_count > 0 {
@@ -2824,6 +2896,26 @@ pub(crate) fn dispatch_image_conversions(
                 "Image set unchanged ({} images{}), skipping re-dispatch — re-registered carry-forward output keys",
                 total_items, joined_note
             );
+            // Nothing to dispatch means `run_image_conversion` (the only
+            // other place this task's terminal tick fires) never runs this
+            // round. That is fine when nothing changed — there is nothing to
+            // sweep. But a deletion just dropped a still-recorded advisory
+            // (`dropped_advisory`), and with no tick at all the app's
+            // advisory store has no way to learn that: fire one directly,
+            // carrying whatever advisories survive, so the sweep this task
+            // now supports actually runs.
+            if dropped_advisory {
+                let total = total_items as u32;
+                crate::build::progress::spawn_media_child_job(svc, "images", 0, carried_advisories.clone());
+                svc.reporter.report(&PipelineEvent::BackgroundProgress {
+                    task: "images".to_string(),
+                    current: total,
+                    total,
+                    message: format_progress_message("images", total, total),
+                    completed: true,
+                    advisories: carried_advisories,
+                });
+            }
             return;
         }
         if to_dispatch.len() < total_items {
@@ -2848,6 +2940,7 @@ pub(crate) fn dispatch_image_conversions(
         // encode.
         let mut run_ctx = ImageRunContext::from_background(ctx, config.clone());
         run_ctx.items = to_dispatch;
+        let run_ctx = run_ctx.with_carried_advisories(carried_advisories);
         let run_ctx = if let Some(t) = tx {
             run_ctx.with_tx(t)
         } else {

@@ -389,6 +389,12 @@ pub struct VideoConversionState {
     /// `compute_video_item_fingerprint` and
     /// `dispatch_video_conversions` in `build/media/video.rs`.
     last_video_fingerprints: std::sync::Mutex<HashMap<String, String>>,
+    /// The advisories a run's own delivery produced for each video, recorded
+    /// alongside its fingerprint in `last_video_fingerprints` above.
+    /// `dispatch_video_conversions` re-emits these for a video it carries
+    /// forward without ever re-entering `run_video_conversion`, mirroring
+    /// `image::ImageLedger`'s twin field on the image side.
+    item_advisories: std::sync::Mutex<HashMap<String, Vec<crate::advisory::Advisory>>>,
     /// What detached runs are converting and what they delivered, under one
     /// lock so every output key is in one set or the other at each instant.
     runs: std::sync::Mutex<RunLedger>,
@@ -424,6 +430,7 @@ impl VideoConversionState {
         Self {
             conversion_id: AtomicU64::new(0),
             last_video_fingerprints: std::sync::Mutex::new(HashMap::new()),
+            item_advisories: std::sync::Mutex::new(HashMap::new()),
             runs: std::sync::Mutex::new(RunLedger::default()),
         }
     }
@@ -477,14 +484,39 @@ impl VideoConversionState {
         self.last_video_fingerprints.lock().unwrap().contains_key(path)
     }
 
+    /// The advisories recorded for `path` alongside its last delivered
+    /// fingerprint — what a skip-carried video still has to say, re-emitted
+    /// by `dispatch_video_conversions` in that video's stead when it carries
+    /// the video forward without re-running it.
+    pub fn item_advisories(&self, path: &str) -> Vec<crate::advisory::Advisory> {
+        self.item_advisories.lock().unwrap().get(path).cloned().unwrap_or_default()
+    }
+
     /// Drop stored fingerprints for paths not in `keep` — called once per
     /// dispatch with the current video set, so a removed video's entry
     /// doesn't linger forever, and a removed-then-re-added video is treated
     /// as new rather than replaying a stale match against bytes that may
     /// since have changed.
-    pub fn retain_item_fingerprints(&self, keep: &HashSet<String>) {
+    ///
+    /// Returns whether any dropped path still had a non-empty advisory
+    /// recorded — a deleted video whose problem the author never saw
+    /// cleared must not silently leave its advisory stranded in the app; the
+    /// caller uses this to fire a terminal tick even when nothing was
+    /// dispatched, so the app-side sweep can drop it.
+    pub fn retain_item_fingerprints(&self, keep: &HashSet<String>) -> bool {
         let mut map = self.last_video_fingerprints.lock().unwrap();
         map.retain(|k, _| keep.contains(k));
+        let mut advisories = self.item_advisories.lock().unwrap();
+        let mut dropped_advisory = false;
+        advisories.retain(|k, v| {
+            if keep.contains(k) {
+                true
+            } else {
+                dropped_advisory |= !v.is_empty();
+                false
+            }
+        });
+        dropped_advisory
     }
 
     /// Whether a spawned run is still converting `path` from a source with
@@ -508,14 +540,24 @@ impl VideoConversionState {
     /// `path` ended in run `epoch`; `landed` names what it put in staging that
     /// no build has registered (empty when the run registers its own). When the run
     /// `delivered` bytes for it, the fingerprint it was dispatched under is recorded
-    /// as the one those bytes are for — only by the run that owns the item, so a
+    /// as the one those bytes are for, alongside `advisories` — what this delivery
+    /// has to say about `path`, possibly empty (which correctly overwrites a stale
+    /// prior advisory since fixed) — only by the run that owns the item, so a
     /// superseded run winding down cannot vouch for what its successor is encoding.
-    pub fn end_item(&self, path: &str, epoch: u64, landed: impl IntoIterator<Item = String>, delivered: bool) {
+    pub fn end_item(
+        &self,
+        path: &str,
+        epoch: u64,
+        landed: impl IntoIterator<Item = String>,
+        delivered: bool,
+        advisories: &[crate::advisory::Advisory],
+    ) {
         let mut runs = self.runs.lock().unwrap();
         runs.landed.extend(landed);
         if runs.running.get(path).is_some_and(|r| r.epoch == epoch) {
             if let Some(item) = runs.running.remove(path).filter(|_| delivered) {
                 self.record_item_fingerprint(path, &item.fingerprint);
+                self.item_advisories.lock().unwrap().insert(path.to_string(), advisories.to_vec());
             }
         }
     }
@@ -954,11 +996,11 @@ mod tests {
         state.begin_run(1, [("a.mov".to_string(), "fp".to_string(), vec![])]);
         state.begin_run(2, [("a.mov".to_string(), "fp".to_string(), vec![])]);
 
-        state.end_item("a.mov", 1, [], false);
+        state.end_item("a.mov", 1, [], false, &[]);
         state.end_run(1);
         assert!(state.is_running("a.mov", "fp"));
 
-        state.end_item("a.mov", 2, [], false);
+        state.end_item("a.mov", 2, [], false, &[]);
         assert!(!state.is_running("a.mov", "fp"));
     }
 
@@ -1061,17 +1103,17 @@ mod tests {
         let dispatched = |epoch: u64, path: &str| state.begin_run(epoch, [(path.to_string(), "fp".to_string(), vec![])]);
 
         dispatched(1, "leaves.mov");
-        state.end_item("leaves.mov", 1, [], false);
+        state.end_item("leaves.mov", 1, [], false, &[]);
         assert!(!state.item_fingerprint_matches("leaves.mov", "fp"), "recorded for a run that delivered nothing");
 
         dispatched(1, "superseded.mov");
         dispatched(2, "superseded.mov");
-        state.end_item("superseded.mov", 1, [], true);
+        state.end_item("superseded.mov", 1, [], true, &[]);
         assert!(!state.item_fingerprint_matches("superseded.mov", "fp"), "recorded by a run that no longer owns the item");
         assert!(state.is_running("superseded.mov", "fp"), "and the successor still owns it");
 
         dispatched(3, "done.mov");
-        state.end_item("done.mov", 3, [], true);
+        state.end_item("done.mov", 3, [], true, &[]);
         assert!(state.item_fingerprint_matches("done.mov", "fp"));
     }
 
@@ -1099,5 +1141,70 @@ mod tests {
         assert!(state.item_fingerprint_matches("a.mov", "fp-a"));
         // ...but "b.mov" was dropped, so the same fingerprint now reads as new.
         assert!(!state.item_fingerprint_matches("b.mov", "fp-b"));
+    }
+
+    fn test_advisory(what: &str) -> crate::advisory::Advisory {
+        crate::advisory::Advisory {
+            scope: crate::advisory::Scope::File,
+            severity: crate::advisory::Severity::ShippedDegraded,
+            item: Some("a.mov".to_string()),
+            what: what.to_string(),
+            action: crate::advisory::Action::None,
+        }
+    }
+
+    /// `end_item` records advisories only alongside a delivered fingerprint —
+    /// mirrors `record_item_fingerprint`'s own delivered-only gate, since an
+    /// item that never delivers is always redispatched and never needs a
+    /// carried-forward advisory.
+    #[test]
+    fn end_item_records_advisories_only_when_delivered() {
+        let state = VideoConversionState::new();
+        state.begin_run(1, [("a.mov".to_string(), "fp".to_string(), vec![])]);
+        state.end_item("a.mov", 1, [], false, std::slice::from_ref(&test_advisory("broken")));
+        assert!(state.item_advisories("a.mov").is_empty(), "a run that delivered nothing must not vouch for its advisory either");
+
+        state.begin_run(2, [("a.mov".to_string(), "fp".to_string(), vec![])]);
+        state.end_item("a.mov", 2, [], true, std::slice::from_ref(&test_advisory("broken")));
+        assert_eq!(state.item_advisories("a.mov"), vec![test_advisory("broken")]);
+    }
+
+    /// A later delivery with no advisories overwrites the earlier one — the
+    /// fixed case must not leave a stale advisory behind for a skip-carried
+    /// item to keep re-raising.
+    #[test]
+    fn end_item_with_no_advisories_clears_a_previously_recorded_one() {
+        let state = VideoConversionState::new();
+        state.begin_run(1, [("a.mov".to_string(), "fp".to_string(), vec![])]);
+        state.end_item("a.mov", 1, [], true, std::slice::from_ref(&test_advisory("broken")));
+        assert_eq!(state.item_advisories("a.mov").len(), 1);
+
+        state.begin_run(2, [("a.mov".to_string(), "fp2".to_string(), vec![])]);
+        state.end_item("a.mov", 2, [], true, &[]);
+        assert!(state.item_advisories("a.mov").is_empty());
+    }
+
+    /// `retain_item_fingerprints` drops an advisory alongside its fingerprint
+    /// when the path leaves the current set, and reports back only when a
+    /// DROPPED path actually had something to say — a path with no advisory
+    /// must not spuriously ask the caller to fire a tick.
+    #[test]
+    fn retain_item_fingerprints_drops_advisories_and_reports_only_a_real_drop() {
+        let state = VideoConversionState::new();
+        state.begin_run(1, [
+            ("a.mov".to_string(), "fp-a".to_string(), vec![]),
+            ("b.mov".to_string(), "fp-b".to_string(), vec![]),
+        ]);
+        state.end_item("a.mov", 1, [], true, std::slice::from_ref(&test_advisory("broken")));
+        state.end_item("b.mov", 1, [], true, &[]);
+
+        // Dropping "b.mov" (no advisory) must not report a drop.
+        assert!(!state.retain_item_fingerprints(&HashSet::from(["a.mov".to_string()])));
+
+        // Dropping "a.mov" (has an advisory) must report one, and the
+        // advisory itself must be gone — never carried forward for a video
+        // that no longer exists.
+        assert!(state.retain_item_fingerprints(&HashSet::new()));
+        assert!(state.item_advisories("a.mov").is_empty());
     }
 }

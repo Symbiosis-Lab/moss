@@ -1378,7 +1378,7 @@ pub(crate) fn run_video_conversion(
                 // until the rebuild it asks for registers it.
                 let landed: Vec<String> = if tx.is_none() { delivered.iter().map(|d| d.url.clone()).collect() } else { Vec::new() };
                 record_deliveries(services, &mut produced_video_paths, delivered);
-                services.cancellation.end_item(item, epoch, landed, delivered_any);
+                services.cancellation.end_item(item, epoch, landed, delivered_any, &item_advisories);
                 advisories.extend(item_advisories);
                 if encoded {
                     converted_count += 1;
@@ -1416,6 +1416,11 @@ pub(crate) fn run_video_conversion(
     }
 
     log::info!("[epoch {}] Video conversion complete ({} videos, {} converted)", epoch, total, converted_count);
+    // Fold in whatever `dispatch_video_conversions` carried forward for
+    // videos it skipped this round (see `BackgroundContext::carried_
+    // advisories`) — the terminal tick `finish_run` fires below must speak
+    // for the whole item set, not just the subset this run dispatched.
+    advisories.extend(ctx.carried_advisories.iter().cloned());
     finish_run(
         services,
         ctx,
@@ -1736,6 +1741,11 @@ pub(crate) fn dispatch_video_conversions(
             let mut healed = 0usize;
             let mut unverified = 0usize;
             let mut queued_why: Vec<String> = Vec::new();
+            // Advisories re-emitted on behalf of a video this dispatch skips
+            // (fingerprint matched or healed, output present) — read from
+            // `VideoConversionState::item_advisories`, never recomputed. See
+            // `BackgroundContext::carried_advisories`.
+            let mut carried_advisories: Vec<Advisory> = Vec::new();
 
             let mut store = VideoStore::open(&background_ctx.moss_dir, &compression_config);
 
@@ -1813,6 +1823,11 @@ pub(crate) fn dispatch_video_conversions(
                     // absent (the HLS ladder's excess candidates, normally)
                     // rather than registering a lie.
                     skip_paths.extend(video_output_keys(&mapped).into_iter().map(|key| (key, None)));
+                    // This video will not re-enter `run_video_conversion` this
+                    // round, so it cannot re-raise its own advisory there —
+                    // carry forward whatever the fingerprint cache still has
+                    // on file for it (moss#1205's partial-dispatch gap).
+                    carried_advisories.extend(svc.cancellation.item_advisories(item));
                 } else {
                     let why = if fingerprint_matched {
                         "no cached output"
@@ -1840,8 +1855,11 @@ pub(crate) fn dispatch_video_conversions(
             // Drop stored fingerprints for videos no longer in the current
             // set, so a removed-then-re-added video starts fresh rather than
             // replaying a stale match against bytes that may since have
-            // changed. Bounds the map to the live video set.
-            svc.cancellation.retain_item_fingerprints(&current_paths);
+            // changed. Bounds the map to the live video set. A dropped
+            // video's own advisory (if it had one) goes with it — see the
+            // `to_dispatch.is_empty()` branch below for why that still needs
+            // a tick.
+            let dropped_advisory = svc.cancellation.retain_item_fingerprints(&current_paths);
 
             if !skip_paths.is_empty() {
                 emit_video_outputs_via_channel(&tx, &skip_paths, &background_ctx.staging_dir);
@@ -1867,6 +1885,26 @@ pub(crate) fn dispatch_video_conversions(
             // Nothing new: every joined item keeps its run, its epoch and its
             // singleflight entry.
             if to_dispatch.is_empty() {
+                // Nothing to dispatch means `run_video_conversion` (the only
+                // other place this task's terminal tick fires) never runs
+                // this round. That is fine when nothing changed — there is
+                // nothing to sweep. But a deletion just dropped a
+                // still-recorded advisory (`dropped_advisory`), and with no
+                // tick at all the app's advisory store has no way to learn
+                // that: fire one directly, carrying whatever advisories
+                // survive, so the sweep this task now supports actually runs.
+                if dropped_advisory {
+                    let total = total_items as u32;
+                    spawn_media_child_job(svc, "videos", 0, carried_advisories.clone());
+                    svc.reporter.report(&PipelineEvent::BackgroundProgress {
+                        task: "videos".to_string(),
+                        current: total,
+                        total,
+                        message: format_progress_message("videos", total, total),
+                        completed: true,
+                        advisories: carried_advisories,
+                    });
+                }
                 return;
             }
 
@@ -1895,6 +1933,7 @@ pub(crate) fn dispatch_video_conversions(
                 }),
             );
             background_ctx.video_items = to_dispatch.into_iter().map(|(item, _)| item).collect();
+            background_ctx.carried_advisories = carried_advisories;
 
             // GUI/CLI mode with event sink: async spawn
             // Increment tracker BEFORE spawn to close the race window.
@@ -2986,6 +3025,199 @@ pub(crate) mod tests {
                 key
             );
         }
+    }
+
+    // ── Partial-dispatch advisory carry-forward (moss#1205's remaining gap) ──
+
+    /// Like [`stage_and_prime_video`], but also records `advisory` as what
+    /// that delivery had to say about `item` — the carry-forward fixture for
+    /// the tests below. Goes through `begin_run`/`end_item` (rather than
+    /// `record_item_fingerprint` alone) so `VideoConversionState::
+    /// item_advisories` has something to serve back.
+    fn stage_and_prime_video_with_advisory(
+        svc: &BuildServices,
+        vault: &Path,
+        staging: &Path,
+        item: &str,
+        source_bytes: &[u8],
+        advisory: Advisory,
+    ) -> Vec<String> {
+        let staged = stage_and_prime_video(svc, vault, staging, item, source_bytes, false);
+        let fingerprint = compute_video_item_fingerprint(
+            &vault.display().to_string(),
+            item,
+            &crate::build::media::ffmpeg::VideoCompressionConfig::default(),
+        )
+        .expect("source file exists and is stat-able");
+        let epoch = svc.cancellation.start_new_conversion();
+        svc.cancellation.begin_run(epoch, [(item.to_string(), fingerprint.clone(), vec![])]);
+        svc.cancellation.end_item(item, epoch, [], true, std::slice::from_ref(&advisory));
+        staged
+    }
+
+    /// A `Spawner` that runs `spawn_blocking` inline, synchronously, on
+    /// whatever thread calls it — so a test can await the whole dispatch
+    /// (including any real dispatch it triggers) in one call, with no
+    /// separate wait and no registered watch worker (which would otherwise
+    /// route through the detached-encode split these tests don't need).
+    struct InlineSpawner;
+    impl crate::build::ports::spawner::Spawner for InlineSpawner {
+        fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+            task();
+        }
+        fn spawn(
+            &self,
+            _task: crate::build::ports::spawner::Task,
+        ) -> crate::build::ports::spawner::Joining {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingReporter(std::sync::Mutex<Vec<PipelineEvent>>);
+    impl crate::build::ports::reporter::BuildReporter for RecordingReporter {
+        fn report(&self, event: &PipelineEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+
+    /// `dispatch_video_conversions` carries an unchanged video forward
+    /// without ever re-entering `run_video_conversion` — so before this fix,
+    /// that video's advisory (e.g. an oversized-encode notice) was simply
+    /// absent from every later completed tick the moment a SIBLING video
+    /// needed dispatching, and the app-side sweep (which trusts an absent key
+    /// as "fixed") deleted a still-true advisory. `VideoConversionState` now
+    /// carries the advisory forward alongside the fingerprint it already
+    /// stores, so the terminal tick speaks for the whole item set even though
+    /// only the new video actually ran.
+    ///
+    /// Ablate by reverting the `carried_advisories` plumbing
+    /// (`VideoConversionState::item_advisories`, `BackgroundContext::
+    /// carried_advisories`) and this goes red: "broken.mov" is absent from
+    /// the terminal tick's advisories.
+    #[tokio::test]
+    async fn a_skip_carried_videos_advisory_rides_the_terminal_ticks_full_set() {
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+
+        let mut svc = BuildServices::headless();
+        svc.spawner = Some(std::sync::Arc::new(InlineSpawner));
+        let recorder = std::sync::Arc::new(RecordingReporter::default());
+        svc.reporter = recorder.clone();
+
+        let broken = "videos/broken.mov".to_string();
+        let fresh = "videos/fresh.mov".to_string();
+
+        let broken_advisory = Advisory::for_source(
+            Scope::File,
+            Severity::ShippedDegraded,
+            &broken,
+            "published over the size target".to_string(),
+            Action::None,
+        );
+        stage_and_prime_video_with_advisory(&svc, &vault, &staging, &broken, b"broken-bytes", broken_advisory);
+
+        // "fresh.mov" is brand new: no staged output, no primed fingerprint,
+        // so it must be dispatched. The fake ffmpeg path (below) means it
+        // ships via the original-bytes fallback rather than a real encode —
+        // this test does not care whether THAT lands its own advisory, only
+        // that "broken.mov"'s survives the round.
+        std::fs::create_dir_all(vault.join(&fresh).parent().unwrap()).unwrap();
+        std::fs::write(vault.join(&fresh), b"fresh-bytes").unwrap();
+
+        let ctx = BackgroundContext {
+            video_items: vec![broken.clone(), fresh.clone()],
+            source_path: vault.display().to_string(),
+            staging_dir: staging.clone(),
+            moss_dir: moss_dir.clone(),
+            ffmpeg_bin_path: Some(moss_dir.join("no-such-ffmpeg").display().to_string()),
+            ..BackgroundContext::for_test()
+        };
+        tokio::task::spawn_blocking(move || {
+            dispatch_video_conversions(Some(&svc), ctx, None);
+        })
+        .await
+        .unwrap();
+
+        let events = recorder.0.lock().unwrap();
+        let terminal = events
+            .iter()
+            .find(|e| matches!(e, PipelineEvent::BackgroundProgress { task, completed: true, .. } if task == "videos"))
+            .expect("the videos task must reach its own completed:true tick");
+        let PipelineEvent::BackgroundProgress { advisories, .. } = terminal else { unreachable!() };
+        assert!(
+            advisories.iter().any(|a| a.item.as_deref() == Some(broken.as_str())),
+            "the skip-carried video's advisory must ride the terminal tick even though only \
+             the new video actually ran, got: {advisories:?}"
+        );
+    }
+
+    /// The deletion side of the same gap: the author deletes "broken.mov"
+    /// outright while the only remaining video stays unchanged, so nothing
+    /// needs the encoder this round. Before this fix `dispatch_video_
+    /// conversions` returned with no tick at all when `to_dispatch` was
+    /// empty — so a stale advisory for a file that no longer exists on disk
+    /// would sit until some UNRELATED future dispatch happened to touch the
+    /// videos task again, which is not guaranteed to ever happen.
+    ///
+    /// Ablate by reverting the `dropped_advisory` early-fire branch in
+    /// `dispatch_video_conversions` and this goes red: no `videos` tick is
+    /// observed at all.
+    #[tokio::test]
+    async fn a_deleted_videos_advisory_still_fires_a_tick_with_nothing_to_dispatch() {
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+
+        let mut svc = BuildServices::headless();
+        svc.spawner = Some(std::sync::Arc::new(InlineSpawner));
+        let recorder = std::sync::Arc::new(RecordingReporter::default());
+        svc.reporter = recorder.clone();
+
+        let broken = "videos/broken.mov".to_string();
+        let safe = "videos/safe.mov".to_string();
+
+        let broken_advisory = Advisory::for_source(
+            Scope::File,
+            Severity::ShippedDegraded,
+            &broken,
+            "published over the size target".to_string(),
+            Action::None,
+        );
+        stage_and_prime_video_with_advisory(&svc, &vault, &staging, &broken, b"broken-bytes", broken_advisory);
+        stage_and_prime_video(&svc, &vault, &staging, &safe, b"safe-bytes", false);
+
+        // "broken.mov" is deleted: this build's video set names ONLY "safe.mov".
+        let ctx = BackgroundContext {
+            video_items: vec![safe.clone()],
+            source_path: vault.display().to_string(),
+            staging_dir: staging.clone(),
+            moss_dir: moss_dir.clone(),
+            ffmpeg_bin_path: Some(moss_dir.join("no-such-ffmpeg").display().to_string()),
+            ..BackgroundContext::for_test()
+        };
+        tokio::task::spawn_blocking(move || {
+            dispatch_video_conversions(Some(&svc), ctx, None);
+        })
+        .await
+        .unwrap();
+
+        let events = recorder.0.lock().unwrap();
+        let terminal = events
+            .iter()
+            .find(|e| matches!(e, PipelineEvent::BackgroundProgress { task, completed: true, .. } if task == "videos"))
+            .expect(
+                "a deletion that drops a recorded advisory must still fire the videos \
+                 task's completed:true tick even with nothing to dispatch",
+            );
+        let PipelineEvent::BackgroundProgress { advisories, .. } = terminal else { unreachable!() };
+        assert!(
+            !advisories.iter().any(|a| a.item.as_deref() == Some(broken.as_str())),
+            "the deleted video's advisory must not ride forward, got: {advisories:?}"
+        );
     }
 
     // ── The seal/video split: an in-flight encode must not hold the seal ──

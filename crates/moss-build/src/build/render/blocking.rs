@@ -3511,6 +3511,7 @@ pub fn generate_blocking_content(
         ffmpeg_bin_path: project_structure.ffmpeg_bin_path.clone(),
         notebook_files: project_structure.notebook_files.clone(),
         rung_collisions,
+        carried_advisories: Vec::new(),
     };
 
     Ok((
