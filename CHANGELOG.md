@@ -34,6 +34,7 @@ All notable changes to moss will be documented here.
 - A place named through `location:` no longer trips the "declared … but never appears in a byline row" warning, and no longer becomes a byline auto-link candidate. A place gets its own automatic place line instead of a byline credit, so it was never meant to appear in a byline row in the first place.
 - A video that isn't 16:9 — square, portrait, or a landscape shape like 4:3 — now fills the column at its own shape instead of sitting pillarboxed inside a fixed 16:9 box with blank bars down the sides. The box now takes the video's real dimensions once the browser has read them; 16:9 is only the placeholder shown before that.
 - Video embeds no longer print an English "Download video" link below the player.
+- A video or audio embed that shares its paragraph with other text — most often a caption on the very next line, joined by a single line break rather than a blank one — now plays as a real `<video>`/`<audio>` element again instead of showing a broken image. Only an embed alone on its own line, with nothing else in the paragraph, was getting its real player before; one with a caption or surrounding prose fell back to the generic image renderer regardless of what kind of file it pointed at.
 
 ### Changed
 

@@ -989,18 +989,37 @@ fn dispatch_image_inner_img_has_single_style_attr() {
 
 // --- Captions on non-image embeds -------------------------------------
 
-fn dispatch_embed(file: &str, alias: Option<&str>) -> String {
+fn dispatch_embed(file: &str, alias: Option<&str>) -> EmitKind {
     let graph = build_graph(&["report.pdf", "clip.mp4", "widget.html"]);
-    let emit = dispatch_wikilink_embed(file, alias, true, &graph, "index.md", &empty_snapshot());
-    match emit.output {
+    dispatch_wikilink_embed(file, alias, true, &graph, "index.md", &empty_snapshot()).output
+}
+
+/// Unwrap a captioned dispatch. Asserts the caption→`HtmlFigure` invariant
+/// itself, not just the HTML shape below: a regression that kept emitting
+/// `Html` for a captioned embed would still produce figure-shaped HTML text
+/// (`wrap_embed_with_caption` didn't change), so a string-only assertion
+/// can't see it — but the mid-paragraph splice guard
+/// (`ast::dispatch_wikilink_embeds`) reads the variant, not the string, and
+/// a caption reaching it as `Html` would be spliced straight into a `<p>`.
+fn expect_figure(emit: EmitKind) -> String {
+    match emit {
+        EmitKind::HtmlFigure(s) => s,
+        other => panic!("expected HtmlFigure (captioned embed), got {other:?}"),
+    }
+}
+
+/// Unwrap an uncaptioned dispatch, asserting it is bare `Html` (not
+/// figure-wrapped) — the mirror check to [`expect_figure`].
+fn expect_bare(emit: EmitKind) -> String {
+    match emit {
         EmitKind::Html(s) => s,
-        other => panic!("expected Html, got {other:?}"),
+        other => panic!("expected Html (uncaptioned embed), got {other:?}"),
     }
 }
 
 #[test]
 fn a_captioned_embed_wears_its_placement_on_the_figure_not_the_element() {
-    let html = dispatch_embed("clip.mp4", Some("align-right 25%|Some caption"));
+    let html = expect_figure(dispatch_embed("clip.mp4", Some("align-right 25%|Some caption")));
     let figure_open = r#"<figure class="moss-embed-figure moss-align-right" style="width:25%">"#;
     assert!(html.starts_with(figure_open), "got: {html}");
     assert!(html.contains("<figcaption>Some caption</figcaption>"), "got: {html}");
@@ -1019,7 +1038,7 @@ fn a_captioned_embed_wears_its_placement_on_the_figure_not_the_element() {
 fn a_captioned_embed_still_escapes_the_content_column() {
     // The case a naive wrapper breaks: `article.container > [data-width]`
     // is a direct-child selector, so `data-width` has to be on the figure.
-    let html = dispatch_embed("report.pdf", Some("wide|A caption"));
+    let html = expect_figure(dispatch_embed("report.pdf", Some("wide|A caption")));
     assert!(
         html.starts_with(r#"<figure class="moss-embed-figure" data-width="wide">"#),
         "got: {html}"
@@ -1030,7 +1049,7 @@ fn a_captioned_embed_still_escapes_the_content_column() {
 
 #[test]
 fn an_uncaptioned_embed_wears_its_placement_directly() {
-    let html = dispatch_embed("clip.mp4", Some("align-right 25%"));
+    let html = expect_bare(dispatch_embed("clip.mp4", Some("align-right 25%")));
     assert!(!html.contains("moss-embed-figure"), "no wrapper without a caption: {html}");
     assert!(html.contains("moss-embed-video moss-align-right"), "got: {html}");
     assert!(html.contains(r#"style="width:25%""#), "got: {html}");
@@ -1040,11 +1059,11 @@ fn an_uncaptioned_embed_wears_its_placement_directly() {
 fn a_pothole_with_no_placement_keeps_meaning_exactly_what_it_did() {
     // An iframe title and a sizing hint are not captions, and adding the
     // caption grammar must not turn them into ones.
-    let html = dispatch_embed("widget.html", Some("My Widget"));
+    let html = expect_bare(dispatch_embed("widget.html", Some("My Widget")));
     assert!(html.contains(r#"title="My Widget""#), "got: {html}");
     assert!(!html.contains("figcaption"), "got: {html}");
 
-    let html = dispatch_embed("clip.mp4", Some("wide|640x360"));
+    let html = expect_bare(dispatch_embed("clip.mp4", Some("wide|640x360")));
     assert!(html.contains(r#"width="640px""#), "got: {html}");
     assert!(!html.contains("figcaption"), "got: {html}");
 }

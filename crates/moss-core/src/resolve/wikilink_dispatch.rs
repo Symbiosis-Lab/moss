@@ -108,10 +108,24 @@ pub enum EmitKind {
     /// Markdown-level text that downstream CommonMark will re-process.
     /// Example: image renderer returns `![alt](url)`.
     Inline(String),
-    /// Final HTML — must NOT be re-parsed by the markdown engine.
-    /// Example: iframe renderer.
+    /// Final HTML — must NOT be re-parsed by the markdown engine. Phrasing
+    /// content: safe as a `<p>` child, which is what lets
+    /// [`crate::ast::dispatch_wikilink_embeds`]'s mid-paragraph path splice
+    /// it straight into a paragraph's inline stream. Example: iframe
+    /// renderer, or any non-image embed with no caption.
     Html(String),
+    /// Final HTML wrapping the embed in a captioned `<figure>`
+    /// ([`crate::render::placement::wrap_embed_with_caption`]) — block-level,
+    /// never phrasing content. Distinct from [`EmitKind::Html`] so a
+    /// mid-paragraph splice site can refuse it by type instead of sniffing
+    /// the string for a leading `<figure`; the block-level (lone-paragraph)
+    /// path treats it exactly like `Html`.
+    HtmlFigure(String),
     /// A marker comment for a post-pass resolver (notebook, table, plugin).
+    /// The marker's eventual resolution ([`crate::resolve::embeds::resolve_deferred_markers`])
+    /// substitutes text with no notion of where the marker sits, and may
+    /// itself be block-level (a `<table>`) — never known to be phrasing
+    /// content, so never spliced into a paragraph either.
     Deferred(String),
     /// A standard markdown link string. Used for non-embed wikilinks
     /// (`[[file]]` rather than `![[file]]`).
@@ -551,14 +565,20 @@ fn dispatch_embed_form(
                         assets,
                     ),
                 };
-                let html = match caption {
-                    Some(ref c) => crate::render::placement::wrap_embed_with_caption(
-                        &html, &placement, c,
+                // A caption wraps the element in a block-level `<figure>`
+                // (`HtmlFigure`); no caption leaves the element bare, which is
+                // phrasing content (`Html`). This is the one place that knows
+                // which shape the HTML below actually is — see `EmitKind`'s
+                // doc for why the two are kept distinct rather than both
+                // emitted as `Html`.
+                let output = match caption {
+                    Some(ref c) => EmitKind::HtmlFigure(
+                        crate::render::placement::wrap_embed_with_caption(&html, &placement, c),
                     ),
-                    None => html,
+                    None => EmitKind::Html(html),
                 };
                 return WikilinkEmit {
-                    output: EmitKind::Html(html),
+                    output,
                     outgoing_link: Some(outgoing),
                     diagnostics,
                 };

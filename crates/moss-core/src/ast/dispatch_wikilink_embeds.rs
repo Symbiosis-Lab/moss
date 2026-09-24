@@ -28,18 +28,31 @@
 //!
 //! # Inline vs block-level
 //!
-//! Per the real-site fixtures in use at the Phase 4 cutover,
-//! every wikilink embed in production is a "lone embed paragraph": a
-//! paragraph whose only `Inline::Image { is_wikilink: true, .. }` plus
-//! whitespace/linebreaks. The visitor detects this shape and replaces the
-//! whole paragraph with the dispatch output (so block-level HTML doesn't
-//! get `<p>`-wrapped).
+//! Most wikilink embeds are a "lone embed paragraph": a paragraph whose
+//! only content is one `Inline::Image { is_wikilink: true, .. }` plus
+//! whitespace/linebreaks. The visitor detects this shape
+//! ([`find_lone_wikilink_image`]) and replaces the whole paragraph with the
+//! dispatch output (so block-level HTML doesn't get `<p>`-wrapped).
 //!
-//! Inline wikilink images (e.g. `Some text ![[icon.png]] more text` in the
-//! same paragraph) stay as `Inline::Image` and route through the normal
-//! `render_inline` → `hooks.render_image` synth path. The dispatcher does
-//! NOT walk them — the `<picture>` shape produced by `synthesize_image_html`
-//! is the right output for inline embeds.
+//! An embed can also sit beside other content in the same paragraph — a
+//! caption on the next line joined by a soft break, or plain prose before
+//! or after it (`Some text ![[icon.png]] more text`, or
+//! `![[clip.mp4]]\nA caption.`). That paragraph isn't the lone-embed shape,
+//! but every `Inline::Image { is_wikilink: true, .. }` inside it still names
+//! a real file with a real extension, and [`dispatch_inline_wikilink_embeds`]
+//! dispatches each one through [`dispatch_embed`] — the SAME call the
+//! lone-paragraph path makes — so kind (image / video / audio / pdf /
+//! iframe / 3D model) is decided in one place regardless of position. An
+//! image extension routes back through the ordinary `render_inline` →
+//! `hooks.render_image` synth path (the `<picture>` shape
+//! `synthesize_image_html` produces is already correct there). A non-image
+//! kind is spliced in via `Inline::Other` ONLY when the dispatcher's answer
+//! is known to be phrasing content (`EmitKind::Html`) — a bare `<video>`,
+//! `<audio>`, `<object>`, `<iframe>` or `<model-viewer>`, all legal `<p>`
+//! children. Anything block-level (a captioned `<figure>`) or not known to
+//! be phrasing content (a deferred post-pass marker) is left as the
+//! original `Inline::Image`, same as before this dispatcher existed; see
+//! [`dispatch_inline_wikilink_embeds`]'s own doc for the full list.
 
 use crate::asset_snapshot::AssetSnapshot;
 use crate::content_graph::ContentGraph;
@@ -125,21 +138,29 @@ fn dispatch_in_block_children(
         };
 
         if let Some((dest_url, pothole)) = dispatch_info {
-            let emit = dispatch_wikilink_embed_with_registry(
-                &dest_url,
-                pothole.as_deref(),
-                true, // is_embed: lone-paragraph wikilink image is an embed
-                graph,
-                source_path,
-                snapshot,
-                registry,
-            );
+            let emit = dispatch_embed(&dest_url, pothole.as_deref(), snapshot, graph, registry, source_path);
             apply_emit(blocks, i, emit, result);
             i += 1;
             continue;
         }
 
-        // Not a lone embed — descend into nested containers if any.
+        // Not a lone embed. A paragraph disqualified from the lone-embed
+        // shape (sibling text, more than one embed) may still carry a
+        // wikilink embed image whose extension is a real kind — dispatch
+        // each one in place so paragraph position never decides whether an
+        // embed gets its own element.
+        if let Block::Paragraph(inlines) = &mut blocks[i] {
+            dispatch_inline_wikilink_embeds(
+                inlines,
+                snapshot,
+                graph,
+                registry,
+                source_path,
+                result,
+            );
+        }
+
+        // Descend into nested containers if any.
         //
         // PR7a-flip-core-C (2026-05-28): the recursion now matches the
         // visitor pattern in `visit.rs` for `Grid.cells` and `Hero.overlay`
@@ -263,10 +284,114 @@ fn find_lone_wikilink_image(inlines: &[Inline]) -> Option<(String, Option<String
     found
 }
 
+/// Dispatch every wikilink-embed image inside a paragraph that
+/// [`find_lone_wikilink_image`] did NOT claim — i.e. one with sibling text,
+/// or more than one embed. Mutates matching `Inline::Image` entries in
+/// place.
+///
+/// Each embed is routed through [`dispatch_embed`], the exact dispatcher
+/// call the lone-paragraph path uses — kind (image / video / audio / pdf /
+/// iframe / 3D model) is decided in that one place regardless of where in
+/// the document an embed sits. Only `EmitKind::Html` changes anything here;
+/// every other variant is left exactly as it rendered before this function
+/// existed (the original `Inline::Image`), because none of them are known
+/// to be phrasing content — the one thing that's safe inside this
+/// paragraph's `<p>`:
+///
+/// - `EmitKind::Html` — the dispatcher resolved a real, non-image kind with
+///   no caption, which every per-kind synthesizer emits as a bare element
+///   (`<video>`, `<audio>`, `<object>`, `<iframe>`, `<model-viewer>`) —
+///   phrasing content. Its HTML replaces the `Inline::Image` via
+///   `Inline::Other`.
+/// - `EmitKind::HtmlFigure` — the same resolution, but with a caption:
+///   `wrap_embed_with_caption` wraps the element in a block-level
+///   `<figure><figcaption>`. Splicing that into this paragraph's inline
+///   stream would land a block element inside `<p>…</p>`, which a browser
+///   corrects by closing the paragraph early and reopening a new one —
+///   splitting the very paragraph this embed sits in.
+/// - `EmitKind::Deferred` — an unresolved marker for a post-pass resolver
+///   (notebook / table / plugin). That post-pass substitutes text with no
+///   notion of where the marker sits and may itself produce block HTML (a
+///   `<table>`), so a marker is never known to be phrasing content either.
+/// - `EmitKind::Block` — an image extension (the dispatcher's typed
+///   `Block::Figure` arm). Left untouched: the ordinary `render_inline` →
+///   `hooks.render_image` path already produces the correct bare
+///   `<picture>`/`<img>` shape for an inline image, and redoing that
+///   decision here would just be a second copy of it.
+/// - `EmitKind::Inline` / `Link` — an unresolved reference or an unknown
+///   extension's link fallback. `resolve_urls` and the ordinary image path
+///   already cover an unresolved/unknown embed the same way they did
+///   before this function existed.
+fn dispatch_inline_wikilink_embeds(
+    inlines: &mut [Inline],
+    snapshot: &AssetSnapshot,
+    graph: &ContentGraph,
+    registry: &RendererRegistry,
+    source_path: &str,
+    result: &mut WikilinkDispatchResult,
+) {
+    for inline in inlines.iter_mut() {
+        let (dest_url, pothole) = match inline {
+            Inline::Image {
+                src: Url::Unresolved(dest),
+                is_wikilink: true,
+                wikilink_pothole,
+                ..
+            } => (dest.clone(), wikilink_pothole.clone()),
+            // Already-resolved src (shouldn't happen — this visitor runs
+            // before `resolve_urls`) or not a wikilink embed at all.
+            _ => continue,
+        };
+        let emit = dispatch_embed(&dest_url, pothole.as_deref(), snapshot, graph, registry, source_path);
+        match emit.output {
+            EmitKind::Html(html) => {
+                if let Some(link) = emit.outgoing_link {
+                    result.outgoing_links.push(link);
+                }
+                result.diagnostics.extend(emit.diagnostics);
+                *inline = Inline::Other(html);
+            }
+            // Not known to be phrasing content — see function doc. Left as
+            // the original Inline::Image, exactly as before this fix.
+            EmitKind::HtmlFigure(_)
+            | EmitKind::Deferred(_)
+            | EmitKind::Block(_)
+            | EmitKind::Inline(_)
+            | EmitKind::Link(_) => {}
+        }
+    }
+}
+
+/// Dispatch one wikilink-embed image through the registry with
+/// `is_embed: true` — the one call built by both the lone-paragraph path
+/// ([`dispatch_in_block_children`]) and the mid-paragraph path
+/// ([`dispatch_inline_wikilink_embeds`]), so the two can never drift on how
+/// an embed is dispatched.
+fn dispatch_embed(
+    dest_url: &str,
+    pothole: Option<&str>,
+    snapshot: &AssetSnapshot,
+    graph: &ContentGraph,
+    registry: &RendererRegistry,
+    source_path: &str,
+) -> WikilinkEmit {
+    dispatch_wikilink_embed_with_registry(
+        dest_url,
+        pothole,
+        true, // is_embed
+        graph,
+        source_path,
+        snapshot,
+        registry,
+    )
+}
+
 /// Apply the dispatcher's `EmitKind` to `blocks[i]`.
 ///
-/// - `Html` / `Deferred` → replace with `Block::Other(html_or_marker)`
-///   (block-level raw HTML, bypassing `<p>` wrap).
+/// - `Html` / `HtmlFigure` / `Deferred` → replace with
+///   `Block::Other(html_or_marker)` (block-level raw HTML, bypassing `<p>`
+///   wrap — the whole reason `HtmlFigure`'s `<figure>` is fine here and
+///   only here: this call site is never inside a `<p>`).
 /// - `Inline` / `Link` → re-parse via [`parse`]; splice the resulting
 ///   blocks in at position `i` (so e.g. an image embed that re-parses
 ///   into a `Block::Paragraph(vec![Inline::Image { … }])` becomes the
@@ -283,7 +408,7 @@ fn apply_emit(
     result.diagnostics.extend(emit.diagnostics);
 
     match emit.output {
-        EmitKind::Html(html) | EmitKind::Deferred(html) => {
+        EmitKind::Html(html) | EmitKind::HtmlFigure(html) | EmitKind::Deferred(html) => {
             blocks[i] = Block::Other(html);
         }
         EmitKind::Block(block) => {
@@ -677,6 +802,200 @@ mod tests {
                 assert_eq!(width.as_deref(), Some("55%"));
             }
             other => panic!("expected Figure for image percent, got {other:?}"),
+        }
+    }
+
+    // --- mid-paragraph embeds (not the lone-embed shape) ------------------
+    //
+    // An embed followed or preceded by text in the same paragraph (a
+    // caption joined by a soft break, or plain prose) disqualifies
+    // `find_lone_wikilink_image`. Before `dispatch_inline_wikilink_embeds`
+    // existed, that meant the embed never reached kind dispatch at all: it
+    // stayed an `Inline::Image` and rendered through the generic image
+    // synth path regardless of its real extension — a video or audio file
+    // rendered as `<img src="clip.mp4">`.
+
+    /// One paragraph, one non-whitespace `Inline::Other` (the dispatched
+    /// embed HTML) — panics with the actual shape otherwise.
+    fn dispatched_inline_html(blocks: &[Block]) -> &str {
+        match blocks {
+            [Block::Paragraph(inlines)] => inlines
+                .iter()
+                .find_map(|i| match i {
+                    Inline::Other(html) => Some(html.as_str()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no Inline::Other in paragraph: {inlines:?}")),
+            other => panic!("expected one Paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn video_followed_by_text_in_same_paragraph_still_renders_as_video() {
+        // The exact shape from the bug report: an embed alone on its line,
+        // then a caption on the next line joined by a soft break (no blank
+        // line between them, so it's one paragraph).
+        let blocks = parse_and_dispatch(
+            "![[clip.mp4]]\nSome caption text on the next line.\n",
+            &["clip.mp4"],
+        );
+        let html = dispatched_inline_html(&blocks);
+        assert!(html.contains("<video"), "got: {html}");
+        assert!(!html.contains("<img"), "must not fall back to <img>: {html}");
+        match &blocks[..] {
+            [Block::Paragraph(inlines)] => {
+                let text: String = inlines
+                    .iter()
+                    .filter_map(|i| match i {
+                        Inline::Text(t) => Some(t.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(
+                    text.contains("Some caption text on the next line."),
+                    "caption text must survive alongside the video: {inlines:?}"
+                );
+            }
+            other => panic!("expected one Paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_before_video_in_same_paragraph_still_renders_as_video() {
+        let blocks = parse_and_dispatch(
+            "Watch this clip:\n![[clip.mp4]]\n",
+            &["clip.mp4"],
+        );
+        let html = dispatched_inline_html(&blocks);
+        assert!(html.contains("<video"), "got: {html}");
+        assert!(!html.contains("<img"), "must not fall back to <img>: {html}");
+    }
+
+    #[test]
+    fn audio_followed_by_text_in_same_paragraph_still_renders_as_audio() {
+        let blocks = parse_and_dispatch(
+            "![[clip.mp3]]\nRecorded live.\n",
+            &["clip.mp3"],
+        );
+        let html = dispatched_inline_html(&blocks);
+        assert!(html.contains("<audio"), "got: {html}");
+        assert!(!html.contains("<img"), "must not fall back to <img>: {html}");
+    }
+
+    #[test]
+    fn text_before_audio_in_same_paragraph_still_renders_as_audio() {
+        let blocks = parse_and_dispatch(
+            "Listen:\n![[clip.mp3]]\n",
+            &["clip.mp3"],
+        );
+        let html = dispatched_inline_html(&blocks);
+        assert!(html.contains("<audio"), "got: {html}");
+        assert!(!html.contains("<img"), "must not fall back to <img>: {html}");
+    }
+
+    #[test]
+    fn captioned_video_mid_paragraph_does_not_nest_a_figure_in_the_paragraph() {
+        // `align-right|My caption` gives the embed both a placement token
+        // and caption text, which the lone-paragraph path wraps in a
+        // block-level `<figure>` (`wrap_embed_with_caption`). Mid-paragraph,
+        // splicing that `<figure>` in would nest a block element inside
+        // `<p>` — invalid HTML a browser corrects by splitting the
+        // paragraph. The dispatcher must leave this one as `Inline::Image`
+        // rather than produce that.
+        let blocks = parse_and_dispatch(
+            "Watch this: ![[clip.mp4|align-right|My caption]] please.\n",
+            &["clip.mp4"],
+        );
+        match &blocks[..] {
+            [Block::Paragraph(inlines)] => {
+                assert!(
+                    inlines.iter().all(|i| !matches!(i, Inline::Other(h) if h.contains("<figure"))),
+                    "a <figure> must never be spliced into paragraph inlines: {inlines:?}"
+                );
+                assert!(
+                    inlines.iter().any(|i| matches!(
+                        i,
+                        Inline::Image {
+                            is_wikilink: true,
+                            ..
+                        }
+                    )),
+                    "the embed must survive as Inline::Image when its HTML can't be inlined: {inlines:?}"
+                );
+            }
+            other => panic!("expected one Paragraph, got {other:?}"),
+        }
+    }
+
+    /// A stub `.ipynb` renderer that answers the way the real notebook
+    /// renderer does: a `Deferred` marker for a post-pass to expand later
+    /// (`crate::resolve::embed_renderer::MARKER_IPYNB`). moss-core's own
+    /// registry never registers one (see `registry.rs`'s "No more
+    /// built-ins"), so this stands in for whatever caller does.
+    #[derive(Debug)]
+    struct NotebookStub;
+    impl crate::resolve::embed_renderer::EmbedRenderer for NotebookStub {
+        fn extensions(&self) -> &[&'static str] {
+            &["ipynb"]
+        }
+        fn render(
+            &self,
+            embed: &crate::resolve::embed_renderer::ParsedEmbed<'_>,
+        ) -> crate::resolve::embed_renderer::RenderedEmbed {
+            crate::resolve::embed_renderer::RenderedEmbed::Deferred {
+                marker: format!(
+                    "<!-- {}:{} -->",
+                    crate::resolve::embed_renderer::MARKER_IPYNB,
+                    embed.resolved_path
+                ),
+            }
+        }
+    }
+
+    fn notebook_registry() -> RendererRegistry {
+        RendererRegistry::empty()
+            .with_boxed(Box::new(NotebookStub))
+            .build()
+    }
+
+    #[test]
+    fn mid_paragraph_notebook_embed_is_not_spliced_as_deferred_marker() {
+        // A `.ipynb`/table embed resolves to `EmitKind::Deferred`: an
+        // unresolved marker comment that a LATER, position-blind post-pass
+        // (`resolve::embeds::resolve_deferred_markers`) expands — possibly
+        // into block HTML (a `<table>`). Splicing the still-unresolved
+        // marker into this paragraph's `Inline::Other` would let that later
+        // pass nest block HTML inside `<p>`, with no way for it to know it
+        // shouldn't. Mid-paragraph, the embed must stay `Inline::Image`,
+        // the same as before this dispatcher existed — not become
+        // `Inline::Other(marker)`.
+        let mut doc = crate::ast::parse("See this notebook: ![[nb.ipynb]] for the data.\n");
+        let mut b = crate::content_graph::ContentGraphBuilder::new();
+        b.add_file("nb.ipynb", "nb");
+        let graph = b.build();
+        let snap = empty_snapshot();
+        let reg = notebook_registry();
+        let _ = dispatch_wikilink_embeds(&mut doc, &snap, &graph, &reg, "post.md");
+        match &doc.blocks[..] {
+            [Block::Paragraph(inlines)] => {
+                assert!(
+                    inlines
+                        .iter()
+                        .all(|i| !matches!(i, Inline::Other(h) if h.contains("moss-embed-ipynb"))),
+                    "a deferred marker must never be spliced into paragraph inlines: {inlines:?}"
+                );
+                assert!(
+                    inlines.iter().any(|i| matches!(
+                        i,
+                        Inline::Image {
+                            is_wikilink: true,
+                            ..
+                        }
+                    )),
+                    "the embed must survive as Inline::Image when its marker can't be inlined: {inlines:?}"
+                );
+            }
+            other => panic!("expected one Paragraph, got {other:?}"),
         }
     }
 }

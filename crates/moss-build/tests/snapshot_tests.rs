@@ -716,6 +716,12 @@ fn snapshot_reading_controls_site() { run_snapshot_test("reading-controls-site")
 fn snapshot_slots_site() { run_snapshot_test("slots-site"); }
 #[test]
 fn snapshot_structure_site() { run_snapshot_test("structure-site"); }
+/// A video embed alone in its paragraph, and one sharing its paragraph with
+/// a caption — pins `<video>` end to end for both, so a regression that
+/// falls the mid-paragraph one back to `<img>` shows here, not just in
+/// moss-core's own unit tests.
+#[test]
+fn snapshot_video_embed_site() { run_snapshot_test("video-embed-site"); }
 #[test]
 fn snapshot_bilingual_lang_tree_site() { run_snapshot_test("bilingual-lang-tree-site"); }
 
