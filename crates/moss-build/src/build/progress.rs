@@ -1163,14 +1163,42 @@ fn advisory_event(task: &str, advisories: Vec<Advisory>) -> Option<PipelineEvent
     })
 }
 
-/// Build a `BackgroundProgress` advisory event for skipped symlinks.
+/// The other half of [`advisory_event`]: an explicit "this build's check ran
+/// and found nothing" signal for `task` — a `completed: true` tick with an
+/// EMPTY `advisories` vec, in place of `advisory_event`'s `None`.
+///
+/// A build-wide check (symlink-skip, config-version-ahead) used to go silent
+/// the moment its condition cleared, because `advisory_event` returns `None`
+/// for an empty vec and nothing was reported in its place. moss-desktop's
+/// per-task reconciliation (moss#1205) sweeps a task's stored advisories
+/// against the keys THAT TASK'S OWN `completed: true` tick re-raised — so a
+/// task that never ticks at all is never reconciled, and a fixed-and-rebuilt
+/// advisory sat until the folder was reopened. Emit this whenever the check
+/// actually ran this build and found nothing; never when it could not run at
+/// all (e.g. an unreadable config) — that is not evidence either way, only an
+/// unknown.
+fn clear_tick(task: &str) -> PipelineEvent {
+    PipelineEvent::BackgroundProgress {
+        task: task.into(),
+        current: 0,
+        total: 0,
+        message: String::new(),
+        completed: true,
+        advisories: vec![],
+    }
+}
+
+/// Build a `BackgroundProgress` event for the symlink-skip check, which runs
+/// unconditionally every build (the background asset-copy worker is never
+/// gated).
 ///
 /// When `count > 0` a NeedsAction advisory is returned so the L1 hairline dot
-/// shows it without a toast. Returns `None` when no symlinks were skipped
-/// (steady-state clean build).
+/// shows it without a toast. `count == 0` returns the [`clear_tick`] instead
+/// of the old `None` — a build that skipped zero symlinks still ran the
+/// check, so it still speaks for the "assets" task.
 pub fn make_symlink_skip_advisory(count: u32) -> Option<PipelineEvent> {
     if count == 0 {
-        return None;
+        return Some(clear_tick("assets"));
     }
     let key = if count == 1 {
         "symlinks_skipped_one"
@@ -1199,20 +1227,28 @@ pub fn make_symlink_skip_advisory(count: u32) -> Option<PipelineEvent> {
 /// re-derived every build (not deduped) so it clears the moment the config
 /// is fixed or moss is updated, same as every other advisory. `cfg: None`
 /// (a config that could not be read) is silently not this advisory's story
-/// to tell — something downstream already owns surfacing a real read error.
+/// to tell — something downstream already owns surfacing a real read error —
+/// and is NOT the same as "checked, schema not ahead": we don't know which,
+/// so this emits neither the advisory nor a [`clear_tick`] in that case.
 pub fn report_config_version_ahead(
     reporter: Option<&dyn super::ports::reporter::BuildReporter>,
     cfg: Option<&crate::config::ConfigFile>,
 ) {
-    let Some(found) = cfg.and_then(|c| c.schema_version_ahead()) else {
+    let Some(cfg) = cfg else {
         return;
     };
-    let Some(event) = make_config_version_ahead_advisory(found) else {
+    let event = match cfg.schema_version_ahead() {
+        Some(found) => make_config_version_ahead_advisory(found),
+        // The check ran (config was readable) and found nothing this build:
+        // an explicit clear, so the app's per-task sweep can retire a
+        // fixed-and-rebuilt advisory instead of waiting for the folder to
+        // reopen — silence is not evidence (moss-desktop's silent-clear gap).
+        None => Some(clear_tick("config")),
+    };
+    let (Some(event), Some(reporter)) = (event, reporter) else {
         return;
     };
-    if let Some(reporter) = reporter {
-        reporter.report(&event);
-    }
+    reporter.report(&event);
 }
 
 /// Build a `BackgroundProgress` advisory event for a config.toml a newer
@@ -1437,9 +1473,22 @@ mod route_tests {
     // =========================================================================
 
     #[test]
-    fn symlink_skip_advisory_zero_returns_none() {
-        // Zero skipped symlinks → no advisory (clean build, no hairline dot).
-        assert!(make_symlink_skip_advisory(0).is_none());
+    fn symlink_skip_advisory_zero_emits_an_explicit_clear() {
+        // Zero skipped symlinks → the check still ran, so it must say so: a
+        // completed:true tick with EMPTY advisories, not the old `None` a
+        // silent build used to leave behind. moss-desktop's per-task sweep
+        // only reconciles a task on that task's OWN completed tick — a task
+        // that never ticks is never reconciled, so a fixed-and-rebuilt
+        // symlink advisory sat stuck until the folder was reopened.
+        let event = make_symlink_skip_advisory(0).expect("the check ran; it must emit a clear");
+        match event {
+            PipelineEvent::BackgroundProgress { task, completed, advisories, .. } => {
+                assert_eq!(task, "assets");
+                assert!(completed, "a clear tick must be completed:true so the sweep fires");
+                assert!(advisories.is_empty(), "a clear tick carries no advisories");
+            }
+            other => panic!("expected BackgroundProgress, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1505,6 +1554,51 @@ mod route_tests {
             }
             other => panic!("expected BackgroundProgress, got {other:?}"),
         }
+    }
+
+    /// Records every event handed to it — for asserting `report_config_
+    /// version_ahead`'s side effect, since it takes a reporter and returns
+    /// nothing.
+    struct RecordingReporter(std::sync::Mutex<Vec<PipelineEvent>>);
+    impl crate::build::ports::reporter::BuildReporter for RecordingReporter {
+        fn report(&self, event: &PipelineEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+        fn is_terminal(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn report_config_version_ahead_emits_a_clear_when_the_config_is_readable_and_not_ahead() {
+        // The check ran (config parsed fine) and found the schema current —
+        // it must still speak for the "config" task, or a fixed-and-rebuilt
+        // config_schema_version_ahead advisory sits until the folder reopens.
+        let rec = RecordingReporter(std::sync::Mutex::new(Vec::new()));
+        let cfg = crate::config::ConfigFile::empty();
+        report_config_version_ahead(Some(&rec), Some(&cfg));
+        let events = rec.0.lock().unwrap();
+        assert_eq!(events.len(), 1, "a readable, not-ahead config must emit exactly one clear tick");
+        match &events[0] {
+            PipelineEvent::BackgroundProgress { task, completed, advisories, .. } => {
+                assert_eq!(task, "config");
+                assert!(*completed, "a clear tick must be completed:true so the sweep fires");
+                assert!(advisories.is_empty(), "a clear tick carries no advisories");
+            }
+            other => panic!("expected BackgroundProgress, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn report_config_version_ahead_emits_nothing_when_the_config_could_not_be_read() {
+        // `cfg: None` is an UNKNOWN, not a "checked, clean" — the check did
+        // not run, so it must not claim it did by emitting a clear.
+        let rec = RecordingReporter(std::sync::Mutex::new(Vec::new()));
+        report_config_version_ahead(Some(&rec), None);
+        assert!(
+            rec.0.lock().unwrap().is_empty(),
+            "an unreadable config is not evidence either way — neither the advisory nor a clear"
+        );
     }
 
     // I4 pluralization fix: "1 symlink(s)" → "1 symlink", "3 symlinks(s)" → "3 symlinks"
