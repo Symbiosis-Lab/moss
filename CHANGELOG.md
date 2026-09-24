@@ -32,6 +32,8 @@ All notable changes to moss will be documented here.
 - When a built-in term namespace (`author` or `tags`) moves into a declared kind, the old namespace root (`/authors/`, `/tags/`) now redirects to the new kind's root, alongside the per-name redirects it already emitted — unless a real page already lives at that address, in which case moss leaves it alone rather than burying it under a redirect; before, only the per-name URLs kept working and the root itself 404ed.
 - A hand-placed embed of a term page that has no real folder behind it — a place reached only through its generated listing, or an ancestor (a country, say) reached only through the gazetteer's roll-up — no longer renders as "Folder not found". Term membership, which the embed depends on to find its members, used to be derived after embeds were already resolved; it now runs first, so every declared kind's term page embeds as a listing of its members, ordered the same way its own generated page already was.
 - A place named through `location:` no longer trips the "declared … but never appears in a byline row" warning, and no longer becomes a byline auto-link candidate. A place gets its own automatic place line instead of a byline credit, so it was never meant to appear in a byline row in the first place.
+- A video that isn't 16:9 — square, portrait, or a landscape shape like 4:3 — now fills the column at its own shape instead of sitting pillarboxed inside a fixed 16:9 box with blank bars down the sides. The box now takes the video's real dimensions once the browser has read them; 16:9 is only the placeholder shown before that.
+- Video embeds no longer print an English "Download video" link below the player.
 
 ### Changed
 

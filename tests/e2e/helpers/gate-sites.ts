@@ -21,6 +21,7 @@ import {
   ScratchSiteSpec,
   findLinkHref,
   requireLinkHref,
+  syntheticTestClip,
 } from "./scratch-site";
 
 const CONFIG_TOML = `schema_version = 5
@@ -1595,3 +1596,37 @@ The first paragraph after the figure.
 `,
   },
 };
+
+// ── Bare inline video takes its own shape, not a forced 16:9 box ────────────
+// `clip.mp4` is 640x540 (DAR 32:27, not 16:9) — a landscape-but-not-widescreen
+// shape close to the 1280x1080 clip that motivated this gate, scaled down so
+// the fixture stays a few KB. Embedded as a bare `![[clip.mp4]]` wikilink on
+// its own line, which moss emits as a direct `<video>` child of `<article>`
+// (site.css's `article video` selector, not the `.video-figure` or `article
+// figure` paths, which already leave a video's natural size alone). Served
+// by playwright/video-embed-shape.config.ts.
+//
+// A function, not a plain `export const` like every other gate above: every
+// gate's config imports from this one module, so a top-level
+// `syntheticTestClip()` call here would shell out to ffmpeg — and require it
+// on PATH — just from importing gate-sites.ts, even for a config that has
+// nothing to do with video. Calling it only inside the one config that needs
+// it keeps that cost (and that prerequisite) scoped to this gate alone.
+export function videoEmbedShapeGate(): ScratchSiteSpec {
+  return {
+    name: "video-embed-shape-gate",
+    files: {
+      "clip.mp4": syntheticTestClip(640, 540),
+      "index.md": `---
+title: Video Embed Shape Gate
+uid: "vsh001a"
+---
+
+# Video Embed Shape Test
+
+![[clip.mp4]]
+`,
+      ".moss/config.toml": CONFIG_TOML,
+    },
+  };
+}

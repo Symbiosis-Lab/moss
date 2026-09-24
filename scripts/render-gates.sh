@@ -67,6 +67,7 @@ GATES_BUILD=(
   nav-island
   edge-clamp
   vertical-nav-chrome
+  video-embed-shape
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

@@ -88,8 +88,7 @@
 //!   `.m3u8` URL is only offered when its bytes exist.
 //!
 //! The progressive MP4 is always the last `<source>`, so a browser that
-//! understands neither HLS natively nor hls.js still plays the video. A plain
-//! download link follows the player for the case where it plays nothing at all.
+//! understands neither HLS natively nor hls.js still plays the video.
 
 use crate::asset_paths::{to_hls_master, to_mp4, to_thumb};
 use crate::asset_snapshot::AssetSnapshot;
@@ -111,12 +110,6 @@ pub const AMBIENT_PLAYBACK_ATTRS: &str = r#"muted loop playsinline preload="meta
 /// than the `application/x-mpegURL` seen in older examples: Safari accepts both
 /// and the former is the registered one.
 const HLS_MIME: &str = "application/vnd.apple.mpegurl";
-
-/// Shown beside a ladder-form player. The player can fail for reasons the page
-/// cannot detect — a codec the device lacks, a corporate proxy that strips
-/// streaming — and on the slow links this ladder exists for, a file the viewer
-/// can start and leave running beats one that will not start at all.
-const DOWNLOAD_LABEL: &str = "Download video";
 
 /// Synthesize video embed HTML for `Tag::Link` with `moss:kind=video` title.
 ///
@@ -191,7 +184,7 @@ pub fn synthesize_video_html(
         // ignores its <source> children — and the progressive MP4 is last so a
         // browser with neither native HLS nor hls.js still plays something.
         return format!(
-            r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop} data-placeholder-src="{orig}" poster="{thumb}" data-thumb-src="{thumb}" {playback}{w}{h}{size}><source src="{hls}" type="{HLS_MIME}"><source src="{src}" type="video/mp4"></video><p class="moss-embed-video-download"><a href="{src}" download>{download}</a></p>"#,
+            r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop} data-placeholder-src="{orig}" poster="{thumb}" data-thumb-src="{thumb}" {playback}{w}{h}{size}><source src="{hls}" type="{HLS_MIME}"><source src="{src}" type="video/mp4"></video>"#,
             align = align,
             dw = place.data_width_attr,
             size = place.size_style_attr,
@@ -203,7 +196,6 @@ pub fn synthesize_video_html(
             playback = playback,
             w = width_attr,
             h = height_attr,
-            download = DOWNLOAD_LABEL,
         );
     }
 
@@ -350,17 +342,29 @@ mod tests {
     }
 
     #[test]
-    fn the_ladder_form_keeps_the_poster_and_offers_a_download() {
-        // The poster is what a viewer on the link this exists for sees during
-        // the seconds before the first segment lands; losing it would make the
-        // slow case look broken rather than slow.
+    fn the_ladder_form_keeps_the_poster() {
+        // The poster is what a viewer sees during the seconds before the
+        // first segment lands; losing it would make the slow case look
+        // broken rather than slow.
         let p = params_with(&[("kind", "video")]);
         let out = synthesize_video_html(&p, &Placement::default(), "clip.mov", &hls_snapshot("clip"));
         assert!(out.contains(r#"poster="clip.thumb.jpg""#), "got: {out}");
+    }
+
+    #[test]
+    fn the_ladder_form_emits_no_download_link() {
+        // The ladder form used to append a `<p class="moss-embed-video-download">`
+        // link after the player. It was never part of the design — only the
+        // progressive MP4 as the last <source> was — and it printed a
+        // hard-coded English label regardless of the site's language.
+        let p = params_with(&[("kind", "video")]);
+        let out = synthesize_video_html(&p, &Placement::default(), "clip.mov", &hls_snapshot("clip"));
         assert!(
-            out.contains(r#"<a href="clip.mp4" download>"#),
-            "a player that fails entirely still leaves a way to watch: {out}"
+            !out.contains("moss-embed-video-download"),
+            "ladder form must not emit a download link: {out}"
         );
+        assert!(!out.contains("download>"), "ladder form must not emit a download link: {out}");
+        assert!(out.ends_with("</video>"), "got: {out}");
     }
 
     #[test]

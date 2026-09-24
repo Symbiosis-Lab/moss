@@ -5331,14 +5331,6 @@ article a:where(:not(.moss-btn)):focus {
   margin-block-start: var(--moss-space-xl);
 }
 
-/* Sits directly under a video that ships an adaptive ladder. Quiet and tight
- * to the player: it is the fallback for a viewer whose browser plays nothing,
- * not a call to action competing with the video itself. */
-.moss-embed-video-download {
-  margin-top: var(--moss-space-xs);
-  font-size: var(--moss-size-sm);
-}
-
 /* Body and cover start together: the first line of the body (date, kicker
    or title) and the cover share the row's block-start edge; `stretch` keeps
    that shared start edge (same as flex-start would) and additionally sizes
@@ -7254,24 +7246,20 @@ article p:has(> video:only-child) {
   margin: var(--moss-space-lg) 0;
 }
 
-/* Video element styling */
+/* Video element styling. `auto 16 / 9`: once the browser knows the video's
+   real dimensions (poster or metadata), the box takes its natural ratio —
+   the 16/9 half is only the pre-metadata placeholder, so a portrait or
+   square clip doesn't sit pillarboxed in a landscape box forever, and layout
+   still doesn't jump from a 300x150 default before metadata arrives. */
 article p > video,
 article video {
   max-width: 100%;
   width: 100%;
   height: auto;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: auto 16 / 9;
   border-radius: 6px;
   background: var(--moss-color-surface);
   object-fit: contain;
-}
-
-/* Override inline height attribute for percentage-width videos.
-   !important: beats the HTML `height` attribute which becomes inline style specificity. */
-article p > video[height],
-article video[height] {
-  height: auto !important;
-  aspect-ratio: 16 / 9;
 }
 
 /* ==========================================================================

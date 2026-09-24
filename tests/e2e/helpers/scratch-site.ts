@@ -65,8 +65,11 @@ export interface ScratchSiteSpec {
   /**
    * Site-relative path → contents. `null` deletes the file, which is how a
    * gate opts OUT of a `.moss/theme/style.css` a previous run left behind.
+   * A `Buffer` writes raw bytes (e.g. a generated video fixture) — every
+   * other gate's fixtures are text, so `writeOrRemove` only reaches for the
+   * binary path when a spec actually hands it one.
    */
-  files: Record<string, string | null>;
+  files: Record<string, string | Buffer | null>;
   /**
    * Optional extra page written into the built output — used by gates whose
    * assertion needs markup moss would never emit (a `.moss-grid` in an article
@@ -235,9 +238,59 @@ export function findLinkHref(html: string, pattern: RegExp): string | null {
   return html.match(pattern)?.[0] ?? null;
 }
 
-function writeOrRemove(filePath: string, content: string | null): void {
+/**
+ * A tiny synthetic MP4 at an arbitrary `width`x`height`, for gates whose
+ * subject only a real decoded video (not a text fixture like the SVGs in
+ * `gate-sites.ts`) can exercise. Shells out to `ffmpeg`'s `testsrc` filter —
+ * present by default on both GitHub-hosted runner images (`ubuntu-latest`,
+ * `macos-latest`), so this needs no extra CI setup, and on a dev machine that
+ * already needs it to run moss's own video pipeline.
+ *
+ * At least 2 seconds long: `FFmpegManager::generate_thumbnail` seeks to a
+ * fixed `-ss 00:00:01` to grab the poster frame. A 1-second clip lands that
+ * seek at-or-past EOF, so the poster comes out 0 bytes and the built page
+ * serves `poster="…thumb.jpg"` as a 404. That silent failure doesn't just
+ * cost a poster: WebKit ignores it, but Chromium resolves a `<video>`'s
+ * `aspect-ratio: auto` from the poster image's own natural size, not the
+ * decoded video frame, whenever a `poster` attribute is present — so a
+ * broken poster made Chromium fall back to the CSS's placeholder 16:9 ratio
+ * even after the video itself had fully decoded (`readyState` 4,
+ * `videoWidth`/`videoHeight` correct). Confirmed by comparing a 1-second and
+ * a 2-second clip through a real `moss-cli build`, isolated Playwright
+ * launches, both engines: only the 1-second clip's build leaves a dead
+ * `clip.thumb.jpg` link and only its Chromium run reports the wrong ratio.
+ *
+ * Cached under `target/test-tmp/fixtures/` keyed by dimensions, on the same
+ * reasoning as `buildScratchSite`'s build-stamp cache: Playwright parses each
+ * config once per worker process, and re-encoding on every parse would pay
+ * the ffmpeg cost that many times over for bytes that never change.
+ */
+export function syntheticTestClip(width: number, height: number): Buffer {
+  const cachePath = path.join(WORKTREE, `target/test-tmp/fixtures/clip-${width}x${height}.mp4`);
+  if (fs.existsSync(cachePath)) return fs.readFileSync(cachePath);
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  try {
+    execSync(
+      `ffmpeg -y -f lavfi -i "testsrc=size=${width}x${height}:rate=15" -t 2 -pix_fmt yuv420p "${cachePath}"`,
+      { stdio: "pipe" },
+    );
+  } catch (e) {
+    throw new Error(
+      `could not generate the ${width}x${height} test clip — is ffmpeg on PATH? (${(e as Error).message})`,
+    );
+  }
+  return fs.readFileSync(cachePath);
+}
+
+function writeOrRemove(filePath: string, content: string | Buffer | null): void {
   if (content === null) {
     fs.rmSync(filePath, { force: true });
+    return;
+  }
+  if (Buffer.isBuffer(content)) {
+    if (fs.existsSync(filePath) && fs.readFileSync(filePath).equals(content)) return;
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content);
     return;
   }
   if (fs.existsSync(filePath) && fs.readFileSync(filePath, "utf8") === content) return;

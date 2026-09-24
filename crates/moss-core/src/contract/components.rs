@@ -1051,17 +1051,6 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "Co-class alongside `.moss-embed` on every video element — not collapsed away by Phase 1c the way the other kind co-classes were. The default CSS keys off `[data-type=video]` rather than this class, so it is a hook for themes, not a style dependency.",
     },
     ComponentEntry {
-        class: "moss-embed-video-download",
-        kind: "instance",
-        parent: "moss-embed",
-        data_attrs: &[],
-        example_html: r#"<p class="moss-embed-video-download"><a href="clip.mp4" download>Download video</a></p>"#,
-        example_markdown: "![[clip.mp4]]",
-        status: Status::Confirmed,
-        since: "0.11",
-        description: "Follows a video that ships an adaptive ladder. A player can fail for reasons the page cannot detect — a missing codec, a proxy that strips streaming — and on a slow link a file the viewer can start and leave running beats one that will not start. Absent when no ladder was built.",
-    },
-    ComponentEntry {
         class: "moss-embed-pdf",
         kind: "instance",
         parent: "moss-embed",
