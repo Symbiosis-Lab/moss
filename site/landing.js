@@ -734,7 +734,7 @@ void main(){
 // Lambert), so a wash that holds a print's pigment shows that print's amount
 // and colour ratio, and mixing two frames mixes the pigment, not the pixels.
 const SHOWK = HEAD + `
-uniform sampler2D uS0, uD0, uS1, uD1; uniform float uW1; uniform vec3 uK0, uK1;
+uniform sampler2D uS0, uD0, uS1, uD1; uniform float uW1, uWetGainMax; uniform vec3 uK0, uK1;
 out vec4 o;
 float depth(vec2 uv){ return mix(texture(uS0, uv).a, texture(uS1, uv).a, uW1); }
 void main(){
@@ -747,7 +747,20 @@ void main(){
   vec4 d0 = texture(uD0, uv), d1 = texture(uD1, uv);
   vec3 A0 = absorb(texture(uSrc, at)) * (1.0 - d0.a) + (d0.rgb + texture(uS0, uv).rgb) * g * uK0;
   vec3 A1 = absorb(texture(uTgt, at)) * (1.0 - d1.a) + (d1.rgb + texture(uS1, uv).rgb) * g * uK1;
-  vec3 T = clamp(exp(-min(mix(A0, A1, uW1), vec3(4.0))), 0.0, 1.0); float a = 1.0 - min(T.r, min(T.g, T.b));
+  vec3 Am = mix(A0, A1, uW1);
+  // Owner (item C): a colourful wet-on-wet bleed is the most stunning part
+  // of a dissolve, and it is exactly what a well-mixed wash's own flat mean
+  // has none of left. Stretched about the mean the same way SHOW already
+  // stretches its own suspended-pigment layer (uWetGainMax is the caller's
+  // own cap, kept under that shader's 2.2 -- MOBILE_WET_GAIN_MAX's own
+  // comment has the measured value and why it moved past the owner's "up
+  // to 1.4" example), scaled by wet itself so a dry pixel (wet=0, s=0 at
+  // each dissolve's own step 0) is untouched -- p=0 and p=1 of a leg are
+  // always dry, so this never moves either scene's own arrival or rest frame.
+  float sat = 1.0 + uWetGainMax * wet;
+  float mean = dot(Am, vec3(1.0 / 3.0));
+  Am = max(mean + (Am - mean) * sat, 0.0);
+  vec3 T = clamp(exp(-min(Am, vec3(4.0))), 0.0, 1.0); float a = 1.0 - min(T.r, min(T.g, T.b));
   o = vec4(uTint * (T - (1.0 - a)), a);
 }`;
 
@@ -1192,7 +1205,10 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
     // the print held in that slot (setPrints) at step s of its dissolve, s = 0
     // being the print at rest; a step between checkpoints must be the one the
     // film was last seeked to.
-    present(f0, f1, w) {
+    // wetGainMax: the SHOW shader's own colour-in-the-bleed gain, 0 for the
+    // desktop shape (identical to before this uniform existed) and set by
+    // watercolor-morph.js's own per-layout bounds for mobile.
+    present(f0, f1, w, wetGainMax = 0) {
       if (!showk) showk = prog(SHOWK);
       const [s0, d0, k0] = frameTextures(f0), [s1, d1, k1] = frameTextures(f1);
       fitCanvas();
@@ -1200,6 +1216,7 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       bind(8, paper); bind(9, prints[f0.slot].full); bind(10, prints[f1.slot].full);
       bind(0, s0); bind(1, d0); bind(2, s1); bind(3, d1);
       gl.uniform1f(showk.u.uW1, w);
+      gl.uniform1f(showk.u.uWetGainMax, wetGainMax);
       gl.uniform3f(showk.u.uK0, k0[0], k0[1], k0[2]); gl.uniform3f(showk.u.uK1, k1[0], k1[1], k1[2]);
       draw();
     },
@@ -1288,7 +1305,34 @@ const sim = makeSim({ canvas, texW: Math.round(BASE_TEX_W / (mobileLayout() ? 4 
 // for three.
 // DISSOLVE_STEPS is a dissolve's length, 1.5 sim-seconds at DT.
 const DISSOLVE_STEPS = 180, CHECKPOINT_EVERY = 18;
-const morph = sim && WatercolorMorph.create(sim, { steps: DISSOLVE_STEPS, every: CHECKPOINT_EVERY });
+// Owner (item C): "can the morph stay longer in the state of not-yet-well-
+// mixed wash... a colourful wet-on-wet wash that is bleeding is the most
+// stunning, and we want to keep that." Mobile-only bounds (desktop keeps
+// watercolor-morph.js's own DEFAULT_BOUNDS): the middle phase shortened
+// (0.45-0.55 vs 0.35-0.65) so more of p falls in the outer, still-
+// structured phases, and MOBILE_STEP_EASE curves step-vs-p inside those
+// phases so p lingers on the low, still-bleeding steps and only reaches the
+// well-mixed top step in the phase's own last stretch. MOBILE_WET_GAIN_MAX
+// is the SHOW shader's own saturation gain cap at full wetness (present()
+// in makeSim, SHOWK) for the same reason: colour where the bleed is still
+// wet, never on a dry pixel (p=0/1 of a leg are always dry, so the live
+// scenes' own arrival and rest colours are untouched).
+//
+// Measured (legs 0->1, 1->2; scratchpad/mobile-round measure-itemC.mjs):
+// structured share (fraction of sampled p with luminance std >= 12 over a
+// 48x36 downsample of #gl, alpha-weighted) 0.29 -> 0.73 to 0.78 and 0.22 ->
+// 0.68 to 0.71 across repeated runs; chroma at p=0.25 relative to each
+// leg's own settled start 48-62 -> 68-108 and 62-75 -> 105-115. ease=4 (a
+// quarter-power ratio, not the owner's cubic example) and wetGainMax=0.9
+// (gain up to 1.9, short of SHOW's own 2.2) are both past the brief's own
+// "for example" numbers: a smaller gain (tried at 0.4, 0.55, 0.7) left leg
+// 0->1's chroma under its own start's on some runs, on a machine measured
+// at 100+ concurrent chromium processes from other agents during this
+// session, which the repeated-run spread above is itself evidence of --
+// 0.9 was the value that held a positive margin across every repeat tried.
+const MOBILE_STEP_EASE = 4, MOBILE_WET_GAIN_MAX = 0.9;
+const MOBILE_MORPH_BOUNDS = { A_END: 0.45, B_START: 0.55, ease: MOBILE_STEP_EASE, wetGainMax: MOBILE_WET_GAIN_MAX };
+const morph = sim && WatercolorMorph.create(sim, { steps: DISSOLVE_STEPS, every: CHECKPOINT_EVERY, mobile: MOBILE_MORPH_BOUNDS });
 // Wherever the cursor is, a scroll gesture moves the page and nothing else. The
 // editor and the preview are live documents with their own scroll containers,
 // so each frame has its own scrolling switched off and the browser chains the
@@ -2560,7 +2604,10 @@ function renderMorphAt(progress) {
     return;
   }
   if (p !== mob.p || !mob.settled) {
-    const r = mob.leg.render(p, STEPS_PER_FRAME);
+    // renderMorphAt is mobile's own presenter (called only from
+    // watchScrollNative's mobile branch), so this render is always mobile's
+    // own shape -- MOBILE_MORPH_BOUNDS above, not desktop's default.
+    const r = mob.leg.render(p, STEPS_PER_FRAME, true);
     steps += r.spent; mob.settled = r.exact; mob.p = p;
   }
   // True only while a dissolve this leg needs is still being recorded -- the

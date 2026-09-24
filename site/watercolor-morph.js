@@ -49,23 +49,40 @@
   const A_END = 0.35, B_START = 0.65;
   const smoothstep = (x) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
   const MEMBER = 'wash-member';
+  // The desktop shape, unchanged: linear step mapping (ease 1), no wet-chroma
+  // gain. A leg's own `bounds` is always one of these two objects (never
+  // built ad hoc), so `===DEFAULT_BOUNDS` is a cheap "is this leg on the
+  // desktop shape" test anywhere one is wanted.
+  const DEFAULT_BOUNDS = { A_END, B_START, ease: 1, wetGainMax: 0 };
 
   // Where p falls: which step of which dissolve to show, or in the middle
   // which two washes to mix and by how much. A dissolve is N steps from the
   // print at rest (0) to its well-mixed wash (N). Pure, so a check can hold
-  // the page to it.
-  function frameAt(p, N) {
-    if (p <= A_END) { const s = Math.round(N * Math.max(0, p) / A_END); return { f0: ['a', s], f1: ['a', s], w: 0 }; }
-    if (p < B_START) return { f0: ['a', N], f1: ['b', N], w: smoothstep((p - A_END) / (B_START - A_END)) };
-    const s = Math.round(N * Math.max(0, 1 - p) / (1 - B_START));
+  // the page to it. `bounds.ease` reshapes step-vs-p inside phases 1 and 3
+  // only (the middle stays smoothstep's symmetric mix, unrelated to either
+  // phase's own dissolve): ease=1 is a straight ratio (N*x); ease>1 spends
+  // more of p on the low steps -- still-structured, not yet well-mixed --
+  // and only reaches the top steps in the last part of the phase (owner,
+  // item C: "linger in the bleeding part... reach the fully mixed end only
+  // in the last part of phase 1", symmetrically in phase 3).
+  function frameAt(p, N, bounds = DEFAULT_BOUNDS) {
+    const { A_END: aEnd, B_START: bStart, ease } = bounds;
+    const stepRatio = (x) => { x = Math.min(1, Math.max(0, x)); return ease === 1 ? x : Math.pow(x, ease); };
+    if (p <= aEnd) { const s = Math.round(N * stepRatio(p / aEnd)); return { f0: ['a', s], f1: ['a', s], w: 0 }; }
+    if (p < bStart) return { f0: ['a', N], f1: ['b', N], w: smoothstep((p - aEnd) / (bStart - aEnd)) };
+    const s = Math.round(N * stepRatio((1 - p) / (1 - bStart)));
     return { f0: ['b', s], f1: ['b', s], w: 0 };
   }
 
   // engine: the makeSim instance. steps: a dissolve's length in sim steps.
   // every: the checkpoint spacing, which bounds the replay one frame costs.
   // keep: how many prints' records stay on the GPU at once (a leg needs two;
-  // a third lets the next one in either direction be warm).
-  function create(engine, { steps, every, keep = 3 }) {
+  // a third lets the next one in either direction be warm). `mobile`: a
+  // bounds object (A_END, B_START, ease, wetGainMax) used in place of the
+  // desktop shape whenever a caller's render() marks its own frame mobile
+  // (owner, item C: shorten the middle and enhance the bleeding phases, on
+  // mobile only for now -- desktop keeps DEFAULT_BOUNDS regardless).
+  function create(engine, { steps, every, keep = 3, mobile: mobileBounds = null }) {
     const records = new Map();   // print (a canvas) -> record, oldest first
     const recordFor = (print) => {
       let rec = records.get(print);
@@ -89,6 +106,10 @@
     };
     // Called with every frame presented: members hide while the canvas shows
     // the leg between its ends, and only once it has shown it for a frame.
+    // Reads the fade against leg.bounds (its own last render's shape), not
+    // the module default -- a member fading on the desktop 0.35/0.65 split
+    // while the wash itself dissolves through mobile's narrower one would
+    // fade out of step with what the canvas is actually showing.
     const showMembers = (leg, p) => {
       if (!(p > 0 && p < 1)) { release(); return; }
       if (!leg.hidden && !leg.hiding) leg.hiding = requestAnimationFrame(() => {
@@ -96,7 +117,8 @@
         for (const m of leg.members) if (m.captured) m.el.classList.add(MEMBER);
         leg.hidden = true;
       });
-      for (const m of leg.members) if (!m.captured) m.el.style.opacity = String(m.side === 'a' ? 1 - smoothstep(p / A_END) : smoothstep((p - B_START) / (1 - B_START)));
+      const { A_END: aEnd, B_START: bStart } = leg.bounds;
+      for (const m of leg.members) if (!m.captured) m.el.style.opacity = String(m.side === 'a' ? 1 - smoothstep(p / aEnd) : smoothstep((p - bStart) / (1 - bStart)));
     };
     return {
       steps, every, A_END, B_START,
@@ -137,20 +159,25 @@
         release();
         current = null;
         const ra = recordFor(a), rb = recordFor(b);
-        const leg = current = { a, b, ra, rb, tag, carry, p: -1, exact: true, members, hidden: false, hiding: 0 };
+        const leg = current = { a, b, ra, rb, tag, carry, p: -1, exact: true, members, hidden: false, hiding: 0, bounds: DEFAULT_BOUNDS };
         return {
           // Presents p, spending at most `budget` steps recording a dissolve
           // this leg still lacks (a's first: it is the one shown first), plus
           // the replay to p's own step. Returns the steps spent and whether
           // the frame shown is exactly p's -- false only while a record is
           // still being made, which asks the caller to render again next frame.
-          render(p, budget) {
+          // `mobile`: this frame's own layout, read fresh every call rather
+          // than fixed at mount -- a leg mounted once and rendered across a
+          // resize (rare, but no render call assumes otherwise) always shows
+          // the shape its actual current layout asks for.
+          render(p, budget, mobile = false) {
+            const bounds = leg.bounds = mobile && mobileBounds ? mobileBounds : DEFAULT_BOUNDS;
             // Another caller (the warmer's cover, the closing wash) may have
             // put its own prints in the display slots since the last frame.
             if (!engine.holds(a, b)) engine.setPrints(a, b);
             let spent = 0;
             for (const rec of [ra, rb]) if (spent < budget) spent += engine.advanceRecord(rec, budget - spent);
-            const at = frameAt(p, steps);
+            const at = frameAt(p, steps, bounds);
             const rec = { a: ra, b: rb };
             // A step not yet recorded shows the furthest a has reached: the
             // same dissolve for a's own, and a's side of the middle for b's.
@@ -162,7 +189,7 @@
             // a single step; the middle, two finished washes), so one seek does,
             // and a step on a checkpoint is shown from the checkpoint itself.
             if (f0[1] % every) spent += engine.seek(rec[f0[0]], f0[1]);
-            engine.present(frame(f0), frame(f1), exact ? at.w : 0);
+            engine.present(frame(f0), frame(f1), exact ? at.w : 0, bounds.wetGainMax);
             leg.p = p; leg.exact = exact;
             showMembers(leg, p);
             return { spent, exact };
@@ -174,7 +201,7 @@
       end() { release(); current = null; },
       // For the harness: the leg on screen, the p it last presented, whether
       // that frame was exactly p's, its prints, tag and carry flag.
-      current: () => current && { p: current.p, exact: current.exact, a: current.a, b: current.b, tag: current.tag, carry: current.carry },
+      current: () => current && { p: current.p, exact: current.exact, a: current.a, b: current.b, tag: current.tag, carry: current.carry, bounds: current.bounds },
     };
   }
 
