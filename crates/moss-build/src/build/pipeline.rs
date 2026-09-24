@@ -1351,6 +1351,23 @@ fn build_inner(
     // Passed to generate_blocking_content so Pattern A emits register via ctx.emit.
     // After the call, pending holds the accumulated site_hashes + blocking_keys;
     let mut pending = PendingManifest::new(previous_hashes.clone());
+    // `.moss/places.toml`: same reasoning as `.moss/config.toml`'s
+    // registration inside `generate_blocking_content` — read fresh (a
+    // second, cheap read; `load_gazetteer` above already parsed it but kept
+    // no raw bytes to hash) and registered here, the earliest point
+    // `pending` exists, rather than inside `generate_blocking_content` where
+    // the file has no other reader. A read error that is not "genuinely
+    // absent" degrades the same way `load_gazetteer` itself does above:
+    // skip, keep building. See `manifest::is_reload_tracked_source_key`.
+    let places_toml_path = paths.places();
+    match crate::build::site_config::read_managed_toml(&places_toml_path) {
+        Ok(Some(content)) => pending.register_page_source_hash(
+            crate::build::manifest::PLACES_TOML_SOURCE_KEY.to_string(),
+            crate::build::render::blocking::source_metadata(&places_toml_path, content.as_bytes()),
+        ),
+        Ok(None) => {}
+        Err(e) => log::warn!("[modified_paths] places.toml unreadable, not tracked this build: {e}"),
+    }
     // `documents` is the parsed page slice (production type `ParsedDocument`,
     // not yet the typed-AST `moss_core::ast::Document`). An earlier change
     // threads it back to `build.rs` so native slot generation can read typed

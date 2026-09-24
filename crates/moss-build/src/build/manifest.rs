@@ -213,6 +213,63 @@ pub struct PendingManifest {
     ship_sources: HashMap<String, ShipSource>,
 }
 
+/// Is this `SiteHashes.sources` key in the page half?
+///
+/// The page half is NOT `source_to_output`'s key set — a slot-only source is a
+/// page source with no output. The extension is the property that does
+/// separate the halves: the deferred asset walk that owns the other half never
+/// inserts markdown.
+pub(crate) fn is_page_source_key(src: &str) -> bool {
+    src.rsplit_once('.')
+        .is_some_and(|(_, ext)| crate::build::incremental_gates::is_markdown_extension(ext))
+}
+
+// The vault-config/theme sources read synchronously alongside pages —
+// `.moss/theme/style.css` and `.moss/theme/script.js` in
+// `render::blocking::generate_blocking_content`, `.moss/config.toml` and
+// `.moss/places.toml` in `build_inner` (`pipeline.rs`) — never through the
+// deferred asset walk (`media/pipeline.rs`).
+//
+// This is a CHECKED SUBSET of `scan::classify::MOSS_INTERNAL_ALLOWLIST`, not
+// a derived copy of it and not a second independent list: every key below
+// must name a path the allowlist also admits into the editor's `.moss/` view
+// (`synchronous_config_source_keys_are_covered_by_the_moss_internal_allowlist`,
+// manifest_tests.rs, fails if the two drift), but the allowlist cannot be
+// used directly as this list. Its `.moss/theme` entry is a *directory* —
+// admitting every path under it would also admit theme fonts and textures,
+// which the deferred asset walk hashes, not this synchronous read; the
+// per-key extension check `is_page_source_key` already exists for pages
+// precisely because a directory-shaped membership test cannot tell
+// "read now" from "read later" on its own. Each key here also needs its own
+// `register_page_source_hash` call — the list is inert without one.
+pub(crate) const CONFIG_TOML_SOURCE_KEY: &str = ".moss/config.toml";
+pub(crate) const PLACES_TOML_SOURCE_KEY: &str = ".moss/places.toml";
+pub(crate) const USER_CSS_SOURCE_KEY: &str = ".moss/theme/style.css";
+pub(crate) const USER_JS_SOURCE_KEY: &str = ".moss/theme/script.js";
+
+/// [`CONFIG_TOML_SOURCE_KEY`], [`PLACES_TOML_SOURCE_KEY`],
+/// [`USER_CSS_SOURCE_KEY`] and [`USER_JS_SOURCE_KEY`] together, for
+/// [`is_reload_tracked_source_key`].
+pub(crate) const SYNCHRONOUS_CONFIG_SOURCE_KEYS: &[&str] = &[
+    CONFIG_TOML_SOURCE_KEY,
+    PLACES_TOML_SOURCE_KEY,
+    USER_CSS_SOURCE_KEY,
+    USER_JS_SOURCE_KEY,
+];
+
+/// Is this `SiteHashes.sources` key one `compute_source_change_set`'s
+/// modified-diff may trust?
+///
+/// A markdown page, or one of [`SYNCHRONOUS_CONFIG_SOURCE_KEYS`] — the two
+/// populations `register_page_source_hash` writes synchronously, before the
+/// deferred asset walk runs, which is what makes the diff race-free. Every
+/// other `sources` entry (images, and any other css/toml/yaml/json the
+/// generic passthrough walk happens to hash) is written by that walk, whose
+/// timing `is_page_source_key`'s doc comment already explains is unsafe here.
+pub(crate) fn is_reload_tracked_source_key(src: &str) -> bool {
+    is_page_source_key(src) || SYNCHRONOUS_CONFIG_SOURCE_KEYS.contains(&src)
+}
+
 impl PendingManifest {
     /// Create a new pending manifest seeded with the previous build's hashes.
     ///
@@ -248,18 +305,10 @@ impl PendingManifest {
             .map(|d| d.as_secs());
         let carried_source_to_output = std::mem::take(&mut inner.source_to_output);
         let carried_page_meta = std::mem::take(&mut inner.page_meta);
-        // The page half of `sources` is NOT `source_to_output`'s key set — a
-        // slot-only source is a page source with no output. Select on the
-        // extension, the property that does separate the halves: the deferred
-        // asset walk that owns the other half never inserts markdown.
         let carried_page_sources: HashMap<String, crate::build::types::SourceMetadata> = inner
             .sources
             .iter()
-            .filter(|(src, _)| {
-                src.rsplit_once('.').is_some_and(|(_, ext)| {
-                    crate::build::incremental_gates::is_markdown_extension(ext)
-                })
-            })
+            .filter(|(src, _)| is_page_source_key(src))
             .map(|(src, meta)| (src.clone(), meta.clone()))
             .collect();
         Self {

@@ -63,7 +63,9 @@ pub struct SystemInfo {
 /// - `source_deletes`: source files removed this rebuild
 /// - `source_renames`: `(old_source_path, new_source_path)` pairs for the
 ///   same file moving to a new path (inode-paired by the watcher)
-/// - `modified_paths`: source files modified in place (logging only)
+/// - `modified_paths`: page sources, plus `.moss/config.toml`,
+///   `.moss/places.toml` and the theme's style.css/script.js, whose bytes
+///   changed in place — what the editor reloads an open file from
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct FileChangeEvent {
     /// Output files whose content hash changed (relative to the staging dir).
@@ -102,7 +104,17 @@ pub struct FileChangeEvent {
     /// rename event populates both fields (the registry consumes source
     /// pairs; the preview consumes the resolved output pairs).
     pub source_renames: Option<Vec<(String, String)>>,
-    /// Files that were modified (source paths) - for logging only, not used for refresh
+    /// **Source-domain.** Page sources (markdown, slot files included), plus
+    /// `.moss/config.toml`, `.moss/places.toml` and the theme's
+    /// `style.css`/`script.js` — the only other vault sources read
+    /// synchronously enough for this diff to be race-free (see
+    /// `manifest::is_reload_tracked_source_key`) — whose bytes
+    /// changed in place this rebuild: another app's edit, or moss's own save.
+    /// Deduped against `source_creates` and `source_renames`. The editor
+    /// reloads the file it has open from this (deferred while it holds unsaved
+    /// edits); the preview ignores it — `changed_output_files` is the refresh
+    /// signal. Populated by `build_rebuild_event_with_renames` in `watch.rs`,
+    /// which emits it even when no output changed.
     pub modified_paths: Option<Vec<String>>,
 }
 

@@ -2492,7 +2492,7 @@ fn compute_source_change_set_finds_creates_excluding_rename_targets() {
 
     let pairs = [("renamed-from.md".to_string(), "renamed-to.md".to_string())];
 
-    let (creates, deletes) = compute_source_change_set(&new, &prev, &pairs);
+    let SourceChanges { creates, deletes, .. } = compute_source_change_set(&new, &prev, &pairs);
 
     assert_eq!(
         creates,
@@ -2520,7 +2520,7 @@ fn compute_source_change_set_finds_deletes_excluding_rename_sources() {
 
     let pairs = [("renamed-from.md".to_string(), "renamed-to.md".to_string())];
 
-    let (creates, deletes) = compute_source_change_set(&new, &prev, &pairs);
+    let SourceChanges { creates, deletes, .. } = compute_source_change_set(&new, &prev, &pairs);
 
     assert!(creates.is_empty(), "no creates in this fixture");
     assert_eq!(
@@ -2548,7 +2548,7 @@ fn compute_source_change_set_dedupes_rename_pair_from_both_sides() {
 
     let pairs = [("renamed-from.md".to_string(), "renamed-to.md".to_string())];
 
-    let (creates, deletes) = compute_source_change_set(&new, &prev, &pairs);
+    let SourceChanges { creates, deletes, .. } = compute_source_change_set(&new, &prev, &pairs);
 
     assert_eq!(creates, vec!["also-new.md".to_string()]);
     assert_eq!(deletes, vec!["also-gone.md".to_string()]);
@@ -2566,7 +2566,7 @@ fn compute_source_change_set_returns_empty_for_no_changes() {
     new.source_to_output
         .insert("only-file.md".into(), "only-file/index.html".into());
 
-    let (creates, deletes) = compute_source_change_set(&new, &prev, &[]);
+    let SourceChanges { creates, deletes, .. } = compute_source_change_set(&new, &prev, &[]);
 
     assert!(creates.is_empty());
     assert!(deletes.is_empty());
@@ -3035,6 +3035,342 @@ fn build_rebuild_event_leaves_source_domain_fields_none_when_unchanged() {
     assert!(event.source_creates.is_none(), "no creates");
     assert!(event.source_deletes.is_none(), "no deletes");
     assert!(event.source_renames.is_none(), "no renames");
+}
+
+fn page_hash(hash: &str) -> SourceMetadata {
+    SourceMetadata { hash: hash.into(), ..Default::default() }
+}
+
+/// `modified_paths` names the page sources whose bytes moved — a slot file
+/// (`footer.md`, a page source with no output of its own) included — and the
+/// event emits for them even when no output changed: an edit that renders
+/// identically (a blank line added in another app) leaves the preview nothing
+/// to refresh, but the editor holding that file still has to reload it, or
+/// its next autosave writes the old text back.
+///
+/// An asset is not named. This snapshot's asset hashes are refreshed by the
+/// background asset walk after it is taken, so an asset edit would surface a
+/// rebuild late — a claim about the wrong build.
+#[test]
+fn modified_paths_names_edited_page_sources_even_when_no_output_changed() {
+    let mut prev = SiteHashes::new();
+    prev.insert("post/index.html".into(), "100644:same-output".into());
+    prev.source_to_output.insert("post.md".into(), "post/index.html".into());
+    prev.sources.insert("post.md".into(), page_hash("v1"));
+    prev.sources.insert("footer.md".into(), page_hash("f1"));
+    prev.sources.insert("untouched.md".into(), page_hash("u"));
+    prev.sources.insert("photo.jpg".into(), page_hash("p1"));
+
+    let mut new = prev.clone();
+    new.sources.insert("post.md".into(), page_hash("v2"));
+    new.sources.insert("footer.md".into(), page_hash("f2"));
+    new.sources.insert("photo.jpg".into(), page_hash("p2"));
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &[])
+        .expect("an edited source must emit even with no output change");
+    assert_eq!(
+        event.modified_paths,
+        Some(vec!["footer.md".to_string(), "post.md".to_string()]),
+    );
+    assert!(event.changed_output_files.is_none(), "the output really was identical");
+}
+
+/// The closed set of vault-config/theme keys — `.moss/config.toml`,
+/// `.moss/places.toml`, `.moss/theme/style.css` — rides the same
+/// modified-diff a page does, because all three are registered synchronously
+/// (`manifest::is_reload_tracked_source_key`). An ordinary passthrough
+/// asset elsewhere in the vault with the same `.css` extension is NOT
+/// included: it is hashed by the deferred asset walk, not synchronously, so
+/// admitting it here would be the exact staleness `is_page_source_key`'s
+/// doc comment warns about for images.
+#[test]
+fn modified_paths_names_an_edited_config_toml_places_toml_and_theme_css() {
+    use crate::build::manifest::{CONFIG_TOML_SOURCE_KEY, PLACES_TOML_SOURCE_KEY, USER_CSS_SOURCE_KEY};
+
+    let mut prev = SiteHashes::new();
+    prev.sources.insert("post.md".into(), page_hash("v1"));
+    prev.sources.insert(CONFIG_TOML_SOURCE_KEY.into(), page_hash("cfg1"));
+    prev.sources.insert(PLACES_TOML_SOURCE_KEY.into(), page_hash("places1"));
+    prev.sources.insert(USER_CSS_SOURCE_KEY.into(), page_hash("css1"));
+    prev.sources.insert("assets/site.css".into(), page_hash("asset-css1"));
+
+    let mut new = prev.clone();
+    new.sources.insert("post.md".into(), page_hash("v2"));
+    new.sources.insert(CONFIG_TOML_SOURCE_KEY.into(), page_hash("cfg2"));
+    new.sources.insert(PLACES_TOML_SOURCE_KEY.into(), page_hash("places2"));
+    new.sources.insert(USER_CSS_SOURCE_KEY.into(), page_hash("css2"));
+    new.sources.insert("assets/site.css".into(), page_hash("asset-css2"));
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &[])
+        .expect("edited sources must emit");
+    let mut modified = event.modified_paths.expect("modified_paths must be set");
+    modified.sort();
+    assert_eq!(
+        modified,
+        vec![
+            CONFIG_TOML_SOURCE_KEY.to_string(),
+            PLACES_TOML_SOURCE_KEY.to_string(),
+            USER_CSS_SOURCE_KEY.to_string(),
+            "post.md".to_string(),
+        ],
+        "config.toml, places.toml and the theme css join a page, but a passthrough asset css does not",
+    );
+}
+
+/// Each source change lands in exactly one source-domain field. A page
+/// deleted in an earlier rebuild keeps its hash in the source cache, so when a
+/// file of the same name comes back — recreated, or renamed onto — its hash
+/// reads as "moved"; but `source_creates` / `source_renames` already name it.
+#[test]
+fn a_page_returning_to_a_cached_path_is_a_create_or_rename_not_a_modification() {
+    let mut prev = SiteHashes::new();
+    prev.sources.insert("back.md".into(), page_hash("before-deletion"));
+    prev.sources.insert("onto.md".into(), page_hash("before-deletion"));
+    prev.source_to_output.insert("from.md".into(), "from/index.html".into());
+
+    let mut new = SiteHashes::new();
+    new.source_to_output.insert("back.md".into(), "back/index.html".into());
+    new.sources.insert("back.md".into(), page_hash("recreated"));
+    new.source_to_output.insert("onto.md".into(), "onto/index.html".into());
+    new.sources.insert("onto.md".into(), page_hash("renamed-here"));
+    let pairs = [("from.md".to_string(), "onto.md".to_string())];
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs).expect("a create emits");
+    assert_eq!(event.source_creates, Some(vec!["back.md".to_string()]));
+    assert!(event.modified_paths.is_none(), "{:?}", event.modified_paths);
+}
+
+/// The real producer, end to end: two builds of a vault on disk, the page
+/// rewritten between them the way another app writes it, and the second
+/// build triggered the way the watcher triggers it (`ContentOnly`, so the
+/// untouched page is carried forward rather than re-read). The event built
+/// from the two builds' own stashes must name exactly the edited page, in
+/// the project-relative form the editor's file registry is keyed by. A
+/// hand-built manifest cannot show that a real rebuild records the new hash.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_page_rewritten_on_disk_between_two_real_builds_is_in_modified_paths() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+
+    /// The stash is recorded before `run_pipeline` returns; the seal tail that
+    /// persists `hashes.json` — the next build's carry-forward — is detached.
+    async fn wait_for_seal(folder: &str, page: &str, stashed: &SiteHashes) {
+        let want = stashed.sources.get(page).map(|m| m.hash.clone());
+        for _ in 0..1500 {
+            if load_previous_hashes(folder).sources.get(page).map(|m| m.hash.clone()) == want {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the seal tail never persisted the build's manifest");
+    }
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    // Not `TempDir::new_in`: its `.tmp…` name is a hidden directory, and the
+    // scan skips hidden paths, so the vault would build as empty.
+    let tmp = tempfile::Builder::new().prefix("modified-paths-").tempdir_in(&base).unwrap();
+    let folder = tmp.path().canonicalize().unwrap();
+    std::fs::create_dir_all(folder.join("notes")).unwrap();
+    std::fs::write(folder.join("index.md"), "# Home\n\nbody\n").unwrap();
+    let page = "notes/片段.md";
+    std::fs::write(folder.join(page), "# Clip\n\nwritten in moss\n").unwrap();
+
+    let root = crate::vault::paths::VaultRoot::resolve(&folder);
+    let folder_key = root.as_str().to_string();
+    // Not in the global session registry: a concurrent test opening a folder
+    // (`register_session`) drains and cancels every registered session, and a
+    // cancelled build records no stash.
+    let session = crate::system::folder_session::FolderSession::new(folder.clone());
+    let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
+    let cell = std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()));
+    let build = |trigger: BuildTrigger| {
+        let mut services = crate::types::services::BuildServices::headless();
+        services.session = Some(session.clone());
+        run_pipeline(PipelineConfig {
+            root: root.clone(),
+            progress: crate::build::null_sink(),
+            plugins: PluginMode::Skip,
+            watch: false,
+            start_server: false,
+            host: crate::build::ports::host::HostPorts {
+                site_dir: Some(cell.clone()),
+                spawner: std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner),
+                services,
+                ..crate::build::ports::host::test_host_ports()
+            },
+            trigger,
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: None,
+            live_port: None,
+        })
+    };
+    let stash = || crate::system::build_records::records().content_hashes(&folder_key);
+
+    build(BuildTrigger::Full).await.expect("build 1");
+    let before = stash().expect("build 1 stashes its hashes");
+    wait_for_seal(&folder_key, page, &before).await;
+
+    std::fs::write(folder.join(page), "# Clip\n\nwritten in moss\n\nand then in another app\n").unwrap();
+    build(BuildTrigger::ContentOnly(vec![folder.join(page)])).await.expect("build 2");
+    let after = stash().expect("build 2 stashes its hashes");
+    wait_for_seal(&folder_key, page, &after).await;
+
+    let event = decide_rebuild_event(Some(after), &folder_key, &before, &[])
+        .expect("an edit on disk emits a rebuild event");
+    assert_eq!(event.modified_paths, Some(vec![page.to_string()]));
+}
+
+/// Same producer as the page test above, for `.moss/theme/style.css` — the
+/// vault-editable theme override, read synchronously in
+/// `render::blocking::generate_blocking_content` rather than through the
+/// deferred asset walk (see `manifest::is_reload_tracked_source_key`). An
+/// editor with the file open must learn about an in-place edit the same way
+/// it does for a page; before this fix the css half of `sources` was never
+/// diffed at all, so `modified_paths` stayed empty across both builds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_theme_css_file_rewritten_on_disk_between_two_real_builds_is_in_modified_paths() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    use crate::build::manifest::USER_CSS_SOURCE_KEY;
+
+    async fn wait_for_seal(folder: &str, key: &str, stashed: &SiteHashes) {
+        let want = stashed.sources.get(key).map(|m| m.hash.clone());
+        for _ in 0..1500 {
+            if load_previous_hashes(folder).sources.get(key).map(|m| m.hash.clone()) == want {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the seal tail never persisted the build's manifest");
+    }
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::Builder::new().prefix("modified-paths-css-").tempdir_in(&base).unwrap();
+    let folder = tmp.path().canonicalize().unwrap();
+    std::fs::create_dir_all(folder.join(".moss").join("theme")).unwrap();
+    std::fs::write(folder.join("index.md"), "# Home\n\nbody\n").unwrap();
+    let css_path = folder.join(".moss").join("theme").join("style.css");
+    std::fs::write(&css_path, "body { color: black; }\n").unwrap();
+
+    let root = crate::vault::paths::VaultRoot::resolve(&folder);
+    let folder_key = root.as_str().to_string();
+    let session = crate::system::folder_session::FolderSession::new(folder.clone());
+    let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
+    let cell = std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()));
+    let build = |trigger: BuildTrigger| {
+        let mut services = crate::types::services::BuildServices::headless();
+        services.session = Some(session.clone());
+        run_pipeline(PipelineConfig {
+            root: root.clone(),
+            progress: crate::build::null_sink(),
+            plugins: PluginMode::Skip,
+            watch: false,
+            start_server: false,
+            host: crate::build::ports::host::HostPorts {
+                site_dir: Some(cell.clone()),
+                spawner: std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner),
+                services,
+                ..crate::build::ports::host::test_host_ports()
+            },
+            trigger,
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: None,
+            live_port: None,
+        })
+    };
+    let stash = || crate::system::build_records::records().content_hashes(&folder_key);
+
+    build(BuildTrigger::Full).await.expect("build 1");
+    let before = stash().expect("build 1 stashes its hashes");
+    wait_for_seal(&folder_key, USER_CSS_SOURCE_KEY, &before).await;
+
+    std::fs::write(&css_path, "body { color: midnightblue; }\n").unwrap();
+    build(BuildTrigger::ContentOnly(vec![css_path.clone()])).await.expect("build 2");
+    let after = stash().expect("build 2 stashes its hashes");
+    wait_for_seal(&folder_key, USER_CSS_SOURCE_KEY, &after).await;
+
+    let event = decide_rebuild_event(Some(after), &folder_key, &before, &[])
+        .expect("a style.css edit on disk emits a rebuild event");
+    assert_eq!(event.modified_paths, Some(vec![USER_CSS_SOURCE_KEY.to_string()]));
+}
+
+/// Same producer again, for `.moss/places.toml` — the hand-edited gazetteer,
+/// registered from `build_inner` (`pipeline.rs`) rather than from
+/// `generate_blocking_content`: `load_gazetteer` runs, and `pending` exists,
+/// before that function is even called. A hand-built manifest could pin the
+/// diff rule but not that this second, separate registration site actually
+/// runs — only a real rebuild proves that.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_places_toml_file_rewritten_on_disk_between_two_real_builds_is_in_modified_paths() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    use crate::build::manifest::PLACES_TOML_SOURCE_KEY;
+
+    async fn wait_for_seal(folder: &str, key: &str, stashed: &SiteHashes) {
+        let want = stashed.sources.get(key).map(|m| m.hash.clone());
+        for _ in 0..1500 {
+            if load_previous_hashes(folder).sources.get(key).map(|m| m.hash.clone()) == want {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the seal tail never persisted the build's manifest");
+    }
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::Builder::new().prefix("modified-paths-places-").tempdir_in(&base).unwrap();
+    let folder = tmp.path().canonicalize().unwrap();
+    std::fs::create_dir_all(folder.join(".moss")).unwrap();
+    std::fs::write(folder.join("index.md"), "# Home\n\nbody\n").unwrap();
+    let places_path = folder.join(".moss").join("places.toml");
+    std::fs::write(&places_path, "[\"Kyoto\"]\nlat = 35.0116\nlng = 135.7681\nprecision = \"city\"\n").unwrap();
+
+    let root = crate::vault::paths::VaultRoot::resolve(&folder);
+    let folder_key = root.as_str().to_string();
+    let session = crate::system::folder_session::FolderSession::new(folder.clone());
+    let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
+    let cell = std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()));
+    let build = |trigger: BuildTrigger| {
+        let mut services = crate::types::services::BuildServices::headless();
+        services.session = Some(session.clone());
+        run_pipeline(PipelineConfig {
+            root: root.clone(),
+            progress: crate::build::null_sink(),
+            plugins: PluginMode::Skip,
+            watch: false,
+            start_server: false,
+            host: crate::build::ports::host::HostPorts {
+                site_dir: Some(cell.clone()),
+                spawner: std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner),
+                services,
+                ..crate::build::ports::host::test_host_ports()
+            },
+            trigger,
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: None,
+            live_port: None,
+        })
+    };
+    let stash = || crate::system::build_records::records().content_hashes(&folder_key);
+
+    build(BuildTrigger::Full).await.expect("build 1");
+    let before = stash().expect("build 1 stashes its hashes");
+    wait_for_seal(&folder_key, PLACES_TOML_SOURCE_KEY, &before).await;
+
+    std::fs::write(&places_path, "[\"Kyoto\"]\nlat = 35.02\nlng = 135.77\nprecision = \"city\"\n").unwrap();
+    build(BuildTrigger::ContentOnly(vec![places_path.clone()])).await.expect("build 2");
+    let after = stash().expect("build 2 stashes its hashes");
+    wait_for_seal(&folder_key, PLACES_TOML_SOURCE_KEY, &after).await;
+
+    let event = decide_rebuild_event(Some(after), &folder_key, &before, &[])
+        .expect("a places.toml edit on disk emits a rebuild event");
+    assert_eq!(event.modified_paths, Some(vec![PLACES_TOML_SOURCE_KEY.to_string()]));
 }
 
 /// Paths outside the watched folder are skipped (returns None from

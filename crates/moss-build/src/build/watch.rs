@@ -316,12 +316,19 @@ fn find_output_for_source(source: &str, hashes: &SiteHashes) -> Option<String> {
     None
 }
 
+/// Which source files this rebuild saw appear, disappear, or change in place —
+/// the one statement of "which sources changed". Paths are project-root-
+/// relative, the keys of `SiteHashes.source_to_output` / `sources`.
+struct SourceChanges {
+    creates: Vec<String>,
+    deletes: Vec<String>,
+    modified: Vec<String>,
+}
+
 /// Diff `previous_hashes.source_to_output` against `new_hashes.source_to_output`
 /// to find which source files appeared (creates) and disappeared (deletes)
-/// this rebuild, with rename pairs deduped from both sides.
-///
-/// Returns `(creates, deletes)` in source-path domain (project-root-relative,
-/// matching the keys of `SiteHashes.source_to_output`).
+/// this rebuild, with rename pairs deduped from both sides; and the page
+/// sources' byte hashes to find which changed in place (modified).
 ///
 /// **Why dedup against `rename_pairs`:** a renamed file naturally appears as
 /// "old path disappeared, new path appeared" in the per-key diff. The watcher's
@@ -329,15 +336,25 @@ fn find_output_for_source(source: &str, hashes: &SiteHashes) -> Option<String> {
 /// emitting it ALSO as a delete + create would force the EntryRegistry to
 /// retire the EntryId (on the spurious delete) and mint a new one (on the
 /// spurious create), losing identity across rename. The dedup keeps each
-/// FS change in exactly one of the three source-domain fields.
+/// FS change in exactly one of the source-domain fields.
 ///
 /// Order of preference: rename > create > delete. A pair in `rename_pairs`
 /// occupies its source AND target paths uniquely.
+///
+/// **Modified is [`is_reload_tracked_source_key`]'s domain: pages, plus the
+/// small closed set of vault-config/theme sources** (`.moss/config.toml`,
+/// `.moss/places.toml`, `.moss/theme/style.css`, `.moss/theme/script.js`).
+/// Those hashes are the
+/// bytes this build read, or carried forward because it provably did not need
+/// to; every other `sources` entry — images, and any other css/toml/yaml/json
+/// the generic passthrough walk happens to hash — is refreshed by the
+/// background asset walk AFTER this snapshot is taken, so including one would
+/// surface a rebuild late.
 fn compute_source_change_set(
     new_hashes: &SiteHashes,
     previous_hashes: &SiteHashes,
     rename_pairs: &[(String, String)],
-) -> (Vec<String>, Vec<String>) {
+) -> SourceChanges {
     let renamed_old: std::collections::HashSet<&str> =
         rename_pairs.iter().map(|(o, _)| o.as_str()).collect();
     let renamed_new: std::collections::HashSet<&str> =
@@ -361,7 +378,23 @@ fn compute_source_change_set(
         .collect();
     deletes.sort();
 
-    (creates, deletes)
+    // A page deleted in an earlier rebuild keeps its hash in the source cache,
+    // so one recreated (or renamed onto) under the same name reads as moved:
+    // it is a create or a rename, and already named there.
+    let mut modified: Vec<String> = new_hashes
+        .sources
+        .iter()
+        .filter(|(src, meta)| {
+            crate::build::manifest::is_reload_tracked_source_key(src)
+                && previous_hashes.sources.get(src.as_str()).is_some_and(|prev| prev.hash != meta.hash)
+                && creates.binary_search(src).is_err()
+                && !renamed_new.contains(src.as_str())
+        })
+        .map(|(src, _)| src.clone())
+        .collect();
+    modified.sort();
+
+    SourceChanges { creates, deletes, modified }
 }
 
 /// Compose a `FileChangeEvent` from the output-hash diff plus the watcher's
@@ -446,13 +479,13 @@ fn build_rebuild_event_with_renames(
     // deletion under the in-memory-hash path. Computed before the diff so its
     // mapped output deletions are merged into `deleted_paths` *before* the
     // rename-suppression pass below.
-    let (source_creates, source_deletes) =
+    let SourceChanges { creates, deletes, modified } =
         compute_source_change_set(new_hashes, previous_hashes, rename_pairs);
 
     // Map source-domain deletions to OUTPUT-domain paths via the PREVIOUS
     // manifest (which still holds the deleted page's source→output mapping) so
     // they reach `deleted_paths` and the frontend redirects the preview home.
-    let mapped_deletes: Vec<String> = source_deletes
+    let mapped_deletes: Vec<String> = deletes
         .iter()
         .filter_map(|src| find_output_for_source(src, previous_hashes))
         .collect();
@@ -488,21 +521,22 @@ fn build_rebuild_event_with_renames(
         event = Some(e);
     }
 
-    // Source-domain fields: surface the per-source changes the watcher detected
-    // (and that compute_rebuild_event/output_pairs intentionally collapsed to
-    // output-domain). Consumed by the EntryRegistry.
-    let source_changes_present = !source_creates.is_empty()
-        || !source_deletes.is_empty()
+    // Source-domain fields: surface the per-source changes that
+    // compute_rebuild_event/output_pairs collapse to output-domain. The file
+    // registry consumes creates/deletes/renames; the editor reloads an open
+    // file named in `modified_paths`. A modification alone emits even when no
+    // output changed — the editor needs it when the preview has nothing to do.
+    let source_changes_present = !creates.is_empty()
+        || !deletes.is_empty()
+        || !modified.is_empty()
         || !rename_pairs.is_empty();
 
     if source_changes_present {
         let mut e = event.unwrap_or_else(FileChangeEvent::new);
-        if !source_creates.is_empty() {
-            e.source_creates = Some(source_creates);
-        }
-        if !source_deletes.is_empty() {
-            e.source_deletes = Some(source_deletes);
-        }
+        let non_empty = |v: Vec<String>| (!v.is_empty()).then_some(v);
+        e.source_creates = non_empty(creates);
+        e.source_deletes = non_empty(deletes);
+        e.modified_paths = non_empty(modified);
         if !rename_pairs.is_empty() {
             e.source_renames = Some(rename_pairs.to_vec());
         }

@@ -178,7 +178,8 @@ fn synthetic_folder_doc(
     }
 }
 
-/// Hash a page's raw source bytes for the durable manifest.
+/// Hash a page's (or, since `is_reload_tracked_source_key` widened, one of
+/// the synchronous vault-config sources') raw bytes for the durable manifest.
 ///
 /// The parse cache's own index cannot answer "did the author change this page
 /// since the last publish?" — it is a watch-loop memo, consulted only under
@@ -189,8 +190,11 @@ fn synthetic_folder_doc(
 ///
 /// `bytes` is passed separately from `path` because the two differ on the uid
 /// write-back path: moss rewrites the file's frontmatter after parsing, and the
-/// bytes now on disk are the ones the next build will hash.
-fn source_metadata(path: &Path, bytes: &[u8]) -> crate::build::types::SourceMetadata {
+/// bytes now on disk are the ones the next build will hash. `pub(crate)`
+/// rather than file-local: `pipeline.rs`'s places.toml registration is not
+/// inside this file (the gazetteer is read before `generate_blocking_content`
+/// is even called) and reuses this rather than a second hasher.
+pub(crate) fn source_metadata(path: &Path, bytes: &[u8]) -> crate::build::types::SourceMetadata {
     use sha2::{Digest, Sha256};
     let md = std::fs::metadata(path).ok();
     let mtime = md
@@ -1373,6 +1377,19 @@ pub fn generate_blocking_content(
         }
         compute_content_hash(content)
     });
+    // Registered the same way a page's bytes are (`register_page_source`,
+    // below) so `watch::compute_source_change_set`'s diff can name an
+    // in-place style.css edit in `modified_paths` — see
+    // `manifest::is_reload_tracked_source_key`. This read already happened
+    // above for `user_css_version`; hashing it again here (rather than
+    // reusing that hash) keeps `SourceMetadata`'s mtime/inode fields honest,
+    // the same reason `source_metadata` takes `bytes` separately from `path`.
+    if let (Some(css_path), Some(content)) = (user_css_path.as_ref(), user_css_content.as_ref()) {
+        pending.register_page_source_hash(
+            crate::build::manifest::USER_CSS_SOURCE_KEY.to_string(),
+            source_metadata(css_path, content.as_bytes()),
+        );
+    }
 
     // Check for user custom JS and compute its hash for cache busting.
     // Canonical location: .moss/theme/script.js. Files at the project root are
@@ -1387,6 +1404,38 @@ pub fn generate_blocking_content(
     };
     let has_user_js = user_js_content.is_some();
     let user_js_version = user_js_content.as_ref().map(|c| compute_content_hash(c));
+    if let (Some(js_path), Some(content)) = (user_js_path.as_ref(), user_js_content.as_ref()) {
+        pending.register_page_source_hash(
+            crate::build::manifest::USER_JS_SOURCE_KEY.to_string(),
+            source_metadata(js_path, content.as_bytes()),
+        );
+    }
+
+    // `.moss/config.toml`: read fresh here (the many small readers elsewhere
+    // in this crate each pull one field; this is the one place the whole
+    // file's bytes are hashed) and registered the same way the theme files
+    // above are, so an in-place edit — the user's own, or moss's settings UI
+    // via `infra::toml_rewrite` — reaches `modified_paths` too. See
+    // `manifest::is_reload_tracked_source_key`.
+    //
+    // `read_managed_toml` (not the `user_css_path.exists()` pattern above):
+    // it proves absence from the error rather than from a stat, which is the
+    // only correct answer under iCloud eviction (see its doc comment). A
+    // read error that is NOT "genuinely absent" (permission denied, a
+    // transient I/O fault) must not fail this registration — the rest of the
+    // crate already tolerates an unreadable config.toml and still publishes
+    // (`an_unreadable_config_toml_still_lets_the_build_publish`); this is
+    // one more source of that same field, not a new one, so it degrades the
+    // same way: skip the registration, keep building.
+    let config_toml_path = source_path_buf.join(".moss").join("config.toml");
+    match crate::build::site_config::read_managed_toml(&config_toml_path) {
+        Ok(Some(content)) => pending.register_page_source_hash(
+            crate::build::manifest::CONFIG_TOML_SOURCE_KEY.to_string(),
+            source_metadata(&config_toml_path, content.as_bytes()),
+        ),
+        Ok(None) => {}
+        Err(e) => log::warn!("[modified_paths] config.toml unreadable, not tracked this build: {e}"),
+    }
 
     // Every content-addressed asset whose HASHED FILENAME appears in emitted
     // HTML, folded into one build-global key. A page that the Stage 5b skip

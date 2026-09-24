@@ -1117,6 +1117,30 @@ fn a_later_registration_with_an_oid_replaces_the_earlier_one() {
 }
 
 // -----------------------------------------------------------------------
+// SYNCHRONOUS_CONFIG_SOURCE_KEYS: a checked subset, not a second list
+// -----------------------------------------------------------------------
+
+/// `SYNCHRONOUS_CONFIG_SOURCE_KEYS` must never name a key the editor's own
+/// `.moss/` allowlist does not also admit — that allowlist is the one place
+/// "is this the user's to edit" is decided, and a key here that fell off it
+/// would be tracked for reload without ever being visible to edit. This pins
+/// containment in that one direction (every key here has SOME covering
+/// allowlist entry); it does not — and cannot — assert the reverse, because
+/// `.moss/theme` covers files (fonts, textures) that are deliberately absent
+/// from this list. See the const's own doc comment for why a directory-shaped
+/// allowlist entry can't be used to derive this list outright.
+#[test]
+fn synchronous_config_source_keys_are_covered_by_the_moss_internal_allowlist() {
+    use crate::build::scan::classify::MOSS_INTERNAL_ALLOWLIST;
+    for key in SYNCHRONOUS_CONFIG_SOURCE_KEYS {
+        let covered = MOSS_INTERNAL_ALLOWLIST
+            .iter()
+            .any(|allowed| key == allowed || key.starts_with(&format!("{allowed}/")));
+        assert!(covered, "{key} has no covering MOSS_INTERNAL_ALLOWLIST entry — drifted");
+    }
+}
+
+// -----------------------------------------------------------------------
 // Held bytes: a derived output that ships from memory
 // -----------------------------------------------------------------------
 
