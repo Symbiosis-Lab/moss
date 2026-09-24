@@ -52,13 +52,28 @@ html:has(body[data-typesetting="vertical"]) {
 body[data-typesetting="vertical"] {
   /* Written once so the head-margin calc below and `height` agree; `em`
      inside a custom property resolves against the font-size of the element
-     that uses it, i.e. this body's own --moss-vertical-font-size.
+     that uses it, i.e. this body's own font-size — --moss-reading-size,
+     redefined below, so a larger reader step also widens this column: the
+     same "same character count, bigger characters" measure `em` always
+     meant, now that the step actually reaches this body's text at all.
      Duplicated as an upper bound in moss-core's `sizes_vertical_body`
      (contract/sizes.rs), which declares body images' `sizes=` as
      `A * (100vh - 4rem)`: this column must never exceed `100vh - 4rem`, or
      those images fetch short rungs. The vertical-sizes render gate pins it. */
   --moss-vertical-column: min(38em, 100svh - 4rem);
-  font-size: var(--moss-vertical-font-size, clamp(1rem, 1.9svh, 1.4rem));
+  /* The reader's Aa control (site.css `html.scale-*`) writes only
+     --moss-reading-step; --moss-reading-size's own formula (tokens.json)
+     folds it in for horizontal typesetting, but this body's text is sized
+     from --moss-vertical-font-size, not that formula's base, so without this
+     line the control does nothing on a vertical page at all —
+     --moss-vertical-font-size itself never varies with the step. Redefining
+     --moss-reading-size here — vertical.css's own name for "this column's
+     reading size" — from the vertical base times that same step makes every
+     ratio already built on it (article h1-h6/caption/title in site.css,
+     --moss-read-line below) follow both the vertical text and the reader's
+     step from this one substitution, rather than each needing its own. */
+  --moss-reading-size: calc(var(--moss-vertical-font-size) * var(--moss-reading-step));
+  font-size: var(--moss-reading-size);
   margin-top: calc((100svh - var(--moss-vertical-column)) * 0.382);
   margin-bottom: 0;
   width: 100%;
@@ -73,6 +88,15 @@ body[data-typesetting="vertical"] {
      to its container and stops binding. Declared on body so it also
      overrides the `data-content-width` presets at equal specificity. */
   --moss-content-width: 100%;
+  /* --moss-read-line (tokens.json) is one line of body text — the unit
+     site.css measures article p/h1-h6/figure margins against. Its default
+     formula already reads --moss-reading-size, redefined above, so only the
+     leading needs restating here: --moss-read-leading is the number that
+     formula multiplies by, restated from the `article` rule's own hardcoded
+     1.8 below rather than left a second hardcoded 1.8 for the two to drift
+     out of. */
+  --moss-read-leading: 1.8;
+  --moss-read-line: calc(var(--moss-reading-size) * var(--moss-read-leading));
 }
 
 /* Force visible scrollbar (macOS overlay scrollbars auto-hide) */
@@ -98,7 +122,10 @@ body[data-typesetting="vertical"] main {
 }
 
 body[data-typesetting="vertical"] article {
-  line-height: 1.8;
+  /* --moss-read-leading, not a restated 1.8: the body rule above redefines
+     it from this same number so --moss-read-line (the prose margin ladder's
+     unit) stays in lockstep with whatever leading actually renders here. */
+  line-height: var(--moss-read-leading);
   letter-spacing: 0.05em;
 }
 
@@ -155,15 +182,21 @@ body[data-typesetting="vertical"] .font-pill.visible {
   transform: scaleY(1);
 }
 
-/* `.font-anchor`'s font-size in site.css is pinned to the horizontal-tb
-   default reading size — but body's own font-size under vertical
-   typesetting (above, this file) is never `--moss-reading-size` at all;
-   it's `--moss-vertical-font-size`, a viewport-height clamp `.date-line
-   .date` inherits directly. Match that instead here, or the control's
-   glyphs stop matching the date's actual size the moment a page is read
-   vertically. */
+/* `.font-anchor`'s font-size in site.css is pinned to the UNSCALED
+   horizontal base (--moss-reading-size-base times the script scale, never
+   --moss-reading-step) for a reason stated there: the control's own glyph
+   must not compound with the size it's choosing. Body's own font-size under
+   vertical typesetting is `--moss-reading-size` too now (above, this file),
+   but redefined from a different, viewport-height base and WITH the step
+   folded in — so matching it here instead would make this glyph grow and
+   shrink as the reader clicks Aa, the same compounding bug the horizontal
+   rule exists to avoid. Anchoring to the raw, unscaled
+   --moss-vertical-font-size keeps the same "control never scales with
+   itself" invariant on this axis; `.date-line .date` (which DOES track the
+   step, inheriting body's own font-size directly with no size rule of its
+   own) only matches this glyph at the default step, same as horizontally. */
 body[data-typesetting="vertical"] .font-anchor {
-  font-size: var(--moss-vertical-font-size, clamp(1rem, 1.9svh, 1.4rem));
+  font-size: var(--moss-vertical-font-size);
 }
 
 /* ── Hero ──

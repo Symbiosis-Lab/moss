@@ -29,6 +29,7 @@ import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tokenBlock } from './tokens-block';
+import { READER_SCALE_STEPS as SCALES, READER_SCALE_TOLERANCE as TOLERANCE } from './reader-scale-steps';
 import { mossBuildAssets } from '../../support/crate-paths';
 
 const CSS = fs.readFileSync(path.join(mossBuildAssets(), 'css/site.css'), 'utf8');
@@ -111,20 +112,7 @@ async function gapPx(pg: import('@playwright/test').Page, aboveId: string, below
   }, { aboveId, belowId });
 }
 
-// The reader's Aa control applies one of these classes to <html> (site.css
-// ~2667, `html.scale-*`) — pure CSS, so setting the class directly here
-// exercises the real rule without needing the site JS that normally writes it.
-const SCALES: Record<string, string> = {
-  default: '',
-  small: 'scale-small',
-  large: 'scale-large',
-  xlarge: 'scale-xlarge',
-};
-
 const LANGS: Lang[] = ['en', 'zh-Hant'];
-
-// gap / L for every rule the ladder sets, ± this much (task tolerance).
-const TOLERANCE = 0.03;
 
 for (const lang of LANGS) {
   for (const [step, scaleClass] of Object.entries(SCALES)) {

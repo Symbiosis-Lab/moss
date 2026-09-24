@@ -2680,13 +2680,17 @@ header:has(+ .moss-hero) .main-nav {
 .font-pill button[data-scale="large"] { font-size: 1.12em; }
 .font-pill button[data-scale="xlarge"]{ font-size: 1.25em; }
 
-/* Font scale classes — multiply the viewport-specific base, not a hardcoded
-   value, and keep the per-script multiplier the base is combined with in
-   :root (--moss-reading-script-scale). Dropping it here would make the reader's
-   Aa control cancel the CJK size bump. */
-html.scale-small  { --moss-reading-size: calc(var(--moss-reading-size-base) * var(--moss-reading-script-scale) * 0.89); }
-html.scale-large  { --moss-reading-size: calc(var(--moss-reading-size-base) * var(--moss-reading-script-scale) * 1.12); }
-html.scale-xlarge { --moss-reading-size: calc(var(--moss-reading-size-base) * var(--moss-reading-script-scale) * 1.25); }
+/* Font scale classes — write only --moss-reading-step (tokens.json), the
+   bare multiplier --moss-reading-size's own formula combines with the base
+   and the per-script scale. Re-deriving the whole formula here (as these
+   three rules used to) meant a second base — vertical typesetting's own body
+   text, sized from --moss-vertical-font-size rather than
+   --moss-reading-size-base (vertical.css) — had no shared variable left to
+   read the reader's step from at all; multiplying by this one instead lets
+   it opt in the same way. */
+html.scale-small  { --moss-reading-step: 0.89; }
+html.scale-large  { --moss-reading-step: 1.12; }
+html.scale-xlarge { --moss-reading-step: 1.25; }
 
 /* GitHub Link */
 .github-link {

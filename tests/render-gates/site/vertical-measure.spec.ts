@@ -24,6 +24,7 @@ import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tokenBlock } from './tokens-block';
+import { READER_SCALE_STEPS as PROSE_LADDER_SCALES, READER_SCALE_TOLERANCE as PROSE_LADDER_TOLERANCE } from './reader-scale-steps';
 import { mossBuildAssets } from '../../support/crate-paths';
 
 const cssDir = path.join(mossBuildAssets(), 'css');
@@ -415,14 +416,17 @@ test.describe('vertical-rl folder page', () => {
 
     // `article p + p { margin-block-start }`: the second paragraph sits 0.75
     // lines of body text to the LEFT of the first, not the old fixed space-md.
-    // A physical margin-top would stack it below. 26, not 24: this fixture's
-    // <html lang="zh-Hant"> makes the paragraph gap's own line (--moss-read-line)
-    // 19.08px x 1.8 CJK leading, and 0.75 of that rounds to 26 — a real move
-    // from the old fixed 24px, the same on this page whether it's laid out
-    // vertical-rl or horizontal-tb, since neither changes --moss-reading-size.
+    // A physical margin-top would stack it below. 23, not 24: --moss-read-line
+    // is redefined under vertical typesetting (vertical.css) from the text
+    // ACTUALLY on the page — this body's own --moss-vertical-font-size (17.1px
+    // at this 900px-tall viewport) times the 1.8 leading the vertical `article`
+    // rule sets — rather than --moss-reading-size, the horizontal font-scale
+    // token this body's font-size isn't. 17.1 x 1.8 x 0.75 = 23.085, rounding
+    // to 23. Before that fix this measured 26 (19.08px --moss-reading-size x
+    // 1.8 CJK leading x 0.75) — a line the vertical column never renders.
     const p1 = await rect(page, '#p1');
     const p2 = await rect(page, '#p2');
-    expect(Math.round(p1.left - p2.right)).toBe(26);
+    expect(Math.round(p1.left - p2.right)).toBe(23);
     expect(Math.abs(p1.top - p2.top)).toBeLessThanOrEqual(1);
   });
 
@@ -1179,5 +1183,113 @@ test.describe('vertical-rl article colophon', () => {
     const padding = await page.locator('.moss-article-colophon').evaluate((el) => getComputedStyle(el).paddingTop);
     expect(padding).toBe('16px'); // --moss-space-sm
   });
+});
+
+// `--moss-read-line` (tokens.json) is the unit article `p`/`h1`-`h6` margins
+// measure against (site.css, see prose-spacing-ladder.spec.ts's horizontal
+// gate for the same ladder). Its default formula reads --moss-reading-size,
+// the HORIZONTAL font-scale token — but this file's own
+// `body[data-typesetting="vertical"]` rule sizes body text from
+// `--moss-vertical-font-size` instead, a viewport-height clamp untouched by
+// --moss-reading-size or the reader's `html.scale-*` control. Before
+// vertical.css redefines --moss-read-line to match, the margin ladder tracks
+// a line the vertical page never renders.
+//
+// "The page's own body line" below is read off `#p1`'s own computed
+// `line-height` — a real px length the engine resolves against that
+// paragraph's own font-size — never the `--moss-read-line` custom property
+// itself: probing the token would make the assertion pass no matter what the
+// token's formula is, since the margin rules already track it faithfully by
+// construction. Ratios and TOLERANCE match prose-spacing-ladder.spec.ts (both
+// now read from the shared reader-scale-steps module).
+
+function proseLadderPage({ lang, scaleClass }) {
+  const htmlAttrs = [`lang="${lang}"`, scaleClass ? `class="${scaleClass}"` : null].filter(Boolean).join(' ');
+  return `<!doctype html><html ${htmlAttrs}><head><meta charset="utf-8">
+<style>${TOKENS}</style><style>${CSS}</style><style>${VERTICAL}</style></head>
+<body data-typesetting="vertical"><main><article class="container">
+<p id="p1">第一段落是這份夾具其他每一段間距的比較基準。</p>
+<p id="p2">第二段緊接在第一段之後，中間沒有任何內容。</p>
+<h2 id="h2-solo">前面接著一段散文的二級標題</h2>
+<p id="p3">第三段緊接在上面的二級標題之後。</p>
+</article></main>
+</body></html>`;
+}
+
+test.describe('vertical-rl prose spacing ladder', () => {
+  for (const lang of ['en', 'zh-Hant']) {
+    for (const [step, scaleClass] of Object.entries(PROSE_LADDER_SCALES)) {
+      test(`${lang} · Aa ${step}: paragraph gap and gap above a solo h2 track the page's own body line`, async ({ page }) => {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.setContent(proseLadderPage({ lang, scaleClass }));
+
+        const bodyLine = await page.locator('#p1').evaluate((el) => parseFloat(getComputedStyle(el).lineHeight));
+        expect(bodyLine, "the paragraph's own line-height must resolve to a real px length").toBeGreaterThan(0);
+
+        // vertical-rl: block progression runs right-to-left, so the gap
+        // between successive elements is on the x-axis (left/right) — the
+        // same axis swap the "vertical-rl folder page" describe block above
+        // relies on for its own margin/divider assertions.
+        const [p1, p2, h2] = await Promise.all([rect(page, '#p1'), rect(page, '#p2'), rect(page, '#h2-solo')]);
+        const ratioPP = (p1.left - p2.right) / bodyLine;
+        const ratioAboveH2 = (p2.left - h2.right) / bodyLine;
+
+        expect(Math.abs(ratioPP - 0.75),
+          `paragraph gap must be 0.75 of the page's own body line (${bodyLine.toFixed(2)}px) — measured ${ratioPP.toFixed(3)}L`)
+          .toBeLessThanOrEqual(PROSE_LADDER_TOLERANCE);
+        expect(Math.abs(ratioAboveH2 - 1.5),
+          `gap above a solo h2 must be 1.5 of the page's own body line (${bodyLine.toFixed(2)}px) — measured ${ratioAboveH2.toFixed(3)}L`)
+          .toBeLessThanOrEqual(PROSE_LADDER_TOLERANCE);
+      });
+    }
+  }
+});
+
+// The reader's Aa control (site.css `html.scale-*`) writes only
+// --moss-reading-step; --moss-reading-size's own formula (tokens.json) folds
+// it in for horizontal typesetting. A vertical page's body text is sized from
+// --moss-vertical-font-size instead (this file's own
+// `body[data-typesetting="vertical"]` rule), a viewport-height clamp the
+// control never itself varies — so before that rule also multiplies by
+// --moss-reading-step, the control has no effect on a vertical page's text
+// size at all.
+//
+// "The vertical base" below is read off a probe styled directly with
+// `font-size: var(--moss-vertical-font-size)` — the raw, UNSCALED token —
+// never `--moss-reading-size` itself: probing the already-scaled value would
+// make the assertion trivially true regardless of whether the multiplication
+// actually happened.
+const READING_STEP_MULTIPLIERS: Record<string, number> = { default: 1, small: 0.89, large: 1.12, xlarge: 1.25 };
+
+function verticalScaleProbePage({ scaleClass }) {
+  const htmlAttrs = ['lang="en"', scaleClass ? `class="${scaleClass}"` : null].filter(Boolean).join(' ');
+  return `<!doctype html><html ${htmlAttrs}><head><meta charset="utf-8">
+<style>${TOKENS}</style><style>${CSS}</style><style>${VERTICAL}</style></head>
+<body data-typesetting="vertical"><main><article class="container">
+<p id="p1">A paragraph, standing in for the vertical column's own body text.</p>
+</article></main>
+<div id="vertical-base-probe" style="position:absolute;visibility:hidden;width:0;height:0;font-size:var(--moss-vertical-font-size);">x</div>
+</body></html>`;
+}
+
+test.describe('vertical-rl reading scale', () => {
+  for (const [step, scaleClass] of Object.entries(PROSE_LADDER_SCALES)) {
+    test(`Aa ${step}: paragraph font-size is the vertical base times the reader's step`, async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.setContent(verticalScaleProbePage({ scaleClass }));
+
+      const { pFontSize, base } = await page.evaluate(() => ({
+        pFontSize: parseFloat(getComputedStyle(document.getElementById('p1')!).fontSize),
+        base: parseFloat(getComputedStyle(document.getElementById('vertical-base-probe')!).fontSize),
+      }));
+      expect(base, 'the vertical base probe must resolve to a real px length').toBeGreaterThan(0);
+
+      const multiplier = READING_STEP_MULTIPLIERS[step];
+      const expected = base * multiplier;
+      expect(pFontSize,
+        `paragraph font-size must be the vertical base (${base.toFixed(2)}px) times ${multiplier} — measured ${pFontSize.toFixed(2)}px (${(pFontSize / base).toFixed(3)}x base)`)
+        .toBeCloseTo(expected, 1);
+    });
+  }
 });
 
