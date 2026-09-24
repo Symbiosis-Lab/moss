@@ -10,6 +10,7 @@ Declares one place-typed kind. Kyoto (`kyoto.md`) claims its own term page; Osak
 - the automatic place line under the byline on every article that names a place, correctly linked;
 - Osaka's missing `lng` and Nara's invalid `precision` each firing a diagnostic (visible via `cli_output_tests.rs`'s `PROBLEMS_TEST_LOCK` mechanism) without failing the build, and Osaka's row still getting its breadcrumb and roll-up despite having no coordinates;
 - no `lat`/`lng` digit sequence anywhere in `expected/` — this slice renders no coordinates at all.
+- the homepage body embeds Osaka's generated term page (`![[/places/osaka/]]`) and Japan's roll-up-only one (`![[/places/japan/]]`) as listings — both are pseudo-folders with no real directory behind them, reached only through `also_in` membership derived at build time, not through a real folder.
 
 See `basic-site/README.md` for the regeneration procedure. Regenerate this fixture alone with:
 

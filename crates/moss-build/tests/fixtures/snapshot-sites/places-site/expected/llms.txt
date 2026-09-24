@@ -52,6 +52,14 @@ Claims the `places/kyoto` page, so its breadcrumb and children list render here 
 
 One namespace, geography.
 
+A city, reached only through its generated term page:
+
+<!--MOSS_MARKER_FOLDER_LIST:path=/places/osaka/|from=index.md-->
+
+A roll-up-only ancestor, reached only through the gazetteer's parent chain:
+
+<!--MOSS_MARKER_FOLDER_LIST:path=/places/japan/|from=index.md-->
+
 ---
 
 ## posts

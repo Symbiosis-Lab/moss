@@ -1020,7 +1020,7 @@ pub fn generate_blocking_content(
     // site default. Reuse it here.
     // Out here because the article map, written far below, carries these to the editor's `url` chip.
     let mut url_collisions: Vec<crate::build::scan::slug::UrlCollision> = Vec::new();
-    let (layout_config, site_url, has_rss, show_rss_in_footer, analytics_script) = {
+    let (layout_config, site_url, has_rss, show_rss_in_footer, analytics_script, term_index) = {
         // Profile the whole-corpus Reduce chain. Each pass
         // below folds OTHER pages' state into `documents`, so (unlike Loop A)
         // none of it is skippable by the parse cache — this is the floor on
@@ -1064,12 +1064,44 @@ pub fn generate_blocking_content(
         populate_direct_children_sorts(&mut documents);
         log::debug!(target: "timing", "[reduce] populate_direct_children_sorts: {:?}", reduce_start.elapsed());
 
+        // Term derivation:
+        // every declared kind's fields become membership claims in term
+        // pseudo-folders (`authors/<slug>`, `tags/<slug>`, or a declared
+        // kind's own namespace) via the `also_in` slot, and their `*_page:`
+        // claims resolve into `term_listing`. Must run before the marker
+        // expansion just below: a body embed of a pseudo-folder term page
+        // (`![[/places/kyoto/]]`, including an ancestor reached only through
+        // `also_in` roll-up) is resolved in `folder_embed.rs`'s pseudo-folder
+        // branch by matching the embed's target against each doc's
+        // `also_in` — which is what this pass fills in. Resolving markers
+        // first (the previous order) left `also_in` empty for every doc at
+        // that point, so any such embed rendered a "Folder not found" div;
+        // a real-folder embed (e.g. `/people/`) only ever worked because it
+        // never needed `also_in` in the first place. Also runs before the
+        // synthetic-index blocks further down (which seed the unclaimed term
+        // keys) and before the incremental verdict (so listing digests see
+        // the derived membership).
+        let term_index = crate::build::terms::derive_terms(&mut documents, site_config.term_kinds.clone());
+        // Design rule 3, byline surface: a name-list field's value that the
+        // author also typed in a `byline:` row becomes a markdown link to
+        // its term page. Before the verdict for the same reason as above —
+        // the linked URL is part of each page's surface, so a claim
+        // appearing elsewhere re-renders the bylines that point at it.
+        crate::build::terms::link_terms_in_bylines(&mut documents, &term_index);
+        // The automatic place line — same neighborhood, same reasoning:
+        // before the incremental content hash is taken, so a claim moving
+        // invalidates the line's link for free.
+        crate::build::terms::set_place_lines(&mut documents, &term_index, site_lang);
+        log::debug!(target: "timing", "[reduce] derive_terms: {:?}", reduce_start.elapsed());
+
         // Resolve folder-list embed markers (`![[/folder/|limit:N,more]]`).
         // moss-core emits a `<!--MOSS_MARKER_FOLDER_LIST:…-->` marker during
         // wikilink resolution; we expand it here, AFTER
         // `populate_direct_children_sorts` so the target folder's resolved axis
-        // is available for inheritance, and BEFORE the HTML render phase (which
-        // would otherwise emit the marker comment unchanged into the page).
+        // is available for inheritance, AFTER term derivation so a pseudo-folder
+        // term embed's `also_in` is already populated, and BEFORE the HTML
+        // render phase (which would otherwise emit the marker comment
+        // unchanged into the page).
         crate::build::folder_embed::expand_markers_in_documents(
             &mut documents,
             project_structure,
@@ -1224,6 +1256,7 @@ pub fn generate_blocking_content(
             has_rss,
             show_rss_in_footer,
             analytics_script,
+            term_index,
         )
     };
 
@@ -1414,29 +1447,13 @@ pub fn generate_blocking_content(
     // Consumed by both folder-index synthesis blocks below.
     let folder_display = folder_display_leaves(&project_structure.dirs, &dir_overrides);
 
-    // Term derivation:
-    // every declared kind's fields become membership claims in term
-    // pseudo-folders (`authors/<slug>`, `tags/<slug>`, or a declared kind's
-    // own namespace) via the `also_in` slot, and their `*_page:` claims
-    // resolve into `term_listing`. Runs BEFORE the synthetic-index blocks
-    // (which seed the unclaimed term keys) and before the incremental
-    // verdict (so listing digests see the derived membership). Both loops
-    // below consult `term_index` for term-page titles.
+    // Term derivation already ran above, before `expand_markers_in_documents`
+    // — see that call site for why. `term_index` is in scope from here on;
+    // both synthetic-index loops below consult it for term-page titles.
     // URL keys of every index page the auto-index loop below synthesizes, for
     // `ArticleMap::generated`: the editor's URL index has no other way to learn
     // those pages exist (no source document).
     let mut generated_index_urls: Vec<String> = Vec::new();
-    let term_index = crate::build::terms::derive_terms(&mut documents, site_config.term_kinds.clone());
-    // Design rule 3, byline surface: a name-list field's value that the
-    // author also typed in a `byline:` row becomes a markdown link to its
-    // term page. Before the verdict for the same reason as above — the
-    // linked URL is part of each page's surface, so a claim appearing
-    // elsewhere re-renders the bylines that point at it.
-    crate::build::terms::link_terms_in_bylines(&mut documents, &term_index);
-    // The automatic place line — same neighborhood, same reasoning: before
-    // the incremental content hash is taken, so a claim moving invalidates
-    // the line's link for free.
-    crate::build::terms::set_place_lines(&mut documents, &term_index, site_lang);
 
     // Synthesize folder index entries for folders that have child documents but
     // no explicit index file. This completes the page tree so parent folder pages

@@ -2572,3 +2572,70 @@ fn a_caption_with_marker_breaking_characters_reaches_the_page_intact() {
         "got: {out}"
     );
 }
+
+/// A term page reached only through DERIVED membership (no real folder
+/// backs `places/kyoto` — it is a pseudo-folder, not a directory) used to
+/// render "Folder not found" for a body embed, because in the real build
+/// pipeline `derive_terms` (which is what fills `also_in`) ran AFTER
+/// markers were resolved, so `also_in` was still empty at the point this
+/// pseudo-folder branch checked it. Reproduces that shape with a real
+/// `derive_terms` call (not hand-authored `also_in`), then feeds the
+/// resulting docs through the exact chain a body embed takes.
+#[test]
+fn pseudo_folder_place_embed_lists_its_derived_members() {
+    let kind = crate::build::terms::TermKind {
+        key: "places".to_string(),
+        fields: vec!["location".to_string()],
+        title: "Places".to_string(),
+        is_place: true,
+        parents: Default::default(),
+    };
+    let mut docs = vec![
+        make_doc("travel/kyoto-temple.html", "Kyoto Temple", Some("2025-01-01")),
+        make_doc("travel/kyoto-market.html", "Kyoto Market", Some("2025-03-01")),
+    ];
+    docs[0].location = vec!["Kyoto".to_string()];
+    docs[1].location = vec!["Kyoto".to_string()];
+    crate::build::terms::derive_terms(&mut docs, vec![kind]);
+
+    let out = render_body_embed("![[/places/kyoto/]]\n", &docs);
+    assert!(!out.contains("moss-embed-missing"), "got: {out}");
+    assert!(out.contains("Kyoto Temple"), "got: {out}");
+    assert!(out.contains("Kyoto Market"), "got: {out}");
+    // Same default a pseudo-folder with no target doc gets everywhere else
+    // in this file (date-descending) — matching the order the generated
+    // term page itself would render its members in, since both paths run
+    // through this same `render_one`.
+    let pos_market = out.find("Kyoto Market").expect("Kyoto Market missing");
+    let pos_temple = out.find("Kyoto Temple").expect("Kyoto Temple missing");
+    assert!(pos_market < pos_temple, "expected date-desc order: {out}");
+}
+
+/// Same bug, the roll-up-ancestor shape: `places/japan` has no doc that
+/// declares `location: Japan` directly — it exists only because a city
+/// under it rolls up through the gazetteer's `parent` chain
+/// (`build::terms::places`), landing `places/japan` in that doc's
+/// `also_in` alongside `places/kyoto`. An ancestor reached only this way
+/// still needs a listing of every doc that names it, transitively.
+#[test]
+fn pseudo_folder_rollup_ancestor_embed_lists_its_descendants() {
+    let kind = crate::build::terms::TermKind {
+        key: "places".to_string(),
+        fields: vec!["location".to_string()],
+        title: "Places".to_string(),
+        is_place: true,
+        parents: [("places/kyoto".to_string(), "Japan".to_string())].into_iter().collect(),
+    };
+    let mut docs = vec![make_doc("travel/kyoto-temple.html", "Kyoto Temple", Some("2025-01-01"))];
+    docs[0].location = vec!["Kyoto".to_string()];
+    crate::build::terms::derive_terms(&mut docs, vec![kind]);
+    assert!(
+        docs[0].also_in.as_ref().unwrap().contains(&"places/japan".to_string()),
+        "sanity: derive_terms must roll the city up into the country's also_in"
+    );
+
+    let out = render_body_embed("![[/places/japan/]]\n", &docs);
+    assert!(!out.contains("moss-embed-missing"), "got: {out}");
+    assert!(out.contains("Kyoto Temple"), "got: {out}");
+}
+

@@ -251,6 +251,8 @@ A place page — claimed with `place_page:`, or generated like any other unclaim
 
 Not built yet: a `style:map` folder-listing style, and a per-site "locator" config key for placing something on a map. Declaring `type = "place"` does not draw a map — it only gives you the pages, the hierarchy and the line.
 
+A place's page — its own leaf (`/places/kyoto/`), or an ancestor reached only through roll-up (`/places/japan/`, with no page of its own naming it directly) — embeds as a listing anywhere in the body the same way a real folder does: `![[/places/kyoto/|style:grid]]`. Nothing on disk backs that path; it resolves through the same term membership the page itself is built from, member order included, whether the page underneath is generated or claimed with `place_page:`.
+
 ### Long archives
 
 moss has **no pagination**: no `paginate:`, no `offset`, no `/page/2/`. Do not

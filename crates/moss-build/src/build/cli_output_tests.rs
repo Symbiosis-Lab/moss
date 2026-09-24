@@ -151,6 +151,95 @@ fn declared_name_absent_from_any_byline_row_warns() {
     );
 }
 
+/// A place name is never credited in a byline (a place-typed kind gets its
+/// own automatic place line instead), so it must never become a guard-6
+/// candidate: neither linked into a byline row nor warned about when it is
+/// absent from one. A same-shaped person name, absent from the same byline,
+/// still warns exactly as `declared_name_absent_from_any_byline_row_warns`
+/// pins — this test only adds the located field beside it and checks the
+/// count does NOT grow to 2.
+#[test]
+fn place_names_never_warn_or_link_in_bylines() {
+    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
+    take_cli_problems();
+    let kinds = vec![
+        crate::build::terms::TermKind {
+            key: "authors".to_string(),
+            fields: vec!["author".to_string()],
+            title: "Authors".to_string(),
+            is_place: false, parents: Default::default(),
+        },
+        crate::build::terms::TermKind {
+            key: "places".to_string(),
+            fields: vec!["location".to_string()],
+            title: "Places".to_string(),
+            is_place: true, parents: Default::default(),
+        },
+    ];
+    let mut docs = vec![crate::build::types::ParsedDocument {
+        url_path: "posts/a/index.html".to_string(),
+        title: "A".to_string(),
+        author: vec!["Kaneda".to_string()],
+        location: vec!["Kyoto".to_string()],
+        byline: vec!["文｜某人".to_string()],
+        ..Default::default()
+    }];
+    let index = crate::build::terms::derive_terms(&mut docs, kinds);
+    crate::build::terms::link_terms_in_bylines(&mut docs, &index);
+    assert_eq!(
+        take_cli_problems(), 1,
+        "only the person name warns; the place name is excluded at the source, not merely unlinked"
+    );
+    assert_eq!(
+        docs[0].byline[0], "文｜某人",
+        "the byline row is untouched — neither name appears in it, so neither ever links"
+    );
+}
+
+/// `place_names_never_warn_or_link_in_bylines` only proves a place name
+/// warns/links correctly when it is ABSENT from the byline row — it can't
+/// tell "correctly excluded" from "would have linked if only the place were
+/// there too". This test puts the place name literally in the row, beside a
+/// person name: the person still becomes a markdown link (later rendered as
+/// an `<a>` by the byline HTML pipeline this test doesn't reach), but the
+/// place name is never wrapped — the `is_place` exclusion drops it from the
+/// candidate list before `find_bounded` ever looks for it in the row, so a
+/// literal "Kyoto" sitting right next to a linked name stays plain text.
+#[test]
+fn place_name_present_in_a_byline_row_is_left_unlinked() {
+    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
+    take_cli_problems();
+    let kinds = vec![
+        crate::build::terms::TermKind {
+            key: "authors".to_string(),
+            fields: vec!["author".to_string()],
+            title: "Authors".to_string(),
+            is_place: false, parents: Default::default(),
+        },
+        crate::build::terms::TermKind {
+            key: "places".to_string(),
+            fields: vec!["location".to_string()],
+            title: "Places".to_string(),
+            is_place: true, parents: Default::default(),
+        },
+    ];
+    let mut docs = vec![crate::build::types::ParsedDocument {
+        url_path: "posts/a/index.html".to_string(),
+        title: "A".to_string(),
+        author: vec!["Kaneda".to_string()],
+        location: vec!["Kyoto".to_string()],
+        byline: vec!["文｜Kaneda, Kyoto".to_string()],
+        ..Default::default()
+    }];
+    let index = crate::build::terms::derive_terms(&mut docs, kinds);
+    crate::build::terms::link_terms_in_bylines(&mut docs, &index);
+    assert_eq!(take_cli_problems(), 0, "both names are physically present in the row; neither warns");
+    assert_eq!(
+        docs[0].byline[0], "文｜[Kaneda](/authors/kaneda/), Kyoto",
+        "the person name links; the place name, though sitting right beside it, is never wrapped in a link"
+    );
+}
+
 /// The plugin manager reports headless through `CarrierReporter`, never
 /// `StdoutReporter` — so the counted "not connected" line has to reach the
 /// `--strict` counter from THERE, or a plugin-bearing build with a plugin that

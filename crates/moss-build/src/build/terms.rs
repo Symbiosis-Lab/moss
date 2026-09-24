@@ -583,8 +583,18 @@ pub fn link_terms_in_bylines(documents: &mut [ParsedDocument], index: &TermIndex
         // site declares — not just author:. A name may legitimately repeat
         // across fields/kinds; guard 6 warns about that, once, only when it
         // actually resolves a link in some row.
+        //
+        // A place-typed kind is skipped here at the source: a place name
+        // (`location:`) is never credited in a byline — it gets its own
+        // automatic place line from `set_place_lines` — so it must never
+        // become a byline-linking candidate, and must never trip guard 6's
+        // "declared but never in a byline row" warning, which fired for
+        // every located page before this exclusion existed.
         let mut declared: Vec<String> = Vec::new();
         for kind in &index.kinds {
+            if kind.is_place {
+                continue;
+            }
             for field in &kind.fields {
                 declared.extend(field_names(doc, field).iter().cloned());
             }
