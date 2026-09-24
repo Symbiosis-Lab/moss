@@ -214,17 +214,20 @@ fn pick_title(
     }
 }
 
-/// "Article Title | Site Name" → "Article Title". Splits on the longest
-/// delimiter (` — `, ` | `, ` - `) and drops the shorter trailing segment when
-/// it looks like a site brand (i.e. when the article half is at least as long).
+/// "Article Title | Site Name" → "Article Title". Splits at the last
+/// delimiter (` — `, ` – `, ` | `, ` - `), since a site brand is always the
+/// final segment, and drops that segment when it looks like a brand (i.e. when
+/// the article half is at least as long).
 fn strip_site_suffix(s: &str) -> String {
     let candidates = [" — ", " – ", " | ", " - "];
-    for delim in candidates {
-        if let Some((head, tail)) = s.rsplit_once(delim) {
-            let (head, tail) = (head.trim(), tail.trim());
-            if !head.is_empty() && !tail.is_empty() && head.len() >= tail.len() {
-                return head.to_string();
-            }
+    let last = candidates
+        .iter()
+        .filter_map(|delim| s.rfind(delim).map(|at| (at, *delim)))
+        .max_by_key(|(at, _)| *at);
+    if let Some((at, delim)) = last {
+        let (head, tail) = (s[..at].trim(), s[at + delim.len()..].trim());
+        if !head.is_empty() && !tail.is_empty() && head.len() >= tail.len() {
+            return head.to_string();
         }
     }
     s.to_string()
@@ -472,6 +475,16 @@ mod tests {
         assert_eq!(
             strip_site_suffix("A Reporter's Voice — Abroad - Example Times"),
             "A Reporter's Voice — Abroad"
+        );
+    }
+
+    #[test]
+    fn strip_site_suffix_keeps_an_em_dash_inside_a_long_title() {
+        // The suffix is the last segment. Splitting at the em dash first cut
+        // this title to its first half whenever that half outweighed the rest.
+        assert_eq!(
+            strip_site_suffix("The Reporter's Notebook — Abroad - Example Times"),
+            "The Reporter's Notebook — Abroad"
         );
     }
 
