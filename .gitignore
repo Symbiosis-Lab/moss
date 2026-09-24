@@ -6,6 +6,7 @@ dist/
 !packages/moss-syntax/dist/**
 .superpowers/
 site/.moss/build/
+site/.moss/build.nosync/
 site/.moss/cache/
 site/.moss/*.bak-*
 target/
