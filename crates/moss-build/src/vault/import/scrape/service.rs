@@ -292,21 +292,21 @@ mod tests {
     #[test]
     fn frontmatter_includes_all_set_fields() {
         let meta = ArticleMetadata {
-            title: Some("Finding China's Voice".into()),
+            title: Some("The Reporter's Notebook".into()),
             description: Some("The new diaspora.".into()),
             author: Some("Jane Doe".into()),
             date: Some("2024-12-22".into()),
-            publisher: Some("The Wire China".into()),
+            publisher: Some("Example Times".into()),
             lang: Some("en".into()),
             cover: Some("./assets/imported/abcd.jpg".into()),
             og_image: None,
         };
         let fm = generate_frontmatter(&meta, "https://x.example/post");
         assert!(fm.starts_with("---\n"));
-        assert!(fm.contains("title: \"Finding China's Voice\""));
+        assert!(fm.contains("title: \"The Reporter's Notebook\""));
         assert!(fm.contains("date: \"2024-12-22\""));
         assert!(fm.contains("author: \"Jane Doe\""));
-        assert!(fm.contains("publisher: \"The Wire China\""));
+        assert!(fm.contains("publisher: \"Example Times\""));
         assert!(fm.contains("lang: \"en\""));
         assert!(fm.contains("description: \"The new diaspora.\""));
         assert!(fm.contains("cover: \"./assets/imported/abcd.jpg\""));

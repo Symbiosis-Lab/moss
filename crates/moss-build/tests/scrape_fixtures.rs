@@ -1,18 +1,19 @@
-//! Real-world HTML regression suite for the article import pipeline.
+//! Whole-page regression suite for the article import pipeline.
 //!
-//! Fixtures live in `tests/fixtures/scrape/` — saved pages from outlets we
-//! expect to keep working: Wire China, China Books Review, China Media
-//! Project, plus the journoportfolio aggregator (a JS-rendered site we
-//! handle partially).
+//! Fixtures live in `tests/fixtures/scrape/`. Each is a synthetic page that
+//! copies the markup of a layout the importer meets in the wild: a paywalled
+//! WordPress news article, a Q&A interview with embedded book cards, a
+//! page-builder layout with no `<article>` container, and a hosted
+//! portfolio's article listing. Names, text and URLs are invented; the
+//! structure is what the tests exercise — schema.org graphs, decoy meta
+//! tags, site chrome, teaser grids, paywall scripts, lazy images. Do not add
+//! saved copies of real pages here: they carry someone's published work,
+//! their name, and whatever keys the site embeds.
 //!
-//! These assertions are intentionally loose — we test invariants we'd
-//! notice breaking ("the byline is parsed", "the lede paragraph is
-//! present", "site chrome doesn't leak into the body") rather than
-//! pinning the exact markdown string. Tight string snapshots break on
-//! every htmd / extractor refinement; invariant tests catch regressions
-//! without churn.
-//!
-//! To save a new fixture: `curl -sL -A "moss-import/test" <url> > tests/fixtures/scrape/<label>.html`
+//! Metadata assertions are exact. Body assertions are invariants ("the lede
+//! is present", "site chrome doesn't leak into the body") rather than a
+//! pinned markdown string, which would break on every htmd / extractor
+//! refinement without catching anything new.
 
 use moss_build::vault::import::scrape::converter::extract_article;
 use std::fs;
@@ -28,121 +29,121 @@ fn fixture(name: &str) -> String {
 }
 
 #[test]
-fn wirechina_finding_chinas_voice_extracts_metadata_and_body() {
-    let html = fixture("wirechina-finding-voice");
+fn paywalled_news_article_extracts_metadata_and_body() {
+    let html = fixture("paywalled-news-article");
     let art = extract_article(
         &html,
-        "https://www.thewirechina.com/2024/12/22/finding-chinas-voice-abroad-chinese-diaspora-america/",
+        "https://news.example.com/2024/03/17/night-ferry-quiet-return/",
     );
 
-    // Metadata — taken from JSON-LD; brittle to upstream content changes only.
-    assert!(
-        art.metadata.title.as_deref().map_or(false, |t| t.contains("Finding China") && t.contains("Voice")),
-        "title missing or wrong: {:?}",
-        art.metadata.title
+    // Metadata comes from the JSON-LD graph: its headline beats the
+    // suffixed og:title, its Person author beats the editor named in
+    // <meta name="author">, and its date beats the one in the URL.
+    assert_eq!(
+        art.metadata.title.as_deref(),
+        Some("The Night Ferry\u{2019}s Quiet Return")
     );
-    assert_eq!(art.metadata.date.as_deref(), Some("2024-12-23"));
-    assert_eq!(art.metadata.author.as_deref(), Some("Yi Liu"));
-    assert_eq!(art.metadata.publisher.as_deref(), Some("The Wire China"));
+    assert_eq!(art.metadata.date.as_deref(), Some("2024-03-18"));
+    assert_eq!(art.metadata.author.as_deref(), Some("Alex Reporter"));
+    assert_eq!(art.metadata.publisher.as_deref(), Some("The Example Wire"));
     assert_eq!(art.metadata.lang.as_deref(), Some("en"));
     assert!(art.metadata.description.is_some());
 
-    // Body — invariants only.
+    // Body — invariants only. The related-article teasers sit in
+    // `.post-content`, which outranks `.entry-content` in the selector list;
+    // only the full body's weight keeps the scorer on the article.
     let md = &art.markdown;
-    assert!(md.len() > 5_000, "body too short: {} bytes", md.len());
-    assert!(md.contains("JF Books"), "lede content missing");
-    assert!(md.contains("Yu Miao"), "key interview subject missing");
+    assert!(md.len() > 2_000, "body too short: {} bytes", md.len());
+    assert!(md.contains("Harbor Lights Books"), "lede content missing");
+    assert!(md.contains("Robin Sample"), "key interview subject missing");
     assert!(
-        md.contains("Cai Xia"),
-        "preserved inline link target ('Cai Xia') missing"
+        md.contains("[Casey Placeholder](https://www.example.org/wiki/Casey_Placeholder)"),
+        "inline link not preserved"
     );
 
-    // Chrome must NOT leak in.
-    let chrome_markers = ["Newsletter", "Subscribe to The Wire", "Read more"];
-    for m in chrome_markers {
-        let leaks = md
-            .lines()
-            .any(|line| line.trim() == m || line.trim().starts_with(&format!("{} ", m)));
-        assert!(!leaks, "chrome marker leaked into body: {:?}", m);
+    // Site chrome and the paywall script's config must NOT leak in.
+    for m in ["Newsletter", "Subscribe to The Example Wire", "Read more", "pk_test_"] {
+        assert!(!md.contains(m), "chrome leaked into body: {:?}", m);
     }
 
-    // At least one image survived and is an absolute URL we'd download.
+    // An in-body photo — not just the og:image cover — is queued as an
+    // absolute URL we'd download.
     assert!(
         art.media_urls
-            .iter()
-            .any(|u| u.starts_with("https://www.thewirechina.com/wp-content/")),
-        "expected at least one Wire China CDN image in media_urls"
+            .contains("https://news.example.com/wp-content/uploads/2024/03/robin-sample-1200x800.jpg"),
+        "expected the in-body photo in media_urls: {:?}",
+        art.media_urls
     );
 }
 
 #[test]
-fn china_books_review_xu_zhiyuan_extracts_metadata_and_body() {
-    let html = fixture("cbr-xu-zhiyuan");
-    let art = extract_article(&html, "https://chinabooksreview.com/2026/05/19/xu-zhiyuan/");
+fn interview_with_book_cards_extracts_metadata_and_body() {
+    let html = fixture("interview-with-book-cards");
+    let art = extract_article(&html, "https://books.example.org/2025/06/10/jamie-author/");
 
-    assert!(
-        art.metadata
-            .title
-            .as_deref()
-            .map_or(false, |t| t.contains("Xu Zhiyuan")),
-        "title wrong: {:?}",
-        art.metadata.title
+    assert_eq!(
+        art.metadata.title.as_deref(),
+        Some("Jamie Author on Keeping an Almanac")
     );
-    assert_eq!(art.metadata.date.as_deref(), Some("2026-05-19"));
-    assert_eq!(art.metadata.author.as_deref(), Some("Yi Liu"));
-    assert_eq!(art.metadata.publisher.as_deref(), Some("China Books Review"));
+    assert_eq!(art.metadata.date.as_deref(), Some("2025-06-10"));
+    assert_eq!(art.metadata.author.as_deref(), Some("Alex Reporter"));
+    assert_eq!(art.metadata.publisher.as_deref(), Some("Example Books Review"));
     assert_eq!(art.metadata.lang.as_deref(), Some("en"));
 
     let md = &art.markdown;
-    assert!(md.len() > 5_000, "body too short: {} bytes", md.len());
-    assert!(md.contains("Liang Qichao"));
-    assert!(md.contains("Thirteen Talks"));
+    assert!(md.len() > 2_000, "body too short: {} bytes", md.len());
+    assert!(md.contains("The Lantern Almanac"));
+    assert!(md.contains("Twelve Evenings"));
 
+    // A book card wraps its cover image in a link; the cover is still queued.
     assert!(
         art.media_urls
-            .iter()
-            .any(|u| u.contains("chinabooksreview.com/wp-content/")),
-        "expected at least one CBR CDN image"
+            .contains("https://books.example.org/wp-content/uploads/2025/06/lantern-almanac-cover.jpg"),
+        "expected the linked book cover in media_urls: {:?}",
+        art.media_urls
     );
 }
 
 #[test]
-fn china_media_project_real_america_extracts_body() {
-    let html = fixture("china-media-real-america");
+fn page_builder_layout_extracts_body() {
+    // No <article> and no .entry-content: the body sits in builder panels
+    // under <main>, which the scorer has to fall back to.
+    let html = fixture("page-builder-article");
     let art = extract_article(
         &html,
-        "https://chinamediaproject.org/2024/04/15/who-is-seeing-the-real-america/",
+        "https://media.example.org/2024/08/05/moonlight-markets/",
     );
 
-    assert!(
-        art.metadata
-            .title
-            .as_deref()
-            .map_or(false, |t| t.contains("Real America")),
-        "title wrong: {:?}",
-        art.metadata.title
+    assert_eq!(
+        art.metadata.title.as_deref(),
+        Some("Who Is Watching the Moonlight Markets?")
     );
     let md = &art.markdown;
     assert!(md.len() > 3_000, "body too short: {} bytes", md.len());
-    assert!(md.contains("zero-dollar") || md.contains("Zero-dollar"));
+    assert!(md.contains("moonlight-market video"), "body paragraphs missing");
 }
 
 #[test]
-fn journoportfolio_aggregator_extracts_some_links() {
-    // Yi's portfolio page is a JS-rendered aggregator. We don't get her full
-    // work list (JS doesn't run), but we DO extract the article links that
-    // are present in the server-rendered HTML — useful as a seed list for
-    // batch import.
-    let html = fixture("portfolio-journoportfolio");
-    let art = extract_article(&html, "https://yiliu.journoportfolio.com/");
+fn portfolio_listing_extracts_outbound_article_links() {
+    // A hosted portfolio's work list: a grid of cards, each one a single
+    // link out to the published article, with images only JS would load.
+    // Cards past the first page arrive by JS and are not in the HTML, but
+    // the server-rendered ones survive — useful as a seed list for batch
+    // import.
+    let html = fixture("portfolio-listing");
+    let art = extract_article(&html, "https://alexreporter.portfolio.example.com/");
     let md = &art.markdown;
 
-    assert!(md.len() > 200, "aggregator body too thin");
-    // At least one outbound external article link survives in markdown.
-    assert!(
-        md.contains("https://www.thewirechina.com")
-            || md.contains("https://chinabooksreview.com")
-            || md.contains("https://thechinaproject.com"),
-        "expected at least one outbound article URL in the aggregator import"
-    );
+    assert!(md.len() > 200, "listing body too thin");
+    // Every card's link survives: the scorer keeps the listing, not one card.
+    for url in [
+        "https://books.example.org/2025/06/10/jamie-author/",
+        "https://media.example.org/2024/08/05/moonlight-markets/",
+        "https://www.example.net/2023/05/03/harbour-master-ledger/",
+        "https://news.example.com/2023/09/21/lighthouse-keepers/",
+        "https://magazine.example.com/2022/11/14/salt-roads/",
+        "https://www.example.net/2022/06/02/tide-tables/",
+    ] {
+        assert!(md.contains(url), "outbound article link missing: {url}");
+    }
 }

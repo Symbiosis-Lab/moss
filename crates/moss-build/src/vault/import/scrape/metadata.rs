@@ -470,8 +470,8 @@ mod tests {
     #[test]
     fn strip_site_suffix_em_dash() {
         assert_eq!(
-            strip_site_suffix("Finding China's Voice — Abroad - The Wire China"),
-            "Finding China's Voice — Abroad"
+            strip_site_suffix("A Reporter's Voice — Abroad - Example Times"),
+            "A Reporter's Voice — Abroad"
         );
     }
 
