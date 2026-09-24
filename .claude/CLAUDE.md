@@ -7,6 +7,7 @@ Read [ARCHITECTURE.md](../ARCHITECTURE.md) before creating or moving any file �
 This is the MIT-licensed public half of moss (`moss-core`, `moss-build`, `moss-cli`, `packages/`). Everything committed here is visible to the world. Before writing anything (code, comments, commit messages, docs):
 
 - No paths from outside this repository, and no names of other repositories.
+- No internal ADR ids or design-doc paths (`docs/decisions/…`, `docs/archive/…`) — they live in the private desktop repo and a stranger can't open them. Keep the claim and reword it to stand on its own. `25dc7f1f` removed about 560 of these, and a change prepared the same day re-added two from text it had copied before that commit.
 - No client, site, or person names.
 - No internal issue/tracker numbers — they resolve against the wrong tracker for a stranger reading this repo, or don't resolve at all.
 - No AI attribution in commits or generated text.
