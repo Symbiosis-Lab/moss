@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Video and audio embeds dropped `wide`/`page`/`screen`; audio embeds now also carry `data-type="audio"` like every other kind.
 - A folder embed with more than one pipe segment set its `style` to the whole remainder, and `sort=date` was ignored.
 - A bare percent on a video or iframe (`|77%`) is now emitted as an inline style width instead of an invalid `width="77%"` attribute.
+- **An unlabeled `:::grid N {scroll}` row that actually scrolls now gets an accessible name.** It was a keyboard stop (`tabindex="0"`) with no `role` or name at all unless the author wrote `label="…"` — a screen reader announced a focusable element with nothing to say about it. Without an explicit `label`, the row now falls back to the text of the nearest preceding heading (`## Related` above the row names it "Related"); with no such heading, today's unnamed-but-scrollable output is unchanged.
 
 ## [0.15.0] - 2026-09-06
 

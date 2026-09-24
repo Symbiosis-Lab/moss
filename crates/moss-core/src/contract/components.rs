@@ -1343,7 +1343,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-scroll",
                 values: &[],
                 default: "",
-                description: "Presence flag: emitted from the bare `scroll` keyword (`:::grid N {scroll}`). Keeps the row on one line — the reader drags it sideways instead of it wrapping or collapsing. Always paired with `tabindex=\"0\"` (keyboard-scrollable, same affordance as `.moss-table-scroll`); a `label=\"…\"` attribute alongside `scroll` adds `role=\"region\"` and an escaped `aria-label` naming the row for assistive tech.",
+                description: "Presence flag: emitted from the bare `scroll` keyword (`:::grid N {scroll}`). Keeps the row on one line — the reader drags it sideways instead of it wrapping or collapsing. Always paired with `tabindex=\"0\"` (keyboard-scrollable, same affordance as `.moss-table-scroll`); also gets `role=\"region\"` plus an escaped `aria-label` naming the row for assistive tech — the author's own `label=\"…\"` text when they wrote one, else the nearest preceding heading's text, or neither attribute when no name is available at all.",
             },
         ],
         example_html: r#"<div class="moss-grid" data-width="wide">

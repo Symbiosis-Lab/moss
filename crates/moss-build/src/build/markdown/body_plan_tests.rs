@@ -314,6 +314,99 @@ fn a_short_intro_with_no_release_point_stays_whole() {
     assert_eq!(end, total);
 }
 
+// ── scroll-row accessible name ────────────────────────────────────────
+//
+// A `:::grid {scroll}` row with no explicit `label` is otherwise a keyboard
+// stop with no accessible name — a screen reader announces an unnamed
+// focusable element. `render_segmented` is the one place that can see the
+// blocks preceding a top-level grid, so it names an unlabeled row after the
+// nearest preceding heading's text (see `nearest_heading_label`), the same
+// `aria-label` an author's own `label=` would have produced.
+
+fn grid_open_tag(md: &str) -> String {
+    let hooks = DefaultHooks::new();
+    let doc = parse(md);
+    let plan = render_segmented(&doc, &hooks);
+    let BodySegment::Grid(grid) = plan
+        .segments
+        .into_iter()
+        .find(|s| matches!(s, BodySegment::Grid(_)))
+        .expect("expected a grid segment")
+    else {
+        unreachable!()
+    };
+    grid.open_tag
+}
+
+#[test]
+fn scroll_row_under_a_heading_is_named_by_that_heading() {
+    let open_tag = grid_open_tag(
+        "## Related\n\n:::grid 3 {scroll}\nA\n+++\nB\n+++\nC\n+++\nD\n:::\n",
+    );
+    assert!(
+        open_tag.contains(r#"role="region" aria-label="Related""#),
+        "got: {open_tag}"
+    );
+}
+
+#[test]
+fn scroll_row_explicit_label_wins_over_the_heading() {
+    let open_tag = grid_open_tag(
+        "## Related\n\n:::grid 3 {scroll label=\"Custom name\"}\nA\n+++\nB\n+++\nC\n+++\nD\n:::\n",
+    );
+    assert!(
+        open_tag.contains(r#"role="region" aria-label="Custom name""#),
+        "got: {open_tag}"
+    );
+    assert!(!open_tag.contains("Related"), "got: {open_tag}");
+}
+
+#[test]
+fn scroll_row_with_no_preceding_heading_gets_no_role() {
+    let open_tag = grid_open_tag(":::grid 3 {scroll}\nA\n+++\nB\n+++\nC\n+++\nD\n:::\n\nAfter.\n");
+    assert!(open_tag.contains(r#"data-scroll tabindex="0""#), "got: {open_tag}");
+    assert!(!open_tag.contains("role="), "got: {open_tag}");
+    assert!(!open_tag.contains("aria-label"), "got: {open_tag}");
+}
+
+#[test]
+fn scroll_row_picks_the_nearer_of_two_preceding_headings() {
+    let open_tag = grid_open_tag(
+        "## First\n\nBody one.\n\n## Second\n\n:::grid 3 {scroll}\nA\n+++\nB\n+++\nC\n+++\nD\n:::\n",
+    );
+    assert!(
+        open_tag.contains(r#"aria-label="Second""#),
+        "got: {open_tag}"
+    );
+    assert!(!open_tag.contains("First"), "got: {open_tag}");
+}
+
+#[test]
+fn scroll_row_heading_fallback_flattens_inline_markup() {
+    // `nearest_heading_label` reuses `inlines_to_plain_text`, the shared
+    // flattening policy — a heading with emphasis in it still produces a
+    // plain `aria-label`, not the markdown asterisks.
+    let open_tag = grid_open_tag(
+        "## Read *this* first\n\n:::grid 3 {scroll}\nA\n+++\nB\n+++\nC\n+++\nD\n:::\n",
+    );
+    assert!(
+        open_tag.contains(r#"aria-label="Read this first""#),
+        "got: {open_tag}"
+    );
+}
+
+#[test]
+fn a_scroll_row_that_fits_gets_no_accessible_name_machinery_either() {
+    // Owner-side rule: `scrolls()` is false when the cells already fit in one
+    // row, so this grid renders exactly like a plain grid — no data-scroll,
+    // no tabindex, and (new) no role/aria-label, even under a heading.
+    let open_tag = grid_open_tag("## Related\n\n:::grid 3 {scroll}\nA\n+++\nB\n+++\nC\n:::\n");
+    assert!(!open_tag.contains("data-scroll"), "got: {open_tag}");
+    assert!(!open_tag.contains("tabindex"), "got: {open_tag}");
+    assert!(!open_tag.contains("role="), "got: {open_tag}");
+    assert!(!open_tag.contains("aria-label"), "got: {open_tag}");
+}
+
 #[test]
 fn plan_lede_segments_split_the_body_without_cutting_an_element() {
     let hooks = DefaultHooks::new();

@@ -100,7 +100,7 @@ Wildfire Recovery
 ::::
 :::
 
-`label="..."` names the row for assistive technology (`role="region"` plus an `aria-label`) — add it whenever the surrounding heading doesn't already say what the row is. Without a label the row is still keyboard-scrollable (focus it and press the arrow keys) but has no accessible name of its own.
+`label="..."` names the row for assistive technology (`role="region"` plus an `aria-label`) — without it, the row's name defaults to the nearest heading above it (so add `label` only when that heading doesn't already say what the row is, or when there's no heading above it at all); with neither, the row is still keyboard-scrollable (focus it and press the arrow keys) but has no accessible name of its own.
 
 Set the `--moss-grid-scroll-peek` custom property to control exactly how many pixels of the next card show at the row's edge (default `2.5rem`, so with the defaults that's 40px of the next card, not an approximation); lower it toward `0` to hide the cue, or raise it for a more insistent one.
 

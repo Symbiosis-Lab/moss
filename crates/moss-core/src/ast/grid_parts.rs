@@ -164,6 +164,16 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
         // whose cells already fit in one row (`cells.len() <= columns`)
         // needs none of this — no dots, no drag, full-width cards, same as
         // the grid without `scroll` at all. See `GridShortcode::scrolls`.
+        //
+        // `label` may be the author's own `{label="…"}` text, or — when
+        // they wrote none — the nearest preceding heading's text, filled in
+        // by the one caller that can see a document's top-level blocks
+        // (moss-build's `render_segmented`, via `grid_with_heading_fallback`
+        // in `body_plan.rs`) before this function ever runs. Either way this
+        // function only ever reads `args.label`; it cannot tell the two
+        // apart, and doesn't need to — an unnamed keyboard stop is a real
+        // accessibility gap (a screen reader announces a focusable element
+        // with no name), and both are equally valid names for it.
         if args.scrolls() {
             open_tag.push_str(r#" data-scroll tabindex="0""#);
             if let Some(label) = &args.label {

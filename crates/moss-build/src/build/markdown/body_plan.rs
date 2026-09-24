@@ -279,6 +279,51 @@ pub fn lede_end(blocks: &[Block]) -> usize {
     blocks.len()
 }
 
+/// The nearest heading's text before index `i` in `blocks` — the accessible
+/// name an unlabeled `:::grid {scroll}` row falls back to (a row directly
+/// under `## Related` is named "Related"). Scans backward and stops at the
+/// FIRST heading found, same parent list only: a grid nested inside a
+/// callout or list item never reaches this function, since `render_segmented`
+/// only special-cases `Shortcode::Grid` at the top level. `None` when nothing
+/// precedes `i`, when the nearest preceding block isn't a heading, or when
+/// the nearest heading is empty — never keeps looking past it for an older
+/// one, or "nearest" would be a lie.
+fn nearest_heading_label(preceding: &[Block]) -> Option<String> {
+    for block in preceding.iter().rev() {
+        if let Block::Heading { children, .. } = block {
+            let text = moss_core::ast::inlines_to_plain_text(children);
+            return if text.is_empty() { None } else { Some(text) };
+        }
+    }
+    None
+}
+
+/// Render a `:::grid`'s parts, falling back to the nearest preceding
+/// heading's text as the scroll row's accessible name when the author wrote
+/// no explicit `label=` — see [`nearest_heading_label`]. `args` is cloned
+/// only on this rare path (an actually-scrolling row, no author label, a
+/// heading to borrow from); every other grid — the vast majority — renders
+/// through the caller's own reference with no allocation. Kept to a
+/// borrowed-`label` swap rather than a new `render_grid_parts` parameter: the
+/// trait is public (moss-core is the MIT-licensed open half), and every other
+/// caller of [`RenderHooks::render_grid_parts`] already has no sibling blocks
+/// in view, so a parameter only this one caller could ever fill is a
+/// signature every implementor pays for and none but this one uses.
+fn grid_parts_with_heading_fallback<H: RenderHooks + ?Sized>(
+    hooks: &H,
+    args: &GridShortcode,
+    source_line: Option<usize>,
+    preceding: &[Block],
+) -> GridParts {
+    if args.scrolls() && args.label.is_none() {
+        if let Some(label) = nearest_heading_label(preceding) {
+            let named = GridShortcode { label: Some(label), ..args.clone() };
+            return hooks.render_grid_parts(&named, source_line);
+        }
+    }
+    hooks.render_grid_parts(args, source_line)
+}
+
 /// Blocks whose rendering assumes the full content column.
 fn is_full_width_block(block: &Block) -> bool {
     match block {
@@ -314,7 +359,8 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
         match block {
             Block::Shortcode(Shortcode::Grid(args)) => {
                 flush(&mut buf, &mut segments);
-                let parts = hooks.render_grid_parts(args, meta.source_line);
+                let parts =
+                    grid_parts_with_heading_fallback(hooks, args, meta.source_line, &doc.blocks[..i]);
                 segments.push(BodySegment::Grid(emission(args, parts)));
             }
             Block::Shortcode(Shortcode::Subscribe(args)) => {
