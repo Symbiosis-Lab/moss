@@ -12,18 +12,25 @@
 // token-highlighted source with zero additional logic of their own.
 // (Retired 2026-08-18 for its affordance, revived 2026-09-01 with the mode
 // control — docs/archive/2026-08-31-editor-modes-and-chip-bar-redesign.md §2.)
+//
+// EDITOR FOCUS (cm-editor-focus.ts) is threaded here the same way, as the
+// opposite case: while the host reports the editor unfocused, no line is
+// active and no node touches the selection. Source mode wins over it — raw
+// source is the mode, not a reveal.
 
 import type { EditorState } from '@codemirror/state';
 import { isSourceMode } from './cm-source-mode.js';
+import { isRevealSuspended } from './cm-editor-focus.js';
 
 /** Returns the set of 1-based line numbers that contain any selection range.
- *  In source mode: every line of the document. */
+ *  In source mode: every line of the document. Unfocused: none. */
 export function getActiveLines(state: EditorState): Set<number> {
   const lines = new Set<number>();
   if (isSourceMode(state)) {
     for (let l = 1; l <= state.doc.lines; l++) lines.add(l);
     return lines;
   }
+  if (isRevealSuspended(state)) return lines;
   for (const range of state.selection.ranges) {
     const startLine = state.doc.lineAt(range.from).number;
     const endLine = state.doc.lineAt(range.to).number;
@@ -68,5 +75,6 @@ export function spanOnActiveLine(state: EditorState, from: number, to: number): 
  */
 export function nodeTouchesSelection(state: EditorState, from: number, to: number): boolean {
   if (isSourceMode(state)) return true;
+  if (isRevealSuspended(state)) return false;
   return state.selection.ranges.some((r) => from <= r.to && r.from <= to);
 }

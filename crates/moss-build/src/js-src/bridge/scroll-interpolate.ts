@@ -2,7 +2,7 @@
 //
 // Extracted so the real bridge code path is unit-tested directly (the bridge
 // itself is an injected IIFE that can't be imported in jsdom). See
-// frontend/app/preview/__tests__/iframe-bridge-scroll-sync.test.ts.
+// __tests__/iframe-bridge-scroll-sync.test.ts.
 
 /**
  * Absolute document scrollTop to place a source line that falls BETWEEN two
@@ -69,3 +69,79 @@ export function isAlreadyShowing(top: number, viewportHeight: number): boolean {
 
 /** Fraction of the viewport at each edge that does NOT count as "showing". */
 export const QUIET_BAND = 0.15;
+
+/**
+ * Viewport fraction of the sync "focus line" (0 = top, 0.5 = centre). The
+ * editor anchors the same source line at the same fraction of its own
+ * viewport, so the two values must stay equal.
+ */
+export const FOCUS_FRACTION = 0.5;
+
+/** Sub-pixel scroll positions and elastic overscroll mean scrollY may not be
+ *  exactly 0 at the top; 4px is below any visible chrome and above rounding
+ *  error in WKWebView. The editor uses the same threshold for its own top. */
+const TOP_THRESHOLD = 4;
+/** Symmetric slack for the bottom edge. */
+const BOTTOM_THRESHOLD = 4;
+
+/** The source line an annotated element was rendered from (a range reports its
+ *  first line), or 0 for an element that carries no annotation. */
+export function getSourceLine(el: Element): number {
+  const lineAttr = el.getAttribute('data-source-line');
+  if (lineAttr) return parseInt(lineAttr, 10);
+  const rangeAttr = el.getAttribute('data-source-range');
+  if (rangeAttr) return parseInt(rangeAttr.split('-')[0], 10);
+  return 0;
+}
+
+/** Where the preview is: the source line at its focus line, plus the two edge
+ *  signals the editor honours before the line. */
+export interface ScrollPosition {
+  line: number;
+  atTop: boolean;
+  atBottom: boolean;
+}
+
+/**
+ * Read where the preview is, the same way whether the user just scrolled it or
+ * the editor is asking because it opened.
+ *
+ * `line` is the annotated element ON the focus line — the last one whose top is
+ * at or above it — so the editor aligns that line at its own focus line. Above
+ * every annotation (near the page top) the topmost visible one stands in; with
+ * none at all it is 0, or 1 at the very top, where `atTop` is what the editor
+ * actually acts on.
+ *
+ * `atTop` and `atBottom` are authoritative and independent of annotations.
+ * Page chrome (a site header, a hero) and the last screenful (a tall footer, an
+ * unannotated embed) carry no `data-source-line`, so a line alone cannot say
+ * "the page is at its top" or "at its end"; without the flags the editor would
+ * chase a line near the edge instead. A page too short to scroll sets both, and
+ * the editor resolves `atTop` first.
+ */
+export function readScrollPosition(win: Window): ScrollPosition {
+  const doc = win.document;
+  const focusY = win.innerHeight * FOCUS_FRACTION;
+  let focusEl: Element | null = null;
+  let focusElTop = -Infinity;
+  let topEl: Element | null = null;
+  let topElTop = Infinity;
+  for (const el of doc.querySelectorAll('[data-source-line], [data-source-range]')) {
+    const top = el.getBoundingClientRect().top;
+    if (top <= focusY && top > focusElTop) {
+      focusElTop = top;
+      focusEl = el;
+    }
+    if (top >= -10 && top < topElTop) {
+      topElTop = top;
+      topEl = el;
+    }
+  }
+  const chosen = focusEl ?? topEl;
+  const atTop = win.scrollY < TOP_THRESHOLD;
+  const maxScroll = doc.documentElement.scrollHeight - win.innerHeight;
+  const atBottom = win.scrollY >= maxScroll - BOTTOM_THRESHOLD;
+  let line = chosen ? getSourceLine(chosen) : 0;
+  if (atTop && line === 0) line = 1;
+  return { line, atTop, atBottom };
+}

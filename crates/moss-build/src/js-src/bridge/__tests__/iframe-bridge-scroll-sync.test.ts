@@ -7,17 +7,15 @@
  * reported line belongs to the currently-active page (and not a page
  * that was just superseded by a navigation).
  *
- * Since iframe-bridge.ts is an IIFE injected into the preview iframe,
- * we test the emitted payload shape by:
- *   (a) running a local harness that mirrors the bridge's
- *       reportScrollPosition() logic, and
- *   (b) asserting the shipped, minified bundle contains the URL field
- *       so the behavior can't regress silently.
+ * iframe-bridge.ts is an IIFE injected into the preview iframe and cannot be
+ * imported, so what it computes lives in scroll-interpolate.ts and is tested
+ * here directly; what only the bridge does (the message literal, the RPC case)
+ * is asserted against the shipped bundle.
  */
 import { describe, it, test, expect, beforeEach, vi } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { interpolatedScrollTop, isAlreadyShowing } from "../scroll-interpolate";
+import { getSourceLine, interpolatedScrollTop, isAlreadyShowing, readScrollPosition } from "../scroll-interpolate";
 
 const BUNDLE_PATH = resolve(
   __dirname,
@@ -31,210 +29,72 @@ if (!bundleExists) {
   );
 }
 
-/**
- * Mirrors iframe-bridge.ts reportScrollPosition(). Reports the annotated element
- * ON the focus line (FOCUS_FRACTION = 0.5 of the viewport) — the last element at
- * or above it — falling back to the topmost element when the focus line is above
- * them all. Then posts { type, url, line } to window.parent.
- */
-const FOCUS_FRACTION = 0.5;
-function reportScrollPosition(win: Window & typeof globalThis): void {
-  const els = win.document.querySelectorAll(
-    "[data-source-line], [data-source-range]"
-  );
-  const focusY = win.innerHeight * FOCUS_FRACTION;
-  let focusEl: Element | null = null;
-  let focusElTop = -Infinity;
-  let topEl: Element | null = null;
-  let topElTop = Infinity;
-  let topLine = 0;
-
-  for (const el of Array.from(els)) {
-    const top = el.getBoundingClientRect().top;
-    if (top <= focusY && top > focusElTop) { focusElTop = top; focusEl = el; }
-    if (top >= -10 && top < topElTop) { topElTop = top; topEl = el; }
-  }
-  const chosen = focusEl ?? topEl;
-  if (chosen) {
-    const raw = chosen.getAttribute("data-source-line");
-    topLine = raw ? parseInt(raw, 10) : 0;
-  }
-
-  if (topLine > 0) {
-    win.parent.postMessage(
-      { type: "moss-scroll-position", url: win.location.href, line: topLine },
-      "*"
-    );
-  }
-}
-
-describe("iframe-bridge scroll position messages", () => {
-  type PostedMsg = { type: string; url?: string; line?: number };
-  let posted: PostedMsg[];
-  let win: Window & typeof globalThis;
-
-  beforeEach(() => {
-    posted = [];
-    // Pretend window.parent is a separate object with a postMessage spy.
-    const parentStub = { postMessage: vi.fn((msg: PostedMsg) => posted.push(msg)) };
-
-    // Build a minimal DOM with a source-line-tagged element positioned
-    // in the upper 30% of the viewport.
-    document.body.innerHTML =
-      '<p data-source-line="42" id="target">hello</p>';
-    const target = document.getElementById("target")!;
-    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
-      top: 10,
-      left: 0,
-      right: 100,
-      bottom: 30,
-      width: 100,
-      height: 20,
-      x: 0,
-      y: 10,
-      toJSON() {},
-    } as DOMRect);
-
-    // Override innerHeight so 10px top falls into the upper 30%.
-    Object.defineProperty(window, "innerHeight", {
-      configurable: true,
-      value: 800,
-    });
-
-    // jsdom doesn't allow reassigning window.location; use defineProperty.
-    Object.defineProperty(window, "parent", {
-      configurable: true,
-      value: parentStub,
-    });
-
-    // Force a known href without navigating jsdom.
-    history.replaceState(null, "", "/posts/foo/");
-
-    win = window as unknown as Window & typeof globalThis;
-  });
-
-  it("moss-scroll-position includes url field matching location.href", () => {
-    reportScrollPosition(win);
-
-    const scrollMsg = posted.find((m) => m.type === "moss-scroll-position");
-    expect(scrollMsg).toBeDefined();
-    expect(scrollMsg!.url).toBe(window.location.href);
-    expect(scrollMsg!.url).toContain("/posts/foo/");
-    expect(typeof scrollMsg!.line).toBe("number");
-    expect(scrollMsg!.line).toBe(42);
-  });
-
-  test.skipIf(!bundleExists)(
-    "shipped iframe-bridge.js bundle emits url alongside moss-scroll-position",
-    () => {
-      const bundle = readFileSync(BUNDLE_PATH, "utf8");
-
-      // Find the minified moss-scroll-position emit site and verify it
-      // carries both url (from location.href) and line in the same object
-      // literal. The bundle is minified, so we match loosely.
-      const scrollEmitRegion = bundle.match(
-        /"moss-scroll-position"[\s\S]{0,200}/
-      );
-      expect(scrollEmitRegion).not.toBeNull();
-      const region = scrollEmitRegion![0];
-      expect(region).toMatch(/url\s*:\s*[a-zA-Z_$][\w$.]*\.href|location\.href/);
-      expect(region).toMatch(/line\s*:/);
+describe("readScrollPosition (what a scroll reports, and what the editor gets when it asks)", () => {
+  /** Lay out annotated paragraphs at the given viewport tops. */
+  function page(tops: Record<string, number>, scrollY: number, scrollHeight = 5000): Window {
+    document.body.innerHTML = Object.keys(tops)
+      .map((line) => `<p data-source-line="${line}" id="l${line}">x</p>`)
+      .join("");
+    for (const [line, top] of Object.entries(tops)) {
+      vi.spyOn(document.getElementById(`l${line}`)!, "getBoundingClientRect")
+        .mockReturnValue({ top } as DOMRect);
     }
-  );
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
+    Object.defineProperty(window, "scrollY", { configurable: true, value: scrollY });
+    Object.defineProperty(document.documentElement, "scrollHeight", { configurable: true, value: scrollHeight });
+    return window;
+  }
+
+  it("reports the line on the focus line, not the first one visible", () => {
+    // Focus line is 400px down an 800px viewport: 12 sits on it, 9 above.
+    expect(readScrollPosition(page({ 9: 50, 12: 380, 20: 700 }, 1500)))
+      .toEqual({ line: 12, atTop: false, atBottom: false });
+  });
+
+  it("near the page top, the topmost visible line stands in for the focus line", () => {
+    expect(readScrollPosition(page({ 3: 600 }, 200)).line).toBe(3);
+  });
+
+  it("at the very top with nothing annotated in view, reports line 1 and atTop", () => {
+    expect(readScrollPosition(page({}, 0))).toEqual({ line: 1, atTop: true, atBottom: false });
+  });
+
+  it("past the top with nothing annotated in view, reports no line", () => {
+    expect(readScrollPosition(page({}, 200)).line).toBe(0);
+  });
+
+  it("at the page bottom, reports atBottom within the 4px slack", () => {
+    // 5000px page, 800px viewport: the bottom is 4200.
+    expect(readScrollPosition(page({ 90: 300 }, 4198)).atBottom).toBe(true);
+    expect(readScrollPosition(page({ 90: 300 }, 1000)).atBottom).toBe(false);
+  });
+
+  it("a page too short to scroll is at both edges; the receiver resolves atTop first", () => {
+    expect(readScrollPosition(page({ 1: 20 }, 0, 600))).toMatchObject({ atTop: true, atBottom: true });
+  });
+
+  it("a range annotation reports its first line", () => {
+    document.body.innerHTML = '<div data-source-range="18-42" id="g">grid</div>';
+    expect(getSourceLine(document.getElementById("g")!)).toBe(18);
+  });
 });
 
-// ── Task 1: preview reports line 1 at literal top ─────────────────────
-
-const TOP_THRESHOLD = 4;
-
-/** Post-fix harness mirroring reportScrollPosition. When scrollY < threshold
- * AND no annotated element was found in the upper 30%, send line: 1 so the
- * editor can mirror "at top". Without this, page chrome (site header, hero
- * block) that lacks data-source-line annotations swallows the sync. */
-function reportScrollPositionV2(win: Window & typeof globalThis): void {
-  const els = win.document.querySelectorAll(
-    "[data-source-line], [data-source-range]"
-  );
-  let topEl: Element | null = null;
-  let topLine = 0;
-
-  for (const el of Array.from(els)) {
-    const rect = el.getBoundingClientRect();
-    if (rect.top >= -10 && rect.top < win.innerHeight * 0.3) {
-      if (!topEl || rect.top < topEl.getBoundingClientRect().top) {
-        topEl = el;
-        const raw = el.getAttribute("data-source-line");
-        topLine = raw ? parseInt(raw, 10) : 0;
-      }
+describe("shipped bundle", () => {
+  test.skipIf(!bundleExists)(
+    "moss-scroll-position carries url alongside the line",
+    () => {
+      const region = readFileSync(BUNDLE_PATH, "utf8").match(/"moss-scroll-position"[\s\S]{0,200}/);
+      expect(region).not.toBeNull();
+      expect(region![0]).toMatch(/url\s*:\s*[a-zA-Z_$][\w$.]*\.href|location\.href/);
+      expect(region![0]).toMatch(/line\s*:/);
+      expect(region![0]).toMatch(/atBottom\s*:/);
     }
-  }
-
-  if (topLine === 0 && win.scrollY < TOP_THRESHOLD) {
-    topLine = 1;
-  }
-
-  if (topLine > 0) {
-    win.parent.postMessage(
-      { type: "moss-scroll-position", url: win.location.href, line: topLine },
-      "*"
-    );
-  }
-}
-
-describe("iframe-bridge scroll position at literal top", () => {
-  type PostedMsg = { type: string; url?: string; line?: number };
-  let posted: PostedMsg[];
-  let win: Window & typeof globalThis;
-
-  beforeEach(() => {
-    posted = [];
-    const parentStub = { postMessage: vi.fn((msg: PostedMsg) => posted.push(msg)) };
-
-    // Page header has NO data-source-line. The first annotated paragraph
-    // sits below the upper-30% window (top: 600px in an 800px viewport).
-    document.body.innerHTML =
-      '<header id="hdr">Site</header>' +
-      '<p data-source-line="3" id="below-fold">content</p>';
-    const belowFold = document.getElementById("below-fold")!;
-    vi.spyOn(belowFold, "getBoundingClientRect").mockReturnValue({
-      top: 600, left: 0, right: 100, bottom: 620, width: 100, height: 20, x: 0, y: 600, toJSON() {},
-    } as DOMRect);
-
-    Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
-    Object.defineProperty(window, "parent", { configurable: true, value: parentStub });
-    Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
-
-    history.replaceState(null, "", "/posts/foo/");
-    win = window as unknown as Window & typeof globalThis;
-  });
-
-  it("emits line: 1 when scrollY is at the literal top and no element is in the upper 30%", () => {
-    reportScrollPositionV2(win);
-    const msg = posted.find((m) => m.type === "moss-scroll-position");
-    expect(msg).toBeDefined();
-    expect(msg!.line).toBe(1);
-  });
-
-  it("does NOT emit when scrollY is past the threshold and no element is in upper 30%", () => {
-    Object.defineProperty(window, "scrollY", { configurable: true, value: 200 });
-    reportScrollPositionV2(win);
-    const msg = posted.find((m) => m.type === "moss-scroll-position");
-    expect(msg).toBeUndefined();
-  });
+  );
 
   test.skipIf(!bundleExists)(
-    "shipped iframe-bridge.js bundle emits line:1 fallback when scrollY is at top",
+    "answers the scrollPosition RPC",
     () => {
-      const bundle = readFileSync(BUNDLE_PATH, "utf8");
-      // The atTop refactor stores `scrollY < TOP_THRESHOLD` in a local variable,
-      // then applies it in a `<var>&&<topLine>===0&&(<topLine>=1)` chain. The
-      // minifier renames the identifier AND — now that atBottom is computed in
-      // the same scope — folds the declaration into a multi-declarator
-      // (`let c=…scrollY<l,u=…,h=…;c&&s===0&&(s=1)`), so match the atTop var
-      // across the rest of the declaration and back-reference it at the use site.
-      expect(bundle).toMatch(
-        /(?:let|var|const)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;]*scrollY\s*<[^;]*;[\s\S]{0,160}\1\s*&&[^;]{0,40}=\s*1\b/
-      );
+      expect(readFileSync(BUNDLE_PATH, "utf8")).toMatch(/case\s*"scrollPosition"/);
     }
   );
 });
@@ -326,87 +186,6 @@ describe("scrollToSourceLine at line 1", () => {
 // This PR adds an explicit `atTop: boolean` to moss-scroll-position and to
 // the scrollToSourceLine RPC, AND removes the legacy `line <= 1` backstops
 // from both call sites. See docs/archive/2026-05-28-scroll-sync-atTop-wire-field.md.
-
-const TOP_THRESHOLD_V3 = 4;
-
-/** Post-atTop reportScrollPosition. Always emits atTop boolean. */
-function reportScrollPositionV3(win: Window & typeof globalThis): void {
-  const els = win.document.querySelectorAll(
-    "[data-source-line], [data-source-range]"
-  );
-  let topEl: Element | null = null;
-  let topLine = 0;
-
-  for (const el of Array.from(els)) {
-    const rect = el.getBoundingClientRect();
-    if (rect.top >= -10 && rect.top < win.innerHeight * 0.3) {
-      if (!topEl || rect.top < topEl.getBoundingClientRect().top) {
-        topEl = el;
-        const raw = el.getAttribute("data-source-line");
-        topLine = raw ? parseInt(raw, 10) : 0;
-      }
-    }
-  }
-
-  const atTop = win.scrollY < TOP_THRESHOLD_V3;
-
-  // If at-top but no element matched, fall back to line: 1 so the receiver
-  // has some line number to carry. atTop is the authoritative signal.
-  if (atTop && topLine === 0) {
-    topLine = 1;
-  }
-
-  if (topLine > 0) {
-    win.parent.postMessage(
-      { type: "moss-scroll-position", url: win.location.href, line: topLine, atTop },
-      "*"
-    );
-  }
-}
-
-describe("iframe-bridge atTop wire field — emit", () => {
-  type PostedMsg = { type: string; url?: string; line?: number; atTop?: boolean };
-  let posted: PostedMsg[];
-
-  beforeEach(() => {
-    posted = [];
-    const parentStub = { postMessage: vi.fn((msg: PostedMsg) => posted.push(msg)) };
-
-    document.body.innerHTML = '<p data-source-line="5" id="p5">x</p>';
-    const p5 = document.getElementById("p5")!;
-    vi.spyOn(p5, "getBoundingClientRect").mockReturnValue({
-      top: 50, left: 0, right: 100, bottom: 70, width: 100, height: 20, x: 0, y: 50, toJSON() {},
-    } as DOMRect);
-    Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
-    Object.defineProperty(window, "parent", { configurable: true, value: parentStub });
-    history.replaceState(null, "", "/posts/foo/");
-  });
-
-  it("emits atTop: true with the real line when scrollY=0", () => {
-    Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
-    reportScrollPositionV3(window as Window & typeof globalThis);
-    const msg = posted.find((m) => m.type === "moss-scroll-position");
-    expect(msg).toBeDefined();
-    expect(msg!.atTop).toBe(true);
-    expect(msg!.line).toBe(5);  // line stays accurate; atTop is the authoritative signal
-  });
-
-  it("emits atTop: false when scrollY=500", () => {
-    Object.defineProperty(window, "scrollY", { configurable: true, value: 500 });
-    reportScrollPositionV3(window as Window & typeof globalThis);
-    const msg = posted.find((m) => m.type === "moss-scroll-position");
-    expect(msg!.atTop).toBe(false);
-  });
-
-  it("at-top with no annotated element falls back to line: 1 and atTop: true", () => {
-    document.body.innerHTML = '<header>Site</header>';
-    Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
-    reportScrollPositionV3(window as Window & typeof globalThis);
-    const msg = posted.find((m) => m.type === "moss-scroll-position");
-    expect(msg!.atTop).toBe(true);
-    expect(msg!.line).toBe(1);
-  });
-});
 
 describe("scrollToSourceLine RPC — atTop arg", () => {
   let scrollToCalls: Array<{ top: number; behavior: string }>;
@@ -571,54 +350,6 @@ describe("interpolatedScrollTop (real bridge geometry)", () => {
     // next visually at or above best → span floored to 0, land at best.
     expect(interpolatedScrollTop(0, 300, 200, 0.5)).toBe(300);
   });
-});
-
-// ── atBottom return leg (symmetric with atTop) ───────────────────────────────
-//
-// The preview reporter must post an atBottom signal so the editor's return
-// handler can park at its own bottom instead of chasing a stale upper-30% line
-// — the asymmetry that let editor→preview EOF sync bounce. Mirrors the bridge's
-// reportScrollPosition atBottom predicate.
-describe("reportScrollPosition atBottom edge signal", () => {
-  const TOP = 4;
-  const BOTTOM = 4;
-  function edges(scrollY: number, scrollHeight: number, innerHeight: number) {
-    const atTop = scrollY < TOP;
-    const maxScroll = scrollHeight - innerHeight;
-    const atBottom = scrollY >= maxScroll - BOTTOM;
-    return { atTop, atBottom };
-  }
-
-  it("is true at the page bottom (scrollY at max)", () => {
-    // 5000px page, 800px viewport → max scroll 4200.
-    expect(edges(4200, 5000, 800).atBottom).toBe(true);
-    expect(edges(4198, 5000, 800).atBottom).toBe(true); // within 4px slack
-    expect(edges(4200, 5000, 800).atTop).toBe(false);
-  });
-
-  it("is false in the middle of a tall page", () => {
-    expect(edges(1000, 5000, 800).atBottom).toBe(false);
-    expect(edges(1000, 5000, 800).atTop).toBe(false);
-  });
-
-  it("a page too short to scroll resolves to top (both flags true, atTop wins)", () => {
-    // maxScroll <= 0, so any scrollY >= maxScroll-4 → atBottom, and scrollY≈0 → atTop.
-    const e = edges(0, 600, 800);
-    expect(e.atTop).toBe(true);
-    expect(e.atBottom).toBe(true); // receiver checks atTop first → parks at top
-  });
-});
-
-describe("shipped bundle emits the atBottom return signal", () => {
-  test.skipIf(!bundleExists)(
-    "moss-scroll-position emit carries atBottom alongside line + atTop",
-    () => {
-      const bundle = readFileSync(BUNDLE_PATH, "utf8");
-      const region = bundle.match(/"moss-scroll-position"[\s\S]{0,200}/);
-      expect(region).not.toBeNull();
-      expect(region![0]).toMatch(/atBottom\s*:/);
-    }
-  );
 });
 
 // ── The caret half of the sync (2026-08-21) ────────────────────────────────

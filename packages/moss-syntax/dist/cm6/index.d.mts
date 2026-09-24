@@ -6,7 +6,7 @@ import { Diagnostic } from "@codemirror/lint";
 
 //#region src/cm6/cm-active-lines.d.ts
 /** Returns the set of 1-based line numbers that contain any selection range.
- *  In source mode: every line of the document. */
+ *  In source mode: every line of the document. Unfocused: none. */
 declare function getActiveLines(state: EditorState): Set<number>;
 /** Returns true if any line of the node range overlaps with active lines. */
 declare function isNodeActive(state: EditorState, from: number, to: number, activeLines: Set<number>): boolean;
@@ -44,18 +44,31 @@ declare function sourceModeChanged(tr: Transaction): boolean;
 /**
  * The one rebuild gate for every consumer of the reveal predicates: did this
  * transaction change anything getActiveLines / nodeTouchesSelection reads?
- * Doc, selection — and the mode flip, which is effect-only and therefore
- * invisible to the doc/selection checks alone. Builders compose their own
+ * Doc, selection — and the mode flip and the editor gaining or losing focus,
+ * which are effect-only and therefore invisible to the doc/selection checks
+ * alone. Builders compose their own
  * extras (treeAdvanced, refsResolved) on top; they must never re-spell this
- * triple, because a hand-written gate is how four consumers shipped stale
+ * set, because a hand-written gate is how four consumers shipped stale
  * decorations across the flip (thermo review, 2026-09-01).
  */
 declare function revealInputsChanged(tr: Transaction): boolean;
 /** ViewUpdate-shaped twin of revealInputsChanged, for ViewPlugin update gates. */
 declare function revealInputsChangedIn(update: ViewUpdate): boolean;
 //#endregion
+//#region src/cm6/cm-editor-focus.d.ts
+/** The host's report that the user started or stopped working in the editor. */
+declare const setEditorFocusedEffect: _codemirror_state0.StateEffectType<boolean>;
+/** Install to make reveals follow focus. Starts unfocused, as a newly opened
+ *  editor is until the user reaches into it. */
+declare const editorFocusField: StateField<boolean>;
+/** True when the host installed `editorFocusField` and the editor is not
+ *  focused: no line is active and no node touches the selection. */
+declare function isRevealSuspended(state: EditorState): boolean;
+/** True when this transaction suspended or resumed reveals — effect-only, so
+ *  invisible to the doc/selection checks alone. */
+declare function revealSuspensionChanged(tr: Transaction): boolean;
+//#endregion
 //#region src/cm6/cm-link-extract.d.ts
-
 interface ExtractedTarget {
   /** The link target text (URL path or wikilink page name). */
   target: string;
@@ -677,4 +690,4 @@ declare const footnoteTheme: Extension;
  */
 declare function footnoteExtension(): Extension;
 //#endregion
-export { CMType, EditorReferenceResolution, EmbedNodeRef, EmbedParts, EmbedSyntax, ExtractedTarget, FolderEmbedParams, FootnoteDeco, FootnoteSite, ImageTarget, LinkValidationResult, LinkedEmbed, ParsedMark, ReferenceCacheRead, ResolveShortcodeAsset, ShortcodeAsset, ShortcodeBlockInfo, ShortcodeBlockOptions, ShortcodeBlockStrings, TreeNode, buildLinkDecorations, classListLabel, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, getActiveLines, imageNodeAtWidget, inShortcodeBody, isBlockActive, isCellDividerLine, isEmbedNode, isLegacyDividerLine, isNodeActive, isSourceMode, legacyDividesCellsAt, linkUnitOfEmbed, linkValidationExtension, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, revealInputsChanged, revealInputsChangedIn, runLinkLintSource, setSourceModeEffect, shortcodeBlockExtension, shortcodeBodyRanges, sourceModeChanged, sourceModeField, spanOnActiveLine, tagParams, topLevelLegacyDividerCount, widthFromPipe };
+export { CMType, EditorReferenceResolution, EmbedNodeRef, EmbedParts, EmbedSyntax, ExtractedTarget, FolderEmbedParams, FootnoteDeco, FootnoteSite, ImageTarget, LinkValidationResult, LinkedEmbed, ParsedMark, ReferenceCacheRead, ResolveShortcodeAsset, ShortcodeAsset, ShortcodeBlockInfo, ShortcodeBlockOptions, ShortcodeBlockStrings, TreeNode, buildLinkDecorations, classListLabel, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, editorFocusField, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, getActiveLines, imageNodeAtWidget, inShortcodeBody, isBlockActive, isCellDividerLine, isEmbedNode, isLegacyDividerLine, isNodeActive, isRevealSuspended, isSourceMode, legacyDividesCellsAt, linkUnitOfEmbed, linkValidationExtension, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, revealInputsChanged, revealInputsChangedIn, revealSuspensionChanged, runLinkLintSource, setEditorFocusedEffect, setSourceModeEffect, shortcodeBlockExtension, shortcodeBodyRanges, sourceModeChanged, sourceModeField, spanOnActiveLine, tagParams, topLevelLegacyDividerCount, widthFromPipe };

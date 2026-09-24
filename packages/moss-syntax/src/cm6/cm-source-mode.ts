@@ -17,6 +17,7 @@
 
 import { EditorState, StateEffect, StateField, type Transaction } from '@codemirror/state';
 import type { ViewUpdate } from '@codemirror/view';
+import { revealSuspensionChanged } from './cm-editor-focus.js';
 
 /** Set source mode on/off. Effect-only transactions (no doc change) — the
  *  save state machine never sees a toggle. */
@@ -51,17 +52,19 @@ export function sourceModeChanged(tr: Transaction): boolean {
 /**
  * The one rebuild gate for every consumer of the reveal predicates: did this
  * transaction change anything getActiveLines / nodeTouchesSelection reads?
- * Doc, selection — and the mode flip, which is effect-only and therefore
- * invisible to the doc/selection checks alone. Builders compose their own
+ * Doc, selection — and the mode flip and the editor gaining or losing focus,
+ * which are effect-only and therefore invisible to the doc/selection checks
+ * alone. Builders compose their own
  * extras (treeAdvanced, refsResolved) on top; they must never re-spell this
- * triple, because a hand-written gate is how four consumers shipped stale
+ * set, because a hand-written gate is how four consumers shipped stale
  * decorations across the flip (thermo review, 2026-09-01).
  */
 export function revealInputsChanged(tr: Transaction): boolean {
-  return tr.docChanged || !!tr.selection || sourceModeChanged(tr);
+  return tr.docChanged || !!tr.selection || sourceModeChanged(tr) || revealSuspensionChanged(tr);
 }
 
 /** ViewUpdate-shaped twin of revealInputsChanged, for ViewPlugin update gates. */
 export function revealInputsChangedIn(update: ViewUpdate): boolean {
-  return update.docChanged || update.selectionSet || update.transactions.some(sourceModeChanged);
+  return update.docChanged || update.selectionSet
+    || update.transactions.some((tr) => sourceModeChanged(tr) || revealSuspensionChanged(tr));
 }

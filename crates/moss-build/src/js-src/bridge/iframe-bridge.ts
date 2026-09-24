@@ -17,7 +17,7 @@ import { pickThemeFromMessage, startPageColor } from "./iframe-bridge-theme";
 import { describeScriptChange, syncBodyAttributes, captureServerBody } from "./morph-guard";
 import { createAssetSwapBuffer } from "./asset-swap-buffer";
 import { bustSrcset, normPath, srcsetMatches, stripBust } from "./asset-urls";
-import { interpolatedScrollTop, isAlreadyShowing } from "./scroll-interpolate";
+import { FOCUS_FRACTION, getSourceLine, interpolatedScrollTop, isAlreadyShowing, readScrollPosition } from "./scroll-interpolate";
 import { installBlueprintFallback } from "./blueprint-fallback";
 import { installSwipeNavigation } from "./swipe-gesture";
 import { startChromeAmbient } from "./chrome-ambient";
@@ -35,8 +35,7 @@ import { installContextMenu } from "./context-menu";
   // in-bridge morph viable). window.__bridgeInitCount must stay 1 across morphs.
   // It is a DIAGNOSTIC, not a gate — it rides in the morph ack, and nothing under
   // tests/ asserts on it. The keystone's coverage is the jsdom harness in
-  // frontend/app/preview/__tests__/iframe-bridge-morph.test.ts, which embeds the
-  // shipped bundle. See docs/reference/editor-preview-sync.md mech 3.
+  // __tests__/iframe-bridge-morph.test.ts, which embeds the shipped bundle.
   (window as unknown as { __bridgeInitCount?: number }).__bridgeInitCount =
     ((window as unknown as { __bridgeInitCount?: number }).__bridgeInitCount || 0) + 1;
 
@@ -296,6 +295,15 @@ import { installContextMenu } from "./context-menu";
           if (!scrollEl) throw new Error(`Element not found: ${args[0]}`);
           scrollEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
           result = true;
+          break;
+
+        // Where the preview is right now, for an editor that has just opened
+        // and must follow it. The same reading a scroll reports, asked for
+        // instead of waited for: an unscrolled page never reports at all.
+        // Unlike the report it ignores _scrollSyncLock — that lock hides the
+        // echo of a scroll the editor caused, and a question is not an echo.
+        case "scrollPosition":
+          result = readScrollPosition(window);
           break;
 
         case "scrollToSourceLine": {
@@ -593,14 +601,6 @@ import { installContextMenu } from "./context-menu";
     | { kind: 'none' };
 
   /** Extract the start source line from an element with data-source-line or data-source-range. */
-  function getSourceLine(el: Element): number {
-    const lineAttr = el.getAttribute('data-source-line');
-    if (lineAttr) return parseInt(lineAttr, 10);
-    const rangeAttr = el.getAttribute('data-source-range');
-    if (rangeAttr) return parseInt(rangeAttr.split('-')[0], 10);
-    return 0;
-  }
-
   function resolveSourceTarget(el: Element | null): SourceTarget | null {
     if (!el) return null;
 
@@ -943,83 +943,15 @@ import { installContextMenu } from "./context-menu";
 
   let _scrollThrottleTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Sub-pixel scroll positions and elastic overscroll mean scrollY may
-  // not be exactly 0 even when the user is at the top. 4px is below any
-  // visible page chrome and above any rounding error in Tauri WKWebView.
-  // Mirror of TOP_THRESHOLD in frontend/app/editor/editor-main.ts; keep
-  // in lockstep unless an intentional divergence is documented.
-  const TOP_THRESHOLD = 4;
-
-  // Symmetric counterpart of TOP_THRESHOLD for the bottom edge. Mirror of
-  // BOTTOM_THRESHOLD in frontend/app/editor/editor-main.ts; keep in lockstep.
-  const BOTTOM_THRESHOLD = 4;
-
-  // Viewport fraction of the sync "focus line" (0 = top, 0.5 = center). MUST
-  // stay in lockstep with FOCUS_FRACTION in
-  // frontend/app/editor/cm-scroll-sync.ts — both panes anchor the same source
-  // line at this fraction of their viewport.
-  const FOCUS_FRACTION = 0.5;
-
   function reportScrollPosition(): void {
     if (_scrollSyncLock) return;
-
-    // Query both data-source-line and data-source-range for scroll position.
-    // Report the annotated element ON the focus line (FOCUS_FRACTION down the
-    // viewport) — the last element whose top is at or above it — so the editor
-    // aligns the same line at its own focus line. Falls back to the topmost
-    // annotated element when the focus line is above them all (near page top).
-    const els = document.querySelectorAll('[data-source-line], [data-source-range]');
-    const focusY = window.innerHeight * FOCUS_FRACTION;
-    let focusEl: Element | null = null;
-    let focusElTop = -Infinity;
-    let topEl: Element | null = null;
-    let topElTop = Infinity;
-    let topLine = 0;
-
-    for (const el of els) {
-      const top = el.getBoundingClientRect().top;
-      if (top <= focusY && top > focusElTop) {
-        focusElTop = top;
-        focusEl = el;
-      }
-      if (top >= -10 && top < topElTop) {
-        topElTop = top;
-        topEl = el;
-      }
-    }
-    const chosen = focusEl ?? topEl;
-    if (chosen) topLine = getSourceLine(chosen);
-
-    // Authoritative "at top" signal — independent of whether any
-    // annotated element is visible. Page chrome (site header, hero) lacks
-    // data-source-line annotation; without atTop, the receiver couldn't
-    // distinguish "scrolled to top, no annotations visible" from "no
-    // signal."
-    const atTop = window.scrollY < TOP_THRESHOLD;
-
-    // Authoritative "at bottom" signal, symmetric with atTop. The last screenful
-    // of a page is often unannotated (a tall footer, or an ![[…]] iframe embed
-    // with no data-source-line), so without this the receiver would chase a
-    // stale upper-30% line when the user is actually at the page bottom — the
-    // asymmetry that let editor→preview EOF sync bounce. atTop is resolved first
-    // by the receiver, so a page too short to scroll (both true) parks at top.
-    const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
-    const atBottom = window.scrollY >= maxScroll - BOTTOM_THRESHOLD;
-
-    // If at-top but the loop found no annotated element, fall back to
-    // line: 1 so the receiver has a numeric line to display in logs.
-    // atTop is the authoritative signal; line is informational.
-    if (atTop && topLine === 0) {
-      topLine = 1;
-    }
-
+    const { line, atTop, atBottom } = readScrollPosition(window);
     // Send when there's a line to report OR an edge flag — atBottom must post
-    // even when no annotated element sits in the upper 30% (line stays 0; the
-    // receiver's atBottom branch ignores the line and scrolls the editor to its
-    // own bottom).
-    if (topLine > 0 || atBottom) {
+    // even when no annotated element sits near the focus line (line stays 0;
+    // the receiver's atBottom branch ignores the line).
+    if (line > 0 || atBottom) {
       window.parent.postMessage(
-        { type: 'moss-scroll-position', url: location.href, line: topLine, atTop, atBottom },
+        { type: 'moss-scroll-position', url: location.href, line, atTop, atBottom },
         '*'
       );
     }
@@ -1170,7 +1102,7 @@ import { installContextMenu } from "./context-menu";
         }
         // NOTE: the morph calls below (veto + head/body innerHTML) are mirrored
         // by a jsdom local harness in
-        // frontend/app/preview/__tests__/iframe-bridge-morph.test.ts — keep that
+        // __tests__/iframe-bridge-morph.test.ts — keep that
         // `applyMorph()` in sync if you change this block (the shipped bundle is
         // also embedded and morphed there).
         // Escape hatch: never reconcile a JS-managed / third-party subtree

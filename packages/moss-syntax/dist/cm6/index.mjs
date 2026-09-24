@@ -5,6 +5,30 @@ import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view
 import { tags } from "@lezer/highlight";
 import { linter } from "@codemirror/lint";
 
+//#region src/cm6/cm-editor-focus.ts
+/** The host's report that the user started or stopped working in the editor. */
+const setEditorFocusedEffect = StateEffect.define();
+/** Install to make reveals follow focus. Starts unfocused, as a newly opened
+*  editor is until the user reaches into it. */
+const editorFocusField = StateField.define({
+	create: () => false,
+	update(value, tr) {
+		for (const e of tr.effects) if (e.is(setEditorFocusedEffect)) value = e.value;
+		return value;
+	}
+});
+/** True when the host installed `editorFocusField` and the editor is not
+*  focused: no line is active and no node touches the selection. */
+function isRevealSuspended(state) {
+	return state.field(editorFocusField, false) === false;
+}
+/** True when this transaction suspended or resumed reveals — effect-only, so
+*  invisible to the doc/selection checks alone. */
+function revealSuspensionChanged(tr) {
+	return isRevealSuspended(tr.startState) !== isRevealSuspended(tr.state);
+}
+
+//#endregion
 //#region src/cm6/cm-source-mode.ts
 /** Set source mode on/off. Effect-only transactions (no doc change) — the
 *  save state machine never sees a toggle. */
@@ -33,30 +57,32 @@ function sourceModeChanged(tr) {
 /**
 * The one rebuild gate for every consumer of the reveal predicates: did this
 * transaction change anything getActiveLines / nodeTouchesSelection reads?
-* Doc, selection — and the mode flip, which is effect-only and therefore
-* invisible to the doc/selection checks alone. Builders compose their own
+* Doc, selection — and the mode flip and the editor gaining or losing focus,
+* which are effect-only and therefore invisible to the doc/selection checks
+* alone. Builders compose their own
 * extras (treeAdvanced, refsResolved) on top; they must never re-spell this
-* triple, because a hand-written gate is how four consumers shipped stale
+* set, because a hand-written gate is how four consumers shipped stale
 * decorations across the flip (thermo review, 2026-09-01).
 */
 function revealInputsChanged(tr) {
-	return tr.docChanged || !!tr.selection || sourceModeChanged(tr);
+	return tr.docChanged || !!tr.selection || sourceModeChanged(tr) || revealSuspensionChanged(tr);
 }
 /** ViewUpdate-shaped twin of revealInputsChanged, for ViewPlugin update gates. */
 function revealInputsChangedIn(update) {
-	return update.docChanged || update.selectionSet || update.transactions.some(sourceModeChanged);
+	return update.docChanged || update.selectionSet || update.transactions.some((tr) => sourceModeChanged(tr) || revealSuspensionChanged(tr));
 }
 
 //#endregion
 //#region src/cm6/cm-active-lines.ts
 /** Returns the set of 1-based line numbers that contain any selection range.
-*  In source mode: every line of the document. */
+*  In source mode: every line of the document. Unfocused: none. */
 function getActiveLines(state) {
 	const lines = /* @__PURE__ */ new Set();
 	if (isSourceMode(state)) {
 		for (let l = 1; l <= state.doc.lines; l++) lines.add(l);
 		return lines;
 	}
+	if (isRevealSuspended(state)) return lines;
 	for (const range of state.selection.ranges) {
 		const startLine = state.doc.lineAt(range.from).number;
 		const endLine = state.doc.lineAt(range.to).number;
@@ -89,6 +115,7 @@ function spanOnActiveLine(state, from, to) {
 */
 function nodeTouchesSelection(state, from, to) {
 	if (isSourceMode(state)) return true;
+	if (isRevealSuspended(state)) return false;
 	return state.selection.ranges.some((r) => from <= r.to && r.from <= to);
 }
 
@@ -1692,4 +1719,4 @@ function footnoteExtension() {
 }
 
 //#endregion
-export { buildLinkDecorations, classListLabel, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, getActiveLines, imageNodeAtWidget, inShortcodeBody, isBlockActive, isCellDividerLine, isEmbedNode, isLegacyDividerLine, isNodeActive, isSourceMode, legacyDividesCellsAt, linkUnitOfEmbed, linkValidationExtension, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, revealInputsChanged, revealInputsChangedIn, runLinkLintSource, setSourceModeEffect, shortcodeBlockExtension, shortcodeBodyRanges, sourceModeChanged, sourceModeField, spanOnActiveLine, tagParams, topLevelLegacyDividerCount, widthFromPipe };
+export { buildLinkDecorations, classListLabel, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, editorFocusField, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, getActiveLines, imageNodeAtWidget, inShortcodeBody, isBlockActive, isCellDividerLine, isEmbedNode, isLegacyDividerLine, isNodeActive, isRevealSuspended, isSourceMode, legacyDividesCellsAt, linkUnitOfEmbed, linkValidationExtension, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, revealInputsChanged, revealInputsChangedIn, revealSuspensionChanged, runLinkLintSource, setEditorFocusedEffect, setSourceModeEffect, shortcodeBlockExtension, shortcodeBodyRanges, sourceModeChanged, sourceModeField, spanOnActiveLine, tagParams, topLevelLegacyDividerCount, widthFromPipe };
