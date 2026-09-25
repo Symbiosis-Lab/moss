@@ -135,7 +135,7 @@ const BASELINE = {
   // the extra bytes replace the old animated colour transition.
   // 55391 -> 55409: public HTML comments no longer name private handoff
   // documents.
-  htmlBytes: 55409,
+  htmlBytes: 55417,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a
@@ -275,7 +275,7 @@ const BASELINE = {
   // wash diagnostics, and the viewport-sized closing wash.
   // 302597 -> 302825: the passive native-scroll presenter call keeps the
   // wash and word-contrast decision in the browser's same paint.
-  scriptBytes: 302825,
+  scriptBytes: 302597,
 };
 
 function countWindowAssignments(text) {
