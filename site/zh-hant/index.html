@@ -94,11 +94,12 @@
      visual-to-copy and copy-to-edge are equal by construction; the whole
      composition is capped at 1440 and centred, so wide screens do not pull
      the two apart. */
-  .page { display: grid; grid-template-columns: calc(var(--vis-w) * var(--s)) minmax(0, 1fr); gap: 0; padding: 0 0 0 56px; max-width: var(--page-max); margin: 0 auto; }
+  .page { position: relative; z-index: 2; display: grid; grid-template-columns: calc(var(--vis-w) * var(--s)) minmax(0, 1fr); gap: 0; padding: 0 0 0 56px; max-width: var(--page-max); margin: 0 auto; }
   /* The left column is as tall as the copy; the visual sticks inside it. */
   /* the cell starts past what hangs left of it: the sheets' 32px spill and the
      left sibling's peek, both of which scale with the composition */
-  #vis { position: sticky; top: 0; height: 100vh; display: flex; align-items: center; padding-left: calc((32px + var(--peek)) * var(--s)); }
+  #vis { position: sticky; top: 0; z-index: 0; height: 100vh; display: flex; align-items: center; padding-left: calc((32px + var(--peek)) * var(--s)); }
+  #copy { position: relative; z-index: 2; }
   #cell { position: relative; width: var(--cell-w); height: var(--cell-h); transform: scale(var(--s)); transform-origin: left center; }
 
   /* Plates: every image the home page itself uses (blakesnotebook.com /
@@ -271,6 +272,7 @@
 
   /* The wash paints only ink and water; elsewhere the canvas is transparent. */
   #gl { position: absolute; inset: calc(-1 * var(--pad)); width: calc(100% + 2 * var(--pad)); height: calc(100% + 2 * var(--pad)); z-index: 6; pointer-events: none; display: none; background: transparent; }
+  #closing-wash { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 1; pointer-events: none; display: none; background: transparent; }
   #stage.morphing #box { visibility: hidden; }
   /* the paper goes into the wash and only the shadow stays: colour and the
      inline placeholder both off (the shorthand would reset the cover sizing and
@@ -524,7 +526,7 @@
     #c4 .lede { color: inherit; }
     .page { position: relative; display: block; width: 100%; padding: 0 16px; }
     #col { margin-top: 0; position: absolute; inset: 0; height: auto; padding-top: var(--mobile-col-pad, 70svh); z-index: 0; pointer-events: none; }
-    #copy { position: relative; z-index: 1; min-width: 0; }
+    #copy { position: relative; z-index: 2; min-width: 0; }
     #vis { margin-left: 0; position: sticky; top: 76px; width: 100%; height: var(--mobile-vis-h, 42vh); min-height: 260px; padding-left: 0; transform: none; align-items: flex-start; justify-content: flex-start; overflow: visible; }
     #stage { position: relative; transform: none; width: calc(var(--cell-w) * var(--s)); height: calc(var(--cell-h) * var(--s)); flex: none; margin: var(--mobile-stage-overhang, 0px) auto 0; }
     #cell { transform: scale(var(--s)); transform-origin: left top; }
@@ -562,7 +564,7 @@
   }
 </style>
 
-<script>history.scrollRestoration = 'manual'; window.__LANG = 'zh';</script>
+<script>history.scrollRestoration = 'manual'; window.__LANG = document.documentElement.lang === 'zh-Hans' || document.documentElement.lang === 'zh-Hant' ? 'zh' : 'en';</script>
 </head>
 <body>
 
@@ -660,7 +662,7 @@
     </div>
     <section id="beta" aria-labelledby="beta-title" tabindex="-1">
       <div><h3 id="beta-title">一起打磨青苔</h3><p>接收不定期的更新消息，並免費試用青苔的預設網站代管服務。</p></div>
-      <p class="static-signup-note">啟用 JavaScript 後即可申請封閉測試。</p><form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">你的電子郵件地址</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="你的電子郵件地址" required><button type="submit">申請封閉測試</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
+      <p class="static-signup-note">Enable JavaScript to request beta access.</p><form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">你的電子郵件地址</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="你的電子郵件地址" required><button type="submit">申請封閉測試</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
     </section>
     <footer id="footer">
       <nav aria-label="頁尾"><a href="/zh-hant/privacy/">隱私權</a><span aria-hidden="true">·</span><a href="https://symbiosis-lab.org/">Symbiosis Lab</a><span aria-hidden="true">·</span><span>2026</span><a class="github-link" href="https://github.com/Symbiosis-Lab/moss" aria-label="在 GitHub 查看青苔"><img src="assets/platforms/github.svg" alt=""></a></nav>
