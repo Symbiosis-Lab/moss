@@ -67,19 +67,22 @@ try {
 
     await page.addStyleTag({ content: 'html { scroll-snap-type: none !important; }' });
     await page.evaluate(async () => {
-      let lo = window.__landing.restY(1), hi = window.__landing.restY(2);
+      let lo = window.__landing.restY(3), hi = document.documentElement.scrollHeight - innerHeight;
       for (let i = 0; i < 12; i++) {
         const y = (lo + hi) / 2;
         scrollTo(0, y);
         await new Promise(requestAnimationFrame);
-        if (window.__landing.state().progress < 1.5) lo = y; else hi = y;
+        if (window.__landing.state().progress < 3.5) lo = y; else hi = y;
       }
       scrollTo(0, (lo + hi) / 2);
     });
-    await page.waitForFunction(() => {
-      const s = window.__landing.state();
-      return s.progress > 1 && s.progress < 2 && stage.style.getPropertyValue('--wash-cover') === '1';
-    }, null, { timeout: 5000 });
+    await page.waitForTimeout(300);
+    const activeWash = await page.evaluate(() => ({
+      progress: window.__landing.state().progress,
+      cover: window.__landing.state().xf,
+      canvas: getComputedStyle(document.querySelector('#closing-wash')).display,
+    }));
+    assert(activeWash.progress > 3 && activeWash.progress < 4 && activeWash.cover > 0 && activeWash.cover < 1 && activeWash.canvas !== 'none', `${test.name}: midpoint did not present an active wash: ${JSON.stringify(activeWash)}`);
     await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
     await page.waitForFunction(() => { const s = window.__landing.state(); return s.shown === 4 && s.xf === 1 && !s.running; }, null, { timeout: 2000 }).catch(async error => { throw new Error(`${test.name}: active jump failed ${JSON.stringify(await state(page))}`, {cause:error}); });
     const activeJoin = await state(page);

@@ -275,7 +275,7 @@ const BASELINE = {
   // wash diagnostics, and the viewport-sized closing wash.
   // 302597 -> 302825: the passive native-scroll presenter call keeps the
   // wash and word-contrast decision in the browser's same paint.
-  scriptBytes: 295626,
+  scriptBytes: 295627,
 };
 
 function countWindowAssignments(text) {
