@@ -68,23 +68,24 @@ describe("scroll dots", () => {
     expect(nav.dataset.indicator).toBe("dots");
   });
 
-  test.each([10, 11])("uses dots at %s cards and a passive fraction above 10", (count) => {
+  test.each([10, 11])("uses full dots through 10 cards and a bounded window above 10", (count) => {
     const g = row(count, "Related");
     initScrollDots();
     const nav = g.nextElementSibling as HTMLElement;
-    expect(nav.dataset.indicator).toBe(count <= 10 ? "dots" : "fraction");
-    expect(nav.querySelectorAll("button")).toHaveLength(count <= 10 ? count : 0);
+    expect(nav.dataset.indicator).toBe(count <= 10 ? "dots" : "dynamic");
+    expect(nav.querySelectorAll("button")).toHaveLength(count <= 10 ? count : 7);
+    expect(nav.getAttribute("role")).toBe("group");
+    expect(nav.getAttribute("aria-label")).toBe("Related");
+    expect(nav.querySelectorAll("button[tabindex=\"0\"]")).toHaveLength(1);
     if (count > 10) {
-      expect(nav.querySelector(".moss-scroll-fraction")?.textContent).toBe("1 / 11");
-      expect(nav.querySelectorAll("[data-current]")).toHaveLength(1);
-      expect(nav.getAttribute("role")).toBeNull();
-      expect(nav.getAttribute("aria-label")).toBeNull();
-      expect(nav.getAttribute("aria-hidden")).toBe("true");
-      expect(nav.querySelectorAll("[tabindex], button, a, input, select, textarea")).toHaveLength(0);
+      expect(nav.querySelectorAll("button")).toHaveLength(7);
+      expect(Array.from(nav.querySelectorAll("button")).map((button) => button.dataset.cardIndex)).toEqual(["0", "1", "2", "3", "4", "5", "6"]);
+      expect(nav.querySelector("button.is-edge-end")).not.toBeNull();
+      expect(nav.querySelectorAll("[tabindex], button, a, input, select, textarea")).toHaveLength(7);
     }
   });
 
-  test("updates the fraction from the first visible card without a live region", () => {
+  test("moves the seven-slot window with the first visible card", () => {
     const g = row(11);
     let intersectionCallback: IntersectionObserverCallback | undefined;
     class FakeIntersectionObserver {
@@ -97,12 +98,31 @@ describe("scroll dots", () => {
     vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
     initScrollDots();
     intersectionCallback?.([
-      { target: g.children[4], isIntersecting: true } as IntersectionObserverEntry,
+      { target: g.children[5], isIntersecting: true } as IntersectionObserverEntry,
     ], {} as IntersectionObserver);
     const nav = g.nextElementSibling as HTMLElement;
-    expect(nav.querySelector("[data-current]")?.textContent).toBe("5");
-    expect(nav.hasAttribute("aria-live")).toBe(false);
-    expect(nav.querySelector(".moss-scroll-fraction")?.getAttribute("aria-hidden")).toBe("true");
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.dataset.cardIndex).toBe("5");
+    expect(Array.from(nav.querySelectorAll("button")).map((button) => button.dataset.cardIndex)).toEqual(["2", "3", "4", "5", "6", "7", "8"]);
+    expect(nav.querySelectorAll("button.is-edge-start, button.is-edge-end")).toHaveLength(2);
+    intersectionCallback?.([
+      { target: g.children[5], isIntersecting: false } as IntersectionObserverEntry,
+      { target: g.children[10], isIntersecting: true } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+    expect(Array.from(nav.querySelectorAll("button")).map((button) => button.dataset.cardIndex)).toEqual(["4", "5", "6", "7", "8", "9", "10"]);
+    expect(nav.querySelector("button.is-edge-start")).not.toBeNull();
+    expect(nav.querySelector("button.is-edge-end")).toBeNull();
+  });
+
+  test("arrow keys move the dynamic window and its single tab stop", () => {
+    const g = row(11);
+    initScrollDots();
+    const nav = g.nextElementSibling as HTMLElement;
+    const current = nav.querySelector("button[aria-current=\"true\"]") as HTMLButtonElement;
+    current.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("11 / 11");
+    expect(nav.querySelectorAll("button[tabindex=\"0\"]")).toHaveLength(1);
+    expect((document.activeElement as HTMLElement)?.getAttribute("aria-label")).toBe("11 / 11");
+    expect(g.children[10].scrollIntoView).toHaveBeenCalled();
   });
 
   test("clicking a dot brings its card to the start of the row", () => {

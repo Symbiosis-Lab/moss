@@ -2,10 +2,12 @@
  * scroll-row.ts — position dots and mouse-wheel scrolling for a
  * `:::grid N {scroll}` row.
  *
- * Up to ten cards get one dot each. Longer rows get a passive fraction instead
- * so a long shelf does not add a second tab stop for every card. In dot mode,
- * cards currently in view are lit and the first of them is `aria-current`.
- * Clicking a dot brings that card to the start of the row.
+ * Up to ten cards get one dot each. Longer rows use a seven-slot moving window
+ * in the style of Apple's page controls: the active dot is prominent and the
+ * smaller edge dots signal that cards continue beyond the visible window. The
+ * control has one roving tab stop, so it never adds one tab stop per card.
+ * Cards currently in view are lit and the first of them is
+ * `aria-current`. Clicking a dot brings that card to the start of the row.
  *
  * Under horizontal typesetting the row scrolls sideways (its inline axis is
  * physical left-right); under vertical typesetting (`writing-mode:
@@ -82,6 +84,7 @@ export {};
 const ROW = ".moss-grid[data-scroll]";
 const DOTS = "moss-scroll-dots";
 const MAX_DOT_COUNT = 10;
+const DYNAMIC_DOT_COUNT = 7;
 
 interface RowState {
   nav: HTMLElement | null;
@@ -187,55 +190,85 @@ function buildDots(row: HTMLElement, state: RowState): void {
 
   const nav = document.createElement("div");
   nav.className = DOTS;
-  const fractionMode = cards.length > MAX_DOT_COUNT;
-  nav.dataset.indicator = fractionMode ? "fraction" : "dots";
-  if (fractionMode) {
-    nav.setAttribute("aria-hidden", "true");
-  } else {
-    nav.setAttribute("role", "group");
-    const label = row.getAttribute("aria-label");
-    if (label) nav.setAttribute("aria-label", label);
-  }
+  const dynamicMode = cards.length > MAX_DOT_COUNT;
+  nav.dataset.indicator = dynamicMode ? "dynamic" : "dots";
+  nav.setAttribute("role", "group");
+  const label = row.getAttribute("aria-label");
+  if (label) nav.setAttribute("aria-label", label);
 
   const reduce = prefersReducedMotion();
-  const dots = cards.length <= MAX_DOT_COUNT
-    ? cards.map((card, i) => {
-        const dot = document.createElement("button");
-        dot.type = "button";
-        // Language-neutral on purpose: a site in any language reads "3 / 8".
-        dot.setAttribute("aria-label", `${i + 1} / ${cards.length}`);
-        dot.addEventListener("click", () =>
-          card.scrollIntoView({ block: "nearest", inline: "start", behavior: reduce ? "auto" : "smooth" }),
-        );
-        nav.appendChild(dot);
-        return dot;
-      })
-    : [];
-  let fractionCurrent: HTMLSpanElement | null = null;
-  if (cards.length > MAX_DOT_COUNT) {
-    const fraction = document.createElement("output");
-    fraction.className = "moss-scroll-fraction";
-    fraction.setAttribute("aria-hidden", "true");
-    fractionCurrent = document.createElement("span");
-    fractionCurrent.dataset.current = "";
-    const total = document.createElement("span");
-    total.dataset.total = "";
-    total.textContent = String(cards.length);
-    fraction.append(fractionCurrent, " / ", total);
-    nav.appendChild(fraction);
-  }
+  const dotCount = dynamicMode ? Math.min(DYNAMIC_DOT_COUNT, cards.length) : cards.length;
+  const dots = Array.from({ length: dotCount }, () => {
+    const dot = document.createElement("button");
+    dot.type = "button";
+    dot.addEventListener("click", () => {
+      const index = Number(dot.dataset.cardIndex);
+      navigateTo(index);
+    });
+    dot.addEventListener("keydown", (e) => {
+      const navigationKey =
+        e.key === "ArrowRight" ||
+        e.key === "ArrowDown" ||
+        e.key === "ArrowLeft" ||
+        e.key === "ArrowUp" ||
+        e.key === "Home" ||
+        e.key === "End";
+      if (!navigationKey) return;
+      e.preventDefault();
+      const current = Number(dot.dataset.cardIndex);
+      const next =
+        e.key === "Home"
+          ? 0
+          : e.key === "End"
+            ? cards.length - 1
+            : e.key === "ArrowRight" || e.key === "ArrowDown"
+              ? Math.min(cards.length - 1, current + 1)
+              : Math.max(0, current - 1);
+      if (cards[next]) {
+        navigateTo(next);
+        dots.find((candidate) => candidate.dataset.cardIndex === String(next))?.focus();
+      }
+    });
+    nav.appendChild(dot);
+    return dot;
+  });
   row.after(nav);
   state.nav = nav;
 
   const inView = new Set<number>();
-  const paint = () => {
-    const first = inView.size ? Math.min(...inView) : 0;
-    if (fractionCurrent) fractionCurrent.textContent = String(first + 1);
-    dots.forEach((dot, i) => {
-      dot.classList.toggle("is-visible", inView.has(i));
-      if (i === first) dot.setAttribute("aria-current", "true");
+  let activeIndex = 0;
+  const windowStart = (index: number): number => {
+    if (!dynamicMode) return 0;
+    const half = Math.floor(dotCount / 2);
+    return Math.max(0, Math.min(index - half, cards.length - dotCount));
+  };
+  const navigateTo = (index: number): void => {
+    const card = cards[index];
+    if (!card) return;
+    activeIndex = index;
+    card.scrollIntoView({ block: "nearest", inline: "start", behavior: reduce ? "auto" : "smooth" });
+    paint(index);
+  };
+  const paint = (requestedIndex?: number) => {
+    const keepIndicatorFocus = nav.contains(document.activeElement);
+    const first = requestedIndex ?? (inView.size ? Math.min(...inView) : activeIndex);
+    activeIndex = first;
+    const start = windowStart(first);
+    dots.forEach((dot, slot) => {
+      const index = start + slot;
+      dot.dataset.cardIndex = String(index);
+      // Numeric labels stay meaningful without imposing an interface language.
+      dot.setAttribute("aria-label", `${index + 1} / ${cards.length}`);
+      dot.tabIndex = index === first ? 0 : -1;
+      dot.classList.toggle("is-visible", inView.has(index));
+      dot.classList.toggle("is-edge-start", dynamicMode && start > 0 && slot === 0);
+      dot.classList.toggle("is-edge-end", dynamicMode && start + dotCount < cards.length && slot === dotCount - 1);
+      if (index === first) dot.setAttribute("aria-current", "true");
       else dot.removeAttribute("aria-current");
     });
+    if (keepIndicatorFocus) {
+      dots.find((dot) => dot.dataset.cardIndex === String(first))?.focus({ preventScroll: true });
+    }
   };
   paint();
   if (typeof IntersectionObserver === "function") {

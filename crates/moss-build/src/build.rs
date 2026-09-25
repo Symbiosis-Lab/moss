@@ -90,6 +90,7 @@ pub(crate) mod process_hooks;
 pub use process_hooks::spawn_process_hooks;
 pub mod ship;
 pub mod terms;
+pub mod place_map;
 pub mod types;
 // New top-level buckets (Task 11 — Phase 3 generator/ redistribution)
 pub mod assets;

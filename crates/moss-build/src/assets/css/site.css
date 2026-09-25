@@ -6562,11 +6562,12 @@ a.moss-grid-card:hover {
 /* Position the indicator under a scroll row (`scroll-row.js` adds it; without the
    script the row still scrolls). The dot is drawn 8px but the button is a
    24px target, the WCAG 2.5.8 minimum. Cards in view are lit; the first of
-   them is also `aria-current` and a touch larger. `currentColor` keeps the
-   dots right on any theme's ground. */
+   them is also `aria-current` and larger. Long rows use seven bounded slots;
+   smaller edge dots signal cards beyond the visible window. `currentColor`
+   keeps the dots right on any theme's ground. */
 .moss-scroll-dots {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: center;
   margin-block-start: -4px;
   color: var(--moss-color-text);
@@ -6607,23 +6608,29 @@ a.moss-grid-card:hover {
 .moss-scroll-dots button[aria-current="true"]::before {
   transform: scale(1.25);
 }
+.moss-scroll-dots[data-indicator="dynamic"] button::before {
+  inline-size: 6px;
+  block-size: 6px;
+  opacity: 0.45;
+  transform: scale(0.9);
+}
+.moss-scroll-dots[data-indicator="dynamic"] button.is-edge-start::before,
+.moss-scroll-dots[data-indicator="dynamic"] button.is-edge-end::before {
+  inline-size: 5px;
+  block-size: 5px;
+  opacity: 0.3;
+  transform: scale(0.7);
+}
+.moss-scroll-dots[data-indicator="dynamic"] button[aria-current="true"]::before {
+  inline-size: 8px;
+  block-size: 8px;
+  opacity: 0.95;
+  transform: scale(1.25);
+}
 .moss-scroll-dots button:focus-visible {
   outline: 2px solid var(--moss-color-ui-accent);
   outline-offset: -2px;
   border-radius: 50%;
-}
-.moss-scroll-dots[data-indicator="fraction"] {
-  color: var(--moss-color-text-secondary);
-  font-size: var(--moss-size-xs);
-  font-variant-numeric: tabular-nums;
-  line-height: 24px;
-  min-block-size: 24px;
-  white-space: nowrap;
-}
-.moss-scroll-fraction {
-  display: inline-block;
-  min-inline-size: 3.5ch;
-  text-align: center;
 }
 @media (prefers-reduced-motion: reduce) {
   .moss-scroll-dots button::before {
