@@ -3691,6 +3691,7 @@ fn grid_scroll_indicator_spacing_only_neutralizes_visible_indicator_margin() {
     let indicator = get_css_rule(DEFAULT_CSS, ".moss-scroll-dots")
         .expect("scroll indicator rule should exist");
     assert!(indicator.contains("margin-block-start: -4px"), "got: {indicator}");
+    assert!(indicator.contains("flex-wrap: nowrap"), "got: {indicator}");
     let button = get_css_rule(DEFAULT_CSS, ".moss-scroll-dots button")
         .expect("scroll indicator button rule should exist");
     assert!(button.contains("inline-size: 24px"), "got: {button}");
@@ -3705,18 +3706,25 @@ fn grid_scroll_indicator_spacing_only_neutralizes_visible_indicator_margin() {
 }
 
 #[test]
-fn long_scroll_indicator_uses_quiet_fraction_rhythm() {
-    let rule = get_css_rule(DEFAULT_CSS, ".moss-scroll-dots[data-indicator=\"fraction\"]")
-        .expect("fraction scroll indicator CSS rule should exist");
-    for declaration in [
-        "color: var(--moss-color-text-secondary)",
-        "font-size: var(--moss-size-xs)",
-        "font-variant-numeric: tabular-nums",
-        "line-height: 24px",
-        "min-block-size: 24px",
-    ] {
-        assert!(rule.contains(declaration), "missing {declaration}: {rule}");
-    }
+fn long_scroll_indicator_uses_bounded_dynamic_dots() {
+    let rule = get_css_rule(DEFAULT_CSS, ".moss-scroll-dots[data-indicator=\"dynamic\"] button::before")
+        .expect("dynamic scroll indicator CSS rule should exist");
+    assert!(rule.contains("inline-size: 6px"), "got: {rule}");
+    assert!(rule.contains("block-size: 6px"), "got: {rule}");
+    let edge = get_css_rule(
+        DEFAULT_CSS,
+        ".moss-scroll-dots[data-indicator=\"dynamic\"] button.is-edge-start::before",
+    )
+    .expect("dynamic edge-dot CSS rule should exist");
+    assert!(edge.contains("inline-size: 5px"), "got: {edge}");
+    assert!(edge.contains("block-size: 5px"), "got: {edge}");
+    let current = get_css_rule(
+        DEFAULT_CSS,
+        ".moss-scroll-dots[data-indicator=\"dynamic\"] button[aria-current=\"true\"]::before",
+    )
+    .expect("dynamic current-dot CSS rule should exist");
+    assert!(current.contains("inline-size: 8px"), "got: {current}");
+    assert!(current.contains("block-size: 8px"), "got: {current}");
 }
 
 #[test]
