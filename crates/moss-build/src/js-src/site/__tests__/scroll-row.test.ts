@@ -125,6 +125,140 @@ describe("scroll dots", () => {
     expect(g.children[10].scrollIntoView).toHaveBeenCalled();
   });
 
+  test("observer updates do not pull keyboard navigation back during a smooth scroll", () => {
+    const g = row(11);
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    class FakeIntersectionObserver {
+      constructor(observerCallback: IntersectionObserverCallback) {
+        intersectionCallback = observerCallback;
+      }
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    initScrollDots();
+    intersectionCallback?.([
+      { target: g.children[0], isIntersecting: true } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+    const nav = g.nextElementSibling as HTMLElement;
+    const current = nav.querySelector("button[aria-current=\"true\"]") as HTMLButtonElement;
+    current.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    intersectionCallback?.([
+      { target: g.children[0], isIntersecting: true } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("11 / 11");
+    expect((document.activeElement as HTMLElement)?.getAttribute("aria-label")).toBe("11 / 11");
+    intersectionCallback?.([
+      { target: g.children[0], isIntersecting: false } as IntersectionObserverEntry,
+      { target: g.children[10], isIntersecting: true } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("11 / 11");
+    intersectionCallback?.([
+      { target: g.children[10], isIntersecting: false } as IntersectionObserverEntry,
+      { target: g.children[9], isIntersecting: true } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("10 / 11");
+  });
+
+  test("pointer scrolling cancels a requested card that never reaches the viewport", () => {
+    const g = row(11);
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    class FakeIntersectionObserver {
+      constructor(observerCallback: IntersectionObserverCallback) {
+        intersectionCallback = observerCallback;
+      }
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    initScrollDots();
+    intersectionCallback?.([
+      { target: g.children[0], isIntersecting: true } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+    const nav = g.nextElementSibling as HTMLElement;
+    const current = nav.querySelector("button[aria-current=\"true\"]") as HTMLButtonElement;
+    current.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    g.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    intersectionCallback?.([
+      { target: g.children[0], isIntersecting: false } as IntersectionObserverEntry,
+      { target: g.children[4], isIntersecting: true } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("5 / 11");
+  });
+
+  test("native keyboard scrolling cancels a requested card", () => {
+    const g = row(11);
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    class FakeIntersectionObserver {
+      constructor(observerCallback: IntersectionObserverCallback) {
+        intersectionCallback = observerCallback;
+      }
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    initScrollDots();
+    intersectionCallback?.([
+      { target: g.children[0], isIntersecting: true } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+    const nav = g.nextElementSibling as HTMLElement;
+    const current = nav.querySelector("button[aria-current=\"true\"]") as HTMLButtonElement;
+    current.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    g.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    intersectionCallback?.([
+      { target: g.children[0], isIntersecting: false } as IntersectionObserverEntry,
+      { target: g.children[4], isIntersecting: true } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("5 / 11");
+  });
+
+  test("a requested card already in view may later leave", () => {
+    const g = row(11);
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    class FakeIntersectionObserver {
+      constructor(observerCallback: IntersectionObserverCallback) {
+        intersectionCallback = observerCallback;
+      }
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    initScrollDots();
+    intersectionCallback?.([
+      { target: g.children[0], isIntersecting: true } as IntersectionObserverEntry,
+      { target: g.children[1], isIntersecting: true } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+    const nav = g.nextElementSibling as HTMLElement;
+    (nav.querySelector("button[data-card-index=\"1\"]") as HTMLButtonElement).click();
+    intersectionCallback?.([
+      { target: g.children[0], isIntersecting: false } as IntersectionObserverEntry,
+      { target: g.children[1], isIntersecting: false } as IntersectionObserverEntry,
+      { target: g.children[4], isIntersecting: true } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("5 / 11");
+  });
+
+  test("arrow keys follow the row's visual axis and direction", () => {
+    const rtl = row(3);
+    rtl.style.direction = "rtl";
+    const vertical = row(3);
+    vertical.style.writingMode = "vertical-rl";
+    initScrollDots();
+
+    const rtlNav = rtl.nextElementSibling as HTMLElement;
+    (rtlNav.querySelector("button[aria-current=\"true\"]") as HTMLButtonElement).dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
+    );
+    expect(rtlNav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("2 / 3");
+
+    const verticalNav = vertical.nextElementSibling as HTMLElement;
+    const verticalCurrent = verticalNav.querySelector("button[aria-current=\"true\"]") as HTMLButtonElement;
+    verticalCurrent.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(verticalNav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("1 / 3");
+    verticalCurrent.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    expect(verticalNav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("2 / 3");
+  });
+
   test("clicking a dot brings its card to the start of the row", () => {
     const g = row(3);
     initScrollDots();

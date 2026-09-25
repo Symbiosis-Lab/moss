@@ -6621,6 +6621,9 @@ a.moss-grid-card:hover {
   opacity: 0.3;
   transform: scale(0.7);
 }
+.moss-scroll-dots[data-indicator="dynamic"] button.is-visible::before {
+  opacity: 0.85;
+}
 .moss-scroll-dots[data-indicator="dynamic"] button[aria-current="true"]::before {
   inline-size: 8px;
   block-size: 8px;

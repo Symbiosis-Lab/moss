@@ -89,6 +89,7 @@ const DYNAMIC_DOT_COUNT = 7;
 interface RowState {
   nav: HTMLElement | null;
   io: IntersectionObserver | null;
+  cancelNavigation: (() => void) | null;
 }
 
 const rows = new WeakMap<HTMLElement, RowState>();
@@ -134,9 +135,14 @@ export function initScrollDots(root: ParentNode = document): void {
 function attach(row: HTMLElement): void {
   let state = rows.get(row);
   if (!state) {
-    state = { nav: null, io: null };
+    state = { nav: null, io: null, cancelNavigation: null };
     rows.set(row, state);
-    row.addEventListener("wheel", (e) => onWheel(row, e), { passive: false });
+    row.addEventListener("wheel", (e) => {
+      state!.cancelNavigation?.();
+      onWheel(row, e);
+    }, { passive: false });
+    row.addEventListener("pointerdown", () => state!.cancelNavigation?.(), { passive: true });
+    row.addEventListener("keydown", () => state!.cancelNavigation?.());
     if (typeof ResizeObserver === "function") {
       new ResizeObserver(() => fit(row, state!)).observe(row);
     }
@@ -174,6 +180,18 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
 
+function navigationStep(row: HTMLElement, key: string): -1 | 1 | null {
+  if (isVertical(row)) {
+    if (key === "ArrowDown") return 1;
+    if (key === "ArrowUp") return -1;
+    return null;
+  }
+  const rtl = getComputedStyle(row).direction === "rtl";
+  if (key === "ArrowRight") return rtl ? -1 : 1;
+  if (key === "ArrowLeft") return rtl ? 1 : -1;
+  return null;
+}
+
 /** (Re)builds the indicator for `row` from its current children. Idempotent: a
  * rebuild first tears down whatever the last one made — the observer it
  * pointed at the old cards, and the nav element itself, which a morph may
@@ -184,6 +202,7 @@ function buildDots(row: HTMLElement, state: RowState): void {
   state.nav?.remove();
   state.nav = null;
   state.io = null;
+  state.cancelNavigation = null;
 
   const cards = Array.from(row.children) as HTMLElement[];
   if (cards.length < 2) return;
@@ -197,7 +216,7 @@ function buildDots(row: HTMLElement, state: RowState): void {
   if (label) nav.setAttribute("aria-label", label);
 
   const reduce = prefersReducedMotion();
-  const dotCount = dynamicMode ? Math.min(DYNAMIC_DOT_COUNT, cards.length) : cards.length;
+  const dotCount = dynamicMode ? DYNAMIC_DOT_COUNT : cards.length;
   const dots = Array.from({ length: dotCount }, () => {
     const dot = document.createElement("button");
     dot.type = "button";
@@ -206,13 +225,8 @@ function buildDots(row: HTMLElement, state: RowState): void {
       navigateTo(index);
     });
     dot.addEventListener("keydown", (e) => {
-      const navigationKey =
-        e.key === "ArrowRight" ||
-        e.key === "ArrowDown" ||
-        e.key === "ArrowLeft" ||
-        e.key === "ArrowUp" ||
-        e.key === "Home" ||
-        e.key === "End";
+      const step = navigationStep(row, e.key);
+      const navigationKey = step !== null || e.key === "Home" || e.key === "End";
       if (!navigationKey) return;
       e.preventDefault();
       const current = Number(dot.dataset.cardIndex);
@@ -221,9 +235,7 @@ function buildDots(row: HTMLElement, state: RowState): void {
           ? 0
           : e.key === "End"
             ? cards.length - 1
-            : e.key === "ArrowRight" || e.key === "ArrowDown"
-              ? Math.min(cards.length - 1, current + 1)
-              : Math.max(0, current - 1);
+            : Math.max(0, Math.min(cards.length - 1, current + (step ?? 0)));
       if (cards[next]) {
         navigateTo(next);
         dots.find((candidate) => candidate.dataset.cardIndex === String(next))?.focus();
@@ -237,6 +249,7 @@ function buildDots(row: HTMLElement, state: RowState): void {
 
   const inView = new Set<number>();
   let activeIndex = 0;
+  let requested: { index: number; reached: boolean } | null = null;
   const windowStart = (index: number): number => {
     if (!dynamicMode) return 0;
     const half = Math.floor(dotCount / 2);
@@ -246,12 +259,13 @@ function buildDots(row: HTMLElement, state: RowState): void {
     const card = cards[index];
     if (!card) return;
     activeIndex = index;
+    requested = { index, reached: inView.has(index) };
     card.scrollIntoView({ block: "nearest", inline: "start", behavior: reduce ? "auto" : "smooth" });
     paint(index);
   };
   const paint = (requestedIndex?: number) => {
     const keepIndicatorFocus = nav.contains(document.activeElement);
-    const first = requestedIndex ?? (inView.size ? Math.min(...inView) : activeIndex);
+    const first = requestedIndex ?? requested?.index ?? (inView.size ? Math.min(...inView) : activeIndex);
     activeIndex = first;
     const start = windowStart(first);
     dots.forEach((dot, slot) => {
@@ -270,6 +284,11 @@ function buildDots(row: HTMLElement, state: RowState): void {
       dots.find((dot) => dot.dataset.cardIndex === String(first))?.focus({ preventScroll: true });
     }
   };
+  state.cancelNavigation = () => {
+    if (!requested) return;
+    requested = null;
+    paint();
+  };
   paint();
   if (typeof IntersectionObserver === "function") {
     const io = new IntersectionObserver(
@@ -278,6 +297,10 @@ function buildDots(row: HTMLElement, state: RowState): void {
           const i = cards.indexOf(e.target as HTMLElement);
           if (e.isIntersecting) inView.add(i);
           else inView.delete(i);
+        }
+        if (requested) {
+          if (inView.has(requested.index)) requested.reached = true;
+          else if (requested.reached) requested = null;
         }
         paint();
       },

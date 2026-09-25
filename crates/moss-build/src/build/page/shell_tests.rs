@@ -3718,6 +3718,12 @@ fn long_scroll_indicator_uses_bounded_dynamic_dots() {
     .expect("dynamic edge-dot CSS rule should exist");
     assert!(edge.contains("inline-size: 5px"), "got: {edge}");
     assert!(edge.contains("block-size: 5px"), "got: {edge}");
+    let visible = get_css_rule(
+        DEFAULT_CSS,
+        ".moss-scroll-dots[data-indicator=\"dynamic\"] button.is-visible::before",
+    )
+    .expect("dynamic visible-dot CSS rule should exist");
+    assert!(visible.contains("opacity: 0.85"), "got: {visible}");
     let current = get_css_rule(
         DEFAULT_CSS,
         ".moss-scroll-dots[data-indicator=\"dynamic\"] button[aria-current=\"true\"]::before",
