@@ -155,6 +155,9 @@ pathdiff = "0.2"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
+# Reference compressor for the deterministic locator size gate; never linked
+# into the production build.
+brotli = "8"
 # vault_root_tests.rs mints unique temp dirs per test.
 uuid = { version = "1.11", features = ["v4"] }
 # The moved build tree's inline tests (M6a).
