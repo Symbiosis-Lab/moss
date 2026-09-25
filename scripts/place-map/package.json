@@ -8,7 +8,12 @@
   },
   "scripts": {
     "check": "python3 generate.py --check",
-    "generate": "python3 generate.py --generate .moss/place-map-source-receipt.json",
-    "test": "python3 -B -m unittest discover -s . -p 'test_*.py'"
+    "generate": "node generate.mjs",
+    "test": "python3 -B -m unittest discover -s . -p 'test_*.py' && node --test test_generate.mjs"
+  },
+  "devDependencies": {
+    "d3-contour": "4.0.2",
+    "h5wasm": "0.10.3",
+    "shpjs": "6.1.0"
   }
 }

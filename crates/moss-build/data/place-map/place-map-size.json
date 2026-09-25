@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "manifest_sha256": "ff8eaffeefb20711c1edf648a2fb7b55c7b00185168a87315f950990d95c384b",
+  "bytes": 1436776,
+  "compressed_bytes": 936441,
+  "budget_bytes": 2883584,
+  "margin_bytes": 1446808,
+  "margin_percent": 50.174,
+  "tiers": {
+    "world": 504794,
+    "fine": 810374
+  },
+  "index": 121496,
+  "layers": {
+    "counts": {
+      "coast": 4133,
+      "land": 11,
+      "lakes": 1355,
+      "rivers": 4224,
+      "ice": 2045,
+      "reefs": 1043,
+      "salt_flats": 73,
+      "built_up": 11878,
+      "relief": 8,
+      "sea_floor": 529
+    },
+    "world_bytes": {
+      "coast": 157585,
+      "land": 11604,
+      "lakes": 8457,
+      "rivers": 164794,
+      "ice": 11428,
+      "reefs": 40139,
+      "salt_flats": 515,
+      "built_up": 1236,
+      "relief": 54695,
+      "sea_floor": 54241
+    },
+    "fine_bytes": {
+      "coast": 177153,
+      "land": 40301,
+      "lakes": 38834,
+      "rivers": 170017,
+      "ice": 43611,
+      "reefs": 40271,
+      "salt_flats": 2489,
+      "built_up": 12725,
+      "relief": 139217,
+      "sea_floor": 145656
+    }
+  }
+}
