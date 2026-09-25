@@ -1157,8 +1157,7 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       w: SW, h: SH,
       bg: tint.map((c) => c * 255),   // the shader's own uTint, for un-premultiplying its output correctly (bgLuminanceUnder, below)
       pixels: () => pixels,
-      // Called once per presented frame (present(), below), and directly by
-      // refreshSmall (below) on a frame draw()/present() did not reach.
+      // Capture once after present() or draw() paints the default framebuffer.
       tick() {
         if (canvas.width < 1 || canvas.height < 1) return;
         gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
@@ -1383,22 +1382,8 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       draw();
       small?.tick();
     },
-    // Item D: refreshes the small readback directly, without going through
-    // a present()/draw() call. Those only run when mob.leg.render() decides
-    // this frame needs a new paint (gated on scroll position changing), but
-    // progressAt() carries its own easing and can keep drifting for a
-    // while after scrollY itself stops moving -- found live, over a second
-    // of continuous touch drag with tick() never called once, because every
-    // sampled p during that stretch matched mob.p already. A word's
-    // background has to be this instant's, not whenever the sim last
-    // happened to redraw, so updateWordContrast calls this itself before
-    // every read rather than trusting draw()'s own cadence to keep it fresh.
-    refreshSmall: () => small?.tick(),
-    // The last small copy the GPU has actually finished (present() or
-    // draw() above, whichever last painted, or refreshSmall just above),
-    // for the per-word contrast flip to sample without a page-wide
-    // readPixels of its own. null before the first tick(), or if this
-    // instance was made without readback:true.
+    // The framebuffer is preserved; moving words can reuse its last readback
+    // until present() or draw() paints and captures a new one.
     smallPixels: () => (small ? { w: small.w, h: small.h, bg: small.bg, pixels: small.pixels() } : null),
   };
 }
@@ -2692,7 +2677,7 @@ const srgbToLin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow(
 const relLuminance = (r, g, b) => 0.2126 * srgbToLin(r) + 0.7152 * srgbToLin(g) + 0.0722 * srgbToLin(b);
 const contrastOf = (l1, l2) => { const a = Math.max(l1, l2), b = Math.min(l1, l2); return (a + 0.05) / (b + 0.05); };
 const parseRGB = (str) => { const m = str.match(/[\d.]+/g); return m ? [+m[0], +m[1], +m[2]] : [0, 0, 0]; };
-let words = null;   // [{ el, ld, required, restColor, bright }], built once, lazily -- first call after boot
+let words = null;   // [{ el, ld, restColor }], built lazily after boot
 function initWords() {
   words = [];
   const wrap = (el) => {
@@ -2713,7 +2698,6 @@ function initWords() {
   for (const el of document.querySelectorAll('.scene .scene-text h2, .scene .scene-text p.lede')) {
     wrap(el);
     const heading = el.tagName === 'H2';
-    const required = heading ? 3 : 4.5;
     // A two-colour (dark/white) flip is gap-free against every possible
     // background luminance only where the dark colour's own luminance is
     // at most 1.05/required^2 - 0.05 -- headings' --text (~0.022) clears
@@ -2729,7 +2713,7 @@ function initWords() {
     // that forced colour for the flip decision itself.
     const restColor = heading ? '' : '#000';
     const ld = heading ? relLuminance(...parseRGB(getComputedStyle(el).color)) : 0;
-    for (const span of el.querySelectorAll('.word')) words.push({ el: span, ld, required, restColor, bright: false, active: false });
+    for (const span of el.querySelectorAll('.word')) words.push({ el: span, ld, restColor });
   }
 }
 // Averages the small readback composited over the page under `rect`
@@ -2758,31 +2742,27 @@ function initWords() {
 function bgLuminanceUnder(rect, canvasRect, small) {
   const nx0 = (rect.left - canvasRect.left) / canvasRect.width, nx1 = (rect.right - canvasRect.left) / canvasRect.width;
   const ny0 = (rect.top - canvasRect.top) / canvasRect.height, ny1 = (rect.bottom - canvasRect.top) / canvasRect.height;
-  const x0 = Math.max(0, Math.floor(nx0 * small.w)), x1 = Math.min(small.w, Math.ceil(nx1 * small.w));
-  const y0 = Math.max(0, Math.floor((1 - ny1) * small.h)), y1 = Math.min(small.h, Math.ceil((1 - ny0) * small.h));
+  const left = nx0 * small.w, right = nx1 * small.w;
+  const bottom = (1 - ny1) * small.h, top = (1 - ny0) * small.h;
+  const x0 = Math.max(0, Math.floor(left)), x1 = Math.min(small.w, Math.ceil(right));
+  const y0 = Math.max(0, Math.floor(bottom)), y1 = Math.min(small.h, Math.ceil(top));
   if (x1 <= x0 || y1 <= y0) return null;
-  const px = small.pixels, bg = small.bg || [255, 255, 255];
+  const px = small.pixels, bg = small.bg;
   let inked = 0, sum = 0, total = 0;
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-    total++;
+    // Edge cells contribute only the area actually beneath the word.
+    const area = (Math.min(x + 1, right) - Math.max(x, left)) * (Math.min(y + 1, top) - Math.max(y, bottom));
+    total += area;
     const i = (y * small.w + x) * 4, a = px[i + 3] / 255;
-    if (a >= 0.05) inked++;
-    sum += relLuminance(px[i] + bg[0] * (1 - a), px[i + 1] + bg[1] * (1 - a), px[i + 2] + bg[2] * (1 - a));
+    if (a >= 0.05) inked += area;
+    sum += area * relLuminance(px[i] + bg[0] * (1 - a), px[i + 1] + bg[1] * (1 - a), px[i + 2] + bg[2] * (1 - a));
   }
   return inked / total > 0.3 ? sum / total : null;
 }
-// Keep the current colour while both choices pass. Switch only when it
-// fails its own floor and the other choice passes; that small overlap is
-// the hysteresis, and neither side is held through an unreadable band.
+// Choose the more readable colour, leaving room for raster rounding rather
+// than holding the previous colour until it reaches the exact contrast floor.
 function updateWordContrast() {
   if (!words) initWords();
-  // Draw() itself may not have run this frame (renderMorphAt's own
-  // render() call is gated on scroll position changing, not on real time
-  // passing), so the small buffer is refreshed here directly rather than
-  // trusting whatever draw() last left it at -- see refreshSmall's own
-  // comment in makeSim. A moving word needs the frame at its current
-  // position; retaining a 40ms-old sample failed on touch reversal.
-  sim?.refreshSmall?.();
   const small = sim?.smallPixels?.();
   if (!small?.pixels) return;
   const canvasRect = canvas.getBoundingClientRect();
@@ -2801,43 +2781,13 @@ function updateWordContrast() {
     // stayed white for the rest of the leg, however light its real
     // background had become (found live: white-on-white, ratio 1.46-2.3,
     // both scored well under white's own 3:1 floor).
-    if (lbg == null) { w.active = false; w.bright = false; w.el.style.color = ''; continue; }
-    const darkC = contrastOf(w.ld, lbg), whiteC = contrastOf(1, lbg);
-    if (!w.active) {
-      // First frame a word is read at all: jump straight to whichever
-      // colour this exact background already calls for, rather than let
-      // the CSS transition fade it in from restColor -- a word can scroll
-      // onto the wash already past the flip-in threshold (a paragraph
-      // entering view over a wash already gone dark), and riding the
-      // 150ms fade from restColor toward white rides its tail straight
-      // through this check's own sampled frame: found live, leg 1->2's
-      // "Everything lives in local files," activated already needing
-      // white and was still short of 4.5:1 most of the way into the fade,
-      // against a background where even fully-white text barely clears
-      // the floor -- no amount of flip-in margin buys enough lead when
-      // the fade itself starts on the word's very first frame. The 150ms
-      // fade the brief asks for is for a reader watching a word flip in
-      // front of them; a word with no prior on-screen colour has no flip
-      // to show, so (like the restColor jump this generalizes) it skips
-      // the fade rather than animate one nobody sees the start of.
-      w.active = true;
-      w.bright = darkC < w.required && whiteC >= w.required;
-      w.el.style.transition = 'none';
-      w.el.style.color = w.bright ? '#fff' : w.restColor;
-      void w.el.offsetHeight;   // flush the transition:none before restoring it
-      w.el.style.transition = '';
-      continue;
-    }
-    let next = w.bright;
-    if (!w.bright && darkC < w.required && whiteC >= w.required) next = true;
-    else if (w.bright && whiteC < w.required && darkC >= w.required) next = false;
-    w.bright = next;
-    w.el.style.color = next ? '#fff' : w.restColor;
+    if (lbg == null) { w.el.style.color = ''; continue; }
+    w.el.style.color = contrastOf(1, lbg) > contrastOf(w.ld, lbg) ? '#fff' : w.restColor;
   }
 }
 function resetWordContrast() {
   if (!words) return;
-  for (const w of words) { w.active = false; w.bright = false; w.el.style.color = ''; }
+  for (const w of words) w.el.style.color = '';
 }
 
 function renderMorphAt(progress) {
@@ -2871,16 +2821,17 @@ function renderMorphAt(progress) {
     // here, and this state must never block the very capture that resolves it.
     showMobileScene(mob.scene === from ? (p >= 0.55 ? to : from) : (p <= 0.45 ? from : to));
     mob.settled = false;   // keep retrying: a print may still arrive with no further scroll
+    driving = false;       // a cut must let the warmer supply its missing print
     return;
   }
   if (p !== mob.p || !mob.settled) {
     const r = mob.leg.render(p, STEPS_PER_FRAME, mobileLayout());
     steps += r.spent; mob.settled = r.exact; mob.p = p;
   }
-  // True only while a dissolve this leg needs is still being recorded -- the
-  // one thing that makes the frame shown lag p. Longer than a few frames
-  // would starve the warmer, which waits on it.
-  driving = !mob.settled;
+  // A recorded checkpoint is still a displayed transition. Keep ownership
+  // while it covers the live scene so the idle warmer cannot replace its
+  // canvas or temporarily switch the stage to a neighbouring scene.
+  driving = between || !mob.settled;
   // The canvas takes the whole composition for the whole leg: never hidden
   // while the reader is between the two scenes.
   const cover = p > 0 && p < 1 ? 1 : 0;
@@ -2889,18 +2840,6 @@ function renderMorphAt(progress) {
     mob.lastCover = cover;
     if (!cover) resetWordContrast();   // the live DOM is fully back: no wash left to read a word's background off
   }
-  // Only while mob.settled: render() above is its own STEPS_PER_FRAME
-  // budget and can still be catching a fast leg up to p over several
-  // frames (driving, just above), so the canvas mid-catch-up is showing
-  // an intermediate frame the flip's own margins were never tuned
-  // against. Found live: four words at one sampled step read a
-  // production luminance of 0.29-0.32 against a real (screenshotted)
-  // background of 0.08-0.10 -- not a stale readback (the small buffer
-  // matched what the canvas had actually drawn), a still-catching-up
-  // one. Holding the word at its last decided colour a few more frames
-  // is the same choice made for a word that scrolls onto unpainted
-  // canvas, just gated on the leg's own progress instead of coverage.
-  if (cover && mob.settled) updateWordContrast();
   showMobileScene(mob.scene === from ? (p >= 0.55 ? to : from) : (p <= 0.45 ? from : to));
   if (!mob.fanSolid && mob.bridge && to === DEPLOY && p > .35 &&
       textBottom(scenesEl[SHIPS]) <= stage.getBoundingClientRect().top + GEOM.cellH * SCALE / 2) {
@@ -2924,6 +2863,9 @@ function renderMorphAt(progress) {
     cell.style.transform = `scale(${SCALE}) translate(${(1 - size) * GEOM.cellW / 2}px, ${(1 - size) * GEOM.cellH / 2}px) scale(${size})`;
     mob.drawnT = t;
   }
+  // Sample every displayed frame, including incomplete recordings, after
+  // the scene and cell transforms have reached their displayed geometry.
+  if (cover) updateWordContrast();
   // The bridge's own lifetime is the leg's: mountLeg above already removes
   // the previous one (if any) before creating this leg's, or leaves it
   // null for a leg that isn't the SHIPS<->DEPLOY pair. Nothing here needs
@@ -4527,8 +4469,6 @@ function watchScrollNative() {
   // Reaching the target still needs frames after the scroll that named it
   // stops: the pigment clock can still be behind p after scrollY stops.
   if (booted && (scrolled || !mob.settled)) renderMorphAt(progressAt());
-  // Mobile contrast readback continues while a covered leg is stationary.
-  else if (mobile && booted && mob.lastCover) updateWordContrast();
   if (!scrolled) return;
   mobileWatchKey = key;
   const dy = lastScrollY == null ? 0 : scrollY - lastScrollY;

@@ -7,7 +7,8 @@
 // through a leg. Driven by real CDP touch events (Input.dispatchTouchEvent,
 // the same technique check-landing-mobile.mjs's swipe() uses), not
 // scrollTo: the point is proving the real input path, not just progressAt().
-import { loadPlaywright, resolveBaseURL, whenReady, PRESETS } from './landing-harness.mjs';
+import { readFile } from 'node:fs/promises';
+import { loadPlaywright, resolveBaseURL, whenReady, PRESETS, installPageOverride } from './landing-harness.mjs';
 
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
 const playwright = await loadPlaywright();
@@ -15,6 +16,19 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 
 const browser = await playwright.chromium.launch({ headless: true });
 const page = await browser.newPage(PRESETS.phone);
+// Pause only while measuring one painted frame. The drag and application
+// run normally between samples; screenshots cannot race later wash paints.
+await page.addInitScript(() => {
+  const raf = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = (callback) => {
+    const frame = (t) => window.__contrastCapture ? raf(frame) : callback(t);
+    return raf(frame);
+  };
+});
+await installPageOverride(page, baseURL, {
+  html: process.env.LANDING_HTML_OVERRIDE ? await readFile(process.env.LANDING_HTML_OVERRIDE, 'utf8') : undefined,
+  jsOverridePath: process.env.LANDING_JS_OVERRIDE,
+});
 await page.goto(baseURL, { waitUntil: 'domcontentloaded' });
 await whenReady(page);
 await page.evaluate(() => { window.__landing.still(0); scrollTo(0, 0); });
@@ -36,130 +50,66 @@ function makeDrag(x = 190, y0 = 420) {
   };
 }
 
-// Every checked frame's ground truth: a screenshot of the canvas itself
-// (not a re-derivation from prints or dens -- the point is what a reader's
-// eye actually meets), plus each overlapping word's own box and live
-// colour. Read together so the pixel crop and the DOM read are of the same
-// paint.
-const VIEWPORT = { width: 390, height: 844 };
+// Read geometry and colour together, then hold that frame while capturing
+// its background. A viewport screenshot has an integer pixel origin;
+// fractional canvas clips otherwise shift the word crops by a pixel.
 const sampleFrame = async () => {
-  const canvasBox = await page.evaluate(() => {
-    const r = document.getElementById('gl').getBoundingClientRect();
-    return { x: r.left, y: r.top, width: r.width, height: r.height };
-  });
-  if (canvasBox.width < 2 || canvasBox.height < 2) return null;
-  // The canvas can extend past the viewport (measured: x as low as -20 on
-  // this layout), but screenshot's own clip cannot -- clamped here, and
-  // *this* clamped rect, not canvasBox itself, is what a pixel offset must
-  // be read against. Using canvasBox.x/y directly here was the bug this
-  // comment replaces: every word's sampled background was off by exactly
-  // however far the canvas hung off the left edge, worst for the words
-  // closest to it.
-  const clip = {
-    x: Math.max(0, canvasBox.x), y: Math.max(0, canvasBox.y),
-    width: Math.min(canvasBox.x + canvasBox.width, VIEWPORT.width) - Math.max(0, canvasBox.x),
-    height: Math.min(canvasBox.y + canvasBox.height, VIEWPORT.height) - Math.max(0, canvasBox.y),
-  };
-  if (clip.width < 2 || clip.height < 2) return null;
-  // The word spans sit visually on top of the canvas, so a plain screenshot
-  // of this clip is the wash AND every glyph's own ink blended together --
-  // averaging that over a word's whole box (bgLuminanceUnder, below) reads
-  // some of the word's own colour back as "background", which for a word
-  // already light (mid-fade or freshly flipped) drags the measured
-  // background up toward white and understates the true contrast against
-  // what is actually behind it. Found live: a lede word 90%+ through its
-  // fade read screenshotLbg 0.18-0.24 and failed 4.5:1 at ratio ~3.6, while
-  // the same pixels' own wash-only reading (rbLbg, sampled off the GPU
-  // readback the same word carries) was 0.11 -- against which its displayed
-  // colour clears 4.5:1 at a real ratio of 5.5. Hiding every word for this
-  // one screenshot (visibility, not display, so layout and the canvas
-  // beneath are untouched) is what makes the crop actually "the pixels
-  // behind it" rather than a mix of that and the text asking the question.
-  await page.evaluate(() => { for (const w of document.querySelectorAll('.word')) w.style.visibility = 'hidden'; });
-  const shot = await page.screenshot({ clip });
-  await page.evaluate(() => { for (const w of document.querySelectorAll('.word')) w.style.visibility = ''; });
-  // inked: does the wash canvas itself (window.__landing.readback(), the
-  // same small buffer updateWordContrast reads) actually have paint under
-  // this word, at all -- #gl is padded past the print's own edges (--pad),
-  // and the print is a fixed image the live, still-scrolling text passes
-  // through, so a word's live position is often over the canvas's own
-  // bounding box but not over anything it painted (measured live: found
-  // fully transparent, a=0, under a real heading word mid-leg). Item D's
-  // own words are "read the darkness of the DISPLAYED wash": nothing
-  // displayed there is nothing to hold the flip to, so an uninked word is
-  // out of this check's scope the same way it is out of
-  // updateWordContrast's own (that function's lbg==null just continues).
-  const words = await page.evaluate(() => {
+  const words = await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => {
+    window.__contrastCapture = true;
     const cv = document.getElementById('gl').getBoundingClientRect();
     const rb = window.__landing.readback?.();
-    return [...document.querySelectorAll('.word')].map((w) => {
+    const sampled = [...document.querySelectorAll('.word')].map((w) => {
       const r = w.getBoundingClientRect();
-      const overlaps = r.right > cv.left && r.left < cv.right && r.bottom > cv.top && r.top < cv.bottom;
-      if (!overlaps) return null;
-      let inked = false, rbLbg = null;
-      if (rb?.pixels) {
-        const nx0 = (r.left - cv.left) / cv.width, nx1 = (r.right - cv.left) / cv.width;
-        const ny0 = (r.top - cv.top) / cv.height, ny1 = (r.bottom - cv.top) / cv.height;
-        const x0 = Math.max(0, Math.floor(nx0 * rb.w)), x1 = Math.min(rb.w, Math.ceil(nx1 * rb.w));
-        const y0 = Math.max(0, Math.floor((1 - ny1) * rb.h)), y1 = Math.min(rb.h, Math.ceil((1 - ny0) * rb.h));
-        let opaque = 0, total = 0, sum = 0;
-        const bg = rb.bg || [255, 255, 255];
-        const srgbToLin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
-        const relLum = (r2, g2, b2) => 0.2126 * srgbToLin(r2) + 0.7152 * srgbToLin(g2) + 0.0722 * srgbToLin(b2);
-        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-          total++; const i = (y * rb.w + x) * 4, a = rb.pixels[i + 3] / 255;
-          // Composite over the page's own bg (rb.bg, the shader's own
-          // uTint), not a straight divide-by-alpha: SHOWK's own output is
-          // premultiplied but not by textbook colour*alpha (its o.rgb is
-          // uTint*(T-(1-a))), so only standard over-compositing matches
-          // what the browser's own canvas compositing -- and so a real
-          // screenshot -- actually shows (matches bgLuminanceUnder's own
-          // fix in site/landing.js).
-          if (rb.pixels[i + 3] > 12) { opaque++; sum += relLum(rb.pixels[i] + bg[0] * (1 - a), rb.pixels[i + 1] + bg[1] * (1 - a), rb.pixels[i + 2] + bg[2] * (1 - a)); }
-        }
-        inked = total > 0 && opaque / total > 0.3;
-        rbLbg = opaque ? sum / opaque : null;
-      }
-      const heading = !!w.closest('h2');
+      if (r.right <= cv.left || r.left >= cv.right || r.bottom <= cv.top || r.top >= cv.bottom) return null;
+      // Diagnostic only: the assertion below uses independent screenshot pixels.
+      const rbLbg = rb?.pixels ? bgLuminanceUnder(r, cv, rb) : null;
       return { text: w.textContent, left: r.left, top: r.top, right: r.right, bottom: r.bottom,
-        color: getComputedStyle(w).color, required: heading ? 3 : 4.5, inked, rbLbg };
+        color: getComputedStyle(w).color, required: w.closest('h2') ? 3 : 4.5,
+        inked: rbLbg != null, rbLbg };
     }).filter(Boolean);
-  });
-  return { shot, clip, words };
+    // Visibility preserves layout while removing each glyph from its own
+    // background measurement.
+    for (const w of document.querySelectorAll('.word')) w.style.visibility = 'hidden';
+    resolve(sampled);
+  })));
+  try {
+    return { shot: await page.screenshot(), words };
+  } finally {
+    await page.evaluate(() => {
+      for (const w of document.querySelectorAll('.word')) w.style.visibility = '';
+      window.__contrastCapture = false;
+    });
+  }
 };
 
-// PNG decode without a dependency: Playwright's screenshot buffer is a
-// PNG; the one thing needed here is raw RGBA pixels, which `sharp` isn't
-// installed for -- reuse the browser's own <canvas> decoder instead of
-// pulling in a new package for a local, single-purpose crop read.
-async function decodePNG(page, buf) {
-  return page.evaluate(async (b64) => {
+// Decode and measure in the browser instead of serializing every RGBA byte
+// across the Playwright connection for every sampled frame.
+async function measureFrame(frame) {
+  return page.evaluate(async ({ b64, words }) => {
     const img = new Image();
     const loaded = new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
     img.src = 'data:image/png;base64,' + b64;
     await loaded;
     const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
     const g = c.getContext('2d'); g.drawImage(img, 0, 0);
-    const d = g.getImageData(0, 0, c.width, c.height).data;
-    return { w: c.width, h: c.height, data: Array.from(d) };
-  }, buf.toString('base64'));
-}
-
-const srgbToLin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
-const relLum = (r, g, b) => 0.2126 * srgbToLin(r) + 0.7152 * srgbToLin(g) + 0.0722 * srgbToLin(b);
-const contrastOf = (l1, l2) => { const a = Math.max(l1, l2), b = Math.min(l1, l2); return (a + 0.05) / (b + 0.05); };
-const parseRGB = (str) => { const m = str.match(/[\d.]+/g); return m ? [+m[0], +m[1], +m[2]] : [0, 0, 0]; };
-
-function bgLuminanceUnder(rect, clip, png) {
-  const x0 = Math.max(0, Math.round(rect.left - clip.x)), x1 = Math.min(png.w, Math.round(rect.right - clip.x));
-  const y0 = Math.max(0, Math.round(rect.top - clip.y)), y1 = Math.min(png.h, Math.round(rect.bottom - clip.y));
-  if (x1 <= x0 || y1 <= y0) return null;
-  let n = 0, sum = 0;
-  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-    const i = (y * png.w + x) * 4;
-    sum += relLum(png.data[i], png.data[i + 1], png.data[i + 2]); n++;
-  }
-  return n ? sum / n : null;
+    const pixels = g.getImageData(0, 0, c.width, c.height).data;
+    const linear = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+    const luminance = (r, g, b) => 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+    return words.filter(w => w.inked).map(w => {
+      const x0 = Math.max(0, Math.round(w.left)), x1 = Math.min(c.width, Math.round(w.right));
+      const y0 = Math.max(0, Math.round(w.top)), y1 = Math.min(c.height, Math.round(w.bottom));
+      if (x1 <= x0 || y1 <= y0) return null;
+      let sum = 0;
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        const i = (y * c.width + x) * 4;
+        sum += luminance(pixels[i], pixels[i + 1], pixels[i + 2]);
+      }
+      const lbg = sum / ((x1 - x0) * (y1 - y0));
+      const [r, g, b] = w.color.match(/[\d.]+/g).map(Number), foreground = luminance(r, g, b);
+      const ratio = (Math.max(lbg, foreground) + 0.05) / (Math.min(lbg, foreground) + 0.05);
+      return { ...w, lbg, ratio, colourKey: r > 200 && g > 200 && b > 200 ? 'bright' : 'dark' };
+    }).filter(Boolean);
+  }, { b64: frame.shot.toString('base64'), words: frame.words });
 }
 
 // One leg, one direction: swipes through it in small real touch steps,
@@ -180,16 +130,10 @@ async function checkLeg(legLabel, totalDy, steps) {
     await drag.moveBy(-totalDy / steps);
     const frame = await sampleFrame();
     if (!frame || !frame.words.length) continue;
-    const png = await decodePNG(page, frame.shot);
-    for (const w of frame.words) {
-      if (!w.inked) continue;   // the wash has nothing displayed here -- out of scope, see sampleFrame's own comment
-      const lbg = bgLuminanceUnder(w, frame.clip, png);
-      if (lbg == null) continue;
-      const [r, g, b] = parseRGB(w.color);
-      const ratio = contrastOf(relLum(r, g, b), lbg);
-      if (ratio < w.required) bad.push({ leg: legLabel, step: i, text: w.text, required: w.required, ratio: +ratio.toFixed(2), color: w.color, screenshotLbg: +lbg.toFixed(3), productionLbg: w.rbLbg == null ? null : +w.rbLbg.toFixed(3) });
+    for (const w of await measureFrame(frame)) {
+      const { ratio, lbg, colourKey } = w;
+      if (ratio < w.required) bad.push({ leg: legLabel, step: i, text: w.text, required: w.required, ratio: +ratio.toFixed(2), color: w.color, screenshotLbg: +lbg.toFixed(3), productionLbg: +w.rbLbg.toFixed(3) });
       const key = w.text + '@' + Math.round(w.left / 4);
-      const colourKey = r > 200 && g > 200 && b > 200 ? 'bright' : 'dark';
       const prior = seen.get(key);
       if (!prior) seen.set(key, { colour: colourKey, flips: 0 });
       else if (prior.colour !== colourKey) { prior.colour = colourKey; prior.flips++; }
@@ -227,6 +171,23 @@ try {
     scrollTo(0, keep);
     return out;
   });
+  // A completed recording halfway through a leg still owns the display.
+  // Exercise the actual idle capture entry, including a missing neighbour.
+  const middle = legBounds[1];
+  assert(middle, 'missing preview-to-creations transition');
+  await page.evaluate(y => scrollTo(0, y), (middle.start + middle.end) / 2);
+  await page.waitForFunction(() => mob.from === 1 && mob.pr && mob.settled && mob.lastCover === 1 && !retaking);
+  results.idleOwnership = await page.evaluate(async () => {
+    const snapshot = () => ({ scene: stage.dataset.scene, pixels: canvas.toDataURL(), colours: [...document.querySelectorAll('.word')].map(w => w.style.color).join('|') });
+    const saved = sheets[DEPLOY], before = snapshot();
+    sheets[DEPLOY] = null;
+    try {
+      await takeOthers([DEPLOY]);
+      const after = snapshot();
+      return { scene: before.scene === after.scene, pixels: before.pixels === after.pixels, colours: before.colours === after.colours };
+    } finally { sheets[DEPLOY] = saved; }
+  });
+  assert(Object.values(results.idleOwnership).every(Boolean), `idle capture replaced an active wash: ${JSON.stringify(results.idleOwnership)}`);
   for (let leg = 0; leg < 4; leg++) {
     const bounds = legBounds[leg];
     const dy = bounds ? bounds.end - bounds.start : 0;
