@@ -310,6 +310,126 @@ fn add_independent_segments(master: &str) -> String {
     out
 }
 
+/// The files that count as `ladder_dir`'s HLS ladder — read from its own
+/// `master.m3u8`, not assumed from a table and not trusted from whatever
+/// else happens to sit in the directory.
+///
+/// `master.m3u8` is the one file every ladder-producing path (a fresh
+/// encode, a cache hit, a legacy-migrated re-encode, a staging heal) writes
+/// LAST and atomically — `link_members`'s own gate-last ordering exists so
+/// that its mere presence already means everything it references landed
+/// first. By the time it exists, its own references are ground truth for
+/// what the ladder actually is, independent of how it got there and
+/// independent of what an earlier, bigger (or differently-shaped) ladder in
+/// the same directory might still be sitting beside it — a shrunk ladder's
+/// dropped rung is never one of these references, so a reader that asks
+/// THIS function instead of the directory never learns about it.
+///
+/// Parsing the real file, rather than reconstructing a member list from a
+/// guessed rung count via [`moss_core::asset_paths::hls_members`], is what
+/// keeps this right for a ladder that table did not produce: an older
+/// site's cache can hold a ladder encoded under a table this build no
+/// longer carries, and a future release may carry one this build has never
+/// seen. `hls_members` still owns the ENCODER's naming — what a fresh
+/// encode writes; this function owns reading back whatever is actually on
+/// disk, whichever table wrote it.
+///
+/// Every reference is paired with its `.m4s` sibling by a plain extension
+/// swap, not by re-deriving a rung table: `-hls_flags single_file` names a
+/// stream's segment file with the SAME `%v` identifier as its playlist
+/// (`build_hls_args`'s own `-hls_segment_filename {out_dir}/%v.m4s` beside
+/// the `{out_dir}/%v.m3u8` output), so the pairing holds for a video rung or
+/// an audio rendition alike, and for a silent source's ladder (no audio
+/// rendition referenced at all) exactly as for one with audio.
+///
+/// `None` only when the gate is POSITIVELY absent
+/// ([`crate::build::icloud::is_definitely_absent`]) — the caller's own
+/// gate-presence check already means this should be rare, but it is what a
+/// genuinely half-written ladder (mid first encode) looks like, and it must
+/// read as "nothing to advertise yet," same as before this function
+/// existed. Any OTHER read failure — a permission error, a still-syncing
+/// iCloud placeholder, `master.m3u8` displaced by a directory — is not
+/// evidence of absence (`io_utils::Presence`'s whole distinction; see its
+/// own doc), so it falls back to [`directory_listing`] instead: presence-
+/// based and conservative, it may include a surplus a smaller ladder left
+/// behind, but unlike `None` it can never drop a real member. Reading the
+/// whole ladder as gone on a transient error is worse than the bug this
+/// function exists to fix — the manifest would drop every member this
+/// build, and a later permitted sweep could then delete a perfectly good
+/// ladder that nothing ever re-registers.
+pub(crate) fn ladder_members_from_master(ladder_dir: &Path) -> Option<Vec<String>> {
+    let master_path = ladder_dir.join(HLS_MASTER_NAME);
+    let master = match std::fs::read_to_string(&master_path) {
+        Ok(content) => content,
+        Err(e) if crate::build::icloud::is_definitely_absent(&master_path, &e) => return None,
+        Err(e) => {
+            log::warn!(
+                "HLS ladder: {} unreadable ({e}) — not evidence it's gone, \
+                 falling back to a directory listing so a real member is never dropped",
+                master_path.display()
+            );
+            return Some(directory_listing(ladder_dir));
+        }
+    };
+    let mut members = vec![HLS_MASTER_NAME.to_string()];
+    let mut after_stream_inf = false;
+    for raw in master.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(uri) = line.starts_with("#EXT-X-MEDIA").then(|| attr(line, "URI")).flatten() {
+            push_member_pair(&mut members, uri);
+        }
+        if line.starts_with('#') {
+            after_stream_inf = line.starts_with("#EXT-X-STREAM-INF");
+            continue;
+        }
+        // The only bare (non-comment) line a VOD multivariant playlist has
+        // is a variant's playlist URI, immediately after its own
+        // #EXT-X-STREAM-INF.
+        if after_stream_inf {
+            push_member_pair(&mut members, line);
+        }
+        after_stream_inf = false;
+    }
+    Some(members)
+}
+
+/// The pre-census fallback for a `master.m3u8` that exists but could not be
+/// read as a file: every name directly inside `ladder_dir`, exactly what
+/// `register_existing_ladders` trusted before this module could ask the
+/// gate instead. Deliberately unfiltered by membership — a name that turns
+/// out to be a surplus rung costs far less than a real member silently
+/// dropped from the manifest over a permission error or a mid-sync file.
+fn directory_listing(ladder_dir: &Path) -> Vec<String> {
+    std::fs::read_dir(ladder_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
+        .collect()
+}
+
+/// `playlist` (a `.m3u8` reference read out of a master playlist) plus its
+/// same-stem `.m4s` segment file — see [`ladder_members_from_master`]'s own
+/// doc for why the pairing is exact rather than assumed.
+///
+/// `playlist` must be a plain file name. Both callers only ever
+/// `ladder_dir.join(name)` with no further check of their own, so an
+/// absolute path, a path carrying a separator, or a bare `..` — anything a
+/// crafted or corrupt `master.m3u8` could use to name a file outside
+/// `ladder_dir` — is ignored rather than trusted.
+fn push_member_pair(members: &mut Vec<String>, playlist: &str) {
+    if playlist.is_empty() || playlist == ".." || playlist.contains('/') || playlist.contains('\\') {
+        return;
+    }
+    if let Some(stem) = playlist.strip_suffix(".m3u8") {
+        members.push(format!("{stem}.m4s"));
+    }
+    members.push(playlist.to_string());
+}
+
 /// Encode the HLS ladder for a source, beside its progressive MP4.
 ///
 /// Encodes the rungs it is given and returns the files it wrote. It does not
@@ -643,6 +763,15 @@ pub(crate) use cache::{legacy_form_params, LegacyShape};
 /// gate: `hls_master_stem` is what marks a stem as laddered, and a directory
 /// without one is a half-written ladder that must not be advertised.
 ///
+/// The gate is also, now, the CENSUS: what gets registered is exactly
+/// [`ladder_members_from_master`]'s reading of the gate's own references,
+/// filtered to what is actually present, never a raw directory listing. A
+/// bigger, earlier ladder can leave a now-dropped rung's files sitting right
+/// beside a smaller one's — nothing physically removes them, since deleting
+/// out from under a background encode that might still be mid-`link_members`
+/// on the very same directory is its own hazard — so the directory itself is
+/// not a trustworthy membership list; the master playlist that gates it is.
+///
 /// `set_pending` here has no paired `set_source_passthrough`, which every other
 /// caller does have. That pairing exists so a variant requested before it is
 /// encoded serves the original bytes; here the file is already on disk, so the
@@ -658,18 +787,23 @@ pub fn register_existing_ladders(
         .filter(|e| e.file_type().is_dir())
     {
         let dir = entry.path();
-        if dir.extension().and_then(|e| e.to_str()) != Some("hls")
-            || !dir.join(HLS_MASTER_NAME).is_file()
-        {
+        if dir.extension().and_then(|e| e.to_str()) != Some("hls") {
             continue;
         }
+        let Some(members) = ladder_members_from_master(dir) else {
+            continue;
+        };
         let Ok(rel_dir) = dir.strip_prefix(staging) else {
             continue;
         };
-        for member in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-            let Some(name) = member.file_name().to_str().map(str::to_owned) else {
+        for name in members {
+            // Present-on-disk, same standard `present_video_output_keys`
+            // (video.rs) holds its own reading of this same census to: the
+            // gate vouches for what SHOULD be there, not for a read that
+            // raced a write and lost.
+            if !dir.join(&name).is_file() {
                 continue;
-            };
+            }
             // Bare, like every other registry writer. The key space no longer
             // has to be guessed — `variant_key` normalizes both forms — so this
             // takes the form the rest of the tree uses.

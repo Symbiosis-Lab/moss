@@ -794,12 +794,20 @@ pub fn hls_master_stem(url: &str) -> Option<&str> {
     dir.strip_suffix(".hls")
 }
 
-/// The names inside one ladder's directory, master first.
+/// The names inside one ladder's directory, master first — what the ENCODER
+/// writes for `rungs`. The image ladder re-derives its membership at five
+/// call sites and this module documents that as a fragile contract; video's
+/// encoder does not repeat it — `produce_ladder`/`link_members` (moss-build)
+/// write exactly this list, from here.
 ///
-/// One owner for the census. The image ladder re-derives its membership at
-/// five call sites and this module documents that as a fragile contract; video
-/// does not repeat it — the encoder writes this list and the registry promises
-/// it, both from here.
+/// This is not how a reader answers "what's in this ladder right now,
+/// today, on disk" — a ladder already sitting in a site's build output may
+/// have been produced under an older or newer table than the one running
+/// today, and this function only ever knows the CURRENT table. moss-build's
+/// `hls::ladder_members_from_master` answers that question instead, by
+/// reading the ladder's own `master.m3u8` back: the master playlist is
+/// authoritative for whatever it actually references, independent of which
+/// table wrote it.
 pub fn hls_members(rungs: &[VideoRung]) -> Vec<String> {
     let mut out = vec![HLS_MASTER_NAME.to_string()];
     for i in 0..rungs.len() {

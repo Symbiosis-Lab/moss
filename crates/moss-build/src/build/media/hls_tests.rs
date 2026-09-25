@@ -290,6 +290,131 @@ fn link_members_never_leaves_the_gate_behind_a_failed_link() {
     );
 }
 
+/// A realistic 4-rung, 2-audio-group master playlist — the shape ffmpeg
+/// actually writes for `hls_members(&VIDEO_LADDER[..4])` — so these tests
+/// exercise the real parser, not a hand-picked stand-in it happens to accept.
+fn four_rung_master() -> &'static str {
+    "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n\
+     #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"alo\",NAME=\"alo\",AUTOSELECT=YES,DEFAULT=YES,URI=\"alo.m3u8\"\n\
+     #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"ahi\",NAME=\"ahi\",AUTOSELECT=YES,DEFAULT=YES,URI=\"ahi.m3u8\"\n\
+     #EXT-X-STREAM-INF:BANDWIDTH=77000,RESOLUTION=320x180,CODECS=\"avc1.42c00c,mp4a.40.2\",AUDIO=\"alo\"\n\
+     v0.m3u8\n\
+     #EXT-X-STREAM-INF:BANDWIDTH=150000,RESOLUTION=416x234,CODECS=\"avc1.42c00c,mp4a.40.2\",AUDIO=\"alo\"\n\
+     v1.m3u8\n\
+     #EXT-X-STREAM-INF:BANDWIDTH=557000,RESOLUTION=640x360,CODECS=\"avc1.4d401f,mp4a.40.2\",AUDIO=\"ahi\"\n\
+     v2.m3u8\n\
+     #EXT-X-STREAM-INF:BANDWIDTH=930000,RESOLUTION=768x432,CODECS=\"avc1.4d401f,mp4a.40.2\",AUDIO=\"ahi\"\n\
+     v3.m3u8\n"
+}
+
+/// The bug this guards: a ladder that SHRINKS (a tighter per-file budget, a
+/// table edit, or the source-bitrate clamp landing on fewer rungs than an
+/// earlier build kept) leaves the dropped rung's files sitting in
+/// `ladder_dir` — nothing unlinks them, because an active unlink here would
+/// race a still-draining background encode that might be mid-`link_members`
+/// on the very same directory. `ladder_members_from_master` is the census
+/// fix instead: it answers "what's in this ladder" from the gate's own
+/// references, which a dropped rung is never one of, regardless of what a
+/// bigger, earlier ladder left beside it.
+#[test]
+fn ladder_members_from_master_excludes_a_surplus_rung_left_by_a_bigger_ladder() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ladder_dir = dir.path().join("clip.hls");
+    std::fs::create_dir_all(&ladder_dir).unwrap();
+    std::fs::write(ladder_dir.join(HLS_MASTER_NAME), four_rung_master()).unwrap();
+    let today = hls_members(&VIDEO_LADDER[..4]);
+    // `today` puts the gate first (`hls_members`' own documented order) —
+    // skip it here so the real playlist just written above survives.
+    for name in today.iter().filter(|n| n.as_str() != HLS_MASTER_NAME) {
+        std::fs::write(ladder_dir.join(name), format!("bytes for {name}")).unwrap();
+    }
+    // A bigger, earlier ladder's now-dropped top rung, left behind exactly
+    // as `link_members` would leave it: real files, just not named by
+    // today's master playlist.
+    std::fs::write(ladder_dir.join("v4.m3u8"), b"stale rung playlist").unwrap();
+    std::fs::write(ladder_dir.join("v4.m4s"), b"stale rung segment").unwrap();
+
+    let members = ladder_members_from_master(&ladder_dir).expect("a real master.m3u8 must parse");
+
+    assert!(!members.contains(&"v4.m3u8".to_string()), "surplus playlist must not be counted: {members:?}");
+    assert!(!members.contains(&"v4.m4s".to_string()), "surplus segment must not be counted: {members:?}");
+    for name in &today {
+        assert!(members.contains(name), "{name} must be counted: {members:?}");
+    }
+    assert_eq!(members.len(), today.len(), "exactly today's ladder, nothing else: {members:?}");
+}
+
+/// A read error is not evidence the ladder is gone. `is_definitely_absent`
+/// only fires on a `NotFound` with no cloud placeholder standing in for it —
+/// anything else (here, `master.m3u8` displaced by a directory, which fails
+/// with something other than `NotFound` on every platform this runs on)
+/// must fall back to a directory listing rather than `None`: reading a
+/// transient failure as "no ladder" would drop every real member from the
+/// manifest this build, and a later permitted sweep could then delete a
+/// perfectly good ladder that nothing ever re-registers.
+#[test]
+fn ladder_members_from_master_falls_back_to_a_directory_listing_when_the_gate_is_unreadable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ladder_dir = dir.path().join("clip.hls");
+    std::fs::create_dir_all(&ladder_dir).unwrap();
+    // A directory standing where the gate file belongs: read_to_string
+    // fails with something other than NotFound, not with empty content.
+    std::fs::create_dir_all(ladder_dir.join(HLS_MASTER_NAME)).unwrap();
+    let today = hls_members(&VIDEO_LADDER[..4]);
+    let real_members: Vec<&String> = today.iter().filter(|n| n.as_str() != HLS_MASTER_NAME).collect();
+    for name in &real_members {
+        std::fs::write(ladder_dir.join(name), format!("bytes for {name}")).unwrap();
+    }
+
+    let members = ladder_members_from_master(&ladder_dir)
+        .expect("an unreadable (not absent) gate must fall back, never read as no ladder at all");
+
+    for name in &real_members {
+        assert!(members.contains(name), "{name} must survive the fallback: {members:?}");
+    }
+}
+
+/// `ladder_members_from_master` only answers "what does the gate say" — this
+/// proves the other reader that used to trust a raw directory listing,
+/// `register_existing_ladders`, actually uses it: a surplus rung must not be
+/// registered as a ready asset, the same failure mode that let it ride into
+/// the manifest and the publish upload.
+#[test]
+fn register_existing_ladders_excludes_a_surplus_rung_left_by_a_bigger_ladder() {
+    let staging = tempfile::tempdir().expect("tempdir");
+    let ladder_dir = staging.path().join("videos").join("clip.hls");
+    std::fs::create_dir_all(&ladder_dir).unwrap();
+    std::fs::write(ladder_dir.join(HLS_MASTER_NAME), four_rung_master()).unwrap();
+    let today = hls_members(&VIDEO_LADDER[..4]);
+    // `today` puts the gate first (`hls_members`' own documented order) —
+    // skip it here so the real playlist just written above survives.
+    for name in today.iter().filter(|n| n.as_str() != HLS_MASTER_NAME) {
+        std::fs::write(ladder_dir.join(name), format!("bytes for {name}")).unwrap();
+    }
+    std::fs::write(ladder_dir.join("v4.m3u8"), b"stale rung playlist").unwrap();
+    std::fs::write(ladder_dir.join("v4.m4s"), b"stale rung segment").unwrap();
+
+    let registry = crate::types::assets::AssetRegistry::new();
+    let found = register_existing_ladders(staging.path(), &registry);
+    assert_eq!(found, 1);
+
+    let registered = registry.assets.read().unwrap();
+    assert!(
+        !registered.contains_key("videos/clip.hls/v4.m3u8"),
+        "surplus playlist must not be registered: {:?}",
+        registered.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !registered.contains_key("videos/clip.hls/v4.m4s"),
+        "surplus segment must not be registered: {:?}",
+        registered.keys().collect::<Vec<_>>()
+    );
+    for name in &today {
+        let key = format!("videos/clip.hls/{name}");
+        assert!(registered.contains_key(&key), "{key} must be registered: {:?}", registered.keys().collect::<Vec<_>>());
+    }
+}
+
 /// The one thing the pure tests cannot see: whether the files the worker links
 /// into staging carry the names the master playlist references, whether a
 /// second build re-uses them, and whether that re-use survives the video being

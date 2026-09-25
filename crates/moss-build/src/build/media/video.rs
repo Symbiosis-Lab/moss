@@ -1600,24 +1600,34 @@ fn video_output_keys(mapped: &str) -> Vec<String> {
 ///
 /// Unlike mp4/poster, having no HLS ladder (a narrow source) or a shorter one
 /// (bitrate/budget clamped below the full table) is an everyday outcome for a
-/// video, not a coherence violation — so unlike `video_output_keys`, this
-/// filters the ladder half to what's on disk before these keys ever reach
-/// `emit_video_outputs_via_channel`. Left unfiltered, that function used to
-/// receive the full 17-name table regardless of the real ladder's width and
-/// log every candidate above it "missing" — a false coherence violation,
-/// every build, for as long as the video existed. mp4/poster are never
-/// filtered here: every caller only ever reaches this after confirming (or
-/// just healing) their presence, so `emit_video_outputs_via_channel` still
-/// catches a genuine last-instant loss of one, which is the check this
-/// file's module doc says never to weaken.
+/// video, not a coherence violation — so unlike `video_output_keys`, the
+/// ladder half is never the full static table. It is
+/// `hls::ladder_members_from_master`'s reading of the gate's own references
+/// — the master playlist is the one file a bigger, EARLIER ladder's now-
+/// dropped rung is never named by, so asking it instead of the directory is
+/// what keeps a stale file this video's own ladder no longer owns from ever
+/// reaching `emit_video_outputs_via_channel` as if it were current, on top
+/// of the presence filter every member (current or not) still has to pass —
+/// a gate vouches for what SHOULD be on disk, not for a read that raced a
+/// write and lost. `None` (no gate at all — a narrow source, or a ladder
+/// mid-encode with nothing to advertise yet) contributes no ladder keys,
+/// same as before. mp4/poster are never filtered by the census here: every
+/// caller only ever reaches this after confirming (or just healing) their
+/// presence, so `emit_video_outputs_via_channel` still catches a genuine
+/// last-instant loss of one, which is the check this file's module doc says
+/// never to weaken.
 fn present_video_output_keys(mapped: &str, staging: &Path) -> Vec<String> {
     use moss_core::asset_paths;
     let mut keys = vec![asset_paths::to_mp4(mapped), asset_paths::to_thumb(mapped)];
-    keys.extend(
-        asset_paths::hls_outputs(mapped, &asset_paths::VIDEO_LADDER)
-            .into_iter()
-            .filter(|key| crate::build::io_utils::output_present(&staging.join(key))),
-    );
+    let hls_dir = asset_paths::to_hls_dir(mapped);
+    if let Some(members) = crate::build::media::hls::ladder_members_from_master(&staging.join(&hls_dir)) {
+        keys.extend(
+            members
+                .into_iter()
+                .map(|name| format!("{hls_dir}/{name}"))
+                .filter(|key| crate::build::io_utils::output_present(&staging.join(key))),
+        );
+    }
     keys
 }
 
@@ -2367,14 +2377,22 @@ pub(crate) mod tests {
         std::fs::write(vault.join(item), source_bytes).unwrap();
 
         let mut staged = vec![asset_paths::to_mp4(item), asset_paths::to_thumb(item)];
+        let rungs = asset_paths::video_ladder_rungs(640);
         if ladder {
-            let rungs = asset_paths::video_ladder_rungs(640);
             staged.extend(asset_paths::hls_outputs(item, rungs));
         }
+        let master_key = asset_paths::to_hls_master(item);
         for key in &staged {
             let abs = staging.join(key);
             std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
-            std::fs::write(&abs, b"STAGED-SENTINEL").unwrap();
+            // The gate needs real, parseable master-playlist bytes — the
+            // census reads them for real now, not just their presence — so
+            // it alone does not get the sentinel every other file keeps.
+            if ladder && *key == master_key {
+                std::fs::write(&abs, synthetic_master(rungs)).unwrap();
+            } else {
+                std::fs::write(&abs, b"STAGED-SENTINEL").unwrap();
+            }
         }
 
         let fingerprint = compute_video_item_fingerprint(
@@ -2643,8 +2661,18 @@ pub(crate) mod tests {
             total_kbps: None,
         };
         let params = crate::build::media::hls::ladder_params(&config, rungs, source);
+        let master = synthetic_master(rungs);
         for name in asset_paths::hls_members(rungs) {
-            let bytes = format!("ladder file {name} for {item}");
+            // The gate gets REAL, parseable master-playlist bytes —
+            // `hls::ladder_members_from_master` reads them for real now, so
+            // a sentinel here would seed a "ladder" whose own gate names no
+            // members at all. Every other file's bytes are never parsed,
+            // only relinked and checked for presence.
+            let bytes = if name == moss_core::asset_paths::HLS_MASTER_NAME {
+                master.clone()
+            } else {
+                format!("ladder file {name} for {item}")
+            };
             record.transforms.insert(
                 format!("video/hls/{name}"),
                 TransformEntry {
@@ -2657,6 +2685,37 @@ pub(crate) mod tests {
         transforms.put(&record).unwrap();
 
         asset_paths::hls_outputs(item, rungs)
+    }
+
+    /// A minimal but real master playlist for `rungs`, parseable by
+    /// `hls::ladder_members_from_master` exactly like a real ffmpeg encode's
+    /// output — built from the SAME rung data `hls_members`/`audio_groups`
+    /// derive their own file list from, so a test fixture built from this
+    /// can never name a different file set than the real functions expect
+    /// for the same `rungs`. Every test in this module that stages a ladder
+    /// without running real ffmpeg (`seed_cached_video_with_ladder` and any
+    /// direct staging in this file) needs this for the gate specifically;
+    /// every other member's bytes are never parsed.
+    pub(crate) fn synthetic_master(rungs: &[moss_core::asset_paths::VideoRung]) -> String {
+        use moss_core::asset_paths::audio_groups;
+        let mut out = String::from("#EXTM3U\n#EXT-X-VERSION:7\n");
+        for group in audio_groups(rungs) {
+            out.push_str(&format!(
+                "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"{a}\",NAME=\"{a}\",AUTOSELECT=YES,DEFAULT=YES,URI=\"{a}.m3u8\"\n",
+                a = group.as_str()
+            ));
+        }
+        for (i, rung) in rungs.iter().enumerate() {
+            out.push_str(&format!(
+                "#EXT-X-STREAM-INF:BANDWIDTH={},RESOLUTION={}x{},AUDIO=\"{}\"\n",
+                u64::from(rung.video_kbps) * 1000,
+                rung.width,
+                rung.height,
+                rung.audio_group().as_str(),
+            ));
+            out.push_str(&format!("v{i}.m3u8\n"));
+        }
+        out
     }
 
     /// Like `seed_cached_video_with_ladder`, but the ladder it seeds is in
@@ -2823,6 +2882,99 @@ pub(crate) mod tests {
         crate::ops::watch::worker::deregister(&folder, &worker);
     }
 
+    /// The other half of the real incident: a video whose fingerprint hasn't
+    /// changed and whose mp4/poster/ladder are ALL already staged takes
+    /// `heal_ladder`'s gate-already-there branch, which never touches the
+    /// ladder directory. A surplus rung a BIGGER, earlier ladder left beside
+    /// it (a tighter per-file budget or a table edit narrowing today's
+    /// ladder) used to still get registered as delivered, because
+    /// `present_video_output_keys` read the full static rung table filtered
+    /// only by presence-on-disk — the surplus file is present, so it passed.
+    /// This is the shape the real incident had: staging was already dirty,
+    /// and the very next build carried the video forward with no re-encode
+    /// and no heal, yet still had to publish only today's ladder.
+    #[tokio::test]
+    async fn a_carried_forward_video_excludes_a_surplus_rung_left_by_a_bigger_ladder() {
+        use moss_core::asset_paths;
+
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+        std::fs::create_dir_all(&staging).unwrap();
+        let mut svc = BuildServices::headless();
+
+        let item = "videos/clip.mov".to_string();
+        let ladder_paths =
+            seed_cached_video_with_ladder(&vault, &moss_dir, &item, b"real mp4 bytes", b"real poster bytes", 4);
+
+        // Stage everything today's cache record says the ladder is, exactly
+        // as an earlier build already would have. The gate gets REAL master
+        // playlist content — the census now reads it, not just its presence.
+        let mp4_key = asset_paths::to_mp4(&item);
+        let thumb_key = asset_paths::to_thumb(&item);
+        std::fs::create_dir_all(staging.join(&mp4_key).parent().unwrap()).unwrap();
+        std::fs::write(staging.join(&mp4_key), b"real mp4 bytes").unwrap();
+        std::fs::write(staging.join(&thumb_key), b"real poster bytes").unwrap();
+        let master_key = asset_paths::to_hls_master(&item);
+        for key in &ladder_paths {
+            let abs = staging.join(key);
+            std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+            if *key == master_key {
+                std::fs::write(&abs, synthetic_master(&asset_paths::VIDEO_LADDER[..4])).unwrap();
+            } else {
+                std::fs::write(&abs, format!("ladder file {key}")).unwrap();
+            }
+        }
+
+        // A bigger, earlier ladder's now-dropped top rung, left exactly
+        // where that build's `link_members` put it — real files on disk,
+        // just not named by today's master playlist or cache record.
+        let hls_dir = asset_paths::to_hls_dir(&item);
+        let surplus_playlist = format!("{hls_dir}/v4.m3u8");
+        let surplus_segment = format!("{hls_dir}/v4.m4s");
+        for key in [&surplus_playlist, &surplus_segment] {
+            std::fs::write(staging.join(key), b"stale rung from a bigger ladder").unwrap();
+        }
+        assert!(!ladder_paths.contains(&surplus_playlist), "sanity: v4 is not part of today's 4-rung ladder");
+
+        // Prime the fingerprint so this dispatch takes the carry-forward
+        // branch — nothing changed, nothing needs the encoder, same as any
+        // rebuild that is not the first one after a relaunch.
+        let config = crate::build::media::ffmpeg::VideoCompressionConfig::default();
+        let fingerprint = compute_video_item_fingerprint(&vault.display().to_string(), &item, &config)
+            .expect("source file exists and is stat-able");
+        svc.cancellation.record_item_fingerprint(&item, &fingerprint);
+
+        let folder = vault.display().to_string();
+        let worker = crate::ops::watch::worker::register(&folder);
+        let (sealed, spawner) =
+            dispatch_with_controlled_spawner(&mut svc, &vault, &staging, &moss_dir, vec![item.clone()]).await;
+
+        assert_eq!(spawner.captured_count(), 0, "nothing changed and nothing needed healing — no encode owed");
+        // Nothing deletes the surplus files here — an active unlink would
+        // race a still-draining background encode on the same directory.
+        // The census simply never counts them, which is what keeps them out
+        // of the manifest; the general staging sweep (gated by its own
+        // SweepPermit, comparing THIS build's manifest as "previous" on a
+        // later one) is what eventually reclaims the disk space.
+        assert!(staging.join(&surplus_playlist).exists(), "sanity: nothing unlinks the surplus file directly");
+        assert!(
+            !sealed.files().contains_key(&surplus_playlist),
+            "a surplus rung must never reach the manifest: {:?}",
+            sealed.files().keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !sealed.video_outputs().contains(&surplus_playlist),
+            "a surplus rung must never be protected from the stale sweep either: {:?}",
+            sealed.video_outputs()
+        );
+        for key in &ladder_paths {
+            assert!(sealed.files().contains_key(key), "{key} must still be registered: {:?}", sealed.files());
+        }
+        crate::ops::watch::worker::deregister(&folder, &worker);
+    }
+
     /// A legacy-form cached ladder (seeded with the real pre-rekey shape,
     /// `hls::LegacyShape`) must not be read as "this item is fine" just
     /// because its mp4/poster healed cleanly. `hls::cached_ladder`'s no-probe
@@ -2894,13 +3046,20 @@ pub(crate) mod tests {
         let item = "videos/narrow.mov".to_string();
         let rungs = asset_paths::video_ladder_rungs_by_count(4).expect("4 is a real rung count");
         let staged_ladder = asset_paths::hls_outputs(&item, rungs);
+        let master_key = asset_paths::to_hls_master(&item);
         for key in [asset_paths::to_mp4(&item), asset_paths::to_thumb(&item)]
             .into_iter()
             .chain(staged_ladder.clone())
         {
             let abs = staging.join(&key);
             std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
-            std::fs::write(&abs, b"STAGED").unwrap();
+            // The gate gets real, parseable master-playlist bytes — the
+            // census reads them for real now, not just their presence.
+            if key == master_key {
+                std::fs::write(&abs, synthetic_master(rungs)).unwrap();
+            } else {
+                std::fs::write(&abs, b"STAGED").unwrap();
+            }
         }
 
         let candidates = present_video_output_keys(&item, &staging);
@@ -2962,10 +3121,17 @@ pub(crate) mod tests {
         let rungs = asset_paths::video_ladder_rungs_by_count(6).expect("6 is a real rung count");
         let mut staged = vec![asset_paths::to_mp4(&item), asset_paths::to_thumb(&item)];
         staged.extend(asset_paths::hls_outputs(&item, rungs));
+        let master_key = asset_paths::to_hls_master(&item);
         for key in &staged {
             let abs = staging.join(key);
             std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
-            std::fs::write(&abs, b"STALE-BUT-STILL-SERVING").unwrap();
+            // The gate gets real, parseable master-playlist bytes — the
+            // census reads them for real now, not just their presence.
+            if *key == master_key {
+                std::fs::write(&abs, synthetic_master(rungs)).unwrap();
+            } else {
+                std::fs::write(&abs, b"STALE-BUT-STILL-SERVING").unwrap();
+            }
         }
         // A fingerprint IS on record (so the dispatch log reads "changed" not
         // "new"), but it cannot match today's bytes — it names no real content.
@@ -3262,6 +3428,8 @@ pub(crate) mod tests {
         remove_stale_files(&staging, view, "test", &crate::build::lifecycle::permit_for_test());
         remove_stale_dirs(&staging, &compute_expected_dirs(view), &crate::build::lifecycle::permit_for_test());
 
+        let master_key = asset_paths::to_hls_master(&item1);
+        let master_bytes = synthetic_master(asset_paths::video_ladder_rungs(640));
         for key in &untouched {
             let abs = staging.join(key);
             assert!(
@@ -3271,9 +3439,14 @@ pub(crate) mod tests {
                 key,
                 view.video_outputs
             );
+            // item1's gate was seeded with real playlist bytes (`stage_and_
+            // prime_video`'s own carve-out, so the census can read it);
+            // every other untouched key, item1's ladder members included,
+            // still gets the plain sentinel check.
+            let expected: &[u8] = if *key == master_key { master_bytes.as_bytes() } else { b"STAGED-SENTINEL" };
             assert_eq!(
                 std::fs::read(&abs).unwrap(),
-                b"STAGED-SENTINEL",
+                expected,
                 "'{}' content changed — it was re-dispatched even though its own \
                  fingerprint and outputs were unchanged",
                 key
