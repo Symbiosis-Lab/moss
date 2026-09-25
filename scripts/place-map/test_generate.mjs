@@ -3,7 +3,23 @@ import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { encodeFeature, geometryParts, rdp, splitDateline } from "./generate.mjs";
+import {
+  encodeFeature,
+  geometryParts,
+  RELIEF_THRESHOLDS,
+  rdp,
+  SEA_FLOOR_THRESHOLDS,
+  splitDateline,
+} from "./generate.mjs";
+
+test("relief and sea-floor ladders cover the approved visual ranges", () => {
+  assert.deepEqual(RELIEF_THRESHOLDS, [
+    100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000,
+  ]);
+  assert.deepEqual(SEA_FLOOR_THRESHOLDS, [-6000, -4000, -2000, -1000, -500, -250, -100, -10]);
+  assert.equal(SEA_FLOOR_THRESHOLDS.at(0), -6000);
+  assert.equal(SEA_FLOOR_THRESHOLDS.at(-1), -10);
+});
 
 test("quantised feature encoding is deterministic", () => {
   const first = encodeFeature([[[0, 0], [1, 1], [2, 1]]]);

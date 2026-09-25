@@ -1,16 +1,16 @@
 {
   "schema": 1,
   "manifest_sha256": "ff8eaffeefb20711c1edf648a2fb7b55c7b00185168a87315f950990d95c384b",
-  "bytes": 1436776,
-  "compressed_bytes": 936441,
+  "bytes": 1495228,
+  "compressed_bytes": 976327,
   "budget_bytes": 2883584,
-  "margin_bytes": 1446808,
-  "margin_percent": 50.174,
+  "margin_bytes": 1388356,
+  "margin_percent": 48.147,
   "tiers": {
-    "world": 504794,
-    "fine": 810374
+    "world": 518091,
+    "fine": 845449
   },
-  "index": 121496,
+  "index": 131576,
   "layers": {
     "counts": {
       "coast": 4133,
@@ -21,7 +21,7 @@
       "reefs": 1043,
       "salt_flats": 73,
       "built_up": 11878,
-      "relief": 8,
+      "relief": 12,
       "sea_floor": 529
     },
     "world_bytes": {
@@ -33,7 +33,7 @@
       "reefs": 40139,
       "salt_flats": 515,
       "built_up": 1236,
-      "relief": 54695,
+      "relief": 67992,
       "sea_floor": 54241
     },
     "fine_bytes": {
@@ -45,7 +45,7 @@
       "reefs": 40271,
       "salt_flats": 2489,
       "built_up": 12725,
-      "relief": 139217,
+      "relief": 174292,
       "sea_floor": 145656
     }
   }

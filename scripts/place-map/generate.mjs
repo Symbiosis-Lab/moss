@@ -36,7 +36,7 @@ const SOURCES = {
 const TOLERANCE = { world: 0.98, fine: 0.3 };
 const BUILT_UP_TOLERANCE = { world: 1.2, fine: 0.4 };
 const SEA_FLOOR_THRESHOLDS = [-6000, -4000, -2000, -1000, -500, -250, -100, -10];
-const RELIEF_THRESHOLDS = [0, 100, 300, 600, 1000, 1600, 2400, 3500];
+const RELIEF_THRESHOLDS = [100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000];
 const SOURCE_MASKS = [1, 2, 4, 8, 48, 64, 128, 512, 1024, 1280];
 
 function fail(message) { throw new Error(message); }
@@ -369,4 +369,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 }
 
-export { encodeFeature, geometryParts, reliefBands, rdp, splitDateline, tileIndex };
+export {
+  encodeFeature,
+  geometryParts,
+  reliefBands,
+  rdp,
+  RELIEF_THRESHOLDS,
+  SEA_FLOOR_THRESHOLDS,
+  splitDateline,
+  tileIndex,
+};

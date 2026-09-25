@@ -467,6 +467,50 @@ mod tests {
     }
 
     #[test]
+    fn feature_bands_and_source_masks_are_opaque_to_the_decoder() {
+        let mut bytes = PACK.to_vec();
+        bytes[72..74].copy_from_slice(&0xdead_u16.to_le_bytes());
+        let pack = decode(&bytes).expect("source masks are not a threshold ladder");
+        assert_eq!(pack.header.source_masks[0], 0xdead);
+
+        let mut reader = Reader::new(&[1, 0, 2, 0, 0, 0, 0, 0, 2, 2]);
+        let feature = decode_feature(
+            &mut reader,
+            [-10_000, 10_000, -10_000, 10_000],
+            [0, 0, 10_000, 10_000],
+            1234,
+        )
+        .expect("arbitrary signed feature bands are valid payload data");
+        assert_eq!(feature.band, 1234);
+    }
+
+    #[test]
+    fn embedded_pack_contains_the_approved_contour_coverage() {
+        let pack = embedded().expect("checked-in place-map pack must decode");
+        let bands = |layer_id| {
+            pack.tiers
+                .iter()
+                .flat_map(|tier| tier.layers.iter())
+                .find(|layer| layer.id == layer_id)
+                .unwrap()
+                .features
+                .iter()
+                .map(|feature| feature.band)
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        assert_eq!(
+            bands(9),
+            [100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000]
+                .into_iter()
+                .collect()
+        );
+        let sea_floor = bands(10);
+        for threshold in [-6000, -4000, -2000, -1000, -500, -250, -100, -10] {
+            assert!(sea_floor.contains(&threshold));
+        }
+    }
+
+    #[test]
     fn truncated_header_is_rejected() {
         assert_eq!(
             decode(&PACK[..8]).unwrap_err(),
