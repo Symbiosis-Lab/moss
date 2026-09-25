@@ -118,6 +118,25 @@ impl AssetIndex for NoAssetIndex {
     }
 }
 
+/// Negative folder index for source-only reference evidence. Folder references
+/// are not missing assets, so this keeps them advisory without re-deriving the
+/// later whole-corpus page surface during Loop A.
+pub struct NoFolderIndex;
+
+impl FolderIndex for NoFolderIndex {
+    fn is_dir(&self, _root_rel: &str) -> bool {
+        false
+    }
+
+    fn dir_has_markdown_index(&self, _root_rel: &str) -> bool {
+        false
+    }
+
+    fn dir_has_static_index(&self, _root_rel: &str) -> Option<String> {
+        None
+    }
+}
+
 /// See `NoAssetIndex` — never consulted for folder markers.
 pub struct NoUrlIndex;
 

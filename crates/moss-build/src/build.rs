@@ -683,6 +683,13 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
         return Err("Empty folder path provided".to_string());
     }
 
+    // This build's ordered identity is acquired before any work that can
+    // complete after another admitted build. The projection tail carries this
+    // value to its atomic install; it must never mint one after rendering.
+    let build_generation = config
+        .admission_epoch
+        .unwrap_or_else(crate::build::ship::next_promotion_epoch);
+
     // This build may write the object store and staging from here until its
     // background workers join: scan stores blobs, render and the media workers
     // write staging. While the lease is open no other build of this folder may
@@ -1145,7 +1152,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
         })
     };
 
-    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_media, cancelled, home_ready: _home_ready, publishable, render_seq, stale_sources } = {
+    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, cancelled, home_ready: _home_ready, publishable, render_seq, stale_sources } = {
         // moss's own generator, always. A plugin could replace it wholesale
         // through the `generate` capability until that capability was
         // retired: three months, no implementation, and the branch had
@@ -1194,7 +1201,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // `run_pipeline`'s `Result<String, String>` after the fact isn't
     // possible, so they're recorded at the point they're computed instead.
     crate::build::phase::record_count("pages", build_documents.len());
-    crate::build::phase::record_count("missing_media", missing_media.len());
+    crate::build::phase::record_count("missing_references", missing_references.len());
     crate::build::phase::record_count("cancelled", cancelled as usize);
     crate::build::phase::record_count("publishable", publishable as usize);
 
@@ -1224,27 +1231,26 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
         crate::system::build_records::records().record_content_hashes(&folder_path, content_hashes);
     }
 
-    // And what this build could not find. Stashed unconditionally — an empty
-    // list is the answer that UNBLOCKS a publish, so skipping the write on a
-    // clean build would leave an earlier failure standing forever.
-    crate::system::build_records::records().record_missing_media(&folder_path, missing_media);
+    // Install this completed build's full publish evidence as one ordered
+    // snapshot. An empty vector is the answer that unblocks publish; the
+    // generation guard prevents an older completion from erasing newer work.
+    crate::system::build_records::records().install_publish_preflight(
+        &folder_path,
+        crate::build::types::PublishPreflightProjection {
+            build_generation,
+            missing_references,
+        },
+    );
 
     // And which structural sources this build had to carry forward rather
-    // than read. Same unconditional-write reasoning as `missing_media` above:
+    // than read. Same unconditional-write reasoning as the preflight projection:
     // a source that arrives fixes nothing if the CLEAN verdict never lands
     // because only failures were ever recorded.
     crate::system::build_records::records().record_stale_sources(&folder_path, stale_sources);
 
-    // This build's promotion epoch. The rebuild worker mints
-    // it at ADMISSION and passes it in (see `PipelineConfig::admission_epoch`
-    // for why that survives a wedged predecessor); every other caller mints
-    // here, not in the seal — for them this is the last point still ordered
-    // against the *next* build of this folder, because their builds are
-    // strictly serialized. A content-hash `generation_id` can never say which
-    // build is newer.
-    let promotion_epoch = config
-        .admission_epoch
-        .unwrap_or_else(crate::build::ship::next_promotion_epoch);
+    // The seal shares the admission-time generation with the projection. A
+    // content-hash `generation_id` can never say which build is newer.
+    let promotion_epoch = build_generation;
 
     // Spawn the seal+persist side task that owns the BackgroundHandle.
     //

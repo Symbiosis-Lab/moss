@@ -13,7 +13,7 @@
 //! moss-build equivalent.
 //!
 //! `moss_build::deploy::refuse_publish` is what makes "a published site cannot
-//! contain a broken image" true for callers that never ran the frontend's
+//! contain a broken file" true for callers that never ran the frontend's
 //! check. No cheaper layer can see a MISSING call — so this reads the
 //! sources and fails if a publish entry point stops asking.
 
@@ -26,9 +26,9 @@ struct Gate {
     must_precede: Option<&'static str>,
 }
 
-const MISSING_MEDIA: &str = "deploy::refuse_publish(";
+const PUBLISH_PREFLIGHT: &str = "deploy::refuse_publish(";
 const PUBLISH_SETUP: &str = "publish_setup::refuse_publish(";
-const BROKEN_IMAGE: &str = "a site with a broken image can be published from it. Restore the \
+const BROKEN_FILE: &str = "a site with a broken file can be published from it. Restore the \
      call AFTER the in-flight drain and the pre-publish rebuild — earlier reads \
      a half-encoded site as a broken one";
 const SETUP_MISSING: &str = "a publish with no credential stored now reaches the plugin, which \
@@ -41,20 +41,20 @@ const GATES: &[Gate] = &[
     // the call sits after `run_pipeline` and not at the top of the driver.
     Gate {
         path: "src/deploy/push.rs",
-        call: MISSING_MEDIA,
-        consequence: BROKEN_IMAGE,
+        call: PUBLISH_PREFLIGHT,
+        consequence: BROKEN_FILE,
         must_precede: None,
     },
     // Both plugin publishes — the gate sits at the top of
     // `run_plugin_deploy_inner`, which both routes enter. `must_precede`
     // pairs it with the setup gate in the same file, in the order both
     // routes ask them: setup first, in each caller's preamble before the
-    // build; missing media second, inside the shared body after it.
+    // build; the publish preflight second, inside the shared body after it.
     Gate {
         path: "src/deploy/plugin_push.rs",
         call: PUBLISH_SETUP,
         consequence: SETUP_MISSING,
-        must_precede: Some(MISSING_MEDIA),
+        must_precede: Some(PUBLISH_PREFLIGHT),
     },
 ];
 

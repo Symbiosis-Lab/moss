@@ -264,6 +264,28 @@ pub fn resolve_duplicate_uids(
     load_deployed: impl FnOnce() -> Baseline,
     built_before: impl Fn(&str) -> bool,
 ) -> UidResolution {
+    resolve_duplicate_uids_with(
+        documents,
+        source_root,
+        load_deployed,
+        built_before,
+        |reassigned_path, new_uid| {
+            persist_reassigned_uid(&source_root.join(reassigned_path), reassigned_path, new_uid)
+        },
+    )
+}
+
+/// Choose and apply duplicate-UID reassignment through the caller's single
+/// source-owner. The renderer supplies an in-memory final-source record here;
+/// the legacy wrapper above retains the direct-write API used by focused unit
+/// tests.
+pub(crate) fn resolve_duplicate_uids_with(
+    documents: &mut [ParsedDocument],
+    source_root: &Path,
+    load_deployed: impl FnOnce() -> Baseline,
+    built_before: impl Fn(&str) -> bool,
+    mut persist: impl FnMut(&str, &str) -> bool,
+) -> UidResolution {
     // BTreeMap, not HashMap: collision groups are processed in a stable uid
     // order so a multi-collision build produces the same result every run.
     let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -415,8 +437,7 @@ pub fn resolve_duplicate_uids(
                 continue;
             };
             let new_uid = crate::build::markdown::generate_uid(&reassigned_path);
-            let file_path = source_root.join(&reassigned_path);
-            if !persist_reassigned_uid(&file_path, &reassigned_path, &new_uid) {
+            if !persist(&reassigned_path, &new_uid) {
                 continue;
             }
             documents[idx].uid = Some(new_uid.clone());

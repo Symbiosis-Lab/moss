@@ -878,9 +878,9 @@ pub struct PipelineRunOutput {
     pub bg_handle: Option<BackgroundHandle>,
     pub build_documents: Vec<ParsedDocument>,
     pub content_hashes: SiteHashes,
-    /// Media references this build could not resolve to a file. Empty is the
-    /// healthy answer and is meaningful — see `AppState::last_missing_media`.
-    pub missing_media: Vec<crate::build::types::MissingMedia>,
+    /// Missing authored asset evidence from this exact build. Empty is the
+    /// completed clean answer and is meaningful.
+    pub missing_references: Vec<crate::build::types::MissingReferenceOccurrence>,
     pub cancelled: bool,
     /// Whether the build left a home page in the directory the preview serves.
     ///
@@ -1426,7 +1426,7 @@ fn build_inner(
     // re-reads the asynchronously-persisted hashes.json. See
     // AppState::last_content_hashes.
     let content_hashes_for_watch = site_result.hashes.clone();
-    let missing_media_for_publish = site_result.missing_media.clone();
+    let missing_references_for_publish = site_result.missing_references.clone();
     let new_hashes = &site_result.hashes;
     let has_output_changes = !current_ptr_exists
         || builder_changed
@@ -1462,7 +1462,7 @@ fn build_inner(
     // Computed here, ahead of the cancellation check below, so a cancelled
     // build reports it too — `BuildRecords::stale_sources` describes what THIS
     // build learned about the folder, on the same "always record real data"
-    // footing as `missing_media` (`build.rs`'s `record_missing_media`), not a
+    // footing as publish preflight evidence (`build.rs`'s projection install), not a
     // verdict scoped to builds that went on to publish. The render pass that
     // populates the ledger has already run by this point either way.
     let still_in_the_cloud_at_scan: Vec<std::path::PathBuf> = project_structure
@@ -1500,7 +1500,7 @@ fn build_inner(
             bg_handle: None,
             build_documents: documents,
             content_hashes: content_hashes_for_watch,
-            missing_media: missing_media_for_publish,
+            missing_references: missing_references_for_publish,
             cancelled: true,
             home_ready,
             // The folder is closed; nothing downstream should promote this
@@ -1887,7 +1887,7 @@ fn build_inner(
         bg_handle,
         build_documents: documents,
         content_hashes: content_hashes_for_watch,
-        missing_media: missing_media_for_publish,
+        missing_references: missing_references_for_publish,
         cancelled: false,
         home_ready,
         publishable,

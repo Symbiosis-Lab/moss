@@ -49,6 +49,7 @@ use super::config::{resolve_logo_url, resolve_data_attr, resolve_comments_attr};
 use super::image_util::PREVIEW_MAX_CHARS;
 use super::preflight::{check_misplaced_theme_files, check_mixed_multilingual_structure};
 use super::html::{generate_html_collect_og, tab_title};
+use super::source_evidence::{flatten_missing_reference_occurrences, FinalSourceRecord};
 
 /// # Note
 /// The caller is responsible for creating the output directory and managing
@@ -573,9 +574,16 @@ pub fn generate_blocking_content_for_build(
     // carry-forward rather than a gap. See `PendingManifest::register_page_source_hash`.
     let mut page_source_hashes: HashMap<String, crate::build::types::SourceMetadata> = HashMap::new();
 
-    // `deferred_paths` and `missing_media` travel out of the parallel markdown
-    // pass with the documents — see their Mutexes' doc comments.
-    let (mut documents, deferred_paths, missing_media) = {
+    // Evidence uses the renderer's syntax mode while retaining coordinates in
+    // the final physical source, never the transclusion-expanded markdown.
+    let authored_evidence_parse_config = moss_core::ast::ParseConfig {
+        math: site_config.markdown().math,
+        ..Default::default()
+    };
+
+    // `deferred_paths` travels out of the parallel markdown pass. Missing
+    // media stays attached to each document and is flattened after Loop A.
+    let (mut documents, deferred_paths, mut source_records) = {
         use rayon::prelude::*;
         use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -606,13 +614,7 @@ pub fn generate_blocking_content_for_build(
         // reduce) because entries are rare and the lock is uncontended on
         // the fast path where nothing is evicted.
         let deferred_mutex: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
-        // Media references that resolve to nothing. Same Mutex-over-reduce
-        // reasoning as `deferred_mutex`: on a healthy site this is never
-        // locked. Non-empty means the site cannot be published.
-        let missing_media_mutex: std::sync::Mutex<Vec<crate::build::types::MissingMedia>> =
-            std::sync::Mutex::new(Vec::new());
-
-        let rendered: Vec<Option<(ParsedDocument, Option<(std::path::PathBuf, String)>, Option<crate::build::types::SourceMetadata>)>> = project_structure
+        let rendered: Vec<Option<(ParsedDocument, Option<(std::path::PathBuf, String)>)>> = project_structure
             .markdown_files
             .par_iter()
             .map_init(
@@ -663,7 +665,7 @@ pub fn generate_blocking_content_for_build(
                     // build's hash forward instead. A page with an output
                     // mapping and no hash is unclassifiable at publish time.
                     if let Some(cached) = parse_session.lookup(&file_info.path) {
-                        return Some((cached, None, None));
+                        return Some((cached, None));
                     }
 
                     let t_read = std::time::Instant::now();
@@ -675,11 +677,6 @@ pub fn generate_blocking_content_for_build(
                         &deferred_mutex,
                     )?;
                     md_read_ns.fetch_add(t_read.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                    // Hash the bytes we actually parsed, before the uid
-                    // write-back below can rewrite this file.
-                    parse_session.note_source_bytes(&file_info.path, content.as_bytes());
-                    // The same bytes, hashed for the durable manifest.
-                    let source_meta = source_metadata(&source_file_path, content.as_bytes());
 
                     // RESOLVE phase: transform Obsidian syntax (wikilinks, embeds,
                     // callouts, block refs) into standard markdown before HTML
@@ -716,9 +713,8 @@ pub fn generate_blocking_content_for_build(
                     let t_process = std::time::Instant::now();
                     // This phase only ever raises advisory diagnostics —
                     // unresolved frontmatter wikilinks, broken transclusions.
-                    // The blocking kind (`MissingAsset`) is raised one phase
-                    // later, inside `process_markdown_file`, and arrives below
-                    // on `doc.missing_media`.
+                    // Physical-source evidence is derived below from the
+                    // final raw bytes, not from this expanded representation.
                     for diag in &resolve_result.diagnostics {
                         log::warn!(
                             "Resolve: {} — ref '{}' in '{}'",
@@ -748,24 +744,6 @@ pub fn generate_blocking_content_for_build(
                     // cache's validity check and `DepGraph::back_embeds`, which
                     // sat over an empty relation until now (Stage 5b finding #2).
                     doc.embed_deps = std::mem::take(&mut resolve_result.embed_deps);
-                    // RETAIN what this page points at and hasn't got — the
-                    // evidence `deploy::refuse_publish` decides on. A
-                    // missing image used to be warned about and then dropped,
-                    // so the site published with a 404 in it.
-                    if !doc.missing_media.is_empty() {
-                        missing_media_mutex
-                            .lock()
-                            .unwrap()
-                            .append(&mut std::mem::take(&mut doc.missing_media));
-                    }
-                    {
-                    // Deferred to a sequential post-pass: the uid write-back
-                    // below mutates this file's SOURCE, and the resolve phase's
-                    // embed reader reads OTHER files' sources concurrently — an
-                    // in-loop `fs::write` would let an embed of this file read it
-                    // mid-write (torn read). Collect the write and apply it after
-                    // the parallel map, when no reads are in flight.
-                    let mut uid_writeback: Option<(std::path::PathBuf, String)> = None;
                     // Demote non-winner index files to normal pages.
                     // When multiple files qualify as home files (e.g., index.md and
                     // a self-named file like 山居.md), only the winner keeps kind = Folder.
@@ -854,19 +832,6 @@ pub fn generate_blocking_content_for_build(
                         }
                     }
 
-                    // Auto-assign uid if missing: generate from relative path and write back.
-                    // Slot files are excluded — a uid identifies a PUBLISHED page, and
-                    // minting one made the footer participate in detect_renames.
-                    if doc.uid.is_none() && !doc.slot_only {
-                        let uid = crate::build::markdown::generate_uid(&file_info.path);
-                        let updated = crate::build::markdown::insert_uid_into_frontmatter(&content, &uid);
-                        if updated != content {
-                            // Defer the write to the sequential post-pass (see above).
-                            uid_writeback = Some((source_file_path.clone(), updated));
-                        }
-                        doc.uid = Some(uid);
-                    }
-
                     // Slugify inline asset-dir segments in every doc's HTML
                     // (src, srcset, poster, data-placeholder-src). The resolve
                     // phase in moss-core uses source filesystem names; this maps
@@ -892,12 +857,7 @@ pub fn generate_blocking_content_for_build(
                     // Phase 2E v5 PR5 (2026-05-26).
 
                     md_process_ns.fetch_add(t_process.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                    // No-op unless MOSS_PARSE_CACHE_SHADOW is set, in which
-                    // case the cache's would-be hits are checked against the
-                    // parse that actually ran.
-                    parse_session.verify_shadow(&file_info.path, &doc);
-                    Some((doc, uid_writeback, Some(source_meta)))
-                }
+                    Some((doc, Some((source_file_path, content))))
                 },
             )
             .collect();
@@ -920,40 +880,145 @@ pub fn generate_blocking_content_for_build(
                 advisories: vec![],
             });
         }
-        // Sequential post-pass: apply the deferred uid write-backs now that the
-        // parallel reads are done (no torn reads), and collect docs in order.
+        // Collect fresh raw sources with their documents. UID normalization,
+        // evidence and cache identity all happen after this parallel read phase
+        // has ended, so no embed reader can observe a half-written source.
         let mut docs = Vec::with_capacity(rendered.len());
-        for (doc, uid_writeback, mut source_meta) in rendered.into_iter().flatten() {
-            if let Some((path, updated)) = uid_writeback {
-                // Best-effort; don't fail the build on a source write error.
-                let _ = fs::write(&path, &updated);  // allow:raw_write the user's own markdown source (uid write-back), not build output
-                // moss just rewrote this file's frontmatter. Record the bytes
-                // that are now on disk, not the ones we parsed — otherwise the
-                // NEXT build reads a hash it never wrote and reports the
-                // author's page as edited when only moss touched it.
-                if let Some(meta) = source_meta.as_mut() {
-                    *meta = source_metadata(&path, updated.as_bytes());
-                }
+        let mut source_records = Vec::new();
+        for (doc, source) in rendered.into_iter().flatten() {
+            let source = source.zip(doc.source_path.clone());
+            let original_uid = doc.uid.clone();
+            if let Some(document_index) = crate::build::scan::slug::admit_unless_reserved_device_output(&mut docs, doc) {
+                let Some(((disk_path, source), source_path)) = source else {
+                    continue;
+                };
+                source_records.push(FinalSourceRecord::fresh(
+                    document_index,
+                    source_path,
+                    disk_path,
+                    source,
+                    original_uid,
+                ));
             }
-            if let (Some(meta), Some(src)) = (source_meta, doc.source_path.as_ref()) {
-                page_source_hashes.insert(src.clone(), meta);
-            }
-            crate::build::scan::slug::push_unless_reserved_device_output(&mut docs, doc);
         }
-        (
-            docs,
-            deferred_mutex.into_inner().unwrap(),
-            missing_media_mutex.into_inner().unwrap(),
-        )
+        (docs, deferred_mutex.into_inner().unwrap(), source_records)
     };
 
-    // THE cache-snapshot boundary. `documents` here is Loop
-    // A's per-file output and nothing else — the next statement begins the
-    // whole-corpus Reduce chain (uid dedup, slug dedup, cascade, children
-    // sorts, marker expansion, translation linking), every pass of which folds
-    // OTHER pages' state into a document. Storing a post-Reduce document would
-    // replay another page's inherited cascade on a later build; storing it
-    // here cannot. Do not move this call down.
+    // UID normalization is the final source-owning step. It completes before
+    // source evidence, cache identity, metadata, or any write observes bytes.
+    let reduce_pre_start = std::time::Instant::now();
+    for record in &mut source_records {
+        record.mint_missing_uid(&mut documents[record.document_index]);
+    }
+    let source_indices: HashMap<String, usize> = documents
+        .iter()
+        .enumerate()
+        .filter_map(|(index, doc)| doc.source_path.as_ref().map(|path| (path.clone(), index)))
+        .collect();
+    let original_uids: HashMap<String, Option<String>> = documents
+        .iter()
+        .filter_map(|doc| doc.source_path.as_ref().map(|path| (path.clone(), doc.uid.clone())))
+        .collect();
+    let mut resolution = super::uid_dedup::resolve_duplicate_uids_with(
+            &mut documents,
+            source_path_buf,
+            || crate::build::manifest::live_baseline::load(&paths),
+            |src| previous_hashes.sources.contains_key(src),
+            |reassigned_path, new_uid| {
+                let record_index = match source_records
+                    .iter()
+                    .position(|record| record.source_path == reassigned_path)
+                {
+                    Some(index) => index,
+                    None => {
+                        let Some(&document_index) = source_indices.get(reassigned_path) else {
+                            return false;
+                        };
+                        let disk_path = source_path_buf.join(reassigned_path);
+                        let source = match std::fs::read_to_string(&disk_path) {
+                            Ok(source) => source,
+                            Err(error) => {
+                                log::warn!("Cannot read '{}' to normalize duplicate uid: {}", reassigned_path, error);
+                                return false;
+                            }
+                        };
+                        let original_uid = original_uids
+                            .get(reassigned_path)
+                            .cloned()
+                            .unwrap_or(None);
+                        source_records.push(FinalSourceRecord::fresh(
+                            document_index,
+                            reassigned_path.to_string(),
+                            disk_path,
+                            source,
+                            original_uid,
+                        ));
+                        source_records.len() - 1
+                    }
+                };
+                source_records[record_index].plan_duplicate_uid(new_uid)
+            },
+        );
+    let mut failed_uid_writes = std::collections::HashSet::new();
+    let asset_index = moss_core::ast::resolve_urls::GraphAssetIndex(&content_graph);
+    let folder_index = crate::build::folder_index::NoFolderIndex;
+    let url_index = crate::build::folder_index::NoUrlIndex;
+    let reference_context = moss_core::resolve::reference::ReferenceContext {
+        assets: &asset_index,
+        folders: &folder_index,
+        urls: &url_index,
+    };
+    for record in &mut source_records {
+        if !record.write_final() {
+            failed_uid_writes.insert(record.source_path.clone());
+            documents[record.document_index].uid = record.original_uid.clone();
+        }
+        let doc = &mut documents[record.document_index];
+        doc.missing_reference_occurrences = crate::build::types::MissingReferenceOccurrence::from_authored_source(
+            &record.source_path,
+            &record.final_source,
+            &authored_evidence_parse_config,
+            &reference_context,
+        );
+        parse_session.note_source_bytes(&record.source_path, record.final_source.as_bytes());
+        parse_session.verify_shadow(&record.source_path, doc);
+        page_source_hashes.insert(
+            record.source_path.clone(),
+            source_metadata(&record.disk_path, record.final_source.as_bytes()),
+        );
+    }
+    resolution.reassignments.retain(|item| !failed_uid_writes.contains(&item.reassigned_path));
+    // A deferral is not shown. `resolve_duplicate_uids` logs it; the author
+    // hears nothing, because a note ID is moss's to manage and every remedy
+    // she could be offered is one moss should have taken itself.
+    if !resolution.reassignments.is_empty() {
+        for r in &resolution.reassignments {
+            let line = format!(
+                "Duplicate note ID '{}': '{}' keeps it, '{}' was given a new one{}",
+                r.uid,
+                r.keeper_path,
+                r.reassigned_path,
+                if r.live_thread_at_risk {
+                    " — a LIVE deployment exists under this ID and moss could not \
+                     identify the published file; its comments may follow the wrong page"
+                } else {
+                    ""
+                }
+            );
+            log::warn!("{}", line);
+            cli_warn!("[warn] {}", line);
+        }
+        if let Some(event) = crate::build::progress::make_duplicate_uid_advisory(&resolution.reassignments) {
+            reporter.report(&event);
+        }
+    }
+    log::debug!(target: "timing", "[reduce] uid_dedup: {:?}", reduce_pre_start.elapsed());
+
+    let missing_references = flatten_missing_reference_occurrences(&documents);
+
+    // This remains the PRE-reduce cache boundary. UID normalization is the
+    // one source-owning precondition: it changes raw bytes, whereas later
+    // passes fold other documents' state into a parsed document.
     parse_session.finish(&documents);
 
     send_progress(
@@ -965,60 +1030,6 @@ pub fn generate_blocking_content_for_build(
         None,
         None,
     );
-
-    // Profile the whole-corpus Reduce chain, starting here
-    // (uid_dedup is the first pass after Loop A's cache-snapshot boundary).
-    let reduce_pre_start = std::time::Instant::now();
-    // Detect and fix duplicate UIDs — before slug resolution so each article
-    // gets its own URL slot. Duplicating a note in Obsidian copies the
-    // frontmatter uid, so collisions are routine; one file has to be given a
-    // fresh uid. WHICH one is the whole problem: a uid is random (not derivable
-    // from the path) and is the join key for the live comment thread and every
-    // signed moderation event, so rewriting the wrong file's uid orphans a
-    // published note irreversibly. `uid_dedup` therefore consults the record
-    // of what is live first and only falls back to date/btime — both of which
-    // iCloud and Obsidian Sync reset — when nothing is live. When that record
-    // cannot be READ, it defers instead of falling back.
-    {
-        let resolution = super::uid_dedup::resolve_duplicate_uids(
-            &mut documents,
-            source_path_buf,
-            || crate::build::manifest::live_baseline::load(&paths),
-            |src| previous_hashes.sources.contains_key(src),
-        );
-        // A deferral is not shown. `resolve_duplicate_uids` logs it; the author
-        // hears nothing, because a note ID is moss's to manage and every remedy
-        // she could be offered is one moss should have taken itself. What is
-        // left after the never-built rule is a case she cannot diagnose and the
-        // next publish ends (2026-08-30).
-        let reassignments = resolution.reassignments;
-        if !reassignments.is_empty() {
-            for r in &reassignments {
-                let line = format!(
-                    "Duplicate note ID '{}': '{}' keeps it, '{}' was given a new one{}",
-                    r.uid,
-                    r.keeper_path,
-                    r.reassigned_path,
-                    if r.live_thread_at_risk {
-                        " — a LIVE deployment exists under this ID and moss could not \
-                         identify the published file; its comments may follow the wrong page"
-                    } else {
-                        ""
-                    }
-                );
-                log::warn!("{}", line);
-                cli_warn!("[warn] {}", line);
-            }
-            // The app surface, for the at-risk subset only — moss may have sent
-            // a live page's comments to the wrong file, and only she can tell.
-            if let Some(event) =
-                crate::build::progress::make_duplicate_uid_advisory(&reassignments)
-            {
-                reporter.report(&event);
-            }
-        }
-    }
-    log::debug!(target: "timing", "[reduce] uid_dedup: {:?}", reduce_pre_start.elapsed());
 
     // Empty-folder onboarding:
     // when zero markdown files were discovered, push a synthetic homepage
@@ -3655,7 +3666,7 @@ pub fn generate_blocking_content_for_build(
             site_title,
             hashes: site_hashes,
             deferred_paths,
-            missing_media,
+            missing_references,
         },
         background_ctx,
         // Surface the parsed page slice to the caller so

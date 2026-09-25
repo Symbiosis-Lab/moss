@@ -3,7 +3,7 @@
 //! # Why this is process-global rather than app-managed
 //!
 //! These two records — the last build's in-memory content hashes and its
-//! missing-media verdict — are what moss shares *between builds of the same
+//! publish-preflight verdict — are what moss shares *between builds of the same
 //! folder*. Until 2026-08-29 they were fields on `AppState`, reached through
 //! `app.manage`, so the only process that could write or read them was one
 //! with a `tauri::AppHandle`. The headless arms of the host seam were
@@ -35,13 +35,13 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::build::manifest::link_audit::DeadLink;
-use crate::build::types::MissingMedia;
+use crate::build::types::PublishPreflightProjection;
 use crate::types::content::SiteHashes;
 
 /// One per-folder verdict, replaced wholesale on every write, never merged.
 /// `None` on read means no build has answered yet in this process — distinct
 /// from "clean" (an empty `Vec`, or whatever value a build genuinely
-/// produced). `content_hashes`, `missing_media` and `promised_dead_links`
+/// produced). `content_hashes`, `publish_preflight` and `promised_dead_links`
 /// used to hand-write this insert/clone pair three times over; collapsed
 /// 2026-09-16 (thermo review of the publish promise gate) since the three
 /// differ only in `V`. `stale_sources` (2026-09-17) reuses the same shape.
@@ -67,11 +67,31 @@ impl<V: Clone> FolderSlot<V> {
     }
 }
 
+impl FolderSlot<PublishPreflightProjection> {
+    /// Replace this folder's immutable projection only when its admission
+    /// generation is at least as new as the installed answer. The comparison
+    /// and replacement share one lock, so callers cannot split the ordering
+    /// policy from the atomic write.
+    fn install_if_newer(&self, key: String, projection: PublishPreflightProjection) {
+        let mut projections = self
+            .0
+            .lock()
+            .expect("FolderSlot lock poisoned — a thread panicked while holding it");
+        if projections
+            .get(&key)
+            .is_some_and(|current| current.build_generation > projection.build_generation)
+        {
+            return;
+        }
+        projections.insert(key, projection);
+    }
+}
+
 /// The per-folder records the build tail writes and the watcher reads.
 #[derive(Default)]
 pub struct BuildRecords {
     content_hashes: FolderSlot<SiteHashes>,
-    missing_media: FolderSlot<Vec<MissingMedia>>,
+    publish_preflight: FolderSlot<PublishPreflightProjection>,
     /// This seal's own still-pending promises the link audit caught dead —
     /// see `link_audit::dead_links_among_promises` and `refuse_publish`.
     promised_dead_links: FolderSlot<Vec<DeadLink>>,
@@ -107,18 +127,18 @@ impl BuildRecords {
         self.content_hashes.get(&Self::key(folder_path))
     }
 
-    /// Always called, including with an empty `Vec` — that is how a fixed
-    /// reference stops blocking a publish. Writing only on failure would
-    /// leave the last broken build's verdict standing forever, and there is
-    /// deliberately no override.
-    pub fn record_missing_media(&self, folder_path: &str, missing: Vec<MissingMedia>) {
-        self.missing_media.record(Self::key(folder_path), missing);
+    /// Install one completed build's publish evidence. The admission epoch is
+    /// the build generation: an older build may finish later, but cannot
+    /// replace a later build's answer. A clean projection still replaces a
+    /// broken one because its empty vector is a completed answer.
+    pub fn install_publish_preflight(&self, folder_path: &str, projection: PublishPreflightProjection) {
+        self.publish_preflight.install_if_newer(Self::key(folder_path), projection);
     }
 
-    /// What the last build of `folder_path` found missing. `None` means no
-    /// build has finished in this process — which is NOT "clean".
-    pub fn missing_media(&self, folder_path: &str) -> Option<Vec<MissingMedia>> {
-        self.missing_media.get(&Self::key(folder_path))
+    /// The last completed build's atomic publish evidence. `None` means no
+    /// build has finished in this process — which is not a clean verdict.
+    pub fn publish_preflight(&self, folder_path: &str) -> Option<PublishPreflightProjection> {
+        self.publish_preflight.get(&Self::key(folder_path))
     }
 
     /// Always called, including with an empty `Vec` — a video that finishes
@@ -130,13 +150,13 @@ impl BuildRecords {
 
     /// What the last seal of `folder_path` found among its own unfulfilled
     /// promises. `None` means no seal has recorded a verdict — not "clean",
-    /// the same distinction `missing_media` draws.
+    /// the same distinction the preflight projection draws.
     pub fn promised_dead_links(&self, folder_path: &str) -> Option<Vec<DeadLink>> {
         self.promised_dead_links.get(&Self::key(folder_path))
     }
 
     /// Always called, including with an empty `Vec` — the same reasoning as
-    /// `record_missing_media`: a source that arrives must clear the refusal,
+    /// `install_publish_preflight`: a source that arrives must clear the refusal,
     /// and only an unconditional write does that.
     pub fn record_stale_sources(&self, folder_path: &str, stale: Vec<String>) {
         self.stale_sources.record(Self::key(folder_path), stale);
@@ -144,7 +164,7 @@ impl BuildRecords {
 
     /// What the last build of `folder_path` carried forward rather than read.
     /// `None` means no build has finished in this process — which is NOT
-    /// "clean", the same distinction `missing_media` draws.
+    /// "clean", the same distinction the preflight projection draws.
     pub fn stale_sources(&self, folder_path: &str) -> Option<Vec<String>> {
         self.stale_sources.get(&Self::key(folder_path))
     }
@@ -169,6 +189,22 @@ pub fn records() -> &'static BuildRecords {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn projection(generation: u64, reference: &str) -> PublishPreflightProjection {
+        PublishPreflightProjection {
+            build_generation: generation,
+            missing_references: vec![crate::build::types::MissingReferenceOccurrence {
+                source_path: "page.md".to_string(),
+                source_revision: crate::build::types::SourceRevision::from_source("page"),
+                reference: reference.to_string(),
+                source_span: crate::build::types::SourceSpan {
+                    start_byte: 0,
+                    end_byte: 1,
+                    line: 1,
+                },
+            }],
+        }
+    }
 
     /// The round trip, and the retain: a peek must not consume, because the
     /// same value is both this rebuild's `new` side and the next one's
@@ -195,6 +231,17 @@ mod tests {
 
         records.forget_content_hashes(folder);
         assert!(records.content_hashes(folder).is_none());
+    }
+
+    #[test]
+    fn older_preflight_completion_cannot_replace_a_newer_projection() {
+        let records = BuildRecords::default();
+        records.install_publish_preflight("/tmp/ordered-vault", projection(2, "newer.png"));
+        records.install_publish_preflight("/tmp/ordered-vault", projection(1, "older.png"));
+
+        let installed = records.publish_preflight("/tmp/ordered-vault").expect("newer projection remains");
+        assert_eq!(installed.build_generation, 2);
+        assert_eq!(installed.missing_references[0].reference, "newer.png");
     }
 
 }

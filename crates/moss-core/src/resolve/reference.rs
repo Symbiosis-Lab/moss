@@ -100,18 +100,39 @@ impl ResolvedReference {
     }
 }
 
-/// Filename extension of a root-relative path, lowercased, no leading dot.
-/// Basename-aware: a dot in a directory name is never mistaken for an extension
-/// (`a.b/README` → ``). Empty when the basename has no extension.
-fn filename_ext(path: &str) -> String {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    match name.rsplit_once('.') {
-        // Guard the empty stem so a dotfile (`.gitignore`) is treated as
-        // extension-less, not as extension `gitignore` — mirrors
-        // `content_graph::filename_stem`.
-        Some((stem, ext)) if !stem.is_empty() => ext.to_lowercase(),
-        _ => String::new(),
+/// One canonical classification result, including the blocking consequence of
+/// an unresolved asset-shaped target.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReferenceVerdict {
+    pub resolved: ResolvedReference,
+    pub missing_kind: crate::resolve::DiagnosticKind,
+}
+
+impl ReferenceVerdict {
+    /// Keep the resolved record only when this reference is the publish gate's
+    /// one blocking missing-asset outcome.
+    pub fn into_missing_asset(self) -> Option<ResolvedReference> {
+        (self.missing_kind == crate::resolve::DiagnosticKind::MissingAsset).then_some(self.resolved)
     }
+}
+
+struct ParsedReference<'a> {
+    path: &'a str,
+    pothole: Option<&'a str>,
+    anchor: Option<String>,
+}
+
+fn parse_reference(inner: &str) -> ParsedReference<'_> {
+    let (path, pothole) = match inner.split_once('|') {
+        Some((path, pothole)) => (path.trim(), Some(pothole)),
+        None => (inner, None),
+    };
+    let path = path.split_once('?').map(|(path, _)| path.trim()).unwrap_or(path);
+    let (path, anchor) = match path.split_once('#') {
+        Some((path, anchor)) => (path.trim(), Some(anchor.to_string())),
+        None => (path, None),
+    };
+    ParsedReference { path, pothole, anchor }
 }
 
 /// Resolve `target` via `resolve_asset_ref`, retrying a percent-decoded form
@@ -145,7 +166,37 @@ pub fn classify_reference(
     is_embed: bool,
     ctx: &ReferenceContext,
 ) -> ResolvedReference {
+    classify_reference_verdict(inner, from_source, is_embed, ctx).resolved
+}
+
+/// Classify an authored reference and retain the canonical missing-asset
+/// consequence alongside the resolved kind.
+pub fn classify_reference_verdict(
+    inner: &str,
+    from_source: &str,
+    is_embed: bool,
+    ctx: &ReferenceContext,
+) -> ReferenceVerdict {
     let inner = inner.trim();
+    let parsed = parse_reference(inner);
+    let resolved = classify_reference_parts(inner, &parsed, from_source, is_embed, ctx);
+    let missing_kind = if matches!(resolved.kind, ReferenceKind::NotFound) {
+        crate::resolve::ext_kind::missing_reference_kind(
+            crate::path_ext::path_extension(parsed.path).as_deref(),
+        )
+    } else {
+        crate::resolve::DiagnosticKind::Other
+    };
+    ReferenceVerdict { resolved, missing_kind }
+}
+
+fn classify_reference_parts(
+    inner: &str,
+    parsed: &ParsedReference,
+    from_source: &str,
+    is_embed: bool,
+    ctx: &ReferenceContext,
+) -> ResolvedReference {
 
     // External short-circuits (mirror classify_link's exception list).
     const EXTERNAL_PREFIXES: &[&str] =
@@ -163,23 +214,9 @@ pub fn classify_reference(
         return r;
     }
 
-    // Split off |pothole, then ?query, then #anchor. A query string is
-    // opaque here — it carries no resolution meaning, same as an anchor —
-    // so it's dropped the same way, before the anchor split runs on what's
-    // left.
-    let (path_part, pothole) = match inner.split_once('|') {
-        Some((p, rest)) => (p.trim(), Some(rest)),
-        None => (inner, None),
-    };
-    let (path_part, _query) = match path_part.split_once('?') {
-        Some((p, q)) => (p.trim(), Some(q)),
-        None => (path_part, None),
-    };
-    let (path_no_anchor, anchor) = match path_part.split_once('#') {
-        Some((p, a)) => (p.trim(), Some(a.to_string())),
-        None => (path_part, None),
-    };
-    let size = pothole.and_then(crate::resolve::embed_renderer::Sizing::parse);
+    let path_no_anchor = parsed.path;
+    let anchor = parsed.anchor.clone();
+    let size = parsed.pothole.and_then(crate::resolve::embed_renderer::Sizing::parse);
 
     // Non-embed mode: a `[[note]]` / `[](path)` reference is a Link resolved
     // against the deployed URL space (`ctx.urls`), NOT an embed kind. This runs
@@ -304,7 +341,9 @@ pub fn classify_reference(
     // drift that showed `![[support-band]]` as "not found" while the build
     // transcluded it. `query_ext_kind` is used only to decide the *unresolved*
     // fallback (known-ext miss = broken embed; unknown-ext miss = note Link).
-    let query_ext_kind = reference_kind_for_ext(&filename_ext(path_no_anchor));
+    let query_ext_kind = reference_kind_for_ext(
+        crate::path_ext::path_extension(path_no_anchor).as_deref().unwrap_or(""),
+    );
 
     let resolved: Option<(String, AssetProvenance)> =
         match resolve_asset_with_percent_fallback(path_no_anchor, from_source, ctx.assets) {
@@ -351,7 +390,9 @@ pub fn classify_reference(
     match resolved {
         Some((root_rel, provenance)) => {
             // Kind keyed off the RESOLVED file's extension (see comment above).
-            let kind = match reference_kind_for_ext(&filename_ext(&root_rel)) {
+            let kind = match reference_kind_for_ext(
+                crate::path_ext::path_extension(&root_rel).as_deref().unwrap_or(""),
+            ) {
                 ExtKind::Image => ReferenceKind::Image,
                 ExtKind::Iframe => ReferenceKind::Iframe,
                 ExtKind::Pdf => ReferenceKind::Pdf,

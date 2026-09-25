@@ -220,7 +220,7 @@ pub async fn run_plugin_deploy_inner(
     // latch. This function is the one place both callers actually converge.
     crate::build::site_config::ensure_config_current(&folder_str)?;
 
-    // The missing-media gate, for every plugin publish there is. It lives here
+    // The publish-preflight gate, for every plugin publish there is. It lives here
     // rather than in each caller because "after the build, before any bytes
     // move" is exactly where this body starts: a one-shot arrives having just
     // run `run_pipeline`, and the app arrives after its in-flight drain and

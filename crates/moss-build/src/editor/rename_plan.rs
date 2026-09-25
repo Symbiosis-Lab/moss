@@ -257,7 +257,8 @@ fn ref_route(syntax: &RefSyntax) -> RefRoute {
         RefSyntax::MarkdownImage { .. }
         | RefSyntax::WikilinkStemEmbed
         | RefSyntax::WikilinkPathEmbed
-        | RefSyntax::WikilinkAliasedEmbed { .. } => RefRoute::AssetOrEmbed,
+        | RefSyntax::WikilinkAliasedEmbed { .. }
+        | RefSyntax::StructuralAsset => RefRoute::AssetOrEmbed,
         // A definition's destination is what `[text][id]` resolves into once
         // pulldown-cmark inlines it — the build renders it as an ordinary
         // link, so it takes the same resolver a MarkdownLink does.

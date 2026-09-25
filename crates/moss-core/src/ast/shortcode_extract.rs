@@ -731,6 +731,28 @@ fn split_grid_cells(body: &str) -> (Vec<String>, bool) {
 ///
 /// Kept in step with the parsers by `spans_agree_with_parsers`.
 pub fn shortcode_asset_spans(source: &str) -> Vec<AssetPathSpan> {
+    structural_asset_spans(source, StructuralAssetMode::RenameSuperset)
+}
+
+/// Byte-offset media paths which the shortcode parser actually renders.
+///
+/// Unlike [`shortcode_asset_spans`], this follows the parser's ownership of
+/// nested blocks: CSS and unknown wrappers recurse, grids recurse into their
+/// parsed bodies, and a recognized hero or gallery owns its body. It is for
+/// source evidence, where reporting a path from an unrendered unknown shape
+/// would create a false blocking error; rename tracking deliberately has the
+/// broader contract above.
+pub fn authored_asset_spans(source: &str) -> Vec<AssetPathSpan> {
+    structural_asset_spans(source, StructuralAssetMode::Rendered)
+}
+
+#[derive(Clone, Copy)]
+enum StructuralAssetMode {
+    RenameSuperset,
+    Rendered,
+}
+
+fn structural_asset_spans(source: &str, mode: StructuralAssetMode) -> Vec<AssetPathSpan> {
     let mask = crate::inert_regions::mask_inert(source);
     // Line table over the RAW source. Index-aligned with `str::lines()`, but
     // additionally carrying each line's absolute base and terminator length
@@ -738,56 +760,93 @@ pub fn shortcode_asset_spans(source: &str) -> Vec<AssetPathSpan> {
     let table = line_table(source);
     let mask_lines: Vec<&str> = mask.lines().collect();
     let mut out = Vec::new();
-    let mut i = 0;
+    collect_structural_asset_spans(
+        source, &mask, &table, &mask_lines, 0, table.len(), mode, &mut out,
+    );
+    out.sort_by_key(|span| span.value.start);
+    out
+}
 
-    while i < table.len() {
-        let Some(mline) = mask_lines.get(i) else { break };
-        let Some((arity, name, single_line_args)) = parse_shortcode_opener(mline.trim()) else {
+fn collect_structural_asset_spans(
+    source: &str,
+    mask: &str,
+    table: &[(usize, usize, usize)],
+    mask_lines: &[&str],
+    start: usize,
+    end: usize,
+    mode: StructuralAssetMode,
+    out: &mut Vec<AssetPathSpan>,
+) {
+    let mut i = start;
+    while i < end {
+        let Some(block) = structural_block_at(mask_lines, i, end) else {
             i += 1;
             continue;
         };
-
-        // Where does the opener's attribute block end? Reuse the extractor's
-        // own ladder so a multi-line `{ … }` is measured identically.
-        let (_, opener_lines_consumed) =
-            gather_multi_line_attrs(single_line_args, &mask_lines[i + 1..]);
-        let body_start = i + 1 + opener_lines_consumed;
-
-        // Matching closer at this arity.
-        let mut close = None;
-        for j in body_start..table.len() {
-            if is_close_fence(mask_lines.get(j).map_or("", |l| l.trim()), arity) {
-                close = Some(j);
-                break;
-            }
-        }
-        let Some(j) = close else {
-            // Unclosed: `extract_with_state` emits the block verbatim, so
-            // nothing inside it is live. Descend in place.
+        let Some(close) = block.close else {
+            // Matches extract_with_state: an unclosed opener is literal and
+            // scanning resumes on its next physical line.
             i += 1;
             continue;
         };
-
-        match name {
+        match block.name {
             "gallery" => {
-                for k in body_start..j {
-                    if let Some(span) = gallery_body_span(source, &table, k) {
+                for line in block.body_start..close {
+                    if let Some(span) = gallery_body_span(source, table, line) {
                         out.push(span);
                     }
                 }
-                i = j + 1;
             }
-            "hero" => {
-                super::extract_hero::hero_asset_spans(source, &mask, &table, i, body_start, j, &mut out);
-                i = j + 1;
+            "hero" => super::extract_hero::hero_asset_spans(
+                source, mask, table, i, block.body_start, close, out,
+            ),
+            // These are the only containers whose parser re-parses body
+            // markdown. Other typed shortcodes own their body as data.
+            "grid" | "" if matches!(mode, StructuralAssetMode::Rendered) => {
+                collect_structural_asset_spans(
+                    source, mask, table, mask_lines, block.body_start, close, mode, out,
+                )
             }
-            // Unknown / CssRegion / other typed block: descend in place so a
-            // gallery nested inside it is still found.
-            _ => i += 1,
+            name if !is_typed_known(name) && matches!(mode, StructuralAssetMode::Rendered) => {
+                collect_structural_asset_spans(
+                    source, mask, table, mask_lines, block.body_start, close, mode, out,
+                )
+            }
+            _ if matches!(mode, StructuralAssetMode::RenameSuperset) => {
+                // Rename follows every physical line after a non-media block,
+                // deliberately finding paths the renderer will not own.
+                i += 1;
+                continue;
+            }
+            _ => {}
         }
+        i = close + 1;
     }
+}
 
-    out
+struct StructuralBlock<'a> {
+    name: &'a str,
+    body_start: usize,
+    close: Option<usize>,
+}
+
+/// Parse one block boundary using the same multi-line-attribute and
+/// same-arity-closer rules as `extract_with_state`.
+fn structural_block_at<'a>(
+    mask_lines: &'a [&str],
+    opener: usize,
+    end: usize,
+) -> Option<StructuralBlock<'a>> {
+    let line = mask_lines.get(opener)?;
+    let (arity, name, args) = parse_shortcode_opener(line.trim())?;
+    let (_, attrs_lines) = gather_multi_line_attrs(args, &mask_lines[opener + 1..end]);
+    let body_start = opener + 1 + attrs_lines;
+    if body_start > end {
+        return Some(StructuralBlock { name, body_start, close: None });
+    }
+    let close = (body_start..end)
+        .find(|&line| is_close_fence(mask_lines.get(line).map_or("", |line| line.trim()), arity));
+    Some(StructuralBlock { name, body_start, close })
 }
 
 /// One `:::gallery` body line → an [`AssetPathSpan`], or `None`.

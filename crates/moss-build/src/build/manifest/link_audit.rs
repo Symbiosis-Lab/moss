@@ -47,7 +47,7 @@
 //! before the page that embeds it was sealed. That subset is not a maybe;
 //! moss knows for certain it will produce the file, on this same folder, from
 //! this same build. `deploy::refuse_publish` refuses on it, the same way it
-//! already refuses on missing media — closing the window where a publish
+//! already refuses on missing files — closing the window where a publish
 //! could land between a generation's seal and the follow-up rebuild that
 //! completes it, shipping a live page with a dead `<video>`. Every other dead
 //! link this module finds stays exactly as advisory as before.

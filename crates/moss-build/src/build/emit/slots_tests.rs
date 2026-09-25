@@ -131,7 +131,7 @@ fn empty_site_result() -> crate::types::content::SiteResult {
         site_title: String::new(),
         hashes: crate::types::content::SiteHashes::default(),
         deferred_paths: Vec::new(),
-        missing_media: Vec::new(),
+        missing_references: Vec::new(),
     }
 }
 

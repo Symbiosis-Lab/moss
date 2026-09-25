@@ -1,6 +1,6 @@
 //! The publish gate's third rule: a structural source (a page, `config.toml`,
 //! the user stylesheet) the last build carried forward rather than read.
-//! Mirrors `missing_media_gate_tests.rs` and `promised_dead_links_gate_tests.rs`
+//! Mirrors `publish_preflight_gate_tests.rs` and `promised_dead_links_gate_tests.rs`
 //! at the `refuse_publish` layer; the wiring that PRODUCES this record from a
 //! real seal is tested at the full-pipeline level in
 //! `build/pipeline_tests.rs` (`a_page_that_could_not_be_read_no_longer_withholds_the_rest_of_the_site`
@@ -38,7 +38,7 @@ fn an_empty_list_does_not_block() {
 }
 
 /// A folder nothing sealed in this process publishes too — absent is not a
-/// verdict, same distinction `missing_media` draws.
+/// verdict, same distinction the preflight report draws.
 #[test]
 fn no_seal_in_this_process_does_not_block() {
     assert!(refuse_publish("/stale-never-sealed").is_ok());
@@ -78,11 +78,14 @@ fn a_rebuild_that_can_read_everything_clears_an_earlier_refusal() {
 }
 
 /// The three rules are independent, and any one alone is enough to refuse —
-/// a folder cleared of missing media and in-flight promises but still
+/// a folder cleared of missing files and in-flight promises but still
 /// carrying a stale source must still be refused.
 #[test]
 fn any_rule_alone_is_enough_to_refuse() {
-    crate::system::build_records::records().record_missing_media("/stale-either", Vec::new());
+    crate::system::build_records::records().install_publish_preflight(
+        "/stale-either",
+        crate::build::types::PublishPreflightProjection { build_generation: 1, missing_references: Vec::new() },
+    );
     crate::system::build_records::records().record_promised_dead_links("/stale-either", Vec::new());
     record("/stale-either", vec!["config.toml".to_string()]);
     let err = refuse_publish("/stale-either").expect_err("the stale-source rule alone must refuse");

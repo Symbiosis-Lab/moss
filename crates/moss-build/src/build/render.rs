@@ -1,6 +1,8 @@
 //! Page rendering. Split into submodules as part of an earlier codebase restructure.
 
 pub mod preflight;
+mod source_evidence;
+pub use source_evidence::{MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 pub mod config;
 pub mod blocking;
 pub mod credits;

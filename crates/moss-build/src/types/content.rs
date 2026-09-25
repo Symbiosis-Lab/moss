@@ -357,11 +357,11 @@ pub struct SiteResult {
     #[serde(skip)]
     #[specta(skip)]
     pub deferred_paths: Vec<std::path::PathBuf>,
-    /// Media references in this site that point at no file on disk. A publish
-    /// is refused while this is non-empty — see [`crate::missing_media`].
+    /// Missing authored asset references in this site. A publish is refused
+    /// while this is non-empty.
     #[serde(skip)]
     #[specta(skip)]
-    pub missing_media: Vec<crate::build::types::MissingMedia>,
+    pub missing_references: Vec<crate::build::types::MissingReferenceOccurrence>,
 }
 
 /// Hash map of generated site files for change detection.

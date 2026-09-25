@@ -24,7 +24,7 @@ use http_body_util::BodyExt;
 /// Bridge script loaded from separate JS file for editor support
 const IFRAME_BRIDGE_SCRIPT: &str = include_str!("js/iframe-bridge.js");
 
-/// Preview-only blueprint placeholder for media that isn't there yet.
+/// Preview-only blueprint placeholder for a file that isn't there yet.
 ///
 /// Built from the desktop app's asset-placeholder bridge script. Injected into `<head>`, not
 /// before `</body>` like everything else in this module: it registers a
@@ -32,7 +32,7 @@ const IFRAME_BRIDGE_SCRIPT: &str = include_str!("js/iframe-bridge.js");
 /// still working through the body would fire before a body-end script existed.
 ///
 /// PREVIEW ONLY, deliberately. A published site never carries this, because a
-/// published site can never contain a broken image — moss refuses to deploy one.
+/// published site can never contain a broken file — moss refuses to deploy one.
 /// The placeholder is a working state, and the work happens locally.
 const ASSET_PLACEHOLDER_SCRIPT: &str = include_str!("js/asset-placeholder.js");
 
@@ -733,7 +733,7 @@ pub async fn inject_iframe_bridge(
 
     // Last: the blueprint placeholder, into <head> rather than before </body>
     // (see `inject_placeholder_into_head`). Preview-only — a published site
-    // cannot contain a broken image, so it has nothing to placeholder.
+    // cannot contain a broken file, so it has nothing to placeholder.
     let injected_html = inject_placeholder_into_head(&html);
 
     // Remove Content-Length header since we modified the body

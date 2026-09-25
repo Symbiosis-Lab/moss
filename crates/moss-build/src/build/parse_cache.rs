@@ -119,13 +119,13 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+#[cfg(test)]
+use std::{cell::Cell, sync::MutexGuard};
 
 /// One page's replayable parse plus everything needed to prove it still applies.
 #[derive(Debug, Clone)]
 struct ParseCacheEntry {
-    /// SHA-256 of the page's own source bytes, as read by the build that wrote
-    /// this entry (i.e. BEFORE that build's uid write-back, if any — which
-    /// simply costs the next build one reparse of that page).
+    /// SHA-256 of the exact final source bytes recorded with this snapshot.
     content_hash: String,
     /// `(path, hash)` for every member of the page's transitive embed closure,
     /// as of the same moment. Materialized at write time so validity checking
@@ -186,16 +186,57 @@ pub fn last_stats() -> Option<ParseCacheStats> {
 /// Forget everything. Test-only lever: cargo runs a test binary's tests in one
 /// process, so two tests over two temp vaults would otherwise share a store.
 pub fn reset_for_tests() {
+    #[cfg(test)]
+    assert!(cache_test_is_active(), "reset_for_tests requires store_lock_for_tests");
     if let Ok(mut store) = STORE.lock() {
         *store = None;
     }
+    #[cfg(test)]
+    if let Ok(mut stats) = LAST_STATS.lock() {
+        *stats = None;
+    }
+}
+
+/// Opt a test into owning the process-global parse cache.
+///
+/// Only the focused parse-cache stories take this guard. Other test builds do
+/// not publish their disabled or incidental cache sessions into the singleton.
+#[cfg(test)]
+pub(crate) fn store_lock_for_tests() -> ParseCacheTestGuard {
+    static LOCK: Mutex<()> = Mutex::new(());
+    let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    CACHE_TEST_ACTIVE.with(|active| {
+        assert!(!active.replace(true), "nested parse-cache test guards are unsupported");
+    });
+    ParseCacheTestGuard { _lock: lock }
+}
+
+#[cfg(test)]
+thread_local! {
+    static CACHE_TEST_ACTIVE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) struct ParseCacheTestGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for ParseCacheTestGuard {
+    fn drop(&mut self) {
+        CACHE_TEST_ACTIVE.with(|active| active.set(false));
+    }
+}
+
+#[cfg(test)]
+fn cache_test_is_active() -> bool {
+    CACHE_TEST_ACTIVE.with(Cell::get)
 }
 
 /// Content hashing for the current build, memoized.
 ///
 /// Memoization is not just a speed-up: `finish` must record for X exactly the
-/// hash `lookup` compared against, even though the uid write-back may have
-/// rewritten X's bytes in between.
+/// final bytes whose evidence travels in the cached document.
 struct FileHasher {
     root: PathBuf,
     index: Mutex<HashIndex>,
@@ -256,13 +297,9 @@ impl FileHasher {
     /// Memoize the hash of bytes the caller has ALREADY read, without touching
     /// the stat-keyed index.
     ///
-    /// Loop A reads a page's source before parsing it, and may then write a
-    /// freshly minted `uid:` back into that same file. The hash that describes
-    /// the parse is the one over the bytes that were parsed — the PRE-write-back
-    /// ones. Recording those bytes against the POST-write-back `(size, mtime)`
-    /// in `HashIndex` would make the next build call a changed file unchanged,
-    /// so this path deliberately only fills the per-build memo: the next build
-    /// re-hashes, sees the difference, and reparses that page once.
+    /// Loop A may mint a `uid:` after parsing. Its caller passes the one final
+    /// source string used for the deferred write, so cache identity and source
+    /// evidence agree with the bytes the next build reads.
     fn note_bytes(&self, relative_path: &str, bytes: &[u8]) {
         let hash = format!("{:x}", Sha256::digest(bytes));
         if let Ok(mut cache) = self.computed.lock() {
@@ -287,6 +324,8 @@ pub struct ParseSession {
     /// Decisions taken during Loop A: `path → hit`.
     decisions: Mutex<HashMap<String, bool>>,
     stats: Mutex<ParseCacheStats>,
+    #[cfg(test)]
+    publish_global_cache: bool,
 }
 
 impl ParseSession {
@@ -339,6 +378,8 @@ impl ParseSession {
             hasher: FileHasher::new(root, HashIndex::load(index_path)),
             decisions: Mutex::new(HashMap::new()),
             stats: Mutex::new(stats),
+            #[cfg(test)]
+            publish_global_cache: enabled && cache_test_is_active(),
         }
     }
 
@@ -514,16 +555,22 @@ impl ParseSession {
             );
         }
 
-        if let Ok(mut last) = LAST_STATS.lock() {
-            *last = Some(stats);
-        }
+        #[cfg(test)]
+        let publish_global_cache = self.publish_global_cache;
+        #[cfg(not(test))]
+        let publish_global_cache = true;
+        if publish_global_cache {
+            if let Ok(mut last) = LAST_STATS.lock() {
+                *last = Some(stats);
+            }
 
-        let cache = ParseCache {
-            inputs_fingerprint: self.inputs_fingerprint,
-            entries,
-        };
-        if let Ok(mut store) = STORE.lock() {
-            *store = Some((self.root, cache));
+            let cache = ParseCache {
+                inputs_fingerprint: self.inputs_fingerprint,
+                entries,
+            };
+            if let Ok(mut store) = STORE.lock() {
+                *store = Some((self.root, cache));
+            }
         }
 
         // Merge, don't overwrite: the background image/video workers own
@@ -605,13 +652,6 @@ pub fn inputs_fingerprint(
 mod tests {
     use super::*;
     use crate::build::cache::FileStat;
-
-    /// The store is process-global, and cargo runs these tests in parallel
-    /// threads. Every test that touches it takes this lock.
-    fn store_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: Mutex<()> = Mutex::new(());
-        LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
 
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
@@ -731,8 +771,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_session_stays_send_and_sync_for_rayon() {
+        fn assert_send_and_sync<T: Send + Sync>() {}
+        assert_send_and_sync::<ParseSession>();
+    }
+
+    #[test]
     fn a_disabled_session_never_hits() {
-        let _guard = store_lock();
+        let _guard = store_lock_for_tests();
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.md"), "hello").unwrap();
         reset_for_tests();
@@ -776,8 +822,30 @@ mod tests {
     }
 
     #[test]
+    fn a_cache_disabled_test_session_does_not_publish_global_state() {
+        let _guard = store_lock_for_tests();
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("hash-index.json");
+        std::fs::write(dir.path().join("a.md"), "hello").unwrap();
+        let doc = ParsedDocument {
+            source_path: Some("a.md".to_string()),
+            ..Default::default()
+        };
+        reset_for_tests();
+
+        ParseSession::begin(dir.path(), &index, false, "fp".to_string())
+            .finish(std::slice::from_ref(&doc));
+
+        assert!(last_stats().is_none(), "a non-cache test build published cache stats");
+        let enabled = ParseSession::begin(dir.path(), &index, true, "fp".to_string());
+        assert!(enabled.is_cold(), "a non-cache test build seeded the global cache");
+        enabled.finish(std::slice::from_ref(&doc));
+        reset_for_tests();
+    }
+
+    #[test]
     fn an_edit_to_the_page_itself_misses() {
-        let _guard = store_lock();
+        let _guard = store_lock_for_tests();
         let dir = tempfile::tempdir().unwrap();
         let index = dir.path().join("hash-index.json");
         std::fs::write(dir.path().join("a.md"), "hello").unwrap();
@@ -802,7 +870,7 @@ mod tests {
     /// a stat that cannot tell the two writes apart replays the old parse.
     #[test]
     fn a_same_size_edit_in_the_same_second_misses() {
-        let _guard = store_lock();
+        let _guard = store_lock_for_tests();
         let dir = tempfile::tempdir().unwrap();
         let index = dir.path().join("hash-index.json");
         let page = dir.path().join("a.md");
@@ -830,7 +898,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_page_replaced_by_rename_with_its_size_and_mtime_kept_misses() {
-        let _guard = store_lock();
+        let _guard = store_lock_for_tests();
         let dir = tempfile::tempdir().unwrap();
         let index = dir.path().join("hash-index.json");
         let page = dir.path().join("a.md");
@@ -935,7 +1003,7 @@ mod tests {
     fn an_edit_two_embed_hops_down_misses_the_top_page() {
         // index.md ← a.md ← b.md. Editing b.md must miss ALL THREE, which a
         // flat `embed_deps` filter on index.md would get wrong.
-        let _guard = store_lock();
+        let _guard = store_lock_for_tests();
         let dir = tempfile::tempdir().unwrap();
         let index_json = dir.path().join("hash-index.json");
         for (name, body) in [("index.md", "top"), ("a.md", "mid"), ("b.md", "leaf")] {
@@ -975,7 +1043,7 @@ mod tests {
 
     #[test]
     fn an_unrelated_edit_leaves_an_embed_chain_hot() {
-        let _guard = store_lock();
+        let _guard = store_lock_for_tests();
         let dir = tempfile::tempdir().unwrap();
         let index_json = dir.path().join("hash-index.json");
         for name in ["index.md", "a.md", "b.md", "other.md"] {
@@ -1009,8 +1077,39 @@ mod tests {
     }
 
     #[test]
+    fn a_warm_entry_replays_its_missing_reference_evidence() {
+        let _guard = store_lock_for_tests();
+        let dir = tempfile::tempdir().unwrap();
+        let index_json = dir.path().join("hash-index.json");
+        std::fs::write(dir.path().join("a.md"), "![alt](gone.png)\n").unwrap();
+        reset_for_tests();
+        let doc = ParsedDocument {
+            source_path: Some("a.md".to_string()),
+            missing_reference_occurrences: vec![crate::build::types::MissingReferenceOccurrence {
+                source_path: "a.md".to_string(),
+                source_revision: crate::build::types::SourceRevision::from_source("revision"),
+                reference: "gone.png".to_string(),
+                source_span: crate::build::types::SourceSpan {
+                    start_byte: 7,
+                    end_byte: 15,
+                    line: 1,
+                },
+            }],
+            ..Default::default()
+        };
+        ParseSession::begin(dir.path(), &index_json, true, "fp".to_string()).finish(&[doc]);
+
+        let session = ParseSession::begin(dir.path(), &index_json, true, "fp".to_string());
+        let replayed = session.lookup("a.md").expect("unchanged source is warm");
+        assert_eq!(replayed.missing_reference_occurrences.len(), 1);
+        assert_eq!(replayed.missing_reference_occurrences[0].reference, "gone.png");
+        session.finish(&[replayed]);
+        reset_for_tests();
+    }
+
+    #[test]
     fn a_changed_inputs_fingerprint_disables_the_whole_build() {
-        let _guard = store_lock();
+        let _guard = store_lock_for_tests();
         let dir = tempfile::tempdir().unwrap();
         let index_json = dir.path().join("hash-index.json");
         for name in ["a.md", "b.md"] {

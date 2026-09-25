@@ -258,7 +258,7 @@ fn record_phase(name: &'static str, elapsed: Duration) {
     });
 }
 
-/// Record a named count (pages rendered, missing-media entries, …) into
+/// Record a named count (pages rendered, missing-reference entries, …) into
 /// whichever collector is active. Same no-op-outside-a-scope behavior as
 /// [`record_phase`]. Public so `build.rs` can call it directly at the point
 /// values like `build_documents.len()` are already in scope, rather than

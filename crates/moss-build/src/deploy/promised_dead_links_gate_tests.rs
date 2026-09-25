@@ -1,6 +1,6 @@
 //! The publish gate's second rule: this build's own unfulfilled promise (a
 //! video, or its poster, still mid-encode when the page that embeds it
-//! sealed). Mirrors `missing_media_gate_tests.rs` at the `refuse_publish`
+//! sealed). Mirrors `publish_preflight_gate_tests.rs` at the `refuse_publish`
 //! layer; the wiring that PRODUCES this record from a real seal is tested in
 //! `build/promise_gate_tests.rs`, and the pure audit ∩ promises filter in
 //! `build/manifest/link_audit_tests.rs`.
@@ -18,7 +18,7 @@ fn dead(page: &str, href: &str) -> DeadLink {
     DeadLink { page: page.into(), href: href.into() }
 }
 
-/// Distinct wording from the missing-media refusal: the reference isn't
+/// Distinct wording from the missing-file refusal: the reference isn't
 /// broken, so "fix this" would send an author hunting for a file that does
 /// not exist.
 #[test]
@@ -40,7 +40,7 @@ fn an_empty_list_does_not_block() {
 }
 
 /// A folder nothing sealed in this process publishes too — absent is not a
-/// verdict, same distinction `missing_media` draws.
+/// verdict, same distinction the preflight report draws.
 #[test]
 fn no_seal_in_this_process_does_not_block() {
     assert!(refuse_publish("/promise-never-sealed").is_ok());
@@ -80,11 +80,14 @@ fn a_rebuild_that_finds_nothing_pending_clears_an_earlier_refusal() {
 }
 
 /// The two rules are independent, and either alone is enough to refuse — a
-/// folder cleared of missing media but still carrying an in-flight promise
+/// folder cleared of missing files but still carrying an in-flight promise
 /// must still be refused.
 #[test]
 fn either_rule_alone_is_enough_to_refuse() {
-    crate::system::build_records::records().record_missing_media("/promise-either", Vec::new());
+    crate::system::build_records::records().install_publish_preflight(
+        "/promise-either",
+        crate::build::types::PublishPreflightProjection { build_generation: 1, missing_references: Vec::new() },
+    );
     record("/promise-either", vec![dead("clip/index.html", "/videos/clip.thumb.jpg")]);
     let err = refuse_publish("/promise-either").expect_err("the in-flight rule alone must refuse");
     assert!(err.contains("still being prepared"), "{err}");

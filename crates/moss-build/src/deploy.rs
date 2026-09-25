@@ -320,9 +320,9 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
     ))
 }
 
-/// Refuse the publish if this site points at media that does not exist.
+/// Refuse the publish if this site points at a file that does not exist.
 ///
-/// A published site cannot contain a broken image. moss will not paper over one
+/// A published site cannot contain a broken file. moss will not paper over one
 /// either — the blueprint grid the author sees locally is a preview affordance
 /// and ships nowhere — so the only honest options are to fix the reference or
 /// not to publish. This is the second one.
@@ -332,10 +332,10 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 /// stranger's screen, and the person who chose it can never see the result,
 /// because their own preview looks the same either way.
 ///
-/// THE GATE, NOT THE MESSAGE. The app calls `list_missing_media` before it ever
-/// calls publish, so a user should never read this string — they get a list of
-/// files they can click. This exists so the guarantee holds for every other
-/// caller too: the CLI, a plugin deploy, a second call site added later.
+/// THE GATE, NOT THE MESSAGE. The app reads the same completed preflight
+/// projection before it calls publish, so a user normally gets its clickable
+/// occurrence list instead. This exists so the guarantee holds for every
+/// other caller too: the CLI, a plugin deploy, a second call site added later.
 ///
 /// The verdict comes from the last build's own resolver
 /// (`BuildRecords`), never from a fresh scan. A second scan
@@ -345,12 +345,6 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 /// Absent means "no build in this session", not "clean" — and since 2026-08-29
 /// a headless build records its verdict here too, so the CLI is refused on the
 /// same evidence the app is.
-///
-/// Crossed here at C4f. It had sat in the app's own missing-media module with a
-/// doc promising the guarantee held "for every other caller too: the CLI, a
-/// plugin deploy, a second call site added later" — which the CLI could not
-/// honour, because it could not name the function. The evidence it reads
-/// (`build_records`) crossed in 2026-08-29; the verdict followed here.
 ///
 /// A second rule joined 2026-09-16, alongside this one rather than as a
 /// separate gate function: a generation can seal before a video it dispatched
@@ -374,9 +368,9 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 /// with no signal that anything needed attention.
 pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
     let records = crate::system::build_records::records();
-    if let Some(missing) = records.missing_media(folder_path) {
-        if !missing.is_empty() {
-            return Err(refusal_text(missing.len()));
+    if let Some(projection) = records.publish_preflight(folder_path) {
+        if !projection.missing_references.is_empty() {
+            return Err(refusal_text(projection.missing_references.len()));
         }
     }
     if let Some(unfulfilled) = records.promised_dead_links(folder_path) {
@@ -401,7 +395,7 @@ pub(crate) fn refusal_text(count: usize) -> String {
         format!("{count} files are missing")
     };
     format!(
-        "Nothing published — {subject}. A published site can't show a broken image. \
+        "Nothing published — {subject}. A published site can't show a broken file. \
          Fix these, then publish again."
     )
 }
@@ -425,7 +419,7 @@ pub(crate) fn in_flight_refusal_text(count: usize) -> String {
 
 /// The refusal for the third rule on [`refuse_publish`]: a structural source
 /// this build carried forward rather than read. Names the sources rather than
-/// only counting them — unlike missing media, there is no separate "list
+/// only counting them — unlike the preflight report, there is no separate "list
 /// what's wrong" call a driver makes first, so this message is the only place
 /// an author learns which file.
 pub(crate) fn stale_source_refusal_text(stale: &[String]) -> String {
@@ -655,7 +649,7 @@ pub async fn resolve_publish_inputs(
     // Mint one if this folder has never published. A publish that cannot sign
     // cannot start, so this fails before a byte is read off disk — and, on the
     // hosted route, before the build. That ordering means a `moss deploy` that
-    // is later refused (a broken image, say) has still written `.moss/identity/`
+    // is later refused (a broken file, say) has still written `.moss/identity/`
     // into a first-time vault. Deliberate: failing after a multi-minute build
     // to say something knowable at t=0 is the worse trade, and it is what the
     // prebuilt route always did.
@@ -1020,8 +1014,8 @@ mod not_allowlisted_message_tests {
 
 
 #[cfg(test)]
-#[path = "deploy/missing_media_gate_tests.rs"]
-mod missing_media_gate_tests;
+#[path = "deploy/publish_preflight_gate_tests.rs"]
+mod publish_preflight_gate_tests;
 
 #[cfg(test)]
 #[path = "deploy/promised_dead_links_gate_tests.rs"]

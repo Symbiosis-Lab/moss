@@ -11,46 +11,7 @@ use specta::Type;
 
 // SeriesField moved to moss-core. Re-exported for backward compat.
 pub use moss_core::frontmatter_typed::SeriesField;
-
-/// One media reference that resolves to nothing.
-///
-/// Broken is a fact about the SOURCE, and this is the build's verdict on it:
-/// the render pass keeps the resolver's own `MissingAsset` diagnostics and
-/// hands them out on `SiteBuildResult`, so a reference with no file behind it
-/// travels with the build that found it rather than being re-derived by a
-/// second scan that is free to disagree. An asset that is merely still
-/// encoding has a source file and never appears here. The publish gate and the
-/// command that shows the author which files to fix are the app half, in
-/// `crate::missing_media`.
-///
-/// Both fields are the author's own strings, not resolved paths — `reference`
-/// especially, because it is what they will search their document for.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub struct MissingMedia {
-    /// Markdown file holding the reference, relative to the site root.
-    pub source_path: String,
-    /// The reference exactly as the author typed it.
-    pub reference: String,
-}
-
-impl MissingMedia {
-    /// Every blocking reference in a run of resolve diagnostics.
-    ///
-    /// `DiagnosticKind::MissingAsset` is the one kind a publish is refused
-    /// over; everything else in the same stream is advisory and logged.
-    pub fn from_diagnostics<'a>(
-        diagnostics: impl IntoIterator<Item = &'a moss_core::resolve::Diagnostic>,
-    ) -> Vec<Self> {
-        diagnostics
-            .into_iter()
-            .filter(|d| d.kind == moss_core::resolve::DiagnosticKind::MissingAsset)
-            .map(|d| MissingMedia {
-                source_path: d.source_path.clone(),
-                reference: d.reference.clone(),
-            })
-            .collect()
-    }
-}
+pub use crate::build::render::{MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 
 /// Parsed markdown document with frontmatter and content.
 ///
@@ -538,20 +499,10 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub embed_deps: Vec<(String, String)>,
-    /// Every media reference in this document that resolves to no file.
-    ///
-    /// The `DiagnosticKind::MissingAsset` diagnostics raised while this
-    /// document was parsed — by the AST URL pass for `![alt](gone.png)`, by
-    /// the wikilink dispatcher for `![[gone.jpg]]`. Carried on the document
-    /// because both run inside `process_markdown_file`, out of reach of the
-    /// render loop that assembles the build's verdict.
-    ///
-    /// Not serialized: derived build state, same rationale as `embed_deps`.
-    /// The build's own copy — `SiteBuildResult::missing_media` — is what the
-    /// publish gate reads.
+    /// Missing references with physical source evidence; not serialized.
     #[serde(skip)]
     #[specta(skip)]
-    pub missing_media: Vec<MissingMedia>,
+    pub missing_reference_occurrences: Vec<MissingReferenceOccurrence>,
 }
 
 impl ParsedDocument {

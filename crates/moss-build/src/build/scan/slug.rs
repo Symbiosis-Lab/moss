@@ -270,24 +270,26 @@ pub(crate) fn warn_reserved_folder(dir: &str, mapped_index: &str) -> bool {
     true
 }
 
-/// Pushes `doc` onto `docs`, unless [`is_reserved_device_output`] flags its
+/// Admits `doc` to `docs`, unless [`is_reserved_device_output`] flags its
 /// `url_path` — in which case the page is dropped, with one warning naming
 /// the file, instead of failing the whole build. Called once per page from
 /// the sequential reduce in `build::render::blocking`, before the
-/// whole-corpus passes (slug dedup, folder synthesis, ...) can see it.
-pub(crate) fn push_unless_reserved_device_output(
+/// whole-corpus passes (slug dedup, folder synthesis, ...) can see it. The
+/// returned index is the only valid document owner for any per-source state.
+pub(crate) fn admit_unless_reserved_device_output(
     docs: &mut Vec<crate::build::types::ParsedDocument>,
     doc: crate::build::types::ParsedDocument,
-) {
+) -> Option<usize> {
     if is_reserved_device_output(&doc.url_path) {
         log::warn!(
             "Skipping '{}': its output directory would be a Windows reserved device name ({}) — cannot exist on NTFS",
             doc.source_path.as_deref().unwrap_or(&doc.url_path),
             doc.url_path,
         );
-        return;
+        return None;
     }
     docs.push(doc);
+    Some(docs.len() - 1)
 }
 
 /// Number the DIRECTORY, never the file.

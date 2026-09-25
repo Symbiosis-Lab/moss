@@ -10,8 +10,8 @@
  *
  * Both are preview-only. The preview server injects the placeholder into <head>
  * and the bridge before </body>; neither reaches a published page, because moss
- * refuses to publish a site whose media is missing at all
- * (`missing_media::refuse_publish`) rather than dressing the hole up for a
+ * refuses to publish a site with a broken file reference
+ * (`refuse_publish`) rather than dressing the hole up for a
  * stranger. So nothing here can change emitted output.
  *
  * Sizing preservation

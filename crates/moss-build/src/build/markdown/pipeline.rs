@@ -950,10 +950,6 @@ pub fn process_markdown_file(
             diag.source_path
         );
     }
-    // …and KEEP the blocking ones. These streams are the build's only producers
-    // of `MissingAsset`, so logging and dropping left the publish gate nothing
-    // to refuse on and the site shipped with a 404 in it.
-    let missing_media = crate::build::types::MissingMedia::from_diagnostics(resolve_diagnostics());
     let mut outgoing_links: Vec<moss_core::resolve::OutgoingLink> = wikilink_outgoing;
     outgoing_links.extend(graph_resolution.outgoing);
 
@@ -1448,7 +1444,11 @@ pub fn process_markdown_file(
         // never sees an `![[...]]` marker. The Loop A call site in
         // `render/blocking.rs` fills this in from `ResolveResult::embed_deps`.
         embed_deps: Vec::new(),
-        missing_media,
+        // Source evidence is attached by Loop A from this file's final raw
+        // bytes, after any uid write-back. Resolution diagnostics above are
+        // still logged here, but they are not physical-source coordinates and
+        // must not become publish evidence.
+        missing_reference_occurrences: Vec::new(),
     })
 }
 

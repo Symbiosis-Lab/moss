@@ -68,7 +68,7 @@
         "crates/moss-build/src/plugins": 19,
         "crates/moss-core/src": 40,
         "crates/moss-core/src/ast": 24,
-        "crates/moss-core/src/resolve": 16
+        "crates/moss-core/src/resolve": 17
       },
       "oversized": {
         "crates/moss-core/src": "Flat by charter: pure, zero-I/O leaf modules (parse, schema, contract, resolve) that are named-scanned, not navigated. ast/ and resolve/ are the two clusters that earned subdirectories. (carried over from the desktop baseline's open/crates/moss-core/src entry, dated pre-2026-09-16.)",

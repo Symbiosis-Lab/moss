@@ -52,7 +52,7 @@
 // script into every page, so a broken reference showed a stranger a blueprint
 // grid on a live site while the author's local preview looked identical, and
 // nothing ever told the author. Rather than dress up the failure, moss removes
-// the cause — a publish is refused while any media reference is broken. The
+// the cause — a publish is refused while any file reference is broken. The
 // placeholder is a working state, and the work is local.
 //
 // `restore()` is published to `window.__mossAssetPlaceholder` so the preview's
@@ -244,7 +244,7 @@ export function install(doc: Document = document, win: Window = window): () => v
   const onError = (e: Event): void => {
     const target = e.target;
     // <audio> is deliberately absent: there is no surface to placehold, and a
-    // missing one still blocks the publish (`missing_media::refuse_publish`).
+    // missing one still blocks the publish (`refuse_publish`).
     if (target instanceof HTMLImageElement || target instanceof HTMLVideoElement) {
       place(target, doc);
     }

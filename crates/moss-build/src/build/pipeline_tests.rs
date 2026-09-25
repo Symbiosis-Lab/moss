@@ -127,7 +127,27 @@ fn build_test_full(
     server_port: Option<u16>,
     services: Option<&BuildServices>,
     resolved_slots: &ResolvedSlots,
-) -> Result<(bool, Vec<crate::build::types::MissingMedia>), String> {
+) -> Result<(bool, Vec<crate::build::types::MissingReferenceOccurrence>), String> {
+    build_test_full_with_gates(
+        folder_path,
+        site_dir_state,
+        progress_sender,
+        server_port,
+        services,
+        resolved_slots,
+        crate::build::render::IncrementalGates::default(),
+    )
+}
+
+fn build_test_full_with_gates(
+    folder_path: &str,
+    site_dir_state: Option<&SiteDirectoryState>,
+    progress_sender: Option<&dyn crate::build::ports::reporter::BuildReporter>,
+    server_port: Option<u16>,
+    services: Option<&BuildServices>,
+    resolved_slots: &ResolvedSlots,
+    gates: crate::build::render::IncrementalGates,
+) -> Result<(bool, Vec<crate::build::types::MissingReferenceOccurrence>), String> {
     let ps = scan_folder(folder_path)?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -151,7 +171,7 @@ fn build_test_full(
             bg_handle,
             build_documents: _documents,
             content_hashes: _content_hashes,
-            missing_media,
+            missing_references,
             cancelled: _cancelled,
             home_ready: _home_ready,
             publishable: _publishable,
@@ -166,7 +186,7 @@ fn build_test_full(
             Some(Box::new(move |_, _, _| Ok(slots))),
             &ps,
             None,
-            crate::build::render::IncrementalGates::default(),
+            gates,
             crate::build::feeds::search_lane::Freshness::Now,
             &test_cache_keys(),
         )
@@ -184,8 +204,192 @@ fn build_test_full(
                 }
             }
         }
-        Ok((is_empty, missing_media))
+        Ok((is_empty, missing_references))
     })
+}
+
+#[test]
+fn warm_parse_cache_replays_then_replaces_missing_reference_evidence() {
+    let _cache_store = crate::build::parse_cache::store_lock_for_tests();
+    crate::build::parse_cache::reset_for_tests();
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: evidence\n---\n![alt](gone.png)\n").unwrap();
+    let gates = crate::build::render::IncrementalGates {
+        render_skip: false,
+        parse_cache: true,
+    };
+
+    let (_, first) = build_test_full_with_gates(
+        dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates,
+    )
+    .expect("cold build");
+    assert_eq!(first.len(), 1);
+
+    let (_, warm) = build_test_full_with_gates(
+        dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates,
+    )
+    .expect("warm build");
+    assert_eq!(warm, first);
+    let stats = crate::build::parse_cache::last_stats().expect("completed cache stats");
+    assert!(stats.eligible && stats.hits >= 1, "expected a real cache hit: {stats:?}");
+
+    fs::write(dir.join("index.md"), "# fixed\n").unwrap();
+    let (_, fixed) = build_test_full_with_gates(
+        dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates,
+    )
+    .expect("fixed build");
+    assert!(fixed.is_empty());
+    crate::build::parse_cache::reset_for_tests();
+}
+
+#[test]
+fn reserved_output_sources_never_receive_final_source_records() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("con.md"), "---\ntitle: reserved\n---\n![reserved](reserved.png)\n").unwrap();
+
+    let (_, missing) = build_test_full(
+        dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(),
+    )
+    .expect("a sole reserved output is skipped without panicking");
+    assert!(missing.is_empty());
+    assert!(
+        !fs::read_to_string(dir.join("con.md")).unwrap().contains("uid:"),
+        "a skipped source must never be normalized or cached as an admitted document"
+    );
+}
+
+#[test]
+fn reserved_output_before_normal_source_keeps_evidence_with_the_normal_document() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("con.md"), "---\ntitle: reserved\n---\n![reserved](reserved.png)\n").unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: normal\n---\n![normal](gone.png)\n").unwrap();
+
+    let (_, missing) = build_test_full(
+        dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(),
+    )
+    .expect("the normal source still builds");
+    assert_eq!(
+        missing.iter().map(|item| (item.source_path.as_str(), item.reference.as_str())).collect::<Vec<_>>(),
+        vec![("index.md", "gone.png")],
+    );
+    assert!(!fs::read_to_string(dir.join("con.md")).unwrap().contains("uid:"));
+    assert!(fs::read_to_string(dir.join("index.md")).unwrap().contains("uid:"));
+}
+
+#[test]
+fn duplicate_uid_normalization_keeps_cacheable_missing_reference_evidence() {
+    let _cache_store = crate::build::parse_cache::store_lock_for_tests();
+    crate::build::parse_cache::reset_for_tests();
+    let (dir, _cleanup) = create_test_dir();
+    for (path, title, image) in [("a.md", "A", "gone-a.png"), ("b.md", "B", "gone-b.jpg")] {
+        fs::write(
+            dir.join(path),
+            format!("---\ntitle: {title}\ndate: 2026-01-01\nuid: duplicate\n---\n![alt]({image})\n"),
+        )
+        .unwrap();
+    }
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let (_, first) = build_test_full_with_gates(
+        dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates,
+    )
+    .expect("duplicate uid build");
+    assert_eq!(first.len(), 2);
+    let a = fs::read_to_string(dir.join("a.md")).unwrap();
+    let b = fs::read_to_string(dir.join("b.md")).unwrap();
+    let uid = |source: &str| source.lines().find(|line| line.starts_with("uid:")).unwrap().to_string();
+    assert_ne!(uid(&a), uid(&b), "one duplicate UID must be reassigned in its final source");
+
+    let (_, warm) = build_test_full_with_gates(
+        dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates,
+    )
+    .expect("cache replay after uid normalization");
+    assert_eq!(warm, first);
+    assert!(crate::build::parse_cache::last_stats().is_some_and(|stats| stats.hits >= 2));
+    crate::build::parse_cache::reset_for_tests();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_build_installs_one_ordered_preflight_projection_for_the_publish_gate() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "![alt](gone.png)\n").unwrap();
+    let config = |folder: &std::path::Path, admission_epoch| PipelineConfig {
+        root: crate::vault::paths::VaultRoot::resolve(folder),
+        progress: crate::build::null_sink(),
+        plugins: PluginMode::Skip,
+        watch: false,
+        start_server: false,
+        host: crate::build::ports::host::test_host_ports(),
+        trigger: BuildTrigger::Full,
+        exits_after_build: true,
+        site_url_override: None,
+        server_port: None,
+        admission_epoch: Some(admission_epoch),
+        live_port: None,
+    };
+
+    let broken_epoch = crate::build::ship::next_promotion_epoch();
+    run_pipeline(config(&dir, broken_epoch)).await.expect("broken build still completes");
+    assert!(crate::deploy::refuse_publish(dir.to_str().unwrap()).is_err());
+    let broken = crate::system::build_records::records()
+        .publish_preflight(dir.to_str().unwrap())
+        .expect("completed build installs a projection");
+    assert_eq!(broken.build_generation, broken_epoch);
+    assert_eq!(broken.missing_references.len(), 1);
+
+    fs::write(dir.join("index.md"), "# fixed\n").unwrap();
+    let clean_epoch = crate::build::ship::next_promotion_epoch();
+    run_pipeline(config(&dir, clean_epoch)).await.expect("fixed build completes");
+    assert!(crate::deploy::refuse_publish(dir.to_str().unwrap()).is_ok());
+    let clean = crate::system::build_records::records()
+        .publish_preflight(dir.to_str().unwrap())
+        .expect("clean completed build replaces the projection");
+    assert_eq!(clean.build_generation, clean_epoch);
+    assert!(clean.missing_references.is_empty(), "a clean build installs an explicit empty verdict");
+}
+
+#[test]
+fn transcluded_child_evidence_keeps_its_own_physical_source() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "# host\n![[child.md]]\n").unwrap();
+    fs::write(dir.join("child.md"), "![child](gone.png)\n").unwrap();
+
+    let (_, missing) = build_test_full(
+        dir.to_str().unwrap(),
+        None,
+        None,
+        None,
+        None,
+        &ResolvedSlots::empty(),
+    )
+    .expect("build renders transclusion");
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].source_path, "child.md");
+}
+
+#[test]
+fn missing_reference_evidence_is_sorted_across_source_files() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("z.md"), "![z](gone-z.jpg)\n").unwrap();
+    fs::write(dir.join("a.md"), "![a](gone-a.png)\n").unwrap();
+
+    let (_, missing) = build_test_full(
+        dir.to_str().unwrap(),
+        None,
+        None,
+        None,
+        None,
+        &ResolvedSlots::empty(),
+    )
+    .expect("build renders both source files");
+    assert_eq!(
+        missing
+            .iter()
+            .map(|item| (item.source_path.as_str(), item.reference.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("a.md", "gone-a.png"), ("z.md", "gone-z.jpg")],
+    );
 }
 
 #[test]

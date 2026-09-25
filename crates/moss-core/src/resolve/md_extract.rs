@@ -43,6 +43,10 @@ pub enum RefSyntax {
     /// definition's own destination is a reference to rewrite; a `[text][id]`
     /// use names no path itself and needs no edit.
     Definition { label: String },
+    /// A bare path or attribute value from a rendered `:::hero` or
+    /// `:::gallery` block. It behaves as an embed for resolution, but has no
+    /// markdown token of its own.
+    StructuralAsset,
 }
 
 /// A raw reference extracted from a markdown source string.
