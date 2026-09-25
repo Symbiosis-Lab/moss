@@ -113,6 +113,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Exact width of the next card's visible slice at the edge of a scrolling row (`:::grid N {scroll}`) — how much of it shows, not an approximation. moss solves the row's `grid-auto-columns` so `data-columns` cards fit fully and precisely this much of the next one peeks past the edge. Raise it for a more insistent hint, lower it toward `0` to hide the cue.",
     },
     CustomProp {
+        name: "--moss-scroll-dot-start",
+        owner: "moss-scroll-dots-track",
+        default: "0",
+        description: "Zero-based start slot for the clipped scroll-indicator track. Written per-row by scroll-row.js while the reader scrolls or scrubs; not a theme hook, because the next indicator update overwrites a hand-set value.",
+    },
+    CustomProp {
         name: "--moss-grid-image-ratio",
         owner: "moss-grid-card",
         default: "1 / 1",
