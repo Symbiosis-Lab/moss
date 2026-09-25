@@ -1,9 +1,0 @@
-{
-  "after": "tree",
-  "steps": [
-    {
-      "dblclick": "tree.divider",
-      "reveals": 1
-    }
-  ]
-}

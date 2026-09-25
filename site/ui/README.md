@@ -10,7 +10,7 @@ These files preserve real moss interface states for the landing page and documen
 | `shell.html` | Self-contained harvested preview/publish shell | Live preview and publish scenes |
 | `shell@2x.png` | Static preview capture, 1760 × 1120 | Static preview fallback |
 | `mark.svg` | moss mark used by the harvested shell | Interface chrome only |
-| `stage/` | `<moss-stage>` + `<moss-scene>` — the one editor a documentation page shows, and the markers that hand it a scene | User-started documentation demos around a harvested fixture; see `stage/README.md` |
+| `demo/` | `<moss-editor-demo>` + `<moss-demo-marker>` — the one editor a documentation page shows, and the markers that hand it a scene | User-started documentation demos around a harvested fixture; see `demo/README.md` |
 
 The editor guide uses `../assets/guides/editor-ui-source.png` and `../assets/guides/choose-page-source.png` directly. `capture-manifest.json` records the desktop source commit, source paths, visible states, and derivation. The older `editor-map.svg` documentation montage remains in the bank but is not used by the guide.
 
@@ -27,8 +27,8 @@ The editor guide uses `../assets/guides/editor-ui-source.png` and `../assets/gui
 - Shell fixture: the matching generated site in its preview and publish chrome.
 - Locale: interface chrome is English. The localized landing scene supplies separate Chinese content; these banked files are not translated screenshots.
 - Interaction boundary: `editor.html` is a deterministic mock of the captured editor, suitable for the interactions it exposes. It is not the desktop application and must not be used as proof of filesystem, Git, deploy, or operating-system behavior.
-- Demo contract: `<moss-stage>` loads the default fixture as soon as it connects and plays a scene only when a marker's own Play button asks it to; any pointer or key press inside the editor stops scripted playback at once and keeps what's there. Reduced motion applies a scene's steps instantly instead of animating them. Full contract: `stage/README.md`.
-- Guide loading: authored `<moss-stage>`/`<moss-scene>` markup survives Markdown rendering. `.moss/theme/script.js` loads `stage/moss-stage.js` and `stage/moss-scene.js` through `window.mossTheme.base`; each module resolves its own stylesheet, scene data, and the harvested iframe from `import.meta.url`, so all of it retains a deployment subpath.
+- Demo contract: links ending in `#scene=…` become `<moss-demo-marker>` controls for the page's single `<moss-editor-demo>` surface. Any pointer or key press inside the editor stops scripted playback and keeps its current state. Reduced motion applies scene steps instantly. Full contract: `demo/README.md`.
+- Guide loading: `.moss/theme/script.js` upgrades authored `#scene=` links and loads the modules in `demo/` through `window.mossTheme.base`; each module resolves its stylesheet, scene data, and harvested iframe from `import.meta.url`, preserving deployment subpaths.
 - Source of truth for behavior: current desktop code and release documentation. When either disagrees with a capture, refresh the capture or use text instead.
 
 The source manifest distinguishes the captured fixture's commit from the desktop commit used to verify the written instructions.
