@@ -1494,6 +1494,22 @@ async function iMonotone(browsers) {
     assert(hero.scene === '0' && hero.shown === 0 && hero.progress <= .002 && hero.cover <= .02, 'I-monotone ' + engineName + ': bottom-to-top did not restore hero: ' + JSON.stringify(hero));
     assert(errors.length === 0, 'I-monotone ' + engineName + ': page errors: ' + errors.join('; '));
     console.log(engineName + ': I-monotone native down/up trace and exact hero reversal'); await page.close();
+
+    // Locale wrapping and viewport width change every rest's geometry. The
+    // real wheel trace above proves native input; this matrix proves the
+    // same position-derived renderer names every rest exactly in both
+    // directions without duplicating the gesture timing policy.
+    for (const locale of ['', 'zh-hans/', 'zh-hant/']) for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
+      const matrixPage = await browser.newPage({ viewport });
+      await ready(matrixPage, locale);
+      for (const scenes of [[0, 1, 2, 3], [3, 2, 1, 0]]) for (const scene of scenes) {
+        const y = await matrixPage.evaluate((s) => window.__landing.restY(s), scene);
+        await matrixPage.evaluate((nextY) => scrollTo(0, nextY), y);
+        await matrixPage.waitForFunction((s) => { const state = window.__landing.state(); return state.shown === s && document.getElementById('stage').dataset.scene === String(s) && !state.running; }, scene, { timeout: 15000 });
+      }
+      console.log(engineName + '/' + (locale || 'en') + ' ' + viewport.width + 'x' + viewport.height + ': I-monotone exact rests both directions');
+      await matrixPage.close();
+    }
   }
 }
 
