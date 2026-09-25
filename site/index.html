@@ -391,6 +391,10 @@
   /* Preserve geometry while deferred scripts are still loading. */
   html:not([data-ready]) #vis { visibility: hidden; }
   html:not([data-ready]) #five { position: relative; min-height: 100vh; opacity: 1; pointer-events: auto; background: #101110; }
+  #beta { position: relative; }
+  .static-signup-note { display: none; position: absolute; inset-block-start: 100%; margin-block-start: 26px; }
+  html:not([data-ready]) .signup { visibility: hidden; }
+  html:not([data-ready]) .static-signup-note { display: block; }
 
   /* Layout pass: the intro owns the first beat, while the stage remains tied
      to the measured desktop composition. The script supplies these variables
@@ -553,10 +557,6 @@
     #five h2 { font-size: clamp(34px, 10vw, 54px); }
     #beta { display: block; margin-top: 48px; }
   #beta .signup { margin-top: 26px; }
-  #beta { position: relative; }
-  .static-signup-note { display: none; position: absolute; inset-block-start: 100%; margin-block-start: 26px; }
-  html:not([data-ready]) .signup { visibility: hidden; }
-  html:not([data-ready]) .static-signup-note { display: block; }
     #footer { margin-top: 48px; }
     .command { grid-template-columns: 1fr auto; }
     .command code { grid-column: 1; }
