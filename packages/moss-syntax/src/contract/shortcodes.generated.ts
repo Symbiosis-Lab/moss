@@ -2,7 +2,7 @@
 // — DO NOT EDIT. Source of truth: crates/moss-core/src/contract/shortcodes.rs
 // (+ `ShortcodeKind` in crates/moss-core/src/ast/shortcode.rs).
 // Structure only — labels, hints and translations are host overlays
-// (a host-overlay design decision).
+// (design: docs/archive/2026-08-11-cm6-extraction-design.md §4).
 
 export interface ShortcodeAttrInfo {
   readonly name: string;
