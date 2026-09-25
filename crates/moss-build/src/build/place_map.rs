@@ -1,5 +1,11 @@
 //! Immutable decoder for the checked-in `MOSSPLM1` place-map pack.
 
+mod context;
+mod geometry;
+
+pub use context::{PlaceMapContext, PlaceMapTarget, ResolvedPlace};
+pub use geometry::{marker_radius, privacy_floor, Frame, FrameTier, ProjectedPoint, Projection, TileSelection};
+
 const MAGIC: &[u8; 8] = b"MOSSPLM1";
 const HEADER_LEN: usize = 92;
 const SCHEMA: u16 = 1;
