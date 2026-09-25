@@ -133,7 +133,9 @@ const BASELINE = {
   // 54941 -> 55331 (2026-09-25): the mobile scene-2 plateau and
   // contrast-safe discrete word colours are intentional interface geometry;
   // the extra bytes replace the old animated colour transition.
-  htmlBytes: 55391,
+  // 55391 -> 55409: public HTML comments no longer name private handoff
+  // documents.
+  htmlBytes: 55409,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a
@@ -271,7 +273,9 @@ const BASELINE = {
   // policy gave way to each colour's actual contrast floor.
   // 294964 -> 302597 (2026-09-25): readable deferred boot, restored title
   // wash diagnostics, and the viewport-sized closing wash.
-  scriptBytes: 302597,
+  // 302597 -> 302825: the passive native-scroll presenter call keeps the
+  // wash and word-contrast decision in the browser's same paint.
+  scriptBytes: 302825,
 };
 
 function countWindowAssignments(text) {

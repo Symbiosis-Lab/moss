@@ -159,6 +159,11 @@ for (const [engineName, engine] of [['chromium', chromium], ['webkit', webkit]])
         const titleWash = await page.evaluate(() => window.__landing.state().titleWash);
         if (!titleWash) { console.log(`${label}: cold solid; TITLE_WASH is off, so the wash-path assertions K..E are skipped`); await page.close(); continue; }
         await page.waitForFunction(() => window.__landing.state().titleMode === 'wash', null, { timeout: 10000 });
+        // This section samples exact intermediate title positions. Native
+        // proximity snapping may settle a programmatic scroll at either end
+        // before the sample is read, so disable snapping after the cold-load
+        // assertion; native snap geometry has its own invariant suite.
+        await page.addStyleTag({ content: 'html { scroll-snap-type: none !important; }' });
 
         // K (owner item 1a): the wash must sit behind scene 1's own visual
         // and copy, not in front of them. Appended last to <body>, an auto

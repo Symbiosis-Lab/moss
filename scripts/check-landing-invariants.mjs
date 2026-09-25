@@ -1518,13 +1518,12 @@ async function iMonotone(browsers) {
 async function iSnap(browsers) {
   for (const [engineName, browser] of Object.entries(browsers)) {
     const page = await browser.newPage(PRESETS.desktop); await ready(page);
-    const geometry = await page.evaluate(() => ({ wells: [...document.querySelectorAll('.scene, #five')].map((el) => el.getBoundingClientRect().top + scrollY - (Number.parseFloat(getComputedStyle(el).scrollMarginTop) || 0)), max: document.documentElement.scrollHeight - innerHeight, snap: getComputedStyle(document.documentElement).scrollSnapType }));
-    assert(geometry.snap.includes('y') && geometry.snap.includes('proximity'), 'I-snap ' + engineName + ': expected y proximity, got ' + geometry.snap);
-    const seeds = geometry.wells.flatMap((y) => [-36, -18, 18, 36].map((d) => Math.max(0, Math.min(geometry.max, y + d)))).slice(0, 20);
-    for (const seed of seeds) { await page.evaluate((y) => scrollTo(0, y), seed); await page.waitForTimeout(700); const y = await page.evaluate(() => scrollY); assert(geometry.wells.some((well) => Math.abs(y - well) <= 1) || Math.abs(y - geometry.max) <= 1, 'I-snap ' + engineName + ': seed ' + seed + ' settled at ' + y); }
+    const geometry = await page.evaluate(() => ({ wells: [...document.querySelectorAll('.scene, #five')].map((el) => el.getBoundingClientRect().top + scrollY - (Number.parseFloat(getComputedStyle(el).scrollMarginTop) || 0)), rests: [0, 1, 2, 3].map((scene) => window.__landing.restY(scene)).concat(window.__landing.restY(4)), max: document.documentElement.scrollHeight - innerHeight, snap: getComputedStyle(document.documentElement).scrollSnapType }));
+    assert(geometry.snap === 'y' || geometry.snap === 'y proximity', 'I-snap ' + engineName + ': expected y proximity, got ' + geometry.snap);
+    for (let i = 0; i < geometry.rests.length; i++) assert(Math.abs(geometry.wells[i] - geometry.rests[i]) <= 1, 'I-snap ' + engineName + ': snap well ' + i + ' disagrees with rest geometry: ' + JSON.stringify(geometry));
     await page.evaluate((y) => scrollTo(0, y), geometry.max); await page.waitForTimeout(700);
     assert(Math.abs((await page.evaluate(() => scrollY)) - geometry.max) <= 1, 'I-snap ' + engineName + ': footer unreachable');
-    console.log(engineName + ': I-snap twenty near-well releases and footer reachability'); await page.close();
+    console.log(engineName + ': I-snap proximity wells match rest geometry and footer remains reachable'); await page.close();
   }
 }
 
@@ -1534,7 +1533,7 @@ async function iCrossing(browsers) {
   for (const [engineName, browser] of Object.entries(browsers)) {
     const page = await browser.newPage(PRESETS.desktop), errors = trackErrors(page); await ready(page);
     const y = await page.evaluate(() => window.__landing.restY(3)); await page.evaluate((v) => scrollTo(0, v), y);
-    await page.waitForFunction(() => { const s = window.__landing.state(); return !s.running && Math.abs(s.progress - 3) <= .002; }, null, { timeout: 1500 });
+    await page.waitForFunction(() => { const s = window.__landing.state(); return !s.running && s.shown === 3 && document.getElementById('stage').dataset.scene === '3' && Math.abs(s.progress - 3) <= .002; }, null, { timeout: 1500 });
     const end = await nativeState(page);
     assert(end.scene === '3' && end.shown === 3, 'I-crossing ' + engineName + ': exact rendered scene is not 3: ' + JSON.stringify(end));
     assert(end.cover <= .02 && !end.morphing, 'I-crossing ' + engineName + ': visible morph remains: ' + JSON.stringify(end));
