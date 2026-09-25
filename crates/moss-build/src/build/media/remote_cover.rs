@@ -57,14 +57,12 @@ pub(crate) fn materialize_remote_covers(
         let (Some(oid), Some(ext)) = (meta.cover_oid.clone(), meta.cover_ext.clone()) else {
             continue;
         };
-        // Already materialized and the file is still there — nothing to do.
-        // A missing file (evicted stage, or a fresh `output_dir`) always
-        // needs re-linking even though the encode itself is CAS-cached.
-        if let Some(sp) = &meta.cover_served_path {
-            if io_utils::output_present(&output_dir.join(sp)) {
-                continue;
-            }
-        }
+        // Re-run the materializer even when the original is already in the
+        // stage tree. A stage tree survives across generations, but the
+        // pending manifest does not: skipping here leaves the old asset
+        // unregistered, so seal's mark-and-sweep drops it from the new
+        // generation. The warm transform path makes this a cheap relink and
+        // re-registers the original, WebP, and rung variants together.
         match materialize_one(&oid, &ext, &objects, &transforms, &scratch_dir, output_dir, pending) {
             Some(result) => {
                 meta.cover_served_path = Some(result.served_path);
@@ -77,11 +75,9 @@ pub(crate) fn materialize_remote_covers(
             }
             None => {
                 // Encode failed this time. Leave any PREVIOUSLY-materialized
-                // fields alone if the files backing them still happen to
-                // exist (the `output_present` check above already would
-                // have `continue`d in that case) — otherwise there is
-                // nothing to serve, so clear the pointer rather than
-                // reference a file that was never written.
+                // fields alone if the files backing them still exist;
+                // otherwise there is nothing to serve, so clear the pointer
+                // rather than reference a file that was never written.
                 if !meta
                     .cover_served_path
                     .as_ref()
@@ -288,6 +284,48 @@ mod tests {
 
         assert_eq!(result.cover_width, Some(3));
         assert_eq!(result.cover_height, Some(2));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn re_registers_cached_cover_files_in_a_second_generation() {
+        let root = fresh_moss_dir("second_generation");
+        let moss_dir = root.join(".moss");
+        std::fs::create_dir_all(&moss_dir).unwrap();
+        let output_dir = root.join("site");
+        std::fs::create_dir_all(&output_dir).unwrap();
+
+        let store = ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.clone()));
+        let oid = store.store_bytes(&tiny_png_bytes()).unwrap();
+        let mut meta = blank_link_meta("https://example.com/post");
+        meta.cover_oid = Some(oid);
+        meta.cover_ext = Some("png".to_string());
+        let mut link_meta = HashMap::from([(meta.url.clone(), meta)]);
+
+        let mut first_pending = PendingManifest::new(SiteHashes::default());
+        assert_eq!(
+            materialize_remote_covers(&mut link_meta, &moss_dir, &output_dir, &mut first_pending),
+            1
+        );
+        let (first_hashes, _) = first_pending.as_parts_clone();
+        let first = first_pending.seal();
+        let original = link_meta["https://example.com/post"].cover_served_path.clone().unwrap();
+        let webp = moss_core::asset_paths::to_webp(&original);
+        assert!(first.files().contains_key(&original));
+        assert!(first.files().contains_key(&webp));
+
+        let mut second_pending = PendingManifest::new(first_hashes);
+        assert_eq!(
+            materialize_remote_covers(&mut link_meta, &moss_dir, &output_dir, &mut second_pending),
+            1,
+            "a warm cached cover must still be registered for the new generation"
+        );
+        let second = second_pending.seal();
+        assert!(second.files().contains_key(&original));
+        assert!(second.files().contains_key(&webp));
+        assert!(output_dir.join(&original).exists());
+        assert!(output_dir.join(&webp).exists());
 
         let _ = std::fs::remove_dir_all(&root);
     }
