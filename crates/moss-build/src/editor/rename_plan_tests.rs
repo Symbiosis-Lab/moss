@@ -26,6 +26,90 @@ fn do_move(root: &Path, old_rel: &str, new_rel: &str) -> RenameApplyResult {
     apply_planned_moves(root, &plan).expect("apply")
 }
 
+#[cfg(unix)]
+#[test]
+fn plan_apply_accepts_paths_spelled_through_a_symlinked_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    w(&root, "target.md", "# Target\n");
+
+    let aliases = tempfile::tempdir().unwrap();
+    let alias_root = aliases.path().join("vault");
+    std::os::unix::fs::symlink(&root, &alias_root).unwrap();
+    let old = alias_root.join("target.md").to_string_lossy().into_owned();
+    let new = alias_root.join("moved.md").to_string_lossy().into_owned();
+
+    let plan = plan_moves(&root, &[(old, new)]).expect("plan through symlink alias");
+    apply_planned_moves(&root, &plan).expect("apply through symlink alias");
+    assert!(root.join("moved.md").exists());
+    assert!(!root.join("target.md").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn plan_rejects_traversal_after_an_alias_before_touching_the_tree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    w(&root, "target.md", "# Target\n");
+
+    let aliases = tempfile::tempdir().unwrap();
+    let alias_root = aliases.path().join("vault");
+    std::os::unix::fs::symlink(&root, &alias_root).unwrap();
+    let cases = [
+        (alias_root.join("target.md"), alias_root.join("dir/../moved.md")),
+        (alias_root.join("dir/../target.md"), alias_root.join("moved.md")),
+    ];
+    for (old, new) in cases {
+        let old = old.to_string_lossy().into_owned();
+        let new = new.to_string_lossy().into_owned();
+        let err = plan_moves(&root, &[(old, new)]).unwrap_err();
+        assert_eq!(err, "Path traversal not allowed");
+    }
+    assert!(root.join("target.md").exists());
+    assert!(!root.join("moved.md").exists());
+}
+
+#[test]
+fn plan_rejects_a_destination_outside_the_root_before_touching_the_tree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    w(&root, "target.md", "# Target\n");
+    let outside = tempfile::tempdir().unwrap();
+    let old = root.join("target.md").to_string_lossy().into_owned();
+    let new = outside.path().join("moved.md").to_string_lossy().into_owned();
+
+    let err = plan_moves(&root, &[(old, new)]).unwrap_err();
+    assert!(err.contains("within the project directory"), "{err}");
+    assert!(root.join("target.md").exists());
+    assert!(!outside.path().join("moved.md").exists());
+}
+
+#[test]
+fn plan_rejects_a_missing_destination_parent_before_touching_the_tree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    w(&root, "target.md", "# Target\n");
+    let old = root.join("target.md").to_string_lossy().into_owned();
+    let new = root.join("missing/moved.md").to_string_lossy().into_owned();
+
+    let err = plan_moves(&root, &[(old, new)]).unwrap_err();
+    assert!(err.contains("Failed to resolve"), "{err}");
+    assert!(root.join("target.md").exists());
+    assert!(!root.join("missing").exists());
+}
+
+#[test]
+fn plan_rejects_a_destination_without_a_final_component_before_touching_the_tree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    w(&root, "target.md", "# Target\n");
+    let old = root.join("target.md").to_string_lossy().into_owned();
+
+    let err = plan_moves(&root, &[(old, String::new())]).unwrap_err();
+    assert!(err.starts_with("Invalid destination path:"), "{err}");
+    assert!(root.join("target.md").exists());
+}
+
 // ── The reported case ────────────────────────────────────────────────────
 
 #[test]
@@ -577,5 +661,3 @@ fn plan_moves_rejects_a_move_nested_inside_another_move_in_the_same_batch() {
 // See the report: `plan_one_ref`'s `resolved_pre.target_path` gate was
 // disabled by hand (a scratch edit, never committed) to confirm the tests
 // above fail without it, then restored via `git checkout --`.
-
-

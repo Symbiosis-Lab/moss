@@ -502,12 +502,24 @@ fn root_relative_existing(canonical_root: &Path, abs: &Path) -> Result<String, S
         .map_err(|_| format!("'{}' is not inside the project root", abs.display()))
 }
 
-/// `new_path` never exists yet, so it cannot be canonicalized — strip the
-/// root prefix textually instead (mirrors the existing fallback in
-/// `rename_entry_with_refs_core`).
-fn root_relative_new(canonical_root: &Path, new_path: &str) -> String {
-    let stripped = new_path.strip_prefix(canonical_root.to_str().unwrap_or("")).unwrap_or(new_path);
-    stripped.strip_prefix('/').unwrap_or(stripped).replace('\\', "/")
+/// `new_path` never exists yet, so validate and canonicalize its existing
+/// parent, then append the final component before deriving the root-relative
+/// path. This also collapses filesystem aliases such as macOS's `/var` →
+/// `/private/var`.
+fn root_relative_new(canonical_root: &Path, new_path: &str) -> Result<String, String> {
+    let new_path = Path::new(new_path);
+    let file_name = new_path
+        .file_name()
+        .ok_or_else(|| format!("Invalid destination path: {}", new_path.display()))?;
+    let parent = new_path
+        .parent()
+        .ok_or_else(|| format!("Invalid destination path: {}", new_path.display()))?;
+    let (_, canonical_parent) = crate::vault::fs::recheck_canonical(canonical_root, parent)?;
+    canonical_parent
+        .join(file_name)
+        .strip_prefix(canonical_root)
+        .map(|r| r.to_string_lossy().replace('\\', "/"))
+        .map_err(|_| format!("'{}' is not inside the project root", new_path.display()))
 }
 
 fn line_number(source: &str, byte_from: usize) -> u32 {
@@ -529,13 +541,17 @@ pub fn plan_moves(project_root: &Path, moves: &[(String, String)]) -> Result<Ren
 
     let mut resolved: Vec<ResolvedMove> = Vec::new();
     for (old, new) in moves {
+        // Reject traversal in the authored spelling before any canonicalization
+        // can erase it. The same guard protects the direct rename door.
+        crate::vault::fs::rejects_traversal(old)?;
+        crate::vault::fs::rejects_traversal(new)?;
         let old_abs = Path::new(old);
         if !old_abs.exists() {
             return Err(format!("source path does not exist: {old}"));
         }
         let is_dir = old_abs.is_dir();
         let old_rel = root_relative_existing(&canonical_root, old_abs)?;
-        let new_rel = root_relative_new(&canonical_root, new);
+        let new_rel = root_relative_new(&canonical_root, new)?;
         resolved.push(ResolvedMove { old: old_rel, new: new_rel, is_dir });
     }
 
