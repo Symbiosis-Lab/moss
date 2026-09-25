@@ -12,6 +12,7 @@ async function state(page) {
     y: scrollY,
     max: document.documentElement.scrollHeight - innerHeight,
     closing: document.querySelector('#five').classList.contains('on'),
+    pageInert: document.querySelector('.page').inert,
   }));
 }
 
@@ -59,13 +60,26 @@ try {
     await page.mouse.up();
     await page.waitForTimeout(200);
     const coldReverse = await state(page);
-    assert(coldReverse.xf < cold.xf && !coldReverse.closing, `${test.name}: cold reverse did not uncover scene 4: ${JSON.stringify(coldReverse)}`);
+    assert(coldReverse.xf < cold.xf && !coldReverse.closing && !coldReverse.pageInert, `${test.name}: cold reverse did not uncover scene 4: ${JSON.stringify(coldReverse)}`);
     await whenReady(page, { timeout: 20000 });
     await page.evaluate(() => scrollTo(0, window.__landing.restY(3)));
     await page.waitForFunction(() => { const s = window.__landing.state(); return s.shown === 3 && s.target === 3 && !s.running; }, null, { timeout: 10000 }).catch(async error => { throw new Error(`${test.name}: return failed ${JSON.stringify(await state(page))}`, {cause:error}); });
 
-    await page.evaluate(() => scrollTo(0, window.__landing.restY(1)));
-    await page.waitForFunction(() => window.__landing.state().running, null, { timeout: 5000 });
+    await page.addStyleTag({ content: 'html { scroll-snap-type: none !important; }' });
+    await page.evaluate(async () => {
+      let lo = window.__landing.restY(1), hi = window.__landing.restY(2);
+      for (let i = 0; i < 12; i++) {
+        const y = (lo + hi) / 2;
+        scrollTo(0, y);
+        await new Promise(requestAnimationFrame);
+        if (window.__landing.state().progress < 1.5) lo = y; else hi = y;
+      }
+      scrollTo(0, (lo + hi) / 2);
+    });
+    await page.waitForFunction(() => {
+      const s = window.__landing.state();
+      return s.progress > 1 && s.progress < 2 && stage.style.getPropertyValue('--wash-cover') === '1';
+    }, null, { timeout: 5000 });
     await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
     await page.waitForFunction(() => { const s = window.__landing.state(); return s.shown === 4 && s.xf === 1 && !s.running; }, null, { timeout: 2000 }).catch(async error => { throw new Error(`${test.name}: active jump failed ${JSON.stringify(await state(page))}`, {cause:error}); });
     const activeJoin = await state(page);
