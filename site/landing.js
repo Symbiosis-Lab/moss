@@ -4414,7 +4414,9 @@ function watchScrollNative() {
     scrollV += dy / innerHeight / V_TAU;
     if (progress >= SHIPS - 1) warmScene3Media();
   }
-  if (xfAt() >= 1 && !five.classList.contains('on')) standAtTerminalClose();
+  const closing = xfAt() >= 1;
+  if (closing && !five.classList.contains('on')) standAtTerminalClose();
+  else if (!closing && !booted && five.classList.contains('on')) fiveOn(false);
   // Native scroll owns the closing crossfade too. Keep the film opacity on
   // the same geometry-derived position as the final wash on every frame;
   // otherwise --xf remains at its previous rest until the terminal cut.
