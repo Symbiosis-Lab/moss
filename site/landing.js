@@ -2892,10 +2892,7 @@ function renderMorphAt(progress) {
     return;
   }
   if (p !== mob.p || !mob.settled) {
-    // renderMorphAt is mobile's own presenter (called only from
-    // watchScrollNative's mobile branch), so this render is always mobile's
-    // own shape -- MOBILE_MORPH_BOUNDS above, not desktop's default.
-    const r = mob.leg.render(p, STEPS_PER_FRAME, true);
+    const r = mob.leg.render(p, STEPS_PER_FRAME, mobileLayout());
     steps += r.spent; mob.settled = r.exact; mob.p = p;
   }
   // True only while a dissolve this leg needs is still being recorded -- the
@@ -4095,7 +4092,6 @@ async function warm() {
   // print goes off because the scene moves.
   if (!await fillPrints() && !await refreshStale()) await retakeShown();
   if (atRest()) warmDissolve();
-  maybeJoin();
 }
 // A dissolve a leg from here will need, recorded while nothing moves: one
 // print a tick. Not the desktop scene on screen, whose print is retaken every
@@ -4114,16 +4110,6 @@ function warmDissolve() {
   }
 }
 warmSoon();
-// The one door into a join. A target asked for while a print it needs was still
-// being taken used to be dropped on the floor and wait for the reader to move
-// again; the warmer knocks here after every print it lands, so the join the
-// prints were holding shut runs as soon as they are on hand.
-// Mobile owns its own presenter now (renderMorphAt, called every frame
-// from watchScrollNative) and never reaches here: onScroll below still
-// calls setTarget for it, which still calls this, so the guard has to sit
-// here rather than at onScroll's call site. landing.wash() -- the test
-// harness's manual hook -- calls runJoin() directly and is unaffected.
-function maybeJoin() { if (!mobileLayout() && !running() && !retaking && target !== shown && primed()) runJoin(); }
 function setTarget(t) {
   if (t === SHARE && xfAt() >= 1) {
     target = t;
@@ -4134,7 +4120,6 @@ function setTarget(t) {
   }
   if (t === target) return;
   target = t;
-  maybeJoin();
 }
 // The closing scene has no captured print or embedded app dependency. A cold
 // load can reach the document bottom while those earlier scenes are still
@@ -4457,35 +4442,26 @@ function updateFinalDissolve() {
 }
 
 function watchScrollNative() {
-  if (mobileLayout()) {
-    const key = `${scrollY}:${innerWidth}:${innerHeight}`;
-    const scrolled = key !== mobileWatchKey;
-    // Reaching the target still needs frames after the scroll that named it
-    // stops: the pigment clock is a simulation with its own step budget
-    // (advanceWash), so it can still be behind p even once scrollY itself
-    // has gone still. Calling only on a fresh scrollY would stall it there,
-    // uncaught-up, until the reader moves again -- this keeps calling while
-    // mob.settled is false and stops the moment renderMorphAt reports
-    // caught up, so R8 (zero steps at rest) still holds once it is.
-    if (booted && (scrolled || !mob.settled)) renderMorphAt(progressAt());
-    // Item D's own brief asks for a read "each frame" the canvas shows
-    // under text, not each frame the reader's own scroll moves -- but
-    // renderMorphAt above (and updateWordContrast inside it) only runs on
-    // a scrolled frame or one still catching a render up, so a leg the
-    // reader is holding still inside (mob.settled already true, scrollY
-    // between two of this synthetic-touch harness's own dispatched moves)
-    // went unread for whole seconds at a stretch, sampled at whatever the
-    // wash had painted whenever it was last true. mob.lastCover, not
-    // mob.settled, is item D's own "is there anything to read" gate --
-    // covers exactly the frames renderMorphAt's branch above did not.
-    else if (booted && mob.lastCover) updateWordContrast();
-    if (!scrolled) return;
-    mobileWatchKey = key;
-
-  }
+  const mobile = mobileLayout();
+  const key = `${scrollY}:${innerWidth}:${innerHeight}`;
+  const scrolled = key !== mobileWatchKey;
+  // Reaching the target still needs frames after the scroll that named it
+  // stops: the pigment clock can still be behind p after scrollY stops.
+  if (booted && (scrolled || !mob.settled)) renderMorphAt(progressAt());
+  // Mobile contrast readback continues while a covered leg is stationary.
+  else if (mobile && booted && mob.lastCover) updateWordContrast();
+  if (!scrolled) return;
+  mobileWatchKey = key;
   const dy = lastScrollY == null ? 0 : scrollY - lastScrollY;
   lastScrollY = scrollY;
-  onScroll(dy);
+  // Mobile retains the target bookkeeping used by its touch/capture path.
+  // Desktop has one authority: renderMorphAt(progressAt()) above. Calling
+  // setTarget here would start the deleted clock-driven presenter beside it.
+  if (mobile) onScroll(dy);
+  else {
+    scrollV += dy / innerHeight / V_TAU;
+    if (progressAt() >= SHIPS - 1) warmScene3Media();
+  }
   updateFinalDissolve();
   const now = performance.now();
   const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000));
@@ -4512,11 +4488,7 @@ async function writeLoop(afterWash) {
     editorPlayback(true);
     ed.setDoc(SEED);
     if (!mobileLayout()) {
-      const focusY = scrollY;
       ed.focus();
-      // WebKit scrolls the parent document to reveal a focused control inside
-      // an offscreen iframe. Typing owns the editor caret, not the page position.
-      requestAnimationFrame(() => { if (shown === 0 && Math.abs(scrollY - focusY) > 1) scrollTo(0, focusY); });
     }
     await new Promise((r) => setTimeout(r, 700));
     if (gen !== g) break;
@@ -4854,7 +4826,8 @@ async function ready() {
   // attempt failing is this attempt's problem, not the rest of the session's.
   if (washing() && needed(shown).length) { try { setSheet(shown, await capture(shown)); await takeOthers(mobileLayout() ? neighbours(shown) : washable.filter((scene) => scene !== shown)); } catch (e) { reportCaptureFault(`boot: ${e.message}`); } }
   booted = true;
-  onScroll(0); if (target !== shown && primed()) runJoin(); else still(shown);
+  renderMorphAt(progressAt());
+  target = asked = shown;
   document.documentElement.dataset.ready = '1';
 }
 // Every frame must be there before the first prints are taken: a print of a

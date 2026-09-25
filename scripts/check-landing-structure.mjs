@@ -259,7 +259,7 @@ const BASELINE = {
   // refreshSmall/smallPixels put back next to the method it describes, and
   // landing.readback's own comment corrected (64x64 -> 128x128, stale
   // since item D's own resolution bump).
-  scriptBytes: 300240,
+  scriptBytes: 298232,
 };
 
 function countWindowAssignments(text) {

@@ -1448,6 +1448,85 @@ async function iHeaderScrimDesktop(browsers) {
   await page.close();
 }
 
+async function nativeState(page) {
+  return page.evaluate(() => {
+    const stage = document.getElementById('stage'), state = window.__landing.state();
+    return { y: scrollY, max: document.documentElement.scrollHeight - innerHeight, progress: state.progress, shown: state.shown, scene: stage.dataset.scene, cover: Number.parseFloat(getComputedStyle(stage).getPropertyValue('--wash-cover')) || 0, morphing: stage.classList.contains('morphing') };
+  });
+}
+
+// I-monotone: sample inside the page on every animation frame so transient
+// reversals cannot hide between Node-side reads. The final assertion is the
+// user-visible regression: a bottom-to-top reversal restores the hero.
+async function iMonotone(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const page = await browser.newPage(PRESETS.desktop), errors = trackErrors(page);
+    await ready(page);
+    // Snap may move backward after release by design; I-snap owns that
+    // behavior. Isolate the presenter's response to one-direction input.
+    await page.evaluate(() => { document.documentElement.style.scrollSnapType = 'none'; });
+    const collect = async (direction) => {
+      await page.evaluate(() => {
+        window.__nativeTrace = []; window.__nativeTraceOn = true;
+        const tick = () => { if (!window.__nativeTraceOn) return; const stage = document.getElementById('stage'), state = window.__landing.state(); window.__nativeTrace.push({ progress: state.progress, scene: stage.dataset.scene, cover: Number.parseFloat(getComputedStyle(stage).getPropertyValue('--wash-cover')) || 0, morphing: stage.classList.contains('morphing') }); requestAnimationFrame(tick); };
+        requestAnimationFrame(tick);
+      });
+      await page.mouse.move(...gesturePos(engineName));
+      for (let i = 0; i < 20; i++) { await page.mouse.wheel(0, direction * 520); await page.waitForTimeout(35); }
+      await page.waitForTimeout(700);
+      return page.evaluate(() => { window.__nativeTraceOn = false; return window.__nativeTrace; });
+    };
+    const check = (rows, direction, label) => {
+      const seen = new Set([rows[0]?.scene]); let scene = rows[0]?.scene;
+      for (let i = 1; i < rows.length; i++) {
+        const delta = rows[i].progress - rows[i - 1].progress;
+        assert(direction * delta >= -.002, 'I-monotone ' + engineName + '/' + label + ': progress reversed ' + delta);
+        if (rows[i].scene !== scene) { assert(!seen.has(rows[i].scene), 'I-monotone ' + engineName + '/' + label + ': scene returned to ' + rows[i].scene + ' at progress ' + rows[i].progress + '; transitions=' + rows.filter((r, n) => !n || r.scene !== rows[n - 1].scene).map((r) => r.scene + '@' + r.progress.toFixed(3)).join(',')); assert(rows[i].cover >= .98 || !rows[i].morphing, 'I-monotone ' + engineName + '/' + label + ': visible scene switch at cover ' + rows[i].cover); scene = rows[i].scene; seen.add(scene); }
+      }
+      const legs = new Map();
+      for (const row of rows) { const leg = Math.floor(row.progress); if (!legs.has(leg)) legs.set(leg, []); legs.get(leg).push(row.cover); }
+      for (const [leg, covers] of legs) { let falling = false; for (let i = 1; i < covers.length; i++) { const d = covers[i] - covers[i - 1]; if (d < -.015) falling = true; if (falling) assert(d <= .015, 'I-monotone ' + engineName + '/' + label + ': cover rose after falling in leg ' + leg); } }
+    };
+    check(await collect(1), 1, 'down');
+    check(await collect(-1), -1, 'up');
+    await page.waitForFunction(() => scrollY <= 1, null, { timeout: 10000 }); await page.waitForTimeout(700);
+    const hero = await nativeState(page);
+    assert(hero.scene === '0' && hero.shown === 0 && hero.progress <= .002 && hero.cover <= .02, 'I-monotone ' + engineName + ': bottom-to-top did not restore hero: ' + JSON.stringify(hero));
+    assert(errors.length === 0, 'I-monotone ' + engineName + ': page errors: ' + errors.join('; '));
+    console.log(engineName + ': I-monotone native down/up trace and exact hero reversal'); await page.close();
+  }
+}
+
+// I-snap seeds twenty releases near the wells: proximity intentionally does
+// not capture arbitrary positions far from them. The footer remains free.
+async function iSnap(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const page = await browser.newPage(PRESETS.desktop); await ready(page);
+    const geometry = await page.evaluate(() => ({ wells: [...document.querySelectorAll('.scene, #five')].map((el) => el.getBoundingClientRect().top + scrollY - (Number.parseFloat(getComputedStyle(el).scrollMarginTop) || 0)), max: document.documentElement.scrollHeight - innerHeight, snap: getComputedStyle(document.documentElement).scrollSnapType }));
+    assert(geometry.snap.includes('y') && geometry.snap.includes('proximity'), 'I-snap ' + engineName + ': expected y proximity, got ' + geometry.snap);
+    const seeds = geometry.wells.flatMap((y) => [-36, -18, 18, 36].map((d) => Math.max(0, Math.min(geometry.max, y + d)))).slice(0, 20);
+    for (const seed of seeds) { await page.evaluate((y) => scrollTo(0, y), seed); await page.waitForTimeout(700); const y = await page.evaluate(() => scrollY); assert(geometry.wells.some((well) => Math.abs(y - well) <= 1) || Math.abs(y - geometry.max) <= 1, 'I-snap ' + engineName + ': seed ' + seed + ' settled at ' + y); }
+    await page.evaluate((y) => scrollTo(0, y), geometry.max); await page.waitForTimeout(700);
+    assert(Math.abs((await page.evaluate(() => scrollY)) - geometry.max) <= 1, 'I-snap ' + engineName + ': footer unreachable');
+    console.log(engineName + ': I-snap twenty near-well releases and footer reachability'); await page.close();
+  }
+}
+
+// I-crossing requires the exact rendered scene after crossing three
+// boundaries. A +/- one-scene tolerance would allow the regression through.
+async function iCrossing(browsers) {
+  for (const [engineName, browser] of Object.entries(browsers)) {
+    const page = await browser.newPage(PRESETS.desktop), errors = trackErrors(page); await ready(page);
+    const y = await page.evaluate(() => window.__landing.restY(3)); await page.evaluate((v) => scrollTo(0, v), y);
+    await page.waitForFunction(() => { const s = window.__landing.state(); return !s.running && Math.abs(s.progress - 3) <= .002; }, null, { timeout: 1500 });
+    const end = await nativeState(page);
+    assert(end.scene === '3' && end.shown === 3, 'I-crossing ' + engineName + ': exact rendered scene is not 3: ' + JSON.stringify(end));
+    assert(end.cover <= .02 && !end.morphing, 'I-crossing ' + engineName + ': visible morph remains: ' + JSON.stringify(end));
+    assert(errors.length === 0, 'I-crossing ' + engineName + ': page errors: ' + errors.join('; '));
+    console.log(engineName + ': I-crossing exact scene after three-boundary jump'); await page.close();
+  }
+}
+
 // I-default: every check script's own default navigation loads the
 // unflagged URL. A carry= baked into a literal .goto() call site was exactly
 // the historical bug (design doc: "the fixed driver was never made the
@@ -1483,25 +1562,12 @@ async function iDefault() {
 // live legs) runs all of them together -- --only was never meant to mean
 // "one function call", only "one named rule".
 const INVARIANTS = [
-  ['I-commit', (b) => iCommit(b)],
-  ['I-gesture', async (b) => {
-    await iGestureHeldExpires(b);
-    // I-gesture(b) disabled here, not deleted (2026-09-21, unit 4): deleting
-    // watchScrollNative's closing-settle special case removed the only live,
-    // non-reduced-motion caller of settleTo -- settleAtRest's own `if (reduce)
-    // return scrollTo(0, y);` runs before its settleTo(...) call and always
-    // fires (settleAtRest has exactly one caller, watchScrollReduced, which
-    // only ever runs when reduce is true), so run/state().settle/kind ===
-    // 'settling' are now unreachable from any live path, not merely untested.
-    // This needs the coordinator's own decision (retarget, or delete the
-    // mechanism as dead code), not a unilateral call from inside this unit.
-    // await iGestureSettleReleases(b);
-    await iGestureCoastDuringHold(b);
-    await iCloseOvershootSettles(b);
-  }],
   ['I-footer-reachable', (b) => iFooterReachable(b)],
   ['I-close-reversal', (b) => iCloseReversal(b)],
   ['I-progress', (b) => iProgressMatchesXf(b)],
+  ['I-monotone', (b) => iMonotone(b)],
+  ['I-snap', (b) => iSnap(b)],
+  ['I-crossing', (b) => iCrossing(b)],
   ['I-rect', (b) => iRect(b)],
   ['I-scene3', (b) => iScene3(b)],
   ['I-reduced', (b) => iReduced(b)],
