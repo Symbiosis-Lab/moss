@@ -75,7 +75,7 @@ const BASELINE = {
   // check elsewhere on the same run).
   // 77 -> 83 (2026-09-25): deferred title diagnostics and the dedicated
   // viewport closing wash each own one explicit state record.
-  topLevelLets: 83,
+  topLevelLets: 82,
   // Rose 14 -> 15 on 2026-09-21: the last scene's rest is a floor, not a point,
   // so a visitor can reach the footer on a short window. It is written as one
   // comparison against SHARE in the desktop drive. The scene table pays this
@@ -275,7 +275,7 @@ const BASELINE = {
   // wash diagnostics, and the viewport-sized closing wash.
   // 302597 -> 302825: the passive native-scroll presenter call keeps the
   // wash and word-contrast decision in the browser's same paint.
-  scriptBytes: 302597,
+  scriptBytes: 295408,
 };
 
 function countWindowAssignments(text) {
