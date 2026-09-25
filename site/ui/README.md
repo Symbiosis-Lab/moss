@@ -5,7 +5,7 @@ These files preserve real moss interface states for the landing page and documen
 | File | State | Intended reuse |
 |---|---|---|
 | `editor.html` | Self-contained harvested editor with mock data and local command adapters | Live editor scenes and interaction reference |
-| `app-editor.html` | Self-contained harvest of the app's own `editor.html` + `editor-main.ts`, with only the Tauri seams mocked — opening files, saving, the app's menus, and versions mode are the app's own code, backed by a real in-memory project per locale (`?lang=en` a William Blake project, `?lang=zh-hant`/`zh-hans` a 朱耷 project) | The docs stage (`stage/`); frames `editor-main`-only behavior (versions mode, real context menus, creating pages, saving/loading templates) the hand-assembled `editor.html` cannot |
+| `app-editor.html` | Self-contained harvest of the app's own `editor.html` + `editor-main.ts`, with only the Tauri seams mocked — opening files, saving, the app's menus, and versions mode are the app's own code, backed by a real in-memory project per locale (`?lang=en` a William Blake project, `?lang=zh-hant`/`zh-hans` a 朱耷 project) | The docs demo (`demo/`); frames `editor-main`-only behavior (versions mode, real context menus, creating pages, saving/loading templates) the hand-assembled `editor.html` cannot |
 | `editor@2x.png` | Static editor capture, 880 × 1120 | Fallback when the HTML scene is too heavy or its interaction is irrelevant |
 | `shell.html` | Self-contained harvested preview/publish shell | Live preview and publish scenes |
 | `shell@2x.png` | Static preview capture, 1760 × 1120 | Static preview fallback |
