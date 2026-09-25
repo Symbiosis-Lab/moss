@@ -4003,17 +4003,6 @@ function warmDissolve() {
   }
 }
 warmSoon();
-function setTarget(t) {
-  if (t === SHARE && xfAt() >= 1) {
-    target = t;
-    // Closing copy and its poster are independent of the active join.
-    mountLoop(); setCross(1); fiveOn(true);
-    if (!running() && shown !== SHARE) standAtTerminalClose();
-    return;
-  }
-  if (t === target) return;
-  target = t;
-}
 // The closing scene has no captured print or embedded app dependency. A cold
 // load can reach the document bottom while those earlier scenes are still
 // loading; let the terminal position stand immediately instead of queuing it
@@ -4112,10 +4101,6 @@ function onScroll(dy) {
     fiveOn(q >= 1);
     return;
   }
-  if (t === SHARE && xfAt() >= 1) {
-    asked = t; setTarget(SHARE);
-    return;
-  }
   // Scene 3's own heavy media (warmScene3Media, defined below) starts here:
   // `t` is read off the real scroll position every frame no matter how the
   // reader got here, so this is the earliest the page ever knows they are
@@ -4126,8 +4111,7 @@ function onScroll(dy) {
   // left standing until the reader moves. Missing prints cut immediately and
   // remain available to the warmer.
   if (t === asked) return;
-  asked = t;
-  if (booted) setTarget(t); else target = t;
+  asked = target = t;
 }
 // The sheets are loose: while the editor is on screen a plate can be dragged
 // anywhere plateBounds() allows, and the print rectangle expands on drop when
@@ -4393,29 +4377,38 @@ function updateFinalDissolve() {
   wash.raf = requestAnimationFrame(frame);
 }
 
+const publishSettled = () => shown === DEPLOY && mob.scene === DEPLOY && mob.settled && !running() && !five.classList.contains('on');
 function watchScrollNative() {
   const mobile = mobileLayout();
   const key = `${scrollY}:${innerWidth}:${innerHeight}`;
   const scrolled = key !== mobileWatchKey;
   const progress = progressAt();
-  // Reaching the target still needs frames after the scroll that named it
-  // stops: the pigment clock can still be behind p after scrollY stops.
-  if (booted && (scrolled || !mob.settled)) renderMorphAt(progress);
+  const closing = xfAt() >= 1;
+  if (progress >= DEPLOY - .002) {
+    // The final viewport wash owns this entire leg; it has no scene-4 print.
+    if (mob.bridge) { mob.bridge.remove(); mob.bridge = null; mob.from = mob.to = -1; }
+    if (closing) {
+      if (!window.mossLanding.atClosing()) standAtTerminalClose();
+    } else if (!publishSettled()) {
+      mob.settled = true; driving = false;
+      mob.scene = DEPLOY;
+      shown = target = DEPLOY; still(DEPLOY);
+    }
+  } else if (booted && (scrolled || !mob.settled)) {
+    // Keep painting until the pigment clock reaches p after scrolling stops.
+    renderMorphAt(progress);
+  }
   if (!scrolled) return;
   mobileWatchKey = key;
   const dy = lastScrollY == null ? 0 : scrollY - lastScrollY;
   lastScrollY = scrollY;
   // Mobile retains the target bookkeeping used by its touch/capture path.
-  // Desktop has one authority: renderMorphAt(progressAt()) above. Calling
-  // setTarget here would start the deleted clock-driven presenter beside it.
   if (mobile) onScroll(dy);
   else {
     scrollV += dy / innerHeight / V_TAU;
     if (progress >= SHIPS - 1) warmScene3Media();
   }
-  const closing = xfAt() >= 1;
-  if (closing && !window.mossLanding.atClosing()) standAtTerminalClose();
-  else if (!closing && !booted && five.classList.contains('on')) fiveOn(false);
+  if (!closing && !booted && five.classList.contains('on')) fiveOn(false);
   // Native scroll owns the closing crossfade too. Keep the film opacity on
   // the same geometry-derived position as the final wash on every frame;
   // otherwise --xf remains at its previous rest until the terminal cut.
@@ -4790,7 +4783,8 @@ async function ready() {
   // attempt failing is this attempt's problem, not the rest of the session's.
   if (washing() && needed(shown).length) { try { setSheet(shown, await capture(shown)); await takeOthers(mobileLayout() ? neighbours(shown) : washable.filter((scene) => scene !== shown)); } catch (e) { reportCaptureFault(`boot: ${e.message}`); } }
   booted = true;
-  renderMorphAt(progressAt());
+  mobileWatchKey = '';
+  watchScrollNative();
   target = asked = shown;
   document.documentElement.dataset.ready = '1';
 }

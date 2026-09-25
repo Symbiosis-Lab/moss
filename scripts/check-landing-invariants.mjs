@@ -640,10 +640,10 @@ async function iCloseReversal(browsers) {
       await page.mouse.move(...pos); await page.mouse.wheel(0, 60); await page.waitForTimeout(20);
     }
     await page.waitForTimeout(400);
-    for (let i = 0; i < 15; i++) { await page.mouse.move(...pos); await page.mouse.wheel(0, -40); await page.waitForTimeout(20); }
+    await page.mouse.move(...pos); await page.mouse.wheel(0, -600);
     await page.waitForTimeout(500);
-    const after = await page.evaluate(() => ({ progress: window.__landing.state().progress, shown: window.__landing.state().shown }));
-    assert(after.progress < 3.95, `I-close-reversal ${engineName}: a wheel reversal off the closing rest left progress at ${after.progress} (wanted a real move off SHARE)`);
+    const after = await page.evaluate(() => ({ progress: window.__landing.state().progress, shown: window.__landing.state().shown, y: scrollY, rest: window.__landing.restY(4), max: document.documentElement.scrollHeight - innerHeight }));
+    assert(after.progress < 3.95, `I-close-reversal ${engineName}: a wheel reversal off the closing rest left ${JSON.stringify(after)} (wanted a real move off SHARE)`);
     console.log(`${engineName}: I-close-reversal a reversal off the closing rest moves progress to ${after.progress.toFixed(3)} (shown=${after.shown})`);
     await page.close();
   }

@@ -277,7 +277,9 @@ const BASELINE = {
   // wash and word-contrast decision in the browser's same paint.
   // 295627 -> 295532 (2026-09-25): share the terminal wash start with its
   // desktop rest and remove obsolete crossing-history commentary.
-  scriptBytes: 295532,
+  // 295532 -> 295405 (2026-09-25): final wash owns the terminal leg and
+  // obsolete mobile target handling is deleted.
+  scriptBytes: 295405,
 };
 
 function countWindowAssignments(text) {

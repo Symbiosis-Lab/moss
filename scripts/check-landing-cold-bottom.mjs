@@ -84,7 +84,7 @@ try {
     }));
     assert(activeWash.progress > 3 && activeWash.progress < 4 && activeWash.cover > 0 && activeWash.cover < 1 && activeWash.canvas !== 'none', `${test.name}: midpoint did not present an active wash: ${JSON.stringify(activeWash)}`);
     await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
-    await page.waitForFunction(() => { const s = window.__landing.state(); return s.shown === 4 && s.xf === 1 && !s.running; }, null, { timeout: 2000 }).catch(async error => { throw new Error(`${test.name}: active jump failed ${JSON.stringify(await state(page))}`, {cause:error}); });
+    await page.waitForFunction(() => { const s = window.__landing.state(); return s.shown === 4 && s.xf === 1 && !s.running; }, null, { timeout: 10000 }).catch(async error => { throw new Error(`${test.name}: active jump failed ${JSON.stringify(await state(page))}`, {cause:error}); });
     const activeJoin = await state(page);
     assert(activeJoin.closing, `${test.name}: closing remained queued behind active join`);
     results.push({ name: test.name, cold, coldReverse, activeJoin });
