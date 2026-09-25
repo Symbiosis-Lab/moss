@@ -139,15 +139,16 @@ fn every_path_gets_the_disposition_whose_wait_can_actually_end() {
 }
 
 /// A vault whose own directory is named `.mossy` is not moss's `.moss`: its
-/// `build/staging/` is the user's own folder, so the file is neither staging
-/// (nothing to discard) nor a build input (nothing to wait for). Pinned
-/// separately because the `.moss`-component split is what decides it, and a
-/// substring gate would read `.mossy` as a hit.
+/// `build/staging/` is the user's own folder. A non-input there must be
+/// reported, while an HTML input must wait for the watcher. A substring gate
+/// would mistake `.mossy` for moss's own staging and discard either one.
 #[test]
 fn a_vault_named_dot_mossy_has_no_moss_staging() {
     let root = std::path::Path::new("/Users/x/.mossy");
-    let staged = std::path::Path::new("/Users/x/.mossy/build/staging/index.html");
+    let staged = std::path::Path::new("/Users/x/.mossy/build/staging/report.docx");
     assert_eq!(disposition(root, staged), Disposition::Report);
+    let watched = std::path::Path::new("/Users/x/.mossy/build/staging/index.html");
+    assert_eq!(disposition(root, watched), Disposition::Wait);
 }
 
 /// `disposition` is a vault-path predicate, so it is held to the same

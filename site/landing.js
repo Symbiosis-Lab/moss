@@ -4035,6 +4035,7 @@ function standAtTerminalClose() {
 const LINE = 0.5;
 const textTop = (sec) => sec.firstElementChild.getBoundingClientRect().top;
 const textBottom = (sec) => sec.lastElementChild.getBoundingClientRect().bottom;
+const finalStartY = () => five.offsetTop - innerHeight * .8;
 // Where the reader is, read whole rather than counted up one crossing at a
 // time. The line standing inside a scene's text names that scene. Between two
 // texts it names neither, and what it names there is the scene being travelled
@@ -4042,9 +4043,6 @@ const textBottom = (sec) => sec.lastElementChild.getBoundingClientRect().bottom;
 // across, and what a turnaround reads to send it back. Because this is a
 // position and not a tally, a fling that clears three texts names the scene it
 // landed on from its first frame, and the wash in flight is re-pointed at it.
-// The pair-of-edges crossing detector this replaces could only ever step one
-// boundary at a time, so scene 1 to scene 3 played both joins in sequence and
-// the reader watched the page morph through scene 2 to get there.
 // One number: the scene whose text the reading line stands in, or a fraction
 // between two scenes when it stands in the gap between their texts. Everything
 // that asks which scene a position belongs to reads it here — the target the
@@ -4070,7 +4068,7 @@ const progressAt = () => {
     // crossfade geometry of its own (closing-progress unit, unit 3,
     // review-phases-2-4.md Job 2 item 5). restY(SHARE) sits at or past
     // where this plateaus at DEPLOY + 1, its far end.
-    if (i === DEPLOY) return DEPLOY + clamp01((scrollY - (five.offsetTop - innerHeight * .8)) / (innerHeight * .6));
+    if (i === DEPLOY) return DEPLOY + clamp01((scrollY - finalStartY()) / (innerHeight * .6));
     const top = textTop(scenesEl[i + 1]);
     if (top >= line) { const bot = textBottom(scenesEl[i]); return i + (line - bot) / Math.max(1, top - bot); }
   }
@@ -4195,6 +4193,7 @@ const restY = (scene) => {
   if (scene < 0) return 0;
   if (scene === 0 && mobileLayout()) return Math.max(0, Math.round(scrollY + textTop(scenesEl[0]) - 88));
   if (scene === SHARE) return closingRestY();
+  if (scene === DEPLOY && !mobileLayout()) return Math.max(0, Math.round(finalStartY()));
   if (mobileLayout()) {
     const band = mobileVisualBand();
     return Math.round(scrollY + (scene === 1 ? textTop(scenesEl[1]) - band.bottom - 24 : textBottom(scenesEl[scene - 1]) - band.top));

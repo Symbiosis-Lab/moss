@@ -275,7 +275,9 @@ const BASELINE = {
   // wash diagnostics, and the viewport-sized closing wash.
   // 302597 -> 302825: the passive native-scroll presenter call keeps the
   // wash and word-contrast decision in the browser's same paint.
-  scriptBytes: 295627,
+  // 295627 -> 295532 (2026-09-25): share the terminal wash start with its
+  // desktop rest and remove obsolete crossing-history commentary.
+  scriptBytes: 295532,
 };
 
 function countWindowAssignments(text) {

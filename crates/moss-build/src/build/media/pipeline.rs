@@ -1244,8 +1244,7 @@ pub(crate) fn copy_deferred_assets(
         // files will be incorrectly skipped here, causing 404s on iframe covers.
         // See render/blocking.rs blocking_keys declaration for the full explanation.
         if html_exts.contains(&ext.as_str()) {
-            let exact_file_passthrough = ctx.passthrough_roots.contains(&relative_path);
-            if ctx.blocking_keys.contains(&relative_path) && !exact_file_passthrough {
+            if ctx.blocking_keys.contains(&relative_path) && !ctx.passthrough_roots.contains(&relative_path) {
                 continue;
             }
             // Fall through — copy as asset

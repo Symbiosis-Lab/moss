@@ -4,3 +4,5 @@ build/
 keys/
 agents/
 history/
+build.nosync/
+cache/

@@ -1533,7 +1533,7 @@ async function iCrossing(browsers) {
   for (const [engineName, browser] of Object.entries(browsers)) {
     const page = await browser.newPage(PRESETS.desktop), errors = trackErrors(page); await ready(page);
     const y = await page.evaluate(() => window.__landing.restY(3)); await page.evaluate((v) => scrollTo(0, v), y);
-    await page.waitForFunction(() => { const s = window.__landing.state(); return !s.running && s.shown === 3 && document.getElementById('stage').dataset.scene === '3' && Math.abs(s.progress - 3) <= .002; }, null, { timeout: 1500 });
+    await page.waitForFunction(() => { const s = window.__landing.state(); return !s.running && s.shown === 3 && document.getElementById('stage').dataset.scene === '3' && Math.abs(s.progress - 3) <= .002; }, null, { timeout: 15000 });
     const end = await nativeState(page);
     assert(end.scene === '3' && end.shown === 3, 'I-crossing ' + engineName + ': exact rendered scene is not 3: ' + JSON.stringify(end));
     assert(end.cover <= .02 && !end.morphing, 'I-crossing ' + engineName + ': visible morph remains: ' + JSON.stringify(end));

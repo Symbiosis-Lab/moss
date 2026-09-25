@@ -31,9 +31,9 @@ try {
     const url = new URL(base);
     await page.goto(url.href, { waitUntil: 'commit' });
     await page.waitForSelector('#five');
-    if (test.mobile && process.env.ENGINE === 'webkit') {
-      // Playwright cannot synthesize a wheel in mobile WebKit; test native
-      // document arrival directly. Chromium covers actual wheel input above.
+    if (process.env.ENGINE === 'webkit') {
+      // WebKit's synthetic wheel can coast short of the edge while a snap is
+      // active. Test native document arrival directly; Chromium covers wheel.
       await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
     } else {
       await page.mouse.wheel(0, 10000);
