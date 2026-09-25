@@ -21,7 +21,11 @@ use crate::vault::places::Precision;
 
 pub const SVG_WIDTH: u32 = 720;
 pub const SVG_HEIGHT: u32 = 480;
-pub const LOCATOR_BROTLI_LIMIT: usize = 16 * 1024;
+/// q11 Brotli budget checked by the dev/CI matrix; production does not link a
+/// compressor solely for this contract.
+pub const LOCATOR_Q11_BROTLI_LIMIT: usize = 16 * 1024;
+/// Deterministic production safety ceiling for the sparse locator profile.
+pub const LOCATOR_RAW_SAFETY_LIMIT: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocatorProfile {
@@ -37,8 +41,8 @@ pub struct LocatorSvg {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocatorBudgetError {
-    pub brotli_bytes: usize,
+pub struct LocatorSafetyError {
+    pub raw_bytes: usize,
 }
 
 const GLOBE_X: f64 = 584.0;
@@ -124,14 +128,14 @@ pub fn emit_svg_with_options(
     emit_svg_with_mode(context, target, options, false)
 }
 
-/// Emit a locator-sized map and enforce its Brotli quality-11 budget. A wide
-/// map may use the explicitly reported simplified globe/local contract; the
-/// ordinary full emitter remains available for larger body maps.
+/// Emit a deterministic sparse locator profile. Production enforces only the
+/// raw safety ceiling; the q11 Brotli budget is enforced by the dev/CI matrix
+/// without adding a compressor to the shipped build.
 pub fn emit_locator_svg(
     context: &PlaceMapContext,
     target: &PlaceMapTarget,
     options: SvgMapOptions<'_>,
-) -> Result<LocatorSvg, LocatorBudgetError> {
+) -> Result<LocatorSvg, LocatorSafetyError> {
     let profile = match options.precision {
         Precision::Exact | Precision::City => LocatorProfile::ExactCity,
         Precision::Region => LocatorProfile::Region,
@@ -150,9 +154,9 @@ pub fn emit_locator_svg(
         &format!("<figure data-map-locator-profile=\"{profile_name}\" "),
         1,
     );
-    if svg.len() > 256 * 1024 {
-        return Err(LocatorBudgetError {
-            brotli_bytes: svg.len(),
+    if svg.len() > LOCATOR_RAW_SAFETY_LIMIT {
+        return Err(LocatorSafetyError {
+            raw_bytes: svg.len(),
         });
     }
     Ok(LocatorSvg { svg, profile })
@@ -1066,7 +1070,7 @@ mod tests {
         compressor.write_all(output.as_bytes()).unwrap();
         let compressed = compressor.into_inner();
         assert!(
-            compressed.len() <= 16 * 1024,
+            compressed.len() <= LOCATOR_Q11_BROTLI_LIMIT,
             "raw={} brotli-q11={}",
             output.len(),
             compressed.len()
@@ -1074,43 +1078,54 @@ mod tests {
     }
 
     #[test]
-    fn locator_profiles_are_deterministic_for_all_precisions_and_xml_is_strict() {
+    fn locator_q11_matrix_covers_dense_dateline_and_polar_targets() {
         let context = PlaceMapContext::embedded().unwrap();
-        let point = ProjectedPoint::new(179.8, 84.0).unwrap();
-        for precision in [
-            Precision::Exact,
-            Precision::City,
-            Precision::Region,
-            Precision::Country,
+        for (case_name, point) in [
+            ("beirut-dense", ProjectedPoint::new(35.5, 33.9).unwrap()),
+            ("dateline", ProjectedPoint::new(179.8, 0.0).unwrap()),
+            ("polar", ProjectedPoint::new(179.8, 84.0).unwrap()),
         ] {
-            let frame = Frame::from_points(&[point], [precision].into_iter()).unwrap();
-            let target = PlaceMapTarget {
-                places: vec![ResolvedPlace {
-                    key: "places/a&b".to_string(),
-                    display: "A\u{1} & B".to_string(),
-                    longitude: Some(point.longitude),
-                    latitude: Some(point.latitude),
+            for precision in [
+                Precision::Exact,
+                Precision::City,
+                Precision::Region,
+                Precision::Country,
+            ] {
+                let frame = Frame::from_points(&[point], [precision].into_iter()).unwrap();
+                let target = PlaceMapTarget {
+                    places: vec![ResolvedPlace {
+                        key: format!("places/{case_name}&b"),
+                        display: "A\u{1} & B".to_string(),
+                        longitude: Some(point.longitude),
+                        latitude: Some(point.latitude),
+                        precision,
+                        aggregate_member: false,
+                    }],
+                    frame: Some(frame),
+                    aggregate_name: None,
+                };
+                let options = SvgMapOptions::new(
+                    case_name,
+                    precision_rank(&precision) as usize,
+                    "A\u{1}",
                     precision,
-                    aggregate_member: false,
-                }],
-                frame: Some(frame),
-                aggregate_name: None,
-            };
-            let options = SvgMapOptions::new(
-                "locator",
-                precision_rank(&precision) as usize,
-                "A\u{1}",
-                precision,
-            );
-            let first = emit_locator(&context, &target, options).unwrap();
-            let second = emit_locator(&context, &target, options).unwrap();
-            assert_eq!(first, second);
-            let mut compressor = brotli::CompressorWriter::new(Vec::new(), 4096, 11, 22);
-            compressor.write_all(first.svg.as_bytes()).unwrap();
-            assert!(compressor.into_inner().len() <= LOCATOR_BROTLI_LIMIT);
-            assert!(roxmltree::Document::parse(&first.svg).is_ok());
-            assert!(first.svg.contains("data-map-globe-marker=\"true\""));
-            assert!(first.svg.contains("A�"));
+                );
+                let first = emit_locator(&context, &target, options).unwrap();
+                let second = emit_locator(&context, &target, options).unwrap();
+                assert_eq!(first, second);
+                let mut compressor = brotli::CompressorWriter::new(Vec::new(), 4096, 11, 22);
+                compressor.write_all(first.svg.as_bytes()).unwrap();
+                let compressed = compressor.into_inner();
+                assert!(
+                    compressed.len() <= LOCATOR_Q11_BROTLI_LIMIT,
+                    "{case_name}/{precision:?}: raw={} brotli-q11={}",
+                    first.svg.len(),
+                    compressed.len()
+                );
+                assert!(roxmltree::Document::parse(&first.svg).is_ok());
+                assert!(first.svg.contains("data-map-globe-marker=\"true\""));
+                assert!(first.svg.contains("A�"));
+            }
         }
     }
 

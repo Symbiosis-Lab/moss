@@ -9,7 +9,8 @@ pub use context::{PlaceMapContext, PlaceMapTarget, ResolvedPlace};
 pub use geometry::{marker_radius, privacy_floor, Frame, FrameTier, ProjectedPoint, Projection, TileSelection};
 pub use svg::{
     emit_locator, emit_locator_svg, emit_svg, emit_svg_with_options, render_svg,
-    LocatorBudgetError, LocatorProfile, LocatorSvg, SvgMapOptions, LOCATOR_BROTLI_LIMIT,
+    LocatorProfile, LocatorSafetyError, LocatorSvg, SvgMapOptions, LOCATOR_Q11_BROTLI_LIMIT,
+    LOCATOR_RAW_SAFETY_LIMIT,
 };
 
 const MAGIC: &[u8; 8] = b"MOSSPLM1";
