@@ -3105,6 +3105,33 @@ fn parse_card_cover_ratio_fallback(rule: &str) -> (u32, u32) {
 }
 
 #[test]
+fn test_css_mobile_portrait_ratio_is_scoped_to_listing_cards() {
+    let css = site_css_with_partials();
+    let mobile = "@container (max-width: 36rem)";
+    let listing = get_css_rule_in_media(
+        &css,
+        mobile,
+        r#".moss-cards[data-layout="grid"] .moss-card-cover"#,
+    )
+    .expect("mobile listing cover rule should exist");
+    assert_eq!(
+        parse_card_cover_ratio_fallback(&listing),
+        (3, 4),
+        "mobile listing cards keep their portrait plate"
+    );
+    assert!(
+        get_css_rule_in_media(&css, mobile, ".moss-grid .moss-card-cover").is_none(),
+        "mobile shortcode grids must not inherit the listing-only portrait override"
+    );
+    let shared = get_css_rule(&css, ".moss-card-cover").expect("shared cover rule should exist");
+    assert_eq!(
+        parse_card_cover_ratio_fallback(&shared),
+        (4, 3),
+        "shortcode grids fall back to the shared landscape ratio"
+    );
+}
+
+#[test]
 fn test_css_vertical_card_cover_ratio_is_reciprocal_of_horizontal_default() {
     // The horizontal default (site.css, `4 / 3`) and the vertical override
     // (vertical.css, `3 / 4`) are independent hand-written literals with
@@ -3693,4 +3720,3 @@ fn grid_scroll_per_count_tracks_fit_n_cards_plus_a_peek_under_vertical_typesetti
         );
     }
 }
-

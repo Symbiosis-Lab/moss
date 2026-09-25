@@ -5077,8 +5077,7 @@ article a:where(:not(.moss-btn)):focus {
     grid-row: auto;
   }
 
-  .moss-cards[data-layout="grid"] .moss-card-cover,
-  .moss-grid .moss-card-cover {
+  .moss-cards[data-layout="grid"] .moss-card-cover {
     aspect-ratio: var(--moss-card-cover-ratio, 3 / 4);
   }
 
