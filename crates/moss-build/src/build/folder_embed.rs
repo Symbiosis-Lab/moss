@@ -85,6 +85,38 @@ struct ParsedMarker<'a> {
     caption: Option<String>,
 }
 
+fn warn_map_fallback_once(path: &str, reason: &str) {
+    static WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    let key = format!("{path}\0{reason}");
+    if crate::infra::warn_once::should_warn_once(
+        key,
+        WARNED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new())),
+    ) {
+        crate::build::cli_output::log_warn_problem!(
+            "map embed '{path}' {reason}; rendering its ordinary listing"
+        );
+    }
+}
+
+fn place_map_with_placement(
+    svg: String,
+    placement: &moss_core::media::Placement,
+    caption: Option<&str>,
+) -> String {
+    let attrs = moss_core::render::placement::placement_attrs(placement);
+    let class = attrs.class_value("moss-place-map-frame");
+    let caption = caption.map(|text| format!(
+        "<div class=\"moss-place-map-caption\">{}</div>",
+        moss_core::media::html_escape(text)
+    )).unwrap_or_default();
+    format!(
+        "<div class=\"{class}\"{}{size}>{svg}{caption}</div>",
+        attrs.data_width_attr,
+        size = attrs.size_style_attr,
+    )
+}
+
 /// Parse the pipe-encoded body of a marker. Returns None if `path` is missing.
 fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
     let mut out = ParsedMarker::default();
@@ -664,6 +696,19 @@ pub fn expand_markers_in_documents(
     media_lookup: &crate::build::media::dimensions::MediaDimensionLookup,
     site_typesetting: Option<&str>,
 ) {
+    expand_markers_in_documents_with_place_maps(documents, project, dir_overrides, math, media_lookup, site_typesetting, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn expand_markers_in_documents_with_place_maps(
+    documents: &mut [ParsedDocument],
+    project: &ProjectStructure,
+    dir_overrides: &std::collections::HashMap<String, String>,
+    math: bool,
+    media_lookup: &crate::build::media::dimensions::MediaDimensionLookup,
+    site_typesetting: Option<&str>,
+    place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+) {
     let has_marker = |d: &ParsedDocument| d.html_content.contains(MARKER_FOLDER_LIST);
     if !documents.iter().any(has_marker) {
         return;
@@ -699,6 +744,7 @@ pub fn expand_markers_in_documents(
                 Some(media_lookup),
                 math,
                 true,
+                place_maps,
             )
         };
         let resolved = match &mut plan {
@@ -733,6 +779,25 @@ pub fn resolve_markers(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     math: bool,
 ) -> String {
+    resolve_markers_with_place_maps(
+        html, from_md_path, all_docs, project, dir_overrides, site_lang,
+        typesetting, media_lookup, math, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_markers_with_place_maps(
+    html: &str,
+    from_md_path: &str,
+    all_docs: &[ParsedDocument],
+    project: &ProjectStructure,
+    dir_overrides: &std::collections::HashMap<String, String>,
+    site_lang: crate::i18n::Language,
+    typesetting: Option<&str>,
+    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
+    math: bool,
+    place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+) -> String {
     resolve_markers_impl(
         html,
         from_md_path,
@@ -744,6 +809,7 @@ pub fn resolve_markers(
         media_lookup,
         math,
         false,
+        place_maps,
     )
 }
 
@@ -767,6 +833,7 @@ fn resolve_markers_impl(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     math: bool,
     is_embed: bool,
+    place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
 ) -> String {
     if !html.contains(MARKER_FOLDER_LIST) {
         return html.to_string();
@@ -800,6 +867,7 @@ fn resolve_markers_impl(
                 media_lookup,
                 math,
                 is_embed,
+                place_maps,
             ),
             None => format!(
                 r#"<div class="moss-embed-missing">Invalid folder-embed marker: {}</div>"#,
@@ -1056,6 +1124,7 @@ fn render_one(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     math: bool,
     is_embed: bool,
+    place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
 ) -> String {
     // Prefer the marker's `from=` (the original markdown source); the
     // page-level `from_md_path` is a safe fallback when older markers omit it.
@@ -1208,6 +1277,17 @@ fn render_one(
         return String::new();
     }
 
+    if parsed.style.as_deref() == Some("map") {
+        if let Some(map) = place_maps.filter(|map| map.is_place_key(&folder_id_slug)) {
+            if let Some(svg) = map.render_term_map(&folder_id_slug, folder_docs.iter().copied(), from, 0) {
+                return place_map_with_placement(svg, &parsed.placement, parsed.caption.as_deref());
+            }
+            warn_map_fallback_once(parsed.path, "has no coordinate-bearing places");
+        } else {
+            warn_map_fallback_once(parsed.path, "is not a place term");
+        }
+    }
+
     // Resolve sort: flatten uses resolve_for_flatten; direct uses resolve_for_direct_children.
     // Per-embed sort= override wins over both. A pseudo-folder has no target
     // doc to carry sort intent, so it gets the same default a folder with no
@@ -1235,6 +1315,7 @@ fn render_one(
     let style_override: Option<moss_core::Resolved<String>> = parsed
         .style
         .as_ref()
+        .filter(|style| style.as_str() != "map")
         .map(|s| moss_core::Resolved::frontmatter(s.clone()));
     let group_override: Option<moss_core::Resolved<String>> = parsed
         .group

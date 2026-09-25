@@ -2524,6 +2524,66 @@ header:has(+ .moss-hero) .main-nav {
   border-bottom-color: currentColor;
 }
 
+/* Offline, self-contained place maps. The SVG owns geometry; this layer owns
+   only presentation and theme tokens, so custom themes can recolour it without
+   depending on generated IDs. */
+.moss-place-map {
+  --moss-place-water: #91b8c7;
+  --moss-place-globe-water: #789fac;
+  --moss-place-land: #d7c89b;
+  --moss-place-coast: #77654c;
+  --moss-place-marker: #b84f3d;
+  --moss-place-shadow: #26343d;
+  margin-block: var(--moss-space-md);
+  max-inline-size: 100%;
+}
+.moss-place-map svg {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+  aspect-ratio: 3 / 2;
+}
+[data-theme="dark"] .moss-place-map {
+  --moss-place-water: #29434d;
+  --moss-place-globe-water: #345662;
+  --moss-place-land: #766d50;
+  --moss-place-coast: #b5a77f;
+  --moss-place-marker: #e07761;
+  --moss-place-shadow: #101719;
+}
+.moss-place-locator {
+  inline-size: min(50%, 22rem);
+}
+.moss-place-locator .moss-place-map {
+  margin-block-start: 0;
+}
+.moss-place-map-frame .moss-place-map {
+  margin-block-end: var(--moss-space-xs);
+}
+.moss-place-map-caption {
+  color: var(--moss-color-text-secondary);
+  font-size: var(--moss-read-caption);
+  font-style: italic;
+  text-align: center;
+}
+article .moss-place-map-frame:is(.moss-align-left, .moss-align-right):not([data-width]) {
+  inline-size: 50%;
+}
+@media (max-width: 48rem) {
+  article .moss-place-map-frame:is(.moss-align-left, .moss-align-right) {
+    float: none;
+    inline-size: 100% !important;
+    max-inline-size: 100%;
+    margin-inline: 0;
+  }
+  article .moss-place-locator.moss-align-right {
+    float: none;
+    inline-size: 100%;
+    max-inline-size: 100%;
+    margin-inline: 0;
+  }
+}
+
 /*
  * Colophon — the same credit rows at the foot of the page (`colophon:`), on
  * articles and folder-index pages alike. Unscoped, like the byline.

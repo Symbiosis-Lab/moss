@@ -2535,6 +2535,25 @@ fn render_body_embed(markdown: &str, docs: &[ParsedDocument]) -> String {
     )
 }
 
+fn render_place_map_embed(markdown: &str, docs: &[ParsedDocument]) -> String {
+    let graph = moss_core::content_graph::ContentGraphBuilder::new().build();
+    let resolved = moss_core::resolve::resolve_content("index.md", markdown, &graph, &|_| None);
+    let table: toml::value::Table = toml::from_str(
+        "[\"Kyoto\"]\nlat = 35.0116\nlng = 135.7681\nprecision = \"city\"\n",
+    ).unwrap();
+    let maps = crate::build::place_map::PlaceMapRenderContext::new(
+        crate::build::place_map::PlaceMapContext::embedded().unwrap(),
+        crate::vault::places::parse_gazetteer(&table),
+        "places".into(),
+        crate::build::place_map::LocatorPlacement::None,
+    );
+    resolve_markers_with_place_maps(
+        &resolved.content_markdown, "index.md", docs, &test_project(),
+        &std::collections::HashMap::new(), crate::i18n::Language::En,
+        None, None, true, Some(&maps),
+    )
+}
+
 fn journal_docs() -> Vec<ParsedDocument> {
     vec![
         make_folder_doc("journal/index.html", "Journal"),
@@ -2611,6 +2630,29 @@ fn pseudo_folder_place_embed_lists_its_derived_members() {
     assert!(pos_market < pos_temple, "expected date-desc order: {out}");
 }
 
+#[test]
+fn place_map_embed_emits_svg_with_placement_and_caption() {
+    let kind = crate::build::terms::TermKind {
+        key: "places".to_string(),
+        fields: vec!["location".to_string()],
+        title: "Places".to_string(),
+        is_place: true,
+        parents: Default::default(),
+    };
+    let mut docs = vec![make_doc("travel/kyoto.html", "Kyoto", Some("2025-01-01"))];
+    docs[0].location = vec!["Kyoto".to_string()];
+    crate::build::terms::derive_terms(&mut docs, vec![kind]);
+
+    let out = render_place_map_embed(
+        "![[/places/kyoto/|style:map|align-right 40%|Kyoto map]]\n",
+        &docs,
+    );
+    assert!(out.starts_with(r#"<div class="moss-place-map-frame moss-align-right" style="width:40%"><figure class="moss-place-map""#), "got: {out}");
+    assert!(out.contains("data-map-location=\"Kyoto\""), "got: {out}");
+    assert!(out.trim_end().ends_with("</figure><div class=\"moss-place-map-caption\">Kyoto map</div></div>"), "got: {out}");
+    assert!(!out.contains("moss-cards-container"), "map style must replace the listing: {out}");
+}
+
 /// Same bug, the roll-up-ancestor shape: `places/japan` has no doc that
 /// declares `location: Japan` directly — it exists only because a city
 /// under it rolls up through the gazetteer's `parent` chain
@@ -2638,4 +2680,3 @@ fn pseudo_folder_rollup_ancestor_embed_lists_its_descendants() {
     assert!(!out.contains("moss-embed-missing"), "got: {out}");
     assert!(out.contains("Kyoto Temple"), "got: {out}");
 }
-

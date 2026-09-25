@@ -106,6 +106,8 @@ pub struct SiteConfig {
     /// namespace, built-in (`authors`, `tags`) and declared alike. The one
     /// thing `build::terms::derive_terms` reads to decide term membership.
     pub term_kinds: Vec<crate::build::terms::TermKind>,
+    /// Decoded geography, gazetteer, place namespace and locator preference.
+    pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
     /// What this build may reuse from the last one. Both bits are
     /// resolved at the entry point (by design, the render phase reads neither the
     /// build trigger nor the environment). See [`IncrementalGates`].
@@ -152,6 +154,7 @@ impl Default for SiteConfig {
             ai_policy: None,
             search: false,
             term_kinds: Vec::new(),
+            place_maps: None,
             incremental: IncrementalGates::default(),
         }
     }

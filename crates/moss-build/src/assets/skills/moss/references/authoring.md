@@ -261,7 +261,16 @@ Three fields, all optional: `lat`/`lng` place the pin (missing either one still 
 
 A place page — claimed with `place_page:`, or generated like any other unclaimed term — gets a breadcrumb up its parent chain and a list of its own children, each with how many pages are under it (counting every page anywhere in that child's own subtree, not just its direct members). A page with `location:` set gets one more thing for free: an automatic line under its byline naming every place it declared, each linked to that place's page. There is no frontmatter key to write that line yourself, and no opt-out — leave `location:` unset and the page gets none.
 
-Not built yet: a `style:map` folder-listing style, and a per-site "locator" config key for placing something on a map. Declaring `type = "place"` does not draw a map — it only gives you the pages, the hierarchy and the line.
+Place pages draw an offline map automatically when at least one relevant gazetteer entry has coordinates. To add the smaller locator map after each authored page's place line, opt in site-wide:
+
+```toml
+[site]
+locator = "align-right"
+```
+
+The default is no locator. `"none"` also disables it. On narrow screens the right-aligned locator collapses into the reading flow at full width.
+
+A place namespace, parent, or leaf can also be embedded explicitly with `style:map`, for example `![[/places/kyoto/|style:map]]`. The map uses the same members and privacy precision as the place page. If the target is not a place term, or none of its entries has coordinates, moss warns and renders the ordinary listing instead.
 
 A place's page — its own leaf (`/places/kyoto/`), or an ancestor reached only through roll-up (`/places/japan/`, with no page of its own naming it directly) — embeds as a listing anywhere in the body the same way a real folder does: `![[/places/kyoto/|style:grid]]`. Nothing on disk backs that path; it resolves through the same term membership the page itself is built from, member order included, whether the page underneath is generated or claimed with `place_page:`.
 

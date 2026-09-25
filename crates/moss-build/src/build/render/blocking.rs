@@ -1147,13 +1147,14 @@ pub fn generate_blocking_content_for_build(
         // term embed's `also_in` is already populated, and BEFORE the HTML
         // render phase (which would otherwise emit the marker comment
         // unchanged into the page).
-        crate::build::folder_embed::expand_markers_in_documents(
+        crate::build::folder_embed::expand_markers_in_documents_with_place_maps(
             &mut documents,
             project_structure,
             &dir_overrides,
             site_config.math,
             &event_level_image_lookup,
             site_config.typesetting.as_deref(),
+            site_config.place_maps.as_ref(),
         );
         log::debug!(target: "timing", "[reduce] expand_markers_in_documents: {:?}", reduce_start.elapsed());
 
@@ -1261,6 +1262,7 @@ pub fn generate_blocking_content_for_build(
         // [site].floating_nav (default false — opt-in) rides along for
         // the same reason: the emitter reads LayoutConfig, not SiteConfig.
         let layout_config = layout_config.with_floating_nav(site_config.floating_nav);
+        let layout_config = layout_config.with_place_maps(site_config.place_maps.clone());
 
         // Resolve the canonical site URL for this build. Resolution lives in
         // site_url::resolve_for_project — the ONE path, shared with the
@@ -2385,6 +2387,12 @@ pub fn generate_blocking_content_for_build(
             if !place_breadcrumb_html.is_empty() {
                 content_html.push('\n');
                 content_html.push_str(&place_breadcrumb_html);
+            }
+            if let Some(map) = layout_config.place_maps.as_ref().and_then(|maps| {
+                maps.render_term_map(folder, all_docs_refs.iter().copied(), &auto_url_path, 0)
+            }) {
+                content_html.push('\n');
+                content_html.push_str(&map);
             }
             content_html.push('\n');
             content_html.push_str(&article_list);

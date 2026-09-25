@@ -44,6 +44,7 @@ pub struct LayoutConfig {
     /// Before 2026-09-01 the render path only had the three-variant enum, so
     /// a French site's artifact said `fr` while its pages said `en`.
     pub lang_tag: String,
+    pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
 }
 
 impl LayoutConfig {
@@ -72,6 +73,7 @@ impl LayoutConfig {
             },
             floating_nav: false,
             lang_tag: "en".to_string(),
+            place_maps: None,
         }
     }
 
@@ -146,6 +148,11 @@ impl LayoutConfig {
     /// use before that point.
     pub fn with_assets(mut self, assets: SiteAssets) -> Self {
         self.assets = assets;
+        self
+    }
+
+    pub fn with_place_maps(mut self, place_maps: Option<crate::build::place_map::PlaceMapRenderContext>) -> Self {
+        self.place_maps = place_maps;
         self
     }
 }

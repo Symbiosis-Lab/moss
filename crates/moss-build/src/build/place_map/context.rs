@@ -6,6 +6,90 @@ use moss_core::terms::{term_fold, term_folder_key};
 use super::{Frame, FrameTier, Pack, ProjectedPoint, Projection};
 use crate::vault::places::Precision;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocatorPlacement { None, AlignRight }
+
+impl LocatorPlacement {
+    pub fn from_config(value: Option<&str>) -> Self {
+        match value {
+            None | Some("") | Some("none") => Self::None,
+            Some("align-right") => Self::AlignRight,
+            Some(other) => {
+                crate::build::cli_output::log_warn_problem!(
+                    "[site].locator must be 'align-right' or 'none', not '{other}'; omitting locator maps"
+                );
+                Self::None
+            }
+        }
+    }
+}
+
+/// Fully-resolved inputs shared by page rendering and map-style embeds.
+#[derive(Debug, Clone)]
+pub struct PlaceMapRenderContext {
+    maps: PlaceMapContext,
+    gazetteer: Arc<crate::vault::places::Gazetteer>,
+    namespace: String,
+    locator: LocatorPlacement,
+}
+
+impl PlaceMapRenderContext {
+    pub fn new(maps: PlaceMapContext, gazetteer: crate::vault::places::Gazetteer, namespace: String, locator: LocatorPlacement) -> Self {
+        Self { maps, gazetteer: Arc::new(gazetteer), namespace, locator }
+    }
+
+    pub fn is_place_key(&self, key: &str) -> bool {
+        key == self.namespace || key.starts_with(&format!("{}/", self.namespace))
+    }
+
+    pub fn render_locator(&self, names: &[String], page_path: &str, ordinal: usize) -> Option<String> {
+        if self.locator == LocatorPlacement::None { return None; }
+        let target = self.maps.resolve_locations(&self.namespace, &self.gazetteer, names);
+        if !target.has_coordinates() { return None; }
+        let first = target.places.iter().find(|place| place.point().is_some())?;
+        let options = super::SvgMapOptions::new(page_path, ordinal, &first.display, first.precision);
+        let svg = super::emit_locator(&self.maps, &target, options).ok()?.svg;
+        Some(format!(r#"<div class="moss-place-locator moss-align-right">{svg}</div>"#))
+    }
+
+    pub fn render_term_map<'a>(
+        &self,
+        key: &str,
+        members: impl IntoIterator<Item = &'a crate::build::types::ParsedDocument>,
+        page_path: &str,
+        ordinal: usize,
+    ) -> Option<String> {
+        if !self.is_place_key(key) { return None; }
+        let members = members.into_iter();
+        let own_name = self.gazetteer.iter().find_map(|(display, _)| {
+            (term_folder_key(&self.namespace, display) == key).then(|| display.clone())
+        });
+        let target = if let Some(name) = own_name.as_ref() {
+            let direct = self.maps.resolve_locations(&self.namespace, &self.gazetteer, std::slice::from_ref(name));
+            if direct.has_coordinates() { direct } else { self.aggregate(key, name, members) }
+        } else {
+            let label = key.strip_prefix(&format!("{}/", self.namespace)).unwrap_or(&self.namespace);
+            self.aggregate(key, label, members)
+        };
+        target.has_coordinates().then(|| super::emit_svg(&self.maps, &target, page_path, ordinal))
+    }
+
+    fn aggregate<'a>(
+        &self,
+        key: &str,
+        label: &str,
+        members: impl IntoIterator<Item = &'a crate::build::types::ParsedDocument>,
+    ) -> PlaceMapTarget {
+        let mut names = Vec::new();
+        for doc in members {
+            if key == self.namespace || doc.also_in.as_ref().is_some_and(|keys| keys.iter().any(|candidate| candidate == key)) {
+                names.extend(doc.location.iter().cloned());
+            }
+        }
+        self.maps.resolve_aggregate(&self.namespace, &self.gazetteer, label, &names)
+    }
+}
+
 /// The immutable inputs shared by every map rendered during one build.
 /// Decoding is deliberately outside page rendering: a page can borrow this
 /// context without reopening the checked-in pack or the gazetteer.
@@ -242,5 +326,21 @@ mod tests {
         assert_eq!(target.places[0].longitude, None);
         assert_eq!(target.places[0].latitude, None);
         assert!(!target.has_coordinates());
+    }
+
+    #[test]
+    fn locator_is_opt_in_and_uses_the_sparse_profile() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let off = PlaceMapRenderContext::new(
+            maps.clone(), gazetteer(), "places".into(), LocatorPlacement::None,
+        );
+        assert!(off.render_locator(&["Harbor".into()], "story/index.html", 0).is_none());
+
+        let on = PlaceMapRenderContext::new(
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight,
+        );
+        let html = on.render_locator(&["Harbor".into()], "story/index.html", 0).unwrap();
+        assert!(html.contains("moss-place-locator moss-align-right"));
+        assert!(html.contains("data-map-locator-profile=\"exact-city\""));
     }
 }

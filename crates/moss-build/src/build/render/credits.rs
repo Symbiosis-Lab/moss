@@ -122,6 +122,39 @@ pub fn render_byline_html(rows: &[String], emit_source_fm: bool, place_line: Opt
     }
 }
 
+/// Render the complete page-head credit area, including an optional place locator.
+pub fn render_page_masthead(
+    doc: &crate::build::types::ParsedDocument,
+    layout: &crate::build::page::layout::LayoutConfig,
+    emit_source_lines: bool,
+) -> String {
+    let mut html = render_byline_html(&doc.byline, emit_source_lines, doc.place_line.as_deref())
+        .unwrap_or_default();
+    if let Some(locator) = layout
+        .place_maps
+        .as_ref()
+        .and_then(|maps| maps.render_locator(&doc.location, &doc.url_path, 0))
+    {
+        html.push_str(&locator);
+    }
+    html
+}
+
+/// Put a non-empty page masthead after the authored title block.
+pub fn splice_page_masthead(
+    content: String,
+    doc: &crate::build::types::ParsedDocument,
+    layout: &crate::build::page::layout::LayoutConfig,
+    emit_source_lines: bool,
+) -> String {
+    let masthead = render_page_masthead(doc, layout, emit_source_lines);
+    if masthead.is_empty() {
+        content
+    } else {
+        crate::build::markdown::html_post::splice_after_title_block(&content, &masthead)
+    }
+}
+
 /// The automatic place line's own block, or `None` when there is none. Not
 /// row-split like `render_rows` — the line is inherently one row, so
 /// `moss-place-line` is the only class the contract table needs.

@@ -517,7 +517,7 @@ fn generate_html_inner(
             // under; render/credits.rs says where it goes instead, and why a
             // `layout: article` homepage is the article path's page, not this one.
             if !is_article_page {
-                content = credits::splice_byline_at_page_head(content, &doc.byline, emit_source_lines, doc.place_line.as_deref());
+                content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines);
             }
 
             // Folder card <img> tags inherit width/height/loading/LQIP/color
@@ -684,8 +684,7 @@ fn generate_html_inner(
                 // below emits both. Same boolean as that gate, so "exactly one
                 // fires" reads off one variable. See render/credits.rs.
                 let folder_byline = (!is_article_page)
-                    .then(|| credits::render_byline_html(&doc.byline, emit_source_lines, doc.place_line.as_deref()))
-                    .flatten()
+                    .then(|| credits::render_page_masthead(doc, layout_config, emit_source_lines))
                     .unwrap_or_default();
                 if resolved_cover.is_some() && !is_article_layout {
                     // Cover branch: folder_cover renders the cover-row with the
@@ -794,7 +793,7 @@ fn generate_html_inner(
                     // and lands the byline beside the real title inside it,
                     // the same as it would for an unwrapped page — one splice
                     // site for both shapes.
-                    content = credits::splice_byline_at_page_head(content, &doc.byline, emit_source_lines, doc.place_line.as_deref());
+                    content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines);
                 }
             }
 
@@ -828,6 +827,13 @@ fn generate_html_inner(
                 };
 
                 let show_folder_children = !has_sidebar && doc.children.unwrap_or(true);
+                if let Some(map) = term_listing.and_then(|key| {
+                    layout_config.place_maps.as_ref().and_then(|maps| {
+                        maps.render_term_map(key, all_docs.iter(), &doc.url_path, 1)
+                    })
+                }) {
+                    content.push_str(&map);
+                }
                 if show_folder_children {
                     let marker = crate::build::folder_embed::synthesize_children_marker(
                         doc,
@@ -1240,10 +1246,8 @@ fn generate_html_inner(
         // of `.date-line`, which is a single flex row owning the reading-size
         // control — and which is emitted only when the page has a date, while
         // a byline must render with or without one.
-        if let Some(byline) = doc
-            .and_then(|d| credits::render_byline_html(&d.byline, emit_source_lines, d.place_line.as_deref()))
-        {
-            after_title_block.push_str(&byline);
+        if let Some(d) = doc {
+            after_title_block.push_str(&credits::render_page_masthead(d, layout_config, emit_source_lines));
         }
         after_title_block.push_str("<!-- slot:after-title -->");
         homepage_content = splice_after_title_block(&homepage_content, &after_title_block);
