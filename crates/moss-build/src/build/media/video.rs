@@ -80,17 +80,30 @@ fn load_transform_record(
 /// Merge transform entries into a source's record, preserving everything else
 /// already in it — scan metadata, and outputs written by an earlier step of the
 /// same conversion.
+fn mutate_transform_record(
+    transforms: &crate::build::cache::TransformCache,
+    source_oid: &str,
+    source_file: &Path,
+    mutate: impl FnOnce(&mut crate::build::cache::TransformRecord) -> bool,
+) {
+    let mut record = load_transform_record(transforms, source_oid, source_file);
+    if mutate(&mut record) {
+        if let Err(e) = transforms.put(&record) {
+            log::warn!("Failed to write transform record: {}", e);
+        }
+    }
+}
+
 fn record_transforms(
     transforms: &crate::build::cache::TransformCache,
     source_oid: &str,
     source_file: &Path,
     entries: impl IntoIterator<Item = (String, crate::build::cache::TransformEntry)>,
 ) {
-    let mut record = load_transform_record(transforms, source_oid, source_file);
-    record.transforms.extend(entries);
-    if let Err(e) = transforms.put(&record) {
-        log::warn!("Failed to write transform record: {}", e);
-    }
+    mutate_transform_record(transforms, source_oid, source_file, |record| {
+        record.transforms.extend(entries);
+        true
+    });
 }
 
 /// Record a freshly produced HLS ladder, replacing whatever `video/hls/` keys
@@ -116,12 +129,11 @@ pub(crate) fn record_ladder(
     source_file: &Path,
     entries: impl IntoIterator<Item = (String, crate::build::cache::TransformEntry)>,
 ) {
-    let mut record = load_transform_record(transforms, source_oid, source_file);
-    record.transforms.retain(|k, _| !k.starts_with(crate::build::media::hls::HLS_TRANSFORM_PREFIX));
-    record.transforms.extend(entries);
-    if let Err(e) = transforms.put(&record) {
-        log::warn!("Failed to write transform record: {}", e);
-    }
+    mutate_transform_record(transforms, source_oid, source_file, |record| {
+        record.transforms.retain(|k, _| !k.starts_with(crate::build::media::hls::HLS_TRANSFORM_PREFIX));
+        record.transforms.extend(entries);
+        true
+    });
 }
 
 /// Drop a source's `video/hls/` keys after `produce_ladder` returns `Ok(None)`
@@ -148,16 +160,16 @@ fn clear_stale_ladder(
     source_oid: &str,
     source_file: &Path,
 ) {
-    let Some(mut record) = transforms.get(source_oid) else {
+    let Some(record) = transforms.get(source_oid) else {
         return;
     };
     if !record.transforms.keys().any(|k| k.starts_with(crate::build::media::hls::HLS_TRANSFORM_PREFIX)) {
         return;
     }
-    record.transforms.retain(|k, _| !k.starts_with(crate::build::media::hls::HLS_TRANSFORM_PREFIX));
-    if let Err(e) = transforms.put(&record) {
-        log::warn!("Failed to clear stale HLS ladder keys for {}: {}", source_file.display(), e);
-    }
+    mutate_transform_record(transforms, source_oid, source_file, |record| {
+        record.transforms.retain(|k, _| !k.starts_with(crate::build::media::hls::HLS_TRANSFORM_PREFIX));
+        true
+    });
 }
 
 /// Store one MP4 and link it into staging. Staging is the page's copy, so a
@@ -170,6 +182,82 @@ fn stage_mp4(
     let oid = objects.store_file(file)?;
     objects.link_to(&oid, output_mp4)?;
     Ok(oid)
+}
+
+/// A cached thumbnail blob is usable: non-empty, and fully decodable.
+///
+/// The MP4 self-heal a few lines down (`ffmpeg.validate_encoded_video`) has
+/// no analogue for the poster, so a thumbnail written before the seek/pixel-
+/// format fix stayed a permanent cache hit: `thumb_params` carries nothing
+/// that changed, so nothing about the fix ever invalidates it. A literal
+/// 0-byte blob is already excluded from reuse one layer down — `ObjectStore`
+/// treats zero length the same as a cloud-evicted placeholder
+/// (`io_utils::probe_path`) — but a NON-empty, truncated or otherwise corrupt
+/// JPEG (a partial write from an encoder that errored mid-stream) clears that
+/// check untouched.
+///
+fn thumbnail_blob_is_valid(path: &Path) -> bool {
+    match fs::metadata(path) {
+        Ok(meta) if meta.len() > 0 => {
+            crate::build::media::decode::sniff_decode(path).is_ok()
+        }
+        _ => false,
+    }
+}
+
+/// Generate a fresh poster, store it in the CAS, and link it into staging.
+/// `Ok((oid, linked))`: `oid` is `Some` once storage succeeds, `linked` is
+/// true only once the bytes also reached staging — the same "stored but
+/// maybe not linked" split `VideoConversionOutcome::thumb_oid`/`poster`
+/// already carry. `Err("Cancelled")` is the one failure the caller must
+/// treat as fatal; every other failure is logged and folded into
+/// `Ok((None, false))`, matching how a plain thumbnail miss always has.
+///
+/// Shared by the ordinary cache-miss path (3a below) and the poster-only
+/// self-heal a cache hit with a valid MP4 but a corrupt poster takes — both
+/// need the identical generate → store → link sequence, and the video's own
+/// bytes are none of this function's concern either way.
+fn regenerate_thumbnail(
+    ffmpeg: &crate::build::media::ffmpeg::FFmpegManager,
+    source_file: &Path,
+    temp_dir: &Path,
+    output_thumb: &Path,
+    objects: &crate::build::cache::ObjectStore,
+    filename: &str,
+    registry: Option<&crate::types::runtime::ChildProcessRegistry>,
+    cancel_flag: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<(Option<String>, bool), String> {
+    let temp_thumb = temp_dir.join(format!("{}-{}.thumb.jpg", filename, uuid::Uuid::new_v4()));
+    let outcome = match ffmpeg.generate_thumbnail(source_file, &temp_thumb, registry, cancel_flag) {
+        Ok(true) => {
+            // No 0-byte check here: `generate_thumbnail` itself now treats a
+            // 0-byte output as a failure (see its own doc), so `Ok(true)`
+            // already means a real, non-empty file.
+            log::debug!("Generated thumbnail for {}", filename);
+            let mut oid_result = None;
+            let mut linked = false;
+            match objects.store_file(&temp_thumb) {
+                Ok(oid) => {
+                    match objects.link_to(&oid, output_thumb) {
+                        Ok(()) => linked = true,
+                        Err(e) => log::warn!("Failed to link thumbnail to output: {}", e),
+                    }
+                    oid_result = Some(oid);
+                }
+                Err(e) => log::warn!("Failed to store thumbnail in CAS: {}", e),
+            }
+            Ok((oid_result, linked))
+        }
+        Ok(false) => Ok((None, false)),
+        Err(ref e) if e == "Cancelled" => Err("Cancelled".to_string()),
+        Err(e) => {
+            log::warn!("Thumbnail generation failed for {}: {}", filename, e);
+            Ok((None, false))
+        }
+    };
+    // allow:unlink an encode temp this call wrote under cache/tmp
+    let _ = fs::remove_file(&temp_thumb);
+    outcome
 }
 
 /// The ladder's slice of one video's progress bar. Measured on the ladder's own
@@ -339,27 +427,39 @@ pub(crate) fn convert_single_video(
     let cached_mp4 = transforms.find_cached_output(source_oid, "video/mp4", mp4_params);
     let cached_thumb = transforms.find_cached_output(source_oid, "video/thumbnail", thumb_params);
 
-    // Step 2: On cache hit, validate and link. Both outputs are required for a
-    // hit — the worker owns the video's bytes as well as its poster, so a
-    // cached thumbnail alone leaves the page with no video to play.
-    if let (Some(ref mp4_oid), Some(ref thumb_oid)) = (&cached_mp4, &cached_thumb) {
-        // Self-healing: validate cached MP4 blob via ffprobe
-        let mut mp4_valid = false;
-        if let Some(blob_path) = objects.get_path(mp4_oid) {
-            if ffmpeg.validate_encoded_video(&blob_path).unwrap_or(false) {
-                mp4_valid = true;
-            } else {
-                log::warn!("Cached video failed validation, evicting: {}", mp4_oid);
-                // Evict the transform record so re-conversion happens.
-                // The corrupt blob itself will be self-healed by store_file()
-                // via validate_blob() when the re-converted output is stored.
-                transforms.remove(source_oid).ok();
-                // Fall through to cache-miss path below
-            }
-        }
+    // Hoisted above Step 2 as well as Step 4: the poster-only self-heal
+    // branch needs it to record a fresh thumbnail entry exactly the way a
+    // full conversion's Step 4 already does, for the same TransformEntry
+    // shape either way.
+    let stored_entry = |oid: &String, params: &serde_json::Value| TransformEntry {
+        oid: oid.clone(),
+        size: objects
+            .get_path(oid)
+            .and_then(|p| fs::metadata(p).ok())
+            .map(|m| m.len())
+            .unwrap_or(0),
+        params: params.clone(),
+    };
 
-        if mp4_valid {
+    // Step 2: On cache hit, validate and link.
+    if let Some(ref mp4_oid) = cached_mp4 {
+        // Self-healing: validate the cached MP4 blob via ffprobe, and fully
+        // decode the cached thumbnail blob (`thumbnail_blob_is_valid`). A thumbnail written
+        // before a fix to `generate_thumbnail` (nothing in `thumb_params`
+        // names the encoder's own seek/pixel-format logic) would otherwise
+        // stay a broken cache hit forever.
+        let mp4_valid = objects
+            .get_path(mp4_oid)
+            .is_some_and(|p| ffmpeg.validate_encoded_video(&p).unwrap_or(false));
+        let thumb_valid = cached_thumb
+            .as_ref()
+            .and_then(|oid| objects.get_path(oid))
+            .is_some_and(|p| thumbnail_blob_is_valid(&p));
+
+        if mp4_valid && thumb_valid {
             log::debug!("Cache hit for {} (content-addressed)", filename);
+
+            let thumb_oid = cached_thumb.as_ref().expect("a valid poster has an OID");
 
             // Link thumbnail to staging. Optional: a failed link just means no
             // poster ships, tracked below so the caller doesn't promise a URL
@@ -395,52 +495,79 @@ pub(crate) fn convert_single_video(
                 hls_entries,
             };
         }
+
+        if mp4_valid {
+            // The defect is scoped to the poster alone — the video's own
+            // bytes already validate — so only the thumbnail entry is
+            // evicted and regenerated. Re-encoding the MP4 (two-pass, ~30s)
+            // over a poster-only defect (a ~2s ffmpeg call) would be real,
+            // avoidable cost for every site that already has a bad poster
+            // cached.
+            log::warn!("Cached thumbnail missing or failed validation, regenerating just the poster: {}", filename);
+
+            if let Err(e) = objects.link_to(mp4_oid, &output_mp4) {
+                return VideoConversionOutcome {
+                    error: Some(format!("could not stage {}: {}", filename, e)),
+                    hls_rungs,
+                    poster: false,
+                    mp4_oid: None,
+                    thumb_oid: None,
+                    hls_entries: Vec::new(),
+                };
+            }
+
+            let (thumb_oid_result, thumb_linked) = match regenerate_thumbnail(
+                ffmpeg, source_file, temp_dir, &output_thumb, objects, filename, registry, cancel_flag,
+            ) {
+                Ok(pair) => pair,
+                Err(_) => {
+                    return VideoConversionOutcome {
+                        error: Some("Cancelled".to_string()),
+                        hls_rungs,
+                        poster: false,
+                        mp4_oid: None,
+                        thumb_oid: None,
+                        hls_entries: Vec::new(),
+                    };
+                }
+            };
+
+            if let Some(ref oid) = thumb_oid_result {
+                record_transforms(
+                    transforms,
+                    source_oid,
+                    source_file,
+                    [("video/thumbnail".to_string(), stored_entry(oid, thumb_params))],
+                );
+            }
+
+            return VideoConversionOutcome {
+                error: None,
+                hls_rungs,
+                poster: thumb_linked,
+                mp4_oid: Some(mp4_oid.clone()),
+                thumb_oid: if thumb_linked { thumb_oid_result } else { None },
+                hls_entries,
+            };
+        }
+
+        // The MP4 itself failed validation: a fresh encode is unavoidable.
+        // Leave the stale entry in place until the fresh conversion records
+        // its replacement. If conversion fails, the next build detects it
+        // again; leaving it avoids clobbering a concurrent repair.
+        log::warn!("Cached video failed validation, re-encoding: {}", mp4_oid);
     }
 
     // Step 3: Cache miss -- run ffmpeg pipeline
     log::info!("Converting video: {}", filename);
 
-    let mut thumb_oid_result: Option<String> = None;
-    // True only once the thumbnail is both stored AND linked into staging —
-    // `thumb_oid_result` alone would count a store whose link then failed,
-    // leaving nothing at the URL the caller is about to promise.
-    let mut thumb_linked = false;
-
     // 3a. Thumbnail FIRST (preserve fast preview swap -- 2s vs 30s)
-    let temp_thumb = temp_dir.join(format!("{}-{}.thumb.jpg", filename, uuid::Uuid::new_v4()));
     log::debug!("Generating thumbnail first for fast preview: {}", filename);
-    match ffmpeg.generate_thumbnail(
-        source_file,
-        &temp_thumb,
-        registry,
-        cancel_flag,
+    let (thumb_oid_result, thumb_linked) = match regenerate_thumbnail(
+        ffmpeg, source_file, temp_dir, &output_thumb, objects, filename, registry, cancel_flag,
     ) {
-        Ok(true) => {
-            // Validate thumbnail: reject 0-byte files
-            if fs::metadata(&temp_thumb).map(|m| m.len()).unwrap_or(0) == 0 {
-                log::warn!("Thumbnail is 0 bytes, skipping CAS storage: {}", filename);
-                // allow:unlink an encode temp this call wrote under cache/tmp
-                let _ = fs::remove_file(&temp_thumb);
-            } else {
-                log::debug!("Generated thumbnail for {}", filename);
-                match objects.store_file(&temp_thumb) {
-                    Ok(oid) => {
-                        match objects.link_to(&oid, &output_thumb) {
-                            Ok(()) => thumb_linked = true,
-                            Err(e) => log::warn!("Failed to link thumbnail to output: {}", e),
-                        }
-                        thumb_oid_result = Some(oid);
-                    }
-                    Err(e) => log::warn!("Failed to store thumbnail in CAS: {}", e),
-                }
-                // allow:unlink an encode temp this call wrote under cache/tmp
-                let _ = fs::remove_file(&temp_thumb);
-            }
-        }
-        Ok(false) => {}
-        Err(ref e) if e == "Cancelled" => {
-            // allow:unlink an encode temp this call wrote under cache/tmp
-            let _ = fs::remove_file(&temp_thumb);
+        Ok(pair) => pair,
+        Err(_) => {
             return VideoConversionOutcome {
                 error: Some("Cancelled".to_string()),
                 hls_rungs,
@@ -450,8 +577,7 @@ pub(crate) fn convert_single_video(
                 hls_entries: Vec::new(),
             };
         }
-        Err(e) => log::warn!("Thumbnail generation failed for {}: {}", filename, e),
-    }
+    };
 
     // 3b. The video's bytes. Every video passes through here — `plan_video_encode`
     // decides inside `convert_to_mp4_with_config` whether that means a re-encode
@@ -541,16 +667,8 @@ pub(crate) fn convert_single_video(
         }
     };
 
-    // Step 4: Write transform record (if we have at least one output)
-    let stored_entry = |oid: &String, params: &serde_json::Value| TransformEntry {
-        oid: oid.clone(),
-        size: objects
-            .get_path(oid)
-            .and_then(|p| fs::metadata(p).ok())
-            .map(|m| m.len())
-            .unwrap_or(0),
-        params: params.clone(),
-    };
+    // Step 4: Write transform record (if we have at least one output).
+    // `stored_entry` is the one hoisted above Step 2.
     let entries: Vec<_> = [
         mp4_oid_result
             .as_ref()
@@ -4328,6 +4446,168 @@ pub(crate) mod tests {
         };
         assert!(outcome.error.is_none());
         assert!(!outcome.poster);
+    }
+
+    /// The bug this fix closes: `thumb_params` never changes when only
+    /// `generate_thumbnail`'s own seek/pixel-format logic is fixed, so a
+    /// bad poster stored under the old code stayed a permanent cache hit —
+    /// nothing about the fix ever invalidated it. A cache hit must validate
+    /// the poster the same way it already validates the MP4, and regenerate
+    /// it — without touching an MP4 that still validates: a poster-only
+    /// defect does not owe the video a fresh two-pass encode.
+    ///
+    /// The seeded blob is non-empty garbage, not literally 0 bytes: a
+    /// LITERAL 0-byte blob never reaches this code at all —
+    /// `io_utils::probe_path` already treats `meta.len() == 0` as `Evicted`
+    /// (the same rule a cloud-dataless placeholder trips), so `ready_blob`
+    /// already reports no cache hit and `convert_single_video` falls through
+    /// to Step 3's ordinary miss path regardless of this fix. The gap this
+    /// closes is a poster lookup that is absent even though the MP4 is valid.
+    ///
+    /// The source is named `.mov`: `plan_video_encode`'s `web_playable` gate
+    /// only recognises `mp4`/`m4v`/`webm` containers, so a `.mov` source can
+    /// never take the `KeepOriginal` path — any real re-encode always runs a
+    /// genuine two-pass libx264 encode and so always produces DIFFERENT
+    /// bytes (a different oid) than the raw source bytes seeded as the
+    /// cached MP4 below. That is what makes "the MP4 oid is unchanged" a
+    /// sound proxy here for "the MP4 was not re-encoded" — with an mp4/m4v/
+    /// webm source, `KeepOriginal` could re-store byte-identical bytes under
+    /// the ordinary miss path too, and the same assertion would prove nothing.
+    #[test]
+    fn a_cache_hit_with_a_corrupt_thumbnail_regenerates_a_real_one() {
+        use crate::build::cache::{ObjectStore, TransformCache, TransformEntry, TransformRecord};
+        use crate::build::media::ffmpeg::{real_ffmpeg, synthesise, FFmpegManager, VideoCompressionConfig};
+
+        let Some(bin) = real_ffmpeg() else {
+            eprintln!("skipping: ffmpeg not on PATH");
+            return;
+        };
+        let tmp = portable_tmpdir();
+        let source = tmp.path().join("clip.mov");
+        if !synthesise(&bin, &source, "320x240") {
+            eprintln!("skipping: could not synthesise a source");
+            return;
+        }
+
+        let objects = ObjectStore::new(tmp.path().join("objects"));
+        let transforms = TransformCache::new(
+            tmp.path().join("transforms"),
+            ObjectStore::new(tmp.path().join("objects")),
+        );
+        let config = VideoCompressionConfig::default();
+        let mp4_params = config.to_params();
+        let thumb_params = serde_json::json!({});
+
+        // A real, playable MP4 blob with no poster entry at all.
+        let mp4_oid = objects.store_file(&source).expect("store the cached mp4");
+        let original_mp4_oid = mp4_oid.clone();
+        transforms
+            .put(&TransformRecord {
+                source_oid: "oid-clip".to_string(),
+                source_size: std::fs::metadata(&source).unwrap().len(),
+                transforms: std::collections::HashMap::from([
+                    (
+                        "video/mp4".to_string(),
+                        TransformEntry { oid: mp4_oid, size: 1, params: mp4_params.clone() },
+                    ),
+                ]),
+            })
+            .expect("write the transform record");
+
+        let staging = tmp.path().join("stage");
+        let temp = tmp.path().join("temp");
+        std::fs::create_dir_all(&temp).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+
+        let outcome = convert_single_video(
+            &FFmpegManager::from_bin_path(bin.clone()),
+            &source,
+            "oid-clip",
+            "videos/clip.mp4",
+            "videos/clip.thumb.jpg",
+            &temp,
+            &staging,
+            &objects,
+            &transforms,
+            &config,
+            &mp4_params,
+            &thumb_params,
+            None,
+            None,
+            None,
+        );
+
+        assert!(outcome.error.is_none(), "expected success, got {:?}", outcome.error);
+        assert!(outcome.poster, "a real poster must be regenerated, not the stale corrupt one");
+        assert_eq!(
+            outcome.mp4_oid.as_deref(),
+            Some(original_mp4_oid.as_str()),
+            "the cached MP4 must be kept, not re-encoded, over a poster-only defect"
+        );
+        let staged_thumb = staging.join("videos/clip.thumb.jpg");
+        assert!(
+            crate::build::media::decode::sniff_decode(&staged_thumb).is_ok(),
+            "the staged poster must be a fully decodable image"
+        );
+
+        let repaired_thumb_oid = outcome.thumb_oid.clone().expect("repair records the poster");
+        std::fs::remove_file(&staged_thumb).unwrap();
+        let second = convert_single_video(
+            &FFmpegManager::from_bin_path(bin),
+            &source,
+            "oid-clip",
+            "videos/clip.mp4",
+            "videos/clip.thumb.jpg",
+            &temp,
+            &staging,
+            &objects,
+            &transforms,
+            &config,
+            &mp4_params,
+            &thumb_params,
+            None,
+            None,
+            None,
+        );
+        assert!(second.error.is_none(), "second call should use persisted cache: {:?}", second.error);
+        assert!(second.poster);
+        assert_eq!(second.mp4_oid.as_deref(), Some(original_mp4_oid.as_str()));
+        assert_eq!(second.thumb_oid.as_deref(), Some(repaired_thumb_oid.as_str()));
+        assert!(crate::build::media::decode::sniff_decode(&staged_thumb).is_ok());
+    }
+
+    #[test]
+    fn thumbnail_validation_rejects_a_valid_header_with_truncated_jpeg() {
+        let tmp = portable_tmpdir();
+        let full = tmp.path().join("full.jpg");
+        let mut image = image::RgbImage::new(256, 256);
+        for (x, y, pixel) in image.enumerate_pixels_mut() {
+            *pixel = image::Rgb([(x ^ y) as u8, x as u8, y as u8]);
+        }
+        image
+            .save_with_format(&full, image::ImageFormat::Jpeg)
+            .expect("write jpeg fixture");
+        let bytes = std::fs::read(&full).unwrap();
+        assert!(crate::build::media::decode::sniff_dimensions(&full).is_ok());
+        let scan = bytes
+            .windows(2)
+            .position(|window| window == [0xff, 0xda])
+            .expect("JPEG start-of-scan marker");
+        let scan_len = u16::from_be_bytes([bytes[scan + 2], bytes[scan + 3]]) as usize;
+        let mut truncated = bytes[..scan + 2 + scan_len].to_vec();
+        // Keep the SOF and SOS headers complete, but declare a deliberately
+        // oversized frame and omit its entropy stream. Header sniffing still
+        // returns dimensions; the bounded decoder must reject the fixture.
+        let sof = bytes
+            .windows(2)
+            .position(|window| matches!(window, [0xff, 0xc0] | [0xff, 0xc1] | [0xff, 0xc2]))
+            .expect("JPEG start-of-frame marker");
+        truncated[sof + 5..sof + 9].copy_from_slice(&[0xff, 0xff, 0xff, 0xff]);
+        std::fs::write(&full, truncated).unwrap();
+        assert_eq!(&bytes[..3], &[0xff, 0xd8, 0xff]);
+        assert!(crate::build::media::decode::sniff_dimensions(&full).is_ok());
+        assert!(crate::build::media::decode::sniff_decode(&full).is_err());
+        assert!(!thumbnail_blob_is_valid(&full));
     }
 
     // ------------------------------------------------------------------

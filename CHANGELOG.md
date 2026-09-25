@@ -37,6 +37,7 @@ All notable changes to moss will be documented here.
 - Video embeds no longer print an English "Download video" link below the player.
 - A video or audio embed that shares its paragraph with other text — most often a caption on the very next line, joined by a single line break rather than a blank one — now plays as a real `<video>`/`<audio>` element again instead of showing a broken image. Only an embed alone on its own line, with nothing else in the paragraph, was getting its real player before; one with a caption or surrounding prose fell back to the generic image renderer regardless of what kind of file it pointed at.
 - Edits made in another app to a page — or to `.moss/config.toml`, `.moss/places.toml`, or the site's theme `style.css`/`script.js` — that is open in moss's editor now appear in the editor, instead of the editor keeping the old text and writing it back over them on the next autosave.
+- A video shorter than about a second now gets a real poster image instead of a broken, empty one. The poster is captured from the middle of the clip rather than a fixed one-second mark, so the capture point always falls inside the video; if a capture still comes out empty, moss leaves out the broken poster instead of publishing it.
 
 ### Changed
 
@@ -1937,4 +1938,3 @@ Active branches not yet in this release — landing in a future version:
 - address code review findings
 - skip re-downloading comments deleted by user
 - show progress during enhance phase and auto-refresh preview after slot injection
-

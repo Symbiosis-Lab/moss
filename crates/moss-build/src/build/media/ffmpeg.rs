@@ -974,6 +974,21 @@ pub(crate) fn encode_end_line(source: &Path, elapsed: Duration, outcome: &Encode
     }
 }
 
+/// Where to seek for a video's poster frame: half the clip's duration, capped
+/// at 1 s. A fixed 1 s seek lands at or past EOF for anything shorter than
+/// that, and ffmpeg turns an out-of-range seek into a 0-byte JPEG rather than
+/// an error. `duration_secs <= 0.0` (an unknown or failed probe) seeks the
+/// very first frame, which always exists.
+///
+/// Pure so the calculation can be tested without spawning ffmpeg.
+pub(crate) fn thumbnail_seek_secs(duration_secs: f64) -> f64 {
+    if duration_secs > 0.0 {
+        (duration_secs / 2.0).min(1.0)
+    } else {
+        0.0
+    }
+}
+
 /// Manager for FFmpeg operations.
 ///
 /// Provides methods for video conversion and thumbnail generation.
@@ -1643,7 +1658,8 @@ impl FFmpegManager {
         }
     }
 
-    /// Generates a thumbnail from a video (first frame at 1 second).
+    /// Generates a thumbnail from a video, seeking to [`thumbnail_seek_secs`]
+    /// of `video`'s own duration.
     ///
     /// # Arguments
     /// * `video` - Path to the video file
@@ -1676,15 +1692,26 @@ impl FFmpegManager {
         let video_str = video.to_str().ok_or("Invalid video path")?;
         let output_str = output.to_str().ok_or("Invalid output path")?;
 
+        // `get_duration` is the same single-purpose ffprobe call
+        // `validate_encoded_video` already uses; a failed probe falls back
+        // to the very first frame, which always exists.
+        let duration = self.get_duration(video).unwrap_or(0.0);
+        let seek = format!("{:.3}", thumbnail_seek_secs(duration));
+
         let args: Vec<&str> = vec![
             "-i",
             video_str,
             "-ss",
-            "00:00:01",
+            &seek,
             "-vframes",
             "1",
             "-vf",
             "scale=800:-1",
+            // JPEG is full-range YUV; without this the mjpeg encoder warns
+            // "Non full-range YUV is non-standard" and some builds refuse a
+            // testsrc-style source outright under strict compliance.
+            "-pix_fmt",
+            "yuvj420p",
             "-y",
             output_str,
         ];
@@ -1701,7 +1728,18 @@ impl FFmpegManager {
             return Err(format!("Thumbnail generation failed: {}", stderr));
         }
 
-        Ok(true)
+        // ffmpeg can exit 0 while writing an empty file when the sought
+        // frame never decodes to anything — the exact failure this function
+        // exists to prevent, so a 0-byte file is a failure, not a result to
+        // ship as a poster.
+        match std::fs::metadata(output) {
+            Ok(meta) if meta.len() > 0 => Ok(true),
+            Ok(_) => Err(format!(
+                "Thumbnail generation produced a 0-byte file: {}",
+                output.display()
+            )),
+            Err(e) => Err(format!("Thumbnail generation did not produce a file: {}", e)),
+        }
     }
 
     /// Validates that an encoded video is playable by checking its duration

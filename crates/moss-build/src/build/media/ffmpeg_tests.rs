@@ -650,22 +650,60 @@ fn test_validate_encoded_video_checks_duration() {
     );
 }
 
+// ===========================================
+// Thumbnail seek — a fixed 1s seek 0-bytes a poster for a clip that short
+// ===========================================
+
 #[test]
-fn test_thumbnail_scale_uses_800px_width() {
-    // Test that generate_thumbnail uses scale=800:-1 instead of scale=400:-1
-    // This test verifies the command construction, not actual execution
+fn thumbnail_seek_is_half_the_clip_for_a_short_source() {
+    // A 0.8 s clip: a fixed 1 s seek would land past EOF.
+    assert!((thumbnail_seek_secs(0.8) - 0.4).abs() < 1e-9);
+}
 
-    let manager = match FFmpegManager::detect() {
-        Ok(m) => m,
-        Err(_) => return, // Skip if FFmpeg not available
+#[test]
+fn thumbnail_seek_caps_at_one_second_for_a_long_source() {
+    assert_eq!(thumbnail_seek_secs(10.0), 1.0);
+}
+
+#[test]
+fn thumbnail_seek_is_zero_for_an_unknown_duration() {
+    // A failed probe (duration <= 0.0) seeks the first frame, which always
+    // exists, rather than propagating the probe failure into a bad seek.
+    assert_eq!(thumbnail_seek_secs(0.0), 0.0);
+    assert_eq!(thumbnail_seek_secs(-1.0), 0.0);
+}
+
+/// The real bug: a clip shorter than the old fixed 1 s seek produced a
+/// 0-byte poster. Real ffmpeg, because the failure is in what ffmpeg does
+/// with an out-of-range `-ss`, not in argument construction.
+#[test]
+fn a_clip_shorter_than_one_second_still_gets_a_poster() {
+    let Some(bin) = real_ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
     };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("blink.mp4");
+    let ok = std::process::Command::new(&bin)
+        .args([
+            "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:duration=0.8",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        ])
+        .arg(&source)
+        .status()
+        .expect("synthesise");
+    if !ok.success() {
+        eprintln!("skipping: could not synthesise a 0.8s source");
+        return;
+    }
 
-    // We'll test this by checking if the generated command contains "scale=800"
-    // For now, this test documents the requirement
-    // Implementation will update generate_thumbnail() to use 800px
-
-    // This test will be verified through integration testing with actual thumbnail generation
-    assert!(true, "Thumbnail scale requirement documented");
+    let manager = FFmpegManager::from_bin_path(bin);
+    let output = dir.path().join("blink.thumb.jpg");
+    let result = manager.generate_thumbnail(&source, &output, None, None);
+    assert!(result.is_ok(), "expected a poster, got {result:?}");
+    let size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+    assert!(size > 0, "poster must not be a 0-byte file");
 }
 
 #[test]
