@@ -370,7 +370,7 @@ function driveTitleDissolve(titleP) {
       goal: lastWashDiag ? lastWashDiag.goal : null,
       clockT: lastWashDiag ? lastWashDiag.clockT : null,
       steps: lastWashDiag ? lastWashDiag.steps : null,
-      renderedInk: landing.title.renderedInk(),
+      renderedInk: landing.title.renderedInk ? landing.title.renderedInk() : null,
     });
   }
 }
@@ -3315,7 +3315,7 @@ async function raster(nodes, w, h, srcDoc = document) {
   // than ink bleeding. TITLE_LOAD raises how much suspended pigment each
   // step's dissolution releases (concentration, not rate — l still grows at
   // the same pace, so "completely gone" keeps its own timing).
-  const TITLE_LOAD = 3;
+  const TITLE_LOAD = 14;
   // The shared splash is eight discrete drops with a circular falloff
   // (WATER, drops[]/dropR): on a photo it hides inside the print's own
   // texture, but on bare glyph strokes it is the whole picture — a judge
@@ -3341,7 +3341,7 @@ async function raster(nodes, w, h, srcDoc = document) {
   // account for — reapplying the old values here and looking at the result
   // against the reference frames (scratchpad/phase1g/) confirmed the same
   // character carries over rather than needing its own re-derivation.
-  const TITLE_SPLASH = 0, TITLE_MIST = 0.02, TITLE_MIST_HOLD = 0.08;
+  const TITLE_SPLASH = 0, TITLE_MIST = 0.14, TITLE_MIST_HOLD = 0.08;
   // R (the splash radius) needs no rescaling for TITLE_PX_PER_TEXEL: with
   // TITLE_SPLASH=0 it multiplies out to nothing in both the h and vel terms
   // (WATER) regardless of its own value, so it is unaffected either way.
@@ -3396,7 +3396,7 @@ async function raster(nodes, w, h, srcDoc = document) {
   // up after a hard scroll jump now takes more frames instead of stalling
   // one. Only this instance's budget changes — the shared default and the
   // main wash's own call sites are untouched.
-  const TITLE_STEP_BUDGET = 8;
+  const TITLE_STEP_BUDGET = 24;
   if (!titleSim) { titleCanvas.remove(); fallbackFade(); return; }
   let broken = false;
   // No webglcontextrestored handler: the canvas is removed here, same as the
@@ -4348,6 +4348,51 @@ setupCssSnap();
 // observational path: native scrolling supplies scrollY, which drives the scenes and closing
 // scrub continuously, and no release may move the page after the reader lets go.
 let mobileWatchKey = '', finalDissolve = 0, finalWash = null, finalPrints = null;
+let closingWashCanvas = document.createElement('canvas');
+closingWashCanvas.id = 'closing-wash';
+document.querySelector('.page').appendChild(closingWashCanvas);
+const closingWashRect = () => ({ x: 0, y: 0, w: innerWidth, h: innerHeight });
+let closingWashSim = null, closingWashSize = '';
+async function armClosingWash() {
+  if (reduce) return;
+  while (document.documentElement.dataset.ready !== '1') {
+    if (document.documentElement.dataset.static) return;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  await new Promise((resolve) => {
+    const schedule = typeof requestIdleCallback === 'function'
+      ? (fn) => requestIdleCallback(fn, { timeout: 2000 })
+      : (fn) => setTimeout(fn, 300);
+    const arm = () => { if (atRest()) resolve(); else schedule(arm); };
+    schedule(arm);
+  });
+  const size = `${innerWidth}x${innerHeight}`;
+  if (closingWashSim && closingWashSize === size) return;
+  if (closingWashSim) {
+    if (finalWash) cancelAnimationFrame(finalWash.raf);
+    finalWash = null; finalPrints = null;
+    closingWashCanvas.getContext('webgl2')?.getExtension('WEBGL_lose_context')?.loseContext();
+    closingWashCanvas.remove();
+    closingWashCanvas = document.createElement('canvas');
+    closingWashCanvas.id = 'closing-wash';
+    document.querySelector('.page').appendChild(closingWashCanvas);
+  }
+  closingWashSim = makeSim({
+    canvas: closingWashCanvas,
+    texW: Math.max(1, Math.round(innerWidth / 4)),
+    texH: Math.max(1, Math.round(innerHeight / 4)),
+    rect: closingWashRect,
+    paperScale: .5,
+  });
+  closingWashSize = closingWashSim ? size : '';
+  if (closingWashSim) updateFinalDissolve();
+}
+armClosingWash();
+let closingWashResizeTimer = null;
+addEventListener('resize', () => {
+  clearTimeout(closingWashResizeTimer);
+  closingWashResizeTimer = setTimeout(armClosingWash, 200);
+});
 // Scene 4 as pixels: with `control` the grown control where it stands, and
 // with `logos` the targets at their exact current physics positions. The
 // closing wash dissolves both. A leg to scene 3 carries the targets alone,
@@ -4388,7 +4433,7 @@ function deployPrint({ logos = true, control = true } = {}) {
   return copy;
 }
 function closingPigmentPrint() {
-  const sheet = document.createElement('canvas'); sheet.width = printW(); sheet.height = printH();
+  const sheet = document.createElement('canvas'); sheet.width = innerWidth; sheet.height = innerHeight;
   const g = sheet.getContext('2d');
   if (closingPoster.complete && closingPoster.naturalWidth) {
     const k = Math.max(sheet.width / closingPoster.naturalWidth, sheet.height / closingPoster.naturalHeight);
@@ -4397,13 +4442,19 @@ function closingPigmentPrint() {
     g.globalAlpha = 1;
   } else { g.fillStyle = '#777777'; g.fillRect(0, 0, sheet.width, sheet.height); }
   g.globalCompositeOperation = 'destination-in';
-  const gradient = g.createRadialGradient(sheet.width / 2, sheet.height / 2, 35, sheet.width / 2, sheet.height / 2, sheet.width * .5);
+  const gradient = g.createRadialGradient(sheet.width / 2, sheet.height / 2, 35, sheet.width / 2, sheet.height / 2, Math.hypot(sheet.width, sheet.height) * .55);
   gradient.addColorStop(0, '#000'); gradient.addColorStop(.55, '#000b'); gradient.addColorStop(1, '#0000');
   g.fillStyle = gradient; g.fillRect(0, 0, sheet.width, sheet.height);
   return sheet;
 }
+function closingSourcePrint() {
+  const sheet = document.createElement('canvas'); sheet.width = innerWidth; sheet.height = innerHeight;
+  const source = deployPrint(), r = canvas.getBoundingClientRect();
+  sheet.getContext('2d').drawImage(source, r.left, r.top, r.width, r.height);
+  return sheet;
+}
 function updateFinalDissolve() {
-  if (!sim || reduce || !sheets[DEPLOY]) return;
+  if (!closingWashSim || reduce || !sheets[DEPLOY]) return;
   const active = shown >= DEPLOY && +stage.dataset.scene === DEPLOY;
   const q = active ? (mobileLayout() ? mobileClosingProgress() : xfAt()) : 0;
   finalDissolve = q;
@@ -4418,6 +4469,7 @@ function updateFinalDissolve() {
       // wash had already reached: the up-leg-off-DEPLOY flip in
       // check-landing-monotone.mjs. Writing the property itself to 0 reaches
       // the same invisible result without touching a class mob still owns.
+      closingWashCanvas.style.display = 'none'; closingWashCanvas.style.filter = '';
       stage.style.setProperty('--wash-cover', '0'); canvas.style.filter = '';
       fanEl.classList.remove(WatercolorMorph.MEMBER);
       if (shown === DEPLOY) orbitSim?.restart();
@@ -4428,8 +4480,13 @@ function updateFinalDissolve() {
     if (!active) return;
     orbitSim?.stop();
     // Retain these exact pixels through the final scene and the return trip.
-    if (!finalPrints) finalPrints = { source: deployPrint(), film: closingPigmentPrint() };
-    holdCanvas(finalPrints.source, finalPrints.film, DEPLOY, true, true);
+    if (!finalPrints || finalPrints.w !== innerWidth || finalPrints.h !== innerHeight) {
+      finalPrints = { source: closingSourcePrint(), film: closingPigmentPrint(), w: innerWidth, h: innerHeight };
+    }
+    closingWashSim.setPrints(finalPrints.source, finalPrints.film);
+    closingWashSim.reset();
+    closingWashSim.draw(true, 0);
+    closingWashCanvas.style.display = 'block';
     finalWash = { t: 0, drawn: -1, goal: q * T_TOTAL, raf: 0, covered: true, shownQ: -1 };
   }
   const wash = finalWash; wash.goal = q * T_TOTAL;
@@ -4440,11 +4497,11 @@ function updateFinalDissolve() {
   // close the gap -- that wait was the mobile reverse-leg bug: cover pinned
   // at 0 while the sim caught up, then jumping straight to ~1.
   if (q !== wash.shownQ) {
-    stage.style.setProperty('--wash-cover', String(smooth(0, .18, q)));
+    closingWashCanvas.style.opacity = String(1 - smooth(.72, 1, q));
     // The targets are in this print (deployPrint): members, hidden once the
     // canvas fully covers them and not before, since this cover fades in.
     fanEl.classList.toggle(WatercolorMorph.MEMBER, q >= .18);
-    canvas.style.filter = `grayscale(${smooth(.1, .65, q)})`;
+    closingWashCanvas.style.filter = `grayscale(${smooth(.1, .65, q)})`;
     wash.shownQ = q;
   }
   if (wash.raf) return;
@@ -4455,8 +4512,8 @@ function updateFinalDissolve() {
     // simulation, not the presenter -- so only the actual paint waits on it.
     // Reverse scroll reconstructs the same forward field at the earlier
     // position. One clock owns both directions, without competing fade loops.
-    const result = advanceWash(sim, wash, { goal: wash.goal, fwd: true }, t => {
-      sim.draw(true, smooth(T_CURE, T_TOTAL, t), -.2 + 1.4 * smooth(.94, 1, wash.goal / T_TOTAL));
+    const result = advanceWash(closingWashSim, wash, { goal: wash.goal, fwd: true }, t => {
+      closingWashSim.draw(true, smooth(T_CURE, T_TOTAL, t), -.2 + 1.4 * smooth(.94, 1, wash.goal / T_TOTAL));
     });
     if (!result.caughtUp) wash.raf = requestAnimationFrame(frame);
   };
