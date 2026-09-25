@@ -200,6 +200,141 @@ impl Projection {
             .collect()
     }
 
+    /// Project one encoded polygon ring while retaining fill topology.
+    ///
+    /// `project_part` is intentionally a line operation: a horizon crossing
+    /// may produce several open segments. Filled map layers must not turn
+    /// those fragments into polygons, because that invents a chord across the
+    /// invisible hemisphere. This method samples each closed edge, keeps the
+    /// visible runs as rings, closes every run, and clips the resulting rings
+    /// with a polygon clipper. A caller can therefore always use `fill-rule`
+    /// on the returned paths without receiving an open line fragment.
+    pub fn project_ring(&self, points: &[(i32, i32)], quantisation: u32) -> Vec<Vec<(f64, f64)>> {
+        let mut coordinates: Vec<ProjectedPoint> = points
+            .iter()
+            .filter_map(|&(longitude, latitude)| {
+                ProjectedPoint::new(
+                    f64::from(longitude) / f64::from(quantisation),
+                    f64::from(latitude) / f64::from(quantisation),
+                )
+            })
+            .collect();
+        if coordinates.len() < 3 {
+            return Vec::new();
+        }
+        if coordinates.first() != coordinates.last() {
+            coordinates.push(coordinates[0]);
+        }
+
+        // Keep the ring as one closed sequence. Splitting a polygon at the
+        // antimeridian turns the two pieces into open lines and makes a fill
+        // emitter close each piece with a made-up chord. The projection
+        // unwraps every point around the frame centre, so the crossing still
+        // follows the short edge without losing ring topology.
+        self.project_ring_part(&coordinates)
+    }
+
+    fn project_ring_part(&self, points: &[ProjectedPoint]) -> Vec<Vec<(f64, f64)>> {
+        if points.len() < 4 {
+            return Vec::new();
+        }
+        let samples = self.projected_ring_samples(points);
+        if samples.iter().all(|sample| !sample.visible) {
+            return Vec::new();
+        }
+        if samples.iter().all(|sample| sample.visible) {
+            let ring: Vec<_> = samples.iter().map(|sample| sample.point).collect();
+            let ring = clip_closed_ring(&ring, CLIP_MIN_X, CLIP_MAX_X, CLIP_MIN_Y, CLIP_MAX_Y);
+            return (ring.len() >= 4).then_some(vec![ring]).unwrap_or_default();
+        }
+
+        // Rotate to an invisible-to-visible transition. This makes every
+        // visible run have a definite exit and entry on the horizon, including
+        // the run that crosses the source ring's closing edge.
+        let first_visible = samples.iter().position(|sample| sample.visible).unwrap();
+        let mut offset = first_visible;
+        while samples[offset].visible {
+            offset = (offset + 1) % samples.len();
+        }
+        let mut index = (offset + 1) % samples.len();
+        let mut runs = Vec::new();
+        while index != offset {
+            if !samples[index].visible {
+                index = (index + 1) % samples.len();
+                continue;
+            }
+            let mut ring = Vec::new();
+            while samples[index].visible {
+                push_unique(&mut ring, samples[index].point);
+                index = (index + 1) % samples.len();
+                if index == offset {
+                    break;
+                }
+            }
+            if ring.len() < 2 {
+                break;
+            }
+            let entry = ring[0];
+            let exit = *ring.last().unwrap();
+            append_horizon_arc(&mut ring, exit, entry, self.horizon_radius());
+            let ring = clip_closed_ring(&ring, CLIP_MIN_X, CLIP_MAX_X, CLIP_MIN_Y, CLIP_MAX_Y);
+            if ring.len() >= 4 {
+                runs.push(ring);
+            }
+        }
+        runs
+    }
+
+    fn projected_ring_samples(&self, points: &[ProjectedPoint]) -> Vec<RingSample> {
+        const SAMPLES: usize = 32;
+        let mut output = Vec::with_capacity((points.len() - 1) * SAMPLES);
+        for (edge_index, pair) in points.windows(2).enumerate() {
+            for sample_index in 0..SAMPLES {
+                if edge_index + 1 == points.len() - 1 && sample_index == SAMPLES - 1 {
+                    continue;
+                }
+                let start_t = sample_index as f64 / SAMPLES as f64;
+                let end_t = (sample_index + 1) as f64 / SAMPLES as f64;
+                let start = interpolate(pair[0], pair[1], start_t);
+                let end = interpolate(pair[0], pair[1], end_t);
+                match (self.project(start), self.project(end)) {
+                    (Some(previous), Some(current)) => {
+                        push_sample(&mut output, true, previous);
+                        if sample_index == SAMPLES - 1 {
+                            push_sample(&mut output, true, current);
+                        }
+                    }
+                    (Some(previous), None) => {
+                        push_sample(&mut output, true, previous);
+                        let boundary = find_visibility_boundary(
+                            self, pair[0], pair[1], start_t, end_t,
+                        );
+                        if let Some(point) = self.project(interpolate(pair[0], pair[1], boundary)) {
+                            push_sample(&mut output, true, point);
+                        }
+                        push_sample(&mut output, false, (0.0, 0.0));
+                    }
+                    (None, Some(current)) => {
+                        push_sample(&mut output, false, (0.0, 0.0));
+                        let boundary = find_visibility_boundary(
+                            self, pair[0], pair[1], start_t, end_t,
+                        );
+                        if let Some(point) = self.project(interpolate(pair[0], pair[1], boundary)) {
+                            push_sample(&mut output, true, point);
+                        }
+                        push_sample(&mut output, true, current);
+                    }
+                    (None, None) => push_sample(&mut output, false, (0.0, 0.0)),
+                }
+            }
+        }
+        output
+    }
+
+    fn horizon_radius(&self) -> f64 {
+        2.0_f64.sqrt() * self.scale
+    }
+
     fn project_path(&self, points: &[ProjectedPoint]) -> Vec<Vec<(f64, f64)>> {
         let mut paths: Vec<Vec<(f64, f64)>> = Vec::new();
         for pair in points.windows(2) {
@@ -322,8 +457,9 @@ fn add_latitude_cut(
 }
 
 fn interpolate(start: ProjectedPoint, end: ProjectedPoint, t: f64) -> ProjectedPoint {
+    let end_longitude = start.longitude + shortest_longitude_delta(end.longitude - start.longitude);
     ProjectedPoint {
-        longitude: start.longitude + (end.longitude - start.longitude) * t,
+        longitude: start.longitude + (end_longitude - start.longitude) * t,
         latitude: start.latitude + (end.latitude - start.latitude) * t,
     }
 }
@@ -383,9 +519,133 @@ fn clip_segment(start: (f64, f64), end: (f64, f64)) -> Option<((f64, f64), (f64,
     ))
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RingSample {
+    visible: bool,
+    point: (f64, f64),
+}
+
+fn push_sample(samples: &mut Vec<RingSample>, visible: bool, point: (f64, f64)) {
+    if let Some(last) = samples.last_mut() {
+        if !visible && !last.visible {
+            return;
+        }
+        if visible && last.visible && same_point(Some(last.point), point) {
+            return;
+        }
+    }
+    samples.push(RingSample { visible, point });
+}
+
+fn push_unique(points: &mut Vec<(f64, f64)>, point: (f64, f64)) {
+    if !same_point(points.last().copied(), point) {
+        points.push(point);
+    }
+}
+
+fn append_horizon_arc(
+    ring: &mut Vec<(f64, f64)>,
+    start: (f64, f64),
+    end: (f64, f64),
+    radius: f64,
+) {
+    let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
+    let start_angle = (start.1 - center.1).atan2(start.0 - center.0);
+    let end_angle = (end.1 - center.1).atan2(end.0 - center.0);
+    let mut delta = (end_angle - start_angle + std::f64::consts::PI)
+        .rem_euclid(2.0 * std::f64::consts::PI)
+        - std::f64::consts::PI;
+    if delta.abs() < 1e-9 {
+        delta = 0.0;
+    }
+    let steps = ((delta.abs() / (std::f64::consts::PI / 12.0)).ceil() as usize).max(1);
+    for step in 1..=steps {
+        let angle = start_angle + delta * step as f64 / steps as f64;
+        push_unique(
+            ring,
+            (center.0 + radius * angle.cos(), center.1 + radius * angle.sin()),
+        );
+    }
+}
+
 fn same_point(first: Option<(f64, f64)>, second: (f64, f64)) -> bool {
     first
         .is_some_and(|point| (point.0 - second.0).abs() < 1e-7 && (point.1 - second.1).abs() < 1e-7)
+}
+
+/// Sutherland–Hodgman clipping for a closed screen-space ring.
+///
+/// Unlike `clip_segment`, this keeps the entering and leaving intersections in
+/// one ordered ring and explicitly closes the result. It is deliberately
+/// private: emitters should receive already-clipped rings through
+/// [`Projection::project_ring`], not assemble their own topology.
+fn clip_closed_ring(
+    points: &[(f64, f64)],
+    min_x: f64,
+    max_x: f64,
+    min_y: f64,
+    max_y: f64,
+) -> Vec<(f64, f64)> {
+    let mut ring = points.to_vec();
+    if ring.len() < 3 {
+        return Vec::new();
+    }
+    if same_point(ring.first().copied(), *ring.last().unwrap()) {
+        ring.pop();
+    }
+    for (axis, boundary, keep_greater) in [
+        (0usize, min_x, true),
+        (0usize, max_x, false),
+        (1usize, min_y, true),
+        (1usize, max_y, false),
+    ] {
+        if ring.len() < 3 {
+            return Vec::new();
+        }
+        let mut clipped = Vec::new();
+        let mut previous = *ring.last().unwrap();
+        let mut previous_inside = inside(previous, axis, boundary, keep_greater);
+        for &current in &ring {
+            let current_inside = inside(current, axis, boundary, keep_greater);
+            if current_inside != previous_inside {
+                clipped.push(intersection(previous, current, axis, boundary));
+            }
+            if current_inside {
+                clipped.push(current);
+            }
+            previous = current;
+            previous_inside = current_inside;
+        }
+        ring = clipped;
+        if ring.len() < 3 {
+            return Vec::new();
+        }
+    }
+    ring.push(ring[0]);
+    ring
+}
+
+fn inside(point: (f64, f64), axis: usize, boundary: f64, keep_greater: bool) -> bool {
+    if keep_greater {
+        axis_value(point, axis) >= boundary - 1e-9
+    } else {
+        axis_value(point, axis) <= boundary + 1e-9
+    }
+}
+
+fn axis_value(point: (f64, f64), axis: usize) -> f64 {
+    if axis == 0 { point.0 } else { point.1 }
+}
+
+fn intersection(start: (f64, f64), end: (f64, f64), axis: usize, boundary: f64) -> (f64, f64) {
+    let start_value = axis_value(start, axis);
+    let end_value = axis_value(end, axis);
+    let fraction = if (end_value - start_value).abs() < f64::EPSILON {
+        0.0
+    } else {
+        (boundary - start_value) / (end_value - start_value)
+    };
+    (start.0 + (end.0 - start.0) * fraction, start.1 + (end.1 - start.1) * fraction)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -695,6 +955,92 @@ mod tests {
         assert!(polar[0]
             .iter()
             .all(|point| point.0.is_finite() && point.1.is_finite()));
+    }
+
+    #[test]
+    fn project_ring_returns_closed_fillable_rings_for_visible_polygon() {
+        let center = ProjectedPoint::new(0.0, 0.0).unwrap();
+        let frame = Frame::from_points(&[center], [Precision::Exact].into_iter()).unwrap();
+        let projection = Projection::new(&frame);
+        let rings = projection.project_ring(
+            &[(-1, -1), (1, -1), (1, 1), (-1, 1), (-1, -1)],
+            1,
+        );
+        assert_eq!(rings.len(), 1);
+        assert!(rings[0].len() >= 4);
+        assert_eq!(rings[0].first(), rings[0].last());
+    }
+
+    #[test]
+    fn project_ring_clips_horizon_crossings_without_open_fragments() {
+        let frame_points = [
+            ProjectedPoint::new(-80.0, 0.0).unwrap(),
+            ProjectedPoint::new(80.0, 0.0).unwrap(),
+        ];
+        let frame = Frame::from_points(&frame_points, [Precision::Exact, Precision::Exact].into_iter()).unwrap();
+        let projection = Projection::new(&frame);
+        let rings = projection.project_ring(
+            &[(80, -30), (100, -30), (100, 30), (80, 30), (80, -30)],
+            1,
+        );
+        assert!(!rings.is_empty());
+        assert!(rings
+            .iter()
+            .all(|ring| ring.len() >= 4 && ring.first() == ring.last()));
+        assert!(rings.iter().flatten().all(|(x, y)| {
+            (CLIP_MIN_X..=CLIP_MAX_X).contains(x) && (CLIP_MIN_Y..=CLIP_MAX_Y).contains(y)
+        }));
+        let horizon = (2.0_f64).sqrt() * projection.scale;
+        let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
+        assert!(rings.iter().flatten().any(|point| {
+            let radius = (point.0 - center.0).hypot(point.1 - center.1);
+            (radius - horizon).abs() < 1.0
+        }));
+        assert!(rings.iter().flatten().all(|point| {
+            let radius = (point.0 - center.0).hypot(point.1 - center.1);
+            radius <= horizon + 1.0
+        }));
+    }
+
+    #[test]
+    fn project_ring_keeps_dateline_rings_closed_in_both_winding_directions() {
+        let points = [
+            ProjectedPoint::new(179.0, 0.0).unwrap(),
+            ProjectedPoint::new(-179.0, 0.0).unwrap(),
+        ];
+        let frame = Frame::from_points(&points, [Precision::Exact, Precision::Exact].into_iter()).unwrap();
+        let projection = Projection::new(&frame);
+        for ring in [
+            vec![(179, -2), (-179, -2), (-179, 2), (179, 2), (179, -2)],
+            vec![(179, -2), (179, 2), (-179, 2), (-179, -2), (179, -2)],
+        ] {
+            let projected = projection.project_ring(&ring, 1);
+            assert_eq!(projected.len(), 1);
+            assert_eq!(projected[0].first(), projected[0].last());
+            let (minimum, maximum) = projected[0]
+                .iter()
+                .map(|point| point.0)
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), x| {
+                    (min.min(x), max.max(x))
+                });
+            assert!(maximum - minimum < VIEWBOX_WIDTH / 2.0);
+        }
+    }
+
+    #[test]
+    fn clip_closed_ring_closes_each_sutherland_hodgman_result() {
+        let clipped = clip_closed_ring(
+            &[(-100.0, 100.0), (820.0, 100.0), (820.0, 380.0), (-100.0, 380.0)],
+            0.0,
+            720.0,
+            0.0,
+            480.0,
+        );
+        assert_eq!(clipped.first(), clipped.last());
+        assert_eq!(clipped.len(), 5);
+        assert!(clipped
+            .iter()
+            .all(|(x, y)| (0.0..=720.0).contains(x) && (0.0..=480.0).contains(y)));
     }
 
     #[test]
