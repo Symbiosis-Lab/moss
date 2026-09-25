@@ -247,7 +247,7 @@ pub fn marker_decode(value: &str) -> String {
             }
         }
         // `i` indexes a byte; push the whole char starting here.
-        let ch = value[i..].chars().next().unwrap_or('%');
+        let ch = value.get(i..).and_then(|s| s.chars().next()).unwrap_or('%');
         out.push(ch);
         i += ch.len_utf8();
     }
