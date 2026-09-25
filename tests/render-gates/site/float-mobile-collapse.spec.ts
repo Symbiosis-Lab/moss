@@ -111,6 +111,10 @@ test.describe('floated embed/figure/listing mobile collapse', () => {
         const expectedRatio = sized ? 0.4 : 0.5;
         expect(dTarget.width / dColumn.width).toBeCloseTo(expectedRatio, 1);
         expect(Math.abs(dTarget.right - dColumn.right)).toBeLessThanOrEqual(2);
+        if (kind === 'image' || kind === 'embed-figure') {
+          const inlineGap = await page.locator('#target').evaluate((el) => parseFloat(getComputedStyle(el).marginLeft));
+          expect(inlineGap).toBe(32);
+        }
 
         // Mobile: un-floated, full column, inline width included.
         await page.setViewportSize(MOBILE);
@@ -123,4 +127,18 @@ test.describe('floated embed/figure/listing mobile collapse', () => {
       });
     }
   }
+
+  test('a width-token figure drops its float-side gap on mobile', async ({ page }) => {
+    await page.setContent(articlePage('image', true).replace(
+      'class="moss-image moss-align-right"',
+      'class="moss-image moss-align-right" data-width="wide"',
+    ));
+    await page.setViewportSize(MOBILE);
+    expect(await floatOf(page, '#target')).toBe('none');
+    const margin = await page.locator('#target').evaluate((el) => getComputedStyle(el).marginLeft);
+    expect(margin).toBe('0px');
+    const target = await rect(page, '#target');
+    const column = await rect(page, '#before');
+    expect(Math.abs(target.left - column.left)).toBeLessThanOrEqual(2);
+  });
 });

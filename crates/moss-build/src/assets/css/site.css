@@ -4167,7 +4167,9 @@ article.container > hr {
   article .moss-embed-figure.moss-align-right,
   article .moss-cards-container.moss-align-left,
   article .moss-cards-container.moss-align-right {
+    float: none;
     width: 100% !important;
+    margin-inline: 0;
   }
 }
 
@@ -7207,9 +7209,9 @@ main.has-sidebar > .moss-series-nav {
    center alignment) while image figures get conventional caption polish.
    Note: this rule applies to figures from ALL three detectors, not just the
    new Pandoc rule — pre-existing image figures gain italic-centered captions
-   on upgrade. This is intentional theme polish, not strictly "preserve
-   visual behavior" as the implicit_figure migration suggests. */
-article figure:not(.video-figure) {
+   on upgrade. Floated figures keep the runaround rule's own rhythm; this
+   rule sets only block spacing so width-token figures keep their centering. */
+article figure:not(.video-figure):not(.moss-align-left):not(.moss-align-right):not(:has(.moss-align-left, .moss-align-right)) {
   /* Figures are full-bandwidth objects and get the largest gap in the reading
      rhythm — 1.25 lines of body text (--moss-read-line) vs the paragraph
      break's 0.75 — so an image reads as a deliberate pause, not another line
@@ -7228,7 +7230,7 @@ article figure:not(.video-figure) {
      lead-in bump on the preceding block was removed as a no-op on that same
      basis, back when both were fixed px; a value ever exceeding 1.25L would
      change that and over-space.) */
-  margin: calc(var(--moss-read-line) * 1.25) 0;
+  margin-block: calc(var(--moss-read-line) * 1.25);
 }
 
 /* Reset margins inside captioned figures so the gap below the image is

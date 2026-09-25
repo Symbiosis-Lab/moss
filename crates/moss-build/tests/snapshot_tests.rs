@@ -648,13 +648,10 @@ fn snapshot_places_site() {
     run_snapshot_test("places-site");
 }
 
-/// This slice renders no coordinates at all — no map, no locator SVG (both
-/// deferred to a later slice). Any digit sequence resembling a `lat`/`lng`
-/// value appearing anywhere in `places-site/expected/` would itself be a
-/// bug worth catching structurally, not just by eye, since nothing here is
-/// SUPPOSED to read `.moss/places.toml`'s coordinates at all.
+/// Place maps may use gazetteer coordinates for rendering, but should not
+/// expose the raw coordinate values in generated text assets.
 #[test]
-fn places_site_output_carries_no_coordinates() {
+fn places_site_output_does_not_leak_raw_coordinates() {
     let expected_dir = fixtures_dir().join("places-site").join("expected");
     for entry in WalkDir::new(&expected_dir).into_iter().filter_map(|e| e.ok()) {
         if !entry.file_type().is_file() {
@@ -664,7 +661,7 @@ fn places_site_output_carries_no_coordinates() {
         for needle in ["35.0116", "135.7681", "34.6937", "34.6851", "135.8048"] {
             assert!(
                 !text.contains(needle),
-                "{} contains a gazetteer coordinate digit sequence ({needle}) — this slice renders no coordinates",
+                "{} contains a raw gazetteer coordinate digit sequence ({needle})",
                 entry.path().display()
             );
         }
