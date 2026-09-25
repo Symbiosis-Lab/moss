@@ -7827,7 +7827,7 @@ body.focus-mode .chip-bar:focus-within { opacity: 1; }
 }
 
 /* ============================================================
-   landing-lab: a cheap, inert file tree — moss-landing-lab/HANDOFF.md
+   landing page: a cheap, inert file tree
    Task B decided the sidebar shows a real tree (folders expand/collapse,
    clicking a file does nothing) without the harvested FileTree component's
    drag/drop, context menus and create/rename/delete flow: that JS is unused
@@ -7860,7 +7860,7 @@ body.focus-mode .chip-bar:focus-within { opacity: 1; }
 .lab-tree-file.active::before { opacity: .9; background: var(--moss-color-accent); }
 
 /* The tree starts collapsed behind the breadcrumb (director's note, see
-   HANDOFF.md): the OUTER <details> wraps the whole nav-grid, the breadcrumb
+   sidebar structure): the OUTER <details> wraps the whole nav-grid, the breadcrumb
    is its <summary>, and it opens only on a click there — never at rest,
    never on hover. */
 .lab-tree-root { }
@@ -8079,14 +8079,14 @@ Subtitle
 // needed to toggle), plain rows for files (no click handler — inert by
 // construction, not by a guard). Replaces the harvested FileTree component
 // (Bl/Wl below), whose drag/drop, context menus and create/rename/delete
-// flow this static sidebar has no use for. See docs/HANDOFF.md Task B.
+// flow this static sidebar has no use for.
 function renderLabTree(container,tree,activeFile){
   container.innerHTML="";
   var activeName=activeFile.split("/").pop().replace(/\.md$/,"");
   var crumbPath=activeFile.replace(/\.md$/,"").split("/");
   // Starts collapsed: the breadcrumb is the <summary>, the tree is the
   // <details> content, and expanding it from the breadcrumb is the only way
-  // to see it — no hover, nothing open at rest. moss-landing-lab/HANDOFF.md.
+  // to see it — no hover, nothing open at rest.
   var root=document.createElement("details");root.className="lab-tree-root";
   var bc=document.createElement("summary");bc.className="nav-bc-strip";
   [tree.name].concat(crumbPath).forEach(function(seg,i,arr){
