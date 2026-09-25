@@ -126,15 +126,37 @@ impl ServedPath {
         Ok(ServedPath(slugify_dir_path(s)))
     }
 
+    /// Rehydrate a path previously stored by the build in a metadata cache.
+    /// Cached paths are already generated and normalized, so unlike source
+    /// paths they may use moss's reserved `_moss/` namespace.
+    pub(crate) fn from_cached(s: &str) -> Result<Self, ServedPathError> {
+        let normalized = Self::normalize_relative(s)?;
+        if normalized.split('/').any(|segment| segment == ".") {
+            return Err(ServedPathError::InvalidInput("cached path contains '.' segment"));
+        }
+        if normalized.split('/').any(|segment| segment == ".moss") {
+            return Err(ServedPathError::ReservedMossPrefix);
+        }
+        Ok(ServedPath(normalized))
+    }
+
     /// Run all parse-time invariants for user-source paths. Rejects both
     /// `.moss/` (moss internal workdir) and `_moss/` (moss framework
     /// namespace, reserved for build-emitted artifacts). The `for_*`
     /// constructors that legitimately produce `_moss/...` paths bypass
     /// this validator by constructing their inner String directly.
     fn validate_source(s: &str) -> Result<(), ServedPathError> {
-        // Normalize `\`→`/` first so the .moss/_moss/.. segment guards see real
-        // segments — a Windows `..\secret` would otherwise be a single segment
-        // and bypass the parent-escape guard.
+        let trimmed = Self::normalize_relative(s)?;
+        if trimmed.split('/').any(|seg| seg == ".moss" || seg == "_moss") {
+            return Err(ServedPathError::ReservedMossPrefix);
+        }
+        Ok(())
+    }
+
+    /// Normalize separators and validate the invariants shared by source and
+    /// cached relative paths. Keeping this at the boundary prevents a Windows
+    /// `..\\secret` from crossing into filesystem or HTML path handling.
+    fn normalize_relative(s: &str) -> Result<String, ServedPathError> {
         let trimmed = moss_core::slug::normalize_separators(s.trim());
         if trimmed.is_empty() {
             return Err(ServedPathError::Empty);
@@ -142,13 +164,10 @@ impl ServedPath {
         if trimmed.starts_with('/') {
             return Err(ServedPathError::AbsolutePath);
         }
-        if trimmed.split('/').any(|seg| seg == ".moss" || seg == "_moss") {
-            return Err(ServedPathError::ReservedMossPrefix);
-        }
-        if trimmed.split('/').any(|seg| seg == "..") {
+        if trimmed.split('/').any(|segment| segment == "..") {
             return Err(ServedPathError::ParentEscape);
         }
-        Ok(())
+        Ok(trimmed)
     }
 
     /// The single legitimate third-party asset bypass: JupyterLite ships
@@ -740,6 +759,30 @@ mod tests {
     fn validate_source_rejects_empty_and_whitespace() {
         assert!(matches!(ServedPath::validate_source(""), Err(ServedPathError::Empty)));
         assert!(matches!(ServedPath::validate_source("   "), Err(ServedPathError::Empty)));
+    }
+
+    #[test]
+    fn cached_paths_use_relative_separator_and_segment_guards() {
+        assert!(matches!(
+            ServedPath::from_cached(".."),
+            Err(ServedPathError::ParentEscape)
+        ));
+        assert!(matches!(
+            ServedPath::from_cached(r"..\secret"),
+            Err(ServedPathError::ParentEscape)
+        ));
+        assert!(matches!(
+            ServedPath::from_cached("."),
+            Err(ServedPathError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ServedPath::from_cached("/_moss/link/cover.png"),
+            Err(ServedPathError::AbsolutePath)
+        ));
+        assert_eq!(
+            ServedPath::from_cached("_moss/link/cover.png").unwrap().as_str(),
+            "_moss/link/cover.png"
+        );
     }
 
     // --- for_* constructor tests ---

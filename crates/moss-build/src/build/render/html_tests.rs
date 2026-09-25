@@ -8806,6 +8806,7 @@ mod remote_cover_end_to_end_tests {
             "og:image present must produce a real cover, not the no-cover placeholder: {index_html}"
         );
         assert!(index_html.contains("_moss/link/"), "cover must be a local asset: {index_html}");
+        assert!(index_html.contains("src=\"/_moss/link/"), "cover URL must be root-relative: {index_html}");
         assert!(index_html.contains(".webp"), "must go through the webp pipeline: {index_html}");
         // The card's own href legitimately points at the external page (and
         // the favicon is hotlinked by existing, unrelated design), so the

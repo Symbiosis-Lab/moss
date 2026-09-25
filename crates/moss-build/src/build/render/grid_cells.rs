@@ -655,6 +655,12 @@ fn external_card_markup(
 fn remote_cover_html(meta: Option<&LinkMeta>, alt: &str) -> Option<String> {
     let meta = meta?;
     let served_path = meta.cover_served_path.clone()?;
+    // The cache stores `ServedPath::as_str()` for filesystem joins and
+    // manifest keys. HTML needs its root-relative URL form, otherwise a card
+    // on `/nested/page/` requests `/nested/page/_moss/link/...`.
+    let served_url = crate::build::served_path::ServedPath::from_cached(&served_path)
+        .ok()?
+        .to_relative_url();
     let media_meta = crate::types::content::MediaMetadata {
         path: served_path.clone(),
         file_type: served_path.rsplit('.').next().unwrap_or("jpg").to_string(),
@@ -672,7 +678,7 @@ fn remote_cover_html(meta: Option<&LinkMeta>, alt: &str) -> Option<String> {
         None,
     );
     Some(crate::build::media::cover::render_cover_html(
-        &served_path,
+        &served_url,
         detect_cover_type(&served_path, None),
         alt,
         "moss-card-cover",
