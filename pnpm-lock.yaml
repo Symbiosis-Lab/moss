@@ -165,6 +165,8 @@ importers:
         specifier: ^3.1.1
         version: 3.2.0(obsidian@1.13.1(@codemirror/state@6.7.5)(@codemirror/view@6.43.12))(webdriverio@9.31.9)
 
+  scripts/place-map: {}
+
 packages:
 
   7z-wasm@1.2.0:

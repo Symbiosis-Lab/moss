@@ -1,0 +1,5 @@
+Natural Earth vector data are public domain. Source and terms: https://www.naturalearthdata.com/about/terms-of-use/
+
+The elevation source is GMT's earth_relief_06m_g grid, SRTM15 Earth Relief v2.7, distributed by the Generic Mapping Tools remote-data service. The pinned server manifest identifies it as a 6x6 arc-minute product reduced by Gaussian Cartesian filtering and gives the 2025-05-01 source date; it does not publish a separate licence statement. Source manifest: https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_server.txt. Provenance: Tozer et al., https://doi.org/10.1029/2019EA000658. Preserve the source manifest and provenance with any redistribution and consult the upstream GMT terms for use.
+
+The checked-in binary is generated offline from the exact source objects and their SHA-256 values in source-manifest.toml. No runtime or build-time network access is required.
