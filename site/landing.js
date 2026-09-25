@@ -872,7 +872,7 @@ async function warmShaderCache() {
 // shader, constant and step. `rect` is a getter because the main instance's
 // print rectangle grows at runtime (dragged plates, scene 3 cards) while the
 // title's stays fixed to its own box.
-function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp = 0.03, mistHold = 0.15, blockSize = 16, paperScale = 1, readback = false }) {
+function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp = 0.03, mistHold = 0.15, blockSize = 16, paperScale = 1 }) {
   const gl = canvas.getContext('webgl2', { alpha: true, antialias: false, premultipliedAlpha: true, preserveDrawingBuffer: true });
   if (!gl || !gl.getExtension('EXT_color_buffer_float')) return null;
   const compile = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
@@ -1107,71 +1107,6 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
     if (film?.rec === rec && film.n === s) return [pT[pi][0], pT[pi][1], k];
     throw new Error(`dissolve step ${s} is neither stored nor on the film`);
   };
-  // Item D: a small copy of whatever the canvas just showed, for the
-  // per-word contrast flip to read pixels under text from. Downsampled by a
-  // framebuffer blit (cheap, one GPU-side copy) into an 8-bit RGBA texture,
-  // then read back with a direct, synchronous readPixels -- not the
-  // PBO+fence async path an earlier version of this tried. That path is, by
-  // construction, always at least one tick stale: harvesting a fence kicked
-  // on the PREVIOUS tick before kicking a new one for the frame just drawn
-  // means even a fence that resolves exactly on schedule hands
-  // updateWordContrast last tick's pixels, never this one's. That lag is
-  // invisible almost everywhere, but not near a dissolve-step boundary,
-  // where the wash's own luminance under a word can swing 0.2-0.5 between
-  // two adjacent rendered frames (found live): a heading word sampled right
-  // there read the async pixels as background 0.29-0.32 while the frame
-  // actually on screen was 0.08-0.12, comfortably past the flip-in floor
-  // for a word that read as still black. Closing that gap without a stall
-  // means the fence has to be waited on same-tick, which is a blocking
-  // readPixels by another name -- so the plain, always-correct version
-  // below just does that directly, once per tick. Measured cost
-  // (check-landing-text-contrast's own per-frame timing) is the number
-  // that would justify bringing the async path back if it ever matters;
-  // it doesn't today. readback=false (the title's own small instance)
-  // skips all of this: nothing reads luminance under the intro title's
-  // letters.
-  let small = null;
-  if (readback) {
-    // 128, not the 64 first tried: a short word ("for", "AI.") spans only a
-    // handful of cells at 64x64 against a 390px-wide phone viewport, and
-    // item C's own chroma/structure boost (the wash is deliberately *not*
-    // spatially uniform) means a coarse grid can average a locally bright
-    // or dark speckle into a reading well off the word's real background --
-    // found live, "for" read 0.16-0.18 off a 64x64 grid against 0.64 in
-    // the actual screenshot, reproducing identically across runs (so not
-    // GPU/timing noise, a resolution one).
-    const SW = 128, SH = 128;
-    const stex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, stex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, SW, SH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    const sfb = gl.createFramebuffer();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, sfb);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, stex, 0);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    let pixels = null;
-    small = {
-      w: SW, h: SH,
-      bg: tint.map((c) => c * 255),   // the shader's own uTint, for un-premultiplying its output correctly (bgLuminanceUnder, below)
-      pixels: () => pixels,
-      // Capture once after present() or draw() paints the default framebuffer.
-      tick() {
-        if (canvas.width < 1 || canvas.height < 1) return;
-        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
-        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, sfb);
-        gl.blitFramebuffer(0, 0, canvas.width, canvas.height, 0, 0, SW, SH, gl.COLOR_BUFFER_BIT, gl.LINEAR);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, sfb);
-        const buf = new Uint8Array(SW * SH * 4);
-        gl.readPixels(0, 0, SW, SH, gl.RGBA, gl.UNSIGNED_BYTE, buf);
-        pixels = buf;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      },
-    };
-  }
-
   return {
     setPrints(src, tgt) { setPrint('src', src); setPrint('tgt', tgt); held = [src, tgt];
       // A new pair invalidates every stored keyframe: it belongs to the
@@ -1312,7 +1247,6 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       gl.uniform1f(showk.u.uWetGainMax, wetGainMax);
       gl.uniform3f(showk.u.uK0, k0[0], k0[1], k0[2]); gl.uniform3f(showk.u.uK1, k1[0], k1[1], k1[2]);
       draw();
-      small?.tick();
     },
     // One fixed step at time t (seconds). The schedule: flood, dissolve and
     // stir, take up, dry and cure.
@@ -1380,17 +1314,14 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
       gl.uniform1f(show.u.uCure, cure);
       gl.uniform1f(show.u.uClearance, clearance);
       draw();
-      small?.tick();
     },
-    // The framebuffer is preserved; moving words can reuse its last readback
-    // until present() or draw() paints and captures a new one.
-    smallPixels: () => (small ? { w: small.w, h: small.h, bg: small.bg, pixels: small.pixels() } : null),
+
   };
 }
 // Phones display the wash at less than half its design size. The page's own
 // canvas and print rectangle are today's exact values; only the factory above
 // is new.
-const sim = makeSim({ canvas, texW: Math.round(BASE_TEX_W / (mobileLayout() ? 4 : 2)), texH: Math.round(BASE_TEX_H / (mobileLayout() ? 4 : 2)), rect: () => printRect, readback: true });
+const sim = makeSim({ canvas, texW: Math.round(BASE_TEX_W / (mobileLayout() ? 4 : 2)), texH: Math.round(BASE_TEX_H / (mobileLayout() ? 4 : 2)), rect: () => printRect });
 // Every scene transition, both layouts (site/watercolor-morph.js). Each frame
 // blends the two recorded checkpoints around its exact scroll position in
 // pigment space. CHECKPOINT_EVERY therefore bounds storage and interpolation
@@ -2545,11 +2476,17 @@ function publishBridge(from, to, prints) {
   const source = prints[SHIPS], copy = document.createElement('canvas');
   copy.width = source.width; copy.height = source.height;
   const context = copy.getContext('2d'), k = copy.width / printW();
+  const ink = document.createElement('canvas');
+  ink.width = ink.height = Math.ceil(size * k);
+  const inkContext = ink.getContext('2d');
+  inkContext.beginPath(); inkContext.arc(ink.width / 2, ink.height / 2, ink.width / 2, 0, Math.PI * 2); inkContext.clip();
+  inkContext.drawImage(source, (x - size / 2 - printRect.x) * k, (y - size / 2 - printRect.y) * k, size * k, size * k, 0, 0, ink.width, ink.height);
   context.drawImage(source, 0, 0);
   context.globalCompositeOperation = 'destination-out';
   context.beginPath(); context.arc((x - printRect.x) * k, (y - printRect.y) * k, (size / 2 + 2) * k, 0, Math.PI * 2); context.fill();
   prints[SHIPS] = copy;
   return {
+    element: clone, ink,
     draw(t) {
       // Forward finishes at T_WET, where the reading line reaches scene 4's
       // text, instead of drifting into the cure tail after text has stopped.
@@ -2630,7 +2567,9 @@ function mountLeg(from, to, leaving = null) {
     // the same gap) -- only the SHIPS<->DEPLOY pair ever has one, so this
     // only ever fires on the rare cut immediately after leaving it.
     mob.bridge?.remove();
-    mob = { ...mob, from, to, pr: null, bridge: null };
+    releasePigmentCover();
+    resetWordContrast();
+    mob = { ...mob, from, to, pr: null, leg: null, bridge: null, p: -1, lastCover: 0 };
     return;
   }
   const A = leaving == null ? { print: sheets[from], members: [] } : memberPrint(from, leaving === from);
@@ -2677,9 +2616,9 @@ const srgbToLin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow(
 const relLuminance = (r, g, b) => 0.2126 * srgbToLin(r) + 0.7152 * srgbToLin(g) + 0.0722 * srgbToLin(b);
 const contrastOf = (l1, l2) => { const a = Math.max(l1, l2), b = Math.min(l1, l2); return (a + 0.05) / (b + 0.05); };
 const parseRGB = (str) => { const m = str.match(/[\d.]+/g); return m ? [+m[0], +m[1], +m[2]] : [0, 0, 0]; };
-let words = null;   // [{ el, ld, restColor }], built lazily after boot
+const wordContrast = { words: null, sample: null, surface: document.createElement('canvas') };
 function initWords() {
-  words = [];
+  wordContrast.words = [];
   const wrap = (el) => {
     for (const child of [...el.childNodes]) {
       if (child.nodeType === Node.ELEMENT_NODE) { wrap(child); continue; }
@@ -2713,81 +2652,77 @@ function initWords() {
     // that forced colour for the flip decision itself.
     const restColor = heading ? '' : '#000';
     const ld = heading ? relLuminance(...parseRGB(getComputedStyle(el).color)) : 0;
-    for (const span of el.querySelectorAll('.word')) words.push({ el: span, ld, restColor });
+    for (const span of el.querySelectorAll('.word')) wordContrast.words.push({ el: span, ld, restColor });
   }
 }
-// Averages the small readback composited over the page under `rect`
-// (viewport px, from a word's own getBoundingClientRect); null where less
-// than a third of that box is inked (mostly-transparent canvas -- #gl is
-// padded past the print's own edges, and the print is a fixed image a
-// still-scrolling word passes through, not always over ink; a few stray
-// inked pixels at that boundary averaged with an otherwise-blank box read
-// as a small, misleadingly dark or light mean, not the word's own real
-// background). The readback is bottom-up (GL convention) against a
-// top-down CSS rect, so y is flipped.
-//
-// Composites each pixel over the page's own background (small.bg, the
-// shader's own uTint) before taking luminance, rather than reading the
-// stored RGB straight: SHOWK's own output is premultiplied (context made
-// premultipliedAlpha:true) but not by the textbook color*alpha -- its o.rgb
-// is uTint*(T-(1-a)), so dividing by a does not recover the "true" colour
-// either, only standard over-compositing (rgb + bg*(1-a)) matches what the
-// browser's own canvas compositing -- and so a real screenshot -- actually
-// shows. Found live: reading the stored RGB straight measured 0.02-0.06 for
-// a heading word the same pixels, on screen, read 0.4-0.67; dividing by a
-// alone (a first, wrong fix) still undershot at 0.05-0.13 -- both dark
-// enough to wrongly pass FLIP_IN's own floor on every candidate this
-// session's transitions produced, while nothing about the fence, the
-// coverage threshold or the hysteresis margins was wrong.
+// Integrate the exact word rectangle over the displayed layers, composited
+// over the page. Mostly transparent words keep their ordinary page colour.
 function bgLuminanceUnder(rect, canvasRect, small) {
+  canvasRect = small.rect || canvasRect;
   const nx0 = (rect.left - canvasRect.left) / canvasRect.width, nx1 = (rect.right - canvasRect.left) / canvasRect.width;
   const ny0 = (rect.top - canvasRect.top) / canvasRect.height, ny1 = (rect.bottom - canvasRect.top) / canvasRect.height;
   const left = nx0 * small.w, right = nx1 * small.w;
-  const bottom = (1 - ny1) * small.h, top = (1 - ny0) * small.h;
+  const top = ny0 * small.h, bottom = ny1 * small.h;
   const x0 = Math.max(0, Math.floor(left)), x1 = Math.min(small.w, Math.ceil(right));
-  const y0 = Math.max(0, Math.floor(bottom)), y1 = Math.min(small.h, Math.ceil(top));
+  const y0 = Math.max(0, Math.floor(top)), y1 = Math.min(small.h, Math.ceil(bottom));
   if (x1 <= x0 || y1 <= y0) return null;
   const px = small.pixels, bg = small.bg;
   let inked = 0, sum = 0, total = 0;
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
     // Edge cells contribute only the area actually beneath the word.
-    const area = (Math.min(x + 1, right) - Math.max(x, left)) * (Math.min(y + 1, top) - Math.max(y, bottom));
+    const area = (Math.min(x + 1, right) - Math.max(x, left)) * (Math.min(y + 1, bottom) - Math.max(y, top));
     total += area;
-    const i = (y * small.w + x) * 4, a = px[i + 3] / 255;
+    const i = (y * small.w + x) * 4, a = px[i + 3] / 255 * small.opacity;
     if (a >= 0.05) inked += area;
-    sum += area * relLuminance(px[i] + bg[0] * (1 - a), px[i + 1] + bg[1] * (1 - a), px[i + 2] + bg[2] * (1 - a));
+    sum += area * relLuminance(px[i] * a + bg[0] * (1 - a), px[i + 1] * a + bg[1] * (1 - a), px[i + 2] * a + bg[2] * (1 - a));
   }
   return inked / total > 0.3 ? sum / total : null;
 }
 // Choose the more readable colour, leaving room for raster rounding rather
 // than holding the previous colour until it reaches the exact contrast floor.
 function updateWordContrast() {
-  if (!words) initWords();
-  const small = sim?.smallPixels?.();
-  if (!small?.pixels) return;
+  if (!wordContrast.words) initWords();
   const canvasRect = canvas.getBoundingClientRect();
   if (canvasRect.width < 1 || canvasRect.height < 1) return;
-  for (const w of words) {
-    const r = w.el.getBoundingClientRect();
-    const overCanvas = r.right > canvasRect.left && r.left < canvasRect.right && r.bottom > canvasRect.top && r.top < canvasRect.bottom;
-    const lbg = overCanvas ? bgLuminanceUnder(r, canvasRect, small) : null;
-    // Off the canvas entirely, or over it but on a stretch the wash left
-    // unpainted (#gl is padded past the print's own edges, and the print
-    // is a fixed image a still-scrolling word passes through, not always
-    // over ink): the wash has nothing to say about this word's background
-    // either way, so a word already flipped is put back rather than left
-    // stuck bright -- skipping it outright (this branch used to `continue`)
-    // meant a word that flipped once and then scrolled onto blank canvas
-    // stayed white for the rest of the leg, however light its real
-    // background had become (found live: white-on-white, ratio 1.46-2.3,
-    // both scored well under white's own 3:1 floor).
+  const visible = wordContrast.words.map(word => ({ word, rect: word.el.getBoundingClientRect() })).filter(({ rect: r }) => r.right > Math.max(0, canvasRect.left) && r.left < Math.min(innerWidth, canvasRect.right) && r.bottom > Math.max(0, canvasRect.top) && r.top < Math.min(innerHeight, canvasRect.bottom));
+  for (const word of wordContrast.words) if (!visible.some(v => v.word === word)) word.el.style.color = '';
+  if (!visible.length) { wordContrast.sample = null; return; }
+  const left = Math.max(0, Math.floor(Math.min(...visible.map(v => v.rect.left))));
+  const top = Math.max(0, Math.floor(Math.min(...visible.map(v => v.rect.top))));
+  const right = Math.min(innerWidth, Math.ceil(Math.max(...visible.map(v => v.rect.right))));
+  const bottom = Math.min(innerHeight, Math.ceil(Math.max(...visible.map(v => v.rect.bottom))));
+  const w = right - left, h = bottom - top;
+  // One CSS-pixel crop covers all reading words. The Publish ink is retained
+  // from the existing scene capture, never recaptured during scrolling.
+  const surface = wordContrast.surface, g = surface.getContext('2d', { willReadFrequently: true });
+  if (surface.width !== w || surface.height !== h) { surface.width = w; surface.height = h; }
+  g.clearRect(0, 0, w, h);
+  const style = getComputedStyle(canvas);
+  g.globalAlpha = Number(style.opacity);
+  g.filter = style.filter;
+  const x0 = Math.max(left, canvasRect.left), y0 = Math.max(top, canvasRect.top);
+  const x1 = Math.min(right, canvasRect.right), y1 = Math.min(bottom, canvasRect.bottom);
+  g.drawImage(canvas, (x0 - canvasRect.left) * canvas.width / canvasRect.width, (y0 - canvasRect.top) * canvas.height / canvasRect.height, (x1 - x0) * canvas.width / canvasRect.width, (y1 - y0) * canvas.height / canvasRect.height, x0 - left, y0 - top, x1 - x0, y1 - y0);
+  g.filter = 'none';
+  if (mob.bridge) {
+    const r = mob.bridge.element.getBoundingClientRect();
+    g.globalAlpha = Number(getComputedStyle(mob.bridge.element).opacity);
+    g.drawImage(mob.bridge.ink, r.left - left, r.top - top, r.width, r.height);
+  }
+  let opacity = 1;
+  for (let el = canvas.parentElement; el; el = el.parentElement) opacity *= Number(getComputedStyle(el).opacity);
+  const small = wordContrast.sample = { w, h, rect: { left, top, width: w, height: h }, pixels: g.getImageData(0, 0, w, h).data, bg: parseRGB(getComputedStyle(document.body).backgroundColor), opacity };
+  for (const { word: w, rect: r } of visible) {
+    const lbg = bgLuminanceUnder(r, canvasRect, small);
+    // A word leaving the pigment must return to its ordinary page colour.
     if (lbg == null) { w.el.style.color = ''; continue; }
     w.el.style.color = contrastOf(1, lbg) > contrastOf(w.ld, lbg) ? '#fff' : w.restColor;
   }
 }
 function resetWordContrast() {
-  if (!words) return;
-  for (const w of words) w.el.style.color = '';
+  wordContrast.sample = null;
+  if (!wordContrast.words) return;
+  for (const w of wordContrast.words) w.el.style.color = '';
 }
 
 function renderMorphAt(progress) {
@@ -2802,12 +2737,6 @@ function renderMorphAt(progress) {
   } else if (between && (mob.p === 0 || mob.p === 1)) {
     mountLeg(from, to, mob.p === 1 ? to : from);   // the reader leaves an end: read its members now
   }
-  // driving/running() exists so the ambient warmer (fillPrints, retakeShown)
-  // never captures out from under a scene mid-transition; onScroll's own
-  // target/setTarget bookkeeping still runs for mobile underneath this (the
-  // maybeJoin it calls is what's gated, not the assignment), so this leaves
-  // that global alone rather than fighting it over a second meaning. Nothing
-  // else here reads it: shown, updated below, is the whole visible state.
   if (!mob.pr) {
     // Still cut (a fast cold-load scroll outrunning capture): a wash with
     // nothing to reach is a jump straight to the far end, the same rule
@@ -2816,9 +2745,7 @@ function renderMorphAt(progress) {
     // while cut means this runs every frame too, and without the mob.scene
     // deadband a p oscillating across 0.45 while the reader merely holds
     // still flips back and forth on nothing (measured: dataset.scene
-    // visiting 2,1,2,3,2 while still waiting on SHIPS's print). driving
-    // stays whatever it was: there is no simulation running to protect
-    // here, and this state must never block the very capture that resolves it.
+    // visiting 2,1,2,3,2 while still waiting on SHIPS's print).
     showMobileScene(mob.scene === from ? (p >= 0.55 ? to : from) : (p <= 0.45 ? from : to));
     mob.settled = false;   // keep retrying: a print may still arrive with no further scroll
     driving = false;       // a cut must let the warmer supply its missing print
@@ -4820,11 +4747,9 @@ landing.probe = (x, y) => sim.probe(x, y);
 // two prints it carries, whether that frame was exactly p's, and a
 // dissolve's length and checkpoint spacing.
 landing.morph = { current: () => morph?.current(), leg: () => morph?.current()?.tag ?? null, steps: DISSOLVE_STEPS, every: CHECKPOINT_EVERY, bounds: [WatercolorMorph.A_END, WatercolorMorph.B_START] };
-// The 128x128 downsampled wash readback (item D's own contrast reads use
-// this, refreshed at most every CONTRAST_REFRESH_MS): width/height, the
-// page background it composites against, and the last read pixel buffer --
-// null before the first refresh.
-landing.readback = () => sim?.smallPixels?.();
+// The visible background sampled for word contrast: top-down straight-alpha
+// RGBA, inherited opacity and the page beneath it. Null without a wash.
+landing.readback = () => wordContrast.sample;
 // The live array itself, not a copy: a fault is injected by assigning into
 // an element (e.g. prints[3] = null), so a snapshot here would turn that
 // into a no-op that still passes.
