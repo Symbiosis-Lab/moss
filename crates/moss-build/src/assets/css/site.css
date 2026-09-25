@@ -5530,7 +5530,8 @@ article a:where(:not(.moss-btn)):focus {
 .moss-card-kicker-favicon {
   width: 14px;
   height: 14px;
-  margin-right: 0.35em;
+  margin: 0;
+  margin-inline-end: 0.35em;
   vertical-align: -2px;
   border-radius: 2px;
   object-fit: contain;
@@ -6414,6 +6415,15 @@ a.moss-grid-card:hover {
   padding-block: 4px;
 }
 
+/* The visible indicator belongs 8px below the cards, not below the grid's
+   normal section margin. The row keeps 4px block padding for lifted cards and
+   focus rings; the indicator's -4px start margin cancels that padding, while
+   the 8px dot centered in its 24px target supplies the visual gap. Keep the
+   margin when the runtime hides the indicator because the row fits. */
+.moss-grid[data-scroll]:has(+ .moss-scroll-dots:not([hidden])) {
+  margin-block-end: 0;
+}
+
 /* `[data-columns]` (present, any value) matches the same specificity as the
    per-count `.moss-grid[data-columns="N"]` rules above (one class + two
    attributes each) and sits later in the file, so it wins regardless of N —
@@ -6549,7 +6559,7 @@ a.moss-grid-card:hover {
   }
 }
 
-/* Position dots under a scroll row (`scroll-row.js` adds them; without the
+/* Position the indicator under a scroll row (`scroll-row.js` adds it; without the
    script the row still scrolls). The dot is drawn 8px but the button is a
    24px target, the WCAG 2.5.8 minimum. Cards in view are lit; the first of
    them is also `aria-current` and a touch larger. `currentColor` keeps the
@@ -6558,7 +6568,7 @@ a.moss-grid-card:hover {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  margin-block-start: var(--moss-space-xs);
+  margin-block-start: -4px;
   color: var(--moss-color-text);
 }
 
@@ -6601,6 +6611,19 @@ a.moss-grid-card:hover {
   outline: 2px solid var(--moss-color-ui-accent);
   outline-offset: -2px;
   border-radius: 50%;
+}
+.moss-scroll-dots[data-indicator="fraction"] {
+  color: var(--moss-color-text-secondary);
+  font-size: var(--moss-size-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 24px;
+  min-block-size: 24px;
+  white-space: nowrap;
+}
+.moss-scroll-fraction {
+  display: inline-block;
+  min-inline-size: 3.5ch;
+  text-align: center;
 }
 @media (prefers-reduced-motion: reduce) {
   .moss-scroll-dots button::before {

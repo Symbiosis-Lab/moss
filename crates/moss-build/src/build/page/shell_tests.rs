@@ -3671,6 +3671,65 @@ fn grid_scroll_reuses_the_table_scrollers_focus_ring() {
 }
 
 #[test]
+fn grid_scroll_indicator_spacing_only_neutralizes_visible_indicator_margin() {
+    let rule = get_css_rule(
+        DEFAULT_CSS,
+        ".moss-grid[data-scroll]:has(+ .moss-scroll-dots:not([hidden]))",
+    )
+    .expect("visible scroll indicator spacing rule should exist");
+    assert!(rule.contains("margin-block-end: 0"), "got: {rule}");
+
+    let base = get_css_rule(DEFAULT_CSS, ".moss-grid[data-scroll]")
+        .expect("scroll grid rule should exist");
+    assert!(
+        !base.contains("margin-block-end: 0"),
+        "the normal scroll-grid margin must remain for hidden/data-fits indicators: {base}"
+    );
+    let row = get_css_rule(DEFAULT_CSS, ".moss-grid[data-scroll]")
+        .expect("scroll grid rule should exist");
+    assert!(row.contains("padding-block: 4px"), "got: {row}");
+    let indicator = get_css_rule(DEFAULT_CSS, ".moss-scroll-dots")
+        .expect("scroll indicator rule should exist");
+    assert!(indicator.contains("margin-block-start: -4px"), "got: {indicator}");
+    let button = get_css_rule(DEFAULT_CSS, ".moss-scroll-dots button")
+        .expect("scroll indicator button rule should exist");
+    assert!(button.contains("inline-size: 24px"), "got: {button}");
+    assert!(button.contains("block-size: 24px"), "got: {button}");
+    let dot = get_css_rule(DEFAULT_CSS, ".moss-scroll-dots button::before")
+        .expect("scroll indicator dot rule should exist");
+    assert!(dot.contains("inline-size: 8px"), "got: {dot}");
+    assert!(dot.contains("block-size: 8px"), "got: {dot}");
+    // 4px row padding + -4px indicator compensation + 8px inset in a 24px
+    // target around an 8px dot = the intended 8px visual gap.
+    assert_eq!(4 - 4 + (24 - 8) / 2, 8);
+}
+
+#[test]
+fn long_scroll_indicator_uses_quiet_fraction_rhythm() {
+    let rule = get_css_rule(DEFAULT_CSS, ".moss-scroll-dots[data-indicator=\"fraction\"]")
+        .expect("fraction scroll indicator CSS rule should exist");
+    for declaration in [
+        "color: var(--moss-color-text-secondary)",
+        "font-size: var(--moss-size-xs)",
+        "font-variant-numeric: tabular-nums",
+        "line-height: 24px",
+        "min-block-size: 24px",
+    ] {
+        assert!(rule.contains(declaration), "missing {declaration}: {rule}");
+    }
+}
+
+#[test]
+fn external_card_favicon_resets_image_margins_and_uses_logical_gap() {
+    let rule = get_css_rule(DEFAULT_CSS, ".moss-card-kicker-favicon")
+        .expect("external-card favicon CSS rule should exist");
+    assert!(rule.contains("margin: 0"), "got: {rule}");
+    assert!(rule.contains("margin-inline-end: 0.35em"), "got: {rule}");
+    assert!(!rule.contains("margin-right"), "physical margin leaked into favicon rule: {rule}");
+    assert!(!rule.contains("margin-block"), "block margin leaked into favicon rule: {rule}");
+}
+
+#[test]
 fn grid_scroll_scrolls_along_the_line_under_vertical_typesetting() {
     // Transposed, not disabled: a grid's columns are both sized and
     // positioned along the INLINE axis, which vertical-rl points down the

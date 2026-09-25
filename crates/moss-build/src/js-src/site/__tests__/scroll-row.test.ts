@@ -65,6 +65,44 @@ describe("scroll dots", () => {
     expect(nav.getAttribute("aria-label")).toBe("Related");
     const labels = Array.from(nav.querySelectorAll("button")).map((b) => b.getAttribute("aria-label"));
     expect(labels).toEqual(["1 / 4", "2 / 4", "3 / 4", "4 / 4"]);
+    expect(nav.dataset.indicator).toBe("dots");
+  });
+
+  test.each([10, 11])("uses dots at %s cards and a passive fraction above 10", (count) => {
+    const g = row(count, "Related");
+    initScrollDots();
+    const nav = g.nextElementSibling as HTMLElement;
+    expect(nav.dataset.indicator).toBe(count <= 10 ? "dots" : "fraction");
+    expect(nav.querySelectorAll("button")).toHaveLength(count <= 10 ? count : 0);
+    if (count > 10) {
+      expect(nav.querySelector(".moss-scroll-fraction")?.textContent).toBe("1 / 11");
+      expect(nav.querySelectorAll("[data-current]")).toHaveLength(1);
+      expect(nav.getAttribute("role")).toBeNull();
+      expect(nav.getAttribute("aria-label")).toBeNull();
+      expect(nav.getAttribute("aria-hidden")).toBe("true");
+      expect(nav.querySelectorAll("[tabindex], button, a, input, select, textarea")).toHaveLength(0);
+    }
+  });
+
+  test("updates the fraction from the first visible card without a live region", () => {
+    const g = row(11);
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    class FakeIntersectionObserver {
+      constructor(observerCallback: IntersectionObserverCallback) {
+        intersectionCallback = observerCallback;
+      }
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    initScrollDots();
+    intersectionCallback?.([
+      { target: g.children[4], isIntersecting: true } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+    const nav = g.nextElementSibling as HTMLElement;
+    expect(nav.querySelector("[data-current]")?.textContent).toBe("5");
+    expect(nav.hasAttribute("aria-live")).toBe(false);
+    expect(nav.querySelector(".moss-scroll-fraction")?.getAttribute("aria-hidden")).toBe("true");
   });
 
   test("clicking a dot brings its card to the start of the row", () => {

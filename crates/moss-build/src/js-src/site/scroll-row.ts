@@ -2,10 +2,10 @@
  * scroll-row.ts — position dots and mouse-wheel scrolling for a
  * `:::grid N {scroll}` row.
  *
- * One dot per card. The cards currently in view are lit and the first of
- * them is `aria-current`, so the dots show how many cards there are, where
- * the reader is, and how much of the row is visible at once. Clicking a dot
- * brings that card to the start of the row.
+ * Up to ten cards get one dot each. Longer rows get a passive fraction instead
+ * so a long shelf does not add a second tab stop for every card. In dot mode,
+ * cards currently in view are lit and the first of them is `aria-current`.
+ * Clicking a dot brings that card to the start of the row.
  *
  * Under horizontal typesetting the row scrolls sideways (its inline axis is
  * physical left-right); under vertical typesetting (`writing-mode:
@@ -81,6 +81,7 @@ export {};
 
 const ROW = ".moss-grid[data-scroll]";
 const DOTS = "moss-scroll-dots";
+const MAX_DOT_COUNT = 10;
 
 interface RowState {
   nav: HTMLElement | null;
@@ -170,7 +171,7 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
 
-/** (Re)builds the dots for `row` from its current children. Idempotent: a
+/** (Re)builds the indicator for `row` from its current children. Idempotent: a
  * rebuild first tears down whatever the last one made — the observer it
  * pointed at the old cards, and the nav element itself, which a morph may
  * already have removed — so it is safe to call on every init, not just the
@@ -186,34 +187,57 @@ function buildDots(row: HTMLElement, state: RowState): void {
 
   const nav = document.createElement("div");
   nav.className = DOTS;
-  nav.setAttribute("role", "group");
-  const label = row.getAttribute("aria-label");
-  if (label) nav.setAttribute("aria-label", label);
+  const fractionMode = cards.length > MAX_DOT_COUNT;
+  nav.dataset.indicator = fractionMode ? "fraction" : "dots";
+  if (fractionMode) {
+    nav.setAttribute("aria-hidden", "true");
+  } else {
+    nav.setAttribute("role", "group");
+    const label = row.getAttribute("aria-label");
+    if (label) nav.setAttribute("aria-label", label);
+  }
 
   const reduce = prefersReducedMotion();
-  const dots = cards.map((card, i) => {
-    const dot = document.createElement("button");
-    dot.type = "button";
-    // Language-neutral on purpose: a site in any language reads "3 / 8".
-    dot.setAttribute("aria-label", `${i + 1} / ${cards.length}`);
-    dot.addEventListener("click", () =>
-      card.scrollIntoView({ block: "nearest", inline: "start", behavior: reduce ? "auto" : "smooth" }),
-    );
-    nav.appendChild(dot);
-    return dot;
-  });
+  const dots = cards.length <= MAX_DOT_COUNT
+    ? cards.map((card, i) => {
+        const dot = document.createElement("button");
+        dot.type = "button";
+        // Language-neutral on purpose: a site in any language reads "3 / 8".
+        dot.setAttribute("aria-label", `${i + 1} / ${cards.length}`);
+        dot.addEventListener("click", () =>
+          card.scrollIntoView({ block: "nearest", inline: "start", behavior: reduce ? "auto" : "smooth" }),
+        );
+        nav.appendChild(dot);
+        return dot;
+      })
+    : [];
+  let fractionCurrent: HTMLSpanElement | null = null;
+  if (cards.length > MAX_DOT_COUNT) {
+    const fraction = document.createElement("output");
+    fraction.className = "moss-scroll-fraction";
+    fraction.setAttribute("aria-hidden", "true");
+    fractionCurrent = document.createElement("span");
+    fractionCurrent.dataset.current = "";
+    const total = document.createElement("span");
+    total.dataset.total = "";
+    total.textContent = String(cards.length);
+    fraction.append(fractionCurrent, " / ", total);
+    nav.appendChild(fraction);
+  }
   row.after(nav);
   state.nav = nav;
 
   const inView = new Set<number>();
   const paint = () => {
-    const first = inView.size ? Math.min(...inView) : -1;
+    const first = inView.size ? Math.min(...inView) : 0;
+    if (fractionCurrent) fractionCurrent.textContent = String(first + 1);
     dots.forEach((dot, i) => {
       dot.classList.toggle("is-visible", inView.has(i));
       if (i === first) dot.setAttribute("aria-current", "true");
       else dot.removeAttribute("aria-current");
     });
   };
+  paint();
   if (typeof IntersectionObserver === "function") {
     const io = new IntersectionObserver(
       (entries) => {
