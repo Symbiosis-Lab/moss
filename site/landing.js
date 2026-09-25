@@ -2183,10 +2183,12 @@ function still(scene) {
 // The signup link is navigation: it skips the scene performance.
 window.mossLanding = {
   openSignup() {
-    cancelSettle();
-    if (running()) setTarget(SHARE);
-    else { shown = target = SHARE; still(SHARE); }
-    mountLoop(); setCross(1); fiveOn(true);
+    // Move to the browser's closing rest before revealing and focusing signup.
+    scrollTo({ top: closingRestY(), behavior: 'auto' });
+    requestAnimationFrame(() => {
+      shown = target = SHARE; still(SHARE);
+      mountLoop(); setCross(1); fiveOn(true);
+    });
   },
   // Whether the page has actually arrived at the close, not just been asked
   // to go there: closing.js polls this to know when it may safely focus the
@@ -4028,9 +4030,8 @@ function standAtTerminalClose() {
   setCross(1);
   fiveOn(true);
 }
-// Scroll: the reading line is mid-window, and where it stands is what names the
-// scene. A wash then runs at its own pace and sets where it is; the scroll only
-// works it.
+// Scroll: the reading line is mid-window, and where it stands names the scene
+// and the exact checkpoint-interpolated wash frame.
 const LINE = 0.5;
 const textTop = (sec) => sec.firstElementChild.getBoundingClientRect().top;
 const textBottom = (sec) => sec.lastElementChild.getBoundingClientRect().bottom;
@@ -4063,8 +4064,8 @@ const progressAt = () => {
   const line = innerHeight * LINE;
   for (let i = 0; i < JOINS.length; i++) {
     if (textBottom(scenesEl[i]) >= line) return i;   // the line is still inside this text
-    // The last join is the crossfade, not a wash: its own progress is the
-    // scrub the visual paints from -- #five's own band against scrollY --
+    // The last join uses its viewport wash and film scrub from #five's own
+    // band against scrollY --
     // not a text-flow gap. scenesEl[DEPLOY + 1] is a bare 1px marker with no
     // crossfade geometry of its own (closing-progress unit, unit 3,
     // review-phases-2-4.md Job 2 item 5). restY(SHARE) sits at or past
@@ -4124,8 +4125,8 @@ function onScroll(dy) {
   if (t >= SHIPS - 1) warmScene3Media();
   // The position asks for a scene when the scene it names changes, so a scene
   // set by another hand — the harness's `landing.still`, a restored position — is
-  // left standing until the reader moves. And nothing may fire before the first
-  // prints are on hand: `ready` starts the first join.
+  // left standing until the reader moves. Missing prints cut immediately and
+  // remain available to the warmer.
   if (t === asked) return;
   asked = t;
   if (booted) setTarget(t); else target = t;
@@ -4397,9 +4398,10 @@ function watchScrollNative() {
   const mobile = mobileLayout();
   const key = `${scrollY}:${innerWidth}:${innerHeight}`;
   const scrolled = key !== mobileWatchKey;
+  const progress = progressAt();
   // Reaching the target still needs frames after the scroll that named it
   // stops: the pigment clock can still be behind p after scrollY stops.
-  if (booted && (scrolled || !mob.settled)) renderMorphAt(progressAt());
+  if (booted && (scrolled || !mob.settled)) renderMorphAt(progress);
   if (!scrolled) return;
   mobileWatchKey = key;
   const dy = lastScrollY == null ? 0 : scrollY - lastScrollY;
@@ -4410,8 +4412,9 @@ function watchScrollNative() {
   if (mobile) onScroll(dy);
   else {
     scrollV += dy / innerHeight / V_TAU;
-    if (progressAt() >= SHIPS - 1) warmScene3Media();
+    if (progress >= SHIPS - 1) warmScene3Media();
   }
+  if (xfAt() >= 1 && !five.classList.contains('on')) standAtTerminalClose();
   // Native scroll owns the closing crossfade too. Keep the film opacity on
   // the same geometry-derived position as the final wash on every frame;
   // otherwise --xf remains at its previous rest until the terminal cut.
