@@ -7,7 +7,10 @@ mod svg;
 
 pub use context::{PlaceMapContext, PlaceMapTarget, ResolvedPlace};
 pub use geometry::{marker_radius, privacy_floor, Frame, FrameTier, ProjectedPoint, Projection, TileSelection};
-pub use svg::{emit_svg, emit_svg_with_options, render_svg, SvgMapOptions};
+pub use svg::{
+    emit_locator, emit_locator_svg, emit_svg, emit_svg_with_options, render_svg,
+    LocatorBudgetError, LocatorProfile, LocatorSvg, SvgMapOptions, LOCATOR_BROTLI_LIMIT,
+};
 
 const MAGIC: &[u8; 8] = b"MOSSPLM1";
 const HEADER_LEN: usize = 92;

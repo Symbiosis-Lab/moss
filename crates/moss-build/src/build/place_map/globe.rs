@@ -4,6 +4,10 @@ pub const CENTER_X: f64 = 648.0;
 pub const CENTER_Y: f64 = 72.0;
 pub const RADIUS: f64 = 63.0;
 
+pub fn globe_marker(point: ProjectedPoint, center: ProjectedPoint) -> Option<(f64, f64)> {
+    project((point.longitude, point.latitude), center)
+}
+
 pub fn globe_line(
     points: &[(i32, i32)],
     center: ProjectedPoint,
@@ -42,52 +46,85 @@ pub fn globe_ring(
     center: ProjectedPoint,
     quantisation: u32,
 ) -> Option<Vec<(f64, f64)>> {
+    globe_rings(points, center, quantisation).into_iter().next()
+}
+
+pub fn globe_rings(
+    points: &[(i32, i32)],
+    center: ProjectedPoint,
+    quantisation: u32,
+) -> Vec<Vec<(f64, f64)>> {
     let samples = sampled_path(points, quantisation, true);
     if samples.len() < 3 {
-        return None;
+        return Vec::new();
     }
-    let visible_count = samples
+    let visible = samples
         .iter()
-        .filter(|&&geo| project(geo, center).is_some())
-        .count();
-    if visible_count == samples.len() {
-        return Some(
-            samples
-                .iter()
-                .filter_map(|&geo| project(geo, center))
-                .collect(),
-        );
+        .map(|&point| project(point, center))
+        .collect::<Vec<_>>();
+    if visible.iter().all(Option::is_some) {
+        return vec![visible.into_iter().flatten().collect()];
     }
-    let start = samples
-        .iter()
-        .position(|&geo| project(geo, center).is_some())?;
+    let winding = geographic_winding(&samples);
+    let mut runs = Vec::new();
+    let Some(invisible) = visible.iter().position(Option::is_none) else {
+        return Vec::new();
+    };
+    // Rotate at an invisible sample so a visible run never gets split at the
+    // arbitrary beginning of a source ring. This handles concave rings with
+    // multiple visible runs and rings crossing the dateline.
+    let n = samples.len();
+    let mut index = (invisible + 1) % n;
+    let mut previous = invisible;
+    let mut in_run = false;
     let mut ring = Vec::new();
-    let mut index = start;
-    let mut previous = samples[(start + samples.len() - 1) % samples.len()];
-    let mut previous_visible = project(previous, center).is_some();
-    for _ in 0..samples.len() {
-        let geo = samples[index];
-        let is_visible = project(geo, center).is_some();
-        if is_visible && !previous_visible {
-            push_unique(
-                &mut ring,
-                project_unchecked(boundary(previous, geo, center), center),
-            );
+    for _ in 0..n {
+        let is_visible = visible[index].is_some();
+        if is_visible && !in_run {
+            let entry =
+                project_unchecked(boundary(samples[previous], samples[index], center), center);
+            ring.clear();
+            push_unique(&mut ring, entry);
+            in_run = true;
         }
         if is_visible {
-            push_unique(&mut ring, project(geo, center).unwrap());
-        } else if previous_visible {
-            let exit = project_unchecked(boundary(previous, geo, center), center);
+            push_unique(&mut ring, visible[index].unwrap());
+        } else if in_run {
+            let exit =
+                project_unchecked(boundary(samples[previous], samples[index], center), center);
             push_unique(&mut ring, exit);
             let entry = ring[0];
-            append_horizon_arc(&mut ring, exit, entry);
-            break;
+            append_horizon_arc(&mut ring, exit, entry, winding);
+            if ring.len() >= 3 {
+                runs.push(std::mem::take(&mut ring));
+            }
+            in_run = false;
         }
-        previous = geo;
-        previous_visible = is_visible;
-        index = (index + 1) % samples.len();
+        previous = index;
+        index = (index + 1) % n;
     }
-    (ring.len() >= 3).then_some(ring)
+    if in_run {
+        let exit = project_unchecked(
+            boundary(samples[previous], samples[invisible], center),
+            center,
+        );
+        push_unique(&mut ring, exit);
+        let entry = ring[0];
+        append_horizon_arc(&mut ring, exit, entry, winding);
+        if ring.len() >= 3 {
+            runs.push(ring);
+        }
+    }
+    runs
+}
+
+fn geographic_winding(points: &[(f64, f64)]) -> f64 {
+    points
+        .iter()
+        .zip(points.iter().cycle().skip(1))
+        .take(points.len())
+        .map(|(&(x1, y1), &(x2, y2))| x1 * y2 - x2 * y1)
+        .sum()
 }
 
 fn geo(point: (i32, i32), quantisation: u32) -> (f64, f64) {
@@ -169,12 +206,29 @@ fn boundary(start: (f64, f64), end: (f64, f64), center: ProjectedPoint) -> (f64,
     interpolate(start, end, (low + high) / 2.0)
 }
 
-fn append_horizon_arc(ring: &mut Vec<(f64, f64)>, start: (f64, f64), end: (f64, f64)) {
+fn append_horizon_arc(
+    ring: &mut Vec<(f64, f64)>,
+    start: (f64, f64),
+    end: (f64, f64),
+    winding: f64,
+) {
     let start_angle = (start.1 - CENTER_Y).atan2(start.0 - CENTER_X);
     let end_angle = (end.1 - CENTER_Y).atan2(end.0 - CENTER_X);
     let tau = 2.0 * std::f64::consts::PI;
-    let delta =
-        (end_angle - start_angle + std::f64::consts::PI).rem_euclid(tau) - std::f64::consts::PI;
+    let counter_clockwise = (end_angle - start_angle).rem_euclid(tau);
+    // Longitude/latitude rings use the opposite y direction to SVG screen
+    // coordinates. Following source winding therefore chooses the major arc
+    // for one winding and the minor arc for the other, instead of always
+    // taking the shortest route around the horizon.
+    let delta = if winding >= 0.0 {
+        if counter_clockwise == 0.0 {
+            0.0
+        } else {
+            counter_clockwise - tau
+        }
+    } else {
+        counter_clockwise
+    };
     let steps = ((delta.abs() / (std::f64::consts::PI / 16.0)).ceil() as usize).clamp(1, 64);
     for step in 1..=steps {
         let angle = start_angle + delta * step as f64 / steps as f64;
@@ -217,5 +271,41 @@ mod tests {
             10000,
         );
         assert!(ring.is_some());
+    }
+
+    #[test]
+    fn concave_rings_keep_multiple_visible_runs_and_polar_horizons_bounded() {
+        let concave = [
+            (-1200000, 200000),
+            (-200000, 200000),
+            (-200000, 400000),
+            (-1200000, 400000),
+            (-1200000, -400000),
+            (-200000, -400000),
+            (-200000, -200000),
+            (-1200000, -200000),
+        ];
+        let runs = globe_rings(&concave, ProjectedPoint::new(0.0, 0.0).unwrap(), 10000);
+        assert!(
+            runs.len() >= 2,
+            "concave globe ring must retain each visible run"
+        );
+        assert!(runs
+            .iter()
+            .flatten()
+            .all(|&(x, y)| { (x - CENTER_X).hypot(y - CENTER_Y) <= RADIUS + 1.0 }));
+
+        let polar = [
+            (1700000, 800000),
+            (-1700000, 800000),
+            (-1700000, 880000),
+            (1700000, 880000),
+        ];
+        let polar_runs = globe_rings(&polar, ProjectedPoint::new(180.0, 89.0).unwrap(), 10000);
+        assert!(!polar_runs.is_empty());
+        assert!(polar_runs
+            .iter()
+            .flatten()
+            .all(|&(x, y)| { (x - CENTER_X).hypot(y - CENTER_Y) <= RADIUS + 1.0 }));
     }
 }

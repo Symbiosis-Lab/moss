@@ -2892,6 +2892,7 @@ dependencies = [
  "regex",
  "reqwest",
  "resvg",
+ "roxmltree",
  "rquickjs",
  "scraper",
  "semver",

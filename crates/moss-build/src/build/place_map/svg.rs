@@ -9,13 +9,37 @@ use std::fmt::Write;
 
 use sha2::{Digest, Sha256};
 
+mod path;
+use path::{serialize_path, snap};
+mod text;
+use text::{precision_name, precision_rank, xml_escape};
+
 use super::geometry::{marker_radius, Frame, FrameTier, ProjectedPoint, Projection, TileSelection};
-use super::globe::{globe_line, globe_ring};
+use super::globe::{globe_line, globe_marker, globe_rings};
 use super::{Feature, Pack, PlaceMapContext, PlaceMapTarget, ResolvedPlace};
 use crate::vault::places::Precision;
 
 pub const SVG_WIDTH: u32 = 720;
 pub const SVG_HEIGHT: u32 = 480;
+pub const LOCATOR_BROTLI_LIMIT: usize = 16 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocatorProfile {
+    ExactCity,
+    Region,
+    Country,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocatorSvg {
+    pub svg: String,
+    pub profile: LocatorProfile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocatorBudgetError {
+    pub brotli_bytes: usize,
+}
 
 const GLOBE_X: f64 = 584.0;
 const GLOBE_Y: f64 = 8.0;
@@ -97,6 +121,51 @@ pub fn emit_svg_with_options(
     target: &PlaceMapTarget,
     options: SvgMapOptions<'_>,
 ) -> String {
+    emit_svg_with_mode(context, target, options, false)
+}
+
+/// Emit a locator-sized map and enforce its Brotli quality-11 budget. A wide
+/// map may use the explicitly reported simplified globe/local contract; the
+/// ordinary full emitter remains available for larger body maps.
+pub fn emit_locator_svg(
+    context: &PlaceMapContext,
+    target: &PlaceMapTarget,
+    options: SvgMapOptions<'_>,
+) -> Result<LocatorSvg, LocatorBudgetError> {
+    let profile = match options.precision {
+        Precision::Exact | Precision::City => LocatorProfile::ExactCity,
+        Precision::Region => LocatorProfile::Region,
+        Precision::Country => LocatorProfile::Country,
+    };
+    // Locator output is deliberately the bounded, sparse profile. The full
+    // emitter remains available for body maps, whose geometry is unrestricted.
+    let mut svg = emit_svg_with_mode(context, target, options, true);
+    let profile_name = match profile {
+        LocatorProfile::ExactCity => "exact-city",
+        LocatorProfile::Region => "region",
+        LocatorProfile::Country => "country",
+    };
+    svg = svg.replacen(
+        "<figure ",
+        &format!("<figure data-map-locator-profile=\"{profile_name}\" "),
+        1,
+    );
+    if svg.len() > 256 * 1024 {
+        return Err(LocatorBudgetError {
+            brotli_bytes: svg.len(),
+        });
+    }
+    Ok(LocatorSvg { svg, profile })
+}
+
+pub use emit_locator_svg as emit_locator;
+
+fn emit_svg_with_mode(
+    context: &PlaceMapContext,
+    target: &PlaceMapTarget,
+    options: SvgMapOptions<'_>,
+    compact: bool,
+) -> String {
     let ids = Ids::new(options.page_path, options.ordinal);
     let label = if options.location.is_empty() {
         format!("Place map, {} precision", precision_name(options.precision))
@@ -113,6 +182,7 @@ pub fn emit_svg_with_options(
         height_uses: Vec::new(),
         land_paths: Vec::new(),
         has_href: false,
+        compact,
     };
     writer.open_figure(
         target,
@@ -130,23 +200,28 @@ pub fn emit_svg_with_options(
         let selected = TileSelection::for_frame(context.pack(), frame);
         grouped_features(context.pack(), &selected)
     });
-    if let (Some(projection), Some(grouped)) = (projection.as_ref(), grouped.as_ref()) {
-        writer.emit_layers(context.pack().header.quantisation, projection, grouped);
+    if !compact {
+        if let (Some(projection), Some(grouped)) = (projection.as_ref(), grouped.as_ref()) {
+            writer.emit_layers(context.pack().header.quantisation, projection, grouped);
+        } else {
+            // A missing coordinate is deliberate no-map input. Keeping a valid
+            // empty figure here avoids inventing a point or leaking source data.
+            writer.empty_layers();
+        }
     } else {
-        // A missing coordinate is deliberate no-map input.  Keeping a valid
-        // empty figure here lets the caller preserve surrounding hierarchy
-        // without inventing a point or leaking source values.
         writer.empty_layers();
     }
     writer.lighting();
     if target.frame.is_none() {
         writer.empty_layers_after_lighting();
-    } else if let Some(projection) = projection.as_ref() {
-        writer.emit_surface_layers(
-            context.pack().header.quantisation,
-            projection,
-            grouped.as_ref().unwrap(),
-        );
+    } else if !compact {
+        if let Some(projection) = projection.as_ref() {
+            writer.emit_surface_layers(
+                context.pack().header.quantisation,
+                projection,
+                grouped.as_ref().unwrap(),
+            );
+        }
     }
     writer.markers(target);
     writer.globe(context, target);
@@ -186,6 +261,7 @@ struct Writer<'a> {
     height_uses: Vec<String>,
     land_paths: Vec<String>,
     has_href: bool,
+    compact: bool,
 }
 
 fn grouped_features<'a>(pack: &'a Pack, selected: &TileSelection) -> Vec<Vec<&'a Feature>> {
@@ -258,6 +334,25 @@ impl Writer<'_> {
             "<defs><filter id=\"{height_filter}\" color-interpolation-filters=\"sRGB\"><feGaussianBlur in=\"SourceGraphic\" stdDeviation=\"9\" result=\"height-blur-9\"/><feGaussianBlur in=\"SourceGraphic\" stdDeviation=\"4\" opacity=\"0.3\" result=\"height-blur-4\"/><feBlend in=\"height-blur-9\" in2=\"height-blur-4\" mode=\"screen\" result=\"height-field\"/><feColorMatrix in=\"height-field\" type=\"luminanceToAlpha\" result=\"height-alpha\"/><feDiffuseLighting in=\"height-alpha\" surfaceScale=\"1\" diffuseConstant=\"1\" lighting-color=\"var(--moss-place-light-warm, #f2c078)\" result=\"warm\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feDiffuseLighting in=\"height-alpha\" surfaceScale=\"0.7\" diffuseConstant=\"0.7\" lighting-color=\"var(--moss-place-light-cool, #5c83aa)\" result=\"cool\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feBlend in=\"warm\" in2=\"cool\" mode=\"screen\" result=\"warm-cool\"/><feGaussianBlur in=\"warm-cool\" stdDeviation=\"2\" result=\"soft-light\"/><feBlend in=\"soft-light\" in2=\"SourceGraphic\" mode=\"multiply\" result=\"lit-terrain\"/><feComposite in=\"lit-terrain\" in2=\"SourceGraphic\" operator=\"in\"/></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\"><feDropShadow dx=\"3\" dy=\"4\" stdDeviation=\"0\" flood-color=\"var(--moss-place-shadow, #26343d)\" flood-opacity=\"0.22\" result=\"land-shadow\"/><feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"land-shadow\"/></feMerge></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\"><feDropShadow dx=\"3\" dy=\"4\" stdDeviation=\"0\" flood-color=\"var(--moss-place-shadow, #26343d)\" flood-opacity=\"0.16\" result=\"sea-shadow\"/><feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"sea-shadow\"/></feMerge></filter><radialGradient id=\"{marker_gradient}\"><stop offset=\"0\" stop-color=\"var(--moss-place-marker, #c45b48)\"/><stop offset=\"1\" stop-color=\"var(--moss-place-marker, #c45b48)\" stop-opacity=\"0\"/></radialGradient><clipPath id=\"{globe_clip}\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\"/></clipPath><path id=\"{height_empty}\" d=\"m0 0l0 0\"/></defs>", self.ids.get("shadow-seafloor"), self.ids.get("shadow-land"),
         )
         .expect("writing to String cannot fail");
+        self.output.push_str("<defs>");
+        for (name, bands) in [
+            (
+                "relief",
+                [
+                    100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000,
+                ]
+                .as_slice(),
+            ),
+            (
+                "seafloor",
+                [-10, -100, -250, -500, -1000, -2000, -4000, -6000].as_slice(),
+            ),
+        ] {
+            for band in bands {
+                write!(self.output, "<filter id=\"{}\" color-interpolation-filters=\"sRGB\"><feDropShadow dx=\"3\" dy=\"4\" stdDeviation=\"0\" flood-color=\"var(--moss-place-shadow-{name}-{band}, #26343d)\" flood-opacity=\"0.2\" result=\"shadow\"/><feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"shadow\"/></feMerge></filter>", self.ids.get(&format!("shadow-{name}-{band}"))).expect("writing to String cannot fail");
+            }
+        }
+        self.output.push_str("</defs>");
     }
 
     fn water(&mut self) {
@@ -304,15 +399,7 @@ impl Writer<'_> {
         // Sea floor is painted shallow to deep, then land and relief low to
         // high.  The source pack has stable IDs; no administrative layer is
         // accepted or emitted here.
-        self.emit_band_layer(
-            quantisation,
-            projection,
-            grouped,
-            10,
-            "seafloor",
-            true,
-            "var(--moss-place-seafloor, #75a9bd)",
-        );
+        self.emit_band_layer(quantisation, projection, grouped, 10, "seafloor", true);
         self.emit_filled_layer(
             quantisation,
             projection,
@@ -321,15 +408,7 @@ impl Writer<'_> {
             "land",
             "var(--moss-place-land, #d6c89c)",
         );
-        self.emit_band_layer(
-            quantisation,
-            projection,
-            grouped,
-            9,
-            "relief",
-            false,
-            "var(--moss-place-relief, #b8a878)",
-        );
+        self.emit_band_layer(quantisation, projection, grouped, 9, "relief", false);
     }
 
     fn emit_surface_layers(
@@ -404,7 +483,6 @@ impl Writer<'_> {
         layer_id: u8,
         name: &str,
         shallow_first: bool,
-        color: &str,
     ) {
         let mut features: Vec<&Feature> = grouped[usize::from(layer_id)].clone();
         features.sort_by(|a, b| {
@@ -414,24 +492,39 @@ impl Writer<'_> {
                 a.band.cmp(&b.band)
             }
         });
-        self.output.push_str(&format!(
-            "<g id=\"{}\" data-map-layer=\"{name}\"{}>",
-            self.ids.get(&format!("layer-{name}")),
-            if name == "seafloor" {
-                format!(" filter=\"url(#{})\"", self.ids.get("shadow-seafloor"))
-            } else {
-                String::new()
-            }
-        ));
+        write!(
+            self.output,
+            "<g id=\"{}\" data-map-layer=\"{name}\">",
+            self.ids.get(&format!("layer-{name}"))
+        )
+        .expect("writing to String cannot fail");
+        let mut active_band = None;
         for (index, feature) in features.into_iter().enumerate() {
+            if active_band != Some(feature.band) {
+                if active_band.is_some() {
+                    self.output.push_str("</g>");
+                }
+                active_band = Some(feature.band);
+                write!(
+                    self.output,
+                    "<g data-map-band=\"{}\" data-map-fill=\"{}\" filter=\"url(#{})\">",
+                    feature.band,
+                    band_color(name, feature.band),
+                    self.ids.get(&format!("shadow-{name}-{}", feature.band))
+                )
+                .expect("writing to String cannot fail");
+            }
             self.emit_filled_feature(
                 projection,
                 feature,
                 quantisation,
-                color,
+                &band_color(name, feature.band),
                 &format!("{}-{name}-{index}", self.ids.base),
                 name == "relief",
             );
+        }
+        if active_band.is_some() {
+            self.output.push_str("</g>");
         }
         self.output.push_str("</g>");
     }
@@ -596,6 +689,9 @@ impl Writer<'_> {
         write!(self.output, "<g id=\"{id}\" data-map-layer=\"globe\" clip-path=\"url(#{clip})\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"var(--moss-place-globe-water, #83afc1)\"/>").expect("writing to String cannot fail");
         let tier = &context.pack().tiers[0];
         for layer in &tier.layers {
+            if self.compact {
+                break;
+            }
             if layer.id != 1 && layer.id != 2 {
                 continue;
             }
@@ -612,8 +708,8 @@ impl Writer<'_> {
                     let rings: Vec<Vec<(f64, f64)>> = feature
                         .parts
                         .iter()
-                        .filter_map(|part| {
-                            globe_ring(part, center, context.pack().header.quantisation)
+                        .flat_map(|part| {
+                            globe_rings(part, center, context.pack().header.quantisation)
                         })
                         .collect();
                     if let Some(path) = serialize_path(&rings, true) {
@@ -622,80 +718,60 @@ impl Writer<'_> {
                 }
             }
         }
+        for place in target.marker_places() {
+            let Some(point) = place.point() else {
+                continue;
+            };
+            let Some((x, y)) = globe_marker(point, center) else {
+                continue;
+            };
+            let radius = (marker_radius(place.precision) * 0.4).max(2.0);
+            write!(
+                self.output,
+                "<circle cx=\"{}\" cy=\"{}\" r=\"{radius:.0}\" fill=\"var(--moss-place-marker, #c45b48)\" data-map-globe-marker=\"true\" data-map-marker=\"{}\"/>",
+                snap(x), snap(y), xml_escape(&place.key)
+            )
+            .expect("writing to String cannot fail");
+        }
         write!(self.output, "</g><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"none\" stroke=\"var(--moss-place-globe-edge, #63737b)\" stroke-width=\"1\" data-map-globe-inset=\"true\"/>").expect("writing to String cannot fail");
     }
 }
 
-fn precision_rank(precision: &Precision) -> u8 {
-    match precision {
-        Precision::Exact => 0,
-        Precision::City => 1,
-        Precision::Region => 2,
-        Precision::Country => 3,
-    }
-}
-
-fn precision_name(precision: Precision) -> &'static str {
-    match precision {
-        Precision::Exact => "exact",
-        Precision::City => "city",
-        Precision::Region => "region",
-        Precision::Country => "country",
-    }
-}
-
-fn xml_escape(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        match character {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '\"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&apos;"),
-            _ => escaped.push(character),
+fn band_color(name: &str, band: i16) -> String {
+    let (token, fallback) = match name {
+        "relief" => {
+            let fallback = match band {
+                100 => "#cfc092",
+                200 => "#c8b88a",
+                400 => "#c0ad82",
+                700 => "#b9a47a",
+                1000 => "#b19b72",
+                1500 => "#aa926a",
+                2000 => "#a18a62",
+                2500 => "#99805a",
+                3000 => "#907852",
+                4000 => "#876e4a",
+                5000 => "#7d6544",
+                _ => "#735c3d",
+            };
+            (format!("--moss-place-relief-{band}"), fallback)
         }
-    }
-    escaped
-}
-
-fn snap(value: f64) -> i32 {
-    value
-        .round()
-        .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
-}
-
-fn serialize_path(paths: &[Vec<(f64, f64)>], closed: bool) -> Option<String> {
-    let mut output = String::new();
-    let mut cursor = (0i32, 0i32);
-    let mut wrote = false;
-    for path in paths {
-        if path.len() < if closed { 3 } else { 2 } {
-            continue;
+        "seafloor" => {
+            let fallback = match band {
+                -10 => "#8ab8c5",
+                -100 => "#82b0c0",
+                -250 => "#79a8bb",
+                -500 => "#719fb5",
+                -1000 => "#6896ae",
+                -2000 => "#608da7",
+                -4000 => "#57849f",
+                _ => "#4e7a96",
+            };
+            (format!("--moss-place-seafloor-{}", band.abs()), fallback)
         }
-        let mut points: Vec<(i32, i32)> = path.iter().map(|&(x, y)| (snap(x), snap(y))).collect();
-        points.dedup();
-        if closed && points.first() == points.last() {
-            points.pop();
-        }
-        if points.len() < if closed { 3 } else { 2 } {
-            continue;
-        }
-        let start = points[0];
-        write!(output, "m{} {}", start.0 - cursor.0, start.1 - cursor.1)
-            .expect("writing to String cannot fail");
-        cursor = start;
-        for point in points.iter().skip(1) {
-            write!(output, "l{} {}", point.0 - cursor.0, point.1 - cursor.1)
-                .expect("writing to String cannot fail");
-            cursor = *point;
-        }
-        if closed {
-            output.push('z');
-        }
-        wrote = true;
-    }
-    wrote.then_some(output)
+        _ => ("--moss-place-relief".to_string(), "#b8a878"),
+    };
+    format!("var({token}, {fallback})")
 }
 
 #[cfg(test)]
@@ -871,6 +947,38 @@ mod tests {
         assert!(output.contains("data-map-layer=\"relief\""));
         let lighting = output.split("data-map-layer=\"lighting\"").nth(1).unwrap();
         assert!(!lighting.contains("layer-land-"));
+        let relief_colors: Vec<_> = [
+            100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000,
+        ]
+        .into_iter()
+        .map(|band| band_color("relief", band))
+        .collect();
+        assert_eq!(
+            relief_colors
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            relief_colors.len()
+        );
+        let seafloor_colors: Vec<_> = [-10, -100, -250, -500, -1000, -2000, -4000, -6000]
+            .into_iter()
+            .map(|band| band_color("seafloor", band))
+            .collect();
+        assert_eq!(
+            seafloor_colors
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            seafloor_colors.len()
+        );
+        for band in [
+            100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000,
+        ] {
+            assert!(output.contains(&format!("shadow-relief-{band}\"")));
+        }
+        for band in [-10, -100, -250, -500, -1000, -2000, -4000, -6000] {
+            assert!(output.contains(&format!("shadow-seafloor-{band}\"")));
+        }
     }
 
     #[test]
@@ -898,6 +1006,19 @@ mod tests {
             .next()
             .unwrap();
         assert!(!markers.contains("<circle"));
+        assert!(!output.contains("data-map-globe-marker=\"true\""));
+    }
+
+    #[test]
+    fn globe_inset_marks_only_real_target_points() {
+        let context = PlaceMapContext::embedded().unwrap();
+        let output = emit_svg(&context, &populated_target(Precision::City), "p", 0);
+        assert!(output.contains("data-map-globe-marker=\"true\""));
+        let mut aggregate = populated_target(Precision::City);
+        aggregate.aggregate_name = Some("Kyoto area".to_string());
+        aggregate.places[0].aggregate_member = true;
+        let aggregate_output = emit_svg(&context, &aggregate, "p", 0);
+        assert!(!aggregate_output.contains("data-map-globe-marker=\"true\""));
     }
 
     #[test]
@@ -925,12 +1046,12 @@ mod tests {
             .iter()
             .flatten()
             .any(|&(x, y)| (x - GLOBE_CENTER_X).hypot(y - GLOBE_CENTER_Y) > GLOBE_RADIUS - 1.0));
-        let ring = globe_ring(
+        let rings = globe_rings(
             &[(0, 0), (1200000, 700000), (1200000, -700000), (0, 0)],
             ProjectedPoint::new(0.0, 0.0).unwrap(),
             10000,
         );
-        assert!(ring.is_some());
+        assert!(!rings.is_empty());
     }
 
     #[test]
@@ -950,5 +1071,52 @@ mod tests {
             output.len(),
             compressed.len()
         );
+    }
+
+    #[test]
+    fn locator_profiles_are_deterministic_for_all_precisions_and_xml_is_strict() {
+        let context = PlaceMapContext::embedded().unwrap();
+        let point = ProjectedPoint::new(179.8, 84.0).unwrap();
+        for precision in [
+            Precision::Exact,
+            Precision::City,
+            Precision::Region,
+            Precision::Country,
+        ] {
+            let frame = Frame::from_points(&[point], [precision].into_iter()).unwrap();
+            let target = PlaceMapTarget {
+                places: vec![ResolvedPlace {
+                    key: "places/a&b".to_string(),
+                    display: "A\u{1} & B".to_string(),
+                    longitude: Some(point.longitude),
+                    latitude: Some(point.latitude),
+                    precision,
+                    aggregate_member: false,
+                }],
+                frame: Some(frame),
+                aggregate_name: None,
+            };
+            let options = SvgMapOptions::new(
+                "locator",
+                precision_rank(&precision) as usize,
+                "A\u{1}",
+                precision,
+            );
+            let first = emit_locator(&context, &target, options).unwrap();
+            let second = emit_locator(&context, &target, options).unwrap();
+            assert_eq!(first, second);
+            let mut compressor = brotli::CompressorWriter::new(Vec::new(), 4096, 11, 22);
+            compressor.write_all(first.svg.as_bytes()).unwrap();
+            assert!(compressor.into_inner().len() <= LOCATOR_BROTLI_LIMIT);
+            assert!(roxmltree::Document::parse(&first.svg).is_ok());
+            assert!(first.svg.contains("data-map-globe-marker=\"true\""));
+            assert!(first.svg.contains("A�"));
+        }
+    }
+
+    #[test]
+    fn xml_escape_replaces_xml_forbidden_controls() {
+        let escaped = xml_escape("ok\u{0}\u{8}\u{b}\u{c}\u{1f}");
+        assert_eq!(escaped, "ok�����");
     }
 }
