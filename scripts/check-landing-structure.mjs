@@ -73,7 +73,7 @@ const BASELINE = {
   // synchronous GPU readback every rendered frame measurably slowed the
   // page, enough to break check-landing-mobile.mjs's own small-wheel-delta
   // check elsewhere on the same run).
-  topLevelLets: 89,
+  topLevelLets: 78,
   // Rose 14 -> 15 on 2026-09-21: the last scene's rest is a floor, not a point,
   // so a visitor can reach the footer on a short window. It is written as one
   // comparison against SHARE in the desktop drive. The scene table pays this
@@ -86,7 +86,7 @@ const BASELINE = {
   // deleted with them rather than left to read as live.
   // Fell 11 -> 9 (2026-09-23): pour() and mountLeg() no longer special-case
   // scene 3 for a retake; memberPrint reads every leg's members the same way.
-  sceneComparisons: 9,
+  sceneComparisons: 8,
   // Unit 0a: rose again -- the mobile header band's fix (one shared
   // body::before band interpolating colour through --xf instead of two
   // separate .brand/.language-picker background boxes) added net new
@@ -128,7 +128,7 @@ const BASELINE = {
   // and their four delays gave way to one membership class.
   // 54436 -> 54941 (2026-09-24, measured): item D's own `.word` rule and
   // its explanatory comment (site/index.html).
-  htmlBytes: 54941,
+  htmlBytes: 55161,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a
@@ -259,7 +259,7 @@ const BASELINE = {
   // refreshSmall/smallPixels put back next to the method it describes, and
   // landing.readback's own comment corrected (64x64 -> 128x128, stale
   // since item D's own resolution bump).
-  scriptBytes: 320980,
+  scriptBytes: 300240,
 };
 
 function countWindowAssignments(text) {
@@ -304,7 +304,7 @@ function extractFunction(text, name) {
 // §2b/§2c and the scroll drivers §2a): the only places a scene index is
 // meant to be tested against a literal or SHIPS/DEPLOY/SHARE at all, once
 // phase 5 merges PHASE/FRAMES/GROUND/JOINS into one table.
-const SCENE_FUNCTIONS = ['pour', 'takePrint', 'watchScrollDesktop', 'watchScrollReduced', 'watchScrollNative'];
+const SCENE_FUNCTIONS = ['pour', 'takePrint', 'watchScrollNative'];
 
 function countSceneComparisons(text) {
   const ident = '(?:scene|to|from|target|shown)';

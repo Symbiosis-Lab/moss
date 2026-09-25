@@ -22,7 +22,6 @@ const CHECKS = [
   'check-landing-subscription.mjs',
   'check-landing-text-track.mjs',
   'check-landing-transitions.mjs',
-  'check-landing-wheel-tail.mjs',
   'check-site-preview.mjs',
   'check-docs-footer-icon.mjs',
   'check-docs-media.mjs',

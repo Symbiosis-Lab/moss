@@ -413,6 +413,12 @@
      .page. */
   #five { margin-top: -100vh; }
   #c5 { height: 0; min-height: 0; padding: 0; }
+  /* Native proximity snap owns desktop reading wells. */
+  @media (min-width: 901px) {
+    html { scroll-snap-type: y proximity; }
+    .scene, #five { scroll-snap-align: start; }
+  }
+  @media (prefers-reduced-motion: reduce) { html { scroll-snap-type: none; } }
   #loop-toggle { position: static; margin-top: 28px; }
   .moss-btn { min-height: 44px; }
   #downloads .download-choice { display: grid; justify-items: center; gap: 7px; min-width: 136px; }
@@ -670,7 +676,6 @@
 
 <script src="watercolor-capture.js"></script>
 <script src="watercolor-morph.js"></script>
-<script src="landing-gesture.js"></script>
 <script src="landing.js"></script>
 <script src="closing.js" defer></script>
 </body>
