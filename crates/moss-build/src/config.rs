@@ -137,8 +137,8 @@ impl ConfigFile {
     }
 
     /// `[build].passthrough` — an ordered list of path strings. Entries with
-    /// no prefix are explicit passthrough roots; a `!` prefix opts a directory
-    /// OUT of auto-detection. Empty when the key is absent.
+    /// no prefix are explicit passthrough directories or scanned HTML files; a
+    /// `!` prefix removes a match. Empty when the key is absent.
     pub fn build_passthrough(&self) -> Vec<String> {
         self.root
             .get("build")

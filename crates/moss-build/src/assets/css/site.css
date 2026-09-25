@@ -1836,7 +1836,7 @@ header:has(+ .moss-hero) .main-nav {
 }
 
 .site-logo {
-  height: 1em;
+  height: 1.15em;
   width: auto;
   vertical-align: middle;
   margin: 0 0.3em 0 0;

@@ -283,10 +283,10 @@ pub struct ProjectStructure {
     #[serde(skip)]
     #[specta(skip)]
     pub has_language_trees: bool,
-    /// Passthrough subtree roots (source-relative, trailing-slash-terminated).
-    /// Files inside these directories are copied verbatim — no WebP/video conversion,
-    /// no SPA meta injection. Auto-detected from `index.html` presence; overridable
-    /// via `[build].passthrough` in `.moss/config.toml`.
+    /// Passthrough directory roots (trailing-slash-terminated) and exact HTML files.
+    /// Matching sources are copied verbatim — no WebP/video conversion or SPA meta
+    /// injection. Directories are auto-detected from `index.html` presence; either
+    /// form can be declared via `[build].passthrough` in config.toml.
     #[serde(skip)]
     #[specta(skip)]
     pub passthrough_roots: std::collections::HashSet<String>,

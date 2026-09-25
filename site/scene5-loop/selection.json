@@ -1,0 +1,125 @@
+{
+  "name": "v5-makers",
+  "fps": 24,
+  "transition_seconds": 0.4,
+  "loop_transition_seconds": 0.7,
+  "speed": 1,
+  "framing": "Fill 16:9 with a centered cover crop, no pillarboxing; CSS object-fit cover adapts the film to the viewport. Preserve the existing shot order, durations, monochrome grade, and dissolves.",
+  "shots": [
+    {
+      "slug": "arts-crafts-kyoto-silk-painting",
+      "file": "arts-crafts-kyoto.mp4",
+      "title": "Arts And Crafts, Kyoto — brush painting on silk",
+      "source_page": "https://archive.org/details/USAF-1064",
+      "source_url": "https://archive.org/download/USAF-1064/342-USAF-11064%20Arts%20Crafts%20Kyoto%2005-19-1946%20-%2005-30-1946.mp4",
+      "start": 61,
+      "end": 70,
+      "reason": "Several deliberate brush leaves establish a calm opening.",
+      "grade": {
+        "black_in": 28,
+        "white_in": 155,
+        "black_out": 32,
+        "white_out": 208
+      },
+      "rights_note": "Public Domain Mark 1.0 — US Army Air Forces production, National Archives Identifier 64512.",
+      "source_caveat": "Same occupation-era caveat as the woodblock entries drawn from this reel — see arts-crafts-kyoto-woodblock-outline.",
+      "source_crop": "640:360:0:0"
+    },
+    {
+      "slug": "block-cutting-printing-sketch-1950",
+      "file": "block-cutting-printing.mp4",
+      "title": "Block Cutting and Printing — design transfer",
+      "source_page": "https://archive.org/details/blockcuttingandprinting",
+      "source_url": "https://archive.org/download/blockcuttingandprinting/blockcuttingandprinting/blockcuttingandprinting.mp4",
+      "start": 112,
+      "end": 120,
+      "reason": "Transferred motif becomes a stronger pencil contour.",
+      "grade": {
+        "black_in": 0,
+        "white_in": 228,
+        "black_out": 32,
+        "white_out": 208
+      },
+      "rights_note": "No explicit licence statement on the item page. Same Ephemeral Films collection-presumption basis as block-cutting-printing-carving-1950 — see that entry's caveat.",
+      "source_caveat": "A different moment (the design-transfer step) in the same reel as block-cutting-printing-carving-1950.",
+      "source_crop": "508:360:66:0"
+    },
+    {
+      "slug": "violin-maker-cremona-1909",
+      "file": "violin-maker-cremona.mp4",
+      "title": "The Violin Maker of Cremona",
+      "source_page": "https://archive.org/details/silent-the-violin-maker-of-cremona",
+      "source_url": "https://archive.org/download/silent-the-violin-maker-of-cremona/The%20Violin%20Maker%20of%20Cremona.mp4",
+      "start": 338,
+      "end": 345,
+      "reason": "The maker lifts, turns and inspects the violin.",
+      "grade": {
+        "black_in": 19,
+        "white_in": 215,
+        "black_out": 32,
+        "white_out": 208
+      },
+      "rights_note": "US PD — pre-1923 Biograph theatrical release; no rights statement on the item page beyond age-based PD.",
+      "source_caveat": "Narrative fiction (D.W. Griffith, Biograph), not documentary — the workshop and instrument-building gesture are staged, and most of the film is a courtship/contest plot with the workshop as backdrop rather than a documented process. A full contact-sheet review found this the weakest visual-bar fit of the pool's craft clips; used because instrument-making otherwise yielded only one clean candidate across every archive this pass checked.",
+      "source_crop": "624:470:0:0"
+    },
+    {
+      "slug": "printing-1947-press",
+      "file": "printing1947.mp4",
+      "title": "Printing (1947) — press run",
+      "source_page": "https://archive.org/details/Printing1947",
+      "source_url": "https://archive.org/download/Printing1947/Printing1947_512kb.mp4",
+      "start": 331,
+      "end": 337.5,
+      "reason": "A complete press cycle gives the middle its pulse.",
+      "grade": {
+        "black_in": 11,
+        "white_in": 201,
+        "black_out": 32,
+        "white_out": 208
+      },
+      "rights_note": "Public Domain, per the archive.org item page.",
+      "source_caveat": "Same source film as printing-1947-composing, a different scene (~5:28 per the item's own shotlist, 'various printing presses in active operation').",
+      "source_crop": "314:240:2:0"
+    },
+    {
+      "slug": "face-of-lincoln-1954",
+      "file": "face-of-lincoln.mp4",
+      "title": "The Face of Lincoln",
+      "source_page": "https://archive.org/details/face_of_lincoln",
+      "source_url": "https://archive.org/download/face_of_lincoln/face_of_lincoln_512kb.mp4",
+      "start": 414,
+      "end": 423,
+      "reason": "Working the brow, eye and nose lets the face emerge.",
+      "grade": {
+        "black_in": 7,
+        "white_in": 124,
+        "black_out": 32,
+        "white_out": 208
+      },
+      "rights_note": "Public Domain, per the archive.org item page (USC Department of Cinema production).",
+      "source_caveat": "Named individual (Merrell Gage, USC sculpture department head, d. 1981) — historical, deceased, low personality-rights risk. The item page notes a separate paid HD master is available via A/V Geeks for broadcast use; the free download used here is the page's own stated public-domain file, not that paid product.",
+      "source_crop": "294:240:4:0"
+    },
+    {
+      "slug": "fantasmagorie-1908-hand",
+      "file": "fantasmagorie.mp4",
+      "title": "Fantasmagorie — the animator's hand",
+      "source_page": "https://archive.org/details/Fantasmagorie",
+      "source_url": "https://archive.org/download/Fantasmagorie/Emile%20Cohl%20-%20Fantasmagorie%201908-aEAObel8yIE.mp4",
+      "start": 64.5,
+      "end": 72.5,
+      "reason": "The live hands arrange the figure, then the animated result completes a playful miniature story.",
+      "grade": {
+        "black_in": 1,
+        "white_in": 226,
+        "black_out": 32,
+        "white_out": 208
+      },
+      "rights_note": "Public Domain Mark 1.0, per the archive.org item page (Émile Cohl, 1908).",
+      "source_caveat": "The rest of the 77-second film is pure line animation, not on-brief; this clip is the one live-action hand-and-materials insert. The white-on-black negative aesthetic reads as chalk-on-blackboard even though the medium is paper cutouts, which is why it's grouped here rather than under drawing.",
+      "source_crop": "296:224:10:8"
+    }
+  ],
+  "grading": "Monochrome; fixed per-shot 2nd/98th-percentile exposure levels mapped to 32–208. No automatic frame-by-frame exposure, so the film does not pump."
+}

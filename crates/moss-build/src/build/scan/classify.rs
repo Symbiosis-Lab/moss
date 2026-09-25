@@ -154,9 +154,9 @@ pub fn is_os_junk_file(name: &str) -> bool {
 /// Compute the set of source-relative passthrough subtree roots.
 ///
 /// A root is any non-root directory containing an `index.html` or `index.htm`.
-/// Config entries (from `[build].passthrough`) can add roots (plain path) or
-/// remove auto-detected ones (`!path` with `!` prefix). All roots are stored
-/// with a trailing `/` so `starts_with` comparisons are separator-exact.
+/// Config entries (from `[build].passthrough`) can add directory roots or exact
+/// scanned HTML files, and remove auto-detected roots (`!path` with `!` prefix).
+/// Directory roots carry a trailing `/`; exact HTML files do not.
 pub fn compute_passthrough_roots(html_files: &[FileInfo], config_entries: &[String]) -> HashSet<String> {
     let mut roots = HashSet::new();
 
@@ -205,7 +205,12 @@ pub fn compute_passthrough_roots(html_files: &[FileInfo], config_entries: &[Stri
             // Empty or slash-only entry ("" / "/" / "!"): no meaningful root.
             continue;
         }
-        let key = format!("{}/", normalized);
+        let is_scanned_html_file = html_files.iter().any(|file| file.path == normalized);
+        let key = if is_scanned_html_file {
+            normalized.to_string()
+        } else {
+            format!("{}/", normalized)
+        };
         if is_negation {
             roots.remove(&key);
         } else {
@@ -222,7 +227,13 @@ pub fn compute_passthrough_roots(html_files: &[FileInfo], config_entries: &[Stri
 /// that cannot accidentally match a sibling directory with a longer name
 /// (e.g. root `app/` does not match `application/file.js`).
 pub fn is_in_passthrough(relative_path: &str, passthrough_roots: &HashSet<String>) -> bool {
-    passthrough_roots.iter().any(|root| relative_path.starts_with(root.as_str()))
+    passthrough_roots.iter().any(|root| {
+        if root.ends_with('/') {
+            relative_path.starts_with(root.as_str())
+        } else {
+            relative_path == root
+        }
+    })
 }
 
 /// Whether the scanned directory `relative_path` is a section of the site, and
@@ -617,6 +628,46 @@ mod tests {
         use crate::types::content::FileInfo;
         let roots = compute_passthrough_roots(&[], &["raw-data".to_string()]);
         assert!(roots.contains("raw-data/"), "explicit config entry should add passthrough");
+    }
+
+    #[test]
+    fn test_compute_passthrough_roots_config_adds_exact_file() {
+        use super::*;
+        use crate::types::content::FileInfo;
+        let html_files = vec![FileInfo {
+            path: "index.html".to_string(),
+            file_type: "html".to_string(),
+            size: 0,
+            modified: None,
+        }];
+        let roots = compute_passthrough_roots(&html_files, &["index.html".to_string()]);
+        assert!(roots.contains("index.html"));
+        assert!(is_in_passthrough("index.html", &roots));
+        assert!(!is_in_passthrough("index.html/child", &roots));
+        assert!(!is_in_passthrough("index.html.bak", &roots));
+    }
+
+    #[test]
+    fn test_compute_passthrough_roots_exact_file_negation() {
+        use crate::types::content::FileInfo;
+        let html_files = vec![FileInfo {
+            path: "index.html".to_string(),
+            file_type: "html".to_string(),
+            size: 0,
+            modified: None,
+        }];
+        let roots = compute_passthrough_roots(
+            &html_files,
+            &["index.html".to_string(), "!index.html".to_string()],
+        );
+        assert!(!is_in_passthrough("index.html", &roots));
+    }
+
+    #[test]
+    fn test_compute_passthrough_roots_dotted_directory_stays_directory() {
+        let roots = compute_passthrough_roots(&[], &["app.v2".to_string()]);
+        assert!(roots.contains("app.v2/"));
+        assert!(is_in_passthrough("app.v2/index.html", &roots));
     }
 
     #[test]

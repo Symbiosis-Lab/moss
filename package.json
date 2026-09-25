@@ -7,7 +7,8 @@
     "build:backend-scripts": "node scripts/build-backend-scripts.mjs",
     "check:backend-scripts": "node scripts/build-backend-scripts.mjs && git diff --exit-code -- crates/moss-build/src/assets/js crates/moss-build/src/ops/serve/js",
     "test:render-gates": "bash scripts/render-gates.sh",
-    "test:demo-player": "node --test scripts/demo-player.test.mjs && node scripts/check-demo-scenes.mjs"
+    "test:demo-player": "node --test scripts/demo-player.test.mjs && node scripts/check-demo-scenes.mjs",
+    "test:stage-player": "node --test scripts/stage-player.test.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",

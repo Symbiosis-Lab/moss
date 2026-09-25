@@ -37,8 +37,8 @@
    only ever showed up in one engine. Declaring html's own overflow-x here
    (not visible) turns propagation off by spec, so body's own
    `overflow-x: auto` a few lines down goes back to doing what its own
-   comment already says: body is its own scroll container, with the
-   visible scrollbar forced below -- not the whole viewport scrolling on a
+   comment already says: body is its own scroll container, rather than the
+   whole viewport scrolling on a
    phantom multi-thousand-px page. */
 html:has(body[data-typesetting="vertical"]) {
   background: var(--moss-color-bg);
@@ -99,16 +99,12 @@ body[data-typesetting="vertical"] {
   --moss-read-line: calc(var(--moss-reading-size) * var(--moss-read-leading));
 }
 
-/* Force visible scrollbar (macOS overlay scrollbars auto-hide) */
+/* Keep horizontal column navigation without painting a second UI bar. */
+body[data-typesetting="vertical"] {
+  scrollbar-width: none;
+}
 body[data-typesetting="vertical"]::-webkit-scrollbar {
-  height: 8px;
-}
-body[data-typesetting="vertical"]::-webkit-scrollbar-track {
-  background: var(--moss-color-bg);
-}
-body[data-typesetting="vertical"]::-webkit-scrollbar-thumb {
-  background: var(--moss-border-medium);
-  border-radius: 4px;
+  display: none;
 }
 
 /* ── Main content ── */

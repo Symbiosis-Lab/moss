@@ -40,11 +40,25 @@ fn test_file_watching_should_watch_file() {
         "Should watch SVG files"
     );
 
-    // Generated/system files that should be ignored
-    // Note: .html files are not in the watch list, so generated HTML is ignored
+    // Source HTML is build input and must trigger a rebuild. Generated HTML is
+    // ignored at the .moss path boundary, not by pretending HTML is never input.
     assert!(
-        !should_watch_file(".moss/build.nosync/current/index.html"),
-        "Should ignore generated HTML files"
+        should_watch_file("index.html"),
+        "Should watch source-authored HTML files"
+    );
+    assert!(
+        !path_is_watchable(
+            std::path::Path::new("/vault"),
+            std::path::Path::new("/vault/.moss/build/current/index.html")
+        ),
+        "Should ignore generated HTML at the .moss boundary"
+    );
+    assert!(
+        !path_is_watchable(
+            std::path::Path::new("/vault"),
+            std::path::Path::new("/vault/.moss/build.nosync/current/index.html")
+        ),
+        "Should ignore generated HTML at the build.nosync boundary"
     );
     // Note: node_modules filtering happens at gitignore level, not in should_watch_file
     // The function only checks file extensions, not directory paths
@@ -1421,6 +1435,24 @@ fn pump_gate_proceeds_unconditionally_on_create_and_remove() {
         &[folder.join("gone.md")],
     );
     assert_eq!(remove, PumpGate::Proceed);
+}
+
+#[test]
+fn pump_gate_does_not_hash_gate_background_passthrough_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path();
+    for name in ["index.html", "app.js", "style.css", "clip.mp4"] {
+        let verdict = pump_gate(
+            EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)),
+            folder.to_str().unwrap(),
+            &[folder.join(name)],
+        );
+        assert_eq!(
+            verdict,
+            PumpGate::Proceed,
+            "{name} is finalized after the synchronous source-hash stash"
+        );
+    }
 }
 
 #[test]
@@ -3910,5 +3942,3 @@ fn raw_create_key_all_folders_returns_empty() {
     let keys = collect_raw_create_keys(&[ev], root, |_| true);
     assert!(keys.is_empty(), "all-folder batch must return empty Vec");
 }
-
-

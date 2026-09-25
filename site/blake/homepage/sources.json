@@ -1,0 +1,28 @@
+{
+  "homepage": "https://www.blakesnotebook.com/",
+  "assets": {
+    "https://www.blakesnotebook.com/_moss/style.85133f0c18da73f2.css": "assets/577d06608a69.css",
+    "https://www.blakesnotebook.com/_moss/theme/style.117064c73c9b770b.css": "assets/f36d29df69ee.css",
+    "https://www.blakesnotebook.com/_moss/css/email.f5aa711060961fb2.css": "assets/a1b14a2a6d47.css",
+    "https://www.blakesnotebook.com/assets/songs-of-experience/songs-of-experience-15-the-tyger.jpg": "assets/3b119ebffab3.jpg",
+    "https://www.blakesnotebook.com/assets/the-large-colour-prints/the-large-colour-prints-newton.jpg": "assets/b8dcbfe35cbd.jpg",
+    "https://www.blakesnotebook.com/assets/writings/notebook-25-tyger-first-draft.jpg": "assets/38211f928ad5.jpg",
+    "https://www.blakesnotebook.com/assets/illustrations-of-the-book-of-job/job-01-job-and-his-family.jpg": "assets/171a382c9cc2.jpg",
+    "https://www.blakesnotebook.com/assets/illustrations-to-dante/illustrations-to-dante-circle-of-the-lustful-whirlwind-of-lovers.jpg": "assets/771aaf08cedb.jpg",
+    "https://www.blakesnotebook.com/assets/the-pastorals-of-virgil/virgil-01-thenot-and-colinet-lead-their-flocks-together.jpg": "assets/f34b78575d36.jpg",
+    "https://www.blakesnotebook.com/assets/visionary-heads/visionary-heads-ghost_of_a_flea.jpg": "assets/50e62b346c5f.jpg",
+    "https://www.blakesnotebook.com/assets/canterbury-pilgrims/canterbury-canterbury_pilgrims_engraving.jpg": "assets/5ac4f7fb652f.jpg",
+    "https://www.blakesnotebook.com/assets/frescos/fresco-ghost_of_a_flea.jpg": "assets/0bb22b56b263.jpg"
+  },
+  "images": [
+    "assets/3b119ebffab3.jpg",
+    "assets/b8dcbfe35cbd.jpg",
+    "assets/38211f928ad5.jpg",
+    "assets/171a382c9cc2.jpg",
+    "assets/771aaf08cedb.jpg",
+    "assets/f34b78575d36.jpg",
+    "assets/50e62b346c5f.jpg",
+    "assets/5ac4f7fb652f.jpg",
+    "assets/0bb22b56b263.jpg"
+  ]
+}

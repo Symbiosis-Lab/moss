@@ -1,0 +1,147 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>watercolor-capture fixture</title>
+<style>
+  @font-face { font-family: 'FixtureFont'; src: url('sample-font.woff2') format('woff2'); font-display: block; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #14140f; }
+  #stage {
+    position: relative;
+    width: 620px;
+    display: grid;
+    grid-template-columns: repeat(3, 180px);
+    grid-auto-rows: 150px;
+    gap: 20px;
+    padding: 20px;
+    background: #14140f;
+  }
+  #stage > * { position: relative; width: 180px; height: 150px; display: block; }
+  img { display: block; }
+  .lqip { background-color: #2a2a20; background-image: url('photo-b.svg'); background-size: cover; background-position: center; }
+  canvas { width: 100%; height: 100%; display: block; }
+  video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .text-box-inner {
+    border-radius: 18px;
+    clip-path: polygon(0 0, 100% 0, 100% 78%, 78% 100%, 0 100%);
+    --rot: -4deg;
+    transform: rotate(var(--rot));
+    overflow: hidden;
+    background: #0d3b66;
+  }
+  .tb-bg { position: absolute; inset: 0; background: #e0592a; z-index: 1; }
+  .tb-label { position: absolute; left: 10px; top: 42px; z-index: 2; font-family: 'FixtureFont', sans-serif; font-size: 34px; color: #fdf6e3; }
+  iframe { border: 0; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <img id="img-plain" data-capture-id="img-plain" data-capture-kind="img" data-capture-expect="ok"
+         src="photo-a.svg" style="width:100%;height:100%;object-fit:cover;border-radius:10px;">
+
+    <img id="img-lazy-lqip" class="lqip" data-capture-id="img-lazy-lqip" data-capture-kind="img" data-capture-expect="ok"
+         src="photo-b.svg" loading="lazy" style="width:100%;height:100%;object-fit:cover;border-radius:10px;">
+
+    <canvas id="canvas-2d" data-capture-id="canvas-2d" data-capture-kind="canvas2d" data-capture-expect="ok"
+            width="360" height="300" style="border-radius:10px;"></canvas>
+
+    <canvas id="canvas-webgl-hook" data-capture-id="canvas-webgl-hook" data-capture-kind="webgl" data-capture-expect="ok"
+            width="360" height="300"></canvas>
+
+    <canvas id="canvas-webgl-nohook" data-capture-id="canvas-webgl-nohook" data-capture-kind="webgl" data-capture-expect="fail"
+            width="360" height="300"></canvas>
+
+    <video id="video-el" data-capture-id="video-el" data-capture-kind="video" data-capture-expect="ok"
+           src="sample.mp4" muted playsinline preload="auto" style="border-radius:10px;"></video>
+
+    <svg id="svg-inline" data-capture-id="svg-inline" data-capture-kind="svg" data-capture-expect="ok"
+         viewBox="0 0 180 150" xmlns="http://www.w3.org/2000/svg" style="border-radius:10px;background:#1b1b14;">
+      <defs>
+        <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#7a2fb0"/>
+          <stop offset="1" stop-color="#2f7ab0"/>
+        </linearGradient>
+      </defs>
+      <rect x="0" y="0" width="180" height="150" fill="url(#g1)"/>
+      <circle cx="90" cy="75" r="45" fill="#fdf6e3"/>
+    </svg>
+
+    <iframe id="iframe-doc" data-capture-id="iframe-doc" data-capture-kind="iframe" data-capture-expect="ok"
+            title="fixture iframe" style="border-radius:10px;"></iframe>
+
+    <div class="text-box-inner" id="text-box" data-capture-id="text-box" data-capture-kind="box" data-capture-expect="ok">
+      <div class="tb-bg"></div>
+      <div class="tb-label">Water 水</div>
+    </div>
+  </div>
+
+  <script src="/site/watercolor-capture.js"></script>
+  <script>
+    // Fixture setup: draws every canvas, fills the iframe, seeks the video
+    // to a fixed frame, and only then flips the readiness flags the check
+    // script waits on. Nothing here is landing.js code -- this is the
+    // design doc section 8 fixture, deliberately standalone.
+    function drawTwoTone(gl) {
+      gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+      gl.disable(gl.SCISSOR_TEST);
+      gl.clearColor(0.85, 0.2, 0.55, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.enable(gl.SCISSOR_TEST);
+      gl.scissor(0, 0, gl.canvas.width, Math.round(gl.canvas.height / 2));
+      gl.clearColor(0.15, 0.55, 0.85, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.disable(gl.SCISSOR_TEST);
+    }
+    (async function setup() {
+      const c2 = document.getElementById('canvas-2d');
+      const g2 = c2.getContext('2d');
+      g2.fillStyle = '#2a7f62'; g2.fillRect(0, 0, c2.width, c2.height);
+      g2.fillStyle = '#f2b134'; g2.fillRect(0, c2.height * 0.55, c2.width, c2.height * 0.45);
+
+      // Same contract as mandelbrot-renderer.js:35 and native-canvas.js:111 --
+      // a synchronous redraw-then-read inside one function, set on the
+      // element itself.
+      const hookCanvas = document.getElementById('canvas-webgl-hook');
+      const hookGl = hookCanvas.getContext('webgl2', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+      drawTwoTone(hookGl);
+      hookCanvas.mossCaptureFrame = () => { drawTwoTone(hookGl); return hookCanvas.toDataURL('image/png'); };
+
+      // Deliberately no hook and no preserveDrawingBuffer: this is the
+      // fixture's one expected-failure element (data-capture-expect="fail"),
+      // the honest analogue of the Mandelbrot canvas the design diagnoses.
+      const noHookCanvas = document.getElementById('canvas-webgl-nohook');
+      const noHookGl = noHookCanvas.getContext('webgl2', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+      drawTwoTone(noHookGl);
+
+      const ifr = document.getElementById('iframe-doc');
+      const iframeLoaded = new Promise((resolve) => ifr.addEventListener('load', resolve, { once: true }));
+      ifr.srcdoc = '<!doctype html><html><head><style>html,body{margin:0;height:100%;}body{background:#553577;display:flex;align-items:center;justify-content:center;font-family:sans-serif;color:#fdf6e3;font-size:22px;}</style></head><body>frame 文字</body></html>';
+      await iframeLoaded;
+
+      const video = document.getElementById('video-el');
+      await new Promise((resolve) => {
+        if (video.readyState >= 2) return resolve();
+        video.addEventListener('loadeddata', resolve, { once: true });
+      });
+      await new Promise((resolve) => {
+        video.addEventListener('seeked', resolve, { once: true });
+        video.currentTime = 0.1;
+      });
+
+      const images = [...document.querySelectorAll('img')];
+      await Promise.all(images.map((im) => im.decode().catch(() => {})));
+
+      if (document.fonts) { try { await document.fonts.ready; } catch (e) {} }
+
+      window.__fixtureManifest = [...document.querySelectorAll('[data-capture-id]')].map((el) => ({
+        id: el.dataset.captureId,
+        kind: el.dataset.captureKind,
+        expect: el.dataset.captureExpect,
+      }));
+      window.__fixtureReady = true;
+      document.documentElement.dataset.ready = '1';
+    })().catch((e) => { window.__fixtureError = String(e && e.stack || e); });
+  </script>
+</body>
+</html>

@@ -1,0 +1,206 @@
+/* Stage chrome and the scene marker's own button/status — one stylesheet for both elements
+   because only the stage injects a <link> (moss-stage.js); moss-scene.js has no injection point
+   of its own. Where the stage sits on the page (sticky, floated beside the prose, or plain and
+   inline) lives in ../../.moss/theme/style.css, keyed on `article:has(> moss-stage)`; this file
+   never places either element, only what is inside or beside it. */
+
+moss-stage {
+  display: block;
+  font: 400 14px/1.5 var(--moss-font-body, system-ui, sans-serif);
+  color: var(--moss-color-text);
+}
+
+.moss-stage__frame-wrap {
+  position: relative;
+  overflow: hidden;
+  height: min(70vh, 640px);
+  min-height: 380px;
+  border: 1px solid var(--moss-border-medium);
+  border-radius: 12px;
+  background: var(--moss-color-surface);
+}
+
+.moss-stage__frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* The pointer (stage/README.md, "The pointer"): a small dot, positioned by driver.js's glide
+   (transform on .moss-stage__pointer itself). Sized to be found at a glance in a ~600px editor —
+   the first build was easy to miss — without ever covering the control it presses: the dot's own
+   footprint never grows, and even the ring's ~2.4x press expansion stays well inside a typical
+   click target. Its press — the dip and the ring(s) — lives on children so driver.js can animate
+   the dot's scale and a ring's scale/opacity without fighting over .moss-stage__pointer's own
+   transform, which the glide alone owns. */
+.moss-stage__pointer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
+.moss-stage__pointer-dot {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--moss-color-bg);
+  border-radius: 50%;
+  background: var(--moss-color-accent);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 30%);
+}
+
+/* One ring, expanding and fading on every press (driver.js) — left click and a right click's own
+   first ring share this one look, same colour as the dot, so only the treatments below need to
+   touch anything at all. */
+.moss-stage__pointer-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--moss-color-accent);
+  opacity: 0;
+}
+
+/* Right-click (stage/README.md, "The pointer"): a right-click must teach the reader to
+   right-click, and colour can't carry that (needs a legend, fails colour-blind readers, and the
+   site's accent green already means Stop), so it is marked by SHAPE: for the press and the hold
+   that follows, the solid dot becomes a hollow dotted circle, slightly larger so its dots read as
+   dots. Hollow, it covers nothing, so the "dot never grows" rule still holds in spirit.
+   driver.js only records which button pressed (`data-button`); border-style and background
+   switch discretely between keyframes, which is the intent. */
+.moss-stage__pointer[data-button="right"] .moss-stage__pointer-dot {
+  animation: moss-stage-hollow 1400ms linear;
+}
+@keyframes moss-stage-hollow {
+  0%, 85% {
+    inset: -5px;
+    background: transparent;
+    border: 3px dotted var(--moss-color-accent);
+    box-shadow: none;
+    filter: drop-shadow(0 0 1px var(--moss-color-bg));
+  }
+  100% { inset: 0; }
+}
+
+@media (max-width: 600px) {
+  .moss-stage__frame-wrap {
+    /* Roughly 60% of the viewport (see stage/README.md, "Fitting the page") — low enough that a
+       phone reader's first screen still shows some of the prose the stage follows. min-height
+       keeps the editor itself usable on a short viewport instead of tracking 56vh all the way
+       down. */
+    height: 56vh;
+    min-height: 320px;
+    border-inline: 0;
+    border-radius: 0;
+  }
+}
+
+.moss-scene__button {
+  margin-block: var(--moss-space-xs, 0.5rem) var(--moss-space-sm, 1rem);
+}
+
+/* A filled round ▶/■ plus the word (stage/README.md, "Authoring"). The filled-circle-on-accent
+   look is the same pattern moss's own round `.moss-btn-slot .moss-btn` primitive uses elsewhere
+   (accent background, --moss-color-bg glyph) — reused rather than invented. */
+.moss-scene__glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: 50%;
+  background: var(--moss-color-accent);
+  color: var(--moss-color-bg);
+  line-height: 1;
+}
+
+/* A marker sits mid-sentence (stage/README.md, "Authoring") — sized to the running text around
+   it, not moss's `.moss-btn` primitive (a standalone pill with its own generous padding), which
+   would visually break the sentence it sits inside. The button element itself IS the filled
+   circle: a FIXED em size, set directly on the button and never derived from the ▶/■ character's
+   own natural width, is what keeps swapping them from re-wrapping the line (stage/README.md,
+   "Pressing Play moves nothing") — confirmed by measuring the button's own rect through a full
+   play/stop cycle. 1.15em is a touch over the surrounding text's cap-height, "the height of the
+   text"; middle vertical-align is checked against the rendered line box in both the Latin and the
+   zh-hant guides (CJK baselines differ) rather than assumed. */
+.moss-scene__button--inline {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: content-box;
+  width: 1.15em;
+  height: 1.15em;
+  padding: 0;
+  margin: 0 0.15em;
+  border: none;
+  border-radius: 50%;
+  background: var(--moss-color-accent);
+  color: var(--moss-color-bg);
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+/* The shared .moss-scene__glyph rule above draws its own filled circle, which is redundant here
+   where the BUTTON itself is already the circle. Reset it back to plain glyph text. */
+.moss-scene__button--inline .moss-scene__glyph {
+  display: inline;
+  background: none;
+  border-radius: 0;
+  font-size: 0.6em;
+}
+
+/* Hit area >=24x24 CSS px (WCAG 2.5.8) without growing the visible circle or disturbing the line's
+   layout: an invisible box centered on the button, out of flow (absolutely positioned), sized
+   against the button's own font-size rather than its (possibly smaller) 1.15em circle. */
+.moss-scene__button--inline::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(24px, 1.15em);
+  height: max(24px, 1.15em);
+  transform: translate(-50%, -50%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .moss-scene__button--inline {
+    transition: opacity 0.15s ease;
+  }
+}
+
+.moss-scene__button--inline:hover {
+  opacity: 0.75;
+}
+
+.moss-scene__button--inline:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent, var(--moss-color-accent));
+  outline-offset: 2px;
+}
+
+/* The verb ("Play"/"Stop") composes the marker's accessible name via aria-labelledby
+   (moss-scene.js); check-docs-stage.mjs's markerState() reads the bare verb off the same class.
+   Visible to assistive tech but hidden on screen, since the ▶/■ glyph beside it is what a sighted
+   reader sees there (aria-hidden). */
+.moss-scene__button--inline .moss-scene__verb-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.moss-scene__status {
+  margin: 0 0 var(--moss-space-sm, 1rem);
+  color: var(--moss-color-muted);
+  font-size: 0.8125rem;
+}
+
+.moss-scene__status:empty {
+  display: none;
+}

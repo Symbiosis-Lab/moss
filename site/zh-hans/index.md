@@ -1,6 +1,6 @@
 ---
 title: 青苔
-logo: assets/logo.svg
+logo: assets/brand/logo.svg
 children: false
 uid: 41f7bc62
 lang: zh-hans

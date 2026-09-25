@@ -1,0 +1,170 @@
+@layer plugins {
+@layer shortcodes {
+  /* NOTE ON @layer: this file is injected via wrap_style_blocks_in_layer,
+     which double-wraps it in `@layer plugins{…}` → effective sub-layer
+     `plugins.shortcodes`, which OUTRANKS site.css's top-level `shortcodes`
+     layer. So a declaration here beats the same-specificity declaration in
+     site.css. That is why the footer subscribe form's right-anchor
+     (`margin-inline-start: auto`) MUST live here, not in site.css. */
+
+  /* Every moss-hosted subscribe form is now the `:::subscribe` shortcode
+     shape — `<div class="moss-subscribe"><form data-position="inline">` —
+     whether auto-injected into the footer or authored in body/footer.md.
+     Card container for the in-page (non-footer) case. Token-only. See spec
+     docs/archive/2026-04-30-subscribe-shortcode-design.md. */
+  .moss-subscribe {
+    max-width: 32rem;
+    margin: var(--moss-space-lg) 0;
+    padding: var(--moss-space-md) var(--moss-space-lg);
+    border: 1px solid var(--moss-border-light);
+    border-radius: var(--moss-radius-md, 0.5rem);
+  }
+
+  /* In a footer, the subscribe form (auto-injected OR authored `:::subscribe`)
+     reads borderless + compact — not the in-page card above — and is
+     right-anchored on desktop. The footer becomes a flex row via
+     `footer.container:has(> .moss-subscribe)` in site.css; `margin-inline-start:
+     auto` (declared HERE so it wins the @layer cascade over the base
+     `.moss-subscribe` margin) pushes the form to the inline-end edge — which is
+     why it and the block margin below are the two logical `margin-inline`/
+     `margin-block` shorthands, not a physical `margin` shorthand: physical
+     `margin-left: auto` only coincides with `margin-inline-start: auto` under
+     horizontal-tb, and sets block-end 0 (so it doesn't inherit the base
+     `space-lg` block margin) and `min-width: 0` lets the form shrink below its
+     content width beside a verbose link list instead of wrapping early. */
+  footer .moss-subscribe {
+    max-width: 24rem;
+    min-width: 0;
+    margin-block: var(--moss-space-sm) 0;
+    margin-inline: auto 0;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+  }
+
+  /* Mobile: drop the right-anchor and let the form read full-width from the
+     start edge (email input stacks above the button via the inline rules). */
+  @media (max-width: 32rem) {
+    footer .moss-subscribe {
+      margin-inline-start: 0;
+    }
+  }
+
+  .moss-subscribe-form[data-position="inline"] {
+    display: flex;
+    gap: var(--moss-space-sm);
+    align-items: baseline;
+  }
+
+  .moss-subscribe-form[data-position="inline"] .moss-input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  @media (max-width: 32rem) {
+    .moss-subscribe-form[data-position="inline"] {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    /* :not([data-state="success"]) on both width rules: this file's layer
+       (plugins.shortcodes) outranks site.css's shortcodes layer, so an
+       unscoped width here would beat the success state's 2.25rem circle
+       (site.css) and stretch the checkmark into a full-width oval. */
+    .moss-subscribe-form[data-position="inline"]:not([data-state="success"]) .moss-btn {
+      width: 100%;
+    }
+
+    /* Footer subscribe form keeps the email input + button on ONE row on
+       mobile (input flexes, button hugs its label) — matching the default
+       auto-injected footer's pre-consolidation behavior. Only the in-page
+       `:::subscribe` card stacks to a column (it has full width to spare). */
+    footer .moss-subscribe .moss-subscribe-form[data-position="inline"] {
+      flex-direction: row;
+      align-items: baseline;
+    }
+    footer .moss-subscribe .moss-subscribe-form[data-position="inline"]:not([data-state="success"]) .moss-btn {
+      width: auto;
+    }
+
+    /* Stacked layout success geometry: site.css overlays the status across
+       the WHOLE form (inset: 0) — correct for the single-row desktop form,
+       but here the form is two rows (input above, button below) and a
+       full-form overlay centers the copy on top of the success circle.
+       Anchor the status to the input row instead: the copy appears where
+       the input was, the circle keeps the button row below. min-height
+       matches the form's own 2.5rem row reservation so the copy centers on
+       the input's line. */
+    .moss-subscribe-form[data-position="inline"] .moss-subscribe-status {
+      inset: 0 0 auto 0;
+      min-height: 2.5rem;
+    }
+
+    /* Footer subscribe form stays single-row on mobile (see above), so it
+       keeps the full-form overlay. */
+    footer .moss-subscribe .moss-subscribe-form[data-position="inline"] .moss-subscribe-status {
+      inset: 0;
+      min-height: 0;
+    }
+  }
+
+  /* ─── Apply form: borderless, placeholder-only, single column ─── */
+  .moss-apply {
+    max-width: 32rem;
+    margin: var(--moss-space-lg) 0;
+    /* Left-align column — do not center-align child text */
+    text-align: start;
+  }
+
+  /* No flex gap: vertical rhythm comes from the helper margins so each helper
+     hugs its own input while the two field-groups stay generously apart. */
+  .moss-subscribe-form[data-position="apply"] {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .moss-subscribe-form[data-position="apply"] .moss-input {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+  }
+
+  /* Submit button at its natural width, left-aligned under the fields */
+  .moss-subscribe-form[data-position="apply"] .moss-btn-slot {
+    align-self: flex-start;
+  }
+
+  /* Honeypot: off-screen, inaccessible to humans */
+  .moss-apply-hp {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+  }
+
+  /* Helper line under each field — no visible <label>; the inputs are
+     placeholder-only and named for assistive tech via aria-label. The top
+     margin hugs the field above; the bottom margin sets the group rhythm. */
+  .moss-apply-helper {
+    margin: 0.375rem 0 var(--moss-space-lg) 0;
+    font-size: var(--moss-size-xs);
+    color: var(--moss-color-text-secondary);
+    text-align: start;
+  }
+}
+
+/* A pending form (no site_id baked in yet) must never face real readers:
+   on a published page (body lacks data-moss-preview — ship.rs strips it)
+   it would POST to "#" and surface an error state. Preview keeps it
+   visible and interactive. This CSS is the shipped guard against a pending
+   form reaching readers (defense-in-depth for non-seta exports — GitHub
+   Pages plugin, plain `moss build` — where email is unsupported in Phase 1).
+   NOTE: this rule sits OUTSIDE the @layer block above (unlayered → highest
+   precedence after the wrap), which is what we want for a safety hide.
+   See docs/archive/2026-06-10-email-footer-mode-independent-design.md. */
+body:not([data-moss-preview]) .moss-subscribe-form[data-moss-pending-site] {
+  display: none;
+}
+
+}

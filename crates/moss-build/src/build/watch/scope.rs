@@ -452,6 +452,9 @@ pub fn should_watch_file(path: &str) -> bool {
     // (`super::IMAGE_EXTENSIONS`), so an extension the build consumes cannot
     // be silently missing here.
     let asset_extensions = [
+        // Source-authored HTML documents and interactive embeds. Generated
+        // HTML remains excluded by the .moss path boundary above this filter.
+        "html", "htm",
         // Styles
         "css",
         // Scripts

@@ -2284,6 +2284,12 @@ pub fn generate_blocking_content_for_build(
             };
             let folder_lang = folder_doc.lang;
             let page_title = folder_doc.title.clone();
+            let localized_site_name = super::html::localized_site_title(
+                &documents,
+                folder_lang,
+                site_lang,
+                &layout_config.site_name,
+            );
 
             // Generate the folder index content listing using generate_children
             // (folder-aware: distinguishes subfolders from articles)
@@ -2395,7 +2401,7 @@ pub fn generate_blocking_content_for_build(
 
             let nav_builder = NavigationBuilder::new(
                 &documents,
-                &layout_config.site_name,
+                &localized_site_name,
                 Some(auto_url_path.as_str()),
                 folder_lang,
                 project_structure.has_content_folders,
@@ -2420,7 +2426,7 @@ pub fn generate_blocking_content_for_build(
             let nav_builder = match compute_breadcrumb_segments(
                 folder_doc,
                 &documents,
-                &layout_config.site_name,
+                &localized_site_name,
                 project_structure.has_content_folders,
             ) {
                 Some(segments) => nav_builder.with_breadcrumb(segments),
@@ -2472,7 +2478,7 @@ pub fn generate_blocking_content_for_build(
 
             let vars = ShellVars {
                 lazy_chunk_attrs: path_resolver.lazy_chunk_attrs(&share_card_hash, hls_attr_hash),
-                title: tab_title(&page_title, &layout_config.site_name, false),
+                title: tab_title(&page_title, &localized_site_name, false),
                 css_path: path_resolver.css_path(),
                 js_path: path_resolver.js_path(),
                 navigation,

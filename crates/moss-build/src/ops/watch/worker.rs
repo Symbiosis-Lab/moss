@@ -268,9 +268,20 @@ impl WorkerHandle {
     }
 
     /// Deposit a request, merging with any occupant, and wake the worker.
-    pub fn enqueue(&self, req: RebuildRequest) {
+    pub fn enqueue(&self, mut req: RebuildRequest) {
         {
             let mut slot = self.lock_slot();
+            // A build can copy a source file early, then compute its final
+            // content-hash stash after a newer save lands. In that ordering
+            // the stash describes the newer source while the promoted output
+            // still contains the older bytes. The catch-up request must not
+            // be gated against that mixed baseline or it will be discarded.
+            // `take_for_attempt` sets `building` under this same slot lock, so
+            // there is no dequeue-to-admission window where an arrival can
+            // retain a suppressible gate.
+            if self.building.load(Ordering::SeqCst) {
+                req.gate_paths = None;
+            }
             *slot = Some(match slot.take() {
                 Some(occupant) => merge_requests(occupant, req),
                 None => req,
@@ -283,6 +294,18 @@ impl WorkerHandle {
     /// Remove the queued request, if any.
     pub fn take(&self) -> Option<RebuildRequest> {
         self.lock_slot().take()
+    }
+
+    /// Dequeue the next request and mark its admission in flight as one
+    /// atomic slot operation. Producers use that mark to make arrivals during
+    /// the attempt unconditional; see [`enqueue`](Self::enqueue).
+    fn take_for_attempt(&self) -> Option<RebuildRequest> {
+        let mut slot = self.lock_slot();
+        let req = slot.take();
+        if req.is_some() {
+            self.building.store(true, Ordering::SeqCst);
+        }
+        req
     }
 
     /// Return a dequeued-but-not-admitted request to the slot (the freeze
@@ -401,7 +424,7 @@ pub async fn run_worker_loop<Fut>(
         if handle.shutdown_requested() {
             break;
         }
-        match handle.take() {
+        match handle.take_for_attempt() {
             None => handle.work.notified().await,
             Some(req) => {
                 // Snapshot BEFORE the attempt: any producer wake from here on
@@ -418,7 +441,6 @@ pub async fn run_worker_loop<Fut>(
                 // panicking, merges harmlessly), and let backoff absorb it.
                 let backup = req.clone();
                 let started = std::time::Instant::now();
-                handle.building.store(true, Ordering::SeqCst);
                 let outcome = match std::panic::AssertUnwindSafe(attempt(req))
                     .catch_unwind()
                     .await

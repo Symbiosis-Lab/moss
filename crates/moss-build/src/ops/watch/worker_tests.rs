@@ -192,12 +192,18 @@ async fn a_request_arriving_mid_build_is_built_next() {
     let mut first_started = Some(first_started_tx);
     let mut release = Some(release_rx);
     let mut second_done = Some(second_done_tx);
-    let worker = tokio::spawn(run_worker_loop(handle.clone(), move |_req| {
+    let worker = tokio::spawn(run_worker_loop(handle.clone(), move |req| {
         let n = b.fetch_add(1, Ordering::SeqCst) + 1;
         let started = if n == 1 { first_started.take() } else { None };
         let gate = if n == 1 { release.take() } else { None };
         let done = if n == 2 { second_done.take() } else { None };
         async move {
+            if n == 2 {
+                assert_eq!(
+                    req.gate_paths, None,
+                    "a catch-up arriving during a build must not be discarded against that build's mixed source/output baseline"
+                );
+            }
             if let Some(tx) = started {
                 tx.send(()).ok();
             }
@@ -214,7 +220,7 @@ async fn a_request_arriving_mid_build_is_built_next() {
     handle.enqueue(content_only("a.md"));
     first_started_rx.await.expect("first build should start");
     // Mid-build: this must be picked up on the worker's next iteration.
-    handle.enqueue(content_only("b.md"));
+    handle.enqueue(gated(&["b.md"]));
     release_tx.send(()).ok();
 
     tokio::time::timeout(Duration::from_secs(5), second_done_rx)

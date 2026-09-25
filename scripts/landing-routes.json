@@ -12,7 +12,13 @@
     "/zh-hans/开始使用/",
     "/zh-hans/开始使用/editor/",
     "/zh-hant/開始使用/",
-    "/zh-hant/開始使用/editor/"
+    "/zh-hant/開始使用/editor/",
+    "/zh-hans/开始使用/design/",
+    "/zh-hans/开始使用/links/",
+    "/zh-hans/开始使用/extend/",
+    "/zh-hant/開始使用/design/",
+    "/zh-hant/開始使用/links/",
+    "/zh-hant/開始使用/extend/"
   ],
   "pending_docs_merge": []
 }

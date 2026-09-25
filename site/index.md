@@ -1,6 +1,6 @@
 ---
 children: false
-logo: assets/logo.svg
+logo: assets/brand/logo.svg
 title: moss
 description: A desktop app that turns folders into websites.
 lang: en

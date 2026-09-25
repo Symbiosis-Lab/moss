@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="zh-hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<base href="/">
+<!-- apple-touch-icon + PNG fallbacks: rasterized at build time by
+     crates/moss-build's resolve_favicon from assets/favicon.svg (not this
+     page's own assets/brand/ copy) -- the docs pages already declare the
+     same three; repeated here since this page never loads moss's own
+     template. One ground (#faf8f5): a raster has no @media rule to swap. -->
+<link rel="apple-touch-icon" sizes="180x180" href="/assets/favicon-180.png">
+<link rel="icon" type="image/svg+xml" href="/assets/brand/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16.png">
+<script>
+// Favicon dark-mode swap — kept identical in spirit to site/.moss/theme/script.js,
+// but duplicated here because this page is a verbatim passthrough (see
+// scripts/README.md) that never loads moss's own theme script. favicon.svg already
+// carries an embedded `@media (prefers-color-scheme:dark)` rule that Chromium and
+// Firefox honor on their own, but Safari (through at least 26.0) renders an SVG
+// favicon's base styles only and never evaluates @media inside it. Swapping the
+// `<link>`'s href via a matchMedia listener is ordinary DOM behavior every engine,
+// including Safari, implements the same way, so it works regardless of whether the
+// engine evaluates the SVG's own rule. See site/assets/brand/favicon-dark.svg's own
+// header for how the dark counterpart was generated.
+(() => {
+  const link = document.querySelector('link[rel="icon"]');
+  const query = matchMedia('(prefers-color-scheme: dark)');
+  const apply = (dark) => link.setAttribute('href', dark ? '/assets/brand/favicon-dark.svg' : '/assets/brand/favicon.svg');
+  apply(query.matches);
+  query.addEventListener('change', (event) => apply(event.matches));
+})();
+</script>
+<title>青苔 — 從你的資料夾，到你的網站</title>
+<meta name="description" content="青苔將你的資料夾發布成網站。在本機資料夾裡寫 Markdown，用任何雲端硬碟協作。">
+<!-- landing-discovery:start -->
+<link rel="canonical" href="https://mosspub.com/zh-hant/">
+<link rel="alternate" hreflang="en" href="https://mosspub.com/">
+<link rel="alternate" hreflang="zh-Hant" href="https://mosspub.com/zh-hant/">
+<link rel="alternate" hreflang="zh-Hans" href="https://mosspub.com/zh-hans/">
+<link rel="alternate" hreflang="x-default" href="https://mosspub.com/">
+<!-- landing-discovery:end -->
+<style>
+  :root {
+    --bg: #faf8f5; --text: #2c2825; --text2: #5d5853; --border: #e5e1da; --accent: #2d5a2d;
+    --heading: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
+    --body: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
+    /* --win-r: 24px, not chosen here -- copied from moss-desktop's own
+       WINDOW_CORNER_RADIUS (src-tauri/src/system/utils/chrome.rs), the real
+       app's window radius. #box shares the harvested shell's own coordinate
+       space 1:1 (iframe at width/height:100%, no separate zoom), so this
+       box-local px is the same px the Publish pill is drawn in: a 36px pill
+       (--moss-pill-size) with border-radius 18px (--moss-pill-radius, half
+       the pill) -- the same 24:18 relationship the app itself draws between
+       its window and that circle. */
+    --cell-w: 660px; --cell-h: 620px; --ed-w: 520px; --pad: 80px; --s: 1; --win-r: 24px; --peek: 150px; --vis-w: 992px; --page-max: 1528px;
+    /* how far the last join has run: 0 the two-column page, 1 the full-bleed
+       close. It is read before the script has set anything, so it starts here. */
+    --xf: 0;
+    /* One radius and one shadow for every sheet on the stage — the centre's and
+       both siblings'. The recipe is the active macOS window's, which the centre
+       already wore; the siblings joined it rather than bringing a third. */
+    --sheet-shadow: 0 0 0 1px rgba(0,0,0,.10), 0 1px 3px rgba(0,0,0,.10), 0 22px 64px rgba(40,35,28,.30);
+  }
+  * { box-sizing: border-box; }
+  html, body { overflow-x: clip; margin: 0; background: var(--bg); color: var(--text); font-family: var(--body); overflow-anchor: none; }
+  /* The lockup follows mark.css: inline, mark and name as peers, the mark's
+     visible ink as tall as the name's letter band, the gap the height of its
+     drop. 13px/600 in the UI sans gives a 10px band; a 16px box shows 11.5px. */
+  @font-face { font-family: MossLongCang; src: url("/assets/brand/LongCang-colophon.woff2") format("woff2"); font-weight: 400; font-display: swap; unicode-range: U+9752,U+82D4; }
+  html:lang(zh) .brand .moss-wordmark { font-family: MossLongCang, var(--body); font-size: 16px; font-weight: 400; }
+  html:lang(zh) .brand svg { width: 18px; height: 18px; }
+  .brand { position: fixed; top: 16px; left: 28px; z-index: 50; display: flex; align-items: center; gap: 5px; font: 600 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #000; }
+  /* var(--hdr, var(--xf)): desktop defines --hdr below (min-width: 901px);
+     mobile defines its own, scoped the same way (max-width: 900px). The
+     fallback is defensive only -- the two media queries are complementary,
+     so one of them always matches and --hdr is always defined in practice
+     (unit 4, review-phases-2-4.md Job 2 item 5: #vis's pin now keeps the
+     scene-1-4 visual on screen through the whole crossfade instead of
+     scrolling away early, so the header sits over real, uncontrolled
+     content -- not a solid band like mobile's own -- the whole time; a
+     linear blend through that touches ~1.2:1 at xf~0.57, measured). */
+  .brand { color: rgb(calc(255 * var(--hdr, var(--xf))), calc(255 * var(--hdr, var(--xf))), calc(255 * var(--hdr, var(--xf)))); }
+  .brand svg { filter: grayscale(var(--hdr, var(--xf))) brightness(calc(1 + var(--hdr, var(--xf)) * 99)); width: 16px; height: 16px; display: block; transform: translateY(1px); }
+  .language-picker { position: fixed; top: 11px; right: 24px; z-index: 50; display: flex; align-items: center; gap: 5px; min-height: 34px; padding-inline: 8px; color: rgb(calc(93 + 162 * var(--hdr, var(--xf))), calc(88 + 167 * var(--hdr, var(--xf))), calc(83 + 172 * var(--hdr, var(--xf)))); font: 500 12px/1 var(--body); }
+  .language-picker a { color: inherit; text-decoration: none; }
+  .language-picker a:hover { color: rgb(calc(45 + 163 * var(--hdr, var(--xf))), calc(90 + 165 * var(--hdr, var(--xf))), calc(45 + 210 * var(--hdr, var(--xf)))); }
+  .language-picker a:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  .language-picker .nav-lang-current { color: rgb(calc(44 + 211 * var(--hdr, var(--xf))), calc(40 + 215 * var(--hdr, var(--xf))), calc(37 + 218 * var(--hdr, var(--xf)))); font-weight: 600; }
+
+  /* ── two columns: the visual is pinned, the copy scrolls past it ─────── */
+  /* The copy column owns all remaining width and centres its block in it, so
+     visual-to-copy and copy-to-edge are equal by construction; the whole
+     composition is capped at 1440 and centred, so wide screens do not pull
+     the two apart. */
+  .page { position: relative; z-index: 2; display: grid; grid-template-columns: calc(var(--vis-w) * var(--s)) minmax(0, 1fr); gap: 0; padding: 0 0 0 56px; max-width: var(--page-max); margin: 0 auto; }
+  /* The left column is as tall as the copy; the visual sticks inside it. */
+  /* the cell starts past what hangs left of it: the sheets' 32px spill and the
+     left sibling's peek, both of which scale with the composition */
+  #vis { position: sticky; top: 0; z-index: 0; height: 100vh; display: flex; align-items: center; padding-left: calc((32px + var(--peek)) * var(--s)); }
+  #copy { position: relative; z-index: 2; }
+  #cell { position: relative; width: var(--cell-w); height: var(--cell-h); transform: scale(var(--s)); transform-origin: left center; }
+
+  /* Plates: every image the home page itself uses (blakesnotebook.com /
+     zhudasnotebook.com), scattered loose to the left of the notebook and
+     under it. Each is cropped to the printed image; each has its own size,
+     offset and a degree or two of turn, as paper put down by hand does. The
+     inline JPEG is the colour of the sheet before the sheet arrives. The
+     sheets can be moved: they dissolve where they were left (their actual
+     rect, bounded to the viewport-aware plateBounds() below. The print domain
+     expands when a drag leaves the resting sheet, so its position,
+     size and rotation are all set by scatterPlates() (movie6.html script,
+     near GEOM) rather than fixed here: the image count differs per language
+     (9 English, 2 Chinese) and 2026-09-18's director's call was a random
+     scatter, not a hand-placed pile. */
+  .plate { position: absolute; border-radius: 3px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 10px 26px rgba(50,44,32,.18);
+    background: #d9d2c4 center / cover no-repeat; transform: rotate(var(--r)); will-change: opacity; cursor: grab; touch-action: none; }
+  .plate.held { cursor: grabbing; }
+  #stage.morphing .plate { cursor: default; }
+  .plate img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; object-position: var(--pos, 50% 50%); opacity: 0; transition: opacity .6s ease; }
+  .plate img.in { opacity: 1; }
+
+  /* The editor sits on the cell's right edge, where the preview's edge will be,
+     so the morph grows leftward over the sheets and one gap serves both scenes. */
+  #box { position: absolute; top: 0; height: 100%; left: auto; right: 0; width: var(--ed-w); border-radius: var(--win-r); overflow: hidden; z-index: 5;
+    background: var(--bg); }
+  /* The preview covers the sheets and the editor exactly, so the two scenes
+     occupy the same ground and the eye is not asked to move; at 692px the
+     site's page is still in its mobile view. */
+  /* and scene 3 holds the sheet exactly where scene 2 left it */
+  #stage.live #box { left: -32px; width: calc(100% + 32px); }
+  /* The box's shadow lives on the page, not in the print. A shadow is the one
+     part of a rasterized scene a browser may draw differently from its own
+     compositor, and a wrong shadow reads as a hard edge behind the wash; so
+     the wash never sees one, and these grounds fade with the sheet instead. */
+  /* Filled with the page colour as well: the wash canvas paints only what the
+     sheet takes out of the light, so where the print is the box's own paper it
+     is clear, and without a filled ground the plates' shadows under the box
+     would show through the editor as a second layer. */
+  /* A macOS window's edge: a hairline ring that draws the corner crisply, a
+     tight contact shadow, and the deep soft shadow of the active window. */
+  .ground { position: absolute; top: 0; height: 100%; right: 0; width: var(--ed-w); z-index: 5; pointer-events: none; background: var(--bg); border-radius: var(--win-r); box-shadow: var(--sheet-shadow); }
+  #stage { position: relative; --g0: 1; --g1: 0; }
+  #g0 { opacity: var(--g0); }
+  #g1 { left: -32px; width: calc(100% + 32px); opacity: var(--g1); }
+  /* Instant frame: moss's strip is 48px with a hairline under it; draw that
+     before the document arrives, so the first paint has the shape. */
+  #box::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 48px; border-bottom: 1px solid var(--border); }
+  #box iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: transparent; }
+  /* Each frame keeps its own scene's width whatever the box is doing, so it
+     never re-lays out: the print of the scene off screen is taken two frames
+     after the DOM switches, and a frame that had just changed width gave a
+     print of the old layout (the preview's breadcrumb truncated at the
+     editor's width, then the live page relaid at its own). */
+  #box #ed { left: auto; right: 0; width: var(--ed-w); }
+  #box #sh, #box #vd { left: auto; right: 0; width: calc(var(--cell-w) + 32px); }
+  /* Scene 2 leaves the shell's Publish control usable. The nested published
+     page remains a readable preview, with its own links made inert below. */
+  #stage[data-scene="1"] #box,
+  #stage[data-scene="1"] #box iframe { pointer-events: auto; }
+  /* One frame is shown per scene; the others keep their layout and wait. */
+  #box iframe { visibility: hidden; }
+  #stage[data-scene="0"] #ed, #stage[data-scene="1"] #sh, #stage[data-scene="2"] #vd, #stage[data-scene="3"] #vd { visibility: visible; }
+  /* The three layers behind the preview's own edge: similar-sized sheets,
+     slightly offset so they read as a stack rather than a hero with two
+     cards peeking from its sides. They arrive and leave under a
+     transition's print, as its members, not on a fade of their own. Their
+     own content takes no pointer — grabbing the card
+     is the only gesture offered — so it always lands on the wrapper, which
+     is what makes the wrapper draggable at all: a pointer that started on
+     the iframe/img inside would never reach this page's JS. */
+  .sib { position: absolute; left: -32px; top: 0; width: calc(100% + 32px); height: 100%;
+    background: var(--bg); border-radius: var(--win-r); box-shadow: var(--sheet-shadow); overflow: hidden; touch-action: none; transform-origin: 0 0;
+    pointer-events: none; opacity: 0; z-index: 1; }
+  /* only scene 3's own layers are ever a drag target — elsewhere they are
+     furniture the wheel and the pointer both pass straight through */
+  #stage[data-scene="2"] .sib { pointer-events: auto; }
+  .sib iframe, .sib img { position: absolute; top: 0; left: 0; height: 100%; width: 100%; border: 0; display: block; pointer-events: none; }
+  /* the notebook's own baked WebP, which is what its first moment paints anyway */
+  .sib img { object-fit: cover; object-position: center; background: var(--bg); }
+  #stage[data-scene="2"] .sib { opacity: 1; }
+
+  /* One preview layer; every movable artifact sits above the whole window. */
+  #stage[data-scene="2"] #box { left: 120px; right: auto; top: 30px; width: 540px; height: 560px; background: transparent; border-radius: var(--win-r); box-shadow: 0 0 0 1px rgba(44,40,37,.22), 0 20px 52px #28251c26; z-index: 9; pointer-events: none; }
+  #stage[data-scene="2"] #box iframe { pointer-events: none; }
+  #stage[data-scene="2"] #box #vd { width: 100%; }
+  #stage[data-scene="2"] #g0, #stage[data-scene="2"] #g1 { opacity: 0; }
+  #stage[data-scene="2"] [data-asset] { cursor: grab; transition-property: opacity; }
+  #stage[data-scene="2"] [data-asset]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  #stage[data-scene="2"] [data-asset].s3-drag { outline: none; cursor: grabbing; transition: none; box-shadow: var(--sheet-shadow); }
+  #stage[data-scene="2"]:not(.s3-ready) #box { visibility: hidden; }
+  #s3-video { position: absolute; left: 0; top: 0; width: 400px; height: 300px; overflow: hidden; border-radius: 3px; box-shadow: var(--sheet-shadow); background: #111; opacity: 0; pointer-events: none; touch-action: none; transform-origin: 0 0; z-index: 5; }
+  #stage[data-scene="2"] #s3-video { opacity: 1; pointer-events: auto; }
+  #s3-video video { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+
+  /* ── Scene 4: the control alone, and the targets that orbit it ──────────── */
+  /* What survives the last wash is the real control, not a picture of one: the
+     shell frame is still mounted and still live, and the sheet is cut away from
+     around it with a circle wide enough to carry its composition ring. The cut
+     is a clip-path and the growth a transform, so both are free to scrub. */
+  /* and it takes no pointer: the control is a real button with a real hover, a
+     real cursor and a real tooltip, and scene 4 offers none of the three — what
+     is on the paper is the ink of the control, not an invitation to press it */
+  #stage[data-scene="3"] #box { clip-path: circle(var(--pub-r) at var(--pub-cx) var(--pub-cy)); transform-origin: var(--pub-cx) var(--pub-cy); transition: transform var(--pub-ms) ease-out var(--pub-out-delay); pointer-events: none; }
+  /* The one zoom on the page: the control grows in place and its centre arrives
+     at the middle of the cell, which is also the centre every target orbits. */
+  #stage.fanned #box { transform: translate(var(--pub-dx), var(--pub-dy)) scale(var(--pub-k)); transition-delay: 0s; }
+  /* #fan takes no pointer itself — the empty space between targets is still the
+     page — but each circle opts back in, since the reader can drag one. It is
+     built and driven entirely from script (see "Scene 4's targets" below);
+     nothing here lays a target out, only the container's own box. */
+  #fan { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none; visibility: hidden; overflow: visible; color: var(--text); }
+  #stage[data-scene="3"] #fan { visibility: visible; }
+  /* One circle per deploy target. Position and pop-scale are both written to
+     `transform` every simulation tick — never a CSS transition, which would
+     lag behind a swirl that never stops moving — so there is nothing here to
+     animate; only how a target sits and what it shows while idle or held. */
+  .orbit-circle { position: absolute; left: 0; top: 0; width: var(--orbit-d); height: var(--orbit-d); border-radius: 50%;
+    background: var(--bg); box-shadow: 0 1px 2px rgba(0,0,0,.12), 0 0 0 1px rgba(0,0,0,.08);
+    display: flex; align-items: center; justify-content: center; opacity: 0;
+    pointer-events: auto; touch-action: none; cursor: grab; -webkit-user-drag: none; }
+  .orbit-circle:active { cursor: grabbing; }
+  /* The logo is drawn exactly as its file has it — no recoloring, no clip —
+     which an <img> guarantees by construction: a page's currentColor cannot
+     reach into an externally-loaded image. Until it loads, or if its own
+     rights audit in targets.json hasn't cleared it yet, or it 404s anyway,
+     the target's own name stands in — set in the page's type, not a made-up
+     glyph, so it reads as a name rather than a bad fake logo. */
+  .orbit-circle img { width: 62%; height: 62%; object-fit: contain; display: none; pointer-events: none; -webkit-user-drag: none; }
+  .orbit-circle.has-logo img { display: block; }
+  .orbit-circle.has-logo .orbit-fallback { display: none; }
+  /* Sized down from a starting point by fitFallback (script), never up: the
+     font-size set here is only the pre-fit default for a name short enough
+     not to need shrinking. Width is a fraction of the circle so a name can
+     wrap to two lines instead of overflowing it. */
+  .orbit-fallback { font: 600 10px/1.05 var(--body); color: var(--text2); letter-spacing: .01em; user-select: none;
+    width: 88%; text-align: center; overflow-wrap: break-word; }
+  @media (prefers-reduced-motion: reduce) { #stage[data-scene="3"] #box { transition: none; } }
+
+  /* Scene 2's Publish cue (see the markup comment above #pub-cue for why this
+     layer sits at the body level). landing.js turns .on on and off and writes
+     --pub-ring-cx/cy/r0/k from the button's live screen rect; everything else
+     -- the breathing period, the hairline stroke, the fade -- is CSS alone,
+     so the two running rings cost the main thread nothing once placed. */
+  #pub-cue { position: fixed; inset: 0; z-index: 60; pointer-events: none; display: none; }
+  #pub-cue.on { display: block; }
+  /* A 2x2 CSS-px SVG; the transform lives on the inner <g>, so
+     vector-effect (which only cancels a transform inside the SVG) can
+     apply. overflow:visible: an SVG clips to its own box by default,
+     and the <g> alone would clip the ring away. */
+  .pub-ring { position: absolute; left: 0; top: 0; width: 2px; height: 2px; overflow: visible; }
+  .pub-ring g { animation: none; }
+  .pub-ring circle { fill: none; stroke: var(--text); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+  #pub-cue.on .pub-ring g { animation: pub-ring-breathe var(--pub-ring-period, 7s) cubic-bezier(.2, .6, .35, 1) infinite; }
+  #pub-cue.on .pub-ring:nth-child(2) g { animation-delay: calc(var(--pub-ring-period, 7s) * -0.5); }
+  @keyframes pub-ring-breathe {
+    0% { transform: translate(var(--pub-ring-cx), var(--pub-ring-cy)) scale(var(--pub-ring-r0, 1)); opacity: .5; }
+    55% { opacity: .16; }
+    100% { transform: translate(var(--pub-ring-cx), var(--pub-ring-cy)) scale(calc(var(--pub-ring-r0, 1) * var(--pub-ring-k, 1))); opacity: 0; }
+  }
+  /* No breath to hold still for: one ring, born at its resting size and left
+     there, is the whole cue. */
+  @media (prefers-reduced-motion: reduce) {
+    #pub-cue.on .pub-ring g { animation: none; opacity: .35; transform: translate(var(--pub-ring-cx), var(--pub-ring-cy)) scale(calc(var(--pub-ring-r0, 1) * 1.3)); }
+    #pub-cue.on .pub-ring:nth-child(2) g { display: none; }
+  }
+
+  /* The scene the crossfade returns to arrives already standing: its targets are
+     an end state, not a performance to replay each time the reader crosses back. */
+  #stage.snap #box, #stage.snap .sib { transition: none; }
+
+  /* The wash paints only ink and water; elsewhere the canvas is transparent. */
+  #gl { position: absolute; inset: calc(-1 * var(--pad)); width: calc(100% + 2 * var(--pad)); height: calc(100% + 2 * var(--pad)); z-index: 6; pointer-events: none; display: none; background: transparent; }
+  #closing-wash { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 1; pointer-events: none; display: none; background: transparent; }
+  #stage.morphing #box { visibility: hidden; }
+  /* the paper goes into the wash and only the shadow stays: colour and the
+     inline placeholder both off (the shorthand would reset the cover sizing and
+     leave the placeholder tiling at its own size) */
+  #stage.morphing .plate { background-color: transparent; background-image: none !important; opacity: var(--g0); }
+  /* hidden by visibility, which does not transition: an opacity of 0 would
+     ride the load-time fade back to 1 when the morph class comes off, and the
+     sheets would return as their placeholder colour and fade in */
+  #stage.morphing .plate img { visibility: hidden; }
+  #stage.morphing #gl { display: block; }
+  /* Mobile keeps the live source under the first wash frames. The cover rises
+     over it before the scene classes change, then falls only after the target
+     has been initialized under the canvas. */
+  #stage.mobile-handoff #gl { display: block; z-index: 100; opacity: var(--wash-cover, 0); }
+  #stage.mobile-handoff #cell > :not(#gl) { filter: opacity(calc(1 - var(--wash-cover, 0))); }
+  #publish-bridge { position: absolute; z-index: 110; pointer-events: none; transform-origin: center; }
+  /* Membership, not animation (site/watercolor-morph.js): an element a
+     transition's print carries is either live or it is that print on the
+     canvas, never half of each. visibility, not opacity, because visibility
+     cannot be transitioned into a second, unsynchronised fade. */
+  .wash-member { visibility: hidden !important; transition: none !important; }
+  #stage.live .plate { visibility: hidden; }
+  /* an explicit visible on a child beats a hidden parent, so the morph hides the frames themselves */
+  #stage.morphing #box iframe { visibility: hidden; }
+
+  /* ── copy: one continuous column; the scene is pinned beside it ──────── */
+  .scene { display: flex; flex-direction: column; width: clamp(360px, 100% - 96px, 440px); margin: 0 auto; }
+  #c1 { min-height: 100vh; justify-content: center; }
+  /* the next text is a screen's scroll away: the stretch between the texts is
+     where the wash is worked, and the smeared print needs room to be seen */
+  #c2, #c3, #c4, #c5 { margin-top: 44vh; }
+  /* Scene 5's words are not in this column — they are in the full-bleed section,
+     which is the whole point of the last join. What stands here is the scroll
+     the join is scrubbed over and the edge the trigger reads off it. */
+  #c5 { padding-bottom: 56vh; }
+  /* #vis's pin, unit 4 (review-phases-2-4.md Job 2 item 5; owner: "the
+     publish button should not scroll up"): #vis un-pins once scrollY
+     passes #col's own stretched height (set by #copy's content) minus
+     #vis's own 100vh -- that used to land right after scene 4's own text,
+     hundreds of px before the crossfade band starts (measured: broke at
+     y=2999, bandNear=3179). margin-bottom here, not .page's own
+     padding-bottom: a grid container's padding does not stretch its rows
+     (measured), #c5's own margin, inside #copy, does. 100vh cancels
+     exactly against #vis's own height, landing the new un-pin point at
+     five.offsetTop, past closingRestY() (measured). Not #five { position:
+     fixed }: #five's own in-flow layout over the pinned #closing-film is
+     the deliberate design (confirmed by measurement) this works with. */
+  #c5 { margin-bottom: 100vh; }
+  #c5 .edge { height: 1px; }
+  h1, h2 { font: 400 40px/1.14 var(--heading); letter-spacing: -.01em; margin: 0 0 20px; }
+  h1 span, h2 span { display: block; }
+  /* Item D: each word of a scene's own h2/.lede, wrapped at runtime
+     (landing.js, initWords) so its background under a mobile wash can be
+     sampled and its own colour flipped independently. display:inline (not
+     h1/h2 span's own block, above -- a class beats a bare type selector)
+     keeps normal text flow. The wash decides the colour at each sampled
+     frame; animating between two contrast-safe endpoints would pass through
+     an unreadable midpoint, so this high-frequency state change is discrete. */
+  .word { display: inline; transition: none; }
+  /* Scene 3's own kicker, standing above the video's own title — the front
+     layer's heading, static now that nothing swaps into or out of it. */
+  .crumb { font: 600 12px/1.4 var(--body); letter-spacing: .04em; text-transform: uppercase; color: var(--text2); margin: 0 0 10px; }
+  .lede { font-size: 17px; line-height: 1.6; color: var(--text2); margin: 0 0 28px; }
+  .btns { display: flex; gap: 12px; flex-wrap: wrap; }
+  /* mosspub.com's .moss-btn, as shipped */
+  .moss-btn { font: 500 15px/1.2 var(--body); border-radius: 4px; padding: 10px 20px; cursor: pointer; white-space: nowrap; text-decoration: none; display: inline-flex; align-items: center; transition: background .15s ease, border-color .15s ease; }
+  .moss-btn[data-role="primary"] { background: var(--text); color: var(--bg); border: 1px solid var(--text); }
+  .moss-btn[data-role="primary"]:hover { background: var(--accent); border-color: var(--accent); }
+  .moss-btn[data-role="secondary"] { background: transparent; color: var(--text); border: 1px solid #d1cdc4; }
+  .moss-btn[data-role="secondary"]:hover { border-color: var(--accent); }
+  .btns a[href^="https://github.com/"]::before { content: ""; width: 1em; height: 1em; margin-right: 7px; background: currentColor; -webkit-mask: url('/assets/platforms/github.svg') center / contain no-repeat; mask: url('/assets/platforms/github.svg') center / contain no-repeat; }
+
+  /* ── Scene 5: the page gives way to one full-bleed frame ───────────────── */
+  /* The last join is a crossfade, not a wash: the two-column page above and this
+     section are co-present in the page's own stacking context for the length of
+     the scrub, and --xf is the only thing that moves — the page's opacity runs
+     down as this section's runs up. Nothing is resized and nothing re-lays out,
+     which is what a sticky box growing into the slot could not promise. */
+  .page { opacity: calc(1 - var(--xf)); }
+  /* faded to nothing is not gone: settled on the close, the page behind it is
+     made inert so no control of scenes 1-4 can still be clicked or tabbed into */
+  .page[inert] { pointer-events: none; }
+  /* position/inset used to be set here too -- dead, overridden below by the
+     deliberate later design (#five is an in-flow text track scrolling over
+     the pinned #closing-film, not a fixed overlay itself; confirmed by
+     measurement, unit 4), and deleted as this unit's own subtraction. */
+  #five { z-index: 40; opacity: var(--xf); pointer-events: none; background: #101110; color: #fff;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; }
+  #five.on { pointer-events: auto; }
+  /* the element's own poster is the ground: it stands while the footage is
+     still bytes, and under reduced motion, where no footage is ever asked for,
+     it is the whole scene */
+  #loop { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  /* the paper, laid over the footage, so the line reads off it */
+  #scrim { position: absolute; inset: 0; background: #080a09; opacity: var(--scrim); }
+  #five-in { position: relative; isolation: isolate; width: min(900px, 100% - 96px); text-align: center; }
+  #five h2 { font: 400 clamp(32px, 4.2vw, 56px)/1.12 var(--heading); letter-spacing: -.015em; margin: 0 0 34px; text-wrap: balance; }
+  #install { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  #routes { display: flex; gap: 6px; align-items: center; }
+  #routes a { font: 500 15px/1.2 var(--body); color: #fff; text-decoration: none; padding: 9px 14px; border: 1px solid transparent; border-radius: 4px;
+    display: inline-flex; align-items: center; min-height: 24px; transition: border-color .15s ease; }
+  #routes a:hover { border-color: var(--accent); }
+  #cli-note { font-size: 13px; line-height: 1.5; color: #eee; margin: 0; max-width: 52ch; }
+  #loop-toggle { position: absolute; right: 28px; bottom: 28px; min-width: 76px; min-height: 34px; padding: 8px 16px; cursor: pointer;
+    font: 500 13px/1.2 var(--body); color: #fff; background: transparent; border: 1px solid #d1cdc4; border-radius: 4px; transition: border-color .15s ease; }
+  #loop-toggle:hover, #routes a:hover { border-color: #fff; }
+  #five .moss-btn[data-role="primary"] { background: #fff; color: #171b17; border-color: #fff; }
+  #five .moss-btn[data-role="primary"]:hover { background: #e7ede5; }
+  /* Reduced motion is the poster and nothing else: no video element is ever
+     given a source, so there is nothing playing and nothing to pause. */
+  @media (prefers-reduced-motion: reduce) { #loop-toggle { display: none; } #intro h1 { opacity: 1; } }
+
+  /* The document still has a useful close if JavaScript is unavailable: the
+     scripts add .js before body paint, while the static section keeps its own
+     headline and links when they cannot run. */
+  /* Preserve geometry while deferred scripts are still loading. */
+  html:not([data-ready]) #vis { visibility: hidden; }
+  html:not([data-ready]) #five { position: relative; min-height: 100vh; opacity: 1; pointer-events: auto; background: #101110; }
+  #beta { position: relative; }
+  .static-signup-note { display: none; position: absolute; inset-block-start: 100%; margin-block-start: 26px; }
+  html:not([data-ready]) .signup { visibility: hidden; }
+  html:not([data-ready]) .static-signup-note { display: block; }
+
+  /* Layout pass: the intro owns the first beat, while the stage remains tied
+     to the measured desktop composition. The script supplies these variables
+     after it knows the viewport and copy heights. */
+  #intro { pointer-events: none; display: grid; place-items: start center; min-height: 108svh; padding: 0 32px; text-align: center; }
+  #intro h1 { position: sticky; top: 34svh; margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; text-wrap: balance; opacity: 1; }
+  .page { margin-top: -42svh; }
+  .page { grid-template-columns: calc(var(--vis-w) * var(--layout-s, var(--s)) - clamp(168px, calc(23vw - 126px), 238px)) minmax(0, 1fr); }
+  #col { margin-top: calc(-1 * var(--page-start, 0px)); }
+  #stage { transform: translate(calc((var(--layout-s, 1) - var(--s, 1)) * 400px), var(--opening-lift, 0px)); }
+  #cell { transform: scale(var(--s)); }
+  #c1 { min-height: 100svh; justify-content: flex-start; }
+  #c1 h2 { font-size: 40px; }
+  #five { position: relative; inset: auto; min-height: 100svh; overflow: visible; background: transparent; color: #fff; }
+  /* Cancels #c5's own +100vh above, so #five's offsetTop -- and
+     restY/closingRestY/progressAt/xfAt, all read from it -- keep their
+     exact values (measured: unchanged to the value at all 25 of
+     I-progress's sampled positions) while #col stretches taller inside
+     .page. */
+  #five { margin-top: -100vh; }
+  #c5 { height: 0; min-height: 0; padding: 0; }
+  /* Native proximity snap owns desktop reading wells. */
+  @media (min-width: 901px) {
+    html { scroll-snap-type: y proximity; }
+    .scene, #five { scroll-snap-align: start; }
+  }
+  @media (prefers-reduced-motion: reduce) { html { scroll-snap-type: none; } }
+  #loop-toggle { position: static; margin-top: 28px; }
+  .moss-btn { min-height: 44px; }
+  #downloads .download-choice { display: grid; justify-items: center; gap: 7px; min-width: 136px; }
+  #downloads .availability { font-size: 11px; opacity: .68; }
+  #downloads button:disabled { opacity: 1; color: rgba(255,255,255,.68); border-color: rgba(255,255,255,.48); cursor: not-allowed; }
+  #downloads button:disabled img { filter: invert(1); opacity: .72; }
+  #downloads a[data-availability] { background: transparent; color: #fff; border-color: #a4a8a2; }
+  #downloads a[data-availability] img { filter: invert(1); }
+  #loop { width: 100vw; height: 100dvh; object-fit: cover; }
+  #closing-film { overflow: hidden; }
+  #downloads svg, #downloads img { width: 19px; height: 19px; margin-right: 8px; }
+  .form-status { min-height: 1.5em; font-size: 13px; }
+  :focus-visible { outline: 2px solid #8aa778; outline-offset: 4px; }
+  #closing-film { position: fixed; inset: 0; z-index: -1; pointer-events: none; background: #101110; }
+  #five-in { z-index: 1; width: min(1000px, calc(100% - 144px)); padding: 72px 0; }
+  #five h2 { max-width: 22ch; margin-inline: auto; }
+  .closing-lede { max-width: 48ch; margin: 0 auto 30px; color: rgba(255,255,255,.82); font-size: 17px; line-height: 1.55; }
+  #downloads, #routes { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+  #downloads .moss-btn, #routes a { min-width: 44px; min-height: 44px; justify-content: center; }
+  #commands { display: grid; gap: 10px; width: min(600px, 100%); margin: 28px auto 0; }
+  .command { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 2px 0 9px; border-bottom: 1px solid rgba(255,255,255,.3); text-align: left; }
+  .command code { min-width: 0; overflow-wrap: anywhere; color: #fff; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .command button { min-height: 40px; padding: 8px 12px; color: #fff; background: transparent; border: 1px solid rgba(255,255,255,.52); border-radius: 4px; cursor: pointer; }
+  #beta, #footer { width: min(1000px, 100%); margin: 56px auto 0; padding-top: 32px; text-align: left; }
+  #beta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 1fr); gap: 48px; align-items: end; }
+  #beta h3 { margin: 0 0 8px; font: 400 28px/1.15 var(--heading); }
+  #beta p, #footer { color: rgba(255,255,255,.75); }
+  .signup { position: relative; display: grid; gap: 8px; align-self: end; }
+  .signup .form-status { position: absolute; inset: calc(100% + 8px) 0 auto; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  .input-row { display: flex; gap: 8px; }
+  .input-row input { min-width: 0; flex: 1; min-height: 44px; padding: 10px 2px; color: #fff; background: transparent; border: 0; border-bottom: 1px solid rgba(255,255,255,.62); border-radius: 0; }
+  .input-row input::placeholder { color: rgba(255,255,255,.7); opacity: 1; }
+  .input-row button { min-height: 44px; padding: 10px 16px; color: #151515; background: #fff; border: 1px solid #fff; border-radius: 4px; cursor: pointer; }
+  #footer { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+  #footer a { color: inherit; }
+  #footer nav { display: flex; width: 100%; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 9px; }
+  #footer .github-link { margin-left: auto; }
+  #footer .github-link { display: inline-flex; align-items: center; }
+  #footer .github-link img { width: 17px; height: 17px; filter: invert(1); }
+
+  @media (min-width: 901px) {
+    #beta p { margin: 0; line-height: 1.5; }
+    #beta .signup { margin-bottom: 3px; }
+    /* Desktop's own flip point, unit 4: the background behind the header is
+       real page content (#vis's own visual, then the closing film), not a
+       single controlled band like mobile's --header-band, so this cannot
+       be solved in closed form the way mobile's 0.548 was. Measured
+       instead, sampling a real crossfade sweep against a clean background
+       strip (not the text's own pixels): the equal-contrast point (20L + 1
+       = 1.05 / (L + 0.05), the same formula mobile's own 0.548 solves in
+       closed form) interpolates to xf~0.626 on the measured background
+       curve, ~4.6:1 there -- I-header-scrim-desktop is the assertion this
+       holds within measurement noise, not the formula alone. */
+    body { --hdr: clamp(0, (var(--xf) - 0.626) * 100000, 1); }
+  }
+  @media (min-width: 901px) and (max-height: 800px) {
+    #beta { margin-top: 40px; padding-top: 0; }
+    #five h2 { margin-bottom: 28px; }
+    .closing-lede { margin-bottom: 24px; }
+    #commands { margin-top: 22px; }
+  }
+
+  @media (max-width: 900px) {
+    /* One band through every scene, including 5, not a paper-coloured band
+       plus two separate dark boxes behind .brand/.language-picker (the
+       previous shape, which the owner found ugly). Same geometry, same
+       solid-then-fade gradient shape as scenes 1-4; only its colour now
+       rides --xf from --bg (#faf8f5, 250/248/245) to the closing film's own
+       dark tone (#080a09, 8/10/9) instead of fading the whole band's
+       opacity to zero -- the same rgb(calc(a + b*var(--xf)), ...) pattern
+       .brand/.language-picker's own color rules already use below, not
+       calc() inside color-mix()'s percentage argument. */
+    body { --header-band: rgb(calc(250 - 242 * var(--xf)), calc(248 - 238 * var(--xf)), calc(245 - 236 * var(--xf)));
+      /* The band and a linearly-interpolated text colour are two values
+         crossing the same grey gamut in opposite directions, so ANY
+         continuous blend between them touches near-zero contrast somewhere
+         -- verified directly, sampling a real touch-scroll crossfade: ~1:1
+         at xf about 0.5, well under readable. Flipping instead of blending:
+         --hdr snaps text from the dark (xf=0) formula to the light (xf=1)
+         one over a ramp a hundred-thousandth of the crossfade wide, centred
+         on 0.548, the xf where
+         solving contrast(black, band) = contrast(white, band) lands --
+         both sides equal 4.58:1 there, the worst case either formula can
+         see. The ramp is narrower than a device pixel of scroll, so no
+         position lands inside it, and the pure-black and
+         pure-white formulas below are the only two colours ever actually
+         seen, each on the side of the band where it has the most room. */
+      --hdr: clamp(0, (var(--xf) - 0.548) * 100000, 1);
+    }
+    body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; background: linear-gradient(to bottom, var(--header-band) 0 34px, color-mix(in srgb, var(--header-band) 72%, transparent) 52px, transparent); }
+    .brand { color: rgb(calc(255 * var(--hdr)), calc(255 * var(--hdr)), calc(255 * var(--hdr))); }
+    .brand svg { filter: grayscale(var(--hdr)) brightness(calc(1 + var(--hdr) * 99)); }
+    .language-picker { color: rgb(calc(93 + 162 * var(--hdr)), calc(88 + 167 * var(--hdr)), calc(83 + 172 * var(--hdr))); }
+    .language-picker a:hover { color: rgb(calc(45 + 163 * var(--hdr)), calc(90 + 165 * var(--hdr)), calc(45 + 210 * var(--hdr))); }
+    .language-picker .nav-lang-current { color: rgb(calc(44 + 211 * var(--hdr)), calc(40 + 215 * var(--hdr)), calc(37 + 218 * var(--hdr))); }
+    /* Belt and suspenders on landing.js's own !mobileLayout() gate: scene 2's
+       cue is a desktop-only design (the brief scopes it that way), and this
+       breakpoint is the same 900px mobileLayout() itself reads. */
+    #pub-cue { display: none !important; }
+    #intro { min-height: 0; justify-items: start; padding: 88px 34px 32px; }
+    #intro h1 { position: static; text-align: left; font-size: clamp(40px, 11vw, 58px); opacity: 1; }
+    .page { margin-top: 0; opacity: 1; }
+    #col { opacity: calc(1 - var(--xf)); }
+    #c4 .scene-text { color: color-mix(in srgb, var(--text), white calc(var(--xf) * 100%)); }
+    #c4 .lede { color: inherit; }
+    .page { position: relative; display: block; width: 100%; padding: 0 16px; }
+    #col { margin-top: 0; position: absolute; inset: 0; height: auto; padding-top: var(--mobile-col-pad, 70svh); z-index: 0; pointer-events: none; }
+    #copy { position: relative; z-index: 2; min-width: 0; }
+    #vis { margin-left: 0; position: sticky; top: 76px; width: 100%; height: var(--mobile-vis-h, 42vh); min-height: 260px; padding-left: 0; transform: none; align-items: flex-start; justify-content: flex-start; overflow: visible; }
+    #stage { position: relative; transform: none; width: calc(var(--cell-w) * var(--s)); height: calc(var(--cell-h) * var(--s)); flex: none; margin: var(--mobile-stage-overhang, 0px) auto 0; }
+    #cell { transform: scale(var(--s)); transform-origin: left top; }
+    #stage[data-scene="3"] #cell { transform: scale(var(--s)) translate(-132px, -124px) scale(1.4); }
+    #vis, #vis * { pointer-events: none !important; touch-action: pan-y; }
+    .scene { width: 100%; min-height: auto; margin: 0; padding: 0 0 calc(var(--mobile-vis-h, 42vh) + 72px + var(--mobile-dwell, 280px)); justify-content: flex-start; }
+    #c1 { min-height: auto; padding-top: 0; }
+    #c1 .scene-text { transform: none; margin-top: 0; }
+    .scene-text { width: min(100%, 520px); margin-inline: auto; padding: 24px 18px 26px; background: none; }
+    #c1 h2 { font-size: clamp(29px, 9vw, 40px); }
+    .btns { flex-wrap: nowrap; gap: 8px; }
+    .moss-btn { padding-inline: clamp(12px, 4vw, 20px); }
+    #c3 .btns { gap: 6px; }
+    #c3 .moss-btn { min-height: 44px; padding-inline: 6px; font-size: clamp(12px, 3.4vw, 14px); white-space: nowrap; }
+    #c2, #c3, #c4, #c5 { margin-top: 0; }
+    /* Leave a readable scene-2 plateau after its incoming wash settles. This
+       is layout-owned breathing room, so the next dissolve still starts from
+       scene 3's text touching the visual rather than from a timer. */
+    #c2 { padding-bottom: calc(var(--mobile-vis-h, 42vh) + 160px + var(--mobile-dwell, 280px)); }
+    #c5 { height: 0; min-height: 0; padding: 0; overflow: hidden; }
+    #five { position: relative; min-height: 100svh; overflow: visible; }
+    #closing-film { position: fixed; z-index: -1; }
+    #five-in { z-index: 1; width: 100%; padding: 72px 20px; }
+    #five h2 { font-size: clamp(34px, 10vw, 54px); }
+    #beta { display: block; margin-top: 48px; }
+  #beta .signup { margin-top: 26px; }
+    #footer { margin-top: 48px; }
+    .command { grid-template-columns: 1fr auto; }
+    .command code { grid-column: 1; }
+    .command button { grid-column: 2; }
+  }
+</style>
+
+<script>history.scrollRestoration = 'manual'; window.__LANG = document.documentElement.lang === 'zh-Hans' || document.documentElement.lang === 'zh-Hant' ? 'zh' : 'en';</script>
+</head>
+<body>
+
+<div class="brand"><span class="moss-mark" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 288 288"><path fill="currentColor" d="m127 67-5 3q-3 5-4 2l-12 4c-10 3-10 4-10 6l-1 3-2 3-1 3q-2 0-4 5-4 11-12-1-4-6-6-4-4 0 1 5c2 2 2 2 2 10q-1 11 6 18v2l3 8 4 8 2 3c3 3 6 12 4 12l-12-5-4-1c-3 0-11-4-15-8q-4-5-6-2t-7-1l-5-2q-2 0-3-3-1-6-5 0-2 3 3 7c7 7 9 17 4 18l4 4q14 8 3 21-4 6-8 5-4 1 0 2h8q7-2 11 4 3 3 0 7-4 9 2 14l3 4q-1 1 1 1 3-2 8 5c6 6 3 15-5 17q-9 3-9 5c1 1 8 0 13-2l11-2 9-1h8l8-1 2-1 1 1 1 2 2 3 2 1q4-1-5 12c-2 3-3 14-1 14l4-4q5-6 9-7l6-1 4-2 4-1c2-2 9-3 9-1v5q-1 9 3 6l2-4 2-8q5-10 8-4l8 5c10 4 12 6 17 12q6 8 8 6 3-1-3-8-9-11-9-14c1-2 12-5 17-5 4 0 11-5 13-10l3-4 1-2v-2c3-1 11-8 11-10q3-8 16-5l8 1c2-1-8-4-14-5-4 0-12-3-16-6s2-13 7-13l3-2 4-2 6-5 4-5c7-5 16-15 15-17q-1-3-2 0c-3 3-18 6-19 4-1-3 4-23 7-27q5-9-1-5l-4 1-5 3q-2 3-3 1h-5l-12 6q-10 4-13 7l-11 5 3-4c6-6 18-27 19-34l6-13q6-9 2-11c-1-2-35-17-52-24l-3 2-3 5-2 4-2 6-2 5-1 6-2 7-2 3-3 4-1 5-1 2-1 2q-2-1-3-7l-2-5-1-3-1-13-2-12-2-1q-2 0-1-3l-3-8-1-3q-1-3-5-1"/><path fill="#4f7031" d="m199 4-7 19-2 6-2 6-5 10-5 10-2 5-3 6-4 6 40 16c14 6 14 6 16 3q3-3 3-16l1-11q2-8-3 1-3 8-10 9-4 0 0-4l2-7q1-7-2-2-2 6-8 5t-4-3l1-3 2-4q4-5 1-6-3 1-4 5c0 2-5 7-8 7q-12 0-2-24 5-9 5-16l2-11c2-10 2-11 0-11q-2 0-2 4M39 41l1 3 9 9 4 7 2 7 4 9 3 4 3 7q2 7 5 4 5-2 0-5c-3-2-9-11-9-13l-6-13-2-4-2-4q-3-2-4-6c-2-6-9-10-8-5M23 23l3 6c3 5 4 6 4 12q0 13 8 21l4 5 5 7-4-15-3-3q-3-2-4-8l-1-3q-2 0-2-7 1-6-3-8l-4-5zM0 114l7 5q5 0 11 5l8 5q7 4 7 7t3-1 0-6l-4-3q-4-3-12-5l-5-2c-2-2-15-7-15-5m277-1-3 2-3 3q-4 4-6 3-3-2-7 2l-6 6q-5 3-4 5 1 3 3 1l5-3q7-2 7-6l3-2c7-4 15-9 15-11q1-4-4 0M108 41l1 5c3 14 0 27-7 28q-7 2-6 5c1 1 20-7 21-9l-1-8-2-12q-3-10-6-9M51 81l7 13c0 2 5 7 6 7q1-4-8-14zm178-59-5 15c-1 6 2 0 5-9l2-10zM49 249c-6 0-6 7-1 7 3 0 10-5 10-6q-3-2-9-1m75-199v9c0 9 0 9 3 8q4 0 1-6l-2-5-1-5zm140 109q-6 2-3 5c2 2 9-2 9-5q1-3-6 0"/></svg></span><span class="moss-wordmark">青苔</span></div>
+
+<nav class="language-picker nav-lang-toggle" aria-label="語言"><a class="nav-lang-link" data-landing-locale="en" hreflang="en" lang="en" aria-label="English" href="/">EN</a><span aria-hidden="true">/</span><span class="nav-lang-current" lang="zh-hant" aria-label="繁體中文">繁</span><span aria-hidden="true">/</span><a class="nav-lang-link" data-landing-locale="zh-hans" hreflang="zh-hans" lang="zh-hans" aria-label="简体中文" href="/zh-hans/">简</a></nav>
+
+<header id="intro"><h1>從你的資料夾，<br>到你的網站。</h1></header>
+<div class="page">
+  <div id="col"><div id="vis"><div id="stage"><div id="cell">
+    <!-- Scene 1's plates: built by JS (buildPlates(), movie6.html script,
+         near GEOM), one per image the active language's home page itself
+         uses — the count differs (9 English, 2 Chinese) so there is no
+         fixed markup to write here. -->
+    <div class="sib" id="sib-nb" data-asset="nb"><iframe id="nb" title="Jupyter 筆記本：連續放大的曼德博集合"></iframe></div>
+    <div class="sib" id="sib-sk" data-asset="sk"><iframe id="sk" data-src="scene3/sketch/native.html?id=living-garden" title="HTML 作品"></iframe></div>
+    <div id="s3-video" data-asset="video"><video id="s3-video-el" muted loop playsinline preload="none" data-poster="scene3/movie/pool/posters/general-railroad-ties.jpg"></video></div>
+    <div class="ground" id="g0"></div><div class="ground" id="g1"></div>
+    <div id="box">
+      <iframe id="ed" title="青苔編輯器"></iframe>
+      <iframe id="sh" title="青苔預覽" loading="lazy"></iframe>
+      <iframe id="vd" data-src="ui/shell.html?title=A%20canvas%20half%20empty%20%E2%80%94%20A%20Folder%20for%20All%20Digital%20Creation&target=your.site" title="青苔預覽" loading="lazy"></iframe>
+    </div>
+    <script>
+    // ?lang=zh: the Chinese version (八大山人 vault), vertical typesetting in
+    // the preview. Set before the two iframes would otherwise start loading
+    // their (English) default src, so there is no double-fetch.
+    // moss-landing-lab/HANDOFF.md Task A.
+    // Sources are assigned by the deferred runtime after parsing.
+    </script>
+    <canvas id="gl"></canvas>
+    <!-- Scene 4's targets. One circle per deploy target, popped from behind
+         the grown control and run from then on by a d3-force simulation
+         (build and physics live in the script, under "Scene 4's targets") —
+         the markup carries nothing target-specific, so a logo landing in
+         scene4/logos/ needs no edit here. -->
+    <div id="fan"></div>
+  </div></div></div></div>
+  <div id="copy">
+    <section class="scene" id="c1"><div class="scene-text">
+      <h2>隨處寫作，<br>隨處發布。</h2>
+      <p class="lede">青苔將你的資料夾發布成網站。在本機資料夾裡寫 Markdown，用任何雲端硬碟協作。按一下就能預覽，再按一下就能發布到任何地方。</p>
+      <div class="btns"><a class="moss-btn" data-role="primary" href="#beta">申請封閉測試</a><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/">開始使用 →</a></div>
+    </div></section>
+    <section class="scene" id="c2"><div class="scene-text">
+      <h2>柔軟如人，<br>強大如機器。</h2>
+      <p class="lede">所有資料都保存在本機檔案中，你慣用的編輯器、程式助理都能直接使用。直覺的介面，讓你的網站始終易讀、好維護。</p>
+      <div class="btns"><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/editor/">青苔編輯器 →</a><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/design/">編寫主題 →</a></div>
+    </div></section>
+    <section class="scene" id="c3"><div class="scene-text">
+      <h2 id="c3-h2">廣如網路，<br>輕如資料夾。</h2>
+      <p class="lede">從文章、影片到 JavaScript 作品與 Jupyter 筆記本，青苔會最佳化檔案並打包成網站。</p>
+      <div class="btns"><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/links/">媒體檔案類型 →</a><a class="moss-btn" data-role="secondary" href="https://github.com/Symbiosis-Lab/moss/issues/new?title=Media%20type%20request%3A%20&amp;labels=enhancement">申請檔案支援</a></div>
+    </div></section>
+    <section class="scene" id="c4"><div class="scene-text">
+      <h2>用你的方式，<br>發布到你的網路。</h2>
+      <p class="lede">選擇網站代管服務，將同一份內容同步到多個管道。自行編寫外掛，或從外掛目錄安裝，連接電子報、IPFS 與 Nostr。</p>
+      <div class="btns"><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/extend/">編寫外掛 →</a><a class="moss-btn" data-role="secondary" href="https://github.com/Symbiosis-Lab/moss-registry">青苔外掛目錄</a></div>
+    </div></section>
+    <section class="scene" id="c5" aria-hidden="true"><div class="edge"></div></section>
+  </div>
+</div>
+
+<!-- Scene 2's Publish cue: a body-level layer, deliberately not inside #stage,
+     so its ring can grow past #box/#cell's own overflow:hidden and is never
+     folded into a print (fold() in landing.js only ever walks #stage). Two
+     rings, phase-offset by CSS alone, so at most two are ever alive; landing.js
+     turns the layer on/off and writes its --pub-ring-* geometry, this markup
+     only draws what it is told. -->
+<div id="pub-cue" aria-hidden="true">
+  <svg class="pub-ring" viewBox="-1 -1 2 2"><g><circle cx="0" cy="0" r="1"/></g></svg>
+  <svg class="pub-ring" viewBox="-1 -1 2 2"><g><circle cx="0" cy="0" r="1"/></g></svg>
+</div>
+
+<!-- The close. Its footage is asked for from the script and never from here, so
+     a reader who has asked for reduced motion is shown the poster and no request
+     for the loop is ever made. -->
+<section id="five" aria-labelledby="five-headline">
+  <div id="closing-film" aria-hidden="true"><video id="loop" muted playsinline loop preload="none" tabindex="-1"></video><div id="scrim"></div></div>
+  <div id="five-in">
+    <noscript><style>.signup, [data-copy] { display: none; }</style><p>To request beta access, enable JavaScript. Downloads and installation commands work without it.</p></noscript>
+    <h2 id="five-headline">你的網路發布器。</h2>
+    <p class="closing-lede">網路不只用來瀏覽，也用來創作。這裡是你的網路發布器。</p>
+    <div id="install">
+      <div id="downloads" aria-label="下載青苔">
+        <div class="download-choice"><a class="moss-btn" data-role="primary" data-platform="macos" href="https://github.com/Symbiosis-Lab/moss/releases/download/v0.14.1/moss_0.14.1_universal.dmg">macOS</a><small class="availability">macOS 12 或更新版本</small></div>
+        <div class="download-choice"><button class="moss-btn" data-role="secondary" data-platform="windows" type="button" disabled>Windows</button><small class="availability">即將推出</small></div>
+        <div class="download-choice"><button class="moss-btn" data-role="secondary" data-platform="linux" type="button" disabled>Linux</button><small class="availability">即將推出</small></div>
+      </div>
+      <div id="commands" aria-label="從終端機安裝">
+        <div class="command"><code>npm install -g @symbiosis-lab/moss</code><button type="button" data-copy="npm install -g @symbiosis-lab/moss" aria-label="複製 npm 安裝指令">複製</button></div>
+        <div class="command"><code>brew install --cask symbiosis-lab/tap/moss</code><button type="button" data-copy="brew install --cask symbiosis-lab/tap/moss" aria-label="複製 Homebrew 安裝指令">複製</button></div>
+      </div>
+      <p class="copy-status" id="copy-status" role="status" aria-live="polite"></p>
+    </div>
+    <section id="beta" aria-labelledby="beta-title" tabindex="-1">
+      <div><h3 id="beta-title">一起打磨青苔</h3><p>接收不定期的更新消息，並免費試用青苔的預設網站代管服務。</p></div>
+      <p class="static-signup-note">Enable JavaScript to request beta access.</p><form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">你的電子郵件地址</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="你的電子郵件地址" required><button type="submit">申請封閉測試</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
+    </section>
+    <footer id="footer">
+      <nav aria-label="頁尾"><a href="/zh-hant/privacy/">隱私權</a><span aria-hidden="true">·</span><a href="https://symbiosis-lab.org/">Symbiosis Lab</a><span aria-hidden="true">·</span><span>2026</span><a class="github-link" href="https://github.com/Symbiosis-Lab/moss" aria-label="在 GitHub 查看青苔"><img src="assets/platforms/github.svg" alt=""></a></nav>
+    </footer>
+  </div>
+</section>
+
+<script>(function () { var w = innerWidth, h = innerHeight, mobile = w <= 900, s = mobile ? Math.min((w - 32) / 820, 366 / 750) : Math.max(.5, Math.min(1, (Math.min(w, 1528) - 56 - 96 - 440) / 992, (h - 96) / 620)); var root = document.documentElement.style; root.setProperty('--page-start', String(document.querySelector('.page').getBoundingClientRect().top + scrollY) + 'px'); root.setProperty('--layout-s', String(s)); root.setProperty('--s', String(s)); })();</script>
+<script src="watercolor-capture.js" defer></script>
+<script src="watercolor-morph.js" defer></script>
+<script src="landing.js" defer></script>
+<script src="closing.js" defer></script>
+</body>
+</html>

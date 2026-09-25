@@ -1,228 +1,156 @@
 :root {
+  --moss-color-bg: #faf8f5;
+  --moss-color-surface: #f4f0ea;
+  --moss-color-text: #2c2825;
+  --moss-color-muted: #716b65;
   --moss-color-accent: #2d5a2d;
-  --moss-font-body: "Inter", -apple-system, sans-serif;
+  --moss-border-light: #e5e1da;
+  --moss-border-medium: #d1cdc4;
+  --moss-font-body: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "PingFang TC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --moss-font-serif: "Iowan Old Style", Athelas, "Palatino Linotype", Palatino, "Book Antiqua", "Songti SC", "Songti TC", "Noto Serif CJK SC", serif;
   --moss-content-width: 72ch;
 }
 
-/* Muted footnote below download buttons — left-aligned to match buttons */
-.moss-buttons + p {
-  font-size: 0.8rem;
-  color: var(--moss-color-muted, #9b9590);
-  margin-top: 0.5rem;
+@font-face {
+  font-family: "Moss Long Cang";
+  src: url("/assets/brand/LongCang-colophon.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+9752, U+82D4;
 }
 
-.nav-content {
-  border-bottom: none;
+[data-theme="dark"] {
+  --moss-color-bg: #171816;
+  --moss-color-surface: #20221f;
+  --moss-color-text: #e8e5df;
+  --moss-color-muted: #aaa59d;
+  --moss-color-accent: #a3d483;
+  --moss-border-light: #33362f;
+  --moss-border-medium: #4a4e45;
 }
 
-/* Screen-recording GIFs (开始使用 guide etc.): cap width on wide screens so
-   the 1200px recordings don't dominate the text column; min() falls back to
-   full container width on narrow/mobile viewports. */
-article img[src$=".gif"] {
-  max-width: min(600px, 100%);
-  margin-inline: auto;
-}
+body { background: var(--moss-color-bg); color: var(--moss-color-text); }
+h1, h2, h3, .article-title { font-family: var(--moss-font-serif); font-weight: 400; letter-spacing: -.01em; }
+.nav-content { border-bottom: 1px solid var(--moss-border-light); }
+.site-name { font-weight: 600; letter-spacing: -.01em; }
+html:lang(zh-Hans) .site-name, html:lang(zh-Hant) .site-name { font-family: "Moss Long Cang", var(--moss-font-body); font-size: 1.08em; font-weight: 400; letter-spacing: .02em; }
+header { padding-bottom: var(--moss-space-lg); }
+article img[src$=".gif"] { max-width: min(600px, 100%); margin-inline: auto; }
+.moss-buttons + p { margin-top: .5rem; color: var(--moss-color-muted); font-size: .8rem; }
+footer.container::before { margin-bottom: .25rem; }
+footer.container > * { font-size: .8em; }
+footer.container > p { font-size: var(--moss-reading-size); }
+/* The old `vertical-align: text-bottom` sat the icon ~1.5px below the
+   optical center of the adjacent footer text, and CSS `middle` (which
+   aligns to the parent's baseline + half its x-height, not to the text's
+   own line-box center) measured slightly worse. `-2.4px` is an empirical
+   nudge down from `baseline` (measured with Playwright against the footer
+   text's line-box center in both chromium and webkit at the system font
+   stack this theme uses); it lands within ~0.2px of center in both — see
+   scripts/check-docs-footer-icon.mjs. Re-measure if the footer font stack
+   ever changes.
+   `position: relative` + `::after` inset hit area: the ::after is
+   out-of-flow, so it pads the click/tap target to the accessible 24x24px
+   minimum (icon is 17-19px per locale; +4px inset on all sides clears 24px)
+   without growing the icon's own box or the footer line's height. */
+footer.container .footer-github { position: relative; display: inline-flex; align-items: center; vertical-align: -2.4px; }
+footer.container .footer-github::before { content: ""; display: block; width: 1em; height: 1em; opacity: .72; background: currentColor; -webkit-mask: url("/assets/platforms/github.svg") center / contain no-repeat; mask: url("/assets/platforms/github.svg") center / contain no-repeat; }
+footer.container .footer-github::after { content: ""; position: absolute; inset: -4px; }
 
-header {
-  padding-bottom: var(--moss-space-lg);
-}
+.moss-grid.sc-demo { margin-block: 0; overflow: hidden; border: 1px solid var(--moss-border-light); border-radius: 6px; gap: 0; }
+.moss-grid.sc-demo > .moss-grid-card { padding: 1.25rem; }
+.moss-grid.sc-demo > .moss-grid-card:first-child { position: relative; background: var(--moss-code-background, var(--moss-color-surface)); }
+.moss-grid.sc-demo > .moss-grid-card:first-child::before { content: "Markdown"; display: block; margin-bottom: .6rem; color: var(--moss-color-muted); font-size: .68rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.moss-grid.sc-demo > .moss-grid-card:first-child pre, .moss-grid.sc-demo > .moss-grid-card:first-child pre code { margin: 0; border: 0; background: transparent; }
+.moss-grid.sc-demo > .moss-grid-card:last-child { align-self: center; border-left: 1px solid var(--moss-border-light); background: var(--moss-color-bg); }
+.moss-grid.sc-demo .moss-grid { margin-block: revert; overflow: visible; border: 0; border-radius: 0; background: transparent; }
+.moss-grid.sc-demo .moss-grid > .moss-grid-card { border: 0; background: transparent; }
 
-/* Footer: smaller text sitting close to the divider.
-   Default moss footer renders at body font-size with an xs-rem gap below
-   the divider; on the releases site we want a tighter, lower-key footer. */
-footer.container::before {
-  margin-bottom: 0.25rem;
-}
-footer.container > * {
-  font-size: 0.8em;
-}
-/* …except the authored link line ("Privacy · Symbiosis Lab · 2026"), which
-   matches the subscribe form's input/placeholder size (--moss-reading-size)
-   so the two halves of the footer read at one consistent size. */
-footer.container > p {
-  font-size: var(--moss-reading-size);
-}
-
-/* ── Sunlight theme — "kindle under sunlight" ambient mode ──
-   Activated by script.js via data-theme="sunlight" on <html>.
-   Extends light color scheme with warmer tones. */
-
-[data-theme="sunlight"] {
-  --moss-color-bg: #f5efe3;
-  --moss-color-surface: #efe8da;
-  --moss-color-text: #2c2825;
-  --moss-color-muted: #8a7d6f;
-  --moss-border-light: #e0d8c8;
-  --moss-border-medium: #d1c8b4;
-  --moss-code-background: #f0eadc;
-  --moss-code-border: #ddd5c3;
-}
-
-/* Leaf shadow video overlay — full viewport, blended via multiply.
-   White areas of the video become transparent; dark areas darken
-   the page content as natural-looking shadows. */
-#sunlight-leaves {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: top;
-  mix-blend-mode: multiply;
-  pointer-events: none;
-  z-index: 999;
-  opacity: 0;
-  transition: opacity 1.2s ease-out;
-}
-
-/* Video stays hidden when sunlight activates — .video-ready
-   (added by JS after playback starts) fades it in. */
-[data-theme="sunlight"] #sunlight-leaves {
-  opacity: 0;
-}
-
-[data-theme="sunlight"] #sunlight-leaves.video-ready {
-  opacity: 0.3;
-}
-
-/* Warm color wash — barely perceptible amber tint.
-   Just enough to unify the page under a warm light without yellowing text. */
-#sunlight-wash {
-  position: fixed;
-  inset: 0;
-  background: rgba(255, 210, 120, 0.02);
-  mix-blend-mode: multiply;
-  pointer-events: none;
-  z-index: 998;
-  opacity: 0;
-  transition: opacity 1.2s ease-out;
-}
-
-[data-theme="sunlight"] #sunlight-wash {
-  opacity: 1;
-}
-
-/* Paper grain texture — tiny repeating noise for analog feel.
-   Relative URL: resolves against this stylesheet (/_moss/theme/style.css →
-   /_moss/theme/grain.png), so it survives wherever moss mounts the theme. */
-[data-theme="sunlight"] body {
-  background-image: url("grain.png");
-  background-repeat: repeat;
-  background-blend-mode: multiply;
-}
-
-/* Accessibility: disable the animated video for users who prefer reduced motion.
-   The warm color shift and grain texture remain (they're static). */
-@media (prefers-reduced-motion: reduce) {
-  #sunlight-leaves {
-    display: none;
-  }
-}
-
-/* ── Shortcode documentation demo layout (.sc-demo) ──────────────────────────
-   Used with :::grid 2 {.sc-demo} to show Markdown source (left) beside
-   the live rendered output (right) in a side-by-side demo block.
-
-   moss renders the grid as:
-     <div class="moss-grid sc-demo" data-columns="2">
-       <div class="moss-grid-card"><!-- code block --></div>
-       <div class="moss-grid-card"><!-- live output --></div>
-     </div>
-
-   This CSS only adds visual treatment; grid-template-columns stays with moss.
-   ─────────────────────────────────────────────────────────────────────────── */
-
-/* Wrapper */
-.moss-grid.sc-demo {
-  border: 1px solid var(--moss-border-light);
-  border-radius: 6px;
-  gap: 0;
-  margin-block: 0;
-  overflow: hidden;
-}
-
-/* Both cells */
-.moss-grid.sc-demo > .moss-grid-card {
-  padding: 1.25rem;
-}
-
-/* Left cell — source panel */
-.moss-grid.sc-demo > .moss-grid-card:first-child {
-  background: var(--moss-code-background, var(--moss-color-surface));
-  position: relative;
-}
-
-/* "Markdown" label via pseudo-element */
-.moss-grid.sc-demo > .moss-grid-card:first-child::before {
-  content: "Markdown";
-  display: block;
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--moss-color-muted, #9b9590);
-  margin-bottom: 0.6rem;
-}
-
-/* Strip extra border/background from the <pre><code> inside the source panel
-   — it's already sitting on a code-background cell */
-.moss-grid.sc-demo > .moss-grid-card:first-child pre,
-.moss-grid.sc-demo > .moss-grid-card:first-child pre code {
-  background: transparent;
-  border: none;
-  margin: 0;
-}
-
-/* Right cell — live output panel */
-.moss-grid.sc-demo > .moss-grid-card:last-child {
-  background: var(--moss-color-bg, #faf8f5);
-  border-left: 1px solid var(--moss-border-light);
-  align-self: center;
-}
-
-/* Recursive safety — nested .moss-grid inside the right cell must NOT inherit
-   the .sc-demo treatment */
-.moss-grid.sc-demo .moss-grid {
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  margin-block: revert;
-  overflow: visible;
-}
-
-.moss-grid.sc-demo .moss-grid > .moss-grid-card {
-  background: transparent;
-  border: none;
-}
-
-/* ── Dark mode ── */
-[data-theme="dark"] .moss-grid.sc-demo {
-  border-color: var(--moss-border-medium);
-}
-
-[data-theme="dark"] .moss-grid.sc-demo > .moss-grid-card:last-child {
-  border-left-color: var(--moss-border-medium);
-}
-
-/* ── Mobile: stack vertically ── */
 @media (max-width: 640px) {
-  .moss-grid.sc-demo {
-    border-radius: 6px;
+  .moss-grid.sc-demo > .moss-grid-card:first-child { border-bottom: 1px solid var(--moss-border-light); }
+  .moss-grid.sc-demo > .moss-grid-card:last-child { align-self: unset; border-left: 0; }
+}
+
+/* moss-stage layout: sticky beside the prose, full article height, on viewports wide enough for
+   both the reading column and the stage to fit. moss-stage.css owns the component's own chrome;
+   this file only places it — see site/ui/stage/README.md's module table.
+
+   Tried first: a plain right float + position: sticky, the same idiom
+   crates/moss-build/src/assets/css/site/sidenotes.css uses for `.moss-sidenote`. It measured
+   correctly at rest, but once the stage was actually stuck (mid-scroll, not at its natural flow
+   position) Chromium and WebKit both kept wrapping prose around the float's ORIGINAL flow
+   rectangle rather than its stuck one — paragraphs below that point rendered full-width and the
+   stuck stage painted over them. That is the "misbehaves" case stage/README.md names; a grid
+   sidesteps it entirely, since a track's box is never something another track's content can be
+   drawn under. */
+:root {
+  --moss-stage-width: 600px;
+}
+
+@media screen and (min-width: 1400px) {
+  /* Header, article, footer, and the series-nav divider share one width on a page with a stage.
+     moss's `.container` reads one variable, --moss-site-max-width (crates/moss-build/src/assets/
+     css/site.css ~L722) — but the nav, the article, the footer, and the series-nav each carry a
+     MORE specific site.css rule of their own (`.main-nav`, `main > article.container`,
+     `footer.container`, `.moss-series-nav`) that reads --moss-content-width instead, so a plain
+     --moss-site-max-width override reaches none of them. This file's own declarations are
+     unlayered, so they already win over site.css's `@layer shortcodes` — they still have to name
+     the property explicitly for each element, just via this one shared variable instead of four
+     copies (or, for the article, two copies) of the formula. */
+  :root:has(article > moss-stage) {
+    /* Wide enough to hold the normal reading measure AND the stage side by side — same idea as
+       `main.has-sidebar` (site.css) holding its narrower article next to `.latest-sidebar`, just
+       expressed as one extra column of this same box instead of a flex sibling. */
+    --moss-site-max-width: min(
+      calc(var(--moss-content-width) + var(--moss-space-lg) + var(--moss-stage-width)),
+      calc(100vw - 2 * var(--moss-container-padding))
+    );
   }
 
-  .moss-grid.sc-demo > .moss-grid-card:first-child {
-    border-radius: 6px 6px 0 0;
-    border-bottom: 1px solid var(--moss-border-light);
+  body:has(article > moss-stage) :is(.main-nav, footer.container, .moss-series-nav) {
+    max-inline-size: var(--moss-site-max-width);
   }
 
-  .moss-grid.sc-demo > .moss-grid-card:last-child {
-    border-left: none;
-    border-radius: 0 0 6px 6px;
-    align-self: unset;
+  article:has(> moss-stage) {
+    max-inline-size: var(--moss-site-max-width);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--moss-stage-width);
+    column-gap: var(--moss-space-lg);
+    align-items: start;
   }
 
-  [data-theme="dark"] .moss-grid.sc-demo > .moss-grid-card:first-child {
-    border-bottom-color: var(--moss-border-medium);
+  /* One rule for every prose child, not one per tag: everything that isn't the stage stays in
+     the reading column. */
+  article:has(> moss-stage) > :not(moss-stage) {
+    grid-column: 1;
+  }
+
+  article:has(> moss-stage) > moss-stage {
+    grid-column: 2;
+    /* `1 / -1` (span to the true last row) measurably pushes Chromium and WebKit alike to put
+       the stage's ENTIRE height requirement into row 1 alone — row 1 grows to the stage's own
+       height and every later row (the actual prose) is shoved down by that much, opening a gap
+       under the first heading. A fixed span past the real row count (no stage-bearing page here
+       has more than ~25 direct children) gives the track-sizing algorithm slack rows with
+       nothing in them to grow into instead, and the stage settles into the prose's real total
+       height with no row conscripted. */
+    grid-row: 1 / span 200;
+    position: sticky;
+    /* --moss-space-lg (32px) read as flush against the viewport edge once the header had
+       scrolled away — bumped to --moss-space-xl (48px) for real breathing room above the stage.
+       Fits a 1440×800 viewport with room to spare: 48px top + min(70vh, 640px) never exceeds
+       800px at any width this layout applies at. */
+    top: var(--moss-space-xl);
+    margin-block-end: var(--moss-space-lg);
+  }
+}
+
+@media screen and (max-width: 1399.98px) {
+  /* Below the width where both fit, the stage is simply inline where authored — no sheet, no
+     docked bar. An explicit play request (site/ui/stage/moss-stage.js) scrolls it into view. */
+  article:has(> moss-stage) > moss-stage {
+    display: block;
+    margin-block-end: var(--moss-space-lg);
   }
 }
 

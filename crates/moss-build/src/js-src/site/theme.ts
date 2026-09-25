@@ -415,11 +415,14 @@ import "./nav/nav-island";
 if (document.body.dataset.typesetting === "vertical") {
   document.addEventListener("wheel", (e: WheelEvent) => {
     // Only remap when vertical delta dominates (skip natural horizontal swipes)
-    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-      e.preventDefault();
-      // Wheel down → scroll left (forward in reading direction)
-      document.documentElement.scrollBy({ left: -e.deltaY });
-    }
+    if (e.ctrlKey || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    const before = document.body.scrollLeft;
+    const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
+      : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? document.body.clientWidth : 1;
+    // The vertical theme makes body the horizontal scroll container. Wheel
+    // down moves it left, forward in the vertical-rl reading direction.
+    document.body.scrollBy({ left: -e.deltaY * unit });
+    if (document.body.scrollLeft !== before) e.preventDefault();
   }, { passive: false });
 }
 

@@ -214,8 +214,13 @@ pub struct HeadlessBuildRun {
 /// shutdown sender; the pipeline still owns the serve-dir cell handoff (it
 /// passes its own cell to the closure — the contract `ops/serve.rs`
 /// documents: the build must own the cell or `--serve` 404s forever).
-pub fn run_headless_build(run: HeadlessBuildRun) -> ! {
+pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
     install_headless_logger();
+    // Keep every process-global folder key in one coordinate system. Notify
+    // reports absolute paths, and watch rebuilds therefore use an absolute
+    // root; registering the initial build's session under a relative CLI
+    // argument would split its stage lock and task registries from rebuilds.
+    run.folder_path = watch::headless::absolute_watch_root(&run.folder_path);
     preflight_cli_build(&run.folder_path);
 
     // Register the session before any build work: the pipeline, the seal tail

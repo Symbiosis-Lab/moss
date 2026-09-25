@@ -38,6 +38,14 @@ output — don't read or edit them; use `moss describe --css <selector>` instead
 
 `.moss/build.nosync/current/` is a symlink, not the only copy: every sealed build lands in its own `generations/<gen-id>/` directory under `.moss/build.nosync/`, and by default the newest 3 are kept (`[build].keep_generations`, floor 2) rather than only the latest — read `.moss/build.nosync/current.generation` (or `readlink .moss/build.nosync/current`) for the id before rebuilding, then diff that generation's directory against the new `current/` once the rebuild finishes. No need to copy anything aside first — the old generation is still on disk.
 
+## Verify a preview before handing it off
+
+For an editing session, start with `moss build <folder> --serve --watch` and use the URL printed by that process. Verify the exact URL the reader will open. A successful build or HTTP 200 for the page does not prove its styles loaded: check the linked CSS and JavaScript responses, their content types, and the rendered page. An HTML fallback can return 200 at a stylesheet URL while leaving the page unstyled.
+
+Test watching with a reversible edit to the actual source, observe the changed page or asset through the running server, then restore it and verify restoration. Checking only the initial build cannot reveal a watcher that ignores source events. Edit source files, not the generated output under `.moss/build/`.
+
+If you separately serve an exported build, set the server root explicitly to that output and preserve its `/_moss/` asset paths. A prototype-specific rewrite can break an otherwise valid documentation build.
+
 ## Shortcode appears as literal text
 
 Usually this means **no matching closing fence**. The closer carries the same

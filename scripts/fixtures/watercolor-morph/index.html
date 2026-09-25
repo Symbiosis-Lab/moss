@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>watercolor-morph fixture</title>
+<style>
+  :root { --bg: #ffffff; }
+  html, body { margin: 0; background: #ffffff; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<!-- The sim's own on-screen canvas: unused by this fixture (draw() is never
+     called -- every invariant reads the pigment framebuffer directly via
+     probe()), so its size does not matter. -->
+<canvas id="gl" width="16" height="16"></canvas>
+<script>
+// Two synthetic compositions, one rect, a 12-column pattern repeated down
+// 12 rows -- 384x384, close to the desktop grid's own ~1.05 aspect (measured
+// 2026-09-21: a 12x1 strip of the same cells left the water shader's eight
+// splash drops, positioned at fixed UV fractions tuned for a near-square
+// grid, wetting some columns far more than others, a geometric artifact
+// unrelated to any of the physics under test). Category membership is
+// column-only and identical on every row, so which physical row a texel
+// readback puts first or last (WebGL's UNPACK_FLIP_Y_WEBGL / gl_FragCoord
+// convention) never matters here.
+// Grouped into three contiguous blocks (cols 0-3 both, 4-7 aOnly, 8-11
+// bOnly), not interleaved -- tried interleaving them 2026-09-21 to shorten
+// the distance uMixG has to carry pigment into bOnly cells, and it instead
+// leaked neighbours' pigment into aOnly cells, which then failed to lift.
+// The two clauses pull in opposite directions on adjacency, so blocks (the
+// original layout) are kept; a real scene boundary sits at one edge of a
+// block, which every cell here is within CELL texels of already.
+const CELL = 32, COLS = 12, ROWS = 12, W = CELL * COLS, H = CELL * ROWS;
+const WHITE = [255, 255, 255];
+const CELLS = [
+  { col: 0, kind: 'both', a: [210, 40, 40], b: [40, 60, 210] },
+  { col: 1, kind: 'both', a: [40, 170, 60], b: [220, 150, 20] },
+  { col: 2, kind: 'both', a: [180, 40, 180], b: [30, 180, 180] },
+  { col: 3, kind: 'both', a: [210, 180, 30], b: [120, 40, 190] },
+  { col: 4, kind: 'aOnly', a: [200, 90, 40], b: WHITE },
+  { col: 5, kind: 'aOnly', a: [50, 140, 200], b: WHITE },
+  { col: 6, kind: 'aOnly', a: [140, 200, 50], b: WHITE },
+  { col: 7, kind: 'aOnly', a: [200, 50, 140], b: WHITE },
+  { col: 8, kind: 'bOnly', a: WHITE, b: [90, 200, 40] },
+  { col: 9, kind: 'bOnly', a: WHITE, b: [200, 40, 90] },
+  { col: 10, kind: 'bOnly', a: WHITE, b: [40, 90, 200] },
+  { col: 11, kind: 'bOnly', a: WHITE, b: [200, 140, 40] },
+];
+
+function paint(field) {
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  for (const cell of CELLS) {
+    const [r, gg, b] = cell[field];
+    g.fillStyle = `rgb(${r},${gg},${b})`;
+    g.fillRect(cell.col * CELL, 0, CELL, H);
+  }
+  return c;
+}
+
+try {
+  const canvasA = paint('a'), canvasB = paint('b');
+  const glCanvas = document.getElementById('gl');
+  // makeSim, V/HEAD/WATER/MEAN/SHOW and T_SPLASH/T_TAKE/T_DRY arrive via an
+  // init script the check injects before this one runs (see
+  // check-watercolor-morph.mjs) -- extracted live from site/landing.js so
+  // this fixture always exercises whatever that file currently contains,
+  // never a second copy of the physics that could drift from it.
+  // 3x the grid's own texel size on screen -- draw()'s only consumer of
+  // rect(), so this is purely cosmetic (a legible filmstrip); probe() reads
+  // the simulation's FBOs directly, sized from texW/texH, not from this.
+  const sim = makeSim({ canvas: glCanvas, texW: W, texH: H, rect: () => ({ x: 0, y: 0, w: W * 3, h: H * 3 }) });
+  if (!sim) throw new Error('makeSim returned null (WebGL2 or EXT_color_buffer_float unavailable)');
+  sim.setPrints(canvasA, canvasB);
+  sim.reset();
+  window.__morphFixture = {
+    W, H, CELL, cells: CELLS,
+    step(t, cure, fwd = true) { sim.step(fwd, t, cure); },
+    // probe() is widened (by the check script's extraction step, not here)
+    // to read a whole rectangle in one call; a Float32Array does not
+    // survive Playwright's evaluate boundary as itself, so this is where it
+    // becomes a plain array, once, rather than in every caller.
+    probe(x, y, w, h) { return sim.probe(x, y, w, h).map((a) => (a instanceof Float32Array ? Array.from(a) : a)); },
+    reset() { sim.reset(); },
+    // Not read by the numeric invariant (that reads probe()'s raw texels
+    // directly) -- for a human filmstrip: renders the canvas exactly as the
+    // landing page would at this state, for a screenshot.
+    draw(cure, fwd = true) { sim.draw(fwd, cure); },
+  };
+} catch (error) {
+  window.__fixtureError = error.message;
+}
+window.__fixtureReady = true;
+</script>
+</body>
+</html>

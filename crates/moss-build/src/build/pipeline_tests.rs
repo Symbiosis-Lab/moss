@@ -2217,6 +2217,62 @@ fn test_copy_deferred_assets_skips_html_when_in_blocking_keys() {
     );
 }
 
+#[test]
+fn configured_passthrough_html_replaces_generated_page() {
+    use std::collections::HashSet;
+
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source");
+    let output = temp.path().join("output");
+    let moss = temp.path().join(".moss");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&output).unwrap();
+    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::write(source.join("index.html"), "<html>custom home</html>").unwrap();
+    fs::write(output.join("index.html"), "<html>generated home</html>").unwrap();
+
+    let ctx = crate::types::services::BackgroundContext {
+        source_path: source.to_string_lossy().to_string(),
+        staging_dir: output.clone(),
+        moss_dir: moss,
+        blocking_keys: HashSet::from(["index.html".to_string()]),
+        passthrough_roots: HashSet::from(["index.html".to_string()]),
+        ..crate::types::services::BackgroundContext::for_test()
+    };
+
+    let (tx, _rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+    copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+
+    assert_eq!(fs::read_to_string(output.join("index.html")).unwrap(), "<html>custom home</html>");
+}
+
+#[test]
+fn configured_passthrough_directory_copies_video_verbatim() {
+    use std::collections::HashSet;
+
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source");
+    let output = temp.path().join("output");
+    let moss = temp.path().join(".moss");
+    fs::create_dir_all(source.join("landing")).unwrap();
+    fs::create_dir_all(&output).unwrap();
+    fs::create_dir_all(moss.join("build").join("cache").join("objects")).unwrap();
+    fs::write(source.join("landing/loop.mp4"), b"source video bytes").unwrap();
+
+    let ctx = crate::types::services::BackgroundContext {
+        source_path: source.to_string_lossy().to_string(),
+        staging_dir: output.clone(),
+        moss_dir: moss,
+        passthrough_roots: HashSet::from(["landing/".to_string()]),
+        ..crate::types::services::BackgroundContext::for_test()
+    };
+
+    let (tx, _rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+    copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+
+    assert_eq!(fs::read(output.join("landing/loop.mp4")).unwrap(), b"source video bytes");
+}
+
 // =========================================================================
 // Stale Directory Cleanup Tests
 // =========================================================================
