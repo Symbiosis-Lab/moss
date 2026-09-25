@@ -4541,6 +4541,10 @@ function watchScrollNative() {
     scrollV += dy / innerHeight / V_TAU;
     if (progressAt() >= SHIPS - 1) warmScene3Media();
   }
+  // Native scroll owns the closing crossfade too. Keep the film opacity on
+  // the same geometry-derived position as the final wash on every frame;
+  // otherwise --xf remains at its previous rest until the terminal cut.
+  setCross(xfAt());
   updateFinalDissolve();
   const now = performance.now();
   const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000));
