@@ -90,6 +90,17 @@ async function checkOpening(viewport) {
   return { viewport, startGap: +start.gap.toFixed(1), travel: +distance.toFixed(1), titleTravel: +(start.title.top - moved.title.top).toFixed(1), movedVisualTop: +moved.visual.top.toFixed(1) };
 }
 
+async function checkContinuousMorph() {
+  const page = await mobilePage();
+  const sample = await page.evaluate(() => WatercolorMorph.frameAt(0.1, 180, {
+    A_END: 0.4, B_START: 0.6, ease: 2, wetGainMax: 0.9,
+  }, 18));
+  assert(sample.f0[0] === sample.f1[0] && sample.f0[1] !== sample.f1[1] && sample.w > 0 && sample.w < 1,
+    `outer-phase pigment is still a rounded discrete frame: ${JSON.stringify(sample)}`);
+  await page.close();
+  return sample;
+}
+
 async function checkSceneTiming() {
   const page = await mobilePage();
   // Started here, awaited much further down: the print-warming this waits
@@ -134,10 +145,10 @@ async function checkSceneTiming() {
   // #vis-pin-gated assertions (below this comment used to read progress off
   // the pin point, which finished the leg while #c2's text was still
   // hundreds of px short of the visual) -- mobileEntranceProgress
-  // (site/landing.js) now holds progress at exactly 0 until #c2's own text
-  // top reaches band.bottom, then ramps over MOBILE_LEG0_RAMP_SPAN (64px).
-  // Same three properties as every other touch-gated leg: 0 exactly at the
-  // touch point (not merely near it); no 2px scroll step raises progress by
+  // (site/landing.js) now starts 72px before #c2's own text reaches the
+  // visual, then ramps over MOBILE_LEG0_RAMP_SPAN (160px). This begins the
+  // visual change earlier rather than obtaining a longer dissolve by moving
+  // its end later. No 2px scroll step raises progress by
   // more than 0.05; and progress still reaches 1 well (>=40px, the owner's
   // own margin for the leg that follows) before scene 2's text reaches its
   // old resting line, leaving room for leg 1->2's own gate on the same text.
@@ -153,17 +164,17 @@ async function checkSceneTiming() {
     return y;
   }, band);
   assert(touchY != null, 'scene 2\'s text never reached the visual band across the sampled scroll range');
-  const beforeTouch = await moveTo(touchY - 40);
-  assert(beforeTouch.progress <= 0.01, `progress advanced before scene 2's text touched the visual: ${JSON.stringify(beforeTouch)}`);
+  const beforeStart = await moveTo(touchY - 80);
+  assert(beforeStart.progress <= 0.01, `progress advanced before scene 2's approach band: ${JSON.stringify(beforeStart)}`);
   const grid = await page.evaluate(({ from, to, step }) => {
     const keep = scrollY;
     const rows = [];
     for (let y = from; y <= to; y += step) { scrollTo(0, y); rows.push([y, +progressAt().toFixed(4)]); }
     scrollTo(0, keep);
     return rows;
-  }, { from: touchY, to: touchY + 90, step: 2 });
-  // touchY is the first whole scroll pixel at which the text's (subpixel)
-  // rect.top has crossed band.bottom, so it can sit a fraction of a px past
+  }, { from: touchY - 72, to: touchY + 100, step: 2 });
+  // touchY-72 is the first whole scroll pixel at which the text's (subpixel)
+  // rect.top has crossed the approach band, so it can sit a fraction of a px past
   // the true zero crossing -- <=0.01 (not ===0) tolerates that rounding the
   // same way backAtTouch below does, without hiding a real step.
   assert(grid[0][1] <= 0.01, `progress is not ~0 at the touch point: ${JSON.stringify(grid[0])}`);
@@ -204,9 +215,9 @@ async function checkSceneTiming() {
   // A real touch drive over a few px, not just the static grid above:
   // confirms a genuine wheel gesture also ramps rather than steps, and
   // reverses, right at the touch point.
-  const justPastTouch = await moveTo(touchY + 2);
+  const justPastTouch = await moveTo(touchY - 70);
   assert(justPastTouch.progress > 0 && justPastTouch.progress <= 0.05, `a 2px real scroll past the touch point reads ${justPastTouch.progress} -- not a ramp`);
-  const backAtTouch = await moveTo(touchY - 2);
+  const backAtTouch = await moveTo(touchY - 74);
   assert(backAtTouch.progress <= 0.01, `reversing 4px back across the touch point did not return progress to ~0: ${JSON.stringify(backAtTouch)}`);
   // Just past where progress first reaches 1 (my own ramp finishing, q not
   // yet under way): targetAt() rounds progress to the nearest scene, so
@@ -236,12 +247,12 @@ async function checkSceneTiming() {
   // #c3's job under the old contact-at-band.bottom+8 step here, which sat
   // before the touch point this leg now starts from and so no longer means
   // "reset" -- this is the same reset, just after leg 0->1's own ramp
-  // instead of before the touch point). band.bottom-74: past leg 0->1's own
-  // MOBILE_LEG0_RAMP_SPAN (64px), so this lands in leg 1->2's own range
+  // instead of before the touch point). band.bottom-170: past leg 0->1's own
+  // MOBILE_LEG0_RAMP_SPAN (160px), so this lands in leg 1->2's own range
   // (progress a little over 1, p a little over 0.088), comfortably under
   // the 0.45 deadband -- band.bottom-20 would still be inside leg 0->1's
-  // own ramp (span 64) and read shown===0, not the reset to 1 this needs.
-  await wheelIncomingTopTo('#c2 .scene-text', band.bottom - 74);
+  // own ramp and read shown===0, not the reset to 1 this needs.
+  await wheelIncomingTopTo('#c2 .scene-text', band.bottom - 170);
   // -40: mirrors mobileInkProgress's own shortened denominator for this leg.
   const nextHalfTop = band.bottom - (band.height + nextTextHeight - 40) / 2;
   let half = await wheelIncomingTopTo('#c2 .scene-text', nextHalfTop);
@@ -262,14 +273,14 @@ async function checkSceneTiming() {
   const paused = await read();
   assert(Math.abs(paused.state.washT - half.state.washT) < .01 && Math.abs(paused.state.progress - half.state.progress) < .001 && paused.writes === 0,
     `scene 2 wash advanced without scroll input: ${JSON.stringify({ half, paused })}`);
-  // band.bottom-70, not +8: that used to sit safely inside leg 1->2's own
+  // band.bottom-170, not +8: that sits safely inside leg 1->2's own
   // ramp because the old pin-gated leg 0->1 had already finished tens of px
   // earlier, well before the touch point. leg 0->1 now occupies band.bottom
-  // down to band.bottom-MOBILE_LEG0_RAMP_SPAN (64px) itself, so anything in
+  // down to band.bottom-MOBILE_LEG0_RAMP_SPAN (160px) itself, so anything in
   // that span (e.g. -4, or -20 as the reset step above found) reverses into
-  // leg 0->1's own territory instead of testing leg 1->2's reversal; -70
+  // leg 0->1's own territory instead of testing leg 1->2's reversal; -170
   // clears that span.
-  const reversed = await wheelIncomingTopTo('#c2 .scene-text', band.bottom - 70);
+  const reversed = await wheelIncomingTopTo('#c2 .scene-text', band.bottom - 170);
   assert(reversed.progress < half.progress && reversed.state.washT < half.state.washT - .02 && reversed.writes === 0,
     `scene 2 wash did not reverse with upward scroll: ${JSON.stringify({ half, reversed })}`);
   await page.close();
@@ -328,6 +339,7 @@ async function checkClosingTouch() {
 try {
   results.opening = [];
   for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 568 }]) results.opening.push(await checkOpening(viewport));
+  results.continuousMorph = await checkContinuousMorph();
   results.sceneTiming = await checkSceneTiming();
   await checkScene2to3Touch();
   await checkClosingTouch();

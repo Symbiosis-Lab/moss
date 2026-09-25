@@ -10,12 +10,10 @@
 //
 // A scene's dissolve is the simulation itself, run on the GPU once per print
 // (the engine's recordDissolve) with a checkpoint of the film's whole state
-// every few steps. The frame shown at p is that dissolve at the step p names,
-// replayed from the checkpoint before it: the real film, so a bloom spreads
-// as p moves instead of fading in between two stored frames, and a pure
+// every few steps. The frame shown at p blends the checkpoints around the
+// step p names as pigment rather than pixels, and remains a pure
 // function of p, since the dissolve's inputs are fixed (a fixed dt, no
-// scroll speed, no tilt) and replay reaches the same state going forwards or
-// back. The middle mixes the two washes' pigment rather than re-tinting water
+// scroll speed, no tilt). The middle mixes the two washes' pigment rather than re-tinting water
 // on the sheet: a well-mixed wash has no spatial structure left for physics
 // to move, so exchanging its pigment is a change of uniform concentration,
 // which interpolation states exactly, reversibly and without a clock.
@@ -65,17 +63,20 @@
   // and only reaches the top steps in the last part of the phase (owner,
   // item C: "linger in the bleeding part... reach the fully mixed end only
   // in the last part of phase 1", symmetrically in phase 3).
-  function frameAt(p, N, bounds = DEFAULT_BOUNDS) {
+  function frameAt(p, N, bounds = DEFAULT_BOUNDS, every = 1) {
     const { A_END: aEnd, B_START: bStart, ease } = bounds;
     const stepRatio = (x) => { x = Math.min(1, Math.max(0, x)); return ease === 1 ? x : Math.pow(x, ease); };
-    if (p <= aEnd) { const s = Math.round(N * stepRatio(p / aEnd)); return { f0: ['a', s], f1: ['a', s], w: 0 }; }
+    const betweenCheckpoints = (side, step) => {
+      const lo = Math.floor(step / every) * every, hi = Math.min(N, lo + every);
+      return { f0: [side, lo], f1: [side, hi], w: hi === lo ? 0 : (step - lo) / (hi - lo) };
+    };
+    if (p <= aEnd) return betweenCheckpoints('a', N * stepRatio(p / aEnd));
     if (p < bStart) return { f0: ['a', N], f1: ['b', N], w: smoothstep((p - aEnd) / (bStart - aEnd)) };
-    const s = Math.round(N * stepRatio((1 - p) / (1 - bStart)));
-    return { f0: ['b', s], f1: ['b', s], w: 0 };
+    return betweenCheckpoints('b', N * stepRatio((1 - p) / (1 - bStart)));
   }
 
   // engine: the makeSim instance. steps: a dissolve's length in sim steps.
-  // every: the checkpoint spacing, which bounds the replay one frame costs.
+  // every: the checkpoint spacing interpolated by one display frame.
   // keep: how many prints' records stay on the GPU at once (a leg needs two;
   // a third lets the next one in either direction be warm). `mobile`: a
   // bounds object (A_END, B_START, ease, wetGainMax) used in place of the
@@ -162,8 +163,8 @@
         const leg = current = { a, b, ra, rb, tag, carry, p: -1, exact: true, members, hidden: false, hiding: 0, bounds: DEFAULT_BOUNDS };
         return {
           // Presents p, spending at most `budget` steps recording a dissolve
-          // this leg still lacks (a's first: it is the one shown first), plus
-          // the replay to p's own step. Returns the steps spent and whether
+          // this leg still lacks (a's first: it is the one shown first).
+          // Returns the steps spent and whether
           // the frame shown is exactly p's -- false only while a record is
           // still being made, which asks the caller to render again next frame.
           // `mobile`: this frame's own layout, read fresh every call rather
@@ -177,7 +178,7 @@
             if (!engine.holds(a, b)) engine.setPrints(a, b);
             let spent = 0;
             for (const rec of [ra, rb]) if (spent < budget) spent += engine.advanceRecord(rec, budget - spent);
-            const at = frameAt(p, steps, bounds);
+            const at = frameAt(p, steps, bounds, every);
             const rec = { a: ra, b: rb };
             // A step not yet recorded shows the furthest a has reached: the
             // same dissolve for a's own, and a's side of the middle for b's.
@@ -185,10 +186,6 @@
             const exact = ok(at.f0) && ok(at.f1);
             const [f0, f1] = exact ? [at.f0, at.f1] : [['a', ra.n], ['a', ra.n]];
             const frame = ([side, s]) => ({ slot: side === 'a' ? 'src' : 'tgt', rec: rec[side], s });
-            // Only one frame is ever between checkpoints (the outer phases show
-            // a single step; the middle, two finished washes), so one seek does,
-            // and a step on a checkpoint is shown from the checkpoint itself.
-            if (f0[1] % every) spent += engine.seek(rec[f0[0]], f0[1]);
             engine.present(frame(f0), frame(f1), exact ? at.w : 0, bounds.wetGainMax);
             leg.p = p; leg.exact = exact;
             showMembers(leg, p);

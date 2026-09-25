@@ -73,7 +73,7 @@ const BASELINE = {
   // synchronous GPU readback every rendered frame measurably slowed the
   // page, enough to break check-landing-mobile.mjs's own small-wheel-delta
   // check elsewhere on the same run).
-  topLevelLets: 78,
+  topLevelLets: 77,
   // Rose 14 -> 15 on 2026-09-21: the last scene's rest is a floor, not a point,
   // so a visitor can reach the footer on a short window. It is written as one
   // comparison against SHARE in the desktop drive. The scene table pays this
@@ -128,7 +128,10 @@ const BASELINE = {
   // and their four delays gave way to one membership class.
   // 54436 -> 54941 (2026-09-24, measured): item D's own `.word` rule and
   // its explanatory comment (site/index.html).
-  htmlBytes: 55161,
+  // 54941 -> 55331 (2026-09-25): the mobile scene-2 plateau and
+  // contrast-safe discrete word colours are intentional interface geometry;
+  // the extra bytes replace the old animated colour transition.
+  htmlBytes: 55551,
   // Unit 0a: rose again for landing.printGeneration(), a getter exposing
   // the existing printGeneration counter on __landing's read side -- the
   // fix for check-landing-invariants.mjs's I-fuzz-invalidated racing on a
@@ -259,7 +262,12 @@ const BASELINE = {
   // refreshSmall/smallPixels put back next to the method it describes, and
   // landing.readback's own comment corrected (64x64 -> 128x128, stale
   // since item D's own resolution bump).
-  scriptBytes: 298232,
+  // 320980 -> 320787 (2026-09-25): the mobile timing comments were shortened
+  // while widening the entrance ramp and softening its phase curve.
+  // 320787 -> 318982 (2026-09-25): the earlier opening trigger is named,
+  // contrast reads the whole composited word box, and obsolete fade-margin
+  // policy gave way to each colour's actual contrast floor.
+  scriptBytes: 294964,
 };
 
 function countWindowAssignments(text) {

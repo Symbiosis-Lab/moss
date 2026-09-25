@@ -1078,7 +1078,6 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
     if (film?.rec === rec && film.n === s) return [pT[pi][0], pT[pi][1], k];
     throw new Error(`dissolve step ${s} is neither stored nor on the film`);
   };
-
   // Item D: a small copy of whatever the canvas just showed, for the
   // per-word contrast flip to read pixels under text from. Downsampled by a
   // framebuffer blit (cheap, one GPU-side copy) into an 8-bit RGBA texture,
@@ -1379,11 +1378,9 @@ function makeSim({ canvas, texW, texH, rect, load = 1, splashAmp = 0.05, mistAmp
 // is new.
 const sim = makeSim({ canvas, texW: Math.round(BASE_TEX_W / (mobileLayout() ? 4 : 2)), texH: Math.round(BASE_TEX_H / (mobileLayout() ? 4 : 2)), rect: () => printRect, readback: true });
 // Every scene transition, both layouts (site/watercolor-morph.js). Each frame
-// shown is the dissolve itself at one step, replayed from the checkpoint
-// before it, so CHECKPOINT_EVERY bounds the replay a frame can cost: 17 steps
-// at most, measured 2026-09-23 at 1.3 ms on the desktop grid and 1.0 ms on
-// the phone's (WebKit, Apple GPU; recording all 180 steps took 82 and 53 ms),
-// which leaves a slower GPU ten times the room within a frame. A checkpoint
+// blends the two recorded checkpoints around its exact scroll position in
+// pigment space. CHECKPOINT_EVERY therefore bounds storage and interpolation
+// distance without requiring a second replay state. A checkpoint
 // is three RGBA16F textures of the grid, 3 x 410 x 390 x 8 B = 3.8 MB on
 // desktop, so ten a print make 38 MB, a leg's two prints 77 MB and the three
 // the page keeps 115 MB; the phone's grid is a quarter of that area, 29 MB
@@ -1393,11 +1390,10 @@ const DISSOLVE_STEPS = 180, CHECKPOINT_EVERY = 18;
 // Owner (item C): "can the morph stay longer in the state of not-yet-well-
 // mixed wash... a colourful wet-on-wet wash that is bleeding is the most
 // stunning, and we want to keep that." Mobile-only bounds (desktop keeps
-// watercolor-morph.js's own DEFAULT_BOUNDS): the middle phase shortened
-// (0.45-0.55 vs 0.35-0.65) so more of p falls in the outer, still-
-// structured phases, and MOBILE_STEP_EASE curves step-vs-p inside those
-// phases so p lingers on the low, still-bleeding steps and only reaches the
-// well-mixed top step in the phase's own last stretch. MOBILE_WET_GAIN_MAX
+// watercolor-morph.js's own DEFAULT_BOUNDS): the middle phase stays broad
+// (0.4-0.6) so dissolution and consolidation read as one continuous wet
+// field, while MOBILE_STEP_EASE softens the outer phase's step curve without
+// pinning a fast touch scroll to its low steps. MOBILE_WET_GAIN_MAX
 // is the SHOW shader's own saturation gain cap at full wetness (present()
 // in makeSim, SHOWK) for the same reason: colour where the bleed is still
 // wet, never on a dry pixel (p=0/1 of a leg are always dry, so the live
@@ -1407,16 +1403,16 @@ const DISSOLVE_STEPS = 180, CHECKPOINT_EVERY = 18;
 // structured share (fraction of sampled p with luminance std >= 12 over a
 // 48x36 downsample of #gl, alpha-weighted) 0.29 -> 0.73 to 0.78 and 0.22 ->
 // 0.68 to 0.71 across repeated runs; chroma at p=0.25 relative to each
-// leg's own settled start 48-62 -> 68-108 and 62-75 -> 105-115. ease=4 (a
-// quarter-power ratio, not the owner's cubic example) and wetGainMax=0.9
+// leg's own settled start 48-62 -> 68-108 and 62-75 -> 105-115. ease=2 and
+// wetGainMax=0.9
 // (gain up to 1.9, short of SHOW's own 2.2) are both past the brief's own
 // "for example" numbers: a smaller gain (tried at 0.4, 0.55, 0.7) left leg
 // 0->1's chroma under its own start's on some runs, on a machine measured
 // at 100+ concurrent chromium processes from other agents during this
 // session, which the repeated-run spread above is itself evidence of --
 // 0.9 was the value that held a positive margin across every repeat tried.
-const MOBILE_STEP_EASE = 4, MOBILE_WET_GAIN_MAX = 0.9;
-const MOBILE_MORPH_BOUNDS = { A_END: 0.45, B_START: 0.55, ease: MOBILE_STEP_EASE, wetGainMax: MOBILE_WET_GAIN_MAX };
+const MOBILE_STEP_EASE = 2, MOBILE_WET_GAIN_MAX = 0.9;
+const MOBILE_MORPH_BOUNDS = { A_END: 0.4, B_START: 0.6, ease: MOBILE_STEP_EASE, wetGainMax: MOBILE_WET_GAIN_MAX };
 const morph = sim && WatercolorMorph.create(sim, { steps: DISSOLVE_STEPS, every: CHECKPOINT_EVERY, mobile: MOBILE_MORPH_BOUNDS });
 // Wherever the cursor is, a scroll gesture moves the page and nothing else. The
 // editor and the preview are live documents with their own scroll containers,
@@ -2280,8 +2276,8 @@ function mobileInkProgress(text, earlyBy = 0) {
 // below read close to 1 while #c2's own text was still hundreds of px below
 // the visual, so scene 1 was already dissolving with nowhere for the reader
 // to see it land. Touch-gated instead, the same shape mobileInkProgress
-// already gives every later leg: held at exactly 0 until #c2's text top
-// reaches band.bottom, then a ratio over MOBILE_LEG0_RAMP_SPAN px.
+// already gives every later leg, except this opening leg starts one line
+// before contact so the slower dissolve is already legible as the copy arrives.
 // That span is deliberately short and independent of mobileInkProgress's
 // own (much longer) span for the *next* leg, 1->2, which is also gated by
 // #c2 -- reusing that leg's own MOBILE_LEG1_EARLY_BY-adjusted ramp here
@@ -2290,14 +2286,13 @@ function mobileInkProgress(text, earlyBy = 0) {
 // which collapses the plateau between them to nothing. A short span keeps
 // leg 1->2's own gate (mobileInkProgress(#c2, 40), still counting from the
 // same touch point) close to its own start when this leg hands off --
-// MOBILE_LEG0_RAMP_SPAN/726 =~ 0.09, comfortably inside the dissolve's own
-// first phase (A_END = 0.35 in watercolor-morph.js) so the handoff reads as
-// a continuation of #c2 still-mostly-undissolved, not a cut.
-const MOBILE_LEG0_RAMP_SPAN = 64;
+// the longer ramp keeps the handoff in the dissolve's own early phase so the
+// scene 2 arrival reads as a continuation of the wet field, not a cut.
+const MOBILE_LEG0_EARLY_BY = 72, MOBILE_LEG0_RAMP_SPAN = 160;
 function mobileEntranceProgress() {
   const band = mobileVisualBand();
   const rect = scenesEl[LIVE].firstElementChild.getBoundingClientRect();
-  return clamp01((band.bottom - rect.top) / MOBILE_LEG0_RAMP_SPAN);
+  return clamp01((band.bottom + MOBILE_LEG0_EARLY_BY - rect.top) / MOBILE_LEG0_RAMP_SPAN);
 }
 // Ends at closingRestY() (the reader's actual last pixel of scroll), not
 // mobileInkProgress's own text-height span, which saturated at 1 hundreds
@@ -2708,7 +2703,7 @@ function initWords() {
     for (const span of el.querySelectorAll('.word')) words.push({ el: span, ld, required, restColor, bright: false, active: false });
   }
 }
-// Averages the small readback's alpha-weighted luminance under `rect`
+// Averages the small readback composited over the page under `rect`
 // (viewport px, from a word's own getBoundingClientRect); null where less
 // than a third of that box is inked (mostly-transparent canvas -- #gl is
 // padded past the print's own edges, and the print is a fixed image a
@@ -2738,69 +2733,27 @@ function bgLuminanceUnder(rect, canvasRect, small) {
   const y0 = Math.max(0, Math.floor((1 - ny1) * small.h)), y1 = Math.min(small.h, Math.ceil((1 - ny0) * small.h));
   if (x1 <= x0 || y1 <= y0) return null;
   const px = small.pixels, bg = small.bg || [255, 255, 255];
-  let n = 0, sum = 0, total = 0;
+  let inked = 0, sum = 0, total = 0;
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
     total++;
     const i = (y * small.w + x) * 4, a = px[i + 3] / 255;
-    if (a < 0.05) continue;
-    sum += relLuminance(px[i] + bg[0] * (1 - a), px[i + 1] + bg[1] * (1 - a), px[i + 2] + bg[2] * (1 - a)); n++;
+    if (a >= 0.05) inked++;
+    sum += relLuminance(px[i] + bg[0] * (1 - a), px[i + 1] + bg[1] * (1 - a), px[i + 2] + bg[2] * (1 - a));
   }
-  return n && n / total > 0.3 ? sum / n : null;
+  return inked / total > 0.3 ? sum / total : null;
 }
-// Hysteresis tied to each word's own required ratio (3 for a heading, 4.5
-// for body), not to a bare comparison of dark's contrast against white's:
-// a reading of "white is relatively better than dark" is true well before
-// dark actually fails its own floor (measured live: a heading word's dark
-// contrast read 1.1-2.3 against a background where white would have read
-// higher still, yet the margin comparison this replaced never crossed
-// because *both* readings kept dropping together) -- what the reader
-// meets is dark's own ratio against its own floor, so that is what gates
-// the flip. FLIP_IN a little early (still passing, 10% of headroom spent)
-// rather than exactly at the floor: the readback trails the frame it
-// describes by up to two frames (present()'s own tick()), and structured,
-// colourful ink (item C) varies enough across a word's own box that the
-// 64x64 average this reads can sit a little optimistic of the darkest
-// patch under it. FLIP_OUT only once dark is comfortably clear (40%
-// headroom) is the hysteresis: without a gap between the two thresholds a
-// reading sitting near the floor would toggle on GPU noise alone.
-// FLIP_IN_MARGIN raised from item D's first cut (1.1) to 1.2 (2026-09-24,
-// measured): the small buffer's own freshness bugs are gone (refreshSmall,
-// makeSim above), so what a low margin leaves short is real lead time for
-// the 150ms fade itself, not stale data -- at 1.1, leg 1->2's own lede
-// words read production and screenshot backgrounds matching exactly and
-// still failed 4.5:1 at ~84% through the fade. 1.2 buys enough lead for
-// most of this leg's words without pulling in ones that then need to fade
-// back out faster than the wash relights around them (measured: 1.3
-// clears the 1.1 failures but trades them for a flip-out lag on a couple
-// of words positioned where this leg's wash swings back fastest). A
-// residual remains at 1.2 too -- see the landing report for which words
-// and why raising this further does not clear it.
-const FLIP_IN_MARGIN = 1.2, FLIP_OUT_MARGIN = 1.4;
-// A synchronous readPixels forces a real GPU->CPU sync point regardless of
-// how small the buffer is -- Chromium's own driver logs "GPU stall due to
-// ReadPixels" for this one, every time, headless or not. Calling it on
-// literally every rendered frame while cover is active (the naive reading
-// of "each frame" the brief asks for) measurably slowed the page: found
-// live, a later, unrelated small-wheel-delta check
-// (check-landing-mobile.mjs's checkScene2to3Touch) started missing its own
-// 250ms settle window once this ran unthrottled through the legs before
-// it. 40ms (~24 Hz) is well under the ~150-500ms a colour transition or a
-// dissolve step takes to matter, and cuts the stall count by 3-5x against
-// a 60-120Hz paint rate.
-const CONTRAST_REFRESH_MS = 40;
-let lastContrastRefresh = -Infinity;
+// Keep the current colour while both choices pass. Switch only when it
+// fails its own floor and the other choice passes; that small overlap is
+// the hysteresis, and neither side is held through an unreadable band.
 function updateWordContrast() {
   if (!words) initWords();
   // Draw() itself may not have run this frame (renderMorphAt's own
   // render() call is gated on scroll position changing, not on real time
   // passing), so the small buffer is refreshed here directly rather than
   // trusting whatever draw() last left it at -- see refreshSmall's own
-  // comment in makeSim. Throttled (CONTRAST_REFRESH_MS, above): a call that
-  // lands inside the throttle window reuses whatever the last refresh left
-  // in the buffer instead of paying another stall for data a reader could
-  // not tell apart from it.
-  const now = performance.now();
-  if (now - lastContrastRefresh >= CONTRAST_REFRESH_MS) { sim?.refreshSmall?.(); lastContrastRefresh = now; }
+  // comment in makeSim. A moving word needs the frame at its current
+  // position; retaining a 40ms-old sample failed on touch reversal.
+  sim?.refreshSmall?.();
   const small = sim?.smallPixels?.();
   if (!small?.pixels) return;
   const canvasRect = canvas.getBoundingClientRect();
@@ -2839,7 +2792,7 @@ function updateWordContrast() {
       // to show, so (like the restColor jump this generalizes) it skips
       // the fade rather than animate one nobody sees the start of.
       w.active = true;
-      w.bright = darkC < w.required * FLIP_IN_MARGIN && whiteC > darkC;
+      w.bright = darkC < w.required && whiteC >= w.required;
       w.el.style.transition = 'none';
       w.el.style.color = w.bright ? '#fff' : w.restColor;
       void w.el.offsetHeight;   // flush the transition:none before restoring it
@@ -2847,8 +2800,8 @@ function updateWordContrast() {
       continue;
     }
     let next = w.bright;
-    if (!w.bright && darkC < w.required * FLIP_IN_MARGIN && whiteC > darkC) next = true;
-    else if (w.bright && darkC > w.required * FLIP_OUT_MARGIN) next = false;
+    if (!w.bright && darkC < w.required && whiteC >= w.required) next = true;
+    else if (w.bright && whiteC < w.required && darkC >= w.required) next = false;
     w.bright = next;
     w.el.style.color = next ? '#fff' : w.restColor;
   }
@@ -4487,9 +4440,6 @@ async function writeLoop(afterWash) {
   while (gen === g) {
     editorPlayback(true);
     ed.setDoc(SEED);
-    if (!mobileLayout()) {
-      ed.focus();
-    }
     await new Promise((r) => setTimeout(r, 700));
     if (gen !== g) break;
     const done = await ed.type(TYPED, { seed: 11, median: window.__LANG === 'zh' ? 95 : 18, slipAt: 47 });

@@ -326,9 +326,10 @@
      (landing.js, initWords) so its background under a mobile wash can be
      sampled and its own colour flipped independently. display:inline (not
      h1/h2 span's own block, above -- a class beats a bare type selector)
-     keeps normal text flow; the transition is what makes a flip read as a
-     fade rather than a cut, on mobile only (updateWordContrast's own gate). */
-  .word { display: inline; transition: color .15s ease; }
+     keeps normal text flow. The wash decides the colour at each sampled
+     frame; animating between two contrast-safe endpoints would pass through
+     an unreadable midpoint, so this high-frequency state change is discrete. */
+  .word { display: inline; transition: none; }
   /* Scene 3's own kicker, standing above the video's own title — the front
      layer's heading, static now that nothing swaps into or out of it. */
   .crumb { font: 600 12px/1.4 var(--body); letter-spacing: .04em; text-transform: uppercase; color: var(--text2); margin: 0 0 10px; }
@@ -543,6 +544,10 @@
     #c3 .btns { gap: 6px; }
     #c3 .moss-btn { min-height: 44px; padding-inline: 6px; font-size: clamp(12px, 3.4vw, 14px); white-space: nowrap; }
     #c2, #c3, #c4, #c5 { margin-top: 0; }
+    /* Leave a readable scene-2 plateau after its incoming wash settles. This
+       is layout-owned breathing room, so the next dissolve still starts from
+       scene 3's text touching the visual rather than from a timer. */
+    #c2 { padding-bottom: calc(var(--mobile-vis-h, 42vh) + 160px + var(--mobile-dwell, 280px)); }
     #c5 { height: 0; min-height: 0; padding: 0; overflow: hidden; }
     #five { position: relative; min-height: 100svh; overflow: visible; }
     #closing-film { position: fixed; z-index: -1; }
