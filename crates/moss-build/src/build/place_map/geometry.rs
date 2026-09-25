@@ -252,10 +252,15 @@ impl Projection {
     }
 
     fn project_ring_part(&self, points: &[ProjectedPoint]) -> Vec<Vec<(f64, f64)>> {
+        // Polar clipping is a geographic operation. Do it before sampling the
+        // projection so a cap crossing remains an ordinary source-ring edge;
+        // the only boundary that still needs screen-space topology is the
+        // projection horizon.
+        let points = clip_polar_band(points);
         if points.len() < 4 {
             return Vec::new();
         }
-        let samples = self.projected_ring_samples(points);
+        let samples = self.projected_ring_samples(&points);
         if samples.iter().all(|sample| !sample.visible) {
             return Vec::new();
         }
@@ -270,12 +275,18 @@ impl Projection {
         // the run that crosses the source ring's closing edge.
         let first_visible = samples.iter().position(|sample| sample.visible).unwrap();
         let mut offset = first_visible;
-        while samples[offset].visible {
+        for _ in 0..samples.len() {
+            if !samples[offset].visible {
+                break;
+            }
             offset = (offset + 1) % samples.len();
         }
         let mut index = (offset + 1) % samples.len();
         let mut runs = Vec::new();
-        while index != offset {
+        for _ in 0..samples.len() {
+            if index == offset {
+                break;
+            }
             if !samples[index].visible {
                 index = (index + 1) % samples.len();
                 continue;
@@ -298,7 +309,7 @@ impl Projection {
                 exit,
                 entry,
                 self.horizon_radius(),
-                -ring_winding(points),
+                -ring_winding(&points),
             );
             let ring = clip_closed_ring(&ring, CLIP_MIN_X, CLIP_MAX_X, CLIP_MIN_Y, CLIP_MAX_Y);
             if ring.len() >= 4 {
@@ -311,7 +322,7 @@ impl Projection {
     fn projected_ring_samples(&self, points: &[ProjectedPoint]) -> Vec<RingSample> {
         const SAMPLES: usize = 32;
         let mut output = Vec::with_capacity((points.len() - 1) * SAMPLES + 1);
-        for (edge_index, pair) in points.windows(2).enumerate() {
+        for pair in points.windows(2) {
             for sample_index in 0..SAMPLES {
                 let start_t = sample_index as f64 / SAMPLES as f64;
                 let end_t = (sample_index + 1) as f64 / SAMPLES as f64;
@@ -484,6 +495,64 @@ fn interpolate(start: ProjectedPoint, end: ProjectedPoint, t: f64) -> ProjectedP
     }
 }
 
+/// Clip a closed geographic ring to the latitude band that this projection
+/// can render. Keeping the cap boundary in source coordinates means mixed
+/// polar/horizon crossings are represented by one ordered ring instead of
+/// asking a horizon arc to stand in for a polar parallel.
+fn clip_polar_band(points: &[ProjectedPoint]) -> Vec<ProjectedPoint> {
+    if points.len() < 4 {
+        return Vec::new();
+    }
+    let mut ring = points.to_vec();
+    if ring.first() == ring.last() {
+        ring.pop();
+    }
+    for (boundary, keep_greater) in [(POLAR_LIMIT, false), (-POLAR_LIMIT, true)] {
+        if ring.len() < 3 {
+            return Vec::new();
+        }
+        let mut clipped = Vec::with_capacity(ring.len() + 2);
+        let mut previous = *ring.last().unwrap();
+        let mut previous_inside = latitude_inside(previous.latitude, boundary, keep_greater);
+        for current in ring.iter().copied() {
+            let current_inside = latitude_inside(current.latitude, boundary, keep_greater);
+            if current_inside != previous_inside {
+                let fraction = (boundary - previous.latitude)
+                    / (current.latitude - previous.latitude);
+                push_geo_unique(&mut clipped, interpolate(previous, current, fraction));
+            }
+            if current_inside {
+                push_geo_unique(&mut clipped, current);
+            }
+            previous = current;
+            previous_inside = current_inside;
+        }
+        ring = clipped;
+    }
+    if ring.len() < 3 {
+        return Vec::new();
+    }
+    ring.push(ring[0]);
+    ring
+}
+
+fn latitude_inside(latitude: f64, boundary: f64, keep_greater: bool) -> bool {
+    if keep_greater {
+        latitude >= boundary - 1e-9
+    } else {
+        latitude <= boundary + 1e-9
+    }
+}
+
+fn push_geo_unique(points: &mut Vec<ProjectedPoint>, point: ProjectedPoint) {
+    if !points.last().is_some_and(|previous| {
+        shortest_longitude_delta(previous.longitude - point.longitude).abs() < 1e-9
+            && (previous.latitude - point.latitude).abs() < 1e-9
+    }) {
+        points.push(point);
+    }
+}
+
 fn find_visibility_boundary(
     projection: &Projection,
     start: ProjectedPoint,
@@ -587,28 +656,18 @@ fn append_horizon_arc(
     let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
     let start_angle = (start.1 - center.1).atan2(start.0 - center.0);
     let end_angle = (end.1 - center.1).atan2(end.0 - center.0);
-    let short_delta = (end_angle - start_angle + std::f64::consts::PI)
-        .rem_euclid(2.0 * std::f64::consts::PI)
+    let tau = 2.0 * std::f64::consts::PI;
+    let short_delta = (end_angle - start_angle + std::f64::consts::PI).rem_euclid(tau)
         - std::f64::consts::PI;
-    let long_delta = if short_delta >= 0.0 {
-        short_delta - 2.0 * std::f64::consts::PI
-    } else {
-        short_delta + 2.0 * std::f64::consts::PI
-    };
     let arc_delta = if desired_winding.abs() < f64::EPSILON {
         short_delta
+    } else if desired_winding.is_sign_positive() {
+        (end_angle - start_angle).rem_euclid(tau)
     } else {
-        let short_area = ring_area_with_arc(ring, start_angle, short_delta, radius, end);
-        let long_area = ring_area_with_arc(ring, start_angle, long_delta, radius, end);
-        if short_area.signum() == desired_winding.signum() {
-            short_delta
-        } else if long_area.signum() == desired_winding.signum() {
-            long_delta
-        } else {
-            short_delta
-        }
+        -(start_angle - end_angle).rem_euclid(tau)
     };
-    let steps = ((arc_delta.abs() / (std::f64::consts::PI / 12.0)).ceil() as usize).max(1);
+    let steps = ((arc_delta.abs() / (std::f64::consts::PI / 12.0)).ceil() as usize)
+        .clamp(1, 128);
     for step in 1..=steps {
         let angle = start_angle + arc_delta * step as f64 / steps as f64;
         push_unique(
@@ -620,27 +679,6 @@ fn append_horizon_arc(
             },
         );
     }
-}
-
-fn ring_area_with_arc(
-    ring: &[(f64, f64)],
-    start_angle: f64,
-    delta: f64,
-    radius: f64,
-    end: (f64, f64),
-) -> f64 {
-    let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
-    let steps = ((delta.abs() / (std::f64::consts::PI / 12.0)).ceil() as usize).max(1);
-    let mut candidate = ring.to_vec();
-    for step in 1..=steps {
-        let angle = start_angle + delta * step as f64 / steps as f64;
-        candidate.push(if step == steps {
-            end
-        } else {
-            (center.0 + radius * angle.cos(), center.1 + radius * angle.sin())
-        });
-    }
-    signed_area(&candidate)
 }
 
 fn signed_area(points: &[(f64, f64)]) -> f64 {
@@ -1113,6 +1151,67 @@ mod tests {
         );
         assert!(!rings.is_empty());
         assert!(rings.iter().all(|ring| ring.first() == ring.last()));
+    }
+
+    #[test]
+    fn project_ring_clips_both_polar_caps_without_using_the_horizon() {
+        let center = ProjectedPoint::new(0.0, 0.0).unwrap();
+        let frame = Frame::from_points(&[center], [Precision::Exact].into_iter()).unwrap();
+        let projection = Projection::new(&frame);
+        let rings = projection.project_ring(
+            &[(-20, -89), (20, -89), (20, 89), (-20, 89), (-20, -89)],
+            1,
+        );
+        assert_eq!(rings.len(), 1);
+        let horizon = projection.horizon_radius();
+        let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
+        assert!(rings[0].iter().all(|point| {
+            (point.0 - center.0).hypot(point.1 - center.1) < horizon - 1.0
+        }));
+        assert!(rings[0].iter().any(|point| point.1 < center.1 - 100.0));
+        assert!(rings[0].iter().any(|point| point.1 > center.1 + 100.0));
+    }
+
+    #[test]
+    fn project_ring_composes_polar_and_horizon_boundaries() {
+        let frame_points = [
+            ProjectedPoint::new(-80.0, 0.0).unwrap(),
+            ProjectedPoint::new(80.0, 0.0).unwrap(),
+        ];
+        let frame =
+            Frame::from_points(&frame_points, [Precision::Exact, Precision::Exact].into_iter())
+                .unwrap();
+        let projection = Projection::new(&frame);
+        let rings = projection.project_ring(
+            &[(80, -30), (100, -30), (100, 89), (80, 89), (80, -30)],
+            1,
+        );
+        assert!(!rings.is_empty());
+        let horizon = projection.horizon_radius();
+        let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
+        assert!(rings.iter().flatten().all(|point| {
+            (point.0 - center.0).hypot(point.1 - center.1) <= horizon + 1.0
+        }));
+        assert!(rings.iter().flatten().any(|point| {
+            (point.0 - center.0).hypot(point.1 - center.1) < horizon - 10.0
+        }));
+        assert!(rings.iter().all(|ring| ring.first() == ring.last()));
+    }
+
+    #[test]
+    fn project_ring_boundary_traversal_is_bounded_for_repeated_crossings() {
+        let center = ProjectedPoint::new(0.0, 0.0).unwrap();
+        let frame = Frame::from_points(&[center], [Precision::Exact].into_iter()).unwrap();
+        let projection = Projection::new(&frame);
+        let mut source = Vec::with_capacity(257);
+        for index in 0..256 {
+            let longitude = if index % 2 == 0 { -100 } else { 100 };
+            source.push((longitude, if index / 2 % 2 == 0 { -10 } else { 10 }));
+        }
+        source.push(source[0]);
+        let rings = projection.project_ring(&source, 1);
+        assert!(rings.iter().all(|ring| ring.first() == ring.last()));
+        assert!(rings.iter().map(Vec::len).sum::<usize>() < 20_000);
     }
 
     #[test]
