@@ -4290,6 +4290,10 @@ setupCssSnap();
 // observational path: native scrolling supplies scrollY, which drives the scenes and closing
 // scrub continuously, and no release may move the page after the reader lets go.
 let mobileWatchKey = '', finalDissolve = 0, finalWash = null, finalPrints = null;
+// The viewport target begins taking shape while scene 4 is still in contact;
+// the shared .9s cure would leave the first 43% of this closing wash clear.
+// This changes only its display onset; the shared pigment clock is unchanged.
+const CLOSING_CURE = T_CURE * .2;
 let closingWashCanvas = document.createElement('canvas');
 closingWashCanvas.id = 'closing-wash';
 document.querySelector('.page').appendChild(closingWashCanvas);
@@ -4301,13 +4305,9 @@ async function armClosingWash() {
     if (document.documentElement.dataset.static) return;
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
-  await new Promise((resolve) => {
-    const schedule = typeof requestIdleCallback === 'function'
-      ? (fn) => requestIdleCallback(fn, { timeout: 2000 })
-      : (fn) => setTimeout(fn, 300);
-    const arm = () => { if (atRest()) resolve(); else schedule(arm); };
-    schedule(arm);
-  });
+  // Construct once readiness releases us. Waiting for another at-rest idle
+  // window strands a fast reader at the scene-4 contact before this small
+  // viewport sim exists; readiness already kept the work off the boot path.
   const size = `${innerWidth}x${innerHeight}`;
   if (closingWashSim && closingWashSize === size) return;
   if (closingWashSim) {
@@ -4379,9 +4379,7 @@ function closingPigmentPrint() {
   const g = sheet.getContext('2d');
   if (closingPoster.complete && closingPoster.naturalWidth) {
     const k = Math.max(sheet.width / closingPoster.naturalWidth, sheet.height / closingPoster.naturalHeight);
-    g.globalAlpha = .45;
     g.drawImage(closingPoster, (sheet.width - closingPoster.naturalWidth * k) / 2, (sheet.height - closingPoster.naturalHeight * k) / 2, closingPoster.naturalWidth * k, closingPoster.naturalHeight * k);
-    g.globalAlpha = 1;
   } else { g.fillStyle = '#777777'; g.fillRect(0, 0, sheet.width, sheet.height); }
   g.globalCompositeOperation = 'destination-in';
   const gradient = g.createRadialGradient(sheet.width / 2, sheet.height / 2, 35, sheet.width / 2, sheet.height / 2, Math.hypot(sheet.width, sheet.height) * .55);
@@ -4391,14 +4389,20 @@ function closingPigmentPrint() {
 }
 function closingSourcePrint() {
   const sheet = document.createElement('canvas'); sheet.width = innerWidth; sheet.height = innerHeight;
-  const source = deployPrint(), r = canvas.getBoundingClientRect();
-  sheet.getContext('2d').drawImage(source, r.left, r.top, r.width, r.height);
+  const r = canvas.getBoundingClientRect(), control = cell.getBoundingClientRect(), g = sheet.getContext('2d');
+  // Scene 4's moving targets retain their current geometry; its stable ink
+  // source is the centred publish disc. Cached sheets may have handed these
+  // members back to the live DOM, so read both explicitly here.
+  g.drawImage(deployPrint({ control: false }), r.left, r.top, r.width, r.height);
+  g.fillStyle = '#28251f'; g.beginPath();
+  g.arc(control.left + control.width / 2, control.top + control.height / 2, buttonR() * SCALE, 0, Math.PI * 2);
+  g.fill();
   return sheet;
 }
 function updateFinalDissolve() {
-  if (!closingWashSim || reduce || !sheets[DEPLOY]) return;
-  const active = shown >= DEPLOY && +stage.dataset.scene === DEPLOY;
-  const q = active ? (mobileLayout() ? mobileClosingProgress() : xfAt()) : 0;
+  if (!closingWashSim || reduce) return;
+  const q = mobileLayout() ? mobileClosingProgress() : xfAt();
+  const active = q > 0;
   finalDissolve = q;
   if (!q) {
     if (finalWash) {
@@ -4455,7 +4459,7 @@ function updateFinalDissolve() {
     // Reverse scroll reconstructs the same forward field at the earlier
     // position. One clock owns both directions, without competing fade loops.
     const result = advanceWash(closingWashSim, wash, { goal: wash.goal, fwd: true }, t => {
-      closingWashSim.draw(true, smooth(T_CURE, T_TOTAL, t), -.2 + 1.4 * smooth(.94, 1, wash.goal / T_TOTAL));
+      closingWashSim.draw(true, smooth(CLOSING_CURE, T_TOTAL, t), -.2 + 1.4 * smooth(.94, 1, wash.goal / T_TOTAL));
     });
     if (!result.caughtUp) wash.raf = requestAnimationFrame(frame);
   };
