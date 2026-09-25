@@ -6622,8 +6622,8 @@ a.moss-grid-card:hover {
 /* Position the indicator under a scroll row (`scroll-row.js` adds it; without the
    script the row still scrolls). The dot is drawn 8px but the button is a
    24px target, the WCAG 2.5.8 minimum. Cards in view are lit; the first of
-   them is also `aria-current` and larger. Long rows use seven bounded slots;
-   smaller edge dots signal cards beyond the visible window. `currentColor`
+   them is also `aria-current` and larger. Long rows clip a stable dot track to
+   seven slots; smaller edge dots signal cards beyond the viewport. `currentColor`
    keeps the dots right on any theme's ground. */
 .moss-scroll-dots {
   display: flex;
@@ -6631,6 +6631,24 @@ a.moss-grid-card:hover {
   justify-content: center;
   margin-block-start: -4px;
   color: var(--moss-color-text);
+  direction: ltr;
+  writing-mode: horizontal-tb;
+}
+.moss-scroll-dots-viewport {
+  overflow: hidden;
+  touch-action: pan-y;
+}
+.moss-scroll-dots[data-indicator="dynamic"] .moss-scroll-dots-viewport {
+  inline-size: calc(7 * 24px);
+}
+.moss-scroll-dots-track {
+  display: flex;
+  inline-size: max-content;
+  transform: translateX(calc(var(--moss-scroll-dot-start, 0) * -24px));
+  transition: transform 0.22s ease-out;
+}
+.moss-scroll-dots[data-scrubbing] .moss-scroll-dots-track {
+  transition: none;
 }
 
 /* `scroll-row.ts`'s `fit()` sets the `hidden` IDL property, not just a class,
@@ -6696,6 +6714,7 @@ a.moss-grid-card:hover {
   border-radius: 50%;
 }
 @media (prefers-reduced-motion: reduce) {
+  .moss-scroll-dots-track,
   .moss-scroll-dots button::before {
     transition: none;
   }

@@ -2,9 +2,13 @@
  * scroll-row.ts — position dots and mouse-wheel scrolling for a
  * `:::grid N {scroll}` row.
  *
- * Up to ten cards get one dot each. Longer rows use a seven-slot moving window
- * in the style of Apple's page controls: the active dot is prominent and the
- * smaller edge dots signal that cards continue beyond the visible window. The
+ * Up to ten cards get one dot each. Longer rows keep one stable dot per card
+ * inside a clipped seven-slot viewport. The track slides as the active card
+ * changes, while smaller edge dots signal that cards continue beyond the
+ * visible window. Keeping each dot tied to one card avoids the disorienting
+ * identity swap of repainting seven fixed buttons with new card numbers.
+ * Dragging the indicator scrubs directly through the cards; discrete clicks
+ * and keys retain smooth movement. The
  * control has one roving tab stop, so it never adds one tab stop per card.
  * Cards currently in view are lit and the first of them is
  * `aria-current`. Clicking a dot brings that card to the start of the row.
@@ -216,12 +220,18 @@ function buildDots(row: HTMLElement, state: RowState): void {
   if (label) nav.setAttribute("aria-label", label);
 
   const reduce = prefersReducedMotion();
-  const dotCount = dynamicMode ? DYNAMIC_DOT_COUNT : cards.length;
-  const dots = Array.from({ length: dotCount }, () => {
+  const viewport = document.createElement("div");
+  viewport.className = `${DOTS}-viewport`;
+  const track = document.createElement("div");
+  track.className = `${DOTS}-track`;
+  viewport.appendChild(track);
+  nav.appendChild(viewport);
+  const dots = Array.from({ length: cards.length }, (_, index) => {
     const dot = document.createElement("button");
     dot.type = "button";
+    dot.dataset.cardIndex = String(index);
+    dot.setAttribute("aria-label", `${index + 1} / ${cards.length}`);
     dot.addEventListener("click", () => {
-      const index = Number(dot.dataset.cardIndex);
       navigateTo(index);
     });
     dot.addEventListener("keydown", (e) => {
@@ -241,7 +251,7 @@ function buildDots(row: HTMLElement, state: RowState): void {
         dots.find((candidate) => candidate.dataset.cardIndex === String(next))?.focus();
       }
     });
-    nav.appendChild(dot);
+    track.appendChild(dot);
     return dot;
   });
   row.after(nav);
@@ -252,15 +262,15 @@ function buildDots(row: HTMLElement, state: RowState): void {
   let requested: { index: number; reached: boolean } | null = null;
   const windowStart = (index: number): number => {
     if (!dynamicMode) return 0;
-    const half = Math.floor(dotCount / 2);
-    return Math.max(0, Math.min(index - half, cards.length - dotCount));
+    const half = Math.floor(DYNAMIC_DOT_COUNT / 2);
+    return Math.max(0, Math.min(index - half, cards.length - DYNAMIC_DOT_COUNT));
   };
-  const navigateTo = (index: number): void => {
+  const navigateTo = (index: number, behavior: ScrollBehavior = reduce ? "auto" : "smooth"): void => {
     const card = cards[index];
     if (!card) return;
     activeIndex = index;
     requested = { index, reached: inView.has(index) };
-    card.scrollIntoView({ block: "nearest", inline: "start", behavior: reduce ? "auto" : "smooth" });
+    card.scrollIntoView({ block: "nearest", inline: "start", behavior });
     paint(index);
   };
   const paint = (requestedIndex?: number) => {
@@ -268,15 +278,12 @@ function buildDots(row: HTMLElement, state: RowState): void {
     const first = requestedIndex ?? requested?.index ?? (inView.size ? Math.min(...inView) : activeIndex);
     activeIndex = first;
     const start = windowStart(first);
-    dots.forEach((dot, slot) => {
-      const index = start + slot;
-      dot.dataset.cardIndex = String(index);
-      // Numeric labels stay meaningful without imposing an interface language.
-      dot.setAttribute("aria-label", `${index + 1} / ${cards.length}`);
+    track.style.setProperty("--moss-scroll-dot-start", String(start));
+    dots.forEach((dot, index) => {
       dot.tabIndex = index === first ? 0 : -1;
       dot.classList.toggle("is-visible", inView.has(index));
-      dot.classList.toggle("is-edge-start", dynamicMode && start > 0 && slot === 0);
-      dot.classList.toggle("is-edge-end", dynamicMode && start + dotCount < cards.length && slot === dotCount - 1);
+      dot.classList.toggle("is-edge-start", dynamicMode && start > 0 && index === start);
+      dot.classList.toggle("is-edge-end", dynamicMode && start + DYNAMIC_DOT_COUNT < cards.length && index === start + DYNAMIC_DOT_COUNT - 1);
       if (index === first) dot.setAttribute("aria-current", "true");
       else dot.removeAttribute("aria-current");
     });
@@ -284,6 +291,50 @@ function buildDots(row: HTMLElement, state: RowState): void {
       dots.find((dot) => dot.dataset.cardIndex === String(first))?.focus({ preventScroll: true });
     }
   };
+
+  // UIPageControl-style continuous interaction: wait for a real drag so a
+  // normal button click stays discrete, then scrub by horizontal distance.
+  // Direct updates intentionally use `auto`; animating every crossed card
+  // makes the content lag behind the pointer and flashes intermediate pages.
+  let scrub: { pointerId: number; x: number; index: number; active: boolean } | null = null;
+  let suppressClick = false;
+  nav.addEventListener("click", (event) => {
+    if (!suppressClick) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, { capture: true });
+  viewport.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    scrub = { pointerId: event.pointerId, x: event.clientX, index: activeIndex, active: false };
+  });
+  viewport.addEventListener("pointermove", (event) => {
+    if (!scrub || event.pointerId !== scrub.pointerId) return;
+    const delta = event.clientX - scrub.x;
+    if (!scrub.active && Math.abs(delta) < 6) return;
+    if (!scrub.active) {
+      scrub.active = true;
+      nav.dataset.scrubbing = "";
+      viewport.setPointerCapture?.(event.pointerId);
+    }
+    event.preventDefault();
+    const width = viewport.getBoundingClientRect().width || DYNAMIC_DOT_COUNT * 24;
+    const step = Math.round((delta / width) * (cards.length - 1));
+    const index = Math.max(0, Math.min(cards.length - 1, scrub.index + step));
+    if (index !== activeIndex) navigateTo(index, "auto");
+  });
+  const endScrub = (event: PointerEvent) => {
+    if (!scrub || event.pointerId !== scrub.pointerId) return;
+    const wasActive = scrub.active;
+    if (viewport.hasPointerCapture?.(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+    scrub = null;
+    delete nav.dataset.scrubbing;
+    if (wasActive) {
+      suppressClick = true;
+      window.setTimeout(() => { suppressClick = false; }, 0);
+    }
+  };
+  viewport.addEventListener("pointerup", endScrub);
+  viewport.addEventListener("pointercancel", endScrub);
   state.cancelNavigation = () => {
     if (!requested) return;
     requested = null;

@@ -68,24 +68,25 @@ describe("scroll dots", () => {
     expect(nav.dataset.indicator).toBe("dots");
   });
 
-  test.each([10, 11])("uses full dots through 10 cards and a bounded window above 10", (count) => {
+  test.each([10, 11])("keeps stable dots and clips long rows to seven slots", (count) => {
     const g = row(count, "Related");
     initScrollDots();
     const nav = g.nextElementSibling as HTMLElement;
     expect(nav.dataset.indicator).toBe(count <= 10 ? "dots" : "dynamic");
-    expect(nav.querySelectorAll("button")).toHaveLength(count <= 10 ? count : 7);
+    expect(nav.querySelectorAll("button")).toHaveLength(count);
     expect(nav.getAttribute("role")).toBe("group");
     expect(nav.getAttribute("aria-label")).toBe("Related");
     expect(nav.querySelectorAll("button[tabindex=\"0\"]")).toHaveLength(1);
     if (count > 10) {
-      expect(nav.querySelectorAll("button")).toHaveLength(7);
-      expect(Array.from(nav.querySelectorAll("button")).map((button) => button.dataset.cardIndex)).toEqual(["0", "1", "2", "3", "4", "5", "6"]);
+      expect(nav.querySelector(".moss-scroll-dots-viewport")).not.toBeNull();
+      expect(Array.from(nav.querySelectorAll("button")).map((button) => button.dataset.cardIndex)).toEqual(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+      expect((nav.querySelector(".moss-scroll-dots-track") as HTMLElement).style.getPropertyValue("--moss-scroll-dot-start")).toBe("0");
       expect(nav.querySelector("button.is-edge-end")).not.toBeNull();
-      expect(nav.querySelectorAll("[tabindex], button, a, input, select, textarea")).toHaveLength(7);
+      expect(nav.querySelectorAll("[tabindex], button, a, input, select, textarea")).toHaveLength(11);
     }
   });
 
-  test("moves the seven-slot window with the first visible card", () => {
+  test("slides the stable dot track with the first visible card", () => {
     const g = row(11);
     let intersectionCallback: IntersectionObserverCallback | undefined;
     class FakeIntersectionObserver {
@@ -102,15 +103,36 @@ describe("scroll dots", () => {
     ], {} as IntersectionObserver);
     const nav = g.nextElementSibling as HTMLElement;
     expect(nav.querySelector("button[aria-current=\"true\"]")?.dataset.cardIndex).toBe("5");
-    expect(Array.from(nav.querySelectorAll("button")).map((button) => button.dataset.cardIndex)).toEqual(["2", "3", "4", "5", "6", "7", "8"]);
+    expect((nav.querySelector(".moss-scroll-dots-track") as HTMLElement).style.getPropertyValue("--moss-scroll-dot-start")).toBe("2");
     expect(nav.querySelectorAll("button.is-edge-start, button.is-edge-end")).toHaveLength(2);
     intersectionCallback?.([
       { target: g.children[5], isIntersecting: false } as IntersectionObserverEntry,
       { target: g.children[10], isIntersecting: true } as IntersectionObserverEntry,
     ], {} as IntersectionObserver);
-    expect(Array.from(nav.querySelectorAll("button")).map((button) => button.dataset.cardIndex)).toEqual(["4", "5", "6", "7", "8", "9", "10"]);
+    expect((nav.querySelector(".moss-scroll-dots-track") as HTMLElement).style.getPropertyValue("--moss-scroll-dot-start")).toBe("4");
     expect(nav.querySelector("button.is-edge-start")).not.toBeNull();
     expect(nav.querySelector("button.is-edge-end")).toBeNull();
+  });
+
+  test("dragging the indicator scrubs without smooth per-card animation", () => {
+    const g = row(22);
+    initScrollDots();
+    const viewport = g.nextElementSibling!.querySelector(".moss-scroll-dots-viewport") as HTMLElement;
+    Object.defineProperty(viewport, "getBoundingClientRect", { value: () => ({ width: 168 }) });
+    const pointer = (type: string, clientX: number) => {
+      const event = new MouseEvent(type, { button: 0, clientX, bubbles: true });
+      Object.defineProperty(event, "pointerId", { value: 7 });
+      return event;
+    };
+    viewport.dispatchEvent(pointer("pointerdown", 40));
+    viewport.dispatchEvent(pointer("pointermove", 208));
+    expect(g.children[21].scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ behavior: "auto" }));
+    expect(g.nextElementSibling!.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("22 / 22");
+    expect((g.nextElementSibling as HTMLElement).dataset.scrubbing).toBe("");
+    viewport.dispatchEvent(pointer("pointerup", 208));
+    (g.nextElementSibling!.querySelector("button[data-card-index=\"5\"]") as HTMLButtonElement).click();
+    expect(g.children[5].scrollIntoView).not.toHaveBeenCalled();
+    expect((g.nextElementSibling as HTMLElement).hasAttribute("data-scrubbing")).toBe(false);
   });
 
   test("arrow keys move the dynamic window and its single tab stop", () => {
