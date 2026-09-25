@@ -119,12 +119,24 @@ pub fn globe_rings(
 }
 
 fn geographic_winding(points: &[(f64, f64)]) -> f64 {
-    points
-        .iter()
-        .zip(points.iter().cycle().skip(1))
-        .take(points.len())
-        .map(|(&(x1, y1), &(x2, y2))| x1 * y2 - x2 * y1)
-        .sum()
+    let Some(&(first_longitude, first_latitude)) = points.first() else {
+        return 0.0;
+    };
+    let mut area = 0.0;
+    let mut previous_longitude = first_longitude;
+    let mut previous_latitude = first_latitude;
+    for &(longitude, latitude) in &points[1..] {
+        let longitude = previous_longitude
+            + (longitude - previous_longitude + 180.0).rem_euclid(360.0)
+            - 180.0;
+        area += previous_longitude * latitude - longitude * previous_latitude;
+        previous_longitude = longitude;
+        previous_latitude = latitude;
+    }
+    let closing_longitude = previous_longitude
+        + (first_longitude - previous_longitude + 180.0).rem_euclid(360.0)
+        - 180.0;
+    area + previous_longitude * first_latitude - closing_longitude * previous_latitude
 }
 
 fn geo(point: (i32, i32), quantisation: u32) -> (f64, f64) {
@@ -307,5 +319,20 @@ mod tests {
             .iter()
             .flatten()
             .all(|&(x, y)| { (x - CENTER_X).hypot(y - CENTER_Y) <= RADIUS + 1.0 }));
+    }
+
+    #[test]
+    fn dateline_ring_winding_uses_the_short_longitude_branch() {
+        let clockwise = [(179.0, -10.0), (-179.0, -10.0), (-179.0, 10.0), (179.0, 10.0)];
+        let counterclockwise = [
+            (179.0, 10.0),
+            (-179.0, 10.0),
+            (-179.0, -10.0),
+            (179.0, -10.0),
+        ];
+        let clockwise_area = geographic_winding(&clockwise);
+        let counterclockwise_area = geographic_winding(&counterclockwise);
+        assert!(clockwise_area.abs() < 1_000.0, "must not span the world");
+        assert_eq!(clockwise_area.signum(), -counterclockwise_area.signum());
     }
 }

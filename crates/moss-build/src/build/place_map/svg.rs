@@ -13,6 +13,11 @@ mod path;
 use path::{serialize_path, snap};
 mod text;
 use text::{precision_name, precision_rank, xml_escape};
+mod locator;
+pub use locator::{
+    emit_locator, emit_locator_svg, LocatorProfile, LocatorSafetyError, LocatorSvg,
+    LOCATOR_Q11_BROTLI_LIMIT, LOCATOR_RAW_SAFETY_LIMIT,
+};
 
 use super::geometry::{marker_radius, Frame, FrameTier, ProjectedPoint, Projection, TileSelection};
 use super::globe::{globe_line, globe_marker, globe_rings};
@@ -21,29 +26,6 @@ use crate::vault::places::Precision;
 
 pub const SVG_WIDTH: u32 = 720;
 pub const SVG_HEIGHT: u32 = 480;
-/// q11 Brotli budget checked by the dev/CI matrix; production does not link a
-/// compressor solely for this contract.
-pub const LOCATOR_Q11_BROTLI_LIMIT: usize = 16 * 1024;
-/// Deterministic production safety ceiling for the sparse locator profile.
-pub const LOCATOR_RAW_SAFETY_LIMIT: usize = 256 * 1024;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocatorProfile {
-    ExactCity,
-    Region,
-    Country,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocatorSvg {
-    pub svg: String,
-    pub profile: LocatorProfile,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocatorSafetyError {
-    pub raw_bytes: usize,
-}
 
 const GLOBE_X: f64 = 584.0;
 const GLOBE_Y: f64 = 8.0;
@@ -128,42 +110,6 @@ pub fn emit_svg_with_options(
     emit_svg_with_mode(context, target, options, false)
 }
 
-/// Emit a deterministic sparse locator profile. Production enforces only the
-/// raw safety ceiling; the q11 Brotli budget is enforced by the dev/CI matrix
-/// without adding a compressor to the shipped build.
-pub fn emit_locator_svg(
-    context: &PlaceMapContext,
-    target: &PlaceMapTarget,
-    options: SvgMapOptions<'_>,
-) -> Result<LocatorSvg, LocatorSafetyError> {
-    let profile = match options.precision {
-        Precision::Exact | Precision::City => LocatorProfile::ExactCity,
-        Precision::Region => LocatorProfile::Region,
-        Precision::Country => LocatorProfile::Country,
-    };
-    // Locator output is deliberately the bounded, sparse profile. The full
-    // emitter remains available for body maps, whose geometry is unrestricted.
-    let mut svg = emit_svg_with_mode(context, target, options, true);
-    let profile_name = match profile {
-        LocatorProfile::ExactCity => "exact-city",
-        LocatorProfile::Region => "region",
-        LocatorProfile::Country => "country",
-    };
-    svg = svg.replacen(
-        "<figure ",
-        &format!("<figure data-map-locator-profile=\"{profile_name}\" "),
-        1,
-    );
-    if svg.len() > LOCATOR_RAW_SAFETY_LIMIT {
-        return Err(LocatorSafetyError {
-            raw_bytes: svg.len(),
-        });
-    }
-    Ok(LocatorSvg { svg, profile })
-}
-
-pub use emit_locator_svg as emit_locator;
-
 fn emit_svg_with_mode(
     context: &PlaceMapContext,
     target: &PlaceMapTarget,
@@ -186,7 +132,11 @@ fn emit_svg_with_mode(
         height_uses: Vec::new(),
         land_paths: Vec::new(),
         has_href: false,
-        compact,
+        locator_profile: compact.then_some(match options.precision {
+            Precision::Exact | Precision::City => LocatorProfile::ExactCity,
+            Precision::Region => LocatorProfile::Region,
+            Precision::Country => LocatorProfile::Country,
+        }),
     };
     writer.open_figure(
         target,
@@ -212,6 +162,17 @@ fn emit_svg_with_mode(
             // empty figure here avoids inventing a point or leaking source data.
             writer.empty_layers();
         }
+    } else if let (Some(projection), Some(grouped), Some(profile)) = (
+        projection.as_ref(),
+        grouped.as_ref(),
+        writer.locator_profile,
+    ) {
+        writer.emit_locator_layers(
+            context.pack().header.quantisation,
+            projection,
+            grouped,
+            profile,
+        );
     } else {
         writer.empty_layers();
     }
@@ -226,6 +187,17 @@ fn emit_svg_with_mode(
                 grouped.as_ref().unwrap(),
             );
         }
+    } else if let (Some(projection), Some(grouped), Some(profile)) = (
+        projection.as_ref(),
+        grouped.as_ref(),
+        writer.locator_profile,
+    ) {
+        writer.emit_locator_surface_layers(
+            context.pack().header.quantisation,
+            projection,
+            grouped,
+            profile,
+        );
     }
     writer.markers(target);
     writer.globe(context, target);
@@ -265,7 +237,7 @@ struct Writer<'a> {
     height_uses: Vec<String>,
     land_paths: Vec<String>,
     has_href: bool,
-    compact: bool,
+    locator_profile: Option<LocatorProfile>,
 }
 
 fn grouped_features<'a>(pack: &'a Pack, selected: &TileSelection) -> Vec<Vec<&'a Feature>> {
@@ -693,10 +665,8 @@ impl Writer<'_> {
         write!(self.output, "<g id=\"{id}\" data-map-layer=\"globe\" clip-path=\"url(#{clip})\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"var(--moss-place-globe-water, #83afc1)\"/>").expect("writing to String cannot fail");
         let tier = &context.pack().tiers[0];
         for layer in &tier.layers {
-            if self.compact {
-                break;
-            }
-            if layer.id != 1 && layer.id != 2 {
+            let include_coast = self.locator_profile != Some(LocatorProfile::Country);
+            if layer.id != 2 && !(include_coast && layer.id == 1) {
                 continue;
             }
             for (index, feature) in layer.features.iter().enumerate() {
@@ -1122,7 +1092,36 @@ mod tests {
                     first.svg.len(),
                     compressed.len()
                 );
-                assert!(roxmltree::Document::parse(&first.svg).is_ok());
+                let document = roxmltree::Document::parse(&first.svg).unwrap();
+                let is_geography_path = |node: roxmltree::Node<'_, '_>| {
+                    node.has_tag_name("path")
+                        && node.ancestors().any(|ancestor| {
+                            matches!(
+                                ancestor.attribute("data-map-layer"),
+                                Some("land" | "coast" | "seafloor" | "relief" | "globe")
+                            )
+                        })
+                };
+                assert!(
+                    document.descendants().any(is_geography_path),
+                    "{case_name}/{precision:?} must retain real basemap geometry"
+                );
+                assert!(document.descendants().any(|node| {
+                    node.has_tag_name("path")
+                        && node.ancestors().any(|ancestor| {
+                            ancestor.attribute("data-map-layer") == Some("globe")
+                        })
+                }), "{case_name}/{precision:?} must retain globe geography");
+                if case_name == "beirut-dense"
+                    && matches!(precision, Precision::Exact | Precision::City)
+                {
+                    assert!(
+                        document
+                            .descendants()
+                            .any(|node| node.attribute("data-map-band").is_some()),
+                        "exact/city locator must retain terrain bands"
+                    );
+                }
                 assert!(first.svg.contains("data-map-globe-marker=\"true\""));
                 assert!(first.svg.contains("A�"));
             }
