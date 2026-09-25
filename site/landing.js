@@ -75,7 +75,7 @@ const FAN_OUT_MS = PUB_OUT_DELAY + PUB_MS;
 const arg = (k, d) => new URLSearchParams(location.search).get(k) || d;
 const LOOP_SRC = arg('loopVideo', 'scene5-loop/out/v5-makers.mp4');
 const LOOP_POSTER = arg('loopPoster', 'scene5-loop/out/v5-makers-poster.jpg');
-const HEADLINE = arg('headline', 'Your internet publisher is here.');
+const HEADLINE = arg('headline', '');
 const SCRIM = 0.72, XF_SPAN = 0.1;
 // The one window radius every sheet on the stage wears (--win-r in the
 // stylesheet); mirrored here for the same reason GEOM mirrors --cell-w — a
@@ -122,6 +122,20 @@ const page = document.querySelector('.page');
 // has no frame and is never printed: no wash reaches it.
 const FRAMES = [edFrame, shFrame, vdFrame, vdFrame];
 const scenesEl = [...document.querySelectorAll('.scene')];
+// Assign the heavy iframe sources only after the deferred runtime has loaded.
+// The HTML remains readable and request-free when scripts are delayed or
+// blocked, while the normal boot path keeps the locale-specific harvested UI.
+function loadLandingFrames() {
+  if (window.__LANG === 'zh') {
+    edFrame.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('八大山人') + '&file=' + encodeURIComponent('八大山人.md') + '&date=1659-12-01&home=1';
+    shFrame.src = 'ui/shell.html?preview=' + encodeURIComponent('/zhuda/homepage/') + '&title=' + encodeURIComponent('八大山人') + '&target=zhudasnotebook.com&live=' + encodeURIComponent('https://www.zhudasnotebook.com/');
+  } else {
+    edFrame.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('William Blake') + '&file=' + encodeURIComponent('William Blake.md') + '&date=1790-06-01&home=1';
+    shFrame.src = 'ui/shell.html?preview=' + encodeURIComponent('/blake/homepage/') + '&title=' + encodeURIComponent('William Blake') + '&target=blakesnotebook.com&live=' + encodeURIComponent('https://www.blakesnotebook.com/');
+  }
+  vdFrame.src = vdFrame.dataset.src;
+}
+loadLandingFrames();
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
 const clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const smooth = (a, b, t) => { const x = clamp01((t - a) / (b - a)); return x * x * (3 - 2 * x); };
@@ -297,6 +311,11 @@ let primeWash = null;
 let simArmed = false;
 let pendingTitleP = 1;
 let titleSteps = 0;
+// Set by washDissolve on every call, read by driveTitleDissolve's trace push
+// below -- diagnostic only (goal/clockT/steps), so a probe can see what the
+// sim's own clock was asked to do this call without a second, desynced
+// sampler. null until the wash has taken its first call.
+let lastWashDiag = null;
 // True once setupTitleDissolve has decided the title's own fate (armed,
 // fell back, or does not apply here) — a harness signal so a test can wait
 // for that decision instead of guessing how long it takes.
@@ -316,7 +335,7 @@ let titleReady = false;
 // 0.98 in one frame: the sudden disappearance the owner reported. Until the
 // first-tick catch-up is fixed, introWatercolor's mask, a pure function of
 // scroll that cannot pop, draws every dissolve. Flip this to re-enable.
-const TITLE_WASH = false;
+const TITLE_WASH = true;
 let titleMode = 'plain';
 function driveTitleDissolve(titleP) {
   pendingTitleP = titleP;
@@ -338,10 +357,20 @@ function driveTitleDissolve(titleP) {
   if (landing.title.traceOn) {
     const cs = getComputedStyle(openingTitle);
     const canvas = document.getElementById('gl-title');
+    const canvasVisible = !!canvas && getComputedStyle(canvas).display !== 'none';
     landing.title.trace.push({
       titleP, ink: landing.title.ink(),
       h1mask: (cs.maskImage || cs.webkitMaskImage || 'none') !== 'none',
-      canvasVisible: !!canvas && getComputedStyle(canvas).display !== 'none',
+      canvasVisible,
+      // Diagnostic fields: the sim's own goal/clock/step-count this call,
+      // from washDissolve itself (goal/clockT/steps, a probe's own reading,
+      // not used by the check below), and renderedInk -- what the check
+      // actually grades for POP, since ink() (remaining()) races ahead of
+      // what is painted (see TITLE_LOAD's own comment).
+      goal: lastWashDiag ? lastWashDiag.goal : null,
+      clockT: lastWashDiag ? lastWashDiag.clockT : null,
+      steps: lastWashDiag ? lastWashDiag.steps : null,
+      renderedInk: landing.title.renderedInk(),
     });
   }
 }
@@ -2132,7 +2161,7 @@ const setFan = (on) => { stage.classList.toggle('fanned', on); if (on) startOrbi
 // hand that stops it keeps it stopped through every crossing after.
 loopVid.poster = LOOP_POSTER;
 const closingPoster = new Image(); closingPoster.src = LOOP_POSTER;
-$('five-headline').textContent = HEADLINE;
+if (HEADLINE) $('five-headline').textContent = HEADLINE;
 // loopOn starts unknown rather than false, so the first call after the source
 // is mounted always says something to the element. It has to: the tag carries
 // `autoplay`, and left alone the browser would start decoding the moment the
@@ -3286,7 +3315,7 @@ async function raster(nodes, w, h, srcDoc = document) {
   // than ink bleeding. TITLE_LOAD raises how much suspended pigment each
   // step's dissolution releases (concentration, not rate — l still grows at
   // the same pace, so "completely gone" keeps its own timing).
-  const TITLE_LOAD = 14;
+  const TITLE_LOAD = 3;
   // The shared splash is eight discrete drops with a circular falloff
   // (WATER, drops[]/dropR): on a photo it hides inside the print's own
   // texture, but on bare glyph strokes it is the whole picture — a judge
@@ -3312,7 +3341,7 @@ async function raster(nodes, w, h, srcDoc = document) {
   // account for — reapplying the old values here and looking at the result
   // against the reference frames (scratchpad/phase1g/) confirmed the same
   // character carries over rather than needing its own re-derivation.
-  const TITLE_SPLASH = 0, TITLE_MIST = 0.14, TITLE_MIST_HOLD = 0.08;
+  const TITLE_SPLASH = 0, TITLE_MIST = 0.02, TITLE_MIST_HOLD = 0.08;
   // R (the splash radius) needs no rescaling for TITLE_PX_PER_TEXEL: with
   // TITLE_SPLASH=0 it multiplies out to nothing in both the h and vel terms
   // (WATER) regardless of its own value, so it is unaffected either way.
@@ -3367,7 +3396,7 @@ async function raster(nodes, w, h, srcDoc = document) {
   // up after a hard scroll jump now takes more frames instead of stalling
   // one. Only this instance's budget changes — the shared default and the
   // main wash's own call sites are untouched.
-  const TITLE_STEP_BUDGET = 24;
+  const TITLE_STEP_BUDGET = 8;
   if (!titleSim) { titleCanvas.remove(); fallbackFade(); return; }
   let broken = false;
   // No webglcontextrestored handler: the canvas is removed here, same as the
@@ -3412,12 +3441,13 @@ async function raster(nodes, w, h, srcDoc = document) {
   };
   // Raw readbacks only — no verdict here, so a check can grade what the
   // reader actually sees instead of grading the page's own opinion of it.
-  // title.raw resamples the rendered canvas down to the sim's own grid
+  // readAlpha resamples the rendered canvas down to the sim's own grid
   // (gridW x gridH), the same resolution title.mask is already at, so a
   // caller can compare the two index-for-index without knowing anything
-  // about devicePixelRatio or the print's own pixel size.
-  landing.title.raw = () => {
-    if (broken || getComputedStyle(titleCanvas).display === 'none') return { w: gridW, h: gridH, alpha: new Array(gridW * gridH).fill(0) };
+  // about devicePixelRatio or the print's own pixel size. No display guard
+  // here (raw(), below, adds its own): the one-time rest capture below
+  // needs a real readback while the canvas is still display:none.
+  const readAlpha = () => {
     const c = document.createElement('canvas'); c.width = gridW; c.height = gridH;
     const g = c.getContext('2d'); g.drawImage(titleCanvas, 0, 0, titleCanvas.width, titleCanvas.height, 0, 0, gridW, gridH);
     const d = g.getImageData(0, 0, gridW, gridH).data;
@@ -3427,7 +3457,23 @@ async function raster(nodes, w, h, srcDoc = document) {
     for (let i = 3, p = 0; i < d.length; i += 4, p++) alpha[p] = d[i] * op;
     return { w: gridW, h: gridH, alpha };
   };
+  landing.title.raw = () => {
+    if (broken || getComputedStyle(titleCanvas).display === 'none') return { w: gridW, h: gridH, alpha: new Array(gridW * gridH).fill(0) };
+    return readAlpha();
+  };
   landing.title.mask = () => ({ w: gridW, h: gridH, mask: Array.from(mask) });
+  // Mask-weighted mean alpha, the same weighting remaining() uses on the
+  // sim's own internal state -- verified index-aligned with raw() by a
+  // row-mass probe against the known, asymmetric line positions from
+  // title.lines() (both land the same text rows at the same row fraction; a
+  // genuine mismatch would not), same alignment G's own raw-vs-mask
+  // correlation already assumes.
+  const weighted = (alpha) => {
+    let sum = 0;
+    for (let p = 0; p < alpha.length; p++) sum += (alpha[p] / 255) * mask[p];
+    return sum / maskTotal;
+  };
+  landing.title.renderedAlpha = () => broken || getComputedStyle(titleCanvas).display === 'none' ? 0 : weighted(readAlpha().alpha);
   // Each rendered line's own box, as a fraction of the print's own box
   // (resolution-independent, so a caller scales onto title.raw/title.mask
   // or onto a screenshot equally) — for the per-line, per-column coverage
@@ -3445,21 +3491,44 @@ async function raster(nodes, w, h, srcDoc = document) {
   // display starts blending it toward the (blank) target.
   const TITLE_CURE = T_CURE * 1.35;
   const paint = (t) => titleSim.draw(true, smooth(TITLE_CURE, T_TOTAL, t));
+  // Captured once, synchronously, right here: the canvas's own rendered
+  // alpha at a genuinely undissolved sim (t=0), before any real step or
+  // display flip -- the reference "fully there" reading renderedInk (below)
+  // normalizes against, the same role h1's own opacity=1 plays for ink().
+  // Without this, weighted()'s natural scale (a mask-weighted mean over a
+  // glyph print, not a solid block) sits well under 1.0 at rest, which
+  // would misread as most of the ink already gone the moment the canvas
+  // takes over. Reading the canvas straight after this synchronous paint()
+  // needs no display flip: readAlpha() draws the WebGL canvas's own pixels
+  // regardless of its CSS display, which only hides it from the reader.
+  paint(0);
+  const restRenderedAlpha = Math.max(1e-6, weighted(readAlpha().alpha));
+  // The h1-to-canvas handoff's own continuity check (public: a probe or a
+  // check reads this instead of reinventing the force-visible readback
+  // above). 1.0 at rest (h1 solid or a freshly primed, undrawn canvas),
+  // falling toward 0 as the wash actually clears -- same scale as ink(),
+  // but built from what is actually painted rather than the sim's internal
+  // dissolved-fraction state, which races ahead of it (see TITLE_LOAD).
+  landing.title.renderedInk = () => {
+    if (broken || getComputedStyle(titleCanvas).display === 'none') return 1;
+    return weighted(readAlpha().alpha) / restRenderedAlpha;
+  };
   // The simplest monotonic map: scroll fraction straight to clock seconds.
   // T_SPLASH(0.2)/T_TAKE(1.2) put the splash and the start of real dissolving
   // within the first ~10-55% of scroll, TITLE_CURE(~1.2) delays the fade so
   // 50% is still mid-bleed, and it lands on exactly T_TOTAL at 100% — no
   // separate legs, no tuned knots, so there is nothing here fighting what the
   // fixed splash actually does over time.
-  const titleGoal = (s) => s * T_TOTAL;
+  const titleGoal = (s) => s * s * (3 - 2 * s) * T_TOTAL;
   washDissolve = (titleP) => {
     if (broken) return;
     const goal = titleGoal(1 - clamp01(titleP));
     // A little agitation, the way a real hand's scroll stirs the main wash's
     // own film — constant here because the title is a fixed clock, not a
     // speed the reader sets — spreads the bloom past single stroke edges.
-    const advanced = advanceWash(titleSim, clock, { goal, fwd: true, stir: 0.8, budget: TITLE_STEP_BUDGET }, paint);
+    const advanced = advanceWash(titleSim, clock, { goal, fwd: true, stir: 0.15, budget: TITLE_STEP_BUDGET }, paint);
     titleSteps += advanced.count;
+    lastWashDiag = { goal: +goal.toFixed(4), clockT: +clock.t.toFixed(4), steps: advanced.count };
     // SHOW's grain haze never fully clears; fade opacity out before the cut.
     titleCanvas.style.opacity = String(1 - smooth(T_TOTAL * .5, T_TOTAL * .8, clock.t));
     if (clock.t <= 0) {
@@ -4582,7 +4651,7 @@ function sketchVisible(on) {
 Object.assign(CARDS.nb, { width: 520, height: 520 * 560 / 670 });
 Object.assign(CARDS.sk, { width: 440, height: 440 });
 Object.assign(CARDS.video, { width: 520, height: 390 });
-let s3Drag = null, s3HardStop = true, s3Touched = false;
+let s3Drag = null, s3HardStop = true, s3Touched = false, s3SuppressClick = false;
 let s3Paper = { x: 120, y: 78, w: 540, h: 512 };
 let s3Slot = { x: 180, y: 290, w: 380, h: 285 };
 let s3Stack = ['video'], s3Initialized = false;
@@ -4643,12 +4712,14 @@ stage.addEventListener('pointerdown', e => {
   if (shown !== SHIPS || phase === 'morph' || s3Drag || e.button !== 0) return;
   const el = e.target.closest('[data-asset]'), id = el && cardId(el); if (!id) return;
   const c = CARDS[id], point = localPoint(e); stopCard(id); s3Touched = true;
-  s3Drag = { id, el, point, inside: inPreview(point), grab: { x: (point.x - c.pose.x) / c.pose.s, y: (point.y - c.pose.y) / c.pose.s }, origin: { ...c.pose }, wasDocked: c.docked, last: performance.now(), vs: 0, pointerId: e.pointerId };
+  s3Drag = { id, el, point, startX: e.clientX, startY: e.clientY, inside: inPreview(point), grab: { x: (point.x - c.pose.x) / c.pose.s, y: (point.y - c.pose.y) / c.pose.s }, origin: { ...c.pose }, wasDocked: c.docked, last: performance.now(), vs: 0, pointerId: e.pointerId };
   el.classList.add('s3-drag'); el.focus({ preventScroll: true }); cardDepths();
   el.setPointerCapture(e.pointerId); e.preventDefault(); c.raf = requestAnimationFrame(updateDrag);
 });
 stage.addEventListener('pointermove', e => {
   if (!s3Drag) return;
+  const dx = e.clientX - s3Drag.startX, dy = e.clientY - s3Drag.startY;
+  if (dx * dx + dy * dy > 16) s3SuppressClick = true;
   s3Drag.point = localPoint(e); s3Drag.inside = inPreview(s3Drag.point);
 });
 function endDrag(cancelled = false) {
@@ -4670,15 +4741,24 @@ function endDrag(cancelled = false) {
 stage.addEventListener('pointerup', e => { if (s3Drag) { s3Drag.point = localPoint(e); s3Drag.inside = inPreview(s3Drag.point); endDrag(); } });
 stage.addEventListener('pointercancel', () => endDrag(true));
 stage.addEventListener('lostpointercapture', () => endDrag(true));
+function toggleCardPlacement(id) {
+  const c = CARDS[id]; if (!c) return;
+  s3Touched = true; c.docked = !c.docked;
+  s3Stack = s3Stack.filter(key => key !== id); if (c.docked) s3Stack.push(id);
+  cardDepths(); settleCard(id, c.docked ? dockPose(id) : c.outside);
+}
+stage.addEventListener('click', e => {
+  if (shown !== SHIPS || s3SuppressClick) { s3SuppressClick = false; return; }
+  const id = cardId(e.target.closest('[data-asset]')); if (!id) return;
+  e.preventDefault(); toggleCardPlacement(id);
+});
 stage.addEventListener('keydown', e => {
   if (shown !== SHIPS) return;
   if (e.key === 'Escape' && s3Drag) { e.preventDefault(); endDrag(true); return; }
   if (!['Enter', ' '].includes(e.key) || s3Drag) return;
   const id = cardId(e.target.closest('[data-asset]')); if (!id) return;
   e.preventDefault(); s3Touched = true;
-  const c = CARDS[id]; c.docked = !c.docked;
-  s3Stack = s3Stack.filter(key => key !== id); if (c.docked) s3Stack.push(id);
-  cardDepths(); settleCard(id, c.docked ? dockPose(id) : c.outside);
+  toggleCardPlacement(id);
 });
 stage.addEventListener('focusin', () => { if (shown === SHIPS) cardDepths(); });
 stage.addEventListener('focusout', () => { if (shown === SHIPS) requestAnimationFrame(cardDepths); });
@@ -4696,7 +4776,7 @@ function enterScene3() {
   s3HardStop = false; warmScene3Media();
   for (const id of S3_ORDER) {
     const c = CARDS[id]; c.el.tabIndex = 0;
-    c.el.setAttribute('role', 'button'); c.el.setAttribute('aria-label', c.label + '; Enter moves it into or out of the article');
+    c.el.setAttribute('role', 'button'); c.el.setAttribute('aria-label', c.label + '; click or press Enter to move it into or out of the article');
     c.el.setAttribute('aria-keyshortcuts', 'Enter Space');
   }
   if (!s3Initialized) { placeScene3Artifacts(); s3Initialized = true; }

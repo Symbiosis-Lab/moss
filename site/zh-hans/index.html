@@ -54,7 +54,7 @@
        (--moss-pill-size) with border-radius 18px (--moss-pill-radius, half
        the pill) -- the same 24:18 relationship the app itself draws between
        its window and that circle. */
-    --cell-w: 660px; --cell-h: 620px; --ed-w: 520px; --pad: 80px; --s: 1; --win-r: 24px;
+    --cell-w: 660px; --cell-h: 620px; --ed-w: 520px; --pad: 80px; --s: 1; --win-r: 24px; --peek: 150px; --vis-w: 992px; --page-max: 1528px;
     /* how far the last join has run: 0 the two-column page, 1 the full-bleed
        close. It is read before the script has set anything, so it starts here. */
     --xf: 0;
@@ -386,13 +386,9 @@
   /* The document still has a useful close if JavaScript is unavailable: the
      scripts add .js before body paint, while the static section keeps its own
      headline and links when they cannot run. */
-  :is(html:not(.js), html[data-static]) #col { display: none; }
-  :is(html:not(.js), html[data-static]) #intro { min-height: 0; padding-block: 100px 32px; }
-  :is(html:not(.js), html[data-static]) #intro h1 { position: static; }
-  :is(html:not(.js), html[data-static]) .page { display: block; margin-top: 0; }
-  :is(html:not(.js), html[data-static]) .scene { min-height: 0; padding: 32px 0; }
-  :is(html:not(.js), html[data-static]) #five { position: relative; min-height: 100vh; opacity: 1; pointer-events: auto; background: #101110; }
-  :is(html:not(.js), html[data-static]) #five-in { width: min(900px, calc(100% - 40px)); }
+  /* Preserve geometry while deferred scripts are still loading. */
+  html:not([data-ready]) #vis { visibility: hidden; }
+  html:not([data-ready]) #five { position: relative; min-height: 100vh; opacity: 1; pointer-events: auto; background: #101110; }
 
   /* Layout pass: the intro owns the first beat, while the stage remains tied
      to the measured desktop composition. The script supplies these variables
@@ -554,7 +550,11 @@
     #five-in { z-index: 1; width: 100%; padding: 72px 20px; }
     #five h2 { font-size: clamp(34px, 10vw, 54px); }
     #beta { display: block; margin-top: 48px; }
-    #beta .signup { margin-top: 26px; }
+  #beta .signup { margin-top: 26px; }
+  #beta { position: relative; }
+  .static-signup-note { display: none; position: absolute; inset-block-start: 100%; margin-block-start: 26px; }
+  html:not([data-ready]) .signup { visibility: hidden; }
+  html:not([data-ready]) .static-signup-note { display: block; }
     #footer { margin-top: 48px; }
     .command { grid-template-columns: 1fr auto; }
     .command code { grid-column: 1; }
@@ -562,8 +562,7 @@
   }
 </style>
 
-<script>document.documentElement.classList.add('js'); history.scrollRestoration = 'manual';</script>
-<script src="landing-i18n.js"></script>
+<script>history.scrollRestoration = 'manual'; window.__LANG = 'zh';</script>
 </head>
 <body>
 
@@ -584,25 +583,15 @@
     <div class="ground" id="g0"></div><div class="ground" id="g1"></div>
     <div id="box">
       <iframe id="ed" title="青苔编辑器"></iframe>
-      <iframe id="sh" title="青苔预览" loading="eager"></iframe>
-      <iframe id="vd" src="ui/shell.html?title=A%20canvas%20half%20empty%20%E2%80%94%20A%20Folder%20for%20All%20Digital%20Creation&target=your.site" title="青苔预览" loading="eager"></iframe>
+      <iframe id="sh" title="青苔预览" loading="lazy"></iframe>
+      <iframe id="vd" data-src="ui/shell.html?title=A%20canvas%20half%20empty%20%E2%80%94%20A%20Folder%20for%20All%20Digital%20Creation&target=your.site" title="青苔预览" loading="lazy"></iframe>
     </div>
     <script>
     // ?lang=zh: the Chinese version (八大山人 vault), vertical typesetting in
     // the preview. Set before the two iframes would otherwise start loading
     // their (English) default src, so there is no double-fetch.
     // moss-landing-lab/HANDOFF.md Task A.
-    (function () {
-      window.__LANG = window.__LANG || 'en';
-      var ed = document.getElementById('ed'), sh = document.getElementById('sh');
-      if (window.__LANG === 'zh') {
-        ed.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('八大山人') + '&file=' + encodeURIComponent('八大山人.md') + '&date=1659-12-01&home=1';
-        sh.src = 'ui/shell.html?preview=' + encodeURIComponent('/zhuda/homepage/') + '&title=' + encodeURIComponent('八大山人') + '&target=zhudasnotebook.com&live=' + encodeURIComponent('https://www.zhudasnotebook.com/');
-      } else {
-        ed.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('William Blake') + '&file=' + encodeURIComponent('William Blake.md') + '&date=1790-06-01&home=1';
-        sh.src = 'ui/shell.html?preview=' + encodeURIComponent('/blake/homepage/') + '&title=' + encodeURIComponent('William Blake') + '&target=blakesnotebook.com&live=' + encodeURIComponent('https://www.blakesnotebook.com/');
-      }
-    })();
+    // Sources are assigned by the deferred runtime after parsing.
     </script>
     <canvas id="gl"></canvas>
     <!-- Scene 4's targets. One circle per deploy target, popped from behind
@@ -671,7 +660,7 @@
     </div>
     <section id="beta" aria-labelledby="beta-title" tabindex="-1">
       <div><h3 id="beta-title">一起打磨青苔</h3><p>接收偶尔一次的更新消息，以及免费试用青苔默认托管服务</p></div>
-      <form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">你的邮箱</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="你的邮箱" required><button type="submit">申请内测</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
+      <p class="static-signup-note">启用 JavaScript 后即可申请内测。</p><form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">你的邮箱</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="你的邮箱" required><button type="submit">申请内测</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
     </section>
     <footer id="footer">
       <nav aria-label="页脚"><a href="/zh-hans/privacy/">隐私</a><span aria-hidden="true">·</span><a href="https://symbiosis-lab.org/">Symbiosis Lab</a><span aria-hidden="true">·</span><span>2026</span><a class="github-link" href="https://github.com/Symbiosis-Lab/moss" aria-label="在 GitHub 查看青苔"><img src="assets/platforms/github.svg" alt=""></a></nav>
@@ -679,9 +668,10 @@
   </div>
 </section>
 
-<script src="watercolor-capture.js"></script>
-<script src="watercolor-morph.js"></script>
-<script src="landing.js"></script>
+<script>(function () { var w = innerWidth, h = innerHeight, mobile = w <= 900, s = mobile ? Math.min((w - 32) / 820, 366 / 750) : Math.max(.5, Math.min(1, (Math.min(w, 1528) - 56 - 96 - 440) / 992, (h - 96) / 620)); var root = document.documentElement.style; root.setProperty('--page-start', String(document.querySelector('.page').getBoundingClientRect().top + scrollY) + 'px'); root.setProperty('--layout-s', String(s)); root.setProperty('--s', String(s)); })();</script>
+<script src="watercolor-capture.js" defer></script>
+<script src="watercolor-morph.js" defer></script>
+<script src="landing.js" defer></script>
 <script src="closing.js" defer></script>
 </body>
 </html>
