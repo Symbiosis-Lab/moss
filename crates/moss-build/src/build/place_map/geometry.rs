@@ -207,8 +207,11 @@ impl Projection {
     /// those fragments into polygons, because that invents a chord across the
     /// invisible hemisphere. This method samples each closed edge, keeps the
     /// visible runs as rings, closes every run, and clips the resulting rings
-    /// with a polygon clipper. A caller can therefore always use `fill-rule`
-    /// on the returned paths without receiving an open line fragment.
+    /// with a polygon clipper. Every returned inner vector is one closed ring.
+    ///
+    /// The caller must preserve all returned rings for one source feature in
+    /// one SVG path (using `fill-rule="evenodd"`); emitting one filled path
+    /// per ring loses holes and can overpaint horizon-separated components.
     pub fn project_ring(&self, points: &[(i32, i32)], quantisation: u32) -> Vec<Vec<(f64, f64)>> {
         let mut coordinates: Vec<ProjectedPoint> = points
             .iter()
@@ -232,6 +235,20 @@ impl Projection {
         // unwraps every point around the frame centre, so the crossing still
         // follows the short edge without losing ring topology.
         self.project_ring_part(&coordinates)
+    }
+
+    /// Project every ring belonging to one source feature without changing
+    /// their grouping. The returned rings must be emitted together in one
+    /// even-odd SVG path so interior rings remain holes.
+    pub fn project_feature(
+        &self,
+        rings: &[&[(i32, i32)]],
+        quantisation: u32,
+    ) -> Vec<Vec<(f64, f64)>> {
+        rings
+            .iter()
+            .flat_map(|ring| self.project_ring(ring, quantisation))
+            .collect()
     }
 
     fn project_ring_part(&self, points: &[ProjectedPoint]) -> Vec<Vec<(f64, f64)>> {
@@ -276,7 +293,13 @@ impl Projection {
             }
             let entry = ring[0];
             let exit = *ring.last().unwrap();
-            append_horizon_arc(&mut ring, exit, entry, self.horizon_radius());
+            append_horizon_arc(
+                &mut ring,
+                exit,
+                entry,
+                self.horizon_radius(),
+                -ring_winding(points),
+            );
             let ring = clip_closed_ring(&ring, CLIP_MIN_X, CLIP_MAX_X, CLIP_MIN_Y, CLIP_MAX_Y);
             if ring.len() >= 4 {
                 runs.push(ring);
@@ -287,12 +310,9 @@ impl Projection {
 
     fn projected_ring_samples(&self, points: &[ProjectedPoint]) -> Vec<RingSample> {
         const SAMPLES: usize = 32;
-        let mut output = Vec::with_capacity((points.len() - 1) * SAMPLES);
+        let mut output = Vec::with_capacity((points.len() - 1) * SAMPLES + 1);
         for (edge_index, pair) in points.windows(2).enumerate() {
             for sample_index in 0..SAMPLES {
-                if edge_index + 1 == points.len() - 1 && sample_index == SAMPLES - 1 {
-                    continue;
-                }
                 let start_t = sample_index as f64 / SAMPLES as f64;
                 let end_t = (sample_index + 1) as f64 / SAMPLES as f64;
                 let start = interpolate(pair[0], pair[1], start_t);
@@ -543,29 +563,94 @@ fn push_unique(points: &mut Vec<(f64, f64)>, point: (f64, f64)) {
     }
 }
 
+fn ring_winding(points: &[ProjectedPoint]) -> f64 {
+    let mut area = 0.0;
+    let mut previous_latitude = points[0].latitude;
+    let mut previous_longitude = points[0].longitude;
+    for &point in &points[1..] {
+        let longitude = previous_longitude
+            + shortest_longitude_delta(point.longitude - previous_longitude);
+        area += previous_longitude * point.latitude - longitude * previous_latitude;
+        previous_longitude = longitude;
+        previous_latitude = point.latitude;
+    }
+    area
+}
+
 fn append_horizon_arc(
     ring: &mut Vec<(f64, f64)>,
     start: (f64, f64),
     end: (f64, f64),
     radius: f64,
+    desired_winding: f64,
 ) {
     let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
     let start_angle = (start.1 - center.1).atan2(start.0 - center.0);
     let end_angle = (end.1 - center.1).atan2(end.0 - center.0);
-    let mut delta = (end_angle - start_angle + std::f64::consts::PI)
+    let short_delta = (end_angle - start_angle + std::f64::consts::PI)
         .rem_euclid(2.0 * std::f64::consts::PI)
         - std::f64::consts::PI;
-    if delta.abs() < 1e-9 {
-        delta = 0.0;
-    }
-    let steps = ((delta.abs() / (std::f64::consts::PI / 12.0)).ceil() as usize).max(1);
+    let long_delta = if short_delta >= 0.0 {
+        short_delta - 2.0 * std::f64::consts::PI
+    } else {
+        short_delta + 2.0 * std::f64::consts::PI
+    };
+    let arc_delta = if desired_winding.abs() < f64::EPSILON {
+        short_delta
+    } else {
+        let short_area = ring_area_with_arc(ring, start_angle, short_delta, radius, end);
+        let long_area = ring_area_with_arc(ring, start_angle, long_delta, radius, end);
+        if short_area.signum() == desired_winding.signum() {
+            short_delta
+        } else if long_area.signum() == desired_winding.signum() {
+            long_delta
+        } else {
+            short_delta
+        }
+    };
+    let steps = ((arc_delta.abs() / (std::f64::consts::PI / 12.0)).ceil() as usize).max(1);
     for step in 1..=steps {
-        let angle = start_angle + delta * step as f64 / steps as f64;
+        let angle = start_angle + arc_delta * step as f64 / steps as f64;
         push_unique(
             ring,
-            (center.0 + radius * angle.cos(), center.1 + radius * angle.sin()),
+            if step == steps {
+                end
+            } else {
+                (center.0 + radius * angle.cos(), center.1 + radius * angle.sin())
+            },
         );
     }
+}
+
+fn ring_area_with_arc(
+    ring: &[(f64, f64)],
+    start_angle: f64,
+    delta: f64,
+    radius: f64,
+    end: (f64, f64),
+) -> f64 {
+    let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
+    let steps = ((delta.abs() / (std::f64::consts::PI / 12.0)).ceil() as usize).max(1);
+    let mut candidate = ring.to_vec();
+    for step in 1..=steps {
+        let angle = start_angle + delta * step as f64 / steps as f64;
+        candidate.push(if step == steps {
+            end
+        } else {
+            (center.0 + radius * angle.cos(), center.1 + radius * angle.sin())
+        });
+    }
+    signed_area(&candidate)
+}
+
+fn signed_area(points: &[(f64, f64)]) -> f64 {
+    points
+        .iter()
+        .zip(points.iter().cycle().skip(1))
+        .take(points.len())
+        .map(|(&(x1, y1), &(x2, y2))| x1 * y2 - x2 * y1)
+        .sum::<f64>()
+        / 2.0
 }
 
 fn same_point(first: Option<(f64, f64)>, second: (f64, f64)) -> bool {
@@ -972,6 +1057,18 @@ mod tests {
     }
 
     #[test]
+    fn project_feature_preserves_outer_and_hole_rings_for_one_even_odd_path() {
+        let center = ProjectedPoint::new(0.0, 0.0).unwrap();
+        let frame = Frame::from_points(&[center], [Precision::Exact].into_iter()).unwrap();
+        let projection = Projection::new(&frame);
+        let outer = [(-10, -10), (10, -10), (10, 10), (-10, 10), (-10, -10)];
+        let hole = [(-2, -2), (-2, 2), (2, 2), (2, -2), (-2, -2)];
+        let rings = projection.project_feature(&[&outer, &hole], 1);
+        assert_eq!(rings.len(), 2);
+        assert!(rings.iter().all(|ring| ring.first() == ring.last()));
+    }
+
+    #[test]
     fn project_ring_clips_horizon_crossings_without_open_fragments() {
         let frame_points = [
             ProjectedPoint::new(-80.0, 0.0).unwrap(),
@@ -1000,6 +1097,44 @@ mod tests {
             let radius = (point.0 - center.0).hypot(point.1 - center.1);
             radius <= horizon + 1.0
         }));
+    }
+
+    #[test]
+    fn project_ring_closes_a_horizon_run_that_crosses_the_source_closing_edge() {
+        let frame_points = [
+            ProjectedPoint::new(-80.0, 0.0).unwrap(),
+            ProjectedPoint::new(80.0, 0.0).unwrap(),
+        ];
+        let frame = Frame::from_points(&frame_points, [Precision::Exact, Precision::Exact].into_iter()).unwrap();
+        let projection = Projection::new(&frame);
+        let rings = projection.project_ring(
+            &[(80, -20), (100, -20), (100, 20), (100, 40)],
+            1,
+        );
+        assert!(!rings.is_empty());
+        assert!(rings.iter().all(|ring| ring.first() == ring.last()));
+    }
+
+    #[test]
+    fn horizon_arc_selects_major_or_minor_boundary_for_requested_winding() {
+        let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
+        let radius = 100.0;
+        let entry = (
+            center.0 + radius * (-0.6_f64).cos(),
+            center.1 + radius * (-0.6_f64).sin(),
+        );
+        let exit = (
+            center.0 + radius * 0.6_f64.cos(),
+            center.1 + radius * 0.6_f64.sin(),
+        );
+        let base = (center.0 - 80.0, center.1);
+        let mut clockwise = vec![base, exit];
+        append_horizon_arc(&mut clockwise, exit, entry, radius, 1.0);
+        let mut counterclockwise = vec![base, exit];
+        append_horizon_arc(&mut counterclockwise, exit, entry, radius, -1.0);
+        assert!(clockwise.len() != counterclockwise.len());
+        assert!(signed_area(&clockwise) > 0.0);
+        assert!(signed_area(&counterclockwise) < 0.0);
     }
 
     #[test]
