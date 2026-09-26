@@ -47,6 +47,20 @@ function immersiveCopy(): typeof IMMERSIVE_COPY["en"] {
   return IMMERSIVE_COPY[langBucket(document.documentElement.lang)];
 }
 
+function iframeOpenUrl(iframe: HTMLIFrameElement): string {
+  const fallback = new URL(iframe.src, window.location.href);
+  const target = iframe.dataset.openUrl;
+  if (target) {
+    try {
+      const url = new URL(target, window.location.href);
+      if (url.protocol === "http:" || url.protocol === "https:") return url.href;
+    } catch {
+      // Use the iframe's original target when the optional override is invalid.
+    }
+  }
+  return fallback.protocol === "javascript:" ? window.location.href : fallback.href;
+}
+
 // Material Design icons (Chrome, Firefox, Edge)
 const MD_ENTER_FS = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>';
 const MD_EXIT_FS = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>';
@@ -102,8 +116,12 @@ function setupImmersiveIframe(iframe: HTMLIFrameElement): void {
   newWindowBtn.setAttribute("aria-label", immersiveCopy().openInNewWindow);
   newWindowBtn.target = "_blank";
   newWindowBtn.rel = "noopener noreferrer";
-  newWindowBtn.href = new URL(iframe.src, window.location.href).href;
+  newWindowBtn.href = iframeOpenUrl(iframe);
   newWindowBtn.innerHTML = ICON_OPEN_NEW;
+
+  new MutationObserver(() => {
+    newWindowBtn.href = iframeOpenUrl(iframe);
+  }).observe(iframe, { attributes: true, attributeFilter: ["data-open-url"] });
 
   // Move iframe into wrapper without removing from DOM tree (preserves iframe state)
   iframe.parentNode!.insertBefore(wrapper, iframe);

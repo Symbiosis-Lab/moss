@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"></head>
+<body>
+  <main><article class="container">
+    <iframe src="/playwright/fixtures/iframe-open-url/map.html?embed=1&amp;camera=home"></iframe>
+  </article></main>
+  <script type="module">
+    import { initImmersiveMode } from '/crates/moss-build/src/js-src/site/immersive-mode.ts';
+    initImmersiveMode();
+  </script>
+</body>
+</html>
