@@ -37,3 +37,25 @@ test('rejects non-http open targets and falls back to the iframe URL', async ({ 
   });
   await expect(openLink).toHaveAttribute('href', /camera=home/);
 });
+
+test('reduced motion leaves the fullscreen control enabled', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/playwright/fixtures/iframe-open-url/live.html');
+
+  const button = page.locator('.immersive-fullscreen-btn');
+  await button.click();
+  await expect(button).toBeEnabled();
+  await expect(page.locator('.immersive-new-window-btn')).not.toHaveAttribute('aria-disabled', 'true');
+});
+
+test('zero-duration transitions leave the fullscreen control enabled', async ({ page }) => {
+  await page.goto('/playwright/fixtures/iframe-open-url/live.html');
+  await page.addStyleTag({
+    content: '.immersive-iframe-wrapper.fs-animating-enter { transition: none !important; }',
+  });
+
+  const button = page.locator('.immersive-fullscreen-btn');
+  await button.click();
+  await expect(button).toBeEnabled();
+  await expect(page.locator('.immersive-new-window-btn')).not.toHaveAttribute('aria-disabled', 'true');
+});

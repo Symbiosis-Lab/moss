@@ -47,6 +47,46 @@ function immersiveCopy(): typeof IMMERSIVE_COPY["en"] {
   return IMMERSIVE_COPY[langBucket(document.documentElement.lang)];
 }
 
+function afterTransition(
+  element: HTMLElement,
+  propertyName: string,
+  callback: () => void,
+): void {
+  const style = getComputedStyle(element);
+  const properties = style.transitionProperty.split(",").map((value) => value.trim());
+  const durations = style.transitionDuration.split(",");
+  const delays = style.transitionDelay.split(",");
+  const milliseconds = (value: string): number => {
+    const time = Number.parseFloat(value);
+    return value.trim().endsWith("ms") ? time : time * 1000;
+  };
+  const remaining = Math.max(0, ...properties.map((property, index) => {
+    if (property !== propertyName && property !== "all") return 0;
+    return milliseconds(durations[index % durations.length]) +
+      milliseconds(delays[index % delays.length]);
+  }));
+
+  let finished = false;
+  let timeout: number | undefined;
+  const finish = (): void => {
+    if (finished) return;
+    finished = true;
+    element.removeEventListener("transitionend", onEnd);
+    if (timeout !== undefined) window.clearTimeout(timeout);
+    callback();
+  };
+  const onEnd = (event: Event): void => {
+    if (event.target === element && (event as TransitionEvent).propertyName === propertyName) finish();
+  };
+
+  if (remaining === 0) {
+    finish();
+    return;
+  }
+  element.addEventListener("transitionend", onEnd);
+  timeout = window.setTimeout(finish, remaining + 50);
+}
+
 function iframeOpenUrl(iframe: HTMLIFrameElement): string {
   const fallback = new URL(iframe.src, window.location.href);
   const target = iframe.dataset.openUrl;
@@ -167,14 +207,11 @@ function setupImmersiveIframe(iframe: HTMLIFrameElement): void {
       button.disabled = true;
       newWindowBtn.setAttribute("aria-disabled", "true");
 
-      function onEnterEnd(e: Event) {
-        if ((e as TransitionEvent).propertyName !== "transform") return;
-        wrapper.removeEventListener("transitionend", onEnterEnd);
+      afterTransition(wrapper, "transform", () => {
         wrapper.classList.remove("fs-animating-enter");
         button.disabled = false;
         newWindowBtn.removeAttribute("aria-disabled");
-      }
-      wrapper.addEventListener("transitionend", onEnterEnd);
+      });
     });
   }
 
@@ -210,9 +247,7 @@ function setupImmersiveIframe(iframe: HTMLIFrameElement): void {
     button.disabled = true;
     newWindowBtn.setAttribute("aria-disabled", "true");
 
-    function onExitEnd(e: Event) {
-      if ((e as TransitionEvent).propertyName !== "transform") return;
-      wrapper.removeEventListener("transitionend", onExitEnd);
+    afterTransition(wrapper, "transform", () => {
       wrapper.classList.remove("fs-animating-exit");
       wrapper.style.transform = "";
       document.body.classList.remove("immersive-fs-active");
@@ -221,8 +256,7 @@ function setupImmersiveIframe(iframe: HTMLIFrameElement): void {
       button.setAttribute("aria-label", immersiveCopy().enterFullscreen);
       button.disabled = false;
       newWindowBtn.removeAttribute("aria-disabled");
-    }
-    wrapper.addEventListener("transitionend", onExitEnd);
+    });
   }
 
   function toggleFullscreen(): void {
