@@ -1,4 +1,11 @@
 (() => {
+  // The subscriber's newsletter is the language they signed up in: the root
+  // (English) is scope '', each language folder is its own scope. Keep the
+  // folder list in step with scripts/generate-landing-locales.mjs.
+  const subscriptionScope = () => {
+    const locale = window.__landingI18n?.locale() || document.documentElement.lang;
+    return locale === 'zh-hans' || locale === 'zh-hant' ? locale : '';
+  };
   const ready = (fn) => document.readyState === 'loading'
     ? document.addEventListener('DOMContentLoaded', fn, { once: true })
     : fn();
@@ -6,20 +13,6 @@
   ready(() => {
     if (document.documentElement.dataset.closingWired === 'true') return;
     document.documentElement.dataset.closingWired = 'true';
-
-    // Moved from landing-i18n.js's apply() (phase 3): a route change, not a
-    // repaint, so it belongs with the rest of the page's one-time wiring,
-    // not with locale detection.
-    document.querySelectorAll('a[href]').forEach((link) => {
-      const url = new URL(link.href);
-      if (url.origin !== location.origin) { link.target = '_blank'; link.rel = 'noopener'; }
-    });
-    // Same move: guards #beta-form's own in-flight submit, which is this
-    // file's concern, not landing-i18n.js's.
-    document.querySelectorAll('[data-landing-locale]').forEach((link) => link.addEventListener('click', (event) => {
-      if (document.querySelector('#beta-form button[aria-busy="true"]')) event.preventDefault();
-    }));
-
     const downloads = document.querySelector('#downloads');
     const release = {
       macos: 'https://github.com/Symbiosis-Lab/moss/releases/download/v0.14.1/moss_0.14.1_universal.dmg',
@@ -116,6 +109,8 @@
         event.preventDefault();
         if (!form.reportValidity() || button.disabled) return;
         button.disabled = true;
+        const languageSelect = document.querySelector('#language-select');
+        if (languageSelect) languageSelect.disabled = true;
         button.setAttribute('aria-busy', 'true');
         button.textContent = window.__landingI18n?.t('sending') || 'Sending…';
         status.textContent = '';
@@ -143,18 +138,11 @@
           input.focus();
         } finally {
           button.disabled = false;
+          if (languageSelect) languageSelect.disabled = false;
           button.removeAttribute('aria-busy');
           button.textContent = window.__landingI18n?.t('request') || initialLabel;
         }
       });
-    };
-
-    // The subscriber's newsletter is the language they signed up in: the root
-    // (English) is scope '', each language folder is its own scope. Keep the
-    // folder list in step with scripts/generate-landing-locales.mjs.
-    const subscriptionScope = () => {
-      const locale = window.__landingI18n?.locale() || document.documentElement.lang;
-      return locale === 'zh-hans' || locale === 'zh-hant' ? locale : '';
     };
 
     submit(
@@ -178,7 +166,8 @@
         window.mossLanding?.openSignup();
         const started = performance.now();
         const focusEmail = () => {
-          if (email && !email.closest('[inert]') && window.mossLanding?.atClosing()) email.focus({ preventScroll: true });
+          const state = window.__state?.();
+          if (email && !email.closest('[inert]') && state?.shown === 4 && !state.running) email.focus({ preventScroll: true });
           else if (performance.now() - started < 10000) setTimeout(focusEmail, 50);
         };
         focusEmail();

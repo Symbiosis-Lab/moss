@@ -10,24 +10,26 @@ import { resolveBaseURL } from './landing-harness.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 
+// check-landing-transitions.mjs (the desktop join sweep) is left out: it times
+// out against the September 19 production page as well, so it is a broken
+// check, not a signal, until its carry-arming step is repaired.
 const CHECKS = [
   'check-landing-cold-bottom.mjs',
-  'check-watercolor-fidelity.mjs',
-  'check-landing-intro-title.mjs',
+  'check-landing-desktop-pace.mjs',
+  'check-landing-intent.mjs',
   'check-landing-mobile-handoff.mjs',
   'check-landing-mobile.mjs',
   'check-landing-pin.mjs',
-  'check-landing-publish-bridge.mjs',
   'check-landing-readiness.mjs',
+  'check-landing-slow-network.mjs',
   'check-landing-subscription.mjs',
   'check-landing-text-track.mjs',
-  'check-landing-transitions.mjs',
+  'check-landing-wash-recovery.mjs',
+  'check-landing-wheel-tail.mjs',
   'check-site-preview.mjs',
   'check-docs-footer-icon.mjs',
   'check-docs-media.mjs',
   'check-favicon-theme.mjs',
-  'check-landing-structure.mjs',
-  'check-landing-invariants.mjs',
 ];
 // These three read the moss doc theme/media pipeline, not the landing page
 // itself -- --landing-only skips them for a faster loop while iterating on

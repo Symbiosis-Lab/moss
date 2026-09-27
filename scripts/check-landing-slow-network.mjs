@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Slow-network contract: the HTML remains readable before the deferred runtime
-// arrives, and releasing that runtime does not move a reader already mid-page.
+// Slow-network contract: with nothing but the HTML document, the page is
+// readable end to end and the signup is honest about needing the runtime. (The
+// runtime is inline in the page, so there is no deferred runtime to release.)
 import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
 
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
@@ -42,33 +43,23 @@ async function htmlOnly(browser, locale) {
   await page.close();
 }
 
-async function delayedBoot(browser, locale) {
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
-  await page.route('**/*', async (route) => {
-    if (route.request().resourceType() === 'document') return route.continue();
-    await gate;
-    return route.continue();
-  });
-  await page.goto(new URL(locale, baseURL).href, { waitUntil: 'commit' });
-  await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight * .4));
-  if (fault) await installFault(page);
-  const before = await page.evaluate((selectors) => ({ y: scrollY, rows: selectors.map((selector) => { const r = document.querySelector(selector).getBoundingClientRect(); return [selector, r.top]; }) }), selectors);
-  if (fault) await page.evaluate(() => document.documentElement.classList.add('js'));
-  release();
-  await page.waitForFunction(() => document.documentElement.dataset.ready === '1', null, { timeout: 20000 });
-  const after = await page.evaluate((selectors) => ({ y: scrollY, rows: selectors.map((selector) => { const r = document.querySelector(selector).getBoundingClientRect(); return [selector, r.top]; }) }), selectors);
-  assert(Math.abs(after.y - before.y) <= 2, `${locale || 'en'} delayed boot: scroll moved ${before.y} -> ${after.y}`);
-  for (let i = 0; i < before.rows.length; i++) assert(Math.abs(before.rows[i][1] - after.rows[i][1]) <= 2, `${locale || 'en'} delayed boot: ${before.rows[i][0]} reflowed ${before.rows[i][1]} -> ${after.rows[i][1]} (${JSON.stringify({ before, after })})`);
-  await page.close();
+// With scripts off entirely, a desktop reads the page as plain document flow:
+// the close stands after the copy rather than pulled up over it, the way the
+// live page pulls it up for the carry to scrub across.
+async function noScript(browser, locale) {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, javaScriptEnabled: false });
+  const page = await context.newPage();
+  await page.goto(new URL(locale, baseURL).href);
+  const overlap = await page.evaluate(() => Math.round(Math.max(...[...document.querySelectorAll('.scene')].map((s) => s.getBoundingClientRect().bottom)) - document.querySelector('#five').getBoundingClientRect().top));
+  assert(overlap <= 1, `${locale || 'en'} with scripts off at 1440px: the close rides ${overlap}px up over the copy`);
+  await context.close();
 }
 
 for (const [name, type] of [['chromium', engines.chromium], ['webkit', engines.webkit]]) {
   const browser = await type.launch();
   try {
-    for (const locale of locales) { await htmlOnly(browser, locale); await delayedBoot(browser, locale); }
-    console.log(`${name}: slow-network checks passed for ${locales.length} locales`);
+    for (const locale of locales) { await htmlOnly(browser, locale); await noScript(browser, locale); }
+    console.log(`${name}: slow-network checks passed for ${locales.length} locales, and with scripts off on a desktop`);
   } finally { await browser.close(); }
 }
 await close();

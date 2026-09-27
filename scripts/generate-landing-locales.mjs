@@ -1,13 +1,13 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 
 const source = new URL('../site/index.html', import.meta.url);
 const html = await readFile(source, 'utf8');
-// landing-i18n.js exports its catalog as a plain CommonJS module when
-// `document` doesn't exist (see the file itself), so this is a real
-// require(), not a regex slice of the source evaluated with Function().
-const { en, hans, hant } = createRequire(import.meta.url)('../site/landing-i18n.js');
+const runtime = await readFile(new URL('../site/landing-i18n.js', import.meta.url), 'utf8');
+const catalogSource = runtime.match(/  const en = \{[\s\S]+?  const catalogs=/)?.[0]
+  .replace('  const catalogs=', '  return { en, hans, hant };');
+if (!catalogSource) throw new Error('Could not read landing locale catalogs');
+const { en, hans, hant } = Function(catalogSource)();
 const catalogs = { 'zh-hans': hans, 'zh-hant': hant };
 
 function escaped(value) {
@@ -50,11 +50,6 @@ function localize(sourceHtml, locale) {
   // install commands, or external destinations.
   const selectors = value => [...value.matchAll(/\b(?:class|id)="[^"]*"/g)].map(match => match[0]).sort();
   if (JSON.stringify(selectors(result)) !== JSON.stringify(selectors(sourceHtml))) throw new Error(`${locale} altered HTML selectors`);
-  // The footer privacy link is deliberately excluded from this invariant: it is same-origin
-  // (/privacy/, /zh-hans/privacy/, /zh-hant/privacy/ — see docs.privacy above) precisely so it
-  // resolves to the localized page on any host, so it must NOT stay byte-identical across
-  // locales. Its correctness is instead asserted by check-site-preview.mjs, which fetches the
-  // link from each landing route and checks the target page's <html lang> against the locale.
   const externals = value => [...value.replace(/<!-- landing-discovery:start -->[\s\S]*?<!-- landing-discovery:end -->/, '').matchAll(/(?:href|src)="https?:[^" ]+"/g)].map(match => match[0]).sort();
   if (JSON.stringify(externals(result)) !== JSON.stringify(externals(sourceHtml))) throw new Error(`${locale} altered external URLs`);
   const commands = value => [...value.matchAll(/<code>[^<]+<\/code>/g)].map(match => match[0]);
@@ -70,6 +65,7 @@ async function emit(url, contents) {
   }
   await writeFile(url, contents);
 }
+
 // Same contract as emit(), for a binary target (favicon.ico): --check
 // compares bytes instead of decoding as UTF-8, which would corrupt a PNG's
 // own bytes into an unequal string on the read alone.

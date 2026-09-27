@@ -126,7 +126,7 @@ export function trackErrors(page) {
 // ready() is called, but ready() still has to decide whether to fire its own
 // runJoin() call (independent of any caller's own scroll/join logic) before
 // it finishes. A script that starts driving the page as soon as state().ready
-// flips races that decision (found in check-landing-invariants.mjs's I-fuzz:
+// flips races that decision (found by a seeded fast-jump fuzz:
 // a fuzz loop's own jumps landed mid-decision and a real join ran for
 // reasons that had nothing to do with the call site under test). Boot sets
 // documentElement.dataset.ready='1' only after that decision is made, on the
