@@ -269,6 +269,37 @@ pub const LADDER: [u32; 2] = [800, 1600];
 /// the worked cases.
 pub const MAX_LADDER_ASPECT: u32 = 10;
 
+/// The most elongated (long edge ÷ short edge) a source may be before it
+/// still reads as an ordinary wide or tall photo. Past this,
+/// `render::image`'s default in-column presentation — fit width to the
+/// text measure horizontally, fit height to the plate vertically — has
+/// already squashed it to an unreadable sliver, well before
+/// [`MAX_LADDER_ASPECT`] even makes its responsive ladder pointless: a
+/// presentation concern, checked first, not a downstream consequence of
+/// the rung-generation cutoff. Deliberately far below `MAX_LADDER_ASPECT`
+/// (10) for that reason — by the time a source's ladder disappears, its
+/// in-column presentation has been broken for a while.
+///
+/// 3 matches the traditional handscroll (手卷) / hanging-scroll (立軸)
+/// formats this threshold targets, not an ordinary wide photograph: an
+/// ordinary panorama crop (2:1–3:1) still reads fine laid out at a normal
+/// column width, but a scroll painting routinely runs 3:1 to 30:1 or more.
+pub const SCROLL_SHAPE_ASPECT: u32 = 3;
+
+/// Whether a source's aspect ratio is extreme enough to need the "scroll"
+/// default presentation (`render::image`'s `data-aspect="scroll"`, CSS in
+/// site.css / vertical.css) instead of ordinary in-column sizing — the
+/// long edge past [`SCROLL_SHAPE_ASPECT`] times the short edge, on either
+/// axis: a handscroll's long edge is its width, a hanging scroll's is its
+/// height. The boundary is INCLUSIVE on the ordinary side, matching
+/// [`MAX_LADDER_ASPECT`]'s own convention: exactly 3:1 is still ordinary,
+/// and only a ratio past it is tagged "scroll".
+pub fn is_scroll_shape(natural_w: u32, natural_h: u32) -> bool {
+    let long = natural_w.max(natural_h);
+    let short = natural_w.min(natural_h).max(1);
+    long > short.saturating_mul(SCROLL_SHAPE_ASPECT)
+}
+
 /// Width the deployed base variant actually has after the encoder's
 /// aspect-preserving resize to [`deployed_long_edge`] (`img.resize(bound,
 /// bound, Lanczos3)` in build/media/image.rs). BOTH dimensions shrink by the
@@ -1629,6 +1660,26 @@ mod tests {
         assert_eq!(ladder_rungs(2400, 240, false), &[800, 1600][..]);
         // One px thinner tips the ratio to ~10.04:1 and empties the ladder.
         assert_eq!(ladder_rungs(2400, 239, false), &[] as &[u32]);
+    }
+
+    #[test]
+    fn is_scroll_shape_boundary_is_inclusive() {
+        // Ordinary photos, any orientation, well under 3:1: not a scroll.
+        assert!(!is_scroll_shape(1600, 900));
+        assert!(!is_scroll_shape(900, 1600));
+        // Exactly 3:1 is still "ordinary" — inclusive on the kept side.
+        assert!(!is_scroll_shape(2400, 800));
+        assert!(!is_scroll_shape(800, 2400));
+        // One px past 3:1 tips into scroll territory, either axis.
+        assert!(is_scroll_shape(2401, 800));
+        assert!(is_scroll_shape(800, 2401));
+        // The real fixtures this feature targets: a handscroll (河上花圖,
+        // 1600×58, ~27.6:1) and a hanging scroll (portrait, well past 3:1).
+        assert!(is_scroll_shape(1600, 58));
+        assert!(is_scroll_shape(1300, 23660));
+        // Degenerate zero height/width never panics or divides by zero.
+        assert!(is_scroll_shape(100, 0));
+        assert!(!is_scroll_shape(0, 0));
     }
 
     #[test]

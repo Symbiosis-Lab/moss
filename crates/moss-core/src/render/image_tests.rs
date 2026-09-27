@@ -1641,6 +1641,130 @@ fn webp_source_animated_is_byte_identical_bare_img() {
 }
 
 #[test]
+fn scroll_shape_tags_only_when_option_and_ratio_both_say_so() {
+    // A 1600x58 handscroll (~27.6:1, this crate's own 河上花圖 fixture
+    // ratio) with `scroll_shape: true` (the body-image path,
+    // DefaultHooks::render_image): both the outer `<picture>` (the real
+    // DOM containment horizontal typesetting's scroll region needs) and
+    // the inner `<img>` (asset_paths::is_scroll_shape reads its own dims
+    // lookup independently in render_img_tag) get `data-aspect="scroll"`;
+    // the picture also gets `tabindex="0"` since options.vertical is false
+    // here — a keyboard stop for the scroll region horizontal typesetting
+    // needs, that vertical typesetting's own page-flow scroll does not.
+    let assets = snapshot_dims("scroll.jpg", 1600, 58);
+    let html = synthesize_image_html(
+        "scroll.jpg",
+        "alt",
+        &assets,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions { scroll_shape: true, ..Default::default() },
+    );
+    assert!(
+        html.contains(r#"<picture data-aspect="scroll" tabindex="0">"#),
+        "got: {html}"
+    );
+    assert!(
+        html.matches(r#"data-aspect="scroll""#).count() == 2,
+        "expected data-aspect=\"scroll\" on both picture and img: {html}"
+    );
+
+    // Same option, ordinary 1600x900 photo (~1.78:1): the option alone
+    // must not tag it — only past SCROLL_SHAPE_ASPECT does.
+    let ordinary = snapshot_dims("photo.jpg", 1600, 900);
+    let html_ordinary = synthesize_image_html(
+        "photo.jpg",
+        "alt",
+        &ordinary,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions { scroll_shape: true, ..Default::default() },
+    );
+    assert!(
+        !html_ordinary.contains("data-aspect"),
+        "got: {html_ordinary}"
+    );
+
+    // Same handscroll dims, option left at its Hero/GalleryThumb/
+    // FolderCardCover default (false, DefaultHooks never sets it there):
+    // never tagged, even though the ratio alone would qualify.
+    let html_untagged = synthesize_image_html(
+        "scroll.jpg",
+        "alt",
+        &assets,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions::default(),
+    );
+    assert!(
+        !html_untagged.contains("data-aspect"),
+        "got: {html_untagged}"
+    );
+}
+
+#[test]
+fn scroll_shape_skips_tabindex_under_vertical_typesetting() {
+    // Same handscroll, `vertical: true`: still tagged (vertical.css's own
+    // override needs the attribute to select on), but no `tabindex` — a
+    // vertically-typeset page has no nested scroller for it to be a
+    // keyboard stop for (render/image.rs's own reasoning: a second tab
+    // stop there would be a pointless one).
+    let assets = snapshot_dims("scroll.jpg", 1600, 58);
+    let html = synthesize_image_html(
+        "scroll.jpg",
+        "alt",
+        &assets,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions { scroll_shape: true, vertical: true, ..Default::default() },
+    );
+    assert!(html.contains(r#"<picture data-aspect="scroll">"#), "got: {html}");
+    assert!(!html.contains("tabindex"), "got: {html}");
+}
+
+#[test]
+fn scroll_shape_wraps_a_bare_webp_source_in_a_scroll_container() {
+    // A webp SOURCE never gets a `<picture>` of its own otherwise — Phase B
+    // rides the responsive ladder directly on the `<img>` (this file's own
+    // module doc) — but horizontal typesetting's scroll container needs
+    // real DOM containment an `<img>` alone doesn't have (nothing for a
+    // browser to scroll TO reveal more of, only clip/crop). A scroll-shaped
+    // one gets wrapped in a `<picture>` that exists for exactly that reason,
+    // same attributes as the raster-original path, and no `<source>` since
+    // there is no second candidate to offer.
+    let assets = snapshot_dims("scroll.webp", 1600, 58);
+    let html = synthesize_image_html(
+        "scroll.webp",
+        "alt",
+        &assets,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions { scroll_shape: true, ..Default::default() },
+    );
+    assert!(
+        html.starts_with(r#"<picture data-aspect="scroll" tabindex="0"><img"#),
+        "got: {html}"
+    );
+    assert!(html.ends_with("</picture>"), "got: {html}");
+    assert!(
+        !html.contains("<source"),
+        "a webp source never gets a <source>: {html}"
+    );
+
+    // Vertical typesetting needs no container at all: vertical.css sizes the
+    // bare `<img>` directly, as part of the page's own scroll — wrapping it
+    // would only add an inert element.
+    let html_vertical = synthesize_image_html(
+        "scroll.webp",
+        "alt",
+        &assets,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions { scroll_shape: true, vertical: true, ..Default::default() },
+    );
+    assert!(html_vertical.starts_with("<img"), "got: {html_vertical}");
+    assert!(!html_vertical.contains("<picture"), "got: {html_vertical}");
+    assert!(
+        html_vertical.contains(r#"data-aspect="scroll""#),
+        "got: {html_vertical}"
+    );
+}
+
+#[test]
 fn webp_source_explicit_non_animated_flag_ladders() {
     // Symmetry with the animated test: an explicit `false` in the snapshot
     // (present-false key) ladders exactly like a missing key.

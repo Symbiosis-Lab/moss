@@ -91,7 +91,8 @@
 //! these bare-img paths.
 
 use crate::asset_paths::{
-    deployed_width, is_ladder_source_ext, is_webp_source_ext, ladder_rungs, to_webp, to_webp_rung,
+    deployed_width, is_ladder_source_ext, is_scroll_shape, is_webp_source_ext, ladder_rungs,
+    to_webp, to_webp_rung,
 };
 use crate::asset_snapshot::{AssetSnapshot, FALLBACK_HEIGHT, FALLBACK_WIDTH};
 use crate::contract::sizes as ctx_sizes;
@@ -277,6 +278,14 @@ pub struct ImageRenderOptions<'a> {
     pub grid_cell_sizes: Option<&'a str>,
     pub data_width: Option<&'a str>,
     pub vertical: bool,
+    /// Whether to tag an extreme-aspect source `data-aspect="scroll"`
+    /// (`asset_paths::is_scroll_shape`) for the default handscroll/hanging-
+    /// scroll presentation in site.css / vertical.css. Set by body-image
+    /// callers (`MarkdownInline`/`MarkdownStandalone`) only — Hero,
+    /// GalleryThumb and FolderCardCover already have their own dedicated
+    /// extreme-aspect handling (`data-fit="plate"`, fixed crop boxes) and
+    /// must not also pick up the body-image default.
+    pub scroll_shape: bool,
 }
 
 /// Synthesize the HTML for an image reference.
@@ -592,17 +601,38 @@ fn synthesize_inner(
     // pipeline sites keep `false` (canonical rationale + the EXIF-orientation
     // agreement live on `asset_paths::ladder_rungs`). base_url == src: the served
     // base webp IS the source (`to_webp(src) == src`).
+    // Computed once here — not re-derived inside `render_img_tag`, nor a
+    // second time for the `<picture>`-wrapping decisions below — so the
+    // `<img>`'s own `data-aspect` and its container's can never disagree
+    // about the same source. `asset_paths::is_scroll_shape` on a `None`
+    // (unknown dims) lookup is `false` by construction (`is_some_and`), so
+    // an unknown-dims source never gets a scroll container either.
+    let scroll =
+        options.scroll_shape && lookup_dims(assets, src).is_some_and(|(w, h)| is_scroll_shape(w, h));
+
     if is_webp_source(src) {
-        return match resolve_ladder(assets, src, lookup_animated(assets, src)) {
-            None => render_img_tag(src, alt, assets, options, None),
+        let img_tag = match resolve_ladder(assets, src, lookup_animated(assets, src)) {
+            None => render_img_tag(src, alt, assets, options, None, scroll),
             Some((rungs, base_w)) => {
                 let srcset = build_srcset(src, src, rungs, base_w);
-                render_img_tag(src, alt, assets, options, Some((&srcset, sizes_value)))
+                render_img_tag(src, alt, assets, options, Some((&srcset, sizes_value)), scroll)
             }
         };
+        return wrap_scroll_container(img_tag, scroll, options.vertical);
     }
 
-    let img_tag = render_img_tag(src, alt, assets, options, None);
+    let img_tag = render_img_tag(src, alt, assets, options, None, scroll);
+
+    // `data-aspect="scroll"` lands on the outer `<picture>` too (not just
+    // the inner `<img>` render_img_tag already tagged) because horizontal
+    // typesetting's CSS needs an element with real DOM containment to make
+    // scrollable — an `<img>` has no child content a browser can scroll to
+    // reveal, only a container with the (wider) `<img>` as its child does.
+    // `tabindex="0"` (keyboard-scrollable, same affordance as
+    // `.moss-table-scroll`) is skipped under vertical typesetting: there the
+    // image sits in the page's own horizontal scroll with no nested
+    // scroller, so a second tab stop would be a pointless one.
+    let picture_scroll_attr = scroll_picture_attrs(scroll, options.vertical);
 
     // For raster originals, always emit <picture><source srcset=X.webp>.
     // This markup is MODE-INDEPENDENT — the on-disk HTML is identical in
@@ -643,20 +673,58 @@ fn synthesize_inner(
         // `None` → the legacy single-URL `<source>` shape.
         match resolve_ladder(assets, src, false) {
             None => format!(
-                r#"<picture><source srcset="{}" type="image/webp">{}</picture>"#,
+                r#"<picture{}><source srcset="{}" type="image/webp">{}</picture>"#,
+                picture_scroll_attr,
                 html_escape(&encode_srcset_url(&srcset_path)),
                 img_tag,
             ),
             Some((rungs, base_w)) => {
                 let srcset = build_srcset(src, &srcset_path, rungs, base_w);
                 format!(
-                    r#"<picture><source srcset="{}" type="image/webp" sizes="{}">{}</picture>"#,
+                    r#"<picture{}><source srcset="{}" type="image/webp" sizes="{}">{}</picture>"#,
+                    picture_scroll_attr,
                     html_escape(&srcset),
                     html_escape(sizes_value),
                     img_tag,
                 )
             }
         }
+    } else {
+        // Non-raster (svg, favicons via Favicon context): no `<picture>` of
+        // its own, same as the webp-source branch above — wrap it under the
+        // same rule if it's scroll-shaped.
+        wrap_scroll_container(img_tag, scroll, options.vertical)
+    }
+}
+
+/// `data-aspect="scroll"` (plus `tabindex="0"` unless `vertical`) for the
+/// `<picture>` that IS the scroll container — shared by every call site that
+/// needs to decide the outer wrapper's attributes from an already-computed
+/// `scroll` bool, so the `is_scroll_shape` dims lookup itself happens in
+/// exactly one place ([`synthesize_inner`]'s own `scroll` binding).
+fn scroll_picture_attrs(scroll: bool, vertical: bool) -> &'static str {
+    if !scroll {
+        ""
+    } else if vertical {
+        r#" data-aspect="scroll""#
+    } else {
+        r#" data-aspect="scroll" tabindex="0""#
+    }
+}
+
+/// Wrap a bare `<img>` — a webp source or a non-raster original, neither of
+/// which gets a `<picture>` of its own otherwise — in one that exists ONLY
+/// to be horizontal typesetting's scroll container (site.css's
+/// `data-aspect="scroll"` rule): an `<img>` alone has no child content a
+/// browser can scroll to reveal, only a container with the (wider) `<img>`
+/// as its child does. Never wraps under vertical typesetting: vertical.css
+/// sizes the bare `<img>` directly as part of the page's own scroll, no
+/// container needed, so wrapping would only add an inert element. Either
+/// way `img_tag` already carries its own `data-aspect` from `render_img_tag`
+/// — this only ever adds the container around it.
+fn wrap_scroll_container(img_tag: String, scroll: bool, vertical: bool) -> String {
+    if scroll && !vertical {
+        format!("<picture{}>{}</picture>", scroll_picture_attrs(true, false), img_tag)
     } else {
         img_tag
     }
@@ -711,6 +779,19 @@ fn sizes_for<'s>(
     options: &ImageRenderOptions<'s>,
 ) -> std::borrow::Cow<'s, str> {
     use std::borrow::Cow;
+    // A body image tagged `data-aspect="scroll"` renders at up to its own
+    // delivered resolution in BOTH writing modes (site.css / vertical.css),
+    // never fit to the viewport-derived column `SIZES_BODY`/
+    // `sizes_vertical_body` assume below — checked before either context
+    // or the vertical branch decides, for the same reason `SIZES_HERO_PLATE`
+    // is checked before `SIZES_FULL_BLEED`'s own viewport-relative value.
+    if options.scroll_shape {
+        if let Some((w, h)) = lookup_dims(assets, src) {
+            if is_scroll_shape(w, h) {
+                return Cow::Borrowed(ctx_sizes::SIZES_SCROLL);
+            }
+        }
+    }
     let data_width = match context {
         ImageContext::MarkdownStandalone { width, .. } => *width,
         ImageContext::MarkdownInline => options.data_width,
@@ -748,7 +829,7 @@ fn sizes_for<'s>(
 ///
 /// Returns `None` when none of the variants is in the snapshot. The caller
 /// supplies the fallback (800×600 for dims, no style for LQIP / color).
-fn lookup_dims(assets: &AssetSnapshot, src: &str) -> Option<(u32, u32)> {
+pub(crate) fn lookup_dims(assets: &AssetSnapshot, src: &str) -> Option<(u32, u32)> {
     probe_paths(src, |p| assets.dims(&p))
 }
 
@@ -893,6 +974,7 @@ pub(crate) fn render_img_tag(
     assets: &AssetSnapshot,
     options: &ImageRenderOptions<'_>,
     srcset_sizes: Option<(&str, &str)>,
+    is_scroll: bool,
 ) -> String {
     // AssetSnapshot's `dims` is keyed by PathBuf; the src arrives as the
     // resolved URL the upstream renderer baked (potentially absolute, e.g.
@@ -962,6 +1044,16 @@ pub(crate) fn render_img_tag(
         None => String::new(),
     };
 
+    // `data-aspect="scroll"` (body images only, `options.scroll_shape`):
+    // the default handscroll/hanging-scroll presentation, `asset_paths::
+    // is_scroll_shape`'s threshold. Read on the real dims looked up above,
+    // not the 800×600 fallback (an unknown-dims source never qualifies).
+    // Computed once by the caller (`synthesize_inner`) and threaded here —
+    // not re-derived from `width`/`height` above, which is the FALLBACK-
+    // substituted pair for an unknown-dims source, not necessarily the same
+    // lookup the caller made for its own picture-wrapping decision.
+    let scroll_attr = if is_scroll { r#" data-aspect="scroll""# } else { "" };
+
     // `data-placeholder-src` removed 2026-05-20: the iframe-bridge handler
     // now matches by URL substring against `src` / `srcset` (see
     // the desktop app's iframe bridge, moss-asset-ready branch). The
@@ -973,7 +1065,7 @@ pub(crate) fn render_img_tag(
     // nextjs.org/docs/app/api-reference/components/image). Shows a blurred
     // preview instantly while the actual bytes are being decoded.
     format!(
-        r#"<img{class_attr} src="{src_esc}"{srcset} width="{w}" height="{h}"{loading}{fetch}{style} alt="{alt}"{extra} />"#,
+        r#"<img{class_attr} src="{src_esc}"{srcset} width="{w}" height="{h}"{loading}{fetch}{style}{scroll} alt="{alt}"{extra} />"#,
         class_attr = class_attr,
         src_esc = html_escape(src),
         srcset = srcset_attr,
@@ -982,6 +1074,7 @@ pub(crate) fn render_img_tag(
         loading = loading_attr,
         fetch = fetchpriority_attr,
         style = style_attr,
+        scroll = scroll_attr,
         alt = html_escape(alt),
         extra = extra,
     )

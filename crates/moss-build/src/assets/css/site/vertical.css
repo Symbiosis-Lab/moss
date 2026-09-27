@@ -225,6 +225,39 @@ body[data-typesetting="vertical"] .moss-hero[data-fit="plate"] video {
   max-block-size: 100vw;
 }
 
+/* ── Body scroll images (data-aspect="scroll") ──
+   A handscroll is unrolled right to left, and this page already scrolls
+   right to left (this whole file's opening comment: "unrolling a scroll"),
+   so the fix here is not a scroller at all — it's letting the image take
+   the column's own height and join the page's ordinary flow, the same way
+   any other vertical figure does. site.css's horizontal-mode rule made it
+   a fixed-height, `overflow-x: auto` strip instead (its own nested
+   scroller, needed there because horizontal typesetting has no free
+   dimension for an extreme-aspect image to expand into); every one of
+   those declarations is reset here.
+
+   `max-inline-size` (site.css: 100%) becomes the fix itself, not a percent.
+   The `.moss-hero` rule above already found the reason live: a percent
+   here needs the FULL ancestor chain to carry a resolvable height, and a
+   theme's own container (a flex column with `align-items: center` instead
+   of the default `stretch`, say) breaks that chain in a way this crate
+   cannot audit for every theme. `var(--moss-vertical-column)` is the exact
+   length body's OWN height is already fixed to (this file, top) — every
+   vertical figure's real ceiling — and needs no ancestor to resolve at
+   all. */
+body[data-typesetting="vertical"] picture[data-aspect="scroll"],
+body[data-typesetting="vertical"] img[data-aspect="scroll"] {
+  max-inline-size: var(--moss-vertical-column);
+  overflow-x: visible;
+  -webkit-overflow-scrolling: auto;
+  background: none;
+}
+
+body[data-typesetting="vertical"] picture[data-aspect="scroll"] img {
+  max-inline-size: 100%;
+  max-block-size: none;
+}
+
 /* ── Footer and colophon ──
    No layout overrides: the divider, the gap, the colophon's centring and the
    wordmark's reserve are all logical in site.css. The rule lands after the

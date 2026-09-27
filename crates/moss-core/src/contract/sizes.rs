@@ -55,6 +55,19 @@ pub const SIZES_FULL_BLEED: &str = "100vw";
 /// value above the top rung.
 pub const SIZES_HERO_PLATE: &str = "2400px";
 
+/// A body image tagged `data-aspect="scroll"` (`asset_paths::is_scroll_shape`
+/// — a handscroll or hanging scroll): the same trade [`SIZES_HERO_PLATE`]
+/// makes, for the same reason. Its CSS (site.css / vertical.css) lets the
+/// image render at up to its own delivered resolution — a fixed-height
+/// scrolling strip horizontally, the full column height vertically — never
+/// fit to the viewport-derived column width [`SIZES_BODY`] assumes. Naming
+/// that column width here anyway would ask the srcset ladder to resolve
+/// against it, under-selecting a wide scroll (a browser picking the `w800`
+/// rung for a source displayed at its own 2400px width is the same blurry-
+/// upscale mistake `SIZES_HERO_PLATE`'s doc names). Same value, so the same
+/// `sizes_hero_plate_selects_the_base` test covers both.
+pub const SIZES_SCROLL: &str = SIZES_HERO_PLATE;
+
 /// `data-width="wide"` figures: the wide band —
 /// `min(56 × reading-size, site-max)` = `min(63rem, 1200px)` = 63rem at the
 /// default reading scale, clamped to the container (`min(…, 100cqw)` in

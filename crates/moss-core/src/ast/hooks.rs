@@ -922,6 +922,11 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
             grid_cell_sizes: cell_scope.last().map(String::as_str),
             data_width: width,
             vertical: self.vertical,
+            // Body image: the one context that gets the default
+            // handscroll/hanging-scroll presentation for an extreme-aspect
+            // source. Hero/GalleryThumb/FolderCardCover route through their
+            // own `ImageContext` variants, never this method.
+            scroll_shape: true,
             ..Default::default()
         };
         let html = crate::render::image::synthesize_image_html(

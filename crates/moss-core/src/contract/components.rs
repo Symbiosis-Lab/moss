@@ -1264,9 +1264,9 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         data_attrs: &[
             DataAttr {
                 name: "data-aspect",
-                values: &["portrait", "square", "auto"],
+                values: &["portrait", "square", "auto", "scroll"],
                 default: "auto",
-                description: "v1 image aspect-ratio hint. Theme authors target `.moss-image[data-aspect=...]`. Emitter wiring lands in a follow-up.",
+                description: "Image aspect-ratio hint. `scroll` is the one wired value (`asset_paths::is_scroll_shape`: long edge past 3x the short edge, either axis — a handscroll or hanging scroll) and carries a default presentation: a fixed-height, horizontally-scrollable strip under horizontal typesetting (site.css), or the full column height as part of the page's own horizontal scroll under vertical typesetting (vertical.css) — no nested scroller there. It lives on the inner `<picture>`/`<img>`, not this figure wrapper, and applies the same way to a bare (non-figure) image. `portrait`/`square` remain an unwired follow-up.",
             },
             DataAttr {
                 name: "data-width",
