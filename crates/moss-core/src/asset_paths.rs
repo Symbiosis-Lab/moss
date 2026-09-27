@@ -254,6 +254,21 @@ pub fn deployed_long_edge(natural_w: u32, natural_h: u32, max_edge: u32) -> u32 
 /// ladder policy stays in one place.
 pub const LADDER: [u32; 2] = [800, 1600];
 
+/// The most elongated (long edge ÷ short edge) a deployed base may be
+/// before [`ladder_rungs`] gives up on offering any rung at all. A rung is
+/// a uniform scale of the base, so it is exactly as elongated — past this
+/// ratio an 800-wide rung is thin enough (under 3 digits tall) that it
+/// stops conveying anything a browser would pick it for. The boundary is
+/// INCLUSIVE: a base at exactly this ratio still keeps its ladder
+/// (2400×240, exactly 10:1), and the ladder only empties once the ratio
+/// exceeds it (2400×239, ~10.04:1) — [`ladder_rungs`]'s check is a strict
+/// `<`, not `<=`. 10 sits well clear of every source this crate's own
+/// tests still expect a ladder for — the widest is 2400×316 (7.6:1) — and
+/// well under the narrowest known pathological source, a 2200×100 fixture
+/// (22:1) and real handscrolls (23–27:1); see [`ladder_rungs`]'s doc for
+/// the worked cases.
+pub const MAX_LADDER_ASPECT: u32 = 10;
+
 /// Width the deployed base variant actually has after the encoder's
 /// aspect-preserving resize to [`deployed_long_edge`] (`img.resize(bound,
 /// bound, Lanczos3)` in build/media/image.rs). BOTH dimensions shrink by the
@@ -269,10 +284,23 @@ pub const LADDER: [u32; 2] = [800, 1600];
 pub fn deployed_width(natural_w: u32, natural_h: u32) -> u32 {
     let long_edge = natural_w.max(natural_h);
     let bound = deployed_long_edge(natural_w, natural_h, DEPLOY_MAX_EDGE);
+    deployed_scaled_dim(natural_w, bound, long_edge)
+}
+
+/// Scale `dim` — an edge of a source whose long edge is `long_edge` — by
+/// the same `bound / long_edge` ratio the deploy resize applies to the
+/// long edge itself (`bound` is [`deployed_long_edge`]'s return value).
+/// Shared by [`deployed_width`] (scaling `natural_w` — a no-op read of
+/// `bound` for a landscape source, where `natural_w` already IS
+/// `long_edge`) and [`ladder_rungs`] (scaling the SHORT edge by that same
+/// ratio, to get the deployed base's actual short edge and check it
+/// against [`MAX_LADDER_ASPECT`]) — one ratio-scale primitive instead of
+/// two copies with the dimensions swapped.
+fn deployed_scaled_dim(dim: u32, bound: u32, long_edge: u32) -> u32 {
     if bound >= long_edge {
-        return natural_w;
+        return dim;
     }
-    ((natural_w as u64 * bound as u64 / long_edge as u64) as u32).max(1)
+    ((u64::from(dim) * u64::from(bound) / u64::from(long_edge)) as u32).max(1)
 }
 
 /// Which ladder rungs exist for a source of `natural_w`×`natural_h` px.
@@ -365,8 +393,48 @@ pub fn deployed_width(natural_w: u32, natural_h: u32) -> u32 {
 /// verbatim-keep guard (build/media/image.rs ~line 830) onto rung encodes —
 /// would create emitted-but-never-encoded rungs, i.e. the non-recoverable
 /// chosen-`<source>` 404. Task 5 must NOT copy that guard.
+///
+/// A rung is a WIDTH contract (`asset_paths::to_webp_rung`'s `wN`, checked
+/// exactly by `validate_webp_output`), so its OTHER edge is always
+/// `short_edge * rung / long_edge` — the source's own aspect ratio,
+/// unchanged at every rung width because every rung is a uniform scale of
+/// the same source, on WHICHEVER side (width for landscape, height for
+/// portrait) that ratio makes thin. That is also true of the deployed
+/// BASE: it is the same uniform scale (`deployed_scaled_dim`, driven by
+/// [`deployed_long_edge`]'s `bound`), so a rung's thin edge is thin in
+/// exactly the same proportion the base's own is — never worse, never
+/// better. Most of the time that's fine: an ordinary photo or hero far
+/// past 2:1 (2400×316, or the 6000×1500 fixture
+/// `vertical_sizes_render_gate_golden_matches_the_synthesizer` pins) keeps
+/// its full, ordinary ladder, landscape or portrait alike.
+///
+/// The ladder empties when that shared ratio is extreme enough that the
+/// base itself is more than [`MAX_LADDER_ASPECT`] times as long as it is
+/// short — checked as the deployed short edge against the deployed long
+/// edge (`bound`), the same "whichever side is short" comparison for
+/// either orientation, not a landscape-only special case. A 38415×1400
+/// handscroll's long edge clamps at [`WEBP_MAX_DIMENSION`], short edge
+/// landing at ~597 against a ~16383 long edge (27:1) — its `w800` rung
+/// would be 800×29. A 1300×23660 hanging scroll clamps the same way,
+/// short edge ~900 against ~16383 (18:1) — its only rung, `w800`, is
+/// itself narrower than that already-compromised 900px base, making a bad
+/// ratio worse rather than offering a genuinely smaller variant. Neither
+/// needs `WEBP_MAX_DIMENSION` to clamp, though: a 2200×100 source (22:1)
+/// is never resized at all — deploying at its own native size — and is
+/// still too elongated for an 800-wide rung to mean anything (800×36).
+/// Once the ratio is this extreme, no rung width helps: widening one would
+/// break the `wN` contract (breaking `validate_webp_output`) and cropping
+/// would lose content, so the ladder is empty and only the base is
+/// offered — no upscale.
 pub fn ladder_rungs(natural_w: u32, natural_h: u32, is_animated: bool) -> &'static [u32] {
     if is_animated {
+        return &[];
+    }
+    let long_edge = natural_w.max(natural_h);
+    let short_edge = natural_w.min(natural_h);
+    let bound = deployed_long_edge(natural_w, natural_h, DEPLOY_MAX_EDGE);
+    let deployed_short = deployed_scaled_dim(short_edge, bound, long_edge);
+    if u64::from(deployed_short) * u64::from(MAX_LADDER_ASPECT) < u64::from(bound) {
         return &[];
     }
     let base = deployed_width(natural_w, natural_h);
@@ -1517,6 +1585,50 @@ mod tests {
         assert_eq!(ladder_rungs(2400, 1600, false), &[800, 1600][..]);
         // Square at exactly the cap: base 2400, both rungs below it.
         assert_eq!(ladder_rungs(2400, 2400, false), &[800, 1600][..]);
+    }
+
+    #[test]
+    fn ladder_rungs_extreme_aspect_is_empty() {
+        // A real handscroll: WEBP_MAX_DIMENSION clamps the deployed long
+        // edge to 16383, short edge landing at ~597 — a ~27:1 deployed
+        // ratio, past MAX_LADDER_ASPECT. Its w800 rung would be 800×29.
+        assert_eq!(ladder_rungs(38415, 1400, false), &[] as &[u32]);
+        // The 21969×950 handscroll `deployed_long_edge`'s own docs cite —
+        // WEBP_MAX_DIMENSION clamps it the same way, short edge ~708
+        // against a 16383 long edge (~23:1).
+        assert_eq!(ladder_rungs(21969, 950, false), &[] as &[u32]);
+        // No clamp needed to be this extreme: 2200×100 (22:1) deploys at
+        // its own native size — nothing capped, nothing widened — and is
+        // still past MAX_LADDER_ASPECT. Its w800 rung would be 800×36.
+        assert_eq!(ladder_rungs(2200, 100, false), &[] as &[u32]);
+        // The portrait twin: 1300×23660 clamps the same way as the
+        // handscrolls above (short edge ~900 against a 16383 long edge,
+        // ~18:1) — its only candidate rung, w800, would be narrower than
+        // the already-compromised 900px base, the same "worse, not
+        // smaller" problem, just on the width axis instead of height.
+        assert_eq!(ladder_rungs(1300, 23660, false), &[] as &[u32]);
+        // Far past 2:1 is still "ordinary" under MAX_LADDER_ASPECT: 2400×316
+        // (7.6:1) and 6000×1500 (4:1, this crate's own hero and
+        // vertical-sizes render-gate fixtures) both keep their full ladder.
+        assert_eq!(ladder_rungs(2400, 316, false), &[800, 1600][..]);
+        assert_eq!(ladder_rungs(6000, 1500, false), &[800, 1600][..]);
+        // And an ordinary portrait, however far from square, is unaffected
+        // the same way — 1500×3000 (2:1) keeps deriving its ladder from
+        // deployed_width alone, same as any other source.
+        assert_eq!(ladder_rungs(1500, 3000, false), &[800][..]);
+    }
+
+    #[test]
+    fn ladder_rungs_max_aspect_boundary_is_inclusive() {
+        // Pinned so a future change to MAX_LADDER_ASPECT or the `<`/`<=`
+        // comparison can't shift the cutoff silently. Neither is resized
+        // (long edge 2400 <= DEPLOY_MAX_EDGE), so the deployed short edge
+        // is the natural one, and the check is exactly `ratio > 10`.
+        // Exactly 10:1 (2400×240) is still "ordinary" — the boundary is
+        // inclusive on the kept side.
+        assert_eq!(ladder_rungs(2400, 240, false), &[800, 1600][..]);
+        // One px thinner tips the ratio to ~10.04:1 and empties the ladder.
+        assert_eq!(ladder_rungs(2400, 239, false), &[] as &[u32]);
     }
 
     #[test]
