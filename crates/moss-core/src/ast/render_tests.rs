@@ -30,6 +30,20 @@ fn renders_heading_with_id() {
     assert_eq!(html, "<h2 id=\"setup\">Setup<a class=\"moss-heading-anchor\" href=\"#setup\" aria-label=\"Permalink to this section\"></a></h2>\n");
 }
 
+/// A level-1 heading is a page's own title, not a section of it — it never
+/// gets the `.moss-heading-anchor` permalink, even though it keeps its `id`
+/// (so an existing `#title`-style inbound link still resolves). Contrast
+/// with `renders_heading_with_id` above, whose level-2 heading gets one.
+#[test]
+fn renders_level_one_heading_without_permalink_anchor() {
+    let html = render(vec![Block::Heading {
+        level: 1,
+        children: vec![Inline::Text("Title".into())],
+        id: Some("title".into()),
+    }]);
+    assert_eq!(html, "<h1 id=\"title\">Title</h1>\n");
+}
+
 #[test]
 fn renders_resolved_link_internal() {
     let html = render(vec![Block::Paragraph(vec![Inline::Link {
@@ -530,7 +544,8 @@ fn round_trips_parse_to_render_for_canonical_doc() {
     // (mark every URL Internal) → render → check shape.
     //
     // Phase 4 PR2: the parser now populates Block::Heading.id with the
-    // Obsidian anchor slug, so the rendered <h1> carries id="title".
+    // Obsidian anchor slug, so the rendered <h1> carries id="title" — but,
+    // since a level-1 heading is never a permalink target, no `.moss-heading-anchor`.
     let md = "# Title\n\npara with [link](docs/) and *em*.\n";
     let mut doc = super::super::parser::parse(md);
     super::super::visit::visit_urls_mut(&mut doc, |u| match u {
@@ -538,7 +553,7 @@ fn round_trips_parse_to_render_for_canonical_doc() {
         _ => {}
     });
     let html = render_document(&doc, &DefaultHooks::new());
-    assert!(html.contains(r##"<h1 id="title">Title<a class="moss-heading-anchor" href="#title" aria-label="Permalink to this section"></a></h1>"##), "got: {html}");
+    assert!(html.contains(r##"<h1 id="title">Title</h1>"##), "got: {html}");
     assert!(html.contains(r#"<a href="docs/">link</a>"#));
     assert!(html.contains("<em>em</em>"));
 }
@@ -1167,8 +1182,8 @@ fn end_to_end_parse_with_config_emits_data_source_line() {
     });
     let html = render_document(&doc, &DefaultHooks::new());
     assert!(
-            html.contains(r##"<h1 id="title" data-source-line="1">Title<a class="moss-heading-anchor" href="#title" aria-label="Permalink to this section"></a></h1>"##),
-            "H1 should carry data-source-line=1: {html}"
+            html.contains(r##"<h1 id="title" data-source-line="1">Title</h1>"##),
+            "H1 should carry data-source-line=1 and no permalink anchor: {html}"
         );
     assert!(
         html.contains(r#"<p data-source-line="3">first paragraph</p>"#),

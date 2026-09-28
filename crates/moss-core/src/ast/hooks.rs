@@ -622,19 +622,28 @@ pub trait RenderHooks {
         true
     }
 
-    /// Whether headings carry the `moss-heading-anchor` permalink.
+    /// Whether a heading at `level` carries the `moss-heading-anchor`
+    /// permalink. The `id` is kept regardless of the answer, so a fragment
+    /// link (`#section`) still resolves either way — this only gates the
+    /// visible `#` appended after the heading text.
     ///
-    /// False for hero overlays: hero headings are display titles, not
-    /// in-page navigation landmarks, so the `#` link is visual noise. The
-    /// `id` attribute is kept regardless, so fragment links still resolve.
+    /// Trait default: no for `level == 1`, yes otherwise. A level-1 heading
+    /// is a page's own title, not a section of it, so it is never a
+    /// fragment a reader deep-links to — true of an author-written
+    /// `# Title` in the body just as much as the auto-injected article
+    /// title (which skips this hook entirely; see [`RenderHooks::render_heading`]).
+    /// Overrides only narrow further, never widen past `level == 1`:
+    /// [`DefaultHooks::hero_overlay`]/[`grid_cells`](DefaultHooks::grid_cells)
+    /// say no at every level (a card/hero heading is a display title
+    /// regardless of level), and a hosting site can do the same for a
+    /// specific page (e.g. the home page).
     ///
-    /// A policy hook rather than a `render_heading` override (the shape
-    /// [`emit_footnote_anchors`](RenderHooks::emit_footnote_anchors) already
-    /// established) so there stays exactly ONE heading emitter — a past
-    /// regression introduced a second, partially-delegating hooks impl
-    /// drifting from the first.
-    fn emit_heading_anchors(&self) -> bool {
-        true
+    /// A policy hook rather than a `render_heading` override — same shape
+    /// as [`emit_footnote_anchors`](RenderHooks::emit_footnote_anchors) —
+    /// so exactly ONE heading emitter exists; a past regression introduced
+    /// a second, partially-delegating impl that drifted from the first.
+    fn emit_heading_anchors(&self, level: u8) -> bool {
+        level != 1
     }
 
     /// The localized `aria-label` for the per-heading permalink anchor
@@ -688,12 +697,14 @@ pub trait RenderHooks {
         }
         out.push('>');
         out.push_str(content);
-        // Permalink anchor — only when the heading has a slug id. Appended
-        // AFTER content / BEFORE </h> so the opening tag (id, data-source-line)
-        // stays byte-identical for preview scroll-sync. The auto-injected
-        // article-title H1 (`<h1 class="moss-article-title">`) is emitted
-        // separately in the desktop app's HTML post-pass and never reaches
-        // this hook, so it correctly gets no anchor.
+        // Permalink anchor — only when the heading has a slug id AND
+        // `emit_heading_anchors(level)` says yes (never for level 1 by
+        // default; see that method's doc for the rest of the policy).
+        // Appended AFTER content / BEFORE </h> so the opening tag (id,
+        // data-source-line) stays byte-identical for preview scroll-sync.
+        // The auto-injected article-title H1 (`<h1 class="moss-article-title">`)
+        // is emitted separately in the desktop app's HTML post-pass and never
+        // reaches this hook — its "no anchor" is structural, not this gate.
         //
         // The `#` glyph is NOT in here. It is drawn by site.css as
         // `.moss-heading-anchor::after { content: "#" }`, because generated
@@ -704,7 +715,7 @@ pub trait RenderHooks {
         // Safari, and in moss's own WebKit preview, selecting a heading
         // copied "Introduction#". Measured in both engines 2026-08-09; the
         // heading-anchor-copy render gate pins it.
-        if let Some(id) = id.filter(|_| self.emit_heading_anchors()) {
+        if let Some(id) = id.filter(|_| self.emit_heading_anchors(level)) {
             out.push_str(r##"<a class="moss-heading-anchor" href="#"##);
             out.push_str(&escape_attr(id));
             out.push_str(r##"" aria-label=""##);
@@ -831,8 +842,8 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
         self.assets
     }
 
-    fn emit_heading_anchors(&self) -> bool {
-        !self.suppress_heading_anchors
+    fn emit_heading_anchors(&self, level: u8) -> bool {
+        level != 1 && !self.suppress_heading_anchors
     }
 
     fn begin_grid_cells(&self, columns: u32, data_width: Option<&str>) {

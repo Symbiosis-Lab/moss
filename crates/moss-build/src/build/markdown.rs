@@ -31,6 +31,7 @@ pub use frontmatter::{
 pub use pipeline::{
     process_markdown_file,
     render_markdown_to_html,
+    PageContext,
     SiteMarkdown,
     render_markdown_to_html_with,
 };

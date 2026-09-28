@@ -331,6 +331,49 @@ impl Default for SiteMarkdown<'_> {
     }
 }
 
+/// Project shape and per-file identity for `process_markdown_file` that are
+/// neither markdown content nor `[site]` config (see [`SiteMarkdown`] for
+/// that half). Folded into one struct, `SiteMarkdown`'s own shape, so the
+/// next fact `process_markdown_file` needs changes this type instead of
+/// every call site — the four fields here replaced four positional
+/// parameters that a single addition (`is_homepage`) had just touched
+/// across every caller. `#[derive(Default)]`'s all-`false`/`None` answer
+/// matches every existing test call's old positional defaults exactly.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PageContext<'a> {
+    /// Project-level signal (true when the site has content subfolders).
+    /// Feeds `is_nav_bar_item` so a root-level nav page suppresses its
+    /// auto-injected article title.
+    pub has_content_folders: bool,
+    /// Pre-resolved seta base URL for subscribe form `action=` attributes.
+    /// When `Some`, overrides the production default
+    /// (`"https://api.mosspub.com"`). The production call site in
+    /// `blocking.rs` passes `Some(resolve_environment(source_path).seta_url())`.
+    /// Test and fragment-render callers pass `None` — the production URL is
+    /// used, preserving existing test behavior.
+    pub seta_url: Option<&'a str>,
+    /// The language inferred for this file's FOLDER, computed once in the
+    /// scan/reduce phase (`scan::page_map::folder_lang`) over every file in
+    /// the folder, not per-page here. Only consulted when the path itself
+    /// carries no naming convention (`ancestor_lang_from_path` is `None`)
+    /// — a folder named `en/` still wins outright. The production call
+    /// site in `blocking.rs` passes the precomputed map's lookup for this
+    /// file's directory; tests pass `None`, matching the old rung-4
+    /// behavior of "no folder signal available".
+    pub folder_lang: Option<crate::i18n::Language>,
+    /// This file is the root's elected home file — the caller's
+    /// `home_file_winners` set, restricted to the root (no `/` in
+    /// `file_path`), computed BEFORE this per-file call so it is never
+    /// wrong for the eventual winner even though non-winner demotion runs
+    /// after this function returns (see the comment on that demotion in
+    /// `blocking.rs`). Feeds `PipelineHooks::is_homepage`, which suppresses
+    /// every heading's `#` permalink anchor on the home page — a reader
+    /// never deep-links into one of its sections the way they do an
+    /// article's. Tests default to `false`, matching every page but the
+    /// home page.
+    pub is_homepage: bool,
+}
+
 /// Processes a markdown file with frontmatter into a ParsedDocument.
 ///
 /// `site_lang` is the site's default language, used as the final fallback
@@ -379,26 +422,9 @@ pub fn process_markdown_file(
     // and do get a graph, which is what makes their wikilinks resolve).
     graph: Option<&moss_core::content_graph::ContentGraph>,
     renderer_registry: Option<&moss_core::resolve::registry::RendererRegistry>,
-    // Project-level signal (true when the site has content subfolders). Feeds
-    // `is_nav_bar_item` so a root-level nav page suppresses its auto-injected
-    // article title.
-    has_content_folders: bool,
-    // Pre-resolved seta base URL for subscribe form `action=` attributes.
-    // When `Some`, overrides the production default ("https://api.mosspub.com").
-    // The production call site in `blocking.rs` passes
-    // `Some(resolve_environment(source_path).seta_url())`.
-    // Test and fragment-render callers pass `None` → production URL is used,
-    // preserving existing test behavior.
-    seta_url: Option<&str>,
-    // The language inferred for this file's FOLDER, computed once
-    // in the scan/reduce phase (`scan::page_map::folder_lang`) over every
-    // file in the folder, not per-page here. Only consulted when the path
-    // itself carries no naming convention (`ancestor_lang_from_path` is
-    // `None`) — a folder named `en/` still wins outright. The production
-    // call site in `blocking.rs` passes the precomputed map's lookup for
-    // this file's directory; tests pass `None`, matching the old rung-4
-    // behavior of "no folder signal available".
-    folder_lang: Option<crate::i18n::Language>,
+    // Project shape and per-file identity — see `PageContext`'s own field
+    // docs for each fact folded in here.
+    page: PageContext<'_>,
 ) -> Result<ParsedDocument, String> {
     // Check if using simplified frontmatter syntax
     // `frontmatter_line_count`: how many leading lines of `content` the
@@ -571,7 +597,7 @@ pub fn process_markdown_file(
     // the folder upstream in scan/reduce (`folder_lang`, computed once per
     // folder, never from this file's own content). `resolve_document_language`
     // treats both the same and no longer reads `content` at all.
-    let ancestor_lang = crate::i18n::path::ancestor_lang_from_path(file_path).or(folder_lang);
+    let ancestor_lang = crate::i18n::path::ancestor_lang_from_path(file_path).or(page.folder_lang);
     let (doc_lang, clean_stem) = crate::i18n::resolve_document_language(
         frontmatter.lang.as_deref(),
         filename_stem,
@@ -766,7 +792,7 @@ pub fn process_markdown_file(
     //
     // DO NOT reorder these without revisiting the constraint set.
     let subscribe_site = site_id.unwrap_or("");
-    let seta_base_resolved: &str = seta_url.unwrap_or("https://api.mosspub.com");
+    let seta_base_resolved: &str = page.seta_url.unwrap_or("https://api.mosspub.com");
     // Real dir_overrides, so the snapshot's output-URL keys are the strings the
     // synthesizer probes with. An empty map re-fires the 800x600 fallback.
     let asset_snapshot = media_lookup.map(|l| l.asset_snapshot());
@@ -778,6 +804,7 @@ pub fn process_markdown_file(
         media_lookup,
         permalink_section_label: crate::i18n::t(doc_lang, "permalink_section"),
         heading_anchors: site.heading_anchors,
+        is_homepage: page.is_homepage,
         vertical: crate::build::render::config::effective_typesetting(
             frontmatter.typesetting.as_deref(),
             site.typesetting,
@@ -1150,7 +1177,7 @@ pub fn process_markdown_file(
         is_root_level,
         is_index_file && is_root_level,
         &clean_stem,
-        has_content_folders,
+        page.has_content_folders,
     );
 
     // Article pages inject `<h1 class="moss-article-title">` from the
@@ -1759,6 +1786,8 @@ pub fn render_markdown_to_html_with(
         media_lookup,
         permalink_section_label: crate::i18n::t(crate::i18n::Language::En, "permalink_section"),
         heading_anchors,
+        // A fragment has no page, so it is never the home page.
+        is_homepage: false,
         // A fragment has no page, so no typesetting of its own.
         vertical: false,
     };
@@ -1888,6 +1917,18 @@ struct PipelineHooks<'a> {
     /// when false, headings render without the trailing `#` permalink
     /// anchor.
     heading_anchors: bool,
+    /// This render is the site's home page (`doc.url_path == "index.html"`
+    /// for the root's elected home file — the same fact `body_attrs` reads
+    /// to emit `data-page="home"` in `build/render/html.rs`). Computed by
+    /// the caller from `home_file_winners`, before per-file demotion runs,
+    /// so it is never wrong for the winner. `false` in the fragment-render
+    /// path (`render_markdown_to_html_with`), which has no page of its own.
+    ///
+    /// A home page's `#` permalinks are dead weight: a reader lands there
+    /// by visiting the site, never by a deep link into one of its sections,
+    /// so every heading on it — not only level 1 — renders with no anchor.
+    /// Consumed by `emit_heading_anchors` below.
+    is_homepage: bool,
     /// The page's effective typesetting is vertical. Handed to the delegated
     /// `DefaultHooks`, where it only changes body images' `sizes=`.
     vertical: bool,
@@ -1910,8 +1951,8 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         self.permalink_section_label
     }
 
-    fn emit_heading_anchors(&self) -> bool {
-        self.heading_anchors
+    fn emit_heading_anchors(&self, level: u8) -> bool {
+        self.heading_anchors && level != 1 && !self.is_homepage
     }
 
     /// The single place grid rendering is bound to the asset snapshot.

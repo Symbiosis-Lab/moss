@@ -1323,7 +1323,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "## Setup",
         status: Status::Emerging,
         since: "1",
-        description: "Clickable permalink appended inside every author-written body heading that carries a slug id; links to the heading's `#`-fragment. The element is EMPTY — the `#` a reader sees is drawn by `site.css` as `::after` content, so selecting a heading never copies it. Not emitted for a display title: the auto-injected `moss-article-title` H1, a `:::hero` overlay heading, and a `:::grid` cell heading all get none.",
+        description: "Clickable permalink appended inside an author-written body heading that carries a slug id; links to the heading's `#`-fragment. The element is EMPTY — the `#` a reader sees is drawn by `site.css` as `::after` content, so selecting a heading never copies it. Never emitted for a level-1 heading (a page's own title, not a section of it — the `id` is still there, so an existing `#title` link still resolves) or for any heading on the home page (levels 2-6 included: a reader lands there by visiting the site, not by a deep link into one of its sections). Also never emitted for a display title: the auto-injected `moss-article-title` H1, a `:::hero` overlay heading, and a `:::grid` cell heading all get none.",
     },
     // -------------------------------------------------------------------
     // Grid + gallery + buttons containers (free-form layouts).

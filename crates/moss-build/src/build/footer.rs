@@ -625,9 +625,7 @@ mod tests {
             None,
             None,
             None,
-            false,
-            None, // seta_url
-            None, // folder_lang
+            crate::build::markdown::PageContext::default(),
         )
         .expect("footer.md should parse through the standard pipeline");
         assert!(doc.slot_only, "footer.md must be flagged slot_only");
@@ -667,9 +665,7 @@ mod tests {
             None,
             None,
             None,
-            false,
-            None, // seta_url
-            None, // folder_lang
+            crate::build::markdown::PageContext::default(),
         )
         .expect("footer.md should parse");
         assert!(doc.slot_only);

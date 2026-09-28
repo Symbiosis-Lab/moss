@@ -182,9 +182,7 @@ fn short_doc_with_no_signal_uses_site_default_lang() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(doc.lang, Language::ZhHans);
@@ -211,9 +209,7 @@ fn editor_and_jury_frontmatter_lower_into_parsed_document_beside_author() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(doc.author, vec!["Ada Lin".to_string()]);
@@ -242,9 +238,7 @@ fn body_cover_path_captures_first_markdown_image() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(
@@ -275,9 +269,7 @@ fn body_cover_path_skips_raw_html_img_in_markdown() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(
@@ -316,9 +308,7 @@ fn body_cover_path_none_when_document_has_no_images() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(doc.body_cover_path, None);
@@ -342,9 +332,7 @@ fn frontmatter_lang_overrides_site_default() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(doc.lang, Language::En);
@@ -371,9 +359,7 @@ fn article_without_h1_or_title_injects_filename_as_h1() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -404,9 +390,7 @@ fn article_with_frontmatter_title_injects_title() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -441,9 +425,7 @@ fn nav_page_suppresses_injected_article_title() {
         None,
         None,
         None,
-        true, // has_content_folders → organized → root file is a nav page
-        None, // seta_url
-        None, // folder_lang
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
     assert!(
@@ -470,9 +452,7 @@ fn non_nav_article_still_injects_title() {
         None,
         None,
         None,
-        true,
-        None, // seta_url
-        None, // folder_lang
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
     assert!(
@@ -502,9 +482,7 @@ fn nav_false_restores_article_title() {
         None,
         None,
         None,
-        true, // organized mode; nav: false opts out even though it would auto-qualify
-        None, // seta_url
-        None, // folder_lang
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
     assert!(
@@ -531,9 +509,7 @@ fn nav_page_keeps_authored_body_h1() {
         None,
         None,
         None,
-        true,
-        None, // seta_url
-        None, // folder_lang
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
     assert!(
@@ -572,9 +548,7 @@ fn strict_contract_section_number_h1_does_not_suppress_injection() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     // Title must be injected from the filename (verbatim case).
@@ -587,7 +561,7 @@ fn strict_contract_section_number_h1_does_not_suppress_injection() {
     // The body section H1 must still be present.
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"1.\">1.<a class=\"moss-heading-anchor\" href=\"#1.\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"1.\">1.</h1>"
             ),
             "body section H1 must be preserved, got: {}",
             doc.html_content
@@ -615,9 +589,7 @@ fn strict_contract_leading_blockquote_then_section_h1_injects_title() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -664,9 +636,7 @@ fn matching_leading_body_h1_is_kept_alongside_injected_title() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     // Two H1s now: the injected article title AND the authored body H1.
@@ -704,9 +674,7 @@ fn dedup_does_not_strip_when_text_differs() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -717,7 +685,7 @@ fn dedup_does_not_strip_when_text_differs() {
     );
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"inner\">Inner<a class=\"moss-heading-anchor\" href=\"#inner\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"inner\">Inner</h1>"
             ),
             "body H1 'Inner' must be preserved (differs from resolved heading), got: {}",
             doc.html_content
@@ -743,9 +711,7 @@ fn dedup_does_not_strip_buried_h1_matching_filename() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -755,11 +721,11 @@ fn dedup_does_not_strip_buried_h1_matching_filename() {
         doc.html_content
     );
     // Buried 'Page' H1 still present (matches filename but not at lead position).
-    // The body heading carries the slug id + permalink anchor; the injected
-    // title H1 (above) carries the class and no anchor.
+    // The body heading carries the slug id; neither it nor the injected
+    // title H1 (above) carries a permalink anchor — level-1 headings never do.
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"page\">Page<a class=\"moss-heading-anchor\" href=\"#page\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"page\">Page</h1>"
             ),
             "buried matching H1 must NOT be stripped (it's a section header), got: {}",
             doc.html_content
@@ -786,9 +752,7 @@ fn article_with_differing_body_h1_renders_both() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -799,7 +763,7 @@ fn article_with_differing_body_h1_renders_both() {
     );
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"body-heading\">Body Heading<a class=\"moss-heading-anchor\" href=\"#body-heading\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"body-heading\">Body Heading</h1>"
             ),
             "differing body H1 must be preserved as a section header, got: {}",
             doc.html_content
@@ -830,9 +794,7 @@ fn article_with_empty_title_suppresses_injection() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -862,9 +824,7 @@ fn index_page_without_h1_does_not_inject() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -893,9 +853,7 @@ fn self_named_folder_index_does_not_inject() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -928,9 +886,7 @@ fn parse_for_test(file_path: &str, md: &str, root: Option<&str>) -> ParsedDocume
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("parse should succeed")
 }
@@ -948,7 +904,7 @@ fn folder_index_title_uses_folder_name_not_body_h1() {
     );
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"method\">Method<a class=\"moss-heading-anchor\" href=\"#method\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"method\">Method</h1>"
             ),
             "authored body H1 'Method' must be kept verbatim, got: {}",
             doc.html_content
@@ -964,7 +920,7 @@ fn folder_index_leading_body_h1_is_not_stripped() {
     assert_eq!(doc.title, "notes");
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"foo\">Foo<a class=\"moss-heading-anchor\" href=\"#foo\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"foo\">Foo</h1>"
             ),
             "leading body H1 must be retained (no dedup), got: {}",
             doc.html_content
@@ -979,7 +935,7 @@ fn folder_index_title_frontmatter_wins_and_body_h1_kept() {
     assert_eq!(doc.title, "Custom Title");
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"other\">Other<a class=\"moss-heading-anchor\" href=\"#other\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"other\">Other</h1>"
             ),
             "body H1 kept, got: {}",
             doc.html_content
@@ -996,7 +952,7 @@ fn homepage_body_h1_is_kept_verbatim_no_injection() {
     let doc = parse_for_test("index.md", md, Some("MySite"));
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"welcome\">Welcome<a class=\"moss-heading-anchor\" href=\"#welcome\" aria-label=\"Permalink to this section\"></a></h1>"
+                "<h1 id=\"welcome\">Welcome</h1>"
             ),
             "homepage body H1 must be kept verbatim, got: {}",
             doc.html_content
@@ -1004,6 +960,79 @@ fn homepage_body_h1_is_kept_verbatim_no_injection() {
     assert!(
         !doc.html_content.contains("moss-article-title"),
         "homepage must NOT inject a filename title h1, got: {}",
+        doc.html_content
+    );
+}
+
+/// The home page (`process_markdown_file`'s `is_homepage: true`, the same
+/// fact that makes `build/render/html.rs` emit `<body data-page="home">`)
+/// suppresses every heading's `#` permalink anchor, not only level 1's. A
+/// reader lands on the home page by visiting the site, never by a deep link
+/// into one of its sections, so a `## Section` there gets no anchor either
+/// — contrast with `ordinary_page_heading_keeps_h2_permalink_anchor` below,
+/// where the identical body renders WITH the anchor because `is_homepage`
+/// is false.
+#[test]
+fn homepage_heading_suppresses_h2_permalink_anchor() {
+    let md = "---\n---\n## Section\n\nhome body\n";
+    let empty_map = HashMap::new();
+    let doc = process_markdown_file(
+        "index.md",
+        md,
+        "site",
+        &empty_map,
+        false,
+        Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        None,
+        PageContext { has_content_folders: false, seta_url: None, folder_lang: None, is_homepage: true },
+    )
+    .expect("should parse");
+    assert!(
+        doc.html_content.contains("<h2 id=\"section\">Section</h2>"),
+        "home page H2 must keep its id, just not the permalink anchor, got: {}",
+        doc.html_content
+    );
+    assert!(
+        !doc.html_content.contains("moss-heading-anchor"),
+        "home page headings must carry no permalink anchor at any level, got: {}",
+        doc.html_content
+    );
+}
+
+/// Same body as `homepage_heading_suppresses_h2_permalink_anchor`, on an
+/// ordinary (non-home) page: the `## Section` heading keeps its permalink
+/// anchor, same as always. Proves the suppression above is specific to the
+/// home page, not a side effect of the level-2 heading itself.
+#[test]
+fn ordinary_page_heading_keeps_h2_permalink_anchor() {
+    let md = "---\n---\n## Section\n\nbody\n";
+    let empty_map = HashMap::new();
+    let doc = process_markdown_file(
+        "posts/note.md",
+        md,
+        "site",
+        &empty_map,
+        false,
+        Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        None,
+        PageContext::default(),
+    )
+    .expect("should parse");
+    assert!(
+        doc.html_content.contains(
+            "<h2 id=\"section\">Section<a class=\"moss-heading-anchor\" href=\"#section\" aria-label=\"Permalink to this section\"></a></h2>"
+        ),
+        "ordinary page H2 must keep its permalink anchor, got: {}",
         doc.html_content
     );
 }
@@ -1056,9 +1085,7 @@ fn filename_title_preserves_case_verbatim() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -1090,9 +1117,7 @@ fn filename_title_no_longer_capitalizes_kebab_case() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -1120,9 +1145,7 @@ fn article_with_h1_inside_hero_block_does_not_inject() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -1156,9 +1179,7 @@ fn article_with_an_image_only_hero_still_renders_its_title() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -1230,9 +1251,7 @@ fn moss_resolved_link_preserves_query_when_target_in_page_map() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
 
@@ -1275,9 +1294,7 @@ fn moss_resolved_link_to_html_asset_uses_pinned_url_regardless_of_page_depth() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
 
@@ -1349,9 +1366,7 @@ fn moss_resolved_link_to_html_asset_depth_table() {
             None,
             None,
             None,
-            false,
-            None, // seta_url
-            None, // folder_lang
+            PageContext::default(),
         )
         .expect("should parse");
         assert!(
@@ -1385,9 +1400,7 @@ fn moss_resolved_link_to_html_asset_opens_in_new_tab() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
 
@@ -1437,9 +1450,7 @@ fn moss_resolved_link_to_markdown_page_stays_same_tab() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
 
@@ -1471,9 +1482,7 @@ fn moss_resolved_link_to_html_asset_from_root_page() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
 
@@ -1512,9 +1521,7 @@ fn nested_image_link_with_query_renders_correctly() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
 
@@ -1544,9 +1551,7 @@ fn filename_suffix_overrides_site_default() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(doc.lang, Language::En);
@@ -1578,9 +1583,7 @@ fn folder_index_with_slug_override_is_still_index() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(
@@ -1612,9 +1615,7 @@ fn home_override_is_index_via_page_map() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert_eq!(
@@ -1641,9 +1642,7 @@ fn test_pipeline_sets_features_inline_subscribe_when_shortcode_present() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     assert!(doc.features.inline_subscribe, "flag must be set");
@@ -1672,9 +1671,7 @@ fn test_pipeline_features_default_false_without_shortcode() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     assert!(!doc.features.inline_subscribe);
@@ -1702,9 +1699,7 @@ fn test_pipeline_sets_scroll_rows_only_for_a_scrolling_grid() {
             None,
             None,
             None,
-            false,
-            None,
-            None,
+            PageContext::default(),
         )
         .expect("pipeline should succeed")
     };
@@ -1735,9 +1730,7 @@ fn test_pipeline_scroll_grid_that_fits_still_sets_scroll_rows() {
         None,
         None,
         None,
-        false,
-        None,
-        None,
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     assert!(doc.features.scroll_rows, "2 cells over 3 columns fit, but is still a scroll row");
@@ -1760,9 +1753,7 @@ fn test_pipeline_single_cell_scroll_grid_does_not_set_scroll_rows() {
         None,
         None,
         None,
-        false,
-        None,
-        None,
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     assert!(!doc.features.scroll_rows, "a single-cell scroll grid has nothing to scroll");
@@ -1785,9 +1776,7 @@ fn test_pipeline_sets_features_inline_apply_when_shortcode_present() {
         None,
         None,
         None,
-        false,
-        Some("https://api.mosspub.com"), // seta_url
-        None, // folder_lang
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
     )
     .expect("pipeline should succeed");
     assert!(doc.features.inline_apply, "inline_apply flag must be set");
@@ -1825,9 +1814,7 @@ fn test_pipeline_no_site_id_yields_pending_form() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .unwrap();
     assert!(doc.features.inline_subscribe);
@@ -1871,9 +1858,7 @@ fn process_markdown_file_emits_data_source_line_when_flag_on() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     // Heading (line 1 of the body markdown, which is line 1 of the
@@ -1929,9 +1914,7 @@ fn process_markdown_file_malformed_yaml_does_not_leak_block() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed on malformed frontmatter");
     assert!(
@@ -2008,9 +1991,7 @@ fn data_source_line_skips_frontmatter_collision() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     // Body `Welcome` is file line 5; `body text` is file line 7. Without the
@@ -2057,9 +2038,7 @@ fn data_source_line_offset_traditional_yaml_frontmatter() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     assert!(
@@ -2117,9 +2096,7 @@ fn data_source_line_matches_editor_cm6_body_line() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
 
@@ -2176,9 +2153,7 @@ fn data_source_line_matches_editor_on_malformed_frontmatter() {
         None,
         None,
         None,
-        false,
-        None,
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
 
@@ -2220,9 +2195,7 @@ fn data_source_line_matches_editor_on_simplified_frontmatter() {
         None,
         None,
         None,
-        false,
-        None,
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
 
@@ -2265,9 +2238,7 @@ fn process_markdown_file_omits_data_source_line_when_flag_off() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     assert!(
@@ -2300,9 +2271,7 @@ fn process_markdown_file_emits_data_source_range_on_shortcode_when_flag_on() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     // The :::grid opener is on body line 3.
@@ -2332,9 +2301,7 @@ fn process_markdown_file_omits_data_source_range_when_flag_off() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     assert!(
@@ -2378,9 +2345,7 @@ fn buttons_internal_link_does_not_leak_moss_resolved_prefix() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     assert!(
@@ -2432,9 +2397,7 @@ Inline link to [extend](docs/extend/) for comparison.
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     for prefix in ["moss-resolved:", "wikilink:", "moss-newtab:"] {
@@ -2517,9 +2480,7 @@ Para with [link](docs/) and *em* and `code`.
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse cleanly with observation path active");
     // Production HTML must still contain the canonical output —
@@ -2566,9 +2527,7 @@ fn render_with_math(md: &str, math: bool) -> String {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     doc.html_content
@@ -2645,9 +2604,7 @@ fn render_with_breaks(md: &str, hard_line_breaks: bool) -> String {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     doc.html_content
@@ -2685,12 +2642,15 @@ fn site_hard_line_breaks_off_keeps_commonmark_soft_break() {
 }
 
 /// Render with an explicit `[site].heading_anchors` answer, everything
-/// else at production defaults.
+/// else at production defaults. `## Title` (level 2), not `# Title` — a
+/// level-1 heading never gets a permalink anchor regardless of this
+/// setting, which would make the "on" case below indistinguishable from
+/// a wiring bug.
 fn render_with_heading_anchors(heading_anchors: bool) -> String {
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
         "test.md",
-        "# Title\n\nBody text.\n",
+        "## Title\n\nBody text.\n",
         "site",
         &empty_map,
         false,
@@ -2701,9 +2661,7 @@ fn render_with_heading_anchors(heading_anchors: bool) -> String {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     doc.html_content
@@ -2715,9 +2673,9 @@ fn render_with_heading_anchors(heading_anchors: bool) -> String {
 /// from `site_config.heading_anchors` at the blocking.rs call site) leaves
 /// every moss-core test green while every real build keeps emitting
 /// permalink anchors regardless of the config toggle. Mutation check: hardcode
-/// `emit_heading_anchors(&self) -> bool { true }` in `PipelineHooks` and this
-/// goes red only for the off case below — this test guards the on case stays
-/// unaffected by the wiring itself.
+/// `emit_heading_anchors(&self, _level: u8) -> bool { true }` in `PipelineHooks`
+/// and this goes red only for the off case below — this test guards the on
+/// case stays unaffected by the wiring itself.
 #[test]
 fn site_heading_anchors_on_renders_permalink_anchor() {
     let html = render_with_heading_anchors(true);
@@ -2751,19 +2709,21 @@ fn site_heading_anchors_off_omits_permalink_anchor() {
 /// uses for its authored fallback_markdown — it must honor the
 /// caller's `heading_anchors` value rather than hardcoding one, or a site
 /// with `[site].heading_anchors = false` still leaks anchors from `:::recent`
-/// fallback blocks.
+/// fallback blocks. `## Title` (level 2): a level-1 heading never gets an
+/// anchor regardless of `heading_anchors`, which would make the "on" case
+/// indistinguishable from a wiring bug.
 #[test]
 fn render_markdown_to_html_with_respects_heading_anchors_param() {
     let default_resolver = |href: &str| -> String { href.to_string() };
 
-    let on = render_markdown_to_html_with("# Title\n", &default_resolver, None, true);
+    let on = render_markdown_to_html_with("## Title\n", &default_resolver, None, true);
     assert!(
         on.contains(r#"class="moss-heading-anchor""#),
         "expected the permalink anchor when heading_anchors=true, got: {}",
         on
     );
 
-    let off = render_markdown_to_html_with("# Title\n", &default_resolver, None, false);
+    let off = render_markdown_to_html_with("## Title\n", &default_resolver, None, false);
     assert!(
         !off.contains("moss-heading-anchor"),
         "no permalink anchor may appear when heading_anchors=false, got: {}",
@@ -2787,9 +2747,7 @@ fn tags_of(content: &str) -> Option<Vec<String>> {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     doc.tags
@@ -2852,9 +2810,7 @@ fn render(md: &str, implicit_figure: bool) -> String {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse");
     doc.html_content
@@ -3338,9 +3294,7 @@ fn recent_shortcode_dispatch_renders_fallback_on_html_path() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed (no panic from Recent dispatch)");
     let html = &doc.html_content;
@@ -3371,9 +3325,7 @@ fn recent_shortcode_dispatch_empty_fallback_yields_no_marker_leak() {
         None,
         None,
         None,
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("pipeline should succeed");
     let html = &doc.html_content;
@@ -3473,9 +3425,7 @@ fn parse_with_graph_cfg(
         None,
         Some(&graph),
         Some(&registry),
-        false,
-        None, // seta_url
-        None, // folder_lang
+        PageContext::default(),
     )
     .expect("should parse")
 }
@@ -3576,9 +3526,7 @@ fn per_page_language_apply_in_zh_hans_subdir() {
         None,
         None,
         None,
-        false,
-        Some("https://api.mosspub.com"),
-        None, // folder_lang
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
     assert!(
@@ -3622,9 +3570,7 @@ fn per_page_language_subscribe_in_zh_hans_subdir() {
         None,
         None,
         None,
-        false,
-        Some("https://api.mosspub.com"),
-        None, // folder_lang
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
     assert!(
@@ -3664,9 +3610,7 @@ fn per_page_language_apply_en_page_in_zh_hans_site() {
         None,
         None,
         None,
-        false,
-        Some("https://api.mosspub.com"),
-        None, // folder_lang
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
     )
     .expect("should parse");
     assert!(
@@ -3840,7 +3784,8 @@ fn body_image_sizes_follow_the_pages_effective_typesetting() {
         let site = SiteMarkdown { typesetting: site_typesetting, ..Default::default() };
         process_markdown_file(
             "a.md", &md, "site", &empty_map, false, Language::ZhHant, None, site,
-            Some(&lookup), None, None, None, false, None, None,
+            Some(&lookup), None, None, None,
+            PageContext::default(),
         )
         .expect("should parse")
         .html_content

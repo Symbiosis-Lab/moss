@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A heading's `#` permalink link no longer appears on a page's own title — an authored `# Heading` at the top of a page, or the title moss adds automatically — or on any heading on a site's home page, at any level. A title was never a section a reader deep-links into on its own, and a reader reaches the home page by visiting the site rather than by a link into one of its sections, so the trailing `#` was just noise in both places. The heading keeps its `id`, so a link someone already wrote to `#the-heading` still works; only the visible `#` link next to the heading is gone.
 - Renaming or moving a file no longer drops a `?query` string from a link that pointed at it (`[text](note.md?v=1)`) when the link needs to change — the `?v=1` used to be silently lost.
 - Renaming or moving a file now updates a reference-style link that points at it — `[text][id]` plus a `[id]: note.md` definition — the same way it already updates a plain `[text](note.md)` link; the `[text][id]` text itself is untouched.
 - Renaming or moving a file whose link uses a percent-encoded destination (`[text](my%20note.md)`, the form Obsidian writes with wikilinks off) now finds and rewrites it, and keeps the same percent-encoded style — before, the encoded destination didn't match anything, so the rename left it pointing at the file's old name.
