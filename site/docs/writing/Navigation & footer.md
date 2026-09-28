@@ -34,6 +34,12 @@ weight: 10
 ---
 ```
 
+## Site name
+
+The header shows the site name at the left, linking home. If the home page's own first heading is the same text as the site name, the header drops the repeated name — the reader has just read it once, in the page's own heading. Set `logo:` (see [[frontmatter]]) to keep a logo in that spot regardless; without a logo the link is simply omitted so the header layout doesn't shift.
+
+Every other page keeps the header name, and a home page that opens with prose, a poem, or an image instead of a matching heading keeps it too — the name never disappears from the site outright.
+
 ## Breadcrumb
 
 When a page has no nav items around it (e.g., an article deep inside a section), moss shows a breadcrumb trail in place of the site name so visitors can navigate back up the tree.

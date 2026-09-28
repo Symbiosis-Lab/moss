@@ -413,6 +413,37 @@ pub fn site_name(
     title.to_string() // (3)
 }
 
+/// Whether the home page's own first level-1 heading duplicates the site
+/// name closely enough that the nav bar's brand link would be pure
+/// repetition — the reader has just read the name once, in the page's own
+/// title, before the header ever comes into view.
+///
+/// Both strings are flattened the same way before comparing: trimmed,
+/// internal whitespace collapsed to single spaces, and Unicode-normalized
+/// (NFC) so a precomposed and a decomposed spelling of the same heading
+/// count as equal. Deliberately case-sensitive — unlike a filename or URL
+/// slug match, this is prose rendered twice on the same screen, and a
+/// heading that differs from the site name only in case ("Moss" vs.
+/// "moss") is still visibly a different piece of text.
+///
+/// `first_h1_text` is `None` when the home page has no top-level heading of
+/// its own (an opening paragraph, a poem, a lead image) — that always keeps
+/// the header brand, the same as a heading whose text differs.
+pub fn home_heading_duplicates_site_name(first_h1_text: Option<&str>, site_name: &str) -> bool {
+    let Some(h1) = first_h1_text else {
+        return false;
+    };
+    normalize_heading_for_brand_check(h1) == normalize_heading_for_brand_check(site_name)
+}
+
+/// Trim, collapse internal whitespace, then NFC-normalize — the flattening
+/// [`home_heading_duplicates_site_name`] applies to both sides before
+/// comparing.
+fn normalize_heading_for_brand_check(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    s.split_whitespace().collect::<Vec<_>>().join(" ").nfc().collect()
+}
+
 /// Find the home file among a list of filenames in a single folder.
 ///
 /// Convenience wrapper around [`detect_home_file_in_folder`] without
@@ -852,5 +883,47 @@ mod tests {
             ),
             "Garden Path"
         );
+    }
+
+    // --- home_heading_duplicates_site_name ---
+
+    #[test]
+    fn test_home_heading_matches_exact() {
+        assert!(home_heading_duplicates_site_name(Some("河灣"), "河灣"));
+    }
+
+    #[test]
+    fn test_home_heading_none_keeps_brand() {
+        assert!(!home_heading_duplicates_site_name(None, "河灣"));
+    }
+
+    #[test]
+    fn test_home_heading_different_text_keeps_brand() {
+        assert!(!home_heading_duplicates_site_name(Some("Welcome"), "河灣"));
+    }
+
+    #[test]
+    fn test_home_heading_case_sensitive() {
+        // Deliberately case-sensitive: "Moss" and "moss" are visibly
+        // different prose, even though a filename/slug match would fold them.
+        assert!(!home_heading_duplicates_site_name(Some("Moss"), "moss"));
+    }
+
+    #[test]
+    fn test_home_heading_trims_and_collapses_whitespace() {
+        assert!(home_heading_duplicates_site_name(
+            Some("  Garden   Path  "),
+            "Garden Path"
+        ));
+    }
+
+    #[test]
+    fn test_home_heading_nfc_normalizes() {
+        // "é" as NFC (single codepoint) vs. NFD (e + combining acute) —
+        // visually and semantically identical, byte-different.
+        let nfc = "Caf\u{00e9}";
+        let nfd = "Cafe\u{0301}";
+        assert_ne!(nfc, nfd, "precondition: the two byte-forms differ");
+        assert!(home_heading_duplicates_site_name(Some(nfd), nfc));
     }
 }

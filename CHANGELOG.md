@@ -4,6 +4,10 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### New
+
+- The header no longer repeats the site name on the home page when the page's own opening heading already says it. If the home page's first `#` heading matches the site name exactly (trimmed, whitespace collapsed, case-sensitive), the header brand link is dropped there; a site with a `logo:` keeps the logo in its place, named for assistive technology by an `aria-label`, instead of dropping the link outright. Every other page keeps the header name as before, and a home page that opens with prose, a poem, or an image instead of a matching heading is unaffected.
+
 ### Fixed
 
 - A heading's `#` permalink link no longer appears on a page's own title — an authored `# Heading` at the top of a page, or the title moss adds automatically — or on any heading on a site's home page, at any level. A title was never a section a reader deep-links into on its own, and a reader reaches the home page by visiting the site rather than by a link into one of its sections, so the trailing `#` was just noise in both places. The heading keeps its `id`, so a link someone already wrote to `#the-heading` still works; only the visible `#` link next to the heading is gone.

@@ -349,6 +349,29 @@ fn generate_html_inner(
         localized_site_title(all_docs, d.lang, site_lang, &site_title)
     });
 
+    // The nav's brand text is redundant once the home page's own first
+    // level-1 heading already says the site name. `is_homepage` is the
+    // same "is this the home page" signal `PageContext::is_homepage` uses
+    // for heading-anchor suppression, so this is judged only for the one
+    // render that IS the home page, against that render's own (already
+    // localized) `site_title` and `doc.content`. Reuses the heading
+    // extractor written for `[[Page#Heading]]` anchors rather than
+    // re-parsing rendered HTML; the parse config's `math` has to agree
+    // with the site's, or the extracted heading text could read differently
+    // from what actually renders.
+    let home_heading_matches_site_name = is_homepage
+        && doc.is_some_and(|d| {
+            let config = moss_core::ast::ParseConfig {
+                math: layout_config.assets.math,
+                ..Default::default()
+            };
+            let first_h1 = moss_core::heading::extract::extract_headings_with_config(&d.content, &config)
+                .into_iter()
+                .find(|h| h.level == 1)
+                .map(|h| h.text);
+            moss_core::home::home_heading_duplicates_site_name(first_h1.as_deref(), &site_title)
+        });
+
     // Generate analytics script tag from homepage frontmatter
     let analytics_script = homepage_doc
         .and_then(|d| d.analytics.as_ref())
@@ -399,7 +422,8 @@ fn generate_html_inner(
         project.has_content_folders,
     )
     .with_search(layout_config.assets.search)
-    .with_source_fm(emit_source_lines, emit_source_lines && logo_is_own_field);
+    .with_source_fm(emit_source_lines, emit_source_lines && logo_is_own_field)
+    .with_home_heading_matches_site_name(home_heading_matches_site_name);
     // Per-language logo: check if the translated homepage has its own logo,
     // otherwise fall back to the default homepage's logo.
     let logo_for_page = if let Some(d) = doc {

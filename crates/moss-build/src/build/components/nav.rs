@@ -59,6 +59,16 @@ pub struct NavigationBuilder<'a> {
     /// and a chip absent from the open file cannot be revealed.
     fm_breadcrumb: bool,
     fm_logo: bool,
+    /// This render is the home page AND the home page's own first level-1
+    /// heading duplicates the site name
+    /// ([`moss_core::home::home_heading_duplicates_site_name`]) — the
+    /// reader has just read the name once, in the page's own heading, so
+    /// `nav_left_html` drops the redundant text. A `logo:` keeps the home
+    /// link with an `aria-label`; with no logo the link is omitted
+    /// entirely. Never true for any other page — a breadcrumb trail's own
+    /// home segment (rendered while viewing a DIFFERENT page) always keeps
+    /// its text, which is the reader's only way back.
+    home_heading_matches_site_name: bool,
 }
 
 impl<'a> NavigationBuilder<'a> {
@@ -83,6 +93,7 @@ impl<'a> NavigationBuilder<'a> {
             has_search: false,
             fm_breadcrumb: false,
             fm_logo: false,
+            home_heading_matches_site_name: false,
         }
     }
 
@@ -120,6 +131,15 @@ impl<'a> NavigationBuilder<'a> {
     /// Set the site logo path (rendered before site name in nav).
     pub fn with_logo(mut self, logo_path: String) -> Self {
         self.logo_path = Some(logo_path);
+        self
+    }
+
+    /// Mark that this render is the home page and its own first level-1
+    /// heading duplicates the site name — see the field doc on
+    /// `home_heading_matches_site_name`. Callers pass `false` for every
+    /// page other than the one render that is actually the home page.
+    pub fn with_home_heading_matches_site_name(mut self, matches: bool) -> Self {
+        self.home_heading_matches_site_name = matches;
         self
     }
 
