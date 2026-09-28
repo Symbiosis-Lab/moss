@@ -8931,6 +8931,101 @@ mod build_time_link_meta_fetch_tests {
     }
 }
 
+/// End-to-end proof that `[site].rss_footer = true` never links the footer
+/// to an `rss.xml` this build didn't actually write. The toggle alone used
+/// to be enough to print the link even on a build with no resolved site
+/// URL — which writes no feed at all — so every page carried a dead link;
+/// see the `has_rss` note in `blocking.rs` above `show_rss_in_footer`.
+mod rss_footer_feed_gate_tests {
+    use crate::build::manifest::PendingManifest;
+    use crate::build::render::blocking::SiteConfig;
+    use crate::build::render::generate_blocking_content_for_build;
+    use crate::build::scan_folder;
+    use crate::types::content::SiteHashes;
+    use std::fs;
+
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "moss_rss_footer_{label}_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Builds a one-page site with `[site].rss_footer = true` and the given
+    /// `site_url_override` (`None` reproduces a fresh, undeployed project —
+    /// the case with no resolvable site URL and thus no feed). Returns the
+    /// built `index.html` and the path a real `rss.xml` would land at.
+    fn build_site(test_dir: &std::path::Path, site_url_override: Option<&str>) -> (String, std::path::PathBuf) {
+        fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n").unwrap();
+        fs::create_dir_all(test_dir.join(".moss")).unwrap();
+        fs::write(test_dir.join(".moss").join("config.toml"), "[site]\nrss_footer = true\n").unwrap();
+
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        fs::create_dir_all(&output_dir).unwrap();
+        let project_structure =
+            scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
+        let site_config = SiteConfig {
+            site_url_override: site_url_override.map(str::to_string),
+            ..SiteConfig::default()
+        };
+        generate_blocking_content_for_build(
+            &crate::vault::paths::VaultRoot::resolve(test_dir),
+            &project_structure,
+            &output_dir,
+            None,
+            None,
+            true,
+            site_config,
+            &mut PendingManifest::new(SiteHashes::default()),
+            true,
+        )
+        .expect("generate_blocking_content_for_build should succeed");
+
+        let index_html = fs::read_to_string(output_dir.join("index.html")).expect("index.html should exist");
+        (index_html, output_dir.join("rss.xml"))
+    }
+
+    #[test]
+    fn rss_footer_on_with_no_feed_emits_no_footer_link() {
+        let test_dir = scratch_dir("no_feed");
+        let _cleanup = Cleanup(test_dir.clone());
+
+        let (index_html, rss_path) = build_site(&test_dir, None);
+
+        assert!(
+            !rss_path.exists(),
+            "precondition: an undeployed build must genuinely write no rss.xml"
+        );
+        assert!(
+            !index_html.contains(r#"href="/rss.xml""#),
+            "no feed exists; the footer must not link to one: {index_html}"
+        );
+    }
+
+    #[test]
+    fn rss_footer_on_with_a_feed_emits_the_footer_link() {
+        let test_dir = scratch_dir("with_feed");
+        let _cleanup = Cleanup(test_dir.clone());
+
+        let (index_html, rss_path) = build_site(&test_dir, Some("https://example.com"));
+
+        assert!(rss_path.exists(), "precondition: a deployed build must write rss.xml");
+        assert!(
+            index_html.contains(r#"href="/rss.xml""#),
+            "a real feed exists and rss_footer is on: the footer link must render: {index_html}"
+        );
+    }
+}
+
 /// End-to-end proof that a downloaded og:image becomes a real local cover
 /// (`build::media::remote_cover`), rendered exactly like an internal page's
 /// cover — never the remote URL — on the SAME build that introduces the

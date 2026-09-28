@@ -1295,7 +1295,14 @@ pub fn generate_blocking_content_for_build(
 
         // RSS feed: always generated when a real (https) URL is resolved.
         // Localhost fallbacks (no deployment configured) skip RSS/sitemap.
-        // Footer RSS link: additionally controlled by [features].rss_footer toggle.
+        // Footer RSS link: additionally controlled by [features].rss_footer
+        // toggle, but never shown when `has_rss` is false — `has_rss` is the
+        // one place "does this build actually have a feed" is decided, and
+        // the footer link must not disagree with the `<head>` link (gated on
+        // the same value via `homepage_rss`/`rss_link` below) about it. The
+        // toggle alone used to be enough to print the footer link even on a
+        // localhost/no-site-url build that writes no `rss.xml`, so every page
+        // carried a link to a file that was never generated.
         let has_rss = site_url.is_deployed();
         // Search does NOT ride RSS's `is_deployed()` gate, and deliberately no
         // longer rides any mode bit: build output is mode-independent
@@ -1306,9 +1313,10 @@ pub fn generate_blocking_content_for_build(
         // emitter read.
         let has_search = site_config.search;
         let layout_config = layout_config.with_search(has_search);
-        let show_rss_in_footer = crate::build::site_config::get_site_rss_footer(source_path)
-            .unwrap_or(None)
-            .unwrap_or(false);
+        let show_rss_in_footer = has_rss
+            && crate::build::site_config::get_site_rss_footer(source_path)
+                .unwrap_or(None)
+                .unwrap_or(false);
 
         // Generate analytics script tag from homepage frontmatter (if configured)
         let homepage_for_analytics = documents.iter().find(|d| d.url_path == "index.html");

@@ -69,7 +69,7 @@ footer: true
 ---
 ```
 
-moss also auto-adds an RSS feed link to the left footer when your site emits a feed.
+Set `[site] rss_footer = true` in `.moss/config.toml` to add an RSS feed link to the left footer. It only appears once your site actually has a feed — a preview or otherwise undeployed build resolves no site URL and writes no `rss.xml`, so the toggle alone never links to a feed that isn't there.
 
 ### Footer slot
 
