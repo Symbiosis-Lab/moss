@@ -1421,7 +1421,6 @@ pub fn process_markdown_file(
         series,
         breadcrumb,
         footer,
-        footer_align: None,
         cascade,
         also_in,
         comments,

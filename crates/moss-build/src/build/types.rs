@@ -303,9 +303,6 @@ pub struct ParsedDocument {
     pub breadcrumb: Option<bool>,
     /// Override site-wide footer setting
     pub footer: Option<bool>,
-    /// Footer alignment: "left" (default) or "right"
-    #[serde(default)]
-    pub footer_align: Option<String>,
     /// Frontmatter values to cascade to all descendants
     ///
     /// `BTreeMap`, not `HashMap`: this field is part of the `Debug` string

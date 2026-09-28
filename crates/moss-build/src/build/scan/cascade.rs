@@ -114,15 +114,6 @@ fn apply_cascade_values(
                     }
                 }
             }
-            "footer-align" => {
-                if doc.footer_align.is_none() {
-                    if let Ok(v) = serde_yaml::from_value::<String>(value.clone()) {
-                        if v == "left" || v == "right" {
-                            doc.footer_align = Some(v);
-                        }
-                    }
-                }
-            }
             "children" => {
                 if doc.children.is_none() {
                     if let Ok(v) = serde_yaml::from_value::<bool>(value.clone()) {

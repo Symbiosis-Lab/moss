@@ -70,7 +70,6 @@ These fields control how the page appears in the site's navigation and chrome.
 | `weight` | integer | (none) | Sort order in nav and lists (lower = first) |
 | `breadcrumb` | boolean | site default | Show breadcrumb trail on this page. Set `true` on the homepage to activate breadcrumbs site-wide; set `false` on any page to opt it out. |
 | `footer` | boolean | site default | Show this page as a link in the site footer |
-| `footer_align` | string | `"left"` | Align this page's footer link (`"left"` or `"right"`) |
 <!-- auto:end:frontmatter-navigation -->
 
 ## Visibility

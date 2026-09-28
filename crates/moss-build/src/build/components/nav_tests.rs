@@ -1781,22 +1781,11 @@ fn make_footer_doc(
     footer: Option<bool>,
     weight: Option<i32>,
 ) -> ParsedDocument {
-    make_footer_doc_with_align(title, url_path, footer, weight, None)
-}
-
-fn make_footer_doc_with_align(
-    title: &str,
-    url_path: &str,
-    footer: Option<bool>,
-    weight: Option<i32>,
-    footer_align: Option<String>,
-) -> ParsedDocument {
     ParsedDocument {
         title: title.to_string(),
         label: title.to_string(),
         url_path: url_path.to_string(),
         footer,
-        footer_align,
         weight,
         lang: crate::i18n::Language::En,
         kind: moss_core::PageKind::Article,
@@ -1959,30 +1948,6 @@ fn footer_left_marker_appears_before_default_links() {
         left_pos < links_pos,
         "footer-left slot must appear before default link list:\n{html}"
     );
-}
-
-#[test]
-fn footer_align_right_field_keeps_link() {
-    // Under the verbatim contract, `footer_align: right` no longer affects
-    // visual position (the .footer-left/.footer-right chrome is gone). The
-    // link still renders in the default link list — sites that want a
-    // multi-column footer author it via footer.md instead.
-    let docs = vec![
-        make_footer_doc("About", "about.html", Some(true), None),
-        make_footer_doc_with_align(
-            "Contact",
-            "contact.html",
-            Some(true),
-            None,
-            Some("right".into()),
-        ),
-    ];
-    let html = footer_builder(&docs, None).generate_footer(true);
-    assert!(
-        html.contains("Contact"),
-        "Contact must still render: {html}"
-    );
-    assert!(html.contains("About"), "About must still render: {html}");
 }
 
 #[test]
@@ -2151,29 +2116,6 @@ fn footer_link_no_active_when_current_url_none() {
     assert!(
         !html.contains("active"),
         "No active class when current_page_url is None: {html}"
-    );
-}
-
-#[test]
-fn footer_link_active_with_right_align() {
-    let docs = vec![
-        make_footer_doc("News", "news/index.html", Some(true), None),
-        make_footer_doc_with_align(
-            "Contact",
-            "contact.html",
-            Some(true),
-            None,
-            Some("right".into()),
-        ),
-    ];
-    let html = footer_builder(&docs, Some("contact.html")).generate_footer(false);
-    assert!(
-        html.contains(r#"class="footer-link active">Contact</a>"#),
-        "Right-aligned footer link should get active class: {html}"
-    );
-    assert!(
-        html.contains(r#"class="footer-link">News</a>"#),
-        "News should NOT have active class: {html}"
     );
 }
 

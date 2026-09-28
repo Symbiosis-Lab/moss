@@ -69,19 +69,6 @@ footer: true
 ---
 ```
 
-### Footer alignment
-
-By default footer links sit on the left. Use `footer_align: right` to pull a page to the right column (typical for "Imprint", "Colophon", or legal links):
-
-```yaml
-# colophon.md
----
-title: Colophon
-footer: true
-footer_align: right
----
-```
-
 moss also auto-adds an RSS feed link to the left footer when your site emits a feed.
 
 ### Footer slot
@@ -96,6 +83,6 @@ If `nav: true` is set on a page in one language tree, the corresponding page in 
 
 ## Related pages
 
-- [[frontmatter]]: `nav`, `weight`, `footer`, `footer_align`, `breadcrumb` field reference
+- [[frontmatter]]: `nav`, `weight`, `footer`, `logo`, `breadcrumb` field reference
 - [[Multilingual sites]]: language trees and how nav scopes to them
 - [[structure]]: how root-level vs nested pages are determined

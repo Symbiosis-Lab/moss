@@ -52,6 +52,10 @@ All notable changes to moss will be documented here.
 - **BREAKING (`moss-build` API):** `markdown::process_markdown_file` takes one `SiteMarkdown` value in place of its four `implicit_figure`, `math`, `hard_line_breaks` and `heading_anchors` bools; the value also carries `[site].typesetting`. `SiteMarkdown::default()` is the drop-in for the common `false, true, true, true`; set only what differs, e.g. `SiteMarkdown { math: false, ..Default::default() }`. A caller with a `SiteConfig` passes `site_config.markdown()`. `folder_embed::expand_markers_in_documents` gains a trailing `site_typesetting: Option<&str>`.
 - **BREAKING (`moss-build` API):** `deploy::resolve_publish_inputs`, `deploy::push::run_hosted_deploy` and `deploy::prebuilt::run_prebuilt_deploy` take `overwrite_newer: bool` after `requested_site_id` (pass `false` to keep the stale-copy refusal), and `cli::deploy::DeployFlags` gains an `overwrite_newer` field.
 
+### Removed
+
+- The `footer_align` frontmatter field is gone. It stopped changing where a footer link renders a while ago and had nothing left to do; a site that still sets it keeps building exactly as before — moss ignores frontmatter keys it doesn't recognize. **BREAKING (`moss-build` API):** `ParsedDocument.footer_align` is removed.
+
 ## [0.7.14] - 2026-06-27
 
 ### New
