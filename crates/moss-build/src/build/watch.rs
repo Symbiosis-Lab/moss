@@ -66,7 +66,7 @@ use notify::EventKind;
 use notify_debouncer_full::DebouncedEvent;
 use std::path::{Path, PathBuf};
 
-use crate::build::types::{identity_disagrees, SourceMetadata};
+use crate::build::types::{identity_disagrees, subsec_proves_same_instant, SourceMetadata};
 
 pub mod drift;
 pub mod scope;
@@ -687,7 +687,12 @@ pub(crate) enum SourceVerdict {
 /// itself: size, then trusted mtime(ns), then hash — with the sweep's two
 /// demotions armed (ctime/inode disagreement, racy-write window). Both
 /// demotions only ever route to the hash tier — they can never suppress, so
-/// a false positive costs one hash and, via `refreshed`, absorbs itself.
+/// a false positive costs one hash and, via `refreshed`, absorbs itself. The
+/// sub-second mtime tier itself goes through
+/// [`subsec_proves_same_instant`](crate::build::types::subsec_proves_same_instant):
+/// on a coarse-timestamp filesystem it can never prove a match, so it demotes
+/// to the hash tier on every check rather than suppressing a rebuild it
+/// cannot actually vouch for.
 ///
 /// Taking `md` as a parameter is what lets the sweep reuse the stat its walk
 /// already paid for instead of stat'ing every file a second time per pass.
@@ -713,8 +718,8 @@ pub(crate) fn source_metadata_verdict(
         .modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok());
-    if let (true, Some(d), Some(nanos)) = (fast_path_trusted, fs_mtime, meta.mtime_nanos) {
-        if d.as_secs() == meta.mtime && d.subsec_nanos() == nanos {
+    if let (true, Some(d)) = (fast_path_trusted, fs_mtime) {
+        if d.as_secs() == meta.mtime && subsec_proves_same_instant(meta.mtime_nanos, Some(d.subsec_nanos())) {
             return SourceVerdict::Unchanged { refreshed: None };
         }
     }

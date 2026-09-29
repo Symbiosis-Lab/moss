@@ -811,6 +811,35 @@ fn a_missing_subsecond_mtime_never_hits_but_a_missing_ctime_or_inode_does() {
     assert_eq!(idx.lookup("photo.jpg", &FileStat { ctime: None, inode: None, ..full }), Some("abcd1234"));
 }
 
+/// A coarse-timestamp filesystem (exFAT/FAT, older SMB/NFS, some FUSE mounts) reports
+/// a sub-second mtime field but always rounds it to zero — `Some(0)`, not `None` — so
+/// `lookup` must treat an exact-zero reading as "resolution unknown" and fail open,
+/// the same as a missing one, rather than trusting `0 == 0` as proof of the same instant.
+#[test]
+fn a_zero_subsecond_mtime_fails_open_like_a_missing_one() {
+    let recorded = FileStat { mtime_nanos: Some(0), ..stat(1024, 1700000000) };
+    let mut idx = HashIndex::new();
+    idx.update("photo.jpg".to_string(), &recorded, "abcd1234".to_string());
+
+    // A same-size rewrite within the same coarse tick: size, whole-second mtime, ctime
+    // and inode may all still agree (or be absent), but the sub-second field on both
+    // sides is exact zero — a re-hash, not a hit.
+    let rewritten = FileStat { mtime_nanos: Some(0), ..recorded };
+    assert!(idx.lookup("photo.jpg", &rewritten).is_none(), "exact-zero nanos on both sides must miss, not hit");
+}
+
+/// The counterpart to the zero-nanos guard: a genuine non-zero sub-second reading
+/// (what APFS, ext4 and NTFS normally report) still hits exactly as before.
+#[test]
+fn a_nonzero_subsecond_mtime_still_hits() {
+    let recorded = stat(1024, 1700000000);
+    assert_ne!(recorded.mtime_nanos, Some(0), "premise: the shared fixture uses a non-zero nanos value");
+    let mut idx = HashIndex::new();
+    idx.update("photo.jpg".to_string(), &recorded, "abcd1234".to_string());
+
+    assert_eq!(idx.lookup("photo.jpg", &recorded), Some("abcd1234"));
+}
+
 /// The video path's rule is unchanged: size + whole-second mtime, blind to the rest,
 /// and what it records carries no sub-second field for `lookup` to trust.
 #[test]

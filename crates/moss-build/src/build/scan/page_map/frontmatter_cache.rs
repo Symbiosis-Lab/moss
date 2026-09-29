@@ -2,7 +2,7 @@
 //! [`super::build_external_url_map`] — see [`FrontmatterScanCache`] for the
 //! corpus-scaled cost this closes.
 
-use crate::build::types::identity_disagrees;
+use crate::build::types::{identity_disagrees, subsec_proves_same_instant};
 use std::path::Path;
 
 /// One file's cached frontmatter pre-scan result, plus the stat identity it
@@ -48,17 +48,13 @@ const SCHEMA: u32 = 2;
 /// agree — the same "both sides present and disagree ⇒ don't trust" rule
 /// the watcher's admission gate uses ([`identity_disagrees`]; this cache has
 /// no hash tier to demote to on disagreement, so unlike the watcher it always
-/// fails open to a full re-parse rather than trusting a forged mtime). A missed cache
-/// hit costs one extra file read; a false hit would silently ship a stale
-/// URL, so the bar here is "never wrong", not "never re-parse".
-///
-/// Known gap: unlike the watcher (`build::watch`'s `mtime_is_racy`), this
-/// cache has no same-second racy-write epsilon and no hash tier to fall
-/// back to. A same-second rewrite that preserves size and lands with
-/// identical `mtime_nanos` (coarse-resolution filesystems/mounts) can read
-/// as a hit. Bounded and self-healing: it costs one build serving the
-/// prior URL, corrected by the next edit or build once the clock ticks
-/// past the collision — never a wrong *final* state.
+/// fails open to a full re-parse rather than trusting a forged mtime). The
+/// `mtime_nanos` match itself goes through [`subsec_proves_same_instant`], so
+/// a same-second rewrite on a coarse-resolution filesystem/mount — which reads
+/// an exact-zero sub-second mtime rather than none — is never mistaken for
+/// proof and always falls through to a re-parse. A missed cache hit costs one
+/// extra file read; a false hit would silently ship a stale URL, so the bar
+/// here is "never wrong", not "never re-parse".
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FrontmatterScanCache {
     /// `#[serde(default)]` uses the FIELD type's default (0), not this
@@ -177,10 +173,8 @@ fn scan_frontmatter_urls_with_evicted(
                 md.len() == entry.size
                     && !identity_disagrees(entry.ctime, ctime)
                     && !identity_disagrees(entry.inode, inode)
-                    && matches!(
-                        (mtime, entry.mtime_nanos),
-                        (Some(d), Some(nanos)) if d.as_secs() == entry.mtime && d.subsec_nanos() == nanos
-                    )
+                    && matches!(mtime, Some(d) if d.as_secs() == entry.mtime)
+                    && subsec_proves_same_instant(entry.mtime_nanos, mtime.map(|d| d.subsec_nanos()))
             }
             _ => false,
         };

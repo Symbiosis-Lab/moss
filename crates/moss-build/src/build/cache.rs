@@ -27,7 +27,7 @@
 //!
 //! Synced, a sibling of `.moss/build.nosync/` — build both via `for_site`, not a hand join.
 
-use crate::build::types::identity_disagrees;
+use crate::build::types::{identity_disagrees, subsec_proves_same_instant};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -916,9 +916,11 @@ pub struct HashIndexEntry {
 ///
 /// The racy-clean edge case is NOT acceptable for an image: its content hash
 /// names the encode, so a false hit ships the previous picture's variant. A
-/// same-second rewrite is told apart by the sub-second mtime (the filesystems
-/// moss runs on report one); on a filesystem whose timestamps are whole seconds
-/// the comparison is no weaker than it used to be, and no stronger.
+/// same-second rewrite is told apart by the sub-second mtime — what counts as
+/// proof there is [`subsec_proves_same_instant`](crate::build::types::subsec_proves_same_instant),
+/// which also covers the filesystems that report the field but can't back it
+/// up; on those, the comparison is no weaker than whole-second matching used
+/// to be, and no stronger.
 ///
 /// Reference: <https://git-scm.com/docs/racy-git>
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1047,11 +1049,27 @@ impl HashIndex {
     /// side — an entry from before the field existed, one recorded by
     /// [`update_whole_second`](Self::update_whole_second), a file whose mtime the
     /// platform will not report: a whole-second match cannot rule out a same-size
-    /// rewrite in the same second. A miss costs one hash; a hit that should have
-    /// missed is a stale image.
+    /// rewrite in the same second. The sub-second match itself is
+    /// [`subsec_proves_same_instant`] — see its doc for what an exact-zero reading
+    /// means and why it fails open too. A miss costs one hash; a hit that should
+    /// have missed is a stale image.
+    ///
+    /// On a coarse-timestamp filesystem `same_instant` below is always false, so
+    /// this fast path is permanently unavailable there: every lookup misses and
+    /// every source is re-hashed on every build. That re-hash does not imply a
+    /// re-encode — [`resolve`](Self::resolve) records the real content hash on a
+    /// miss either way, and `TransformCache::find_cached_output` is keyed on that
+    /// content hash, so an image whose bytes genuinely didn't change still hits
+    /// the transform cache and skips the encode. The recurring cost on such a
+    /// filesystem is the read and the SHA-256, not the conversion.
     pub fn lookup(&self, relative_path: &str, stat: &FileStat) -> Option<&str> {
         let entry = self.entries.get(relative_path)?;
-        let same_instant = stat.mtime_nanos.is_some() && entry.mtime_nanos == stat.mtime_nanos;
+        let same_instant = subsec_proves_same_instant(entry.mtime_nanos, stat.mtime_nanos);
+        // ctime needs no coarse-timestamp guard: `stat_identity` already reports it
+        // in whole seconds only (no sub-second field is ever read), and
+        // `identity_disagrees` never treats agreement as proof of freshness by
+        // itself — it can only turn a would-be hit into a miss. `same_instant`
+        // above is the sole proof; ctime just vetoes it.
         count_hit(
             (entry.size == stat.size
                 && entry.mtime == stat.mtime
@@ -1071,6 +1089,10 @@ impl HashIndex {
     /// re-materializing it) and on the first build after this rule changed. Callers
     /// record with [`update_whole_second`](Self::update_whole_second), so what they
     /// leave in the index is never mistaken for a full stat record.
+    ///
+    /// Needs no coarse-timestamp guard: it never reads a sub-second field at all, so
+    /// a filesystem that rounds one to zero changes nothing here — this rule was
+    /// already as coarse as whole seconds get, by design, on every filesystem.
     pub fn lookup_whole_second(&self, relative_path: &str, size: u64, mtime: u64) -> Option<&str> {
         let entry = self.entries.get(relative_path)?;
         count_hit((entry.size == size && entry.mtime == mtime).then_some(entry.content_hash.as_str()))

@@ -1146,6 +1146,55 @@ fn mtime_is_racy_boundaries() {
     );
 }
 
+/// A coarse-timestamp filesystem (exFAT/FAT, older SMB/NFS, some FUSE mounts)
+/// reports a sub-second mtime but always rounds it to zero — `Some(0)`, not
+/// `None` — so a same-size rewrite landing in the same recorded second can
+/// read identically to the file that was hashed. The admission gate must not
+/// suppress a rebuild on `0 == 0` alone: it has to fall through to the hash
+/// tier, which sees the changed bytes.
+#[test]
+fn a_same_tick_same_size_rewrite_on_a_coarse_stat_is_not_suppressed() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = gate_write_file(dir.path(), "a.md", b"hello");
+
+    // Same-size rewrite, in place (preserves the inode) — the racy-write case
+    // this whole gate exists for.
+    fs::write(&p, b"world").unwrap();
+
+    // Simulate the coarse filesystem: force the CURRENT read to carry an
+    // exact-zero sub-second mtime, at the same whole second the (also
+    // zero-nanos) baseline recorded. A real coarse filesystem gives both
+    // writes this reading regardless of when either one actually landed.
+    let secs = gate_mtime_secs(&p);
+    fs::File::options()
+        .write(true)
+        .open(&p)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + std::time::Duration::new(secs, 0))
+        .unwrap();
+    let md = fs::metadata(&p).unwrap();
+    let (fs_ctime, fs_inode) = crate::build::types::stat_identity(&md);
+
+    let meta = SourceMetadata {
+        hash: gate_sha256_hex(b"hello"), // the ORIGINAL bytes' hash
+        size: 5,                         // same size as the rewrite
+        mtime: secs,                     // same recorded second
+        mtime_nanos: Some(0),            // what the baseline's coarse stat read
+        // Identity agrees — isolating the sub-second guard as the only signal
+        // that can catch this rewrite; ctime is itself only second-resolution,
+        // so a same-tick rewrite plausibly carries the same recorded value too.
+        ctime: fs_ctime,
+        inode: fs_inode,
+    };
+
+    assert_eq!(
+        source_metadata_verdict(&meta, &md, &p, None),
+        SourceVerdict::Changed,
+        "size, whole-second mtime and identity all agree, but both sub-second \
+         readings are an unproven exact zero — must hash, and the hash differs"
+    );
+}
+
 /// The absorb-once rule for provider re-materialization: an evict + identical
 /// re-download rewrites ctime/inode, so the fast path is demoted and the hash
 /// tier runs — ONCE. The verdict hands back the fresh stat record; with it

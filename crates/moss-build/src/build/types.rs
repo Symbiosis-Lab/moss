@@ -832,6 +832,23 @@ pub(crate) fn identity_disagrees<T: PartialEq>(recorded: Option<T>, current: Opt
     matches!((recorded, current), (Some(a), Some(b)) if a != b)
 }
 
+/// Both sides reported a sub-second mtime, neither reading is an exact zero, and
+/// they agree — the only condition under which a whole-second mtime match may be
+/// trusted as proof of "the same write", not just "the same second".
+///
+/// A coarse-timestamp filesystem (exFAT/FAT at 2s resolution, older SMB/NFS, some
+/// FUSE mounts) reports the sub-second field but always rounds it to zero — `Some(0)`,
+/// not `None` — so two different same-second writes can both read `Some(0)` and look
+/// identical. This function treats an exact zero, on either side, the same as a
+/// missing reading: "resolution unknown", never proof. On APFS, ext4 and NTFS a
+/// genuine zero-nanosecond mtime is about a one-in-a-billion event, so the extra cost
+/// where this fails open (one re-hash, or one avoidable rebuild) is negligible.
+/// Every consumer that trusts a sub-second match as proof of "the same instant"
+/// compares through this one definition, mirroring [`identity_disagrees`].
+pub(crate) fn subsec_proves_same_instant(recorded: Option<u32>, current: Option<u32>) -> bool {
+    matches!((recorded, current), (Some(a), Some(b)) if a != 0 && b != 0 && a == b)
+}
+
 impl moss_core::sort::SortableDoc for ParsedDocument {
     fn url_path(&self) -> &str { &self.url_path }
     fn date(&self) -> Option<&str> { self.date.as_deref() }
