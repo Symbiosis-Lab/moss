@@ -31,7 +31,7 @@ impl Writer<'_> {
         write!(self.output, "<g id=\"{}\" data-map-layer=\"rivers\">", self.ids.get("layer-rivers"))
             .expect("writing to String cannot fail");
         for (centi_px, paths) in by_width {
-            if let Some(path) = serialize_path(&paths, false, BY_AREA) {
+            if let Some(path) = serialize_path(&paths, false, BY_AREA.scaled(self.detail)) {
                 write!(
                     self.output,
                     "<path d=\"{path}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"{:.2}\" stroke-linecap=\"round\"/>",

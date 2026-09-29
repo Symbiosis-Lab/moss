@@ -4,8 +4,41 @@ use crate::vault::places::Precision;
 /// q11 Brotli budget checked by the dev/CI matrix; production does not link a
 /// compressor solely for this contract.
 pub const LOCATOR_Q11_BROTLI_LIMIT: usize = 16 * 1024;
+/// The same budget for a locator whose frame spans continents. It covers
+/// tens of times a local frame's ground, and even drawn for its display
+/// size, with every other elevation step, it costs about twice as much:
+/// the whole world, the most a locator shows, comes to about 32 KiB, and
+/// this leaves a quarter's headroom.
+pub const WIDE_LOCATOR_Q11_BROTLI_LIMIT: usize = 40 * 1024;
 /// Deterministic production safety ceiling for the sparse locator profile.
 pub const LOCATOR_RAW_SAFETY_LIMIT: usize = 256 * 1024;
+
+/// A locator is shown at most about 350 CSS px wide, under half the
+/// 720-unit viewBox it is drawn in. A local frame's detail is bounded by
+/// the pack, simplified for that frame; a wider frame's by the screen, so
+/// a wide locator is simplified for the size it is shown at.
+pub(super) const LOCATOR_DISPLAY_SCALE: f64 = 2.0;
+
+/// A wide locator's elevation and depth steps: every other one, counted
+/// from the highest and the deepest, and the shallowest sea step, which
+/// runs along the coastline. At half the width, over a frame ten times a
+/// local one's, neighbouring steps crowd within a pixel of each other, and
+/// their outlines were most of a continent-wide locator's bytes.
+pub(super) fn keep_alternate_bands(grouped: &mut [Vec<&Feature>]) {
+    for (layer, highest_first) in [(9, true), (10, false)] {
+        let mut bands: Vec<i16> = grouped[layer].iter().map(|feature| feature.band).collect();
+        bands.sort_unstable();
+        bands.dedup();
+        if highest_first {
+            bands.reverse();
+        }
+        let mut kept: Vec<i16> = bands.iter().copied().step_by(2).collect();
+        if layer == 10 {
+            kept.extend(bands.last());
+        }
+        grouped[layer].retain(|feature| kept.contains(&feature.band));
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocatorProfile {

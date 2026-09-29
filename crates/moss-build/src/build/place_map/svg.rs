@@ -20,9 +20,10 @@ use text::{precision_name, xml_escape};
 // broke.
 pub(crate) use text::precision_rank;
 mod locator;
+use locator::{keep_alternate_bands, LOCATOR_DISPLAY_SCALE};
 pub use locator::{
     emit_locator, emit_locator_svg, LocatorProfile, LocatorSafetyError, LocatorSvg,
-    LOCATOR_Q11_BROTLI_LIMIT, LOCATOR_RAW_SAFETY_LIMIT,
+    LOCATOR_Q11_BROTLI_LIMIT, LOCATOR_RAW_SAFETY_LIMIT, WIDE_LOCATOR_Q11_BROTLI_LIMIT,
 };
 mod river;
 mod palette;
@@ -99,17 +100,6 @@ pub fn emit_svg(
     )
 }
 
-/// Alias used by render callers that prefer the verb used by other SVG
-/// components in the build crate.
-pub fn render_svg(
-    context: &PlaceMapContext,
-    target: &PlaceMapTarget,
-    page_path: &str,
-    ordinal: usize,
-) -> String {
-    emit_svg(context, target, page_path, ordinal)
-}
-
 /// Emit one map figure with an explicit accessible label/link.
 pub fn emit_svg_with_options(
     context: &PlaceMapContext,
@@ -140,6 +130,8 @@ fn emit_svg_with_mode(
         )
     };
     let projection = target.frame.as_ref().map(Projection::new);
+    let wide = projection.as_ref().is_some_and(Projection::is_wide);
+    let wide_locator = compact && wide;
     let mut writer = Writer {
         output: String::with_capacity(32 * 1024),
         ids: &ids,
@@ -147,6 +139,7 @@ fn emit_svg_with_mode(
         land_paths: Vec::new(),
         has_href: false,
         effect_scale: projection.as_ref().map_or(1.0, Projection::effect_scale),
+        detail: if wide_locator { LOCATOR_DISPLAY_SCALE } else { 1.0 },
         locator_profile: compact.then_some(match options.precision {
             Precision::Exact | Precision::City => LocatorProfile::ExactCity,
             Precision::Region => LocatorProfile::Region,
@@ -167,8 +160,11 @@ fn emit_svg_with_mode(
     let grouped = target.frame.as_ref().map(|frame| {
         let selected = TileSelection::for_frame(context.pack(), frame);
         let mut grouped = grouped_features(context.pack(), &selected);
-        if frame.tier == FrameTier::World {
+        if wide {
             keep_world_scale_layers(&mut grouped);
+        }
+        if wide_locator {
+            keep_alternate_bands(&mut grouped);
         }
         grouped
     });
@@ -236,6 +232,9 @@ struct Writer<'a> {
     land_paths: Vec<String>,
     has_href: bool,
     effect_scale: f64,
+    /// How many times smaller than its viewBox the map is shown, which
+    /// scales the render-time simplification.
+    detail: f64,
     locator_profile: Option<LocatorProfile>,
 }
 
@@ -290,11 +289,11 @@ fn clamp_to_circle(point: (f64, f64), center: (f64, f64), radius: f64) -> (f64, 
 /// Natural Earth scalerank of the smallest river a world map still draws.
 const WORLD_MAX_RIVER_RANK: i16 = 3;
 
-/// At world scale the river taper's 0.5 px floor still draws every
-/// tributary as a thread, reef lines read as scratches across the ocean,
-/// and salt flats and built-up areas shrink to specks a few pixels wide.
-/// A world map keeps trunk rivers, lakes and ice, as the approved world
-/// map does.
+/// On any frame wider than a local one (over 60 degrees) the river taper's
+/// 0.5 px floor draws every tributary as a thread, reef lines read as
+/// scratches across the ocean, and salt flats and built-up areas shrink to
+/// specks a few pixels wide. Such a map keeps trunk rivers, lakes and ice,
+/// as the approved world map does.
 fn keep_world_scale_layers(grouped: &mut [Vec<&Feature>]) {
     grouped[4].retain(|feature| feature.band <= WORLD_MAX_RIVER_RANK);
     for layer in [6, 7, 8] {
@@ -326,6 +325,13 @@ fn grouped_features<'a>(pack: &'a Pack, selected: &TileSelection) -> Vec<Vec<&'a
 }
 
 impl Writer<'_> {
+    /// `data-map-tier` reports `FrameTier`, the span-based tier used for
+    /// data selection (which tiles are in bounds, and whether the globe
+    /// inset and Patterson projection apply). It is not the drawing
+    /// treatment: that is chosen separately, by zoom, through
+    /// `Projection::is_wide()`. A `local`-tagged frame can still cross
+    /// `WIDE_ZOOM` and be drawn with the wide treatment — the attribute and
+    /// the rendered detail can disagree, and both are correct.
     fn open_figure(
         &mut self,
         target: &PlaceMapTarget,
@@ -475,7 +481,7 @@ impl Writer<'_> {
         self.output.push_str("<defs>");
         for (index, feature) in grouped[2].iter().enumerate() {
             let rings: Vec<&[(i32, i32)]> = feature.parts.iter().map(Vec::as_slice).collect();
-            if let Some(path) = serialize_path(&projection.project_feature(&rings, quantisation), true, FINE) {
+            if let Some(path) = serialize_path(&projection.project_feature(&rings, quantisation), true, FINE.scaled(self.detail)) {
                 let id = format!("{}-land-{index}", self.ids.base);
                 write!(self.output, "<path id=\"{id}\" d=\"{path}\"/>")
                     .expect("writing to String cannot fail");
@@ -553,7 +559,7 @@ impl Writer<'_> {
         }
         write!(self.output, "<g id=\"{}\" data-map-layer=\"{name}\">", self.ids.get(&format!("layer-{name}")))
             .expect("writing to String cannot fail");
-        if let Some(path) = serialize_path(&paths, filled, FINE) {
+        if let Some(path) = serialize_path(&paths, filled, FINE.scaled(self.detail)) {
             write!(self.output, "<path d=\"{path}\" {paint}/>").expect("writing to String cannot fail");
         }
         self.output.push_str("</g>");
@@ -587,7 +593,7 @@ impl Writer<'_> {
                 // clipping.
                 let rings = projection.project_feature(&rings, quantisation);
                 let on_screen = rings.iter().any(|ring| on_screen(ring));
-                (feature, on_screen.then(|| serialize_path(&rings, true, BY_AREA)).flatten())
+                (feature, on_screen.then(|| serialize_path(&rings, true, BY_AREA.scaled(self.detail))).flatten())
             })
             .filter(|(_, path)| path.is_some())
             .collect();
@@ -801,6 +807,7 @@ impl Writer<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::geometry::{DESIGN_PIXELS_PER_DEGREE, FRAME_PADDING, WIDE_ZOOM};
     use crate::build::place_map::Frame;
     use std::io::Write;
 
@@ -963,6 +970,7 @@ mod tests {
             land_paths: Vec::new(),
             has_href: false,
             effect_scale: 1.0,
+            detail: 1.0,
             locator_profile: None,
         };
         writer.emit_band_layer(10_000, &projection, &grouped, 9, "relief", false);
@@ -1003,6 +1011,7 @@ mod tests {
             land_paths: Vec::new(),
             has_href: false,
             effect_scale: 1.0,
+            detail: 1.0,
             locator_profile: None,
         };
         writer.emit_river_layer(10_000, &projection, &grouped, "#5b93bd");
@@ -1719,22 +1728,137 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_world_map_keeps_trunk_rivers_and_no_specks() {
-        let svg = world_map();
-        let rivers = layer_body(&svg, "rivers");
-        let widths: Vec<f64> = rivers
-            .match_indices("stroke-width=\"")
-            .map(|(index, _)| {
-                let rest = &rivers[index + "stroke-width=\"".len()..];
-                rest[..rest.find('"').unwrap()].parse().unwrap()
+    /// A multi-place story's target, its places named by their compass
+    /// direction.
+    fn story_target(places: &[(&str, f64, f64, Precision)], tier: FrameTier) -> PlaceMapTarget {
+        let places: Vec<ResolvedPlace> = places
+            .iter()
+            .map(|&(key, longitude, latitude, precision)| ResolvedPlace {
+                key: format!("places/{key}"),
+                display: key.to_string(),
+                longitude: Some(longitude),
+                latitude: Some(latitude),
+                precision,
             })
             .collect();
-        assert!(!widths.is_empty(), "the world map lost its trunk rivers");
-        let floor = river::river_width(WORLD_MAX_RIVER_RANK);
-        assert!(widths.iter().all(|&width| width >= floor - 1e-9), "{widths:?}");
-        for name in ["reefs", "salt", "built-up"] {
-            assert!(!layer_body(&svg, name).contains("<path"), "the world map draws {name}");
+        let points: Vec<ProjectedPoint> = places.iter().filter_map(ResolvedPlace::point).collect();
+        let frame = Frame::from_points(&points, places.iter().map(|place| place.precision)).unwrap();
+        assert_eq!(frame.tier, tier);
+        PlaceMapTarget { places, frame: Some(frame), aggregate_name: None }
+    }
+
+    /// From London to Hong Kong by way of Kerala: over a hundred degrees.
+    fn continental_target() -> PlaceMapTarget {
+        story_target(&[("north", -0.128, 51.507, Precision::City), ("east", 114.177, 22.302, Precision::City), ("south", 76.271, 10.851, Precision::Region)], FrameTier::Wide)
+    }
+
+    /// From Bangkok to Shanghai: a local frame by span, under 60 degrees,
+    /// but at a third of the design's zoom.
+    fn regional_target() -> PlaceMapTarget {
+        story_target(&[("south", 100.5, 13.75, Precision::City), ("north", 121.474, 31.23, Precision::City)], FrameTier::Local)
+    }
+
+    /// A story set in three places across two continents gets its locator:
+    /// drawn for its display size and with every other elevation step, it
+    /// fits the wide locator budget, where it used to pass the raw ceiling
+    /// and be dropped.
+    #[test]
+    fn a_continental_locator_is_emitted_within_its_budget() {
+        for (target, precision) in [(continental_target(), Precision::Region), (regional_target(), Precision::City)] {
+            let options = SvgMapOptions::new("p", 0, "north", precision);
+            let locator = emit_locator(&PlaceMapContext::embedded().unwrap(), &target, options).expect("the locator is emitted, not dropped");
+            let mut compressor = brotli::CompressorWriter::new(Vec::new(), 4096, 11, 22);
+            compressor.write_all(locator.svg.as_bytes()).unwrap();
+            let compressed = compressor.into_inner();
+            assert!(compressed.len() <= WIDE_LOCATOR_Q11_BROTLI_LIMIT, "raw={} brotli-q11={}", locator.svg.len(), compressed.len());
+            let relief = &locator.svg[locator.svg.find("data-map-layer=\"relief\"").unwrap()..locator.svg.find("data-map-layer=\"lighting\"").unwrap()];
+            assert!(relief.contains("data-map-band=\"6000\"") && !relief.contains("data-map-band=\"5000\""), "the highest step and every other one below it");
+        }
+    }
+
+    /// The zoom cut-off between the local and wide drawing treatments sits
+    /// at a padded longitude span of `SVG_WIDTH / (WIDE_ZOOM *
+    /// DESIGN_PIXELS_PER_DEGREE)` degrees (see `Projection::effect_scale`).
+    /// Both frames built here keep `FrameTier::Local` (well under the
+    /// 60-degree tier boundary), so the two locators differ only by zoom,
+    /// never by which data the frame selects — the split `open_figure`'s
+    /// doc comment describes for `data-map-tier`.
+    #[test]
+    fn a_locator_switches_treatment_at_the_wide_zoom_cutoff() {
+        let cutoff = f64::from(SVG_WIDTH) / (WIDE_ZOOM * DESIGN_PIXELS_PER_DEGREE);
+        // Half a degree of padded span clears `effect_scale`'s 3-decimal
+        // rounding on either side, so which side of the cut-off each case
+        // lands on isn't a coin flip.
+        let margin = 0.5;
+        for (padded_span, wide, limit) in [
+            (cutoff - margin, false, LOCATOR_Q11_BROTLI_LIMIT),
+            (cutoff + margin, true, WIDE_LOCATOR_Q11_BROTLI_LIMIT),
+        ] {
+            let raw_span = padded_span / FRAME_PADDING;
+            let target = story_target(
+                &[
+                    ("west", 20.0 - raw_span / 2.0, 0.0, Precision::City),
+                    ("east", 20.0 + raw_span / 2.0, 0.0, Precision::City),
+                ],
+                FrameTier::Local,
+            );
+            assert_eq!(
+                Projection::new(target.frame.as_ref().unwrap()).is_wide(),
+                wide,
+                "padded span {padded_span:.2} against cutoff {cutoff:.2}"
+            );
+            let options = SvgMapOptions::new("p", 0, "west", Precision::City);
+            let locator = emit_locator(&PlaceMapContext::embedded().unwrap(), &target, options)
+                .expect("the locator is emitted, not dropped");
+            let mut compressor = brotli::CompressorWriter::new(Vec::new(), 4096, 11, 22);
+            compressor.write_all(locator.svg.as_bytes()).unwrap();
+            let compressed = compressor.into_inner();
+            assert!(
+                compressed.len() <= limit,
+                "padded span {padded_span:.2}: raw={} brotli-q11={} limit={limit}",
+                locator.svg.len(),
+                compressed.len()
+            );
+        }
+    }
+
+    /// A multi-place frame is wider and taller than its places span, so the
+    /// places at its edges are drawn inside the map: spanned exactly, the
+    /// westernmost and easternmost sat on its border.
+    #[test]
+    fn places_at_a_frames_edges_sit_inside_the_map() {
+        let svg = emit_svg(&PlaceMapContext::embedded().unwrap(), &continental_target(), "p", 0);
+        let markers = layer_body(&svg, "marker");
+        let mut centres: Vec<(f64, f64)> = dots(markers).into_iter().map(|(x, y, _)| (x, y)).collect();
+        centres.extend(markers.split("<circle cx=\"").skip(1).map(|rest| {
+            let mut numbers = rest.split('"').step_by(2).map(|value| value.parse::<f64>().unwrap());
+            (numbers.next().unwrap(), numbers.next().unwrap())
+        }));
+        assert_eq!(centres.len(), 5, "two dots with their casings and one fade: {markers}");
+        for (x, y) in centres {
+            assert!((60.0..=660.0).contains(&x) && (40.0..=440.0).contains(&y), "a marker at ({x}, {y}) sits on the map's border");
+        }
+    }
+
+    #[test]
+    fn wide_maps_keep_trunk_rivers_and_no_specks() {
+        let context = PlaceMapContext::embedded().unwrap();
+        let wide = [continental_target(), regional_target()].map(|target| emit_svg(&context, &target, "p", 0));
+        for svg in [vec![world_map()], wide.to_vec()].concat() {
+            let rivers = layer_body(&svg, "rivers");
+            let widths: Vec<f64> = rivers
+                .match_indices("stroke-width=\"")
+                .map(|(index, _)| {
+                    let rest = &rivers[index + "stroke-width=\"".len()..];
+                    rest[..rest.find('"').unwrap()].parse().unwrap()
+                })
+                .collect();
+            assert!(!widths.is_empty(), "the map lost its trunk rivers");
+            let floor = river::river_width(WORLD_MAX_RIVER_RANK);
+            assert!(widths.iter().all(|&width| width >= floor - 1e-9), "{widths:?}");
+            for name in ["reefs", "salt", "built-up"] {
+                assert!(!layer_body(&svg, name).contains("<path"), "the map draws {name}");
+            }
         }
     }
 

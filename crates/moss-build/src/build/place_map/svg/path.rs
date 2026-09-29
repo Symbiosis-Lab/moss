@@ -22,6 +22,16 @@ pub(super) enum Simplify {
 pub(super) const FINE: Simplify = Simplify::Distance(1.0);
 pub(super) const BY_AREA: Simplify = Simplify::Area(2.0);
 
+impl Simplify {
+    /// The same pass for a map shown `scale` times smaller than its viewBox.
+    pub(super) fn scaled(self, scale: f64) -> Self {
+        match self {
+            Self::Distance(tolerance) => Self::Distance(tolerance * scale),
+            Self::Area(min_area) => Self::Area(min_area * scale * scale),
+        }
+    }
+}
+
 pub(super) fn snap(value: f64) -> i32 {
     value
         .round()

@@ -11,7 +11,14 @@ const LATITUDE_SHARE: f64 = 0.68;
 /// The zoom the approved design's shadows, coast halo and lighting were
 /// drawn at: the narrowest frame, whose 6.8-degree height fills the 480 px
 /// canvas, about 70.6 px to the degree.
-const DESIGN_PIXELS_PER_DEGREE: f64 = VIEWBOX_HEIGHT / (MIN_FRAME_DEGREES * LATITUDE_SHARE);
+pub(crate) const DESIGN_PIXELS_PER_DEGREE: f64 = VIEWBOX_HEIGHT / (MIN_FRAME_DEGREES * LATITUDE_SHARE);
+/// The zoom, as a share of the design's, at or under which a map counts as
+/// wide: a frame about 20 degrees across or more, where elevation steps
+/// and small features tuned for a 10-degree frame crowd together.
+pub(crate) const WIDE_ZOOM: f64 = 0.5;
+/// How much wider and taller than the span of its places a frame is drawn,
+/// so places at its edges sit inside the map instead of on its border.
+pub(crate) const FRAME_PADDING: f64 = 1.25;
 const CLIP_MARGIN: f64 = 24.0;
 const CLIP_MIN_X: f64 = -CLIP_MARGIN;
 const CLIP_MAX_X: f64 = VIEWBOX_WIDTH + CLIP_MARGIN;
@@ -76,8 +83,11 @@ impl Frame {
             .map(|point| point.latitude)
             .fold(-90.0, f64::max);
         let (center_longitude, longitude_span) = circular_longitude_bounds(points);
-        let latitude_span = (latitude_max - latitude_min).max(floor * LATITUDE_SHARE).min(170.0);
-        let longitude_span = longitude_span.max(floor).min(360.0);
+        // Padding is applied here, before `tier` below is classified, so the
+        // tier reflects the padded frame that projection and tile selection
+        // will actually draw, not the raw points' tighter extent.
+        let latitude_span = ((latitude_max - latitude_min) * FRAME_PADDING).max(floor * LATITUDE_SHARE).min(170.0);
+        let longitude_span = (longitude_span * FRAME_PADDING).max(floor).min(360.0);
         let center_latitude =
             ((latitude_min + latitude_max) / 2.0).clamp(-POLAR_LIMIT, POLAR_LIMIT);
         let tier = if points
@@ -327,6 +337,11 @@ impl Projection {
             FrameTier::World => Self::Patterson(PattersonProjection::new(frame)),
             FrameTier::Local | FrameTier::Wide => Self::Flat(FlatProjection::new(frame)),
         }
+    }
+
+    /// Whether the map is drawn at or under half the design's zoom.
+    pub fn is_wide(&self) -> bool {
+        self.effect_scale() <= WIDE_ZOOM
     }
 
     /// How much the approved design's effect sizes (cut-paper shadows,
@@ -876,8 +891,10 @@ mod tests {
         let wide_projection = Projection::new(&wide_frame);
         let (west_x, _) = wide_projection.project(wide_points[0]).unwrap();
         let (east_x, _) = wide_projection.project(wide_points[1]).unwrap();
-        assert!((west_x - 0.0).abs() < 1.0, "west edge should reach the viewBox edge: {west_x}");
-        assert!((east_x - VIEWBOX_WIDTH).abs() < 1.0, "east edge should reach the viewBox edge: {east_x}");
+        // The places span the padded frame's middle 1 / FRAME_PADDING.
+        let inset = VIEWBOX_WIDTH * (1.0 - 1.0 / FRAME_PADDING) / 2.0;
+        assert!((west_x - inset).abs() < 1.0, "the west place should sit {inset} in from the edge: {west_x}");
+        assert!((east_x - (VIEWBOX_WIDTH - inset)).abs() < 1.0, "the east place should sit {inset} in from the edge: {east_x}");
 
         let tall_points = [
             ProjectedPoint::new(0.0, -40.0).unwrap(),
@@ -889,8 +906,9 @@ mod tests {
         let tall_projection = Projection::new(&tall_frame);
         let (_, south_y) = tall_projection.project(tall_points[0]).unwrap();
         let (_, north_y) = tall_projection.project(tall_points[1]).unwrap();
-        assert!((south_y - VIEWBOX_HEIGHT).abs() < 1.0, "south edge should reach the viewBox edge: {south_y}");
-        assert!((north_y - 0.0).abs() < 1.0, "north edge should reach the viewBox edge: {north_y}");
+        let inset = VIEWBOX_HEIGHT * (1.0 - 1.0 / FRAME_PADDING) / 2.0;
+        assert!((south_y - (VIEWBOX_HEIGHT - inset)).abs() < 1.0, "the south place should sit {inset} in from the edge: {south_y}");
+        assert!((north_y - inset).abs() < 1.0, "the north place should sit {inset} in from the edge: {north_y}");
     }
 
     /// A ring that straddles the antimeridian (a Fiji-shaped locator) must
