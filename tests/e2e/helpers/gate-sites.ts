@@ -1704,3 +1704,65 @@ precision = "exact"
 `,
   },
 };
+
+/**
+ * The locator's top-edge alignment with the article body's first block —
+ * one article whose body opens with a `##` heading, one whose body opens
+ * with a plain paragraph, one whose body opens with an `hr`. `heading-first.md`
+ * also carries a second `##` further down, past a paragraph, so the gate can
+ * confirm the clear-float exception is scoped to the block immediately after
+ * the locator and nothing past it.  Served by playwright/place-map-align.config.ts.
+ */
+export const PLACE_MAP_ALIGN_GATE: ScratchSiteSpec = {
+  name: "place-map-align-gate",
+  files: {
+    "heading-first.md": `---
+title: Heading First
+uid: "pma001a"
+location: "Lisbon"
+---
+
+## Where the story begins
+
+Prose that should flow beside the locator, on its left, once the heading
+no longer clears the float.
+
+## A later heading
+
+This one is not the locator's immediate sibling, so it still clears.
+`,
+    "paragraph-first.md": `---
+title: Paragraph First
+uid: "pma002b"
+location: "Lisbon"
+---
+
+Opening prose, directly after the masthead, with no heading before it.
+`,
+    "hr-first.md": `---
+title: Rule First
+uid: "pma003c"
+location: "Lisbon"
+---
+
+***
+
+Prose after the rule, once real content has run beside the locator.
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+locator = "align-right"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+`,
+    ".moss/places.toml": `["Lisbon"]
+lat = 38.722
+lng = -9.139
+precision = "city"
+`,
+  },
+};

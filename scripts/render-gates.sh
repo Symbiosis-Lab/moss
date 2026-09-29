@@ -69,6 +69,7 @@ GATES_BUILD=(
   vertical-nav-chrome
   video-embed-shape
   place-map-tokens
+  place-map-align
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

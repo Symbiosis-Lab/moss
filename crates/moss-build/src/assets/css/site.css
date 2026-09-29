@@ -530,11 +530,24 @@ article h4, article h5, article h6 {
 article h1:not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
   margin-block: calc(var(--moss-read-line) * 2) calc(var(--moss-read-line) * 0.5);
 }
+/* h2/h3 top margins as custom properties, not inline literals: the place
+   locator's :has(+ h2)/:has(+ h3) alignment rules (~line 2631) need this
+   exact value to keep the locator's top level with the heading's, and two
+   copies of the same multiplier drift the moment either side is edited
+   alone. Scoped to `article.container`, not :root — this file's own top
+   note asks that new --moss-* definitions not be added there, since that's
+   tokens.json's layer — but a class both the headings below and the
+   locator (a descendant of the same element) already sit inside is enough
+   to share the value. */
+article.container {
+  --moss-h2-margin-top: calc(var(--moss-read-line) * 1.5);
+  --moss-h3-margin-top: var(--moss-read-line);
+}
 article h2:not(.moss-card-title) {
-  margin-block: calc(var(--moss-read-line) * 1.5) calc(var(--moss-read-line) * 0.5);
+  margin-block: var(--moss-h2-margin-top) calc(var(--moss-read-line) * 0.5);
 }
 article h3:not(.moss-card-title) {
-  margin-block: var(--moss-read-line) calc(var(--moss-read-line) * 0.25);
+  margin-block: var(--moss-h3-margin-top) calc(var(--moss-read-line) * 0.25);
 }
 
 /* Two headings back to back, with no prose between them: the ladder above
@@ -2611,6 +2624,36 @@ header:has(+ .moss-hero) .main-nav {
 .moss-place-locator .moss-place-map {
   margin-block-start: 0;
 }
+/* Keep the locator's top edge level with the text top of whatever body
+ * block follows it. A float's own top margin is never collapsed away by
+ * an adjoining sibling's margin the way two in-flow boxes' margins are —
+ * only the PRECEDING sibling (the place line, `margin-block-end:
+ * --moss-space-md`) sets where the float starts. A heading's own top
+ * margin, once `clear: none` (below) lets it sit beside the float instead
+ * of dropping under it, still collapses with that same place-line margin
+ * and wins whenever it is the larger of the two — which is always, since
+ * even h3's floor (`--moss-read-line`) exceeds `--moss-space-md`. Adding
+ * the difference here is what makes the float track that larger, already
+ * -collapsed value instead of stopping at the place line's own margin. A
+ * plain paragraph's own top margin is 0 — smaller than the place line's —
+ * so it never moves the collapsed edge, and the locator needs no
+ * adjustment for it. An `hr`'s own top margin (`--moss-space-2xl`, further
+ * below) is larger than the place line's the same way a heading's is, so it
+ * gets the same treatment as h2/h3 rather than falling through to the
+ * paragraph case. Desktop-only: below the 48rem breakpoint the locator
+ * un-floats and stacks above the text (see the media query below), where
+ * this alignment does not apply. */
+@media (min-width: 48rem) {
+  article.container > .moss-place-locator:has(+ h2) {
+    margin-block-start: calc(var(--moss-h2-margin-top) - var(--moss-space-md));
+  }
+  article.container > .moss-place-locator:has(+ h3) {
+    margin-block-start: calc(var(--moss-h3-margin-top) - var(--moss-space-md));
+  }
+  article.container > .moss-place-locator:has(+ hr) {
+    margin-block-start: calc(var(--moss-space-2xl) - var(--moss-space-md));
+  }
+}
 .moss-place-map-frame .moss-place-map {
   margin-block-end: var(--moss-space-xs);
 }
@@ -4141,6 +4184,17 @@ article.container > h3,
 article.container > hr {
   clear: both;
 }
+/* Except the one immediately after a place locator: that heading (or
+ * rule) IS the article's first body block, meant to sit beside the
+ * locator as its running text rather than clear it — clearing here is
+ * what used to strand the locator alone at the right with the body
+ * starting under it. A later heading, once real prose has run beside the
+ * float, still clears it via the rule above. */
+article.container > .moss-place-locator + h2,
+article.container > .moss-place-locator + h3,
+article.container > .moss-place-locator + hr {
+  clear: none;
+}
 
 /* Mobile collapse: every one of these mirrors its desktop 50%-cap
  * counterpart's selector text exactly, `:not([data-width])` included, so
@@ -4354,6 +4408,14 @@ hr {
   border: none;
   background: none;
   margin: var(--moss-space-2xl) 0;
+  /* Chromium and WebKit's UA stylesheet gives `hr` `overflow: hidden`,
+     which establishes a new block formatting context — and a box in its
+     own BFC is shoved below any float in the same one regardless of
+     `clear`, which is what stranded this rule under the place locator even
+     with `clear: none` (~line 4193) in effect. Nothing here relies on the
+     clipping: `hr::before`'s dot pattern is `inset: 0`, exactly the box it
+     would clip to anyway. */
+  overflow: visible;
 }
 
 hr::before {
@@ -7273,8 +7335,16 @@ main.has-sidebar > .moss-series-nav {
    Note: this rule applies to figures from ALL three detectors, not just the
    new Pandoc rule — pre-existing image figures gain italic-centered captions
    on upgrade. Floated figures keep the runaround rule's own rhythm; this
-   rule sets only block spacing so width-token figures keep their centering. */
-article figure:not(.video-figure):not(.moss-align-left):not(.moss-align-right):not(:has(.moss-align-left, .moss-align-right)) {
+   rule sets only block spacing so width-token figures keep their centering.
+   `:not(.moss-place-map)` — a place map is not a photo and keeps its own
+   margin story (the base `.moss-place-map` rule plus the locator's
+   zeroed top and the map-frame embed's tight bottom); this rule's four
+   :not()s already out-specify that story (0,4,2 against the locator
+   reset's 0,2,0), which silently gave every place map this rule's 1.25L
+   top AND bottom regardless — inside a locator that meant the actual
+   `<figure>` sat 1.25L below the float's own (correctly aligned) top
+   edge, no matter what margin the locator itself carried. */
+article figure:not(.video-figure):not(.moss-align-left):not(.moss-align-right):not(.moss-place-map):not(:has(.moss-align-left, .moss-align-right)) {
   /* Figures are full-bandwidth objects and get the largest gap in the reading
      rhythm — 1.25 lines of body text (--moss-read-line) vs the paragraph
      break's 0.75 — so an image reads as a deliberate pause, not another line
