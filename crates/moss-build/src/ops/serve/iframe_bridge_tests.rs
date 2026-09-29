@@ -76,6 +76,36 @@ fn test_cheap_reflow_reserves_height_only_never_width() {
 }
 
 #[test]
+fn test_cheap_reflow_excludes_scroll_row_cards() {
+    // Regression: a `:::grid N {scroll}` row (`.moss-grid[data-scroll]`) lays
+    // its cards out with `grid-auto-flow: column` on ONE shared grid row
+    // track. When a card scrolled out of the interest rect fell back to this
+    // rule's 600px placeholder height, that height became the row track's
+    // size — every card in the row (not just the off-screen one) rendered
+    // 600px+ tall until the row was scrolled. Measured: a 22-card scroll row
+    // was 669px tall in preview vs. 269px in the static build. Static
+    // builds never get this style at all, so published sites were
+    // unaffected — this reproduced ONLY in the preview.
+    let out = inject_preview_assets("<html><body></body></html>", false);
+    assert!(
+        out.contains("figure.moss-image:not(.moss-grid[data-scroll] *)"),
+        "figures inside a scroll row must be excluded from the placeholder height; got: {out}"
+    );
+    assert!(
+        out.contains("p:has(> img):not(.moss-grid[data-scroll] *)"),
+        "bare images inside a scroll row must be excluded; got: {out}"
+    );
+    assert!(
+        out.contains("p:has(> picture):not(.moss-grid[data-scroll] *)"),
+        "pictures inside a scroll row must be excluded; got: {out}"
+    );
+    assert!(
+        out.contains(".moss-embed:not(.moss-grid[data-scroll] *)"),
+        "embeds inside a scroll row must be excluded; got: {out}"
+    );
+}
+
+#[test]
 fn test_script_has_rpc_allowlist() {
     // Security: RPC handler should only allow specific methods to prevent
     // arbitrary code execution (addresses CodeQL security alert)

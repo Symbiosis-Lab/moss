@@ -197,11 +197,16 @@ box-shadow:0 4px 12px rgba(0,0,0,0.18);pointer-events:none;z-index:50}}\
 /// CSS → survives idiomorph morphs (re-injected on every served response).
 /// `content-visibility` is recent WebKit (Safari 18+); older engines ignore the
 /// declaration → graceful no-op, no regression.
+///
+/// Excludes media inside a `.moss-grid[data-scroll]` row (`:not(.moss-grid[data-scroll]
+/// *)`): a scroll row's cards share ONE grid row track (`grid-auto-flow: column`), so
+/// an off-screen card falling back to the 600px placeholder height stretches every
+/// card in the row, not just the one out of view.
 const PREVIEW_CHEAP_REFLOW_STYLE: &str = "<style id=\"moss-preview-cheap-reflow\">\
-article figure.moss-image,\
-article p:has(> img),\
-article p:has(> picture),\
-article .moss-embed{\
+article figure.moss-image:not(.moss-grid[data-scroll] *),\
+article p:has(> img):not(.moss-grid[data-scroll] *),\
+article p:has(> picture):not(.moss-grid[data-scroll] *),\
+article .moss-embed:not(.moss-grid[data-scroll] *){\
 content-visibility:auto;contain-intrinsic-size:auto none auto 600px}\
 </style>\n";
 
