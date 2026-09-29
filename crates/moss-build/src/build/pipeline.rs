@@ -1380,10 +1380,12 @@ fn build_inner(
     // absent" degrades the same way `load_gazetteer` itself does above:
     // skip, keep building. See `manifest::is_reload_tracked_source_key`.
     let places_toml_path = paths.places();
-    match crate::build::site_config::read_managed_toml(&places_toml_path) {
+    let (places_toml_stat, places_toml) =
+        crate::build::stat::stat_then(&places_toml_path, crate::build::site_config::read_managed_toml);
+    match places_toml {
         Ok(Some(content)) => pending.register_page_source_hash(
             crate::build::manifest::PLACES_TOML_SOURCE_KEY.to_string(),
-            crate::build::render::blocking::source_metadata(&places_toml_path, content.as_bytes()),
+            crate::build::render::blocking::source_metadata(places_toml_stat, content.as_bytes()),
         ),
         Ok(None) => {}
         Err(e) => log::warn!("[modified_paths] places.toml unreadable, not tracked this build: {e}"),

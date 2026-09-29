@@ -189,20 +189,18 @@ fn synthetic_folder_doc(
 /// answer it, and it is persisted. SHA-256 keeps page entries in the same hash
 /// domain as the asset entries already in that map.
 ///
-/// `bytes` is passed separately from `path` because the two differ on the uid
-/// write-back path: moss rewrites the file's frontmatter after parsing, and the
-/// bytes now on disk are the ones the next build will hash. `pub(crate)`
+/// `stat` is the file's stat taken BEFORE `bytes` were read — see
+/// [`stat_then`](crate::build::stat::stat_then), which every caller reads
+/// through — or right after moss wrote them, on the uid write-back path.
+/// `pub(crate)`
 /// rather than file-local: `pipeline.rs`'s places.toml registration is not
 /// inside this file (the gazetteer is read before `generate_blocking_content`
 /// is even called) and reuses this rather than a second hasher.
-pub(crate) fn source_metadata(path: &Path, bytes: &[u8]) -> crate::build::types::SourceMetadata {
+pub(crate) fn source_metadata(stat: Option<crate::build::stat::FileStat>, bytes: &[u8]) -> crate::build::types::SourceMetadata {
     use sha2::{Digest, Sha256};
     // No stat records the bytes' length and no sub-second mtime, which the
     // watcher gate never trusts: it always hashes (fail open).
-    let stat = std::fs::metadata(path)
-        .ok()
-        .map(|md| crate::build::stat::FileStat::of(&md))
-        .unwrap_or(crate::build::stat::FileStat::whole_second(bytes.len() as u64, 0));
+    let stat = stat.unwrap_or(crate::build::stat::FileStat::whole_second(bytes.len() as u64, 0));
     crate::build::types::SourceMetadata::from_stat(format!("{:x}", Sha256::digest(bytes)), stat)
 }
 
@@ -612,7 +610,7 @@ pub fn generate_blocking_content_for_build(
         // reduce) because entries are rare and the lock is uncontended on
         // the fast path where nothing is evicted.
         let deferred_mutex: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
-        let rendered: Vec<Option<(ParsedDocument, Option<(std::path::PathBuf, String)>)>> = project_structure
+        let rendered: Vec<Option<(ParsedDocument, Option<(std::path::PathBuf, String, Option<crate::build::stat::FileStat>)>)>> = project_structure
             .markdown_files
             .par_iter()
             .map_init(
@@ -670,10 +668,10 @@ pub fn generate_blocking_content_for_build(
                     // A source still in the cloud is DEFERRED, not dropped —
                     // `remove_stale_html` treats a page this build didn't emit
                     // as deleted. See `read_page_source`, which owns that call.
-                    let content = crate::build::cloud_readiness::read_page_source(
-                        &source_file_path,
-                        &deferred_mutex,
-                    )?;
+                    let (stat_before_read, content) = crate::build::stat::stat_then(&source_file_path, |path| {
+                        crate::build::cloud_readiness::read_page_source(path, &deferred_mutex)
+                    });
+                    let content = content?;
                     md_read_ns.fetch_add(t_read.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
                     // RESOLVE phase: transform Obsidian syntax (wikilinks, embeds,
@@ -874,7 +872,7 @@ pub fn generate_blocking_content_for_build(
                     // Phase 2E v5 PR5 (2026-05-26).
 
                     md_process_ns.fetch_add(t_process.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                    Some((doc, Some((source_file_path, content))))
+                    Some((doc, Some((source_file_path, content, stat_before_read))))
                 },
             )
             .collect();
@@ -906,7 +904,7 @@ pub fn generate_blocking_content_for_build(
             let source = source.zip(doc.source_path.clone());
             let original_uid = doc.uid.clone();
             if let Some(document_index) = crate::build::scan::slug::admit_unless_reserved_device_output(&mut docs, doc) {
-                let Some(((disk_path, source), source_path)) = source else {
+                let Some(((disk_path, source, stat_before_read), source_path)) = source else {
                     continue;
                 };
                 source_records.push(FinalSourceRecord::fresh(
@@ -915,6 +913,7 @@ pub fn generate_blocking_content_for_build(
                     disk_path,
                     source,
                     original_uid,
+                    stat_before_read,
                 ));
             }
         }
@@ -952,7 +951,8 @@ pub fn generate_blocking_content_for_build(
                             return false;
                         };
                         let disk_path = source_path_buf.join(reassigned_path);
-                        let source = match std::fs::read_to_string(&disk_path) {
+                        let (stat_before_read, source) = crate::build::stat::stat_then(&disk_path, |path| std::fs::read_to_string(path));
+                        let source = match source {
                             Ok(source) => source,
                             Err(error) => {
                                 log::warn!("Cannot read '{}' to normalize duplicate uid: {}", reassigned_path, error);
@@ -969,6 +969,7 @@ pub fn generate_blocking_content_for_build(
                             disk_path,
                             source,
                             original_uid,
+                            stat_before_read,
                         ));
                         source_records.len() - 1
                     }
@@ -1001,7 +1002,7 @@ pub fn generate_blocking_content_for_build(
         parse_session.verify_shadow(&record.source_path, doc);
         page_source_hashes.insert(
             record.source_path.clone(),
-            source_metadata(&record.disk_path, record.final_source.as_bytes()),
+            record.source_metadata(),
         );
     }
     resolution.reassignments.retain(|item| !failed_uid_writes.contains(&item.reassigned_path));
@@ -1431,9 +1432,14 @@ pub fn generate_blocking_content_for_build(
     // cloud-evicted style.css stats as present but reads as absent, and linking
     // to a stylesheet this build never emits would 404 every page. Unstyled for
     // one build, restyled when the download lands.
-    let user_css_content = match user_css_path {
-        Some(ref css_path) => cloud_readiness::read_optional_build_input(css_path, "user style.css")?,
-        None => None,
+    let (user_css_stat, user_css_content) = match user_css_path {
+        Some(ref css_path) => {
+            let (stat, content) = crate::build::stat::stat_then(css_path, |path| {
+                cloud_readiness::read_optional_build_input(path, "user style.css")
+            });
+            (stat, content?)
+        }
+        None => (None, None),
     };
     let has_user_css = user_css_content.is_some();
     let user_css_version = user_css_content.as_ref().map(|content| {
@@ -1450,12 +1456,12 @@ pub fn generate_blocking_content_for_build(
     // in-place style.css edit in `modified_paths` — see
     // `manifest::is_reload_tracked_source_key`. This read already happened
     // above for `user_css_version`; hashing it again here (rather than
-    // reusing that hash) keeps `SourceMetadata`'s mtime/inode fields honest,
-    // the same reason `source_metadata` takes `bytes` separately from `path`.
-    if let (Some(css_path), Some(content)) = (user_css_path.as_ref(), user_css_content.as_ref()) {
+    // reusing that hash) keeps `SourceMetadata`'s fields honest: its stat is
+    // the one taken before that read.
+    if let Some(content) = user_css_content.as_ref() {
         pending.register_page_source_hash(
             crate::build::manifest::USER_CSS_SOURCE_KEY.to_string(),
-            source_metadata(css_path, content.as_bytes()),
+            source_metadata(user_css_stat, content.as_bytes()),
         );
     }
 
@@ -1466,16 +1472,21 @@ pub fn generate_blocking_content_for_build(
         let theme_js = source_path_buf.join(".moss").join("theme").join("script.js");
         if theme_js.exists() { Some(theme_js) } else { None }
     };
-    let user_js_content = match user_js_path {
-        Some(ref js_path) => cloud_readiness::read_optional_build_input(js_path, "user script.js")?,
-        None => None,
+    let (user_js_stat, user_js_content) = match user_js_path {
+        Some(ref js_path) => {
+            let (stat, content) = crate::build::stat::stat_then(js_path, |path| {
+                cloud_readiness::read_optional_build_input(path, "user script.js")
+            });
+            (stat, content?)
+        }
+        None => (None, None),
     };
     let has_user_js = user_js_content.is_some();
     let user_js_version = user_js_content.as_ref().map(|c| compute_content_hash(c));
-    if let (Some(js_path), Some(content)) = (user_js_path.as_ref(), user_js_content.as_ref()) {
+    if let Some(content) = user_js_content.as_ref() {
         pending.register_page_source_hash(
             crate::build::manifest::USER_JS_SOURCE_KEY.to_string(),
-            source_metadata(js_path, content.as_bytes()),
+            source_metadata(user_js_stat, content.as_bytes()),
         );
     }
 
@@ -1496,10 +1507,12 @@ pub fn generate_blocking_content_for_build(
     // one more source of that same field, not a new one, so it degrades the
     // same way: skip the registration, keep building.
     let config_toml_path = source_path_buf.join(".moss").join("config.toml");
-    match crate::build::site_config::read_managed_toml(&config_toml_path) {
+    let (config_toml_stat, config_toml) =
+        crate::build::stat::stat_then(&config_toml_path, crate::build::site_config::read_managed_toml);
+    match config_toml {
         Ok(Some(content)) => pending.register_page_source_hash(
             crate::build::manifest::CONFIG_TOML_SOURCE_KEY.to_string(),
-            source_metadata(&config_toml_path, content.as_bytes()),
+            source_metadata(config_toml_stat, content.as_bytes()),
         ),
         Ok(None) => {}
         Err(e) => log::warn!("[modified_paths] config.toml unreadable, not tracked this build: {e}"),
@@ -2083,9 +2096,10 @@ pub fn generate_blocking_content_for_build(
                     pending.register_page_source_hash(src.clone(), meta.clone());
                 } else if pending.carry_forward_page_source(src).is_none() {
                     let abs = source_path_buf.join(src);
-                    match fs::read(&abs) {
+                    let (stat_before_read, bytes) = crate::build::stat::stat_then(&abs, |path| fs::read(path));
+                    match bytes {
                         Ok(bytes) => pending
-                            .register_page_source_hash(src.clone(), source_metadata(&abs, &bytes)),
+                            .register_page_source_hash(src.clone(), source_metadata(stat_before_read, &bytes)),
                         // Unreadable (evicted, permissions): leave it absent,
                         // which is what the sweep already tolerates for a file
                         // it cannot stat. Better one extra rebuild than a hash

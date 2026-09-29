@@ -3,7 +3,6 @@
 //! [`FileStat::vouches_for`].
 
 use std::fs;
-#[cfg(test)]
 use std::path::Path;
 
 /// What `stat(2)` reports about a file that can tell one version of its bytes
@@ -138,6 +137,16 @@ pub(crate) fn zero_stamp_settled(mtime: u64, recorded_at: Option<u64>) -> bool {
 /// the clock caught up — re-hashed on every 2s watcher sweep pass.
 pub(crate) fn mtime_is_racy(mtime: u64, recorded_at: Option<u64>) -> bool {
     recorded_at.is_some_and(|at| mtime.abs_diff(at) <= RACY_WRITE_EPSILON_SECS)
+}
+
+/// Stat `path`, then `read` it — in that order, the only one in which a record
+/// pairing the stat with the bytes' hash is safe: a write landing after the stat
+/// leaves a record the file no longer matches, where a stat taken after the read
+/// would carry that write's stamp beside the old bytes' hash and vouch for it.
+/// The stat is `None` when the file cannot be stat'd.
+pub(crate) fn stat_then<T>(path: &Path, read: impl FnOnce(&Path) -> T) -> (Option<FileStat>, T) {
+    let stat = fs::metadata(path).ok().map(|md| FileStat::of(&md));
+    (stat, read(path))
 }
 
 /// The clock [`FileStat::vouches_for`] measures a record's age against, in Unix

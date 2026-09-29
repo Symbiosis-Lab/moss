@@ -677,12 +677,12 @@ pub(crate) fn source_metadata_verdict(
     }
 
     // The racy window on top of the shared rule, for a real sub-second mtime
-    // too, because a page's record here is not taken the way the rule assumes:
-    // `render::blocking::source_metadata` stats the file AFTER its bytes were
-    // read, so a write landing between the two leaves a record whose stat
-    // matches the new bytes and whose hash is the old ones. The window sends
-    // an mtime near the capture to the hash tier, which catches that write
-    // when it lands close to the capture, not in general.
+    // too. Records are stat'd before their bytes are read, so an equal stamp
+    // is the same write wherever the sub-second field is as fine as it looks;
+    // some filesystems store it coarser but non-zero (exFAT in 10ms steps,
+    // NTFS over SMB in 100ns), where two writes in one step read the same.
+    // The window sends an mtime near the capture to the hash tier, which
+    // catches such a pair when the read was close to the capture.
     let current = FileStat::of(md);
     if !mtime_is_racy(meta.mtime, captured_at) && meta.stat().vouches_for(&current, captured_at) {
         return SourceVerdict::Unchanged { refreshed: None };

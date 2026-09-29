@@ -70,6 +70,10 @@ pub(super) struct FinalSourceRecord {
     pub original_source: String,
     pub final_source: String,
     pub original_uid: Option<String>,
+    /// The file's stat, taken BEFORE `original_source` was read — or right after
+    /// [`write_final`](Self::write_final) wrote `final_source` — so the record
+    /// never pairs a later write's stat with these bytes' hash.
+    stat: Option<crate::build::stat::FileStat>,
 }
 
 impl FinalSourceRecord {
@@ -79,6 +83,7 @@ impl FinalSourceRecord {
         disk_path: PathBuf,
         source: String,
         original_uid: Option<String>,
+        stat_before_read: Option<crate::build::stat::FileStat>,
     ) -> Self {
         Self {
             document_index,
@@ -87,7 +92,14 @@ impl FinalSourceRecord {
             final_source: source.clone(),
             original_source: source,
             original_uid,
+            stat: stat_before_read,
         }
+    }
+
+    /// The manifest's record of `final_source` at the stat it was read (or
+    /// written) at.
+    pub(super) fn source_metadata(&self) -> crate::build::types::SourceMetadata {
+        super::blocking::source_metadata(self.stat, self.final_source.as_bytes())
     }
 
     pub(super) fn mint_missing_uid(&mut self, document: &mut ParsedDocument) {
@@ -114,9 +126,20 @@ impl FinalSourceRecord {
         if self.final_source == self.original_source {
             return true;
         }
-        // allow:raw_write this writes authored markdown, not regenerable build output
-        match std::fs::write(&self.disk_path, &self.final_source) {
-            Ok(()) => true,
+        // The stat comes from the handle that wrote, so it describes moss's write
+        // and nothing that lands on the path afterwards.
+        let written = (|| {
+            use std::io::Write;
+            // allow:raw_write this writes authored markdown, not regenerable build output
+            let mut file = std::fs::File::create(&self.disk_path)?;
+            file.write_all(self.final_source.as_bytes())?;
+            file.metadata()
+        })();
+        match written {
+            Ok(md) => {
+                self.stat = Some(crate::build::stat::FileStat::of(&md));
+                true
+            }
             Err(error) => {
                 log::warn!(
                     "Failed to write normalized uid into '{}': {}",
@@ -282,6 +305,53 @@ mod tests {
         );
     }
 
+    /// The manifest record pairs a stat with a hash, and the stat must be the one
+    /// taken BEFORE the bytes were read: a same-size write landing after the read
+    /// then shows a stat the record does not have, so the watcher hashes and sees
+    /// the change. Stat'd after the read, the record would carry the new write's
+    /// stat beside the old bytes' hash, and the watcher's fast path would vouch
+    /// for bytes the build never read.
+    #[test]
+    fn a_write_after_the_read_leaves_a_record_the_file_no_longer_matches() {
+        let temp = tempfile::tempdir().unwrap();
+        let disk = temp.path().join("note.md");
+        std::fs::write(&disk, "hello").unwrap();
+        // The same-size write lands the moment the read returns.
+        let (stat_before_read, source) = crate::build::stat::stat_then(&disk, |path| {
+            let read = std::fs::read_to_string(path);
+            std::fs::write(path, "world").unwrap();
+            read
+        });
+        let record = FinalSourceRecord::fresh(0, "note.md".to_string(), disk.clone(), source.unwrap(), None, stat_before_read);
+
+        let now = std::fs::metadata(&disk).unwrap();
+        assert_eq!(
+            crate::build::watch::source_metadata_verdict(&record.source_metadata(), &now, &disk, None),
+            crate::build::watch::SourceVerdict::Changed,
+        );
+    }
+
+    /// The uid write-back is moss's own write: the record it leaves has to agree with
+    /// the file as moss left it, or the next look at the file reads moss's write as the
+    /// author's edit.
+    #[test]
+    fn a_uid_writeback_records_the_stat_of_the_bytes_it_wrote() {
+        let source = "---\ntitle: Hé\n---\nbody\n";
+        let temp = tempfile::tempdir().unwrap();
+        let disk = temp.path().join("note.md");
+        std::fs::write(&disk, source).unwrap();
+        let stat_before_read = std::fs::metadata(&disk).ok().map(|md| crate::build::stat::FileStat::of(&md));
+        let mut record = FinalSourceRecord::fresh(0, "note.md".to_string(), disk.clone(), source.to_string(), None, stat_before_read);
+        record.mint_missing_uid(&mut ParsedDocument::default());
+        assert!(record.write_final());
+
+        let now = std::fs::metadata(&disk).unwrap();
+        assert_eq!(
+            crate::build::watch::source_metadata_verdict(&record.source_metadata(), &now, &disk, None),
+            crate::build::watch::SourceVerdict::Unchanged { refreshed: None },
+        );
+    }
+
     #[test]
     fn uid_writeback_hands_evidence_the_exact_bytes_it_writes() {
         let source = "---\ntitle: Hé\n---\n![alt](gone.png)\n";
@@ -294,6 +364,7 @@ mod tests {
             "note.md".to_string(),
             disk.clone(),
             source.to_string(),
+            None,
             None,
         );
         record.mint_missing_uid(&mut document);
@@ -337,6 +408,7 @@ mod tests {
             disk.clone(),
             source.to_string(),
             Some("old-id".to_string()),
+            None,
         );
         assert!(record.plan_duplicate_uid("replacement-id"));
         assert!(record.write_final());
