@@ -10,6 +10,7 @@ This is the MIT-licensed public half of moss (`moss-core`, `moss-build`, `moss-c
 - No internal ADR ids or design-doc paths (`docs/decisions/…`, `docs/archive/…`) — they live in the private desktop repo and a stranger can't open them. Keep the claim and reword it to stand on its own. `25dc7f1f` removed about 560 of these, and a change prepared the same day re-added two from text it had copied before that commit.
 - No client, site, or person names.
 - No internal issue/tracker numbers — they resolve against the wrong tracker for a stranger reading this repo, or don't resolve at all.
+- No vocabulary from the private work process: plan stage or task labels ("Stage 3", "Task A5"), the names of review passes ("the thermo review"), "the design doc", or the filenames of private documents (even a bare name like `proving-a-change.md`). Say the technical reason itself. In one batch on 2026-09-29, four of seven commits leaked terms like these after the bullets above had been read, because none of those bullets names them.
 - No AI attribution in commits or generated text.
 
 ## Rust conventions
