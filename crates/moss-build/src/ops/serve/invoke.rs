@@ -550,6 +550,35 @@ async fn arm_resolve_url_for_file(ctx: &Session, args: Value) -> ArmResult {
     to_value(r)
 }
 
+/// `get_publish_preflight(folder)` — the last completed build's
+/// missing-reference evidence for this vault. The command body is already a
+/// pure read of the process-global `BuildRecords`
+/// (`system::build_records::records().publish_preflight`), so the arm calls
+/// it directly; there is no `State`-taking core to re-derive. The caller's
+/// `folder` is **ignored**, for the same reason `list_directory` ignores
+/// `projectPath`: the carrier's own vault is the only build this process
+/// could have completed a preflight for, so it is the only key worth asking
+/// about — honouring a caller-supplied folder would let the request read
+/// another vault's evidence out of the shared, process-global record.
+/// `None` means this process has not completed a build for that folder yet,
+/// same as the desktop answer.
+async fn arm_get_publish_preflight(ctx: &Session, _args: Value) -> ArmResult {
+    let root = project_root(ctx);
+    let r = crate::system::build_records::records().publish_preflight(&root.to_string_lossy());
+    to_value(r)
+}
+
+/// `list_vault_terms()` — every term the last build derived, grouped by
+/// kind, for the editor's name-chip completion. The arm calls the SAME
+/// `list_vault_terms_in` core the command body calls, over the SAME
+/// `ArticleMap::load` read `editor_bootstrap` and the other article-map
+/// readers use.
+async fn arm_list_vault_terms(ctx: &Session, _args: Value) -> ArmResult {
+    let root = project_root(ctx);
+    let map = crate::build::scan::article_map::ArticleMap::load(&root.join(".moss")).unwrap_or_default();
+    to_value(crate::build::terms::list_vault_terms_in(&map))
+}
+
 // ── Versions arms (publish history) ───────────────────────────────────────────
 //
 // The five commands of the Versions surface, each calling the SAME
@@ -754,8 +783,10 @@ carrier! {
     /// mutation tier — booting the editor exposes the whole vault, so it is a
     /// session-scoped capability, not a public read like `parse_frontmatter`.
     /// A strict subset of the registry, validated by the SAME subset test as the
-    /// other two lists. These are the editor's boot + open reads, plus the
-    /// Versions surface's three non-writing commands. `list_versions` can build
+    /// other two lists. These are the editor's boot + open reads (including
+    /// the publish-preflight verdict and the vault's term list the editor
+    /// fetches on boot), plus the Versions surface's three non-writing
+    /// commands. `list_versions` can build
     /// the site to answer a site-version drill-down (that is how a headless
     /// process gets a sealed manifest at all) — it writes moss's own output
     /// tree, never the author's files, which is what keeps it a read.
@@ -768,6 +799,8 @@ carrier! {
         describe_source_role => arm_describe_source_role,
         resolve_url_for_file => arm_resolve_url_for_file,
         validate_content => arm_validate_content,
+        get_publish_preflight => arm_get_publish_preflight,
+        list_vault_terms => arm_list_vault_terms,
         list_versions => arm_list_versions,
         read_version => arm_read_version,
         reveal_history_store => arm_reveal_history_store,
@@ -997,6 +1030,67 @@ mod tests {
             .expect("scan_shortcodes is infallible on valid text");
         // EditorScanResult is an object — proves we got a real serialized result.
         assert!(out.is_object(), "expected an EditorScanResult object, got: {out}");
+    }
+
+    /// The publish-preflight arm dispatches on the authed-read tier and
+    /// ignores the caller-supplied `folder`, reading the session's own vault
+    /// instead — proven by installing the projection under the session root
+    /// and passing a different, bogus folder in the request body.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn get_publish_preflight_arm_reads_the_session_root_not_the_caller_folder() {
+        let (dir, ctx) = scratch();
+        let root = dir.path().to_string_lossy().to_string();
+        crate::system::build_records::records().install_publish_preflight(
+            &root,
+            crate::build::types::PublishPreflightProjection { build_generation: 7, missing_references: vec![] },
+        );
+
+        let out = dispatch_authed_read(&ctx, "get_publish_preflight", json!({ "folder": "/somewhere/else" }))
+            .await
+            .expect("listed command must dispatch")
+            .expect("a recorded projection is Ok");
+        assert_eq!(out["build_generation"], json!(7));
+    }
+
+    /// A vault this process has not built yet answers `null`, the same
+    /// distinct "no verdict" the desktop command returns.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn get_publish_preflight_arm_answers_null_for_an_unbuilt_vault() {
+        let (_dir, ctx) = scratch();
+        let out = dispatch_authed_read(&ctx, "get_publish_preflight", json!({}))
+            .await
+            .expect("listed command must dispatch")
+            .expect("no build recorded is still Ok(None)");
+        assert!(out.is_null(), "expected null, got: {out}");
+    }
+
+    /// The vault-terms arm reads the session's own article map and groups its
+    /// terms by kind — the same `list_vault_terms_in` core the desktop
+    /// command calls, over the same on-disk fixture a real build would leave.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn list_vault_terms_arm_dispatches_from_an_article_map_fixture() {
+        let (dir, ctx) = scratch();
+        std::fs::create_dir_all(dir.path().join(".moss").join("build.nosync")).expect("build.nosync");
+
+        let mut map = crate::build::scan::article_map::ArticleMap::new();
+        map.kinds = vec![crate::build::terms::TermKind {
+            key: "people".to_string(),
+            fields: vec!["author".to_string()],
+            title: "People".to_string(),
+            is_place: false,
+            parents: Default::default(),
+        }];
+        map.terms.insert(
+            "people/scarly".to_string(),
+            crate::build::terms::TermSite { display: "Scarly".to_string(), claimed_by: None, parent: None },
+        );
+        map.save(&dir.path().join(".moss")).expect("save fixture");
+
+        let out = dispatch_authed_read(&ctx, "list_vault_terms", json!({}))
+            .await
+            .expect("listed command must dispatch")
+            .expect("a valid article map is Ok");
+        assert_eq!(out["kinds"]["people"]["names"], json!(["Scarly"]));
     }
 
     /// Bad args surface as `BadArgs`, mapped to 400 by the handler.

@@ -26,6 +26,12 @@ use crate::build::types::ParsedDocument;
 
 mod kinds;
 pub use kinds::{term_kinds, TermKind, BUILTIN_DEFAULT_FIELDS};
+// The editor's chip-completion readout of a finished build's kinds table —
+// a pure reader of `ArticleMap`, never a deriver. Sibling file for the same
+// reason `kinds.rs` and `rollup.rs` are: it grows from a different concern
+// (what the editor asks for) than derivation does.
+mod editor_read;
+pub use editor_read::{list_vault_terms_in, KindTerms, VaultTerms};
 // The gazetteer's `parent` links, attached to place-typed kinds at the
 // config stage — the only place the gazetteer type crosses into the terms
 // machinery. `derive_terms` itself never reads it.
