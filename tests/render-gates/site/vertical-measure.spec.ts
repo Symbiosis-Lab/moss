@@ -968,9 +968,15 @@ for (const width of [1440, 390]) {
   // counters the collapse back to N columns, and only under
   // `[data-typesetting="vertical"]`; this test renders `vertical: false`,
   // so nothing counters it here.
+  //
+  // The shelf here is the author's own `:::grid` (`.moss-grid`), not the
+  // generated listing — b47a55ed (2026-09-25) took `.moss-grid` covers out
+  // of the narrow-container portrait override entirely, so this cover stays
+  // the shared 4/3 landscape default at BOTH widths; only the column layout
+  // changes below 768px.
   const collapsed = width < 768;
-  const expectedRatio = width < 576 ? 3 / 4 : 4 / 3;
-  const shape = width < 576 ? 'portrait' : 'landscape';
+  const expectedRatio = 4 / 3;
+  const shape = 'landscape';
   const layout = collapsed ? 'a single column' : 'a 3-track grid';
   test(`horizontally at ${width}px the shelf is ${layout} of ${shape} plates`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });

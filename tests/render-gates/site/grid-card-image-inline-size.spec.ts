@@ -1,29 +1,35 @@
 /**
  * A grid-card image must fill the card's inline axis, in both writing modes.
  *
- * `.moss-grid-card :is(.moss-image, picture, img) { inline-size: 100% }`
- * (site.css) is what makes that true; the source image here is deliberately
- * tinier (40×30) than any card, so nothing about the assertion depends on a
- * real `sizes="auto"` lazy fetch resolving inside the test — a fix that only
- * caps an OVERSIZED image (`max-width: 100%`, already there before this
- * rule) would never show this regression, because a cap never stretches a
- * small source up.
+ * The two whole-cell link-card shapes take different code paths to that
+ * result since bbb3c0a5 unified external links into the page-card shell:
+ *  - the internal cell (`a.moss-grid-card[data-kind="link"]`, still the
+ *    pre-existing shape) fills via `.moss-grid-card :is(.moss-image,
+ *    picture, img) { inline-size: 100% }` (site.css) — a logical property,
+ *    so it reads as the card's inline axis in either writing mode.
+ *  - the external cell (`a.moss-card[data-external]`, bbb3c0a5's unified
+ *    shell) has no `.moss-grid-card` figure at all; its cover is
+ *    `.moss-card-cover`, a flex item that stretches to the card's cross
+ *    (inline) axis and whose `> img` fills it with physical `width: 100%;
+ *    height: 100%` inside an `aspect-ratio` box — same end result, reached
+ *    through flex stretch instead of a logical `inline-size` declaration.
+ *
+ * The source image here is deliberately tinier (40×30) than any card, so
+ * nothing about the assertion depends on a real `sizes="auto"` lazy fetch
+ * resolving inside the test — a fix that only caps an OVERSIZED image
+ * (`max-width: 100%`, already there before either rule) would never show a
+ * regression, because a cap never stretches a small source up.
  *
  * Under vertical typesetting (`writing-mode: vertical-rl`) the inline axis
- * is the box's physical HEIGHT, not its width — and the base rule this one
- * has to outrank (`article figure:not(.video-figure) img`) sets a PHYSICAL
- * `height: auto`, which is the inline axis there. Ablating the `:is()` rule
- * leaves the horizontal page unaffected (a block-level image with a CSS
- * `aspect-ratio` already fills the available width there by other sizing
- * rules) and collapses the vertical page's images to their bare intrinsic
- * height instead — so both pages are checked here, not just one, and an
- * `expect.soft` per card means an ablation shows every card that broke, not
- * just the first.
+ * is the box's physical HEIGHT, not its width — and the base rule the
+ * internal cell's image has to outrank (`article figure:not(.video-figure)
+ * img`) sets a PHYSICAL `height: auto`, which is the inline axis there.
+ * Both pages are checked here, not just one, and an `expect.soft` per card
+ * means a regression on either card shape still shows every card that
+ * broke, not just the first.
  *
- * Both the external whole-cell link (`a.moss-grid-card.link-preview`, a flex
- * column) and the internal one (`a.moss-grid-card[data-kind="link"]`, a
- * block container) are checked: the rule's selector governs both alike, so a
- * regression scoped to one card shape is still visible on the other here.
+ * Both shapes are checked: a regression scoped to one card shape is still
+ * visible on the other here.
  *
  * Site: tests/e2e/helpers/gate-sites.ts → GRID_CARD_IMAGE_INLINE_SIZE_GATE, a
  * dedicated site rather than a reuse of GRID_MOBILE_COLLAPSE_GATE: that one
@@ -38,7 +44,7 @@ const DESKTOP = { width: 1280, height: 900 };
  * inline padding), and its image's rendered inline-axis size — "inline"
  * meaning whichever physical axis `writing-mode` currently maps it to. */
 async function cardImageInlineSizes(page: Page, gridSelector: string) {
-  return page.$$eval(`${gridSelector} > a.moss-grid-card`, async (cards) => {
+  return page.$$eval(`${gridSelector} > :is(a.moss-grid-card, a.moss-card)`, async (cards) => {
     // Every cell image here is `loading="lazy"`: the page's `load` event
     // does not wait for it, so measuring right after `goto()` races a fetch
     // that may not have started. `decode()` waits for the resource itself,
@@ -54,7 +60,7 @@ async function cardImageInlineSizes(page: Page, gridSelector: string) {
         ? parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
         : parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
       return {
-        isExternal: card.classList.contains("link-preview"),
+        isExternal: card.hasAttribute("data-external"),
         cardInline: (vertical ? cardRect.height : cardRect.width) - inlinePadding,
         imgInline: vertical ? imgRect.height : imgRect.width,
       };
@@ -92,30 +98,48 @@ for (const [page_, url] of [
  * following `site/vertical.css`'s `figure figcaption { writing-mode:
  * horizontal-tb }` exception, which exists for ordinary in-article figures.
  *
- * Both grid-card shapes are checked (external `.link-preview` and internal
- * `[data-kind="link"]`), same reasoning as the inline-size test above: the
- * carve-out's selector governs both alike. The standalone figure appended to
- * the vertical fixture page is the control — an ordinary article figure the
- * horizontal exception still applies to, unaffected by the grid-card
- * carve-out.
+ * Since bbb3c0a5 only the internal whole-cell link card
+ * (`a.moss-grid-card[data-kind="link"]`) still carries a `<figcaption>` at
+ * all — its body is the author's own image markdown, rendered through the
+ * ordinary figure path. The external card (`a.moss-card[data-external]`,
+ * bbb3c0a5's unified shell) has no figcaption; its title lives in
+ * `.moss-card-title`, an ordinary card-copy span with no horizontal-tb
+ * carve-out of its own, so it is checked here instead — same claim
+ * (card copy turns with the page), same regression this gate is for,
+ * carried by the shape that now exists rather than the one that was
+ * deleted. The standalone figure appended to the vertical fixture page is
+ * the control — an ordinary article figure the horizontal exception still
+ * applies to, unaffected by either grid-card shape.
  */
-test("grid-card figcaptions run vertical; an ordinary figure's caption still runs horizontal (vertical)", async ({
+test("grid-card copy runs vertical; an ordinary figure's caption still runs horizontal (vertical)", async ({
   page,
 }) => {
   await page.setViewportSize(DESKTOP);
   await page.goto("/vertical/");
 
-  const cardCaptions = await page.$$eval(".moss-grid > a.moss-grid-card figcaption", (nodes) =>
+  const cardCaptions = await page.$$eval(".moss-grid > a.moss-grid-card[data-kind='link'] figcaption", (nodes) =>
     nodes.map((node) => {
       const rect = node.getBoundingClientRect();
       return { writingMode: getComputedStyle(node).writingMode, width: rect.width, height: rect.height };
     }),
   );
-  expect(cardCaptions).toHaveLength(2);
+  expect(cardCaptions).toHaveLength(1);
   for (const { writingMode, width, height } of cardCaptions) {
     expect.soft(writingMode).toBe("vertical-rl");
     expect.soft(height, "a vertical caption's box should read taller than wide").toBeGreaterThan(width);
   }
+
+  const externalTitle = await page.$eval(
+    ".moss-grid > a.moss-card[data-external] .moss-card-title",
+    (node) => {
+      const rect = node.getBoundingClientRect();
+      return { writingMode: getComputedStyle(node).writingMode, width: rect.width, height: rect.height };
+    },
+  );
+  expect.soft(externalTitle.writingMode).toBe("vertical-rl");
+  expect
+    .soft(externalTitle.height, "a vertical title's box should read taller than wide")
+    .toBeGreaterThan(externalTitle.width);
 
   const standaloneWritingMode = await page.$eval(
     "article > figure.moss-image > figcaption",

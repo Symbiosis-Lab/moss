@@ -5180,19 +5180,25 @@ article a:where(:not(.moss-btn)):focus {
    unless it is redeclared here.
 
    The cover's own ratio changes here too — 3/4, a portrait plate, below the
-   same 36rem breakpoint. That is research, not a hunch: measured cover
-   legibility at phone width found a taller plate reads better once the
-   caption band has little room to spare. a9db42542d6 (2026-09-15) briefly
-   extended that phone-only finding into the unscoped default above — every
-   width, not just narrow ones — a regression this rule reverts; the research
-   itself still stands, scoped to where it was measured. `.moss-grid` carries
-   no writing-mode guard, and needs none: a `@container (max-width: …)`
-   condition queries physical width, which under vertical-rl is main's
-   uncontained BLOCK axis (`container-type: inline-size` on `main` contains
-   only its INLINE axis — physical height there), so this query structurally
-   cannot match for vertical-rl content and the rule is inert for it —
-   confirmed by measurement, see `site/vertical.css`'s comment on its own
-   unscoped rule, which carries the only literal vertical-rl ever reads. */
+   same 36rem breakpoint, but ONLY for this generated listing grid. That is
+   research, not a hunch: measured cover legibility at phone width found a
+   taller plate reads better once the caption band has little room to
+   spare. a9db42542d6 (2026-09-15) briefly extended that phone-only finding
+   into the unscoped default above — every width, not just narrow ones — a
+   regression this rule reverts; the research itself still stands, scoped to
+   where it was measured. `.moss-grid` (a hand-picked `:::grid` cover) is
+   deliberately NOT in this selector: b47a55ed (2026-09-25) removed it after
+   the unscoped-default regression above had briefly made it portrait too —
+   an author's own choice of image is not the generated listing's uniform
+   box, so it keeps the shared landscape default (below) at every width,
+   narrow container or not. This rule carries no writing-mode guard, and
+   needs none: a `@container (max-width: …)` condition queries physical
+   width, which under vertical-rl is main's uncontained BLOCK axis
+   (`container-type: inline-size` on `main` contains only its INLINE axis —
+   physical height there), so this query structurally cannot match for
+   vertical-rl content and the rule is inert for it — confirmed by
+   measurement, see `site/vertical.css`'s comment on its own unscoped rule,
+   which carries the only literal vertical-rl ever reads. */
 @container (max-width: 36rem) {
   .moss-cards[data-layout="grid"] {
     grid-auto-rows: auto;

@@ -352,9 +352,12 @@ pub enum Block {
     /// single-element `vec![Block::LinkCard { url, children }]` with the
     /// inner markdown parsed into typed blocks.
     ///
-    /// Render shape (matches today's `render_compound_link_cell` byte
-    /// shape):
-    /// - External URL (`http(s)://...`): `<a href=URL class="moss-grid-card link-preview" target="_blank" rel="noopener">children</a>`.
+    /// Render shape:
+    /// - External URL (`http(s)://...`): the unified `.moss-card` shell
+    ///   (`<a href=URL class="moss-card" data-external target="_blank"
+    ///   rel="noopener">…</a>`), the same shell an internal page card uses —
+    ///   never the retired `.moss-grid-card.link-preview` shape. See
+    ///   `super::link_card::render_external_link_card`.
     /// - Internal URL: `<a href=URL class="moss-grid-card" data-kind="link">children</a>`.
     LinkCard { url: Url, children: Vec<Block> },
     /// `[^label]: body` — a GFM footnote definition, wherever the author

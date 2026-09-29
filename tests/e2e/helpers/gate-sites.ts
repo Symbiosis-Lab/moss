@@ -621,18 +621,22 @@ implicit_figure = false
 };
 
 // ── A grid-card image fills the card's inline size ───────────────────────────
-// An external-link cell renders as a flex column (`a.moss-grid-card
-// .link-preview`) whose figure carries `margin-inline: auto`; nothing else
-// stretches it, so a lazy image's `sizes="auto, …"` sizes the source from the
-// figure's own shrunk-to-caption width unless
+// An internal whole-cell image link renders as `a.moss-grid-card[data-kind=
+// "link"]` wrapping a `<figure class="moss-image">`; nothing stretches that
+// figure on its own, so a lazy image's `sizes="auto, …"` sizes the source
+// from the figure's own shrunk-to-content width unless
 // `.moss-grid-card :is(.moss-image, picture, img) { inline-size: 100% }`
 // (site.css) holds. That needs a real `<figure class="moss-image">` around
 // the image, which only exists with moss's default `implicit_figure` (unset
 // — true here), unlike GRID_MOBILE_COLLAPSE_GATE above, which turns it off to
-// test the plain-`<p>` shape instead — this gate cannot reuse that site.
+// test the plain-`<p>` shape instead — this gate cannot reuse that site. An
+// external whole-cell image link takes a different path entirely since
+// bbb3c0a5: it renders as `a.moss-card[data-external]`, and its cover fills
+// via `.moss-card-cover`'s flex-stretch + `aspect-ratio` box instead of the
+// `.moss-grid-card` rule — both shapes are exercised by this gate's fixture.
 // Both writing modes matter: under vertical typesetting the inline axis is
-// the box's physical HEIGHT, and the base rule this one has to outrank sets
-// a PHYSICAL `height: auto`, which is the inline axis there.
+// the box's physical HEIGHT, and the base rule the internal shape has to
+// outrank sets a PHYSICAL `height: auto`, which is the inline axis there.
 // Served by playwright/grid-card-image-inline-size.config.ts.
 //
 // Deliberately tiny intrinsic size (40×30, an order of magnitude below any
@@ -714,14 +718,16 @@ uid: "gcis0103"
 # About
 `,
     // A scroll row mixing every direct-child card shape `.moss-grid[data-scroll]`
-    // has to size: the two `Block::LinkCard` image cells above
-    // (`a.moss-grid-card`, with or without `.link-preview`), a bare link to a
-    // page in this build (converted to `a.moss-card` by `apply_collection_cards`
-    // — no `.moss-grid-card` wrapper at all, see grid_cells.rs), and a bare
-    // external link (converted to a link-preview by `apply_link_previews`,
-    // which DOES carry `.moss-grid-card`). Four cells over three columns so the
-    // row actually scrolls (`GridShortcode::scrolls`) rather than rendering as
-    // a plain grid.
+    // has to size: an internal whole-cell image link (`a.moss-grid-card
+    // [data-kind="link"]`), an external whole-cell image link (`a.moss-card
+    // [data-external]`, bbb3c0a5's unified shell), a bare link to a page in
+    // this build (converted to `a.moss-card` by `apply_collection_cards` — no
+    // `.moss-grid-card` wrapper at all, see grid_cells.rs), and a bare
+    // external link (also `a.moss-card[data-external]` since bbb3c0a5 —
+    // `render_external_card` overrides even a non-whole-cell external link
+    // with the unified shell). Four cells over three columns so the row
+    // actually scrolls (`GridShortcode::scrolls`) rather than rendering as a
+    // plain grid.
     "scroll-row.md": `---
 title: Scroll Row Mixed Cards
 uid: "gcis0104"
@@ -997,6 +1003,12 @@ Scratch site; the assertions run against the probe page.
 // is about what the emitter emits: a `:::grid` cell's heading is a card title
 // and must carry no permalink at all. Served by
 // playwright/heading-anchor.config.ts.
+//
+// Two pages carry the same `## Introduction` section: the home page, whose
+// headings lost the anchor entirely, and `page/`, an ordinary non-home page
+// where an author-written `##` heading still gets one. The permalink-
+// selection tests run against `page/`, where the anchor exists to be
+// selected; the home page's own `h2` is asserted anchor-less separately.
 export const HEADING_ANCHOR_GATE: ScratchSiteSpec = {
   name: "heading-anchor-gate",
   files: {
@@ -1018,6 +1030,15 @@ The cell's own text.
 
 The other cell's text.
 :::
+`,
+    "page/index.md": `---
+title: A non-home page
+uid: "hag00102"
+---
+
+## Introduction
+
+Body text under the section heading.
 `,
     ".moss/config.toml": CONFIG_TOML,
     ".moss/theme/style.css": null,

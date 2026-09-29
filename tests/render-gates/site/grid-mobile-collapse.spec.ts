@@ -79,10 +79,14 @@ test.describe("grid mobile collapse", () => {
   /** Cover at the card's block-start, band at block-end, one shared rule —
    * checked identically at 390px and at 1280px, because nothing about the
    * COMPOSITION (this box-arithmetic) is a function of viewport width. The
-   * cover's own aspect-ratio is a separate claim and IS width-dependent
-   * (site.css's `@container (max-width: 36rem)` override, research-backed) — 390px is narrow
-   * enough to trigger it (36rem = 576px), 1280px is not. */
-  async function assertCardComposition(page: Page, selector: string) {
+   * cover's own aspect-ratio is a separate claim: on the generated LISTING
+   * grid it IS width-dependent (site.css's `@container (max-width: 36rem)`
+   * override, research-backed — 390px is narrow enough to trigger it (36rem
+   * = 576px), 1280px is not), but on a hand-picked `:::grid` cover it stays
+   * the shared landscape default at every width (b47a55ed, 2026-09-25: an
+   * author's own choice of image is not the generated listing's uniform
+   * box). `coverFollowsWidth` selects which claim this call is checking. */
+  async function assertCardComposition(page: Page, selector: string, coverFollowsWidth: boolean) {
     for (const viewport of [MOBILE, DESKTOP]) {
       await page.setViewportSize(viewport);
       const { cardBox, coverBox, contentBox } = await cardGeometry(page, selector);
@@ -95,8 +99,10 @@ test.describe("grid mobile collapse", () => {
       expect(Math.abs(coverBox.height + contentBox.height - cardBox.height), "cover + content should account for the card's full height, not leave a gap or overlap")
         .toBeLessThanOrEqual(1);
       // inline:block = 4:3 above 36rem (width:height under horizontal-tb, a
-      // landscape plate), 3:4 below it (portrait — the phone-width research).
-      const expectedRatio = viewport === MOBILE ? 3 / 4 : 4 / 3;
+      // landscape plate), 3/4 below it (portrait — the phone-width
+      // research) only when `coverFollowsWidth`; a `:::grid` cover ignores
+      // the narrow-container override and stays 4/3 at both widths.
+      const expectedRatio = coverFollowsWidth && viewport === MOBILE ? 3 / 4 : 4 / 3;
       expect(coverBox.width / coverBox.height).toBeCloseTo(expectedRatio, 1);
     }
   }
@@ -105,10 +111,10 @@ test.describe("grid mobile collapse", () => {
     page,
   }) => {
     await page.goto("/rows/");
-    await assertCardComposition(page, '.moss-cards[data-layout="grid"] .moss-card');
+    await assertCardComposition(page, '.moss-cards[data-layout="grid"] .moss-card', true);
   });
 
-  test("a :::grid link card (lone wikilinks to covered pages) is also a column at 390px and at 1280px", async ({
+  test("a :::grid link card (lone wikilinks to covered pages) is also a column at 390px and at 1280px, cover stays landscape at both", async ({
     page,
   }) => {
     // The "Shelf" grid is a DIFFERENT component from the `rows/` listing
@@ -116,8 +122,9 @@ test.describe("grid mobile collapse", () => {
     // but grid_cells.rs substitutes the same `<a class="moss-card">` markup
     // into `.moss-grid` that the listing gets into `.moss-cards`, so the
     // shared rule has to reach it through the same selector list, not a copy
-    // of the rule scoped to `.moss-grid`.
+    // of the rule scoped to `.moss-grid`. Unlike the listing above, its
+    // cover ratio does not follow the narrow-container width (b47a55ed).
     await page.goto("/");
-    await assertCardComposition(page, ".moss-grid .moss-card");
+    await assertCardComposition(page, ".moss-grid .moss-card", false);
   });
 });
