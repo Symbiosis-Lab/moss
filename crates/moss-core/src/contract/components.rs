@@ -3068,6 +3068,38 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "Position dots after a `:::grid N {scroll}` row, one per card. Added by the `scroll-row` runtime script, never by the build, so a page without scripts keeps the plain scrolling row. Cards in view carry `.is-visible`; the first of them is `aria-current`. Hidden when the row has nothing to scroll, and in print.",
     },
     ComponentEntry {
+        class: "moss-scroll-dots-viewport",
+        kind: "container",
+        parent: "moss-scroll-dots",
+        data_attrs: &[],
+        example_html: r#"<div class="moss-scroll-dots" role="group" aria-label="Related articles" data-indicator="dynamic">
+  <div class="moss-scroll-dots-viewport">
+    <div class="moss-scroll-dots-track">…</div>
+  </div>
+</div>"#,
+        example_markdown: ":::grid 3 {scroll label=\"Related articles\"}\n…\n:::",
+        status: Status::Emerging,
+        since: "1",
+        description: "Clipping wrapper directly inside `.moss-scroll-dots`, around `.moss-scroll-dots-track`. `overflow: hidden` crops the track to what's visible and `touch-action: pan-y` reserves the horizontal gesture for the pointer-driven scrub instead of ceding it to page panning. In dynamic mode (`data-indicator=\"dynamic\"` on the ancestor, more than ten cards) it also fixes its `inline-size` to exactly seven dot-slots so a longer set of dots slides through a stable window; in the plain `dots` mode it sizes to its content and shows every dot. Added by the `scroll-row` runtime script, never by the build.",
+    },
+    ComponentEntry {
+        class: "moss-scroll-dots-track",
+        kind: "container",
+        parent: "moss-scroll-dots-viewport",
+        data_attrs: &[],
+        example_html: r#"<div class="moss-scroll-dots-viewport">
+  <div class="moss-scroll-dots-track">
+    <button type="button" aria-label="1 / 8" class="is-visible" aria-current="true"></button>
+    <button type="button" aria-label="2 / 8" class="is-visible"></button>
+    …
+  </div>
+</div>"#,
+        example_markdown: ":::grid 3 {scroll label=\"Related articles\"}\n…\n:::",
+        status: Status::Emerging,
+        since: "1",
+        description: "Flex row of dot buttons inside `.moss-scroll-dots-viewport`. Slides via `transform: translateX()` driven by the `--moss-scroll-dot-start` custom property the script sets on navigation, over a 0.22s transition — suppressed while the reader is actively dragging (`.moss-scroll-dots[data-scrubbing]` on the ancestor, so the track tracks the pointer 1:1) or under `prefers-reduced-motion: reduce`. Added by the `scroll-row` runtime script, never by the build.",
+    },
+    ComponentEntry {
         class: "moss-col-right",
         kind: "instance",
         parent: "moss-table-scroll",
