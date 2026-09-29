@@ -258,6 +258,26 @@ fn carrier_reporter_counts_a_plugin_needing_connection() {
     assert_eq!(take_cli_problems(), 1, "a plugin that cannot run is a --strict problem");
 }
 
+/// A build-time phase that overruns its timing budget (`phase.rs`) is
+/// observability only: it must never count toward `--strict`'s problem
+/// summary, which is what turns a slow-but-successful build into one that
+/// reads as failed. Sleeping past a tight budget (`native_process_spawn`'s
+/// 100ms) exercises the real `Drop` path, not just the pure classifier.
+#[test]
+fn phase_budget_overrun_does_not_count_as_a_cli_problem() {
+    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
+    take_cli_problems();
+    {
+        let _p = crate::build::phase::PhaseTrace::start("native_process_spawn");
+        std::thread::sleep(std::time::Duration::from_millis(250)); // > 2x the 100ms budget
+    }
+    assert_eq!(
+        take_cli_problems(),
+        0,
+        "a budget overrun is a performance note, not a --strict problem"
+    );
+}
+
 #[test]
 fn take_cli_problems_resets_to_zero() {
     let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
