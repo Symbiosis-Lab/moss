@@ -124,6 +124,12 @@ fn the_only_exemption_is_the_one_we_reasoned_about() {
             // HTML-block collectors are blind because pulldown emits no
             // math event inside either construct.
             "src/ast/parser.rs".to_string(),
+            // `image_definition_spans`: matches only
+            // `Event::Start(Tag::Image { .. })` to record a reference
+            // definition's source byte span; every other event, math
+            // included, falls through `else { continue }` unread, and
+            // nothing here is rebuilt from the event stream.
+            "src/resolve/authored_assets.rs".to_string(),
         ],
         "The set of math-blind walkers in this crate changed. Adding one is a real decision — \
          confirm the code inspects event kinds for control flow or side effects and the \

@@ -84,6 +84,12 @@ fn image_definition_spans(
     source: &str,
     parse_config: &crate::ast::parser::ParseConfig,
 ) -> HashSet<std::ops::Range<usize>> {
+    // allow:math-events-ignored — this walker matches only
+    // `Event::Start(Tag::Image { .. })` and records the DEFINITION's source
+    // byte span for later comparison against `RawRef` spans; every other
+    // event, including `InlineMath`/`DisplayMath`, falls through the
+    // `else { continue }` below with its payload never read. Nothing here is
+    // rebuilt from the event stream, so an ignored math event drops nothing.
     let mut parser =
         Parser::new_ext(source, crate::ast::parser::parser_options(parse_config.math)).into_offset_iter();
     let mut spans = HashSet::new();
