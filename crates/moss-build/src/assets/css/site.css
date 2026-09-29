@@ -3713,25 +3713,6 @@ pre:has(code.language-ascii) {
   letter-spacing: 0;
 }
 
-/* Syntax highlighting (build-time, via syntect + moss tokenizer) */
-pre code .keyword { color: var(--moss-hl-keyword); }
-pre code .keyword.operator { color: var(--moss-hl-operator); }
-pre code .string { color: var(--moss-hl-string); }
-pre code .comment { color: var(--moss-hl-comment); font-style: italic; }
-pre code .constant.numeric { color: var(--moss-hl-number); }
-pre code .entity.name { color: var(--moss-hl-function); font-weight: 600; }
-pre code .storage { color: var(--moss-hl-keyword); }
-pre code .support { color: var(--moss-hl-type); }
-pre code .variable { color: var(--moss-hl-builtin); }
-pre code .punctuation { color: var(--moss-hl-operator); }
-
-/* moss shortcode tokenizer classes */
-pre code .hl-punct { color: var(--moss-hl-comment); }
-pre code .hl-tag { color: var(--moss-hl-keyword); font-weight: 600; }
-pre code .hl-attr { color: var(--moss-hl-attr); }
-pre code .hl-val { color: var(--moss-hl-string); }
-pre code .hl-brace { color: var(--moss-hl-operator); }
-
 /* LaTeX math — sizing & overflow only.
    P1 emits the escaped LaTeX source in `<code class="moss-math">`. P2 replaces
    that element with a typeset `<svg class="moss-math">` in the served bytes,

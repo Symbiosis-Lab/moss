@@ -107,7 +107,6 @@ pub mod folder_embed;
 pub mod folder_index;
 pub mod feeds;
 pub mod footer;
-pub mod highlight;
 pub mod io_utils;
 pub(crate) mod lifecycle;
 pub mod media_collection;

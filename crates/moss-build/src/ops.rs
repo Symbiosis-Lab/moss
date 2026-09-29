@@ -171,7 +171,21 @@ impl BuildArgs {
             }
         }
         match folder {
-            Some(folder) => Ok(BuildArgs { folder: folder.to_string(), flags }),
+            Some(folder) => {
+                // Refresh events have nowhere to go without the SSE carrier
+                // `--serve` starts, so a watch with no serve used to build
+                // once and silently stop watching — caught only after the
+                // build ran, too late for an agent to react to. Caught here
+                // instead, before any build work starts.
+                if flags.watch && !flags.serve {
+                    return Err(format!(
+                        "error: --watch needs --serve: moss build {} --watch --serve\n{}",
+                        folder,
+                        usage()
+                    ));
+                }
+                Ok(BuildArgs { folder: folder.to_string(), flags })
+            }
             None => Err(usage()),
         }
     }
@@ -319,8 +333,6 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                         let _ = tx.send(());
                     }
                     cli_eprintln!("Stopped");
-                } else if run.flags.watch {
-                    cli_eprintln!("--watch was requested but --serve is required to receive refresh events; ignoring --watch");
                 }
 
                 if run.flags.strict && problems > 0 {
@@ -336,4 +348,36 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
         }
     });
     std::process::exit(code);
+}
+
+#[cfg(test)]
+mod build_args_tests {
+    use super::BuildArgs;
+
+    fn args(strs: &[&str]) -> Vec<String> {
+        strs.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn watch_without_serve_is_a_parse_error_naming_the_fix() {
+        let err = BuildArgs::parse(&args(&["site", "--watch"])).unwrap_err();
+        assert!(
+            err.contains("--watch needs --serve: moss build site --watch --serve"),
+            "error must name the exact corrected command, got: {err}"
+        );
+    }
+
+    #[test]
+    fn watch_with_serve_parses() {
+        let parsed = BuildArgs::parse(&args(&["site", "--watch", "--serve"])).unwrap();
+        assert!(parsed.flags.watch);
+        assert!(parsed.flags.serve);
+    }
+
+    #[test]
+    fn serve_without_watch_parses() {
+        let parsed = BuildArgs::parse(&args(&["site", "--serve"])).unwrap();
+        assert!(!parsed.flags.watch);
+        assert!(parsed.flags.serve);
+    }
 }

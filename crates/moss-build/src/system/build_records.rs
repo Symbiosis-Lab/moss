@@ -31,7 +31,7 @@
 //! later callers. The module now owns the normalization, every caller lands on the
 //! same key automatically.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
 use crate::build::manifest::link_audit::DeadLink;
@@ -99,6 +99,12 @@ pub struct BuildRecords {
     /// last build of this folder had to carry forward rather than read — see
     /// `cloud_ledger::structural_stale_paths` and `refuse_publish`.
     stale_sources: FolderSlot<Vec<String>>,
+    /// The merged redirect map (`feeds::redirects::merge_redirects`'s result)
+    /// the last build of this folder emitted stubs from. Redirect-stub bytes
+    /// are a pure function of this map, so an unchanged map means the stub
+    /// set this build would write is byte-identical to what is already
+    /// staged — see `feeds::redirects::emit_redirect_stubs`.
+    redirect_signature: FolderSlot<BTreeMap<String, String>>,
 }
 
 impl BuildRecords {
@@ -175,6 +181,20 @@ impl BuildRecords {
     /// screen is not one.
     pub fn forget_content_hashes(&self, folder_path: &str) {
         self.content_hashes.forget(&Self::key(folder_path));
+    }
+
+    /// Record the merged redirect map the just-finished build emitted stubs
+    /// from, so the next build in this process can tell whether it needs to
+    /// re-emit anything.
+    pub fn record_redirect_signature(&self, folder_path: &str, merged: BTreeMap<String, String>) {
+        self.redirect_signature.record(Self::key(folder_path), merged);
+    }
+
+    /// The merged redirect map the last build of `folder_path` emitted stubs
+    /// from, in this process. `None` means no build of this folder has
+    /// finished here yet — not "no redirects", which is `Some(empty)`.
+    pub fn redirect_signature(&self, folder_path: &str) -> Option<BTreeMap<String, String>> {
+        self.redirect_signature.get(&Self::key(folder_path))
     }
 }
 

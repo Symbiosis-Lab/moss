@@ -8,12 +8,13 @@
 //!
 //! 1. Compare previous and current `ArticleMap` to detect renames via stable UIDs
 //! 2. Merge new renames into the persistent redirect map (with chain resolution)
-//! 3. Generate HTML redirect stub files in the output directory
+//! 3. Generate HTML redirect stub files in the output directory, unless the
+//!    merged map is identical to what the last build of this folder in this
+//!    process already wrote them from
 
+use crate::build::assets::paths::compute_binary_hash;
 use crate::build::manifest::live_baseline::{self, Baseline, LiveBaseline, Unreadable};
 use crate::build::scan::article_map::ArticleMap;
-#[cfg(test)]
-use crate::build::assets::paths::compute_binary_hash;
 #[cfg(test)]
 use crate::types::content::file_entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -227,18 +228,55 @@ pub fn emit_redirect_stubs(
         ),
     }
 
+    // Every build re-derives `merged` regardless (it's the read above, no
+    // I/O of its own), but writing every stub's bytes to stage on every
+    // build — the loop below — is waste once a site has accumulated more
+    // than a handful of redirects and nothing about them changed: the same
+    // bytes land on the same paths every time. `merged` is already the one
+    // value both of this gate's inputs (`redirects.json` and the current
+    // article map) flow through — a rename or an edited redirects.json can
+    // only reach the stubs by changing it — so comparing it against what the
+    // last build of this folder in this process emitted from is the whole
+    // gate. Carrying stub paths forward, rather than skipping them outright,
+    // is not optional: `seal`'s mark-and-sweep and `remove_stale_html` both
+    // delete any `index.html` this build did not register.
+    let records = crate::system::build_records::records();
+    let folder_key = paths.project_root().to_string_lossy().into_owned();
+    let previous_signature = records.redirect_signature(&folder_key);
+    let unchanged = previous_signature.as_ref() == Some(&merged)
+        && merged.keys().all(|old_url| {
+            crate::build::io_utils::output_present(&output_dir.join(pretty_url_to_fs_path(old_url)))
+        });
+
     for (old_url, new_url) in &merged {
         let fs_path = pretty_url_to_fs_path(old_url);
         let html = generate_redirect_html(new_url);
         let sp = ServedPath::from_source(&fs_path)
             .map_err(|e| format!("Invalid redirect stub path '{}': {}", fs_path, e))?;
-        BuildContext::for_render(output_dir, pending)
-            .emit(&sp, html.as_bytes(), HashBucket::Files)
-            .map_err(|e| format!("Failed to emit redirect stub '{}': {}", fs_path, e))?;
+        if unchanged {
+            // Same bytes already on disk from a previous build in this
+            // session — re-register without rewriting or re-hashing off a
+            // fresh write, so the manifest still carries the path through
+            // `seal`.
+            let hash = compute_binary_hash(html.as_bytes());
+            pending.register_hashed(&sp, &hash, HashBucket::Files);
+        } else {
+            BuildContext::for_render(output_dir, pending)
+                .emit(&sp, html.as_bytes(), HashBucket::Files)
+                .map_err(|e| format!("Failed to emit redirect stub '{}': {}", fs_path, e))?;
+        }
     }
+    records.record_redirect_signature(&folder_key, merged.clone());
 
     if !merged.is_empty() {
-        log::info!("build: emitted {} redirect stub(s) into pending manifest", merged.len());
+        if unchanged {
+            log::debug!(
+                "build: {} redirect stub(s) unchanged since the last build in this session — skipped re-write",
+                merged.len()
+            );
+        } else {
+            log::info!("build: emitted {} redirect stub(s) into pending manifest", merged.len());
+        }
     }
 
     Ok(BaselineHealth::of(paths, &baseline))
@@ -964,5 +1002,129 @@ mod tests {
             vec!["ancient/page/index.html"],
             "an unreadable record keeps what the site has earned and claims nothing new"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // emit_redirect_stubs (the re-emission gate)
+    // ---------------------------------------------------------------
+
+    /// Sets up a moss folder with one earned rename (uid-X: `old/page/` ->
+    /// whatever `current_map` says), and returns everything a caller needs to
+    /// call `emit_redirect_stubs` more than once against it.
+    fn gate_test_fixture() -> (crate::moss_paths::MossPaths, std::path::PathBuf, tempfile::TempDir) {
+        let test_tmp = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
+            .parent()
+            .unwrap()
+            .join("target")
+            .join("test-tmp");
+        std::fs::create_dir_all(&test_tmp).unwrap();
+        let tmp = tempfile::TempDir::new_in(&test_tmp).unwrap();
+
+        let moss_dir = tmp.path().join(".moss");
+        std::fs::create_dir_all(moss_dir.join("data")).unwrap();
+        let deploy_dir = moss_dir.join("deploy");
+        std::fs::create_dir_all(&deploy_dir).unwrap();
+        let output_dir = tmp.path().join("output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+
+        let deployed_map = {
+            let mut m = ArticleMap::new();
+            m.articles.insert(
+                "old/page/".to_string(),
+                article_info_with_uid(Some("uid-X")),
+            );
+            m
+        };
+        std::fs::write(
+            deploy_dir.join("deployed-article-map.json"),
+            serde_json::to_string(&deployed_map).unwrap(),
+        )
+        .unwrap();
+
+        let paths = crate::moss_paths::MossPaths::from_moss_dir(moss_dir);
+        (paths, output_dir, tmp)
+    }
+
+    /// A second build with the same baseline and the same article map — no
+    /// rename detected, `redirects.json` untouched between the two calls —
+    /// must not rewrite the stub already on disk. Reverting the gate (always
+    /// taking the `emit` branch) turns this red: the second call's write
+    /// bumps the mtime.
+    #[test]
+    fn emit_redirect_stubs_skips_rewrite_when_nothing_relevant_changed() {
+        use crate::build::manifest::PendingManifest;
+        use crate::types::content::SiteHashes;
+
+        let (paths, output_dir, _tmp) = gate_test_fixture();
+        let mut current_map = ArticleMap::new();
+        current_map.articles.insert(
+            "new/page/".to_string(),
+            article_info_with_uid(Some("uid-X")),
+        );
+
+        let mut pending1 = PendingManifest::new(SiteHashes::default());
+        emit_redirect_stubs(&paths, &current_map, &output_dir, &mut pending1).unwrap();
+        let stub_path = output_dir.join("old/page/index.html");
+        let mtime1 = std::fs::metadata(&stub_path).unwrap().modified().unwrap();
+        let sealed1 = pending1.seal();
+        assert!(sealed1.files().contains_key("old/page/index.html"));
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        // Second build in the same process, nothing redirect-relevant changed.
+        let mut pending2 = PendingManifest::new(SiteHashes::default());
+        emit_redirect_stubs(&paths, &current_map, &output_dir, &mut pending2).unwrap();
+        let mtime2 = std::fs::metadata(&stub_path).unwrap().modified().unwrap();
+        assert_eq!(
+            mtime1, mtime2,
+            "unchanged redirects.json and article map must not rewrite the stub file"
+        );
+
+        let sealed2 = pending2.seal();
+        assert!(
+            sealed2.files().contains_key("old/page/index.html"),
+            "the stub must stay registered even when the write is skipped, or \
+             seal's mark-and-sweep (and remove_stale_html) would delete it"
+        );
+    }
+
+    /// A second build whose article map moves the SAME uid to a different
+    /// URL is exactly the "article map changed" half of the gate: it must
+    /// re-emit, with the new target.
+    #[test]
+    fn emit_redirect_stubs_reemits_when_article_map_changes() {
+        use crate::build::manifest::PendingManifest;
+        use crate::types::content::SiteHashes;
+
+        let (paths, output_dir, _tmp) = gate_test_fixture();
+        let stub_path = output_dir.join("old/page/index.html");
+
+        let mut first_map = ArticleMap::new();
+        first_map.articles.insert(
+            "new/page/".to_string(),
+            article_info_with_uid(Some("uid-X")),
+        );
+        let mut pending1 = PendingManifest::new(SiteHashes::default());
+        emit_redirect_stubs(&paths, &first_map, &output_dir, &mut pending1).unwrap();
+        pending1.seal();
+        let html1 = std::fs::read_to_string(&stub_path).unwrap();
+        assert!(html1.contains("url=/new/page/"));
+
+        // Same uid, moved again — a different article map from the one the
+        // last build in this process saw.
+        let mut second_map = ArticleMap::new();
+        second_map.articles.insert(
+            "newer/page/".to_string(),
+            article_info_with_uid(Some("uid-X")),
+        );
+        let mut pending2 = PendingManifest::new(SiteHashes::default());
+        emit_redirect_stubs(&paths, &second_map, &output_dir, &mut pending2).unwrap();
+        pending2.seal();
+        let html2 = std::fs::read_to_string(&stub_path).unwrap();
+        assert!(
+            html2.contains("url=/newer/page/"),
+            "a changed article map must re-emit the stub with the new target, got: {html2}"
+        );
+        assert_ne!(html1, html2);
     }
 }
