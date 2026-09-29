@@ -685,9 +685,9 @@ uid: "gcis0101"
 ---
 
 :::grid 2 {.no-cards}
-[![被兩地驅逐的人](tile.svg)](https://example.org/)
+[![第一篇文章](tile.svg)](https://example.org/)
 +++
-[![家鎖：家庭不只是你自己的事](tile.svg)](/about/)
+[![第二篇文章：占位標題](tile.svg)](/about/)
 :::
 `,
     // CJK alt text on both cells, plus a standalone (non-grid) captioned
@@ -703,9 +703,9 @@ typesetting: vertical
 ---
 
 :::grid 2 {.no-cards}
-[![被兩地驅逐的人](tile.svg)](https://example.org/)
+[![第一篇文章](tile.svg)](https://example.org/)
 +++
-[![家鎖：家庭不只是你自己的事](tile.svg)](/about/)
+[![第二篇文章：占位標題](tile.svg)](/about/)
 :::
 
 ![人形物體載浮載沉](tile.svg)
@@ -734,9 +734,9 @@ uid: "gcis0104"
 ---
 
 :::grid 3 {scroll label="Related"}
-[![被兩地驅逐的人](tile.svg)](https://example.org/)
+[![第一篇文章](tile.svg)](https://example.org/)
 +++
-[![家鎖：家庭不只是你自己的事](tile.svg)](/about/)
+[![第二篇文章：占位標題](tile.svg)](/about/)
 +++
 [About](/about/)
 +++
@@ -781,6 +781,17 @@ ${SCROLL_OVERFLOW_CELLS}
     // it must not be pinned to one or the other. Three plain-text cells
     // (no images) keep the geometry the render-gate assertions read off
     // (equal card widths, row scroll metrics) independent of image decode.
+    // More cells than scroll-row.ts's MAX_DOT_COUNT (10), so the row gets
+    // the sliding (data-indicator="dynamic") dots with their edge sizes.
+    "scroll-dots-dynamic.md": `---
+title: Scroll Dots Dynamic
+uid: "gcis0110"
+---
+
+:::grid 3 {scroll label="Many"}
+${Array.from({ length: 14 }, (_, i) => `[![Card ${i + 1}](tile.svg)](https://example.org/many-${i + 1}/)`).join("\n+++\n")}
+:::
+`,
     "scroll-row-fits.md": `---
 title: Scroll Row Fits
 uid: "gcis0107"

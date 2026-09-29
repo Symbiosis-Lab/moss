@@ -345,3 +345,27 @@ test("the fitting scroll row's vertical-typesetting twin also fits at 1280px", a
   expect(metrics.tabIndex, "not a pointless tab stop when nothing scrolls").toBe(-1);
   await expect(page.locator(".moss-scroll-dots")).toBeHidden();
 });
+
+// WebKit rasterizes a transform-scaled dot at its unscaled size and
+// resamples it, so scale()-sized dots rendered lumpy on Retina. Every dot,
+// in every state, must be an unscaled square of an even whole-pixel size
+// (which also centers it on whole pixels inside its 24px cell).
+test("a scroll row's page-control dots are unscaled even-pixel squares in every state", async ({ page }) => {
+  await page.goto("/scroll-dots-dynamic/");
+  const nav = page.locator(".moss-scroll-dots");
+  await expect(nav).toHaveAttribute("data-indicator", "dynamic");
+  const dots = await nav.evaluate((el) =>
+    [...el.querySelectorAll("button")].map((b) => {
+      const cs = getComputedStyle(b, "::before");
+      return { cls: b.className, current: b.getAttribute("aria-current"), w: cs.width, h: cs.height, t: cs.transform };
+    }),
+  );
+  expect(dots.some((d) => d.cls.includes("is-edge-end"))).toBe(true);
+  expect(dots.some((d) => d.current === "true")).toBe(true);
+  for (const d of dots) {
+    expect(d.t, `transform on ${JSON.stringify(d)}`).toBe("none");
+    expect(d.w, `square ${JSON.stringify(d)}`).toBe(d.h);
+    const px = parseFloat(d.w);
+    expect(Number.isInteger(px) && px % 2 === 0, `even whole px ${JSON.stringify(d)}`).toBe(true);
+  }
+});

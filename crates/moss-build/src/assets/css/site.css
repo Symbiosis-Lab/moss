@@ -6770,35 +6770,37 @@ a.moss-grid-card:hover {
   border-radius: 50%;
   background: currentColor;
   opacity: 0.25;
-  transition: opacity 0.2s, transform 0.2s;
+  /* Sizes, not transform: scale(): WebKit rasterizes a transformed dot at
+     its unscaled size and resamples the bitmap, so a 5px dot at scale(0.7)
+     came out lumpy on Retina. Even pixel sizes also center on whole pixels
+     in the 24px cell. */
+  transition: opacity 0.2s, inline-size 0.2s, block-size 0.2s;
 }
 .moss-scroll-dots button.is-visible::before {
   opacity: 0.85;
 }
 .moss-scroll-dots button[aria-current="true"]::before {
-  transform: scale(1.25);
+  inline-size: 10px;
+  block-size: 10px;
 }
 .moss-scroll-dots[data-indicator="dynamic"] button::before {
   inline-size: 6px;
   block-size: 6px;
   opacity: 0.45;
-  transform: scale(0.9);
 }
 .moss-scroll-dots[data-indicator="dynamic"] button.is-edge-start::before,
 .moss-scroll-dots[data-indicator="dynamic"] button.is-edge-end::before {
-  inline-size: 5px;
-  block-size: 5px;
+  inline-size: 4px;
+  block-size: 4px;
   opacity: 0.3;
-  transform: scale(0.7);
 }
 .moss-scroll-dots[data-indicator="dynamic"] button.is-visible::before {
   opacity: 0.85;
 }
 .moss-scroll-dots[data-indicator="dynamic"] button[aria-current="true"]::before {
-  inline-size: 8px;
-  block-size: 8px;
+  inline-size: 10px;
+  block-size: 10px;
   opacity: 0.95;
-  transform: scale(1.25);
 }
 .moss-scroll-dots button:focus-visible {
   outline: 2px solid var(--moss-color-ui-accent);
