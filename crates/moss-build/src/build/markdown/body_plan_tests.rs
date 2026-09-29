@@ -314,6 +314,169 @@ fn a_short_intro_with_no_release_point_stays_whole() {
     assert_eq!(end, total);
 }
 
+// ── first_text_block: the place-map locator's insertion point ──────────
+
+fn first_text_block_of(md: &str) -> Option<usize> {
+    let doc = parse(md);
+    first_text_block(&doc.blocks)
+}
+
+#[test]
+fn first_text_block_is_the_leading_paragraph() {
+    assert_eq!(first_text_block_of("Opening line.\n\nSecond line.\n"), Some(0));
+}
+
+#[test]
+fn first_text_block_skips_a_leading_heading() {
+    assert_eq!(
+        first_text_block_of("## Section\n\nBody paragraph.\n"),
+        Some(1),
+        "the heading is block 0; the locator goes before the paragraph, block 1"
+    );
+}
+
+#[test]
+fn first_text_block_skips_leading_media_and_a_rule() {
+    assert_eq!(
+        first_text_block_of(
+            "![alt](photo.jpg)\n\n---\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n\
+             ```\ncode\n```\n\nBody paragraph.\n"
+        ),
+        Some(4),
+        "figure, rule, table and code block are all media/rules, not text"
+    );
+}
+
+#[test]
+fn first_text_block_is_a_leading_list() {
+    assert_eq!(first_text_block_of("- one\n- two\n"), Some(0));
+}
+
+#[test]
+fn first_text_block_is_a_leading_blockquote() {
+    assert_eq!(first_text_block_of("> plain quote\n"), Some(0));
+}
+
+#[test]
+fn first_text_block_is_none_for_an_all_heading_and_rule_body() {
+    assert_eq!(first_text_block_of("## Section\n\n---\n\n### Another\n"), None);
+}
+
+#[test]
+fn first_text_block_skips_a_callout_even_though_it_is_blockquote_syntax() {
+    // `> [!note] …` parses to the typed `Block::Callout`, not `Block::BlockQuote`
+    // — it renders as its own boxed component (same weight as a table or a
+    // figure), not running prose, so the locator must not stop here.
+    assert_eq!(
+        first_text_block_of("> [!note] Heads up\n> Body of the callout.\n\nReal paragraph.\n"),
+        Some(1)
+    );
+}
+
+// ── BodyPlan::first_text_segments / insert_before_text ──────────────────
+
+#[test]
+fn insert_before_text_lands_between_a_heading_segment_and_the_paragraph() {
+    let hooks = DefaultHooks::new();
+    let doc = parse("## Section\n\nBody paragraph.\n");
+    let mut plan = render_segmented(&doc, &hooks);
+    plan.insert_before_text("<!--LOCATOR-->".to_string());
+    let html = plan.to_html();
+    let heading = html.find("<h2").expect("heading present");
+    let locator = html.find("<!--LOCATOR-->").expect("locator present");
+    let para = html.find("<p>Body paragraph").expect("paragraph present");
+    assert!(
+        heading < locator && locator < para,
+        "want heading < locator < paragraph, got:\n{html}"
+    );
+}
+
+#[test]
+fn insert_before_text_is_a_noop_for_an_empty_fragment() {
+    let hooks = DefaultHooks::new();
+    let doc = parse("## Section\n\nBody paragraph.\n");
+    let before = render_segmented(&doc, &hooks).to_html();
+    let mut plan = render_segmented(&doc, &hooks);
+    plan.insert_before_text(String::new());
+    assert_eq!(plan.to_html(), before);
+}
+
+#[test]
+fn insert_before_text_falls_back_to_the_front_with_no_text_block() {
+    let hooks = DefaultHooks::new();
+    let doc = parse("## Only a heading\n\n---\n");
+    let mut plan = render_segmented(&doc, &hooks);
+    plan.insert_before_text("<!--LOCATOR-->".to_string());
+    let html = plan.to_html();
+    assert!(
+        html.starts_with("<!--LOCATOR-->"),
+        "a body with no text block keeps the locator at the very front: {html}"
+    );
+}
+
+/// Simulates the real call order in the production pipeline: the article
+/// title is prepended (`build::markdown::pipeline`, at parse time) BEFORE
+/// the locator is inserted (`render/html.rs`, at render time). If
+/// `prepend_html` did not also shift `first_text_segments`, the locator
+/// would land one segment too early — right before the heading instead of
+/// before the paragraph, since the title segment it never accounted for
+/// pushed every real segment index up by one.
+#[test]
+fn prepend_html_before_insert_before_text_still_lands_after_the_heading() {
+    let hooks = DefaultHooks::new();
+    let doc = parse("## Section\n\nBody paragraph.\n");
+    let mut plan = render_segmented(&doc, &hooks);
+    plan.prepend_html("<h1 class=\"moss-article-title\">Title</h1>\n".to_string());
+    plan.insert_before_text("<!--LOCATOR-->".to_string());
+    let html = plan.to_html();
+    let title = html.find("moss-article-title").expect("title present");
+    let heading = html.find("<h2").expect("heading present");
+    let locator = html.find("<!--LOCATOR-->").expect("locator present");
+    let para = html.find("<p>Body paragraph").expect("paragraph present");
+    assert!(
+        title < heading && heading < locator && locator < para,
+        "want title < heading < locator < paragraph, got:\n{html}"
+    );
+}
+
+/// `insert_before_text` must move `lede_segments` the same way `prepend_html`
+/// does, when the locator lands inside the narrow cover column: a body whose
+/// lede is a plain heading-then-paragraph intro (no release point before the
+/// paragraph) keeps the paragraph — and now the locator ahead of it — inside
+/// the lede.
+#[test]
+fn insert_before_text_keeps_the_paragraph_and_locator_together_inside_the_lede() {
+    let hooks = DefaultHooks::new();
+    // No grid/table/wide figure and no heading-after-paragraph, so the whole
+    // body is the lede (`lede_end` returns `blocks.len()`).
+    let doc = parse("## Section\n\nBody paragraph, the whole short intro.\n");
+    let mut plan = render_segmented(&doc, &hooks);
+    assert_eq!(plan.lede_segments, plan.segments.len(), "precondition: whole body is the lede");
+    plan.insert_before_text("<!--LOCATOR-->".to_string());
+    let (lead, trailer) = plan.split_at_lede();
+    assert!(lead.contains("<!--LOCATOR-->"), "locator belongs in the lede: {lead}");
+    assert!(lead.contains("Body paragraph"), "lead: {lead}");
+    assert_eq!(trailer, "", "nothing releases past the lede here: {trailer}");
+}
+
+/// When the text block the locator would sit before is released PAST the
+/// lede (a full-width grid ends the lede immediately), the locator must land
+/// in the trailer alongside it, not get stranded in the now-empty lede.
+#[test]
+fn insert_before_text_lands_in_the_trailer_when_the_text_block_is_released_past_the_lede() {
+    let hooks = DefaultHooks::new();
+    let doc = parse(":::grid 2\n[A](a/)\n:::\n\nBody paragraph after the grid.\n");
+    let mut plan = render_segmented(&doc, &hooks);
+    assert_eq!(plan.lede_segments, 0, "precondition: the grid releases the lede immediately");
+    plan.insert_before_text("<!--LOCATOR-->".to_string());
+    let (lead, trailer) = plan.split_at_lede();
+    assert_eq!(lead, "", "lede: {lead}");
+    assert!(trailer.contains("<!--LOCATOR-->"), "trailer: {trailer}");
+    let locator = trailer.find("<!--LOCATOR-->").unwrap();
+    let para = trailer.find("Body paragraph after the grid").expect("paragraph present");
+    assert!(locator < para, "locator must still sit right before its paragraph: {trailer}");
+}
+
 // ── scroll-row accessible name ────────────────────────────────────────
 //
 // A `:::grid {scroll}` row with no explicit `label` is otherwise a keyboard

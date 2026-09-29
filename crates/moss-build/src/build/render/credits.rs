@@ -122,7 +122,14 @@ pub fn render_byline_html(rows: &[String], emit_source_fm: bool, place_line: Opt
     }
 }
 
-/// Render the complete page-head credit area, including an optional place locator.
+/// Render the complete page-head credit area, including an optional place
+/// locator, for a folder index or a plain page (the two page-head emission
+/// sites; see the module docs). An article's own masthead is byline + place
+/// line only — same `render_byline_html` call this makes, minus the
+/// locator — because the locator's article-page position is no longer
+/// fixed right after the place line: `render/html.rs` inserts it into the
+/// body itself, before the first text block, via
+/// `BodyPlan::insert_before_text`.
 pub fn render_page_masthead(
     doc: &crate::build::types::ParsedDocument,
     layout: &crate::build::page::layout::LayoutConfig,
@@ -130,14 +137,25 @@ pub fn render_page_masthead(
 ) -> String {
     let mut html = render_byline_html(&doc.byline, emit_source_lines, doc.place_line.as_deref())
         .unwrap_or_default();
-    if let Some(locator) = layout
-        .place_maps
-        .as_ref()
-        .and_then(|maps| maps.render_locator(&doc.location, &doc.url_path, 0))
-    {
+    if let Some(locator) = render_place_locator(doc, layout) {
         html.push_str(&locator);
     }
     html
+}
+
+/// The place-map locator's own HTML (`<div class="moss-place-locator" …>`),
+/// or `None` when the site has no locator configured or the page names no
+/// place with coordinates — same resolution `render_page_masthead` folds
+/// in. Exposed separately so the article path can place it in the BODY,
+/// via `BodyPlan::insert_before_text`, rather than in the masthead.
+pub fn render_place_locator(
+    doc: &crate::build::types::ParsedDocument,
+    layout: &crate::build::page::layout::LayoutConfig,
+) -> Option<String> {
+    layout
+        .place_maps
+        .as_ref()
+        .and_then(|maps| maps.render_locator(&doc.location, &doc.url_path, 0))
 }
 
 /// Put a non-empty page masthead after the authored title block.

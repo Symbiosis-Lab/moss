@@ -1031,6 +1031,7 @@ mod tests {
             body_plan: Some(crate::build::markdown::body_plan::BodyPlan {
                 segments: vec![crate::build::markdown::body_plan::BodySegment::Html(html.to_string())],
                 lede_segments: 1,
+                first_text_segments: 0,
             }),
             ..Default::default()
         };

@@ -1706,12 +1706,17 @@ precision = "exact"
 };
 
 /**
- * The locator's top-edge alignment with the article body's first block —
- * one article whose body opens with a `##` heading, one whose body opens
- * with a plain paragraph, one whose body opens with an `hr`. `heading-first.md`
- * also carries a second `##` further down, past a paragraph, so the gate can
- * confirm the clear-float exception is scoped to the block immediately after
- * the locator and nothing past it.  Served by playwright/place-map-align.config.ts.
+ * The locator's position relative to the article body's first TEXT block (a
+ * paragraph, list or blockquote) — never a heading or media. `heading-first.md`
+ * opens with a `##` the locator must skip, staying full column width, with
+ * the map's top instead tracking the paragraph that follows it.
+ * `media-first.md` does the same with a figure. `paragraph-first.md`,
+ * `list-first.md` and `quote-first.md` have no leading block to skip — the
+ * map aligns with the body's very first element, as it always has, whatever
+ * shape that element is. `no-text.md` has no paragraph, list or blockquote
+ * anywhere in its body, so the locator has nothing to sit before and stays
+ * at the front, above the (now full-width) heading.
+ * Served by playwright/place-map-align.config.ts.
  */
 export const PLACE_MAP_ALIGN_GATE: ScratchSiteSpec = {
   name: "place-map-align-gate",
@@ -1724,12 +1729,7 @@ location: "Lisbon"
 
 ## Where the story begins
 
-Prose that should flow beside the locator, on its left, once the heading
-no longer clears the float.
-
-## A later heading
-
-This one is not the locator's immediate sibling, so it still clears.
+Prose that should flow beside the locator, on its left, once the heading above it has cleared out of the way entirely.
 `,
     "paragraph-first.md": `---
 title: Paragraph First
@@ -1739,15 +1739,44 @@ location: "Lisbon"
 
 Opening prose, directly after the masthead, with no heading before it.
 `,
-    "hr-first.md": `---
-title: Rule First
+    "media-first.md": `---
+title: Media First
 uid: "pma003c"
 location: "Lisbon"
 ---
 
-***
+![A photograph](photo.svg)
 
-Prose after the rule, once real content has run beside the locator.
+Prose that should flow beside the locator, once the photograph above it has cleared out of the way entirely.
+`,
+    "photo.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48"><rect width="64" height="48" fill="#6a7a9a"/></svg>
+`,
+    "no-text.md": `---
+title: No Text
+uid: "pma004d"
+location: "Lisbon"
+---
+
+## Only a heading
+
+***
+`,
+    "list-first.md": `---
+title: List First
+uid: "pma005e"
+location: "Lisbon"
+---
+
+- Opening item, directly after the masthead, with no heading before it.
+- A second item.
+`,
+    "quote-first.md": `---
+title: Quote First
+uid: "pma006f"
+location: "Lisbon"
+---
+
+> Opening quote, directly after the masthead, with no heading before it.
 `,
     ".moss/config.toml": `schema_version = 6
 

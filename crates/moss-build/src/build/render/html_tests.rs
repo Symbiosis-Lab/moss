@@ -7563,6 +7563,264 @@ mod listable_page_card_tests {
     }
 }
 
+/// Where the place-map locator lands in a real article's rendered HTML —
+/// the wiring between `render/html.rs`'s two `is_article_page` call sites
+/// and `BodyPlan::insert_before_text` (`build/markdown/body_plan.rs`).
+/// `body_plan_tests.rs` covers the placement logic itself in isolation;
+/// these exercise it through `generate_html`, the same function a real
+/// build calls.
+mod place_locator_position_tests {
+    use super::super::generate_html;
+    use crate::build::markdown::body_plan::{render_segmented, BodyPlan};
+    use crate::build::markdown::html_post::inject_article_title_h1;
+    use crate::build::page::layout::LayoutConfig;
+    use crate::build::place_map::{LocatorPlacement, PlaceMapContext, PlaceMapRenderContext};
+    use crate::build::site_url::SiteUrl;
+    use crate::build::types::ParsedDocument;
+    use crate::i18n::Language;
+    use crate::types::content::ProjectStructure;
+    use moss_core::ast::{parse, visit_urls_mut, DefaultHooks, Url, UrlKind};
+    use moss_core::PageKind;
+    use std::collections::BTreeMap;
+
+    fn make_project() -> ProjectStructure {
+        ProjectStructure {
+            root_path: String::new(),
+            markdown_files: vec![],
+            html_files: vec![],
+            image_files: vec![],
+            video_files: vec![],
+            notebook_files: vec![],
+            other_files: vec![],
+            total_files: 0,
+            homepage_file: Some("index.md".to_string()),
+            ffmpeg_bin_path: None,
+            evicted_count: 0,
+            evicted_paths: Vec::new(),
+            has_content_folders: false,
+            has_language_trees: false,
+            passthrough_roots: std::collections::HashSet::new(),
+            dirs: Vec::new(),
+        }
+    }
+
+    /// A locator-bearing layout: one gazetteer entry ("Harbor") under the
+    /// "places" namespace, same shape `place_map::context`'s own tests use.
+    fn layout_with_locator() -> LayoutConfig {
+        let table: toml::value::Table =
+            toml::from_str("[\"Harbor\"]\nlat = 35.0\nlng = 135.0\nprecision = \"city\"\n").unwrap();
+        let gazetteer = crate::vault::places::parse_gazetteer(&table);
+        let maps = PlaceMapContext::embedded().expect("embedded place-map pack");
+        let context = PlaceMapRenderContext::new(
+            maps,
+            gazetteer,
+            "places".to_string(),
+            LocatorPlacement::AlignRight,
+            BTreeMap::new(),
+        );
+        LayoutConfig::new("test-site", Some("Test Site")).with_place_maps(Some(context))
+    }
+
+    /// Parse markdown the way the pipeline does (parse, then classify every
+    /// URL), segment it, then prepend the article title exactly as
+    /// `build::markdown::pipeline` does at parse time — before render/html.rs
+    /// ever reads `first_text_segments` to place the locator.
+    fn article_body(markdown: &str) -> BodyPlan {
+        let mut doc = parse(markdown);
+        visit_urls_mut(&mut doc, |u| {
+            if let Url::Unresolved(s) = u {
+                let kind = if s.starts_with("http") {
+                    UrlKind::External
+                } else if s.ends_with(".jpg") || s.ends_with(".png") {
+                    UrlKind::Asset
+                } else {
+                    UrlKind::Internal
+                };
+                *u = Url::resolved(s.clone(), kind);
+            }
+        });
+        let mut plan = render_segmented(&doc, &DefaultHooks::new());
+        plan.prepend_html(inject_article_title_h1("", "Research", false));
+        plan
+    }
+
+    /// Render a non-homepage article at `/research/` with `location:
+    /// ["Harbor"]` and the given body markdown, through the real
+    /// `generate_html` — the same function `build/pipeline.rs` calls.
+    fn render_article(markdown: &str) -> String {
+        let homepage = {
+            let mut d = ParsedDocument::default();
+            d.title = "Home".to_string();
+            d.label = "Home".to_string();
+            d.url_path = "index.html".to_string();
+            d.kind = PageKind::Article;
+            d
+        };
+        let mut page = ParsedDocument::default();
+        page.title = "Research".to_string();
+        page.label = "Research".to_string();
+        page.url_path = "research/index.html".to_string();
+        page.kind = PageKind::Article;
+        page.location = vec!["Harbor".to_string()];
+        let plan = article_body(markdown);
+        page.html_content = plan.to_html();
+        page.body_plan = Some(plan);
+
+        let all_docs = vec![homepage, page.clone()];
+        let project = make_project();
+        let layout = layout_with_locator();
+
+        generate_html(
+            Some(&page),
+            &all_docs,
+            &project,
+            &layout,
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &SiteUrl::parse("https://example.com").unwrap(),
+            true,
+            false,
+            "favicon.svg",
+            None, // output_dir — no auto OG card
+            std::path::Path::new(""),
+        )
+        .expect("generate_html should succeed")
+    }
+
+    #[test]
+    fn locator_sits_after_a_leading_heading_and_before_the_paragraph() {
+        let html = render_article("## Section\n\nBody paragraph after heading.\n");
+        let heading = html.find("<h2").expect("heading present");
+        let locator = html.find("moss-place-locator").expect("locator present");
+        let para = html.find("Body paragraph after heading").expect("paragraph present");
+        assert!(
+            heading < locator && locator < para,
+            "want heading < locator < paragraph, got:\n{html}"
+        );
+    }
+
+    #[test]
+    fn locator_sits_right_before_a_leading_paragraph() {
+        let html = render_article("Opening paragraph, no heading first.\n");
+        let title = html.find("moss-article-title").expect("title present");
+        let locator = html.find("moss-place-locator").expect("locator present");
+        let para = html.find("Opening paragraph").expect("paragraph present");
+        assert!(
+            title < locator && locator < para,
+            "want title < locator < paragraph, got:\n{html}"
+        );
+    }
+
+    #[test]
+    fn locator_sits_after_a_leading_image_and_before_the_paragraph() {
+        let html = render_article("![alt](photo.jpg)\n\nBody paragraph after the image.\n");
+        let image = html.find("photo.jpg").expect("image present");
+        let locator = html.find("moss-place-locator").expect("locator present");
+        let para = html.find("Body paragraph after the image").expect("paragraph present");
+        assert!(
+            image < locator && locator < para,
+            "want image < locator < paragraph, got:\n{html}"
+        );
+    }
+
+    #[test]
+    fn locator_sits_right_before_a_leading_list() {
+        // A list IS a text block (same as a paragraph or blockquote), so the
+        // locator goes before it, not after — unlike the heading/image cases
+        // above, where the locator is skipping past non-text content.
+        let html = render_article("- one\n- two\n");
+        let title = html.find("moss-article-title").expect("title present");
+        let locator = html.find("moss-place-locator").expect("locator present");
+        let list = html.find("<ul").expect("list present");
+        assert!(
+            title < locator && locator < list,
+            "want title < locator < list, got:\n{html}"
+        );
+    }
+
+    #[test]
+    fn locator_falls_back_to_the_front_with_no_text_block() {
+        let html = render_article("## Only a heading\n\n---\n");
+        let title = html.find("moss-article-title").expect("title present");
+        let locator = html.find("moss-place-locator").expect("locator present");
+        let heading = html.find("<h2").expect("heading present");
+        assert!(
+            title < locator && locator < heading,
+            "a body with no text block keeps the locator right after the title, before \
+             everything else, got:\n{html}"
+        );
+    }
+
+    /// Render a `layout: article` HOMEPAGE with `location: ["Harbor"]` — the
+    /// other site `is_article_page` can be true at (the `(Some(doc), true)`
+    /// arm of `generate_html_inner`'s match, not the `(Some(doc), false)` arm
+    /// every other test in this module exercises).
+    fn render_homepage_article(markdown: &str) -> String {
+        let mut page = ParsedDocument::default();
+        page.title = "Research".to_string();
+        page.label = "Research".to_string();
+        page.url_path = "index.html".to_string();
+        page.kind = PageKind::Article;
+        page.layout = Some("article".to_string());
+        page.location = vec!["Harbor".to_string()];
+        let plan = article_body(markdown);
+        page.html_content = plan.to_html();
+        page.body_plan = Some(plan);
+
+        let all_docs = vec![page.clone()];
+        let project = make_project();
+        let layout = layout_with_locator();
+
+        generate_html(
+            Some(&page),
+            &all_docs,
+            &project,
+            &layout,
+            true, // is_homepage
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &SiteUrl::parse("https://example.com").unwrap(),
+            true,
+            false,
+            "favicon.svg",
+            None,
+            std::path::Path::new(""),
+        )
+        .expect("generate_html should succeed")
+    }
+
+    #[test]
+    fn locator_sits_after_a_leading_heading_on_a_layout_article_homepage() {
+        let html = render_homepage_article("## Section\n\nBody paragraph after heading.\n");
+        let heading = html.find("<h2").expect("heading present");
+        let locator = html.find("moss-place-locator").expect("locator present");
+        let para = html.find("Body paragraph after heading").expect("paragraph present");
+        assert!(
+            heading < locator && locator < para,
+            "want heading < locator < paragraph, got:\n{html}"
+        );
+    }
+}
+
 /// Tests for folder index page metadata (title suffix and description).
 mod folder_index_meta_tests {
     use super::super::generate_html;

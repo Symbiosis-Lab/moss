@@ -265,6 +265,24 @@ fn resolve_children_source_folder_path(children_source: &str, all_docs: &[Parsed
         .unwrap_or_else(|| stem.to_lowercase())
 }
 
+/// Article path only: insert the place-map locator into `body`, before its
+/// first text block, rather than the masthead (`BodyPlan::insert_before_text`).
+/// Shared by both places `is_article_page` can be true — homepage-as-article
+/// below, and the ordinary non-homepage branch further down.
+fn splice_body_locator(
+    body: &mut crate::build::markdown::body_plan::BodyPlan,
+    doc: &ParsedDocument,
+    layout: &LayoutConfig,
+    is_article_page: bool,
+) {
+    if !is_article_page {
+        return;
+    }
+    if let Some(locator) = credits::render_place_locator(doc, layout) {
+        body.insert_before_text(locator);
+    }
+}
+
 /// The browser-tab `<title>` text: `"{page} - {site}"` for sub-pages, bare
 /// `"{page}"` for the homepage or when the page title already equals the site
 /// title (avoids `X - X` doubling). Single source of truth for tab titles.
@@ -526,7 +544,7 @@ fn generate_html_inner(
                 None,
             );
 
-            let mut content = grid_cells::resolve_page_body(
+            let mut body_plan = grid_cells::resolve_page_body(
                 doc,
                 all_docs,
                 content_graph,
@@ -534,8 +552,9 @@ fn generate_html_inner(
                 &project.root_path,
                 &media_lookup,
                 resolved_typesetting,
-            )
-            .to_html();
+            );
+            splice_body_locator(&mut body_plan, doc, layout_config, is_article_page);
+            let mut content = body_plan.to_html();
 
             // The homepage has no title of moss's own for the byline to sit
             // under; render/credits.rs says where it goes instead, and why a
@@ -613,7 +632,7 @@ fn generate_html_inner(
                 None,
             );
 
-            let body = grid_cells::resolve_page_body(
+            let mut body = grid_cells::resolve_page_body(
                 doc,
                 all_docs,
                 content_graph,
@@ -622,6 +641,11 @@ fn generate_html_inner(
                 &media_lookup,
                 resolved_typesetting,
             );
+            // Done before any cover-wrap below reads `body`, so a claimed
+            // leaf's `split_at_lede` sees the locator as part of the body
+            // it is splitting, same as any other segment, rather than
+            // needing its own case.
+            splice_body_locator(&mut body, doc, layout_config, is_article_page);
             let mut content = body.to_html();
 
             // Check if this is a folder index page (any non-root index page).
@@ -1264,8 +1288,19 @@ fn generate_html_inner(
         // of `.date-line`, which is a single flex row owning the reading-size
         // control — and which is emitted only when the page has a date, while
         // a byline must render with or without one.
+        //
+        // Byline + place line only — NOT `render_page_masthead`, which also
+        // folds in the locator for the folder/page-head paths. On an
+        // article the locator already went into the body itself, before its
+        // first text block, when `body_plan`/`body` was built above; adding
+        // it again here would duplicate it right after the place line, the
+        // position this change moved away from.
         if let Some(d) = doc {
-            after_title_block.push_str(&credits::render_page_masthead(d, layout_config, emit_source_lines));
+            if let Some(masthead) =
+                credits::render_byline_html(&d.byline, emit_source_lines, d.place_line.as_deref())
+            {
+                after_title_block.push_str(&masthead);
+            }
         }
         after_title_block.push_str("<!-- slot:after-title -->");
         homepage_content = splice_after_title_block(&homepage_content, &after_title_block);
