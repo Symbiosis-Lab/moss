@@ -1284,20 +1284,25 @@ fn build_inner(
     );
     let gazetteer = crate::vault::places::load_gazetteer(&paths.places());
     crate::build::terms::places::attach_parents(&mut kinds, &gazetteer);
-    let place_maps = kinds.iter().find(|kind| kind.is_place).map(|kind| kind.key.clone()).and_then(|namespace| {
-        match crate::build::place_map::PlaceMapContext::embedded() {
-            Ok(maps) => Some(crate::build::place_map::PlaceMapRenderContext::new(
-                maps,
-                gazetteer,
-                namespace,
-                crate::build::place_map::LocatorPlacement::from_config(site_str("locator").as_deref()),
-            )),
-            Err(error) => {
-                crate::build::cli_output::log_warn_problem!("bundled place-map data could not be decoded ({error:?}); omitting maps");
-                None
+    let place_maps = kinds
+        .iter()
+        .find(|kind| kind.is_place)
+        .map(|kind| (kind.key.clone(), kind.parents.clone()))
+        .and_then(|(namespace, parents)| {
+            match crate::build::place_map::PlaceMapContext::embedded() {
+                Ok(maps) => Some(crate::build::place_map::PlaceMapRenderContext::new(
+                    maps,
+                    gazetteer,
+                    namespace,
+                    crate::build::place_map::LocatorPlacement::from_config(site_str("locator").as_deref()),
+                    parents,
+                )),
+                Err(error) => {
+                    crate::build::cli_output::log_warn_problem!("bundled place-map data could not be decoded ({error:?}); omitting maps");
+                    None
+                }
             }
-        }
-    });
+        });
     // Read site-level config from .moss/config.toml [site] section
     let site_config = crate::build::render::SiteConfig {
         lang: site_lang.clone(),

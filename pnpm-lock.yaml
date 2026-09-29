@@ -170,9 +170,6 @@ importers:
       d3-contour:
         specifier: 4.0.2
         version: 4.0.2
-      h5wasm:
-        specifier: 0.10.3
-        version: 0.10.3
       shpjs:
         specifier: 6.1.0
         version: 6.1.0
@@ -2195,9 +2192,6 @@ packages:
 
   grapheme-splitter@1.0.4:
     resolution: {integrity: sha512-bzh50DW9kTPM00T8y4o8vQg89Di9oLJVLW/KaOGIXJWP/iqCN6WKYkbNOF04vFLJhwcpYUh9ydh/+5vpOqV4YQ==}
-
-  h5wasm@0.10.3:
-    resolution: {integrity: sha512-W4Jy5ExtX/VNbyD8GdOBckDuj6AL16TemppVNxZsV3rJZEWCv2sxlCzOttZLer3zkMttbDYsWHl0qt1z3Bln+Q==}
 
   has-flag@4.0.0:
     resolution: {integrity: sha512-EykJT/Q1KjTWctppgIAgfSO0tKVuZUjhgMr17kqTumMl6Afv3EISleU7qZUzoXDFTAHTDC4NOoG/ZxU3EvlMPQ==}
@@ -5757,8 +5751,6 @@ snapshots:
   graceful-fs@4.2.11: {}
 
   grapheme-splitter@1.0.4: {}
-
-  h5wasm@0.10.3: {}
 
   has-flag@4.0.0: {}
 

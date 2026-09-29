@@ -2546,6 +2546,7 @@ fn render_place_map_embed(markdown: &str, docs: &[ParsedDocument]) -> String {
         crate::vault::places::parse_gazetteer(&table),
         "places".into(),
         crate::build::place_map::LocatorPlacement::None,
+        std::collections::BTreeMap::new(),
     );
     resolve_markers_with_place_maps(
         &resolved.content_markdown, "index.md", docs, &test_project(),

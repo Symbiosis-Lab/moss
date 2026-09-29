@@ -21,7 +21,6 @@ import {
   splitDateline,
   tierPayload,
   TOLERANCE,
-  worldReliefBands,
   writePack,
 } from "./generate.mjs";
 
@@ -160,7 +159,7 @@ test("a sea-floor band covers the water deeper than its threshold, never the lan
   const axis = Array.from({ length: size }, (_, index) => index);
   const z = new Float32Array(size * size);
   for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) z[y * size + x] = x < 3 ? 50 : x < 6 ? -50 : -500;
-  const { sea_floor: seaFloor } = reliefBands(z, axis, axis, 1, 1);
+  const { sea_floor: seaFloor } = reliefBands(z, axis, axis, 1);
   const band = seaFloor.find((feature) => feature.properties.band === -100);
   assert.ok(band, "the -100 m band must exist over 500 m deep water");
   const inside = ([px, py]) => {
@@ -176,6 +175,53 @@ test("a sea-floor band covers the water deeper than its threshold, never the lan
   assert.equal(inside([8, 5]), true, "deep water belongs to the -100 m band");
   assert.equal(inside([4, 5]), false, "a 50 m shelf is not deeper than 100 m");
   assert.equal(inside([1, 5]), false, "land is never part of a sea-floor band");
+});
+
+test("the shallowest sea band reaches the coastline the land layer draws", () => {
+  // Deep water west of x = 8, a 5 m shelf from there to the coast at x = 12,
+  // and land beyond. Natural Earth's coastline sits at x = 12.
+  const size = 20;
+  // Typed, like the real grid's axes.
+  const axis = Float64Array.from({ length: size }, (_, index) => index);
+  const z = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) z[y * size + x] = x < 8 ? -500 : x < 12 ? -5 : 40;
+  const land = [{ geometry: { type: "Polygon", coordinates: [[[11.6, -1], [30, -1], [30, 30], [11.6, 30], [11.6, -1]]] } }];
+  const covers = (bands, [px, py]) => bands.filter((feature) => feature.properties.band === -10).some((band) => {
+    let hit = false;
+    for (const polygon of band.geometry.coordinates) for (const ring of polygon) {
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const [xi, yi] = ring[i]; const [xj, yj] = ring[j];
+        if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) hit = !hit;
+      }
+    }
+    return hit;
+  });
+  const { sea_floor: seaFloor } = reliefBands(z, axis, axis, 1, 0, land);
+  assert.equal(covers(seaFloor, [10, 10]), true, "the 5 m shelf off the coast belongs to the shallowest band");
+  assert.equal(covers(seaFloor, [15, 10]), false, "land is never part of a sea-floor band");
+  const deeper = seaFloor.find((feature) => feature.properties.band === -20);
+  assert.ok(deeper, "the deeper bands still come from the grid alone");
+  assert.equal(covers([{ ...deeper, properties: { band: -10 } }], [10, 10]), false, "a 5 m shelf is not 20 m deep");
+});
+
+test("land cut at the antimeridian stays land in the samples on it", () => {
+  // A global 5-degree grid: shallow shelf everywhere, and a polar landmass
+  // whose Natural Earth ring is cut at 180 degrees, as Antarctica's is.
+  const lon = Float64Array.from({ length: 73 }, (_, i) => -180 + i * 5); const lat = Float64Array.from({ length: 37 }, (_, i) => -90 + i * 5);
+  const z = new Float32Array(lon.length * lat.length);
+  for (let y = 0; y < lat.length; y++) for (let x = 0; x < lon.length; x++) z[y * lon.length + x] = lat[y] <= -70 ? 100 : -5;
+  const land = [{ geometry: { type: "Polygon", coordinates: [[[-180, -90], [180, -90], [180, -70], [-180, -70], [-180, -90]]] } }];
+  const { sea_floor: seaFloor } = reliefBands(z, lon, lat, 5, 0, land);
+  // Read as sea, the antimeridian column carried the shallowest band from
+  // the Arctic down to the south pole.
+  const [feature] = featuresFor(seaFloor.filter((f) => f.properties.band === -10), TOLERANCE.fine, 0, "sea_floor");
+  assert.ok(Math.min(...feature.parts.flat().map(([, y]) => y)) >= -72.5);
+});
+
+test("the world tier refuses any layer but land", () => {
+  const lake = { properties: {}, geometry: { type: "Polygon", coordinates: [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]] } };
+  assert.throws(() => tierPayload(new Map([["lakes", [lake]]]), "world"), /the world tier stores land alone, not lakes/);
+  assert.equal(tierPayload(new Map([["land", [lake]]]), "world").refs.length, 1);
 });
 
 test("a river's band carries its Natural Earth scalerank so strokes can taper by rank", () => {
@@ -207,7 +253,7 @@ test("a band that reaches a pole is clamped onto it instead of leaving WGS84", (
   // touches both grid edges, so d3-contour closes it along rows past them.
   const lon = [-180, -90, 0, 90, 180]; const lat = [-90, -45, 0, 45, 90];
   const z = new Float32Array(lon.length * lat.length).fill(-500);
-  const { sea_floor: seaFloor } = reliefBands(z, lon, lat, 1, 45);
+  const { sea_floor: seaFloor } = reliefBands(z, lon, lat, 45);
   const band = seaFloor.find((feature) => feature.properties.band === -100);
   const latitudes = band.geometry.coordinates.flat(2).map(([, y]) => y);
   assert.ok(Math.max(...latitudes) <= 90 && Math.min(...latitudes) >= -90, `latitudes ${Math.min(...latitudes)}..${Math.max(...latitudes)}`);
@@ -231,40 +277,18 @@ test("a gently curving band edge keeps its curve instead of long straight chords
   assert.ok(longestEdge("relief") < 0.5, `a relief band's longest edge is ${longestEdge("relief").toFixed(3)} degrees`);
 });
 
-test("the world tier's relief is one smooth band per hill, not grid-cell speckle", () => {
-  // 6-arcminute cells: a hill well above 100 m on a plain that sits just
-  // below it, with cell-to-cell noise lifting every other cell over it.
-  const size = 80; const axis = Array.from({ length: size }, (_, index) => index * 0.1);
-  const z = new Float32Array(size * size);
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    const hill = Math.hypot(x - 40, y - 40) < 15 ? 300 : 80;
-    z[y * size + x] = hill + ((x + y) % 2 ? 60 : -60);
-  }
-  const { relief } = worldReliefBands({ z, lon: axis, lat: axis });
-  const rings = relief.filter((feature) => feature.properties.band === 100).flatMap((feature) => feature.geometry.coordinates.flat());
-  assert.equal(rings.length, 1, `${rings.length} rings trace the 100 m band`);
-});
-
-test("the world tier drops relief and sea-floor rings too small to be more than contour noise", () => {
-  const square = (size) => [[[0, 0], [size, 0], [size, size], [0, size], [0, 0]]];
-  const band = (size) => ({ properties: { band: 100 }, geometry: { type: "Polygon", coordinates: square(size) } });
-  const island = { properties: {}, geometry: { type: "Polygon", coordinates: square(1.2) } };
-  const { refs } = tierPayload(new Map([["relief", [band(0.8), band(0.9)]], ["land", [island]]]), "world");
-  assert.deepEqual(refs.map((ref) => ref.name), ["relief", "land"], "a 0.8-degree relief ring is dropped; 0.9-degree relief and a 1.2-degree island are kept");
-});
-
-test("the world tier keeps relief detail at world scale and only the trunk rivers the world map draws", () => {
-  // A 3-degree circle: at the other world layers' 0.98-degree tolerance its
-  // edges would run 12 px and more on the world map.
-  const circle = [];
-  for (let i = 0; i <= 100; i++) circle.push([3 * Math.cos(i / 16), 3 * Math.sin(i / 16)]);
-  circle.push(circle[0]);
-  const band = { properties: { band: 100 }, geometry: { type: "Polygon", coordinates: [circle] } };
-  const river = (rank) => ({ properties: { scalerank: rank }, geometry: { type: "LineString", coordinates: [[0, 0], [1, 1]] } });
-  const { refs, bytes } = tierPayload(new Map([["relief", [band]], ["rivers", [river(1), river(3), river(7)]]]), "world");
-  assert.deepEqual(refs.map((ref) => ref.name), ["relief", "rivers", "rivers"], "rank 7 is not a trunk river");
-  const points = bytes.readUInt32LE(10 + 4 + 16 + 2 + 2);
-  assert.ok(points >= 10, `a 3-degree world relief ring keeps ${points} points`);
+test("a meandering river keeps its bends instead of one straight chord", () => {
+  // Six degrees of river swinging 0.02 degrees either side of its course,
+  // under the locator tolerance: Douglas-Peucker keeps only the two ends,
+  // one 430 px chord on a 10-degree map.
+  const course = [];
+  for (let i = 0; i <= 600; i++) course.push([30 + i / 100, 35 + 0.02 * Math.sin((i / 100) * (2 * Math.PI / 0.6))]);
+  const [feature] = featuresFor([{ properties: { scalerank: 2 }, geometry: { type: "LineString", coordinates: course } }], TOLERANCE.fine, 0, "rivers");
+  const line = feature.parts[0];
+  let longest = 0;
+  for (let i = 1; i < line.length; i++) longest = Math.max(longest, Math.hypot(line[i][0] - line[i - 1][0], line[i][1] - line[i - 1][1]));
+  assert.ok(longest < 0.5, `the river's longest edge is ${longest.toFixed(3)} degrees`);
+  assert.deepEqual([line[0], line.at(-1)], [course[0], course.at(-1)].map(([x, y]) => [Math.round(x * QUANT) / QUANT, Math.round(y * QUANT) / QUANT]));
 });
 
 test("a band that crosses the antimeridian reaches it from both sides, whatever the source's 180E column holds", () => {
@@ -274,8 +298,8 @@ test("a band that crosses the antimeridian reaches it from both sides, whatever 
   for (let y = 0; y < lat.length; y++) for (let x = 0; x < lon.length; x++) z[y * lon.length + x] = Math.abs(lat[y]) >= 70 ? 100 : -500;
   // The source tiles' 180E column repeats 90E; here it is high ground.
   for (let y = 0; y < lat.length; y++) z[y * lon.length + lon.length - 1] = 6000;
-  const { sea_floor: seaFloor } = reliefBands(z, lon, lat, 1, 5, 1.2);
-  const [feature] = featuresFor(seaFloor.filter((f) => f.properties.band === -100), TOLERANCE.world, 0, "sea_floor");
+  const { sea_floor: seaFloor } = reliefBands(z, lon, lat, 5, 1.2);
+  const [feature] = featuresFor(seaFloor.filter((f) => f.properties.band === -100), TOLERANCE.fine, 0, "sea_floor");
   const lons = feature.parts.flat().map(([x]) => x);
   assert.equal(Math.min(...lons), -180);
   assert.equal(Math.max(...lons), 180);

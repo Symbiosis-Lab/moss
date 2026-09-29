@@ -2553,13 +2553,22 @@ header:has(+ .moss-hero) .main-nav {
   --moss-place-relief-edge-opacity: 0;
   --moss-place-light-warm: #fff3d0;
   --moss-place-light-cool: #5a6488;
+  /* The lighting's highlight and shadow strength, as a share of the
+     filter's gains, which are the larger of the two themes'. */
+  --moss-place-light-warm-strength: 1;
+  --moss-place-light-cool-strength: 0.8889;
   --moss-place-rivers: #5b93bd;
   --moss-place-lakes: #a9c6d8;
   --moss-place-ice: #fbfcfd;
   --moss-place-built-up: #c9bdb4;
   --moss-place-salt: #e3dcc8;
   --moss-place-reefs: #b9d6cf;
+  /* Reset the UA stylesheet's own `figure { margin: 1em 40px }` — its
+     40px inline sides survive `margin-block` alone and silently shrink
+     the visible map by 80px inside whatever column or locator width it's
+     given, worst on a mobile locator meant to run full width. */
   margin-block: var(--moss-space-md);
+  margin-inline: 0;
   max-inline-size: 100%;
 }
 .moss-place-map svg {
@@ -2585,6 +2594,8 @@ header:has(+ .moss-hero) .main-nav {
   --moss-place-relief-edge-opacity: 0.18;
   --moss-place-light-warm: #d9cfa6;
   --moss-place-light-cool: #4d5f8f;
+  --moss-place-light-warm-strength: 0.8182;
+  --moss-place-light-cool-strength: 1;
   --moss-place-rivers: #6fa6cc;
   --moss-place-lakes: #2b4a5e;
   --moss-place-ice: #4a5258;

@@ -5,6 +5,13 @@ pub const VIEWBOX_WIDTH: f64 = 720.0;
 pub const VIEWBOX_HEIGHT: f64 = 480.0;
 const POLAR_LIMIT: f64 = 85.0;
 const MIN_FRAME_DEGREES: f64 = 10.0;
+/// A frame's latitude floor as a share of its longitude floor, so the
+/// narrowest frame fills the 3:2 canvas.
+const LATITUDE_SHARE: f64 = 0.68;
+/// The zoom the approved design's shadows, coast halo and lighting were
+/// drawn at: the narrowest frame, whose 6.8-degree height fills the 480 px
+/// canvas, about 70.6 px to the degree.
+const DESIGN_PIXELS_PER_DEGREE: f64 = VIEWBOX_HEIGHT / (MIN_FRAME_DEGREES * LATITUDE_SHARE);
 const CLIP_MARGIN: f64 = 24.0;
 const CLIP_MIN_X: f64 = -CLIP_MARGIN;
 const CLIP_MAX_X: f64 = VIEWBOX_WIDTH + CLIP_MARGIN;
@@ -69,7 +76,7 @@ impl Frame {
             .map(|point| point.latitude)
             .fold(-90.0, f64::max);
         let (center_longitude, longitude_span) = circular_longitude_bounds(points);
-        let latitude_span = (latitude_max - latitude_min).max(floor * 0.68).min(170.0);
+        let latitude_span = (latitude_max - latitude_min).max(floor * LATITUDE_SHARE).min(170.0);
         let longitude_span = longitude_span.max(floor).min(360.0);
         let center_latitude =
             ((latitude_min + latitude_max) / 2.0).clamp(-POLAR_LIMIT, POLAR_LIMIT);
@@ -112,9 +119,10 @@ pub fn privacy_floor(precision: Precision) -> f64 {
     }
 }
 
-/// The main map's marker size in viewBox px: an exact or city place is a
-/// 4 px dot (on a 5 px casing), and a country, whose frame spans half the
-/// globe, a 20 px soft fade. A region's fade is sized in degrees instead
+/// The main map's marker radius. An exact or city place is a 4 px dot on a
+/// 5 px casing, in screen px: the dot keeps that size at whatever width
+/// the map is shown. A country, whose frame spans half the globe, is a
+/// 20 viewBox px soft fade. A region's fade is sized in degrees instead
 /// (`REGION_FADE_DEGREES`); this is its fallback where that can't be
 /// projected.
 pub fn marker_radius(precision: Precision) -> f64 {
@@ -127,6 +135,10 @@ pub fn marker_radius(precision: Precision) -> f64 {
 /// A region marker fades out over this much latitude, the approved
 /// design's soft area marker: about 78 px on a 10-degree frame.
 pub const REGION_FADE_DEGREES: f64 = 1.1;
+
+/// The smallest radius, in viewBox px, a region's fade is drawn at: on the
+/// world map 1.1 degrees is under 3 px, too small for a fade to read.
+pub const REGION_FADE_MIN_RADIUS: f64 = 12.0;
 
 /// Equirectangular crop of a Local/Wide frame, longitude scaled by
 /// cos(center_latitude) (a local standard parallel) so a small crop's
@@ -317,6 +329,24 @@ impl Projection {
         }
     }
 
+    /// How much the approved design's effect sizes (cut-paper shadows,
+    /// coast halo, lighting blur and relief) shrink for this frame: 1 at
+    /// the narrowest frame, and in proportion to the zoom for a wider one.
+    /// Drawn at full size on a world map, every small band ring casts a
+    /// shadow about 0.6 degrees long, and the terrain reads as shards.
+    pub fn effect_scale(&self) -> f64 {
+        let scale = match self {
+            Self::Flat(projection) => projection.scale,
+            Self::Patterson(projection) => projection.scale,
+        };
+        // `scale` is viewBox px per radian; `.to_radians()` here is not an
+        // angle conversion, just a convenient stand-in for the same
+        // constant (pi/180) that turns "per radian" into "per degree", so
+        // it can be compared against DESIGN_PIXELS_PER_DEGREE below.
+        let ratio = scale.to_radians() / DESIGN_PIXELS_PER_DEGREE;
+        (ratio.min(1.0) * 1000.0).round() / 1000.0
+    }
+
     /// Project one point. Always succeeds: neither projection has a
     /// visibility concept, unlike the azimuthal projection this replaced.
     /// `Option` stays in the signature so callers (markers) don't change.
@@ -335,17 +365,9 @@ impl Projection {
     }
 
     /// Project one encoded polygon ring, clipped to the frame's screen
-    /// rectangle. Every returned inner vector is one closed ring.
-    ///
-    /// The ring's raw longitudes are "developed" onto the plane by always
-    /// taking the true short way at each edge (`unwrap_path`) before
-    /// projecting, rather than projecting raw values and hoping nothing
-    /// crosses ±180°. A ring that happens to pass near its own antipodal
-    /// meridian — the far side of a landmass feature spanning most of the
-    /// globe, say — still becomes one connected, non-self-intersecting
-    /// screen-space shape, because every step is locally faithful; the
-    /// rectangle clip afterward is then free to discard whatever ends up
-    /// far outside the frame.
+    /// rectangle. Every returned inner vector is one closed ring: the
+    /// pack's rings are already cut at the antimeridian, so each projects
+    /// from its raw coordinates (see `raw_screen_copies`).
     pub fn project_ring(&self, points: &[(i32, i32)], quantisation: u32) -> Vec<Vec<(f64, f64)>> {
         match self {
             Self::Flat(projection) => projection.project_ring(points, quantisation),
@@ -625,9 +647,12 @@ fn intersection(start: (f64, f64), end: (f64, f64), axis: usize, boundary: f64) 
     (start.0 + (end.0 - start.0) * fraction, start.1 + (end.1 - start.1) * fraction)
 }
 
+/// The fine-tier tiles a main map draws. The world map draws them all,
+/// simplified on screen like any wide frame: the world tier, simplified by
+/// about a degree for the globe inset, facets coasts, lakes and bands when
+/// drawn across the whole canvas.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TileSelection {
-    pub tier: u8,
     pub tiles: Vec<(i16, i16)>,
 }
 
@@ -635,8 +660,7 @@ impl TileSelection {
     pub fn for_frame(pack: &Pack, frame: &Frame) -> Self {
         if frame.tier == FrameTier::World {
             return Self {
-                tier: 0,
-                tiles: Vec::new(),
+                tiles: pack.tiles.iter().map(|tile| (tile.x, tile.y)).collect(),
             };
         }
         let (west, east, south, north) = FlatProjection::new(frame).visible_bounds();
@@ -658,23 +682,11 @@ impl TileSelection {
                 tiles.push((tile.x, tile.y));
             }
         }
-        Self { tier: 1, tiles }
+        Self { tiles }
     }
 
     pub fn features<'a>(&self, pack: &'a Pack) -> Vec<(u8, &'a Feature)> {
-        let tier = &pack.tiers[usize::from(self.tier)];
-        if self.tier == 0 {
-            return tier
-                .layers
-                .iter()
-                .flat_map(|layer| {
-                    layer
-                        .features
-                        .iter()
-                        .map(move |feature| (layer.id, feature))
-                })
-                .collect();
-        }
+        let tier = &pack.tiers[1];
         let tile_ids: std::collections::BTreeSet<u32> = pack
             .tiles
             .iter()
@@ -1165,7 +1177,6 @@ mod tests {
         let frame =
             Frame::from_points(&points, [Precision::Exact, Precision::Exact].into_iter()).unwrap();
         let selection = TileSelection::for_frame(&pack, &frame);
-        assert_eq!(selection.tier, 1);
         assert!(selection.tiles.iter().any(|(x, _)| *x == 0));
         assert!(selection.tiles.iter().any(|(x, _)| *x == 35));
         assert!(selection.tiles.iter().all(|(x, _)| *x == 0 || *x == 35));
@@ -1191,19 +1202,12 @@ mod tests {
     }
 
     #[test]
-    fn world_frames_select_the_world_tier_without_fine_tiles() {
+    fn world_frames_draw_every_fine_feature() {
         let pack = super::super::embedded().unwrap();
         let points = [ProjectedPoint::new(0.0, 85.1).unwrap()];
         let frame = Frame::from_points(&points, [Precision::Exact].into_iter()).unwrap();
         let selection = TileSelection::for_frame(&pack, &frame);
-        assert_eq!(selection.tier, 0);
-        assert!(selection.tiles.is_empty());
-        // Not `pack.tiers[0].feature_count` (the pack's own stored total,
-        // read straight off the tier header): schema 2 synthesises a coast
-        // layer directly into `tiers[0].layers` from land's rings
-        // (place_map.rs's `synthesize_world_coast`), so the tier actually
-        // carries more features than its header ever counted.
-        let expected: usize = pack.tiers[0]
+        let expected: usize = pack.tiers[1]
             .layers
             .iter()
             .map(|layer| layer.feature_count as usize)
@@ -1221,7 +1225,6 @@ mod tests {
             .find(|tile| tile.features.iter().any(|id| *id >= first_layer_count))
             .unwrap();
         let selection = TileSelection {
-            tier: 1,
             tiles: vec![(tile.x, tile.y)],
         };
         let actual = selection.features(&pack);

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use moss_core::terms::{term_fold, term_folder_key};
@@ -31,11 +31,25 @@ pub struct PlaceMapRenderContext {
     gazetteer: Arc<crate::vault::places::Gazetteer>,
     namespace: String,
     locator: LocatorPlacement,
+    /// The place kind's already cycle-repaired `parents` map — the same one
+    /// `build::terms::places::attach_parents`/`break_cycles` finishes
+    /// building before this context is ever constructed (see the pipeline's
+    /// call order), and the one the terms layer's own ancestor walks read.
+    /// `lies_under` walks this instead of re-deriving its own chain from
+    /// the raw gazetteer, so a parent-chain cycle is fixed in exactly one
+    /// place rather than risking a second, differently-capped repair here.
+    parents: BTreeMap<String, String>,
 }
 
 impl PlaceMapRenderContext {
-    pub fn new(maps: PlaceMapContext, gazetteer: crate::vault::places::Gazetteer, namespace: String, locator: LocatorPlacement) -> Self {
-        Self { maps, gazetteer: Arc::new(gazetteer), namespace, locator }
+    pub fn new(
+        maps: PlaceMapContext,
+        gazetteer: crate::vault::places::Gazetteer,
+        namespace: String,
+        locator: LocatorPlacement,
+        parents: BTreeMap<String, String>,
+    ) -> Self {
+        Self { maps, gazetteer: Arc::new(gazetteer), namespace, locator, parents }
     }
 
     pub fn is_place_key(&self, key: &str) -> bool {
@@ -111,10 +125,50 @@ impl PlaceMapRenderContext {
         let mut names = Vec::new();
         for doc in members {
             if key == self.namespace || doc.also_in.as_ref().is_some_and(|keys| keys.iter().any(|candidate| candidate == key)) {
-                names.extend(doc.location.iter().cloned());
+                // A page listed under a parent may also name places
+                // elsewhere; the parent's map marks only its own.
+                names.extend(doc.location.iter().filter(|name| self.lies_under(name, key)).cloned());
             }
         }
         self.maps.resolve_aggregate(&self.namespace, &self.gazetteer, label, &names)
+    }
+
+    /// Whether a place is `key`, or under it through `self.parents` — the
+    /// terms layer's own already cycle-repaired hierarchy, not a second
+    /// walk of the raw gazetteer. A raw walk here used to cap itself at
+    /// eight hops with no cycle detection of its own, so a gazetteer
+    /// parent-chain cycle could make it give up on a place the terms
+    /// layer's ancestor walk (`build/terms.rs` pass 2, over this same
+    /// `parents` map) still reaches and counts as a member. Walking the
+    /// repaired map instead fixes that by construction: there is only one
+    /// cycle repair, and both walks read its result. The namespace root
+    /// holds every place.
+    fn lies_under(&self, name: &str, key: &str) -> bool {
+        if key == self.namespace {
+            return true;
+        }
+        let Some((display, _)) = find_record(&self.gazetteer, name) else {
+            return false;
+        };
+        let mut current = term_folder_key(&self.namespace, display);
+        let mut seen = HashSet::new();
+        seen.insert(current.clone());
+        loop {
+            if current == key {
+                return true;
+            }
+            let Some(parent_display) = self.parents.get(&current) else {
+                return false;
+            };
+            current = term_folder_key(&self.namespace, parent_display);
+            // `parents` is already a fixed point (break_cycles cut every
+            // cycle when it was built); `seen` is a defensive backstop
+            // against a hand-built map reaching this some other way, the
+            // same posture the terms layer's own walks over this map take.
+            if !seen.insert(current.clone()) {
+                return false;
+            }
+        }
     }
 }
 
@@ -169,10 +223,10 @@ impl PlaceMapContext {
         PlaceMapTarget::from_places(places)
     }
 
-    /// Resolve a synthetic parent page from its coordinate-bearing
-    /// descendants. It carries no invented point: the frame is an aggregate
-    /// halo, and its marker group intentionally remains empty. Descendant
-    /// markers would falsely imply that the parent itself has a location.
+    /// Resolve a listing map (the namespace root, or a parent place with no
+    /// coordinates of its own) from the places its member pages name. The
+    /// frame holds them all and each is marked by its own precision;
+    /// nothing marks the parent, which has no location to mark.
     pub fn resolve_aggregate(
         &self,
         namespace: &str,
@@ -182,10 +236,6 @@ impl PlaceMapContext {
     ) -> PlaceMapTarget {
         let mut target = self.resolve_locations(namespace, gazetteer, descendants);
         target.aggregate_name = Some(parent_name.trim().to_string());
-        target
-            .places
-            .iter_mut()
-            .for_each(|place| place.aggregate_member = true);
         target
     }
 
@@ -201,7 +251,6 @@ pub struct ResolvedPlace {
     pub longitude: Option<f64>,
     pub latitude: Option<f64>,
     pub precision: Precision,
-    pub aggregate_member: bool,
 }
 
 impl ResolvedPlace {
@@ -223,7 +272,6 @@ impl ResolvedPlace {
             longitude,
             latitude,
             precision: record.precision,
-            aggregate_member: false,
         }
     }
 
@@ -267,9 +315,7 @@ impl PlaceMapTarget {
     }
 
     pub fn marker_places(&self) -> impl Iterator<Item = &ResolvedPlace> {
-        self.places
-            .iter()
-            .filter(|place| !place.aggregate_member && place.point().is_some())
+        self.places.iter().filter(|place| place.point().is_some())
     }
 }
 
@@ -322,15 +368,24 @@ mod tests {
         assert!(target.frame.is_none());
     }
 
+    /// A listing map marks the places its pages name, each by its own
+    /// precision, and never the parent it lists them under.
     #[test]
-    fn aggregate_target_has_a_frame_but_never_a_centroid_marker() {
+    fn aggregate_target_marks_its_members_not_the_parent() {
         let context = PlaceMapContext::new(super::super::embedded().unwrap());
-        let target =
-            context.resolve_aggregate("places", &gazetteer(), "Harbor", &["Harbor East".into()]);
+        let target = context.resolve_aggregate(
+            "places",
+            &gazetteer(),
+            "places",
+            &["Harbor".into(), "Harbor East".into()],
+        );
         assert!(target.frame.is_some());
-        assert_eq!(target.marker_places().count(), 0);
-        assert_eq!(target.aggregate_name.as_deref(), Some("Harbor"));
-        assert!(target.places.iter().all(|place| place.aggregate_member));
+        let marked: Vec<(&str, Precision)> = target
+            .marker_places()
+            .map(|place| (place.display.as_str(), place.precision))
+            .collect();
+        assert_eq!(marked, [("Harbor", Precision::City), ("Harbor East", Precision::Region)]);
+        assert_eq!(target.aggregate_name.as_deref(), Some("places"));
     }
 
     #[test]
@@ -360,12 +415,12 @@ mod tests {
     fn locator_is_opt_in_and_uses_the_sparse_profile() {
         let maps = PlaceMapContext::new(super::super::embedded().unwrap());
         let off = PlaceMapRenderContext::new(
-            maps.clone(), gazetteer(), "places".into(), LocatorPlacement::None,
+            maps.clone(), gazetteer(), "places".into(), LocatorPlacement::None, BTreeMap::new(),
         );
         assert!(off.render_locator(&["Harbor".into()], "story/index.html", 0).is_none());
 
         let on = PlaceMapRenderContext::new(
-            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight,
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
         );
         let html = on.render_locator(&["Harbor".into()], "story/index.html", 0).unwrap();
         assert!(html.contains("moss-place-locator moss-align-right"));
@@ -386,7 +441,7 @@ mod tests {
     fn multi_place_locator_uses_the_coarsest_precision_not_declaration_order() {
         let maps = PlaceMapContext::new(super::super::embedded().unwrap());
         let context = PlaceMapRenderContext::new(
-            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight,
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new(),
         );
         let html = context
             .render_locator(&["Harbor".into(), "Harbor East".into()], "story/index.html", 0)
@@ -426,6 +481,7 @@ mod tests {
             crate::vault::places::parse_gazetteer(&table),
             "places".into(),
             LocatorPlacement::AlignRight,
+            BTreeMap::new(),
         );
         crate::build::cli_output::take_cli_problems(); // drain any count left over from another test
         let result =
@@ -434,6 +490,48 @@ mod tests {
         assert!(
             crate::build::cli_output::take_cli_problems() >= 1,
             "dropping an oversized locator must warn (and count as a --strict problem), not fail silently"
+        );
+    }
+
+    /// A gazetteer parent chain that loops (P1..P8 cycle back to P1) after
+    /// a short prefix: `attach_parents`/`break_cycles` cuts exactly one
+    /// link of it before this context is ever built, the same repair the
+    /// terms layer's own ancestor walk (`build/terms.rs` pass 2) reads —
+    /// so a document declaring "Leaf" as its location is, by the terms
+    /// layer's own count, a member all the way up to P8. A raw re-walk of
+    /// the gazetteer here, still cyclic and capped at eight hops, would
+    /// give up before reaching P8 and silently drop it from that listing.
+    #[test]
+    fn lies_under_reaches_past_a_repaired_cycle_the_terms_layer_also_counts() {
+        let table: toml::value::Table = toml::from_str(
+            "[\"Leaf\"]\nlat=1.0\nlng=1.0\nprecision=\"city\"\nparent=\"Mid\"\n\n\
+             [\"Mid\"]\nlat=2.0\nlng=2.0\nprecision=\"region\"\nparent=\"P1\"\n\n\
+             [\"P1\"]\nlat=3.0\nlng=3.0\nprecision=\"region\"\nparent=\"P2\"\n\n\
+             [\"P2\"]\nlat=4.0\nlng=4.0\nprecision=\"region\"\nparent=\"P3\"\n\n\
+             [\"P3\"]\nlat=5.0\nlng=5.0\nprecision=\"region\"\nparent=\"P4\"\n\n\
+             [\"P4\"]\nlat=6.0\nlng=6.0\nprecision=\"region\"\nparent=\"P5\"\n\n\
+             [\"P5\"]\nlat=7.0\nlng=7.0\nprecision=\"region\"\nparent=\"P6\"\n\n\
+             [\"P6\"]\nlat=8.0\nlng=8.0\nprecision=\"region\"\nparent=\"P7\"\n\n\
+             [\"P7\"]\nlat=9.0\nlng=9.0\nprecision=\"region\"\nparent=\"P8\"\n\n\
+             [\"P8\"]\nlat=10.0\nlng=10.0\nprecision=\"country\"\nparent=\"P1\"\n",
+        )
+        .unwrap();
+        let gaz = crate::vault::places::parse_gazetteer(&table);
+        let mut kinds = vec![crate::build::terms::TermKind {
+            key: "places".to_string(),
+            fields: vec!["location".to_string()],
+            title: "Places".to_string(),
+            is_place: true,
+            parents: Default::default(),
+        }];
+        crate::build::terms::places::attach_parents(&mut kinds, &gaz);
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps, gaz, "places".into(), LocatorPlacement::None, kinds[0].parents.clone(),
+        );
+        assert!(
+            context.lies_under("Leaf", "places/p8"),
+            "the repaired chain still reaches P8 past the cut cycle edge"
         );
     }
 }

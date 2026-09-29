@@ -12,6 +12,11 @@
  * The scratch site comes from tests/e2e/helpers/gate-sites.ts
  * (PLACE_MAP_TOKENS_GATE), built by the playwright config at parse time.
  *
+ * The same locator's lighting is checked for each theme's own strengths,
+ * and its place dot is measured on screen: the locator floats
+ * at about 350 CSS px, half the width it is drawn for, and only a browser
+ * can say how large its dot comes out.
+ *
  * Run via:
  *   npx playwright test -c playwright/place-map-tokens.config.ts
  */
@@ -183,4 +188,118 @@ test("a coastal locator's relief and sea-floor bands resolve their tint from the
     `the deepest sea-floor band must paint --moss-place-sea-deep (${DARK_SEA_DEEP_HEX}), ` +
       "not the light theme's paler deep tint",
   ).toBe(DARK_SEA_DEEP_HEX);
+});
+
+// The lighting filter carries one set of gains; each theme scales its
+// highlight and shadow through flood-opacity tokens to its own. Only a
+// browser resolves those tokens inside a filter.
+test("the terrain lighting takes each theme's own highlight and shadow strength", async ({ page }) => {
+  const strengths = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll(".moss-place-locator feFlood")].map((flood) => getComputedStyle(flood).floodOpacity),
+    );
+  await setTheme(page, "light");
+  expect(await strengths()).toEqual(["1", "0.8889"]);
+  await setTheme(page, "dark");
+  expect(await strengths()).toEqual(["0.8182", "1"]);
+});
+
+// The approved dot is 8 px across (a 4 px radius) on a map shown 720 px
+// wide. Sized in viewBox units it shrank with the floated locator, to
+// about 4 px on a desktop and on a phone alike.
+for (const [device, viewport] of [
+  ["desktop", { width: 1440, height: 900 }],
+  ["phone", { width: 390, height: 844 }],
+] as const) {
+  test(`the locator's place dot stays 8 px across on a ${device}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("./", { waitUntil: "domcontentloaded" });
+    await page.locator(".moss-place-locator svg").scrollIntoViewIfNeeded();
+    const dot = page.locator(".moss-place-locator [data-map-marker]:not([data-map-globe-marker])").first();
+    const { x, y, color, mapWidth } = await dot.evaluate((element) => {
+      const marker = element as SVGGraphicsElement;
+      const svg = marker.ownerSVGElement!;
+      const box = marker.getBBox();
+      const point = svg.createSVGPoint();
+      point.x = box.x + box.width / 2;
+      point.y = box.y + box.height / 2;
+      const screen = point.matrixTransform(svg.getScreenCTM()!);
+      const style = getComputedStyle(marker);
+      const color = style.stroke && style.stroke !== "none" ? style.stroke : style.fill;
+      return { x: screen.x, y: screen.y, color, mapWidth: svg.getBoundingClientRect().width };
+    });
+    expect(mapWidth, "the locator is shown well under the 720 px it is drawn for").toBeLessThan(400);
+    const shot = await page.screenshot({ clip: { x: x - 12, y: y - 12, width: 24, height: 24 } });
+    const matching = await page.evaluate(
+      async ([png, target]) => {
+        const image = new Image();
+        image.src = `data:image/png;base64,${png}`;
+        await image.decode();
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const context = canvas.getContext("2d")!;
+        context.drawImage(image, 0, 0);
+        const [r, g, b] = target.match(/\d+/g)!.map(Number);
+        const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        let count = 0;
+        for (let index = 0; index < data.length; index += 4) {
+          if (Math.abs(data[index] - r) + Math.abs(data[index + 1] - g) + Math.abs(data[index + 2] - b) < 48) count += 1;
+        }
+        return count / (image.width / 24) ** 2;
+      },
+      [shot.toString("base64"), color] as const,
+    );
+    const diameter = 2 * Math.sqrt(matching / Math.PI);
+    expect(diameter, `the dot is ${diameter.toFixed(1)} px across`).toBeGreaterThan(7);
+    expect(diameter, `the dot is ${diameter.toFixed(1)} px across`).toBeLessThan(11);
+  });
+}
+
+// Below the 48rem mobile breakpoint the locator un-floats and is documented
+// to run the column's own full width (authoring.md), the same rule every
+// other floated embed follows (float-mobile-collapse's own gate). The
+// figure's own UA-stylesheet margin (`figure { margin: 1em 40px }`) used to
+// survive site.css's `margin-block` reset, leaving 80px of blank inline
+// margin the outer `.moss-place-locator` had already made room for — this
+// compares the map figure against a same-column paragraph rather than a
+// hardcoded px width, since the column width itself depends on viewport and
+// theme.
+test("the locator's map runs the full column width below the mobile breakpoint", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("./", { waitUntil: "domcontentloaded" });
+  const widths = await page.evaluate(() => {
+    const figure = document.querySelector(".moss-place-map")!;
+    const column = document.querySelector("article p")!;
+    return { figure: figure.getBoundingClientRect().width, column: column.getBoundingClientRect().width };
+  });
+  expect(widths.figure / widths.column, `map ${widths.figure}px vs. column ${widths.column}px`).toBeCloseTo(1, 1);
+});
+
+// Taveuni sits on the antimeridian, the world map's right edge. A dot is a
+// non-scaling stroke in screen px, so on a phone's narrow column its casing
+// reaches furthest past a clamp measured in viewBox units.
+test("an antimeridian place's dot is drawn whole on the phone-width world map", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("places/", { waitUntil: "domcontentloaded" });
+  const { map, dot } = await page.evaluate(() => {
+    const svg = document.querySelector(".moss-place-map svg") as SVGSVGElement;
+    const marker = svg.querySelector('[data-map-marker="places/taveuni"]') as SVGGraphicsElement;
+    const casing = marker.previousElementSibling as SVGGraphicsElement;
+    const box = casing.getBBox();
+    const point = svg.createSVGPoint();
+    point.x = box.x + box.width / 2;
+    point.y = box.y + box.height / 2;
+    const centre = point.matrixTransform(svg.getScreenCTM()!);
+    const radius = Number(casing.getAttribute("stroke-width")) / 2;
+    const frame = svg.getBoundingClientRect();
+    return {
+      map: [frame.left, frame.top, frame.right, frame.bottom],
+      dot: [centre.x - radius, centre.y - radius, centre.x + radius, centre.y + radius],
+    };
+  });
+  expect(dot[0], `dot ${dot} inside map ${map}`).toBeGreaterThanOrEqual(map[0]);
+  expect(dot[1], `dot ${dot} inside map ${map}`).toBeGreaterThanOrEqual(map[1]);
+  expect(dot[2], `dot ${dot} inside map ${map}`).toBeLessThanOrEqual(map[2]);
+  expect(dot[3], `dot ${dot} inside map ${map}`).toBeLessThanOrEqual(map[3]);
 });

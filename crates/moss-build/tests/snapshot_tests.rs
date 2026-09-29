@@ -540,6 +540,27 @@ fn diff_preview_handles_difference_after_multibyte_prefix() {
     assert!(preview.contains('二'), "unexpected preview: {preview}");
 }
 
+/// Removes a scratch build directory when dropped.
+struct Cleanup(PathBuf);
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Build a copy of a fixture's input in a scratch directory, returning the
+/// directory's guard and the build output.
+fn build_fixture(fixture_name: &str) -> (Cleanup, PathBuf) {
+    let input_dir = fixtures_dir().join(fixture_name).join("input");
+    let temp_dir = std::env::temp_dir().join(format!("moss_snapshot_test_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp directory");
+    let cleanup = Cleanup(temp_dir.clone());
+    copy_dir_recursive(&input_dir, &temp_dir).expect("Failed to copy input files");
+    let result = build_sync(&temp_dir.to_string_lossy(), false);
+    assert!(result.is_ok(), "Build failed for {}: {:?}", fixture_name, result);
+    (cleanup, temp_dir.join(".moss/build.nosync/staging"))
+}
+
 /// Run a snapshot test for a given fixture.
 fn run_snapshot_test(fixture_name: &str) {
     let fixture_dir = fixtures_dir().join(fixture_name);
@@ -552,29 +573,7 @@ fn run_snapshot_test(fixture_name: &str) {
         return;
     }
 
-    // Create temp directory with unique name
-    let temp_dir = std::env::temp_dir().join(format!("moss_snapshot_test_{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(&temp_dir).expect("Failed to create temp directory");
-
-    // Cleanup on drop
-    struct Cleanup(PathBuf);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-    let _cleanup = Cleanup(temp_dir.clone());
-
-    // Copy input to temp directory
-    copy_dir_recursive(&input_dir, &temp_dir).expect("Failed to copy input files");
-
-    // Run build using build_sync
-    let result = build_sync(&temp_dir.to_string_lossy(), false);
-
-    // Check build succeeded
-    assert!(result.is_ok(), "Build failed for {}: {:?}", fixture_name, result);
-
-    let output_dir = temp_dir.join(".moss/build.nosync/staging");
+    let (_cleanup, output_dir) = build_fixture(fixture_name);
 
     // Check if we should update snapshots
     let should_update = std::env::var("SNAPSHOTS").map(|v| v == "overwrite").unwrap_or(false);
@@ -646,6 +645,27 @@ fn snapshot_term_kinds_site() {
 #[test]
 fn snapshot_places_site() {
     run_snapshot_test("places-site");
+}
+
+/// The places root and a parent place's listing mark every place their
+/// pages name, each once and by its own precision: Kyoto (city) with a
+/// dot, and Nara, whose invalid precision falls back to country, with a
+/// soft fade, drawn first so it never covers a dot. Osaka has no
+/// longitude, so it is listed but not marked.
+#[test]
+fn place_listing_maps_mark_their_member_places() {
+    let (_cleanup, output) = build_fixture("places-site");
+    let markers = |page: &str| -> Vec<String> {
+        let html = fs::read_to_string(output.join(page)).unwrap();
+        let layer = &html[html.find("data-map-layer=\"marker\"").unwrap_or_else(|| panic!("{page} has no map"))..];
+        let layer = &layer[..layer.find("</g>").unwrap()];
+        layer
+            .match_indices("data-map-marker=\"")
+            .map(|(index, _)| layer[index + 17..].split('"').next().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(markers("places/index.html"), ["places/nara", "places/kyoto"]);
+    assert_eq!(markers("places/japan/index.html"), ["places/kyoto"]);
 }
 
 /// Place maps may use gazetteer coordinates for rendering, but should not

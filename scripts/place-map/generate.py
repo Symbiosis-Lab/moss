@@ -35,7 +35,6 @@ EXPECTED_NAMES = {
     "playas",
     "bathymetry",
     "urban_areas",
-    "earth_relief_06m_g",
     "earth_relief_03m_g_n00e000",
     "earth_relief_03m_g_n00e090",
     "earth_relief_03m_g_n00w090",
@@ -56,7 +55,6 @@ EXPECTED_URLS = {
     "playas": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_playas.zip",
     "bathymetry": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_bathymetry_all.zip",
     "urban_areas": "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_urban_areas.zip",
-    "earth_relief_06m_g": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_g.grd",
     "earth_relief_03m_g_n00e000": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00E000.earth_relief_03m_g.jp2",
     "earth_relief_03m_g_n00e090": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00E090.earth_relief_03m_g.jp2",
     "earth_relief_03m_g_n00w090": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00W090.earth_relief_03m_g.jp2",
@@ -106,10 +104,8 @@ def validate_manifest(manifest: dict) -> list[dict]:
         raise VerificationError("Natural Earth releases must be stated per source")
     if "natural_earth_version" in manifest:
         raise VerificationError("a single Natural Earth version cannot describe these mixed archives")
-    if manifest.get("gmt_dataset") != "earth_relief_06m_g":
-        raise VerificationError("only GMT earth_relief_06m_g is allowed for the world tier")
-    if manifest.get("gmt_dataset_fine") != "earth_relief_03m_g":
-        raise VerificationError("only GMT earth_relief_03m_g is allowed for the locator tier")
+    if manifest.get("gmt_dataset") != "earth_relief_03m_g":
+        raise VerificationError("only GMT earth_relief_03m_g is allowed")
     if manifest.get("gmt_manifest_date") != "2025-05-01":
         raise VerificationError("GMT manifest date is not the pinned 2025-05-01")
     if manifest.get("natural_earth_license", "").lower().find("public domain") < 0:

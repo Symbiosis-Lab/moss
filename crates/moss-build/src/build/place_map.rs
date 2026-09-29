@@ -20,18 +20,16 @@ pub(crate) use svg::precision_rank;
 
 const MAGIC: &[u8; 8] = b"MOSSPLM1";
 const HEADER_LEN: usize = 92;
-const SCHEMA: u16 = 2;
-// Schema 2 never writes a coast (layer 1) record: Natural Earth's coastline
-// and land datasets trace the same digitized shoreline, so storing both
-// independently duplicated the pack's single largest chunk of geometry.
-// Every stored tier holds exactly these nine layers (ids 2..=10). The globe
-// inset strokes coast lines from `Pack.tiers[0].layers` with no tile
-// filtering, so the world tier gets layer 1 derived from land's own rings in
-// `decode` below (`synthesize_world_coast`). A main map's coast is the halo
-// of its land paths, so the fine tier needs no coast layer at all.
+const SCHEMA: u16 = 3;
+// The pack stores no coast (layer 1) record: Natural Earth's coastline and
+// land datasets trace the same digitized shoreline, so every coast is drawn
+// from land's rings: a main map's as the halo of its land paths, the globe
+// inset's as its land rings stroked. The world tier holds land alone, the
+// only layer the globe draws; every main map reads the fine tier, which
+// holds the other eight.
+const WORLD_LAYERS: std::ops::RangeInclusive<u8> = 2..=2;
+const FINE_LAYERS: std::ops::RangeInclusive<u8> = 2..=10;
 const STORED_LAYERS: u16 = 9;
-const MIN_STORED_LAYER: u8 = 2;
-const MAX_LAYER_ID: u8 = 10;
 const EXPECTED_TIERS: u16 = 2;
 const MAX_PARTS_PER_FEATURE: usize = 4096;
 const MAX_POINTS_PER_PART: usize = 1_000_000;
@@ -197,10 +195,6 @@ fn zigzag(value: u32) -> i32 {
     ((value >> 1) as i32) ^ -((value & 1) as i32)
 }
 
-fn valid_layer(id: u8) -> bool {
-    (MIN_STORED_LAYER..=MAX_LAYER_ID).contains(&id)
-}
-
 fn decode_feature(
     reader: &mut Reader<'_>,
     extent: [i32; 4],
@@ -272,6 +266,7 @@ fn decode_tier(
     reader: &mut Reader<'_>,
     extent: [i32; 4],
     expected_id: u8,
+    layer_ids: std::ops::RangeInclusive<u8>,
 ) -> Result<Tier, DecodeError> {
     let id = reader.u8("tier id")?;
     let _reserved = reader.u8("tier reserved")?;
@@ -290,7 +285,7 @@ fn decode_tier(
     while payload.position < payload.bytes.len() {
         let id = payload.u8("layer id")?;
         let _kind = payload.u8("layer kind")?;
-        if !valid_layer(id) {
+        if !layer_ids.contains(&id) {
             return Err(DecodeError::UnknownLayer(id));
         }
         let bit = 1u16 << (id - 1);
@@ -336,11 +331,9 @@ fn decode_tier(
             features,
         });
     }
-    if seen.count_ones() != u32::from(STORED_LAYERS) {
-        for id in MIN_STORED_LAYER..=MAX_LAYER_ID {
-            if seen & (1 << (id - 1)) == 0 {
-                return Err(DecodeError::MissingLayer(id));
-            }
+    for id in layer_ids {
+        if seen & (1 << (id - 1)) == 0 {
+            return Err(DecodeError::MissingLayer(id));
         }
     }
     if total != feature_count {
@@ -351,23 +344,6 @@ fn decode_tier(
         feature_count,
         layers,
     })
-}
-
-/// Materialise layer 1 (coast) directly from layer 2 (land)'s own decoded
-/// rings, so callers that read `Tier.layers` without going through
-/// `TileSelection` (`svg.rs`'s globe inset reads `Pack.tiers[0]` this way)
-/// still see it. A no-op if land is somehow absent — `decode_tier` already
-/// guarantees it isn't, this is just not the place to re-assert that.
-fn synthesize_world_coast(tier: &mut Tier) {
-    let Some(land) = tier.layers.iter().find(|layer| layer.id == 2) else {
-        return;
-    };
-    let coast = Layer {
-        id: 1,
-        feature_count: land.feature_count,
-        features: land.features.clone(),
-    };
-    tier.layers.insert(0, coast);
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Pack, DecodeError> {
@@ -418,14 +394,10 @@ pub fn decode(bytes: &[u8]) -> Result<Pack, DecodeError> {
     for source_mask in &mut source_masks {
         *source_mask = reader.u16("source mapping")?;
     }
-    let mut tiers = vec![
-        decode_tier(&mut reader, extent, 0)?,
-        decode_tier(&mut reader, extent, 1)?,
+    let tiers = vec![
+        decode_tier(&mut reader, extent, 0, WORLD_LAYERS)?,
+        decode_tier(&mut reader, extent, 1, FINE_LAYERS)?,
     ];
-    // The world tier has no tile index to keep byte-aligned with, so its
-    // synthetic coast layer is materialised once, right here — see the
-    // STORED_LAYERS doc comment above.
-    synthesize_world_coast(&mut tiers[0]);
     let tile_count = reader.u32("tile count")?;
     if tile_count > 36 * 18 {
         return Err(DecodeError::InvalidLength("tile count"));
@@ -503,15 +475,11 @@ mod tests {
     fn embedded_pack_has_both_tiers_and_every_layer_once() {
         let pack = embedded().expect("checked-in place-map pack must decode");
         assert_eq!(pack.tiers.len(), 2);
-        // Tier 0 (world) carries all ten layer ids: coast is synthesised
-        // directly into it at decode time (`synthesize_world_coast`), since
-        // the globe inset reads `Pack.tiers[0].layers` with no tile
-        // filtering. Tier 1 (fine/locator) stores only 2..=10 — schema 2
-        // never writes a coast record, and a main map's coast is the halo
-        // of its land paths.
+        // The world tier holds land alone, for the globe inset; the fine
+        // tier holds every stored layer.
         assert_eq!(
             pack.tiers[0].layers.iter().map(|layer| layer.id).collect::<Vec<_>>(),
-            (1..=10).collect::<Vec<_>>()
+            [2]
         );
         assert_eq!(
             pack.tiers[1].layers.iter().map(|layer| layer.id).collect::<Vec<_>>(),
@@ -533,27 +501,13 @@ mod tests {
         assert!(!pack.tiles.is_empty());
     }
 
-    /// The ablatable half of the schema-2 coast/land dedup: revert
-    /// `synthesize_world_coast` (make it a no-op) and this fails, because
-    /// `pack.tiers[0]` would then have only nine layers, ids 2..=10.
+    /// Nothing reads a world-tier layer but land, so the decoder takes no
+    /// other: the first world-tier layer, relabelled as lakes, is refused.
     #[test]
-    fn world_tier_coast_mirrors_lands_own_rings() {
-        let pack = embedded().expect("checked-in place-map pack must decode");
-        let land = pack.tiers[0]
-            .layers
-            .iter()
-            .find(|layer| layer.id == 2)
-            .expect("world tier must have a land layer");
-        let coast = pack.tiers[0]
-            .layers
-            .iter()
-            .find(|layer| layer.id == 1)
-            .expect("world tier must have a synthesised coast layer");
-        assert_eq!(coast.feature_count, land.feature_count);
-        assert_eq!(
-            coast.features.iter().map(|feature| &feature.parts).collect::<Vec<_>>(),
-            land.features.iter().map(|feature| &feature.parts).collect::<Vec<_>>(),
-        );
+    fn the_world_tier_holds_land_alone() {
+        let mut bytes = raw_pack_bytes();
+        bytes[HEADER_LEN + 10] = 3;
+        assert_eq!(decode(&bytes).unwrap_err(), DecodeError::UnknownLayer(3));
     }
 
     #[test]

@@ -13,7 +13,6 @@
   },
   "devDependencies": {
     "d3-contour": "4.0.2",
-    "h5wasm": "0.10.3",
     "shpjs": "6.1.0"
   }
 }

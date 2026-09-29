@@ -4,16 +4,15 @@ generator_version = "1.0.0"
 natural_earth_theme = "10m physical and cultural"
 natural_earth_release = "mixed per-layer releases; see each source's published_version and archive_version"
 natural_earth_license = "Public domain; see https://www.naturalearthdata.com/about/terms-of-use/"
-gmt_dataset = "earth_relief_06m_g"
-gmt_dataset_fine = "earth_relief_03m_g"
+gmt_dataset = "earth_relief_03m_g"
 gmt_manifest_url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_server.txt"
 gmt_manifest_date = "2025-05-01"
 gmt_manifest_sha256 = "65c7c03a59d103c329f3ab8f88bb8fb3719e0a73314747aba971906a1f17bb82"
 gmt_provenance = "https://doi.org/10.1029/2019EA000658"
 gmt_license = "not specified in the pinned GMT server manifest"
-simplification = "Douglas-Peucker in geographic degrees; layer tolerances are pinned by the generator."
+simplification = "In geographic degrees: by area (Visvalingam-Whyatt) for relief, sea-floor and river lines, Douglas-Peucker for the rest; layer tolerances are pinned by the generator."
 projection = "longitude/latitude in WGS84; Rust owns screen projection"
-quantization = 10000
+quantization = 1000
 
 [[sources]]
 name = "land"
@@ -119,21 +118,12 @@ published_version = "4.1.0"
 members = ["ne_10m_urban_areas.shp", "ne_10m_urban_areas.dbf", "ne_10m_urban_areas.shx", "ne_10m_urban_areas.prj", "ne_10m_urban_areas.cpg"]
 layer = "built_up"
 
-[[sources]]
-name = "earth_relief_06m_g"
-artifact = "earth_relief_06m_g.grd"
-url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_g.grd"
-sha256 = "19dd7d422c2e2712d17199fea9488b1e72c9eb76929bd48091fd01de11b3992f"
-size_bytes = 8093288
-member = "earth_relief_06m_g.grd"
-layer = "relief"
-
 # earth_relief_03m_g ships as eight 90x90-degree gridline-registered tiles
-# (lossless, signed 16-bit JPEG2000) rather than one file; the locator tier
-# contours this dataset at native resolution instead of the 06m grid's
-# coarse stride. Tile naming gives the southwest corner: N00 spans lat
-# 0..90, S90 spans lat -90..0; E000/E090/W090/W180 each span 90 degrees of
-# longitude starting at that corner.
+# (lossless, signed 16-bit JPEG2000) rather than one file; the fine tier
+# contours this dataset at native resolution. Tile naming gives the
+# southwest corner: N00 spans lat 0..90, S90 spans lat -90..0;
+# E000/E090/W090/W180 each span 90 degrees of longitude starting at that
+# corner.
 [[sources]]
 name = "earth_relief_03m_g_n00e000"
 artifact = "N00E000.earth_relief_03m_g.jp2"

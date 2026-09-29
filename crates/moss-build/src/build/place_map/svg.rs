@@ -10,7 +10,7 @@ use std::fmt::Write;
 use sha2::{Digest, Sha256};
 
 mod path;
-use path::{serialize_path, snap, BANDS, FINE};
+use path::{serialize_path, snap, BY_AREA, FINE};
 mod text;
 use text::{precision_name, xml_escape};
 // Re-exported (via place_map.rs) so context.rs's locator can derive a
@@ -28,7 +28,7 @@ mod river;
 mod palette;
 use palette::{band_tint, relief_height_grey};
 
-use super::geometry::{marker_radius, FrameTier, ProjectedPoint, Projection, TileSelection, REGION_FADE_DEGREES};
+use super::geometry::{marker_radius, FrameTier, ProjectedPoint, Projection, TileSelection, REGION_FADE_DEGREES, REGION_FADE_MIN_RADIUS};
 use super::globe::{globe_line, globe_marker, globe_rings};
 use super::{Feature, Pack, PlaceMapContext, PlaceMapTarget, ResolvedPlace};
 use crate::vault::places::Precision;
@@ -126,7 +126,11 @@ fn emit_svg_with_mode(
     compact: bool,
 ) -> String {
     let ids = Ids::new(options.page_path, options.ordinal);
-    let label = if options.location.is_empty() {
+    // A listing map's places each keep their own precision, so its label
+    // names only what it lists.
+    let label = if target.aggregate_name.is_some() {
+        format!("Map of {}", options.location)
+    } else if options.location.is_empty() {
         format!("Place map, {} precision", precision_name(options.precision))
     } else {
         format!(
@@ -135,12 +139,14 @@ fn emit_svg_with_mode(
             precision_name(options.precision)
         )
     };
+    let projection = target.frame.as_ref().map(Projection::new);
     let mut writer = Writer {
         output: String::with_capacity(32 * 1024),
         ids: &ids,
         height_uses: Vec::new(),
         land_paths: Vec::new(),
         has_href: false,
+        effect_scale: projection.as_ref().map_or(1.0, Projection::effect_scale),
         locator_profile: compact.then_some(match options.precision {
             Precision::Exact | Precision::City => LocatorProfile::ExactCity,
             Precision::Region => LocatorProfile::Region,
@@ -158,7 +164,6 @@ fn emit_svg_with_mode(
     writer.defs();
     writer.water();
 
-    let projection = target.frame.as_ref().map(Projection::new);
     let grouped = target.frame.as_ref().map(|frame| {
         let selected = TileSelection::for_frame(context.pack(), frame);
         let mut grouped = grouped_features(context.pack(), &selected);
@@ -189,7 +194,11 @@ fn emit_svg_with_mode(
         _ => writer.empty_layers_after_lighting(),
     }
     writer.markers(target);
-    writer.globe(context, target);
+    // The globe shows where a frame sits in the world; a world map is its
+    // own answer.
+    if target.frame.as_ref().map_or(true, |frame| frame.tier != FrameTier::World) {
+        writer.globe(context, target);
+    }
     writer.close_svg();
     writer.output
 }
@@ -226,19 +235,71 @@ struct Writer<'a> {
     height_uses: Vec<String>,
     land_paths: Vec<String>,
     has_href: bool,
+    effect_scale: f64,
     locator_profile: Option<LocatorProfile>,
+}
+
+/// A round dot of `radius` screen px at a viewBox point, drawn as a
+/// zero-length stroke that does not scale with the SVG: sized in viewBox
+/// units, the approved 4 px dot for a 720 px map came out at 1.5 px on a
+/// floated locator.
+fn dot(x: i32, y: i32, radius: f64, color: &str, attributes: &str) -> String {
+    format!(
+        "<path d=\"M{x} {y}h0\" stroke=\"{color}\" stroke-width=\"{}\" stroke-linecap=\"round\" vector-effect=\"non-scaling-stroke\"{attributes}/>",
+        length(radius * 2.0)
+    )
+}
+
+/// A viewBox length for an SVG attribute, to a thousandth of a pixel.
+fn length(value: f64) -> f64 {
+    (value * 1000.0).round() / 1000.0
+}
+
+/// The narrowest a map is shown, in CSS px: a phone column is about 270
+/// and a floated locator about 350; a map embedded narrower still can crop
+/// an edge dot by a pixel or two.
+const NARROWEST_MAP_PX: f64 = 240.0;
+
+/// How many viewBox units a dot of `radius` screen px covers on the
+/// narrowest map: a non-scaling stroke spans more of the viewBox the
+/// narrower the map is shown, over 10 units for a 5 px casing on a phone.
+fn dot_reach(radius: f64) -> f64 {
+    radius * f64::from(SVG_WIDTH) / NARROWEST_MAP_PX
+}
+
+/// Pull a dot's centre in from the viewBox edge by its reach, so its
+/// casing is drawn whole at any width a map is shown.
+fn clamp_dot(point: (f64, f64), radius: f64) -> (f64, f64) {
+    let reach = dot_reach(radius);
+    (point.0.clamp(reach, f64::from(SVG_WIDTH) - reach), point.1.clamp(reach, f64::from(SVG_HEIGHT) - reach))
+}
+
+/// Pull a point inside a circle of `radius` round `center`, so a globe dot
+/// near the horizon is not sliced by the globe's own clip-path.
+fn clamp_to_circle(point: (f64, f64), center: (f64, f64), radius: f64) -> (f64, f64) {
+    let (dx, dy) = (point.0 - center.0, point.1 - center.1);
+    let distance = dx.hypot(dy);
+    if distance <= radius || distance == 0.0 {
+        point
+    } else {
+        let scale = radius / distance;
+        (center.0 + dx * scale, center.1 + dy * scale)
+    }
 }
 
 /// Natural Earth scalerank of the smallest river a world map still draws.
 const WORLD_MAX_RIVER_RANK: i16 = 3;
 
 /// At world scale the river taper's 0.5 px floor still draws every
-/// tributary as a thread, and reef lines simplified for a whole-globe frame
-/// read as scratches across the ocean. A world map keeps trunk rivers only
-/// and no reefs.
+/// tributary as a thread, reef lines read as scratches across the ocean,
+/// and salt flats and built-up areas shrink to specks a few pixels wide.
+/// A world map keeps trunk rivers, lakes and ice, as the approved world
+/// map does.
 fn keep_world_scale_layers(grouped: &mut [Vec<&Feature>]) {
     grouped[4].retain(|feature| feature.band <= WORLD_MAX_RIVER_RANK);
-    grouped[6].clear();
+    for layer in [6, 7, 8] {
+        grouped[layer].clear();
+    }
 }
 
 /// Whether any part of a projected ring falls inside the 720x480 view,
@@ -319,18 +380,34 @@ impl Writer<'_> {
         let marker_gradient = self.ids.get("marker-fade");
         let globe_clip = self.ids.get("globe-clip");
         let height_empty = self.ids.get("height-empty");
+        // The highlight and shadow masks carry the larger of the two
+        // themes' gains, and each theme scales its tints down through
+        // flood-opacity, which CSS can set where a filter's own numbers
+        // cannot be themed. Neither mask ever reaches 1, so scaling the
+        // flood is exactly scaling the mask.
+        //
+        // Every effect length below was drawn for the narrowest frame and
+        // shrinks with a wider one (`Projection::effect_scale`). The
+        // lighting's surface heights shrink with its blur, so its slopes,
+        // and the strength of the light, stay the same.
+        let scale = self.effect_scale;
+        let (wide, narrow, smooth) = (length(9.0 * scale), length(4.0 * scale), length(2.0 * scale));
+        let (steep, soft, halo_blur) = (length(78.0 * scale), length(34.0 * scale), length(2.4 * scale));
         write!(
             self.output,
-            "<defs><filter id=\"{height_filter}\" color-interpolation-filters=\"sRGB\"><feColorMatrix in=\"SourceGraphic\" type=\"luminanceToAlpha\" result=\"height-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"9\" result=\"height-blur-9\"/><feColorMatrix in=\"height-blur-9\" type=\"matrix\" values=\"0 0 0 1 0  0 0 0 1 0  0 0 0 1 0  0 0 0 1 0\" result=\"height-coverage\"/><feDiffuseLighting in=\"height-blur-9\" surfaceScale=\"78\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-steep\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-steep\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-steep-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"4\" result=\"height-blur-4\"/><feDiffuseLighting in=\"height-blur-4\" surfaceScale=\"34\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-soft\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-soft\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-soft-alpha\"/><feComposite in=\"lit-steep-alpha\" in2=\"lit-soft-alpha\" operator=\"arithmetic\" k1=\"0\" k2=\"0.7\" k3=\"0.3\" k4=\"0\" result=\"lit-mix\"/><feComponentTransfer in=\"lit-mix\" result=\"lit-hi-mask\"><feFuncA type=\"linear\" slope=\"1.877817459305202\" intercept=\"-1.327817459305202\"/></feComponentTransfer><feComponentTransfer in=\"lit-mix\" result=\"lit-lo-mask\"><feFuncA type=\"linear\" slope=\"-0.5656854249492381\" intercept=\"0.4\"/></feComponentTransfer><feFlood flood-color=\"var(--moss-place-light-warm, #fff3d0)\" result=\"lit-hi-flood\"/><feComposite in=\"lit-hi-flood\" in2=\"lit-hi-mask\" operator=\"in\" result=\"lit-hi-tint\"/><feFlood flood-color=\"var(--moss-place-light-cool, #5a6488)\" result=\"lit-lo-flood\"/><feComposite in=\"lit-lo-flood\" in2=\"lit-lo-mask\" operator=\"in\" result=\"lit-lo-tint\"/><feMerge result=\"lit-combined\"><feMergeNode in=\"lit-lo-tint\"/><feMergeNode in=\"lit-hi-tint\"/></feMerge><feGaussianBlur in=\"lit-combined\" stdDeviation=\"2\" result=\"lit-smooth\"/><feComposite in=\"lit-smooth\" in2=\"height-coverage\" operator=\"arithmetic\" k1=\"1\" k2=\"0\" k3=\"0\" k4=\"0\"/></filter><radialGradient id=\"{marker_gradient}\"><stop offset=\"0\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0.28\"/><stop offset=\"1\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0\"/></radialGradient><clipPath id=\"{globe_clip}\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\"/></clipPath><path id=\"{height_empty}\" d=\"m0 0l0 0\"/><filter id=\"{}\" filterUnits=\"userSpaceOnUse\" x=\"-24\" y=\"-24\" width=\"768\" height=\"528\"><feGaussianBlur stdDeviation=\"2.4\"/></filter></defs>", self.ids.get("soft"),
+            "<defs><filter id=\"{height_filter}\" color-interpolation-filters=\"sRGB\"><feColorMatrix in=\"SourceGraphic\" type=\"luminanceToAlpha\" result=\"height-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"{wide}\" result=\"height-blur-9\"/><feColorMatrix in=\"height-blur-9\" type=\"matrix\" values=\"0 0 0 1 0  0 0 0 1 0  0 0 0 1 0  0 0 0 1 0\" result=\"height-coverage\"/><feDiffuseLighting in=\"height-blur-9\" surfaceScale=\"{steep}\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-steep\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-steep\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-steep-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"{narrow}\" result=\"height-blur-4\"/><feDiffuseLighting in=\"height-blur-4\" surfaceScale=\"{soft}\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-soft\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-soft\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-soft-alpha\"/><feComposite in=\"lit-steep-alpha\" in2=\"lit-soft-alpha\" operator=\"arithmetic\" k1=\"0\" k2=\"0.7\" k3=\"0.3\" k4=\"0\" result=\"lit-mix\"/><feComponentTransfer in=\"lit-mix\" result=\"lit-hi-mask\"><feFuncA type=\"linear\" slope=\"1.877817459305202\" intercept=\"-1.327817459305202\"/></feComponentTransfer><feComponentTransfer in=\"lit-mix\" result=\"lit-lo-mask\"><feFuncA type=\"linear\" slope=\"-0.6363961030678928\" intercept=\"0.45\"/></feComponentTransfer><feFlood flood-color=\"var(--moss-place-light-warm, #fff3d0)\" flood-opacity=\"var(--moss-place-light-warm-strength, 1)\" result=\"lit-hi-flood\"/><feComposite in=\"lit-hi-flood\" in2=\"lit-hi-mask\" operator=\"in\" result=\"lit-hi-tint\"/><feFlood flood-color=\"var(--moss-place-light-cool, #5a6488)\" flood-opacity=\"var(--moss-place-light-cool-strength, 0.8889)\" result=\"lit-lo-flood\"/><feComposite in=\"lit-lo-flood\" in2=\"lit-lo-mask\" operator=\"in\" result=\"lit-lo-tint\"/><feMerge result=\"lit-combined\"><feMergeNode in=\"lit-lo-tint\"/><feMergeNode in=\"lit-hi-tint\"/></feMerge><feGaussianBlur in=\"lit-combined\" stdDeviation=\"{smooth}\" result=\"lit-smooth\"/><feComposite in=\"lit-smooth\" in2=\"height-coverage\" operator=\"arithmetic\" k1=\"1\" k2=\"0\" k3=\"0\" k4=\"0\"/></filter><radialGradient id=\"{marker_gradient}\"><stop offset=\"0\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0.28\"/><stop offset=\"1\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0\"/></radialGradient><clipPath id=\"{globe_clip}\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\"/></clipPath><path id=\"{height_empty}\" d=\"m0 0l0 0\"/><filter id=\"{}\" filterUnits=\"userSpaceOnUse\" x=\"-24\" y=\"-24\" width=\"768\" height=\"528\"><feGaussianBlur stdDeviation=\"{halo_blur}\"/></filter></defs>", self.ids.get("soft"),
         )
         .expect("writing to String cannot fail");
         // The approved design's two cut-paper shadows, one per band family,
         // shared by every band group: relief casts a firmer shadow (and, in
         // the dark theme, a faint warm top-left edge) than the sea floor.
         // The land fill itself casts none.
+        let (relief, relief_blur) = (length(1.4 * scale), length(0.7 * scale));
+        let (edge, edge_blur) = (length(0.7 * scale), length(0.49 * scale));
+        let (sea, sea_blur) = (length(1.0 * scale), length(0.6 * scale));
         write!(
             self.output,
-            "<defs><filter id=\"{}\" color-interpolation-filters=\"sRGB\" filterUnits=\"userSpaceOnUse\" x=\"-12\" y=\"-12\" width=\"744\" height=\"504\"><feDropShadow in=\"SourceGraphic\" dx=\"1.4\" dy=\"1.4\" stdDeviation=\"0.7\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.35\" result=\"with-shadow\"/><feDropShadow in=\"SourceGraphic\" dx=\"-0.7\" dy=\"-0.7\" stdDeviation=\"0.49\" flood-color=\"var(--moss-place-light-warm, #fff3d0)\" flood-opacity=\"var(--moss-place-relief-edge-opacity, 0)\" result=\"with-edge\"/><feMerge><feMergeNode in=\"with-shadow\"/><feMergeNode in=\"with-edge\"/></feMerge></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\" filterUnits=\"userSpaceOnUse\" x=\"-12\" y=\"-12\" width=\"744\" height=\"504\"><feDropShadow in=\"SourceGraphic\" dx=\"1.0\" dy=\"1.0\" stdDeviation=\"0.6\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.22\"/></filter>",
+            "<defs><filter id=\"{}\" color-interpolation-filters=\"sRGB\" filterUnits=\"userSpaceOnUse\" x=\"-12\" y=\"-12\" width=\"744\" height=\"504\"><feDropShadow in=\"SourceGraphic\" dx=\"{relief}\" dy=\"{relief}\" stdDeviation=\"{relief_blur}\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.35\" result=\"with-shadow\"/><feDropShadow in=\"SourceGraphic\" dx=\"-{edge}\" dy=\"-{edge}\" stdDeviation=\"{edge_blur}\" flood-color=\"var(--moss-place-light-warm, #fff3d0)\" flood-opacity=\"var(--moss-place-relief-edge-opacity, 0)\" result=\"with-edge\"/><feMerge><feMergeNode in=\"with-shadow\"/><feMergeNode in=\"with-edge\"/></feMerge></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\" filterUnits=\"userSpaceOnUse\" x=\"-12\" y=\"-12\" width=\"744\" height=\"504\"><feDropShadow in=\"SourceGraphic\" dx=\"{sea}\" dy=\"{sea}\" stdDeviation=\"{sea_blur}\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.22\"/></filter>",
             self.ids.get("shadow-relief"),
             self.ids.get("shadow-seafloor"),
         )
@@ -416,7 +493,7 @@ impl Writer<'_> {
         write!(self.output, "<g id=\"{}\" data-map-layer=\"coast\" filter=\"url(#{})\">", self.ids.get("layer-coast"), self.ids.get("soft"))
             .expect("writing to String cannot fail");
         for id in &self.land_paths {
-            write!(self.output, "<use href=\"#{id}\" fill=\"none\" stroke=\"var(--moss-place-coast, #f5f6f4)\" stroke-opacity=\"var(--moss-place-coast-opacity, 0.6)\" stroke-width=\"10\"/>")
+            write!(self.output, "<use href=\"#{id}\" fill=\"none\" stroke=\"var(--moss-place-coast, #f5f6f4)\" stroke-opacity=\"var(--moss-place-coast-opacity, 0.6)\" stroke-width=\"{}\"/>", length(10.0 * self.effect_scale))
                 .expect("writing to String cannot fail");
         }
         self.output.push_str("</g>");
@@ -510,7 +587,7 @@ impl Writer<'_> {
                 // clipping.
                 let rings = projection.project_feature(&rings, quantisation);
                 let on_screen = rings.iter().any(|ring| on_screen(ring));
-                (feature, on_screen.then(|| serialize_path(&rings, true, BANDS)).flatten())
+                (feature, on_screen.then(|| serialize_path(&rings, true, BY_AREA)).flatten())
             })
             .filter(|(_, path)| path.is_some())
             .collect();
@@ -609,16 +686,34 @@ impl Writer<'_> {
         ));
         if let Some(frame) = target.frame.as_ref() {
             let projection = Projection::new(frame);
-            for place in target.marker_places() {
+            // Soft fades first, so none covers a dot. A marker that would
+            // draw the same shape on the same pixel as one already drawn is
+            // left out, so several places in one city make one dot.
+            let mut places: Vec<&ResolvedPlace> = target.marker_places().collect();
+            places.sort_by_key(|place| matches!(place.precision, Precision::Exact | Precision::City));
+            let mut drawn = std::collections::HashSet::new();
+            for place in places {
                 let Some(point) = place.point().and_then(|point| projection.project(point)) else {
                     continue;
                 };
                 let (x, y) = (snap(point.0), snap(point.1));
+                let shape = match place.precision {
+                    Precision::Exact | Precision::City => 0,
+                    Precision::Region => 1,
+                    Precision::Country => 2,
+                };
+                if !drawn.insert((x, y, shape)) {
+                    continue;
+                }
                 let key = xml_escape(&place.key);
                 match place.precision {
                     Precision::Exact | Precision::City => {
                         let radius = marker_radius(place.precision);
-                        write!(self.output, "<circle cx=\"{x}\" cy=\"{y}\" r=\"{:.0}\" fill=\"var(--moss-place-marker-casing, #ffffff)\"/><circle cx=\"{x}\" cy=\"{y}\" r=\"{radius:.0}\" fill=\"var(--moss-place-marker, #2d5a2d)\" data-map-marker=\"{key}\"/>", radius + 1.0).expect("writing to String cannot fail");
+                        // A fade below is a geographic extent and may crop at
+                        // the frame; a dot is a fixed-size marker and may not.
+                        let (cx, cy) = clamp_dot(point, radius + 1.0);
+                        let (x, y) = (snap(cx), snap(cy));
+                        write!(self.output, "{}{}", dot(x, y, radius + 1.0, "var(--moss-place-marker-casing, #ffffff)", ""), dot(x, y, radius, "var(--moss-place-marker, #2d5a2d)", &format!(" data-map-marker=\"{key}\""))).expect("writing to String cannot fail");
                     }
                     Precision::Region | Precision::Country => {
                         let fade_edge = place.point().filter(|_| place.precision == Precision::Region).and_then(|centre| {
@@ -626,7 +721,7 @@ impl Writer<'_> {
                         });
                         let radius = fade_edge
                             .and_then(|edge| projection.project(edge))
-                            .map_or(marker_radius(place.precision), |edge| (edge.0 - point.0).hypot(edge.1 - point.1));
+                            .map_or(marker_radius(place.precision), |edge| (edge.0 - point.0).hypot(edge.1 - point.1).max(REGION_FADE_MIN_RADIUS));
                         write!(self.output, "<circle cx=\"{x}\" cy=\"{y}\" r=\"{radius:.0}\" fill=\"url(#{fade})\" data-map-marker=\"{key}\"/>").expect("writing to String cannot fail");
                     }
                 }
@@ -649,35 +744,37 @@ impl Writer<'_> {
                 latitude: 0.0,
             });
         write!(self.output, "<g id=\"{id}\" data-map-layer=\"globe\" clip-path=\"url(#{clip})\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"var(--moss-place-globe-water, #e9eff2)\"/>").expect("writing to String cannot fail");
-        let tier = &context.pack().tiers[0];
-        for layer in &tier.layers {
-            let include_coast = self.locator_profile != Some(LocatorProfile::Country);
-            if layer.id != 2 && !(include_coast && layer.id == 1) {
-                continue;
-            }
-            for (index, feature) in layer.features.iter().enumerate() {
-                if layer.id == 1 {
-                    let mut paths = Vec::new();
-                    for part in &feature.parts {
-                        paths.extend(globe_line(part, center, context.pack().header.quantisation));
-                    }
-                    if let Some(path) = serialize_path(&paths, false, FINE) {
-                        write!(self.output, "<path d=\"{path}\" fill=\"none\" stroke=\"var(--moss-place-globe-coast, #f5f6f4)\" stroke-width=\"0.5\" data-globe-feature=\"{index}\"/>").expect("writing to String cannot fail");
-                    }
-                } else {
-                    let rings: Vec<Vec<(f64, f64)>> = feature
-                        .parts
-                        .iter()
-                        .flat_map(|part| {
-                            globe_rings(part, center, context.pack().header.quantisation)
-                        })
-                        .collect();
-                    if let Some(path) = serialize_path(&rings, true, FINE) {
-                        write!(self.output, "<path d=\"{path}\" fill=\"var(--moss-place-globe-land, #d7d5c9)\" fill-rule=\"evenodd\" data-globe-feature=\"{index}\"/>").expect("writing to String cannot fail");
-                    }
+        // The world tier holds land alone: its rings are the globe's land
+        // and, stroked first, its coast.
+        let quantisation = context.pack().header.quantisation;
+        let land = context.pack().tiers[0]
+            .layers
+            .iter()
+            .find(|layer| layer.id == 2)
+            .map_or(&[][..], |layer| layer.features.as_slice());
+        if self.locator_profile != Some(LocatorProfile::Country) {
+            for (index, feature) in land.iter().enumerate() {
+                let paths: Vec<Vec<(f64, f64)>> = feature
+                    .parts
+                    .iter()
+                    .flat_map(|part| globe_line(part, center, quantisation))
+                    .collect();
+                if let Some(path) = serialize_path(&paths, false, FINE) {
+                    write!(self.output, "<path d=\"{path}\" fill=\"none\" stroke=\"var(--moss-place-globe-coast, #f5f6f4)\" stroke-width=\"0.5\" data-globe-feature=\"{index}\"/>").expect("writing to String cannot fail");
                 }
             }
         }
+        for (index, feature) in land.iter().enumerate() {
+            let rings: Vec<Vec<(f64, f64)>> = feature
+                .parts
+                .iter()
+                .flat_map(|part| globe_rings(part, center, quantisation))
+                .collect();
+            if let Some(path) = serialize_path(&rings, true, FINE) {
+                write!(self.output, "<path d=\"{path}\" fill=\"var(--moss-place-globe-land, #d7d5c9)\" fill-rule=\"evenodd\" data-globe-feature=\"{index}\"/>").expect("writing to String cannot fail");
+            }
+        }
+        let mut drawn = std::collections::HashSet::new();
         for place in target.marker_places() {
             let Some(point) = place.point() else {
                 continue;
@@ -685,10 +782,15 @@ impl Writer<'_> {
             let Some((x, y)) = globe_marker(point, center) else {
                 continue;
             };
+            let (x, y) = clamp_to_circle((x, y), (GLOBE_CENTER_X, GLOBE_CENTER_Y), GLOBE_RADIUS - dot_reach(3.0));
+            let (x, y) = (snap(x), snap(y));
+            if !drawn.insert((x, y)) {
+                continue;
+            }
             write!(
                 self.output,
-                "<circle cx=\"{}\" cy=\"{}\" r=\"3\" fill=\"var(--moss-place-marker, #2d5a2d)\" data-map-globe-marker=\"true\" data-map-marker=\"{}\"/>",
-                snap(x), snap(y), xml_escape(&place.key)
+                "{}",
+                dot(x, y, 3.0, "var(--moss-place-marker, #2d5a2d)", &format!(" data-map-globe-marker=\"true\" data-map-marker=\"{}\"", xml_escape(&place.key)))
             )
             .expect("writing to String cannot fail");
         }
@@ -712,7 +814,6 @@ mod tests {
                 longitude: Some(point.longitude),
                 latitude: Some(point.latitude),
                 precision,
-                aggregate_member: false,
             }],
             frame: Some(frame),
             aggregate_name: None,
@@ -861,6 +962,7 @@ mod tests {
             height_uses: Vec::new(),
             land_paths: Vec::new(),
             has_href: false,
+            effect_scale: 1.0,
             locator_profile: None,
         };
         writer.emit_band_layer(10_000, &projection, &grouped, 9, "relief", false);
@@ -877,6 +979,45 @@ mod tests {
         assert!(longest < 50.0, "a curved band edge became a {longest} px chord");
     }
 
+    /// Rivers leave the pack simplified by area, so a river winding a
+    /// fraction of a pixel either side of its course keeps its bends; a
+    /// render-time pass by distance would put the long chords back.
+    #[test]
+    fn river_bends_survive_render_time_simplification() {
+        let origin = ProjectedPoint::new(0.0, 0.0).unwrap();
+        let frame = Frame::from_points(&[origin], [Precision::Exact].into_iter()).unwrap();
+        let projection = Projection::new(&frame);
+        // Six degrees of river, 0.6 px either side of its course, one bend
+        // every 0.3 degrees.
+        let line: Vec<(i32, i32)> = (-300..=300)
+            .map(|step| (step * 100, (85.0 * (f64::from(step) * std::f64::consts::PI / 30.0).sin()).round() as i32))
+            .collect();
+        let feature = Feature { bounds: [-30_000, -85, 30_000, 85], band: 2, parts: vec![line] };
+        let mut grouped: Vec<Vec<&Feature>> = (0..=10).map(|_| Vec::new()).collect();
+        grouped[4].push(&feature);
+        let ids = Ids::new("p", 0);
+        let mut writer = Writer {
+            output: String::new(),
+            ids: &ids,
+            height_uses: Vec::new(),
+            land_paths: Vec::new(),
+            has_href: false,
+            effect_scale: 1.0,
+            locator_profile: None,
+        };
+        writer.emit_river_layer(10_000, &projection, &grouped, "#5b93bd");
+        let d = &writer.output[writer.output.find(" d=\"").unwrap() + 4..];
+        let longest = d[..d.find('"').unwrap()]
+            .split(['m', 'l'])
+            .skip(2)
+            .map(|step| {
+                let mut numbers = step.split(' ').map(|value| value.parse::<f64>().unwrap());
+                numbers.next().unwrap().hypot(numbers.next().unwrap())
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(longest < 50.0, "a winding river became a {longest} px chord");
+    }
+
     /// The approved design's cut-paper shadows: relief bands cast the
     /// firmer 1.4 px / 35% shadow, sea-floor bands the lighter 1.0 px / 22%
     /// one, and the land fill casts none.
@@ -889,7 +1030,7 @@ mod tests {
             &svg[start..start + svg[start..].find("</filter>").unwrap()]
         };
         assert!(filter("relief").contains("dx=\"1.4\"") && filter("relief").contains("flood-opacity=\"0.35\""));
-        assert!(filter("seafloor").contains("dx=\"1.0\"") && filter("seafloor").contains("flood-opacity=\"0.22\""));
+        assert!(filter("seafloor").contains("dx=\"1\"") && filter("seafloor").contains("flood-opacity=\"0.22\""));
         for name in ["relief", "seafloor"] {
             let body = layer_body(&svg, name);
             let groups = body.matches("<g data-map-band=").count();
@@ -958,22 +1099,74 @@ mod tests {
     }
 
     /// The approved design's markers: an exact or city place is a 4 px dot
-    /// on a 5 px casing; a region is a soft fade from 28% out to 1.1
-    /// degrees of latitude (about 78 px at the 10-degree frame); the globe
-    /// marks either with a 3 px dot.
+    /// on a 5 px casing and the globe marks any place with a 3 px dot, all
+    /// in screen px however wide the map is shown; a region is a soft fade
+    /// from 28% out to 1.1 degrees of latitude (about 78 px at the
+    /// 10-degree frame), and never under 12 px.
     #[test]
     fn markers_match_the_approved_dot_fade_and_globe_sizes() {
         let exact = locator_for(35.5, 33.89, Precision::Exact);
         let marker = layer_body(&exact, "marker");
-        assert!(marker.contains("r=\"5\" fill=\"var(--moss-place-marker-casing, #ffffff)\""), "{marker}");
-        assert!(marker.contains("r=\"4\" fill=\"var(--moss-place-marker, #2d5a2d)\""), "{marker}");
+        let dot = |width: &str, color: &str| format!("stroke=\"{color}\" stroke-width=\"{width}\" stroke-linecap=\"round\" vector-effect=\"non-scaling-stroke\"");
+        assert!(marker.contains(&dot("10", "var(--moss-place-marker-casing, #ffffff)")), "{marker}");
+        assert!(marker.contains(&dot("8", "var(--moss-place-marker, #2d5a2d)")), "{marker}");
         let region = locator_for(40.5, 36.0, Precision::Region);
         let marker = layer_body(&region, "marker");
         let radius: f64 = marker[marker.find(" r=\"").unwrap() + 4..].split('"').next().unwrap().parse().unwrap();
         assert!((70.0..=85.0).contains(&radius), "region fade radius {radius}");
         assert!(region.contains("stop-opacity=\"0.28\""));
         for svg in [&exact, &region] {
-            assert!(svg.contains("r=\"3\" fill=\"var(--moss-place-marker, #2d5a2d)\" data-map-globe-marker=\"true\""));
+            assert!(svg.contains(&format!("{} data-map-globe-marker=\"true\"", dot("6", "var(--moss-place-marker, #2d5a2d)"))));
+        }
+        let place = ResolvedPlace { key: "places/kansai".into(), display: "Kansai".into(), longitude: Some(135.5), latitude: Some(34.7), precision: Precision::Region };
+        let world = PlaceMapTarget { places: vec![place], frame: world_frame(), aggregate_name: Some("places".into()) };
+        let svg = emit_svg(&PlaceMapContext::embedded().unwrap(), &world, "p", 0);
+        assert!(layer_body(&svg, "marker").contains(" r=\"12\""), "{}", layer_body(&svg, "marker"));
+    }
+
+    /// Every dot a layer draws: its centre and its radius in screen px.
+    fn dots(layer: &str) -> Vec<(f64, f64, f64)> {
+        layer
+            .split("<path d=\"M")
+            .skip(1)
+            .map(|rest| {
+                let mut centre = rest[..rest.find("h0").unwrap()].split(' ').map(|value| value.parse::<f64>().unwrap());
+                let width = &rest[rest.find("stroke-width=\"").unwrap() + 14..];
+                let width: f64 = width[..width.find('"').unwrap()].parse().unwrap();
+                (centre.next().unwrap(), centre.next().unwrap(), width / 2.0)
+            })
+            .collect()
+    }
+
+    /// The places root of a site with places all round the world, two of
+    /// them either side of the antimeridian, where the world map's edge
+    /// falls. Every dot, casing included, stays inside the viewBox at the
+    /// narrowest width a map is shown: a dot is drawn in screen px, so there
+    /// it reaches furthest into the viewBox.
+    #[test]
+    fn every_dot_on_the_world_listing_stays_whole() {
+        let table: toml::value::Table = toml::from_str(
+            "[\"Lima\"]\nlat = -12.05\nlng = -77.03\nprecision = \"exact\"\n\
+             [\"Lisbon\"]\nlat = 38.722\nlng = -9.139\nprecision = \"city\"\n\
+             [\"Beirut\"]\nlat = 33.89\nlng = 35.5\nprecision = \"exact\"\n\
+             [\"Bangkok\"]\nlat = 13.75\nlng = 100.5\nprecision = \"exact\"\n\
+             [\"McMurdo\"]\nlat = -77.85\nlng = 166.67\nprecision = \"exact\"\n\
+             [\"Taveuni\"]\nlat = -16.85\nlng = 179.95\nprecision = \"exact\"\n\
+             [\"Wrangel Island\"]\nlat = 71.23\nlng = -179.9\nprecision = \"exact\"\n",
+        )
+        .unwrap();
+        let gazetteer = crate::vault::places::parse_gazetteer(&table);
+        let names: Vec<String> = ["Lima", "Lisbon", "Beirut", "Bangkok", "McMurdo", "Taveuni", "Wrangel Island"].map(String::from).to_vec();
+        let context = PlaceMapContext::embedded().unwrap();
+        let target = context.resolve_aggregate("places", &gazetteer, "places", &names);
+        assert_eq!(target.tier(), FrameTier::World);
+        let svg = emit_svg(&context, &target, "places/index.html", 0);
+        let dots = dots(layer_body(&svg, "marker"));
+        assert_eq!(dots.len(), 2 * names.len(), "a casing and a dot for each place");
+        for (x, y, radius) in dots {
+            let reach = radius * 720.0 / NARROWEST_MAP_PX;
+            assert!(x - reach >= 0.0 && x + reach <= 720.0, "a dot at x={x} reaches {reach} past the side");
+            assert!(y - reach >= 0.0 && y + reach <= 480.0, "a dot at y={y} reaches {reach} past the top or bottom");
         }
     }
 
@@ -1012,8 +1205,7 @@ mod tests {
         assert!(output.contains("data-map-layer=\"relief\""));
         assert!(output.contains("data-map-band=\"100\""));
         assert!(output.contains("fill-rule=\"evenodd\""));
-        assert!(output.contains("data-map-layer=\"marker\""));
-        assert!(output.contains("r=\"4\""));
+        assert!(output.contains("data-map-marker=\"places/kyoto\""));
         assert!(!output.contains("country-border"));
         let document = scraper::Html::parse_fragment(&output);
         let svg_selector = scraper::Selector::parse("svg").unwrap();
@@ -1109,6 +1301,34 @@ mod tests {
                 "{mask_name} (slope={slope}, intercept={intercept}) must zero out at the \
                  flat-ground baseline sin(45deg)={baseline}, got {at_baseline}"
             );
+        }
+    }
+
+    /// The approved design lights each theme with its own gains: the
+    /// highlight mask's slope is 1.878 in the light theme and 1.536 in the
+    /// dark one, the shadow's 0.566 and 0.636. The filter carries one set,
+    /// so each theme's strength tokens must bring it to that theme's gains.
+    #[test]
+    fn each_theme_lights_the_terrain_with_its_own_gains() {
+        let output = emit_svg(&PlaceMapContext::embedded().unwrap(), &populated_target(Precision::Exact), "p", 0);
+        let slope = |mask: &str| -> f64 {
+            let anchor = format!("result=\"{mask}\"><feFuncA type=\"linear\" slope=\"");
+            let rest = &output[output.find(&anchor).unwrap() + anchor.len()..];
+            rest[..rest.find('"').unwrap()].parse::<f64>().unwrap().abs()
+        };
+        for (mask, token) in [("lit-hi-mask", "light-warm-strength"), ("lit-lo-mask", "light-cool-strength")] {
+            assert!(output.contains(&format!("flood-opacity=\"var(--moss-place-{token}, ")), "{token} is not on its flood");
+        }
+        let css = include_str!("../../assets/css/site.css");
+        let token = |block: &str, name: &str| -> f64 {
+            let body = css_block(css, block);
+            let rest = &body[body.find(&format!("--moss-place-{name}:")).unwrap_or_else(|| panic!("{name} missing")) + name.len() + 14..];
+            rest[..rest.find(';').unwrap()].trim().parse().unwrap()
+        };
+        for (block, warm, cool) in [(".moss-place-map {", 1.8778, 0.5657), ("[data-theme=\"dark\"] .moss-place-map {", 1.5364, 0.6364)] {
+            let hi = slope("lit-hi-mask") * token(block, "light-warm-strength");
+            let lo = slope("lit-lo-mask") * token(block, "light-cool-strength");
+            assert!((hi - warm).abs() < 1e-3 && (lo - cool).abs() < 1e-3, "{block} lights at {hi}/{lo}, not {warm}/{cool}");
         }
     }
 
@@ -1222,21 +1442,54 @@ mod tests {
         assert!(output.ends_with("</a></figure>") || output.ends_with("</figure>"));
     }
 
+    /// A listing map marks every member place by its own precision, soft
+    /// fades under dots, and several places on one pixel with one shape
+    /// make one marker. Its label names the listing, not a precision.
     #[test]
-    fn aggregate_target_has_no_centroid_marker() {
-        let mut target = populated_target(Precision::Region);
-        target.aggregate_name = Some("Region".to_string());
-        target.places[0].aggregate_member = true;
-        let output = emit_svg(&PlaceMapContext::embedded().unwrap(), &target, "p", 0);
-        let markers = output
-            .split("data-map-layer=\"marker\"")
-            .nth(1)
-            .unwrap()
-            .split("</g>")
-            .next()
-            .unwrap();
-        assert!(!markers.contains("<circle"));
-        assert!(!output.contains("data-map-globe-marker=\"true\""));
+    fn listing_maps_mark_each_member_once_by_its_own_precision() {
+        let place = |key: &str, longitude: f64, latitude: f64, precision| ResolvedPlace {
+            key: key.to_string(),
+            display: key.to_string(),
+            longitude: Some(longitude),
+            latitude: Some(latitude),
+            precision,
+        };
+        let places = vec![
+            place("places/old-town", 135.77, 35.01, Precision::Exact),
+            place("places/kyoto", 135.77, 35.01, Precision::City),
+            place("places/kansai", 135.5, 34.7, Precision::Region),
+            place("places/nara", 135.8, 34.68, Precision::City),
+        ];
+        let points: Vec<ProjectedPoint> = places.iter().filter_map(ResolvedPlace::point).collect();
+        let frame = Frame::from_points(&points, places.iter().map(|place| place.precision)).unwrap();
+        let target = PlaceMapTarget { places, frame: Some(frame), aggregate_name: Some("places".to_string()) };
+        let svg = emit_svg(&PlaceMapContext::embedded().unwrap(), &target, "p", 0);
+        let markers = layer_body(&svg, "marker");
+        let marked: Vec<&str> = markers
+            .match_indices("data-map-marker=\"")
+            .map(|(index, _)| markers[index + 17..].split('"').next().unwrap())
+            .collect();
+        assert_eq!(marked, ["places/kansai", "places/old-town", "places/nara"], "{markers}");
+        assert!(svg.contains("aria-label=\"Map of places\""));
+    }
+
+    /// The globe's coast is its land rings stroked: every land feature it
+    /// fills has a coast line of its own.
+    #[test]
+    fn globe_strokes_its_coast_from_the_land_rings() {
+        let svg = locator_for(35.5, 33.89, Precision::Exact);
+        let globe = &svg[svg.find("data-map-layer=\"globe\"").unwrap()..];
+        let features = |paint: &str| -> Vec<String> {
+            globe
+                .split("<path ")
+                .filter(|tag| tag.contains(paint))
+                .map(|tag| tag[tag.find("data-globe-feature=\"").unwrap() + 20..].split('"').next().unwrap().to_string())
+                .collect()
+        };
+        let coasts = features("stroke=\"var(--moss-place-globe-coast, #f5f6f4)\"");
+        let lands = features("fill=\"var(--moss-place-globe-land, #d7d5c9)\"");
+        assert!(!lands.is_empty());
+        assert!(lands.iter().all(|land| coasts.contains(land)), "coast {coasts:?}, land {lands:?}");
     }
 
     #[test]
@@ -1244,18 +1497,8 @@ mod tests {
         let context = PlaceMapContext::embedded().unwrap();
         let output = emit_svg(&context, &populated_target(Precision::City), "p", 0);
         assert!(output.contains("data-map-globe-marker=\"true\""));
-        let mut aggregate = populated_target(Precision::City);
-        aggregate.aggregate_name = Some("Kyoto area".to_string());
-        aggregate.places[0].aggregate_member = true;
-        let aggregate_output = emit_svg(&context, &aggregate, "p", 0);
-        assert!(!aggregate_output.contains("data-map-globe-marker=\"true\""));
-    }
-
-    #[test]
-    fn marker_radii_are_fixed_by_precision() {
-        assert_eq!(marker_radius(Precision::Exact), 4.0);
-        assert_eq!(marker_radius(Precision::City), 4.0);
-        assert_eq!(marker_radius(Precision::Country), 20.0);
+        let empty = PlaceMapTarget { places: vec![], frame: None, aggregate_name: None };
+        assert!(!emit_svg(&context, &empty, "p", 0).contains("data-map-globe-marker=\"true\""));
     }
 
     #[test]
@@ -1324,7 +1567,6 @@ mod tests {
                         longitude: Some(point.longitude),
                         latitude: Some(point.latitude),
                         precision,
-                        aggregate_member: false,
                     }],
                     frame: Some(frame),
                     aggregate_name: None,
@@ -1393,7 +1635,6 @@ mod tests {
                 longitude: Some(point.longitude),
                 latitude: Some(point.latitude),
                 precision,
-                aggregate_member: false,
             }],
             frame: Some(frame),
             aggregate_name: None,
@@ -1437,13 +1678,50 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_world_map_keeps_trunk_rivers_and_no_reefs() {
+    fn world_frame() -> Option<Frame> {
         let polar = ProjectedPoint::new(0.0, 89.0).unwrap();
         let frame = Frame::from_points(&[polar], [Precision::Exact].into_iter()).unwrap();
         assert_eq!(frame.tier, FrameTier::World);
-        let target = PlaceMapTarget { places: vec![], frame: Some(frame), aggregate_name: None };
-        let svg = emit_svg(&PlaceMapContext::embedded().unwrap(), &target, "p", 0);
+        Some(frame)
+    }
+
+    fn world_map() -> String {
+        let target = PlaceMapTarget { places: vec![], frame: world_frame(), aggregate_name: None };
+        emit_svg(&PlaceMapContext::embedded().unwrap(), &target, "p", 0)
+    }
+
+    /// The first number an attribute takes after `anchor`.
+    fn number_after(svg: &str, anchor: &str, attribute: &str) -> f64 {
+        let from = svg.find(anchor).unwrap_or_else(|| panic!("no {anchor}"));
+        let rest = &svg[from..];
+        let rest = &rest[rest.find(&format!("{attribute}=\"")).unwrap() + attribute.len() + 2..];
+        rest[..rest.find('"').unwrap()].parse().unwrap()
+    }
+
+    /// The cut-paper shadows, the coast halo and the lighting blur were
+    /// drawn for a 10-degree frame, about 70 px to the degree. The world
+    /// map has about 2.3, so each shrinks by the same ratio: at full size,
+    /// every small band ring on the world map casts a shadow 0.6 degrees
+    /// long, and the terrain reads as shards.
+    #[test]
+    fn effects_shrink_with_the_frame_on_the_world_map() {
+        let locator = locator_for(35.5, 33.89, Precision::Exact);
+        let world = world_map();
+        for (anchor, attribute, full) in [
+            ("<feDropShadow", "dx", 1.4),
+            ("data-map-layer=\"coast\"", "stroke-width", 10.0),
+            ("-height-filter\"", "stdDeviation", 9.0),
+            ("-height-filter\"", "surfaceScale", 78.0),
+        ] {
+            assert_eq!(number_after(&locator, anchor, attribute), full, "{attribute} after {anchor}");
+            let ratio = number_after(&world, anchor, attribute) / full;
+            assert!((0.02..0.05).contains(&ratio), "{attribute} after {anchor} kept {ratio} of its size");
+        }
+    }
+
+    #[test]
+    fn the_world_map_keeps_trunk_rivers_and_no_specks() {
+        let svg = world_map();
         let rivers = layer_body(&svg, "rivers");
         let widths: Vec<f64> = rivers
             .match_indices("stroke-width=\"")
@@ -1455,7 +1733,28 @@ mod tests {
         assert!(!widths.is_empty(), "the world map lost its trunk rivers");
         let floor = river::river_width(WORLD_MAX_RIVER_RANK);
         assert!(widths.iter().all(|&width| width >= floor - 1e-9), "{widths:?}");
-        assert!(!layer_body(&svg, "reefs").contains("<path"));
+        for name in ["reefs", "salt", "built-up"] {
+            assert!(!layer_body(&svg, name).contains("<path"), "the world map draws {name}");
+        }
+    }
+
+    /// The places root inlines its world map, so the map's size is page
+    /// weight on every visit: 82.3 KB of brotli today, drawn from the
+    /// fine tier. It may only grow past 96 KiB with a stated reason.
+    #[test]
+    fn the_world_map_stays_under_its_inline_budget() {
+        const WORLD_MAP_Q11_BROTLI_LIMIT: usize = 96 * 1024;
+        let output = world_map();
+        let mut compressor = brotli::CompressorWriter::new(Vec::new(), 4096, 11, 22);
+        compressor.write_all(output.as_bytes()).unwrap();
+        let compressed = compressor.into_inner();
+        assert!(compressed.len() <= WORLD_MAP_Q11_BROTLI_LIMIT, "raw={} brotli-q11={}", output.len(), compressed.len());
+    }
+
+    #[test]
+    fn the_world_map_has_no_globe_inset() {
+        assert!(!world_map().contains("data-map-layer=\"globe\""));
+        assert!(locator_for(35.5, 33.89, Precision::Exact).contains("data-map-layer=\"globe\""));
     }
 
     #[test]

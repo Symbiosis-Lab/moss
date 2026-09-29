@@ -1674,6 +1674,14 @@ location: "Lisbon"
 
 A coastal locator, for reading the water layer's resolved colour.
 `,
+    "taveuni.md": `---
+title: Taveuni
+uid: "pmt002b"
+location: "Taveuni"
+---
+
+A place on the antimeridian, where the world map's edge falls.
+`,
     ".moss/config.toml": `schema_version = 6
 
 [site]
@@ -1688,6 +1696,11 @@ fields = ["location"]
 lat = 38.722
 lng = -9.139
 precision = "city"
+
+["Taveuni"]
+lat = -16.85
+lng = 179.95
+precision = "exact"
 `,
   },
 };
