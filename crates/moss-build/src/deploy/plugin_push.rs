@@ -232,6 +232,18 @@ pub async fn run_plugin_deploy_inner(
     // manifest there is no generation to check `current` against, and
     // `current` on this path is the PREVIOUS build's tree.
     let sealed = super::one_shot::require_sealed(cx.sealed)?;
+
+    // Force any pending seal to materialize NOW, before the check below reads
+    // `current_generation_id()`. The seal's own materialize phase is
+    // debounced (`build::seal_phase`) since the app and headless `--watch`
+    // no longer promote a generation on every rebuild — without this, a
+    // publish click right after a save would almost always fail
+    // `site_dir_for_plugin`'s check below, because `current` would still lag
+    // the manifest `cx.sealed` already names. A one-shot CLI publish
+    // (`run_plugin_deploy` → `one_shot::build_and_seal`) already materialized
+    // synchronously, so this is a no-op there — settle() only does work when
+    // something is actually pending.
+    crate::build::seal_phase::settle(&mp).await;
     let output_dir = site_dir_for_plugin(&mp, sealed)?;
 
     let manager = match cx.managers.get_or_create(&folder_str) {

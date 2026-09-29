@@ -149,6 +149,113 @@ pub fn gc_roots(
     roots
 }
 
+/// Lock file for `generations_dir.join(gen_id)`, kept beside the directory
+/// rather than inside it: the directory is what deploy walks and serves.
+fn write_lock_path(generations_dir: &Path, gen_id: &str) -> PathBuf {
+    generations_dir.join(format!(".{gen_id}.writing"))
+}
+
+/// An exclusive flock on a generation's `.<id>.writing` file. Moss has no
+/// other cross-process lock on the build store, and a CLI build may run
+/// beside the app on the same folder, so every writer and every removal of a
+/// generation directory goes through this lock.
+///
+/// A writer takes it before creating the directory and calls
+/// [`Self::finish`] only after its copy is complete and promoted. Dropping
+/// it without finishing (a failed copy), or the process exiting mid-copy,
+/// releases the lock but leaves the file, which is how GC recognises the
+/// directory as abandoned. GC takes the same lock before removing any
+/// directory, so a writer that re-derives an old id waits for the removal
+/// to finish instead of copying into a directory being deleted.
+pub struct GenerationWriteLock {
+    /// The open lock file; `same_file::Handle` so identity can be checked
+    /// against the path on every platform.
+    handle: same_file::Handle,
+    path: PathBuf,
+}
+
+/// The outcome of [`GenerationWriteLock::take`].
+enum Take {
+    /// Locked, on the file currently at the path. `created` says whether
+    /// this call created that file, as opposed to finding one left behind.
+    Locked { lock: GenerationWriteLock, created: bool },
+    /// Another handle holds the lock.
+    Busy,
+    /// The file exists but this filesystem cannot lock it.
+    Unlockable(GenerationWriteLock),
+}
+
+impl GenerationWriteLock {
+    /// Take `gen_id`'s write lock for a copy, waiting while anyone else holds
+    /// it. If the filesystem cannot lock at all, the file is still created
+    /// and the copy proceeds: GC keeps any generation whose lock it cannot
+    /// check.
+    pub fn acquire(generations_dir: &Path, gen_id: &str) -> std::io::Result<Self> {
+        crate::build::io_utils::create_output_dir_all(generations_dir)?;
+        match Self::take(generations_dir, gen_id, true)? {
+            Take::Locked { lock, .. } | Take::Unlockable(lock) => Ok(lock),
+            Take::Busy => Err(std::io::Error::other("generation lock reported busy on a blocking lock")),
+        }
+    }
+
+    /// Open (creating if needed) and lock `gen_id`'s lock file, then check
+    /// that the file locked is still the one at the path: a holder that
+    /// finished may have unlinked it between our open and our lock, and a
+    /// lock on an unlinked file protects nothing, so retry on a fresh one.
+    fn take(generations_dir: &Path, gen_id: &str, wait: bool) -> std::io::Result<Take> {
+        use fs2::FileExt;
+        let path = write_lock_path(generations_dir, gen_id);
+        loop {
+            // allow:raw_write an empty lock file, never truncated or written
+            let mut open = std::fs::OpenOptions::new();
+            open.read(true).write(true);
+            let (file, created) = match open.clone().create_new(true).open(&path) {
+                Ok(file) => (file, true),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => match open.open(&path) {
+                    Ok(file) => (file, false),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) => return Err(e),
+                },
+                Err(e) => return Err(e),
+            };
+            let handle = same_file::Handle::from_file(file)?;
+            let locked = if wait { handle.as_file().lock_exclusive() } else { handle.as_file().try_lock_exclusive() };
+            match locked {
+                Ok(()) => {}
+                // fs2's contended error, not a fixed ErrorKind: Windows reports
+                // ERROR_LOCK_VIOLATION, which std does not map to WouldBlock.
+                Err(e) if e.kind() == fs2::lock_contended_error().kind() => return Ok(Take::Busy),
+                Err(e) => {
+                    log::warn!("generation {gen_id}: cannot lock {}: {e}", path.display());
+                    return Ok(Take::Unlockable(Self { handle, path }));
+                }
+            }
+            if same_file::Handle::from_path(&path).is_ok_and(|at_path| at_path == handle) {
+                return Ok(Take::Locked { lock: Self { handle, path }, created });
+            }
+        }
+    }
+
+    /// Done with the generation: remove the lock file while still holding
+    /// it, then release. For a writer this marks the copy complete.
+    pub fn finish(self) {
+        let Self { handle, path } = self;
+        // allow:unlink this generation's own lock file, while its lock is held
+        if let Err(e) = std::fs::remove_file(&path) {
+            log::warn!("failed to remove {}: {e}", path.display());
+        }
+        drop(handle);
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only: called by [`gc_old_generations`] just before it removes a
+    /// directory, with that directory's lock held.
+    pub(crate) static BEFORE_GENERATION_REMOVAL: std::cell::RefCell<Option<Box<dyn FnMut(&Path)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// List the generation-directory names present under `generations_dir`.
 pub fn list_generations(generations_dir: &Path) -> Vec<String> {
     let Ok(rd) = std::fs::read_dir(generations_dir) else {
@@ -161,7 +268,17 @@ pub fn list_generations(generations_dir: &Path) -> Vec<String> {
 }
 
 /// Remove old generation directories, keeping the `n` most-recently-modified
-/// plus everything in `roots`.
+/// plus everything in `roots`, and plus whatever `current_marker` names on
+/// disk when the directory is about to go (another process may have promoted
+/// it after `roots` was computed).
+///
+/// Every removal happens under the directory's [`GenerationWriteLock`]. A
+/// directory whose lock is held, or cannot be checked, is kept. A directory
+/// whose lock file was left behind by a copy that failed or was cut off is
+/// removed even inside the `n`, unless it is a root: it would otherwise take
+/// a retention slot from a real generation. A directory with no lock file is
+/// finished or predates the lock, and gets ordinary retention; treating it
+/// as abandoned could delete a copy an older moss binary is still running.
 ///
 /// Errors are logged but non-fatal: the caller logs them as warnings so a GC
 /// failure never invalidates a build that already succeeded.
@@ -172,6 +289,7 @@ pub fn list_generations(generations_dir: &Path) -> Vec<String> {
 /// Harmless — a re-derived generation is byte-identical to the one it refreshes.
 pub fn gc_old_generations(
     generations_dir: &Path,
+    current_marker: &Path,
     roots: &HashSet<String>,
     n: usize,
 ) -> std::io::Result<()> {
@@ -187,15 +305,50 @@ pub fn gc_old_generations(
     // Sort newest first.
     entries.sort_by(|a, b| b.0.cmp(&a.0));
 
-    let mut removed: Vec<&str> = Vec::new();
-    for (_, path) in entries.iter().skip(n) {
+    let mut removed: Vec<String> = Vec::new();
+    for (idx, (_, path)) in entries.iter().enumerate() {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if roots.contains(name) {
             continue; // pinned: current, in-flight deploy, or last-deployed
         }
-        // allow:unlink an old generation that is neither current, pinned by a deploy, nor being indexed
+        let retained = idx < n;
+        if retained && std::fs::symlink_metadata(write_lock_path(generations_dir, name)).is_err() {
+            continue; // finished and within retention: nothing to lock
+        }
+        let lock = match GenerationWriteLock::take(generations_dir, name, false) {
+            // Its copy finished between the check above and the lock.
+            Ok(Take::Locked { lock, created: true }) if retained => {
+                lock.finish();
+                continue;
+            }
+            Ok(Take::Locked { lock, .. }) => lock,
+            Ok(Take::Busy | Take::Unlockable(_)) | Err(_) => continue, // copying, or cannot tell
+        };
+        // Under the lock no copy of this id is running and none can start.
+        match std::fs::read_to_string(current_marker) {
+            Ok(current) if current.trim() == name => {
+                lock.finish(); // promoted, so complete: drop any stale lock file
+                continue;
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => continue, // cannot tell what is current: keep
+        }
+        #[cfg(test)]
+        BEFORE_GENERATION_REMOVAL.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().as_mut() {
+                hook(path);
+            }
+        });
+        // allow:unlink an old or abandoned generation that is neither current,
+        // pinned by a deploy, nor being indexed, removed under its write lock
         match crate::build::io_utils::remove_output_dir_all(path) {
-            Ok(()) => removed.push(name),
+            Ok(()) => {
+                lock.finish();
+                removed.push(name.to_string());
+            }
+            // Dropped without finishing: the lock file stays, so the next GC
+            // retries this half-removed directory as abandoned.
             Err(e) => log::warn!("generation GC: failed to remove {:?}: {}", path, e),
         }
     }

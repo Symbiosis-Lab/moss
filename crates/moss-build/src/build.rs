@@ -88,6 +88,7 @@ pub mod progress;
 pub mod ports;
 pub(crate) mod process_hooks;
 pub use process_hooks::spawn_process_hooks;
+pub mod seal_phase;
 pub mod ship;
 pub mod terms;
 pub mod place_map;
@@ -98,6 +99,7 @@ pub mod cache;
 // What a `moss build` prints, and the problem count `--strict` reads. Split out
 // of `crate::diagnostics` because the rest of that module is tauri-plugin-log.
 pub mod cli_output;
+pub mod debounce;
 pub mod degrade;
 pub mod embed_handlers;
 pub mod emit;
@@ -1345,15 +1347,15 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                         let mp_for_mat = crate::moss_paths::MossPaths::new(
                             std::path::Path::new(&folder_path_for_mat),
                         );
-                        advertise_sealed(
+                        let pending = advertise_sealed(
                             &seal_ports,
                             &mp_for_mat,
                             &hashes_path,
                             &stage_dir,
                             sealed,
                             assets_for_seal,
-                            |g| store.is_pinned(g),
-                            session_opt.as_ref(),
+                            std::sync::Arc::new(move |g: &str| store.is_pinned(g)),
+                            session_opt.clone(),
                             promotion_epoch,
                             render_seq,
                             publishable,
@@ -1369,6 +1371,14 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                             },
                         )
                         .await;
+                        // Long-lived runtime: debounce the materialize
+                        // (`build::seal_phase`) instead of running it inline
+                        // — this is the fix this whole change exists for.
+                        // Non-blocking: hands the request to the folder's
+                        // lane and returns immediately, so `end_ui_bound()`
+                        // below fires once the (fast) per-build half is done
+                        // rather than waiting out the materialize debounce.
+                        crate::build::seal_phase::request(mp_for_mat.root(), pending);
                     }
                     Err(e) => {
                         log::error!("seal+persist: background work failed: {}", e);
@@ -1422,7 +1432,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                     );
                     let mp = crate::moss_paths::MossPaths::new(std::path::Path::new(&folder_path));
                     let session = crate::system::folder_session::registry().get(&folder_path);
-                    advertise_sealed(
+                    let pending = advertise_sealed(
                         &SealPorts {
                             events: config.host.events.clone(),
                             announcer: config.host.announcer.clone(),
@@ -1433,8 +1443,8 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                         &mp.staging_dir(),
                         sealed,
                         assets_for_advertise.clone(),
-                        |_| false,
-                        session.as_ref(),
+                        std::sync::Arc::new(|_: &str| false),
+                        session.clone(),
                         promotion_epoch,
                         render_seq,
                         publishable,
@@ -1451,6 +1461,11 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                         },
                     )
                     .await;
+                    // CLI / one-shot arm: keep sealing synchronously, exactly
+                    // as before this split — the caller drops the tokio
+                    // runtime as soon as `run_pipeline` returns, so a
+                    // debounced materialize would never get to run.
+                    crate::build::seal_phase::run_now(pending).await;
                 }
                 Err(e) => {
                     log::error!("seal+persist (sync): background work failed: {}", e);
@@ -1696,7 +1711,11 @@ impl SealWait {
 /// The subset of [`HostPorts`](crate::build::HostPorts) a seal tail needs,
 /// cloned ONCE where the tail is launched instead of field-by-field at every
 /// call site — the next port a tail needs joins here instead of growing
-/// `advertise_sealed`'s signature again.
+/// `advertise_sealed`'s signature again. `Clone` because a debounced
+/// materialize (`build/seal_phase.rs`) carries its own copy into a request
+/// that may outlive the call that built it — every field is already an
+/// `Arc`/`Option<Arc<_>>`, so this is a pointer copy, not real cloning.
+#[derive(Clone)]
 pub(crate) struct SealPorts {
     pub events: crate::build::ProgressSink,
     pub announcer: std::sync::Arc<dyn crate::build::ports::announcer::SealAnnouncer>,
@@ -1813,11 +1832,27 @@ fn record_promise_gate(
 // one window a guard-based probe can't see, because `_stage_write_guard` is
 // held uniformly across the whole tail. Unset (the `try_with` miss) on every
 // other call path, which the sampler below treats as "nothing to record".
+// `pub(crate)`: sampled from `build/seal_phase.rs`'s `run_materialize_phase`,
+// which is where `materialize_and_promote`'s call site now lives (the
+// materialize step moved out of `advertise_sealed` so it can be debounced).
 #[cfg(test)]
 tokio::task_local! {
-    static SHIP_PHASE_LEASE_SAMPLE: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+    pub(crate) static SHIP_PHASE_LEASE_SAMPLE: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
+/// The seal's per-build half: everything that depends only on `stage_dir` and
+/// the in-memory `sealed` manifest, never on a materialized generation.
+/// Always runs inline, synchronously, in the seal task — on every watch
+/// rebuild, not just the ones a debounced materialize eventually acts on.
+///
+/// Returns a [`crate::build::seal_phase::PendingSeal`]: the generation-dependent
+/// half (`materialize_and_promote`, generation GC, the search-lane request,
+/// and everything downstream of knowing whether promotion succeeded) moved out
+/// into `build/seal_phase.rs`'s `run_materialize_phase`, so it can be debounced
+/// (idle-fired, or forced via `seal_phase::settle`) instead of running on every
+/// call. See that module's doc for why the split falls exactly here — in
+/// short: `verdict` (Ship vs. Withhold) and the `stage_dir` bytes are both
+/// already final at this point, without touching `generations/<id>/` at all.
 async fn advertise_sealed(
     ports: &SealPorts,
     mp: &crate::moss_paths::MossPaths,
@@ -1825,8 +1860,8 @@ async fn advertise_sealed(
     stage_dir: &std::path::Path,
     mut sealed: crate::build::manifest::SealedManifest,
     assets: Option<std::sync::Arc<crate::types::assets::AssetRegistry>>,
-    is_pinned: impl Fn(&str) -> bool,
-    session: Option<&std::sync::Arc<crate::system::folder_session::FolderSession>>,
+    is_pinned: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    session: Option<std::sync::Arc<crate::system::folder_session::FolderSession>>,
     promotion_epoch: u64,
     // The render `lifecycle::show_render` minted for this build.
     render_seq: Option<u64>,
@@ -1837,29 +1872,26 @@ async fn advertise_sealed(
     // so a `MossPaths` normalization can never drift the two apart. See the
     // step-7b call into `trigger_media_settle_rerender` below.
     folder_path: &str,
-    // The seal tail's two one-off RAII permits — see `SealGuards` for what
-    // each field is and when it is read or dropped.
+    // The seal tail's one-off RAII permits — see `SealGuards` for what each
+    // field is and when it is read or dropped. `final_sweep` is consumed
+    // below, inline; `cache_lease` and `build_root_identity` travel into the
+    // returned `PendingSeal` for the materialize phase to read or drop.
     guards: SealGuards,
-) {
-    let reporter = ports.events.as_ref();
-    let announcer = ports.announcer.as_ref();
+) -> crate::build::seal_phase::PendingSeal {
     let sealed_at = std::time::Instant::now();
-    // The id the coordinator sealed, before the repair pass below rewrites
-    // HTML and re-derives it — the promote line names both, so a sealed id
-    // and a promoted id that differ read as one generation, not two.
-    let sealed_as = sealed.generation_id().to_string();
     // Right after seal, before any repair pass can rewrite `stage_dir`: the
     // reference point `ship_phase`'s integrity check compares against, for
     // every entry it will read from the mutable stage path rather than an
     // immutable CAS blob. This is what makes "seal to ship" a real window —
     // a concurrent build's rewrite anywhere between here and `ship_phase`
-    // below is exactly what the check exists to catch.
+    // (now possibly much later, behind the debounce) is exactly what the
+    // check exists to catch; `verify_ship_integrity` only warns, it never
+    // fails the ship, so a wider window does not turn into a new failure mode.
     sealed.stamp_all_ship_fingerprints(stage_dir);
-    // 0. Read the PREVIOUS on-disk manifest BEFORE step 2 overwrites it, so the
-    //    post-seal asset diff (step 7) compares the freshly-sealed view against
-    //    the prior build. Missing/corrupt → default (empty), so a first build
-    //    treats every materialized variant as new. write_to_disk below clobbers
-    //    this file, hence the read must happen here.
+    // Read the PREVIOUS on-disk manifest BEFORE the write below overwrites it,
+    // so the post-seal asset diff compares the freshly-sealed view against the
+    // prior build. Missing/corrupt → default (empty), so a first build treats
+    // every materialized variant as new.
     //    `None` when the file exists but could not be read or parsed: an
     //    unreadable manifest is not an empty one, and diffing against empty
     //    reads every variant as newly settled.
@@ -1873,32 +1905,34 @@ async fn advertise_sealed(
     // guard that `build_inner` (pipeline.rs) holds across its own
     // stage-writing span. This task runs detached — well after the
     // watcher's `is_rebuilding` lock has already released — so without this
-    // guard, the encode-degrade pass and step 1 below (which read and
-    // rewrite the live, possibly-being-served `stage_dir`) can interleave
-    // with a NEXT rebuild's writes into that same directory, corrupting the
-    // generation that gets promoted to `current`. See
+    // guard, the encode-degrade pass below (which reads and rewrites the
+    // live, possibly-being-served `stage_dir`) can interleave with a NEXT
+    // rebuild's writes into that same directory. See
     // `FolderSession::stage_write_lock` doc comment for the full rationale.
-    // Held from here through the materialize walk, not across anything
-    // before this point — in particular NOT across the `await_completion`
-    // media-encode wait that already happened before `advertise_sealed` was
-    // called.
+    //
+    // Held only across THIS phase's own writes (repair + the hashes.json
+    // below), not across the materialize phase any more — that phase runs
+    // later, often much later behind the seal's idle debounce, and holding a
+    // per-folder write lock for that whole window would serialize every
+    // rebuild behind it, which is exactly the latency this split exists to
+    // remove. `run_materialize_phase` re-acquires the same lock, freshly, for
+    // its own (much shorter) span.
     //
     // It serializes WRITERS. It is not, and cannot be, a reader-side guard:
     // the preview server takes no lock, so the rule that keeps it whole is
-    // that nothing in this tail unlinks from `stage_dir` — unless
-    // `reclaim_stage_dir_when_done` says nobody is left to read it (below).
-    let _stage_write_guard = match session {
+    // that nothing in this phase unlinks from `stage_dir`.
+    let _stage_write_guard = match &session {
         Some(s) => Some(s.lock_stage_write().await),
         None => None,
     };
 
     // Remove every variant that must not ship, then repair the HTML that
-    // referenced it. Runs before `materialize_and_promote` and `write_to_disk`
-    // below, which would otherwise ship bytes it just deleted from stage_dir;
-    // it writes into `stage_dir`, under `_stage_write_guard` above. The
-    // registry is read here because it is the only thing in this tail that
-    // needs one — see `degrade::repair_staged_html` for the four sources and
-    // why their order is what it is.
+    // referenced it. Runs before the hashes.json write below, which would
+    // otherwise describe bytes just deleted from stage_dir; it writes into
+    // `stage_dir`, under `_stage_write_guard` above. The registry is read
+    // here because it is the only thing in this phase that needs one — see
+    // `degrade::repair_staged_html` for the four sources and why their order
+    // is what it is.
     let presence_verdict = crate::build::degrade::repair_staged_html(
         mp,
         stage_dir,
@@ -1925,253 +1959,81 @@ async fn advertise_sealed(
     // docs on the publish/media race this closes.
     record_promise_gate(stage_dir, &sealed, assets.as_ref(), folder_path);
 
-    // 1. Copy stage_dir → generations/<gen-id>/ and swap `current`. mat_ok gates
-    //    advertisement to deploy: a failed materialize must NOT publish a
-    //    manifest whose generation_dir is partial/absent.
-    //    `Superseded` is the third outcome: a NEWER build already
-    //    promoted, so this tail's swap was refused. Not an error — but not
-    //    `mat_ok` either, since advertising this older manifest to deploy rolls
-    //    the published site back exactly as the symlink swap would have.
-    use crate::build::ship::Promotion;
-    let promotion = crate::build::ship::materialize_and_promote(
-        &sealed,
-        mp,
-        stage_dir,
-        None,
-        promotion_epoch,
-        render_seq,
-        verdict,
-    );
-    match &promotion {
-        Ok(Promotion::Promoted) => log::info!(
-            "promoted gen {} (sealed as {}, epoch {}, render #{}, {} files) {} ms after seal",
-            sealed.generation_id(),
-            sealed_as,
-            promotion_epoch,
-            render_seq.map_or("none".to_string(), |r| r.to_string()),
-            sealed.files().len(),
-            sealed_at.elapsed().as_millis()
-        ),
-        Ok(Promotion::Superseded) => log::info!(
-            "advertise_sealed: generation {} was superseded before promotion",
-            sealed.generation_id()
-        ),
-        // Said once, with its reason, by `materialize_and_promote`.
-        Ok(Promotion::Withheld(_)) => {}
-        Err(_) => log::error!("advertise_sealed: materialize failed — current_ptr stays put"),
-    }
-    // Observed at the plain path on purpose: `build_dir()` follows the handle,
-    // so it can never disagree with the start identity.
-    crate::build::lifecycle::root_identity::log_build_root(&mp.root().join("build.nosync"), "ship", guards.build_root_identity);
-    let mat_ok = matches!(promotion, Ok(Promotion::Promoted));
-    let owns_shared = crate::build::ship::tail_owns_shared_state(&promotion);
-
-    // `materialize_and_promote` (ship_phase) was the last thing above that
-    // could still read a CAS blob a concurrent GC might collect, so the lease
-    // has done its job — drop it now, before step 3 below can reach this same
-    // tail's own `collect_build_store` and trigger cache GC: held any longer
-    // and every promoted build would defer its own GC pass against its own
-    // still-open lease. Residual accepted here: on a vault rebuilt
-    // continuously this still shrinks each build's GC-eligible window
-    // relative to the old (too-early) drop point, so cache GC can end up
-    // deferred for a whole active-editing session — fine, a skipped GC is
-    // already non-fatal and retried next build.
-    //
-    // Test-only: hand `cache_lease_ship_tests.rs` the writer count exactly
-    // here, still inside the window the fix's whole point is to hold open.
-    // A no-op outside that test's `SHIP_PHASE_LEASE_SAMPLE` scope.
-    #[cfg(test)]
-    let _ = SHIP_PHASE_LEASE_SAMPLE.try_with(|sample| {
-        sample.store(crate::build::lifecycle::snapshot(mp).2, std::sync::atomic::Ordering::SeqCst);
-    });
-    drop(guards.cache_lease);
-
-    // Nothing reads the held bytes past `materialize_and_promote`, and `sealed`
-    // is about to be adopted as the manifest deploy keeps for the folder's
-    // lifetime. A plain statement, not a branch: whatever the promotion was
-    // (`Promoted`, `Superseded`, `Withheld`, `Err`), the tail is done with them.
-    sealed.release_held();
-
-    // Say it out loud, and only for a real swap: this instant — not
-    // `BuildComplete`, which fired back when `await_completion` returned — is
-    // when the user's change became what the preview loads. `Superseded`,
-    // `Withheld` and `Err` all leave `current` where it was, so none of them
-    // may claim it. Announced here rather than after step 2 so nothing between
-    // the swap and the announcement can fail and swallow it.
-    if mat_ok {
-        announcer.promoted(sealed.generation_id());
-    }
-
-    // 2. Persist so the next build's load_previous_hashes reads a complete
-    //    manifest — AFTER the promotion, and never from a superseded tail:
-    //    `hashes.json` and `current` are read as a pair (see
-    //    `ship::tail_owns_shared_state`).
-    if owns_shared {
+    // Persist so the next build's load_previous_hashes reads a complete
+    // manifest. This is the "hashes.json incremental baseline": it needs only
+    // the in-memory `sealed` manifest and `stage_dir`, both final at this
+    // point, never `generations/<id>/` — so it stays per-build rather than
+    // waiting on the (now debounced) materialize. Gated on `verdict` alone
+    // (not on whether materialize will later succeed, race, or get
+    // superseded): a `Withhold` here is the one case where writing would make
+    // `hashes.json` describe a page set nothing will ever promote, the same
+    // reason the pre-split code refused it via `tail_owns_shared_state`. The
+    // materialize phase's own `Superseded`/`Err` outcomes need no matching
+    // withdrawal here — the debouncer is level-triggered, so whichever
+    // build's phase-1 ran LAST is the one whose hashes.json write stands by
+    // the time materialize actually runs.
+    if verdict == crate::build::ship::ShipVerdict::Ship {
         if let Err(e) = sealed.write_to_disk(hashes_path) {
             log::warn!("advertise_sealed: failed to write hashes.json: {}", e);
         }
     }
 
-    // 3. Retain generations + sweep the cache. Non-fatal. Generation GC stays
-    //    inside the `_stage_write_guard` span, which serializes it against the
-    //    next rebuild's promotion; the cache sweep runs only when no build or
-    //    encode holds a cache lease (`store_gc::maybe_gc_cache`). Blocking
-    //    work, so it goes to the blocking pool.
-    if mat_ok {
-        // `project_root()`, not `root()`: `MossPaths::new` appends `.moss`, so
-        // handing it the `.moss` dir builds paths under `.moss/.moss/` and the
-        // collector sweeps an empty tree.
-        let project_root = mp.project_root().to_path_buf();
-        let gen_id = sealed.generation_id().to_string();
-        // Resolve the pin set HERE, on this thread: `is_pinned` borrows
-        // `AppState` and cannot cross into the blocking pool. A generation
-        // pinned now cannot become unpinned in a way that matters — unpinning
-        // only ever makes a directory *more* collectable, and missing that
-        // costs one extra retained generation, not a deleted live upload.
-        // Also fold in the search lane's in-flight set: a
-        // generation the lane is still indexing must survive GC exactly like
-        // an in-flight deploy does — this is the same skip
-        // `ship::gc_old_generations` used to apply directly.
-        let pinned: std::collections::HashSet<String> =
-            crate::build::store_gc::list_generations(&mp.generations_dir())
-                .into_iter()
-                .filter(|g| is_pinned(g) || crate::build::feeds::search_lane::is_indexing(mp, g))
-                .collect();
-        let _ = tokio::task::spawn_blocking(move || {
-            let mp = crate::moss_paths::MossPaths::new(&project_root);
-            collect_build_store(&mp, &gen_id, &pinned);
-        })
-        .await;
-        // 3b. Hand the FROZEN generation to the search lane — staging
-        //     is wrong, the next build rewrites it. Nothing here awaits.
-        //     `Freshness::Now` (a process that exits when the build returns)
-        //     already indexed synchronously inside the build, and a request
-        //     issued here would die with the runtime mid-index — so the
-        //     promise and its keeper now gate on the SAME value (they used
-        //     to sit on different predicates).
-        use crate::build::feeds::search_lane as lane;
-        if matches!(freshness, lane::Freshness::Lane) && lane::enabled_for(mp) {
-            let want = lane::PageSet::of(&sealed.site_hashes_view().files);
-            lane::request(mp, sealed.generation_id(), want);
-        }
-    }
-
-    // 4. Staging's stale-file and stale-dir sweep used to run here. It now
-    //    runs at the START of the next build (`pipeline::sweep_staging`),
-    //    because the preview server is reading `stage_dir` at this instant:
-    //    `pipeline::run` pointed it there when the render finished and nothing
-    //    moves it off until the next build begins, so an unlink here takes a
-    //    file out from under a live reader. Nothing is lost by waiting —
-    //    `ship_phase` copies `sealed.files()` and nothing else, so a stale
-    //    staged file could never reach a generation anyway, and the next
-    //    build sweeps against the `hashes.json` written just above, which is
-    //    the same view this sweep would have used. `owns_shared` made the same
-    //    judgement there that reading the persisted manifest makes here: a
-    //    superseded tail does not write `hashes.json`, so its view never
-    //    becomes the one the next build sweeps by.
-    let view = sealed.site_hashes_view();
-
-    // Seal-persist-race-404 fix: release the stage-write guard now — steps
-    // 2-3 (the only ones touching `stage_dir`) are done. Everything below
-    // (advertising the manifest, progress events) doesn't touch the
-    // filesystem, so there's nothing left to protect.
+    // Seal-persist-race-404 fix: release the stage-write guard now — the
+    // repair pass and the hashes.json write above are the only things in
+    // this phase that touch `stage_dir`/`hashes.json`. Dropped before
+    // `session` moves into the returned `PendingSeal` below, and before the
+    // guard could otherwise outlive the borrow it holds on `session`.
     drop(_stage_write_guard);
 
-    // Compute the post-seal asset diff HERE (step 7 emits it) while `view` still
-    // borrows `sealed` — step 5 below MOVES `sealed` into the deploy slot. The
-    // result is an owned Vec, so the borrow ends here.
+    // Post-seal asset diff (`AssetsSettled` / the LQIP swap): its real
+    // dependency is `stage_dir`, which every build repairs above regardless
+    // of whether this build's generation is ever promoted — the preview reads
+    // `staging/`, not a generation, so a freshly-encoded variant is visible to
+    // it the moment repair_staged_html finishes, not when ship_phase later
+    // copies the same bytes into `generations/<id>/`. So this stays gated on
+    // `verdict` (was staging trustworthy this build?), same as the hashes.json
+    // write above — NOT on whether materialize later succeeds, which is a
+    // strictly narrower (and, for a materialize I/O failure specifically,
+    // wrong) condition: a failed COPY into the generation directory says
+    // nothing about whether the SOURCE bytes in staging, which is what the
+    // frontend actually fetches, are fine.
+    let view = sealed.site_hashes_view();
     let settled_changed = match &previous_hashes {
         Some(previous) => diff_settled_assets(previous, view),
         None => diff_settled_assets(&Default::default(), view),
     };
-
-    // 4b. Classify what publishing this generation would change on the live
-    //     site, against the record of the last publish that landed — or, with
-    //     no record, against the last deployed generation still on disk
-    //     (`manifest::backfill`). `tail_speaks` decides whether this tail may
-    //     describe a publish at all; `None` means it has nothing to say, and
-    //     step 5b then leaves the stash alone (see its doc comment).
-    //
-    //     The LOCAL arms run before step 5, borrowing `sealed` rather than
-    //     cloning it: the app's deploy waits on `has_ui_bound()`, which this
-    //     whole function holds, so moving the walk later shortens nobody's wait
-    //     and the clone would cost a manifest copy per seal. A headless deploy
-    //     needs no such wait: `headless_for` leaves `spawner: None`. Only
-    //     the AskServer arm pays a clone, and only when a port exists — the
-    //     price of resolving the network ask after step 5. Here because this
-    //     is the one point where a complete manifest exists — on every path,
-    //     including the one-shot, which awaits this same function inline.
-    use crate::build::manifest::backfill::{self, SealVerdict};
-    let verdict =
-        backfill::for_seal(mp, backfill::tail_speaks(&sealed, mat_ok, owns_shared)).await;
-    // The server ask (the AskServer arm) is deliberately NOT resolved here:
-    // it is a network call, and step 5 below is what deploy waits on. Clone
-    // its two inputs out of `sealed` before step 5 moves it, resolve after.
-    let server_ask = match (&verdict, &ports.server_diff) {
-        (Some(SealVerdict::AskServer), Some(_)) => {
-            Some((sealed.files().clone(), sealed.generation_id().to_string()))
-        }
-        _ => None,
-    };
-
-    // 5. Advertise the sealed manifest to deploy ONLY when its generation
-    //    materialized on disk (mat_ok).
-    if mat_ok {
-        announcer.adopt_sealed(sealed).await;
-    }
-
-    // 5b. Stash the change set as a read model for webviews that boot between
-    //     builds (pull via `deploy::get_publish_change_set`), then push it to
-    //     the ones already listening. A tail with nothing to say (4b) does
-    //     neither, and does not CLEAR: the manifest step 5 left standing is
-    //     still publishable and the standing stash describes it — they are a
-    //     pair (`AppState::current_change_set`), keyed by folder on both sides.
-    //     Resolving AskServer here — after step 5 — is what keeps a slow
-    //     server off the publish path: it can delay this stash refresh (by
-    //     the port's bounded timeout), never the manifest deploy reads.
-    let change_set = match verdict {
-        None => None,
-        Some(SealVerdict::Ready(set)) => Some(set),
-        Some(SealVerdict::AskServer) => Some(match (&ports.server_diff, server_ask) {
-            (Some(port), Some((files, gen_id))) => {
-                backfill::from_server(port, files, gen_id).await
-            }
-            _ => Default::default(),
-        }),
-    };
-    announcer
-        .publish_change_set(mp.project_root(), change_set)
-        .await;
-
-    // 6. Emit the "Sealed" progress tick (mat_ok-gated).
-    reporter.report(&crate::build::progress::PipelineEvent::BackgroundProgress {
-        task: "sealing".to_string(),
-        current: 1,
-        total: 1,
-        message: if mat_ok { "Sealed".to_string() } else { "Sealed (materialize failed)".to_string() },
-        completed: true,
-        advisories: vec![],
-    });
-
-    // 7. Post-seal asset sweep (2026-07-02): the one authoritative "background
-    //    variants have materialized" signal, decoupled from the watch refresh-
-    //    diff (which runs on a pre-background snapshot that can never contain the
-    //    freshly-encoded .webp). Diff the sealed view's image/video variants
-    //    against the previous manifest and, if any are new-or-changed, emit
-    //    AssetsSettled so the frontend swaps each LQIP placeholder to the real
-    //    variant via the iframe's page-agnostic srcset cache-bust. Only when
-    //    mat_ok (the variants are actually on disk under current/). Empty set →
-    //    nothing emitted (pure text edit / identical re-encode).
-    if mat_ok && !settled_changed.is_empty() {
-        // 7b. Two settle kinds have no catch-up path once a page has already
+    if verdict == crate::build::ship::ShipVerdict::Ship && !settled_changed.is_empty() {
+        // Two settle kinds have no catch-up path once a page has already
         // shipped a placeholder that consumed them — see
         // `trigger_media_settle_rerender`'s doc for the full case-by-case
         // reasoning. Reuses the render's own existing trigger path rather
         // than growing a second one here.
         trigger_media_settle_rerender(folder_path, &settled_changed, previous_hashes.as_ref());
-        reporter.report(&crate::build::progress::PipelineEvent::AssetsSettled {
+        ports.events.report(&crate::build::progress::PipelineEvent::AssetsSettled {
             changed: settled_changed,
         });
+    }
+
+    // Everything from here down needs a materialized generation (or needs to
+    // know whether one exists) — handed to the materialize phase, which runs
+    // it now (the CLI/one-shot arm) or debounced (the long-lived arm). The
+    // stage-write guard is dropped here, not carried into that phase: it will
+    // re-acquire its own, later, only for the span that actually reads
+    // `stage_dir`.
+    crate::build::seal_phase::PendingSeal {
+        sealed,
+        verdict,
+        ports: ports.clone(),
+        folder_path: folder_path.to_string(),
+        stage_dir: stage_dir.to_path_buf(),
+        sealed_at,
+        promotion_epoch,
+        render_seq,
+        freshness,
+        is_pinned,
+        session,
+        cache_lease: guards.cache_lease,
+        build_root_identity: guards.build_root_identity,
     }
 }
 
@@ -2257,7 +2119,7 @@ fn trigger_media_settle_rerender(
 ///
 /// **Callers must hold the per-folder `stage_write_lock`** for generation GC;
 /// the cache sweep gates itself on the folder's cache leases.
-fn collect_build_store(
+pub(crate) fn collect_build_store(
     mp: &crate::moss_paths::MossPaths,
     current_gen_id: &str,
     pinned: &std::collections::HashSet<String>,
@@ -2277,7 +2139,7 @@ fn collect_build_store(
         crate::build::site_config::get_build_keep_generations(&project_path),
         &mp.build_dir(),
     );
-    if let Err(e) = store_gc::gc_old_generations(&mp.generations_dir(), &roots, keep) {
+    if let Err(e) = store_gc::gc_old_generations(&mp.generations_dir(), &mp.current_generation_marker(), &roots, keep) {
         log::warn!("generation GC failed (non-fatal): {}", e);
     }
     store_gc::maybe_gc_cache(mp);

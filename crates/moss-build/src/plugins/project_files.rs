@@ -386,6 +386,15 @@ fn resolve_plugin_project_path(
 /// * Files are scoped to the active generation (.moss/build.nosync/current/) only
 /// Shared body for read_site_file — called by the Tauri command and the engine
 /// arm (so QuickJS plugins can read built-site bytes, not just webview callers).
+///
+/// Reads `current_ptr()`, which the seal's materialize phase now debounces
+/// (`build::seal_phase`) rather than updating on every build — safe here
+/// specifically because a plugin's own read of this path happens from its
+/// deploy hook, which runs only after the publish path has already forced a
+/// synchronous seal (`build::seal_phase::settle`) so `current_ptr()` matches
+/// the generation being published. A caller reaching this outside that
+/// window would see whatever generation last materialized, same as before
+/// this stage — the debounce widens that window, it does not create it.
 pub async fn read_site_file_impl(
     project_path: &str,
     relative_path: &str,
@@ -546,6 +555,16 @@ pub fn list_files_in_dir(site_dir: &std::path::Path) -> Vec<SiteFileInfo> {
 }
 
 /// Shared body for list_site_files_with_sizes — called by the Tauri command and the engine arm.
+///
+/// Reads `current_ptr()`, which the seal's materialize phase now debounces
+/// (`build::seal_phase`). Safe unlike a baked render: this is a live,
+/// on-demand query a frontend panel re-invokes each time it is shown, not a
+/// value computed once during a render and then frozen into shipped HTML —
+/// so a call made mid-debounce just reports the last-materialized
+/// generation's sizes, and the next call after settling reports the new
+/// ones. No permanent staleness to bake in, unlike `color_extract`'s render-
+/// time reads (which this stage moved off `current_ptr()` for exactly that
+/// reason).
 pub fn list_site_files_with_sizes_impl(project_path: &std::path::Path) -> Vec<SiteFileInfo> {
     let site_dir = crate::moss_paths::MossPaths::new(project_path).current_ptr();
     list_files_in_dir(&site_dir)

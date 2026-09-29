@@ -859,9 +859,11 @@ fn card_color_video_resolves_thumbnail_through_ladder() {
     // CoverType::Video must route through resolve_color_source_path's
     // .mp4 → .thumb.jpg rewrite from the shared entry point too —
     // same pin as video_cover_resolves_and_extracts_end_to_end, but
-    // through resolve_card_color.
+    // through resolve_card_color. `staging/`, not `current/`:
+    // resolve_card_color reads THIS build's own render-time output, which is
+    // staging — see the "reads fresh render output" tests below for why.
     let tmp = repo_tmp();
-    let out_dir = tmp.path().join(".moss/build.nosync/current/videos");
+    let out_dir = tmp.path().join(".moss/build.nosync/staging/videos");
     std::fs::create_dir_all(&out_dir).unwrap();
     let img = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([0u8, 0, 255]));
     image::DynamicImage::ImageRgb8(img)
@@ -894,7 +896,7 @@ fn card_color_video_resolves_thumbnail_through_ladder() {
 #[test]
 fn card_color_video_self_heals_once_the_poster_lands() {
     let tmp = repo_tmp();
-    let out_dir = tmp.path().join(".moss/build.nosync/current/videos");
+    let out_dir = tmp.path().join(".moss/build.nosync/staging/videos");
     std::fs::create_dir_all(&out_dir).unwrap();
 
     // Before: background video conversion hasn't produced the thumbnail yet —
@@ -933,6 +935,49 @@ fn card_color_video_self_heals_once_the_poster_lands() {
             c.starts_with("hsla(240,") || c.starts_with("hsla(239,") || c.starts_with("hsla(241,")
         }),
         "expected blue hue once the poster exists, got {after:?}"
+    );
+}
+
+/// `current` can lag `staging` by up to the seal's own debounce window
+/// (`build::seal_phase`'s `IDLE`/`MAX_DEFER`), not just one build. A render
+/// that reads `current_ptr()` here would bake
+/// whichever color a stale — or absent — generation happened to have,
+/// permanently, since nothing re-triggers this render once the real
+/// generation eventually seals. Plant a STALE poster under `current/` and a
+/// FRESH, different-colored one under `staging/` (this build's own output,
+/// written before this call, every build, regardless of whether its
+/// generation is ever promoted) and require the fresh one.
+#[test]
+fn card_color_video_reads_this_builds_staging_not_a_lagging_current_generation() {
+    let tmp = repo_tmp();
+    let stale_dir = tmp.path().join(".moss/build.nosync/current/videos");
+    let fresh_dir = tmp.path().join(".moss/build.nosync/staging/videos");
+    std::fs::create_dir_all(&stale_dir).unwrap();
+    std::fs::create_dir_all(&fresh_dir).unwrap();
+
+    // The stale generation's poster from several debounced seals ago: green.
+    let stale = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([0u8, 255, 0]));
+    image::DynamicImage::ImageRgb8(stale)
+        .save_with_format(stale_dir.join("clip.thumb.jpg"), image::ImageFormat::Jpeg)
+        .unwrap();
+    // This build's own, not-yet-materialized poster: red.
+    let fresh = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([255, 0, 0]));
+    image::DynamicImage::ImageRgb8(fresh)
+        .save_with_format(fresh_dir.join("clip.thumb.jpg"), image::ImageFormat::Jpeg)
+        .unwrap();
+
+    let color = resolve_card_color(
+        Some("videos/clip.mp4"),
+        Some(CoverType::Video),
+        Some(tmp.path()),
+        None,
+    );
+    assert!(
+        color.as_deref().is_some_and(|c| {
+            c.starts_with("hsla(0,") || c.starts_with("hsla(359,") || c.starts_with("hsla(1,")
+        }),
+        "expected red (this build's own staging output), got {color:?} — reading a stale \
+         `current` generation instead would give green"
     );
 }
 

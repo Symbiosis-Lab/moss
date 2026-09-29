@@ -47,6 +47,14 @@ fn field<'a>(line: &'a str, key: &str) -> &'a str {
 /// seal tail is one of them. `block_on`'s own root future is not counted
 /// (only `tokio::spawn`ed work is), which is what makes this reach 0 rather
 /// than spin until the timeout.
+///
+/// No longer used to wait for the seal itself (see [`until_shipped`]): once
+/// the seal's materialize phase is debounced (`moss_build::build::seal_phase`),
+/// its lane spawns a background task that parks forever waiting for its NEXT
+/// request rather than exiting, so the runtime never reaches 0 alive tasks
+/// again after the first build that reaches it. Kept for callers that only
+/// care about the render/encode work finishing, ahead of forcing the seal.
+#[allow(dead_code)]
 async fn until_quiet() {
     let metrics = tokio::runtime::Handle::current().metrics();
     for _ in 0..4000 {
@@ -59,6 +67,22 @@ async fn until_quiet() {
         "background seal work never finished: {} tasks alive",
         metrics.num_alive_tasks()
     );
+}
+
+/// Wait for the detached tail to hand off to the seal's (now debounced)
+/// materialize phase, then force it — repeatedly, since the hand-off itself
+/// races this test's own polling and `settle` is a no-op until something is
+/// actually pending. Replaces `until_quiet` as this file's "the seal
+/// finished" signal for the reason documented on that function.
+async fn until_shipped(mp: &moss_build::moss_paths::MossPaths) {
+    for _ in 0..4000 {
+        moss_build::build::seal_phase::settle(mp).await;
+        if !lines_containing("build.root phase=ship").is_empty() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    panic!("the seal's materialize phase never ran (no build.root phase=ship line)");
 }
 
 /// One build, held long enough to see its own detached seal tail (mirrors a
@@ -114,7 +138,8 @@ async fn build_and_serve_report_the_same_root_identity_through_every_phase() {
     .await
     .expect("build");
 
-    until_quiet().await;
+    let mp = moss_build::moss_paths::MossPaths::new(&folder);
+    until_shipped(&mp).await;
 
     let start = lines_containing("build.root phase=start");
     let ship = lines_containing("build.root phase=ship");

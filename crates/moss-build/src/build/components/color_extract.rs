@@ -691,12 +691,23 @@ pub fn resolve_card_color(
             // Rungs 2–3: static page scan; rung 4: dark default. External
             // URLs and missing files land on the default — an iframe
             // cover always produces a color.
+            //
+            // `staging_dir()`, not `current_ptr()`: this call runs during
+            // THIS build's render, every build, and the render's own output
+            // for this exact build is what has to be there — `staging/` is
+            // written fresh on every build regardless of whether its
+            // generation is ever promoted (`build::seal_phase` debounces
+            // materialize, not the render). `current_ptr()` can now lag
+            // behind by many builds, and a color resolved from it here would
+            // bake a stale — or, for a page this build just added, entirely
+            // missing — result permanently into rendered HTML, with no later
+            // event that ever re-triggers this render to fix it.
             let scanned = root
                 .and_then(|root| {
                     resolve_color_source_path(
                         path_part,
                         root,
-                        &crate::moss_paths::MossPaths::new(root).current_ptr(),
+                        &crate::moss_paths::MossPaths::new(root).staging_dir(),
                     )
                 })
                 .and_then(|p| extract_webpage_color(&p));
@@ -713,10 +724,16 @@ pub fn resolve_card_color(
                 }
             }
             let root = root?;
+            // `staging_dir()`, not `current_ptr()` — see the iframe branch's
+            // comment above; it applies here even more directly, since a
+            // video's thumbnail (`resolve_color_source_path`'s
+            // `to_thumb_if_video` arm) is output-only and NEVER falls back to
+            // a source file, so this path is the only place its bytes are
+            // ever read from.
             let resolved = resolve_color_source_path(
                 path_part,
                 root,
-                &crate::moss_paths::MossPaths::new(root).current_ptr(),
+                &crate::moss_paths::MossPaths::new(root).staging_dir(),
             )?;
             extract_dominant_color(&resolved)
         }

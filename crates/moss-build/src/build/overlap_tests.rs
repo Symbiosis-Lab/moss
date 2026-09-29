@@ -157,12 +157,19 @@ struct Held {
 }
 
 impl Held {
-    /// Run the tail to its end and hand back the manifest it gave deploy. Panics when
-    /// the tail was superseded or withheld and gave deploy nothing.
-    async fn release(self) -> SealedManifest {
+    /// Run the tail to its end, force its now-debounced materialize phase to
+    /// complete (`seal_phase::settle` — this harness's `Task` future resolves
+    /// as soon as the per-build half hands off to the debounce lane, before
+    /// `ship_phase`/`materialize_and_promote` ever runs), and hand back the
+    /// manifest it gave deploy. Panics when the tail was superseded or
+    /// withheld and gave deploy nothing.
+    async fn release(self, mp: &crate::moss_paths::MossPaths) -> SealedManifest {
         tokio::time::timeout(std::time::Duration::from_secs(60), self.tail)
             .await
             .expect("the seal tail must finish");
+        tokio::time::timeout(std::time::Duration::from_secs(60), crate::build::seal_phase::settle(mp))
+            .await
+            .expect("the materialize phase must settle");
         let sealed = self.sealed.lock().unwrap().take();
         sealed.expect("the tail must have promoted its generation and adopted the manifest")
     }
@@ -364,7 +371,7 @@ async fn overlap(edit: &Edit) -> Outcome {
     }
 
     // A ships, from a stage that is now B's.
-    let a_sealed = a.release().await;
+    let a_sealed = a.release(&vault.mp).await;
     assert_eq!(
         vault.generations(),
         BTreeSet::from([gen_0.clone(), a_sealed.generation_id().to_string()]),
@@ -374,7 +381,7 @@ async fn overlap(edit: &Edit) -> Outcome {
     let diverging = files_differing_from_manifest(&vault.mp.generation_dir(a_sealed.generation_id()), &a_sealed);
 
     // B's own tail, after A's.
-    let b_sealed = b.release().await;
+    let b_sealed = b.release(&vault.mp).await;
     let b_diverging = files_differing_from_manifest(&vault.mp.generation_dir(b_sealed.generation_id()), &b_sealed);
     assert_eq!(vault.mp.current_generation_id().unwrap(), b_sealed.generation_id());
 

@@ -1953,6 +1953,12 @@ async fn a_rebuild_sweeps_staging_only_when_the_render_on_screen_is_promoted() {
 
     build().await.expect("build 1");
     drained().await;
+    // The materialize phase is now debounced (`build::seal_phase`) rather
+    // than running inline in the detached tail — `drained()` only waits for
+    // the (fast) per-build half, not for `ship_phase`/promotion. Force it so
+    // the assertions below, which are specifically about promotion, see a
+    // deterministic state rather than racing the idle timer.
+    crate::build::seal_phase::settle(&mp).await;
     assert!(mp.current_ptr().exists(), "build 1's tail promoted its render");
 
     let orphan = mp.staging_dir().join("orphan.txt");
@@ -1961,6 +1967,7 @@ async fn a_rebuild_sweeps_staging_only_when_the_render_on_screen_is_promoted() {
     assert!(!orphan.exists(), "a caught-up rebuild sweeps what no manifest names");
     assert_eq!(*cell.read().unwrap(), mp.staging_dir(), "and ends showing its own render");
     drained().await;
+    crate::build::seal_phase::settle(&mp).await;
 
     crate::build::lifecycle::show_render(&mp, true);
     let orphan = mp.staging_dir().join("orphan-2.txt");

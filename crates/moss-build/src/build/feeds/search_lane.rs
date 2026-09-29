@@ -12,9 +12,8 @@
 //! registrant, and no seal may await one.** Instead:
 //!
 //! ```text
-//!   build N  ──seal──► generation N frozen ──request(fp_N)──►  lane
-//!                                                               │ debounce
-//!                                                               │ index generations/<N>/
+//!   build N  ──seal (already debounced)──► generation N frozen ──request(fp_N)──►  lane
+//!                                                                                    │ index generations/<N>/
 //!                                                               ▼
 //!                                          .moss/build.nosync/index/<fp_N>/  +  receipt.json
 //!   build N+1 ──adopt_into(receipt)──► staging + PendingManifest
@@ -41,43 +40,33 @@
 //!
 //! # Staleness budget
 //!
-//! Editors autosave every 5–13 s while typing, so a 2 s `IDLE` window used to
-//! elapse between nearly every pair of saves and re-index on almost all of
-//! them. `IDLE` is now 20 s — longer than the gap between autosaves — so a
-//! typing session collapses to one index pass, roughly `IDLE + index_time`
-//! after the writer stops. `MAX_DEFER` still bounds continuous editing to an
-//! index at least every 2 minutes, so preview search may lag the vault by up
-//! to `MAX_DEFER + index_time` in the worst case. Nothing else consumes the
-//! index, so nothing else observes the lag. [`settle_for_publish`] is the
-//! publish path's sync point, so a deploy never ships a stale index.
+//! The lane itself no longer debounces — [`request`] is called only from the
+//! seal's own debounced tail (`build::debounce`, `build.rs`'s
+//! `seal_debounce` instance), which already collapses a burst of autosaves to
+//! one seal after its own idle window. A second idle wait here would only add
+//! a further delay on top of that one without removing any real work — the
+//! search lane's old `IDLE`/`MAX_DEFER` (2 s, then 20 s) governed how often
+//! the LANE re-indexed a generation that materialized on every save; now a
+//! generation to index shows up at most once per debounced seal, already
+//! rate-limited. So the lane indexes the moment [`request`] hands it a
+//! generation, and preview search lags the vault by roughly the seal's own
+//! debounce (`build::debounce::IDLE`/`MAX_DEFER`) plus `index_time`. Nothing
+//! else consumes the index, so nothing else observes the lag.
+//! [`settle_for_publish`] is the publish path's sync point, so a deploy never
+//! ships a stale index (it forces the seal's own pending debounce first, then
+//! finds this already caught up — see `build.rs`'s `settle`).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-// `Instant`, not `std::time::Instant`: `quiesce`'s `MAX_DEFER` check has to
-// see the same clock its `sleep(IDLE)` races against, or a paused-clock test
-// of the deferral bound would measure real wall time against simulated time.
-use tokio::time::Instant;
 
 use crate::build::feeds::search;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::served_path::ServedPath;
 use crate::moss_paths::MossPaths;
 use crate::types::content::SiteHashes;
-
-/// Quiet period a request must survive before the lane indexes. Set longer
-/// than the 5–13 s gap between autosaves, so a typing session collapses to
-/// one index pass after the writer pauses instead of re-indexing after
-/// nearly every save.
-const IDLE: Duration = Duration::from_secs(20);
-
-/// Upper bound on deferral under sustained saving. Without it a vault being
-/// edited continuously would never index at all; continuous editing still
-/// indexes at least this often.
-const MAX_DEFER: Duration = Duration::from_secs(120);
 
 // ---------------------------------------------------------------------------
 // PageSetFp
@@ -641,15 +630,18 @@ pub fn request(mp: &MossPaths, gen_id: &str, want: PageSet) {
     tokio::spawn(run_lane(rx));
 }
 
-/// The lane loop. Level-triggered, debounced, and skips entirely when the
-/// requested page set is the one already published — every no-op save, and
-/// where the ~5.2 s goes.
+/// The lane loop. Level-triggered and skips entirely when the requested page
+/// set is the one already published — every no-op save, and where the ~5.2 s
+/// goes. **No debounce of its own** — see the module doc's "Staleness
+/// budget": the seal that calls [`request`] is already debounced, so a
+/// generation to index shows up here already rate-limited, and adding a
+/// second idle wait would only stack a further delay on top.
 ///
 /// **It parks between requests.** Every pass is driven by a value it has not
 /// seen before; nothing runs a timer in the idle state. An earlier shape
-/// re-evaluated the last request every `IDLE` — a wakeup plus a ~440-entry JSON
-/// parse every 2 s for the life of the app, and on a folder whose index kept
-/// failing, a whole-corpus pagefind run every ~7 s forever.
+/// re-evaluated the last request every 2 s — a wakeup plus a ~440-entry JSON
+/// parse for the life of the app, and on a folder whose index kept failing, a
+/// whole-corpus pagefind run every ~7 s forever.
 async fn run_lane(mut rx: tokio::sync::watch::Receiver<LaneRequest>) {
     // The channel is created carrying the first request, and `changed()` only
     // reports *later* sends, so the first pass is seeded from the current value.
@@ -665,9 +657,6 @@ async fn run_lane(mut rx: tokio::sync::watch::Receiver<LaneRequest>) {
                 }
                 rx.borrow_and_update().clone()
             }
-        };
-        let Some(req) = quiesce(&mut rx, req).await else {
-            return;
         };
 
         if read_receipt(&req.index_dir).map(|r| r.fp()) != Some(req.want.fp) {
@@ -721,29 +710,6 @@ async fn index_one(req: &LaneRequest, watcher: tokio::sync::watch::Receiver<Lane
         }
         Ok(Err(e)) => log::warn!(target: "search", "search index not generated: {}", e),
         Err(e) => log::warn!(target: "search", "search index worker failed: {}", e),
-    }
-}
-
-/// Hold `req` until `IDLE` of quiet — but never longer than `MAX_DEFER`, or a
-/// vault under sustained editing would never be indexed at all. Returns the
-/// latest request seen, or `None` once every sender has dropped.
-async fn quiesce(
-    rx: &mut tokio::sync::watch::Receiver<LaneRequest>,
-    req: LaneRequest,
-) -> Option<LaneRequest> {
-    let first = Instant::now();
-    let mut latest = req;
-    loop {
-        tokio::select! {
-            _ = tokio::time::sleep(IDLE) => return Some(latest),
-            changed = rx.changed() => {
-                changed.ok()?;
-                latest = rx.borrow_and_update().clone();
-                if first.elapsed() >= MAX_DEFER {
-                    return Some(latest);
-                }
-            }
-        }
     }
 }
 

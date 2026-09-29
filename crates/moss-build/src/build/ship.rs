@@ -642,6 +642,13 @@ pub fn materialize_and_promote(
         return Ok(Promotion::Withheld(reason));
     }
     let gen_dir = mp.generation_dir(sealed.generation_id());
+    // Held across the copy and the promote, so no process's generation GC
+    // removes `gen_dir` under the copy or between the copy and `current`
+    // naming it. Finished only on success: a copy that fails or is cut off
+    // leaves its lock file behind, and GC removes the directory later.
+    let write_lock =
+        crate::build::store_gc::GenerationWriteLock::acquire(&mp.generations_dir(), sealed.generation_id())
+            .map_err(|e| format!("Failed to lock generation {}: {}", sealed.generation_id(), e))?;
     crate::build::io_utils::create_output_dir_all(&gen_dir)
         .map_err(|e| format!("Failed to create generation dir: {}", e))?;
     // Ship-by-OID: read a `staged_oid` entry from its
@@ -653,6 +660,7 @@ pub fn materialize_and_promote(
         .map_err(|e| format!("Failed to materialize generation {}: {}", sealed.generation_id(), e))?;
     let promoted = crate::build::lifecycle::promote(mp, epoch, render, sealed.generation_id())
         .map_err(|e| format!("Failed to set current_ptr: {}", e))?;
+    write_lock.finish();
     Ok(if promoted { Promotion::Promoted } else { Promotion::Superseded })
 }
 

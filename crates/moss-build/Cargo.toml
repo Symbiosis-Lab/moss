@@ -36,6 +36,9 @@ toml = "0.8"
 toml_edit = { version = "0.20", default-features = false }
 # `plugins::install` compares manifest versions against the running moss.
 semver = "1"
+# `store_gc::GenerationWriteLock` checks that a locked file is still the one at
+# its path, on every platform. Already in the tree via walkdir; same version.
+same-file = "1.0.6"
 
 # The config vocabulary (`config/{services,deployment,environment}.rs`) is
 # serde-mapped from the toml text; specta rides the crossed vocabulary for the

@@ -99,60 +99,75 @@ async fn advertise_sealed_drops_the_cache_lease_before_collect_build_store() {
     let hashes_path = mp.hashes();
     let stage = mp.staging_dir();
     let epoch = crate::build::ship::next_promotion_epoch();
-    let folder_path = format!("/cache-lease-ship-test-{}", uuid::Uuid::new_v4());
+    // Must equal `mp`'s own project root: `run_materialize_phase`
+    // (`build/seal_phase.rs`) now reconstructs its `MossPaths` from this
+    // string alone (it may run long after the call that built `mp`, on a
+    // task that cannot borrow it) — exactly what every real caller already
+    // guarantees by constructing both from the same folder path.
+    let folder_path = mp.project_root().to_string_lossy().to_string();
 
-    // Sampled by `advertise_sealed` itself (`SHIP_PHASE_LEASE_SAMPLE`, see
-    // `build.rs`) immediately after `materialize_and_promote` returns and
-    // before `drop(cache_lease)` — the window that actually distinguishes
-    // this fix from the bug it closed. `usize::MAX` is a sentinel meaning
-    // "never sampled", which would itself be a failure below.
+    // Sampled by `run_materialize_phase` (`build/seal_phase.rs`) itself
+    // (`SHIP_PHASE_LEASE_SAMPLE`, see `build.rs`) immediately after
+    // `materialize_and_promote` returns and before `drop(cache_lease)` — the
+    // window that actually distinguishes this fix from the bug it closed.
+    // `usize::MAX` is a sentinel meaning "never sampled", which would itself
+    // be a failure below.
     let lease_sample = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
 
-    // Sampled by `is_pinned`, which `advertise_sealed` calls once per stored
-    // generation while it resolves the pin set (step 3) — after the lease's
+    // Sampled by `is_pinned`, which the materialize phase calls once per
+    // stored generation while it resolves the pin set — after the lease's
     // drop point and before `collect_build_store` is spawned. `usize::MAX` is
     // the "never called" sentinel, which is itself a failure below: without
-    // this call the tail never reached step 3 and the ordering proves nothing.
-    // The stage-write guard must be held at that instant, or this is not the
-    // span step 3's comment says it is.
-    let writers_at_pin_resolution = std::sync::atomic::AtomicUsize::new(usize::MAX);
-    let guard_held_at_pin_resolution = std::sync::atomic::AtomicBool::new(false);
-    let is_pinned = |_: &str| {
-        writers_at_pin_resolution.store(
-            crate::build::lifecycle::snapshot(&mp).2,
-            std::sync::atomic::Ordering::SeqCst,
-        );
-        guard_held_at_pin_resolution.store(
-            session.try_lock_stage_write().is_none(),
-            std::sync::atomic::Ordering::SeqCst,
-        );
-        false
+    // this call the phase never reached that step and the ordering proves
+    // nothing. The stage-write guard must be held at that instant, or this is
+    // not the span the comment says it is. `Arc`s rather than plain locals:
+    // `is_pinned` must now be `'static` to travel through the debounce
+    // request, so it owns clones rather than borrowing these.
+    let writers_at_pin_resolution = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+    let guard_held_at_pin_resolution = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let is_pinned: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync> = {
+        let project_root = mp.project_root().to_path_buf();
+        let session = session.clone();
+        let writers_at_pin_resolution = writers_at_pin_resolution.clone();
+        let guard_held_at_pin_resolution = guard_held_at_pin_resolution.clone();
+        std::sync::Arc::new(move |_: &str| {
+            let mp = crate::moss_paths::MossPaths::new(&project_root);
+            writers_at_pin_resolution.store(
+                crate::build::lifecycle::snapshot(&mp).2,
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            guard_held_at_pin_resolution.store(
+                session.try_lock_stage_write().is_none(),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            false
+        })
     };
 
+    let pending = advertise_sealed(
+        &ports,
+        &mp,
+        &hashes_path,
+        &stage,
+        sealed,
+        None,
+        is_pinned,
+        Some(session.clone()),
+        epoch,
+        Some(1),
+        true,
+        crate::build::feeds::search_lane::Freshness::Now,
+        &folder_path,
+        SealGuards {
+            final_sweep: None,
+            cache_lease: Some(lease),
+            ..Default::default()
+        },
+    )
+    .await;
+
     super::SHIP_PHASE_LEASE_SAMPLE
-        .scope(
-            lease_sample.clone(),
-            advertise_sealed(
-                &ports,
-                &mp,
-                &hashes_path,
-                &stage,
-                sealed,
-                None,
-                is_pinned,
-                Some(&session),
-                epoch,
-                Some(1),
-                true,
-                crate::build::feeds::search_lane::Freshness::Now,
-                &folder_path,
-                SealGuards {
-                    final_sweep: None,
-                    cache_lease: Some(lease),
-                    ..Default::default()
-                },
-            ),
-        )
+        .scope(lease_sample.clone(), crate::build::seal_phase::run_now(pending))
         .await;
 
     assert_eq!(
@@ -212,23 +227,26 @@ async fn advertise_sealed_ships_held_bytes_then_hands_deploy_a_manifest_without_
     let ports = SealPorts { events: crate::build::null_sink(), announcer: host.announcer.clone(), server_diff: None };
     let session = FolderSession::new(mp.project_root().to_path_buf());
 
-    advertise_sealed(
+    let pending = advertise_sealed(
         &ports,
         &mp,
         &mp.hashes(),
         &mp.staging_dir(),
         sealed,
         None,
-        |_| false,
-        Some(&session),
+        std::sync::Arc::new(|_: &str| false),
+        Some(session.clone()),
         crate::build::ship::next_promotion_epoch(),
         Some(1),
         true,
         crate::build::feeds::search_lane::Freshness::Now,
-        &format!("/held-release-test-{}", uuid::Uuid::new_v4()),
+        // Must equal `mp`'s own project root — see the sibling test's comment
+        // on the same requirement.
+        &mp.project_root().to_string_lossy(),
         SealGuards::default(),
     )
     .await;
+    crate::build::seal_phase::run_now(pending).await;
 
     let adopted = adopted.lock().unwrap().take().expect("the tail must have adopted its manifest");
     assert_eq!(

@@ -241,8 +241,11 @@ impl FolderSession {
         });
     }
 
-    /// Fire cancel and drain the JoinSet within `grace`. Returns the number
-    /// of tasks that did not finish before the grace window expired.
+    /// Fire cancel and drain the JoinSet within `grace`, then drop the
+    /// folder's seal debounce lane (`build::seal_phase::evict`), which is
+    /// keyed by folder rather than owned by this session and would otherwise
+    /// outlive it. Returns the number of tasks that did not finish before
+    /// the grace window expired.
     pub async fn shutdown(self: Arc<Self>, grace: Duration) -> usize {
         self.cancel.cancel();
         let mut tasks = self.tasks.lock().await;
@@ -261,6 +264,7 @@ impl FolderSession {
                 }
             }
         }
+        crate::build::seal_phase::evict(&self.folder);
         leaked
     }
 }

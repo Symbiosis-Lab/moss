@@ -66,20 +66,21 @@ fn field<'a>(line: &'a str, key: &str) -> &'a str {
         .unwrap_or_else(|| panic!("{key} missing from {line:?}"))
 }
 
-/// Wait until the runtime's spawned tasks have all finished — the detached
-/// seal tail is one of them.
-async fn until_quiet() {
-    let metrics = tokio::runtime::Handle::current().metrics();
+/// Wait for the detached tail to hand off to the seal's (now debounced)
+/// materialize phase, then force it. Repeats `settle` — a no-op until
+/// something is actually pending — rather than waiting for the runtime to
+/// reach 0 alive tasks: the debounce lane (`moss_build::build::seal_phase`)
+/// parks forever waiting for its NEXT request once it exists, so the
+/// runtime never goes quiet again after the first build that reaches it.
+async fn until_shipped(mp: &moss_build::moss_paths::MossPaths) {
     for _ in 0..4000 {
-        if metrics.num_alive_tasks() == 0 {
+        moss_build::build::seal_phase::settle(mp).await;
+        if !lines_containing("build.root phase=ship").is_empty() {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
-    panic!(
-        "background seal work never finished: {} tasks alive",
-        metrics.num_alive_tasks()
-    );
+    panic!("the seal's materialize phase never ran (no build.root phase=ship line)");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -133,7 +134,8 @@ async fn a_rename_aside_mid_build_still_promotes_under_the_renamed_directory() {
     .await
     .expect("build");
 
-    until_quiet().await;
+    let mp = moss_build::moss_paths::MossPaths::new(&folder);
+    until_shipped(&mp).await;
 
     // The swap actually happened — otherwise everything below would pass for
     // the wrong reason.
