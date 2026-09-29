@@ -56,7 +56,7 @@ async fn a_withheld_render_is_never_shown_and_its_workers_block_the_next_sweep()
     let cell = empty_cell();
     adopt_server(&mp, &cell);
     let (r1, _) = show_render(&mp, true);
-    assert!(promote(&mp, next_promotion_epoch(), Some(r1), "g1").unwrap());
+    assert!(promote(&mp, next_promotion_epoch(), Some(r1), "g1", true).unwrap());
 
     let build2 = cache_write_lease(&mp);
     assert!(park_for_rebuild(&mp, true, Default::default()).is_some(), "render 1 is on current, so build 2 may sweep");
@@ -210,12 +210,20 @@ fn promotion_refuses_older_and_repeated_epochs_per_folder() {
     let epoch_n = next_promotion_epoch();
     let epoch_n1 = next_promotion_epoch();
 
-    assert!(promote(&mp, epoch_n1, None, "genN1").unwrap());
-    assert!(!promote(&mp, epoch_n, None, "genN").unwrap(), "a tail from an older build must not promote");
-    assert!(!promote(&mp, epoch_n1, None, "genN1").unwrap(), "nor a repeat of the epoch on current");
+    assert!(promote(&mp, epoch_n1, None, "genN1", true).unwrap());
+    assert!(!promote(&mp, epoch_n, None, "genN", true).unwrap(), "a tail from an older build must not promote");
+    assert!(!promote(&mp, epoch_n1, None, "genN1", true).unwrap(), "nor a repeat of the epoch on current");
     assert_eq!(mp.current_generation_id().unwrap(), "genN1");
 
     let (_other_tmp, other) = vault(&[("g", "a")]);
     let _other_record = lock_for(&other);
-    assert!(promote(&other, epoch_n, None, "g").unwrap(), "another folder's newer epoch refuses nothing here");
+    assert!(promote(&other, epoch_n, None, "g", true).unwrap(), "another folder's newer epoch refuses nothing here");
+}
+
+#[test]
+fn only_a_generation_neither_copied_nor_already_served_skips_the_repoint() {
+    assert!(!repoint_needed(false, || true));
+    assert!(repoint_needed(false, || false));
+    assert!(repoint_needed(true, || true), "a re-copy must reach Windows' copied `current`");
+    assert!(repoint_needed(true, || false));
 }

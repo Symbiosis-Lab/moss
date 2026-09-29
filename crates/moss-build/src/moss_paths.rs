@@ -541,6 +541,11 @@ impl MossPaths {
         }
         #[cfg(windows)]
         {
+            // Marker first: a failed copy below must not leave it vouching for
+            // a torn `current` (unix swaps in one rename, so needs no such step).
+            // allow:unlink the marker is rewritten below once `current` is whole
+            std::fs::remove_file(self.current_generation_marker())
+                .or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })?;
             // Windows directory symlinks require elevation
             // (SeCreateSymbolicLinkPrivilege), so — like `ship_phase` — copy the
             // generation into `current` for output parity instead. Not atomic, but

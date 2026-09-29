@@ -425,3 +425,21 @@ fn cow_probe_answers_and_leaves_no_litter() {
         "the probe must clean up after itself; found {leftovers:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Reusing a generation already on disk
+// ---------------------------------------------------------------------------
+
+/// Windows ships a symlink entry's target bytes, but the entry hashes only
+/// the target path, so an edit inside a linked folder keeps the id. A
+/// directory holding such an entry is never reused where targets are copied.
+#[test]
+fn a_symlink_entry_is_never_reused_where_ship_copies_its_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("linked"), b"target bytes").unwrap();
+    let files: std::collections::HashMap<String, String> =
+        [("linked".to_string(), crate::types::content::symlink_entry("../elsewhere"))].into();
+
+    assert!(dir_holds(tmp.path(), &files, false), "sanity: the entry is present");
+    assert!(!dir_holds(tmp.path(), &files, true));
+}

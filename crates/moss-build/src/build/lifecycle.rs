@@ -329,11 +329,15 @@ pub(crate) fn show_render(mp: &MossPaths, publishable: bool) -> (u64, Option<Pat
 /// is what orders them. The swap runs under its own lock and the render is
 /// recorded only after it, so a reader between the two sees the older render
 /// and withholds a permit rather than granting one early.
+///
+/// `copied` says the generation directory was just (re)written; see
+/// [`repoint_needed`].
 pub(crate) fn promote(
     mp: &MossPaths,
     epoch: u64,
     render: Option<u64>,
     gen_id: &str,
+    copied: bool,
 ) -> std::io::Result<bool> {
     let record = lock_for(mp);
     let _swap = record.promote_lock.lock().unwrap_or_else(PoisonError::into_inner);
@@ -342,11 +346,36 @@ pub(crate) fn promote(
         log::info!("promotion refused: gen {} epoch {} < promoted {}", gen_id, epoch, promoted);
         return Ok(false);
     }
-    mp.set_current_ptr(gen_id)?;
+    if repoint_needed(copied, || serves(mp, gen_id)) {
+        mp.set_current_ptr(gen_id)?;
+    }
     let mut st = record.state();
     st.promoted_epoch = epoch;
     st.current_render = render;
     Ok(true)
+}
+
+/// Whether a promotion must rewrite `current`. Re-promoting what it already
+/// serves still records the render and epoch but leaves the pointer alone,
+/// since on Windows repointing is a full copy — unless the generation was just
+/// copied again: Windows `current` is a copy of the generation, not a link to
+/// it, so bytes the re-copy fixed reach the preview only through a repoint.
+pub(crate) fn repoint_needed(copied: bool, serves: impl FnOnce() -> bool) -> bool {
+    copied || !serves()
+}
+
+/// Whether `current` serves `gen_id`: the marker names it AND the pointer
+/// resolves to it. The marker alone is not enough — `retire_legacy_roots` can
+/// remove `current` and leave the marker behind.
+fn serves(mp: &MossPaths, gen_id: &str) -> bool {
+    if mp.current_generation_id().ok().as_deref() != Some(gen_id) {
+        return false;
+    }
+    #[cfg(unix)]
+    return std::fs::read_link(mp.current_ptr()).is_ok_and(|target| target == mp.generation_dir(gen_id));
+    // `set_current_ptr` writes the marker only once `current` is whole.
+    #[cfg(not(unix))]
+    return mp.current_ptr().is_dir();
 }
 
 /// Return the preview to `current` when the render on screen is `render` and

@@ -12,7 +12,8 @@
 //! - [`ship_phase`], which walks the sealed entries and derives each generation
 //!   file from its staged bytes (apply transform, or recreate a symlink);
 //! - [`materialize_and_promote`], which runs the above into a fresh
-//!   generation dir and repoints `current`, and [`gc_old_generations`].
+//!   generation dir (or finds it already whole on disk) and repoints
+//!   `current`, and [`gc_old_generations`].
 //!
 //! The manifest is the input, not the directory: a file in staging that no
 //! entry names — a sync client's conflicted copy, a stale output from an
@@ -261,25 +262,29 @@ fn verify_ship_integrity(
 /// generation is never promoted.
 ///
 /// `cancel` is checked between entries. When fired (folder switch / window
-/// close) this returns `Ok(())`, matching the cancellation semantics of the
+/// close) this returns `Ok`, matching the cancellation semantics of the
 /// `copy_dir_all` it replaced.
+///
+/// `Ok` carries how many entries shipped bytes other than the ones their
+/// manifest hash names — see [`verify_ship_integrity`].
 pub fn ship_phase(
     stage_dir: &Path,
     site_dir: &Path,
     sealed: &SealedManifest,
     object_store: Option<&crate::build::cache::ObjectStore>,
     cancel: Option<&tokio_util::sync::CancellationToken>,
-) -> std::io::Result<()> {
+) -> std::io::Result<usize> {
     // Count per-file faults so a PARTIAL materialize reports failure (Err),
     // not success. Fix B's mat_ok gate relies on this: a partial generation
     // must fall back to last-known-good, never be promoted or advertised.
     let mut failures = 0u32;
+    let mut drifted = 0;
 
     for (rel_path, entry) in sealed.files() {
         if let Some(c) = cancel {
             if c.is_cancelled() {
                 log::info!("ship_phase cancelled (folder closed)");
-                return Ok(());
+                return Ok(drifted);
             }
         }
 
@@ -336,6 +341,7 @@ pub fn ship_phase(
         // seal-to-ship race audible.
         if source_path == stage_path {
             if let Some(real_hash) = verify_ship_integrity(rel_path, &stage_path, entry, sealed) {
+                drifted += 1;
                 log::warn!(
                     "[ship_phase] {:?} changed after this manifest sealed (now hashes to {}, \
                      manifest says {}) — shipping the current bytes rather than withholding the \
@@ -448,7 +454,7 @@ pub fn ship_phase(
             failures, site_dir
         )));
     }
-    Ok(())
+    Ok(drifted)
 }
 
 // ---------------------------------------------------------------------------
@@ -596,6 +602,9 @@ pub fn tail_owns_shared_state(promotion: &Result<Promotion, String>) -> bool {
 /// Caller must ensure `staging/` is fully populated (post-barrier). The
 /// generation dir is created inside this function via `create_dir_all`.
 ///
+/// A generation already whole on disk is promoted without a copy — see
+/// [`crate::build::store_gc::GenerationWriteLock::holds`].
+///
 /// `epoch` orders this build against every other build of the same folder; the
 /// swap goes through `lifecycle::promote`, which refuses it when a newer build
 /// has already promoted.
@@ -649,18 +658,28 @@ pub fn materialize_and_promote(
     let write_lock =
         crate::build::store_gc::GenerationWriteLock::acquire(&mp.generations_dir(), sealed.generation_id())
             .map_err(|e| format!("Failed to lock generation {}: {}", sealed.generation_id(), e))?;
-    crate::build::io_utils::create_output_dir_all(&gen_dir)
-        .map_err(|e| format!("Failed to create generation dir: {}", e))?;
-    // Ship-by-OID: read a `staged_oid` entry from its
-    // immutable CAS blob instead of the mutable `stage_dir` copy. Depends on
-    // the entry's CAS blob surviving a concurrent build's GC across this
-    // whole call — see `CacheWriteLease` at this function's own call sites.
-    let object_store = crate::build::cache::ObjectStore::new(mp.cache_objects());
-    ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), cancel)
-        .map_err(|e| format!("Failed to materialize generation {}: {}", sealed.generation_id(), e))?;
-    let promoted = crate::build::lifecycle::promote(mp, epoch, render, sealed.generation_id())
+    let mut drifted = 0;
+    let copied = !write_lock.holds(&gen_dir, sealed.files());
+    if copied {
+        crate::build::io_utils::create_output_dir_all(&gen_dir)
+            .map_err(|e| format!("Failed to create generation dir: {}", e))?;
+        // Ship-by-OID: read a `staged_oid` entry from its
+        // immutable CAS blob instead of the mutable `stage_dir` copy. Depends on
+        // the entry's CAS blob surviving a concurrent build's GC across this
+        // whole call — see `CacheWriteLease` at this function's own call sites.
+        let object_store = crate::build::cache::ObjectStore::new(mp.cache_objects());
+        drifted = ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), cancel)
+            .map_err(|e| format!("Failed to materialize generation {}: {}", sealed.generation_id(), e))?;
+    } else {
+        log::info!("generation {} is already on disk — promoting it without a copy", sealed.generation_id());
+    }
+    let promoted = crate::build::lifecycle::promote(mp, epoch, render, sealed.generation_id(), copied)
         .map_err(|e| format!("Failed to set current_ptr: {}", e))?;
-    write_lock.finish();
+    // A generation holding bytes its id does not describe keeps its lock file,
+    // so the next seal of this id copies it again instead of reusing it.
+    if drifted == 0 {
+        write_lock.finish();
+    }
     Ok(if promoted { Promotion::Promoted } else { Promotion::Superseded })
 }
 
@@ -1608,6 +1627,67 @@ mod tests {
         assert_eq!(promotion, Promotion::Promoted);
         assert_eq!(sealed.files().len(), 39);
         assert_eq!(served_generation(&mp), sealed.generation_id());
+    }
+
+    /// A marker that outlived its pointer — `retire_legacy_roots` removes a
+    /// legacy `current` and leaves the marker — must not let a re-seal of the
+    /// same generation skip the repoint and leave the site unserved.
+    #[test]
+    fn resealing_the_marked_generation_repoints_a_missing_current() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let stage = mp.staging_dir();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("index.html"), b"<h1>home</h1>").unwrap();
+        let sealed = manifest_of(&[("index.html", b"<h1>home</h1>")]);
+        let promote = || {
+            materialize_and_promote(&sealed, &mp, &stage, None, next_promotion_epoch(), None, ShipVerdict::Ship).unwrap()
+        };
+        assert_eq!(promote(), Promotion::Promoted);
+
+        let current = mp.current_ptr();
+        std::fs::remove_file(&current).or_else(|_| std::fs::remove_dir_all(&current)).unwrap();
+        assert_eq!(served_generation(&mp), sealed.generation_id(), "sanity: the marker survives");
+        assert_eq!(promote(), Promotion::Promoted);
+
+        assert!(current.join("index.html").is_file(), "`current` must serve the generation again");
+    }
+
+    /// A generation that shipped bytes other than its manifest's — a concurrent
+    /// build rewrote a stage file after the seal — does not hold what its id
+    /// describes, so the next seal of that id must copy it again, not reuse it.
+    #[test]
+    fn a_generation_that_shipped_drifted_bytes_is_copied_again() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let stage = mp.staging_dir();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("page.html"), b"<h1>original</h1>").unwrap();
+        let mut sealed = manifest_of(&[("page.html", b"<h1>original</h1>")]);
+        sealed.stamp_all_ship_fingerprints(&stage);
+        let shipped = mp.generation_dir(sealed.generation_id()).join("page.html");
+        let promote = |sealed: &SealedManifest| {
+            materialize_and_promote(sealed, &mp, &stage, None, next_promotion_epoch(), None, ShipVerdict::Ship).unwrap()
+        };
+
+        std::fs::write(stage.join("page.html"), b"<h1>RACED</h1>").unwrap();
+        assert_eq!(promote(&sealed), Promotion::Promoted);
+        assert_eq!(std::fs::read(&shipped).unwrap(), b"<h1>RACED</h1>", "sanity: the drifted bytes shipped");
+
+        std::fs::write(stage.join("page.html"), b"<h1>original</h1>").unwrap();
+        sealed.stamp_all_ship_fingerprints(&stage);
+        #[cfg(unix)]
+        let pointer = || std::os::unix::fs::MetadataExt::ino(&std::fs::symlink_metadata(mp.current_ptr()).unwrap());
+        #[cfg(unix)]
+        let pointer_before = pointer();
+        assert_eq!(promote(&sealed), Promotion::Promoted);
+        assert_eq!(std::fs::read(&shipped).unwrap(), b"<h1>original</h1>", "the generation must be copied again");
+        // Windows `current` is a copy of the generation, so the fixed bytes
+        // reach it only if the re-copy repoints `current` even though the
+        // marker already names this generation.
+        assert_eq!(std::fs::read(mp.current_ptr().join("page.html")).unwrap(), b"<h1>original</h1>");
+        #[cfg(unix)]
+        assert_ne!(pointer(), pointer_before, "a re-copied generation must be repointed");
     }
 
     /// One row per way a referenced `.webp` can fail to be gone, over a single

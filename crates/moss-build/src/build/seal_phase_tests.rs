@@ -52,20 +52,23 @@ impl Vault {
     /// One long-lived-arm build (`exits_after_build: false`, a real
     /// `TokioSpawner`) — the detached tail this whole module debounces.
     async fn build(&self) {
+        self.build_with(self.host()).await;
+    }
+
+    fn host(&self) -> HostPorts {
         let mut services = BuildServices::headless();
         services.session = Some(self.session.clone());
+        HostPorts { site_dir: Some(self.served.clone()), spawner: Arc::new(TokioSpawner), services, ..test_host_ports() }
+    }
+
+    async fn build_with(&self, host: HostPorts) {
         run_pipeline(PipelineConfig {
             root: crate::vault::paths::VaultRoot::resolve(&self.folder),
             progress: crate::build::null_sink(),
             plugins: PluginMode::Skip,
             watch: false,
             start_server: false,
-            host: HostPorts {
-                site_dir: Some(self.served.clone()),
-                spawner: Arc::new(TokioSpawner),
-                services,
-                ..test_host_ports()
-            },
+            host,
             trigger: BuildTrigger::Full,
             exits_after_build: false,
             site_url_override: None,
@@ -97,6 +100,28 @@ impl Vault {
 
     fn generations(&self) -> std::collections::BTreeSet<String> {
         crate::build::store_gc::list_generations(&self.mp.generations_dir()).into_iter().collect()
+    }
+
+    /// Build, seal and promote the vault as it stands; returns what `current`
+    /// then serves.
+    async fn promote(&self) -> String {
+        self.build().await;
+        self.drained().await;
+        settle(&self.mp).await;
+        self.mp.current_generation_id().expect("the seal must have promoted a generation")
+    }
+
+    /// Every file in generation `gen`, with its inode — see [`rewritten`]. A copy renames a fresh
+    /// file into place, so a file the seal rewrote comes back with a new one.
+    #[cfg(unix)]
+    fn inodes(&self, gen: &str) -> std::collections::BTreeMap<std::path::PathBuf, u64> {
+        use std::os::unix::fs::MetadataExt;
+        walkdir::WalkDir::new(self.mp.generation_dir(gen))
+            .into_iter()
+            .map(|e| e.unwrap())
+            .filter(|e| e.file_type().is_file())
+            .map(|e| (e.path().to_path_buf(), e.metadata().unwrap().ino()))
+            .collect()
     }
 }
 
@@ -171,34 +196,9 @@ async fn a_pending_seal_left_unforced_leaves_current_at_the_prior_valid_generati
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn settle_forces_a_synchronous_seal_before_generation_id_is_read() {
     let vault = Vault::new();
-    let mut host = HostPorts {
-        site_dir: Some(vault.served.clone()),
-        spawner: Arc::new(TokioSpawner),
-        services: {
-            let mut s = BuildServices::headless();
-            s.session = Some(vault.session.clone());
-            s
-        },
-        ..test_host_ports()
-    };
+    let mut host = vault.host();
     let captured = capture_seal(&mut host);
-
-    run_pipeline(PipelineConfig {
-        root: crate::vault::paths::VaultRoot::resolve(&vault.folder),
-        progress: crate::build::null_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host,
-        trigger: BuildTrigger::Full,
-        exits_after_build: false,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-    })
-    .await
-    .expect("build");
+    vault.build_with(host).await;
     vault.drained().await;
 
     // Immediately, no sleep: the deploy-shaped scenario this test names.
@@ -309,4 +309,89 @@ async fn a_finished_generation_survives_the_next_seals_gc() {
     assert_ne!(vault.mp.current_generation_id().ok().as_deref(), Some(first.as_str()), "sanity: build 2 promoted");
 
     assert!(vault.generations().contains(&first), "a finished generation inside the retention window must survive GC");
+}
+
+/// How many of `before`'s files are gone or were replaced in `after`.
+#[cfg(unix)]
+fn rewritten(
+    before: &std::collections::BTreeMap<std::path::PathBuf, u64>,
+    after: &std::collections::BTreeMap<std::path::PathBuf, u64>,
+) -> usize {
+    before.iter().filter(|(path, ino)| after.get(*path) != Some(*ino)).count()
+}
+
+/// (i) A save that changes nothing re-derives the generation `current`
+/// already serves. Its seal must rewrite none of that generation's files —
+/// each one is a file-provider event in a cloud-synced vault, paid while the
+/// stage-write lock holds back the next edit's rebuild — and must still
+/// complete: `settle` returns and deploy is handed the manifest.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resealing_the_current_generation_rewrites_none_of_its_files() {
+    let vault = Vault::new();
+    let gen = vault.promote().await;
+    let before = vault.inodes(&gen);
+    let pointer = || std::os::unix::fs::MetadataExt::ino(&std::fs::symlink_metadata(vault.mp.current_ptr()).unwrap());
+    let pointer_before = pointer();
+
+    let mut host = vault.host();
+    let captured = capture_seal(&mut host);
+    vault.build_with(host).await;
+    vault.drained().await;
+    assert!(LANES.is_pending(vault.mp.root()), "sanity: the unchanged build handed a seal to the lane");
+    settle(&vault.mp).await;
+
+    assert!(!LANES.is_pending(vault.mp.root()), "settle must complete the pending seal");
+    let sealed = captured.lock().unwrap().take().expect("deploy must still be handed the manifest");
+    assert_eq!(sealed.generation_id(), gen, "sanity: an unchanged rebuild re-derives the same generation");
+    assert_eq!(vault.mp.current_generation_id().unwrap(), gen, "`current` must not move");
+    assert_eq!(pointer(), pointer_before, "nor be rewritten in place");
+    let rewritten = rewritten(&before, &vault.inodes(&gen));
+    assert_eq!(rewritten, 0, "the seal rewrote {rewritten} of the {} files `current` already served", before.len());
+}
+
+/// (j) An edit and its undo return to a generation still on disk. Promoting
+/// it again needs no copy: the directory already holds exactly those bytes.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_undone_edit_promotes_the_earlier_generation_without_copying_it() {
+    let vault = Vault::new();
+    let first = vault.promote().await;
+    let before = vault.inodes(&first);
+    vault.edit("v1");
+    assert_ne!(vault.promote().await, first, "sanity: the edit promoted a new generation");
+
+    vault.edit("v0");
+    assert_eq!(vault.promote().await, first, "the undo must promote the earlier generation");
+    assert_eq!(rewritten(&before, &vault.inodes(&first)), 0, "and must not have rewritten any of its files");
+}
+
+/// (k) A generation directory is reused only when it is whole. One missing a
+/// file, or whose copy was cut off (its lock file left behind), is copied
+/// again before `current` points at it.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_earlier_generation_that_is_not_whole_is_copied_again() {
+    let vault = Vault::new();
+    let first = vault.promote().await;
+    let page = vault.mp.generation_dir(&first).join("index.html");
+
+    vault.edit("v1");
+    vault.promote().await;
+    std::fs::remove_file(&page).unwrap();
+    vault.edit("v0");
+    assert_eq!(vault.promote().await, first);
+    assert!(page.is_file(), "a generation missing a file must be copied again");
+
+    vault.edit("v1");
+    vault.promote().await;
+    let before = vault.inodes(&first);
+    std::fs::write(vault.mp.generations_dir().join(format!(".{first}.writing")), b"").unwrap();
+    vault.edit("v0");
+    assert_eq!(vault.promote().await, first);
+    assert_eq!(
+        rewritten(&before, &vault.inodes(&first)),
+        before.len(),
+        "a generation whose copy was cut off must be copied again in full"
+    );
 }

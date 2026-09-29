@@ -172,13 +172,16 @@ pub struct GenerationWriteLock {
     /// against the path on every platform.
     handle: same_file::Handle,
     path: PathBuf,
+    /// This lock created its file, so no earlier copy of this id was left
+    /// unfinished. False when a file was found left behind, or when the
+    /// filesystem cannot lock and nothing can be concluded.
+    fresh: bool,
 }
 
 /// The outcome of [`GenerationWriteLock::take`].
 enum Take {
-    /// Locked, on the file currently at the path. `created` says whether
-    /// this call created that file, as opposed to finding one left behind.
-    Locked { lock: GenerationWriteLock, created: bool },
+    /// Locked, on the file currently at the path.
+    Locked(GenerationWriteLock),
     /// Another handle holds the lock.
     Busy,
     /// The file exists but this filesystem cannot lock at all.
@@ -194,7 +197,7 @@ impl GenerationWriteLock {
     pub fn acquire(generations_dir: &Path, gen_id: &str) -> std::io::Result<Self> {
         crate::build::io_utils::create_output_dir_all(generations_dir)?;
         match Self::take(generations_dir, gen_id, true)? {
-            Take::Locked { lock, .. } | Take::Unlockable(lock) => Ok(lock),
+            Take::Locked(lock) | Take::Unlockable(lock) => Ok(lock),
             Take::Busy => Err(std::io::Error::other("generation lock reported busy on a blocking lock")),
         }
     }
@@ -238,25 +241,64 @@ impl GenerationWriteLock {
                 Err(e) if wait && !cannot_lock_here(&e) => return Err(e),
                 Err(e) => {
                     log::warn!("generation {gen_id}: cannot lock {}: {e}", path.display());
-                    return Ok(Take::Unlockable(Self { handle, path }));
+                    return Ok(Take::Unlockable(Self { handle, path, fresh: false }));
                 }
             }
             if same_file::Handle::from_path(&path).is_ok_and(|at_path| at_path == handle) {
-                return Ok(Take::Locked { lock: Self { handle, path }, created });
+                return Ok(Take::Locked(Self { handle, path, fresh: created }));
             }
         }
+    }
+
+    /// Whether no copy of this generation was cut off before this lock was
+    /// taken: an existing directory is then one a copy finished (or one
+    /// that predates the lock), never one a copy abandoned.
+    pub fn fresh(&self) -> bool {
+        self.fresh
+    }
+
+    /// Whether `gen_dir` already holds the generation whose manifest entries
+    /// are `files`, so that promoting it needs no copy. A save that changes
+    /// nothing, or an edit and its undo, re-derives a generation that is
+    /// already on disk — often the one `current` serves — and copying it
+    /// again rewrites every file in it for nothing.
+    ///
+    /// The id is a hash of every entry's path and content hash, so a directory
+    /// named for it was copied from the same entries. It holds them all when
+    /// no copy of it was cut off or shipped bytes that drifted from the
+    /// manifest (either leaves the lock file behind, so [`Self::fresh`] is
+    /// false) and every entry is present: each file lands by rename, so a
+    /// present file is whole. The presence check also lets a generation that
+    /// shipped without an evicted `_moss/math/` PNG pick it up on a later seal.
+    /// Asked under this lock, so no GC can remove the directory between this
+    /// answer and the promotion.
+    pub fn holds(&self, gen_dir: &Path, files: &std::collections::HashMap<String, String>) -> bool {
+        self.fresh && dir_holds(gen_dir, files, cfg!(windows))
     }
 
     /// Done with the generation: remove the lock file while still holding
     /// it, then release. For a writer this marks the copy complete.
     pub fn finish(self) {
-        let Self { handle, path } = self;
+        let Self { handle, path, .. } = self;
         // allow:unlink this generation's own lock file, while its lock is held
         if let Err(e) = std::fs::remove_file(&path) {
             log::warn!("failed to remove {}: {e}", path.display());
         }
         drop(handle);
     }
+}
+
+/// Every entry of `files` is present in `gen_dir`. Never, when
+/// `copies_link_targets` and any entry is a symlink: Windows ships a symlink's
+/// target bytes, but its manifest entry hashes only the target path, so an
+/// edit inside a linked folder leaves the id unchanged.
+fn dir_holds(gen_dir: &Path, files: &std::collections::HashMap<String, String>, copies_link_targets: bool) -> bool {
+    gen_dir.is_dir()
+        && files.iter().all(|(rel_path, entry)| {
+            let (mode, _) = crate::types::content::parse_entry(entry);
+            !(copies_link_targets && mode == crate::types::content::MODE_SYMLINK)
+                && crate::build::io_utils::entry_output_present(&gen_dir.join(rel_path), mode)
+        })
 }
 
 /// Whether `e` means this filesystem has no working locks at all (a network
@@ -311,10 +353,11 @@ pub fn list_generations(generations_dir: &Path) -> Vec<String> {
 /// Errors are logged but non-fatal: the caller logs them as warnings so a GC
 /// failure never invalidates a build that already succeeded.
 ///
-/// *Known imprecision:* generation directories are content-addressed, so a
-/// rebuild that re-derives an old id refreshes that directory's mtime. "The `n`
-/// most recent" therefore means recency-of-materialisation, not build order.
-/// Harmless — a re-derived generation is byte-identical to the one it refreshes.
+/// *Known imprecision:* "the `n` most recent" means recency of the last copy,
+/// not of the last promotion. A rebuild that re-derives an old id promotes the
+/// directory already on disk without copying it (`ship::materialize_and_promote`),
+/// so its mtime stays that of its first copy. Harmless: it is a root while
+/// current, and past that its retention only buys a rollback.
 pub fn gc_old_generations(
     generations_dir: &Path,
     current_marker: &Path,
@@ -345,11 +388,11 @@ pub fn gc_old_generations(
         }
         let lock = match GenerationWriteLock::take(generations_dir, name, false) {
             // Its copy finished between the check above and the lock.
-            Ok(Take::Locked { lock, created: true }) if retained => {
+            Ok(Take::Locked(lock)) if retained && lock.fresh() => {
                 lock.finish();
                 continue;
             }
-            Ok(Take::Locked { lock, .. }) => lock,
+            Ok(Take::Locked(lock)) => lock,
             Ok(Take::Busy | Take::Unlockable(_)) | Err(_) => continue, // copying, or cannot tell
         };
         // Under the lock no copy of this id is running and none can start.
