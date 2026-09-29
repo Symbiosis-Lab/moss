@@ -10,17 +10,15 @@ moss import --list <urls.txt> [folder] [-r|--recursive]
 - Accepts a remote **http/https URL**, a local **`.mhtml`/`.mht` web-archive**
   ("Save Page As"), a local **`.html`/`.htm` file**, or (via `--list`) a text
   file of one-per-line URLs/paths to import in batch.
-- Each page becomes a `.md` file with YAML frontmatter (`title`, `date`,
-  `author`, `publisher`, `lang`, `description`, `cover`, plus a `syndicated:`
-  list holding the source URL). Images download to `assets/imported/`.
+- Each page becomes a `.md` file with YAML frontmatter for whichever of `title`, `date`, `author`, `publisher`, `lang`, `description`, `cover` the source page actually declares — `author` is set only when the page carries one (JSON-LD `author`, or an `author`/`article:author` meta tag), so a page with no visible byline gets no `author` key at all. A `syndicated:` list holds the source URL, and images download to `assets/imported/`.
 - `syndicated:` is the POSSE mirror field: an import is the user's own content
   republished here, so the local copy is canonical and the source URL is
   recorded as a syndication mirror. `moss import` does **not** set
   `external_url` — that is the manual linkblog field, which points cards,
   canonical and sitemap off-site. (Pages that fail to fetch are the one
   exception: they get a `title`/`external_url`/`scrape_error` stub.)
-- `--recursive` crawls **same-domain, same-path-prefix** links (capped at 200
-  pages) and rewrites in-scope links to relative `.md` paths.
+- A page's `uid` is not written by `moss import` at all — it is minted the first time the folder is built, the same as for a hand-authored page, so an imported page carries no `uid` in its frontmatter until you build or preview the folder.
+- `--recursive` crawls **same-domain, same-path-prefix** links, capped at 200 pages — the run's summary says when the cap is what stopped the crawl and how many more in-scope pages were found but not imported, and names `--list` as the way to bring in the rest. Link rewriting only touches an in-scope link written in the source page as a full, absolute URL (`https://example.com/post`), turning it into a relative `./post.md`-style path; a link that was already relative in the source markup — root-relative (`/events/2026/11/01`) or bare (`post.html`) — is left exactly as written, and a link whose entire content is an image (`[![alt](img)](page)`) is never rewritten either.
 
 **Important:** import extracts **content** and discards the original CSS and
 design — you get raw markdown, not the original look. `moss import` does not
@@ -44,12 +42,12 @@ convention. After importing, your job is:
 
 ## From local files
 
-There is **no** local-import command. Two options:
+A single saved page — a `.mhtml`/`.mht` web-archive or a plain `.html` file — imports directly with `moss import <file> [folder]`, described at the top of this guide. There is no *recursive* local import: `-r`/`--recursive` walks links by fetching them over HTTP, so it has nothing to walk inside a folder of local files. For a whole local site — many linked pages, not one saved page — two options:
 
 - **Hand-convert (preferred for a few pages):** read the local HTML/files and
   write canonical moss markdown + `.moss/theme/` yourself, following
   `moss guide authoring`.
-- **Temp-serve then import (for a whole local site):** serve the local files
+- **Temp-serve then import (for many pages):** serve the local files
   over HTTP (e.g. `python3 -m http.server`) and run
   `moss import http://localhost:8000/ <folder> --recursive`, then do the cleanup
   steps above.
