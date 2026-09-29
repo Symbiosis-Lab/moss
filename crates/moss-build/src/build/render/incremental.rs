@@ -17,6 +17,7 @@
 //!   bytes are the same either way.
 
 pub mod carry_verify;
+pub mod dependents;
 pub mod listing;
 pub mod policy;
 pub mod verdict;

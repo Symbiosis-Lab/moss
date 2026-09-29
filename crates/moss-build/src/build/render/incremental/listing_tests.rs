@@ -411,3 +411,74 @@ fn a_term_claim_page_hosts_the_terms_group_and_its_membership_moves_with_authors
     more.push(another);
     assert_ne!(digest(&more, &key("authors/林小滿")).membership, before.membership);
 }
+
+// ---- series-chain steps as listing-group readers ---------------------------
+
+fn series_vault() -> Vec<ParsedDocument> {
+    let mut parent = folder("series/index.html");
+    parent.series = Some(crate::build::types::SeriesField::Flag(true));
+    let part1 = article("series/part-1/index.html", "one");
+    let part2 = article("series/part-2/index.html", "two");
+    vec![parent, part1, part2]
+}
+
+#[test]
+fn a_series_step_reads_its_parents_folder_listing_key() {
+    let docs = series_vault();
+    let part1 = docs.iter().find(|d| d.url_path == "series/part-1/index.html").unwrap();
+    assert!(is_series_member(part1, &docs));
+
+    let keys = groups_read_by(part1, &docs).expect("a series step is a modelled shape");
+    assert!(
+        keys.iter().any(|k| k.folder_slug == "series" && k.depth == Depth::Direct),
+        "expected the parent's own direct-children key, got {keys:?}"
+    );
+}
+
+#[test]
+fn a_step_that_opted_out_is_not_a_series_member() {
+    let mut docs = series_vault();
+    let idx = docs.iter().position(|d| d.url_path == "series/part-1/index.html").unwrap();
+    docs[idx].series = Some(crate::build::types::SeriesField::Flag(false));
+    assert!(!is_series_member(&docs[idx].clone(), &docs));
+}
+
+#[test]
+fn a_step_is_a_series_member_via_an_inferred_weight_axis_when_the_parent_leaves_series_unset() {
+    // `series_vault()` sets `parent.series = Flag(true)` explicitly, which
+    // never exercises `series_chrome_on`'s `None` arm (`resolved.series_default`).
+    // `resolve_for_direct_children` reads the scan-time `direct_children_sort`
+    // cache, not a live re-inference — `populate_direct_children_sorts` is
+    // what normally fills it from a weight axis or an explicit list order
+    // (`moss_core::sort::resolve_folder_sort`), so a hand-built fixture sets
+    // the cache directly, the same "this folder looks ordered" reading.
+    let mut docs = series_vault();
+    let parent_idx = docs.iter().position(|d| d.url_path == "series/index.html").unwrap();
+    docs[parent_idx].series = None;
+    docs[parent_idx].direct_children_sort = Some(moss_core::sort::ResolvedSort {
+        axis: moss_core::sort::SortAxis::Weight,
+        explicit_order: None,
+        series_default: true,
+    });
+    let part1 = docs.iter().find(|d| d.url_path == "series/part-1/index.html").unwrap().clone();
+    assert!(is_series_member(&part1, &docs), "a weight-inferred sort axis implies series chrome on");
+}
+
+#[test]
+fn no_step_is_a_series_member_when_the_parents_chrome_is_off() {
+    let mut docs = series_vault();
+    let parent_idx = docs.iter().position(|d| d.url_path == "series/index.html").unwrap();
+    docs[parent_idx].series = Some(crate::build::types::SeriesField::Flag(false));
+    let part1 = docs.iter().find(|d| d.url_path == "series/part-1/index.html").unwrap().clone();
+    assert!(!is_series_member(&part1, &docs));
+}
+
+#[test]
+fn a_root_level_document_is_never_a_series_member() {
+    let docs = vault();
+    let about = article("about/index.html", "x");
+    // Only one path segment above it — `is_series_member` requires a real
+    // parent folder two levels up, the same shape `render/html.rs`'s own
+    // series-nav block checks before it looks anything up.
+    assert!(!is_series_member(&about, &docs));
+}

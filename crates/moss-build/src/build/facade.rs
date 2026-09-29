@@ -201,6 +201,20 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // `ParsedDocument` (`pipeline.rs` sets it once per doc) and every other
     // hit is a test fixture. It stays in the FACADE and out of the surface.
     stripped.reading_time = 0;
+    // `slug` moves in lockstep with `title` (`markdown/pipeline.rs`'s
+    // `generate_slug(&title)`) but, unlike `title`, has NO reader at all:
+    // grepping every `.slug` access across `moss-build` and `moss-core`
+    // finds only its own assignment sites (the real one and a synthetic-page
+    // one) and unrelated `Heading::slug` hits (a different struct, anchor
+    // text for in-page headings). Nothing renders it, on this page or any
+    // other. Left in the surface it defeated exactly the narrowing added
+    // below: `title` is classified
+    // (`render::incremental::dependents::field_is_classified`), but `slug`
+    // is not, so every title edit anywhere still carried an unclassified
+    // field into `moved_surface_fields` and forced `FullCause::SurfaceChanged`
+    // regardless. It stays in the FACADE (nothing here claims it can't affect
+    // some future per-page use) and comes out of the surface only.
+    stripped.slug = String::new();
     // `lang` — audited again after an earlier pass called `lang`
     // "genuinely cross-page-visible" and stopped there. Re-auditing every
     // cross-page read of another document's `lang` (not just this page's own —
@@ -236,6 +250,16 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // comment on a future change — the two channels above were exhaustive as
     // of this audit, not by construction.
     stripped.lang = crate::i18n::Language::default();
+    // `raw_frontmatter` is kept in the surface (nothing above blanks it) as
+    // the catch-all that lets an unmodeled or plugin-only key (`syndicated:`
+    // and friends) still reach here — but that means it duplicates every
+    // OTHER surface field the frontmatter also sets. Left whole, editing
+    // only `weight:` moves the opaque `raw_frontmatter` field right beside
+    // the named, classifiable `weight` field, and an opaque move can never
+    // be classified. Stripping the keys that already have their own
+    // dedicated field removes exactly that duplication, not the catch-all
+    // itself — see `dependents::strip_typed_frontmatter_keys`.
+    crate::build::render::incremental::dependents::strip_typed_frontmatter_keys(&mut stripped.raw_frontmatter);
     format!("{:?}", normalized(&stripped))
 }
 
@@ -484,6 +508,28 @@ pub struct FacadeCache {
     /// direction as `asset_versions`.
     #[serde(default)]
     lang_globals: std::collections::BTreeMap<String, String>,
+    /// Per-language digest of that language's nav bar membership/order
+    /// (`render::incremental::dependents::nav_globals`) — the first of the
+    /// three per-language digests that let a `SurfaceChanged` verdict narrow
+    /// to "every page of the affected language" instead of the whole site.
+    ///
+    /// `serde(default)` gives an empty map for a cache written before this
+    /// field existed, so every language reads as moved on the first build
+    /// after upgrading — the same one-time, fail-safe-direction cost
+    /// `asset_versions`/`listing_globals`/`lang_globals` all pay.
+    #[serde(default)]
+    nav_globals: std::collections::BTreeMap<String, String>,
+    /// Per-language digest of that language's home-page title
+    /// (`render::incremental::dependents::home_title_globals`). See
+    /// `nav_globals`'s field docs for the shared rationale and fail-safe
+    /// direction.
+    #[serde(default)]
+    home_title_globals: std::collections::BTreeMap<String, String>,
+    /// Per-language digest of that language's home page's `breadcrumb:`
+    /// site-wide toggle (`render::incremental::dependents::home_breadcrumb_globals`).
+    /// See `nav_globals`'s field docs.
+    #[serde(default)]
+    home_breadcrumb_globals: std::collections::BTreeMap<String, String>,
 }
 
 /// Which keys differ between two digest maps — sorted, and including keys
@@ -548,6 +594,9 @@ impl FacadeCache {
             listing_globals: std::collections::BTreeMap::new(),
             global_contributions: std::collections::BTreeMap::new(),
             lang_globals: std::collections::BTreeMap::new(),
+            nav_globals: std::collections::BTreeMap::new(),
+            home_title_globals: std::collections::BTreeMap::new(),
+            home_breadcrumb_globals: std::collections::BTreeMap::new(),
         }
     }
 
@@ -602,6 +651,51 @@ impl FacadeCache {
         current: &std::collections::BTreeMap<String, String>,
     ) -> Vec<String> {
         moved_keys(&self.lang_globals, current)
+    }
+
+    /// Record this build's nav globals. Chained onto `from_facades`.
+    pub fn with_nav_globals(mut self, globals: std::collections::BTreeMap<String, String>) -> Self {
+        self.nav_globals = globals;
+        self
+    }
+
+    /// The languages whose nav bar moved — callers must render every page of
+    /// that language, not the whole site. See `nav_globals`'s field docs.
+    pub fn nav_globals_changed(&self, current: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+        moved_keys(&self.nav_globals, current)
+    }
+
+    /// Record this build's home-title globals. Chained onto `from_facades`.
+    pub fn with_home_title_globals(mut self, globals: std::collections::BTreeMap<String, String>) -> Self {
+        self.home_title_globals = globals;
+        self
+    }
+
+    /// The languages whose home-page title moved — callers must render every
+    /// page of that language. See `nav_globals`'s field docs.
+    pub fn home_title_globals_changed(
+        &self,
+        current: &std::collections::BTreeMap<String, String>,
+    ) -> Vec<String> {
+        moved_keys(&self.home_title_globals, current)
+    }
+
+    /// Record this build's home-breadcrumb globals. Chained onto `from_facades`.
+    pub fn with_home_breadcrumb_globals(
+        mut self,
+        globals: std::collections::BTreeMap<String, String>,
+    ) -> Self {
+        self.home_breadcrumb_globals = globals;
+        self
+    }
+
+    /// The languages whose home page's `breadcrumb:` toggle moved — callers
+    /// must render every page of that language. See `nav_globals`'s field docs.
+    pub fn home_breadcrumb_globals_changed(
+        &self,
+        current: &std::collections::BTreeMap<String, String>,
+    ) -> Vec<String> {
+        moved_keys(&self.home_breadcrumb_globals, current)
     }
 
     /// Record this build's global contributions. Chained onto `from_facades`.
@@ -986,6 +1080,44 @@ mod tests {
         );
     }
 
+    /// `slug` moves whenever `title` does (both derive from the same source)
+    /// but has no reader anywhere — see `surface_debug`'s comment. A title
+    /// edit still has to re-render the page's own HTML, but the accompanying
+    /// slug move must not ALSO show up as a second, unclassifiable surface
+    /// field next to the classified `title` field.
+    #[test]
+    fn a_slug_change_moves_the_facade_but_not_the_surface() {
+        let a = ParsedDocument { title: "A".to_string(), slug: "a".to_string(), ..Default::default() };
+        let b = ParsedDocument { title: "A".to_string(), slug: "b".to_string(), ..Default::default() };
+        assert_ne!(compute_page_facade(&a), compute_page_facade(&b), "slug is part of this page's own HTML");
+        assert_eq!(
+            compute_page_surface(&a),
+            compute_page_surface(&b),
+            "no page reads another's slug — it must not full-render the site"
+        );
+    }
+
+    /// The actual bug this fixes: a REAL title edit moves `title` (and the
+    /// no-op-for-rendering `label`/`slug` that ride along with it), and only
+    /// `title` may show up as a moved surface field — `slug` riding along
+    /// silently must not.
+    #[test]
+    fn a_title_edit_does_not_also_report_slug_as_a_moved_surface_field() {
+        let title = |t: &str| ParsedDocument {
+            title: t.to_string(),
+            label: t.to_string(),
+            slug: t.to_lowercase(),
+            ..Default::default()
+        };
+        let a = title("Original");
+        let b = title("Renamed");
+        let names = surface_field_names();
+        let moved = moved_surface_fields(&PageFingerprints::of(&a).fields, &PageFingerprints::of(&b).fields, &names);
+        let mut moved_sorted = moved.clone();
+        moved_sorted.sort();
+        assert_eq!(moved_sorted, ["label", "title"], "got {moved:?}");
+    }
+
     #[test]
     fn a_lang_change_moves_the_facade_but_not_the_surface() {
         // `lang` drives this page's own `<html lang>`, hreflang, and interface
@@ -1041,6 +1173,52 @@ mod tests {
         let a = ParsedDocument { label: "A".to_string(), ..Default::default() };
         let b = ParsedDocument { label: "B".to_string(), ..Default::default() };
         assert_ne!(compute_page_surface(&a), compute_page_surface(&b));
+    }
+
+    /// `raw_frontmatter` is a whole-map catch-all kept in the surface so an
+    /// unmodeled or plugin-only frontmatter key (`syndicated:`, say) still
+    /// reaches it — but a real edit always moves the SAME key's copy inside
+    /// `raw_frontmatter` too. Left whole, editing only `weight:` would move
+    /// BOTH the named `weight` field AND the opaque `raw_frontmatter` field,
+    /// and an opaque move can never be classified
+    /// (`render::incremental::dependents::field_is_classified`) — every
+    /// weight edit on a nav-eligible page would still force
+    /// `FullCause::SurfaceChanged` despite the narrowing this fix exists for.
+    /// Per-field attribution is what proves it: only `weight` may move here,
+    /// not `raw_frontmatter` alongside it.
+    #[test]
+    fn a_typed_frontmatter_keys_raw_copy_does_not_also_move_the_surface() {
+        use std::collections::BTreeMap;
+        let raw = |weight: i64| {
+            let mut m = BTreeMap::new();
+            m.insert("weight".to_string(), serde_json::Value::Number(weight.into()));
+            m
+        };
+        let a = ParsedDocument { weight: Some(10), raw_frontmatter: raw(10), ..Default::default() };
+        let b = ParsedDocument { weight: Some(25), raw_frontmatter: raw(25), ..Default::default() };
+
+        let names = surface_field_names();
+        let moved = moved_surface_fields(&PageFingerprints::of(&a).fields, &PageFingerprints::of(&b).fields, &names);
+        assert_eq!(moved, ["weight"], "raw_frontmatter must not also show up as moved: {moved:?}");
+    }
+
+    /// The other half of the same fix: a key with NO dedicated struct field
+    /// (a plugin-only key like `syndicated:`) has nowhere else to be seen,
+    /// so `raw_frontmatter`'s own move must still be reported for it.
+    #[test]
+    fn an_untyped_frontmatter_keys_move_still_shows_up_as_raw_frontmatter() {
+        use std::collections::BTreeMap;
+        let raw = |value: &str| {
+            let mut m = BTreeMap::new();
+            m.insert("syndicated".to_string(), serde_json::Value::String(value.to_string()));
+            m
+        };
+        let a = ParsedDocument { raw_frontmatter: raw("no"), ..Default::default() };
+        let b = ParsedDocument { raw_frontmatter: raw("yes"), ..Default::default() };
+
+        let names = surface_field_names();
+        let moved = moved_surface_fields(&PageFingerprints::of(&a).fields, &PageFingerprints::of(&b).fields, &names);
+        assert_eq!(moved, ["raw_frontmatter"]);
     }
 
     #[test]

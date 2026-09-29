@@ -974,13 +974,7 @@ fn generate_html_inner(
                 // new contract — series-nav iterates direct siblings only,
                 // so re-resolution on a flatten scope would be wrong.
                 let resolved = parent_doc.resolve_for_direct_children();
-                let parent_chrome_explicit: Option<bool> = match &parent_doc.series {
-                    Some(crate::build::types::SeriesField::Flag(b)) => Some(*b),
-                    Some(crate::build::types::SeriesField::Ordered(_)) => Some(true), // defensive (normalize rewrites this)
-                    None => None,
-                };
-                let parent_chrome_default = resolved.series_default;
-                let parent_chrome_on = parent_chrome_explicit.unwrap_or(parent_chrome_default);
+                let parent_chrome_on = series_chrome_on(parent_doc);
                 let page_opted_out = matches!(
                     &d.series,
                     Some(crate::build::types::SeriesField::Flag(false))
@@ -1677,11 +1671,30 @@ fn generate_html_inner(
 ///    suppressed by `nav_enabled` at the call site.
 ///
 /// Every page that sets neither answers exactly as `is_listable` does.
-fn is_sequence_step(pd: &ParsedDocument) -> bool {
+pub(crate) fn is_sequence_step(pd: &ParsedDocument) -> bool {
     use moss_core::sort::SortableDoc;
     pd.is_listable()
         && (!pd.is_folder_index() || ShellRegistry::is_article_layout(pd))
         && !matches!(&pd.series, Some(crate::build::types::SeriesField::Flag(false)))
+}
+
+/// Whether `parent_doc`'s series prev/next chrome is on for its children —
+/// the chrome-trigger precedence: an explicit `series:` on the parent wins
+/// (`Flag(true)`/`Flag(false)`, or the legacy `Ordered(_)` list form, which
+/// always means on); otherwise the resolved sort's own `series_default`
+/// (weight axis, or an explicit list order) decides. Shared by the two
+/// places that need this one precedence decision on a parent folder: this
+/// module's own series-nav block (a leaf's own opt-out, `page_opted_out`
+/// below, is a separate, per-leaf check on top of it) and
+/// `render::incremental::listing::is_series_member`, which needs the same
+/// answer to know whether an edit anywhere in the chain can move any
+/// sibling's rendered chrome.
+pub(crate) fn series_chrome_on(parent_doc: &ParsedDocument) -> bool {
+    match &parent_doc.series {
+        Some(crate::build::types::SeriesField::Flag(b)) => *b,
+        Some(crate::build::types::SeriesField::Ordered(_)) => true,
+        None => parent_doc.resolve_for_direct_children().series_default,
+    }
 }
 
 /// The ordered prev/next chain for the folder at `parent_prefix`: its direct

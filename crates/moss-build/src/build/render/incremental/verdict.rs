@@ -25,10 +25,16 @@
 //!   * [`FullCause::ColdCache`] — a cold or unreadable cache; nothing to diff.
 //!   * [`FullCause::PathSetMoved`] — a page appeared or disappeared, which
 //!     moves listings, nav and folder indexes no per-page diff can model.
-//!   * [`FullCause::SurfaceChanged`] — ANY page's cross-page-visible surface
-//!     moved. The design's six non-graph render dependencies (site nav,
-//!     breadcrumbs, series siblings, homepage title, folder-embed listings,
-//!     translation counterparts) all read surface fields.
+//!   * [`FullCause::SurfaceChanged`] — a page's cross-page-visible surface
+//!     moved by a field NOT in the classified set
+//!     ([`dependents::field_is_classified`]). The design's six non-graph
+//!     render dependencies (site nav, breadcrumbs, series siblings, homepage
+//!     title, folder-embed listings, translation counterparts) all read
+//!     surface fields, but only translation counterparts is unmodeled —
+//!     the other five each have a narrower render set below, so a classified
+//!     move no longer costs the whole site. An unclassified field (anything
+//!     [`dependents::field_is_classified`] does not name) still falls back to
+//!     this, unchanged from before this module existed.
 //!   * [`FullCause::GlobalInvalidator`] — a page whose BODY feeds every other
 //!     page's HTML changed.
 //!   * [`FullCause::AssetVersionsMoved`] — a content-addressed asset moved, so
@@ -52,6 +58,7 @@ use crate::build::phase::PhaseTrace;
 use crate::build::types::ParsedDocument;
 use crate::types::content::ProjectStructure;
 
+use super::dependents;
 use super::listing::{self, ListingGroups};
 use super::policy::IncrementalPolicy;
 
@@ -101,6 +108,12 @@ pub enum VerdictBasis {
         by_backlink: usize,
         by_listing_group: usize,
         groups: usize,
+        /// Pages added solely by a classified surface move: the nav/homepage
+        /// -title/breadcrumb-enable per-language widen, plus the breadcrumb
+        /// ancestor descendant scan. Zero on a build with no surface move at
+        /// all, and on one whose surface moves were all backlink/listing-
+        /// group reachable anyway.
+        by_dependents: usize,
     },
 }
 
@@ -147,11 +160,12 @@ impl RenderVerdict {
                 by_backlink,
                 by_listing_group,
                 groups,
+                by_dependents,
             } => log::info!(
                 target: "incremental",
                 "{tracked} tracked pages, {changed} changed ({surface_changed} by surface), \
                  +{by_backlink} by backlink/embed, +{by_listing_group} by listing group \
-                 ({groups} groups), skipping {}",
+                 ({groups} groups), +{by_dependents} by surface dependents, skipping {}",
                 self.skip.len(),
             ),
         }
@@ -248,6 +262,55 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     let changed = previous.changed_paths(&current);
     let surface_changed = previous.surface_changed_paths(&current);
 
+    // Path -> document, for the two lookups the dependents narrowing below
+    // needs: which fields moved on a given surface-changed page, and which
+    // folder document a breadcrumb-ancestor scan starts from. Built once
+    // rather than at each call site, since `documents` is scanned linearly
+    // either way.
+    let doc_by_path: HashMap<&str, &ParsedDocument> = documents
+        .iter()
+        .filter_map(|doc| doc.source_path.as_deref().map(|p| (p, doc)))
+        .collect();
+    let surface_field_names = facade::surface_field_names();
+
+    // Which fields moved on each surface-changed page — computed once here
+    // and read by both this section (is the move unclassified?) and the
+    // breadcrumb-ancestor scan below (did `label` move?), rather than
+    // re-running the same diff for the same page twice. A page missing from
+    // `doc_by_path` (no source path, hence no facade entry) has no entry
+    // here either.
+    let moved_fields_by_path: HashMap<&str, Vec<String>> = surface_changed
+        .iter()
+        .filter_map(|path| {
+            doc_by_path.get(path.as_str())?;
+            let moved = facade::moved_surface_fields(
+                previous.surface_fields_of(path),
+                current.get(path.as_str()).map(|fp| fp.fields.as_str()).unwrap_or(""),
+                &surface_field_names,
+            );
+            Some((path.as_str(), moved))
+        })
+        .collect();
+
+    // Which surface-changed pages moved a field this build cannot narrow —
+    // see `dependents::field_is_classified`'s doc comment for what "cannot
+    // narrow" means and why it is not a flat field-name allow-list. A page
+    // whose move cannot be attributed to any field at all (a legacy cache, or
+    // a names/current width mismatch — see `moved_surface_fields`) counts as
+    // unclassified too: "cannot tell you what moved" is not evidence it was
+    // safe, it is the absence of the evidence this whole mechanism runs on.
+    let unclassified_surface_movers: Vec<String> = surface_changed
+        .iter()
+        .filter(|path| {
+            let Some(doc) = doc_by_path.get(path.as_str()) else { return true };
+            match moved_fields_by_path.get(path.as_str()) {
+                Some(moved) => moved.is_empty() || moved.iter().any(|f| !dependents::field_is_classified(doc, f)),
+                None => true,
+            }
+        })
+        .cloned()
+        .collect();
+
     // A page whose BODY feeds every other page's HTML. Three kinds exist, all
     // found by auditing every cross-page read of another document's
     // `content`/`html_content`: the root homepage, a language home, and any
@@ -309,6 +372,34 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     );
     let lang_globals_changed = previous.lang_globals_changed(&lang_globals);
 
+    // Sixth, seventh and eighth: the three per-language digests that let a
+    // classified nav/title/breadcrumb-enable move narrow to "every page of
+    // the affected language" instead of "every page" — see
+    // `dependents`'s module doc for why these three specifically have no
+    // existing digest to reuse (series siblings and folder-embed listings
+    // both do; translation counterparts stays unmodeled). Unlike
+    // `FullCause`'s other build-globals, a move here is NOT a full-render
+    // bypass: it feeds the per-language widen inside the incremental branch
+    // below instead.
+    let nav_globals = dependents::nav_globals(documents, inputs.project.has_content_folders);
+    let nav_globals_changed = previous.nav_globals_changed(&nav_globals);
+    let home_title_globals = dependents::home_title_globals(documents, inputs.site_lang);
+    let home_title_globals_changed = previous.home_title_globals_changed(&home_title_globals);
+    let home_breadcrumb_globals = dependents::home_breadcrumb_globals(documents);
+    let home_breadcrumb_globals_changed =
+        previous.home_breadcrumb_globals_changed(&home_breadcrumb_globals);
+    // The languages nav or homepage title disagreed on — deduplicated once,
+    // since both widen the render set the same way (every page of that
+    // language). The breadcrumb enable/disable toggle is not per-language
+    // (see `dependents::home_breadcrumb_globals`'s doc comment) and is
+    // handled separately, below, as a site-wide widen.
+    let widen_langs: HashSet<String> = nav_globals_changed
+        .iter()
+        .chain(home_title_globals_changed.iter())
+        .cloned()
+        .collect();
+    let breadcrumb_enable_moved = !home_breadcrumb_globals_changed.is_empty();
+
     // Listing groups: computed unconditionally, because this build's digests
     // must be persisted for the NEXT build even when this one renders
     // everything. Sub-millisecond on the reference vault.
@@ -323,10 +414,10 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
             FullCause::PathSetMoved,
             name_a_few(previous.paths_symmetric_difference(&current), "page"),
         ))
-    } else if !surface_changed.is_empty() {
+    } else if !unclassified_surface_movers.is_empty() {
         Some((
             FullCause::SurfaceChanged,
-            name_surface_movers(&surface_changed, &previous, &current),
+            name_surface_movers(&unclassified_surface_movers, &previous, &current),
         ))
     } else if !global_invalidator_changed.is_empty() {
         Some((FullCause::GlobalInvalidator, name_a_few(global_invalidator_changed, "page")))
@@ -392,7 +483,11 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
             // already moves the embedding page's facade.
             let mut by_listing_group = 0usize;
             for doc in documents {
-                if !listing::hosts_listing(doc) {
+                // A series-chain step reads its parent's listing for
+                // prev/next ordering exactly the way a listing host reads a
+                // listing (`listing::is_series_member`'s doc comment) — same
+                // loop, same digest check, so it must not be skipped here.
+                if !listing::hosts_listing(doc) && !listing::is_series_member(doc, documents) {
                     continue;
                 }
                 let Some(source) = doc.source_path.as_ref() else {
@@ -418,6 +513,45 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                 }
             }
 
+            // The two channels with no pre-existing digest to fall through
+            // into: a classified nav/title/breadcrumb-enable move widens to
+            // every page of the affected language, and a folder-index
+            // `label` move widens to that folder's breadcrumb descendants.
+            // See `dependents`'s module doc for why these two specifically
+            // need code here at all.
+            let mut by_dependents = 0usize;
+            if !widen_langs.is_empty() || breadcrumb_enable_moved {
+                for doc in documents {
+                    let Some(path) = doc.source_path.as_ref() else { continue };
+                    if render_set.contains(path) {
+                        continue;
+                    }
+                    let widen = breadcrumb_enable_moved
+                        || widen_langs.contains(dependents::effective_lang(doc, inputs.site_lang).code());
+                    if widen {
+                        render_set.insert(path.clone());
+                        by_dependents += 1;
+                    }
+                }
+            }
+            for path in &surface_changed {
+                let Some(doc) = doc_by_path.get(path.as_str()) else { continue };
+                if doc.kind != moss_core::PageKind::Folder {
+                    continue;
+                }
+                let Some(moved) = moved_fields_by_path.get(path.as_str()) else { continue };
+                if !moved.iter().any(|f| f == "label") {
+                    continue;
+                }
+                for extra in
+                    dependents::breadcrumb_ancestor_descendants(doc, documents, inputs.project.has_content_folders)
+                {
+                    if render_set.insert(extra) {
+                        by_dependents += 1;
+                    }
+                }
+            }
+
             let skip: HashSet<String> = current
                 .keys()
                 .filter(|p| !render_set.contains(*p))
@@ -430,6 +564,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                 by_backlink,
                 by_listing_group,
                 groups: groups.len(),
+                by_dependents,
             };
             (skip, basis)
         }
@@ -439,7 +574,10 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
         .with_asset_versions(inputs.asset_versions.to_string())
         .with_global_contributions(contributions)
         .with_listing(listing_globals, groups.into_map())
-        .with_lang_globals(lang_globals);
+        .with_lang_globals(lang_globals)
+        .with_nav_globals(nav_globals)
+        .with_home_title_globals(home_title_globals)
+        .with_home_breadcrumb_globals(home_breadcrumb_globals);
     if let Err(e) = new_cache.save(inputs.cache_path) {
         log::warn!(target: "incremental", "failed to save facade cache: {e}");
     }
