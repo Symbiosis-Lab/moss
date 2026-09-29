@@ -9,32 +9,15 @@
 use super::{NavigationBuilder, island};
 
 impl<'a> NavigationBuilder<'a> {
-    /// The plain (non-breadcrumb) `.nav-left`: a linked site name — unless
-    /// this render is the home page and its own first level-1 heading
-    /// already says the name
-    /// (`NavigationBuilder::home_heading_matches_site_name`), in which case
-    /// the redundant text is dropped. A `logo:` keeps the home link, with
-    /// `aria-label` naming the site for assistive tech; with no logo the
-    /// link is omitted outright, and `.nav-left` renders empty so the
-    /// header layout doesn't shift.
+    /// The plain (non-breadcrumb) `.nav-left`: a linked site name. Extracted
+    /// so the two call sites below (no breadcrumb segments at all, and an
+    /// empty segment list) share one format string instead of each carrying
+    /// their own copy.
     fn plain_site_name_html(&self, home_path: &str, logo_html: &str) -> String {
-        if self.home_heading_matches_site_name {
-            if self.logo_path.is_some() {
-                format!(
-                    r#"<div class="nav-left"><a href="{}" class="site-name" aria-label="{}">{}</a></div>"#,
-                    home_path,
-                    crate::build::page::meta::escape_html_attr(self.site_title),
-                    logo_html
-                )
-            } else {
-                r#"<div class="nav-left"></div>"#.to_string()
-            }
-        } else {
-            format!(
-                r#"<div class="nav-left"><a href="{}" class="site-name">{}{}</a></div>"#,
-                home_path, logo_html, self.site_title
-            )
-        }
+        format!(
+            r#"<div class="nav-left"><a href="{}" class="site-name">{}{}</a></div>"#,
+            home_path, logo_html, self.site_title
+        )
     }
 
     /// Build the `.nav-left` fragment: breadcrumb trail or plain site name.

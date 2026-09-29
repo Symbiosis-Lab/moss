@@ -2379,7 +2379,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "The site title link at the left of the nav bar. On a non-home page the same slot may instead carry `.breadcrumb-segment`. On the home page, when the page's own first heading is the site name, the text is dropped: with a `logo:` the link stays with an `aria-label` naming the site, and with no logo the link is omitted and `.nav-left` renders empty.",
+        description: "The site title link at the left of the nav bar. On a non-home page the same slot may instead carry `.breadcrumb-segment`.",
     },
     ComponentEntry {
         class: "breadcrumb-segment",
@@ -2423,7 +2423,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Left group of the nav bar. Holds either `.site-name` or the breadcrumb trail, never both — or, on a home page whose own heading duplicates the site name and carries no logo, neither.",
+        description: "Left group of the nav bar. Holds either `.site-name` or the breadcrumb trail, never both.",
     },
     ComponentEntry {
         class: "nav-right",
