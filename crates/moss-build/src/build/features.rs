@@ -31,6 +31,28 @@ pub(crate) fn html_escape(s: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+/// Mark a `<script ...>…</script>` tag as deploy-only: the deployed site must
+/// run it, but the preview server must never serve it — see
+/// `ops::serve::iframe_bridge::strip_preview_only_scripts`, the sole reader of
+/// this attribute. This is the SOLE WRITER: both callers (the analytics tag
+/// below and the pageview beacon further down) route their finished tag
+/// through here rather than embedding the attribute themselves, so there is
+/// exactly one place that decides what "deploy-only" looks like on the wire.
+/// Ship's `StripPreviewAttrs` pass deliberately leaves the attribute alone
+/// (`build::ship::apply_transform`), unlike the `<!--moss:no-preview-->`
+/// markers this replaced: a marker wrapping the script was removed by ship
+/// for deploy while the script itself stayed, so a page served from a
+/// SHIP-TRANSFORMED generation carried the script with nothing left for a
+/// marker-based strip to find. An attribute on the element itself has no such
+/// gap.
+///
+/// Splices right after the tag's own `<script` — safe because every caller
+/// passes a tag that starts with exactly that literal (`AnalyticsConfig::
+/// to_script_tag`'s two branches, and the beacon's own hand-written tag).
+pub(crate) fn mark_deploy_only(script_tag: &str) -> String {
+    script_tag.replacen("<script", "<script data-moss-deploy-only", 1)
+}
+
 use crate::build::slots::Slot;
 use crate::build::render::resolve_comments_pref;
 use crate::config::services::ServicesConfig;
@@ -90,25 +112,23 @@ pub fn should_inject_subscribe_assets(
 /// rebuild (start_server=false). Preview safety is handled at the
 /// runtime layer, not by omitting the tags:
 ///
-/// - **Analytics pixel** — wrapped in `<!--moss:no-preview-->` markers;
-///   the preview server strips those regions before serving
-///   (`preview::iframe_bridge::strip_preview_only_scripts`). The
-///   deployed artifact keeps the script; the markers are removed by
-///   `apply_transform` on ship (Task A5).
-/// - **Pageview beacon** — two cooperating preview protections:
-///   (1) wrapped in the same `<!--moss:no-preview-->` markers, so
-///   preview-served STAGING pages drop the script entirely at serve
-///   time. `ship_phase` removes only the marker comments, so deployed
-///   pages keep the script — which means frozen generations served
-///   during the zero-flicker window still carry it (their markers are
-///   already gone) and the strip cannot help there.
-///   (2) the runtime `DOMContentLoaded` self-gate on `data-moss-preview`
-///   (Task A4) — effective on EVERY preview-served page because the
-///   preview server re-guarantees the attribute on each HTML response
-///   (`preview::iframe_bridge::ensure_preview_body_attr`), including
-///   ship-stripped frozen generations where the build-time annotation
-///   is gone. On the live site neither mechanism applies and the
-///   beacon fires.
+/// - **Analytics pixel** and **pageview beacon** — both carry a
+///   `data-moss-deploy-only` attribute directly on the `<script>` element.
+///   The preview server strips any script carrying it before serving
+///   (`preview::iframe_bridge::strip_preview_only_scripts`); the deployed
+///   artifact keeps the script AND the attribute, since `apply_transform`
+///   on ship deliberately leaves it alone. Keying the strip on
+///   an attribute of the script itself, rather than a surrounding comment
+///   marker, is what lets it work on a page served from a SHIP-TRANSFORMED
+///   generation, not just fresh staging output: a marker wrapping the
+///   script could be (and was) removed by ship for deploy while the
+///   script stayed, leaving nothing between staging and a shipped
+///   generation's markup for a marker-based strip to find. This attribute
+///   survives that same transform by design, so the strip finds it either
+///   way. The beacon's own former `data-moss-preview` runtime self-gate is
+///   gone: it existed only to cover the gap the marker-based strip left on
+///   ship-transformed generations, and that gap no longer exists. On the
+///   live site the script is deployed as-is and fires.
 ///
 /// Comments (Artalk) are mode-INDEPENDENT: baked identically in every
 /// mode (preview, build, publish). Preview safety is achieved by two
@@ -219,12 +239,11 @@ pub fn generate_native_slots(
             provider: None,
             site_id: None,
         };
-        // Wrap in a preview-strip marker so the preview server can remove it
-        // from served responses (Task A5) while the deployed artifact keeps it.
-        let script_tag = format!(
-            "<!--moss:no-preview-->{}<!--/moss:no-preview-->",
-            ac.to_script_tag()
-        );
+        // Mark the element itself so the preview server can remove it from
+        // served responses while the deployed artifact keeps it — ship's
+        // StripPreviewAttrs pass leaves this attribute alone by design
+        // (`build::ship::apply_transform`).
+        let script_tag = mark_deploy_only(&ac.to_script_tag());
         let result = EnhanceResult {
             success: true,
             slots: HashMap::from([(Slot::HeadEnd.as_str().into(), EnhanceContent::Static { html: script_tag })]),
@@ -471,29 +490,33 @@ pub fn generate_native_slots(
     // Auto-injected for moss deployments, regardless of analytics config.
     // Sends a fire-and-forget pageview POST to the beacon endpoint.
     // Mode-INDEPENDENT: injected in every mode. Preview safety is layered:
-    // - The <!--moss:no-preview--> wrapper: the preview server strips the
-    //   region from served STAGING pages (same mechanism as the analytics
-    //   pixel). ship_phase removes only the marker comments, so the deployed
-    //   artifact keeps the script — as do frozen generations served during
-    //   the zero-flicker window, whose markers are already gone.
-    // - The data-moss-preview self-gate (Task A4) below covers those frozen
-    //   pages: the preview server re-guarantees the attribute on every HTML
-    //   response (iframe_bridge::ensure_preview_body_attr), so the gate
-    //   holds even where the build-time annotation was ship-stripped.
+    // - The `data-moss-deploy-only` attribute on the script element (see
+    //   `mark_deploy_only`, same mechanism as the analytics pixel): the
+    //   preview server strips any script carrying it from every response it
+    //   serves, regardless of whether that response originated from fresh
+    //   staging output or a ship-transformed generation — ship's
+    //   StripPreviewAttrs pass leaves the attribute alone by design, so
+    //   there is no generation the strip is blind to.
     // - The loopback-origin gate below covers ship output served OUTSIDE the
     //   preview server (the documented `python3 -m http.server` flow,
-    //   file:// opens): those pages are ship-stripped and un-middlewared, so
-    //   neither mechanism above applies. Local-env deploys live on
-    //   *.localhost subdomains and still pass.
+    //   file:// opens): those pages are un-middlewared, so the strip above
+    //   cannot reach them. Local-env deploys live on *.localhost subdomains
+    //   and still pass.
+    //
+    // There used to be a third layer, a runtime `data-moss-preview`
+    // self-gate inside this script: it existed only to cover frozen
+    // generations the OLD `<!--moss:no-preview-->` marker-based strip
+    // couldn't see (ship removed the marker but kept the script). That gap
+    // is what the attribute-based strip above closes, so the self-gate had
+    // nothing left to guard and was removed rather than kept as a fourth,
+    // now-redundant layer.
     {
         if deploy_config.deploy_method.as_deref() == Some("moss") {
             if let Some(ref site_id) = deploy_config.site_id {
                 let beacon_script = format!(
                     concat!(
-                        "<!--moss:no-preview-->",
                         "<script id=\"moss-beacon\">(function(){{",
                         "document.addEventListener('DOMContentLoaded',function(){{",
-                        "if(document.body.hasAttribute('data-moss-preview'))return;",
                         "var h=location.hostname;",
                         "if(location.protocol==='file:'||h==='localhost'||h==='127.0.0.1'||h==='[::1]')return;",
                         // Absolute URL with the environment's own scheme
@@ -526,8 +549,7 @@ pub fn generate_native_slots(
                         "}})",
                         "}})",
                         "}});",
-                        "}})()</script>",
-                        "<!--/moss:no-preview-->"
+                        "}})()</script>"
                     ),
                     seta_url,
                     html_escape(site_id)
@@ -536,7 +558,7 @@ pub fn generate_native_slots(
                     success: true,
                     slots: HashMap::from([(
                         Slot::HeadEnd.as_str().into(),
-                        EnhanceContent::Static { html: beacon_script },
+                        EnhanceContent::Static { html: mark_deploy_only(&beacon_script) },
                     )]),
                 };
                 slots.merge(&result, 0, "__native_beacon");

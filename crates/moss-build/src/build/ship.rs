@@ -43,7 +43,7 @@ pub use crate::build::served_path::{transform_for, ShipTransform};
 /// longer produces, and deploy, which byte-verifies each upload against the
 /// manifest hash, refuses the whole publish. This constant is part of the cache
 /// key, so bumping it invalidates those records instead.
-pub const SHIP_TRANSFORM_REV: u32 = 2;
+pub const SHIP_TRANSFORM_REV: u32 = 3;
 
 /// Strips preview-only `data-source-*` attributes from HTML.
 /// Matches: data-source-line="N", data-source-range="N-M", data-source-fm="field", data-source-none.
@@ -57,15 +57,14 @@ static STRIP_PREVIEW_ATTR: LazyLock<regex::Regex> = LazyLock::new(|| {
         .unwrap()
 });
 
-/// Strips `<!--moss:no-preview-->` and `<!--/moss:no-preview-->` comment
-/// markers from the shipped artifact. Content between the markers is kept
-/// (e.g. the analytics `<script>`) — only the marker comments are removed.
-/// The preview server strips both markers AND content via
-/// `strip_preview_only_scripts`; the ship path strips only the markers so
-/// the deployed artifact fires the analytics script normally.
-static STRIP_NO_PREVIEW_MARKER: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"<!--/?moss:no-preview-->").unwrap()
-});
+// The `<!--moss:no-preview-->` comment markers that used to wrap deploy-only
+// scripts (the pageview beacon, the site-wide analytics tag) are gone. They
+// were removed by ship, keeping the wrapped script for deploy — but that
+// meant a page served by the preview router from a generation this pass had
+// already run on carried an unmarked, un-strippable script (see
+// `ops::serve::iframe_bridge::strip_preview_only_scripts`). Deploy-only
+// scripts now carry a `data-moss-deploy-only` attribute directly instead,
+// which this transform deliberately leaves alone — see `apply_transform`.
 
 // ---------------------------------------------------------------------------
 // apply_transform
@@ -91,6 +90,12 @@ pub fn strip_source_annotations(html: &str) -> std::borrow::Cow<'_, str> {
 /// The enum survives the deletion of its payload because it still names the
 /// two *I/O paths* ship takes: `CopyAsIs` never reads the file (`fs::copy` is
 /// COW on APFS/Btrfs and the assets are large), `StripPreviewAttrs` must.
+///
+/// Deliberately does NOT strip `data-moss-deploy-only`: that attribute marks
+/// a `<script>` a deployed site must still execute (the pageview beacon, the
+/// site-wide analytics tag), and it is what lets the preview server strip
+/// that same script from a page it serves out of a generation THIS transform
+/// already ran on — see `ops::serve::iframe_bridge::strip_preview_only_scripts`.
 pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
     match transform {
         ShipTransform::CopyAsIs => bytes.to_vec(),
@@ -102,8 +107,7 @@ pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
             };
             let after_source = STRIP_SOURCE_LINE.replace_all(s, "");
             let after_preview = STRIP_PREVIEW_ATTR.replace_all(&after_source, "$1");
-            let after_markers = STRIP_NO_PREVIEW_MARKER.replace_all(&after_preview, "");
-            after_markers.into_owned().into_bytes()
+            after_preview.into_owned().into_bytes()
         }
     }
 }
@@ -1443,13 +1447,16 @@ mod tests {
     }
 
     #[test]
-    fn apply_strip_removes_no_preview_markers_keeps_content() {
-        let html = r#"<body data-moss-preview><!--moss:no-preview--><script src="a.js"></script><!--/moss:no-preview-->x</body>"#;
+    fn apply_strip_keeps_deploy_only_script_and_its_attribute() {
+        // The deployed artifact must keep running the beacon/analytics
+        // script AND the attribute the preview server keys its strip on —
+        // ship must not repeat the old markers' mistake of leaving that
+        // script unmarked for a later, generation-blind server-side strip.
+        let html = r#"<body data-moss-preview><script src="a.js" data-moss-deploy-only></script>x</body>"#;
         let out = std::str::from_utf8(
             &apply_transform(ShipTransform::StripPreviewAttrs, html.as_bytes())
         ).unwrap().to_string();
-        assert!(out.contains("a.js"), "analytics content must survive into the artifact");
-        assert!(!out.contains("moss:no-preview"), "marker comments must be stripped on ship");
+        assert_eq!(out, r#"<body><script src="a.js" data-moss-deploy-only></script>x</body>"#);
     }
 
     // ─── Promotion ordering ──────────────────────────────────────

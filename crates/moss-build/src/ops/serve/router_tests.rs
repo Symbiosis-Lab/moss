@@ -340,12 +340,10 @@ async fn cold_start_serves_generation_through_current_symlink() {
 async fn frozen_generation_page_regains_preview_gate_attribute() {
     // Simulates the zero-flicker window: during rebuilds (and on cold
     // start) the server serves the previous SHIPPED generation, where
-    // ship_phase removed the no-preview markers (keeping the beacon
-    // script for deploy) and stripped data-moss-preview from <body>.
-    // Runtime preview gates — the beacon's self-gate, subscribe.ts's
-    // no-real-POST gate — all read that attribute, so the middleware
-    // must re-guarantee it on every served HTML response. This is the
-    // regression test for the beacon firing from a local preview.
+    // ship_phase stripped data-moss-preview from <body>. subscribe.ts's
+    // no-real-POST gate reads that attribute, so the middleware must
+    // re-guarantee it on every served HTML response regardless of which
+    // generation backs it.
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -353,7 +351,7 @@ async fn frozen_generation_page_regains_preview_gate_attribute() {
         temp_dir.path().join("index.html"),
         concat!(
             "<html><head>",
-            "<script id=\"moss-beacon\">/* gates on data-moss-preview */</script>",
+            "<script id=\"moss-beacon\" data-moss-deploy-only></script>",
             "</head><body class=\"page\"><p>frozen</p></body></html>",
         ),
     )
@@ -379,6 +377,113 @@ async fn frozen_generation_page_regains_preview_gate_attribute() {
     );
 
     let _ = shutdown_tx.send(());
+}
+
+/// The bug this stage fixes, proved through the real HTTP path: a page
+/// served by the preview ROUTER from a SHIP-TRANSFORMED generation must
+/// carry no deploy-only script, and must be byte-identical to the same
+/// page served from fresh staging output. Before this fix, the marker
+/// wrapping the beacon/analytics script was removed by ship (keeping the
+/// script for deploy), so a shipped generation's markup had no marker
+/// left for the serve-time strip to find — the script reached the
+/// browser, and idiomorph's morph guard then forced a full reload on
+/// every such transition. Real emitted markup on both sides, not a
+/// hand-written fixture.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preview_router_strips_deploy_only_script_from_both_staging_and_shipped_pages() {
+    use tempfile::TempDir;
+
+    let deploy = crate::config::deployment::DomainDeploymentConfig {
+        deploy_method: Some("moss".into()),
+        site_id: Some("router-seam-test".into()),
+        ..Default::default()
+    };
+    let services = crate::config::services::ServicesConfig {
+        analytics: Some(crate::config::services::AnalyticsService {
+            common: crate::config::services::ServiceCommon {
+                enabled: None,
+                provider: Some("goatcounter".into()),
+            },
+            script: Some("https://router-seam-test.goatcounter.com/count".into()),
+        }),
+        ..Default::default()
+    };
+    let slots = crate::build::features::generate_native_slots(
+        &services,
+        "/nonexistent-router-seam-test",
+        false,
+        crate::build::features::comment::MATTERS_DOMAIN_FALLBACK,
+        &std::collections::HashMap::new(),
+        &[],
+        "en",
+        None,
+        Some(deploy),
+        false,
+        None,
+        None,
+    );
+    let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
+    assert!(
+        head_end.contains("moss-beacon") && head_end.contains("goatcounter"),
+        "precondition: the emitter injects both the beacon and analytics, got: {head_end}"
+    );
+
+    let staging_page = format!(
+        "<html><head>{head_end}</head><body data-moss-preview class=\"page\"><p>content</p></body></html>"
+    );
+    let shipped_bytes = crate::build::ship::apply_transform(
+        crate::build::ship::ShipTransform::StripPreviewAttrs,
+        staging_page.as_bytes(),
+    );
+    let shipped_page = String::from_utf8(shipped_bytes).expect("shipped page is UTF-8");
+    assert!(
+        shipped_page.contains("moss-beacon") && shipped_page.contains("goatcounter"),
+        "precondition: ship keeps both deploy-only scripts, got: {shipped_page}"
+    );
+
+    let staging_dir = TempDir::new().expect("staging temp dir");
+    std::fs::write(staging_dir.path().join("index.html"), &staging_page).unwrap();
+    let shipped_dir = TempDir::new().expect("shipped temp dir");
+    std::fs::write(shipped_dir.path().join("index.html"), &shipped_page).unwrap();
+
+    let staging_state = Arc::new(std::sync::RwLock::new(staging_dir.path().to_path_buf()));
+    let (staging_port, staging_shutdown) = start_server(ServeConfig {
+        ..ServeConfig::new(staging_state, 61800)
+    })
+    .await
+    .expect("staging server should start");
+    let shipped_state = Arc::new(std::sync::RwLock::new(shipped_dir.path().to_path_buf()));
+    let (shipped_port, shipped_shutdown) = start_server(ServeConfig {
+        ..ServeConfig::new(shipped_state, 61900)
+    })
+    .await
+    .expect("shipped server should start");
+
+    let get = |port: u16| {
+        let url = format!("http://localhost:{port}/index.html");
+        ureq::get(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .call()
+            .expect("request should succeed")
+            .into_string()
+            .expect("read body")
+    };
+    let staging_served = get(staging_port);
+    let shipped_served = get(shipped_port);
+
+    for (label, served) in [("staging", &staging_served), ("shipped", &shipped_served)] {
+        assert!(
+            !served.contains("moss-beacon") && !served.contains("goatcounter"),
+            "{label}-origin page must carry neither deploy-only script, got: {served}"
+        );
+    }
+    assert_eq!(
+        staging_served, shipped_served,
+        "the preview router must serve byte-identical pages regardless of the origin generation"
+    );
+
+    let _ = staging_shutdown.send(());
+    let _ = shipped_shutdown.send(());
 }
 
 /// The seal tail runs DETACHED, and it runs against the very directory the

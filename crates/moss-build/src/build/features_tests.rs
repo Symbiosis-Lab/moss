@@ -51,8 +51,8 @@ fn comments_fixture(server_url: &str) -> ServicesConfig {
 
 // (removed) test_analytics_slot_uses_to_script_tag asserted goatcounter SCRIPT
 // emission into head-end. Analytics is now mode-INDEPENDENT: always injected,
-// wrapped in <!--moss:no-preview--> markers that the preview server strips — see
-// analytics_present_in_both_build_modes below and the beacon tests
+// carrying a data-moss-deploy-only attribute that the preview server strips
+// on — see analytics_present_in_both_build_modes below and the beacon tests
 // (beacon_injected_for_moss_hosted_build / beacon_injected_during_preview_mode_independent).
 
 fn make_article_map() -> HashMap<String, ArticleInfo> {
@@ -141,10 +141,11 @@ fn beacon_injected_for_moss_hosted_build() {
 #[test]
 fn beacon_injected_during_preview_mode_independent() {
     // Previously this test asserted absence in preview (start_server=true).
-    // The CORS issue (protocol-relative URL resolving to http:// under the
-    // local preview origin) is now handled by the data-moss-preview self-gate
-    // in the beacon script itself (Task A4) — the beacon is in the slot in
-    // both modes but no-ops at runtime when data-moss-preview is present.
+    // The published artifact is mode-independent by design: the beacon is
+    // always in the slot output, in both modes. Preview safety is a
+    // SEPARATE concern handled at serve time — the preview server strips
+    // any script carrying data-moss-deploy-only before it reaches the
+    // browser — not by omitting the beacon from what gets built.
     // This flips the old beacon_skipped_during_preview assertion to pin the
     // mode-independence fix.
     let config = ServicesConfig::default();
@@ -1887,12 +1888,12 @@ fn apply_only_page_slice_does_not_hit_early_return() {
 //
 // Invariant: the slot output that becomes the deploy artifact must be
 // mode-independent (same config → same bytes regardless of start_server).
-// Preview safety is the runtime layer: the beacon self-gates on
-// `data-moss-preview` (Task A4); analytics is stripped from served
-// preview responses by the preview server (Task A5). Subscribe forms
-// have always been mode-independent (see email_slots_identical_across_
-// build_modes). These tests pin the oscillation fix: injected in both
-// modes, deterministic on every watch-rebuild.
+// Preview safety is the runtime layer: both the beacon and analytics carry
+// `data-moss-deploy-only` and are stripped from served preview responses by
+// the preview server. Subscribe forms have always been
+// mode-independent (see email_slots_identical_across_build_modes). These
+// tests pin the oscillation fix: injected in both modes, deterministic on
+// every watch-rebuild.
 
 /// Analytics must be injected REGARDLESS of start_server — the published
 /// artifact must be mode-independent (preview safety is handled at serve
@@ -1921,20 +1922,20 @@ fn analytics_present_in_both_build_modes() {
             "analytics must be injected when start_server={start_server}, got: {head_end}"
         );
         // Regression guard for the load-bearing preview-strip invariant: the
-        // analytics script MUST be wrapped in <!--moss:no-preview--> markers so
-        // the preview server can strip it (Task A5). Without this, dropping the
-        // marker wrapping would silently fire foreign analytics on every preview
-        // reload — the exact bug this change prevents.
-        let open = head_end.find("<!--moss:no-preview-->");
-        let close = head_end.find("<!--/moss:no-preview-->");
-        let gc = head_end.find("goatcounter");
+        // analytics <script> itself MUST carry data-moss-deploy-only so the
+        // preview server can strip it, including from a ship-transformed
+        // generation, where a comment-marker wrapper would already be gone.
+        // Without this, dropping the attribute would silently fire foreign
+        // analytics on every preview reload — the exact bug this change
+        // prevents.
+        let script_open = head_end.find("<script").expect("analytics script tag present");
+        let script_close = head_end[script_open..]
+            .find('>')
+            .map(|rel| script_open + rel)
+            .expect("analytics script tag is closed");
         assert!(
-            open.is_some() && close.is_some(),
-            "analytics must be wrapped in moss:no-preview markers, got: {head_end}"
-        );
-        assert!(
-            open < gc && gc < close,
-            "analytics script must sit between the no-preview markers, got: {head_end}"
+            head_end[script_open..script_close].contains("data-moss-deploy-only"),
+            "analytics script tag must carry data-moss-deploy-only, got: {head_end}"
         );
     }
 }
@@ -2046,13 +2047,14 @@ fn moss_hosted_production_injections_absent_during_preview() {
         );
     // Note: beacon presence/absence no longer asserted here — beacon is
     // mode-independent (see beacon_present_in_both_build_modes_for_moss_hosted).
-    // Preview safety is the runtime data-moss-preview self-gate in the beacon
-    // script itself (Task A4), not omission from the slot output.
+    // Preview safety is the serve-time strip on data-moss-deploy-only,
+    // not omission from the slot output.
 }
 
 /// The pageview beacon must be injected for moss-hosted sites REGARDLESS of
-/// start_server. Preview safety is the runtime data-moss-preview self-gate
-/// (Task A4), not omission. This is the active @guo oscillation driver.
+/// start_server. Preview safety is the serve-time strip on
+/// data-moss-deploy-only, not omission. This is the active @guo
+/// oscillation driver.
 #[test]
 fn beacon_present_in_both_build_modes_for_moss_hosted() {
     // moss_hosted_fixture() returns (ServicesConfig, DomainDeploymentConfig, TempDir).
@@ -2114,16 +2116,14 @@ fn head_end_byte_identical_across_build_modes() {
     );
 }
 
-/// The beacon must (a) defer to DOMContentLoaded so document.body exists, and
-/// (b) no-op under preview (data-moss-preview present on body). Mirrors the
-/// intent of subscribe.ts's gate; the deployed artifact has the attribute
-/// stripped by ship_phase, so the beacon fires live.
-/// NOTE: this is a string-structure check (Rust can't run the JS). The
-/// runtime behavior MUST also be verified headlessly in a browser before
-/// merge (load a preview page + a stripped page; confirm no console error and
-/// correct fire/no-fire) — see moss headless-verify patterns.
+/// The beacon must defer to DOMContentLoaded so document.body exists before
+/// it reads location/document state. There is no longer a data-moss-preview
+/// runtime gate to check alongside it: that self-gate existed only to cover
+/// a gap in the old comment-marker preview strip (see
+/// beacon_carries_deploy_only_attribute), and the gap is closed at the
+/// source now, so nothing here reads data-moss-preview at all.
 #[test]
-fn beacon_script_defers_to_domcontentloaded_and_gates_on_preview() {
+fn beacon_script_defers_to_domcontentloaded() {
     let (config, deploy, tmp) = moss_hosted_fixture();
     let project_path = tmp.path().to_str().unwrap();
     let slots = generate_native_slots(
@@ -2141,32 +2141,35 @@ fn beacon_script_defers_to_domcontentloaded_and_gates_on_preview() {
         None, // [site] comments unset
     );
     let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
-    let dcl = head_end.find("DOMContentLoaded");
-    let gate = head_end.find("data-moss-preview");
+    // Scope to the beacon's OWN script — this fixture's head-end also
+    // carries the subscribe bundle, which has its own, unrelated
+    // data-moss-preview check (subscribe.ts's gate, untouched by this fix).
+    let beacon_start = head_end.find("id=\"moss-beacon\"").expect("beacon script present");
+    let beacon_end = head_end[beacon_start..]
+        .find("</script>")
+        .map(|rel| beacon_start + rel)
+        .expect("beacon script is closed");
+    let beacon_script = &head_end[beacon_start..beacon_end];
     assert!(
-        dcl.is_some(),
-        "beacon must defer to DOMContentLoaded, got: {head_end}"
+        beacon_script.contains("DOMContentLoaded"),
+        "beacon must defer to DOMContentLoaded, got: {beacon_script}"
     );
     assert!(
-        gate.is_some(),
-        "beacon must gate on data-moss-preview, got: {head_end}"
-    );
-    assert!(
-        dcl < gate,
-        "the data-moss-preview check must be INSIDE the DOMContentLoaded handler \
-             (document.body is null in <head> at parse time), got: {head_end}"
+        !beacon_script.contains("data-moss-preview"),
+        "the beacon's old data-moss-preview self-gate is dead weight now that \
+         the preview server strips it at the source — it must not come back, got: {beacon_script}"
     );
 }
 
-/// The beacon must be wrapped in `<!--moss:no-preview-->` markers so the
-/// preview server's serve-time strip drops it from served staging pages,
-/// exactly like the analytics pixel. (Frozen generations served during
-/// the zero-flicker window have the markers ship-stripped and keep the
-/// script — there the serve-time data-moss-preview re-guarantee in
-/// iframe_bridge::ensure_preview_body_attr re-arms the runtime self-gate;
-/// see frozen_generation_page_regains_preview_gate_attribute.)
+/// The beacon's `<script>` element must carry `data-moss-deploy-only` so the
+/// preview server's serve-time strip drops it from every response it serves,
+/// exactly like the analytics pixel — including a page served from a
+/// SHIP-TRANSFORMED generation, where a comment-marker wrapper would already
+/// be gone (ship keeps the script for deploy but never this attribute). See
+/// `ops::serve::iframe_bridge::strip_matches_between_staging_and_a_ship_transformed_generation`
+/// for the end-to-end proof.
 #[test]
-fn beacon_wrapped_in_no_preview_markers() {
+fn beacon_carries_deploy_only_attribute() {
     let (config, deploy, tmp) = moss_hosted_fixture();
     let project_path = tmp.path().to_str().unwrap();
     let slots = generate_native_slots(
@@ -2185,15 +2188,15 @@ fn beacon_wrapped_in_no_preview_markers() {
     );
     let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
     let beacon = head_end.find("moss-beacon").expect("beacon script present");
-    let open = head_end.find("<!--moss:no-preview--><script id=\"moss-beacon\"");
-    let close = head_end[beacon..].find("</script><!--/moss:no-preview-->");
+    let open = head_end.find("<script data-moss-deploy-only id=\"moss-beacon\">");
+    let close = head_end[beacon..].find("</script>");
     assert!(
         open.is_some(),
-        "beacon must open with a moss:no-preview marker (serve-time strip), got: {head_end}"
+        "beacon script tag must carry data-moss-deploy-only, got: {head_end}"
     );
     assert!(
         close.is_some(),
-        "beacon must close its moss:no-preview marker region, got: {head_end}"
+        "beacon script tag must be closed, got: {head_end}"
     );
 }
 
@@ -2244,8 +2247,8 @@ fn beacon_url_is_absolute_https_and_fetch_failure_is_swallowed() {
 }
 
 /// Ship output served outside the preview server (python -m http.server
-/// on .moss/build.nosync/current, file:// opens) is ship-stripped AND
-/// un-middlewared, so neither the marker strip nor the re-guaranteed
+/// on .moss/build.nosync/current, file:// opens) is un-middlewared, so
+/// neither the serve-time deploy-only-script strip nor the re-guaranteed
 /// data-moss-preview attribute applies — with an absolute https URL the
 /// beacon would silently record real pageviews from a dev machine. The
 /// script must therefore also gate on loopback/file origins. Local-env

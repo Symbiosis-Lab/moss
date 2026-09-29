@@ -20,6 +20,7 @@ use axum::{
     response::IntoResponse,
 };
 use http_body_util::BodyExt;
+use lol_html::{element, HtmlRewriter, Settings};
 
 /// Bridge script loaded from separate JS file for editor support
 const IFRAME_BRIDGE_SCRIPT: &str = include_str!("js/iframe-bridge.js");
@@ -501,23 +502,53 @@ fn rewrite_comment_form_server_url(html: &str) -> String {
     format!("{before}{FORM_MARKER}/__moss/comments\"{after}")
 }
 
-/// Remove `<!--moss:no-preview-->…<!--/moss:no-preview-->` regions from served
-/// preview HTML. The published artifact keeps these (mode-independent); only
-/// the preview origin must not fire foreign analytics on every reload.
+/// Remove every `<script data-moss-deploy-only …>…</script>` element from
+/// served preview HTML (the pageview beacon, the site-wide analytics tag —
+/// `build::features::mark_deploy_only` is the sole writer of the attribute).
+/// The published artifact keeps these scripts (mode-independent); only the
+/// preview origin must not fire foreign analytics/tracking on every reload —
+/// and, since the attribute survives ship (`build::ship::apply_transform`
+/// deliberately leaves it alone), this now holds regardless of which
+/// generation backed the response: a page served out of a SHIP-TRANSFORMED
+/// generation strips the same as fresh staging output. An earlier
+/// `<!--moss:no-preview-->` comment-marker scheme could not: ship removed
+/// the marker but kept the wrapped script for deploy, so a shipped
+/// generation's markup had nothing left for a marker-based strip to find.
+///
+/// Uses `lol_html` (moss's existing HTML-rewriting tool, cf.
+/// `build/markdown/html_post.rs`, `build/feeds/search.rs`,
+/// `build/site_meta/spa_inject.rs`) rather than a hand-rolled scan: a real
+/// HTML5 tokenizer is quote-aware inside an attribute value (a bare
+/// `find('>')` is not) and applies the actual script-end-tag rule — the
+/// first case-insensitive `</script` sequence closes the element regardless
+/// of what the raw text around it looks like, the same rule a browser
+/// applies. `Element::remove()` drops the element AND its content, so the
+/// script body goes with it, not just its tags. Malformed input that lol_html
+/// can't rewrite is passed through unchanged rather than dropped.
 fn strip_preview_only_scripts(html: &str) -> String {
-    const OPEN: &str = "<!--moss:no-preview-->";
-    const CLOSE: &str = "<!--/moss:no-preview-->";
-    let mut out = String::with_capacity(html.len());
-    let mut rest = html;
-    while let Some((before, after_open)) = rest.split_once(OPEN) {
-        out.push_str(before);
-        match after_open.split_once(CLOSE) {
-            Some((_region, after_close)) => rest = after_close,
-            None => { rest = after_open; break; } // unbalanced: drop the marker, keep going
-        }
+    let mut output = Vec::with_capacity(html.len());
+    let rewritten: Result<(), String> = (|| {
+        let mut rewriter = HtmlRewriter::new(
+            Settings {
+                element_content_handlers: vec![element!(
+                    "script[data-moss-deploy-only]",
+                    |el| {
+                        el.remove();
+                        Ok(())
+                    }
+                )],
+                ..Settings::default()
+            },
+            |c: &[u8]| output.extend_from_slice(c),
+        );
+        rewriter.write(html.as_bytes()).map_err(|e| e.to_string())?;
+        rewriter.end().map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    match rewritten {
+        Ok(()) => String::from_utf8(output).unwrap_or_else(|_| html.to_string()),
+        Err(_) => html.to_string(),
     }
-    out.push_str(rest);
-    out
 }
 
 
@@ -698,9 +729,11 @@ pub async fn inject_iframe_bridge(
     // URL. The preview-shim.ts rewrite stays as defense-in-depth.
     let html = rewrite_comment_form_server_url(&html);
 
-    // Step 1b: strip <!--moss:no-preview-->…<!--/moss:no-preview--> regions.
-    // The published artifact keeps them (analytics script is mode-independent);
-    // the preview origin must not fire foreign analytics on every reload.
+    // Step 1b: strip every `<script data-moss-deploy-only>` element (the
+    // beacon, the analytics tag). The published artifact keeps them
+    // (mode-independent); the preview origin must not fire foreign
+    // analytics on every reload — regardless of which generation this
+    // response was served from.
     let html = strip_preview_only_scripts(&html);
 
     // Step 1c: guarantee data-moss-preview on <body>. The zero-flicker window
