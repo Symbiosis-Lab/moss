@@ -57,6 +57,7 @@ pub fn run(args: &[String]) -> i32 {
     let mut any_failed = false;
     let mut total_pages = 0usize;
     let mut total_failed_pages = 0usize;
+    let mut total_skipped_pages = 0usize;
 
     for url in &urls {
         eprintln!("→ {}", redact_query(url));
@@ -75,9 +76,10 @@ pub fn run(args: &[String]) -> i32 {
             Ok(res) => {
                 total_pages += res.total_pages;
                 total_failed_pages += res.failed_pages;
+                total_skipped_pages += res.skipped_pages;
                 eprintln!(
-                    "  ✓ {} page(s) imported, {} failed",
-                    res.total_pages, res.failed_pages
+                    "  ✓ {} page(s) imported, {} failed, {} skipped (non-HTML)",
+                    res.total_pages, res.failed_pages, res.skipped_pages
                 );
                 if res.failed_pages > 0 {
                     any_failed = true;
@@ -91,10 +93,11 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     eprintln!(
-        "Done: {} page(s) imported into {} ({} failed)",
+        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML)",
         total_pages,
         folder.display(),
-        total_failed_pages
+        total_failed_pages,
+        total_skipped_pages,
     );
 
     if any_failed && total_pages == 0 {
@@ -264,8 +267,10 @@ fn print_usage() {
     eprintln!("login-gated or JS-heavy pages a plain fetch can't reach.");
     eprintln!();
     eprintln!("By default imports only the URL given. Pass --recursive (-r) to walk");
-    eprintln!("every in-scope page (same host + path prefix). On filename collisions,");
-    eprintln!("the new file is renamed `name 2.md`, `name 3.md`, etc.");
+    eprintln!("every in-scope page (same host + path prefix). A non-HTML response found");
+    eprintln!("while crawling (a PDF, an image, a feed, a calendar file, ...) is skipped,");
+    eprintln!("never written as a page. On filename collisions, the new file is renamed");
+    eprintln!("`name 2.md`, `name 3.md`, etc.");
     eprintln!();
     eprintln!("The vault copy is canonical; the source URL is recorded in `syndicated`");
     eprintln!("frontmatter (POSSE), the same field that lets a syndicated comment link");

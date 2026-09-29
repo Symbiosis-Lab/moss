@@ -16,7 +16,7 @@ use std::sync::LazyLock;
 use tokio::sync::Semaphore;
 
 use super::converter::{extract_article, extract_article_with_snapshot, rewrite_image_links};
-use super::crawler::extract_links;
+use super::crawler::{extract_links, looks_like_html_page};
 use super::scope::{is_within_scope, UrlScope};
 use super::service::{generate_frontmatter, render_error_markdown, rewrite_links, ScrapeConfig};
 use super::writer::{rename_for_collision, sanitize_filename, url_to_file_path};
@@ -47,7 +47,26 @@ pub struct ScrapeResult {
     pub success: bool,
     pub total_pages: usize,
     pub failed_pages: usize,
+    /// Fetched responses whose Content-Type (declared, or sniffed when
+    /// missing/generic) was not HTML/XHTML — a PDF, an image, a calendar
+    /// file, an RSS feed, and the like. Never written as a `.md` page.
+    pub skipped_pages: usize,
     pub error: Option<String>,
+}
+
+/// What became of one URL popped from the crawl queue.
+enum PageOutcome {
+    /// Composed into a note; the full markdown ready to write.
+    Written(String),
+    /// Fetched (or attempted) but refused with a reason — written as the
+    /// error placeholder, so an in-scope link elsewhere that points at it
+    /// still resolves to a real file on disk.
+    Failed(String),
+    /// The response was not an HTML/XHTML page. Never written as a `.md`
+    /// file, and — because this is decided before any link discovery or
+    /// asset download runs — its own body is never treated as a source of
+    /// further links or media either.
+    Skipped,
 }
 
 /// A short, stable name for a media URL, so the same image fetched twice
@@ -128,6 +147,7 @@ where
     let mut remote_to_local: HashMap<String, String> = HashMap::new();
     let mut pages_scraped: usize = 0;
     let mut pages_failed: usize = 0;
+    let mut pages_skipped: usize = 0;
 
     queue.push_back(config.start_url.clone());
 
@@ -152,15 +172,25 @@ where
 
         let _permit = SCRAPE_SEMAPHORE.acquire().await.map_err(|e| e.to_string())?;
 
-        // Every way this page can end — fetched and composed, or refused with
-        // a reason — leaves through one value, so the file it lands in is
-        // named and collision-renamed in exactly one place below. A fourth
-        // failure mode cannot forget to do that.
-        let outcome: Result<String, String> = 'page: {
-        let html = match fetch_page(&url, &config.user_agent).await {
-            Ok(html) => html,
-            Err(e) => break 'page Err(e),
+        // Every way this page can end — fetched and composed, refused with a
+        // reason, or skipped as non-HTML — leaves through one value, so the
+        // file it lands in (or doesn't) is decided in exactly one place
+        // below. A fourth outcome cannot forget to do that.
+        let outcome: PageOutcome = 'page: {
+        let (html, content_type) = match fetch_page(&url, &config.user_agent).await {
+            Ok(v) => v,
+            Err(e) => break 'page PageOutcome::Failed(e),
         };
+
+        // A recursive crawl follows every same-host, same-prefix link it
+        // finds, and not everything at such a link is a page: a linked PDF,
+        // image, calendar file, or the site's own RSS feed all live at
+        // in-scope URLs. Decided before any extraction, link discovery, or
+        // asset download runs, so a non-page's body is never mined for
+        // further links or images either.
+        if !looks_like_html_page(&content_type, &html) {
+            break 'page PageOutcome::Skipped;
+        }
 
         // Client-rendered builders keep their content in a pre-rendered
         // snapshot the page's state JSON points at — one extra fetch, scoped
@@ -168,7 +198,7 @@ where
         // page's own DOM (generic scorer).
         let snapshot_html = match crate::vault::import::engine::snapshot_request(&html, &url) {
             Some(snapshot_url) => match fetch_page(&snapshot_url, &config.user_agent).await {
-                Ok(s) => Some(s),
+                Ok((s, _content_type)) => Some(s),
                 // The page degrades to its own (often empty) DOM — loud, not
                 // silent: for a client-rendered viewer this loses the body.
                 Err(e) => {
@@ -230,25 +260,34 @@ where
         let scope_for_links = config.recursive.then_some(&scope);
         // Nothing extracted is a page failure, not a crawl failure: one
         // unparseable page in a hundred must not cost the other ninety-nine.
-        compose_note(
+        match compose_note(
             &mut article,
             &remote_to_local,
             cover_remote,
             &url,
             scope_for_links,
-        )
-        .ok_or_else(|| "no article content found (unsupported page or empty body)".to_string())
+        ) {
+            Some(note) => PageOutcome::Written(note),
+            None => PageOutcome::Failed(
+                "no article content found (unsupported page or empty body)".to_string(),
+            ),
+        }
         };
 
-        let relative = rename_for_collision(out_dir, &url_to_file_path(&url, &scope));
         match outcome {
-            Ok(note) => {
+            PageOutcome::Written(note) => {
+                let relative = rename_for_collision(out_dir, &url_to_file_path(&url, &scope));
                 write_note(out_dir, &relative, &note)?;
                 pages_scraped += 1;
             }
-            Err(reason) => {
+            PageOutcome::Failed(reason) => {
+                let relative = rename_for_collision(out_dir, &url_to_file_path(&url, &scope));
                 write_note(out_dir, &relative, &render_error_markdown(&url, &reason))?;
                 pages_failed += 1;
+            }
+            // Never written as a `.md` file at all — that is the whole fix.
+            PageOutcome::Skipped => {
+                pages_skipped += 1;
             }
         }
     }
@@ -264,6 +303,7 @@ where
         success: true,
         total_pages: pages_scraped,
         failed_pages: pages_failed,
+        skipped_pages: pages_skipped,
         error: None,
     })
 }
@@ -400,6 +440,7 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
         success: true,
         total_pages: 1,
         failed_pages: 0,
+        skipped_pages: 0,
         error: None,
     })
 }
@@ -628,14 +669,19 @@ fn call_with_retry(
     Err(last_err)
 }
 
-async fn fetch_page(url: &str, user_agent: &str) -> Result<String, String> {
+/// Fetch a page's body, alongside its declared Content-Type — the caller
+/// decides whether the response is a page worth importing at all
+/// ([`looks_like_html_page`]) before doing anything else with the body.
+async fn fetch_page(url: &str, user_agent: &str) -> Result<(String, String), String> {
     let url = url.to_string();
     let user_agent = user_agent.to_string();
     tokio::task::spawn_blocking(move || {
         let response = call_with_retry(&url, &user_agent, std::time::Duration::from_secs(30))?;
+        let content_type = response.content_type().to_string();
 
         response
             .into_string()
+            .map(|body| (body, content_type))
             .map_err(|e| format!("Failed to read response: {}", e))
     })
     .await
@@ -896,6 +942,88 @@ Content-Location: https://img.douban.com/a.png\r\n\
         assert!(
             body.contains("no article content found"),
             "the placeholder must say why: {body}"
+        );
+    }
+
+    /// Bug fix: a recursive crawl must never write a non-HTML response as a
+    /// `.md` page. A real site's own links routinely point at a PDF, an
+    /// image, a calendar file, and the site's own RSS feed — all four are
+    /// fetched alongside one real HTML page here, and only the HTML page may
+    /// become a note. The rest are counted as skipped, not failed, and
+    /// produce no file on disk at all.
+    #[tokio::test]
+    async fn non_html_responses_are_skipped_not_written_as_pages() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let index_body = format!(
+            "<html><body><article><p>Real page body, long enough to be extracted as content.</p>\
+             <a href=\"{base}/doc.pdf\">PDF</a>\
+             <a href=\"{base}/photo.tiff\">TIFF</a>\
+             <a href=\"{base}/event.ics\">ICS</a>\
+             <a href=\"{base}/feed.xml\">Feed</a>\
+             </article></body></html>"
+        );
+        let index = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(&index_body)
+            .create_async()
+            .await;
+        let pdf = server
+            .mock("GET", "/doc.pdf")
+            .with_status(200)
+            .with_header("content-type", "application/pdf")
+            .with_body("%PDF-1.4 binary bytes here")
+            .create_async()
+            .await;
+        let tiff = server
+            .mock("GET", "/photo.tiff")
+            .with_status(200)
+            .with_header("content-type", "image/tiff")
+            .with_body("II*\u{0} binary tiff bytes")
+            .create_async()
+            .await;
+        let ics = server
+            .mock("GET", "/event.ics")
+            .with_status(200)
+            .with_header("content-type", "text/calendar")
+            .with_body("BEGIN:VCALENDAR\nEND:VCALENDAR")
+            .create_async()
+            .await;
+        let feed = server
+            .mock("GET", "/feed.xml")
+            .with_status(200)
+            .with_header("content-type", "application/rss+xml")
+            .with_body("<?xml version=\"1.0\"?><rss><channel></channel></rss>")
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        index.assert_async().await;
+        pdf.assert_async().await;
+        tiff.assert_async().await;
+        ics.assert_async().await;
+        feed.assert_async().await;
+
+        assert_eq!(res.total_pages, 1, "only the real HTML page is imported");
+        assert_eq!(res.failed_pages, 0);
+        assert_eq!(res.skipped_pages, 4, "the PDF, TIFF, .ics and feed are all skipped");
+
+        let written: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+            .collect();
+        assert_eq!(
+            written.len(),
+            1,
+            "no .md should be written for any of the skipped responses"
         );
     }
 
