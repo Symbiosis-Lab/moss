@@ -203,9 +203,13 @@ pub enum Capability {
     /// Hook function: `syndicate(ctx)`
     Syndicate,
 
-    /// Import content from an external source into the project folder
-    /// (e.g., Matters profile, RSS feed, URL scrape). Multiple plugins allowed.
-    /// Hook function: `import(ctx)`
+    /// Marks a channel that imports content from an external source into the
+    /// project folder (e.g., Matters profile, RSS feed, URL scrape). Not
+    /// independently dispatched — a plugin that declares this still
+    /// implements `process(ctx)`, which is what actually runs; `Import`
+    /// exists for onboarding-catalog filtering (see `OpenPluginsView`) and
+    /// for `fold_contributions_into_capabilities` to derive from a legacy
+    /// manifest's `channel.imports`.
     ///
     /// Added 2026-05-28 alongside `PluginHook::Import` to support the
     /// onboarding flow's "Plugin" card.

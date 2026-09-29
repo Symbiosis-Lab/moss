@@ -12,7 +12,7 @@ John Muir’s *How to Keep Your Volkswagen Alive* demonstrates friendly hierarch
 
 Diderot’s plates separate a complete view from details so readers can orient themselves before inspecting a part. The interface plate applies that whole-to-detail structure to a software surface. Source: [MIT Libraries, *Diderot’s Encyclopédie*](https://libraries.mit.edu/exhibits/diderots-encyclopedia-exhibit-preview/printing-papermaking-and-mining/).
 
-The mood board photographs in `moss-desktop/docs/reference/design/mood board/` supplied composition references: a full-object plate with an aligned key, and an emphatic manual cover with a clear reading order. They are research references only and are not shipped.
+A mood board of photographs kept outside this repository supplied composition references: a full-object plate with an aligned key, and an emphatic manual cover with a clear reading order. They are research references only and are not shipped.
 
 ## Product source material
 
