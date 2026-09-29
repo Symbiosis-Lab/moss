@@ -51,6 +51,13 @@ pub struct ScrapeResult {
     /// missing/generic) was not HTML/XHTML — a PDF, an image, a calendar
     /// file, an RSS feed, and the like. Never written as a `.md` page.
     pub skipped_pages: usize,
+    /// True when `max_pages` stopped a recursive crawl before every
+    /// discovered in-scope URL had been visited — distinct from a crawl that
+    /// finished because its queue simply ran out.
+    pub capped: bool,
+    /// Discovered, in-scope URLs still unvisited when the cap stopped the
+    /// crawl (deduplicated). Zero whenever `capped` is false.
+    pub remaining_urls: usize,
     pub error: Option<String>,
 }
 
@@ -148,6 +155,7 @@ where
     let mut pages_scraped: usize = 0;
     let mut pages_failed: usize = 0;
     let mut pages_skipped: usize = 0;
+    let mut capped = false;
 
     queue.push_back(config.start_url.clone());
 
@@ -155,13 +163,17 @@ where
         if visited.contains(&url) {
             continue;
         }
-        visited.insert(url.clone());
 
         if let Some(cap) = config.max_pages {
-            if pages_scraped + pages_failed >= cap {
+            if pages_scraped + pages_failed + pages_skipped >= cap {
+                // Popped but never visited or processed: put it back so the
+                // leftover count computed after the loop includes it.
+                queue.push_front(url);
+                capped = true;
                 break;
             }
         }
+        visited.insert(url.clone());
 
         on_progress(ScrapeProgress {
             pages_scraped,
@@ -299,11 +311,26 @@ where
         complete: true,
     });
 
+    // Discovered, in-scope URLs the cap left behind: deduplicated, since the
+    // same not-yet-visited URL can have been queued more than once by
+    // different pages that both linked to it before either was processed.
+    let remaining_urls = if capped {
+        queue
+            .iter()
+            .filter(|u| !visited.contains(*u))
+            .collect::<HashSet<_>>()
+            .len()
+    } else {
+        0
+    };
+
     Ok(ScrapeResult {
         success: true,
         total_pages: pages_scraped,
         failed_pages: pages_failed,
         skipped_pages: pages_skipped,
+        capped,
+        remaining_urls,
         error: None,
     })
 }
@@ -441,6 +468,8 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
         total_pages: 1,
         failed_pages: 0,
         skipped_pages: 0,
+        capped: false,
+        remaining_urls: 0,
         error: None,
     })
 }
@@ -1025,6 +1054,77 @@ Content-Location: https://img.douban.com/a.png\r\n\
             1,
             "no .md should be written for any of the skipped responses"
         );
+    }
+
+    /// Bug fix: a capped recursive crawl must say so in its own result, not
+    /// only via a process exit code, and must say how many discovered
+    /// in-scope URLs it left behind — before this fix `ScrapeResult` carried
+    /// no such signal at all.
+    #[tokio::test]
+    async fn a_capped_crawl_reports_the_cap_and_the_leftover_count() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let index_body = format!(
+            "<html><body><article><p>Root page with enough words to be extracted.</p>\
+             <a href=\"{base}/a\">A</a><a href=\"{base}/b\">B</a><a href=\"{base}/c\">C</a>\
+             </article></body></html>"
+        );
+        let index = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(&index_body)
+            .create_async()
+            .await;
+        let leaf = |name: &str| {
+            format!(
+                "<html><body><article><p>Leaf page {name}, long enough to be extracted as content.</p></article></body></html>"
+            )
+        };
+        let _a = server
+            .mock("GET", "/a")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(leaf("a"))
+            .create_async()
+            .await;
+        let _b = server
+            .mock("GET", "/b")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(leaf("b"))
+            .create_async()
+            .await;
+        let _c = server
+            .mock("GET", "/c")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(leaf("c"))
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        config.max_pages = Some(2);
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        index.assert_async().await;
+
+        assert_eq!(res.total_pages, 2, "the cap stopped the crawl after exactly 2 pages");
+        assert!(res.capped, "the result must say the cap is what stopped the crawl");
+        assert_eq!(
+            res.remaining_urls, 2,
+            "two of the three discovered children were never visited"
+        );
+
+        let written: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+            .collect();
+        assert_eq!(written.len(), 2, "the index plus exactly one child were written");
     }
 
     // ── refuse_unsafe_scrape_url ─────────────────────────────────────────

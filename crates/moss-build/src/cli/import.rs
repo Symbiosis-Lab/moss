@@ -7,8 +7,10 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::vault::import::scrape::run::{import_local_file, scrape_to_folder, ScrapeProgress};
-use crate::vault::import::scrape::service::ScrapeConfig;
+use crate::vault::import::scrape::run::{
+    import_local_file, scrape_to_folder, ScrapeProgress, ScrapeResult,
+};
+use crate::vault::import::scrape::service::{ScrapeConfig, DEFAULT_MAX_PAGES};
 
 /// Top-level dispatcher for `moss import …`. Returns a process exit code.
 pub fn run(args: &[String]) -> i32 {
@@ -54,10 +56,7 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
 
-    let mut any_failed = false;
-    let mut total_pages = 0usize;
-    let mut total_failed_pages = 0usize;
-    let mut total_skipped_pages = 0usize;
+    let mut totals = ImportTotals::default();
 
     for url in &urls {
         eprintln!("→ {}", redact_query(url));
@@ -74,38 +73,89 @@ pub fn run(args: &[String]) -> i32 {
 
         match result {
             Ok(res) => {
-                total_pages += res.total_pages;
-                total_failed_pages += res.failed_pages;
-                total_skipped_pages += res.skipped_pages;
                 eprintln!(
                     "  ✓ {} page(s) imported, {} failed, {} skipped (non-HTML)",
                     res.total_pages, res.failed_pages, res.skipped_pages
                 );
-                if res.failed_pages > 0 {
-                    any_failed = true;
+                // A capped crawl is incomplete even when every page it did
+                // reach succeeded — real pages were left out, and before
+                // this fix the only signal was the exit code below. Say so
+                // plainly, with how many were left and how to get them.
+                // `-r` is deliberately left off that follow-up command: with
+                // `--list`, `-r` makes every listed URL its own fresh,
+                // separately-capped crawl rather than just fetching it, so
+                // it does not pick up "the rest" — it can re-walk pages
+                // already imported and hit the cap again per URL.
+                if res.capped {
+                    eprintln!(
+                        "  ⚠ stopped at the {}-page cap — {} more in-scope page(s) were \
+                         found but not imported. Run `moss import --list <file> {}` (leave \
+                         off -r, which would re-crawl each listed URL instead of just \
+                         fetching it) with the missing URLs one per line to pick up the rest.",
+                        DEFAULT_MAX_PAGES,
+                        res.remaining_urls,
+                        folder.display(),
+                    );
                 }
+                totals.record(&res);
             }
             Err(e) => {
                 eprintln!("  ✗ {}", e);
-                any_failed = true;
+                totals.hard_errors += 1;
             }
         }
     }
 
     eprintln!(
-        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML)",
-        total_pages,
+        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML{})",
+        totals.pages,
         folder.display(),
-        total_failed_pages,
-        total_skipped_pages,
+        totals.failed_pages,
+        totals.skipped_pages,
+        if totals.capped_leftovers > 0 {
+            format!(", {} left unimported by the page cap", totals.capped_leftovers)
+        } else {
+            String::new()
+        },
     );
 
-    if any_failed && total_pages == 0 {
-        1
-    } else if any_failed {
-        2
-    } else {
-        0
+    totals.exit_code()
+}
+
+/// Running counts across every URL passed to one `moss import` invocation.
+/// A recursive crawl can hit the page cap independently for each URL, and a
+/// URL can fail to fetch at all before any `ScrapeResult` exists — folding
+/// both into one struct is what lets the exit code below be a single
+/// derivation instead of an `any_failed` flag set from three different arms.
+#[derive(Debug, Default)]
+struct ImportTotals {
+    pages: usize,
+    failed_pages: usize,
+    skipped_pages: usize,
+    capped_leftovers: usize,
+    hard_errors: usize,
+}
+
+impl ImportTotals {
+    fn record(&mut self, res: &ScrapeResult) {
+        self.pages += res.total_pages;
+        self.failed_pages += res.failed_pages;
+        self.skipped_pages += res.skipped_pages;
+        if res.capped {
+            self.capped_leftovers += res.remaining_urls;
+        }
+    }
+
+    fn any_failed(&self) -> bool {
+        self.failed_pages > 0 || self.capped_leftovers > 0 || self.hard_errors > 0
+    }
+
+    fn exit_code(&self) -> i32 {
+        match (self.any_failed(), self.pages) {
+            (true, 0) => 1,
+            (true, _) => 2,
+            (false, _) => 0,
+        }
     }
 }
 
@@ -267,14 +317,21 @@ fn print_usage() {
     eprintln!("login-gated or JS-heavy pages a plain fetch can't reach.");
     eprintln!();
     eprintln!("By default imports only the URL given. Pass --recursive (-r) to walk");
-    eprintln!("every in-scope page (same host + path prefix). A non-HTML response found");
-    eprintln!("while crawling (a PDF, an image, a feed, a calendar file, ...) is skipped,");
-    eprintln!("never written as a page. On filename collisions, the new file is renamed");
-    eprintln!("`name 2.md`, `name 3.md`, etc.");
+    eprintln!("every in-scope page (same host + path prefix), up to {} pages. If more", DEFAULT_MAX_PAGES);
+    eprintln!("are discovered, the crawl stops there; the summary says how many were");
+    eprintln!("left, and you can pass the missing URLs to `--list` (without -r — each");
+    eprintln!("listed URL is fetched directly, not re-crawled) to pick up the rest.");
+    eprintln!("A non-HTML response found while crawling (a PDF, an image, a feed, a");
+    eprintln!("calendar file, ...) is skipped, never written as a page. On filename");
+    eprintln!("collisions, the new file is renamed `name 2.md`, `name 3.md`, etc.");
     eprintln!();
     eprintln!("The vault copy is canonical; the source URL is recorded in `syndicated`");
     eprintln!("frontmatter (POSSE), the same field that lets a syndicated comment link");
     eprintln!("back to its origin. Import is for content you have the right to republish.");
+    eprintln!();
+    eprintln!("Exit codes: 0 every page imported cleanly; 1 nothing was imported at all;");
+    eprintln!("2 partial — some pages failed, or a recursive crawl was stopped early by");
+    eprintln!("the page cap (a skipped non-HTML response alone does not cause exit 2).");
 }
 
 #[cfg(test)]

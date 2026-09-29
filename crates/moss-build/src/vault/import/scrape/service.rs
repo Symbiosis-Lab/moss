@@ -29,6 +29,12 @@ pub fn default_user_agent() -> String {
     format!("moss-import/{} (+https://moss.pub)", crate::system::app_version())
 }
 
+/// [`ScrapeConfig::new`]'s default `max_pages` — the recursive-crawl page
+/// cap. Named so the CLI's `--help` text and progress summary can cite the
+/// same number the config actually enforces, rather than a second copy of
+/// the literal that could drift from it.
+pub const DEFAULT_MAX_PAGES: usize = 200;
+
 /// Configuration for one scrape invocation.
 #[derive(Debug, Clone)]
 pub struct ScrapeConfig {
@@ -52,7 +58,7 @@ impl ScrapeConfig {
             start_url: start_url.into(),
             output_dir: output_dir.into(),
             recursive: false,
-            max_pages: Some(200),
+            max_pages: Some(DEFAULT_MAX_PAGES),
             user_agent: default_user_agent(),
         }
     }
