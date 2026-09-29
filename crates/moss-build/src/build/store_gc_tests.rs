@@ -162,6 +162,51 @@ fn a_generation_promoted_by_another_process_is_kept() {
     assert!(surviving(&gens).contains(&"theirs".to_string()), "the on-disk current generation must survive");
 }
 
+fn inject_lock_errors(errors: Vec<std::io::Error>) {
+    INJECTED_LOCK_ERRORS.with(|q| *q.borrow_mut() = errors.into());
+}
+
+/// A signal interrupting the blocking lock must not let a copy run
+/// unlocked: the writer retries and really holds the lock afterwards.
+#[test]
+fn an_interrupted_lock_is_retried_rather_than_skipped() {
+    let (_tmp, gens) = make_generations(&[]);
+    inject_lock_errors(vec![std::io::Error::from(std::io::ErrorKind::Interrupted)]);
+
+    let _lock = GenerationWriteLock::acquire(&gens, "g").expect("an interrupted lock must be retried");
+
+    inject_lock_errors(vec![]);
+    assert!(
+        matches!(GenerationWriteLock::take(&gens, "g", false), Ok(Take::Busy)),
+        "after the retry the writer must actually hold the lock"
+    );
+}
+
+/// A lock failure on a filesystem that can otherwise lock fails the copy
+/// before it starts, since a GC might still lock and remove the directory.
+/// Only a filesystem with no locks at all lets the copy proceed.
+#[test]
+fn a_lock_error_fails_the_copy_unless_the_filesystem_cannot_lock() {
+    let (_tmp, gens) = make_generations(&[]);
+    inject_lock_errors(vec![std::io::Error::other("transient")]);
+    assert!(GenerationWriteLock::acquire(&gens, "g").is_err(), "an unexpected lock error must fail the copy");
+
+    inject_lock_errors(vec![std::io::Error::from(std::io::ErrorKind::Unsupported)]);
+    let proceeded = GenerationWriteLock::acquire(&gens, "g");
+    inject_lock_errors(vec![]);
+    assert!(proceeded.is_ok(), "a filesystem without locks must still let the copy run");
+    drop(proceeded);
+
+    // What a macOS network share returns; std gives it no specific kind.
+    #[cfg(unix)]
+    {
+        inject_lock_errors(vec![std::io::Error::from_raw_os_error(libc::ENOTSUP)]);
+        let proceeded = GenerationWriteLock::acquire(&gens, "g");
+        inject_lock_errors(vec![]);
+        assert!(proceeded.is_ok(), "ENOTSUP must count as a filesystem without locks");
+    }
+}
+
 #[test]
 fn keeps_the_n_newest_generations() {
     let (_tmp, gens) = make_generations(&["a", "b", "c", "d", "e"]);

@@ -181,15 +181,16 @@ enum Take {
     Locked { lock: GenerationWriteLock, created: bool },
     /// Another handle holds the lock.
     Busy,
-    /// The file exists but this filesystem cannot lock it.
+    /// The file exists but this filesystem cannot lock at all.
     Unlockable(GenerationWriteLock),
 }
 
 impl GenerationWriteLock {
     /// Take `gen_id`'s write lock for a copy, waiting while anyone else holds
     /// it. If the filesystem cannot lock at all, the file is still created
-    /// and the copy proceeds: GC keeps any generation whose lock it cannot
-    /// check.
+    /// and the copy proceeds: GC cannot lock there either, so it keeps the
+    /// directory. Any other lock failure is returned, failing the copy
+    /// before it starts and leaving `current` where it was.
     pub fn acquire(generations_dir: &Path, gen_id: &str) -> std::io::Result<Self> {
         crate::build::io_utils::create_output_dir_all(generations_dir)?;
         match Self::take(generations_dir, gen_id, true)? {
@@ -219,12 +220,22 @@ impl GenerationWriteLock {
                 Err(e) => return Err(e),
             };
             let handle = same_file::Handle::from_file(file)?;
-            let locked = if wait { handle.as_file().lock_exclusive() } else { handle.as_file().try_lock_exclusive() };
+            let attempt = || if wait { handle.as_file().lock_exclusive() } else { handle.as_file().try_lock_exclusive() };
+            #[cfg(test)]
+            let attempt = || INJECTED_LOCK_ERRORS.with(|q| q.borrow_mut().pop_front()).map_or_else(attempt, Err);
+            let locked = loop {
+                match attempt() {
+                    // A signal cut a blocking lock short: nothing is held yet.
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    result => break result,
+                }
+            };
             match locked {
                 Ok(()) => {}
                 // fs2's contended error, not a fixed ErrorKind: Windows reports
                 // ERROR_LOCK_VIOLATION, which std does not map to WouldBlock.
                 Err(e) if e.kind() == fs2::lock_contended_error().kind() => return Ok(Take::Busy),
+                Err(e) if wait && !cannot_lock_here(&e) => return Err(e),
                 Err(e) => {
                     log::warn!("generation {gen_id}: cannot lock {}: {e}", path.display());
                     return Ok(Take::Unlockable(Self { handle, path }));
@@ -248,8 +259,25 @@ impl GenerationWriteLock {
     }
 }
 
+/// Whether `e` means this filesystem has no working locks at all (a network
+/// share without a lock manager), as opposed to one lock attempt failing.
+/// Only then may a copy run unlocked, because every GC there fails the same
+/// way and keeps the directory. Raw errnos as well as the kind: macOS's
+/// `ENOTSUP` and `ENOLCK` map to no specific `ErrorKind`.
+fn cannot_lock_here(e: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    if matches!(e.raw_os_error(), Some(libc::ENOTSUP | libc::EOPNOTSUPP | libc::ENOLCK)) {
+        return true;
+    }
+    e.kind() == std::io::ErrorKind::Unsupported
+}
+
 #[cfg(test)]
 thread_local! {
+    /// Test-only: errors the next lock attempts on this thread return
+    /// instead of locking, in order.
+    pub(crate) static INJECTED_LOCK_ERRORS: std::cell::RefCell<std::collections::VecDeque<std::io::Error>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
     /// Test-only: called by [`gc_old_generations`] just before it removes a
     /// directory, with that directory's lock held.
     pub(crate) static BEFORE_GENERATION_REMOVAL: std::cell::RefCell<Option<Box<dyn FnMut(&Path)>>> =
