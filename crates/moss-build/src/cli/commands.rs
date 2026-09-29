@@ -27,8 +27,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
     vec![
         CliCommandInfo {
             name: "build",
-            args: "<folder> [--serve] [--watch] [--no-plugins] [--allow-plugins] [--wait-plugins] [--strict] [--site-url=<url>]",
-            description: "Build the site with plugins. --serve starts a local preview server when the build finishes, and --watch rebuilds on every file change. Use --no-plugins for fast CI/CD builds. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed. --strict exits 1 if the build reported any problems (they are printed to stderr and summarized as `moss: N problems …`); without it a build with warnings still exits 0.",
+            args: "<folder> [--serve [--watch]] [--no-plugins] [--allow-plugins] [--wait-plugins] [--strict] [--site-url=<url>]",
+            description: "Build the site with plugins. --serve starts a local preview server when the build finishes, and --watch, which only works with --serve, rebuilds on every file change and refreshes the preview. Use --no-plugins for fast CI/CD builds. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed. --strict exits 1 if the build reported any problems (they are printed to stderr and summarized as `moss: N problems …`); without it a build with warnings still exits 0.",
         },
         CliCommandInfo {
             name: "deploy",
@@ -420,6 +420,15 @@ mod tests {
         let text = help_for("build").expect("build is not self-handled");
         assert!(text.starts_with("Usage: moss build "), "no usage line: {text}");
         assert!(text.contains("--strict"), "flags missing from usage: {text}");
+    }
+
+    /// `--watch` is refused without `--serve` (the refresh it drives goes out
+    /// through the preview server), so the usage must not offer it alone.
+    #[test]
+    fn build_help_nests_watch_under_serve() {
+        let text = help_for("build").expect("build is not self-handled");
+        assert!(text.contains("[--serve [--watch]]"), "usage offers --watch on its own: {text}");
+        assert!(text.contains("--watch, which only works with --serve"), "help does not say --watch needs --serve: {text}");
     }
 
     /// `every_command_answers_help` cannot see a verb that declines rendering
