@@ -491,12 +491,27 @@
     (function () {
       window.__LANG = window.__LANG || 'en';
       var ed = document.getElementById('ed'), sh = document.getElementById('sh');
+      // What scene 2's publish receipt names, in the order the demo's afternoon
+      // adds and removes them: each example site's newest real pages, and one
+      // page the afternoon deletes (a path the live site does not have).
+      var BLAKE_PAGES = [
+        { kind: 'added', title: 'Illustrations of the Book of Job', path: '/paintings-and-prints/illustrations-of-the-book-of-job/' },
+        { kind: 'added', title: 'Illustrations to Dante', path: '/paintings-and-prints/illustrations-to-dante/' },
+        { kind: 'added', title: 'The Pastorals of Virgil', path: '/paintings-and-prints/the-pastorals-of-virgil/' },
+        { kind: 'removed', title: 'Notebook drafts', path: '/writings/notebook-drafts/' },
+      ];
+      var ZHUDA_PAGES = [
+        { kind: 'added', title: '孤禽圖', path: '/畫/孤禽圖/' },
+        { kind: 'added', title: '安晚冊', path: '/畫/安晚冊/' },
+        { kind: 'added', title: '魚', path: '/畫/魚/' },
+        { kind: 'removed', title: '草稿', path: '/文/草稿/' },
+      ];
       if (window.__LANG === 'zh') {
         ed.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('八大山人') + '&file=' + encodeURIComponent('八大山人.md') + '&date=1659-12-01&home=1';
-        sh.src = 'ui/shell.html?preview=' + encodeURIComponent('/zhuda/homepage/') + '&title=' + encodeURIComponent('八大山人') + '&target=zhudasnotebook.com&live=' + encodeURIComponent('https://www.zhudasnotebook.com/');
+        sh.src = 'ui/shell.html?preview=' + encodeURIComponent('/zhuda/homepage/') + '&title=' + encodeURIComponent('八大山人') + '&target=zhudasnotebook.com&live=' + encodeURIComponent('https://www.zhudasnotebook.com/') + '&pages=' + encodeURIComponent(JSON.stringify(ZHUDA_PAGES));
       } else {
         ed.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('William Blake') + '&file=' + encodeURIComponent('William Blake.md') + '&date=1790-06-01&home=1';
-        sh.src = 'ui/shell.html?preview=' + encodeURIComponent('/blake/homepage/') + '&title=' + encodeURIComponent('William Blake') + '&target=blakesnotebook.com&live=' + encodeURIComponent('https://www.blakesnotebook.com/');
+        sh.src = 'ui/shell.html?preview=' + encodeURIComponent('/blake/homepage/') + '&title=' + encodeURIComponent('William Blake') + '&target=blakesnotebook.com&live=' + encodeURIComponent('https://www.blakesnotebook.com/') + '&pages=' + encodeURIComponent(JSON.stringify(BLAKE_PAGES));
       }
     })();
     </script>
@@ -1519,7 +1534,7 @@ const sim = createSim(canvas, BASE_TEX_W, BASE_TEX_H, mobileLayout() ? 4 : 2, ()
         'Settings':'設定', 'Website':'網站', 'Add channel':'新增管道', 'Publish site':'發布網站',
         'Open editor':'開啟編輯器', 'Import from URL':'從 URL 匯入',
         'Publish':'發布', 'Publish site':'發布網站', 'Cancel':'取消', 'Confirm':'確認', 'Later':'稍後',
-        'Close':'關閉', 'Visit site':'造訪網站', 'Your site is live':'你的網站已上線', 'Settings':'設定',
+        'Settings':'設定',
         'This Page':'此頁面', 'Child Pages':'子頁面', 'Live preview':'即時預覽', 'Source':'原始碼',
         'Writing mode':'寫作模式', 'Untitled':'未命名', 'New Page':'新增頁面', 'New Folder':'新增資料夾',
       } : {
@@ -1528,7 +1543,7 @@ const sim = createSim(canvas, BASE_TEX_W, BASE_TEX_H, mobileLayout() ? 4 : 2, ()
         'Settings':'设置', 'Website':'网站', 'Add channel':'添加渠道', 'Publish site':'发布网站',
         'Open editor':'打开编辑器', 'Import from URL':'从 URL 导入',
         'Publish':'发布', 'Publish site':'发布网站', 'Cancel':'取消', 'Confirm':'确认', 'Later':'稍后',
-        'Close':'关闭', 'Visit site':'访问网站', 'Your site is live':'你的网站已上线', 'Settings':'设置',
+        'Settings':'设置',
         'This Page':'此页面', 'Child Pages':'子页面', 'Live preview':'实时预览', 'Source':'源代码',
         'Writing mode':'写作模式', 'Untitled':'未命名', 'New Page':'新建页面', 'New Folder':'新建文件夹',
       };

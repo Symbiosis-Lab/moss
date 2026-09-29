@@ -146,6 +146,38 @@ try {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.waitForTimeout(500);
   assert(resized.hidden || resized.width === resized.want, `a ring kept its old window's canvas after a resize: ${JSON.stringify(resized)}`);
+  // Clicking the demo's Publish (through the page, the way a reader does)
+  // opens the app's publish receipt for the example site: checking first, the
+  // pending changes as rows naming the site's real pages, then the verdict.
+  const receiptAt = await page.evaluate(() => {
+    gen++; const sh = shFrame.contentWindow.__shell; sh.hold(); sh.setPending({ edited: 2, added: 1 });
+    const f = shFrame.getBoundingClientRect(), k = f.width / shFrame.offsetWidth, b = shFrame.contentDocument.querySelector('.moss-publish-button').getBoundingClientRect();
+    return { x: f.left + (b.left + b.width / 2) * k, y: f.top + (b.top + b.height / 2) * k };
+  });
+  await page.mouse.click(receiptAt.x, receiptAt.y);
+  const receiptRead = () => page.evaluate(() => {
+    const m = shFrame.contentDocument.querySelector('.moss-modal--receipt.visible');
+    return m && { title: m.querySelector('.moss-modal-title').textContent, rows: [...m.querySelectorAll('.receipt-row')].map((r) => [r.querySelector('.receipt-label')?.textContent, r.querySelector('.receipt-host')?.textContent || r.querySelector('.receipt-detail')?.textContent]),
+      marks: [...m.querySelectorAll('svg.mark')].map((s) => s.dataset.state), primary: m.querySelector('.moss-btn-primary').textContent };
+  });
+  const receipt = await receiptRead();
+  assert(receipt && receipt.title === 'Checking your site is live…' && receipt.primary === 'View page', `Publish did not open the checking receipt: ${JSON.stringify(receipt)}`);
+  assert(JSON.stringify(receipt.rows) === JSON.stringify([['Uploaded', '3 files uploaded'], ['Added', 'Illustrations of the Book of Job'], ['Live', 'Checking…']]), `the receipt's rows are not the demo's changes: ${JSON.stringify(receipt.rows)}`);
+  await page.waitForFunction(() => shFrame.contentDocument.querySelector('.moss-modal--receipt .moss-modal-title')?.textContent === 'Your site is live', null, { timeout: 5000 })
+    .catch(async () => { throw new Error(`the receipt's verdict never landed: ${JSON.stringify(await receiptRead())}`); });
+  const settled = await receiptRead();
+  assert(settled.marks.every((st) => st === 'done'), `the receipt's marks did not all settle: ${settled.marks}`);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !shFrame.contentDocument.querySelector('.moss-modal--receipt.visible'), null, { timeout: 3000 });
+  // a click while the ring is still growing reports the changes the ring shows
+  await page.evaluate(() => { const sh = shFrame.contentWindow.__shell; sh.setPending({}); sh.growTo({ edited: 4, added: 2 }, 2400); });
+  await page.waitForTimeout(1500);
+  await page.mouse.click(receiptAt.x, receiptAt.y);
+  const mid = await receiptRead();
+  assert(mid && mid.rows[0][1] !== 'Nothing new — nothing else changed' && mid.rows.some(([label]) => label === 'Added'), `a Publish clicked while the ring grew reported the ring before it: ${JSON.stringify(mid)}`);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !shFrame.contentDocument.querySelector('.moss-modal--receipt.visible'), null, { timeout: 3000 });
+  console.log('webkit 1440×900: scene 2\'s Publish opens the example site\'s publish receipt, which settles to live');
   // Standing in scene 3, the sketch and notebook keep running through the
   // retakes of its print. Each retake wakes them for its own frames, so they
   // are read between retakes, never during one.
