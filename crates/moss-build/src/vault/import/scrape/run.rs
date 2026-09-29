@@ -16,7 +16,7 @@ use std::sync::LazyLock;
 use tokio::sync::Semaphore;
 
 use super::converter::{extract_article, extract_article_with_snapshot, rewrite_image_links};
-use super::crawler::{extract_links, looks_like_html_page};
+use super::crawler::{extract_canonical_url, extract_links, looks_like_html_page, path_identity};
 use super::scope::{is_within_scope, UrlScope};
 use super::service::{generate_frontmatter, render_error_markdown, rewrite_links, ScrapeConfig};
 use super::writer::{rename_for_collision, sanitize_filename, url_to_file_path};
@@ -51,6 +51,16 @@ pub struct ScrapeResult {
     /// missing/generic) was not HTML/XHTML — a PDF, an image, a calendar
     /// file, an RSS feed, and the like. Never written as a `.md` page.
     pub skipped_pages: usize,
+    /// Fetched HTML pages whose `<link rel="canonical">` identity already
+    /// matched a page already written in this crawl, or — lacking a
+    /// canonical — whose URL path (query string and fragment ignored)
+    /// AND extracted body both matched an already-written page's. A
+    /// recursive crawl's queue routinely fills with query-string variants
+    /// of one page (lightbox `?itemId=…`, listing filters, calendar
+    /// exports). Never written as a `.md` page, and, like `skipped_pages`,
+    /// does not count against `max_pages`; its own links are still
+    /// harvested before the duplicate verdict is reached.
+    pub duplicate_pages: usize,
     /// True when `max_pages` stopped a recursive crawl before every
     /// discovered in-scope URL had been visited — distinct from a crawl that
     /// finished because its queue simply ran out.
@@ -74,6 +84,13 @@ enum PageOutcome {
     /// asset download runs — its own body is never treated as a source of
     /// further links or media either.
     Skipped,
+    /// Its `<link rel="canonical">` identity — or, lacking one, its own
+    /// URL path together with its extracted body — already matched a page
+    /// already written in this crawl. Unlike `Skipped`, its links were
+    /// harvested (same as `Written`) before this verdict; unlike
+    /// `Written`, nothing reaches disk and it costs no slot in the page
+    /// cap.
+    Duplicate,
 }
 
 /// A short, stable name for a media URL, so the same image fetched twice
@@ -81,6 +98,18 @@ enum PageOutcome {
 /// production caller and went with it.
 fn hash_url(url: &str) -> String {
     format!("{:016x}", xxhash_rust::xxh3::xxh3_64(url.as_bytes()))
+}
+
+/// Content hash half of the rule-2 duplicate fallback used when a page
+/// declares no `<link rel="canonical">` of its own: xxh3 of the extracted
+/// markdown BODY, never the raw HTML, so two pages that differ only in
+/// boilerplate (ad slots, nonce attributes, a request-scoped id) that htmd
+/// discards along with the rest of the clutter still compare equal. Never
+/// consulted alone — rule 2 also requires [`path_identity`] to match, so a
+/// short body two DIFFERENT pages happen to share (two templated "coming
+/// soon" stubs at different addresses) never collapses them into one.
+fn hash_body(body: &str) -> u64 {
+    xxhash_rust::xxh3::xxh3_64(body.as_bytes())
 }
 
 /// Compose one imported note: pick its cover, point every media reference at
@@ -155,7 +184,22 @@ where
     let mut pages_scraped: usize = 0;
     let mut pages_failed: usize = 0;
     let mut pages_skipped: usize = 0;
+    let mut pages_duplicate: usize = 0;
     let mut capped = false;
+    // Identity of every page WRITTEN so far in this crawl — its own
+    // canonical URL when it declared one, else the URL it was fetched from.
+    // A later page whose own canonical names an identity already in this
+    // set is a duplicate (rule 1).
+    let mut imported_identities: HashSet<String> = HashSet::new();
+    // Body hashes of every page WRITTEN so far, keyed by that page's own
+    // `path_identity` (scheme + host + path, query and fragment dropped).
+    // Consulted only for a page that declares no canonical of its own
+    // (rule 2, the fallback): a duplicate needs BOTH the same path identity
+    // AND the same body hash, so two different pages that happen to render
+    // the same short templated body (two "coming soon" stubs at different
+    // addresses) never collapse into one — only a query-string variant of
+    // the SAME path does.
+    let mut written_path_bodies: HashMap<String, HashSet<u64>> = HashMap::new();
 
     queue.push_back(config.start_url.clone());
 
@@ -204,6 +248,49 @@ where
             break 'page PageOutcome::Skipped;
         }
 
+        // The page's own declared identity — same-host `<link
+        // rel="canonical">` only (see `extract_canonical_url`). Read before
+        // any of the more expensive extraction below, so a duplicate never
+        // pays for a snapshot fetch or article extraction it will discard.
+        let canonical = extract_canonical_url(&html, &url);
+
+        if config.recursive {
+            for link in extract_links(&html, &url) {
+                if is_within_scope(&scope, &link) && !visited.contains(&link) {
+                    queue.push_back(link);
+                }
+            }
+            // Manifest-declared pages (client-rendered viewers have no
+            // server-side anchors to follow).
+            for page in crate::vault::import::engine::discover_pages(&html, &url) {
+                if is_within_scope(&scope, &page) && !visited.contains(&page) {
+                    queue.push_back(page);
+                }
+            }
+        }
+
+        // Rule 1: a canonical identity already imported makes THIS page a
+        // duplicate of it. Deliberately checked against identities already
+        // WRITTEN, never against an unvisited target still sitting in the
+        // queue: an earlier version of this rule bet on that queued target
+        // too, dropping this page on the assumption that the future pop
+        // would import it under the same identity. When the bet was wrong —
+        // the canonical target itself later failed to fetch (a dead link, a
+        // moved page, a stale tag left behind by a CMS migration) — nothing
+        // was ever written under that identity, and the only real copy of
+        // this content, the one already in hand, had already been thrown
+        // away. Comparing only against identities already written keeps a
+        // real distinct page from ever being dropped; the cost is that the
+        // page kept, when two variants race for one identity, is whichever
+        // one this crawl reaches first, not necessarily the one its own
+        // canonical tag points at — and a kept variant is a page still on
+        // disk, not a page gone.
+        if let Some(canon) = &canonical {
+            if imported_identities.contains(canon) {
+                break 'page PageOutcome::Duplicate;
+            }
+        }
+
         // Client-rendered builders keep their content in a pre-rendered
         // snapshot the page's state JSON points at — one extra fetch, scoped
         // to the site's own account. Fetch failure just falls back to the
@@ -221,18 +308,20 @@ where
             None => None,
         };
         let mut article = extract_article_with_snapshot(&html, snapshot_html.as_deref(), &url);
+        let body_hash = hash_body(&article.markdown);
 
-        if config.recursive {
-            for link in extract_links(&html, &url) {
-                if is_within_scope(&scope, &link) && !visited.contains(&link) {
-                    queue.push_back(link);
-                }
-            }
-            // Manifest-declared pages (client-rendered viewers have no
-            // server-side anchors to follow).
-            for page in crate::vault::import::engine::discover_pages(&html, &url) {
-                if is_within_scope(&scope, &page) && !visited.contains(&page) {
-                    queue.push_back(page);
+        // Rule 2: the fallback for a page that declares no canonical of its
+        // own — a body byte-identical to an already-written page's AT THE
+        // SAME PATH (query string and fragment ignored) is a query-string
+        // variant of it (seen on calendar/filter exports with no canonical
+        // tag at all). The path match is required: without it, two
+        // different real pages that happen to render the same short
+        // templated body would collapse into one, which this rule must
+        // never do.
+        if canonical.is_none() {
+            if let Some(id) = path_identity(&url) {
+                if written_path_bodies.get(&id).is_some_and(|hashes| hashes.contains(&body_hash)) {
+                    break 'page PageOutcome::Duplicate;
                 }
             }
         }
@@ -279,7 +368,19 @@ where
             &url,
             scope_for_links,
         ) {
-            Some(note) => PageOutcome::Written(note),
+            Some(note) => {
+                // Record this page's identity so a later duplicate of it —
+                // by canonical (rule 1) or by same-path body (rule 2) — is
+                // caught. Recorded regardless of whether THIS page itself
+                // had a canonical: rule 2 matches against any already-
+                // written page at that path, not only ones that also lacked
+                // a canonical of their own.
+                imported_identities.insert(canonical.clone().unwrap_or_else(|| url.clone()));
+                if let Some(id) = path_identity(&url) {
+                    written_path_bodies.entry(id).or_default().insert(body_hash);
+                }
+                PageOutcome::Written(note)
+            }
             None => PageOutcome::Failed(
                 "no article content found (unsupported page or empty body)".to_string(),
             ),
@@ -300,6 +401,10 @@ where
             // Never written as a `.md` file at all — that is the whole fix.
             PageOutcome::Skipped => {
                 pages_skipped += 1;
+            }
+            // Also never written — its links were already harvested above.
+            PageOutcome::Duplicate => {
+                pages_duplicate += 1;
             }
         }
     }
@@ -329,6 +434,7 @@ where
         total_pages: pages_scraped,
         failed_pages: pages_failed,
         skipped_pages: pages_skipped,
+        duplicate_pages: pages_duplicate,
         capped,
         remaining_urls,
         error: None,
@@ -468,6 +574,7 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
         total_pages: 1,
         failed_pages: 0,
         skipped_pages: 0,
+        duplicate_pages: 0,
         capped: false,
         remaining_urls: 0,
         error: None,
@@ -1125,6 +1232,362 @@ Content-Location: https://img.douban.com/a.png\r\n\
             .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
             .collect();
         assert_eq!(written.len(), 2, "the index plus exactly one child were written");
+    }
+
+    // ── canonical/body-hash duplicate detection (a recursive crawl's queue
+    // routinely fills with query-string variants of one page — a lightbox
+    // `?itemId=…`, a listing filter, a calendar export) ───────────────────
+
+    /// Rule 1: a chain of lightbox-style variants, each whose own `<link
+    /// rel="canonical">` names the one real gallery page, sits BETWEEN that
+    /// page and a second real page discovered only at the end of the chain.
+    /// A strict chain (each variant links only to the next) keeps the fetch
+    /// order deterministic, unlike sibling links pulled from one page's
+    /// `HashSet`. `max_pages` is set to 2 — the count of REAL pages: if a
+    /// duplicate consumed a cap slot, the cap would be reached mid-chain and
+    /// `/gallery/finale` would never be discovered at all. Since it does not, both
+    /// real pages import and the crawl finishes clean.
+    #[tokio::test]
+    async fn canonical_duplicates_are_not_written_and_do_not_consume_the_cap() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let gallery = server
+            .mock("GET", "/gallery")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><body><article><p>Real gallery page body, long enough to be \
+                 extracted as content.</p><a href=\"{base}/gallery?itemId=1\">Item 1</a>\
+                 </article></body></html>"
+            ))
+            .create_async()
+            .await;
+        let variant = |n: u32, next_href: &str| {
+            format!(
+                "<html><head><link rel=\"canonical\" href=\"{base}/gallery\"></head>\
+                 <body><article><p>Lightbox chrome around item {n}.</p>\
+                 <a href=\"{next_href}\">Next</a></article></body></html>"
+            )
+        };
+        let item1 = server
+            .mock("GET", "/gallery?itemId=1")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(variant(1, &format!("{base}/gallery?itemId=2")))
+            .create_async()
+            .await;
+        let item2 = server
+            .mock("GET", "/gallery?itemId=2")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(variant(2, &format!("{base}/gallery?itemId=3")))
+            .create_async()
+            .await;
+        let item3 = server
+            .mock("GET", "/gallery?itemId=3")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(variant(3, &format!("{base}/gallery/finale")))
+            .create_async()
+            .await;
+        let finale = server
+            .mock("GET", "/gallery/finale")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><body><article><p>A second real page, discovered only past the \
+                 duplicate chain, long enough to be extracted as content.</p>\
+                 </article></body></html>"
+            ))
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/gallery"), tmp.path());
+        config.recursive = true;
+        config.max_pages = Some(2);
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        gallery.assert_async().await;
+        item1.assert_async().await;
+        item2.assert_async().await;
+        item3.assert_async().await;
+        finale.assert_async().await;
+
+        assert_eq!(res.total_pages, 2, "the gallery page and /gallery/finale are both written");
+        assert_eq!(res.duplicate_pages, 3, "all three itemId variants are duplicates");
+        assert_eq!(res.failed_pages, 0);
+        assert_eq!(res.skipped_pages, 0);
+        assert!(
+            !res.capped,
+            "three duplicates must not have consumed cap slots meant for /gallery/finale: {res:?}"
+        );
+        assert_eq!(res.remaining_urls, 0);
+
+        let written: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+            .collect();
+        assert_eq!(written.len(), 2, "no duplicate must ever reach disk");
+    }
+
+    /// Rule 2 (fallback for a page with no canonical of its own): a second
+    /// fetch of the SAME URL PATH — a query-string variant, `?ref=share` —
+    /// whose extracted BODY is byte-identical to an already-written page's
+    /// is a duplicate too. A chain (root → note-a → the query variant)
+    /// keeps every URL inside the crawl's scope and its fetch order
+    /// deterministic.
+    #[tokio::test]
+    async fn no_canonical_but_identical_body_at_the_same_path_is_a_duplicate() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+        let shared_body = "Shared identical content for the duplicate-body dedup test, \
+             long enough to pass the content extraction scorer reliably.";
+
+        let root = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><body><article><p>Root page body, distinct from the shared \
+                 note content and long enough to be extracted.</p>\
+                 <a href=\"{base}/note-a\">A</a></article></body></html>"
+            ))
+            .create_async()
+            .await;
+        let note_a = server
+            .mock("GET", "/note-a")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                // The "Next" link sits in a <nav> OUTSIDE <article> — link
+                // discovery reads the whole document, but content extraction
+                // strips nav chrome, so note-a's extracted body still comes
+                // out byte-identical to its own query-variant's.
+                "<html><body><nav><a href=\"{base}/note-a?ref=share\">Next</a></nav>\
+                 <article><p>{shared_body}</p></article></body></html>"
+            ))
+            .create_async()
+            .await;
+        let note_a_variant = server
+            .mock("GET", "/note-a?ref=share")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><body><article><p>{shared_body}</p></article></body></html>"
+            ))
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        root.assert_async().await;
+        note_a.assert_async().await;
+        note_a_variant.assert_async().await;
+
+        assert_eq!(res.total_pages, 2, "the root and the first-seen note are written");
+        assert_eq!(
+            res.duplicate_pages, 1,
+            "the byte-identical same-path query variant is a duplicate"
+        );
+        assert_eq!(res.failed_pages, 0);
+
+        let written: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+            .collect();
+        assert_eq!(written.len(), 2, "the duplicate body must never reach disk");
+    }
+
+    /// Rule 2 must never fire across two DIFFERENT paths, even when their
+    /// bodies are byte-identical: two real, distinct pages (different
+    /// addresses) that happen to share the same short templated body — the
+    /// shape a "coming soon" location stub takes — must both import.
+    #[tokio::test]
+    async fn identical_body_at_different_paths_both_import() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+        let stub_body = "Coming soon — check back later.";
+
+        let root = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><body><article><p>Root page, distinct from the stub pages \
+                 below and long enough to be extracted on its own.</p>\
+                 <a href=\"{base}/boston\">Boston</a>\
+                 <a href=\"{base}/chicago\">Chicago</a></article></body></html>"
+            ))
+            .create_async()
+            .await;
+        let boston = server
+            .mock("GET", "/boston")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!("<html><body><article><p>{stub_body}</p></article></body></html>"))
+            .create_async()
+            .await;
+        let chicago = server
+            .mock("GET", "/chicago")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!("<html><body><article><p>{stub_body}</p></article></body></html>"))
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        root.assert_async().await;
+        boston.assert_async().await;
+        chicago.assert_async().await;
+
+        assert_eq!(res.total_pages, 3, "the root and both distinct-path stubs all import");
+        assert_eq!(
+            res.duplicate_pages, 0,
+            "different paths never collide, regardless of a shared body"
+        );
+        assert_eq!(res.failed_pages, 0);
+
+        let written: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+            .collect();
+        assert_eq!(written.len(), 3, "both stub pages must survive: {written:?}");
+    }
+
+    /// Negative case: two real, DISTINCT pages behind an old-CMS-style query
+    /// string (`?p=1` / `?p=2`), each self-canonical, must both import — the
+    /// design's whole point is that a blanket query-string strip would
+    /// wrongly collapse exactly this shape into one page. Both pages map to
+    /// the same on-disk filename (query strings never enter `url_to_file_path`),
+    /// so this also proves `rename_for_collision` is still load-bearing after
+    /// this fix, not a deletion candidate.
+    #[tokio::test]
+    async fn distinct_query_string_pages_with_self_canonicals_both_import() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let page1 = server
+            .mock("GET", "/blog/?p=1")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><head><link rel=\"canonical\" href=\"{base}/blog/?p=1\"></head>\
+                 <body><article><p>First real post, unique content A, long enough to be \
+                 extracted as the article body for page one.</p>\
+                 <a href=\"{base}/blog/?p=2\">Next</a></article></body></html>"
+            ))
+            .create_async()
+            .await;
+        let page2 = server
+            .mock("GET", "/blog/?p=2")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><head><link rel=\"canonical\" href=\"{base}/blog/?p=2\"></head>\
+                 <body><article><p>Second real post, unique content B, long enough to be \
+                 extracted as the article body for page two.</p></article></body></html>"
+            ))
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/blog/?p=1"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        page1.assert_async().await;
+        page2.assert_async().await;
+
+        assert_eq!(res.total_pages, 2, "both distinct pages must import");
+        assert_eq!(res.duplicate_pages, 0, "distinct self-canonicals are never duplicates");
+        assert_eq!(res.failed_pages, 0);
+
+        let written: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+            .collect();
+        assert_eq!(
+            written.len(),
+            2,
+            "both pages collide on filename (query strings aren't part of it) and must \
+             survive via rename_for_collision: {written:?}"
+        );
+    }
+
+    /// Rule 1 must compare only against identities already WRITTEN, never
+    /// against a target merely sitting in the queue: this page's own
+    /// canonical names a second page that this crawl goes on to discover and
+    /// queue, but that second page's own fetch then fails outright. If rule 1
+    /// had pre-emptively dropped this page on the bet that the queued target
+    /// would supply the content instead, that bet would have cost the only
+    /// real copy this crawl ever had of it — nothing would be written under
+    /// either URL. This page's own content must survive regardless.
+    #[tokio::test]
+    async fn a_page_is_written_when_its_own_canonical_target_later_fails_to_fetch() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        // The start URL's own path is the crawl root ("/"), which is the
+        // one case `is_within_scope` treats specially and admits every
+        // same-host URL regardless of path — needed here so the linked
+        // `/canonical-target` is actually queued rather than filtered out
+        // as a sibling path outside the starting URL's own prefix.
+        let variant = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><head><link rel=\"canonical\" href=\"{base}/canonical-target\"></head>\
+                 <body><article><p>Real content that must survive even though its own \
+                 canonical tag names a page that will fail to load.</p>\
+                 <a href=\"{base}/canonical-target\">Canonical</a></article></body></html>"
+            ))
+            .create_async()
+            .await;
+        let canonical_target = server
+            .mock("GET", "/canonical-target")
+            .with_status(404)
+            .with_body("not found")
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        variant.assert_async().await;
+        canonical_target.assert_async().await;
+
+        assert_eq!(res.total_pages, 1, "the variant's own real content is written");
+        assert_eq!(res.failed_pages, 1, "the canonical target's own fetch failure is recorded");
+        assert_eq!(res.duplicate_pages, 0, "nothing was dropped on a bet that never paid off");
+
+        let written: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+            .collect();
+        assert_eq!(written.len(), 2, "the real page and the failure placeholder both land on disk");
+        let bodies: Vec<String> =
+            written.iter().map(|p| std::fs::read_to_string(p).unwrap()).collect();
+        assert!(
+            bodies.iter().any(|b| b.contains("Real content that must survive")),
+            "the variant's real content must not have been discarded: {bodies:?}"
+        );
     }
 
     // ── refuse_unsafe_scrape_url ─────────────────────────────────────────

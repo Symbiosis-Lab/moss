@@ -74,8 +74,8 @@ pub fn run(args: &[String]) -> i32 {
         match result {
             Ok(res) => {
                 eprintln!(
-                    "  ✓ {} page(s) imported, {} failed, {} skipped (non-HTML)",
-                    res.total_pages, res.failed_pages, res.skipped_pages
+                    "  ✓ {} page(s) imported, {} failed, {} skipped (non-HTML), {} duplicate(s) skipped",
+                    res.total_pages, res.failed_pages, res.skipped_pages, res.duplicate_pages
                 );
                 // A capped crawl is incomplete even when every page it did
                 // reach succeeded — real pages were left out, and before
@@ -107,11 +107,12 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     eprintln!(
-        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML{})",
+        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{})",
         totals.pages,
         folder.display(),
         totals.failed_pages,
         totals.skipped_pages,
+        totals.duplicate_pages,
         if totals.capped_leftovers > 0 {
             format!(", {} left unimported by the page cap", totals.capped_leftovers)
         } else {
@@ -132,6 +133,7 @@ struct ImportTotals {
     pages: usize,
     failed_pages: usize,
     skipped_pages: usize,
+    duplicate_pages: usize,
     capped_leftovers: usize,
     hard_errors: usize,
 }
@@ -141,6 +143,7 @@ impl ImportTotals {
         self.pages += res.total_pages;
         self.failed_pages += res.failed_pages;
         self.skipped_pages += res.skipped_pages;
+        self.duplicate_pages += res.duplicate_pages;
         if res.capped {
             self.capped_leftovers += res.remaining_urls;
         }
@@ -322,8 +325,12 @@ fn print_usage() {
     eprintln!("left, and you can pass the missing URLs to `--list` (without -r — each");
     eprintln!("listed URL is fetched directly, not re-crawled) to pick up the rest.");
     eprintln!("A non-HTML response found while crawling (a PDF, an image, a feed, a");
-    eprintln!("calendar file, ...) is skipped, never written as a page. On filename");
-    eprintln!("collisions, the new file is renamed `name 2.md`, `name 3.md`, etc.");
+    eprintln!("calendar file, ...) is skipped, never written as a page. A page whose own");
+    eprintln!("canonical URL (or, lacking one, its extracted body) already matches a page");
+    eprintln!("already imported — a lightbox, listing-filter, or calendar-export variant");
+    eprintln!("of the same page — is a duplicate: also never written, and does not count");
+    eprintln!("against the page cap. On filename collisions between two distinct pages,");
+    eprintln!("the new file is renamed `name 2.md`, `name 3.md`, etc.");
     eprintln!();
     eprintln!("The vault copy is canonical; the source URL is recorded in `syndicated`");
     eprintln!("frontmatter (POSSE), the same field that lets a syndicated comment link");

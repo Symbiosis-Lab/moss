@@ -133,6 +133,57 @@ pub fn normalize_url(url_str: &str) -> Option<String> {
     Some(url.to_string())
 }
 
+/// A page's identity for the no-canonical duplicate fallback (rule 2):
+/// scheme + host + path, with the query string and fragment dropped
+/// entirely and a leading `www.` / one trailing `/` normalized away on
+/// both sides being compared. This is deliberately narrower than
+/// [`extract_canonical_url`]'s identity — it exists only to recognize a
+/// query-string variant of the SAME path (`?itemId=…`, `?ref=…`), never to
+/// collapse two different paths onto each other just because they render
+/// the same short, templated body text (two "coming soon" location pages
+/// at different addresses must both stay).
+pub fn path_identity(url_str: &str) -> Option<String> {
+    let url = Url::parse(url_str).ok()?;
+    let host = url.host_str()?;
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    let mut path = url.path();
+    if path.len() > 1 {
+        path = path.strip_suffix('/').unwrap_or(path);
+    }
+    Some(format!("{}://{}{}", url.scheme(), host.to_ascii_lowercase(), path))
+}
+
+/// A fetched page's own declared identity: `<link rel="canonical" href>`,
+/// resolved against `page_url` and accepted only when it names the SAME host
+/// as the page itself.
+///
+/// This is the primary signal `scrape_to_folder` dedupes a recursive crawl
+/// by — a canonical tag is the site's own claim that "this exact document
+/// lives here", which is what lets a real distinct page (an old WordPress
+/// `?p=123`) keep importing while a lightbox `?itemId=…` or listing-filter
+/// `?category=…` variant collapses onto the page it is a variant of. A
+/// canonical naming a DIFFERENT host (an AMP mirror, a syndication partner)
+/// is not this site's own identity and is treated the same as no canonical
+/// at all — the caller falls through to a body-hash comparison instead.
+pub fn extract_canonical_url(html: &str, page_url: &str) -> Option<String> {
+    let page = Url::parse(page_url).ok()?;
+    let document = Html::parse_document(html);
+    let selector = Selector::parse(r#"link[rel~="canonical"]"#).unwrap();
+    let href = document.select(&selector).find_map(|el| {
+        let h = el.value().attr("href")?;
+        (!h.trim().is_empty()).then_some(h)
+    })?;
+    let resolved = page.join(href).ok()?;
+    let same_host = resolved
+        .host_str()
+        .zip(page.host_str())
+        .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b));
+    if !same_host {
+        return None;
+    }
+    normalize_url(resolved.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +362,68 @@ mod tests {
         assert!(
             !looks_like_html_page("application/octet-stream", "%PDF-1.4 binary bytes here"),
             "generic type with a non-HTML body must still be refused"
+        );
+    }
+
+    // ── extract_canonical_url (the page-identity signal the run loop dedupes
+    // a recursive crawl's query-string variants by) ──
+
+    #[test]
+    fn extract_canonical_url_reads_a_same_host_absolute_link() {
+        let html = r#"<html><head><link rel="canonical" href="https://example.test/gallery"></head></html>"#;
+        assert_eq!(
+            extract_canonical_url(html, "https://example.test/gallery?itemId=1"),
+            Some("https://example.test/gallery".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_canonical_url_resolves_a_relative_href() {
+        let html = r#"<html><head><link rel="canonical" href="/gallery"></head></html>"#;
+        assert_eq!(
+            extract_canonical_url(html, "https://example.test/gallery?itemId=1"),
+            Some("https://example.test/gallery".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_canonical_url_absent_without_the_tag() {
+        let html = "<html><head></head><body>no canonical here</body></html>";
+        assert_eq!(extract_canonical_url(html, "https://example.test/p"), None);
+    }
+
+    #[test]
+    fn extract_canonical_url_ignores_a_different_host() {
+        // A canonical pointing at another host (an AMP mirror, a syndication
+        // partner) is not this site's own identity — treated as absent.
+        let html = r#"<html><head><link rel="canonical" href="https://amp.example.test/p"></head></html>"#;
+        assert_eq!(extract_canonical_url(html, "https://example.test/p"), None);
+    }
+
+    // ── path_identity (the rule-2 no-canonical duplicate fallback's own
+    // identity — narrower than extract_canonical_url on purpose) ──────────
+
+    #[test]
+    fn path_identity_ignores_the_query_string() {
+        assert_eq!(
+            path_identity("https://example.test/gallery?itemId=1"),
+            path_identity("https://example.test/gallery?itemId=2")
+        );
+    }
+
+    #[test]
+    fn path_identity_normalizes_a_leading_www_and_a_trailing_slash() {
+        assert_eq!(
+            path_identity("https://www.example.test/blog/"),
+            path_identity("https://example.test/blog")
+        );
+    }
+
+    #[test]
+    fn path_identity_treats_different_paths_as_different() {
+        assert_ne!(
+            path_identity("https://example.test/boston"),
+            path_identity("https://example.test/chicago")
         );
     }
 
