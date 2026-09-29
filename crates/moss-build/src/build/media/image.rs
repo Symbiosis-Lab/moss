@@ -3029,17 +3029,18 @@ pub(crate) fn dispatch_image_conversions(
             svc.begin_ui_bound();
         }
 
-        // Image dispatch does not use epochs — unlike video, there is no
-        // long-running external process to cancel (encoding a single image
-        // takes ~100–500 ms). Cancellation is handled via `cancel_flag`
-        // on the image-specific `ImageConversionState`, which is checked
-        // between items.
+        // Image dispatch does not use epochs, and a newer build never cancels
+        // an older build's worker: a later dispatch that finds an image already
+        // queued joins that worker instead (`image_item_is_pending` above).
+        // The only stop is the folder session's cancel token, bridged into a
+        // local flag that `convert_single_image` checks before each image, so
+        // an encode already underway always runs to the end.
         //
-        // This task may race `dispatch_background_assets` (a parallel
-        // `spawn_blocking`). Safety relies on `copy_deferred_assets`
-        // re-reading `hashes.json` to merge `image_outputs` before running
-        // stale cleanup — see `media/pipeline.rs::copy_deferred_assets`.
-        // If that merge is ever removed, rebuilds will delete our `.webp`s.
+        // This task runs beside the asset walk (`copy_deferred_assets`).
+        // Neither writes `hashes.json`: both send their outputs to the build's
+        // coordinator, which seals them into `image_outputs`. Staging is swept
+        // only under a sweep permit, against the previous sealed manifest, and
+        // the permit keeps an encode's output until a build registers it.
         mark_image_items_pending(
             run_ctx.items.iter().filter_map(|item| Some((item.source_path.to_string_lossy().into_owned(), item.fingerprint.clone()?))),
         );
