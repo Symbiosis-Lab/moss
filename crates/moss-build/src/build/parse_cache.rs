@@ -133,6 +133,7 @@
 //! `ParseSession::finish`, at the true end of the build).
 
 use crate::build::cache::HashIndex;
+use crate::build::stat::FileStat;
 use crate::build::markdown::math::TypesetMath;
 use crate::build::types::ParsedDocument;
 use moss_core::dep_graph::DepGraph;
@@ -321,8 +322,17 @@ impl FileHasher {
     /// Loop A may mint a `uid:` after parsing. Its caller passes the one final
     /// source string used for the deferred write, so cache identity and source
     /// evidence agree with the bytes the next build reads.
-    fn note_bytes(&self, relative_path: &str, bytes: &[u8]) {
+    ///
+    /// With the file's `stat` from before those bytes were read (or from the
+    /// write that put them there) and a clock sampled before that, the hash is
+    /// recorded in the index too — otherwise a build that parsed every page
+    /// leaves no page in it, and the next one reads and hashes them all again.
+    fn note_bytes(&self, relative_path: &str, bytes: &[u8], stat: Option<FileStat>, recorded_at: Option<u64>) {
         let hash = format!("{:x}", Sha256::digest(bytes));
+        if let Some(stat) = stat {
+            let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+            index.update_read_at(relative_path.to_string(), &stat, hash.clone(), recorded_at);
+        }
         if let Ok(mut cache) = self.computed.lock() {
             cache.insert(relative_path.to_string(), Some(hash));
         }
@@ -342,6 +352,9 @@ pub struct ParseSession {
     inputs_fingerprint: String,
     shadow: bool,
     hasher: FileHasher,
+    /// When this session began, before Loop A read any page: the recording
+    /// clock for the page hashes [`Self::note_source_bytes`] records.
+    began_at: Option<u64>,
     /// Decisions taken during Loop A: `path → hit`.
     decisions: Mutex<HashMap<String, bool>>,
     stats: Mutex<ParseCacheStats>,
@@ -397,6 +410,7 @@ impl ParseSession {
             inputs_fingerprint,
             shadow,
             hasher: FileHasher::new(root, HashIndex::load(index_path)),
+            began_at: crate::build::stat::recording_clock(),
             decisions: Mutex::new(HashMap::new()),
             stats: Mutex::new(stats),
             #[cfg(test)]
@@ -442,9 +456,11 @@ impl ParseSession {
 
     /// Tell the session what a page's source bytes were at the moment Loop A
     /// parsed them (see [`FileHasher::note_bytes`] for why this is not the same
-    /// as hashing the file again afterwards).
-    pub fn note_source_bytes(&self, relative_path: &str, bytes: &[u8]) {
-        self.hasher.note_bytes(relative_path, bytes);
+    /// as hashing the file again afterwards). `stat` is the file's stat from
+    /// before those bytes were read, or `None` when they are not what the file
+    /// holds; with it, the hash is recorded for the next build as well.
+    pub fn note_source_bytes(&self, relative_path: &str, bytes: &[u8], stat: Option<FileStat>) {
+        self.hasher.note_bytes(relative_path, bytes, stat, self.began_at);
     }
 
     /// Shadow-mode falsifier: a page the cache called a HIT must parse to the
@@ -1389,5 +1405,31 @@ mod tests {
             "switching roots must free the OLD root's whole equation set, not just \
              whatever it happened to lose since its own last build"
         );
+    }
+
+    /// A build parses every page it did not replay, and notes the bytes it parsed
+    /// rather than hashing the file again. Unless that note is recorded in the
+    /// index, a cold build leaves no page there and the first rebuild after it
+    /// reads and hashes every page. Recorded with the stat from before the read,
+    /// the next session answers the page from the index; without a stat (a page
+    /// whose bytes are not what the file holds) nothing is recorded.
+    #[test]
+    fn a_noted_page_is_recorded_so_the_next_build_answers_it_from_the_index() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "hello").unwrap();
+        std::fs::write(dir.path().join("b.md"), "world").unwrap();
+        let index_path = dir.path().join("hash-index.json");
+
+        let session = ParseSession::begin(dir.path(), &index_path, false, "fp".to_string());
+        for (page, vouched) in [("a.md", true), ("b.md", false)] {
+            let (stat, bytes) = crate::build::stat::stat_then(&dir.path().join(page), |path| std::fs::read(path));
+            session.note_source_bytes(page, &bytes.unwrap(), stat.filter(|_| vouched));
+        }
+        session.finish(&[]);
+
+        let index = HashIndex::load(&index_path);
+        let now = |page: &str| FileStat::of(&std::fs::metadata(dir.path().join(page)).unwrap());
+        assert_eq!(index.lookup("a.md", &now("a.md")), Some(format!("{:x}", Sha256::digest(b"hello")).as_str()));
+        assert!(index.lookup("b.md", &now("b.md")).is_none(), "an unvouched note must not be recorded");
     }
 }

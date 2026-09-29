@@ -987,7 +987,8 @@ pub fn generate_blocking_content_for_build(
         urls: &url_index,
     };
     for record in &mut source_records {
-        if !record.write_final() {
+        let written = record.write_final();
+        if !written {
             failed_uid_writes.insert(record.source_path.clone());
             documents[record.document_index].uid = record.original_uid.clone();
         }
@@ -998,7 +999,13 @@ pub fn generate_blocking_content_for_build(
             &authored_evidence_parse_config,
             &reference_context,
         );
-        parse_session.note_source_bytes(&record.source_path, record.final_source.as_bytes());
+        // A failed write may have left the file half-written, so its bytes are
+        // not vouched for: the hash is memoized for this build, not recorded.
+        parse_session.note_source_bytes(
+            &record.source_path,
+            record.final_source.as_bytes(),
+            record.stat().filter(|_| written),
+        );
         parse_session.verify_shadow(&record.source_path, doc);
         page_source_hashes.insert(
             record.source_path.clone(),

@@ -96,6 +96,12 @@ impl FinalSourceRecord {
         }
     }
 
+    /// The file's stat from before `final_source` was read, or from the write
+    /// that put it there.
+    pub(super) fn stat(&self) -> Option<crate::build::stat::FileStat> {
+        self.stat
+    }
+
     /// The manifest's record of `final_source` at the stat it was read (or
     /// written) at.
     pub(super) fn source_metadata(&self) -> crate::build::types::SourceMetadata {
