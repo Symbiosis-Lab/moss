@@ -41,8 +41,13 @@ jobs:
       contents: write
       pull-requests: read   # release-plz looks up PR-of-commit for changelog enrichment
     steps:
+      # `release: published` checks out the tag by default, which leaves HEAD
+      # detached with no upstream — release-plz's `release` command needs to
+      # resolve the current branch (`git rev-parse @{upstream}`) to push tags,
+      # so pin a real branch checkout instead.
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: release-plz/action@v0.5.129
