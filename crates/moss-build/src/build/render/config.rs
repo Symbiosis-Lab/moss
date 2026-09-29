@@ -84,6 +84,10 @@ pub struct SiteConfig {
     ///
     /// Stored resolved, like `math`, so consumers never re-decide the default.
     pub floating_nav: bool,
+    /// `[site].header` — resolved (`HeaderMode::from_config`, which also
+    /// carries the default and the unrecognized-value fallback), so
+    /// consumers never re-decide either.
+    pub header: crate::build::components::nav::HeaderMode,
     /// CLI `--site-url` override. When set, `resolve_site_url` will use this
     /// value instead of deriving the URL from `.moss/state.toml`. `None` means
     /// "derive from deployment state as usual". Consumed by Task 2.5.
@@ -150,6 +154,7 @@ impl Default for SiteConfig {
             link_preview: false,
             heading_anchors: false,
             floating_nav: false,
+            header: crate::build::components::nav::HeaderMode::Brand,
             site_url_override: None,
             ai_policy: None,
             search: false,

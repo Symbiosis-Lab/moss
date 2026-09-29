@@ -13,6 +13,13 @@ use crate::i18n::link::TranslationLink;
 mod breadcrumb;
 /// The floating nav island. A child module for the same reason.
 mod island;
+/// `generate_footer`. A child module for the same reason as the two above.
+mod footer;
+/// `[site].header` — see `HeaderMode`. Not a private-state module like the
+/// two above (nothing here reads `NavigationBuilder`'s privates), just a
+/// sibling kept close to its one reader.
+mod header_mode;
+pub use header_mode::HeaderMode;
 
 /// A single segment of a breadcrumb trail
 pub struct BreadcrumbSegment {
@@ -59,6 +66,8 @@ pub struct NavigationBuilder<'a> {
     /// and a chip absent from the open file cannot be revealed.
     fm_breadcrumb: bool,
     fm_logo: bool,
+    /// `[site].header`, resolved. See `HeaderMode`.
+    header_mode: HeaderMode,
 }
 
 impl<'a> NavigationBuilder<'a> {
@@ -83,6 +92,7 @@ impl<'a> NavigationBuilder<'a> {
             has_search: false,
             fm_breadcrumb: false,
             fm_logo: false,
+            header_mode: HeaderMode::Brand,
         }
     }
 
@@ -90,6 +100,12 @@ impl<'a> NavigationBuilder<'a> {
     pub fn with_source_fm(mut self, breadcrumb: bool, logo: bool) -> Self {
         self.fm_breadcrumb = breadcrumb;
         self.fm_logo = logo;
+        self
+    }
+
+    /// Set `[site].header` — see `HeaderMode`.
+    pub fn with_header_mode(mut self, header_mode: HeaderMode) -> Self {
+        self.header_mode = header_mode;
         self
     }
 
@@ -186,9 +202,24 @@ impl<'a> NavigationBuilder<'a> {
         let effective_lang = self.effective_lang();
         let home_path = self.home_path();
         let logo_html = self.logo_html();
+        let nav_mode = self.header_mode == HeaderMode::Nav;
 
         // Build nav-left: breadcrumb trail or plain site name (nav/breadcrumb.rs)
-        let site_name = self.nav_left_html(&home_path, &logo_html);
+        // — omitted entirely under `[site].header = "nav"`, which drops the
+        // brand from the masthead in favor of the Home link below. Omitting
+        // the `<div>` outright (not just its content) is what matters here:
+        // `.nav-left` claims 999/1000 of row 1's free space by design (see
+        // its own comment), so an EMPTY-but-present div would still crowd
+        // `.nav-right` over to the right edge. With no `.nav-left` sibling at
+        // all, `.nav-right` becomes `.nav-content`'s only flex child and
+        // takes the full row; `.nav-icons`'s own `margin-inline-start: auto`
+        // then pins it to the end edge and the link list falls in at the
+        // start, with no CSS of its own for this mode.
+        let site_name = if nav_mode {
+            String::new()
+        } else {
+            self.nav_left_html(&home_path, &logo_html)
+        };
 
         // Adaptive auto-navigation model:
         // - Organized mode (has content folders): root-level non-index files auto-appear in nav
@@ -219,20 +250,54 @@ impl<'a> NavigationBuilder<'a> {
             }
         });
 
-        let page_items: Vec<String> = nav_documents.iter()
+        let mut page_items: Vec<String> = nav_documents.iter()
             .map(|doc| {
                 // Nav link text uses the chrome label (plain text).
                 let label = doc.label.clone();
                 let pretty = crate::build::scan::article_map::to_pretty_url(&doc.url_path);
                 let href = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (nav href to user content page, not a framework asset)
-                let class = if self.current_page_url.map_or(false, |url| url == doc.url_path) {
-                    r#" class="active""#
+                let is_current_page = self.current_page_url.map_or(false, |url| url == doc.url_path);
+                // `nav` header mode has no breadcrumb trail to say "you are
+                // somewhere under this section" on a deep page (the section's
+                // own nav item is the only cue left), so it marks that item
+                // itself: `aria-current="true"` for a containing section,
+                // `"page"` reserved for the exact page, same as Home above.
+                // Brand mode is unaffected — its plain `class="active"`-on-
+                // exact-match behavior (and the breadcrumb trail alongside
+                // it) is unchanged.
+                let attrs = if is_current_page {
+                    if nav_mode {
+                        r#" class="active" aria-current="page""#
+                    } else {
+                        r#" class="active""#
+                    }
+                } else if nav_mode && is_current_nav_section(doc, self.current_page_url) {
+                    r#" class="active" aria-current="true""#
                 } else {
                     ""
                 };
-                format!(r#"<a href="{}"{class}>{}</a>"#, href, label)
+                format!(r#"<a href="{}"{attrs}>{}</a>"#, href, label)
             })
             .collect();
+
+        // `nav` header mode always opens the link list with Home, ahead of
+        // the site's own nav items and outside their weight order — it is
+        // the one way back to the site root now that the brand link is gone
+        // from the masthead, so it leads even on a site with no nav items of
+        // its own.
+        if nav_mode {
+            let home_label = crate::i18n::t(self.current_lang, "nav_home");
+            // Compared as hrefs, not `url_path`s: there is no ParsedDocument
+            // for "the home page" in hand here, but `home_path` and every
+            // other page_items href are both already `to_pretty_url`-built,
+            // so comparing the two forms is comparing like with like.
+            let is_home = self.current_page_url.is_some_and(|url| {
+                let pretty = crate::build::scan::article_map::to_pretty_url(url);
+                format!("/{}", pretty.trim_start_matches('/')) == home_path
+            });
+            let current_attrs = if is_home { r#" class="active" aria-current="page""# } else { "" };
+            page_items.insert(0, format!(r#"<a href="{}"{}>{}</a>"#, home_path, current_attrs, home_label));
+        }
 
         let has_nav_items = !page_items.is_empty();
 
@@ -328,125 +393,6 @@ impl<'a> NavigationBuilder<'a> {
         let nav_right = format!(r#"<div class="nav-right">{}{}{}</div>"#, hamburger, nav_links, nav_icons);
 
         format!("{}{}", site_name, nav_right)
-    }
-
-    /// Generates footer HTML.
-    ///
-    /// Layout:
-    /// ```html
-    /// <footer class="container">
-    ///   {footer.md HTML, if present}
-    ///   {default link list <p class="footer-default">, if any links}
-    ///   {auto-injected subscribe form, if moss-hosted with [channels.email]}
-    /// </footer>
-    /// ```
-    ///
-    /// Three-segment vertical stack: leading author chrome (footer.md) →
-    /// auto-generated link list → trailing widget (subscribe form). The
-    /// trailing-widget position is a deliberate design decision — links lead,
-    /// the auto-injected widget trails.
-    ///
-    /// Flat HTML — authored content sits as direct children of `<footer>`.
-    /// The default visual chrome (border-top divider, padding, muted
-    /// typography) lives on `footer.container` directly in CSS; the footer
-    /// renders at the body font-size by default. This shape gives sites two
-    /// ways to customize:
-    ///
-    /// 1. Override `footer.container { ... }` to replace the default chrome.
-    /// 2. Use `body > footer.container > selector` rules to target individual
-    ///    elements for custom designs (e.g. brand text +
-    ///    :::grid + copyright + :::subscribe stack with custom flex layout).
-    ///
-    /// History: An earlier "verbatim footer" design (commit 6e47a8024)
-    /// stripped the `.footer-content` wrapper but left no chrome on
-    /// `<footer>` either, removing the divider + muted typography from the
-    /// default look. The current shape restores the chrome on `footer.container`
-    /// directly so existing sites' `body > footer.container > *` direct-
-    /// child selectors keep working.
-    ///
-    /// When `footer.md` is absent, the wrapper still emits with default
-    /// content: an auto-generated link list from pages with `footer: true`
-    /// frontmatter, plus an optional RSS link.
-    ///
-    /// `current_page_url` is used to mark the matching footer link as
-    /// `.active` (parallel to `generate_navigation`).
-    pub fn generate_footer(&self, show_rss: bool) -> String {
-        let mut footer_pages: Vec<&ParsedDocument> = self.documents
-            .iter()
-            .filter(|d| d.footer == Some(true) && d.lang == self.current_lang)
-            .collect();
-        footer_pages.sort_by(|a, b| match (a.weight, b.weight) {
-            // Tied weights fall through to alphabetical for cross-platform
-            // determinism — see comment in generate_navigation().
-            (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.label.cmp(&b.label)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            // Sort alphabetically by the plain-text chrome label.
-            (None, None) => a.label.cmp(&b.label),
-        });
-
-        let mut default_links = Vec::new();
-        for doc in &footer_pages {
-            let pretty = crate::build::scan::article_map::to_pretty_url(&doc.url_path);
-            let href = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (footer nav href to user content page, not a framework asset)
-            let class = if self.current_page_url.map_or(false, |url| url == doc.url_path) {
-                "footer-link active"
-            } else {
-                "footer-link"
-            };
-            // Footer link text is chrome; use the plain-text label.
-            default_links.push(format!(
-                r#"<a href="{}" class="{}">{}</a>"#,
-                href, class, doc.label
-            ));
-        }
-
-        if show_rss {
-            let rss_url = crate::build::served_path::ServedPath::for_rss("").unwrap().to_relative_url();
-            default_links.push(format!(
-                r#"<a href="{rss_url}" class="footer-link" data-external>{}</a>"#,
-                crate::i18n::t(self.lang, "rss"),
-            ));
-        }
-
-        // Two slot markers, resolved during the pre-ship slot pass:
-        //   slot:footer-left  — author chrome (footer.md) or empty
-        //   slot:footer-end   — auto-injected subscribe form or empty
-        // When both content slots are empty, only the default link list shows.
-        //
-        // Footer LAYOUT is driven purely by CSS: `footer.container:has(> .moss-subscribe)`
-        // lays the footer out as a flex row (links left, subscribe form
-        // right-anchored) — see site.css. There is no `data-moss-shape` marker:
-        // the retired attribute existed only to toggle that layout from the
-        // build side, but keying the CSS on the presence of the (now-unified)
-        // `.moss-subscribe` form covers the auto-injected AND footer.md cases
-        // uniformly, so the footer open tag is a plain `<footer class="container">`.
-        //
-        // The default link list is emitted in a wrapping <p> with class
-        // `footer-default` so themes can hide it (`.footer-default { display:
-        // none }`) when they author a richer footer.
-        //
-        // No `.footer-content` wrapper here: the visual chrome (divider,
-        // padding, muted typography) lives on `<footer class="container">`
-        // directly. This keeps the HTML flat — author content sits as direct
-        // children of <footer>, which lets sites use `body > footer.container
-        // > selector` rules to target individual elements
-        // for their custom design.
-        let default_inner = if default_links.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "\n        <p class=\"footer-default\">{}</p>",
-                default_links.join(" · ")
-            )
-        };
-
-        format!(
-            r#"<footer class="container">
-        <!-- slot:footer-left -->{default_inner}
-        <!-- slot:footer-end -->
-</footer>"#
-        )
     }
 
 }
@@ -560,6 +506,31 @@ pub fn is_listing_nav_item(doc: &crate::build::types::ParsedDocument, has_conten
 /// Used by breadcrumb auto-enable: breadcrumbs turn on when the nav bar is empty.
 pub fn has_nav_items(docs: &[crate::build::types::ParsedDocument], has_content_folders: bool) -> bool {
     docs.iter().any(|doc| is_nav_bar_item_doc(doc, has_content_folders))
+}
+
+/// Whether the current page sits inside `doc`'s own section — true for a
+/// page anywhere under a folder-kind nav item's tree, at any depth, false
+/// for an exact match on `doc` itself (that case carries
+/// `aria-current="page"` instead, at the call site) and false for a leaf nav
+/// item, which has no section beyond itself.
+///
+/// `[site] header = "nav"`'s stand-in for the breadcrumb trail it drops: on
+/// a deep page (`essays/2024/some-post/index.html`) the "Essays" nav item is
+/// the one remaining cue for which top-level section the reader is under.
+fn is_current_nav_section(doc: &crate::build::types::ParsedDocument, current_page_url: Option<&str>) -> bool {
+    if doc.kind != moss_core::PageKind::Folder {
+        return false;
+    }
+    let Some(current) = current_page_url else {
+        return false;
+    };
+    if current == doc.url_path {
+        return false;
+    }
+    let Some(folder_prefix) = doc.url_path.strip_suffix("index.html") else {
+        return false;
+    };
+    current.starts_with(folder_prefix)
 }
 
 /// Titlecase a path segment: replace hyphens with spaces, capitalize each word.

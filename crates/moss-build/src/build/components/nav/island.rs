@@ -61,6 +61,13 @@ impl<'a> NavigationBuilder<'a> {
     /// not, because an emitted island that is never shown without a contents
     /// table is an island whose sections button always has something to open.
     pub fn generate_nav_island(&self) -> String {
+        // `nav` header mode carries no breadcrumb trail — a home segment
+        // would reintroduce the brand link this mode exists to drop, in the
+        // one nav surface that isn't gated on it. The Home link the masthead
+        // already opens with covers the same "way back" job.
+        if self.header_mode == super::HeaderMode::Nav {
+            return String::new();
+        }
         let Some(segments) = &self.breadcrumb_segments else {
             return String::new();
         };

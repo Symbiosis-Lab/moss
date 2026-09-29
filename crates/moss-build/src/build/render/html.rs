@@ -417,7 +417,8 @@ fn generate_html_inner(
         project.has_content_folders,
     )
     .with_search(layout_config.assets.search)
-    .with_source_fm(emit_source_lines, emit_source_lines && logo_is_own_field);
+    .with_source_fm(emit_source_lines, emit_source_lines && logo_is_own_field)
+    .with_header_mode(layout_config.header);
     // Per-language logo: check if the translated homepage has its own logo,
     // otherwise fall back to the default homepage's logo.
     let logo_for_page = if let Some(d) = doc {

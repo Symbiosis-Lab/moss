@@ -2670,3 +2670,252 @@ fn island_labels_are_localized_and_attribute_safe() {
     assert!(island.contains(r#"aria-label="顯示省略的層級""#), "got: {island}");
     assert!(island.contains(r#"aria-label="路徑""#), "got: {island}");
 }
+
+// =========================================================================
+// [site].header = "nav" tests
+// =========================================================================
+
+fn nav_mode_documents() -> Vec<ParsedDocument> {
+    vec![
+        make_doc("index.html", "Home", None, None),
+        make_doc("about/index.html", "About", Some(2), Some(true)),
+        make_doc("blog/index.html", "Blog", Some(1), Some(true)),
+    ]
+}
+
+#[test]
+fn test_header_mode_from_config_default_and_recognized_values() {
+    assert_eq!(HeaderMode::from_config(None), HeaderMode::Brand);
+    assert_eq!(HeaderMode::from_config(Some("")), HeaderMode::Brand);
+    assert_eq!(HeaderMode::from_config(Some("brand")), HeaderMode::Brand);
+    assert_eq!(HeaderMode::from_config(Some("nav")), HeaderMode::Nav);
+}
+
+#[test]
+fn test_header_mode_from_config_unrecognized_falls_back_to_brand() {
+    assert_eq!(HeaderMode::from_config(Some("sidebar")), HeaderMode::Brand);
+}
+
+#[test]
+fn nav_mode_renders_no_site_name_on_home_or_inner_pages() {
+    let documents = nav_mode_documents();
+    for current in [Some("index.html"), Some("about/index.html")] {
+        let html = NavigationBuilder::new(&documents, "My Site", current, crate::i18n::Language::En, true)
+            .with_header_mode(HeaderMode::Nav)
+            .generate_navigation();
+        assert!(
+            !html.contains("nav-left"),
+            "nav mode must not emit .nav-left at all. got: {html}"
+        );
+        assert!(
+            !html.contains("My Site"),
+            "nav mode must not print the site name anywhere in the nav. got: {html}"
+        );
+    }
+}
+
+#[test]
+fn nav_mode_home_link_leads_with_aria_current_on_home() {
+    let documents = nav_mode_documents();
+    let html = NavigationBuilder::new(&documents, "My Site", Some("index.html"), crate::i18n::Language::En, true)
+        .with_header_mode(HeaderMode::Nav)
+        .generate_navigation();
+    assert!(
+        html.contains(r#"<a href="/" class="active" aria-current="page">Home</a>"#),
+        "got: {html}"
+    );
+}
+
+#[test]
+fn nav_mode_home_link_has_no_aria_current_off_home() {
+    let documents = nav_mode_documents();
+    let html = NavigationBuilder::new(&documents, "My Site", Some("about/index.html"), crate::i18n::Language::En, true)
+        .with_header_mode(HeaderMode::Nav)
+        .generate_navigation();
+    // Home itself carries no current-page marking off the home page...
+    assert!(html.contains(r#"<a href="/">Home</a>"#), "got: {html}");
+    // ...but the page actually being viewed is itself a nav item here, and
+    // correctly gets the exact-match marking (see
+    // nav_mode_exact_match_on_a_nav_item_gets_aria_current_page_not_true).
+    assert!(
+        html.contains(r#"<a href="/about/" class="active" aria-current="page">About</a>"#),
+        "got: {html}"
+    );
+}
+
+#[test]
+fn nav_mode_items_follow_weight_order_after_home() {
+    // Blog carries weight 1, About weight 2 — Home always leads regardless.
+    let documents = nav_mode_documents();
+    let html = NavigationBuilder::new(&documents, "My Site", None, crate::i18n::Language::En, true)
+        .with_header_mode(HeaderMode::Nav)
+        .generate_navigation();
+    let home_idx = html.find(">Home<").expect("Home link must render");
+    let blog_idx = html.find(">Blog<").expect("Blog link must render");
+    let about_idx = html.find(">About<").expect("About link must render");
+    assert!(home_idx < blog_idx && blog_idx < about_idx, "got: {html}");
+}
+
+#[test]
+fn nav_mode_keeps_the_theme_toggle() {
+    let documents = nav_mode_documents();
+    let html = NavigationBuilder::new(&documents, "My Site", None, crate::i18n::Language::En, true)
+        .with_header_mode(HeaderMode::Nav)
+        .generate_navigation();
+    assert!(html.contains("nav-theme-btn"), "got: {html}");
+}
+
+#[test]
+fn nav_mode_home_label_is_localized() {
+    let documents = nav_mode_documents();
+    let zh_hans = NavigationBuilder::new(&documents, "站点", None, crate::i18n::Language::ZhHans, true)
+        .with_header_mode(HeaderMode::Nav)
+        .generate_navigation();
+    assert!(zh_hans.contains(">首页<"), "got: {zh_hans}");
+
+    let zh_hant = NavigationBuilder::new(&documents, "網站", None, crate::i18n::Language::ZhHant, true)
+        .with_header_mode(HeaderMode::Nav)
+        .generate_navigation();
+    assert!(zh_hant.contains(">首頁<"), "got: {zh_hant}");
+}
+
+#[test]
+fn nav_mode_suppresses_the_floating_island() {
+    // The island would otherwise show a breadcrumb trail whose first crumb is
+    // the site name — exactly the brand text nav mode drops from the
+    // masthead. See `HeaderMode::Nav`'s doc.
+    let documents = vec![
+        make_doc_with_breadcrumb("index.html", "Home", Some(true)),
+        make_doc_with_breadcrumb("posts/index.html", "Posts", None),
+        make_doc_with_breadcrumb("posts/hello/index.html", "Hello World", None),
+    ];
+    let doc = &documents[2];
+    let segments = compute_breadcrumb_segments(doc, &documents, "My Site", true).unwrap();
+    let island = NavigationBuilder::new(
+        &documents,
+        "My Site",
+        Some(doc.url_path.as_str()),
+        crate::i18n::Language::En,
+        true,
+    )
+    .with_breadcrumb(segments)
+    .with_header_mode(HeaderMode::Nav)
+    .generate_nav_island();
+    assert_eq!(island, "", "got: {island}");
+}
+
+#[test]
+fn brand_mode_is_the_default_and_renders_no_home_link() {
+    let documents = nav_mode_documents();
+    let default_html = NavigationBuilder::new(&documents, "My Site", None, crate::i18n::Language::En, true)
+        .generate_navigation();
+    let explicit_brand_html = NavigationBuilder::new(&documents, "My Site", None, crate::i18n::Language::En, true)
+        .with_header_mode(HeaderMode::Brand)
+        .generate_navigation();
+    assert_eq!(
+        default_html, explicit_brand_html,
+        "the default must be indistinguishable from an explicit [site] header = \"brand\""
+    );
+    assert!(
+        default_html.contains(r#"<div class="nav-left"><a href="/" class="site-name">My Site</a></div>"#),
+        "got: {default_html}"
+    );
+    assert!(
+        !default_html.contains(">Home<"),
+        "brand mode must not synthesize a Home link. got: {default_html}"
+    );
+}
+
+// =========================================================================
+// nav mode's current-section cue (stands in for the dropped breadcrumb)
+// =========================================================================
+
+fn make_folder_doc(url_path: &str, title: &str, weight: Option<i32>) -> ParsedDocument {
+    let mut doc = make_doc(url_path, title, weight, Some(true));
+    doc.kind = moss_core::PageKind::Folder;
+    doc
+}
+
+#[test]
+fn nav_mode_marks_the_containing_section_current_on_a_deep_page() {
+    // No breadcrumb in nav mode, so a reader three levels into "Essays" has
+    // no other cue for which top-level section they're under — the nav item
+    // itself has to carry it.
+    let documents = vec![
+        make_doc("index.html", "Home", None, None),
+        make_folder_doc("essays/index.html", "Essays", Some(1)),
+    ];
+    let html = NavigationBuilder::new(
+        &documents,
+        "My Site",
+        Some("essays/2024/some-post/index.html"),
+        crate::i18n::Language::En,
+        true,
+    )
+    .with_header_mode(HeaderMode::Nav)
+    .generate_navigation();
+    assert!(
+        html.contains(r#"<a href="/essays/" class="active" aria-current="true">Essays</a>"#),
+        "got: {html}"
+    );
+}
+
+#[test]
+fn nav_mode_exact_match_on_a_nav_item_gets_aria_current_page_not_true() {
+    let documents = vec![
+        make_doc("index.html", "Home", None, None),
+        make_folder_doc("essays/index.html", "Essays", Some(1)),
+    ];
+    let html = NavigationBuilder::new(&documents, "My Site", Some("essays/index.html"), crate::i18n::Language::En, true)
+        .with_header_mode(HeaderMode::Nav)
+        .generate_navigation();
+    assert!(
+        html.contains(r#"<a href="/essays/" class="active" aria-current="page">Essays</a>"#),
+        "got: {html}"
+    );
+}
+
+#[test]
+fn nav_mode_unrelated_section_is_not_marked_current() {
+    let documents = vec![
+        make_doc("index.html", "Home", None, None),
+        make_folder_doc("essays/index.html", "Essays", Some(1)),
+        make_folder_doc("recipes/index.html", "Recipes", Some(2)),
+    ];
+    let html = NavigationBuilder::new(
+        &documents,
+        "My Site",
+        Some("essays/2024/some-post/index.html"),
+        crate::i18n::Language::En,
+        true,
+    )
+    .with_header_mode(HeaderMode::Nav)
+    .generate_navigation();
+    assert!(html.contains(r#"<a href="/recipes/">Recipes</a>"#), "got: {html}");
+}
+
+#[test]
+fn brand_mode_never_marks_a_containing_section_current() {
+    // The regression this guards: brand mode keeps its breadcrumb trail for
+    // this job and must render exactly as it always has — no aria-current
+    // anywhere in the nav-links list, exact-match or not.
+    let documents = vec![
+        make_doc("index.html", "Home", None, None),
+        make_folder_doc("essays/index.html", "Essays", Some(1)),
+    ];
+    let deep_page = NavigationBuilder::new(
+        &documents,
+        "My Site",
+        Some("essays/2024/some-post/index.html"),
+        crate::i18n::Language::En,
+        true,
+    )
+    .generate_navigation();
+    assert!(!deep_page.contains("aria-current"), "got: {deep_page}");
+    assert!(!deep_page.contains(r#"class="active""#), "got: {deep_page}");
+
+    let exact_page = NavigationBuilder::new(&documents, "My Site", Some("essays/index.html"), crate::i18n::Language::En, true)
+        .generate_navigation();
+    assert!(!exact_page.contains("aria-current"), "brand mode's exact-match styling is plain class=\"active\" only: {exact_page}");
+    assert!(exact_page.contains(r#"<a href="/essays/" class="active">Essays</a>"#), "got: {exact_page}");
+}

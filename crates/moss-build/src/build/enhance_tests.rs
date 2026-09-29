@@ -202,12 +202,83 @@ fn per_language_slot_without_default_strips_marker_for_other_languages() {
         6,
         "native",
     );
-    let html = r#"<footer><!-- slot:footer-left --></footer>"#;
+    // Real (sentinel-bounded) shape: without it, `strip_empty_footer` has no
+    // way to know this `<footer>` is the chrome one, so the emptiness check
+    // below would be a no-op — see `an_authored_footer_tag_in_the_body_is_never_mistaken_for_the_chrome_footer`.
+    let html = r#"<!-- moss:footer --><footer><!-- slot:footer-left --></footer><!-- /moss:footer -->"#;
     assert!(inject_slots(html, &slots, "zh-hans/index.html").contains("<footer>ZH</footer>"));
-    // Root page: no default → marker stripped, empty footer.
-    assert_eq!(
-        inject_slots(html, &slots, "index.html"),
-        "<footer></footer>"
+    // Root page: no default → marker stripped, and the now-empty `<footer>`
+    // element itself is dropped (see `strip_empty_footer`), not just its marker.
+    assert_eq!(inject_slots(html, &slots, "index.html"), "");
+}
+
+#[test]
+fn strip_empty_footer_removes_a_footer_with_nothing_to_show() {
+    // The exact shape `NavigationBuilder::generate_footer` emits when a page
+    // has no footer.md, no `footer: true` pages, no feed link and no
+    // subscribe form: two unresolved slot markers, sentinel-bounded, and
+    // nothing else.
+    let slots = ResolvedSlots::empty();
+    let html = "<body><!-- moss:footer --><footer class=\"container\">\n        <!-- slot:footer-left -->\n        <!-- slot:footer-end -->\n</footer><!-- /moss:footer -->\n\n    <div class=\"moss-colophon\">mark</div></body>";
+    let out = inject_slots(html, &slots, "index.html");
+    assert!(!out.contains("<footer"), "an empty footer must not render at all: {out}");
+    assert!(
+        out.contains("moss-colophon"),
+        "the colophon sits outside <footer> in the template and must survive: {out}"
+    );
+}
+
+#[test]
+fn strip_empty_footer_keeps_a_footer_with_a_feed_link() {
+    // The default link list (here, just the RSS link) is baked in at render
+    // time, before slot injection ever runs — it is already in `html`,
+    // announced by `<!-- footer:has-content -->`, not behind either marker.
+    let slots = ResolvedSlots::empty();
+    let html = "<!-- moss:footer --><!-- footer:has-content --><footer class=\"container\">\n        <!-- slot:footer-left --><p class=\"footer-default\"><a href=\"/rss.xml\" class=\"footer-link\" data-external>RSS</a></p>\n        <!-- slot:footer-end -->\n</footer><!-- /moss:footer -->";
+    let out = inject_slots(html, &slots, "index.html");
+    assert!(out.contains("<footer"), "a footer with a real link must still render: {out}");
+    assert!(out.contains("rss.xml"), "got: {out}");
+    assert!(!out.contains("moss:footer") && !out.contains("footer:has-content"), "sentinels must never reach shipped HTML: {out}");
+}
+
+#[test]
+fn strip_empty_footer_keeps_a_footer_with_footer_md_content() {
+    let mut slots = ResolvedSlots::empty();
+    slots.merge(
+        &EnhanceResult {
+            success: true,
+            slots: HashMap::from([(
+                "footer-left".to_string(),
+                EnhanceContent::Static { html: "<p>© 2026</p>".to_string() },
+            )]),
+        },
+        0,
+        "native",
+    );
+    let html = "<!-- moss:footer --><footer class=\"container\">\n        <!-- slot:footer-left -->\n        <!-- slot:footer-end -->\n</footer><!-- /moss:footer -->";
+    let out = inject_slots(html, &slots, "index.html");
+    assert!(out.contains("<footer"), "footer.md content must keep the footer: {out}");
+    assert!(out.contains("© 2026"), "got: {out}");
+}
+
+#[test]
+fn an_authored_footer_tag_in_the_body_is_never_mistaken_for_the_chrome_footer() {
+    // moss passes raw HTML through markdown verbatim, so a page can
+    // legitimately contain its own `<footer>` — a byline, a credits block —
+    // inside `<article>`. Locating the chrome footer by its own sentinels
+    // (rather than by searching the whole page for a `<footer` tag) is what
+    // keeps that content untouched while the genuinely empty chrome footer,
+    // elsewhere on the same page, still gets removed.
+    let slots = ResolvedSlots::empty();
+    let html = "<article><footer>— the author</footer></article><!-- moss:footer --><footer class=\"container\">\n        <!-- slot:footer-left -->\n        <!-- slot:footer-end -->\n</footer><!-- /moss:footer -->";
+    let out = inject_slots(html, &slots, "index.html");
+    assert!(
+        out.contains("<footer>— the author</footer>"),
+        "the author's own <footer> in the body must survive untouched: {out}"
+    );
+    assert!(
+        !out.contains("class=\"container\""),
+        "the empty chrome footer must still be removed: {out}"
     );
 }
 

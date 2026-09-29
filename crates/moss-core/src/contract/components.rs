@@ -2379,7 +2379,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "The site title link at the left of the nav bar. On a non-home page the same slot may instead carry `.breadcrumb-segment`.",
+        description: "The site title link at the left of the nav bar. On a non-home page the same slot may instead carry `.breadcrumb-segment`. Absent on every page under `[site] header = \"nav\"`, which drops the brand from the header in favor of a leading Home item in `.nav-links`.",
     },
     ComponentEntry {
         class: "breadcrumb-segment",
@@ -2423,7 +2423,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Left group of the nav bar. Holds either `.site-name` or the breadcrumb trail, never both.",
+        description: "Left group of the nav bar. Holds either `.site-name` or the breadcrumb trail, never both — or, under `[site] header = \"nav\"`, neither: the element itself is not emitted, and `.nav-right` takes the full row.",
     },
     ComponentEntry {
         class: "nav-right",
@@ -2445,7 +2445,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "The nav link list. The link for the page currently being viewed additionally carries the bare class `active` — style `.nav-links .active`, not a `moss-` class.",
+        description: "The nav link list. The link for the page currently being viewed additionally carries the bare class `active` — style `.nav-links .active`, not a `moss-` class. Under `[site] header = \"nav\"` the list always opens with an unstyled Home link ahead of the site's own nav items, carrying `active` and `aria-current=\"page\"` together while on the home page. That mode drops the breadcrumb trail, so a nav item whose section contains the page being viewed — without being that exact page — carries `active` and `aria-current=\"true\"` instead of `\"page\"`, the one remaining cue for which section a deep page is under.",
     },
     ComponentEntry {
         class: "site-logo",

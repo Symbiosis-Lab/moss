@@ -978,14 +978,15 @@ footer.container > :last-child {
   margin-block-end: 0;
 }
 
-/* The footer's ::before divider is the single bottom-matter divider and must
-   always render — including on pages with no authored footer content. So the
-   footer is never hidden; when it has no visible content we instead collapse
-   its body bottom padding so the colophon ("Published with moss") sits directly
-   under the divider rather than below an empty gap. */
-footer.container:not(:has(a, p, form, .moss-subscribe-form, .moss-grid)) {
-  padding-block-end: 0;
-}
+/* A page whose footer has nothing to show — no footer.md, no `footer: true`
+   links, no feed link, no subscribe form, no plugin footer HTML — gets no
+   `<footer>` element at all (`build::enhance::strip_empty_footer`), so its
+   divider disappears with it and the colophon ("Published with moss") sits
+   directly below the article instead of under an empty band. There is
+   therefore no `footer.container` on the page for CSS to collapse padding
+   on; a `:not(:has(...))` rule used to do exactly that and is gone along
+   with the case it existed for.
+*/
 
 /*
  * Footer flex layout when it contains a moss subscribe form.

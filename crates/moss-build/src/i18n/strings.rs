@@ -140,6 +140,13 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "切换菜单",
             Language::ZhHant => "切換選單",
         },
+        // `[site] header = "nav"` masthead: the link list's leading item,
+        // replacing the brand link that mode drops.
+        "nav_home" => match lang {
+            Language::En => "Home",
+            Language::ZhHans => "首页",
+            Language::ZhHant => "首頁",
+        },
         // Skip link (WCAG 2.4.1): the first focusable element on
         // every page, visually hidden until it receives keyboard focus, and
         // jumping straight to <main id="main-content"> — see shell.html and

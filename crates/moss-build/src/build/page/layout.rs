@@ -35,6 +35,8 @@ pub struct LayoutConfig {
     /// since 2026-08-30, explicit opt-in). Site-level for the same reason as
     /// `math`: the island is chrome, present on every breadcrumbed page or none.
     pub floating_nav: bool,
+    /// `[site].header` — resolved. See `crate::build::components::nav::HeaderMode`.
+    pub header: crate::build::components::nav::HeaderMode,
     /// The SITE's declared language as a BCP-47 tag — what `<html lang>` says
     /// on a page that declares none of its own.
     ///
@@ -72,6 +74,7 @@ impl LayoutConfig {
                 ..SiteAssets::default()
             },
             floating_nav: false,
+            header: crate::build::components::nav::HeaderMode::Brand,
             lang_tag: "en".to_string(),
             place_maps: None,
         }
@@ -138,6 +141,12 @@ impl LayoutConfig {
     /// Set the site-wide floating-nav preference (`[site].floating_nav`, default false)
     pub fn with_floating_nav(mut self, floating_nav: bool) -> Self {
         self.floating_nav = floating_nav;
+        self
+    }
+
+    /// Set `[site].header` (default `HeaderMode::Brand`)
+    pub fn with_header_mode(mut self, header: crate::build::components::nav::HeaderMode) -> Self {
+        self.header = header;
         self
     }
 
