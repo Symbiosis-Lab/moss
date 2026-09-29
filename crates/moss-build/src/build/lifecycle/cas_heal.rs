@@ -2,33 +2,15 @@
 //!
 //! A staged output can go missing while its bytes are safe in the CAS: a
 //! staging sweep, an iCloud eviction of `.moss/build.nosync`, or a batch that
-//! registers long after it linked. The encode is what the fingerprint skip
+//! registers long after it linked. The encode is what the skip decision
 //! saves; the file's presence in staging is not, so every skip path relinks
 //! the blob it already owns instead of sending the source back to the encoder.
-//! Images and videos share this one function.
+//! Images and videos share these two entry points — [`rematerialize`] when the
+//! caller only has a stat-index hint and must not hash on a miss, and
+//! [`rematerialize_with_oid`] when it already holds the source's content hash
+//! (e.g. from a strict, no-hash-on-miss lookup the caller ran itself).
 
 use std::path::Path;
-
-/// How far the heal may go to learn the source's content hash.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HashPolicy {
-    /// Only a `(size, whole-second mtime)` hit in the hash index
-    /// ([`HashIndex::lookup_whole_second`]). The video dispatcher runs on the render
-    /// thread and must never hash a multi-GB source there, so unlike `HashOnMiss` it
-    /// cannot fail open to a hash and cannot afford the full-stat comparison.
-    ///
-    /// [`HashIndex::lookup_whole_second`]: crate::build::cache::HashIndex::lookup_whole_second
-    StatOnly,
-    /// Hash the source on an index miss, trusting a hit only by the full stat
-    /// record ([`HashIndex::resolve`]). Images take this: the file is small, and the
-    /// fingerprint gate has usually already said it is unchanged. A source still in
-    /// the cloud is not read: `resolve` refuses, and the heal is `NotCached` — this
-    /// runs over every item of a batch, including the ones the worker deferred to
-    /// the cloud.
-    ///
-    /// [`HashIndex::resolve`]: crate::build::cache::HashIndex::resolve
-    HashOnMiss,
-}
 
 /// What a heal attempt did.
 #[derive(Debug)]
@@ -37,8 +19,8 @@ pub(crate) enum HealOutcome {
     AlreadyPresent,
     /// The cached blob was linked into staging.
     Healed,
-    /// No cached output could be linked: the source hash is unknown under the
-    /// policy, the store has no record or blob for it, or the link failed.
+    /// No cached output could be linked: the source hash is unknown to the
+    /// stat index, the store has no record or blob for it, or the link failed.
     NotCached,
     /// The staged path could not be checked. An unreadable output is not a
     /// missing one, so nothing was linked over it.
@@ -54,17 +36,20 @@ pub(crate) enum HealOutcome {
 /// temp-and-rename, never a hard link.
 ///
 /// [`ObjectStore::link_to`]: crate::build::cache::ObjectStore::link_to
-#[allow(clippy::too_many_arguments)]
+///
+/// The source hash comes only from a `(size, whole-second mtime)` hit in the
+/// hash index ([`indexed_hash`]), never a hash-on-miss: the video dispatcher
+/// runs on the render thread and must never hash a multi-GB source there. An
+/// index miss is `NotCached`, not a fallback to hashing.
 pub(crate) fn rematerialize(
     objects: &crate::build::cache::ObjectStore,
     transforms: &crate::build::cache::TransformCache,
     params: &serde_json::Value,
-    hash_index: &mut crate::build::cache::HashIndex,
+    hash_index: &crate::build::cache::HashIndex,
     source_file: &Path,
     rel_source: &str,
     staging_path: &Path,
     transform: &str,
-    policy: HashPolicy,
 ) -> HealOutcome {
     use crate::build::io_utils::Presence;
     match crate::build::io_utils::probe_path(staging_path) {
@@ -72,21 +57,62 @@ pub(crate) fn rematerialize(
         Presence::Unverified(e) => return HealOutcome::Unverified(e),
         Presence::Absent | Presence::Evicted => {}
     }
-    let source_oid = match policy {
-        HashPolicy::StatOnly => match indexed_hash(hash_index, source_file, rel_source) {
-            Some(oid) => oid,
-            None => return HealOutcome::NotCached,
-        },
-        HashPolicy::HashOnMiss => {
-            match hash_index.resolve(source_file, rel_source) {
-                Ok(oid) => oid,
-                Err(_) => return HealOutcome::NotCached,
-            }
-        }
+    let source_oid = match indexed_hash(hash_index, source_file, rel_source) {
+        Some(oid) => oid,
+        None => return HealOutcome::NotCached,
     };
+    relink_from_cache(objects, transforms, params, staging_path, transform, &source_oid)
+}
+
+/// [`rematerialize`], for a caller that already holds the source's content hash —
+/// e.g. a strict, no-hash-on-miss [`HashIndex::lookup`] the caller ran itself,
+/// against a `FileStat` it already had in hand.
+///
+/// Deliberately does NOT take [`rematerialize`]'s "present → already correct,
+/// skip the lstat's-worth of work" shortcut: that shortcut is only sound when
+/// the caller reached this file by first confirming its own bytes are
+/// unchanged (the old fingerprint-ledger contract every other caller of
+/// [`rematerialize`] still honors). A stat-index hit proves only what the
+/// SOURCE's current content is, never that the file already sitting at
+/// `staging_path` was encoded from it — staging carries content forward
+/// between builds, so a changed source can find its PREVIOUS build's output
+/// still present and, if presence alone were trusted, ship it unchanged. This
+/// always re-verifies the exact oid against the transform cache and relinks
+/// (a COW copy-and-rename, cheap — see [`ObjectStore::link_to`]), so a stale
+/// file is overwritten with the correct bytes and a genuinely-unchanged one
+/// is relinked to itself. Bails early only on `Unverified`: a path this
+/// process cannot even confirm is not safe to overwrite.
+///
+/// [`HashIndex::lookup`]: crate::build::cache::HashIndex::lookup
+/// [`ObjectStore::link_to`]: crate::build::cache::ObjectStore::link_to
+pub(crate) fn rematerialize_with_oid(
+    objects: &crate::build::cache::ObjectStore,
+    transforms: &crate::build::cache::TransformCache,
+    params: &serde_json::Value,
+    staging_path: &Path,
+    transform: &str,
+    source_oid: &str,
+) -> HealOutcome {
+    use crate::build::io_utils::Presence;
+    if let Presence::Unverified(e) = crate::build::io_utils::probe_path(staging_path) {
+        return HealOutcome::Unverified(e);
+    }
+    relink_from_cache(objects, transforms, params, staging_path, transform, source_oid)
+}
+
+/// The shared second half of both entry points above: `source_oid` is already
+/// known, so this only has to find its cached transform output and link it in.
+fn relink_from_cache(
+    objects: &crate::build::cache::ObjectStore,
+    transforms: &crate::build::cache::TransformCache,
+    params: &serde_json::Value,
+    staging_path: &Path,
+    transform: &str,
+    source_oid: &str,
+) -> HealOutcome {
     // `find_cached_output` also checks the blob is still in the store, so a
     // hit means the bytes are recoverable.
-    let Some(oid) = transforms.find_cached_output(&source_oid, transform, params) else {
+    let Some(oid) = transforms.find_cached_output(source_oid, transform, params) else {
         return HealOutcome::NotCached;
     };
     match objects.link_to(&oid, staging_path) {

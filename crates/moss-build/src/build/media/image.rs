@@ -51,7 +51,7 @@ use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
 
 use crate::build::coordinator::EmitMessage;
-use crate::build::lifecycle::cas_heal::{rematerialize, HashPolicy, HealOutcome};
+use crate::build::lifecycle::cas_heal::{rematerialize_with_oid, HealOutcome};
 use crate::build::manifest::HashBucket;
 use crate::advisory::{Action, Advisory, Scope, Severity};
 use crate::build::progress::{format_progress_message, PipelineEvent};
@@ -1373,19 +1373,21 @@ pub(crate) fn convert_single_image(
 }
 
 // ---------------------------------------------------------------------------
-// Fingerprint (for skip-on-no-change)
+// Fingerprint (identifies one dispatch's worker, for in-flight join + advisory
+// carry-forward — the skip-on-no-change decision itself is now originated from
+// the on-disk hash index / transform cache, not from this)
 // ---------------------------------------------------------------------------
 
-/// What the dispatch gate compares for one image: its whole stat record (a same-size
-/// rewrite in the same second, or a replace-via-rename, must not look like the file
-/// it replaced) and the compression params, so a config change re-dispatches every
-/// image even when no file moved. Matching the last delivered one for THIS path
-/// means the image is unchanged, and — with its output still present, checked
-/// separately in `dispatch_image_conversions` — there is no reason to re-encode it.
+/// One dispatch's view of a source, for two things only: joining a worker that
+/// already has these exact bytes queued (`image_item_is_pending`), and closing
+/// out that worker's marker when it finishes (`end_image_item`). Its whole stat
+/// record (a same-size rewrite in the same second, or a replace-via-rename,
+/// must not look like the file it replaced) plus the compression params, so a
+/// config change is never joined against a worker queued under the old one.
 ///
 /// Per item, not per set: one added, changed or removed image must not invalidate
-/// every other, untouched image's skip decision and drop it out of that round's
-/// manifest. Compared by value, in-process only: the cell below is keyed by path.
+/// every other, untouched image's in-flight marker. Compared by value, in-process
+/// only: the cell below is keyed by path.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ImageFingerprint {
     stat: crate::build::cache::FileStat,
@@ -1405,45 +1407,35 @@ pub(crate) fn compute_image_item_fingerprint(
     Some(ImageFingerprint { stat, params: config.to_params() })
 }
 
-/// What the dispatch gate remembers about each image, process-wide (independent of
-/// `VideoConversionState`, which owns the video's), keyed by the image's relative source
-/// path. Per item, not per set — mirrors `VideoConversionState`'s fingerprint map and
-/// `RunLedger`, and like `RunLedger` under one lock, so an image is in exactly one of the
-/// two maps at each instant: a dispatch that looks between a worker's end and its record
-/// must not find the image in neither and spawn a worker for what was just delivered.
+/// What a dispatch remembers about each image's WORKER, process-wide
+/// (independent of `VideoConversionState`, which owns the video's), keyed by
+/// the image's relative source path. Per item, not per set.
+///
+/// This no longer says anything about whether an image is unchanged — that
+/// skip decision is now originated from the on-disk hash index and transform
+/// cache (`dispatch_image_conversions`), which survives a process restart;
+/// this ledger only tracks a worker in flight and the last thing it had to
+/// say, neither of which the disk can answer.
 ///
 /// Not shared with the video store, on purpose. Video runs supersede one another under an
 /// epoch, so its ledger is cleared and owned per run; image workers are independent (a
-/// dispatch never cancels an earlier one), and the two maps here need only be looked at
-/// and moved together.
+/// dispatch never cancels an earlier one).
 #[derive(Default)]
 struct ImageLedger {
-    /// The source each image's variant was last delivered for.
-    delivered: HashMap<String, ImageFingerprint>,
     /// The source each image was queued under, until the worker that has it is done.
     pending: HashMap<String, ImageFingerprint>,
-    /// The advisories a delivered item's own dispatch produced, alongside the
-    /// fingerprint recorded in `delivered` above. `dispatch_image_conversions`
-    /// re-emits these for an image it carries forward without ever
-    /// re-entering `run_image_conversion`, so that image's terminal tick still
-    /// speaks for it instead of going silent the moment it stops changing.
-    /// Empty for an item with nothing to say; absent for one never delivered.
+    /// The advisories the most recent delivered dispatch of each image produced.
+    /// `dispatch_image_conversions` re-emits these for an image it carries
+    /// forward without ever re-entering `run_image_conversion`, so that
+    /// image's terminal tick still speaks for it instead of going silent the
+    /// moment it stops changing. Empty for an item with nothing to say;
+    /// absent for one never delivered in this process.
     advisories: HashMap<String, Vec<Advisory>>,
 }
 
 fn image_ledger() -> std::sync::MutexGuard<'static, ImageLedger> {
     static IMAGE_LEDGER: OnceLock<Mutex<ImageLedger>> = OnceLock::new();
     IMAGE_LEDGER.get_or_init(Mutex::default).lock().expect("image ledger mutex")
-}
-
-/// Whether `path`'s fingerprint is the one recorded when a worker last delivered its
-/// variant (`end_image_item`): this one image is unchanged since. Read only — a dispatch
-/// that finds a change must not vouch for the change, because the worker it spawns may
-/// leave (the user cancelled, the source went back to the cloud, the hash failed) without
-/// encoding it, and the old variant it leaves in staging is exactly what the next
-/// dispatch's skip check finds present. Independent per path.
-pub(crate) fn image_item_fingerprint_matches(path: &str, fingerprint: &ImageFingerprint) -> bool {
-    image_ledger().delivered.get(path) == Some(fingerprint)
 }
 
 /// Whether a worker a dispatch spawned has yet to finish `path`, from a source with
@@ -1460,14 +1452,13 @@ pub(crate) fn mark_image_items_pending(items: impl IntoIterator<Item = (String, 
 }
 
 /// The worker queued for `path` under `queued_as` is done with it, and, if it
-/// `delivered`, has delivered that source. Only its own dispatch's mark ends: a newer
+/// `delivered`, has advisories to record. Only its own dispatch's mark ends: a newer
 /// dispatch over a rewritten source has marked the image for its own worker, and one
 /// that dropped the path (`retain_image_item_fingerprints`) has said the image left.
 ///
 /// `advisories` is what THIS delivery has to say about `path` — possibly
 /// empty, which correctly overwrites whatever a stale prior delivery left
-/// behind (e.g. a rung failure since fixed). Recorded only alongside a
-/// `delivered` fingerprint, for the same reason `delivered` itself is gated:
+/// behind (e.g. a rung failure since fixed). Recorded only when `delivered`:
 /// an item that never delivers is always redispatched, so it never needs a
 /// carried-forward advisory.
 pub(crate) fn end_image_item(path: &str, queued_as: &ImageFingerprint, delivered: bool, advisories: &[Advisory]) {
@@ -1477,7 +1468,6 @@ pub(crate) fn end_image_item(path: &str, queued_as: &ImageFingerprint, delivered
     }
     ledger.pending.remove(path);
     if delivered {
-        ledger.delivered.insert(path.to_string(), queued_as.clone());
         ledger.advisories.insert(path.to_string(), advisories.to_vec());
     }
 }
@@ -1490,13 +1480,13 @@ pub(crate) fn image_item_advisories(path: &str) -> Vec<Advisory> {
     image_ledger().advisories.get(path).cloned().unwrap_or_default()
 }
 
-/// Drop stored fingerprints for paths not in `keep` — called once per
-/// dispatch with the current image set, so a removed image's entry doesn't
-/// linger forever, and a removed-then-re-added image is treated as new
-/// rather than replaying a stale match against bytes that may since have
-/// changed. Mirrors `VideoConversionState::retain_item_fingerprints`. A path
-/// whose worker is still to finish loses its pending marker too, so that worker
-/// ends without vouching for an image that has left.
+/// Drop stored state for paths not in `keep` — called once per dispatch with
+/// the current image set, so a removed image's entry doesn't linger forever,
+/// and a removed-then-re-added image starts fresh rather than joining a stale
+/// in-flight marker for bytes that may since have changed. Mirrors
+/// `VideoConversionState::retain_item_fingerprints`. A path whose worker is
+/// still to finish loses its pending marker too, so that worker ends without
+/// vouching for an image that has left.
 ///
 /// Returns whether any dropped path still had a non-empty advisory recorded
 /// — a deleted image whose problem the author never saw cleared must not
@@ -1505,7 +1495,6 @@ pub(crate) fn image_item_advisories(path: &str) -> Vec<Advisory> {
 /// app side (moss-desktop) can drop it.
 pub(crate) fn retain_image_item_fingerprints(keep: &std::collections::HashSet<String>) -> bool {
     let mut ledger = image_ledger();
-    ledger.delivered.retain(|path, _| keep.contains(path));
     ledger.pending.retain(|path, _| keep.contains(path));
     let mut dropped_advisory = false;
     ledger.advisories.retain(|path, advisories| {
@@ -1552,8 +1541,8 @@ pub(crate) struct ImageRunContext {
     /// clobbered. Never recomputed here.
     pub rung_collisions: HashMap<String, PathBuf>,
     /// Advisories `dispatch_image_conversions` carried forward for images it
-    /// skipped this round (fingerprint matched, output present) — read from
-    /// the fingerprint cache (`image_item_advisories`), not recomputed here.
+    /// skipped this round (disk-origin hit, output present) — read from
+    /// the advisory cache (`image_item_advisories`), not recomputed here.
     /// `run_image_conversion` folds these into the same terminal tick as the
     /// advisories the items it actually dispatches produce, so the tick
     /// speaks for the whole item set even though only some of it ran.
@@ -2641,7 +2630,43 @@ fn summarize_coherence_violations(
 // (`emit_image_outputs_via_channel`) and the coordinator merges into the
 // SealedManifest. There is no longer an on-disk fallback.
 
-/// Dispatch image conversion — GUI spawns async, headless runs synchronously.
+/// The shared second half of a disk-origin skip candidate's per-key check —
+/// base webp and each ladder rung alike. A suppressed (unreferenced, per the
+/// last ship-time scan) key never ships either way, so a bare presence check
+/// is enough; anything else is tied to `rematerialize_with_oid`'s own
+/// verdict, never an independent presence check — a file already sitting at
+/// `staging_path` proves nothing on its own (see that function's doc:
+/// staging carries content forward between builds).
+///
+/// Presence uses `metadata(..).is_ok_and(|m| m.len() > 0)`, not `.exists()`:
+/// a cloud-evicted or otherwise dataless stub still passes `.exists()`, and
+/// treating a 0-byte stub as present would register it as this generation's
+/// shipped output.
+fn heal_and_verify_variant(
+    heal_objects: &crate::build::cache::ObjectStore,
+    heal_transforms: &crate::build::cache::TransformCache,
+    heal_params: &serde_json::Value,
+    staging_path: &Path,
+    transform: &str,
+    source_oid: &str,
+    suppressed: bool,
+    healed_count: &mut usize,
+) -> (bool, Option<String>) {
+    if suppressed {
+        (std::fs::metadata(staging_path).is_ok_and(|m| m.len() > 0), None)
+    } else {
+        let outcome = rematerialize_with_oid(heal_objects, heal_transforms, heal_params, staging_path, transform, source_oid);
+        let healed = matches!(outcome, HealOutcome::Healed);
+        *healed_count += usize::from(healed);
+        let oid = healed.then(|| heal_transforms.find_cached_output(source_oid, transform, heal_params)).flatten();
+        (healed, oid)
+    }
+}
+
+/// Dispatch image conversion. The skip/dispatch decision below runs the same
+/// way for every caller; only what happens with the result differs — GUI
+/// spawns the dispatched subset async, headless (CLI, no spawner) runs it
+/// synchronously inline. See the branch at the bottom.
 ///
 /// Takes `ctx` by reference because both `dispatch_video_conversions` and
 /// `dispatch_image_conversions` are called back-to-back from build.rs with
@@ -2654,21 +2679,35 @@ fn summarize_coherence_violations(
 /// When `tx` is `Some`, each produced `.webp` path is registered via the
 /// coordinator channel instead of the legacy `update_image_hashes` disk write.
 ///
-/// In GUI mode the skip/dispatch decision is made per image, not for the set
-/// as a whole: each image's own fingerprint
-/// (`compute_image_item_fingerprint`) is compared against the fingerprint
-/// recorded when a worker last delivered THAT image. An image whose
-/// fingerprint matches is a skip candidate; self-heal (re-materializing its
-/// `.webp` from the CAS blob store) is attempted before deciding, and only
-/// if that leaves the output present is it carried forward without ever
-/// entering `run_image_conversion` — its output keys (base + any ladder
-/// rungs) are re-registered so seal() doesn't prune them. Everything else —
-/// new, changed, or an unchanged image whose self-heal still leaves the
-/// output missing — is dispatched. One added or changed image therefore no
-/// longer forces every other, untouched image to re-dispatch and drop out
-/// of this round's manifest before the async batch finishes registering
-/// them (mirrors `dispatch_video_conversions`, build/media/video.rs, commit
-/// 5323496908).
+/// The skip/dispatch decision is made per image, not for the set as a whole,
+/// and it is originated from the ON-DISK caches, not from anything this
+/// process remembers: each image's current stat is looked up directly in the
+/// on-disk hash index (`HashIndex::lookup` — a stat comparison, no hashing),
+/// and a hit's content hash is looked up in the on-disk transform cache for a
+/// matching encode. A hit on both is a skip candidate; self-heal
+/// (re-materializing its `.webp` from the CAS blob store) is attempted before
+/// deciding, and only if that leaves the output present is the image carried
+/// forward without ever entering `run_image_conversion` — its output keys
+/// (base + any ladder rungs) are re-registered so seal() doesn't prune them.
+/// Everything else — new, changed, an index miss, or an unchanged image whose
+/// self-heal still leaves the output missing — is dispatched. One added or
+/// changed image therefore no longer forces every other, untouched image to
+/// re-dispatch and drop out of this round's manifest before the async batch
+/// finishes registering them (mirrors `dispatch_video_conversions`,
+/// build/media/video.rs, commit 5323496908).
+///
+/// This decision used to run only for a spawner-backed (GUI) caller, on the
+/// theory that a headless CLI build is called once per invocation and so has
+/// no PREVIOUS dispatch in this process to compare against. On-disk origin
+/// removes that premise — the comparison is against what an earlier build
+/// (this process's or any other's) already wrote to disk, so a headless
+/// `moss build`'s very first and only dispatch benefits from it too; the
+/// skip loop below now runs unconditionally, before the spawner branch.
+///
+/// Deliberately never hashes to make this decision (see the comment at the
+/// stat lookup below): a hash index MISS is not proof the file changed, only
+/// that this decision cannot afford to find out, so it dispatches — the
+/// worker it dispatches to resolves the hash anyway, off this hot path.
 pub(crate) fn dispatch_image_conversions(
     services: Option<&BuildServices>,
     ctx: &BackgroundContext,
@@ -2682,16 +2721,14 @@ pub(crate) fn dispatch_image_conversions(
 
     let config = ImageCompressionConfig::default();
 
-    if let Some(spawner) = svc.spawner.clone() {
+    {
         use std::collections::HashSet;
 
         let heal_paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
         let heal_objects = crate::build::cache::ObjectStore::for_site(&heal_paths);
         let heal_transforms = crate::build::cache::TransformCache::for_site(&heal_paths);
         let heal_params = config.to_params();
-        let mut heal_index =
-            crate::build::cache::HashIndex::load(&heal_paths.cache_hash_index());
-        let heal_root = Path::new(&ctx.source_path);
+        let heal_index = crate::build::cache::HashIndex::load(&heal_paths.cache_hash_index());
 
         // WHAT to heal is the ship-time prune's verdict, not the disk scan
         // this loop walks: `ctx.image_items` is every image
@@ -2745,43 +2782,70 @@ pub(crate) fn dispatch_image_conversions(
                 );
                 continue;
             }
-            let fingerprint_matched =
-                fingerprint.as_ref().is_some_and(|fp| image_item_fingerprint_matches(&rel_source, fp));
+            // The skip candidate's origin: a STRICT stat comparison against the
+            // on-disk hash index (`HashIndex::lookup`, never `resolve` — this must
+            // not hash the file). A hit means the index already knows this exact
+            // content under `rel_source`, regardless of which process, or which of
+            // this process's builds, put it there; a miss (new file, changed file,
+            // or a file the index has simply never seen — including on the very
+            // first build after a relaunch) is not a skip candidate, full stop, and
+            // costs nothing but the stat `fingerprint` already took.
+            let disk_source_oid = fingerprint
+                .as_ref()
+                .and_then(|fp| heal_index.lookup(&rel_source, &fp.stat))
+                .map(str::to_string);
 
-            // Self-heal is only attempted for a skip CANDIDATE: resolving the
-            // source hash can require a real read+hash on a cache miss (see
-            // `lifecycle::cas_heal::rematerialize`), and a genuinely changed image
-            // is about to be dispatched (and re-hashed) anyway — attempting
-            // it here first would pay that cost twice on the hot path this
-            // runs on every rebuild.
-            let outputs_present = if fingerprint_matched {
-                if !heal_suppressed.contains(&relative_webp) {
-                    healed_count += usize::from(matches!(
-                        rematerialize(
-                            &heal_objects,
-                            &heal_transforms,
-                            &heal_params,
-                            &mut heal_index,
-                            &heal_root.join(&item.source_path),
-                            &rel_source,
-                            &staging_path,
-                            "image/webp",
-                            HashPolicy::HashOnMiss,
-                        ),
-                        HealOutcome::Healed
-                    ));
-                }
-                std::fs::metadata(&staging_path).is_ok_and(|m| m.len() > 0)
+            // A disk-index hit is only proof of the SOURCE's current content —
+            // never proof that whatever is sitting at `staging_path` was encoded
+            // from it. Staging carries content forward between builds, so a
+            // just-changed source can still find its PREVIOUS build's output
+            // physically present. `rematerialize_with_oid` accounts for exactly
+            // this: it never trusts presence alone, always re-verifying the
+            // exact oid against the transform cache and relinking (cheap: a COW
+            // copy-and-rename, not a re-encode) — so a stale file left here by
+            // an earlier generation is overwritten with the correct bytes
+            // rather than silently shipped. The source hash itself is never
+            // re-derived here (never hashed on this hot path) — a genuinely
+            // changed image is about to be dispatched and hashed on the worker
+            // anyway, so doing it here first would pay that cost twice.
+            // `verified_webp_oid` is `Some` only when the base webp is BOTH
+            // verified present AND backed by a real CAS blob for THIS
+            // content — never guessed — so the manifest registration below
+            // can carry a genuine `ShipSource::Cas` instead of falling back
+            // to the weaker, audit-only `ShipSource::Fingerprint` (see
+            // `manifest/ship_source.rs`'s doc: `Fingerprint` "is the audit
+            // for the rest, and only ever logs" — it does not stop a later,
+            // overlapping build's stage rewrite from shipping under THIS
+            // generation's hash). A skip-carried image is exactly the entry
+            // `ship_phase`'s overlap protection was built to cover for
+            // "image variants"; registering it with no oid at all reopened
+            // that gap the moment this path started reaching content
+            // nothing had previously proven present.
+            let (outputs_present, verified_webp_oid) = if let Some(source_oid) = disk_source_oid.as_deref() {
+                heal_and_verify_variant(
+                    &heal_objects,
+                    &heal_transforms,
+                    &heal_params,
+                    &staging_path,
+                    "image/webp",
+                    source_oid,
+                    heal_suppressed.contains(&relative_webp),
+                    &mut healed_count,
+                )
             } else {
-                false
+                (false, None)
             };
 
-            if fingerprint_matched && outputs_present {
+            if let (Some(source_oid), true) = (disk_source_oid.as_deref(), outputs_present) {
                 // Re-register every key the encode path delivers for this
                 // image so seal() keeps them. `emit_image_outputs_via_channel`'s
                 // existence check drops any key whose staging file is absent
-                // rather than registering a lie.
-                skip_paths.push((relative_webp.clone(), None));
+                // rather than registering a lie. `verified_webp_oid` is
+                // `None` only for a suppressed (unreferenced) image, which
+                // never reaches deploy either way — `ship-by-OID`'s
+                // fingerprint fallback covers that one, same as before this
+                // fix.
+                skip_paths.push((relative_webp.clone(), verified_webp_oid));
                 // This image will not re-enter `run_image_conversion` this
                 // round, so it cannot re-raise its own advisory there — carry
                 // forward whatever the fingerprint cache still has on file
@@ -2814,24 +2878,29 @@ pub(crate) fn dispatch_image_conversions(
                 // membership test as everywhere else.
                 for (rung, rung_rel) in promised_rungs(item, &mapped, &ctx.rung_collisions) {
                     let rung_staging = ctx.staging_dir.join(&rung_rel);
-                    if !heal_suppressed.contains(&rung_rel) {
-                        healed_count += usize::from(matches!(
-                            rematerialize(
-                                &heal_objects,
-                                &heal_transforms,
-                                &heal_params,
-                                &mut heal_index,
-                                &heal_root.join(&item.source_path),
-                                &rel_source,
-                                &rung_staging,
-                                &format!("image/webp-w{}", rung),
-                                HashPolicy::HashOnMiss,
-                            ),
-                            HealOutcome::Healed
-                        ));
-                    }
-                    skip_paths.push((rung_rel.clone(), None));
-                    if rung_staging.exists() {
+                    let rung_transform = format!("image/webp-w{}", rung);
+                    // Same fix as the base image just above, and for the same
+                    // reason: registering a rung must be tied to the heal's
+                    // own verdict, carrying its own verified CAS oid rather
+                    // than an independent presence check or no oid at all —
+                    // a rung transform the current oid never produced (e.g.
+                    // rungs shipped after this content was last encoded)
+                    // must NOT register whatever stale file an older
+                    // generation left at this exact path, and one it DID
+                    // produce must ship with the same overlap protection the
+                    // base image gets, not the weaker Fingerprint fallback.
+                    let (rung_present, rung_oid) = heal_and_verify_variant(
+                        &heal_objects,
+                        &heal_transforms,
+                        &heal_params,
+                        &rung_staging,
+                        &rung_transform,
+                        source_oid,
+                        heal_suppressed.contains(&rung_rel),
+                        &mut healed_count,
+                    );
+                    if rung_present {
+                        skip_paths.push((rung_rel.clone(), rung_oid));
                         if let Some(ref asset_reg) = svc.assets {
                             if asset_reg.set_ready(rung_rel.clone()) {
                                 svc.reporter.report(&PipelineEvent::AssetReady {
@@ -2841,9 +2910,14 @@ pub(crate) fn dispatch_image_conversions(
                             }
                         }
                     }
+                    // Else: this rung isn't verifiably encoded for the
+                    // current content — leave it unregistered rather than
+                    // register a lie. It stays Pending behind the
+                    // LQIP/passthrough placeholder until some future
+                    // dispatch actually produces it.
                 }
             } else {
-                if fingerprint_matched {
+                if disk_source_oid.is_some() {
                     log::info!(
                         "Image '{}' unchanged but its .webp is missing — \
                          re-dispatching to self-heal instead of skipping",
@@ -2863,9 +2937,15 @@ pub(crate) fn dispatch_image_conversions(
         let dropped_advisory = retain_image_item_fingerprints(&current_paths);
 
         // ONE line, not one per file: the per-file form was 96% of an upload.
+        // Fires for every disk-origin skip candidate now, not only a genuine
+        // repair: `rematerialize_with_oid` always re-verifies and relinks
+        // rather than trusting a staged file's mere presence (a stale file
+        // left by an earlier generation must never be shipped as if
+        // unchanged — see its doc), so this count is "carried forward from
+        // CAS", not "was broken and got fixed".
         if healed_count > 0 {
             log::info!(
-                "[image] self-heal: re-materialized {} staged .webp file(s) from CAS",
+                "[image] carried forward {} staged .webp file(s) from CAS",
                 healed_count
             );
         }
@@ -2929,7 +3009,12 @@ pub(crate) fn dispatch_image_conversions(
         // Only the changed/new/missing-output subset ever enters
         // run_image_conversion's loop — unchanged images never contend for
         // an encode permit or a megapixel-budget slot behind one large
-        // encode.
+        // encode. This holds for a headless CLI build exactly as it does for
+        // the app: the skip decision above is disk-origin, not a comparison
+        // against a previous dispatch this process remembers, so a one-shot
+        // `moss build` benefits from it on its very first (and only) call —
+        // unlike the old in-process ledger, which had nothing to compare
+        // against and so never attempted a skip in headless mode at all.
         let mut run_ctx = ImageRunContext::from_background(ctx, config.clone());
         run_ctx.items = to_dispatch;
         let run_ctx = run_ctx.with_carried_advisories(carried_advisories);
@@ -2944,30 +3029,6 @@ pub(crate) fn dispatch_image_conversions(
             svc.begin_ui_bound();
         }
 
-        let services_arc = std::sync::Arc::new(BuildServices {
-            session: svc.session.clone(),
-            cancellation: svc.cancellation.clone(),
-            image_cancellation: svc.image_cancellation.clone(),
-            notebook_cancellation: svc.notebook_cancellation.clone(),
-            processes: svc.processes.clone(),
-            reporter: svc.reporter.clone(),
-            spawner: svc.spawner.clone(),
-            assets: svc.assets.clone(),
-            in_flight_videos: svc.in_flight_videos.clone(),
-            in_flight_images: svc.in_flight_images.clone(),
-            in_flight_metadata: svc.in_flight_metadata.clone(),
-            skipped_symlinks: svc.skipped_symlinks.clone(),
-            videos_converted: svc.videos_converted.clone(),
-            task_registry: svc.task_registry.clone(),
-            build_parent: svc.build_parent.clone(),
-            page_count: svc.page_count.clone(),
-            deploy_video_max_size_mb: svc.deploy_video_max_size_mb,
-        });
-
-        log::info!(
-            "Spawning background image conversion for {} images",
-            run_ctx.items.len()
-        );
         // Image dispatch does not use epochs — unlike video, there is no
         // long-running external process to cancel (encoding a single image
         // takes ~100–500 ms). Cancellation is handled via `cancel_flag`
@@ -2982,29 +3043,39 @@ pub(crate) fn dispatch_image_conversions(
         mark_image_items_pending(
             run_ctx.items.iter().filter_map(|item| Some((item.source_path.to_string_lossy().into_owned(), item.fingerprint.clone()?))),
         );
-        spawner.spawn_blocking(Box::new(move || {
-            run_image_conversion(&services_arc, &run_ctx);
-        }));
-    } else {
-        // Headless mode: run synchronously, every item, every time — a
-        // headless build is called once per invocation, so there is no
-        // previous dispatch to compare against.
-        let run_ctx = ImageRunContext::from_background(ctx, config.clone());
-        let run_ctx = if let Some(t) = tx {
-            run_ctx.with_tx(t)
-        } else {
-            run_ctx
-        };
 
-        let total = ctx.image_items.len() as u32;
-        for _ in 0..total {
-            svc.begin_ui_bound();
+        // GUI spawns async (`tauri::async_runtime::spawn` behind `Spawner`);
+        // headless (no spawner: `BuildServices::headless_for` leaves it
+        // `None`, see its doc) runs `run_image_conversion` synchronously
+        // inline, exactly as a one-shot `moss build` always has.
+        if let Some(spawner) = svc.spawner.clone() {
+            let services_arc = std::sync::Arc::new(BuildServices {
+                session: svc.session.clone(),
+                cancellation: svc.cancellation.clone(),
+                image_cancellation: svc.image_cancellation.clone(),
+                notebook_cancellation: svc.notebook_cancellation.clone(),
+                processes: svc.processes.clone(),
+                reporter: svc.reporter.clone(),
+                spawner: svc.spawner.clone(),
+                assets: svc.assets.clone(),
+                in_flight_videos: svc.in_flight_videos.clone(),
+                in_flight_images: svc.in_flight_images.clone(),
+                in_flight_metadata: svc.in_flight_metadata.clone(),
+                skipped_symlinks: svc.skipped_symlinks.clone(),
+                videos_converted: svc.videos_converted.clone(),
+                task_registry: svc.task_registry.clone(),
+                build_parent: svc.build_parent.clone(),
+                page_count: svc.page_count.clone(),
+                deploy_video_max_size_mb: svc.deploy_video_max_size_mb,
+            });
+            log::info!("Spawning background image conversion for {} images", total);
+            spawner.spawn_blocking(Box::new(move || {
+                run_image_conversion(&services_arc, &run_ctx);
+            }));
+        } else {
+            log::info!("Running headless image conversion for {} images", total);
+            run_image_conversion(svc, &run_ctx);
         }
-        log::info!(
-            "Running headless image conversion for {} images",
-            ctx.image_items.len()
-        );
-        run_image_conversion(svc, &run_ctx);
     }
 }
 

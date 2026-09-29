@@ -1066,7 +1066,7 @@ impl HashIndex {
     /// blind to a same-size rewrite in the same second.
     ///
     /// For the video path, which cannot afford the full-stat rule: the render thread
-    /// hashes no multi-GB source (`HashPolicy::StatOnly`), and a stricter worker would
+    /// hashes no multi-GB source, and a stricter worker would
     /// rehash every video on any ctime or inode change (a cloud provider
     /// re-materializing it) and on the first build after this rule changed. Callers
     /// record with [`update_whole_second`](Self::update_whole_second), so what they

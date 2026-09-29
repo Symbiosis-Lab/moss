@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 use tokio::sync::Semaphore;
 
 use crate::build::coordinator::EmitMessage;
-use crate::build::lifecycle::cas_heal::{rematerialize, HashPolicy, HealOutcome};
+use crate::build::lifecycle::cas_heal::{rematerialize, HealOutcome};
 use crate::build::manifest::HashBucket;
 use crate::advisory::{Action, Advisory, Scope, Severity};
 use crate::build::progress::{format_progress_message, spawn_media_child_job, PipelineEvent};
@@ -1816,12 +1816,11 @@ impl VideoStore {
                     &self.objects,
                     &self.transforms,
                     params,
-                    &mut self.index,
+                    &self.index,
                     &source_file,
                     item,
                     &staging.join(key),
                     transform,
-                    HashPolicy::StatOnly,
                 ) {
                     HealOutcome::AlreadyPresent => {}
                     HealOutcome::Healed => healed = true,
