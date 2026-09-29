@@ -704,3 +704,31 @@ async fn a_completed_admission_records_finish_time_and_duration() {
     handle.request_shutdown();
     worker.await.unwrap();
 }
+
+// ── enqueue_with_notify: the building-flag protection ──────────────────────
+
+/// `enqueue_with_notify`'s own correctness: called the way any real caller
+/// would — no external pre-check, just the call — while a build is already
+/// in flight (`take_for_attempt` has dequeued and set `building`), it must
+/// clear `gate_paths` itself. No forced interleaving needed here: the
+/// method has no read-then-act gap for a concurrent `take_for_attempt` to
+/// land in (the read and the merge share one `lock_slot()` call), so a
+/// plain sequential ordering already exercises the property that matters —
+/// unlike the composed pattern above, which is only broken under a specific
+/// interleaving a sequential test cannot reach.
+#[test]
+fn enqueue_with_notify_clears_gate_paths_for_a_request_that_arrives_mid_build() {
+    let handle = WorkerHandle::new();
+    handle.enqueue(gated(&["a.md"]));
+    let taken = handle.take_for_attempt();
+    assert!(taken.is_some());
+    assert!(handle.is_building());
+
+    handle.enqueue_with_notify(gated(&["b.md"]), false);
+
+    let req = handle.take().expect("a request should be parked");
+    assert!(
+        req.gate_paths.is_none(),
+        "a request merged while building must lose its gate_paths, same as enqueue's own rule"
+    );
+}

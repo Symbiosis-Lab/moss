@@ -45,6 +45,7 @@ use crate::build::watch::{
 };
 use crate::types::events::MossEvent;
 
+pub mod cadence;
 pub mod headless;
 pub mod reconcile;
 pub mod supervision;
@@ -88,6 +89,11 @@ pub struct WatchConfig {
     pub emit: EventRelay,
     pub dispatch: RebuildDispatch,
     pub attempt: RebuildAttempt,
+    /// Live/Background — races the reconcile timer's sleep against a
+    /// change instead of ticking on a fixed `Duration`. A headless host
+    /// with no visibility signal passes a constant `Live` receiver (see
+    /// `headless::start`); the GUI passes the real, live-updating one.
+    pub cadence: tokio::sync::watch::Receiver<cadence::Cadence>,
 }
 
 /// Per-event delay passed to `notify-debouncer-full`. Lowered from 500ms to
@@ -211,6 +217,7 @@ pub async fn start(config: WatchConfig) {
         emit,
         dispatch,
         attempt,
+        cadence,
     } = config;
 
     let worker_handle = ensure_worker(&folder_path, &spawner, attempt);
@@ -325,10 +332,14 @@ pub async fn start(config: WatchConfig) {
             // Because the root is not watched recursively, a NEW top-level entry
             // is not covered by any existing subscription. Reconcile the set on a
             // low-frequency tick: one `read_dir` over ~10 entries, which also
-            // unsubscribes entries that were removed.
-            let mut reconcile = tokio::time::interval(reconcile::INTERVAL);
-            reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            reconcile.tick().await; // the first tick completes immediately
+            // unsubscribes entries that were removed. The first pass runs
+            // unconditionally, same as the old fixed-interval timer's
+            // immediate-first-tick behavior — a folder opened while the app is
+            // already `Background` still gets its first reconcile promptly,
+            // rather than waiting out a 30s Background interval before it ever
+            // sees content that appeared after the watcher's initial scan.
+            let mut ticker = cadence::CadenceTicker::new(cadence.clone());
+            reconcile::targets(&mut debouncer, root, &mut watched);
 
             // Process debounced batches until shutdown, recreate, or channel death
             let end = loop {
@@ -346,8 +357,18 @@ pub async fn start(config: WatchConfig) {
                     _ = health.recreate_requested() => {
                         break SessionEnd::Recreate;
                     }
-                    _ = reconcile.tick() => {
-                        reconcile::targets(&mut debouncer, root, &mut watched);
+                    tick = ticker.next_tick() => {
+                        match tick {
+                            cadence::Tick::Elapsed
+                            | cadence::Tick::CadenceChanged(cadence::Cadence::Live) => {
+                                reconcile::targets(&mut debouncer, root, &mut watched);
+                            }
+                            cadence::Tick::CadenceChanged(cadence::Cadence::Background) => {
+                                // Just entered Background — let the freshly
+                                // armed 30s sleep govern; don't reconcile twice
+                                // for one open.
+                            }
+                        }
                     }
                     // Process file events (one batch per debounce window)
                     event_result = rx.recv() => {

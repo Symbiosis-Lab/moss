@@ -267,8 +267,26 @@ impl WorkerHandle {
         self.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Deposit a request, merging with any occupant, and wake the worker.
-    pub fn enqueue(&self, mut req: RebuildRequest) {
+    /// Deposit a request, merging with any occupant under one critical
+    /// section, and wake the worker only when `notify` is true.
+    ///
+    /// The one place this check-and-merge happens. `enqueue` is a thin
+    /// wrapper (`notify: true`); a caller that wants the merge WITHOUT an
+    /// immediate wake — background-cadence coalescing, which wakes the
+    /// worker later via `poke`/`poke_all` on its own schedule — calls this
+    /// directly and gets exactly the same building-flag protection, not a
+    /// hand-rolled approximation of it. That protection is *why* this has
+    /// to be one atomic operation rather than a caller reading
+    /// `is_building()` and then separately calling `restore`/
+    /// `restore_visibly`: `take_for_attempt` dequeues and flips `building`
+    /// to `true` under this same slot lock, so a caller that checked
+    /// `is_building()` in a separate critical section could observe `false`,
+    /// have `take_for_attempt` run, and then merge a request whose
+    /// `gate_paths` was never cleared against a build that had, by then,
+    /// already started — reopening the exact mixed-baseline race this
+    /// building-flag check exists to close (see the field doc on
+    /// `building`).
+    pub fn enqueue_with_notify(&self, mut req: RebuildRequest, notify: bool) {
         {
             let mut slot = self.lock_slot();
             // A build can copy a source file early, then compute its final
@@ -288,7 +306,15 @@ impl WorkerHandle {
             });
         }
         self.bump_wake_seq();
-        self.work.notify_one();
+        if notify {
+            self.work.notify_one();
+        }
+    }
+
+    /// Deposit a request, merging with any occupant, and wake the worker.
+    /// See [`enqueue_with_notify`](Self::enqueue_with_notify).
+    pub fn enqueue(&self, req: RebuildRequest) {
+        self.enqueue_with_notify(req, true);
     }
 
     /// Remove the queued request, if any.

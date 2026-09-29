@@ -119,6 +119,18 @@ pub async fn start(config: HeadlessWatchConfig) -> tokio::sync::oneshot::Sender<
         })
     };
 
+    // Headless has no visibility signal (no window, no webview) — the
+    // cadence-aware timers this receiver drives must never throttle, so it
+    // is pinned to `Live` for the life of the watch. The sender drops
+    // normally at the end of this function (`super::start(...).await`
+    // below only completes setup and returns almost immediately — it
+    // spawns the long-lived session task and hands back — so a sender
+    // meant to outlive that session could never have been scoped to this
+    // function correctly anyway): `CadenceTicker` treats a closed channel
+    // as "the cadence is fixed from here" and just keeps waiting out the
+    // last-known interval, so there is nothing that needs to stay alive.
+    let (_sender, always_live) =
+        tokio::sync::watch::channel(crate::ops::watch::cadence::Cadence::Live);
     super::start(WatchConfig {
         folder_path,
         spawner: Arc::new(crate::build::ports::spawner::TokioSpawner),
@@ -126,6 +138,7 @@ pub async fn start(config: HeadlessWatchConfig) -> tokio::sync::oneshot::Sender<
         emit,
         dispatch,
         attempt,
+        cadence: always_live,
     })
     .await;
 

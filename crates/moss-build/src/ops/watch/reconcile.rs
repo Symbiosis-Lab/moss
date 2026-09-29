@@ -20,11 +20,10 @@ use notify::Watcher;
 
 use crate::build::watch::scope;
 
-/// How often the watcher re-derives its subscription set.
-///
-/// Two seconds keeps "drop a folder in and see events flow from it" feeling
-/// immediate without making the `read_dir` noticeable.
-pub(crate) const INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+// How often the watcher re-derives its subscription set is `Cadence::interval()`
+// (`super::cadence`) as of the background-cadence design — `Live` reconciles at
+// the same 2s this module used to hard-code; `Background` slows to 30s while
+// nobody is looking. The rationale for the 2s figure now lives on that method.
 
 type Debouncer = notify_debouncer_full::Debouncer<
     notify::RecommendedWatcher,
