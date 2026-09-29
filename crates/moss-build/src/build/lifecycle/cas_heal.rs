@@ -145,6 +145,6 @@ pub(crate) fn indexed_hash(
     source_file: &Path,
     rel_source: &str,
 ) -> Option<String> {
-    let stat = crate::build::cache::FileStat::of(&std::fs::metadata(source_file).ok()?);
+    let stat = crate::build::stat::FileStat::of(&std::fs::metadata(source_file).ok()?);
     hash_index.lookup_whole_second(rel_source, stat.size, stat.mtime).map(str::to_string)
 }

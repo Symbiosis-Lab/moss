@@ -66,7 +66,8 @@ use notify::EventKind;
 use notify_debouncer_full::DebouncedEvent;
 use std::path::{Path, PathBuf};
 
-use crate::build::types::{identity_disagrees, subsec_proves_same_instant, SourceMetadata};
+use crate::build::stat::{mtime_is_racy, FileStat};
+use crate::build::types::SourceMetadata;
 
 pub mod drift;
 pub mod scope;
@@ -598,14 +599,13 @@ pub(crate) enum SourceCheck {
 /// Compare a file on disk against its previous `SourceMetadata`.
 ///
 /// 1. If size differs → `Changed` (short-circuit; avoid hashing huge files).
-/// 2. If size matches AND the mtime matches at full nanosecond precision →
-///    `Unchanged` (fast path). This requires an mtime on BOTH sides: the
-///    filesystem must report one now, and the manifest must carry
-///    `mtime_nanos` (written since this field existed, from a filesystem
-///    that had an mtime). A missing mtime anywhere, or a manifest with only
-///    whole-second precision, falls through to hashing — a whole-second
-///    match cannot rule out a same-size rewrite in the same second, and a
-///    size-only match must never suppress.
+/// 2. If the recorded stat still vouches for the file
+///    ([`FileStat::vouches_for`]) → `Unchanged` (fast path). With no capture
+///    clock here, that takes a non-zero sub-second mtime on BOTH sides that
+///    agrees: a missing mtime anywhere, a manifest with only whole-second
+///    precision, or an exact-zero reading falls through to hashing — a
+///    whole-second match cannot rule out a same-size rewrite in the same
+///    second, and a size-only match must never suppress.
 /// 3. Otherwise → read and hash; compare to `meta.hash`.
 ///    - Hash match → `Unchanged`.
 ///    - Hash mismatch → `Changed`.
@@ -614,39 +614,12 @@ pub(crate) fn source_metadata_matches(meta: &SourceMetadata, fs_path: &Path) -> 
     source_metadata_matches_at(meta, fs_path, None)
 }
 
-/// One timestamp granularity, generously: exFAT stores mtimes at 2s
-/// resolution and SMB servers round to 1–2s, so a write landing inside this
-/// window of the manifest's capture could share the recorded mtime while
-/// carrying different bytes.
-pub(crate) const RACY_WRITE_EPSILON_SECS: u64 = 2;
-
-/// git's racily-clean rule: is this entry's mtime too close to the moment
-/// the manifest was captured to trust a whole-timestamp match?
-///
-/// `captured_at` is [`SiteHashes::captured_at`]; `None` (old manifest, no
-/// clock) fails open — nothing is suspect, the fast path keeps working.
-/// A racy entry is not "changed" — it merely loses the fast path and is
-/// disposed of by the hash tier.
-///
-/// The window is TWO-sided (`|mtime − captured_at| ≤ ε`), deliberately. The
-/// racy case is a write straddling the capture moment; a recorded mtime far
-/// in the FUTURE (a file synced from a device with a fast clock) is not
-/// ambiguous — a later change would move it off the recorded value like any
-/// other mtime. One-sided (`mtime + ε ≥ cap`) marked every future-dated file
-/// racy forever, which on a 2s sweep cadence meant re-hashing it every pass
-/// for the life of the session.
-pub(crate) fn mtime_is_racy(meta: &SourceMetadata, captured_at: Option<u64>) -> bool {
-    match captured_at {
-        Some(cap) => meta.mtime.abs_diff(cap) <= RACY_WRITE_EPSILON_SECS,
-        None => false,
-    }
-}
-
-/// [`source_metadata_matches`] with the sweep's two demotions armed:
-/// ctime/inode disagreement (userland can forge mtime but not ctime, and
-/// replace-via-rename changes the inode) and the racy-write guard. Both only
-/// ever route to the hash tier — they can never suppress, so a false
-/// positive costs one hash and self-absorbs.
+/// [`source_metadata_matches`] against the manifest's capture clock,
+/// [`SiteHashes::captured_at`](crate::types::content::SiteHashes::captured_at):
+/// the racy-write window ([`mtime_is_racy`]) arms, and an exact-zero sub-second
+/// mtime comfortably older than the capture can fast-path (see
+/// [`FileStat::vouches_for`]). The window only ever routes to the hash tier —
+/// it can never suppress, so a false positive costs one hash and self-absorbs.
 pub(crate) fn source_metadata_matches_at(
     meta: &SourceMetadata,
     fs_path: &Path,
@@ -684,15 +657,11 @@ pub(crate) enum SourceVerdict {
 }
 
 /// The verdict core, over a caller-supplied stat. The three-tier compare
-/// itself: size, then trusted mtime(ns), then hash — with the sweep's two
-/// demotions armed (ctime/inode disagreement, racy-write window). Both
-/// demotions only ever route to the hash tier — they can never suppress, so
-/// a false positive costs one hash and, via `refreshed`, absorbs itself. The
-/// sub-second mtime tier itself goes through
-/// [`subsec_proves_same_instant`](crate::build::types::subsec_proves_same_instant):
-/// on a coarse-timestamp filesystem it can never prove a match, so it demotes
-/// to the hash tier on every check rather than suppressing a rebuild it
-/// cannot actually vouch for.
+/// itself: size, then the stat record ([`FileStat::vouches_for`]: mtime to the
+/// sub-second, ctime/inode disagreement, racy-write window), then hash. Every
+/// way the stat tier declines only routes to the hash tier — it can never
+/// suppress, so a false positive costs one hash and, via `refreshed`, absorbs
+/// itself.
 ///
 /// Taking `md` as a parameter is what lets the sweep reuse the stat its walk
 /// already paid for instead of stat'ing every file a second time per pass.
@@ -702,26 +671,21 @@ pub(crate) fn source_metadata_verdict(
     fs_path: &Path,
     captured_at: Option<u64>,
 ) -> SourceVerdict {
-    use std::time::UNIX_EPOCH;
-
     // Size differs: content definitely changed. Don't hash (file may be huge).
     if md.len() != meta.size {
         return SourceVerdict::Changed;
     }
 
-    let (fs_ctime, fs_inode) = crate::build::types::stat_identity(md);
-    let fast_path_trusted = !identity_disagrees(meta.ctime, fs_ctime)
-        && !identity_disagrees(meta.inode, fs_inode)
-        && !mtime_is_racy(meta, captured_at);
-
-    let fs_mtime = md
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok());
-    if let (true, Some(d)) = (fast_path_trusted, fs_mtime) {
-        if d.as_secs() == meta.mtime && subsec_proves_same_instant(meta.mtime_nanos, Some(d.subsec_nanos())) {
-            return SourceVerdict::Unchanged { refreshed: None };
-        }
+    // The racy window on top of the shared rule, for a real sub-second mtime
+    // too, because a page's record here is not taken the way the rule assumes:
+    // `render::blocking::source_metadata` stats the file AFTER its bytes were
+    // read, so a write landing between the two leaves a record whose stat
+    // matches the new bytes and whose hash is the old ones. The window sends
+    // an mtime near the capture to the hash tier, which catches that write
+    // when it lands close to the capture, not in general.
+    let current = FileStat::of(md);
+    if !mtime_is_racy(meta.mtime, captured_at) && meta.stat().vouches_for(&current, captured_at) {
+        return SourceVerdict::Unchanged { refreshed: None };
     }
 
     // No trustworthy mtime match: hash to disambiguate.
@@ -735,16 +699,7 @@ pub(crate) fn source_metadata_verdict(
     let computed = format!("{:x}", hasher.finalize());
 
     if computed == meta.hash {
-        SourceVerdict::Unchanged {
-            refreshed: Some(SourceMetadata {
-                hash: meta.hash.clone(),
-                size: md.len(),
-                mtime: fs_mtime.map(|d| d.as_secs()).unwrap_or(meta.mtime),
-                mtime_nanos: fs_mtime.map(|d| d.subsec_nanos()).or(meta.mtime_nanos),
-                ctime: fs_ctime,
-                inode: fs_inode,
-            }),
-        }
+        SourceVerdict::Unchanged { refreshed: Some(SourceMetadata::from_stat(meta.hash.clone(), current)) }
     } else {
         SourceVerdict::Changed
     }

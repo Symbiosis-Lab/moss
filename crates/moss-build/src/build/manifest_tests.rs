@@ -1311,3 +1311,25 @@ mod held {
         assert!(m.seal().held_bytes("llms.txt").is_some());
     }
 }
+
+/// A carried source entry is judged under the NEW build's later clock, which would
+/// vouch for an exact-zero sub-second mtime the old clock could not — a same-tick
+/// rewrite after the old read would then pass for unchanged. So `new` drops that
+/// reading (the entry fails open to the hash tier) and leaves every entry the old
+/// clock could vouch for, and every real sub-second reading, as it was.
+#[test]
+fn a_carried_zero_subsecond_mtime_its_own_clock_cannot_vouch_for_is_dropped() {
+    let entry = |mtime: u64, nanos: u32| SourceMetadata { hash: "h".into(), size: 1, mtime, mtime_nanos: Some(nanos), ctime: None, inode: None };
+    let mut carry = SiteHashes::default();
+    carry.captured_at = Some(10_000);
+    carry.sources.insert("racy.png".into(), entry(9_000, 0));
+    carry.sources.insert("settled.png".into(), entry(1_000, 0));
+    carry.sources.insert("precise.png".into(), entry(9_999, 5));
+
+    let m = PendingManifest::new(carry);
+    let nanos = |k: &str| m.inner.sources[k].mtime_nanos;
+    assert_eq!(nanos("racy.png"), None, "read inside the margin: no longer proof under a later clock");
+    assert_eq!(nanos("settled.png"), Some(0));
+    assert_eq!(nanos("precise.png"), Some(5));
+    assert!(m.inner.captured_at > Some(10_000), "premise: the new build's clock replaced the old one");
+}

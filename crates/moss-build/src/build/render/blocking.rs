@@ -197,25 +197,13 @@ fn synthetic_folder_doc(
 /// is even called) and reuses this rather than a second hasher.
 pub(crate) fn source_metadata(path: &Path, bytes: &[u8]) -> crate::build::types::SourceMetadata {
     use sha2::{Digest, Sha256};
-    let md = std::fs::metadata(path).ok();
-    let mtime = md
-        .as_ref()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
-    let (ctime, inode) = md
-        .as_ref()
-        .map(crate::build::types::stat_identity)
-        .unwrap_or((None, None));
-    crate::build::types::SourceMetadata {
-        hash: format!("{:x}", Sha256::digest(bytes)),
-        size: md.as_ref().map(|m| m.len()).unwrap_or(bytes.len() as u64),
-        mtime: mtime.map(|d| d.as_secs()).unwrap_or(0),
-        // None ⇔ no readable mtime; the watcher gate then always hashes
-        // instead of trusting a size-only match (fail open).
-        mtime_nanos: mtime.map(|d| d.subsec_nanos()),
-        ctime,
-        inode,
-    }
+    // No stat records the bytes' length and no sub-second mtime, which the
+    // watcher gate never trusts: it always hashes (fail open).
+    let stat = std::fs::metadata(path)
+        .ok()
+        .map(|md| crate::build::stat::FileStat::of(&md))
+        .unwrap_or(crate::build::stat::FileStat::whole_second(bytes.len() as u64, 0));
+    crate::build::types::SourceMetadata::from_stat(format!("{:x}", Sha256::digest(bytes)), stat)
 }
 
 /// Register a page's source hash beside its `source_to_output` mapping.

@@ -836,7 +836,7 @@ struct MathCacheTestGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::cache::FileStat;
+    use crate::build::stat::FileStat;
 
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs

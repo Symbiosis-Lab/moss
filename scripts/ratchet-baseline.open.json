@@ -8,7 +8,7 @@
       "armed": true,
       "value": {
         "crates/moss-build/src/build/assets/binary_resolver.rs": 1100,
-        "crates/moss-build/src/build/cache.rs": 1800,
+        "crates/moss-build/src/build/cache.rs": 1700,
         "crates/moss-build/src/build/folder_embed.rs": 1600,
         "crates/moss-build/src/build/markdown/html_post.rs": 1100,
         "crates/moss-build/src/build/markdown/pipeline.rs": 2300,
@@ -92,7 +92,7 @@
       "armed": true,
       "value": {
         "crates/moss-build/src": 40,
-        "crates/moss-build/src/build": 73,
+        "crates/moss-build/src/build": 74,
         "crates/moss-build/src/build/media": 19,
         "crates/moss-build/src/deploy": 16,
         "crates/moss-build/src/js-src/bridge": 16,

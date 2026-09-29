@@ -96,6 +96,8 @@ pub mod types;
 // New top-level buckets (Task 11 — Phase 3 generator/ redistribution)
 pub mod assets;
 pub mod cache;
+// A file's stat record and the one rule the stat-keyed caches trust it by.
+pub mod stat;
 // What a `moss build` prints, and the problem count `--strict` reads. Split out
 // of `crate::diagnostics` because the rest of that module is tauri-plugin-log.
 pub mod cli_output;

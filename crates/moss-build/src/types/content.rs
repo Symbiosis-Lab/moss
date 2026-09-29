@@ -398,9 +398,12 @@ pub struct SiteHashes {
     /// rewritten *after* it was hashed without moving its mtime (1–2s
     /// filesystems: exFAT, SMB), so the sweep treats such entries as
     /// suspect and routes them to the hash tier instead of trusting the
-    /// size+mtime fast path. `None` in manifests that predate the field —
-    /// fail open (no racy demotion), never fail closed.
-    /// See `crate::build::watch::mtime_is_racy`.
+    /// size+mtime fast path; an exact-zero sub-second mtime is trusted only
+    /// when comfortably older than it. `None` in manifests that predate the
+    /// field: no racy demotion, and no trust in a zero sub-second mtime.
+    /// Per manifest, not per entry, so `PendingManifest::new` drops the zero
+    /// sub-second reading from every carried entry this clock cannot vouch
+    /// for. See `crate::build::stat::FileStat::vouches_for`.
     #[serde(default)]
     pub captured_at: Option<u64>,
     /// The site URL this generation was built with — canonical links,

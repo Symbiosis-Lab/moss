@@ -202,7 +202,7 @@ fn the_fingerprint_of_a_file_is_the_fingerprint_of_its_whole_stat_record() {
     make_big_jpeg(&file, 40, 30);
     let cfg = ImageCompressionConfig::default();
 
-    let stat = crate::build::cache::FileStat::of(&fs::metadata(&file).unwrap());
+    let stat = crate::build::stat::FileStat::of(&fs::metadata(&file).unwrap());
     assert_eq!(
         compute_image_item_fingerprint(&tmp.path().to_string_lossy(), Path::new("a.jpg"), &cfg),
         Some(ImageFingerprint { stat, params: cfg.to_params() }),
@@ -224,7 +224,7 @@ fn an_image_replaced_by_rename_with_its_size_and_mtime_kept_has_a_new_fingerprin
     let mut bytes = fs::read(&file).unwrap();
     let middle = bytes.len() / 2;
     bytes[middle] ^= 0xff;
-    crate::build::cache::FileStat::replace_by_rename_keeping_mtime(&file, &bytes);
+    crate::build::stat::FileStat::replace_by_rename_keeping_mtime(&file, &bytes);
 
     assert_ne!(compute_image_item_fingerprint(&root, Path::new("a.jpg"), &cfg), before);
 }
@@ -2389,7 +2389,7 @@ fn test_collect_images_reuses_stat_matched_hash_without_rehashing() {
     let mut hash_index = crate::build::cache::HashIndex::new();
     hash_index.update(
         "photo.jpg".to_string(),
-        &crate::build::cache::FileStat::of(&fs::metadata(&file_path).unwrap()),
+        &crate::build::stat::FileStat::of(&fs::metadata(&file_path).unwrap()),
         "deadbeef".to_string(),
     );
 
@@ -2414,7 +2414,7 @@ fn collect_trusts_an_entry_only_for_the_files_whole_stat_record() {
         crate::build::cache::ObjectStore::new(tmp.path().join("cache_objects")),
     );
     let cfg = ImageCompressionConfig { min_size_kb: 0, ..Default::default() };
-    let real = crate::build::cache::FileStat::of(&fs::metadata(tmp.path().join("photo.jpg")).unwrap());
+    let real = crate::build::stat::FileStat::of(&fs::metadata(tmp.path().join("photo.jpg")).unwrap());
 
     for (field, changed) in real.each_field_changed() {
         let mut hash_index = crate::build::cache::HashIndex::new();
@@ -2446,7 +2446,7 @@ fn collect_does_not_take_the_oid_of_an_image_replaced_by_rename() {
     let mut bytes = fs::read(&file).unwrap();
     let middle = bytes.len() / 2;
     bytes[middle] ^= 0xff;
-    crate::build::cache::FileStat::replace_by_rename_keeping_mtime(&file, &bytes);
+    crate::build::stat::FileStat::replace_by_rename_keeping_mtime(&file, &bytes);
 
     let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg);
 
@@ -4511,7 +4511,7 @@ fn rematerialize_relinks_orphaned_staged_webp() {
     // recovers the same oid, find_cached_output hits, link_to restores it.
     let params = cfg.to_params();
     let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    let stat = crate::build::cache::FileStat::of(&fs::metadata(&src).unwrap());
+    let stat = crate::build::stat::FileStat::of(&fs::metadata(&src).unwrap());
     index.update("photo.jpg".to_string(), &stat, source_oid.clone());
     rematerialize(
         &h.objects,
@@ -4649,7 +4649,7 @@ fn rematerialize_recovers_rung_via_rung_kind() {
 
     let params = cfg.to_params();
     let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    let stat = crate::build::cache::FileStat::of(&fs::metadata(&src).unwrap());
+    let stat = crate::build::stat::FileStat::of(&fs::metadata(&src).unwrap());
     index.update("photo.jpg".to_string(), &stat, source_oid.clone());
     rematerialize(
         &h.objects,
@@ -4686,7 +4686,7 @@ fn rematerialize_noop_without_cas_blob() {
 
     let params = ImageCompressionConfig::default().to_params();
     let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    let stat = crate::build::cache::FileStat::of(&fs::metadata(&src).unwrap());
+    let stat = crate::build::stat::FileStat::of(&fs::metadata(&src).unwrap());
     let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
     index.update("photo.jpg".to_string(), &stat, source_oid);
     rematerialize(
@@ -4789,7 +4789,7 @@ fn self_heal_then_emit_registers_relinked_webp() {
     // Self-heal, then emit ⇒ REGISTERS the variant with a real content hash.
     let params = cfg.to_params();
     let mut index = crate::build::cache::HashIndex::load(&h._tmp.path().join("hash_index"));
-    let stat = crate::build::cache::FileStat::of(&fs::metadata(&src).unwrap());
+    let stat = crate::build::stat::FileStat::of(&fs::metadata(&src).unwrap());
     index.update("photo.jpg".to_string(), &stat, source_oid.clone());
     rematerialize(
         &h.objects,
@@ -5857,7 +5857,7 @@ impl RewriteVault {
         let before = fs::metadata(self.pic()).unwrap();
         self.write_pic(rgb);
         assert_eq!(fs::metadata(self.pic()).unwrap().len(), before.len(), "precondition: a same-size rewrite");
-        crate::build::cache::FileStat::stamp_in_the_second_of(&self.pic(), before.modified().unwrap());
+        crate::build::stat::FileStat::stamp_in_the_second_of(&self.pic(), before.modified().unwrap());
     }
 
     /// A second (or third) image beside `pic.png`.
@@ -6374,11 +6374,11 @@ async fn the_worker_takes_the_hash_the_index_holds_for_an_unchanged_file_instead
         crate::build::cache::ObjectStore::new(paths.cache_objects()),
     );
     let real = crate::build::cache::ObjectStore::hash_file(&vault.pic()).unwrap();
-    let stat = crate::build::cache::FileStat::of(&fs::metadata(vault.pic()).unwrap());
+    let stat = crate::build::stat::FileStat::of(&fs::metadata(vault.pic()).unwrap());
 
     let items = vault.collect();
     assert!(items[0].source_oid.is_empty(), "premise: the blocking phase left the hash to the worker");
-    for (recorded_at, trusted) in [(stat, true), (crate::build::cache::FileStat { size: stat.size + 1, ..stat }, false)] {
+    for (recorded_at, trusted) in [(stat, true), (crate::build::stat::FileStat { size: stat.size + 1, ..stat }, false)] {
         let planted = if trusted { "ab".repeat(32) } else { "cd".repeat(32) };
         let mut index = crate::build::cache::HashIndex::new();
         index.update("pic.png".to_string(), &recorded_at, planted.clone());

@@ -204,7 +204,7 @@ pub fn stamp_of(meta: Option<&std::fs::Metadata>) -> DriftStamp {
     };
     use std::time::UNIX_EPOCH;
     let mtime = m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok());
-    let (ctime, inode) = crate::build::types::stat_identity(m);
+    let (ctime, inode) = crate::build::stat::stat_identity(m);
     (
         m.len(),
         mtime.map(|d| d.as_secs() as i64).unwrap_or(0),

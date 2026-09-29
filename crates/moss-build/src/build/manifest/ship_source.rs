@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::{HashBucket, PendingManifest, SealedManifest};
-use crate::build::cache::FileStat;
+use crate::build::stat::FileStat;
 use crate::build::served_path::{transform_for, ServedPath, ShipTransform};
 
 /// The most bytes one manifest holds for [`ShipSource::Held`].

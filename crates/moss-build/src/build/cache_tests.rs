@@ -1,4 +1,5 @@
 use super::*;
+use crate::build::stat::{mtime_is_racy, RACY_WRITE_EPSILON_SECS, ZERO_NANOS_TRUST_AGE_SECS};
 use std::io::Write;
 
 /// Helper: create a unique temp directory for each test.
@@ -813,8 +814,9 @@ fn a_missing_subsecond_mtime_never_hits_but_a_missing_ctime_or_inode_does() {
 
 /// A coarse-timestamp filesystem (exFAT/FAT, older SMB/NFS, some FUSE mounts) reports
 /// a sub-second mtime field but always rounds it to zero — `Some(0)`, not `None` — so
-/// `lookup` must treat an exact-zero reading as "resolution unknown" and fail open,
-/// the same as a missing one, rather than trusting `0 == 0` as proof of the same instant.
+/// an entry that does not say when it was read must treat an exact-zero reading as
+/// "resolution unknown" and fail open, the same as a missing one, rather than trusting
+/// `0 == 0` as proof of the same instant.
 #[test]
 fn a_zero_subsecond_mtime_fails_open_like_a_missing_one() {
     let recorded = FileStat { mtime_nanos: Some(0), ..stat(1024, 1700000000) };
@@ -838,6 +840,98 @@ fn a_nonzero_subsecond_mtime_still_hits() {
     idx.update("photo.jpg".to_string(), &recorded, "abcd1234".to_string());
 
     assert_eq!(idx.lookup("photo.jpg", &recorded), Some("abcd1234"));
+}
+
+/// The shared rule's clock boundaries, pinned for both kinds of stamp: a real
+/// sub-second mtime needs no clock; an exact-zero one is trusted only when more than
+/// the skew margin older than the read, never at the boundary, never with no clock,
+/// and never when dated in the future. The racy window is two-sided and inclusive.
+#[test]
+fn the_stat_rule_trusts_a_zero_subsecond_mtime_only_well_before_its_recording() {
+    const E: u64 = RACY_WRITE_EPSILON_SECS;
+    const M: u64 = ZERO_NANOS_TRUST_AGE_SECS;
+    let precise = stat(1024, 10_000);
+    let coarse = FileStat { mtime_nanos: Some(0), ..precise };
+    let vouches = |s: FileStat, at| s.vouches_for(&s, at);
+
+    for at in [None, Some(10_000), Some(10_000 + E), Some(10_000 - E), Some(50_000)] {
+        assert!(vouches(precise, at), "a real sub-second match needs no clock ({at:?})");
+    }
+    assert!(!vouches(coarse, None), "no clock: the gap cannot be shown");
+    assert!(!vouches(coarse, Some(10_000)), "read in the same tick");
+    assert!(!vouches(coarse, Some(10_000 + E + 1)), "past the racy window, but inside a skewed server clock's reach");
+    assert!(!vouches(coarse, Some(10_000 + M)), "the boundary is inclusive");
+    assert!(vouches(coarse, Some(10_000 + M + 1)), "older than the read by more than the margin");
+    assert!(!vouches(coarse, Some(10_000 - E - 1)), "a future stamp the clock could still reach");
+
+    assert!(!mtime_is_racy(1000, None), "no clock, nothing suspect");
+    assert!(mtime_is_racy(1000, Some(1000 + E)), "inclusive after");
+    assert!(mtime_is_racy(1000 + E, Some(1000)), "inclusive before: a write just after the read");
+    assert!(!mtime_is_racy(1000, Some(1000 + E + 1)));
+    assert!(!mtime_is_racy(2000, Some(1000)), "far in the future is not racy");
+}
+
+/// The case the zero-nanos guard exists for, kept: a file read within the window of
+/// its own mtime, then rewritten same-size in the same coarse tick, reads identically
+/// on every field — it must be re-hashed, clock or no clock.
+#[test]
+fn a_same_tick_rewrite_of_a_zero_subsecond_mtime_read_inside_the_window_misses() {
+    let recorded = FileStat { mtime_nanos: Some(0), ..stat(1024, 1700000000) };
+    let mut idx = HashIndex::new();
+    idx.update_read_at("photo.jpg".to_string(), &recorded, "abcd1234".to_string(), Some(1700000001));
+
+    let rewritten = FileStat { mtime_nanos: Some(0), ..recorded };
+    assert!(idx.lookup("photo.jpg", &rewritten).is_none(), "read one second after the mtime: racy, re-hash");
+}
+
+/// A ZIP extraction or `rsync -a` leaves exact-zero sub-second mtimes on a filesystem
+/// that could record real ones. An entry read long after such a stamp can never be
+/// matched by a later write, so it hits — the fast path the zero-nanos guard alone
+/// took away from every such file on every build.
+#[test]
+fn a_zero_subsecond_mtime_read_well_after_it_hits() {
+    let recorded = FileStat { mtime_nanos: Some(0), ..stat(1024, 1700000000) };
+    let mut idx = HashIndex::new();
+    idx.update_read_at("photo.jpg".to_string(), &recorded, "abcd1234".to_string(), Some(1700000000 + ZERO_NANOS_TRUST_AGE_SECS + 1));
+
+    assert_eq!(idx.lookup("photo.jpg", &recorded), Some("abcd1234"));
+}
+
+/// An index written before entries carried a recording time loads, keeps its fast
+/// path for real sub-second stamps, and fails open on exact-zero ones — the behaviour
+/// it had before the field existed, never an upgrade to trusting.
+#[test]
+fn an_index_without_recording_times_never_trusts_a_zero_subsecond_mtime() {
+    let dir = make_test_dir("hash_idx_no_recorded_at");
+    let path = dir.join("hash-index.json");
+    let entry = |nanos: u32| serde_json::json!({
+        "size": 1024, "mtime": 1700000000u64, "mtime_nanos": nanos, "ctime": 1_700_000_005i64, "inode": 77, "content_hash": "abcd1234"
+    });
+    fs::write(&path, serde_json::json!({ "entries": { "coarse.jpg": entry(0), "precise.jpg": entry(250_000_000) } }).to_string()).unwrap();
+
+    let idx = HashIndex::load(&path);
+    assert_eq!(idx.entries["coarse.jpg"].recorded_at, None, "premise: the old format has no recording time");
+    assert!(idx.lookup("coarse.jpg", &FileStat { mtime_nanos: Some(0), ..stat(1024, 1700000000) }).is_none());
+    assert_eq!(idx.lookup("precise.jpg", &stat(1024, 1700000000)), Some("abcd1234"));
+}
+
+/// `resolve` is what records the clock: a local file whose mtime carries exact-zero
+/// nanoseconds and is long past is hashed once, then answered from the index.
+#[test]
+fn resolve_records_its_clock_so_an_old_zero_subsecond_stamp_is_hashed_once() {
+    let dir = make_test_dir("hash_idx_resolve_coarse");
+    let file = write_temp_file(&dir, "pic.png", b"extracted from an archive");
+    let old = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 3 * ZERO_NANOS_TRUST_AGE_SECS;
+    fs::File::options().write(true).open(&file).unwrap().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(old)).unwrap();
+
+    let reads = std::cell::Cell::new(0);
+    let hash = |p: &Path| { reads.set(reads.get() + 1); ObjectStore::hash_file(p) };
+    let mut idx = HashIndex::new();
+    let first = idx.resolve_with(&file, "pic.png", &hash, |_| false).unwrap();
+    let second = idx.resolve_with(&file, "pic.png", &hash, |_| false).unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(reads.get(), 1, "an old exact-zero stamp read now must be trusted the second time");
 }
 
 /// The video path's rule is unchanged: size + whole-second mtime, blind to the rest,
@@ -2182,11 +2276,8 @@ fn test_gc_removes_orphaned_transform() {
             m.insert(
                 "source.md".to_string(),
                 HashIndexEntry {
-                    size: 100,
-                    mtime: 1000,
-                    mtime_nanos: None,
-                    ctime: None,
-                    inode: None,
+                    stat: FileStat::whole_second(100, 1000),
+                    recorded_at: None,
                     content_hash: live_oid.clone(),
                 },
             );
@@ -2354,11 +2445,8 @@ fn test_gc_preserves_objects_referenced_by_transforms() {
             m.insert(
                 "file.jpg".to_string(),
                 HashIndexEntry {
-                    size: 500,
-                    mtime: 2000,
-                    mtime_nanos: None,
-                    ctime: None,
-                    inode: None,
+                    stat: FileStat::whole_second(500, 2000),
+                    recorded_at: None,
                     content_hash: source_oid.clone(),
                 },
             );
@@ -2505,7 +2593,7 @@ fn gc_deletes_nothing_when_a_mark_input_is_unreadable() {
         let mut entries = HashMap::new();
         entries.insert(
             "file.jpg".to_string(),
-            HashIndexEntry { size: 500, mtime: 2000, mtime_nanos: None, ctime: None, inode: None, content_hash: source_oid.clone() },
+            HashIndexEntry { stat: FileStat::whole_second(500, 2000), recorded_at: None, content_hash: source_oid.clone() },
         );
         HashIndex { entries }
             .save(&mp.cache_hash_index())

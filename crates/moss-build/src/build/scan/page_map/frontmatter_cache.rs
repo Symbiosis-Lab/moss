@@ -2,7 +2,7 @@
 //! [`super::build_external_url_map`] — see [`FrontmatterScanCache`] for the
 //! corpus-scaled cost this closes.
 
-use crate::build::types::{identity_disagrees, subsec_proves_same_instant};
+use crate::build::stat::{recording_clock, FileStat};
 use std::path::Path;
 
 /// One file's cached frontmatter pre-scan result, plus the stat identity it
@@ -14,6 +14,12 @@ pub(super) struct FrontmatterScanEntry {
     mtime_nanos: Option<u32>,
     ctime: Option<i64>,
     inode: Option<u64>,
+    /// When the file was read for this entry, Unix seconds: the clock
+    /// [`FileStat::vouches_for`] needs to trust an exact-zero sub-second mtime.
+    /// No [`SCHEMA`] bump: a file written before the field reads it as `None`,
+    /// which that rule fails open on — an unknown, never a wrong answer.
+    #[serde(default)]
+    recorded_at: Option<u64>,
     pub(super) url_override: Option<String>,
     external_url: Option<String>,
     /// The `lang:` this file declares, trimmed and allowlist-validated — the
@@ -22,6 +28,12 @@ pub(super) struct FrontmatterScanEntry {
     /// the pass that already read every file, instead of re-reading one small
     /// file per folder on every build (118 of them on a 251-file vault).
     pub(super) lang: Option<String>,
+}
+
+impl FrontmatterScanEntry {
+    fn stat(&self) -> FileStat {
+        FileStat { size: self.size, mtime: self.mtime, mtime_nanos: self.mtime_nanos, ctime: self.ctime, inode: self.inode }
+    }
 }
 
 /// Bumped whenever [`FrontmatterScanEntry`] gains or loses a field. An entry
@@ -43,18 +55,12 @@ const SCHEMA: u32 = 2;
 /// because the cost is the read+parse of every file, not the size of the
 /// result.
 ///
-/// Correctness: an entry is trusted only when the file's `(size, mtime,
-/// mtime_nanos)` match exactly AND any ctime/inode recorded on both sides
-/// agree — the same "both sides present and disagree ⇒ don't trust" rule
-/// the watcher's admission gate uses ([`identity_disagrees`]; this cache has
-/// no hash tier to demote to on disagreement, so unlike the watcher it always
-/// fails open to a full re-parse rather than trusting a forged mtime). The
-/// `mtime_nanos` match itself goes through [`subsec_proves_same_instant`], so
-/// a same-second rewrite on a coarse-resolution filesystem/mount — which reads
-/// an exact-zero sub-second mtime rather than none — is never mistaken for
-/// proof and always falls through to a re-parse. A missed cache hit costs one
-/// extra file read; a false hit would silently ship a stale URL, so the bar
-/// here is "never wrong", not "never re-parse".
+/// Correctness: an entry is trusted only while the file's stat still vouches
+/// for it — the rule the hash index and the watcher's admission gate use too
+/// ([`FileStat::vouches_for`]; this cache has no hash tier to demote to, so
+/// where that rule declines it always falls through to a full re-parse). A
+/// missed cache hit costs one extra file read; a false hit would silently ship
+/// a stale URL, so the bar here is "never wrong", not "never re-parse".
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FrontmatterScanCache {
     /// `#[serde(default)]` uses the FIELD type's default (0), not this
@@ -150,7 +156,6 @@ fn scan_frontmatter_urls_with_evicted(
     is_evicted: &dyn Fn(&Path) -> bool,
 ) -> std::collections::HashMap<String, (Option<String>, Option<String>)> {
     use std::collections::HashMap;
-    use std::time::UNIX_EPOCH;
 
     let mut out: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
 
@@ -163,19 +168,11 @@ fn scan_frontmatter_urls_with_evicted(
             continue;
         }
 
-        let stat = std::fs::metadata(&source_file_path).ok();
+        let stat = std::fs::metadata(&source_file_path).ok().as_ref().map(FileStat::of);
         let cached = cache.entries.get(file_path);
 
         let hit = match (&stat, cached) {
-            (Some(md), Some(entry)) => {
-                let (ctime, inode) = crate::build::types::stat_identity(md);
-                let mtime = md.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok());
-                md.len() == entry.size
-                    && !identity_disagrees(entry.ctime, ctime)
-                    && !identity_disagrees(entry.inode, inode)
-                    && matches!(mtime, Some(d) if d.as_secs() == entry.mtime)
-                    && subsec_proves_same_instant(entry.mtime_nanos, mtime.map(|d| d.subsec_nanos()))
-            }
+            (Some(current), Some(entry)) => entry.stat().vouches_for(current, entry.recorded_at),
             _ => false,
         };
 
@@ -185,6 +182,7 @@ fn scan_frontmatter_urls_with_evicted(
             continue;
         }
 
+        let recorded_at = recording_clock();
         let content = match std::fs::read_to_string(&source_file_path) {
             Ok(c) => c,
             Err(e) => {
@@ -231,17 +229,16 @@ fn scan_frontmatter_urls_with_evicted(
         }
         let external_url = external_url_raw.filter(|u| super::is_valid_external_url(u));
 
-        if let Some(md) = stat {
-            let (ctime, inode) = crate::build::types::stat_identity(&md);
-            let mtime = md.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok());
+        if let Some(FileStat { size, mtime, mtime_nanos, ctime, inode }) = stat {
             cache.entries.insert(
                 file_path.clone(),
                 FrontmatterScanEntry {
-                    size: md.len(),
-                    mtime: mtime.map(|d| d.as_secs()).unwrap_or(0),
-                    mtime_nanos: mtime.map(|d| d.subsec_nanos()),
+                    size,
+                    mtime,
+                    mtime_nanos,
                     ctime,
                     inode,
+                    recorded_at,
                     url_override: frontmatter_url.clone(),
                     external_url: external_url.clone(),
                     lang,

@@ -24,7 +24,7 @@ fn meta_for(p: &Path, bytes: &[u8]) -> SourceMetadata {
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
-    let (ctime, inode) = crate::build::types::stat_identity(&md);
+    let (ctime, inode) = crate::build::stat::stat_identity(&md);
     SourceMetadata {
         hash: format!("{:x}", Sha256::digest(bytes)),
         size: md.len(),
@@ -271,7 +271,7 @@ fn the_baselines_capture_clock_arms_the_racy_guard() {
     meta.size = md.len();
     meta.mtime = mtime.as_secs();
     meta.mtime_nanos = Some(mtime.subsec_nanos());
-    let (ctime, inode) = crate::build::types::stat_identity(&md);
+    let (ctime, inode) = crate::build::stat::stat_identity(&md);
     meta.ctime = ctime;
     meta.inode = inode;
 

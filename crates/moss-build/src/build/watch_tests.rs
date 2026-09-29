@@ -1,4 +1,5 @@
 use super::*;
+use crate::build::stat::{RACY_WRITE_EPSILON_SECS, ZERO_NANOS_TRUST_AGE_SECS};
 
 /// Feature 4: File Watching - File Filtering
 /// Tests which files should trigger recompilation
@@ -1079,7 +1080,7 @@ fn an_inode_disagreement_demotes_the_fast_path_to_the_hash_tier() {
 fn an_agreeing_identity_keeps_the_fast_path() {
     let dir = tempfile::tempdir().unwrap();
     let p = gate_write_file(dir.path(), "a.md", b"hello");
-    let (ctime, inode) = crate::build::types::stat_identity(&std::fs::metadata(&p).unwrap());
+    let (ctime, inode) = crate::build::stat::stat_identity(&std::fs::metadata(&p).unwrap());
     let meta = SourceMetadata {
         hash: "fast-path-must-not-hash".into(),
         size: 5,
@@ -1122,30 +1123,6 @@ fn a_racy_mtime_is_hashed_not_trusted() {
     );
 }
 
-/// The racy predicate's boundaries, pinned: no capture clock means nothing
-/// is suspect (old manifests keep their fast path), and the epsilon is
-/// inclusive on the boundary.
-#[test]
-fn mtime_is_racy_boundaries() {
-    let m = |mtime: u64| SourceMetadata { mtime, ..Default::default() };
-    assert!(!mtime_is_racy(&m(1000), None), "no clock, nothing suspect");
-    assert!(mtime_is_racy(&m(1000), Some(1000)), "same instant is racy");
-    assert!(
-        mtime_is_racy(&m(1000), Some(1000 + RACY_WRITE_EPSILON_SECS)),
-        "the boundary is inclusive"
-    );
-    assert!(!mtime_is_racy(&m(1000), Some(1000 + RACY_WRITE_EPSILON_SECS + 1)));
-    assert!(
-        mtime_is_racy(&m(1000 + RACY_WRITE_EPSILON_SECS), Some(1000)),
-        "a write just after capture is inside the window"
-    );
-    assert!(
-        !mtime_is_racy(&m(2000), Some(1000)),
-        "a FUTURE-dated mtime far past the window is not racy: a fast-clock \
-         device's sync would otherwise be re-hashed every pass forever"
-    );
-}
-
 /// A coarse-timestamp filesystem (exFAT/FAT, older SMB/NFS, some FUSE mounts)
 /// reports a sub-second mtime but always rounds it to zero — `Some(0)`, not
 /// `None` — so a same-size rewrite landing in the same recorded second can
@@ -1173,7 +1150,7 @@ fn a_same_tick_same_size_rewrite_on_a_coarse_stat_is_not_suppressed() {
         .set_modified(UNIX_EPOCH + std::time::Duration::new(secs, 0))
         .unwrap();
     let md = fs::metadata(&p).unwrap();
-    let (fs_ctime, fs_inode) = crate::build::types::stat_identity(&md);
+    let (fs_ctime, fs_inode) = crate::build::stat::stat_identity(&md);
 
     let meta = SourceMetadata {
         hash: gate_sha256_hex(b"hello"), // the ORIGINAL bytes' hash
@@ -1195,6 +1172,44 @@ fn a_same_tick_same_size_rewrite_on_a_coarse_stat_is_not_suppressed() {
     );
 }
 
+/// The sweep's side of the git racy rule for an exact-zero sub-second mtime (a
+/// ZIP extraction, `rsync -a`): a stamp older than the manifest's capture by more
+/// than the skew margin is proof — the fast path answers without reading a byte (the
+/// recorded hash is deliberately wrong to show it) — while one inside the margin
+/// still goes to the hash tier, which sees the rewrite.
+#[test]
+fn a_zero_subsecond_mtime_fast_paths_only_when_older_than_the_capture_by_more_than_the_margin() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = gate_write_file(dir.path(), "a.md", b"world");
+    let secs = gate_mtime_secs(&p) - 3 * ZERO_NANOS_TRUST_AGE_SECS;
+    fs::File::options()
+        .write(true)
+        .open(&p)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + std::time::Duration::new(secs, 0))
+        .unwrap();
+    let md = fs::metadata(&p).unwrap();
+    let (ctime, inode) = crate::build::stat::stat_identity(&md);
+    let meta = SourceMetadata {
+        hash: gate_sha256_hex(b"hello"), // not these bytes: only the fast path says Unchanged
+        size: 5,
+        mtime: secs,
+        mtime_nanos: Some(0),
+        ctime,
+        inode,
+    };
+
+    assert_eq!(
+        source_metadata_verdict(&meta, &md, &p, Some(secs + ZERO_NANOS_TRUST_AGE_SECS + 1)),
+        SourceVerdict::Unchanged { refreshed: None },
+    );
+    assert_eq!(
+        source_metadata_verdict(&meta, &md, &p, Some(secs + ZERO_NANOS_TRUST_AGE_SECS)),
+        SourceVerdict::Changed,
+        "inside the margin: hash, and the hash differs"
+    );
+}
+
 /// The absorb-once rule for provider re-materialization: an evict + identical
 /// re-download rewrites ctime/inode, so the fast path is demoted and the hash
 /// tier runs — ONCE. The verdict hands back the fresh stat record; with it
@@ -1204,7 +1219,7 @@ fn a_hash_confirmed_match_hands_back_the_fresh_identity() {
     let dir = tempfile::tempdir().unwrap();
     let p = gate_write_file(dir.path(), "a.md", b"same bytes");
     let md = fs::metadata(&p).unwrap();
-    let (fs_ctime, fs_inode) = crate::build::types::stat_identity(&md);
+    let (fs_ctime, fs_inode) = crate::build::stat::stat_identity(&md);
 
     // Baseline: right hash and size, but a stat identity from a previous life.
     let meta = SourceMetadata {

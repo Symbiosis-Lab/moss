@@ -1165,6 +1165,39 @@ mod frontmatter_scan_cache_tests {
         );
     }
 
+    /// An exact-zero sub-second mtime (a ZIP extraction, `rsync -a`) is served
+    /// from the cache once the scan that recorded it read the file more than the
+    /// skew margin after that mtime — and re-read while it was inside it.
+    #[test]
+    fn a_zero_subsecond_mtime_is_cached_only_when_read_well_after_it() {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        for (mtime, served_from_cache) in [(now - 3 * crate::build::stat::ZERO_NANOS_TRUST_AGE_SECS, true), (now, false)] {
+            let dir = setup_temp_dir(&[("about.md", "---\nurl: custom-slug\n---\n# About\n")]);
+            fs::File::options()
+                .write(true)
+                .open(dir.path().join("about.md"))
+                .unwrap()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime))
+                .unwrap();
+            let files = vec![make_file("about.md")];
+            let winners = compute_home_file_winners(&files, "mysite", &std::collections::HashMap::new());
+            let overrides = std::collections::HashMap::new();
+            let not_evicted = |_: &Path| false;
+            let mut cache = FrontmatterScanCache::default();
+
+            build_page_map_and_external_urls_cached_with_evicted(
+                &files, dir.path(), "mysite", &winners, &overrides, &mut cache, &not_evicted,
+            );
+            // Poisoned value, untouched stat: a hit returns it, a re-read does not.
+            cache.entries.get_mut("about.md").unwrap().url_override = Some("poisoned".to_string());
+            let (map, ..) = build_page_map_and_external_urls_cached_with_evicted(
+                &files, dir.path(), "mysite", &winners, &overrides, &mut cache, &not_evicted,
+            );
+            let expected = if served_from_cache { "poisoned/index.html" } else { "custom-slug/index.html" };
+            assert_eq!(map.get("about.md").unwrap(), expected, "mtime {mtime}, read at about {now}");
+        }
+    }
+
     #[test]
     fn changed_file_bypasses_a_stale_cache_entry() {
         let dir = setup_temp_dir(&[("about.md", "---\nurl: first-slug\n---\n# About\n")]);

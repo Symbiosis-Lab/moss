@@ -783,10 +783,11 @@ pub struct SourceMetadata {
     ///
     /// `None` when the writer could not read an mtime at all, or when the
     /// manifest predates this field (`#[serde(default)]` on read). The
-    /// watcher gate's size+mtime fast path requires `Some` and an exact
-    /// nanosecond match — a whole-second match alone cannot distinguish the
-    /// hashed file from a same-size rewrite landing in the same second, so
-    /// missing precision fails OPEN to hashing, never to suppression.
+    /// watcher gate's size+mtime fast path requires `Some` and a match that
+    /// [`FileStat::vouches_for`](crate::build::stat::FileStat::vouches_for)
+    /// accepts — a whole-second match alone cannot distinguish the hashed file
+    /// from a same-size rewrite landing in the same second, so missing
+    /// precision fails OPEN to hashing, never to suppression.
     #[serde(default)]
     pub mtime_nanos: Option<u32>,
     /// Inode change time (ctime) as Unix seconds, where the platform reports
@@ -807,46 +808,18 @@ pub struct SourceMetadata {
     pub inode: Option<u64>,
 }
 
-/// The forgery-resistant half of a stat record: (ctime seconds, inode).
-///
-/// `(None, None)` on platforms that report neither — every consumer must
-/// fail open on `None` (compare only when both sides are `Some`).
-pub fn stat_identity(md: &std::fs::Metadata) -> (Option<i64>, Option<u64>) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        (Some(md.ctime()), Some(md.ino()))
+impl SourceMetadata {
+    /// The record for bytes hashing to `hash`, read from a file as it stood at
+    /// `stat` — the one place a stat becomes a manifest source entry.
+    pub(crate) fn from_stat(hash: String, stat: crate::build::stat::FileStat) -> Self {
+        let crate::build::stat::FileStat { size, mtime, mtime_nanos, ctime, inode } = stat;
+        Self { hash, size, mtime, mtime_nanos, ctime, inode }
     }
-    #[cfg(not(unix))]
-    {
-        let _ = md;
-        (None, None)
+
+    /// The stat record half, for [`FileStat::vouches_for`](crate::build::stat::FileStat::vouches_for).
+    pub(crate) fn stat(&self) -> crate::build::stat::FileStat {
+        crate::build::stat::FileStat { size: self.size, mtime: self.mtime, mtime_nanos: self.mtime_nanos, ctime: self.ctime, inode: self.inode }
     }
-}
-
-/// Both sides reported a value and they disagree. Absence on either side is
-/// agreement (fail open) — old records and platforms without the field must not
-/// lose their fast path forever. Every consumer of [`stat_identity`] compares
-/// through this one definition.
-pub(crate) fn identity_disagrees<T: PartialEq>(recorded: Option<T>, current: Option<T>) -> bool {
-    matches!((recorded, current), (Some(a), Some(b)) if a != b)
-}
-
-/// Both sides reported a sub-second mtime, neither reading is an exact zero, and
-/// they agree — the only condition under which a whole-second mtime match may be
-/// trusted as proof of "the same write", not just "the same second".
-///
-/// A coarse-timestamp filesystem (exFAT/FAT at 2s resolution, older SMB/NFS, some
-/// FUSE mounts) reports the sub-second field but always rounds it to zero — `Some(0)`,
-/// not `None` — so two different same-second writes can both read `Some(0)` and look
-/// identical. This function treats an exact zero, on either side, the same as a
-/// missing reading: "resolution unknown", never proof. On APFS, ext4 and NTFS a
-/// genuine zero-nanosecond mtime is about a one-in-a-billion event, so the extra cost
-/// where this fails open (one re-hash, or one avoidable rebuild) is negligible.
-/// Every consumer that trusts a sub-second match as proof of "the same instant"
-/// compares through this one definition, mirroring [`identity_disagrees`].
-pub(crate) fn subsec_proves_same_instant(recorded: Option<u32>, current: Option<u32>) -> bool {
-    matches!((recorded, current), (Some(a), Some(b)) if a != 0 && b != 0 && a == b)
 }
 
 impl moss_core::sort::SortableDoc for ParsedDocument {

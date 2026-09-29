@@ -14,7 +14,8 @@
 //! This metadata enables dynamic SVG placeholders during page rendering.
 
 use crate::types::content::{FileInfo, MediaMetadata, ProjectStructure};
-use crate::build::cache::{CachedMediaMeta, FileStat, HashIndex, ObjectStore, TransformCache, TransformEntry, TransformRecord};
+use crate::build::stat::FileStat;
+use crate::build::cache::{CachedMediaMeta, HashIndex, ObjectStore, TransformCache, TransformEntry, TransformRecord};
 use super::classify::{classify_extension, is_excluded_dir_name, skip_root_agent_config, ScanBucket};
 use crate::build::media::ffmpeg::FFmpegManager;
 use walkdir::WalkDir;

@@ -709,7 +709,7 @@ pub(crate) fn collect_images_for_conversion(
             .ok()
             .and_then(|m| {
                 hash_index
-                    .lookup(&media_meta.path, &crate::build::cache::FileStat::of(&m))
+                    .lookup(&media_meta.path, &crate::build::stat::FileStat::of(&m))
                     .map(str::to_string)
             })
             .unwrap_or_default();
@@ -1390,7 +1390,7 @@ pub(crate) fn convert_single_image(
 /// only: the cell below is keyed by path.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ImageFingerprint {
-    stat: crate::build::cache::FileStat,
+    stat: crate::build::stat::FileStat,
     params: serde_json::Value,
 }
 
@@ -1402,7 +1402,7 @@ pub(crate) fn compute_image_item_fingerprint(
     item: &Path,
     config: &ImageCompressionConfig,
 ) -> Option<ImageFingerprint> {
-    let stat = crate::build::cache::FileStat::of(&fs::metadata(Path::new(source_path).join(item)).ok()?);
+    let stat = crate::build::stat::FileStat::of(&fs::metadata(Path::new(source_path).join(item)).ok()?);
     stat.mtime_nanos?;
     Some(ImageFingerprint { stat, params: config.to_params() })
 }

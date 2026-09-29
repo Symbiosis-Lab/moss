@@ -4,7 +4,8 @@
 //! lib's test process every parallel test that touches an index moves them, and an
 //! exact count is only checkable where nothing else runs.
 
-use moss_build::build::cache::{report_hash_index_activity, FileStat, HashIndex};
+use moss_build::build::cache::{report_hash_index_activity, HashIndex};
+use moss_build::build::stat::FileStat;
 use std::sync::Mutex;
 
 struct Capture(Mutex<Vec<String>>);

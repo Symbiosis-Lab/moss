@@ -1270,22 +1270,13 @@ pub(crate) fn copy_deferred_assets(
         // `file_size` below — a stat failure must NOT be confused with a
         // genuine 0-byte file by the WebP-ownership check (see its comment).
         let file_size_opt = file_stat.as_ref().ok().map(|m| m.len());
-        let (file_size, file_mtime_secs, file_mtime_nanos) = match &file_stat {
-            Ok(m) => {
-                let mtime = m
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
-                (
-                    m.len(),
-                    mtime.map(|d| d.as_secs()).unwrap_or(0),
-                    // None ⇔ no readable mtime; the watcher gate then always
-                    // hashes instead of trusting a size-only match.
-                    mtime.map(|d| d.subsec_nanos()),
-                )
-            }
-            Err(_) => (0, 0, None),
-        };
+        // A failed stat records as size 0, mtime 0 and no sub-second mtime, which
+        // the watcher gate never trusts: it always hashes (fail open).
+        let src_stat = file_stat
+            .as_ref()
+            .map(crate::build::stat::FileStat::of)
+            .unwrap_or(crate::build::stat::FileStat::whole_second(0, 0));
+        let (file_size, file_mtime_secs) = (src_stat.size, src_stat.mtime);
 
         // Cache fast-path: if we already hashed this exact (size, mtime)
         // last build AND the blob is still in the object store AND we
@@ -1495,20 +1486,9 @@ pub(crate) fn copy_deferred_assets(
                 // path, not output path) so the next build's check_source_cache
                 // can short-circuit. Always write — even on cache hit — so
                 // the entry stays present after every build.
-                let (src_ctime, src_inode) = file_stat
-                    .as_ref()
-                    .map(crate::build::types::stat_identity)
-                    .unwrap_or((None, None));
                 site_hashes.sources.insert(
                     relative_path.clone(),
-                    crate::build::types::SourceMetadata {
-                        hash: oid.clone(),
-                        size: file_size,
-                        mtime: file_mtime_secs,
-                        mtime_nanos: file_mtime_nanos,
-                        ctime: src_ctime,
-                        inode: src_inode,
-                    },
+                    crate::build::types::SourceMetadata::from_stat(oid.clone(), src_stat),
                 );
                 match crate::build::served_path::ServedPath::from_source(&mapped_path) {
                     Ok(out_path) => {
