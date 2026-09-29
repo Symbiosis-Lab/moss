@@ -5,7 +5,8 @@
 //!
 //! 1. **Strip clutter** with [`lol_html`] — remove `<script>` / `<style>` / `<nav>`
 //!    / `<aside>` / `<footer>` / `<header>` / `<form>` / `<button>` etc., plus
-//!    any element whose `class`/`id`/`data-testid` matches one of the
+//!    any element whose `class`/`id`/semantic-hook attribute (`data-testid`,
+//!    `data-test-id`, `data-component`, `data-hook`) matches one of the
 //!    journalism-site clutter tokens (ad, social, sidebar, comment, …).
 //!    Also drops hidden elements (inline `display:none` / `visibility:hidden`
 //!    style or `hidden`/`invisible` class) and small images (width or height
@@ -58,8 +59,9 @@ const STRIP_TAGS: &[&str] = &[
     "link", "object", "embed", "dialog",
 ];
 
-/// Tokens we look for in `class` / `id` / `data-testid`. Word-boundary match
-/// (see [`contains_token_boundary`]).
+/// Tokens we look for in `class` / `id` / a semantic-hook attribute
+/// (`data-testid`, `data-test-id`, `data-component`, `data-hook`).
+/// Word-boundary match (see [`contains_token_boundary`]).
 ///
 /// Distilled from defuddle's 580-pattern `PARTIAL_SELECTORS` to the ~30 that
 /// actually fire on news/blog pages.
@@ -100,6 +102,7 @@ const CLUTTER_TOKENS: &[&str] = &[
     "skip-to",
     "sr-only",
     "visually-hidden",
+    "aria-label",
     "popup",
     "modal",
     "toolbar",
@@ -272,6 +275,7 @@ fn strip_clutter(html: &str) -> String {
                         .get_attribute("data-testid")
                         .or_else(|| el.get_attribute("data-test-id"))
                         .or_else(|| el.get_attribute("data-component"))
+                        .or_else(|| el.get_attribute("data-hook"))
                         .unwrap_or_default();
                     let role = el.get_attribute("role").unwrap_or_default();
 
@@ -442,6 +446,38 @@ mod tests {
         assert!(!out.contains("subscribe"));
         assert!(!out.contains("related"));
         assert!(out.contains("Real body"));
+    }
+
+    #[test]
+    fn strip_removes_data_hook_sr_only_and_aria_label_duplicates() {
+        // A component library that marks visible text `aria-hidden="true"`
+        // (removed from the accessibility tree) and puts the reader-facing
+        // duplicate/description in a sibling element addressed only by
+        // `data-hook` (not `data-testid`/`data-test-id`/`data-component`,
+        // the attributes this file already read). The visible span must
+        // survive; the two accessibility-only siblings must not, or their
+        // text runs into the visible span with no separator.
+        let html = r#"<html><body>
+            <article>
+              <p>Real content.</p>
+              <span aria-hidden="true">Ended</span>
+              <span data-hook="details-duration-aria-label">Ended</span>
+              <div data-hook="sr-only-details-price">650 Canadian dollars</div>
+              <div data-hook="aria-hidden-details-price">CA$650</div>
+            </article>
+        </body></html>"#;
+        let out = strip_clutter(html);
+        assert!(out.contains("Real content"), "got:\n{out}");
+        assert!(out.contains("CA$650"), "the visible price must survive: {out}");
+        assert!(
+            !out.contains("650 Canadian dollars"),
+            "the sr-only duplicate price must be stripped: {out}"
+        );
+        assert_eq!(
+            out.matches("Ended").count(),
+            1,
+            "the aria-label duplicate must be stripped, leaving one 'Ended': {out}"
+        );
     }
 
     #[test]
