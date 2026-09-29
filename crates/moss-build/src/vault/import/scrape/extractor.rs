@@ -9,7 +9,10 @@
 //!    journalism-site clutter tokens (ad, social, sidebar, comment, …).
 //!    Also drops hidden elements (inline `display:none` / `visibility:hidden`
 //!    style or `hidden`/`invisible` class) and small images (width or height
-//!    `< 33`).
+//!    `< 33`), and promotes a lazy-load `data-src`/`data-lazy-src`/
+//!    `data-original`/`data-echo` onto `src` when `src` itself is missing
+//!    or empty — otherwise a lazy-loaded gallery image is invisible to
+//!    every later step, since none of them look past `src`.
 //!
 //! 2. **Score candidates** with [`scraper`] — for each of the 20 priority
 //!    entry-point selectors (`#post`, `.article-content`, …, `article`,
@@ -184,6 +187,37 @@ fn small_image_px(attr: Option<&str>) -> Option<u32> {
     raw.trim_end_matches("px").trim().parse::<u32>().ok()
 }
 
+/// `data-*` attributes that stand in for `src` on a lazy-loaded `<img>`.
+/// Squarespace's gallery blocks (and lazysizes-style loaders generally)
+/// never populate `src` server-side — an IntersectionObserver swaps it in
+/// client-side on scroll — so a static fetch sees an `<img>` with no `src`
+/// at all and htmd silently drops it. Checked in this order; first match
+/// wins.
+const LAZY_SRC_ATTRS: &[&str] = &["data-src", "data-lazy-src", "data-original", "data-echo"];
+
+/// Promote a lazy-load `data-*` attribute onto `src` when `src` is missing
+/// or empty, so the image survives into the markdown like any other.
+fn promote_lazy_src(
+    el: &mut lol_html::html_content::Element,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let has_real_src = el
+        .get_attribute("src")
+        .is_some_and(|s| !s.trim().is_empty());
+    if has_real_src {
+        return Ok(());
+    }
+    for attr in LAZY_SRC_ATTRS {
+        if let Some(v) = el.get_attribute(attr) {
+            let v = v.trim();
+            if !v.is_empty() {
+                el.set_attribute("src", v)?;
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Run lol_html over the input HTML, removing clutter. Returns clean HTML.
 fn strip_clutter(html: &str) -> String {
     let mut output: Vec<u8> = Vec::with_capacity(html.len());
@@ -207,8 +241,10 @@ fn strip_clutter(html: &str) -> String {
                     el.remove();
                     Ok(())
                 }),
-                // Drop small images.
+                // Fill in `src` from a lazy-load attribute before anything
+                // else inspects the image, then drop small images.
                 element!("img", |el| {
+                    promote_lazy_src(el)?;
                     let w = small_image_px(el.get_attribute("width").as_deref());
                     let h = small_image_px(el.get_attribute("height").as_deref());
                     if matches!(w, Some(v) if v < 33) || matches!(h, Some(v) if v < 33) {
@@ -431,6 +467,82 @@ mod tests {
         assert!(out.contains("big.jpg"));
         assert!(!out.contains("pixel.gif"));
         assert!(!out.contains("tiny.png"));
+    }
+
+    /// The `src` attribute's value on the first `<img>` in a fragment, via
+    /// a real HTML parser — a plain `contains("src=\"…\"")` string check
+    /// is a false positive here, since that same byte sequence also
+    /// occurs inside `data-src="…"`.
+    fn first_img_src(html: &str) -> Option<String> {
+        let doc = Html::parse_fragment(html);
+        let sel = Selector::parse("img").unwrap();
+        doc.select(&sel)
+            .next()?
+            .value()
+            .attr("src")
+            .map(|s| s.to_string())
+    }
+
+    #[test]
+    fn strip_promotes_lazy_src_when_src_missing() {
+        // Squarespace-style gallery markup: no `src` at all, only the
+        // lazy-load attribute the client swaps in on scroll.
+        let html = r#"<html><body>
+            <img data-src="https://cdn.example.com/photo1.jpg" alt="one">
+            <img data-src="https://cdn.example.com/photo2.jpg" data-image="https://cdn.example.com/photo2.jpg" alt="two">
+            <p>hello</p>
+        </body></html>"#;
+        let out = strip_clutter(html);
+        let doc = Html::parse_document(&out);
+        let sel = Selector::parse("img").unwrap();
+        let srcs: Vec<Option<&str>> = doc.select(&sel).map(|el| el.value().attr("src")).collect();
+        assert_eq!(
+            srcs,
+            vec![
+                Some("https://cdn.example.com/photo1.jpg"),
+                Some("https://cdn.example.com/photo2.jpg"),
+            ],
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn strip_leaves_real_src_alone_even_with_data_src_present() {
+        // A real `src` (even a different URL, e.g. a low-res placeholder
+        // swapped for the lazy-load target) must never be overwritten.
+        let html = r#"<html><body>
+            <img src="https://cdn.example.com/real.jpg" data-src="https://cdn.example.com/other.jpg" alt="one">
+            <p>hello</p>
+        </body></html>"#;
+        let out = strip_clutter(html);
+        assert_eq!(
+            first_img_src(&out).as_deref(),
+            Some("https://cdn.example.com/real.jpg"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn strip_promotes_lazy_src_end_to_end_through_markdown() {
+        // The promotion must survive into the actual markdown the
+        // conversion pipeline produces, not just the intermediate HTML.
+        let html = r#"<!doctype html><html><body>
+            <article>
+              <p>A gallery page with almost no prose.</p>
+              <img data-src="https://cdn.example.com/gallery1.jpg" alt="Gallery one">
+              <img data-src="https://cdn.example.com/gallery2.jpg" alt="Gallery two">
+            </article>
+        </body></html>"#;
+        let inner = extract_main_content(html);
+        let md = htmd::convert(&inner).unwrap();
+        assert!(
+            md.contains("https://cdn.example.com/gallery1.jpg"),
+            "got: {md}"
+        );
+        assert!(
+            md.contains("https://cdn.example.com/gallery2.jpg"),
+            "got: {md}"
+        );
     }
 
     #[test]
