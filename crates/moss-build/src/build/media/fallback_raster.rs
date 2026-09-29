@@ -437,6 +437,15 @@ pub(crate) fn encode_sized_raster(
 /// (corrupt / mislabeled non-image), or a CMYK JPEG (libjpeg's CMYK→RGB is
 /// lossy; mirrors the WebP `SkipReason::Cmyk`). On `None` the caller keeps the
 /// verbatim original. Never panics; never fails the build.
+///
+/// Concurrent callers for the same source share one encode. Every build's
+/// background asset walk comes through here, and the walks of earlier builds
+/// keep running while a later build starts its own. On a cold cache each walk
+/// that catches up with the one ahead of it arrives at the first uncached image
+/// while that image is still being encoded, misses the cache, and encodes it
+/// too; from then on the walks move in lockstep and every image is encoded
+/// once per live walk. Joining the encode already in flight makes the cost
+/// one encode per source however many builds overlap.
 pub(crate) fn sized_raster_oid_for_original(
     source_file: &Path,
     source_oid: &str,
@@ -445,9 +454,8 @@ pub(crate) fn sized_raster_oid_for_original(
     config: &ImageCompressionConfig,
     quality: u8,
 ) -> Option<String> {
-    use crate::build::cache::{TransformEntry, TransformRecord};
-
-    const TRANSFORM: &str = "image/sized-raster";
+    static IN_FLIGHT: std::sync::LazyLock<crate::build::cache::Singleflight<Option<String>>> =
+        std::sync::LazyLock::new(crate::build::cache::Singleflight::new);
 
     let ext = source_file
         .extension()
@@ -469,13 +477,50 @@ pub(crate) fn sized_raster_oid_for_original(
         "flatten_alpha": !is_png,
         "format": if is_png { "png" } else { "jpeg" },
     });
+    let job = SizedRasterJob { source_file, source_oid, ext: &ext, fallback_edge, quality, params: &params };
 
-    // ---- Cache hit? (checked BEFORE reading the source at all) ----
-    if !source_oid.is_empty() {
-        if let Some(cached) = transforms.find_cached_output(source_oid, TRANSFORM, &params) {
-            return Some(cached);
-        }
+    if source_oid.is_empty() {
+        return produce_sized_raster(&job, objects, transforms);
     }
+    // ---- Cache hit? (checked BEFORE reading the source at all) ----
+    let cached = || transforms.find_cached_output(source_oid, SIZED_RASTER_TRANSFORM, &params);
+    if let Some(hit) = cached() {
+        return Some(hit);
+    }
+    // The key is the cache entry's own identity. The cache root is in it
+    // because the returned oid names a blob in that site's object store.
+    let key = format!("{}|{source_oid}|{SIZED_RASTER_TRANSFORM}|{params}", transforms.root().display());
+    // Re-checked inside: an encode that finished between the check above and
+    // this call has already cached its output.
+    IN_FLIGHT
+        .do_work(&key, || cached().or_else(|| produce_sized_raster(&job, objects, transforms)))
+        .0
+        .flatten()
+}
+
+const SIZED_RASTER_TRANSFORM: &str = "image/sized-raster";
+
+/// What one sized-raster output depends on, derived once so the cache params
+/// and the in-flight key cannot disagree.
+struct SizedRasterJob<'a> {
+    source_file: &'a Path,
+    source_oid: &'a str,
+    ext: &'a str,
+    fallback_edge: u32,
+    quality: u8,
+    params: &'a serde_json::Value,
+}
+
+/// The cache-miss path: guard, encode, store, record.
+fn produce_sized_raster(
+    job: &SizedRasterJob<'_>,
+    objects: &crate::build::cache::ObjectStore,
+    transforms: &crate::build::cache::TransformCache,
+) -> Option<String> {
+    use crate::build::cache::{TransformEntry, TransformRecord};
+
+    let SizedRasterJob { source_file, source_oid, ext, fallback_edge, quality, params } = *job;
+    let is_png = ext == "png";
 
     // ---- Cloud guard: the bytes are not here, and that is not a verdict. ----
     //
@@ -522,6 +567,8 @@ pub(crate) fn sized_raster_oid_for_original(
     }
 
     // ---- Encode (decode → orient → resize → [flatten] → JPEG/PNG). ----
+    #[cfg(test)]
+    TEST_HOOK_ENCODED_SOURCES.lock().unwrap().push(source_file.to_path_buf());
     let sized_bytes = match encode_sized_raster(source_file, fallback_edge, quality) {
         Ok(b) => b,
         Err(e) => {
@@ -594,11 +641,11 @@ pub(crate) fn sized_raster_oid_for_original(
             transforms: std::collections::HashMap::new(),
         });
         record.transforms.insert(
-            TRANSFORM.to_string(),
+            SIZED_RASTER_TRANSFORM.to_string(),
             TransformEntry {
                 oid: out_oid.clone(),
                 size: out_size,
-                params,
+                params: params.clone(),
             },
         );
         if let Err(e) = transforms.put(&record) {
@@ -608,6 +655,11 @@ pub(crate) fn sized_raster_oid_for_original(
 
     Some(out_oid)
 }
+
+/// Test hook: every source this process actually encoded, as opposed to served
+/// from the cache or from an encode already in flight. Compiled only for tests.
+#[cfg(test)]
+pub(crate) static TEST_HOOK_ENCODED_SOURCES: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
 
 /// Cheap animated-PNG (APNG) detection: an `acTL` control chunk appears before
 /// the first `IDAT` in an animated PNG. The still-image decoder used by the

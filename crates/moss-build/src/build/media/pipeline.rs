@@ -1392,31 +1392,13 @@ pub(crate) fn copy_deferred_assets(
                 // cached by source hash, so unchanged images are not re-encoded
                 // on incremental builds. The manifest hash below is computed from
                 // the OUTPUT file, so it correctly reflects the sized bytes.
-                // A source still in the cloud never reaches the sized-raster
-                // encode.
-                //
-                // The deferral above is guarded on `cached_oid.is_none()`,
-                // correctly: with a warm OID the bytes are already in the CAS
-                // and the output can be linked without touching the source. But
-                // `sized_raster_oid_for_original` takes the SOURCE PATH and, on
-                // a transform-cache miss, reads it — so a warm OID walked
-                // straight past the deferral into a full source read that fails
-                // `EDEADLK`. That is the 6,967 `[sized-raster] encode failed …
-                // keeping verbatim original` lines in one incident's uploaded
-                // log, once per image per build for the whole download window,
-                // and a large part of the 7-10 cores it burned.
-                //
-                // Linking the verbatim CAS blob is the honest fallback: it is
-                // the full-resolution original rather than the sized one, which
-                // is heavier than we would like but correct and available now.
-                // The next build after the file lands re-encodes it properly.
-                let source_in_the_cloud = crate::build::icloud::is_evicted(file_path);
-                if source_in_the_cloud {
-                    crate::build::cloud_ledger::note_unavailable(file_path);
-                }
-                let link_oid = if source_in_the_cloud {
-                    oid.clone()
-                } else if matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
+                // A source still in the cloud is safe to hand over: a warm OID
+                // means the bytes are already in the CAS, and
+                // `sized_raster_oid_for_original` answers from its cache before
+                // it touches the source. On a miss it checks for eviction
+                // itself, records the absence, and returns `None`, so the
+                // verbatim CAS blob is linked until the file lands.
+                let link_oid = if matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
                     crate::build::media::fallback_raster::sized_raster_oid_for_original(
                         file_path,
                         &oid,

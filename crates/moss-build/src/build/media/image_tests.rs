@@ -4042,6 +4042,38 @@ fn sized_raster_oid_reuses_transform_cache() {
     );
 }
 
+/// Overlapping builds each run their own asset walk. On a cold cache they must
+/// share one encode per source, and a later warm walk must encode nothing.
+#[test]
+fn concurrent_sized_raster_calls_share_one_encode() {
+    use crate::build::cache::{ObjectStore, TransformCache};
+    use crate::build::media::fallback_raster::TEST_HOOK_ENCODED_SOURCES;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let objects_root = tmp.path().join("objects");
+    let objects = ObjectStore::new(objects_root.clone());
+    let transforms = TransformCache::new(tmp.path().join("transforms"), ObjectStore::new(objects_root));
+    let src = tmp.path().join("photo.jpg");
+    make_detailed_jpeg(&src, 1600, 1200);
+    let source_oid = objects.store_file(&src).unwrap();
+    let cfg = ImageCompressionConfig::default();
+    let encodes = || TEST_HOOK_ENCODED_SOURCES.lock().unwrap().iter().filter(|p| **p == src).count();
+    let size = || sized_raster_oid_for_original(&src, &source_oid, &objects, &transforms, &cfg, SIZED_JPEG_QUALITY);
+
+    let walks = 6;
+    let barrier = std::sync::Barrier::new(walks);
+    let oids: Vec<Option<String>> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..walks).map(|_| s.spawn(|| { barrier.wait(); size() })).collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert!(oids[0].is_some(), "the source must be sized");
+    assert!(oids.iter().all(|o| *o == oids[0]), "every walk must get the same output: {oids:?}");
+    assert_eq!(encodes(), 1, "{walks} concurrent walks must share one encode");
+
+    assert_eq!(size(), oids[0]);
+    assert_eq!(encodes(), 1, "a warm walk must not encode");
+}
+
 #[test]
 fn sized_raster_oid_keeps_source_when_reencode_not_smaller() {
     use crate::build::cache::{ObjectStore, TransformCache};
