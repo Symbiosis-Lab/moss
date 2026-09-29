@@ -932,10 +932,20 @@ impl HashIndex {
     /// last clobber the other's freshly-added entries, forcing a full re-hash of
     /// that category on the next build. `save_merging` re-reads the current
     /// on-disk entries and layers `self`'s on top (self wins on key collision),
-    /// so neither worker loses the other's contribution. Scan output keeps using
-    /// plain `save` (it is authoritative and prunes stale entries).
+    /// so neither worker loses the other's contribution. The scan, which also
+    /// prunes, uses [`save_pruned`](Self::save_pruned).
     pub fn save_merging(&self, path: &Path) -> Result<(), String> {
+        self.save_pruned(path, |_| true)
+    }
+
+    /// [`save_merging`](Self::save_merging) that first drops every on-disk entry
+    /// `keep` rejects. For the scan: it is authoritative for the media it
+    /// resolves (it leaves out, on purpose, an entry recorded for another instant
+    /// of a file) and for which files exist, but the parse cache records page
+    /// hashes in the same file, and those must survive while their page does.
+    pub fn save_pruned(&self, path: &Path, keep: impl Fn(&str) -> bool) -> Result<(), String> {
         let mut merged = Self::load(path);
+        merged.entries.retain(|key, _| keep(key));
         for (key, entry) in &self.entries {
             merged.entries.insert(key.clone(), entry.clone());
         }

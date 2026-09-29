@@ -1343,8 +1343,17 @@ pub fn scan_folder_with_dedup_emit(
     log::debug!(target: "timing", "[scan] walk={:?} image_meta(parallel, {} imgs)={:?}",
         walk_elapsed, img_n, img_phase_start.elapsed());
 
-    // Save the new hash index (only entries seen this scan — auto-prunes stale).
-    if let Err(e) = new_index.save(&hash_index_path) {
+    // Save the new hash index: this scan's media entries, plus what other writers
+    // recorded for the non-media files it walked (the parse cache's page hashes).
+    // Entries for files that are gone are pruned.
+    let walked_non_media: std::collections::HashSet<&str> = markdown_files
+        .iter()
+        .chain(&html_files)
+        .chain(&notebook_files)
+        .chain(&other_files)
+        .map(|f| f.path.as_str())
+        .collect();
+    if let Err(e) = new_index.save_pruned(&hash_index_path, |path| walked_non_media.contains(path)) {
         log::warn!("Failed to save hash index: {}", e);
     }
 

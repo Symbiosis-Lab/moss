@@ -2568,3 +2568,38 @@ fn scan_folder_prunes_nested_moss_sites() {
         ps.dirs
     );
 }
+
+/// The scan rewrites the shared hash index from what it saw, but the parse cache
+/// records each page's hash in the same file. A scan that dropped those made every
+/// build re-hash every unchanged page; it must hand them on as recorded while the
+/// page exists, and still prune one that is gone.
+#[test]
+fn a_scan_keeps_the_page_hashes_the_parse_cache_recorded_and_prunes_deleted_pages() {
+    // Not tempfile's default ".tmp" prefix: the walk excludes a dot-named root.
+    let dir = tempfile::Builder::new().prefix("moss_test_page_hashes").tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("posts")).unwrap();
+    fs::write(root.join("index.md"), "# Home\n").unwrap();
+    fs::write(root.join("posts/first.md"), "# First\n").unwrap();
+    let index_path = crate::moss_paths::MossPaths::new(root).cache_hash_index();
+
+    // What a build's parse cache leaves behind: every page hashed and merged in.
+    let mut parsed = HashIndex::load(&index_path);
+    for page in ["index.md", "posts/first.md"] {
+        parsed.resolve(&root.join(page), page).unwrap();
+    }
+    parsed.save_merging(&index_path).unwrap();
+
+    scan_folder(&root.to_string_lossy()).unwrap();
+    let after = HashIndex::load(&index_path);
+    for page in ["index.md", "posts/first.md"] {
+        let stat = FileStat::of(&fs::metadata(root.join(page)).unwrap());
+        assert!(after.lookup(page, &stat).is_some(), "the next build would re-hash unchanged {page}");
+    }
+
+    fs::remove_file(root.join("posts/first.md")).unwrap();
+    scan_folder(&root.to_string_lossy()).unwrap();
+    let pruned = HashIndex::load(&index_path);
+    assert!(pruned.entries.contains_key("index.md"));
+    assert!(!pruned.entries.contains_key("posts/first.md"), "a deleted page's entry must still be pruned");
+}
