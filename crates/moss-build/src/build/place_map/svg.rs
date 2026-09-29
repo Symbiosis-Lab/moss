@@ -10,16 +10,25 @@ use std::fmt::Write;
 use sha2::{Digest, Sha256};
 
 mod path;
-use path::{serialize_path, snap};
+use path::{serialize_path, snap, BAND_PX, FINE_PX};
 mod text;
-use text::{precision_name, precision_rank, xml_escape};
+use text::{precision_name, xml_escape};
+// Re-exported (via place_map.rs) so context.rs's locator can derive a
+// profile from every resolved place's precision, the same rule emit_svg
+// already applies to the full/aggregate map — see the doc comment on
+// render_locator's fix for what picking only the first place's precision
+// broke.
+pub(crate) use text::precision_rank;
 mod locator;
 pub use locator::{
     emit_locator, emit_locator_svg, LocatorProfile, LocatorSafetyError, LocatorSvg,
     LOCATOR_Q11_BROTLI_LIMIT, LOCATOR_RAW_SAFETY_LIMIT,
 };
+mod river;
+mod palette;
+use palette::{band_color, relief_height_grey};
 
-use super::geometry::{marker_radius, Frame, FrameTier, ProjectedPoint, Projection, TileSelection};
+use super::geometry::{marker_radius, FrameTier, ProjectedPoint, Projection, TileSelection};
 use super::globe::{globe_line, globe_marker, globe_rings};
 use super::{Feature, Pack, PlaceMapContext, PlaceMapTarget, ResolvedPlace};
 use crate::vault::places::Precision;
@@ -152,52 +161,32 @@ fn emit_svg_with_mode(
     let projection = target.frame.as_ref().map(Projection::new);
     let grouped = target.frame.as_ref().map(|frame| {
         let selected = TileSelection::for_frame(context.pack(), frame);
-        grouped_features(context.pack(), &selected)
-    });
-    if !compact {
-        if let (Some(projection), Some(grouped)) = (projection.as_ref(), grouped.as_ref()) {
-            writer.emit_layers(context.pack().header.quantisation, projection, grouped);
-        } else {
-            // A missing coordinate is deliberate no-map input. Keeping a valid
-            // empty figure here avoids inventing a point or leaking source data.
-            writer.empty_layers();
+        let mut grouped = grouped_features(context.pack(), &selected);
+        if frame.tier == FrameTier::World {
+            keep_world_scale_layers(&mut grouped);
         }
-    } else if let (Some(projection), Some(grouped), Some(profile)) = (
-        projection.as_ref(),
-        grouped.as_ref(),
-        writer.locator_profile,
-    ) {
-        writer.emit_locator_layers(
-            context.pack().header.quantisation,
-            projection,
-            grouped,
-            profile,
-        );
-    } else {
-        writer.empty_layers();
+        grouped
+    });
+    let quantisation = context.pack().header.quantisation;
+    // A locator draws the same layers as a full map. Only a country-level
+    // locator, whose frame spans half the globe, keeps to land alone so it
+    // stays within the locator byte budget.
+    let sparse = writer.locator_profile == Some(LocatorProfile::Country);
+    match (projection.as_ref(), grouped.as_ref()) {
+        (Some(projection), Some(grouped)) if sparse => {
+            writer.emit_sparse_layers(quantisation, projection, grouped)
+        }
+        (Some(projection), Some(grouped)) => writer.emit_layers(quantisation, projection, grouped),
+        // A missing coordinate is deliberate no-map input. Keeping a valid
+        // empty figure here avoids inventing a point or leaking source data.
+        _ => writer.empty_layers(),
     }
     writer.lighting();
-    if target.frame.is_none() {
-        writer.empty_layers_after_lighting();
-    } else if !compact {
-        if let Some(projection) = projection.as_ref() {
-            writer.emit_surface_layers(
-                context.pack().header.quantisation,
-                projection,
-                grouped.as_ref().unwrap(),
-            );
+    match (projection.as_ref(), grouped.as_ref()) {
+        (Some(projection), Some(grouped)) if !sparse => {
+            writer.emit_surface_layers(quantisation, projection, grouped)
         }
-    } else if let (Some(projection), Some(grouped), Some(profile)) = (
-        projection.as_ref(),
-        grouped.as_ref(),
-        writer.locator_profile,
-    ) {
-        writer.emit_locator_surface_layers(
-            context.pack().header.quantisation,
-            projection,
-            grouped,
-            profile,
-        );
+        _ => writer.empty_layers_after_lighting(),
     }
     writer.markers(target);
     writer.globe(context, target);
@@ -238,6 +227,18 @@ struct Writer<'a> {
     land_paths: Vec<String>,
     has_href: bool,
     locator_profile: Option<LocatorProfile>,
+}
+
+/// Natural Earth scalerank of the smallest river a world map still draws.
+const WORLD_MAX_RIVER_RANK: i16 = 3;
+
+/// At world scale the river taper's 0.5 px floor still draws every
+/// tributary as a thread, and reef lines simplified for a whole-globe frame
+/// read as scratches across the ocean. A world map keeps trunk rivers only
+/// and no reefs.
+fn keep_world_scale_layers(grouped: &mut [Vec<&Feature>]) {
+    grouped[4].retain(|feature| feature.band <= WORLD_MAX_RIVER_RANK);
+    grouped[6].clear();
 }
 
 fn grouped_features<'a>(pack: &'a Pack, selected: &TileSelection) -> Vec<Vec<&'a Feature>> {
@@ -307,7 +308,7 @@ impl Writer<'_> {
         let height_empty = self.ids.get("height-empty");
         write!(
             self.output,
-            "<defs><filter id=\"{height_filter}\" color-interpolation-filters=\"sRGB\"><feGaussianBlur in=\"SourceGraphic\" stdDeviation=\"9\" result=\"height-blur-9\"/><feGaussianBlur in=\"SourceGraphic\" stdDeviation=\"4\" opacity=\"0.3\" result=\"height-blur-4\"/><feBlend in=\"height-blur-9\" in2=\"height-blur-4\" mode=\"screen\" result=\"height-field\"/><feColorMatrix in=\"height-field\" type=\"luminanceToAlpha\" result=\"height-alpha\"/><feDiffuseLighting in=\"height-alpha\" surfaceScale=\"1\" diffuseConstant=\"1\" lighting-color=\"var(--moss-place-light-warm, #f2c078)\" result=\"warm\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feDiffuseLighting in=\"height-alpha\" surfaceScale=\"0.7\" diffuseConstant=\"0.7\" lighting-color=\"var(--moss-place-light-cool, #5c83aa)\" result=\"cool\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feBlend in=\"warm\" in2=\"cool\" mode=\"screen\" result=\"warm-cool\"/><feGaussianBlur in=\"warm-cool\" stdDeviation=\"2\" result=\"soft-light\"/><feBlend in=\"soft-light\" in2=\"SourceGraphic\" mode=\"multiply\" result=\"lit-terrain\"/><feComposite in=\"lit-terrain\" in2=\"SourceGraphic\" operator=\"in\"/></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\"><feDropShadow dx=\"3\" dy=\"4\" stdDeviation=\"0\" flood-color=\"var(--moss-place-shadow, #26343d)\" flood-opacity=\"0.22\" result=\"land-shadow\"/><feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"land-shadow\"/></feMerge></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\"><feDropShadow dx=\"3\" dy=\"4\" stdDeviation=\"0\" flood-color=\"var(--moss-place-shadow, #26343d)\" flood-opacity=\"0.16\" result=\"sea-shadow\"/><feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"sea-shadow\"/></feMerge></filter><radialGradient id=\"{marker_gradient}\"><stop offset=\"0\" stop-color=\"var(--moss-place-marker, #c45b48)\"/><stop offset=\"1\" stop-color=\"var(--moss-place-marker, #c45b48)\" stop-opacity=\"0\"/></radialGradient><clipPath id=\"{globe_clip}\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\"/></clipPath><path id=\"{height_empty}\" d=\"m0 0l0 0\"/></defs>", self.ids.get("shadow-seafloor"), self.ids.get("shadow-land"),
+            "<defs><filter id=\"{height_filter}\" color-interpolation-filters=\"sRGB\"><feColorMatrix in=\"SourceGraphic\" type=\"luminanceToAlpha\" result=\"height-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"9\" result=\"height-blur-9\"/><feColorMatrix in=\"height-blur-9\" type=\"matrix\" values=\"0 0 0 1 0  0 0 0 1 0  0 0 0 1 0  0 0 0 1 0\" result=\"height-coverage\"/><feDiffuseLighting in=\"height-blur-9\" surfaceScale=\"78\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-steep\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-steep\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-steep-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"4\" result=\"height-blur-4\"/><feDiffuseLighting in=\"height-blur-4\" surfaceScale=\"34\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-soft\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-soft\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-soft-alpha\"/><feComposite in=\"lit-steep-alpha\" in2=\"lit-soft-alpha\" operator=\"arithmetic\" k1=\"0\" k2=\"0.7\" k3=\"0.3\" k4=\"0\" result=\"lit-mix\"/><feComponentTransfer in=\"lit-mix\" result=\"lit-hi-mask\"><feFuncA type=\"linear\" slope=\"1.877817459305202\" intercept=\"-1.327817459305202\"/></feComponentTransfer><feComponentTransfer in=\"lit-mix\" result=\"lit-lo-mask\"><feFuncA type=\"linear\" slope=\"-0.5656854249492381\" intercept=\"0.4\"/></feComponentTransfer><feFlood flood-color=\"var(--moss-place-light-warm, #fff3d0)\" result=\"lit-hi-flood\"/><feComposite in=\"lit-hi-flood\" in2=\"lit-hi-mask\" operator=\"in\" result=\"lit-hi-tint\"/><feFlood flood-color=\"var(--moss-place-light-cool, #5a6488)\" result=\"lit-lo-flood\"/><feComposite in=\"lit-lo-flood\" in2=\"lit-lo-mask\" operator=\"in\" result=\"lit-lo-tint\"/><feMerge result=\"lit-combined\"><feMergeNode in=\"lit-lo-tint\"/><feMergeNode in=\"lit-hi-tint\"/></feMerge><feGaussianBlur in=\"lit-combined\" stdDeviation=\"2\" result=\"lit-smooth\"/><feComposite in=\"lit-smooth\" in2=\"height-coverage\" operator=\"arithmetic\" k1=\"1\" k2=\"0\" k3=\"0\" k4=\"0\"/></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\"><feDropShadow dx=\"1.4\" dy=\"1.4\" stdDeviation=\"0.7\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.35\" result=\"land-shadow\"/><feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"land-shadow\"/></feMerge></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\"><feDropShadow dx=\"1.0\" dy=\"1.0\" stdDeviation=\"0.6\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.22\" result=\"sea-shadow\"/><feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"sea-shadow\"/></feMerge></filter><radialGradient id=\"{marker_gradient}\"><stop offset=\"0\" stop-color=\"var(--moss-place-marker, #2d5a2d)\"/><stop offset=\"1\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0\"/></radialGradient><clipPath id=\"{globe_clip}\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\"/></clipPath><path id=\"{height_empty}\" d=\"m0 0l0 0\"/><filter id=\"{}\" filterUnits=\"userSpaceOnUse\" x=\"-24\" y=\"-24\" width=\"768\" height=\"528\"><feGaussianBlur stdDeviation=\"2.4\"/></filter></defs>", self.ids.get("shadow-seafloor"), self.ids.get("shadow-land"), self.ids.get("soft"),
         )
         .expect("writing to String cannot fail");
         self.output.push_str("<defs>");
@@ -321,11 +322,24 @@ impl Writer<'_> {
             ),
             (
                 "seafloor",
-                [-10, -100, -250, -500, -1000, -2000, -4000, -6000].as_slice(),
+                [
+                    -10, -20, -30, -50, -100, -200, -1000, -2000, -3000, -4000, -5000, -6000,
+                ]
+                .as_slice(),
             ),
         ] {
+            // Same small cut-paper offset the shared shadow-land/shadow-seafloor
+            // filters above use, not the earlier dx=3/dy=4/stdDeviation=0: at
+            // that larger, perfectly hard-edged offset a small island (a
+            // handful of points wide) reads as a doubled "ghost" shape rather
+            // than a subtle drop shadow.
+            let (dx, dy, std, opacity) = if name == "relief" {
+                ("1.4", "1.4", "0.7", "0.35")
+            } else {
+                ("1.0", "1.0", "0.6", "0.22")
+            };
             for band in bands {
-                write!(self.output, "<filter id=\"{}\" color-interpolation-filters=\"sRGB\"><feDropShadow dx=\"3\" dy=\"4\" stdDeviation=\"0\" flood-color=\"var(--moss-place-shadow-{name}-{band}, #26343d)\" flood-opacity=\"0.2\" result=\"shadow\"/><feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"shadow\"/></feMerge></filter>", self.ids.get(&format!("shadow-{name}-{band}"))).expect("writing to String cannot fail");
+                write!(self.output, "<filter id=\"{}\" color-interpolation-filters=\"sRGB\"><feDropShadow dx=\"{dx}\" dy=\"{dy}\" stdDeviation=\"{std}\" flood-color=\"var(--moss-place-shadow-{name}-{band}, #5a6488)\" flood-opacity=\"{opacity}\" result=\"shadow\"/><feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"shadow\"/></feMerge></filter>", self.ids.get(&format!("shadow-{name}-{band}"))).expect("writing to String cannot fail");
             }
         }
         self.output.push_str("</defs>");
@@ -335,13 +349,13 @@ impl Writer<'_> {
         let id = self.ids.get("layer-water");
         write!(
             self.output,
-            "<g id=\"{id}\" data-map-layer=\"water\"><rect width=\"{SVG_WIDTH}\" height=\"{SVG_HEIGHT}\" fill=\"var(--moss-place-water, #9cc7d8)\"/></g>",
+            "<g id=\"{id}\" data-map-layer=\"water\"><rect width=\"{SVG_WIDTH}\" height=\"{SVG_HEIGHT}\" fill=\"var(--moss-place-water, #e9eff2)\"/></g>",
         )
         .expect("writing to String cannot fail");
     }
 
     fn empty_layers(&mut self) {
-        for name in ["seafloor", "land", "relief"] {
+        for name in ["coast", "seafloor", "land", "relief"] {
             write!(
                 self.output,
                 "<g id=\"{}\" data-map-layer=\"{name}\"/>",
@@ -354,9 +368,7 @@ impl Writer<'_> {
     }
 
     fn empty_layers_after_lighting(&mut self) {
-        for name in [
-            "coast", "lakes", "rivers", "ice", "reefs", "salt", "built-up",
-        ] {
+        for name in ["ice", "salt", "lakes", "rivers", "reefs", "built-up"] {
             write!(
                 self.output,
                 "<g id=\"{}\" data-map-layer=\"{name}\"/>",
@@ -372,83 +384,110 @@ impl Writer<'_> {
         projection: &Projection,
         grouped: &[Vec<&Feature>],
     ) {
-        // Sea floor is painted shallow to deep, then land and relief low to
-        // high.  The source pack has stable IDs; no administrative layer is
-        // accepted or emitted here.
+        // The coast halo first, then the sea floor painted shallow to deep,
+        // then land and relief low to high. The source pack has stable IDs;
+        // no administrative layer is accepted or emitted here.
+        self.land_defs(quantisation, projection, grouped);
+        self.coast();
         self.emit_band_layer(quantisation, projection, grouped, 10, "seafloor", true);
-        self.emit_filled_layer(
-            quantisation,
-            projection,
-            grouped,
-            2,
-            "land",
-            "var(--moss-place-land, #d6c89c)",
-        );
+        self.land();
         self.emit_band_layer(quantisation, projection, grouped, 9, "relief", false);
     }
 
+    /// Land is defined once and drawn twice through `<use>`: as the coast's
+    /// soft halo under the sea floor, then as the land fill over it.
+    pub(super) fn land_defs(
+        &mut self,
+        quantisation: u32,
+        projection: &Projection,
+        grouped: &[Vec<&Feature>],
+    ) {
+        self.output.push_str("<defs>");
+        for (index, feature) in grouped[2].iter().enumerate() {
+            let rings: Vec<&[(i32, i32)]> = feature.parts.iter().map(Vec::as_slice).collect();
+            if let Some(path) = serialize_path(&projection.project_feature(&rings, quantisation), true, FINE_PX) {
+                let id = format!("{}-land-{index}", self.ids.base);
+                write!(self.output, "<path id=\"{id}\" d=\"{path}\" fill-rule=\"evenodd\"/>")
+                    .expect("writing to String cannot fail");
+                self.land_paths.push(id);
+            }
+        }
+        self.output.push_str("</defs>");
+    }
+
+    /// The land outline stroked wide, pale and blurred, under the sea
+    /// floor. The sea-floor bands cover it everywhere deeper than the
+    /// shallowest band, so what stays visible is a pale band on the sea
+    /// side of the shore.
+    pub(super) fn coast(&mut self) {
+        write!(self.output, "<g id=\"{}\" data-map-layer=\"coast\" filter=\"url(#{})\">", self.ids.get("layer-coast"), self.ids.get("soft"))
+            .expect("writing to String cannot fail");
+        for id in &self.land_paths {
+            write!(self.output, "<use href=\"#{id}\" fill=\"none\" stroke=\"var(--moss-place-coast, #f5f6f4)\" stroke-opacity=\"var(--moss-place-coast-opacity, 0.6)\" stroke-width=\"10\"/>")
+                .expect("writing to String cannot fail");
+        }
+        self.output.push_str("</g>");
+    }
+
+    pub(super) fn land(&mut self) {
+        write!(self.output, "<g id=\"{}\" data-map-layer=\"land\" filter=\"url(#{})\">", self.ids.get("layer-land"), self.ids.get("shadow-land"))
+            .expect("writing to String cannot fail");
+        for id in &self.land_paths {
+            write!(self.output, "<use href=\"#{id}\" fill=\"var(--moss-place-land, #d7d5c9)\"/>")
+                .expect("writing to String cannot fail");
+        }
+        self.output.push_str("</g>");
+    }
+
+    /// The physical layers over the lit terrain, in the approved design's
+    /// paint order: ice, salt flats, lakes, rivers, reefs, then built-up
+    /// areas at 70% so terrain still reads through a city.
     fn emit_surface_layers(
         &mut self,
         quantisation: u32,
         projection: &Projection,
         grouped: &[Vec<&Feature>],
     ) {
-        self.emit_line_layer(
-            quantisation,
-            projection,
-            grouped,
-            1,
-            "coast",
-            "var(--moss-place-coast, #7d684b)",
-        );
-        self.emit_filled_layer(
-            quantisation,
-            projection,
-            grouped,
-            3,
-            "lakes",
-            "var(--moss-place-lakes, #80b9c8)",
-        );
-        self.emit_line_layer(
-            quantisation,
-            projection,
-            grouped,
-            4,
-            "rivers",
-            "var(--moss-place-rivers, #5793ae)",
-        );
-        self.emit_filled_layer(
-            quantisation,
-            projection,
-            grouped,
-            5,
-            "ice",
-            "var(--moss-place-ice, #eaf2ed)",
-        );
-        self.emit_filled_layer(
-            quantisation,
-            projection,
-            grouped,
-            6,
-            "reefs",
-            "var(--moss-place-reefs, #d4a77e)",
-        );
-        self.emit_filled_layer(
-            quantisation,
-            projection,
-            grouped,
-            7,
-            "salt",
-            "var(--moss-place-salt, #e5d9b4)",
-        );
-        self.emit_filled_layer(
-            quantisation,
-            projection,
-            grouped,
-            8,
-            "built-up",
-            "var(--moss-place-built-up, #aa8065)",
-        );
+        let fill = |color: &str| format!("fill=\"{color}\"");
+        self.emit_merged_layer(quantisation, projection, grouped, 5, "ice", &fill("var(--moss-place-ice, #fbfcfd)"));
+        self.emit_merged_layer(quantisation, projection, grouped, 7, "salt", &fill("var(--moss-place-salt, #e3dcc8)"));
+        self.emit_merged_layer(quantisation, projection, grouped, 3, "lakes", &fill("var(--moss-place-lakes, #a9c6d8)"));
+        self.emit_river_layer(quantisation, projection, grouped, "var(--moss-place-rivers, #5b93bd)");
+        // Natural Earth's reefs are lines, not areas.
+        self.emit_merged_layer(quantisation, projection, grouped, 6, "reefs", "fill=\"none\" stroke=\"var(--moss-place-reefs, #b9d6cf)\" stroke-width=\"1.2\"");
+        self.emit_merged_layer(quantisation, projection, grouped, 8, "built-up", "fill=\"var(--moss-place-built-up, #c9bdb4)\" fill-opacity=\"0.7\"");
+    }
+
+    /// Every feature of one layer in a single path: these layers are never
+    /// referenced by id, so one element per feature would only add bytes.
+    /// Filled layers keep even-odd holes; line layers (reefs) stay open.
+    fn emit_merged_layer(
+        &mut self,
+        quantisation: u32,
+        projection: &Projection,
+        grouped: &[Vec<&Feature>],
+        layer_id: u8,
+        name: &str,
+        paint: &str,
+    ) {
+        let filled = !paint.starts_with("fill=\"none\"");
+        let mut paths = Vec::new();
+        for feature in &grouped[usize::from(layer_id)] {
+            for part in &feature.parts {
+                paths.extend(if filled {
+                    projection.project_ring(part, quantisation)
+                } else {
+                    projection.project_part(part, quantisation)
+                });
+            }
+        }
+        write!(self.output, "<g id=\"{}\" data-map-layer=\"{name}\">", self.ids.get(&format!("layer-{name}")))
+            .expect("writing to String cannot fail");
+        if let Some(path) = serialize_path(&paths, filled, FINE_PX) {
+            let rule = if filled { " fill-rule=\"evenodd\"" } else { "" };
+            write!(self.output, "<path d=\"{path}\" {paint}{rule}/>").expect("writing to String cannot fail");
+        }
+        self.output.push_str("</g>");
     }
 
     fn emit_band_layer(
@@ -505,64 +544,6 @@ impl Writer<'_> {
         self.output.push_str("</g>");
     }
 
-    fn emit_filled_layer(
-        &mut self,
-        quantisation: u32,
-        projection: &Projection,
-        grouped: &[Vec<&Feature>],
-        layer_id: u8,
-        name: &str,
-        color: &str,
-    ) {
-        let features = grouped[usize::from(layer_id)].clone();
-        self.output.push_str(&format!(
-            "<g id=\"{}\" data-map-layer=\"{name}\"{}>",
-            self.ids.get(&format!("layer-{name}")),
-            if name == "land" {
-                format!(" filter=\"url(#{})\"", self.ids.get("shadow-land"))
-            } else {
-                String::new()
-            }
-        ));
-        for (index, feature) in features.into_iter().enumerate() {
-            self.emit_filled_feature(
-                projection,
-                feature,
-                quantisation,
-                color,
-                &format!("{}-{name}-{index}", self.ids.base),
-                false,
-            );
-        }
-        self.output.push_str("</g>");
-    }
-
-    fn emit_line_layer(
-        &mut self,
-        quantisation: u32,
-        projection: &Projection,
-        grouped: &[Vec<&Feature>],
-        layer_id: u8,
-        name: &str,
-        color: &str,
-    ) {
-        let features = grouped[usize::from(layer_id)].clone();
-        self.output.push_str(&format!(
-            "<g id=\"{}\" data-map-layer=\"{name}\">",
-            self.ids.get(&format!("layer-{name}"))
-        ));
-        for (index, feature) in features.into_iter().enumerate() {
-            let mut paths = Vec::new();
-            for part in &feature.parts {
-                paths.extend(projection.project_part(part, quantisation));
-            }
-            if let Some(path) = serialize_path(&paths, false) {
-                write!(self.output, "<path id=\"{}\" d=\"{path}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"1\" stroke-linecap=\"round\"/>", format!("{}-{name}-{index}", self.ids.base)).expect("writing to String cannot fail");
-            }
-        }
-        self.output.push_str("</g>");
-    }
-
     fn emit_filled_feature(
         &mut self,
         projection: &Projection,
@@ -577,7 +558,7 @@ impl Writer<'_> {
         // rings stay in one even-odd path, preserving holes and multipart
         // topology through clipping.
         let projected = projection.project_feature(&rings, quantisation);
-        let Some(path) = serialize_path(&projected, true) else {
+        let Some(path) = serialize_path(&projected, true, BAND_PX) else {
             return;
         };
         write!(
@@ -587,11 +568,8 @@ impl Writer<'_> {
         )
         .expect("writing to String cannot fail");
         if is_relief {
-            let opacity = (f64::from(feature.band).abs() / 6000.0).clamp(0.2, 1.0);
-            self.height_uses.push(format!("{id}|{opacity:.3}"));
-        }
-        if id.contains("-land-") {
-            self.land_paths.push(id.to_string());
+            self.height_uses
+                .push(format!("{id}|{}", relief_height_grey(feature.band)));
         }
     }
 
@@ -609,10 +587,15 @@ impl Writer<'_> {
             .expect("writing to String cannot fail");
         }
         self.output.push_str("</clipPath>");
-        write!(self.output, "<g id=\"{id}\" data-map-layer=\"lighting\" filter=\"url(#{filter})\" clip-path=\"url(#{land_clip})\" aria-hidden=\"true\"><g id=\"{}\" opacity=\"0.3\">", self.ids.get("height-field")).expect("writing to String cannot fail");
+        // 0.5, not the two-pass diffuse blend weight (0.3, further down)
+        // this was copied from by mistake: the height field's own opacity
+        // is fixed at 0.5, and this opacity is the alpha the filter's
+        // luminanceToAlpha step reads as height, so 0.3 understated every
+        // highlight and shadow tint in both themes.
+        write!(self.output, "<g id=\"{id}\" data-map-layer=\"lighting\" filter=\"url(#{filter})\" clip-path=\"url(#{land_clip})\" aria-hidden=\"true\"><g id=\"{}\" opacity=\"0.5\">", self.ids.get("height-field")).expect("writing to String cannot fail");
         for item in &self.height_uses {
-            let (path_id, opacity) = item.split_once('|').unwrap_or((item.as_str(), "1"));
-            write!(self.output, "<use href=\"#{path_id}\" height=\"100%\" fill=\"rgb(128 128 128)\" fill-opacity=\"1\" opacity=\"{opacity}\" data-map-role=\"height-field\"/>").expect("writing to String cannot fail");
+            let (path_id, grey) = item.split_once('|').unwrap_or((item.as_str(), "#f2f2f2"));
+            write!(self.output, "<use href=\"#{path_id}\" height=\"100%\" fill=\"{grey}\" fill-opacity=\"1\" data-map-role=\"height-field\"/>").expect("writing to String cannot fail");
         }
         if self.height_uses.is_empty() {
             write!(
@@ -641,7 +624,7 @@ impl Writer<'_> {
                 let fill = if matches!(place.precision, Precision::Region | Precision::Country) {
                     format!("url(#{fade})")
                 } else {
-                    "var(--moss-place-marker, #c45b48)".to_string()
+                    "var(--moss-place-marker, #2d5a2d)".to_string()
                 };
                 write!(self.output, "<circle cx=\"{}\" cy=\"{}\" r=\"{radius:.0}\" fill=\"{fill}\" data-map-marker=\"{}\"/>", snap(point.0), snap(point.1), xml_escape(&place.key)).expect("writing to String cannot fail");
             }
@@ -662,7 +645,7 @@ impl Writer<'_> {
                 longitude: 0.0,
                 latitude: 0.0,
             });
-        write!(self.output, "<g id=\"{id}\" data-map-layer=\"globe\" clip-path=\"url(#{clip})\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"var(--moss-place-globe-water, #83afc1)\"/>").expect("writing to String cannot fail");
+        write!(self.output, "<g id=\"{id}\" data-map-layer=\"globe\" clip-path=\"url(#{clip})\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"var(--moss-place-globe-water, #e9eff2)\"/>").expect("writing to String cannot fail");
         let tier = &context.pack().tiers[0];
         for layer in &tier.layers {
             let include_coast = self.locator_profile != Some(LocatorProfile::Country);
@@ -675,8 +658,8 @@ impl Writer<'_> {
                     for part in &feature.parts {
                         paths.extend(globe_line(part, center, context.pack().header.quantisation));
                     }
-                    if let Some(path) = serialize_path(&paths, false) {
-                        write!(self.output, "<path d=\"{path}\" fill=\"none\" stroke=\"var(--moss-place-globe-coast, #80684d)\" stroke-width=\"0.5\" data-globe-feature=\"{index}\"/>").expect("writing to String cannot fail");
+                    if let Some(path) = serialize_path(&paths, false, FINE_PX) {
+                        write!(self.output, "<path d=\"{path}\" fill=\"none\" stroke=\"var(--moss-place-globe-coast, #f5f6f4)\" stroke-width=\"0.5\" data-globe-feature=\"{index}\"/>").expect("writing to String cannot fail");
                     }
                 } else {
                     let rings: Vec<Vec<(f64, f64)>> = feature
@@ -686,8 +669,8 @@ impl Writer<'_> {
                             globe_rings(part, center, context.pack().header.quantisation)
                         })
                         .collect();
-                    if let Some(path) = serialize_path(&rings, true) {
-                        write!(self.output, "<path d=\"{path}\" fill=\"var(--moss-place-globe-land, #d6c89c)\" fill-rule=\"evenodd\" data-globe-feature=\"{index}\"/>").expect("writing to String cannot fail");
+                    if let Some(path) = serialize_path(&rings, true, FINE_PX) {
+                        write!(self.output, "<path d=\"{path}\" fill=\"var(--moss-place-globe-land, #d7d5c9)\" fill-rule=\"evenodd\" data-globe-feature=\"{index}\"/>").expect("writing to String cannot fail");
                     }
                 }
             }
@@ -702,55 +685,19 @@ impl Writer<'_> {
             let radius = (marker_radius(place.precision) * 0.4).max(2.0);
             write!(
                 self.output,
-                "<circle cx=\"{}\" cy=\"{}\" r=\"{radius:.0}\" fill=\"var(--moss-place-marker, #c45b48)\" data-map-globe-marker=\"true\" data-map-marker=\"{}\"/>",
+                "<circle cx=\"{}\" cy=\"{}\" r=\"{radius:.0}\" fill=\"var(--moss-place-marker, #2d5a2d)\" data-map-globe-marker=\"true\" data-map-marker=\"{}\"/>",
                 snap(x), snap(y), xml_escape(&place.key)
             )
             .expect("writing to String cannot fail");
         }
-        write!(self.output, "</g><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"none\" stroke=\"var(--moss-place-globe-edge, #63737b)\" stroke-width=\"1\" data-map-globe-inset=\"true\"/>").expect("writing to String cannot fail");
+        write!(self.output, "</g><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"none\" stroke=\"var(--moss-place-globe-edge, #d7d5c9)\" stroke-width=\"1\" data-map-globe-inset=\"true\"/>").expect("writing to String cannot fail");
     }
-}
-
-fn band_color(name: &str, band: i16) -> String {
-    let (token, fallback) = match name {
-        "relief" => {
-            let fallback = match band {
-                100 => "#cfc092",
-                200 => "#c8b88a",
-                400 => "#c0ad82",
-                700 => "#b9a47a",
-                1000 => "#b19b72",
-                1500 => "#aa926a",
-                2000 => "#a18a62",
-                2500 => "#99805a",
-                3000 => "#907852",
-                4000 => "#876e4a",
-                5000 => "#7d6544",
-                _ => "#735c3d",
-            };
-            (format!("--moss-place-relief-{band}"), fallback)
-        }
-        "seafloor" => {
-            let fallback = match band {
-                -10 => "#8ab8c5",
-                -100 => "#82b0c0",
-                -250 => "#79a8bb",
-                -500 => "#719fb5",
-                -1000 => "#6896ae",
-                -2000 => "#608da7",
-                -4000 => "#57849f",
-                _ => "#4e7a96",
-            };
-            (format!("--moss-place-seafloor-{}", band.abs()), fallback)
-        }
-        _ => ("--moss-place-relief".to_string(), "#b8a878"),
-    };
-    format!("var({token}, {fallback})")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build::place_map::Frame;
     use std::io::Write;
 
     fn populated_target(precision: Precision) -> PlaceMapTarget {
@@ -836,11 +783,11 @@ mod tests {
         );
         let order = [
             "data-map-layer=\"water\"",
+            "data-map-layer=\"coast\"",
             "data-map-layer=\"seafloor\"",
             "data-map-layer=\"land\"",
             "data-map-layer=\"relief\"",
             "data-map-layer=\"lighting\"",
-            "data-map-layer=\"coast\"",
             "data-map-layer=\"marker\"",
             "data-map-layer=\"globe\"",
         ];
@@ -866,10 +813,74 @@ mod tests {
         assert!(output.contains("data-map-globe-inset=\"true\""));
     }
 
+    /// The coast is the approved design's halo: the land outline, 10 px
+    /// wide, 60% opaque and blurred by 2.4, drawn after the water and under
+    /// the sea floor so only the shallows' edge of it shows.
+    #[test]
+    fn coast_is_a_soft_halo_of_the_land_outline_under_the_sea_floor() {
+        let svg = locator_for(35.5, 33.89, Precision::Exact);
+        let position = |name: &str| svg.find(&format!("data-map-layer=\"{name}\"")).unwrap();
+        assert!(position("water") < position("coast") && position("coast") < position("seafloor"));
+        let coast = layer_body(&svg, "coast");
+        let soft = format!("url(#{}-soft)", &svg[svg.find("moss-place-map-").unwrap()..][..79]);
+        assert!(coast.starts_with(&format!(" filter=\"{soft}\">")), "{coast:.200}");
+        assert!(svg.contains("<feGaussianBlur stdDeviation=\"2.4\"/>"));
+        let halos: Vec<&str> = coast.split("<use ").skip(1).collect();
+        assert!(!halos.is_empty());
+        for halo in halos {
+            assert!(halo.contains("stroke-width=\"10\"") && halo.contains("0.6)"), "{halo}");
+            let target = &halo[halo.find("href=\"#").unwrap() + 7..];
+            let id = &target[..target.find('"').unwrap()];
+            assert!(id.contains("-land-") && svg.contains(&format!("<path id=\"{id}\"")), "{id}");
+        }
+    }
+
+    /// A square whose edges bow 2 px outward at their midpoints: detail land
+    /// keeps at its 1 px tolerance and a band, at 2 px, starts dropping.
+    /// (Which bows survive depends on where Douglas-Peucker splits a closed
+    /// ring, so the band's count is only bounded, not pinned.)
+    #[test]
+    fn bands_simplify_at_two_px_and_land_at_one() {
+        let origin = ProjectedPoint::new(0.0, 0.0).unwrap();
+        let frame = Frame::from_points(&[origin], [Precision::Exact].into_iter()).unwrap();
+        let projection = Projection::new(&frame);
+        // About 70.6 px per degree in this frame: the 0.034 degree bow
+        // lands 2 px off each 141 px edge once snapped to whole pixels.
+        let (edge, bow) = (10_000, 10_340);
+        let ring = vec![
+            (-edge, -edge), (0, -bow), (edge, -edge), (bow, 0),
+            (edge, edge), (0, bow), (-edge, edge), (-bow, 0), (-edge, -edge),
+        ];
+        let feature = Feature { bounds: [-bow, -bow, bow, bow], band: 100, parts: vec![ring] };
+        let mut grouped: Vec<Vec<&Feature>> = (0..=10).map(|_| Vec::new()).collect();
+        grouped[2].push(&feature);
+        grouped[9].push(&feature);
+        let ids = Ids::new("p", 0);
+        let mut writer = Writer {
+            output: String::new(),
+            ids: &ids,
+            height_uses: Vec::new(),
+            land_paths: Vec::new(),
+            has_href: false,
+            locator_profile: None,
+        };
+        let vertices = |svg: &str| {
+            let d = &svg[svg.find(" d=\"").unwrap() + 4..];
+            d[..d.find('"').unwrap()].matches(['m', 'l']).count()
+        };
+        writer.land_defs(10_000, &projection, &grouped);
+        let land = vertices(&writer.output);
+        writer.output.clear();
+        writer.emit_band_layer(10_000, &projection, &grouped, 9, "relief", false);
+        let band = vertices(&writer.output);
+        assert_eq!(land, 8, "land at 1 px keeps every bow");
+        assert!(band < land, "a band at 2 px must drop bows land keeps: band {band}, land {land}");
+    }
+
     #[test]
     fn path_serializer_closes_fills_but_not_lines() {
-        let fill = serialize_path(&[vec![(1.2, 2.8), (4.1, 2.8), (4.1, 5.0)]], true).unwrap();
-        let line = serialize_path(&[vec![(1.2, 2.8), (4.1, 2.8)]], false).unwrap();
+        let fill = serialize_path(&[vec![(1.2, 2.8), (4.1, 2.8), (4.1, 5.0)]], true, FINE_PX).unwrap();
+        let line = serialize_path(&[vec![(1.2, 2.8), (4.1, 2.8)]], false, FINE_PX).unwrap();
         assert!(fill.ends_with('z'));
         assert!(!line.contains('z'));
         assert!(fill
@@ -886,7 +897,6 @@ mod tests {
             "places/kyoto",
             0,
         );
-        assert!(output.contains("data-map-layer=\"coast\"><path"));
         assert!(output.contains("data-map-layer=\"land\""));
         assert!(output.contains("data-map-layer=\"relief\""));
         assert!(output.contains("data-map-band=\"100\""));
@@ -912,15 +922,48 @@ mod tests {
             assert!(output[token.0..=end].contains(','), "token lacks fallback");
         }
         assert!(output.contains("feDropShadow"));
-        assert!(output.contains("dx=\"3\" dy=\"4\" stdDeviation=\"0\""));
+        // The approved cut-paper offset: small enough that a several-point
+        // island does not read as a doubled "ghost" shape the way the
+        // larger dx=3/dy=4/stdDeviation=0 this replaced did.
+        assert!(output.contains("dx=\"1.4\" dy=\"1.4\" stdDeviation=\"0.7\""));
         assert!(output.contains("stdDeviation=\"2\""));
-        assert!(output.contains("result=\"warm\""));
-        assert!(output.contains("result=\"cool\""));
+        // Two separately weighted diffuse passes (surfaceScale 78/34, the
+        // approved design's own values) through feComponentTransfer hi/lo
+        // masks — see
+        // height_weighting_zeroes_flat_ground_and_matches_the_reference
+        // below for the behavioural half of this contract.
+        assert!(output.contains("surfaceScale=\"78\""));
+        assert!(output.contains("surfaceScale=\"34\""));
+        assert!(output.contains("feComponentTransfer"));
+        assert!(output.contains("feFuncA"));
+        assert!(output.contains("result=\"lit-hi-tint\""));
+        assert!(output.contains("result=\"lit-lo-tint\""));
         assert!(output.contains("clip-path=\"url(#"));
-        assert!(output.contains("fill=\"rgb(128 128 128)\""));
         assert!(output.contains("data-map-layer=\"relief\""));
         let lighting = output.split("data-map-layer=\"lighting\"").nth(1).unwrap();
         assert!(!lighting.contains("layer-land-"));
+        // The height-field source's own opacity, distinct from the 0.3
+        // two-pass diffuse blend weight above (see the emitter's comment on
+        // this literal for the defect that conflated the two).
+        assert!(lighting.contains("opacity=\"0.5\""));
+        // Height-field fill encodes elevation as luminance directly (a
+        // per-band grey ramp) rather than a per-feature opacity over one
+        // constant mid-grey, which could never read brighter than that
+        // grey even at the top band. This frame (Kyoto) has real relief,
+        // so at least one of the twelve ramp colors must actually appear
+        // as a fill.
+        let relief_greys: Vec<&str> = [
+            100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000,
+        ]
+        .into_iter()
+        .map(relief_height_grey)
+        .collect();
+        assert!(
+            relief_greys
+                .iter()
+                .any(|grey| lighting.contains(&format!("fill=\"{grey}\""))),
+            "expected one of {relief_greys:?} as a height-field fill"
+        );
         let relief_colors: Vec<_> = [
             100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000,
         ]
@@ -934,10 +977,12 @@ mod tests {
                 .len(),
             relief_colors.len()
         );
-        let seafloor_colors: Vec<_> = [-10, -100, -250, -500, -1000, -2000, -4000, -6000]
-            .into_iter()
-            .map(|band| band_color("seafloor", band))
-            .collect();
+        let seafloor_colors: Vec<_> = [
+            -10, -20, -30, -50, -100, -200, -1000, -2000, -3000, -4000, -5000, -6000,
+        ]
+        .into_iter()
+        .map(|band| band_color("seafloor", band))
+        .collect();
         assert_eq!(
             seafloor_colors
                 .iter()
@@ -950,8 +995,228 @@ mod tests {
         ] {
             assert!(output.contains(&format!("shadow-relief-{band}\"")));
         }
-        for band in [-10, -100, -250, -500, -1000, -2000, -4000, -6000] {
+        for band in [-10, -20, -30, -50, -100, -200, -1000, -2000, -3000, -4000, -5000, -6000] {
             assert!(output.contains(&format!("shadow-seafloor-{band}\"")));
+        }
+    }
+
+    /// The lighting filter's whole point, read off the filter's own
+    /// numbers rather than eyeballed: a perfectly flat area (zero alpha
+    /// gradient, so surfaceScale cannot matter) has diffuse intensity
+    /// sin(elevation) — the same figure for both the steep and soft passes,
+    /// so their 0.7/0.3 mix lands there too — and the hi/lo
+    /// feComponentTransfer masks must evaluate to exactly zero at that
+    /// point. That is what "flat ground carries no tone" means in this
+    /// filter: not a separate flatness check, but the linear masks' own
+    /// zero-crossing landing on the physically-flat baseline.
+    #[test]
+    fn height_weighting_zeroes_flat_ground_and_matches_the_reference() {
+        let output = emit_svg(
+            &PlaceMapContext::embedded().unwrap(),
+            &populated_target(Precision::Exact),
+            "p",
+            0,
+        );
+        assert!(output.contains("azimuth=\"240\" elevation=\"45\""));
+        let baseline = 45.0_f64.to_radians().sin();
+        for mask_name in ["lit-hi-mask", "lit-lo-mask"] {
+            let anchor = format!("result=\"{mask_name}\"><feFuncA type=\"linear\" slope=\"");
+            let start = output.find(&anchor).unwrap_or_else(|| panic!("{mask_name} not found")) + anchor.len();
+            let rest = &output[start..];
+            let slope: f64 = rest[..rest.find('"').unwrap()].parse().unwrap();
+            let rest = &rest[rest.find("intercept=\"").unwrap() + "intercept=\"".len()..];
+            let intercept: f64 = rest[..rest.find('"').unwrap()].parse().unwrap();
+            let at_baseline = slope * baseline + intercept;
+            assert!(
+                at_baseline.abs() < 1e-6,
+                "{mask_name} (slope={slope}, intercept={intercept}) must zero out at the \
+                 flat-ground baseline sin(45deg)={baseline}, got {at_baseline}"
+            );
+        }
+    }
+
+    /// Every `--moss-place-*` custom property this emitter can reference
+    /// (as a literal `var(--moss-place-NAME, #fallback)` call-site string,
+    /// or as one of `band_color`'s relief/seafloor tokens) must be defined
+    /// in the shipped stylesheet, in both the light and dark blocks — the
+    /// defect this guards was that the emitter used tokens (rivers, ice,
+    /// every relief/seafloor band, the globe-* trio...) `site.css` never
+    /// declared, so they silently rendered as their Rust fallback colour
+    /// instead of the approved theme.
+    ///
+    /// Source is scanned rather than the rendered SVG because an optional
+    /// layer (rivers, lakes, salt...) only appears in the output when the
+    /// test pack actually has data for it in the probed frame; the call-site
+    /// string exists regardless of what data is present.
+    #[test]
+    fn every_place_token_the_emitter_can_produce_is_defined_in_site_css() {
+        let svg_source = include_str!("svg.rs");
+        let locator_source = include_str!("svg/locator.rs");
+        let css = include_str!("../../assets/css/site.css");
+
+        // Call-site literals: `var(--moss-place-NAME, #hex)`. band_color's
+        // own dynamically-formatted token (`--moss-place-relief-{band}`) has
+        // no such literal in source, so this pass can't accidentally pick up
+        // its dead `_ => ("--moss-place-relief".to_string(), ...)` arm. The
+        // name is cut at the first character outside `[a-z0-9-]` rather than
+        // at the next comma, so this can't misfire on this very function's
+        // own source text (this file's `include_str!` of itself) the way a
+        // bare `find(',')` would.
+        let mut tokens: Vec<String> = Vec::new();
+        for source in [svg_source, locator_source] {
+            let mut rest = source;
+            while let Some(start) = rest.find("var(--moss-place-") {
+                let name_start = start + "var(--".len();
+                let after = &rest[name_start..];
+                let name_len = after
+                    .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
+                    .unwrap_or(after.len());
+                if after[name_len..].starts_with(',') {
+                    tokens.push(after[..name_len].to_string());
+                }
+                rest = &after[name_len.max(1)..];
+            }
+        }
+
+        // The two dynamically-named families, generated the same way the
+        // emitter generates them.
+        for band in [
+            100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000,
+        ] {
+            tokens.push(extract_token_name(&band_color("relief", band)));
+        }
+        for band in [-10, -20, -30, -50, -100, -200, -1000, -2000, -3000, -4000, -5000, -6000] {
+            tokens.push(extract_token_name(&band_color("seafloor", band)));
+        }
+
+        // Also every band the checked-in pack actually contains, not just
+        // the fixed lists above: those two lists and band_color's own match
+        // arms are three hand-kept copies of the same set, and a pack
+        // regeneration can add a new band value (as it did 2026-09-28, three
+        // shallow shelf steps and three deep abyssal steps) without any of
+        // the three being told. When band_color doesn't recognise a band it
+        // falls through to an untranslated catch-all token, which still
+        // renders (site.css defines that catch-all token) but silently
+        // ignores the real depth and, for any band between two catch-alls,
+        // can point at the wrong one entirely -- a real render, not a build
+        // error. Scanning the pack directly is what would have caught it.
+        let pack = crate::build::place_map::embedded().expect("checked-in pack must decode");
+        for (layer_id, name) in [(9u8, "relief"), (10u8, "seafloor")] {
+            let bands: std::collections::BTreeSet<i16> = pack
+                .tiers
+                .iter()
+                .flat_map(|tier| tier.layers.iter())
+                .filter(|layer| layer.id == layer_id)
+                .flat_map(|layer| layer.features.iter().map(|feature| feature.band))
+                .collect();
+            assert!(!bands.is_empty(), "pack layer {layer_id} has no bands");
+            for band in bands {
+                tokens.push(extract_token_name(&band_color(name, band)));
+            }
+        }
+
+        tokens.sort();
+        tokens.dedup();
+        assert!(tokens.len() > 30, "expected a rich token set, got {tokens:?}");
+
+        let light_block = css_block(css, "\n.moss-place-map {");
+        let dark_block = css_block(css, "\n[data-theme=\"dark\"] .moss-place-map {");
+        for token in &tokens {
+            let declaration = format!("--{token}:");
+            assert!(
+                light_block.contains(&declaration),
+                "{token} has no light definition in .moss-place-map"
+            );
+            // --moss-place-marker deliberately inherits var(--moss-color-accent)'s
+            // own dark override rather than repeating a second dark value.
+            if token != "moss-place-marker" {
+                assert!(
+                    dark_block.contains(&declaration),
+                    "{token} has no dark definition in [data-theme=\"dark\"] .moss-place-map"
+                );
+            }
+        }
+    }
+
+    /// Pulls the property name back out of a `band_color`-shaped
+    /// `var(--NAME, #hex)` string — deliberately not spelled with a literal
+    /// `var(--moss-place-` prefix in this comment, so the scan above (which
+    /// reads this very file's source) can't mistake the example for a call
+    /// site.
+    fn extract_token_name(var_call: &str) -> String {
+        let name = var_call.trim_start_matches("var(--");
+        name[..name.find(',').unwrap()].to_string()
+    }
+
+    /// The fallback hex color out of a `var(--token, #hex)` call-site
+    /// string, as opposed to [`extract_token_name`]'s token half.
+    fn extract_fallback(var_call: &str) -> String {
+        let after_comma = &var_call[var_call.find(',').unwrap() + 1..];
+        after_comma.trim_end_matches(')').trim().to_string()
+    }
+
+    /// Regression for a 2026-09-28 defect: band_color's seafloor match only
+    /// recognised the pack's original eight depths, so the four bands a
+    /// pack regeneration added (-20/-30/-50/-200/-3000/-5000, alongside the
+    /// unchanged -10/-100/-1000/-2000/-4000/-6000) all fell through to the
+    /// deepest band's catch-all fallback and were visually indistinguishable
+    /// from -6000. That is invisible to a test asserting the whole
+    /// `var(--token, #fallback)` string is unique per band, because the
+    /// token half (built from the raw, unmatched band value) still differed
+    /// even though the fallback color repeated -- the token and fallback
+    /// were two independently-wrong computations that happened to disagree
+    /// with each other, not just with the truth. Checking the fallback in
+    /// isolation is what catches it.
+    #[test]
+    fn seafloor_bands_use_distinct_fallbacks_not_a_shared_catch_all() {
+        let fallbacks: Vec<String> = [
+            -10, -20, -30, -50, -100, -200, -1000, -2000, -3000, -4000, -5000, -6000,
+        ]
+        .into_iter()
+        .map(|band| extract_fallback(&band_color("seafloor", band)))
+        .collect();
+        assert_eq!(
+            fallbacks
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            fallbacks.len(),
+            "expected 12 distinct seafloor fallbacks, got {fallbacks:?}"
+        );
+    }
+
+    /// The property list of one `selector {`, up to its closing brace. Panics
+    /// (loudly, with the selector) if the selector or its close is missing —
+    /// a silent empty block would make every token assertion above pass for
+    /// the wrong reason.
+    fn css_block<'a>(css: &'a str, selector_with_brace: &str) -> &'a str {
+        let start = css
+            .find(selector_with_brace)
+            .unwrap_or_else(|| panic!("{selector_with_brace} not found in site.css"))
+            + selector_with_brace.len();
+        let end = css[start..]
+            .find('}')
+            .unwrap_or_else(|| panic!("{selector_with_brace} has no closing brace"));
+        &css[start..start + end]
+    }
+
+    #[test]
+    fn river_width_tapers_by_rank_to_a_floor() {
+        let widths: Vec<f64> = [0, 1, 3, 6, 7, 8, 12].into_iter().map(river::river_width).collect();
+        let expected = [1.6, 1.46, 1.18, 0.76, 0.62, 0.5, 0.5];
+        for (width, expected) in widths.iter().zip(expected) {
+            assert!((width - expected).abs() < 1e-9, "{widths:?}");
+        }
+    }
+
+    /// The Levant frame holds the Nile's delta branches (rank 1) and the
+    /// Jordan (rank 6): their strokes must taper by the pack's own rank.
+    #[test]
+    fn locator_rivers_taper_by_their_scalerank() {
+        let svg = locator_for(35.5, 33.89, Precision::Exact);
+        let rivers = layer_body(&svg, "rivers");
+        for width in ["1.46", "0.76"] {
+            assert!(rivers.contains(&format!("stroke-width=\"{width}\"")), "no {width} stroke in {rivers:.300}");
         }
     }
 
@@ -1126,6 +1391,81 @@ mod tests {
                 assert!(first.svg.contains("A�"));
             }
         }
+    }
+
+    fn locator_for(longitude: f64, latitude: f64, precision: Precision) -> String {
+        let point = ProjectedPoint::new(longitude, latitude).unwrap();
+        let frame = Frame::from_points(&[point], [precision].into_iter()).unwrap();
+        let target = PlaceMapTarget {
+            places: vec![ResolvedPlace {
+                key: "places/probe".to_string(),
+                display: "Probe".to_string(),
+                longitude: Some(point.longitude),
+                latitude: Some(point.latitude),
+                precision,
+                aggregate_member: false,
+            }],
+            frame: Some(frame),
+            aggregate_name: None,
+        };
+        let options = SvgMapOptions::new("p", 0, "Probe", precision);
+        emit_locator(&PlaceMapContext::embedded().unwrap(), &target, options).unwrap().svg
+    }
+
+    fn layer_body<'a>(svg: &'a str, name: &str) -> &'a str {
+        let marker = format!("data-map-layer=\"{name}\"");
+        let start = svg.find(&marker).unwrap_or_else(|| panic!("no {name} layer")) + marker.len();
+        let body = &svg[start..];
+        if body.starts_with("/>") { "" } else { &body[..body.find("</g>").unwrap()] }
+    }
+
+    /// The Levant frame holds the Sea of Galilee, the Dead Sea, the Jordan
+    /// and Beirut's built-up area: a locator must draw them, above the lit
+    /// terrain, in the approved paint order.
+    #[test]
+    fn locators_draw_the_physical_layers_in_the_approved_order() {
+        let svg = locator_for(35.5, 33.89, Precision::Exact);
+        for name in ["lakes", "rivers", "built-up"] {
+            assert!(layer_body(&svg, name).contains("<path"), "{name} is empty in the Beirut locator");
+        }
+        let order = ["lighting", "ice", "salt", "lakes", "rivers", "reefs", "built-up", "marker"];
+        let positions: Vec<usize> = order
+            .iter()
+            .map(|name| svg.find(&format!("data-map-layer=\"{name}\"")).unwrap())
+            .collect();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{order:?} at {positions:?}");
+    }
+
+    /// A region locator shares the exact/city frame, so it keeps the same
+    /// terrain: its precision shows in the marker, not in missing layers.
+    #[test]
+    fn region_locators_keep_relief_and_sea_floor() {
+        let svg = locator_for(40.5, 36.0, Precision::Region);
+        assert!(svg.contains("data-map-locator-profile=\"region\""));
+        for name in ["seafloor", "relief"] {
+            assert!(layer_body(&svg, name).contains("data-map-band"), "{name} is empty");
+        }
+    }
+
+    #[test]
+    fn the_world_map_keeps_trunk_rivers_and_no_reefs() {
+        let polar = ProjectedPoint::new(0.0, 89.0).unwrap();
+        let frame = Frame::from_points(&[polar], [Precision::Exact].into_iter()).unwrap();
+        assert_eq!(frame.tier, FrameTier::World);
+        let target = PlaceMapTarget { places: vec![], frame: Some(frame), aggregate_name: None };
+        let svg = emit_svg(&PlaceMapContext::embedded().unwrap(), &target, "p", 0);
+        let rivers = layer_body(&svg, "rivers");
+        let widths: Vec<f64> = rivers
+            .match_indices("stroke-width=\"")
+            .map(|(index, _)| {
+                let rest = &rivers[index + "stroke-width=\"".len()..];
+                rest[..rest.find('"').unwrap()].parse().unwrap()
+            })
+            .collect();
+        assert!(!widths.is_empty(), "the world map lost its trunk rivers");
+        let floor = river::river_width(WORLD_MAX_RIVER_RANK);
+        assert!(widths.iter().all(|&width| width >= floor - 1e-9), "{widths:?}");
+        assert!(!layer_body(&svg, "reefs").contains("<path"));
     }
 
     #[test]

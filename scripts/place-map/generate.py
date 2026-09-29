@@ -26,7 +26,6 @@ REPO_ROOT = SCRIPT_DIR.parents[1]
 MANIFEST = REPO_ROOT / "crates/moss-build/data/place-map/source-manifest.toml"
 GMT_MANIFEST_ARTIFACT = "earth_relief_server.txt"
 EXPECTED_NAMES = {
-    "coastline",
     "land",
     "lakes",
     "rivers",
@@ -37,9 +36,17 @@ EXPECTED_NAMES = {
     "bathymetry",
     "urban_areas",
     "earth_relief_06m_g",
+    "earth_relief_03m_g_n00e000",
+    "earth_relief_03m_g_n00e090",
+    "earth_relief_03m_g_n00w090",
+    "earth_relief_03m_g_n00w180",
+    "earth_relief_03m_g_s90e000",
+    "earth_relief_03m_g_s90e090",
+    "earth_relief_03m_g_s90w090",
+    "earth_relief_03m_g_s90w180",
 }
+GMT_SOURCE_NAMES = {name for name in EXPECTED_NAMES if name.startswith("earth_relief_")}
 EXPECTED_URLS = {
-    "coastline": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_coastline.zip",
     "land": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_land.zip",
     "lakes": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_lakes.zip",
     "rivers": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_rivers_lake_centerlines_scale_rank.zip",
@@ -50,9 +57,16 @@ EXPECTED_URLS = {
     "bathymetry": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_bathymetry_all.zip",
     "urban_areas": "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_urban_areas.zip",
     "earth_relief_06m_g": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_06m_g.grd",
+    "earth_relief_03m_g_n00e000": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00E000.earth_relief_03m_g.jp2",
+    "earth_relief_03m_g_n00e090": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00E090.earth_relief_03m_g.jp2",
+    "earth_relief_03m_g_n00w090": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00W090.earth_relief_03m_g.jp2",
+    "earth_relief_03m_g_n00w180": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00W180.earth_relief_03m_g.jp2",
+    "earth_relief_03m_g_s90e000": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90E000.earth_relief_03m_g.jp2",
+    "earth_relief_03m_g_s90e090": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90E090.earth_relief_03m_g.jp2",
+    "earth_relief_03m_g_s90w090": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90W090.earth_relief_03m_g.jp2",
+    "earth_relief_03m_g_s90w180": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90W180.earth_relief_03m_g.jp2",
 }
 EXPECTED_PUBLISHED_VERSIONS = {
-    "coastline": "4.1.0",
     "land": "5.1.1",
     "lakes": "5.0.0",
     "rivers": "5.0.0",
@@ -93,7 +107,9 @@ def validate_manifest(manifest: dict) -> list[dict]:
     if "natural_earth_version" in manifest:
         raise VerificationError("a single Natural Earth version cannot describe these mixed archives")
     if manifest.get("gmt_dataset") != "earth_relief_06m_g":
-        raise VerificationError("only GMT earth_relief_06m_g is allowed")
+        raise VerificationError("only GMT earth_relief_06m_g is allowed for the world tier")
+    if manifest.get("gmt_dataset_fine") != "earth_relief_03m_g":
+        raise VerificationError("only GMT earth_relief_03m_g is allowed for the locator tier")
     if manifest.get("gmt_manifest_date") != "2025-05-01":
         raise VerificationError("GMT manifest date is not the pinned 2025-05-01")
     if manifest.get("natural_earth_license", "").lower().find("public domain") < 0:
@@ -111,7 +127,7 @@ def validate_manifest(manifest: dict) -> list[dict]:
         name = source.get("name")
         if source.get("url") != EXPECTED_URLS[name]:
             raise VerificationError(f"{name}: URL is not the pinned source")
-        if name != "earth_relief_06m_g" and source.get("published_version") != EXPECTED_PUBLISHED_VERSIONS[name]:
+        if name not in GMT_SOURCE_NAMES and source.get("published_version") != EXPECTED_PUBLISHED_VERSIONS[name]:
             raise VerificationError(f"{name}: published version is not the pinned layer version")
         artifact = source.get("artifact")
         if not isinstance(artifact, str) or Path(artifact).name != artifact:

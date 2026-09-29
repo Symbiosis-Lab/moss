@@ -60,59 +60,20 @@ pub fn emit_locator_svg(
 pub use emit_locator_svg as emit_locator;
 
 impl Writer<'_> {
-    pub(super) fn emit_locator_layers(
+    /// A country-level locator's layers: land and its coast halo alone, with
+    /// the other layer groups present but empty so every map keeps the same
+    /// structure.
+    pub(super) fn emit_sparse_layers(
         &mut self,
         quantisation: u32,
         projection: &Projection,
         grouped: &[Vec<&Feature>],
-        profile: LocatorProfile,
     ) {
-        match profile {
-            LocatorProfile::ExactCity => {
-                self.emit_band_layer(quantisation, projection, grouped, 10, "seafloor", true);
-                self.emit_filled_layer(
-                    quantisation,
-                    projection,
-                    grouped,
-                    2,
-                    "land",
-                    "var(--moss-place-land, #d6c89c)",
-                );
-                self.emit_band_layer(quantisation, projection, grouped, 9, "relief", false);
-            }
-            LocatorProfile::Region | LocatorProfile::Country => {
-                self.empty_named_layer("seafloor");
-                self.emit_filled_layer(
-                    quantisation,
-                    projection,
-                    grouped,
-                    2,
-                    "land",
-                    "var(--moss-place-land, #d6c89c)",
-                );
-                self.empty_named_layer("relief");
-            }
-        }
-    }
-
-    pub(super) fn emit_locator_surface_layers(
-        &mut self,
-        quantisation: u32,
-        projection: &Projection,
-        grouped: &[Vec<&Feature>],
-        _profile: LocatorProfile,
-    ) {
-        self.emit_line_layer(
-            quantisation,
-            projection,
-            grouped,
-            1,
-            "coast",
-            "var(--moss-place-coast, #7d684b)",
-        );
-        for name in ["lakes", "rivers", "ice", "reefs", "salt", "built-up"] {
-            self.empty_named_layer(name);
-        }
+        self.land_defs(quantisation, projection, grouped);
+        self.coast();
+        self.empty_named_layer("seafloor");
+        self.land();
+        self.empty_named_layer("relief");
     }
 
     fn empty_named_layer(&mut self, name: &str) {

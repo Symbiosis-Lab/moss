@@ -78,6 +78,7 @@ const GATE_PORT_KEYS = [
   'edge-clamp',
   'vertical-nav-chrome',
   'iframe-open-url',
+  'place-map-tokens',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

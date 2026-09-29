@@ -2528,12 +2528,58 @@ header:has(+ .moss-hero) .main-nav {
    only presentation and theme tokens, so custom themes can recolour it without
    depending on generated IDs. */
 .moss-place-map {
-  --moss-place-water: #91b8c7;
-  --moss-place-globe-water: #789fac;
-  --moss-place-land: #d7c89b;
-  --moss-place-coast: #77654c;
-  --moss-place-marker: #b84f3d;
-  --moss-place-shadow: #26343d;
+  /* Cut-paper + soft-light basemap palette, 2026-09-21. Sea darker than land
+     in the dark theme; land lightens with height and never goes green; the
+     relief/seafloor ramps below are threeStopLerp(low, mid, high) /
+     lerp(shallow, deep) over the pack's fixed band thresholds, gamma 0.45 on
+     the seafloor side so the shelf (10/20/30/50/100/200m) stays visually
+     distinct from the abyssal plain (1000-6000m) — the same formula and
+     endpoints as the approved design specifies, not eyeballed. */
+  --moss-place-water: #e9eff2;
+  --moss-place-globe-water: #e9eff2;
+  --moss-place-land: #d7d5c9;
+  --moss-place-globe-land: #d7d5c9;
+  --moss-place-coast: #f5f6f4;
+  --moss-place-coast-opacity: 0.6;
+  --moss-place-globe-coast: #f5f6f4;
+  --moss-place-globe-edge: #d7d5c9;
+  /* The site's own accent, not a second hardcoded green — a marker must
+     outrank terrain regardless of what a custom theme does to
+     --moss-color-accent. */
+  --moss-place-marker: var(--moss-color-accent, #2d5a2d);
+  --moss-place-shadow: #5a6488;
+  --moss-place-light-warm: #fff3d0;
+  --moss-place-light-cool: #5a6488;
+  --moss-place-rivers: #5b93bd;
+  --moss-place-lakes: #a9c6d8;
+  --moss-place-ice: #fbfcfd;
+  --moss-place-built-up: #c9bdb4;
+  --moss-place-salt: #e3dcc8;
+  --moss-place-reefs: #b9d6cf;
+  --moss-place-relief-100: #d7d5c9;
+  --moss-place-relief-200: #d7d5c9;
+  --moss-place-relief-400: #d8d6c9;
+  --moss-place-relief-700: #d9d6c9;
+  --moss-place-relief-1000: #dbd7c9;
+  --moss-place-relief-1500: #ddd8c9;
+  --moss-place-relief-2000: #dfdac8;
+  --moss-place-relief-2500: #e1dbc8;
+  --moss-place-relief-3000: #e3dcc8;
+  --moss-place-relief-4000: #e9e3d1;
+  --moss-place-relief-5000: #f0eadb;
+  --moss-place-relief-6000: #f6f1e4;
+  --moss-place-seafloor-10: #e9eff2;
+  --moss-place-seafloor-20: #e7edf1;
+  --moss-place-seafloor-30: #e6edf0;
+  --moss-place-seafloor-50: #e5ecf0;
+  --moss-place-seafloor-100: #e3eaef;
+  --moss-place-seafloor-200: #e0e8ed;
+  --moss-place-seafloor-1000: #d6e1e8;
+  --moss-place-seafloor-2000: #cfdce5;
+  --moss-place-seafloor-3000: #cad8e2;
+  --moss-place-seafloor-4000: #c6d5e0;
+  --moss-place-seafloor-5000: #c2d2de;
+  --moss-place-seafloor-6000: #bfd0dc;
   margin-block: var(--moss-space-md);
   max-inline-size: 100%;
 }
@@ -2544,12 +2590,49 @@ header:has(+ .moss-hero) .main-nav {
   aspect-ratio: 3 / 2;
 }
 [data-theme="dark"] .moss-place-map {
-  --moss-place-water: #29434d;
-  --moss-place-globe-water: #345662;
-  --moss-place-land: #766d50;
-  --moss-place-coast: #b5a77f;
-  --moss-place-marker: #e07761;
-  --moss-place-shadow: #101719;
+  --moss-place-water: #1b242c;
+  --moss-place-globe-water: #1b242c;
+  --moss-place-land: #23272a;
+  --moss-place-globe-land: #23272a;
+  --moss-place-coast: #243542;
+  --moss-place-coast-opacity: 0.55;
+  --moss-place-globe-coast: #243542;
+  --moss-place-globe-edge: #23272a;
+  --moss-place-shadow: #4d5f8f;
+  --moss-place-light-warm: #d9cfa6;
+  --moss-place-light-cool: #4d5f8f;
+  --moss-place-rivers: #6fa6cc;
+  --moss-place-lakes: #2b4a5e;
+  --moss-place-ice: #4a5258;
+  --moss-place-built-up: #4a4440;
+  --moss-place-salt: #33383a;
+  --moss-place-reefs: #1d3a3a;
+  --moss-place-relief-100: #23272a;
+  --moss-place-relief-200: #24282b;
+  --moss-place-relief-400: #25292c;
+  --moss-place-relief-700: #262a2d;
+  --moss-place-relief-1000: #282c2f;
+  --moss-place-relief-1500: #2b2f32;
+  --moss-place-relief-2000: #2d3234;
+  --moss-place-relief-2500: #303537;
+  --moss-place-relief-3000: #33383a;
+  --moss-place-relief-4000: #3e4343;
+  --moss-place-relief-5000: #4a4f4d;
+  --moss-place-relief-6000: #565b57;
+  --moss-place-seafloor-10: #1b242c;
+  --moss-place-seafloor-20: #1a232b;
+  --moss-place-seafloor-30: #1a232b;
+  --moss-place-seafloor-50: #1a232a;
+  --moss-place-seafloor-100: #19222a;
+  --moss-place-seafloor-200: #192129;
+  --moss-place-seafloor-1000: #161e25;
+  --moss-place-seafloor-2000: #141b22;
+  --moss-place-seafloor-3000: #131a20;
+  --moss-place-seafloor-4000: #12181f;
+  --moss-place-seafloor-5000: #11171d;
+  --moss-place-seafloor-6000: #10161c;
+  /* --moss-place-marker is not redefined: var(--moss-color-accent) already
+     carries its own [data-theme="dark"] override. */
 }
 .moss-place-locator {
   inline-size: min(50%, 22rem);

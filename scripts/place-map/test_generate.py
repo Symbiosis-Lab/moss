@@ -23,7 +23,13 @@ class SourceBoundaryTests(unittest.TestCase):
         sources = generate.validate_manifest(manifest)
         self.assertEqual({source["name"] for source in sources}, generate.EXPECTED_NAMES)
         self.assertEqual(len(digest), 64)
-        self.assertTrue(all(source.get("members") for source in sources if source["name"] != "earth_relief_06m_g"))
+        # Every source names either an archive's exact member list or (a
+        # single-file source, like the GMT relief grid and its eight
+        # 3-arcminute tiles) one exact `member` -- validate_manifest already
+        # enforces this per-source (`members must be an exact list` /
+        # `one exact member is required`), so this just re-checks the same
+        # OR the schema itself allows, not `members` specifically.
+        self.assertTrue(all(source.get("members") or source.get("member") for source in sources))
 
     def test_duplicate_sources_are_rejected(self):
         manifest, _ = generate.load_manifest()

@@ -3,20 +3,35 @@
 mod context;
 mod geometry;
 mod globe;
+mod simplify;
 mod svg;
 
 pub use context::{LocatorPlacement, PlaceMapContext, PlaceMapRenderContext, PlaceMapTarget, ResolvedPlace};
 pub use geometry::{marker_radius, privacy_floor, Frame, FrameTier, ProjectedPoint, Projection, TileSelection};
 pub use svg::{
-    emit_locator, emit_locator_svg, emit_svg, emit_svg_with_options, render_svg,
-    LocatorProfile, LocatorSafetyError, LocatorSvg, SvgMapOptions, LOCATOR_Q11_BROTLI_LIMIT,
+    emit_locator, emit_locator_svg, emit_svg, emit_svg_with_options, render_svg, LocatorProfile,
+    LocatorSafetyError, LocatorSvg, SvgMapOptions, LOCATOR_Q11_BROTLI_LIMIT,
     LOCATOR_RAW_SAFETY_LIMIT,
 };
+// Crate-internal only (unlike the block above): context.rs's locator reuses
+// the same coarsest-precision rule emit_svg applies to the full/aggregate
+// map, rather than a second copy of the Precision -> rank mapping.
+pub(crate) use svg::precision_rank;
 
 const MAGIC: &[u8; 8] = b"MOSSPLM1";
 const HEADER_LEN: usize = 92;
-const SCHEMA: u16 = 1;
-const EXPECTED_LAYERS: u16 = 10;
+const SCHEMA: u16 = 2;
+// Schema 2 never writes a coast (layer 1) record: Natural Earth's coastline
+// and land datasets trace the same digitized shoreline, so storing both
+// independently duplicated the pack's single largest chunk of geometry.
+// Every stored tier holds exactly these nine layers (ids 2..=10). The globe
+// inset strokes coast lines from `Pack.tiers[0].layers` with no tile
+// filtering, so the world tier gets layer 1 derived from land's own rings in
+// `decode` below (`synthesize_world_coast`). A main map's coast is the halo
+// of its land paths, so the fine tier needs no coast layer at all.
+const STORED_LAYERS: u16 = 9;
+const MIN_STORED_LAYER: u8 = 2;
+const MAX_LAYER_ID: u8 = 10;
 const EXPECTED_TIERS: u16 = 2;
 const MAX_PARTS_PER_FEATURE: usize = 4096;
 const MAX_POINTS_PER_PART: usize = 1_000_000;
@@ -24,10 +39,23 @@ const MAX_POINTS_PER_FEATURE: usize = 2_000_000;
 const MAX_FEATURES_PER_LAYER: u32 = 100_000;
 const MAX_FEATURES_PER_TIER: u32 = 200_000;
 
-pub const PACK: &[u8] = include_bytes!(concat!(
+// The checked-in artifact is the pack brotli-compressed (generate.mjs writes
+// it that way): the ~5.3MB raw MOSSPLM1 bytes would otherwise sit in the
+// moss binary uncompressed, which is exactly the budget this pack is
+// measured against (scripts/place-map/README.md). `raw_pack_bytes` is the
+// only thing that decompresses it, once, behind `embedded`'s cache below.
+const PACK_BROTLI: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/data/place-map/place-map-v1.bin"
+    "/data/place-map/place-map-v1.bin.br"
 ));
+
+fn raw_pack_bytes() -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut input = std::io::Cursor::new(PACK_BROTLI);
+    brotli::BrotliDecompress(&mut input, &mut out)
+        .expect("embedded place-map pack must be valid brotli");
+    out
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodeError {
@@ -170,7 +198,7 @@ fn zigzag(value: u32) -> i32 {
 }
 
 fn valid_layer(id: u8) -> bool {
-    (1..=EXPECTED_LAYERS as u8).contains(&id)
+    (MIN_STORED_LAYER..=MAX_LAYER_ID).contains(&id)
 }
 
 fn decode_feature(
@@ -308,8 +336,8 @@ fn decode_tier(
             features,
         });
     }
-    if seen.count_ones() != u32::from(EXPECTED_LAYERS) {
-        for id in 1..=EXPECTED_LAYERS as u8 {
+    if seen.count_ones() != u32::from(STORED_LAYERS) {
+        for id in MIN_STORED_LAYER..=MAX_LAYER_ID {
             if seen & (1 << (id - 1)) == 0 {
                 return Err(DecodeError::MissingLayer(id));
             }
@@ -323,6 +351,23 @@ fn decode_tier(
         feature_count,
         layers,
     })
+}
+
+/// Materialise layer 1 (coast) directly from layer 2 (land)'s own decoded
+/// rings, so callers that read `Tier.layers` without going through
+/// `TileSelection` (`svg.rs`'s globe inset reads `Pack.tiers[0]` this way)
+/// still see it. A no-op if land is somehow absent — `decode_tier` already
+/// guarantees it isn't, this is just not the place to re-assert that.
+fn synthesize_world_coast(tier: &mut Tier) {
+    let Some(land) = tier.layers.iter().find(|layer| layer.id == 2) else {
+        return;
+    };
+    let coast = Layer {
+        id: 1,
+        feature_count: land.feature_count,
+        features: land.features.clone(),
+    };
+    tier.layers.insert(0, coast);
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Pack, DecodeError> {
@@ -365,7 +410,7 @@ pub fn decode(bytes: &[u8]) -> Result<Pack, DecodeError> {
     let tier_count = reader.u16("tier count")?;
     let tile_degrees = reader.u16("tile degrees")?;
     let _reserved = reader.u16("reserved")?;
-    if layer_count != EXPECTED_LAYERS || tier_count != EXPECTED_TIERS || tile_degrees != 10 {
+    if layer_count != STORED_LAYERS || tier_count != EXPECTED_TIERS || tile_degrees != 10 {
         return Err(DecodeError::InvalidHeader("counts"));
     }
     let manifest_sha256 = reader.take(32, "manifest digest")?.try_into().unwrap();
@@ -373,10 +418,14 @@ pub fn decode(bytes: &[u8]) -> Result<Pack, DecodeError> {
     for source_mask in &mut source_masks {
         *source_mask = reader.u16("source mapping")?;
     }
-    let tiers = vec![
+    let mut tiers = vec![
         decode_tier(&mut reader, extent, 0)?,
         decode_tier(&mut reader, extent, 1)?,
     ];
+    // The world tier has no tile index to keep byte-aligned with, so its
+    // synthetic coast layer is materialised once, right here — see the
+    // STORED_LAYERS doc comment above.
+    synthesize_world_coast(&mut tiers[0]);
     let tile_count = reader.u32("tile count")?;
     if tile_count > 36 * 18 {
         return Err(DecodeError::InvalidLength("tile count"));
@@ -435,8 +484,15 @@ pub fn decode(bytes: &[u8]) -> Result<Pack, DecodeError> {
     })
 }
 
+/// Decode the checked-in pack once per process and clone the cached result
+/// on every call. Decoding walks millions of delta/zig-zag varints, so
+/// re-running it per page (as every earlier caller did — `PlaceMapContext`
+/// wraps the `Pack` in an `Arc` but re-decoded on every `embedded()` call
+/// feeding it) cost real build time; the clone below is still a deep copy,
+/// but it skips brotli decompression and varint parsing, which dominate it.
 pub fn embedded() -> Result<Pack, DecodeError> {
-    decode(PACK)
+    static CACHE: std::sync::OnceLock<Result<Pack, DecodeError>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| decode(&raw_pack_bytes())).clone()
 }
 
 #[cfg(test)]
@@ -447,11 +503,21 @@ mod tests {
     fn embedded_pack_has_both_tiers_and_every_layer_once() {
         let pack = embedded().expect("checked-in place-map pack must decode");
         assert_eq!(pack.tiers.len(), 2);
+        // Tier 0 (world) carries all ten layer ids: coast is synthesised
+        // directly into it at decode time (`synthesize_world_coast`), since
+        // the globe inset reads `Pack.tiers[0].layers` with no tile
+        // filtering. Tier 1 (fine/locator) stores only 2..=10 — schema 2
+        // never writes a coast record, and a main map's coast is the halo
+        // of its land paths.
+        assert_eq!(
+            pack.tiers[0].layers.iter().map(|layer| layer.id).collect::<Vec<_>>(),
+            (1..=10).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            pack.tiers[1].layers.iter().map(|layer| layer.id).collect::<Vec<_>>(),
+            (2..=10).collect::<Vec<_>>()
+        );
         for tier in &pack.tiers {
-            assert_eq!(
-                tier.layers.iter().map(|layer| layer.id).collect::<Vec<_>>(),
-                (1..=10).collect::<Vec<_>>()
-            );
             for layer in &tier.layers {
                 assert!(layer.feature_count > 0);
                 assert!(
@@ -465,6 +531,29 @@ mod tests {
             }
         }
         assert!(!pack.tiles.is_empty());
+    }
+
+    /// The ablatable half of the schema-2 coast/land dedup: revert
+    /// `synthesize_world_coast` (make it a no-op) and this fails, because
+    /// `pack.tiers[0]` would then have only nine layers, ids 2..=10.
+    #[test]
+    fn world_tier_coast_mirrors_lands_own_rings() {
+        let pack = embedded().expect("checked-in place-map pack must decode");
+        let land = pack.tiers[0]
+            .layers
+            .iter()
+            .find(|layer| layer.id == 2)
+            .expect("world tier must have a land layer");
+        let coast = pack.tiers[0]
+            .layers
+            .iter()
+            .find(|layer| layer.id == 1)
+            .expect("world tier must have a synthesised coast layer");
+        assert_eq!(coast.feature_count, land.feature_count);
+        assert_eq!(
+            coast.features.iter().map(|feature| &feature.parts).collect::<Vec<_>>(),
+            land.features.iter().map(|feature| &feature.parts).collect::<Vec<_>>(),
+        );
     }
 
     #[test]
@@ -481,7 +570,7 @@ mod tests {
 
     #[test]
     fn feature_bands_and_source_masks_are_opaque_to_the_decoder() {
-        let mut bytes = PACK.to_vec();
+        let mut bytes = raw_pack_bytes();
         bytes[72..74].copy_from_slice(&0xdead_u16.to_le_bytes());
         let pack = decode(&bytes).expect("source masks are not a threshold ladder");
         assert_eq!(pack.header.source_masks[0], 0xdead);
@@ -518,7 +607,9 @@ mod tests {
                 .collect()
         );
         let sea_floor = bands(10);
-        for threshold in [-6000, -4000, -2000, -1000, -500, -250, -100, -10] {
+        for threshold in [
+            -6000, -5000, -4000, -3000, -2000, -1000, -200, -100, -50, -30, -20, -10,
+        ] {
             assert!(sea_floor.contains(&threshold));
         }
     }
@@ -526,28 +617,28 @@ mod tests {
     #[test]
     fn truncated_header_is_rejected() {
         assert_eq!(
-            decode(&PACK[..8]).unwrap_err(),
+            decode(&raw_pack_bytes()[..8]).unwrap_err(),
             DecodeError::Truncated("schema")
         );
     }
 
     #[test]
     fn unknown_schema_is_rejected() {
-        let mut bytes = PACK.to_vec();
+        let mut bytes = raw_pack_bytes();
         bytes[8] = 9;
         assert_eq!(decode(&bytes).unwrap_err(), DecodeError::UnknownSchema(9));
     }
 
     #[test]
     fn unknown_layer_is_rejected() {
-        let mut bytes = PACK.to_vec();
+        let mut bytes = raw_pack_bytes();
         bytes[HEADER_LEN + 10] = 99;
         assert_eq!(decode(&bytes).unwrap_err(), DecodeError::UnknownLayer(99));
     }
 
     #[test]
     fn invalid_length_is_rejected() {
-        let mut bytes = PACK.to_vec();
+        let mut bytes = raw_pack_bytes();
         // The first tier starts immediately after the 92-byte header. Its
         // payload length is the u32 after the id, reserved byte, and count.
         let tier_length = HEADER_LEN + 1 + 1 + 4;
@@ -561,7 +652,7 @@ mod tests {
 
     #[test]
     fn out_of_range_coordinate_is_rejected() {
-        let mut bytes = PACK.to_vec();
+        let mut bytes = raw_pack_bytes();
         let offset = HEADER_LEN + 10 + 10 + 4;
         bytes[offset..offset + 4].copy_from_slice(&i32::MAX.to_le_bytes());
         assert_eq!(decode(&bytes).unwrap_err(), DecodeError::InvalidCoordinate);
@@ -590,7 +681,7 @@ mod tests {
 
     #[test]
     fn quantisation_extent_multiplication_is_checked() {
-        let mut bytes = PACK.to_vec();
+        let mut bytes = raw_pack_bytes();
         bytes[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
         assert_eq!(
             decode(&bytes).unwrap_err(),
@@ -600,7 +691,7 @@ mod tests {
 
     #[test]
     fn out_of_range_tile_reference_is_rejected() {
-        let mut bytes = PACK.to_vec();
+        let mut bytes = raw_pack_bytes();
         let first_tier_length =
             u32::from_le_bytes(bytes[HEADER_LEN + 6..HEADER_LEN + 10].try_into().unwrap())
                 as usize;

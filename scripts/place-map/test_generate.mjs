@@ -1,24 +1,68 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { brotliDecompressSync } from "node:zlib";
 import test from "node:test";
 import {
+  COAST_TOLERANCE,
   encodeFeature,
+  FINE_PX,
   geometryParts,
   RELIEF_THRESHOLDS,
+  reliefBands,
   rdp,
+  SCHEMA,
   SEA_FLOOR_THRESHOLDS,
   splitDateline,
+  tierPayload,
+  TOLERANCE,
+  writePack,
 } from "./generate.mjs";
 
 test("relief and sea-floor ladders cover the approved visual ranges", () => {
   assert.deepEqual(RELIEF_THRESHOLDS, [
     100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000,
   ]);
-  assert.deepEqual(SEA_FLOOR_THRESHOLDS, [-6000, -4000, -2000, -1000, -500, -250, -100, -10]);
+  assert.deepEqual(SEA_FLOOR_THRESHOLDS, [-6000, -5000, -4000, -3000, -2000, -1000, -200, -100, -50, -30, -20, -10]);
   assert.equal(SEA_FLOOR_THRESHOLDS.at(0), -6000);
   assert.equal(SEA_FLOOR_THRESHOLDS.at(-1), -10);
+  // Shelf-sea steps: without them a shallow shelf sea (the Gulf of Thailand,
+  // the Persian Gulf) has no band shallower than -50m and renders as one
+  // flat deep-water tone instead of shoaling toward the coast.
+  for (const shelf of [-10, -20, -30]) assert.ok(SEA_FLOOR_THRESHOLDS.includes(shelf), `missing shelf-sea band ${shelf}`);
+});
+
+test("locator-tier tolerances hold the approved ~1px coast / ~2px band resolution, not the old ~22px pass", () => {
+  // Locator frames render ~10 degrees across ~720px, so 1px is 10/720deg.
+  const px = 10 / 720;
+  assert.equal(FINE_PX, px);
+  assert.ok(COAST_TOLERANCE.fine <= px + 1e-9, `coast tolerance ${COAST_TOLERANCE.fine} exceeds 1px (${px})`);
+  assert.ok(TOLERANCE.fine <= 2 * px + 1e-9, `band tolerance ${TOLERANCE.fine} exceeds 2px (${2 * px})`);
+  // The bug this guards: a 0.3deg pass is about 21.6px at this scale, coarse
+  // enough to draw a small island as a handful of straight segments.
+  assert.ok(COAST_TOLERANCE.fine < 0.3 / 10, "coast tolerance regressed toward the old 0.3deg pass");
+});
+
+test("a jagged coastline keeps materially more vertices at the approved tolerance than the old 0.3deg pass", () => {
+  // Stand-in for a real small, convoluted island coastline (e.g. Cyprus):
+  // a ring with many capes and bays at a scale (~0.4deg across) typical of
+  // a Mediterranean island, well above the ~2px sub-pixel-drop floor.
+  const points = [];
+  const n = 400;
+  for (let i = 0; i < n; i++) {
+    const angle = (2 * Math.PI * i) / n;
+    const radius = 0.2 + 0.05 * Math.sin(angle * 17) + 0.02 * Math.sin(angle * 41 + 1);
+    points.push([Math.cos(angle) * radius, Math.sin(angle) * radius]);
+  }
+  points.push(points[0]);
+  const oldTolerance = 0.3; // the bug: applied uniformly to coast and bands alike
+  const before = rdp(points.slice(0, -1), oldTolerance);
+  const after = rdp(points.slice(0, -1), COAST_TOLERANCE.fine);
+  assert.ok(after.length > before.length * 3, `expected the approved tolerance (${after.length} pts) to keep at least 3x the old pass's vertices (${before.length} pts)`);
+  assert.ok(before.length < 15, "the old 0.3deg pass should reduce this coastline to only a handful of points");
 });
 
 test("quantised feature encoding is deterministic", () => {
@@ -82,12 +126,77 @@ test("the executable generator invokes the canonical source verifier", async () 
   assert.match(`${result.stdout}\n${result.stderr}`, /missing cached source|canonical source verifier exited/);
 });
 
-test("checked-in pack remains within its raw-size budget and has the versioned header", async () => {
-  const bytes = await readFile(new URL("../../crates/moss-build/data/place-map/place-map-v1.bin", import.meta.url));
+test("checked-in pack remains within its brotli budget and decodes to the versioned header", async () => {
+  // The embedded artifact is brotli-compressed on disk (moss-build's
+  // `place_map::embedded()` decompresses it once at runtime): the budget
+  // this gates is the compressed size, not the raw MOSSPLM1 bytes
+  // underneath.
+  const compressed = await readFile(new URL("../../crates/moss-build/data/place-map/place-map-v1.bin.br", import.meta.url));
   const report = JSON.parse(await readFile(new URL("../../crates/moss-build/data/place-map/place-map-size.json", import.meta.url)));
+  const bytes = brotliDecompressSync(compressed);
   assert.equal(bytes.subarray(0, 8).toString("ascii"), "MOSSPLM1");
-  assert.equal(bytes.readUInt16LE(8), 1);
-  assert.equal(report.bytes, bytes.length);
+  assert.equal(bytes.readUInt16LE(8), SCHEMA);
+  assert.equal(report.raw_bytes, bytes.length);
+  assert.equal(report.brotli_bytes, compressed.length);
   assert.ok(report.margin_percent >= 5);
-  assert.ok(bytes.length <= report.budget_bytes);
+  assert.ok(compressed.length <= report.budget_bytes);
+});
+
+test("a sea-floor band covers the water deeper than its threshold, never the land or the shallows", () => {
+  // Ten columns west to east: land (+50 m), a shelf (-50 m), deep water (-500 m).
+  const size = 10;
+  const axis = Array.from({ length: size }, (_, index) => index);
+  const z = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) z[y * size + x] = x < 3 ? 50 : x < 6 ? -50 : -500;
+  const { sea_floor: seaFloor } = reliefBands(z, axis, axis, 1, 1);
+  const band = seaFloor.find((feature) => feature.properties.band === -100);
+  assert.ok(band, "the -100 m band must exist over 500 m deep water");
+  const inside = ([px, py]) => {
+    let hit = false;
+    for (const polygon of band.geometry.coordinates) for (const ring of polygon) {
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const [xi, yi] = ring[i]; const [xj, yj] = ring[j];
+        if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) hit = !hit;
+      }
+    }
+    return hit;
+  };
+  assert.equal(inside([8, 5]), true, "deep water belongs to the -100 m band");
+  assert.equal(inside([4, 5]), false, "a 50 m shelf is not deeper than 100 m");
+  assert.equal(inside([1, 5]), false, "land is never part of a sea-floor band");
+});
+
+test("a river's band carries its Natural Earth scalerank so strokes can taper by rank", () => {
+  const river = { properties: { scalerank: 3 }, geometry: { type: "LineString", coordinates: [[35.6, 32.7], [35.6, 32.9], [35.7, 33.4]] } };
+  const { bytes } = tierPayload(new Map([["rivers", [river]]]), "fine");
+  // Layer record: id u8, kind u8, count u32, byte length u32; then the
+  // feature: byte length u32, four i32 bounds, and the i16 band.
+  assert.equal(bytes.readUInt8(0), 4, "rivers are layer 4");
+  assert.equal(bytes.readInt16LE(10 + 4 + 16), 3);
+});
+
+test("an over-budget pack fails before anything is written", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "moss-place-map-budget-"));
+  try {
+    const out = join(dir, "pack.bin.br"); const reportPath = join(dir, "size.json");
+    const bytes = Buffer.from("MOSSPLM1 a pack that cannot fit a ten-byte budget");
+    await assert.rejects(writePack(bytes, { schema: 2 }, { out, reportPath, budgetBytes: 10 }), /over 10; nothing written/);
+    await assert.rejects(stat(out), { code: "ENOENT" }, "an over-budget run must not replace the checked-in pack");
+    await assert.rejects(stat(reportPath), { code: "ENOENT" });
+    const report = await writePack(bytes, { schema: 2 }, { out, reportPath, budgetBytes: 10_000 });
+    assert.equal((await stat(out)).size, report.brotli_bytes);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a band that reaches a pole is clamped onto it instead of leaving WGS84", () => {
+  // Five rows from pole to pole, all deep water: every sea-floor band
+  // touches both grid edges, so d3-contour closes it along rows past them.
+  const lon = [-180, -90, 0, 90, 180]; const lat = [-90, -45, 0, 45, 90];
+  const z = new Float32Array(lon.length * lat.length).fill(-500);
+  const { sea_floor: seaFloor } = reliefBands(z, lon, lat, 1, 45);
+  const band = seaFloor.find((feature) => feature.properties.band === -100);
+  const latitudes = band.geometry.coordinates.flat(2).map(([, y]) => y);
+  assert.ok(Math.max(...latitudes) <= 90 && Math.min(...latitudes) >= -90, `latitudes ${Math.min(...latitudes)}..${Math.max(...latitudes)}`);
 });

@@ -5,7 +5,6 @@ pub const VIEWBOX_WIDTH: f64 = 720.0;
 pub const VIEWBOX_HEIGHT: f64 = 480.0;
 const POLAR_LIMIT: f64 = 85.0;
 const MIN_FRAME_DEGREES: f64 = 10.0;
-const CLIP_ANGLE_DEGREES: f64 = 90.0;
 const CLIP_MARGIN: f64 = 24.0;
 const CLIP_MIN_X: f64 = -CLIP_MARGIN;
 const CLIP_MAX_X: f64 = VIEWBOX_WIDTH + CLIP_MARGIN;
@@ -48,7 +47,6 @@ pub struct Frame {
     pub longitude_span: f64,
     pub latitude_span: f64,
     pub tier: FrameTier,
-    pub antimeridian: bool,
 }
 
 impl Frame {
@@ -70,7 +68,7 @@ impl Frame {
             .iter()
             .map(|point| point.latitude)
             .fold(-90.0, f64::max);
-        let (center_longitude, longitude_span, antimeridian) = circular_longitude_bounds(points);
+        let (center_longitude, longitude_span) = circular_longitude_bounds(points);
         let latitude_span = (latitude_max - latitude_min).max(floor * 0.68).min(170.0);
         let longitude_span = longitude_span.max(floor).min(360.0);
         let center_latitude =
@@ -92,19 +90,7 @@ impl Frame {
             longitude_span,
             latitude_span,
             tier,
-            antimeridian,
         })
-    }
-
-    pub fn bounds(&self) -> (f64, f64, f64, f64) {
-        let half_lon = self.longitude_span / 2.0;
-        let half_lat = self.latitude_span / 2.0;
-        (
-            self.center_longitude - half_lon,
-            self.center_longitude + half_lon,
-            self.center_latitude - half_lat,
-            self.center_latitude + half_lat,
-        )
     }
 
     pub fn contains(&self, point: ProjectedPoint) -> bool {
@@ -114,11 +100,14 @@ impl Frame {
     }
 }
 
+/// The narrowest frame a place of this precision may be shown in. The
+/// closest frame is about 10 degrees wide, which is already coarse enough
+/// for exact, city and region places alike: their precision is carried by
+/// the marker (a dot, a larger dot, a soft fade), not by zooming out. Only
+/// a country-level place widens the frame.
 pub fn privacy_floor(precision: Precision) -> f64 {
     match precision {
-        Precision::Exact => MIN_FRAME_DEGREES,
-        Precision::City => 18.0,
-        Precision::Region => 52.0,
+        Precision::Exact | Precision::City | Precision::Region => MIN_FRAME_DEGREES,
         Precision::Country => 180.0,
     }
 }
@@ -132,109 +121,212 @@ pub fn marker_radius(precision: Precision) -> f64 {
     }
 }
 
+/// Equirectangular crop of a Local/Wide frame, longitude scaled by
+/// cos(center_latitude) (a local standard parallel) so a small crop's
+/// shapes stay close to true instead of stretching east-west away from the
+/// equator. There is no visibility/horizon concept the way there was under
+/// the azimuthal projection this replaced: every point projects, and a
+/// ring or line is clipped to the frame's screen rectangle afterward with
+/// plain Sutherland–Hodgman / segment clipping, not horizon-arc closing.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Projection {
-    frame: Frame,
-    sin_latitude: f64,
-    cos_latitude: f64,
+struct FlatProjection {
+    center_longitude: f64,
+    center_latitude: f64,
+    cos_center_latitude: f64,
     scale: f64,
+}
+
+impl FlatProjection {
+    fn new(frame: &Frame) -> Self {
+        let center_latitude = frame.center_latitude;
+        let cos_center_latitude = center_latitude.to_radians().cos();
+        let half_width = (frame.longitude_span / 2.0).to_radians() * cos_center_latitude;
+        let half_height = (frame.latitude_span / 2.0).to_radians();
+        let scale = (VIEWBOX_WIDTH / 2.0 / half_width.max(f64::EPSILON))
+            .min(VIEWBOX_HEIGHT / 2.0 / half_height.max(f64::EPSILON));
+        Self {
+            center_longitude: frame.center_longitude,
+            center_latitude,
+            cos_center_latitude,
+            scale,
+        }
+    }
+
+    fn project_point(&self, point: ProjectedPoint) -> (f64, f64) {
+        let longitude = unwrap_longitude(point.longitude, self.center_longitude);
+        self.project_unwrapped(longitude, point.latitude)
+    }
+
+    fn project_unwrapped(&self, longitude: f64, latitude: f64) -> (f64, f64) {
+        let x = (longitude - self.center_longitude).to_radians() * self.cos_center_latitude;
+        let y = (latitude - self.center_latitude).to_radians();
+        (
+            VIEWBOX_WIDTH / 2.0 + self.scale * x,
+            VIEWBOX_HEIGHT / 2.0 - self.scale * y,
+        )
+    }
+
+    /// West, east, south and north edges, in degrees, of everything this
+    /// projection can draw: the viewBox plus the clip margin. The frame's
+    /// own span is only a floor; fitting a 3:2 canvas usually shows more
+    /// longitude than the frame asked for.
+    fn visible_bounds(&self) -> (f64, f64, f64, f64) {
+        let half_width = (CLIP_MAX_X - VIEWBOX_WIDTH / 2.0)
+            / (self.scale * self.cos_center_latitude.max(f64::EPSILON));
+        let half_height = (CLIP_MAX_Y - VIEWBOX_HEIGHT / 2.0) / self.scale;
+        let (half_width, half_height) = (half_width.to_degrees(), half_height.to_degrees());
+        (
+            self.center_longitude - half_width,
+            self.center_longitude + half_width,
+            (self.center_latitude - half_height).max(-90.0),
+            (self.center_latitude + half_height).min(90.0),
+        )
+    }
+
+    fn project_ring(&self, points: &[(i32, i32)], quantisation: u32) -> Vec<Vec<(f64, f64)>> {
+        project_ring_flat(points, quantisation, self.center_longitude, |longitude, latitude| {
+            self.project_unwrapped(longitude, latitude)
+        })
+    }
+
+    fn project_part(&self, points: &[(i32, i32)], quantisation: u32) -> Vec<Vec<(f64, f64)>> {
+        project_part_flat(points, quantisation, self.center_longitude, |longitude, latitude| {
+            self.project_unwrapped(longitude, latitude)
+        })
+    }
+}
+
+const PATTERSON_K1: f64 = 1.0148;
+const PATTERSON_K2: f64 = 0.23185;
+const PATTERSON_K3: f64 = -0.14499;
+const PATTERSON_K4: f64 = 0.02406;
+
+/// Patterson (2014) cylindrical projection: longitude is linear, and
+/// y = K1·φ + K2·φ⁵ + K3·φ⁷ + K4·φ⁹, the published polynomial, tuned to
+/// keep high-latitude area distortion well below plate carrée's without
+/// the complexity of a true equal-area or conformal projection.
+fn patterson_y(latitude_radians: f64) -> f64 {
+    let squared = latitude_radians * latitude_radians;
+    let fourth = squared * squared;
+    latitude_radians
+        * (PATTERSON_K1
+            + fourth * (PATTERSON_K2 + squared * (PATTERSON_K3 + squared * PATTERSON_K4)))
+}
+
+/// Patterson cylindrical over the whole world, used for the places-root
+/// World-tier map. The geometry stays centred on the prime meridian, where
+/// the pack cuts its rings. The world is fitted to the viewBox height and
+/// its sides are cropped, keeping the projection's aspect: fitted by width
+/// instead, a 3:2 viewBox leaves empty strips above and below. The crop
+/// window slides toward the frame's centre, by at most the width the crop
+/// removes, so places near the antimeridian stay on the map where they can.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PattersonProjection {
+    scale: f64,
+    offset_x: f64,
+}
+
+impl PattersonProjection {
+    fn new(frame: &Frame) -> Self {
+        let scale = VIEWBOX_HEIGHT / 2.0 / patterson_y(std::f64::consts::FRAC_PI_2);
+        let cropped = (scale * std::f64::consts::PI - VIEWBOX_WIDTH / 2.0).max(0.0);
+        let offset_x = (-scale * frame.center_longitude.to_radians()).clamp(-cropped, cropped);
+        Self { scale, offset_x }
+    }
+
+    fn project_point(&self, point: ProjectedPoint) -> (f64, f64) {
+        self.project_unwrapped(point.longitude, point.latitude)
+    }
+
+    fn project_unwrapped(&self, longitude: f64, latitude: f64) -> (f64, f64) {
+        let x = longitude.to_radians();
+        let y = patterson_y(latitude.to_radians());
+        (
+            VIEWBOX_WIDTH / 2.0 + self.offset_x + self.scale * x,
+            VIEWBOX_HEIGHT / 2.0 - self.scale * y,
+        )
+    }
+
+    /// The pack cuts every ring at the antimeridian and closes a ring that
+    /// surrounds a pole with explicit edges along the seam and the pole,
+    /// so on a map centred on the prime meridian its raw coordinates are
+    /// already a correct planar polygon. Developing them with
+    /// `unwrap_path` would instead read the 360-degree edge along the pole
+    /// as zero width and lose the sector of Antarctica between the ring's
+    /// first vertex and the seam.
+    fn project_ring(&self, points: &[(i32, i32)], quantisation: u32) -> Vec<Vec<(f64, f64)>> {
+        let screen: Vec<(f64, f64)> =
+            points.iter().map(|&point| self.project_raw(point, quantisation)).collect();
+        let ring = clip_closed_ring(&screen, CLIP_MIN_X, CLIP_MAX_X, CLIP_MIN_Y, CLIP_MAX_Y);
+        (ring.len() >= 4).then_some(vec![ring]).unwrap_or_default()
+    }
+
+    fn project_part(&self, points: &[(i32, i32)], quantisation: u32) -> Vec<Vec<(f64, f64)>> {
+        let screen: Vec<(f64, f64)> =
+            points.iter().map(|&point| self.project_raw(point, quantisation)).collect();
+        clip_polyline(&screen)
+    }
+
+    fn project_raw(&self, (longitude, latitude): (i32, i32), quantisation: u32) -> (f64, f64) {
+        let quantisation = f64::from(quantisation);
+        self.project_unwrapped(f64::from(longitude) / quantisation, f64::from(latitude) / quantisation)
+    }
+}
+
+/// Either cylindrical projection this crate uses for a main map: an
+/// equirectangular crop for a Local/Wide locator or place-term page, or a
+/// world-spanning Patterson cylindrical for the places-root aggregate. The
+/// small globe inset (`globe.rs`) is unrelated to both — it keeps its own
+/// orthographic projection regardless of which of these renders the main
+/// map on the same figure.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Projection {
+    Flat(FlatProjection),
+    Patterson(PattersonProjection),
 }
 
 impl Projection {
     pub fn new(frame: &Frame) -> Self {
-        let latitude = frame.center_latitude.to_radians();
-        let width_scale = frame_width_scale(frame.longitude_span);
-        let (max_x, max_y) = frame_raw_extent(frame, latitude.sin(), latitude.cos());
-        let scale = width_scale.min((VIEWBOX_HEIGHT / 2.0) / max_y.max(f64::EPSILON));
-        Self {
-            frame: *frame,
-            sin_latitude: latitude.sin(),
-            cos_latitude: latitude.cos(),
-            scale: scale.min((VIEWBOX_WIDTH / 2.0) / max_x.max(f64::EPSILON)),
+        match frame.tier {
+            FrameTier::World => Self::Patterson(PattersonProjection::new(frame)),
+            FrameTier::Local | FrameTier::Wide => Self::Flat(FlatProjection::new(frame)),
         }
     }
 
-    /// Spherical Lambert azimuthal equal-area projection. The frame's
-    /// longitude unwrap is applied before this formula so a date-line frame
-    /// never creates a world-spanning segment.
+    /// Project one point. Always succeeds: neither projection has a
+    /// visibility concept, unlike the azimuthal projection this replaced.
+    /// `Option` stays in the signature so callers (markers) don't change.
     pub fn project(&self, point: ProjectedPoint) -> Option<(f64, f64)> {
-        if point.latitude.abs() > POLAR_LIMIT {
-            return None;
-        }
-        let latitude = point.latitude.to_radians();
-        let longitude = unwrap_longitude(point.longitude, self.frame.center_longitude).to_radians();
-        let center_longitude = self.frame.center_longitude.to_radians();
-        let delta = longitude - center_longitude;
-        let cosine_angle =
-            self.sin_latitude * latitude.sin() + self.cos_latitude * latitude.cos() * delta.cos();
-        if cosine_angle + f64::EPSILON < CLIP_ANGLE_DEGREES.to_radians().cos() {
-            return None;
-        }
-        let denominator = 1.0 + cosine_angle;
-        if denominator <= f64::EPSILON {
-            return None;
-        }
-        let raw_scale = (2.0 / denominator).sqrt();
-        let x = raw_scale * latitude.cos() * delta.sin();
-        let y = raw_scale
-            * (self.cos_latitude * latitude.sin()
-                - self.sin_latitude * latitude.cos() * delta.cos());
-        Some((
-            VIEWBOX_WIDTH / 2.0 + self.scale * x,
-            VIEWBOX_HEIGHT / 2.0 - self.scale * y,
-        ))
+        Some(match self {
+            Self::Flat(projection) => projection.project_point(point),
+            Self::Patterson(projection) => projection.project_point(point),
+        })
     }
 
     pub fn project_part(&self, points: &[(i32, i32)], quantisation: u32) -> Vec<Vec<(f64, f64)>> {
-        let coordinates: Vec<ProjectedPoint> = points
-            .iter()
-            .filter_map(|&(longitude, latitude)| {
-                let longitude = f64::from(longitude) / f64::from(quantisation);
-                let latitude = f64::from(latitude) / f64::from(quantisation);
-                ProjectedPoint::new(longitude, latitude)
-            })
-            .collect();
-        split_antimeridian(&coordinates)
-            .into_iter()
-            .flat_map(|part| self.project_path(&part))
-            .collect()
+        match self {
+            Self::Flat(projection) => projection.project_part(points, quantisation),
+            Self::Patterson(projection) => projection.project_part(points, quantisation),
+        }
     }
 
-    /// Project one encoded polygon ring while retaining fill topology.
+    /// Project one encoded polygon ring, clipped to the frame's screen
+    /// rectangle. Every returned inner vector is one closed ring.
     ///
-    /// `project_part` is intentionally a line operation: a horizon crossing
-    /// may produce several open segments. Filled map layers must not turn
-    /// those fragments into polygons, because that invents a chord across the
-    /// invisible hemisphere. This method samples each closed edge, keeps the
-    /// visible runs as rings, closes every run, and clips the resulting rings
-    /// with a polygon clipper. Every returned inner vector is one closed ring.
-    ///
-    /// The caller must preserve all returned rings for one source feature in
-    /// one SVG path (using `fill-rule="evenodd"`); emitting one filled path
-    /// per ring loses holes and can overpaint horizon-separated components.
+    /// The ring's raw longitudes are "developed" onto the plane by always
+    /// taking the true short way at each edge (`unwrap_path`) before
+    /// projecting, rather than projecting raw values and hoping nothing
+    /// crosses ±180°. A ring that happens to pass near its own antipodal
+    /// meridian — the far side of a landmass feature spanning most of the
+    /// globe, say — still becomes one connected, non-self-intersecting
+    /// screen-space shape, because every step is locally faithful; the
+    /// rectangle clip afterward is then free to discard whatever ends up
+    /// far outside the frame.
     pub fn project_ring(&self, points: &[(i32, i32)], quantisation: u32) -> Vec<Vec<(f64, f64)>> {
-        let mut coordinates: Vec<ProjectedPoint> = points
-            .iter()
-            .filter_map(|&(longitude, latitude)| {
-                ProjectedPoint::new(
-                    f64::from(longitude) / f64::from(quantisation),
-                    f64::from(latitude) / f64::from(quantisation),
-                )
-            })
-            .collect();
-        if coordinates.len() < 3 {
-            return Vec::new();
+        match self {
+            Self::Flat(projection) => projection.project_ring(points, quantisation),
+            Self::Patterson(projection) => projection.project_ring(points, quantisation),
         }
-        if coordinates.first() != coordinates.last() {
-            coordinates.push(coordinates[0]);
-        }
-
-        // Keep the ring as one closed sequence. Splitting a polygon at the
-        // antimeridian turns the two pieces into open lines and makes a fill
-        // emitter close each piece with a made-up chord. The projection
-        // unwraps every point around the frame centre, so the crossing still
-        // follows the short edge without losing ring topology.
-        self.project_ring_part(&coordinates)
     }
 
     /// Project every ring belonging to one source feature without changing
@@ -250,330 +342,232 @@ impl Projection {
             .flat_map(|ring| self.project_ring(ring, quantisation))
             .collect()
     }
-
-    fn project_ring_part(&self, points: &[ProjectedPoint]) -> Vec<Vec<(f64, f64)>> {
-        // Polar clipping is a geographic operation. Do it before sampling the
-        // projection so a cap crossing remains an ordinary source-ring edge;
-        // the only boundary that still needs screen-space topology is the
-        // projection horizon.
-        let points = clip_polar_band(points);
-        if points.len() < 4 {
-            return Vec::new();
-        }
-        let samples = self.projected_ring_samples(&points);
-        if samples.iter().all(|sample| !sample.visible) {
-            return Vec::new();
-        }
-        if samples.iter().all(|sample| sample.visible) {
-            let ring: Vec<_> = samples.iter().map(|sample| sample.point).collect();
-            let ring = clip_closed_ring(&ring, CLIP_MIN_X, CLIP_MAX_X, CLIP_MIN_Y, CLIP_MAX_Y);
-            return (ring.len() >= 4).then_some(vec![ring]).unwrap_or_default();
-        }
-
-        // Rotate to an invisible-to-visible transition. This makes every
-        // visible run have a definite exit and entry on the horizon, including
-        // the run that crosses the source ring's closing edge.
-        let first_visible = samples.iter().position(|sample| sample.visible).unwrap();
-        let mut offset = first_visible;
-        for _ in 0..samples.len() {
-            if !samples[offset].visible {
-                break;
-            }
-            offset = (offset + 1) % samples.len();
-        }
-        let mut index = (offset + 1) % samples.len();
-        let mut runs = Vec::new();
-        for _ in 0..samples.len() {
-            if index == offset {
-                break;
-            }
-            if !samples[index].visible {
-                index = (index + 1) % samples.len();
-                continue;
-            }
-            let mut ring = Vec::new();
-            while samples[index].visible {
-                push_unique(&mut ring, samples[index].point);
-                index = (index + 1) % samples.len();
-                if index == offset {
-                    break;
-                }
-            }
-            if ring.len() < 2 {
-                break;
-            }
-            let entry = ring[0];
-            let exit = *ring.last().unwrap();
-            append_horizon_arc(
-                &mut ring,
-                exit,
-                entry,
-                self.horizon_radius(),
-                -ring_winding(&points),
-            );
-            let ring = clip_closed_ring(&ring, CLIP_MIN_X, CLIP_MAX_X, CLIP_MIN_Y, CLIP_MAX_Y);
-            if ring.len() >= 4 {
-                runs.push(ring);
-            }
-        }
-        runs
-    }
-
-    fn projected_ring_samples(&self, points: &[ProjectedPoint]) -> Vec<RingSample> {
-        const SAMPLES: usize = 32;
-        let mut output = Vec::with_capacity((points.len() - 1) * SAMPLES + 1);
-        for pair in points.windows(2) {
-            for sample_index in 0..SAMPLES {
-                let start_t = sample_index as f64 / SAMPLES as f64;
-                let end_t = (sample_index + 1) as f64 / SAMPLES as f64;
-                let start = interpolate(pair[0], pair[1], start_t);
-                let end = interpolate(pair[0], pair[1], end_t);
-                match (self.project(start), self.project(end)) {
-                    (Some(previous), Some(current)) => {
-                        push_sample(&mut output, true, previous);
-                        if sample_index == SAMPLES - 1 {
-                            push_sample(&mut output, true, current);
-                        }
-                    }
-                    (Some(previous), None) => {
-                        push_sample(&mut output, true, previous);
-                        let boundary = find_visibility_boundary(
-                            self, pair[0], pair[1], start_t, end_t,
-                        );
-                        if let Some(point) = self.project(interpolate(pair[0], pair[1], boundary)) {
-                            push_sample(&mut output, true, point);
-                        }
-                        push_sample(&mut output, false, (0.0, 0.0));
-                    }
-                    (None, Some(current)) => {
-                        push_sample(&mut output, false, (0.0, 0.0));
-                        let boundary = find_visibility_boundary(
-                            self, pair[0], pair[1], start_t, end_t,
-                        );
-                        if let Some(point) = self.project(interpolate(pair[0], pair[1], boundary)) {
-                            push_sample(&mut output, true, point);
-                        }
-                        push_sample(&mut output, true, current);
-                    }
-                    (None, None) => push_sample(&mut output, false, (0.0, 0.0)),
-                }
-            }
-        }
-        output
-    }
-
-    fn horizon_radius(&self) -> f64 {
-        2.0_f64.sqrt() * self.scale
-    }
-
-    fn project_path(&self, points: &[ProjectedPoint]) -> Vec<Vec<(f64, f64)>> {
-        let mut paths: Vec<Vec<(f64, f64)>> = Vec::new();
-        for pair in points.windows(2) {
-            for (start, end) in self.projected_segments(pair[0], pair[1]) {
-                let Some((start, end)) = clip_segment(start, end) else {
-                    continue;
-                };
-                if let Some(path) = paths.last_mut() {
-                    if same_point(path.last().copied(), start) {
-                        path.push(end);
-                        continue;
-                    }
-                }
-                paths.push(vec![start, end]);
-            }
-        }
-        paths
-    }
-
-    fn projected_segments(
-        &self,
-        start: ProjectedPoint,
-        end: ProjectedPoint,
-    ) -> Vec<((f64, f64), (f64, f64))> {
-        let mut cuts = vec![0.0, 1.0];
-        add_latitude_cut(&mut cuts, start, end, POLAR_LIMIT);
-        add_latitude_cut(&mut cuts, start, end, -POLAR_LIMIT);
-        let sample_count = 32;
-        let mut previous_t = 0.0;
-        let mut previous_visible = self.project(interpolate(start, end, 0.0)).is_some();
-        for index in 1..=sample_count {
-            let current_t = f64::from(index) / f64::from(sample_count);
-            let current_visible = self.project(interpolate(start, end, current_t)).is_some();
-            if current_visible != previous_visible {
-                cuts.push(find_visibility_boundary(
-                    self, start, end, previous_t, current_t,
-                ));
-            }
-            previous_t = current_t;
-            previous_visible = current_visible;
-        }
-        cuts.sort_by(f64::total_cmp);
-        cuts.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
-        cuts.windows(2)
-            .filter_map(|window| {
-                let middle = (window[0] + window[1]) / 2.0;
-                self.project(interpolate(start, end, middle))?;
-                let a = self
-                    .project(interpolate(start, end, window[0]))
-                    .or_else(|| {
-                        self.project(interpolate(
-                            start,
-                            end,
-                            window[0] + (middle - window[0]) * 1e-7,
-                        ))
-                    })?;
-                let b = self
-                    .project(interpolate(start, end, window[1]))
-                    .or_else(|| {
-                        self.project(interpolate(
-                            start,
-                            end,
-                            window[1] - (window[1] - middle) * 1e-7,
-                        ))
-                    })?;
-                Some((a, b))
-            })
-            .collect()
-    }
 }
 
-fn frame_width_scale(longitude_span: f64) -> f64 {
-    let theta = (longitude_span / 2.0).to_radians();
-    (VIEWBOX_WIDTH / 2.0) / (2.0 * (theta / 2.0).sin()).max(f64::EPSILON)
-}
-
-fn frame_raw_extent(frame: &Frame, sin_center: f64, cos_center: f64) -> (f64, f64) {
-    let (west, east, south, north) = frame.bounds();
-    let points = [
-        (west, south),
-        (west, north),
-        (east, south),
-        (east, north),
-        (frame.center_longitude, south),
-        (frame.center_longitude, north),
-    ];
-    let mut max_x: f64 = 0.0;
-    let mut max_y: f64 = 0.0;
-    for (longitude, latitude) in points {
-        let latitude = latitude.to_radians();
-        let delta = shortest_longitude_delta(longitude - frame.center_longitude).to_radians();
-        let denominator =
-            1.0 + sin_center * latitude.sin() + cos_center * latitude.cos() * delta.cos();
-        if denominator <= f64::EPSILON {
-            continue;
-        }
-        let raw_scale = (2.0 / denominator).sqrt();
-        max_x = max_x.max((raw_scale * latitude.cos() * delta.sin()).abs());
-        max_y = max_y.max(
-            (raw_scale * (cos_center * latitude.sin() - sin_center * latitude.cos() * delta.cos()))
-                .abs(),
+/// Close a horizon-crossing run by walking the visible-hemisphere boundary
+/// circle from `start` to `end`. Shared by the globe inset (`globe.rs`,
+/// centered on its own small circle) and this file's tests exercising it
+/// directly — the main map no longer has a horizon to clip against (it
+/// uses the flat/Patterson projections above instead), but the globe inset
+/// still does.
+///
+/// `desired_winding` fixes one rotational sense (the source ring's own
+/// signed area) for every crossing in a ring, rather than re-deciding per
+/// crossing: for a simple polygon clipped against a convex disc, the arcs
+/// that stitch its chords back together all go around the boundary the
+/// same way. A `desired_winding` of (near) zero has no ring orientation to
+/// anchor a direction, so it falls back to the shorter of the two arcs.
+///
+/// The direction is resolved from `short_delta`, the numerically stable
+/// signed delta in `(-pi, pi]`, rather than from `start_angle - end_angle`
+/// directly. When `start` and `end` sit within float noise of the same
+/// horizon point — a ring grazing the visibility cutoff more than once in
+/// close succession, the way a real coastline does — the raw subtraction's
+/// sign is arbitrary (decided by an unrelated bisection search elsewhere),
+/// and feeding that sign through `rem_euclid` used to send one sign to a
+/// near-zero arc and the other to a near-2*pi arc that loops almost all the
+/// way around the circle, rendering as a crescent bulging past the disc.
+/// `DEGENERATE_ANGLE` treats any delta under ~0.6 degrees as already
+/// matching the desired direction, so a near-zero gap always closes
+/// near-zero regardless of which side of zero float noise landed it on.
+pub(super) fn append_horizon_arc(
+    ring: &mut Vec<(f64, f64)>,
+    center: (f64, f64),
+    start: (f64, f64),
+    end: (f64, f64),
+    radius: f64,
+) {
+    let start_angle = (start.1 - center.1).atan2(start.0 - center.0);
+    let end_angle = (end.1 - center.1).atan2(end.0 - center.0);
+    let tau = 2.0 * std::f64::consts::PI;
+    // Always the minor (shorter, < 180 degree) arc. A "major arc" choice
+    // driven by the source ring's winding — global or local — was tried
+    // and measured wrong on real data: Beirut's own merged-landmass
+    // feature and Ireland's coastline (viewed from the globe inset
+    // centred near Hainan) each have a real, non-degenerate run whose
+    // winding-selected "major" arc closes to 99% of the horizon disc
+    // instead of the sliver the run's own entry/exit gap actually spans.
+    // Every case measured across both the old main-map horizon clipper and
+    // the globe inset — tiny near-duplicate crossings and substantial
+    // real ones alike — wants the minor arc; `short_delta` already can't
+    // suffer the old near-2*pi sign-flip (Defect 1's mechanism), since it
+    // is one continuous formula in `(-pi, pi]`, not a branch choosing
+    // between two representations of the same angle.
+    let arc_delta = (end_angle - start_angle + std::f64::consts::PI).rem_euclid(tau)
+        - std::f64::consts::PI;
+    let steps = ((arc_delta.abs() / (std::f64::consts::PI / 12.0)).ceil() as usize)
+        .clamp(1, 128);
+    for step in 1..=steps {
+        let angle = start_angle + arc_delta * step as f64 / steps as f64;
+        push_unique(
+            ring,
+            if step == steps {
+                end
+            } else {
+                (center.0 + radius * angle.cos(), center.1 + radius * angle.sin())
+            },
         );
     }
-    (max_x.max(f64::EPSILON), max_y.max(f64::EPSILON))
 }
 
-fn add_latitude_cut(
-    cuts: &mut Vec<f64>,
-    start: ProjectedPoint,
-    end: ProjectedPoint,
-    latitude: f64,
-) {
-    let delta = end.latitude - start.latitude;
-    if delta.abs() > f64::EPSILON {
-        let t = (latitude - start.latitude) / delta;
-        if (0.0..1.0).contains(&t) {
-            cuts.push(t);
-        }
-    }
+pub(super) fn signed_area(points: &[(f64, f64)]) -> f64 {
+    points
+        .iter()
+        .zip(points.iter().cycle().skip(1))
+        .take(points.len())
+        .map(|(&(x1, y1), &(x2, y2))| x1 * y2 - x2 * y1)
+        .sum::<f64>()
+        / 2.0
 }
 
-fn interpolate(start: ProjectedPoint, end: ProjectedPoint, t: f64) -> ProjectedPoint {
-    let end_longitude = start.longitude + shortest_longitude_delta(end.longitude - start.longitude);
-    ProjectedPoint {
-        longitude: start.longitude + (end_longitude - start.longitude) * t,
-        latitude: start.latitude + (end.latitude - start.latitude) * t,
-    }
+fn decode_points(points: &[(i32, i32)], quantisation: u32) -> Vec<ProjectedPoint> {
+    points
+        .iter()
+        .filter_map(|&(longitude, latitude)| {
+            ProjectedPoint::new(
+                f64::from(longitude) / f64::from(quantisation),
+                f64::from(latitude) / f64::from(quantisation),
+            )
+        })
+        .collect()
 }
 
-/// Clip a closed geographic ring to the latitude band that this projection
-/// can render. Keeping the cap boundary in source coordinates means mixed
-/// polar/horizon crossings are represented by one ordered ring instead of
-/// asking a horizon arc to stand in for a polar parallel.
-fn clip_polar_band(points: &[ProjectedPoint]) -> Vec<ProjectedPoint> {
-    if points.len() < 4 {
+fn close_ring(mut coordinates: Vec<ProjectedPoint>) -> Vec<ProjectedPoint> {
+    if coordinates.len() < 3 {
         return Vec::new();
     }
-    let mut ring = points.to_vec();
-    if ring.first() == ring.last() {
-        ring.pop();
+    if coordinates.first() != coordinates.last() {
+        coordinates.push(coordinates[0]);
     }
-    for (boundary, keep_greater) in [(POLAR_LIMIT, false), (-POLAR_LIMIT, true)] {
-        if ring.len() < 3 {
-            return Vec::new();
-        }
-        let mut clipped = Vec::with_capacity(ring.len() + 2);
-        let mut previous = *ring.last().unwrap();
-        let mut previous_inside = latitude_inside(previous.latitude, boundary, keep_greater);
-        for current in ring.iter().copied() {
-            let current_inside = latitude_inside(current.latitude, boundary, keep_greater);
-            if current_inside != previous_inside {
-                let fraction = (boundary - previous.latitude)
-                    / (current.latitude - previous.latitude);
-                push_geo_unique(&mut clipped, interpolate(previous, current, fraction));
-            }
-            if current_inside {
-                push_geo_unique(&mut clipped, current);
-            }
-            previous = current;
-            previous_inside = current_inside;
-        }
-        ring = clipped;
-    }
-    if ring.len() < 3 {
+    coordinates
+}
+
+/// Shared by `FlatProjection` and `PattersonProjection`: decode, develop
+/// the antimeridian, project every point with `project_unwrapped`, and
+/// clip the resulting screen-space ring to the frame rectangle.
+fn project_ring_flat(
+    points: &[(i32, i32)],
+    quantisation: u32,
+    reference_longitude: f64,
+    project_unwrapped: impl Fn(f64, f64) -> (f64, f64),
+) -> Vec<Vec<(f64, f64)>> {
+    let coordinates = close_ring(decode_points(points, quantisation));
+    if coordinates.len() < 4 {
         return Vec::new();
     }
-    ring.push(ring[0]);
-    ring
+    let mut unwrapped = unwrap_path(&coordinates, reference_longitude);
+    close_pole_wind(&mut unwrapped);
+    let screen: Vec<(f64, f64)> = unwrapped
+        .iter()
+        .map(|point| project_unwrapped(point.longitude, point.latitude))
+        .collect();
+    let ring = clip_closed_ring(&screen, CLIP_MIN_X, CLIP_MAX_X, CLIP_MIN_Y, CLIP_MAX_Y);
+    (ring.len() >= 4).then_some(vec![ring]).unwrap_or_default()
 }
 
-fn latitude_inside(latitude: f64, boundary: f64, keep_greater: bool) -> bool {
-    if keep_greater {
-        latitude >= boundary - 1e-9
-    } else {
-        latitude <= boundary + 1e-9
+/// Shared by `FlatProjection` and `PattersonProjection`: decode, develop
+/// the antimeridian, project, and segment-clip an open line (coastline or
+/// river) to the frame rectangle, merging contiguous clipped segments.
+fn project_part_flat(
+    points: &[(i32, i32)],
+    quantisation: u32,
+    reference_longitude: f64,
+    project_unwrapped: impl Fn(f64, f64) -> (f64, f64),
+) -> Vec<Vec<(f64, f64)>> {
+    let coordinates = decode_points(points, quantisation);
+    if coordinates.len() < 2 {
+        return Vec::new();
     }
+    let screen: Vec<(f64, f64)> = unwrap_path(&coordinates, reference_longitude)
+        .iter()
+        .map(|point| project_unwrapped(point.longitude, point.latitude))
+        .collect();
+    clip_polyline(&screen)
 }
 
-fn push_geo_unique(points: &mut Vec<ProjectedPoint>, point: ProjectedPoint) {
-    if !points.last().is_some_and(|previous| {
-        shortest_longitude_delta(previous.longitude - point.longitude).abs() < 1e-9
-            && (previous.latitude - point.latitude).abs() < 1e-9
-    }) {
-        points.push(point);
-    }
-}
-
-fn find_visibility_boundary(
-    projection: &Projection,
-    start: ProjectedPoint,
-    end: ProjectedPoint,
-    mut low: f64,
-    mut high: f64,
-) -> f64 {
-    let low_visible = projection.project(interpolate(start, end, low)).is_some();
-    for _ in 0..40 {
-        let middle = (low + high) / 2.0;
-        if projection
-            .project(interpolate(start, end, middle))
-            .is_some()
-            == low_visible
-        {
-            low = middle;
-        } else {
-            high = middle;
+fn clip_polyline(points: &[(f64, f64)]) -> Vec<Vec<(f64, f64)>> {
+    let mut paths: Vec<Vec<(f64, f64)>> = Vec::new();
+    for pair in points.windows(2) {
+        let Some((start, end)) = clip_segment(pair[0], pair[1]) else {
+            continue;
+        };
+        if let Some(path) = paths.last_mut() {
+            if same_point(path.last().copied(), start) {
+                path.push(end);
+                continue;
+            }
         }
+        paths.push(vec![start, end]);
     }
-    (low + high) / 2.0
+    paths
+}
+
+/// "Develop" a path's raw longitudes into one continuous stream by always
+/// taking the true short way at each edge (`shortest_longitude_delta`),
+/// instead of pre-splitting at a fixed antimeridian. A ring or line whose
+/// extent drifts far from any single [-180, 180] window (a landmass
+/// spanning most of the globe, say) still ends up one connected,
+/// non-self-intersecting screen-space shape once projected: every step
+/// here is locally faithful, so nothing invents a false long-way jump.
+///
+/// `reference` anchors the *first* point only (`unwrap_longitude`, the
+/// same short-way rule applied once): without it, a path starting near
+/// +179° would stay near +179° even when the caller's projection origin
+/// (a Local/Wide frame centred near -180°, say) is numerically on the far
+/// side, producing an accidental ~360° offset between path and origin
+/// that no amount of later local-chaining corrects. Every point after the
+/// first still chains from its predecessor, not from `reference` again.
+fn unwrap_path(points: &[ProjectedPoint], reference: f64) -> Vec<ProjectedPoint> {
+    let mut output = Vec::with_capacity(points.len());
+    let Some(first) = points.first() else {
+        return output;
+    };
+    let mut longitude = unwrap_longitude(first.longitude, reference);
+    output.push(ProjectedPoint {
+        longitude,
+        latitude: first.latitude,
+    });
+    for pair in points.windows(2) {
+        longitude += shortest_longitude_delta(pair[1].longitude - pair[0].longitude);
+        output.push(ProjectedPoint {
+            longitude,
+            latitude: pair[1].latitude,
+        });
+    }
+    output
+}
+
+/// A ring that encircles a pole (Antarctica's coastline, on a cylindrical
+/// projection) winds a full lap in longitude as `unwrap_path` develops it:
+/// its last point ends up ~360 degrees from its first, not back near it,
+/// because going all the way around that pole visits every longitude
+/// once. Left alone, `clip_closed_ring` would draw the implicit closing
+/// edge as a chord straight from the last point to the first — nearly one
+/// full map width, at whatever latitude the ring happened to end on —
+/// instead of capping the pole. Detected by that ~360-degree drift, this
+/// extends the ring down (or up) to the map's own bottom (or top) edge at
+/// each end first, so the closing edge runs along the pole instead of
+/// across the map, filling the cap between the real coastline and the
+/// edge the way a cylindrical projection is meant to depict a region that
+/// reaches a pole.
+fn close_pole_wind(ring: &mut Vec<ProjectedPoint>) {
+    let (Some(&first), Some(&last)) = (ring.first(), ring.last()) else {
+        return;
+    };
+    if (last.longitude - first.longitude).abs() < 180.0 {
+        return;
+    }
+    let average_latitude: f64 = ring.iter().map(|point| point.latitude).sum::<f64>() / ring.len() as f64;
+    let pole_latitude = if average_latitude < 0.0 { -90.0 } else { 90.0 };
+    ring.push(ProjectedPoint {
+        longitude: last.longitude,
+        latitude: pole_latitude,
+    });
+    ring.push(ProjectedPoint {
+        longitude: first.longitude,
+        latitude: pole_latitude,
+    });
+    ring.push(first);
 }
 
 fn clip_segment(start: (f64, f64), end: (f64, f64)) -> Option<((f64, f64), (f64, f64))> {
@@ -608,87 +602,10 @@ fn clip_segment(start: (f64, f64), end: (f64, f64)) -> Option<((f64, f64), (f64,
     ))
 }
 
-#[derive(Debug, Clone, Copy)]
-struct RingSample {
-    visible: bool,
-    point: (f64, f64),
-}
-
-fn push_sample(samples: &mut Vec<RingSample>, visible: bool, point: (f64, f64)) {
-    if let Some(last) = samples.last_mut() {
-        if !visible && !last.visible {
-            return;
-        }
-        if visible && last.visible && same_point(Some(last.point), point) {
-            return;
-        }
-    }
-    samples.push(RingSample { visible, point });
-}
-
 fn push_unique(points: &mut Vec<(f64, f64)>, point: (f64, f64)) {
     if !same_point(points.last().copied(), point) {
         points.push(point);
     }
-}
-
-fn ring_winding(points: &[ProjectedPoint]) -> f64 {
-    let mut area = 0.0;
-    let mut previous_latitude = points[0].latitude;
-    let mut previous_longitude = points[0].longitude;
-    for &point in &points[1..] {
-        let longitude = previous_longitude
-            + shortest_longitude_delta(point.longitude - previous_longitude);
-        area += previous_longitude * point.latitude - longitude * previous_latitude;
-        previous_longitude = longitude;
-        previous_latitude = point.latitude;
-    }
-    area
-}
-
-fn append_horizon_arc(
-    ring: &mut Vec<(f64, f64)>,
-    start: (f64, f64),
-    end: (f64, f64),
-    radius: f64,
-    desired_winding: f64,
-) {
-    let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
-    let start_angle = (start.1 - center.1).atan2(start.0 - center.0);
-    let end_angle = (end.1 - center.1).atan2(end.0 - center.0);
-    let tau = 2.0 * std::f64::consts::PI;
-    let short_delta = (end_angle - start_angle + std::f64::consts::PI).rem_euclid(tau)
-        - std::f64::consts::PI;
-    let arc_delta = if desired_winding.abs() < f64::EPSILON {
-        short_delta
-    } else if desired_winding.is_sign_positive() {
-        (end_angle - start_angle).rem_euclid(tau)
-    } else {
-        -(start_angle - end_angle).rem_euclid(tau)
-    };
-    let steps = ((arc_delta.abs() / (std::f64::consts::PI / 12.0)).ceil() as usize)
-        .clamp(1, 128);
-    for step in 1..=steps {
-        let angle = start_angle + arc_delta * step as f64 / steps as f64;
-        push_unique(
-            ring,
-            if step == steps {
-                end
-            } else {
-                (center.0 + radius * angle.cos(), center.1 + radius * angle.sin())
-            },
-        );
-    }
-}
-
-fn signed_area(points: &[(f64, f64)]) -> f64 {
-    points
-        .iter()
-        .zip(points.iter().cycle().skip(1))
-        .take(points.len())
-        .map(|(&(x1, y1), &(x2, y2))| x1 * y2 - x2 * y1)
-        .sum::<f64>()
-        / 2.0
 }
 
 fn same_point(first: Option<(f64, f64)>, second: (f64, f64)) -> bool {
@@ -785,14 +702,17 @@ impl TileSelection {
                 tiles: Vec::new(),
             };
         }
-        let (west, east, south, north) = frame.bounds();
+        let (west, east, south, north) = FlatProjection::new(frame).visible_bounds();
         let x_start = tile_x(west);
         let x_end = tile_x(east);
         let y_start = tile_y(south);
         let y_end = tile_y(north);
+        let every_longitude = east - west >= 360.0;
         let mut tiles = Vec::new();
         for tile in &pack.tiles {
-            let in_x = if x_start <= x_end {
+            let in_x = if every_longitude {
+                true
+            } else if x_start <= x_end {
                 tile.x >= x_start && tile.x <= x_end
             } else {
                 tile.x >= x_start || tile.x <= x_end
@@ -863,14 +783,14 @@ fn unwrap_longitude(longitude: f64, center: f64) -> f64 {
     center + shortest_longitude_delta(longitude - center)
 }
 
-fn circular_longitude_bounds(points: &[ProjectedPoint]) -> (f64, f64, bool) {
+fn circular_longitude_bounds(points: &[ProjectedPoint]) -> (f64, f64) {
     let mut longitudes: Vec<f64> = points
         .iter()
         .map(|point| normalize_longitude(point.longitude))
         .collect();
     longitudes.sort_by(f64::total_cmp);
     if longitudes.len() == 1 {
-        return (longitudes[0], 0.0, false);
+        return (longitudes[0], 0.0);
     }
     let mut largest_gap = (0usize, -1.0f64);
     for index in 0..longitudes.len() {
@@ -894,40 +814,7 @@ fn circular_longitude_bounds(points: &[ProjectedPoint]) -> (f64, f64, bool) {
         };
     let span = end - start;
     let center = normalize_longitude(start + span / 2.0);
-    (
-        center,
-        span,
-        start > normalize_longitude(end) || span > 180.0,
-    )
-}
-
-fn split_antimeridian(points: &[ProjectedPoint]) -> Vec<Vec<ProjectedPoint>> {
-    if points.is_empty() {
-        return Vec::new();
-    }
-    let mut parts = vec![vec![points[0]]];
-    for &point in &points[1..] {
-        let previous = *parts.last().and_then(|part| part.last()).unwrap();
-        let delta = point.longitude - previous.longitude;
-        if delta.abs() <= 180.0 {
-            parts.last_mut().unwrap().push(point);
-            continue;
-        }
-        let adjusted_longitude = point.longitude + if delta > 0.0 { -360.0 } else { 360.0 };
-        let boundary = if delta > 0.0 { -180.0 } else { 180.0 };
-        let fraction = (boundary - previous.longitude) / (adjusted_longitude - previous.longitude);
-        let crossing = ProjectedPoint {
-            longitude: boundary,
-            latitude: previous.latitude + (point.latitude - previous.latitude) * fraction,
-        };
-        let counterpart = ProjectedPoint {
-            longitude: -boundary,
-            latitude: crossing.latitude,
-        };
-        parts.last_mut().unwrap().push(crossing);
-        parts.push(vec![counterpart, point]);
-    }
-    parts.into_iter().filter(|part| part.len() >= 2).collect()
+    (center, span)
 }
 
 #[cfg(test)]
@@ -950,7 +837,16 @@ mod tests {
         let frame =
             Frame::from_points(&points, [Precision::Exact, Precision::Exact].into_iter()).unwrap();
         assert!(frame.longitude_span < 20.0);
-        assert!(frame.antimeridian);
+    }
+
+    #[test]
+    fn exact_city_and_region_places_share_the_ten_degree_frame() {
+        let point = ProjectedPoint::new(40.5, 36.0).unwrap();
+        for precision in [Precision::Exact, Precision::City, Precision::Region] {
+            let frame = Frame::from_points(&[point], [precision].into_iter()).unwrap();
+            assert_eq!(frame.longitude_span, 10.0, "{precision:?}");
+            assert_eq!(frame.tier, FrameTier::Local, "{precision:?}");
+        }
     }
 
     #[test]
@@ -965,299 +861,410 @@ mod tests {
     }
 
     #[test]
-    fn laea_center_is_the_viewbox_center() {
-        let points = [ProjectedPoint::new(12.0, 41.0).unwrap()];
+    fn polar_points_select_world_tier() {
+        let points = [ProjectedPoint::new(0.0, 85.1).unwrap()];
         let frame = Frame::from_points(&points, [Precision::Exact].into_iter()).unwrap();
-        let projection = Projection::new(&frame);
-        let projected = projection.project(points[0]).unwrap();
-        assert!((projected.0 - VIEWBOX_WIDTH / 2.0).abs() < 0.001);
-        assert!((projected.1 - VIEWBOX_HEIGHT / 2.0).abs() < 0.001);
+        assert_eq!(frame.tier, FrameTier::World);
     }
 
-    #[test]
-    fn laea_scale_uses_the_frame_width_without_axis_distortion() {
-        let points = [
-            ProjectedPoint::new(-5.0, 0.0).unwrap(),
-            ProjectedPoint::new(5.0, 0.0).unwrap(),
-        ];
-        let frame =
-            Frame::from_points(&points, [Precision::Exact, Precision::Exact].into_iter()).unwrap();
-        let projection = Projection::new(&frame);
-        let west = projection.project(points[0]).unwrap();
-        let east = projection.project(points[1]).unwrap();
-        assert!((west.0 - 7.454599).abs() < 0.001);
-        assert!((east.0 - 712.545401).abs() < 0.001);
-        assert!((west.1 - 240.0).abs() < 0.001);
-        assert!((east.1 - 240.0).abs() < 0.001);
-    }
+    // -- FlatProjection: Local/Wide locators and place-term maps --------
 
     #[test]
-    fn laea_scale_fits_a_tall_frame_without_changing_aspect_ratio() {
-        let points = [
-            ProjectedPoint::new(0.0, -20.0).unwrap(),
-            ProjectedPoint::new(0.0, 20.0).unwrap(),
-        ];
-        let frame =
-            Frame::from_points(&points, [Precision::Exact, Precision::Exact].into_iter()).unwrap();
+    fn flat_projection_centers_the_frame_point_on_the_viewbox() {
+        let point = ProjectedPoint::new(12.0, 41.0).unwrap();
+        let frame = Frame::from_points(&[point], [Precision::Exact].into_iter()).unwrap();
+        assert_eq!(frame.tier, FrameTier::Local);
         let projection = Projection::new(&frame);
-        let south = projection.project(points[0]).unwrap();
-        let north = projection.project(points[1]).unwrap();
-        assert!((south.0 - VIEWBOX_WIDTH / 2.0).abs() < 0.001);
-        assert!((north.0 - VIEWBOX_WIDTH / 2.0).abs() < 0.001);
-        assert!((0.0..=VIEWBOX_HEIGHT).contains(&south.1));
-        assert!((0.0..=VIEWBOX_HEIGHT).contains(&north.1));
-        assert!(south.1 > north.1);
+        let (x, y) = projection.project(point).unwrap();
+        assert!((x - VIEWBOX_WIDTH / 2.0).abs() < 0.001);
+        assert!((y - VIEWBOX_HEIGHT / 2.0).abs() < 0.001);
     }
 
+    /// The whole point of the cos(center_latitude) correction: a locator
+    /// framed at a high latitude (Stockholm) must compress the on-screen
+    /// spacing between two points a fixed number of *longitude* degrees
+    /// apart, relative to the same number of *latitude* degrees, by
+    /// cos(center_latitude) — otherwise east-west shapes stretch at
+    /// locator scale. Verified against an independent formula, not by
+    /// re-deriving the implementation's own arithmetic.
     #[test]
-    fn laea_uses_the_short_arc_across_the_antimeridian() {
-        let points = [
-            ProjectedPoint::new(179.0, 0.0).unwrap(),
-            ProjectedPoint::new(-179.0, 0.0).unwrap(),
-        ];
-        let frame =
-            Frame::from_points(&points, [Precision::Exact, Precision::Exact].into_iter()).unwrap();
+    fn flat_projection_scales_longitude_by_cosine_of_center_latitude() {
+        let center_latitude = 59.33_f64; // Stockholm
+        let west = ProjectedPoint::new(17.0, center_latitude).unwrap();
+        let east = ProjectedPoint::new(19.0, center_latitude).unwrap();
+        let south = ProjectedPoint::new(18.0, center_latitude - 1.0).unwrap();
+        let north = ProjectedPoint::new(18.0, center_latitude + 1.0).unwrap();
+        let frame = Frame::from_points(
+            &[west, east, south, north],
+            [Precision::Exact; 4].into_iter(),
+        )
+        .unwrap();
+        assert_eq!(frame.tier, FrameTier::Local);
         let projection = Projection::new(&frame);
-        let first = projection.project(points[0]).unwrap();
-        let second = projection.project(points[1]).unwrap();
-        assert!(first.0 < VIEWBOX_WIDTH / 2.0);
-        assert!(second.0 > VIEWBOX_WIDTH / 2.0);
-        assert!((first.0 + second.0 - VIEWBOX_WIDTH).abs() < 0.001);
-    }
-
-    #[test]
-    fn local_projection_rejects_points_beyond_the_polar_cap_and_clip_hemisphere() {
-        let center = ProjectedPoint::new(0.0, 0.0).unwrap();
-        let frame = Frame::from_points(&[center], [Precision::Exact].into_iter()).unwrap();
-        let projection = Projection::new(&frame);
-        assert!(projection
-            .project(ProjectedPoint::new(0.0, 85.0).unwrap())
-            .is_some());
-        assert!(projection
-            .project(ProjectedPoint::new(0.0, 85.1).unwrap())
-            .is_none());
-        assert!(projection
-            .project(ProjectedPoint::new(90.0, 0.0).unwrap())
-            .is_some());
-        assert!(projection
-            .project(ProjectedPoint::new(90.001, 0.0).unwrap())
-            .is_none());
-    }
-
-    #[test]
-    fn project_returns_unclamped_points_and_project_part_clips_segments() {
-        let center = ProjectedPoint::new(0.0, 0.0).unwrap();
-        let frame = Frame::from_points(&[center], [Precision::Exact].into_iter()).unwrap();
-        let projection = Projection::new(&frame);
-        let far = projection
-            .project(ProjectedPoint::new(80.0, 0.0).unwrap())
-            .unwrap();
-        assert!(far.0 > CLIP_MAX_X);
-        let paths = projection.project_part(&[(-80, 0), (80, 0)], 1);
-        assert_eq!(paths.len(), 1);
-        assert!(paths[0].iter().all(|point| {
-            (CLIP_MIN_X..=CLIP_MAX_X).contains(&point.0)
-                && (CLIP_MIN_Y..=CLIP_MAX_Y).contains(&point.1)
-        }));
-        assert!(paths[0][0].0 <= CLIP_MIN_X + 0.001);
-        assert!(paths[0][1].0 >= CLIP_MAX_X - 0.001);
-    }
-
-    #[test]
-    fn project_part_clips_both_hemisphere_and_polar_crossings() {
-        let center = ProjectedPoint::new(0.0, 0.0).unwrap();
-        let frame = Frame::from_points(&[center], [Precision::Exact].into_iter()).unwrap();
-        let projection = Projection::new(&frame);
-        let hemisphere = projection.project_part(&[(-100, 0), (-1, 0)], 1);
-        assert_eq!(hemisphere.len(), 1);
-        assert!(hemisphere[0]
-            .iter()
-            .all(|point| point.0.is_finite() && point.1.is_finite()));
-        let polar = projection.project_part(&[(0, -90), (0, 90)], 1);
-        assert_eq!(polar.len(), 1);
-        assert!(polar[0]
-            .iter()
-            .all(|point| point.0.is_finite() && point.1.is_finite()));
-    }
-
-    #[test]
-    fn project_ring_returns_closed_fillable_rings_for_visible_polygon() {
-        let center = ProjectedPoint::new(0.0, 0.0).unwrap();
-        let frame = Frame::from_points(&[center], [Precision::Exact].into_iter()).unwrap();
-        let projection = Projection::new(&frame);
-        let rings = projection.project_ring(
-            &[(-1, -1), (1, -1), (1, 1), (-1, 1), (-1, -1)],
-            1,
+        let (west_x, _) = projection.project(west).unwrap();
+        let (east_x, _) = projection.project(east).unwrap();
+        let (_, south_y) = projection.project(south).unwrap();
+        let (_, north_y) = projection.project(north).unwrap();
+        let x_per_degree = (east_x - west_x).abs() / 2.0;
+        let y_per_degree = (south_y - north_y).abs() / 2.0;
+        let expected_ratio = center_latitude.to_radians().cos();
+        let actual_ratio = x_per_degree / y_per_degree;
+        assert!(
+            (actual_ratio - expected_ratio).abs() < 0.001,
+            "x/y degree ratio {actual_ratio} should match cos({center_latitude}) = {expected_ratio}"
         );
-        assert_eq!(rings.len(), 1);
-        assert!(rings[0].len() >= 4);
-        assert_eq!(rings[0].first(), rings[0].last());
     }
 
     #[test]
-    fn project_feature_preserves_outer_and_hole_rings_for_one_even_odd_path() {
+    fn flat_projection_fits_a_wide_frame_by_width_and_a_tall_frame_by_height() {
+        let wide_points = [
+            ProjectedPoint::new(-10.0, 0.0).unwrap(),
+            ProjectedPoint::new(10.0, 0.0).unwrap(),
+        ];
+        let wide_frame =
+            Frame::from_points(&wide_points, [Precision::Exact, Precision::Exact].into_iter())
+                .unwrap();
+        let wide_projection = Projection::new(&wide_frame);
+        let (west_x, _) = wide_projection.project(wide_points[0]).unwrap();
+        let (east_x, _) = wide_projection.project(wide_points[1]).unwrap();
+        assert!((west_x - 0.0).abs() < 1.0, "west edge should reach the viewBox edge: {west_x}");
+        assert!((east_x - VIEWBOX_WIDTH).abs() < 1.0, "east edge should reach the viewBox edge: {east_x}");
+
+        let tall_points = [
+            ProjectedPoint::new(0.0, -40.0).unwrap(),
+            ProjectedPoint::new(0.0, 40.0).unwrap(),
+        ];
+        let tall_frame =
+            Frame::from_points(&tall_points, [Precision::Exact, Precision::Exact].into_iter())
+                .unwrap();
+        let tall_projection = Projection::new(&tall_frame);
+        let (_, south_y) = tall_projection.project(tall_points[0]).unwrap();
+        let (_, north_y) = tall_projection.project(tall_points[1]).unwrap();
+        assert!((south_y - VIEWBOX_HEIGHT).abs() < 1.0, "south edge should reach the viewBox edge: {south_y}");
+        assert!((north_y - 0.0).abs() < 1.0, "north edge should reach the viewBox edge: {north_y}");
+    }
+
+    /// A ring that straddles the antimeridian (a Fiji-shaped locator) must
+    /// close into one simple shape with the expected small enclosed area —
+    /// not a chord straight across the frame connecting +179° to -179° the
+    /// long way.
+    #[test]
+    fn flat_projection_ring_closes_correctly_across_the_antimeridian() {
+        let points = [
+            ProjectedPoint::new(179.0, -1.0).unwrap(),
+            ProjectedPoint::new(-179.0, -1.0).unwrap(),
+        ];
+        let frame =
+            Frame::from_points(&points, [Precision::Exact, Precision::Exact].into_iter()).unwrap();
+        let projection = Projection::new(&frame);
+        // A 2-degree-square box straddling 180: 179 to -179 the short way.
+        let ring = projection.project_ring(
+            &[(1790, -20), (-1790, -20), (-1790, 20), (1790, 20), (1790, -20)],
+            10,
+        );
+        assert_eq!(ring.len(), 1);
+        assert_eq!(ring[0].first(), ring[0].last());
+        let area = signed_area(&ring[0]).abs();
+        // Two degrees square at this scale should cover a small,
+        // plausible slice of the frame, not the whole clip rectangle.
+        let clip_area = (VIEWBOX_WIDTH + 2.0 * CLIP_MARGIN) * (VIEWBOX_HEIGHT + 2.0 * CLIP_MARGIN);
+        assert!(area > 0.0);
+        assert!(area < 0.5 * clip_area, "antimeridian ring covered {area} of {clip_area}");
+    }
+
+    #[test]
+    fn flat_projection_line_clips_at_the_frame_rectangle() {
         let center = ProjectedPoint::new(0.0, 0.0).unwrap();
         let frame = Frame::from_points(&[center], [Precision::Exact].into_iter()).unwrap();
         let projection = Projection::new(&frame);
-        let outer = [(-10, -10), (10, -10), (10, 10), (-10, 10), (-10, -10)];
-        let hole = [(-2, -2), (-2, 2), (2, 2), (2, -2), (-2, -2)];
-        let rings = projection.project_feature(&[&outer, &hole], 1);
+        // Far outside the Local-tier crop (~10 degree span) on both ends,
+        // but still valid degrees and on the frame-center side of the
+        // globe (unlike -170/170, whose short way is via the antipodal
+        // meridian, not through this frame at all).
+        let paths = projection.project_part(&[(-60, 0), (60, 0)], 1);
+        assert_eq!(paths.len(), 1);
+        let clip_min_x = -CLIP_MARGIN;
+        let clip_max_x = VIEWBOX_WIDTH + CLIP_MARGIN;
+        assert!(paths[0].iter().all(|point| {
+            point.0 >= clip_min_x - 0.01 && point.0 <= clip_max_x + 0.01
+        }));
+        assert!((paths[0][0].0 - clip_min_x).abs() < 0.5);
+        assert!((paths[0][1].0 - clip_max_x).abs() < 0.5);
+    }
+
+    #[test]
+    fn flat_projection_ring_and_feature_preserve_holes_for_one_even_odd_path() {
+        // Frame::from_points floors a single Exact point's span at
+        // MIN_FRAME_DEGREES (10), so keep the outer ring comfortably
+        // inside that, or it clips down smaller than the hole.
+        let center = ProjectedPoint::new(0.0, 0.0).unwrap();
+        let frame = Frame::from_points(&[center], [Precision::Exact].into_iter()).unwrap();
+        let projection = Projection::new(&frame);
+        let outer = [(-40, -40), (40, -40), (40, 40), (-40, 40), (-40, -40)];
+        let hole = [(-10, -10), (-10, 10), (10, 10), (10, -10), (-10, -10)];
+        let rings = projection.project_feature(&[&outer, &hole], 10);
         assert_eq!(rings.len(), 2);
         assert!(rings.iter().all(|ring| ring.first() == ring.last()));
+        let outer_area = signed_area(&rings[0]).abs();
+        let hole_area = signed_area(&rings[1]).abs();
+        assert!(outer_area > hole_area);
+    }
+
+    // -- PattersonProjection: the places-root World-tier map ------------
+
+    #[test]
+    fn patterson_y_matches_the_published_polynomial() {
+        let phi: f64 = 0.5;
+        let expected = PATTERSON_K1 * phi
+            + PATTERSON_K2 * phi.powi(5)
+            + PATTERSON_K3 * phi.powi(7)
+            + PATTERSON_K4 * phi.powi(9);
+        assert!((patterson_y(phi) - expected).abs() < 1e-12);
+        // The pole's y, as published with the projection.
+        assert!((patterson_y(std::f64::consts::FRAC_PI_2) - 1.790857183).abs() < 1e-9);
+        // Odd function: patterson_y(-phi) == -patterson_y(phi).
+        assert!((patterson_y(-phi) + patterson_y(phi)).abs() < 1e-12);
+        assert_eq!(patterson_y(0.0), 0.0);
     }
 
     #[test]
-    fn project_ring_clips_horizon_crossings_without_open_fragments() {
-        let frame_points = [
-            ProjectedPoint::new(-80.0, 0.0).unwrap(),
-            ProjectedPoint::new(80.0, 0.0).unwrap(),
-        ];
-        let frame = Frame::from_points(&frame_points, [Precision::Exact, Precision::Exact].into_iter()).unwrap();
+    fn patterson_projection_centers_the_prime_meridian_and_equator() {
+        let point = ProjectedPoint::new(0.0, 0.0).unwrap();
+        // A single equatorial point stays Wide, not World; force World via
+        // a companion point beyond the polar limit so this exercises the
+        // actual Patterson path Projection::new selects for World frames.
+        let polar = ProjectedPoint::new(0.0, 89.0).unwrap();
+        let world_frame =
+            Frame::from_points(&[point, polar], [Precision::Exact, Precision::Exact].into_iter())
+                .unwrap();
+        assert_eq!(world_frame.tier, FrameTier::World);
+        let projection = Projection::new(&world_frame);
+        let (x, y) = projection.project(point).unwrap();
+        assert!((x - VIEWBOX_WIDTH / 2.0).abs() < 0.5);
+        assert!((y - VIEWBOX_HEIGHT / 2.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn world_map_fills_the_viewbox_height_and_crops_the_sides() {
+        let polar = ProjectedPoint::new(0.0, 89.0).unwrap();
+        let frame = Frame::from_points(&[polar], [Precision::Exact].into_iter()).unwrap();
+        assert_eq!(frame.tier, FrameTier::World);
         let projection = Projection::new(&frame);
-        let rings = projection.project_ring(
-            &[(80, -30), (100, -30), (100, 30), (80, 30), (80, -30)],
-            1,
-        );
-        assert!(!rings.is_empty());
-        assert!(rings
-            .iter()
-            .all(|ring| ring.len() >= 4 && ring.first() == ring.last()));
-        assert!(rings.iter().flatten().all(|(x, y)| {
-            (CLIP_MIN_X..=CLIP_MAX_X).contains(x) && (CLIP_MIN_Y..=CLIP_MAX_Y).contains(y)
-        }));
-        let horizon = (2.0_f64).sqrt() * projection.scale;
-        let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
-        assert!(rings.iter().flatten().any(|point| {
-            let radius = (point.0 - center.0).hypot(point.1 - center.1);
-            (radius - horizon).abs() < 1.0
-        }));
-        assert!(rings.iter().flatten().all(|point| {
-            let radius = (point.0 - center.0).hypot(point.1 - center.1);
-            radius <= horizon + 1.0
-        }));
+        let project = |longitude, latitude| {
+            projection.project(ProjectedPoint::new(longitude, latitude).unwrap()).unwrap()
+        };
+        assert!(project(0.0, 90.0).1.abs() < 1e-9, "north pole at {}", project(0.0, 90.0).1);
+        assert!((project(0.0, -90.0).1 - VIEWBOX_HEIGHT).abs() < 1e-9);
+        assert!(project(-180.0, 0.0).0 < 0.0 && project(179.999, 0.0).0 > VIEWBOX_WIDTH);
     }
 
     #[test]
-    fn project_ring_closes_a_horizon_run_that_crosses_the_source_closing_edge() {
-        let frame_points = [
-            ProjectedPoint::new(-80.0, 0.0).unwrap(),
-            ProjectedPoint::new(80.0, 0.0).unwrap(),
-        ];
-        let frame = Frame::from_points(&frame_points, [Precision::Exact, Precision::Exact].into_iter()).unwrap();
-        let projection = Projection::new(&frame);
-        let rings = projection.project_ring(
-            &[(80, -20), (100, -20), (100, 20), (100, 40)],
-            1,
-        );
-        assert!(!rings.is_empty());
-        assert!(rings.iter().all(|ring| ring.first() == ring.last()));
-    }
-
-    #[test]
-    fn project_ring_clips_both_polar_caps_without_using_the_horizon() {
-        let center = ProjectedPoint::new(0.0, 0.0).unwrap();
-        let frame = Frame::from_points(&[center], [Precision::Exact].into_iter()).unwrap();
-        let projection = Projection::new(&frame);
-        let rings = projection.project_ring(
-            &[(-20, -89), (20, -89), (20, 89), (-20, 89), (-20, -89)],
-            1,
-        );
-        assert_eq!(rings.len(), 1);
-        let horizon = projection.horizon_radius();
-        let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
-        assert!(rings[0].iter().all(|point| {
-            (point.0 - center.0).hypot(point.1 - center.1) < horizon - 1.0
-        }));
-        assert!(rings[0].iter().any(|point| point.1 < center.1 - 100.0));
-        assert!(rings[0].iter().any(|point| point.1 > center.1 + 100.0));
-    }
-
-    #[test]
-    fn project_ring_composes_polar_and_horizon_boundaries() {
-        let frame_points = [
-            ProjectedPoint::new(-80.0, 0.0).unwrap(),
-            ProjectedPoint::new(80.0, 0.0).unwrap(),
+    fn world_map_crop_slides_toward_places_near_the_antimeridian() {
+        let points = [
+            ProjectedPoint::new(174.8, -41.3).unwrap(),
+            ProjectedPoint::new(170.0, 89.0).unwrap(),
         ];
         let frame =
-            Frame::from_points(&frame_points, [Precision::Exact, Precision::Exact].into_iter())
-                .unwrap();
-        let projection = Projection::new(&frame);
-        let rings = projection.project_ring(
-            &[(80, -30), (100, -30), (100, 89), (80, 89), (80, -30)],
-            1,
-        );
-        assert!(!rings.is_empty());
-        let horizon = projection.horizon_radius();
-        let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
-        assert!(rings.iter().flatten().all(|point| {
-            (point.0 - center.0).hypot(point.1 - center.1) <= horizon + 1.0
-        }));
-        assert!(rings.iter().flatten().any(|point| {
-            (point.0 - center.0).hypot(point.1 - center.1) < horizon - 10.0
-        }));
-        assert!(rings.iter().all(|ring| ring.first() == ring.last()));
+            Frame::from_points(&points, [Precision::Exact, Precision::Exact].into_iter()).unwrap();
+        assert_eq!(frame.tier, FrameTier::World);
+        let (x, _) = Projection::new(&frame).project(points[0]).unwrap();
+        assert!((0.0..=VIEWBOX_WIDTH).contains(&x), "a place at 174.8E is cropped off at x={x}");
     }
 
+    /// The world tier's Antarctic rings reach every longitude: the
+    /// generator closes each one along the seam and the pole, and the
+    /// projected ring must keep all of it, not only the sector between its
+    /// first vertex and the antimeridian.
     #[test]
-    fn project_ring_boundary_traversal_is_bounded_for_repeated_crossings() {
-        let center = ProjectedPoint::new(0.0, 0.0).unwrap();
-        let frame = Frame::from_points(&[center], [Precision::Exact].into_iter()).unwrap();
+    fn world_map_keeps_every_longitude_of_antarctica() {
+        let pack = super::super::embedded().unwrap();
+        let polar = ProjectedPoint::new(0.0, 89.0).unwrap();
+        let frame = Frame::from_points(&[polar], [Precision::Exact].into_iter()).unwrap();
         let projection = Projection::new(&frame);
-        let mut source = Vec::with_capacity(257);
-        for index in 0..256 {
-            let longitude = if index % 2 == 0 { -100 } else { 100 };
-            source.push((longitude, if index / 2 % 2 == 0 { -10 } else { 10 }));
+        let quantisation = pack.header.quantisation;
+        let land = pack.tiers[0].layers.iter().find(|layer| layer.id == 2).unwrap();
+        let antarctica = land
+            .features
+            .iter()
+            .flat_map(|feature| feature.parts.iter())
+            .find(|part| part.iter().any(|&(_, latitude)| latitude <= -89 * quantisation as i32))
+            .expect("the world tier's land reaches the south pole");
+        let rings = projection.project_ring(antarctica, quantisation);
+        assert_eq!(rings.len(), 1);
+        let min_x = rings[0].iter().map(|point| point.0).fold(f64::INFINITY, f64::min);
+        let max_x = rings[0].iter().map(|point| point.0).fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            min_x <= 0.0 && max_x >= VIEWBOX_WIDTH,
+            "Antarctica spans only [{min_x}, {max_x}] of the {VIEWBOX_WIDTH}-wide map"
+        );
+    }
+
+    /// Projecting raw coordinates is only exact because the generator cuts
+    /// every ring at the antimeridian. The one place a ring may jump across
+    /// the map is along a pole, where both ends are the same point.
+    #[test]
+    fn world_tier_rings_cross_the_antimeridian_only_along_a_pole() {
+        let pack = super::super::embedded().unwrap();
+        let near_pole = (89.5 * f64::from(pack.header.quantisation)) as i32;
+        let half_turn = 180 * pack.header.quantisation as i32;
+        for layer in &pack.tiers[0].layers {
+            for part in layer.features.iter().flat_map(|feature| feature.parts.iter()) {
+                for pair in part.windows(2) {
+                    if (pair[1].0 - pair[0].0).abs() > half_turn {
+                        assert!(
+                            pair[0].1.abs() >= near_pole && pair[1].1.abs() >= near_pole,
+                            "layer {} jumps across the map away from a pole: {:?}",
+                            layer.id,
+                            pair
+                        );
+                    }
+                }
+            }
         }
-        source.push(source[0]);
-        let rings = projection.project_ring(&source, 1);
-        assert!(rings.iter().all(|ring| ring.first() == ring.last()));
-        assert!(rings.iter().map(Vec::len).sum::<usize>() < 20_000);
     }
 
-    #[test]
-    fn horizon_arc_selects_major_or_minor_boundary_for_requested_winding() {
-        let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
-        let radius = 100.0;
-        let entry = (
-            center.0 + radius * (-0.6_f64).cos(),
-            center.1 + radius * (-0.6_f64).sin(),
-        );
-        let exit = (
-            center.0 + radius * 0.6_f64.cos(),
-            center.1 + radius * 0.6_f64.sin(),
-        );
-        let base = (center.0 - 80.0, center.1);
-        let mut clockwise = vec![base, exit];
-        append_horizon_arc(&mut clockwise, exit, entry, radius, 1.0);
-        let mut counterclockwise = vec![base, exit];
-        append_horizon_arc(&mut counterclockwise, exit, entry, radius, -1.0);
-        assert!(clockwise.len() != counterclockwise.len());
-        assert!(signed_area(&clockwise) > 0.0);
-        assert!(signed_area(&counterclockwise) < 0.0);
-    }
+    // -- unwrap_path: the shared antimeridian-development helper --------
 
     #[test]
-    fn project_ring_keeps_dateline_rings_closed_in_both_winding_directions() {
+    fn unwrap_path_takes_the_short_way_at_every_edge() {
         let points = [
             ProjectedPoint::new(179.0, 0.0).unwrap(),
-            ProjectedPoint::new(-179.0, 0.0).unwrap(),
+            ProjectedPoint::new(-179.0, 1.0).unwrap(),
         ];
-        let frame = Frame::from_points(&points, [Precision::Exact, Precision::Exact].into_iter()).unwrap();
-        let projection = Projection::new(&frame);
-        for ring in [
-            vec![(179, -2), (-179, -2), (-179, 2), (179, 2), (179, -2)],
-            vec![(179, -2), (179, 2), (-179, 2), (-179, -2), (179, -2)],
-        ] {
-            let projected = projection.project_ring(&ring, 1);
-            assert_eq!(projected.len(), 1);
-            assert_eq!(projected[0].first(), projected[0].last());
-            let (minimum, maximum) = projected[0]
-                .iter()
-                .map(|point| point.0)
-                .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), x| {
-                    (min.min(x), max.max(x))
-                });
-            assert!(maximum - minimum < VIEWBOX_WIDTH / 2.0);
+        let unwrapped = unwrap_path(&points, 179.0);
+        assert_eq!(unwrapped.len(), 2);
+        assert_eq!(unwrapped[0].longitude, 179.0);
+        // -179 the short way from 179 is 181, not -179.
+        assert!((unwrapped[1].longitude - 181.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn unwrap_path_anchors_its_first_point_near_the_reference() {
+        // A path starting at +179 with a reference near -180 (a Local
+        // frame centred just past the antimeridian, say) must not stay
+        // near +179 — that would leave every projected point ~360 degrees
+        // away from the projection's own origin.
+        let points = [ProjectedPoint::new(179.0, 0.0).unwrap()];
+        let unwrapped = unwrap_path(&points, -179.5);
+        assert!((unwrapped[0].longitude - (-181.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn unwrap_path_returns_a_closed_ring_to_its_starting_longitude() {
+        // A small ring not encircling a pole must return to (near) its
+        // starting unwrapped longitude — no net drift after a full lap.
+        // (Unlike four points at 0/90/180/-90, which trace the equator
+        // itself and legitimately wind all the way around.)
+        let points = [
+            ProjectedPoint::new(10.0, -5.0).unwrap(),
+            ProjectedPoint::new(20.0, -5.0).unwrap(),
+            ProjectedPoint::new(20.0, 5.0).unwrap(),
+            ProjectedPoint::new(10.0, 5.0).unwrap(),
+            ProjectedPoint::new(10.0, -5.0).unwrap(),
+        ];
+        let unwrapped = unwrap_path(&points, 15.0);
+        assert!((unwrapped.last().unwrap().longitude - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn unwrap_path_develops_a_ring_spanning_nearly_the_whole_globe() {
+        // The pack's merged-landmass shape: bounces close to -180 and
+        // +180 without ever taking one giant "wrong way" edge.
+        let points = [
+            ProjectedPoint::new(-179.0, 10.0).unwrap(),
+            ProjectedPoint::new(170.0, 20.0).unwrap(),
+            ProjectedPoint::new(0.0, 30.0).unwrap(),
+            ProjectedPoint::new(-170.0, 20.0).unwrap(),
+            ProjectedPoint::new(-179.0, 10.0).unwrap(),
+        ];
+        let unwrapped = unwrap_path(&points, -179.0);
+        for pair in unwrapped.windows(2) {
+            assert!(
+                (pair[1].longitude - pair[0].longitude).abs() <= 180.0 + 1e-9,
+                "unwrap_path must never take a >180 degree step: {:?} -> {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+
+    // -- append_horizon_arc: still used by the globe inset ---------------
+
+    /// A polygon that grazes the horizon twice in almost the same place (a
+    /// ring wiggling in and out of visibility right at the 90-degree
+    /// cutoff, as a real coastline does) hands the closer an entry and an
+    /// exit that sit within float noise of the same point.
+    /// `start_angle - end_angle` is then a tiny value whose sign is
+    /// essentially arbitrary; both signs of the noise must close with a
+    /// near-zero arc.
+    #[test]
+    fn append_horizon_arc_closes_a_near_duplicate_crossing_tight_not_the_long_way() {
+        let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
+        let radius = 60.0;
+        let angle = 1.234_f64;
+        let start = (center.0 + radius * angle.cos(), center.1 + radius * angle.sin());
+        for noise in [1e-9, -1e-9] {
+            let end_angle = angle + noise;
+            let end = (
+                center.0 + radius * end_angle.cos(),
+                center.1 + radius * end_angle.sin(),
+            );
+            let mut ring = vec![start];
+            append_horizon_arc(&mut ring, center, start, end, radius);
+            for &(x, y) in &ring {
+                let point_angle = (y - center.1).atan2(x - center.0);
+                let delta = (point_angle - angle + std::f64::consts::PI)
+                    .rem_euclid(2.0 * std::f64::consts::PI)
+                    - std::f64::consts::PI;
+                assert!(
+                    delta.abs() < 0.01,
+                    "noise={noise}: closing a near-duplicate crossing produced a point \
+                     {delta:.6} radians from the shared angle — a near-full circle loop \
+                     instead of a no-op close"
+                );
+            }
+        }
+    }
+
+    /// A run's own entry/exit gap, however far apart, always closes with
+    /// the shorter of the two possible arcs — confirmed on real pack data
+    /// (see the commit introducing this test): a landmass feature whose
+    /// winding-selected "major" arc closed to 99% of the horizon disc
+    /// instead of the actual sliver its entry/exit gap spans.
+    #[test]
+    fn horizon_arc_always_takes_the_shorter_of_the_two_boundary_arcs() {
+        let center = (VIEWBOX_WIDTH / 2.0, VIEWBOX_HEIGHT / 2.0);
+        let radius = 60.0;
+        for (start_angle, end_angle) in [(-0.6_f64, 0.6_f64), (0.6, -0.6), (3.0, -3.0)] {
+            let start = (
+                center.0 + radius * start_angle.cos(),
+                center.1 + radius * start_angle.sin(),
+            );
+            let end = (
+                center.0 + radius * end_angle.cos(),
+                center.1 + radius * end_angle.sin(),
+            );
+            let mut ring = vec![start];
+            append_horizon_arc(&mut ring, center, start, end, radius);
+            for &(x, y) in &ring {
+                let radius_here = (x - center.0).hypot(y - center.1);
+                assert!((radius_here - radius).abs() < 0.5, "arc point left the circle");
+            }
+            let swept: f64 = ring
+                .windows(2)
+                .map(|pair| {
+                    let a = (pair[0].1 - center.1).atan2(pair[0].0 - center.0);
+                    let b = (pair[1].1 - center.1).atan2(pair[1].0 - center.0);
+                    ((b - a + std::f64::consts::PI).rem_euclid(2.0 * std::f64::consts::PI)
+                        - std::f64::consts::PI)
+                        .abs()
+                })
+                .sum();
+            assert!(
+                swept < std::f64::consts::PI + 0.01,
+                "arc from {start_angle} to {end_angle} swept {swept} radians, more than the \
+                 minor arc's at-most-pi"
+            );
         }
     }
 
@@ -1277,23 +1284,7 @@ mod tests {
             .all(|(x, y)| (0.0..=720.0).contains(x) && (0.0..=480.0).contains(y)));
     }
 
-    #[test]
-    fn antimeridian_split_handles_both_travel_directions() {
-        let eastward = split_antimeridian(&[
-            ProjectedPoint::new(179.0, 0.0).unwrap(),
-            ProjectedPoint::new(-179.0, 1.0).unwrap(),
-        ]);
-        assert_eq!(eastward.len(), 2);
-        assert_eq!(eastward[0].last().unwrap().longitude, 180.0);
-        assert_eq!(eastward[1].first().unwrap().longitude, -180.0);
-        let westward = split_antimeridian(&[
-            ProjectedPoint::new(-179.0, 0.0).unwrap(),
-            ProjectedPoint::new(179.0, 1.0).unwrap(),
-        ]);
-        assert_eq!(westward.len(), 2);
-        assert_eq!(westward[0].last().unwrap().longitude, -180.0);
-        assert_eq!(westward[1].first().unwrap().longitude, 180.0);
-    }
+    // -- TileSelection ----------------------------------------------------
 
     #[test]
     fn tile_rows_follow_the_generator_south_to_north_index() {
@@ -1320,6 +1311,25 @@ mod tests {
         assert!(selection.tiles.iter().all(|(x, _)| *x == 0 || *x == 35));
     }
 
+    /// A 10-degree frame at Beirut's latitude fits the 3:2 canvas by height
+    /// and so shows about 13 degrees of longitude, reaching past 30E into
+    /// tile column 20. Features there are on screen and must be selected.
+    #[test]
+    fn tile_selection_covers_the_visible_canvas_not_just_the_frame() {
+        let pack = super::super::embedded().unwrap();
+        let point = ProjectedPoint::new(35.5, 33.89).unwrap();
+        let frame = Frame::from_points(&[point], [Precision::Exact].into_iter()).unwrap();
+        let (west, ..) = FlatProjection::new(&frame).visible_bounds();
+        assert!(west < 30.0, "visible canvas starts at {west}");
+        let selection = TileSelection::for_frame(&pack, &frame);
+        assert!(
+            selection.tiles.contains(&(tile_x(west), 12)),
+            "tile column {} is on screen but not selected: {:?}",
+            tile_x(west),
+            selection.tiles
+        );
+    }
+
     #[test]
     fn world_frames_select_the_world_tier_without_fine_tiles() {
         let pack = super::super::embedded().unwrap();
@@ -1328,10 +1338,17 @@ mod tests {
         let selection = TileSelection::for_frame(&pack, &frame);
         assert_eq!(selection.tier, 0);
         assert!(selection.tiles.is_empty());
-        assert_eq!(
-            selection.features(&pack).len(),
-            pack.tiers[0].feature_count as usize
-        );
+        // Not `pack.tiers[0].feature_count` (the pack's own stored total,
+        // read straight off the tier header): schema 2 synthesises a coast
+        // layer directly into `tiers[0].layers` from land's rings
+        // (place_map.rs's `synthesize_world_coast`), so the tier actually
+        // carries more features than its header ever counted.
+        let expected: usize = pack.tiers[0]
+            .layers
+            .iter()
+            .map(|layer| layer.feature_count as usize)
+            .sum();
+        assert_eq!(selection.features(&pack).len(), expected);
     }
 
     #[test]
@@ -1360,10 +1377,194 @@ mod tests {
         }
     }
 
+    // -- Real-pack shape regression: Beirut and Bangkok ------------------
+
+    /// A Fiji-shaped frame straddles the antimeridian, which is also the
+    /// boundary between pack tiles x=35 and x=0. Bathymetry band features
+    /// there are pre-split at that tile edge in the source pack (visible
+    /// as a rendered seam: two same-depth "-6000" rings whose bounding
+    /// boxes meet exactly at the boundary's screen x, one ending there and
+    /// the next starting there). That split is a pack-data characteristic
+    /// this crate only renders, not a defect in the geometry pipeline —
+    /// but the geometry pipeline is exactly what would be at fault if the
+    /// two pre-split pieces failed to *meet*, leaving a gap of open water
+    /// with no band coverage on either side of the seam. This pins that
+    /// they still abut cleanly for the one depth this frame has data on
+    /// both sides of.
     #[test]
-    fn polar_points_select_world_tier() {
-        let points = [ProjectedPoint::new(0.0, 85.1).unwrap()];
-        let frame = Frame::from_points(&points, [Precision::Exact].into_iter()).unwrap();
-        assert_eq!(frame.tier, FrameTier::World);
+    fn tile_boundary_seafloor_bands_meet_without_a_gap() {
+        let pack = super::super::embedded().unwrap();
+        let point = ProjectedPoint::new(178.4419, -18.1416).unwrap();
+        let frame = Frame::from_points(&[point], [Precision::City].into_iter()).unwrap();
+        let projection = Projection::new(&frame);
+        let selection = TileSelection::for_frame(&pack, &frame);
+        let quantisation = pack.header.quantisation;
+
+        let target_band = -6000_i16;
+        let mut rings: Vec<Vec<(f64, f64)>> = Vec::new();
+        for (layer_id, feature) in selection.features(&pack) {
+            if layer_id != 10 || feature.band != target_band {
+                continue;
+            }
+            let parts: Vec<&[(i32, i32)]> = feature.parts.iter().map(Vec::as_slice).collect();
+            rings.extend(projection.project_feature(&parts, quantisation));
+        }
+        assert!(!rings.is_empty(), "expected some -6000 seafloor coverage in the Fiji frame");
+
+        // The tile boundary between x=35 (170E-180) and x=0 (180-170W) is
+        // the antimeridian itself.
+        let boundary_x = projection
+            .project(ProjectedPoint::new(180.0, frame.center_latitude).unwrap())
+            .unwrap()
+            .0;
+        let west_rings: Vec<&Vec<(f64, f64)>> = rings
+            .iter()
+            .filter(|ring| ring.iter().any(|p| (p.0 - boundary_x).abs() < 1.0))
+            .collect();
+        assert!(
+            !west_rings.is_empty(),
+            "no -6000 ring touches the tile boundary at x={boundary_x}; the frame or pack \
+             changed shape — update this test's premise rather than deleting the check"
+        );
+        // A fixed +/-2px probe would false-positive on an ordinary polygon
+        // vertex near the boundary (coverage can legitimately start or end
+        // within a couple of pixels of x=boundary_x without any gap). Instead,
+        // bisect for the true transition point on each side of every sampled
+        // y and assert *that* is within a tight tolerance of the boundary —
+        // this only fails for an actual missing strip between the two
+        // pre-split pieces, not for their polygons simply having a vertex
+        // near the seam.
+        for ring in &west_rings {
+            let ys: Vec<f64> = ring
+                .iter()
+                .filter(|p| (p.0 - boundary_x).abs() < 1.0)
+                .map(|p| p.1)
+                .collect();
+            for &y in &ys {
+                let west_covered = point_in_any_ring(&rings, (boundary_x - 2.0, y));
+                let east_covered = point_in_any_ring(&rings, (boundary_x + 2.0, y));
+                if west_covered == east_covered {
+                    continue;
+                }
+                let (mut lo, mut hi) = (boundary_x - 2.0, boundary_x + 2.0);
+                let lo_covered = point_in_any_ring(&rings, (lo, y));
+                for _ in 0..30 {
+                    let mid = (lo + hi) / 2.0;
+                    if point_in_any_ring(&rings, (mid, y)) == lo_covered {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                let gap = (hi - lo).abs();
+                assert!(
+                    gap < 0.01,
+                    "at y={y}, coverage transitions at x={lo:.3}..{hi:.3} ({gap:.3}px wide), \
+                     {:.3}px from the tile boundary at x={boundary_x:.3} — a real gap between \
+                     the pre-split pieces, not just a polygon vertex near the seam",
+                    (lo - boundary_x).abs()
+                );
+            }
+        }
+    }
+
+    fn land_rings_for(pack: &Pack, longitude: f64, latitude: f64) -> (Frame, Vec<Vec<(f64, f64)>>) {
+        let point = ProjectedPoint::new(longitude, latitude).unwrap();
+        let frame = Frame::from_points(&[point], [Precision::City].into_iter()).unwrap();
+        assert_eq!(frame.tier, FrameTier::Local);
+        let projection = Projection::new(&frame);
+        let selection = TileSelection::for_frame(pack, &frame);
+        let quantisation = pack.header.quantisation;
+        let mut rings = Vec::new();
+        for (layer_id, feature) in selection.features(pack) {
+            if layer_id != 2 {
+                continue;
+            }
+            let parts: Vec<&[(i32, i32)]> = feature.parts.iter().map(Vec::as_slice).collect();
+            rings.extend(projection.project_feature(&parts, quantisation));
+        }
+        (frame, rings)
+    }
+
+    fn point_in_any_ring(rings: &[Vec<(f64, f64)>], point: (f64, f64)) -> bool {
+        rings.iter().any(|ring| point_in_ring(ring, point))
+    }
+
+    fn point_in_ring(ring: &[(f64, f64)], point: (f64, f64)) -> bool {
+        let mut inside = false;
+        for pair in ring.windows(2) {
+            let (x1, y1) = pair[0];
+            let (x2, y2) = pair[1];
+            if (y1 > point.1) != (y2 > point.1) {
+                let x_at_y = x1 + (point.1 - y1) / (y2 - y1) * (x2 - x1);
+                if point.0 < x_at_y {
+                    inside = !inside;
+                }
+            }
+        }
+        inside
+    }
+
+    #[test]
+    fn coastal_local_frames_never_paint_the_full_clip_rectangle_as_land() {
+        let pack = super::super::embedded().unwrap();
+        for (longitude, latitude) in [(35.495, 33.888), (100.502, 13.756)] {
+            let (_, rings) = land_rings_for(&pack, longitude, latitude);
+            let clip_min_x = -CLIP_MARGIN;
+            let clip_max_x = VIEWBOX_WIDTH + CLIP_MARGIN;
+            let clip_min_y = -CLIP_MARGIN;
+            let clip_max_y = VIEWBOX_HEIGHT + CLIP_MARGIN;
+            for ring in &rings {
+                let min_x = ring.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+                let max_x = ring.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+                let min_y = ring.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+                let max_y = ring.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+                let is_full_clip_rectangle = ring.len() <= 5
+                    && (min_x - clip_min_x).abs() < 0.5
+                    && (max_x - clip_max_x).abs() < 0.5
+                    && (min_y - clip_min_y).abs() < 0.5
+                    && (max_y - clip_max_y).abs() < 0.5;
+                assert!(
+                    !is_full_clip_rectangle,
+                    "({longitude}, {latitude}): a land ring degenerated into the full clip \
+                     rectangle {ring:?}"
+                );
+            }
+        }
+    }
+
+    /// Beirut is on the Mediterranean coast: a point a few tenths of a
+    /// degree out to sea must not be inside any emitted land ring. Unlike
+    /// an area-fraction budget, this pins one concrete, independently
+    /// verifiable fact about the coastline's shape (west of Beirut is
+    /// open water) that a land-fill/coastline mismatch would violate
+    /// directly, regardless of how the rest of the frame is covered.
+    #[test]
+    fn beirut_frame_leaves_the_open_mediterranean_uncovered_by_land() {
+        let pack = super::super::embedded().unwrap();
+        let (frame, rings) = land_rings_for(&pack, 35.495, 33.888);
+        let sea_point = ProjectedPoint::new(34.0, 34.0).unwrap();
+        assert!(frame.contains(sea_point), "34.0E 34.0N should be within the Beirut frame");
+        let projection = Projection::new(&frame);
+        let (x, y) = projection.project(sea_point).unwrap();
+        assert!(
+            !point_in_any_ring(&rings, (x, y)),
+            "a known open-sea point (34.0E 34.0N) fell inside a land ring at ({x}, {y})"
+        );
+    }
+
+    #[test]
+    fn bangkok_frame_land_area_stays_within_a_plausible_band() {
+        let pack = super::super::embedded().unwrap();
+        let (_, rings) = land_rings_for(&pack, 100.502, 13.756);
+        let total_area: f64 = rings.iter().map(|ring| signed_area(ring).abs()).sum();
+        let frame_area = VIEWBOX_WIDTH * VIEWBOX_HEIGHT;
+        let fraction = total_area / frame_area;
+        assert!(
+            fraction < 0.85,
+            "Bangkok land covers {:.0}% of the frame; the Gulf of Thailand and its coastline \
+             should leave a clearly visible fraction as open water",
+            fraction * 100.0
+        );
     }
 }

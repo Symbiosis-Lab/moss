@@ -6,6 +6,8 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- Places get maps. With `[site] locator = "align-right"`, a page whose `location:` names a place in `.moss/places.toml` shows a small map beside its place line; each place's own page carries a map, `/places/` shows them all on a world map, and `![[/places/<place>/|style:map]]` embeds one anywhere. The maps are drawn at build time as inline SVG, with no tiles, scripts or third-party requests, in a cut-paper style: stepped land elevation and sea depth under soft light from the north-north-west, rivers, lakes, ice, reefs, salt flats and built-up areas, a small globe showing where the frame sits, and matching light and dark themes. A place's precision in the gazetteer is also its privacy: the closest a map ever zooms is a frame about 10° across, and a region or country is marked by a soft fade rather than a pin.
+
 - The header no longer repeats the site name on the home page when the page's own opening heading already says it. If the home page's first `#` heading matches the site name exactly (trimmed, whitespace collapsed, case-sensitive), the header brand link is dropped there; a site with a `logo:` keeps the logo in its place, named for assistive technology by an `aria-label`, instead of dropping the link outright. Every other page keeps the header name as before, and a home page that opens with prose, a poem, or an image instead of a matching heading is unaffected.
 
 ### Fixed

@@ -1,19 +1,18 @@
 {
-  "schema": 1,
-  "manifest_sha256": "ff8eaffeefb20711c1edf648a2fb7b55c7b00185168a87315f950990d95c384b",
-  "bytes": 1495228,
-  "compressed_bytes": 976327,
-  "budget_bytes": 2883584,
-  "margin_bytes": 1388356,
-  "margin_percent": 48.147,
+  "schema": 2,
+  "manifest_sha256": "7d19e4853f6d7a34af64acb471df4704e14b481d07bccd7e2eff3ff62474bc16",
+  "raw_bytes": 4710486,
+  "brotli_bytes": 3265159,
+  "budget_bytes": 3565158,
+  "margin_bytes": 299999,
+  "margin_percent": 8.415,
   "tiers": {
-    "world": 518091,
-    "fine": 845449
+    "world": 386023,
+    "fine": 4156775
   },
-  "index": 131576,
+  "index": 167576,
   "layers": {
-    "counts": {
-      "coast": 4133,
+    "world_counts": {
       "land": 11,
       "lakes": 1355,
       "rivers": 4224,
@@ -22,10 +21,20 @@
       "salt_flats": 73,
       "built_up": 11878,
       "relief": 12,
-      "sea_floor": 529
+      "sea_floor": 533
+    },
+    "fine_counts": {
+      "land": 11,
+      "lakes": 1355,
+      "rivers": 4224,
+      "ice": 2045,
+      "reefs": 1043,
+      "salt_flats": 73,
+      "built_up": 11878,
+      "relief": 12,
+      "sea_floor": 533
     },
     "world_bytes": {
-      "coast": 157585,
       "land": 11604,
       "lakes": 8457,
       "rivers": 164794,
@@ -34,19 +43,18 @@
       "salt_flats": 515,
       "built_up": 1236,
       "relief": 67992,
-      "sea_floor": 54241
+      "sea_floor": 79768
     },
     "fine_bytes": {
-      "coast": 177153,
-      "land": 40301,
-      "lakes": 38834,
-      "rivers": 170017,
-      "ice": 43611,
-      "reefs": 40271,
-      "salt_flats": 2489,
-      "built_up": 12725,
-      "relief": 174292,
-      "sea_floor": 145656
+      "land": 491506,
+      "lakes": 133750,
+      "rivers": 282576,
+      "ice": 206474,
+      "reefs": 45524,
+      "salt_flats": 6617,
+      "built_up": 502153,
+      "relief": 1206027,
+      "sea_floor": 1282058
     }
   }
 }

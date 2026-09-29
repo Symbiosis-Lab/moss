@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /* Offline place-map pack generator. The source cache is the only input. */
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { deflateRawSync } from "node:zlib";
-import { resolve, dirname, basename } from "node:path";
+import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
+import { resolve, dirname, basename, join } from "node:path";
 import shp from "shpjs";
 import h5wasm from "h5wasm/node";
 import { contours } from "d3-contour";
@@ -13,31 +14,71 @@ import { contours } from "d3-contour";
 const ROOT = resolve(import.meta.dirname, "../..");
 const MANIFEST = resolve(ROOT, "crates/moss-build/data/place-map/source-manifest.toml");
 const CACHE = resolve(process.env.MOSS_PLACE_MAP_SOURCE_DIR ?? "/private/tmp/moss-place-map-sources");
-const OUT = resolve(ROOT, "crates/moss-build/data/place-map/place-map-v1.bin");
+// The checked-in artifact is the brotli-compressed pack, not the raw
+// MOSSPLM1 bytes: the moss binary embeds this file verbatim and decodes it
+// once at runtime (place_map.rs's `embedded()`), so what's on disk here is
+// exactly what the app carries.
+const OUT = resolve(ROOT, "crates/moss-build/data/place-map/place-map-v1.bin.br");
 const REPORT = resolve(ROOT, "crates/moss-build/data/place-map/place-map-size.json");
 const QUANT = 10000;
 const POLE_EPSILON = 1e-9;
 const POLE_CAP = 89.999;
 const MAGIC = Buffer.from("MOSSPLM1", "ascii");
-const SCHEMA = 1;
+// Schema 2 (2026-09): the pack no longer stores a coast (layer 1) record.
+// Natural Earth's coastline and land datasets trace the same digitized
+// shoreline, so storing both independently duplicated the pack's single
+// largest chunk of geometry; land is now simplified at coast's own finer
+// tolerance (see featureTolerance below) and the Rust decoder derives every
+// coast stroke from land's ring boundary instead — place_map.rs's
+// decode_tier and TileSelection::features (geometry.rs).
+const SCHEMA = 2;
 const TILE_DEGREES = 10;
 const LAYERS = [
-  [1, "coast", 2], [2, "land", 1], [3, "lakes", 1], [4, "rivers", 2],
+  [2, "land", 1], [3, "lakes", 1], [4, "rivers", 2],
   [5, "ice", 1], [6, "reefs", 1], [7, "salt_flats", 1], [8, "built_up", 1],
   [9, "relief", 1], [10, "sea_floor", 1],
 ];
 const LAYER_ID = new Map(LAYERS.map(([id, name]) => [name, id]));
 const SOURCES = {
-  coast: "ne_10m_coastline.zip", land: "ne_10m_land.zip", lakes: "ne_10m_lakes.zip",
+  land: "ne_10m_land.zip", lakes: "ne_10m_lakes.zip",
   rivers: "ne_10m_rivers_lake_centerlines_scale_rank.zip", ice: ["ne_10m_glaciated_areas.zip", "ne_10m_antarctic_ice_shelves_polys.zip"],
   reefs: "ne_10m_reefs.zip", salt_flats: "ne_10m_playas.zip", built_up: "ne_10m_urban_areas.zip",
   bathymetry: "ne_10m_bathymetry_all.zip", relief: "earth_relief_06m_g.grd",
 };
-const TOLERANCE = { world: 0.98, fine: 0.3 };
-const BUILT_UP_TOLERANCE = { world: 1.2, fine: 0.4 };
-const SEA_FLOOR_THRESHOLDS = [-6000, -4000, -2000, -1000, -500, -250, -100, -10];
+// Eight 90x90-degree gridline-registered tiles making up the 3-arcminute
+// GMT relief grid (source-manifest.toml earth_relief_03m_g_*); the locator
+// tier contours this at native resolution instead of the 06m grid's stride.
+// Filenames name the tile's southwest corner: N00 spans lat 0..90, S90
+// spans lat -90..0; each longitude tag spans 90 degrees starting there.
+const RELIEF_FINE_TILES = [
+  { artifact: "N00W180.earth_relief_03m_g.jp2", latMin: 0, lonMin: -180 },
+  { artifact: "N00W090.earth_relief_03m_g.jp2", latMin: 0, lonMin: -90 },
+  { artifact: "N00E000.earth_relief_03m_g.jp2", latMin: 0, lonMin: 0 },
+  { artifact: "N00E090.earth_relief_03m_g.jp2", latMin: 0, lonMin: 90 },
+  { artifact: "S90W180.earth_relief_03m_g.jp2", latMin: -90, lonMin: -180 },
+  { artifact: "S90W090.earth_relief_03m_g.jp2", latMin: -90, lonMin: -90 },
+  { artifact: "S90E000.earth_relief_03m_g.jp2", latMin: -90, lonMin: 0 },
+  { artifact: "S90E090.earth_relief_03m_g.jp2", latMin: -90, lonMin: 90 },
+];
+const RELIEF_FINE_TILE_POINTS = 1801; // 90deg at 0.05deg (3 arcmin) spacing, gridline-registered.
+const RELIEF_FINE_SPACING = 0.05;
+const RELIEF_WORLD_SPACING = 0.1; // 06m native spacing; world tier keeps its stride-5 (0.5deg) sample.
+const RELIEF_FINE_SIGMA = 1.2; // grid cells; suppresses marching-squares noise before tracing native-res contours.
+const RELIEF_WORLD_STRIDE = 5;
+// Locator ("fine") frames render about 10 degrees across 720 device px.
+const FINE_PX = 10 / 720;
+const TOLERANCE = { world: 0.98, fine: 2 * FINE_PX };
+const COAST_TOLERANCE = { world: 0.98, fine: FINE_PX };
+const BUILT_UP_TOLERANCE = { world: 1.2, fine: 2 * FINE_PX };
+const SEA_FLOOR_THRESHOLDS = [-6000, -5000, -4000, -3000, -2000, -1000, -200, -100, -50, -30, -20, -10];
 const RELIEF_THRESHOLDS = [100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000];
-const SOURCE_MASKS = [1, 2, 4, 8, 48, 64, 128, 512, 1024, 1280];
+// Per-layer bitmask of the logical source datasets behind it (opaque to the
+// Rust decoder). Bit 10 is the 06m world-tier GMT grid; bit 11 is the
+// 03m locator-tier GMT tile set added for the approved-resolution fix.
+// Index 0 (coast) mirrors index 1 (land)'s mask (bit 2) rather than the old
+// standalone coastline-dataset bit: schema 2 derives every coast stroke
+// from land's own rings, so land is what actually feeds it now.
+const SOURCE_MASKS = [2, 2, 4, 8, 48, 64, 128, 512, 1024 + 2048, 256 + 1024 + 2048];
 
 function fail(message) { throw new Error(message); }
 function u16(value) { const b = Buffer.alloc(2); b.writeUInt16LE(value); return b; }
@@ -66,8 +107,8 @@ function parseToml(text) {
 async function verifySources() {
   const manifestBytes = await readFile(MANIFEST);
   const manifest = parseToml(manifestBytes.toString("utf8"));
-  if (manifest.schema !== 1 || manifest.gmt_dataset !== "earth_relief_06m_g") fail("unsupported source manifest");
-  if (manifest.sources.length !== 11) fail("source manifest has an unexpected source count");
+  if (manifest.schema !== 1 || manifest.gmt_dataset !== "earth_relief_06m_g" || manifest.gmt_dataset_fine !== "earth_relief_03m_g") fail("unsupported source manifest");
+  if (manifest.sources.length !== 18) fail("source manifest has an unexpected source count");
   for (const source of manifest.sources) {
     const path = resolve(CACHE, source.artifact);
     if (dirname(path) !== CACHE || basename(path) !== source.artifact) fail(`unsafe source path ${source.artifact}`);
@@ -183,15 +224,16 @@ function cleanRing(points) {
   return unique;
 }
 
-function normalizeRing(coords, tolerance, outer) {
+function normalizeRing(coords, tolerance, outer, minArea = 0) {
   const points = coords.map(numberPoint);
   if (points.length < 3) return [];
   const source = points[0][0] === points.at(-1)[0] && points[0][1] === points.at(-1)[1] ? points.slice(0, -1) : points;
   const unwrapped = unwrapRing(source);
-  const latitudes = unwrapped.map(([, lat]) => lat);
-  if (Math.max(...latitudes) - Math.min(...latitudes) >= 179.998) fail("polygon spans both poles");
-  const minimum = Math.min(...unwrapped.map(([lon]) => lon));
-  const maximum = Math.max(...unwrapped.map(([lon]) => lon));
+  // Loops, not Math.min/max(...spread): a native-resolution relief ring can
+  // have far more points than the engine's argument-list stack allows.
+  let minLat = Infinity, maxLat = -Infinity, minimum = Infinity, maximum = -Infinity;
+  for (const [lon, lat] of unwrapped) { if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat; if (lon < minimum) minimum = lon; if (lon > maximum) maximum = lon; }
+  if (maxLat - minLat >= 179.998) fail("polygon spans both poles");
   const firstWindow = Math.floor((minimum + 180) / 360);
   const lastWindow = Math.floor((maximum + 180) / 360);
   const output = [];
@@ -206,17 +248,22 @@ function normalizeRing(coords, tolerance, outer) {
     const ring = simplified.map(([lon, lat]) => [lon - window * 360, lat]);
     if (ring[0][0] !== ring.at(-1)[0] || ring[0][1] !== ring.at(-1)[1]) ring.push(ring[0]);
     const area = ringArea(ring);
-    if (Math.abs(area) < 1e-9) continue;
+    if (Math.abs(area) < Math.max(1e-9, minArea)) continue;
     if ((area > 0) !== outer) ring.reverse();
     output.push(ring);
   }
   return output;
 }
 
-function geometryParts(geometry, tolerance, polygon = false) {
+// minArea drops a whole ring below that footprint (deg^2) rather than just
+// thinning its points: a Douglas-Peucker pass alone keeps every feature
+// regardless of size, so without this a locator-scale pack ends up carrying
+// thousands of sub-pixel islands, lakes and urban patches at full encoding
+// cost. This mirrors the approved design's ring-weight filtering step.
+function geometryParts(geometry, tolerance, polygon = false, minArea = 0) {
   if (!geometry) return [];
-  if (geometry.type === "Polygon") return geometry.coordinates.flatMap((ring, index) => normalizeRing(ring, tolerance, index === 0));
-  if (geometry.type === "MultiPolygon") return geometry.coordinates.flatMap((polygonRings) => polygonRings.flatMap((ring, index) => normalizeRing(ring, tolerance, index === 0)));
+  if (geometry.type === "Polygon") return geometry.coordinates.flatMap((ring, index) => normalizeRing(ring, tolerance, index === 0, minArea));
+  if (geometry.type === "MultiPolygon") return geometry.coordinates.flatMap((polygonRings) => polygonRings.flatMap((ring, index) => normalizeRing(ring, tolerance, index === 0, minArea)));
   const collect = (coords, isPolygon) => {
     if (!coords?.length) return [];
     if (typeof coords[0][0] === "number") {
@@ -260,55 +307,192 @@ function encodeFeature(parts) {
   return Buffer.concat(chunks);
 }
 
-function featuresFor(features, tolerance) {
+// The signed 16-bit band field is the one per-feature attribute the pack
+// carries. Contour bands store their threshold and the retained Natural
+// Earth bathymetry stores its (negated) depth; rivers store Natural Earth's
+// scalerank, 0 for the largest trunk rivers, so the renderer can taper
+// strokes by rank instead of guessing importance from a river's extent.
+function featureBand(layer, properties) {
+  if (layer === "rivers") return properties?.scalerank ?? 0;
+  return properties?.band ?? (properties?.depth === undefined ? 0 : -properties.depth);
+}
+
+function featuresFor(features, tolerance, minArea = 0, layer = null) {
   const output = [];
   for (const feature of features) {
-    const parts = geometryParts(feature.geometry, tolerance);
+    const parts = geometryParts(feature.geometry, tolerance, false, minArea);
     if (!parts.length) continue;
-    const flat = parts.flat();
-    const bounds = [Math.min(...flat.map((x) => x[0])), Math.min(...flat.map((x) => x[1])), Math.max(...flat.map((x) => x[0])), Math.max(...flat.map((x) => x[1]))];
-    const rawBand = feature.properties?.band ?? (feature.properties?.depth === undefined ? 0 : -feature.properties.depth);
+    // A loop, not Math.min/max(...spread): a native-resolution relief ring
+    // can carry tens of thousands of points before simplification, which
+    // overflows the engine's call-stack-sized argument list.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const part of parts) for (const [x, y] of part) { if (x < minX) minX = x; if (y < minY) minY = y; if (x > maxX) maxX = x; if (y > maxY) maxY = y; }
+    const bounds = [minX, minY, maxX, maxY];
+    const rawBand = featureBand(layer, feature.properties);
     const band = Number.isFinite(rawBand) ? Math.max(-32768, Math.min(32767, Math.round(rawBand))) : 0;
     output.push({ parts, bounds, band, bytes: encodeFeature(parts) });
   }
   return output;
 }
 
-function reliefBands(z, lon, lat) {
-  const stride = 5; // 0.5 degree samples from the 0.1 degree source grid.
+// z is a flat row-major grid (row index = latitude index, ascending from
+// lat[0]) sampled every `stride` native cells, each `spacing` degrees apart.
+// Separable Gaussian blur, wrapping across the antimeridian (longitude is
+// periodic) and clamping at the poles (latitude is not). Contouring raw
+// relief/bathymetry with marching squares turns per-cell noise into a huge
+// number of tiny spurious rings; a mild pre-blur is what keeps the traced
+// bands close to the real terrain shape instead of quantisation static.
+function blurGrid(z, nx, ny, sigma) {
+  const radius = Math.max(1, Math.ceil(sigma * 3));
+  const kernel = new Float64Array(2 * radius + 1);
+  let sum = 0;
+  for (let i = -radius; i <= radius; i++) { const v = Math.exp(-(i * i) / (2 * sigma * sigma)); kernel[i + radius] = v; sum += v; }
+  for (let i = 0; i < kernel.length; i++) kernel[i] /= sum;
+  const tmp = new Float32Array(nx * ny);
+  for (let y = 0; y < ny; y++) {
+    const rowBase = y * nx;
+    for (let x = 0; x < nx; x++) {
+      let acc = 0;
+      for (let k = -radius; k <= radius; k++) acc += z[rowBase + (((x + k) % nx) + nx) % nx] * kernel[k + radius];
+      tmp[rowBase + x] = acc;
+    }
+  }
+  const out = new Float32Array(nx * ny);
+  for (let x = 0; x < nx; x++) {
+    for (let y = 0; y < ny; y++) {
+      let acc = 0;
+      for (let k = -radius; k <= radius; k++) acc += tmp[Math.max(0, Math.min(ny - 1, y + k)) * nx + x] * kernel[k + radius];
+      out[y * nx + x] = acc;
+    }
+  }
+  return out;
+}
+
+function reliefBands(z, lon, lat, stride, spacing, smoothSigma = 0) {
   const nx = Math.floor((lon.length - 1) / stride) + 1; const ny = Math.floor((lat.length - 1) / stride) + 1;
-  const values = new Float32Array(nx * ny);
+  let values = new Float32Array(nx * ny);
   for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) values[y * nx + x] = z[Math.min(y * stride, lat.length - 1) * lon.length + Math.min(x * stride, lon.length - 1)];
-  const project = (geometry) => geometry.map((polygon) => polygon.map((ring) => ring.map(([x, y]) => [lon[0] + x * stride * 0.1, lat[0] + y * stride * 0.1])));
-  const make = (name, thresholds) => thresholds.flatMap((threshold) => contours().size([nx, ny]).thresholds([threshold])(values).flatMap((contour) => [{ properties: { band: threshold }, geometry: { type: contour.type, coordinates: project(contour.coordinates) } }]));
-  return [{ name: "relief", features: make("relief", RELIEF_THRESHOLDS) }, { name: "sea_floor", features: make("sea_floor", SEA_FLOOR_THRESHOLDS) }];
+  if (smoothSigma > 0) values = blurGrid(values, nx, ny, smoothSigma);
+  // d3-contour closes a region that reaches the grid's edge along a virtual
+  // row just outside it, which for a global grid lies past a pole. Deep
+  // water covers the North Pole, so the sea-floor bands reach that row;
+  // it is clamped back onto the pole instead of leaving WGS84.
+  const lastLat = lat[lat.length - 1];
+  const project = (geometry) => geometry.map((polygon) => polygon.map((ring) => ring.map(([x, y]) => [lon[0] + x * stride * spacing, Math.max(lat[0], Math.min(lastLat, lat[0] + y * stride * spacing))])));
+  const make = (thresholds, grid, level) => thresholds.flatMap((threshold) => contours().size([nx, ny]).thresholds([level(threshold)])(grid).flatMap((contour) => [{ properties: { band: threshold }, geometry: { type: contour.type, coordinates: project(contour.coordinates) } }]));
+  // d3-contour traces the region at or above a level. A relief band wants
+  // exactly that (ground at least 100 m up), but a sea-floor band means
+  // "at least this deep": contouring the raw grid at -200 would instead
+  // trace every cell shallower than 200 m, land included, so the bands grow
+  // toward the deep ocean and the last one painted covers the whole sea.
+  // Contouring the negated grid at +200 traces the water deeper than 200 m,
+  // which shrinks with depth like the Natural Earth bathymetry polygons
+  // this layer also carries.
+  const negated = values.map((value) => -value);
+  return { relief: make(RELIEF_THRESHOLDS, values, (threshold) => threshold), sea_floor: make(SEA_FLOOR_THRESHOLDS, negated, (threshold) => -threshold) };
+}
+
+async function readWorldReliefGrid() {
+  const h5 = await import("h5wasm/node"); await h5.default.ready;
+  const file = new h5.default.File(resolve(CACHE, SOURCES.relief), "r");
+  const lon = file.get("lon").value; const lat = file.get("lat").value; const z = file.get("z").value;
+  file.close();
+  return { lon, lat, z };
+}
+
+// Decodes one lossless signed-16-bit gridline-registered GMT relief tile
+// (JPEG2000) to a flat row-major Int16Array via the `opj_decompress` CLI
+// (from the openjpeg project). Node has no JP2 decoder of its own; this
+// mirrors the existing dependency on an external `python3` verifier.
+async function decodeReliefTile(artifact, workDir) {
+  const input = resolve(CACHE, artifact);
+  const output = join(workDir, `${basename(artifact)}.rawl`);
+  const result = spawnSync("opj_decompress", ["-i", input, "-o", output, "-quiet"], { encoding: "utf8" });
+  if (result.error) fail(`opj_decompress is required to decode ${artifact} (openjpeg not found): ${result.error.message}`);
+  if (result.status !== 0) fail(`opj_decompress failed on ${artifact}: ${result.stderr || result.stdout}`);
+  const raw = await readFile(output);
+  const expected = RELIEF_FINE_TILE_POINTS * RELIEF_FINE_TILE_POINTS * 2;
+  if (raw.length !== expected) fail(`${artifact}: decoded ${raw.length} bytes, expected ${expected}`);
+  const values = new Int16Array(RELIEF_FINE_TILE_POINTS * RELIEF_FINE_TILE_POINTS);
+  for (let i = 0; i < values.length; i++) values[i] = raw.readInt16LE(i * 2);
+  return values;
+}
+
+// Assembles the eight 90x90-degree tiles into one native-resolution global
+// grid (0.05deg spacing), row 0 = south (lat -90), matching the 06m grid's
+// ascending-latitude convention so reliefBands needs no orientation case.
+async function readFineReliefGrid() {
+  const workDir = await mkdtemp(join(tmpdir(), "moss-place-map-relief-"));
+  try {
+    const nx = Math.round(360 / RELIEF_FINE_SPACING) + 1;
+    const ny = Math.round(180 / RELIEF_FINE_SPACING) + 1;
+    const z = new Float32Array(nx * ny);
+    const T = RELIEF_FINE_TILE_POINTS;
+    for (const tile of RELIEF_FINE_TILES) {
+      const values = await decodeReliefTile(tile.artifact, workDir);
+      const latTop = tile.latMin + 90; // tile-local row 0 is the tile's north edge
+      for (let r = 0; r < T; r++) {
+        const lat = latTop - r * RELIEF_FINE_SPACING;
+        const gy = Math.round((lat + 90) / RELIEF_FINE_SPACING);
+        const rowBase = r * T; const gRowBase = gy * nx;
+        for (let c = 0; c < T; c++) {
+          const gx = Math.round((tile.lonMin + c * RELIEF_FINE_SPACING + 180) / RELIEF_FINE_SPACING);
+          z[gRowBase + gx] = values[rowBase + c];
+        }
+      }
+    }
+    const lon = new Float64Array(nx); for (let x = 0; x < nx; x++) lon[x] = -180 + x * RELIEF_FINE_SPACING;
+    const lat = new Float64Array(ny); for (let y = 0; y < ny; y++) lat[y] = -90 + y * RELIEF_FINE_SPACING;
+    return { lon, lat, z };
+  } finally {
+    await rm(workDir, { recursive: true, force: true });
+  }
 }
 
 async function makeLayers() {
   const raw = {};
   for (const [name, source] of Object.entries(SOURCES)) {
+    if (name === "relief") continue;
     if (name === "ice") raw[name] = [...await readGeoJson(source[0]), ...await readGeoJson(source[1])];
-    else if (name !== "relief") raw[name] = await readGeoJson(source);
+    else raw[name] = await readGeoJson(source);
   }
-  const h5 = await import("h5wasm/node"); await h5.default.ready;
-  const file = new h5.default.File(resolve(CACHE, SOURCES.relief), "r");
-  const lon = file.get("lon").value; const lat = file.get("lat").value; const z = file.get("z").value;
-  const bands = reliefBands(z, lon, lat);
-  file.close();
-  const layers = new Map();
-  const sourceLayers = { coast: "coast", land: "land", lakes: "lakes", rivers: "rivers", ice: "ice", reefs: "reefs", salt_flats: "salt_flats", built_up: "built_up" };
-  for (const [name, sourceName] of Object.entries(sourceLayers)) layers.set(name, raw[sourceName]);
-  layers.set("relief", bands.find((band) => band.name === "relief").features);
+  const worldGrid = await readWorldReliefGrid();
+  const worldBands = reliefBands(worldGrid.z, worldGrid.lon, worldGrid.lat, RELIEF_WORLD_STRIDE, RELIEF_WORLD_SPACING);
+  const fineGrid = await readFineReliefGrid();
+  const fineBands = reliefBands(fineGrid.z, fineGrid.lon, fineGrid.lat, 1, RELIEF_FINE_SPACING, RELIEF_FINE_SIGMA);
+
+  const sourceLayers = { land: "land", lakes: "lakes", rivers: "rivers", ice: "ice", reefs: "reefs", salt_flats: "salt_flats", built_up: "built_up" };
   const bathymetry = raw.bathymetry.filter((feature) => feature.properties?.depth === 6000);
-  layers.set("sea_floor", [...bands.find((band) => band.name === "sea_floor").features, ...bathymetry]);
-  return layers;
+  const buildLayerMap = (bands) => {
+    const layers = new Map();
+    for (const [name, sourceName] of Object.entries(sourceLayers)) layers.set(name, raw[sourceName]);
+    layers.set("relief", bands.relief);
+    layers.set("sea_floor", [...bands.sea_floor, ...bathymetry]);
+    return layers;
+  };
+  return { worldLayers: buildLayerMap(worldBands), fineLayers: buildLayerMap(fineBands) };
 }
+
+const LINE_LAYERS = new Set(["rivers"]);
 
 function tierPayload(layers, tolerance) {
   const pieces = []; const refs = []; const layerBytes = {}; let featureRef = 0;
   for (const [name, features] of layers) {
-    const featureTolerance = name === "built_up" ? BUILT_UP_TOLERANCE[tolerance] : TOLERANCE[tolerance];
-    const normalized = featuresFor(features, featureTolerance);
+    const tight = name === "built_up"; // small real urban patches must not be eaten by the same threshold as ocean-scale bands.
+    // Land carries coast's own ~1px tolerance, not the ~2px "wide" bands
+    // get: its rings are now the only source of the coast stroke (schema 2),
+    // so they need to stay as crisp as the old standalone coastline layer.
+    const featureTolerance = tight ? BUILT_UP_TOLERANCE[tolerance] : name === "land" ? COAST_TOLERANCE[tolerance] : TOLERANCE[tolerance];
+    // A ring below this footprint is dropped outright, not just thinned: a
+    // point-simplification pass alone keeps every feature no matter how
+    // small. The "tight" built-up layer drops only sub-pixel rings; "wide"
+    // bands (land included) drop anything under a 2x2-pixel footprint.
+    // World-tier tolerances are calibrated to a whole-globe frame, not the
+    // 10deg/720px locator frame this px-based footprint assumes, so only
+    // the locator tier gets ring-dropping; world keeps point-simplification
+    // only, as before.
+    const minArea = tolerance !== "fine" || LINE_LAYERS.has(name) ? 0 : tight ? featureTolerance * featureTolerance : (2 * featureTolerance) * (2 * featureTolerance);
+    const normalized = featuresFor(features, featureTolerance, minArea, name);
     const body = [];
     for (const feature of normalized) {
       body.push(u32(feature.bytes.length), ...feature.bounds.map((x) => i32(Math.round(x * QUANT))), i16(feature.band), feature.bytes);
@@ -338,24 +522,42 @@ function tileIndex(refs) {
   return Buffer.concat(chunks);
 }
 
+const BUDGET_BYTES = 3_565_158;
+
+// Compresses the pack and writes it with its size report, but only once it
+// fits: the budget is checked before anything touches disk, so a run that
+// blows the budget fails without replacing the checked-in pack.
+async function writePack(bytes, fields, { out = OUT, reportPath = REPORT, budgetBytes = BUDGET_BYTES } = {}) {
+  // The budget measures what the app actually ships: this container,
+  // brotli -q11, not the raw MOSSPLM1 bytes.
+  const compressed = brotliCompressSync(bytes, {
+    params: {
+      [zlibConstants.BROTLI_PARAM_QUALITY]: 11,
+      [zlibConstants.BROTLI_PARAM_SIZE_HINT]: bytes.length,
+    },
+  });
+  const marginBytes = budgetBytes - compressed.length;
+  const marginPercent = (marginBytes / budgetBytes) * 100;
+  const report = { schema: fields.schema, manifest_sha256: fields.manifest_sha256, raw_bytes: bytes.length, brotli_bytes: compressed.length, budget_bytes: budgetBytes, margin_bytes: marginBytes, margin_percent: Number(marginPercent.toFixed(3)), ...fields };
+  if (compressed.length > budgetBytes) fail(`place-map pack is ${compressed.length} brotli bytes, over ${budgetBytes}; nothing written\n${JSON.stringify(report, null, 2)}`);
+  if (marginPercent < 5) fail(`place-map pack has only ${marginPercent.toFixed(3)}% brotli budget margin; need at least 5%; nothing written\n${JSON.stringify(report, null, 2)}`);
+  await mkdir(dirname(out), { recursive: true });
+  await writeFile(out, compressed);
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  return report;
+}
+
 async function main() {
   const { manifestBytes, manifestDigest } = await verifySources();
-  const layers = await makeLayers();
-  const world = tierPayload(layers, "world"); const fine = tierPayload(layers, "fine");
+  const { worldLayers, fineLayers } = await makeLayers();
+  const world = tierPayload(worldLayers, "world"); const fine = tierPayload(fineLayers, "fine");
   const index = tileIndex(fine.refs);
   const sourceMasks = SOURCE_MASKS.map(u16);
   const header = Buffer.concat([MAGIC, u16(SCHEMA), u16(0), u32(QUANT), i32(-180 * QUANT), i32(180 * QUANT), i32(-90 * QUANT), i32(90 * QUANT), u16(LAYERS.length), u16(2), u16(TILE_DEGREES), u16(0), manifestDigest, ...sourceMasks]);
   const tiers = Buffer.concat([Buffer.from([0, 0]), u32(world.refs.length), u32(world.bytes.length), world.bytes, Buffer.from([1, 0]), u32(fine.refs.length), u32(fine.bytes.length), fine.bytes, index]);
   const bytes = Buffer.concat([header, tiers]);
   bytes.writeUInt16LE(header.length, 10);
-  await mkdir(dirname(OUT), { recursive: true }); await writeFile(OUT, bytes);
-  const budgetBytes = 2_883_584;
-  const marginBytes = budgetBytes - bytes.length;
-  const marginPercent = (marginBytes / budgetBytes) * 100;
-  const report = { schema: SCHEMA, manifest_sha256: manifestDigest.toString("hex"), bytes: bytes.length, compressed_bytes: deflateRawSync(bytes, { level: 9 }).length, budget_bytes: budgetBytes, margin_bytes: marginBytes, margin_percent: Number(marginPercent.toFixed(3)), tiers: { world: world.bytes.length, fine: fine.bytes.length }, index: index.length, layers: { counts: Object.fromEntries([...layers].map(([name, features]) => [name, features.length])), world_bytes: world.layerBytes, fine_bytes: fine.layerBytes } };
-  await writeFile(REPORT, `${JSON.stringify(report, null, 2)}\n`);
-  if (bytes.length > report.budget_bytes) fail(`place-map pack is ${bytes.length} bytes, over ${report.budget_bytes}`);
-  if (marginPercent < 5) fail(`place-map pack has only ${marginPercent.toFixed(3)}% budget margin; need at least 5%`);
+  const report = await writePack(bytes, { schema: SCHEMA, manifest_sha256: manifestDigest.toString("hex"), tiers: { world: world.bytes.length, fine: fine.bytes.length }, index: index.length, layers: { world_counts: Object.fromEntries([...worldLayers].map(([name, features]) => [name, features.length])), fine_counts: Object.fromEntries([...fineLayers].map(([name, features]) => [name, features.length])), world_bytes: world.layerBytes, fine_bytes: fine.layerBytes } });
   console.log(JSON.stringify(report, null, 2));
 }
 
@@ -370,12 +572,18 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 
 export {
+  COAST_TOLERANCE,
   encodeFeature,
+  FINE_PX,
   geometryParts,
   reliefBands,
   rdp,
   RELIEF_THRESHOLDS,
+  SCHEMA,
   SEA_FLOOR_THRESHOLDS,
   splitDateline,
+  tierPayload,
   tileIndex,
+  TOLERANCE,
+  writePack,
 };

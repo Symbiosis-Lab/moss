@@ -5,6 +5,7 @@ natural_earth_theme = "10m physical and cultural"
 natural_earth_release = "mixed per-layer releases; see each source's published_version and archive_version"
 natural_earth_license = "Public domain; see https://www.naturalearthdata.com/about/terms-of-use/"
 gmt_dataset = "earth_relief_06m_g"
+gmt_dataset_fine = "earth_relief_03m_g"
 gmt_manifest_url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_server.txt"
 gmt_manifest_date = "2025-05-01"
 gmt_manifest_sha256 = "65c7c03a59d103c329f3ab8f88bb8fb3719e0a73314747aba971906a1f17bb82"
@@ -13,17 +14,6 @@ gmt_license = "not specified in the pinned GMT server manifest"
 simplification = "Douglas-Peucker in geographic degrees; layer tolerances are pinned by the generator."
 projection = "longitude/latitude in WGS84; Rust owns screen projection"
 quantization = 10000
-
-[[sources]]
-name = "coastline"
-artifact = "ne_10m_coastline.zip"
-url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_coastline.zip"
-sha256 = "bfa04cdbcbef07ef90dfca1dabb48062eca29900a113df0f389303e255484017"
-size_bytes = 3069451
-published_version = "4.1.0"
-archive_version = "5.0.0-pre9"
-members = ["ne_10m_coastline.shp", "ne_10m_coastline.dbf", "ne_10m_coastline.shx", "ne_10m_coastline.prj", "ne_10m_coastline.cpg"]
-layer = "coast"
 
 [[sources]]
 name = "land"
@@ -136,4 +126,82 @@ url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth
 sha256 = "19dd7d422c2e2712d17199fea9488b1e72c9eb76929bd48091fd01de11b3992f"
 size_bytes = 8093288
 member = "earth_relief_06m_g.grd"
+layer = "relief"
+
+# earth_relief_03m_g ships as eight 90x90-degree gridline-registered tiles
+# (lossless, signed 16-bit JPEG2000) rather than one file; the locator tier
+# contours this dataset at native resolution instead of the 06m grid's
+# coarse stride. Tile naming gives the southwest corner: N00 spans lat
+# 0..90, S90 spans lat -90..0; E000/E090/W090/W180 each span 90 degrees of
+# longitude starting at that corner.
+[[sources]]
+name = "earth_relief_03m_g_n00e000"
+artifact = "N00E000.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00E000.earth_relief_03m_g.jp2"
+sha256 = "a7c0459ad149fd93984ebcfda16be889fd2dd52dd70b08d4472bbb9720c57b72"
+size_bytes = 2569883
+member = "N00E000.earth_relief_03m_g.jp2"
+layer = "relief"
+
+[[sources]]
+name = "earth_relief_03m_g_n00e090"
+artifact = "N00E090.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00E090.earth_relief_03m_g.jp2"
+sha256 = "be0b684aa6fa326710c5328214d34d2c37531e1cc8f8359ccb5000f4d4ff535b"
+size_bytes = 3015041
+member = "N00E090.earth_relief_03m_g.jp2"
+layer = "relief"
+
+[[sources]]
+name = "earth_relief_03m_g_n00w090"
+artifact = "N00W090.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00W090.earth_relief_03m_g.jp2"
+sha256 = "49638a4d87a268f97a7235c5c5936fe5ab8457664ee28b0fa9cc38037ed3e6d9"
+size_bytes = 2936302
+member = "N00W090.earth_relief_03m_g.jp2"
+layer = "relief"
+
+[[sources]]
+name = "earth_relief_03m_g_n00w180"
+artifact = "N00W180.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00W180.earth_relief_03m_g.jp2"
+sha256 = "3c410a2e5e97cafb839402b9dd087caa567ea53f1a8aa6a8cf8432e08d459619"
+size_bytes = 2991787
+member = "N00W180.earth_relief_03m_g.jp2"
+layer = "relief"
+
+[[sources]]
+name = "earth_relief_03m_g_s90e000"
+artifact = "S90E000.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90E000.earth_relief_03m_g.jp2"
+sha256 = "6525887ffbfcc6b2dabc64c6da42c6389540b756d38b214ba8133af1520999bd"
+size_bytes = 2793835
+member = "S90E000.earth_relief_03m_g.jp2"
+layer = "relief"
+
+[[sources]]
+name = "earth_relief_03m_g_s90e090"
+artifact = "S90E090.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90E090.earth_relief_03m_g.jp2"
+sha256 = "d6bf56a882983d011404fc76df1d80a126a80659e7e172f5903d438820f51f69"
+size_bytes = 2787129
+member = "S90E090.earth_relief_03m_g.jp2"
+layer = "relief"
+
+[[sources]]
+name = "earth_relief_03m_g_s90w090"
+artifact = "S90W090.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90W090.earth_relief_03m_g.jp2"
+sha256 = "d3c2c1dcc4c6fc72eaef033331925a6807289fcf6e8811b37beb6601aabf31c9"
+size_bytes = 2885704
+member = "S90W090.earth_relief_03m_g.jp2"
+layer = "relief"
+
+[[sources]]
+name = "earth_relief_03m_g_s90w180"
+artifact = "S90W180.earth_relief_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90W180.earth_relief_03m_g.jp2"
+sha256 = "fa0651ea262690fe50d332a3448e28dd0084a2e13926df220e61c58cc025f991"
+size_bytes = 3109991
+member = "S90W180.earth_relief_03m_g.jp2"
 layer = "relief"

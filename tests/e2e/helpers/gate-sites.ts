@@ -1630,3 +1630,43 @@ uid: "vsh001a"
     },
   };
 }
+
+// ── Place-map palette reaches the built page ─────────────────────────────────
+// The Rust snapshot suite proves the SVG's `var(--moss-place-*, #fallback)`
+// call sites exist; it cannot prove the browser resolves them to the
+// *approved* colour rather than silently riding the fallback because
+// site.css never defined the token — that needs a real cascade. `location:`
+// on a coastal city plus the site-level `locator = "align-right"` default
+// (the same key the terms/places design record uses) is enough to make moss
+// emit a locator automatically, no embed syntax needed. Served by
+// playwright/place-map-tokens.config.ts.
+export const PLACE_MAP_TOKENS_GATE: ScratchSiteSpec = {
+  name: "place-map-tokens-gate",
+  files: {
+    "index.md": `---
+title: Place Map Tokens Gate
+uid: "pmt001a"
+location: "Lisbon"
+---
+
+# Place Map Tokens Test
+
+A coastal locator, for reading the water layer's resolved colour.
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+locator = "align-right"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+`,
+    ".moss/places.toml": `["Lisbon"]
+lat = 38.722
+lng = -9.139
+precision = "city"
+`,
+  },
+};

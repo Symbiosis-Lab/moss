@@ -1,6 +1,6 @@
 use crate::vault::places::Precision;
 
-pub(super) fn precision_rank(precision: &Precision) -> u8 {
+pub(crate) fn precision_rank(precision: &Precision) -> u8 {
     match precision {
         Precision::Exact => 0,
         Precision::City => 1,

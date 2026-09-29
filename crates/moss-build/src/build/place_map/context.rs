@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use moss_core::terms::{term_fold, term_folder_key};
 
-use super::{Frame, FrameTier, Pack, ProjectedPoint, Projection};
+use super::{precision_rank, Frame, FrameTier, Pack, ProjectedPoint, Projection};
 use crate::vault::places::Precision;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,9 +47,37 @@ impl PlaceMapRenderContext {
         let target = self.maps.resolve_locations(&self.namespace, &self.gazetteer, names);
         if !target.has_coordinates() { return None; }
         let first = target.places.iter().find(|place| place.point().is_some())?;
-        let options = super::SvgMapOptions::new(page_path, ordinal, &first.display, first.precision);
-        let svg = super::emit_locator(&self.maps, &target, options).ok()?.svg;
-        Some(format!(r#"<div class="moss-place-locator moss-align-right">{svg}</div>"#))
+        // The profile (how much detail the locator carries) has to reflect
+        // the WHOLE list's precision, not whichever place happens to be
+        // declared first: emit_svg already picks the coarsest precision
+        // across every declared place for the full/aggregate map, for the
+        // same privacy reason a region-precision place anywhere in the list
+        // demands. A locator that instead kept the first place's precision
+        // (e.g. a [city, city, region, city] list, first = city) requested
+        // full relief/seafloor detail for a frame wide enough to hold a
+        // region, which is how a real multi-place article blew past
+        // LOCATOR_RAW_SAFETY_LIMIT and lost its locator with no warning.
+        let precision = target
+            .places
+            .iter()
+            .map(|place| place.precision)
+            .max_by_key(precision_rank)
+            .unwrap_or(Precision::Country);
+        let options = super::SvgMapOptions::new(page_path, ordinal, &first.display, precision);
+        match super::emit_locator(&self.maps, &target, options) {
+            Ok(locator) => {
+                let svg = locator.svg;
+                Some(format!(r#"<div class="moss-place-locator moss-align-right">{svg}</div>"#))
+            }
+            Err(error) => {
+                crate::build::cli_output::log_warn_problem!(
+                    "{page_path}: locator dropped — {} bytes exceeds the {} byte safety ceiling",
+                    error.raw_bytes,
+                    super::LOCATOR_RAW_SAFETY_LIMIT
+                );
+                None
+            }
+        }
     }
 
     pub fn render_term_map<'a>(
@@ -342,5 +370,70 @@ mod tests {
         let html = on.render_locator(&["Harbor".into()], "story/index.html", 0).unwrap();
         assert!(html.contains("moss-place-locator moss-align-right"));
         assert!(html.contains("data-map-locator-profile=\"exact-city\""));
+    }
+
+    /// The reproduction from the field: a location list that mixes
+    /// precisions (here just [city, region] — the minimal shape that still
+    /// triggers it) must size the locator to the COARSEST place in the
+    /// list, not whichever one was declared first. `gazetteer()`'s "Harbor"
+    /// (city) / "Harbor East" (region) pair already gives us that mix.
+    /// Before the fix this kept "exact-city" (Harbor's own precision, since
+    /// it happened to resolve first) for a frame wide enough to also hold
+    /// Harbor East — full relief/seafloor detail over a region-sized frame,
+    /// which is how a real multi-place article's locator blew past
+    /// LOCATOR_RAW_SAFETY_LIMIT.
+    #[test]
+    fn multi_place_locator_uses_the_coarsest_precision_not_declaration_order() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight,
+        );
+        let html = context
+            .render_locator(&["Harbor".into(), "Harbor East".into()], "story/index.html", 0)
+            .expect("a mixed-precision list must still produce a locator");
+        assert!(
+            html.contains("data-map-locator-profile=\"region\""),
+            "must use Harbor East's (region) precision, not Harbor's (city, first-declared): {html}"
+        );
+        assert!(!html.contains("data-map-locator-profile=\"exact-city\""));
+    }
+
+    // CLI_PROBLEMS is a process-global static (see cli_output_tests.rs's own
+    // PROBLEMS_TEST_LOCK, which serializes ITS tests against each other for
+    // the same reason). This lock only protects this test against itself; a
+    // concurrent run of a cli_warn!/log_warn_problem! test in a different
+    // module is a pre-existing, accepted hazard this does not solve.
+    static OVERSIZED_WARN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// The safety ceiling stops an oversized locator from shipping, and
+    /// dropping it must not be silent: the page has to name itself in a
+    /// warning an agent or a --strict build can see. Real geometry no longer
+    /// reliably clears the ceiling, because every path is simplified in
+    /// screen space and a map's bytes are bounded by its pixels, so the
+    /// fixture overflows it with the place's name, which the figure repeats
+    /// in its accessible label.
+    #[test]
+    fn oversized_locator_is_dropped_with_a_warning_not_silently() {
+        const LONG_NAME: usize = super::super::LOCATOR_RAW_SAFETY_LIMIT;
+        let _guard = OVERSIZED_WARN_LOCK.lock().unwrap();
+        let table: toml::value::Table = toml::from_str(
+            &format!("[\"{}\"]\nlat = 62.0\nlng = 6.0\nprecision = \"city\"\n", "F".repeat(LONG_NAME)),
+        )
+        .unwrap();
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let context = PlaceMapRenderContext::new(
+            maps,
+            crate::vault::places::parse_gazetteer(&table),
+            "places".into(),
+            LocatorPlacement::AlignRight,
+        );
+        crate::build::cli_output::take_cli_problems(); // drain any count left over from another test
+        let result =
+            context.render_locator(&["F".repeat(LONG_NAME)], "story/oversized.html", 0);
+        assert!(result.is_none(), "an oversized locator must be dropped, not shipped");
+        assert!(
+            crate::build::cli_output::take_cli_problems() >= 1,
+            "dropping an oversized locator must warn (and count as a --strict problem), not fail silently"
+        );
     }
 }

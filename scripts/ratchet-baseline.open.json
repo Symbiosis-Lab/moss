@@ -51,7 +51,7 @@
         "crates/moss-build/src/build/page/link_meta.rs": 1200,
         "crates/moss-build/src/build/render/grid_cells.rs": 900,
         "crates/moss-build/src/build/media/hls.rs": 900,
-        "crates/moss-build/src/build/place_map/geometry.rs": 1000
+        "crates/moss-build/src/build/place_map/geometry.rs": 900
       }
     },
     "children_per_dir": {

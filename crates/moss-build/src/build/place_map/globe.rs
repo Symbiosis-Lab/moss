@@ -65,7 +65,6 @@ pub fn globe_rings(
     if visible.iter().all(Option::is_some) {
         return vec![visible.into_iter().flatten().collect()];
     }
-    let winding = geographic_winding(&samples);
     let mut runs = Vec::new();
     let Some(invisible) = visible.iter().position(Option::is_none) else {
         return Vec::new();
@@ -94,7 +93,13 @@ pub fn globe_rings(
                 project_unchecked(boundary(samples[previous], samples[index], center), center);
             push_unique(&mut ring, exit);
             let entry = ring[0];
-            append_horizon_arc(&mut ring, exit, entry, winding);
+            super::geometry::append_horizon_arc(
+                &mut ring,
+                (CENTER_X, CENTER_Y),
+                exit,
+                entry,
+                RADIUS,
+            );
             if ring.len() >= 3 {
                 runs.push(std::mem::take(&mut ring));
             }
@@ -110,33 +115,18 @@ pub fn globe_rings(
         );
         push_unique(&mut ring, exit);
         let entry = ring[0];
-        append_horizon_arc(&mut ring, exit, entry, winding);
+        super::geometry::append_horizon_arc(
+            &mut ring,
+            (CENTER_X, CENTER_Y),
+            exit,
+            entry,
+            RADIUS,
+        );
         if ring.len() >= 3 {
             runs.push(ring);
         }
     }
     runs
-}
-
-fn geographic_winding(points: &[(f64, f64)]) -> f64 {
-    let Some(&(first_longitude, first_latitude)) = points.first() else {
-        return 0.0;
-    };
-    let mut area = 0.0;
-    let mut previous_longitude = first_longitude;
-    let mut previous_latitude = first_latitude;
-    for &(longitude, latitude) in &points[1..] {
-        let longitude = previous_longitude
-            + (longitude - previous_longitude + 180.0).rem_euclid(360.0)
-            - 180.0;
-        area += previous_longitude * latitude - longitude * previous_latitude;
-        previous_longitude = longitude;
-        previous_latitude = latitude;
-    }
-    let closing_longitude = previous_longitude
-        + (first_longitude - previous_longitude + 180.0).rem_euclid(360.0)
-        - 180.0;
-    area + previous_longitude * first_latitude - closing_longitude * previous_latitude
 }
 
 fn geo(point: (i32, i32), quantisation: u32) -> (f64, f64) {
@@ -218,44 +208,6 @@ fn boundary(start: (f64, f64), end: (f64, f64), center: ProjectedPoint) -> (f64,
     interpolate(start, end, (low + high) / 2.0)
 }
 
-fn append_horizon_arc(
-    ring: &mut Vec<(f64, f64)>,
-    start: (f64, f64),
-    end: (f64, f64),
-    winding: f64,
-) {
-    let start_angle = (start.1 - CENTER_Y).atan2(start.0 - CENTER_X);
-    let end_angle = (end.1 - CENTER_Y).atan2(end.0 - CENTER_X);
-    let tau = 2.0 * std::f64::consts::PI;
-    let counter_clockwise = (end_angle - start_angle).rem_euclid(tau);
-    // Longitude/latitude rings use the opposite y direction to SVG screen
-    // coordinates. Following source winding therefore chooses the major arc
-    // for one winding and the minor arc for the other, instead of always
-    // taking the shortest route around the horizon.
-    let delta = if winding >= 0.0 {
-        if counter_clockwise == 0.0 {
-            0.0
-        } else {
-            counter_clockwise - tau
-        }
-    } else {
-        counter_clockwise
-    };
-    let steps = ((delta.abs() / (std::f64::consts::PI / 16.0)).ceil() as usize).clamp(1, 64);
-    for step in 1..=steps {
-        let angle = start_angle + delta * step as f64 / steps as f64;
-        let point = if step == steps {
-            end
-        } else {
-            (
-                CENTER_X + RADIUS * angle.cos(),
-                CENTER_Y + RADIUS * angle.sin(),
-            )
-        };
-        push_unique(ring, point);
-    }
-}
-
 fn push_unique(points: &mut Vec<(f64, f64)>, point: (f64, f64)) {
     if points.last().is_none_or(|previous| {
         (previous.0 - point.0).abs() >= 1e-7 || (previous.1 - point.1).abs() >= 1e-7
@@ -321,18 +273,91 @@ mod tests {
             .all(|&(x, y)| { (x - CENTER_X).hypot(y - CENTER_Y) <= RADIUS + 1.0 }));
     }
 
+    /// A ring that grazes the globe's visibility horizon more than once in
+    /// almost the same place (a coastline wiggling right at the 90-degree
+    /// cutoff, the way a real one does) produces two runs whose shared
+    /// boundary is a near-duplicate point. The horizon-arc closer must
+    /// still connect each run with a near-zero arc, not loop the long way
+    /// around the disc — the crescent/full-disc-land artifact this
+    /// regresses is defect 3's globe-inset half.
     #[test]
-    fn dateline_ring_winding_uses_the_short_longitude_branch() {
-        let clockwise = [(179.0, -10.0), (-179.0, -10.0), (-179.0, 10.0), (179.0, 10.0)];
-        let counterclockwise = [
-            (179.0, 10.0),
-            (-179.0, 10.0),
-            (-179.0, -10.0),
-            (179.0, -10.0),
+    fn globe_rings_closes_a_near_duplicate_crossing_tight_not_a_crescent() {
+        // Near longitude 90 (the horizon at this center), a tiny jog in
+        // latitude (1 unit at quantisation 10000 is 0.0001 degree) crosses
+        // the visibility boundary twice more, right next to the main
+        // crossing at latitude -30.
+        let ring = [
+            (800000, -300000),
+            (1000000, -300000),
+            (1000000, -299999),
+            (800000, -299999),
+            (800000, -299998),
+            (1000000, -299998),
+            (1000000, 300000),
+            (800000, 300000),
         ];
-        let clockwise_area = geographic_winding(&clockwise);
-        let counterclockwise_area = geographic_winding(&counterclockwise);
-        assert!(clockwise_area.abs() < 1_000.0, "must not span the world");
-        assert_eq!(clockwise_area.signum(), -counterclockwise_area.signum());
+        let center = ProjectedPoint::new(0.0, 0.0).unwrap();
+        let runs = globe_rings(&ring, center, 10000);
+        assert!(!runs.is_empty());
+        let disc_area = std::f64::consts::PI * RADIUS * RADIUS;
+        for run in &runs {
+            let area: f64 = run
+                .iter()
+                .zip(run.iter().cycle().skip(1))
+                .take(run.len())
+                .map(|(&(x1, y1), &(x2, y2))| x1 * y2 - x2 * y1)
+                .sum::<f64>()
+                .abs()
+                / 2.0;
+            assert!(
+                area < 0.5 * disc_area,
+                "a run covered {area} of the {disc_area} globe disc — a near-duplicate \
+                 crossing closed the long way around instead of tight"
+            );
+        }
+    }
+
+    /// A ring straddling the dateline must close the same way regardless of
+    /// which direction it's wound: the closing arc's direction now comes
+    /// from `signed_area` on each run's own *projected* (screen-space)
+    /// points, which needs no antimeridian unwrapping (the projection
+    /// already resolved that per point), unlike the old geographic-space
+    /// winding this replaced.
+    #[test]
+    fn dateline_ring_closes_the_same_way_for_either_winding() {
+        let clockwise = [
+            (1790000, -100000),
+            (-1790000, -100000),
+            (-1790000, 100000),
+            (1790000, 100000),
+        ];
+        let counterclockwise = [
+            (1790000, 100000),
+            (-1790000, 100000),
+            (-1790000, -100000),
+            (1790000, -100000),
+        ];
+        let center = ProjectedPoint::new(180.0, 0.0).unwrap();
+        for ring in [&clockwise[..], &counterclockwise[..]] {
+            let runs = globe_rings(ring, center, 10000);
+            assert!(!runs.is_empty());
+            let area: f64 = runs
+                .iter()
+                .map(|r| {
+                    r.iter()
+                        .zip(r.iter().cycle().skip(1))
+                        .take(r.len())
+                        .map(|(&(x1, y1), &(x2, y2))| x1 * y2 - x2 * y1)
+                        .sum::<f64>()
+                        .abs()
+                        / 2.0
+                })
+                .sum();
+            let disc_area = std::f64::consts::PI * RADIUS * RADIUS;
+            assert!(
+                area < 0.5 * disc_area,
+                "dateline ring covered {area} of the {disc_area} disc — closed the long way"
+            );
+        }
     }
 }

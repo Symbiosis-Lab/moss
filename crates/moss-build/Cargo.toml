@@ -131,6 +131,11 @@ tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["fs"] }
 http-body-util = "0.1"
 
+# The checked-in place-map pack is embedded brotli-compressed and
+# decompressed once at runtime (`place_map::embedded`); same version already
+# used by moss-build's own brotli-budget tests below.
+brotli = "8"
+
 # `exclude_from_cloud_sync` sets the File Provider ignore xattr — an Apple subsystem,
 # so the dep is target-gated and the function is a no-op elsewhere. Last on
 # purpose: a `[target.…]` table ends `[dependencies]`, so a plain dep written
@@ -155,7 +160,6 @@ pathdiff = "0.2"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
-brotli = "8"
 roxmltree = "0.20"
 # vault_root_tests.rs mints unique temp dirs per test.
 uuid = { version = "1.11", features = ["v4"] }
