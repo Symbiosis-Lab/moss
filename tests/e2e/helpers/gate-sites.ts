@@ -1766,3 +1766,99 @@ precision = "city"
 `,
   },
 };
+
+// ── Preview server ↔ static build layout parity ──────────────────────────────
+// One page combining every shape the preview server's own injected CSS
+// (`PREVIEW_CHEAP_REFLOW_STYLE` in iframe_bridge.rs) can touch: a scroll row
+// with enough cards that most start outside the row's own visible area, a
+// wrapping (non-scroll) grid of images, standalone figures well below the
+// fold, a tabular embed, a hero, and enough filler prose between them that
+// the later media are genuinely off-screen at first paint. None of the
+// existing gates combine all of these on one page — GRID_CARD_IMAGE_INLINE_
+// SIZE_GATE's scroll rows are the closest relative, but its cards are a
+// 40×30 probe size chosen to catch a different (inline-size) regression, and
+// its pages carry no hero, wrapping grid, or embed alongside the row.
+//
+// 22 cards: the exact count the be18a723 regression measured (a 669px
+// preview row against a 269px published one) — enough over 4 visible
+// columns that most cards have never been laid out at first paint.
+const PARITY_SQUARE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300"><rect width="300" height="300" fill="#6a8caf"/></svg>
+`;
+const PARITY_FIGURE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450" viewBox="0 0 800 450"><rect width="800" height="450" fill="#8a6a4f"/><circle cx="640" cy="360" r="60" fill="#e8d9a0"/></svg>
+`;
+const PARITY_HERO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900"><rect width="1600" height="900" fill="#3a5a6a"/><circle cx="1360" cy="180" r="90" fill="#f2e4a0"/></svg>
+`;
+
+// Placeholder CJK prose (invented for this fixture, no real source) padding
+// the page so later media start below the fold — this gate's whole point is
+// content-visibility behaviour on off-screen media, which a short page could
+// never exercise.
+const PARITY_FILLER_LINE =
+  "第一段。這是為了撐開版面高度而寫的占位文字，讓下面的圖片在頁面剛載入時還在畫面之外。";
+
+function parityFiller(paragraphs: number): string {
+  return Array.from({ length: paragraphs }, (_, i) => `${PARITY_FILLER_LINE}（第 ${i + 1} 段）`).join(
+    "\n\n",
+  );
+}
+
+const PARITY_SCROLL_ROW_CELLS = Array.from(
+  { length: 22 },
+  (_, i) => `![Card ${i + 1}](tile.svg)`,
+).join("\n+++\n");
+
+const PARITY_WRAP_GRID_CELLS = Array.from({ length: 6 }, (_, i) => `![Wrap cell ${i + 1}](tile.svg)`).join(
+  "\n+++\n",
+);
+
+export const PREVIEW_PARITY_GATE: ScratchSiteSpec = {
+  name: "preview-parity-gate",
+  files: {
+    "tile.svg": PARITY_SQUARE_SVG,
+    "figure.svg": PARITY_FIGURE_SVG,
+    "hero.svg": PARITY_HERO_SVG,
+    // A tabular embed (`![[data.csv]]` → `.moss-embed.moss-embed-table`,
+    // resolved by moss-core's csv_table renderer) — the fourth shape
+    // PREVIEW_CHEAP_REFLOW_STYLE's selector names alongside figures, bare
+    // images, and generic embeds.
+    "data.csv": `label,value\nAlpha,12\nBeta,7\nGamma,19\nDelta,3\nEpsilon,25\n`,
+    "index.md": `---
+title: Preview Parity Gate
+uid: "ppg001aa"
+---
+
+:::hero {image=hero.svg caption="Placeholder hero plate for the preview-parity gate"}
+:::
+
+${parityFiller(3)}
+
+![A standalone figure near the top of the article](figure.svg)
+
+${parityFiller(3)}
+
+:::grid 3 {.no-cards}
+${PARITY_WRAP_GRID_CELLS}
+:::
+
+${parityFiller(3)}
+
+![[data.csv]]
+
+${parityFiller(3)}
+
+:::grid 4 {scroll label="Related"}
+${PARITY_SCROLL_ROW_CELLS}
+:::
+
+${parityFiller(3)}
+
+![A second standalone figure, well below the fold on first paint](figure.svg)
+
+${parityFiller(3)}
+`,
+    ".moss/config.toml": CONFIG_TOML,
+    // No user theme: this gate is about the preview server's own injected
+    // CSS against moss's own defaults, not a cascade contract.
+    ".moss/theme/style.css": null,
+  },
+};

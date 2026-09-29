@@ -70,6 +70,7 @@ GATES_BUILD=(
   video-embed-shape
   place-map-tokens
   place-map-align
+  preview-parity-gate
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

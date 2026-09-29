@@ -80,6 +80,8 @@ const GATE_PORT_KEYS = [
   'iframe-open-url',
   'place-map-tokens',
   'place-map-align',
+  'preview-parity-gate:static',
+  'preview-parity-gate:preview',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

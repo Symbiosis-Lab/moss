@@ -59,6 +59,17 @@ export const WORKTREE = path.resolve(
  */
 export const MOSS_BIN = resolveMossBin();
 
+/**
+ * Where `buildScratchSite` scaffolds a spec's source files, before any
+ * build runs. Exported for the one gate (preview-parity-gate) whose preview
+ * server needs to build the SAME source itself (`moss-cli build --serve`
+ * builds live, it does not serve a directory `buildScratchSite` already
+ * built) rather than serving `buildScratchSite`'s output directory.
+ */
+export function scratchSiteDir(name: string): string {
+  return path.join(WORKTREE, "target/test-tmp", name);
+}
+
 export interface ScratchSiteSpec {
   /** Directory under `target/test-tmp/`. */
   name: string;
@@ -98,7 +109,7 @@ export function buildScratchSite(spec: ScratchSiteSpec): string {
     );
   }
 
-  const siteDir = path.join(WORKTREE, "target/test-tmp", spec.name);
+  const siteDir = scratchSiteDir(spec.name);
   for (const [rel, content] of Object.entries(spec.files)) {
     writeOrRemove(path.join(siteDir, rel), content);
   }
