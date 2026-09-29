@@ -60,6 +60,12 @@ const HASH_BUF_SIZE: usize = 64 * 1024;
 /// This two-level fan-out keeps directory listings manageable even for
 /// repositories with hundreds of thousands of objects (the same strategy
 /// git uses).
+///
+/// `Clone` is cheap and deliberate: both fields are just `PathBuf`s, no open
+/// handles, so a caller that needs to hand a store across a lock boundary
+/// (e.g. the math render cache's process-global "current site" pointer) can
+/// clone it out under the lock and do the actual I/O unsynchronized.
+#[derive(Clone)]
 pub struct ObjectStore {
     /// Root directory — typically `.moss/cache/objects/`.
     base: PathBuf,
@@ -560,6 +566,10 @@ pub struct TransformEntry {
 /// ```text
 /// <base>/<oid[0..2]>/<oid[2..4]>/<source_oid>.json
 /// ```
+///
+/// `Clone` (see [`ObjectStore`]'s derive) lets a caller stash the paths
+/// behind a lock and clone them out for unsynchronized I/O.
+#[derive(Clone)]
 pub struct TransformCache {
     /// Root directory — typically `.moss/cache/transforms/`.
     base: PathBuf,

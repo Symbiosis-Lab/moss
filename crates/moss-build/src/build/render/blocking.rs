@@ -490,6 +490,16 @@ pub fn generate_blocking_content_for_build(
     // — most importantly `page_map`, which pre-scans every file's frontmatter,
     // so a folder index's `url:` edit reshapes URLs for a whole subtree while
     // moving no other file. A mismatch bypasses the cache for the entire build.
+    //
+    // Arm the math-equation render cache's disk level for this build, once,
+    // before any page's markdown is rendered (this function is the single
+    // Loop A / render entry point every build path shares — see its own
+    // doc). See `markdown::math`'s "Render caching" module doc section:
+    // keyed by the same `TransformCache` every image/video transform already
+    // uses.
+    crate::build::markdown::math::set_disk_cache(crate::build::cache::TransformCache::for_site(
+        &paths,
+    ));
     let parse_session = crate::build::parse_cache::ParseSession::begin(
         Path::new(source_path),
         &paths.cache_hash_index(),
@@ -3693,6 +3703,12 @@ pub fn generate_blocking_content_for_build(
         rung_collisions,
         carried_advisories: Vec::new(),
     };
+
+    // Math render cache build-end hook (see `parse_cache::math_cache_finish_build`'s
+    // doc for why it belongs HERE — after `emit_math_pngs`'s sweep above, not
+    // at `ParseSession::finish` near the top of this function): drop this
+    // root's superseded equations and record its current set.
+    crate::build::parse_cache::math_cache_finish_build(Path::new(source_path), &documents);
 
     Ok((
         SiteResult {

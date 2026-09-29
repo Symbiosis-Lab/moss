@@ -25,12 +25,58 @@
 //!   least one glyph, and contain **zero** `<text>`/`<use>`/`<image>`/`id=`.
 //!   The last is the engine-drift tripwire: a mis-built RaTeX (wrong features)
 //!   ships `<text>`, which resvg would later rasterize blank.
-//! - **C — 16 MiB spawn-join thread** ([`render_on_big_stack`]): every render
-//!   runs on an explicit-stack thread spawned from inside the rayon worker, so
-//!   the depth at which #144 would abort moves ~60× past what the length cap
-//!   admits. RaTeX has zero rayon deps, so there is no worker-nesting hazard.
+//! - **C — 16 MiB-stack render pool** (`render_cache::render_on_big_stack`): every render
+//!   runs on a dedicated [`rayon::ThreadPool`] whose workers carry an explicit
+//!   16 MiB stack, so the depth at which #144 would abort moves ~60× past what
+//!   the length cap admits. RaTeX has zero rayon deps, so there is no
+//!   worker-nesting hazard. A per-call `thread::spawn` gave every equation its
+//!   own stack too, but paid a fresh thread's creation cost on every one of a
+//!   page's equations; the pool is sized to
+//!   [`std::thread::available_parallelism`] so a build with many math-heavy
+//!   pages in flight keeps the same per-file concurrency a spawn-per-call
+//!   design gave it — a single dedicated worker would serialize those pages
+//!   instead.
 //! - **D — fallback**: every [`MathRefusal`] returns to the caller, which emits
 //!   the P1 escaped-source node. The floor. Ships in P1, exercised from day one.
+//!
+//! ## Render caching
+//!
+//! [`typeset`] is a pure function of `(tex, display)` plus two process-wide
+//! constants — the pinned CJK font ([`font::pinned`]) and RaTeX's own version
+//! — so its result can be memoized under that tuple forever: unlike a parsed
+//! *page* (which a folder-wide `url:` edit can silently reshape without
+//! touching the page's own bytes — see `parse_cache`'s module doc), an
+//! equation's typeset SVG depends on nothing else. Two levels, both keyed by
+//! [`crate::build::emit::math_png::content_hash`] (the same content address
+//! the email/RSS PNG projection already uses, so a build session and its PNG
+//! pass share one cache instead of keeping two):
+//!
+//! - **In-memory** (`parse_cache::math_cache_lookup`/`math_cache_store` —
+//!   co-located with [`crate::build::parse_cache::ParseSession`]'s own
+//!   process-lifetime store rather than threaded through it: math rendering
+//!   happens in a later pipeline phase than Loop A parsing, with no
+//!   `ParseSession` in scope). A HIT never needs eligibility or invalidation
+//!   — a rendered equation is a pure function of its own text plus the two
+//!   constants above, so it is correct forever — but RETENTION is bounded:
+//!   `parse_cache::math_cache_finish_build` drops a root's own equations
+//!   once they leave its corpus (an edited-away version), so editing one
+//!   equation repeatedly does not keep every prior draft alive. This is the
+//!   fast path, and the whole win for a watch-loop single-equation edit — the
+//!   other 99 equations on a re-rendered page hit this and never reach
+//!   RaTeX.
+//! - **On disk**, under [`crate::build::cache::TransformCache`], keyed by a
+//!   *synthetic* source OID (there is no backing file — the equation's own
+//!   content address stands in for one), following the `format-probe` pattern
+//!   `build/media/image.rs` uses to cache a verdict rather than a converted
+//!   asset. The parse cache's module doc argues AGAINST a disk mirror for
+//!   *pages* (parsing is single-digit-µs per file, and a JSON file would never
+//!   even be read outside the watch loop); math earns one anyway because,
+//!   unlike page parsing, EVERY entry point pays for it — `moss build`,
+//!   `moss preview`, and deploy all typeset every equation on every run today
+//!   (see `emit_math_pngs`'s per-build site-wide sweep), not just a
+//!   long-lived watch process. A cold rebuild with nothing changed should cost
+//!   zero typesets, and only a persistent cache can promise that across
+//!   process restarts.
 //!
 //! ## CJK inside math — verify + pin a system font
 //!
@@ -48,6 +94,9 @@
 //! [#144]: https://github.com/erweixin/RaTeX/issues/144
 
 pub(crate) mod font;
+mod render_cache;
+
+pub use render_cache::{set_disk_cache, typeset_count};
 
 /// Hard cap on the LaTeX source length, in **bytes**. The combining-mark abort
 /// ([#143]) needs ~4,173 marks on an 8 MiB stack; at 2 bytes/mark that is
@@ -63,12 +112,6 @@ const MAX_TEX_BYTES: usize = 4096;
 /// *before* the 16 MiB thread, which moves the real failure point past ~2,000.
 /// No legitimate equation nests brackets 32 deep.
 const MAX_NESTING: usize = 32;
-
-/// Stack size for the render thread (layer C). RaTeX renders the spike's
-/// deepest admissible input in well under this; a 2 MiB (Rust default spawned-
-/// thread) stack aborts on inputs an 8 MiB stack renders fine (#144), so we
-/// give it 16 MiB and let the length + nesting caps bound the rest.
-const RENDER_STACK_BYTES: usize = 16 * 1024 * 1024;
 
 /// RaTeX user-units per em. The layout metrics ([`RawRender`]) are already in
 /// em and font-size-independent, so this value only scales the SVG's internal
@@ -119,8 +162,9 @@ pub enum MathRefusal {
     CjkOutsideTextMode { codepoint: u32 },
     /// RaTeX's parser rejected the source.
     ParseError,
-    /// The render thread aborted or panicked (should be unreachable behind the
-    /// guard; the join is the last-ditch net).
+    /// The render pool worker aborted or panicked (should be unreachable
+    /// behind the guard; `catch_unwind` in `render_cache::render_on_big_stack`
+    /// is the last-ditch net, and only in debug/CI — see that function's doc).
     RenderFailed,
     /// The emitted SVG failed [`validate_svg`] (engine-drift tripwire, blank
     /// output, or output amplification).
@@ -147,7 +191,7 @@ impl MathRefusal {
 /// the caller emits the P1 fallback. This is the whole public surface — the one
 /// place RaTeX is reached, with the guard/thread/validation envelope around it.
 pub fn render_math(tex: &str, display: bool) -> Result<String, MathRefusal> {
-    let raw = typeset(tex)?;
+    let raw = typeset(tex, display)?;
     Ok(assemble(&raw, tex, display))
 }
 
@@ -155,6 +199,11 @@ pub fn render_math(tex: &str, display: bool) -> Result<String, MathRefusal> {
 /// any surface-specific assembly. The email/RSS PNG projection
 /// (`build::emit::math_png`) rasterizes exactly these bytes so the equation a
 /// feed reader or inbox shows is the one the website inlines.
+///
+/// `Clone` + `Serialize`/`Deserialize`: both render-cache levels store this
+/// exact value — in-memory by cloning it out of a `HashMap`, on disk as the
+/// `format-probe`-style transform's JSON blob (see the module doc).
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct TypesetMath {
     /// The engine's raw SVG, already past [`validate_svg`] (path-only, sane
     /// viewBox, byte-capped). Root carries `width`/`height` in pt + `viewBox`.
@@ -168,20 +217,39 @@ pub struct TypesetMath {
     pub depth_em: f64,
 }
 
-/// Guard → render → validate, returning the raw SVG + metrics instead of the
-/// assembled web element. The full crash-prevention envelope applies — this is
-/// NOT a bypass: every layer (`guard`, big-stack thread, `validate_svg`) runs
-/// exactly as in [`render_math`]; only the final surface assembly differs.
-pub fn typeset(tex: &str) -> Result<TypesetMath, MathRefusal> {
+/// Guard → cache → render → validate, returning the raw SVG + metrics instead
+/// of the assembled web element. The full crash-prevention envelope still
+/// applies on a cache miss — this is NOT a bypass: every layer (`guard`,
+/// big-stack pool, `validate_svg`) runs exactly as in [`render_math`]; only
+/// the final surface assembly differs. `display` does not change the raw SVG
+/// bytes RaTeX emits (only [`assemble`]'s wrapper does), but the cache key
+/// still carries it — see the module doc's "Render caching" section for why
+/// this reuses [`crate::build::emit::math_png::content_hash`] as-is rather
+/// than a display-free key of its own.
+pub fn typeset(tex: &str, display: bool) -> Result<TypesetMath, MathRefusal> {
     guard(tex)?;
-    let raw = render_on_big_stack(tex)?;
+
+    let key = crate::build::emit::math_png::content_hash(tex, display);
+    if let Some(cached) = crate::build::parse_cache::math_cache_lookup(&key) {
+        return Ok(cached);
+    }
+    if let Some(cached) = render_cache::disk_cache_lookup(&key) {
+        crate::build::parse_cache::math_cache_store(key, cached.clone());
+        return Ok(cached);
+    }
+
+    render_cache::record_typeset(&key);
+    let raw = render_cache::render_on_big_stack(tex)?;
     validate_svg(&raw.svg)?;
-    Ok(TypesetMath {
+    let typeset = TypesetMath {
         svg: raw.svg,
         width_em: raw.width,
         height_em: raw.height,
         depth_em: raw.depth,
-    })
+    };
+    crate::build::parse_cache::math_cache_store(key.clone(), typeset.clone());
+    render_cache::disk_cache_store(&key, &typeset);
+    Ok(typeset)
 }
 
 /// Layer A — the input envelope. Reject, before RaTeX sees a byte, everything
@@ -413,9 +481,10 @@ fn is_allowed_codepoint(ch: char) -> bool {
     )
 }
 
-/// The raw render output that crosses back from the [`render_on_big_stack`]
-/// thread: the SVG string and the layout metrics (em, font-size-independent)
-/// used to size and baseline-align the element.
+/// The raw render output that crosses back from
+/// [`render_cache::render_on_big_stack`]: the SVG string and the layout
+/// metrics (em, font-size-independent) used to size and baseline-align the
+/// element.
 struct RawRender {
     svg: String,
     /// Width in em.
@@ -424,26 +493,6 @@ struct RawRender {
     height: f64,
     /// Descent below the baseline, in em.
     depth: f64,
-}
-
-/// Layer C — run RaTeX on a spawned thread with an explicit 16 MiB stack, from
-/// inside the rayon worker, and join it. RaTeX has no rayon dependency, so
-/// there is no worker-pool nesting corruption. A panic inside (parse `unwrap`,
-/// or an unforeseen path) surfaces as [`MathRefusal::RenderFailed`] rather than
-/// propagating; a *stack overflow* still aborts (uncatchable under
-/// `panic="abort"`), which is why layer A must keep it from ever reaching here.
-fn render_on_big_stack(tex: &str) -> Result<RawRender, MathRefusal> {
-    let owned = tex.to_string();
-    let handle = std::thread::Builder::new()
-        .name("moss-math-render".into())
-        .stack_size(RENDER_STACK_BYTES)
-        .spawn(move || render_inner(&owned))
-        .map_err(|_| MathRefusal::RenderFailed)?;
-
-    match handle.join() {
-        Ok(result) => result,
-        Err(_) => Err(MathRefusal::RenderFailed),
-    }
 }
 
 /// The four RaTeX calls, isolated so the thread closure is trivial. Runs on the
@@ -814,7 +863,7 @@ mod tests {
 
     #[test]
     fn a_real_render_passes_validation_and_is_path_only() {
-        let raw = render_on_big_stack(r"\frac{QK^\top}{\sqrt{d}}").unwrap();
+        let raw = render_cache::render_on_big_stack(r"\frac{QK^\top}{\sqrt{d}}").unwrap();
         validate_svg(&raw.svg).expect("real render must validate");
         assert!(!raw.svg.contains("<text"));
         assert!(!raw.svg.contains(" id="));

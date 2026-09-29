@@ -175,7 +175,7 @@ impl EmailMathImg {
 /// guard, big-stack render, output validation — then derives the `<img>`
 /// geometry from the same layout metrics that drive the web SVG.
 pub fn email_math_img(tex: &str, display: bool) -> Result<EmailMathImg, MathRefusal> {
-    let t = typeset(tex)?;
+    let t = typeset(tex, display)?;
     let ink_w = t.width_em;
     let ink_h = t.height_em + t.depth_em;
     if !(ink_w > 0.0 && ink_h > 0.0) || !ink_w.is_finite() || !ink_h.is_finite() {
@@ -263,7 +263,12 @@ fn write_atomic(disk_path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// Parses with the SAME pulldown dialect as the web build and the email
 /// walkers (`moss_core::ast::parser_options`), so the event text — and thus
 /// the content hash — is identical at every call site.
-fn collect_math_events(markdown: &str) -> Vec<(String, bool)> {
+///
+/// `pub(crate)`: also the pure, no-RaTeX way `parse_cache::math_cache_finish_build`
+/// computes "which equations does this build's corpus still contain" without
+/// triggering a render as a side effect of asking (`typeset_math_hashes`,
+/// below, would — it calls `email_math_img` per event to check eligibility).
+pub(crate) fn collect_math_events(markdown: &str) -> Vec<(String, bool)> {
     use pulldown_cmark::{Event, Parser};
     Parser::new_ext(markdown, moss_core::ast::parser_options(true))
         .filter_map(|ev| match ev {
@@ -783,6 +788,73 @@ mod tests {
             std::fs::metadata(&disk).unwrap().modified().unwrap(),
             mtime1,
             "existing file must be reused, not rewritten"
+        );
+    }
+
+    // ---- Render caching ----
+    //
+    // `emit_math_pngs` already skips the PNG *write* for an existing file
+    // (`emit_is_idempotent_byte_for_byte`, above), but that guard is on the
+    // OUTPUT file, not the typeset — without a render cache, every equation
+    // is re-typeset on every build regardless. This asserts the render cache
+    // (`markdown::math::typeset_count`, shared with the HTML/SVG path) now
+    // catches that: a repeat emit with nothing changed costs zero typesets,
+    // and a changed equation costs exactly one.
+    #[test]
+    fn repeat_emit_of_an_unchanged_equation_skips_the_typeset() {
+        use crate::build::markdown::math::typeset_count;
+
+        let dir = tempfile::tempdir().unwrap();
+        let tex = r"\gamma_{cache_probe_c3d1}";
+        let changed_tex = r"\gamma_{cache_probe_c3d1} + 1";
+        let docs = vec![doc_with(&format!("${tex}$"))];
+
+        // Captured BEFORE anything else touches `tex`, so this is a genuine
+        // miss — the reference the later cache HITS must reproduce. Calling
+        // `email_math_img` again after `emit_math_pngs` has already cached
+        // the equation would itself be a hit, and comparing a hit against
+        // another hit can't catch a cache that mutates every hit the same
+        // way (an earlier draft of this test made exactly that mistake).
+        let fresh = email_math_img(tex, false).unwrap();
+        assert_eq!(typeset_count(tex, false), 1, "first call for a new equation must typeset");
+
+        let mut p1 = PendingManifest::new(crate::types::content::SiteHashes::default());
+        emit_math_pngs(&docs, true, dir.path(), &mut p1).unwrap();
+        assert_eq!(
+            typeset_count(tex, false),
+            1,
+            "emit_math_pngs must reuse the cached typeset, not redo it"
+        );
+
+        let mut p2 = PendingManifest::new(crate::types::content::SiteHashes::default());
+        emit_math_pngs(&docs, true, dir.path(), &mut p2).unwrap();
+        assert_eq!(
+            typeset_count(tex, false),
+            1,
+            "re-emitting the SAME equation must not typeset again"
+        );
+        // The counter only proves RaTeX was skipped; it says nothing about
+        // whether the cache handed back the RIGHT bytes instead. A cache hit
+        // that quietly returned a different SVG would still pass the
+        // count-based assertion above, and would rasterize into a WRONG png
+        // for a URL Gmail's proxy caches forever (module doc, "append-only
+        // retention").
+        let cached = email_math_img(tex, false).unwrap();
+        assert_eq!(
+            cached.svg, fresh.svg,
+            "a cache hit must rasterize from the identical SVG a fresh typeset produced"
+        );
+        assert_eq!(cached.width_1x, fresh.width_1x);
+        assert_eq!(cached.height_1x, fresh.height_1x);
+        assert_eq!(cached.valign_1x_px, fresh.valign_1x_px);
+
+        let changed = vec![doc_with(&format!("${changed_tex}$"))];
+        let mut p3 = PendingManifest::new(crate::types::content::SiteHashes::default());
+        emit_math_pngs(&changed, true, dir.path(), &mut p3).unwrap();
+        assert_eq!(
+            typeset_count(changed_tex, false),
+            1,
+            "a DIFFERENT equation must still typeset exactly once"
         );
     }
 

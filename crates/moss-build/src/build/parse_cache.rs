@@ -111,14 +111,35 @@
 //! acted on (every page is parsed for real), and each would-be hit is verified
 //! against the freshly parsed document's facade so a stale reuse shows up as a
 //! logged error instead of a wrong page.
+//!
+//! # A second, unrelated process-lifetime cache lives here too
+//!
+//! [`math_cache_lookup`]/[`math_cache_store`], near the bottom of this file,
+//! are the in-memory level of the math-equation render cache
+//! (`markdown::math`'s "Render caching" module doc section) — NOT part of
+//! the Loop A parse-cache design above. They are co-located here rather than
+//! threaded through [`ParseSession`] because math rendering runs in a later
+//! pipeline phase with no session in scope, and because they need none of
+//! this module's VALIDITY machinery: a rendered equation is a pure function
+//! of its own text (plus two process-wide constants), so a HIT, when there is
+//! one, is correct forever — there is no per-build eligibility to gate a
+//! lookup on, unlike `entries` above. RETENTION is a separate question, and
+//! it does share `STORE`'s shape: [`math_cache_finish_build`] persists a
+//! root-scoped snapshot that gets replaced wholesale on a root switch, the
+//! same as `entries`, and additionally drops whichever of a root's own
+//! equations are no longer in its corpus — see that function's doc for why
+//! the sweep is computed from the build's parsed documents rather than
+//! tracked live, and for the production call site (later than
+//! `ParseSession::finish`, at the true end of the build).
 
 use crate::build::cache::HashIndex;
+use crate::build::markdown::math::TypesetMath;
 use crate::build::types::ParsedDocument;
 use moss_core::dep_graph::DepGraph;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 #[cfg(test)]
 use std::{cell::Cell, sync::MutexGuard};
 
@@ -648,6 +669,170 @@ pub fn inputs_fingerprint(
     crate::build::facade::debug_hash(&ordered)
 }
 
+// ---------------------------------------------------------------------------
+// Math render cache — in-memory level (see this module's doc, above)
+// ---------------------------------------------------------------------------
+
+/// The process-global WORKING map, keyed by
+/// [`crate::build::emit::math_png::content_hash`]. `lookup`/`store` need no
+/// per-build setup — a caller that never reaches
+/// [`math_cache_finish_build`] (a unit test, a fragment-render path) just
+/// gets an always-on cache that grows for the life of the process. That is
+/// fine there (short-lived, few distinct equations) and is NOT how this
+/// map's size is actually bounded in production — see
+/// `math_cache_finish_build`.
+static MATH_RENDER_CACHE: OnceLock<Mutex<HashMap<String, TypesetMath>>> = OnceLock::new();
+
+fn math_render_cache() -> &'static Mutex<HashMap<String, TypesetMath>> {
+    MATH_RENDER_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// A previously typeset equation for `key`, if this process has already paid
+/// for it. See `markdown::math::typeset`, the only caller.
+pub fn math_cache_lookup(key: &str) -> Option<TypesetMath> {
+    math_render_cache().lock().ok()?.get(key).cloned()
+}
+
+/// Record a freshly typeset equation under `key`.
+pub fn math_cache_store(key: String, value: TypesetMath) {
+    if let Ok(mut cache) = math_render_cache().lock() {
+        cache.insert(key, value);
+    }
+}
+
+/// One root's math cache as of its own last completed build: what
+/// [`math_cache_finish_build`] persists and the next call for the SAME root
+/// reads back, purely to compute which of THAT root's keys it contributed
+/// last time. Root-scoped and replaced wholesale — the same shape as
+/// [`STORE`] — so a folder switch drops the old root's accounting instead of
+/// accumulating across roots. (The equations themselves stay shareable in
+/// [`MATH_RENDER_CACHE`] regardless of which root asked for them first —
+/// content-addressed, so a hit is correct no matter who populated it; only
+/// this bookkeeping is per-root.)
+static MATH_STORE: Mutex<Option<(PathBuf, HashMap<String, TypesetMath>)>> = Mutex::new(None);
+
+/// Bound the math render cache's growth for one build: drop whichever of
+/// `root`'s PREVIOUSLY-cached equations are no longer in `documents`' corpus
+/// (an edited-away equation's stale key), then record `root`'s current set
+/// as the baseline the next call diffs against. Without this, repeated
+/// edits of one equation leave every prior version live forever; this
+/// sweep is what makes only the CURRENT version survive, so the cache stays
+/// bounded to the current site's equations rather than every equation it
+/// has ever seen. Verified by
+/// `the_in_memory_math_cache_drops_superseded_equations_at_build_end`
+/// (ablate by skipping the removal loop below: red).
+///
+/// Deliberately NOT a live `used_this_build` set mutated from inside
+/// `math_cache_lookup`/`store`: those run on whichever rayon worker is
+/// rendering a page, and — unlike `ParseSession`, which is a value the
+/// caller threads through Loop A by hand — `typeset` has no per-build handle
+/// to carry such a set on (that gap is exactly why `math_cache_lookup`/
+/// `store` are free functions over a process global in the first place; see
+/// `math.rs`'s "Render caching" doc). A live set would also need to survive
+/// this process potentially building SEVERAL roots concurrently — moss's own
+/// test suite does this routinely — and a set that is really "per build" but
+/// lives in one global slot would have builds for different roots stomping
+/// each other's bookkeeping. Deriving the live set from `documents` here
+/// instead needs no shared mutable state at all: it is pure, so two builds
+/// finishing concurrently for two different roots never contend, and — the
+/// property that actually matters for test safety — a build for a root with
+/// no math, or a root this process has never seen before, has nothing stored
+/// for it and so removes nothing from the shared working map, never an
+/// unrelated concurrent build's equations.
+///
+/// A root SWITCH is the other case this must handle: if [`MATH_STORE`] holds
+/// a DIFFERENT root when this runs, that other root's whole key set is freed
+/// right away rather than left behind — it can never be reached by a diff
+/// again, because every future call diffs against its OWN root. Verified by
+/// `a_root_switch_frees_the_old_roots_math_cache` (ablate by skipping that
+/// branch's removal loop: red).
+///
+/// Called once per build, at the TRUE end — not at [`ParseSession::finish`],
+/// which runs at the end of Loop A, well BEFORE `emit_math_pngs`'s later
+/// site-wide sweep in the SAME build (`render/blocking.rs`'s
+/// `generate_blocking_content_for_build` runs both). Sweeping that early
+/// would evict entries math_png is about to look up again a few hundred
+/// lines later, turning an in-memory hit into an avoidable disk round trip
+/// within the same build. Production call site: the end of that function,
+/// immediately before it returns.
+pub fn math_cache_finish_build(root: &Path, documents: &[ParsedDocument]) {
+    let live_keys: std::collections::HashSet<String> = documents
+        .iter()
+        .flat_map(|d| crate::build::emit::math_png::collect_math_events(&d.content))
+        .map(|(tex, display)| crate::build::emit::math_png::content_hash(&tex, display))
+        .collect();
+
+    // Same root as last time: the keys IT contributed, diffed against its
+    // CURRENT corpus below. A DIFFERENT root (or no previous build at all):
+    // nothing to diff — but if a different root really was stored, every one
+    // of its keys is now unreachable from any future call, since every
+    // future call diffs against its OWN root, never this one. Free them
+    // right here instead of leaving them in the shared map forever; that gap
+    // is exactly what let a folder switch leak the old site's equations
+    // before this fix.
+    let previous_for_root: std::collections::HashSet<String> = match MATH_STORE.lock() {
+        Ok(mut store) => match store.take() {
+            Some((stored_root, keys)) if stored_root == root => keys.into_keys().collect(),
+            Some((_, stale_keys)) => {
+                if let Ok(mut working) = math_render_cache().lock() {
+                    for key in stale_keys.keys() {
+                        working.remove(key.as_str());
+                    }
+                }
+                std::collections::HashSet::new()
+            }
+            None => std::collections::HashSet::new(),
+        },
+        Err(_) => std::collections::HashSet::new(),
+    };
+
+    let dropped: Vec<&String> = previous_for_root.difference(&live_keys).collect();
+    if !dropped.is_empty() {
+        if let Ok(mut working) = math_render_cache().lock() {
+            for key in &dropped {
+                working.remove(key.as_str());
+            }
+        }
+    }
+
+    let snapshot: HashMap<String, TypesetMath> = math_render_cache()
+        .lock()
+        .ok()
+        .map(|working| {
+            live_keys
+                .iter()
+                .filter_map(|k| working.get(k).cloned().map(|v| (k.clone(), v)))
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Ok(mut store) = MATH_STORE.lock() {
+        *store = Some((root.to_path_buf(), snapshot));
+    }
+}
+
+/// Serializes tests that call [`math_cache_finish_build`] against each
+/// other — the `store_lock_for_tests`/`disk_cache_lock_for_tests` pattern,
+/// applied to this pair's own global state. Two such tests running
+/// concurrently (cargo's default) would otherwise race on the single
+/// [`MATH_STORE`] slot: whichever runs its `finish_build` call while the
+/// OTHER is mid-test would see a root mismatch and free that other test's
+/// keys out from under it. Caught this by observation, not by reasoning
+/// alone: the two lifecycle tests below passed every time run in isolation
+/// but failed intermittently as part of the full suite before this guard
+/// existed.
+#[cfg(test)]
+fn math_cache_test_lock() -> MathCacheTestGuard {
+    static LOCK: Mutex<()> = Mutex::new(());
+    MathCacheTestGuard {
+        _lock: LOCK.lock().unwrap_or_else(|e| e.into_inner()),
+    }
+}
+
+#[cfg(test)]
+struct MathCacheTestGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1132,5 +1317,77 @@ mod tests {
         assert!(session.lookup("b.md").is_none());
         session.finish(&docs);
         reset_for_tests();
+    }
+
+    // ---- Math render cache: growth bound ----
+
+    #[test]
+    fn the_in_memory_math_cache_drops_superseded_equations_at_build_end() {
+        let _guard = math_cache_test_lock();
+        // A literal, not a tempdir: `math_cache_finish_build`'s `root` is a
+        // pure lookup key here, never touched for I/O, and a fixed string
+        // unique to this test can never collide with a real vault path or
+        // another test's root.
+        let root = Path::new("test-root-math-cache-generational-probe-7e21");
+        let mut keys = Vec::new();
+
+        // Edit the "same" equation 10 times — same base identity, different
+        // text each time, exactly what a person iterating on one formula
+        // does. Each edit gets its own `finish_build` call, standing in for
+        // one build per edit (the real watch-loop cadence).
+        for i in 0..10 {
+            let tex = format!(r"\delta_{{cache_probe_gen_7e21_{i}}}");
+            crate::build::markdown::math::render_math(&tex, false).expect("should typeset");
+            keys.push(crate::build::emit::math_png::content_hash(&tex, false));
+            let doc = ParsedDocument {
+                content: format!("${tex}$"),
+                ..Default::default()
+            };
+            math_cache_finish_build(root, std::slice::from_ref(&doc));
+        }
+
+        for (i, old_key) in keys[..9].iter().enumerate() {
+            assert!(
+                math_cache_lookup(old_key).is_none(),
+                "edit {i}'s superseded version must not survive a later edit's build-end sweep"
+            );
+        }
+        assert!(
+            math_cache_lookup(&keys[9]).is_some(),
+            "the CURRENT (10th) version must still be cached after its own build finished"
+        );
+    }
+
+    #[test]
+    fn a_root_switch_frees_the_old_roots_math_cache() {
+        let _guard = math_cache_test_lock();
+        let root_a = Path::new("test-root-math-cache-switch-probe-a-4b2c");
+        let root_b = Path::new("test-root-math-cache-switch-probe-b-4b2c");
+
+        let tex_a = r"\epsilon_{cache_probe_switch_4b2c}";
+        crate::build::markdown::math::render_math(tex_a, false).expect("should typeset");
+        let key_a = crate::build::emit::math_png::content_hash(tex_a, false);
+        let doc_a = ParsedDocument {
+            content: format!("${tex_a}$"),
+            ..Default::default()
+        };
+        math_cache_finish_build(root_a, std::slice::from_ref(&doc_a));
+        assert!(
+            math_cache_lookup(&key_a).is_some(),
+            "root A's equation must be cached once its own build has finished"
+        );
+
+        // A completely different root, with no math of its own at all.
+        let doc_b = ParsedDocument {
+            content: "no math here".to_string(),
+            ..Default::default()
+        };
+        math_cache_finish_build(root_b, std::slice::from_ref(&doc_b));
+
+        assert!(
+            math_cache_lookup(&key_a).is_none(),
+            "switching roots must free the OLD root's whole equation set, not just \
+             whatever it happened to lose since its own last build"
+        );
     }
 }
