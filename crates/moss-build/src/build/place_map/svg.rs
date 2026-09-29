@@ -10,7 +10,7 @@ use std::fmt::Write;
 use sha2::{Digest, Sha256};
 
 mod path;
-use path::{serialize_path, snap, BAND_PX, FINE_PX};
+use path::{serialize_path, snap, BANDS, FINE};
 mod text;
 use text::{precision_name, xml_escape};
 // Re-exported (via place_map.rs) so context.rs's locator can derive a
@@ -26,9 +26,9 @@ pub use locator::{
 };
 mod river;
 mod palette;
-use palette::{band_color, relief_height_grey};
+use palette::{band_tint, relief_height_grey};
 
-use super::geometry::{marker_radius, FrameTier, ProjectedPoint, Projection, TileSelection};
+use super::geometry::{marker_radius, FrameTier, ProjectedPoint, Projection, TileSelection, REGION_FADE_DEGREES};
 use super::globe::{globe_line, globe_marker, globe_rings};
 use super::{Feature, Pack, PlaceMapContext, PlaceMapTarget, ResolvedPlace};
 use crate::vault::places::Precision;
@@ -241,6 +241,19 @@ fn keep_world_scale_layers(grouped: &mut [Vec<&Feature>]) {
     grouped[6].clear();
 }
 
+/// Whether any part of a projected ring falls inside the 720x480 view,
+/// rather than only in the clip margin around it.
+fn on_screen(ring: &[(f64, f64)]) -> bool {
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+    for &(x, y) in ring {
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+    }
+    min_x < f64::from(SVG_WIDTH) && max_x > 0.0 && min_y < f64::from(SVG_HEIGHT) && max_y > 0.0
+}
+
 fn grouped_features<'a>(pack: &'a Pack, selected: &TileSelection) -> Vec<Vec<&'a Feature>> {
     let mut grouped: Vec<Vec<&Feature>> = (0..=10).map(|_| Vec::new()).collect();
     for (layer_id, feature) in selected.features(pack) {
@@ -308,40 +321,20 @@ impl Writer<'_> {
         let height_empty = self.ids.get("height-empty");
         write!(
             self.output,
-            "<defs><filter id=\"{height_filter}\" color-interpolation-filters=\"sRGB\"><feColorMatrix in=\"SourceGraphic\" type=\"luminanceToAlpha\" result=\"height-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"9\" result=\"height-blur-9\"/><feColorMatrix in=\"height-blur-9\" type=\"matrix\" values=\"0 0 0 1 0  0 0 0 1 0  0 0 0 1 0  0 0 0 1 0\" result=\"height-coverage\"/><feDiffuseLighting in=\"height-blur-9\" surfaceScale=\"78\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-steep\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-steep\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-steep-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"4\" result=\"height-blur-4\"/><feDiffuseLighting in=\"height-blur-4\" surfaceScale=\"34\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-soft\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-soft\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-soft-alpha\"/><feComposite in=\"lit-steep-alpha\" in2=\"lit-soft-alpha\" operator=\"arithmetic\" k1=\"0\" k2=\"0.7\" k3=\"0.3\" k4=\"0\" result=\"lit-mix\"/><feComponentTransfer in=\"lit-mix\" result=\"lit-hi-mask\"><feFuncA type=\"linear\" slope=\"1.877817459305202\" intercept=\"-1.327817459305202\"/></feComponentTransfer><feComponentTransfer in=\"lit-mix\" result=\"lit-lo-mask\"><feFuncA type=\"linear\" slope=\"-0.5656854249492381\" intercept=\"0.4\"/></feComponentTransfer><feFlood flood-color=\"var(--moss-place-light-warm, #fff3d0)\" result=\"lit-hi-flood\"/><feComposite in=\"lit-hi-flood\" in2=\"lit-hi-mask\" operator=\"in\" result=\"lit-hi-tint\"/><feFlood flood-color=\"var(--moss-place-light-cool, #5a6488)\" result=\"lit-lo-flood\"/><feComposite in=\"lit-lo-flood\" in2=\"lit-lo-mask\" operator=\"in\" result=\"lit-lo-tint\"/><feMerge result=\"lit-combined\"><feMergeNode in=\"lit-lo-tint\"/><feMergeNode in=\"lit-hi-tint\"/></feMerge><feGaussianBlur in=\"lit-combined\" stdDeviation=\"2\" result=\"lit-smooth\"/><feComposite in=\"lit-smooth\" in2=\"height-coverage\" operator=\"arithmetic\" k1=\"1\" k2=\"0\" k3=\"0\" k4=\"0\"/></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\"><feDropShadow dx=\"1.4\" dy=\"1.4\" stdDeviation=\"0.7\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.35\" result=\"land-shadow\"/><feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"land-shadow\"/></feMerge></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\"><feDropShadow dx=\"1.0\" dy=\"1.0\" stdDeviation=\"0.6\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.22\" result=\"sea-shadow\"/><feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"sea-shadow\"/></feMerge></filter><radialGradient id=\"{marker_gradient}\"><stop offset=\"0\" stop-color=\"var(--moss-place-marker, #2d5a2d)\"/><stop offset=\"1\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0\"/></radialGradient><clipPath id=\"{globe_clip}\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\"/></clipPath><path id=\"{height_empty}\" d=\"m0 0l0 0\"/><filter id=\"{}\" filterUnits=\"userSpaceOnUse\" x=\"-24\" y=\"-24\" width=\"768\" height=\"528\"><feGaussianBlur stdDeviation=\"2.4\"/></filter></defs>", self.ids.get("shadow-seafloor"), self.ids.get("shadow-land"), self.ids.get("soft"),
+            "<defs><filter id=\"{height_filter}\" color-interpolation-filters=\"sRGB\"><feColorMatrix in=\"SourceGraphic\" type=\"luminanceToAlpha\" result=\"height-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"9\" result=\"height-blur-9\"/><feColorMatrix in=\"height-blur-9\" type=\"matrix\" values=\"0 0 0 1 0  0 0 0 1 0  0 0 0 1 0  0 0 0 1 0\" result=\"height-coverage\"/><feDiffuseLighting in=\"height-blur-9\" surfaceScale=\"78\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-steep\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-steep\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-steep-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"4\" result=\"height-blur-4\"/><feDiffuseLighting in=\"height-blur-4\" surfaceScale=\"34\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-soft\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-soft\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-soft-alpha\"/><feComposite in=\"lit-steep-alpha\" in2=\"lit-soft-alpha\" operator=\"arithmetic\" k1=\"0\" k2=\"0.7\" k3=\"0.3\" k4=\"0\" result=\"lit-mix\"/><feComponentTransfer in=\"lit-mix\" result=\"lit-hi-mask\"><feFuncA type=\"linear\" slope=\"1.877817459305202\" intercept=\"-1.327817459305202\"/></feComponentTransfer><feComponentTransfer in=\"lit-mix\" result=\"lit-lo-mask\"><feFuncA type=\"linear\" slope=\"-0.5656854249492381\" intercept=\"0.4\"/></feComponentTransfer><feFlood flood-color=\"var(--moss-place-light-warm, #fff3d0)\" result=\"lit-hi-flood\"/><feComposite in=\"lit-hi-flood\" in2=\"lit-hi-mask\" operator=\"in\" result=\"lit-hi-tint\"/><feFlood flood-color=\"var(--moss-place-light-cool, #5a6488)\" result=\"lit-lo-flood\"/><feComposite in=\"lit-lo-flood\" in2=\"lit-lo-mask\" operator=\"in\" result=\"lit-lo-tint\"/><feMerge result=\"lit-combined\"><feMergeNode in=\"lit-lo-tint\"/><feMergeNode in=\"lit-hi-tint\"/></feMerge><feGaussianBlur in=\"lit-combined\" stdDeviation=\"2\" result=\"lit-smooth\"/><feComposite in=\"lit-smooth\" in2=\"height-coverage\" operator=\"arithmetic\" k1=\"1\" k2=\"0\" k3=\"0\" k4=\"0\"/></filter><radialGradient id=\"{marker_gradient}\"><stop offset=\"0\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0.28\"/><stop offset=\"1\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0\"/></radialGradient><clipPath id=\"{globe_clip}\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\"/></clipPath><path id=\"{height_empty}\" d=\"m0 0l0 0\"/><filter id=\"{}\" filterUnits=\"userSpaceOnUse\" x=\"-24\" y=\"-24\" width=\"768\" height=\"528\"><feGaussianBlur stdDeviation=\"2.4\"/></filter></defs>", self.ids.get("soft"),
         )
         .expect("writing to String cannot fail");
-        self.output.push_str("<defs>");
-        for (name, bands) in [
-            (
-                "relief",
-                [
-                    100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000,
-                ]
-                .as_slice(),
-            ),
-            (
-                "seafloor",
-                [
-                    -10, -20, -30, -50, -100, -200, -1000, -2000, -3000, -4000, -5000, -6000,
-                ]
-                .as_slice(),
-            ),
-        ] {
-            // Same small cut-paper offset the shared shadow-land/shadow-seafloor
-            // filters above use, not the earlier dx=3/dy=4/stdDeviation=0: at
-            // that larger, perfectly hard-edged offset a small island (a
-            // handful of points wide) reads as a doubled "ghost" shape rather
-            // than a subtle drop shadow.
-            let (dx, dy, std, opacity) = if name == "relief" {
-                ("1.4", "1.4", "0.7", "0.35")
-            } else {
-                ("1.0", "1.0", "0.6", "0.22")
-            };
-            for band in bands {
-                write!(self.output, "<filter id=\"{}\" color-interpolation-filters=\"sRGB\"><feDropShadow dx=\"{dx}\" dy=\"{dy}\" stdDeviation=\"{std}\" flood-color=\"var(--moss-place-shadow-{name}-{band}, #5a6488)\" flood-opacity=\"{opacity}\" result=\"shadow\"/><feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"shadow\"/></feMerge></filter>", self.ids.get(&format!("shadow-{name}-{band}"))).expect("writing to String cannot fail");
-            }
-        }
+        // The approved design's two cut-paper shadows, one per band family,
+        // shared by every band group: relief casts a firmer shadow (and, in
+        // the dark theme, a faint warm top-left edge) than the sea floor.
+        // The land fill itself casts none.
+        write!(
+            self.output,
+            "<defs><filter id=\"{}\" color-interpolation-filters=\"sRGB\" filterUnits=\"userSpaceOnUse\" x=\"-12\" y=\"-12\" width=\"744\" height=\"504\"><feDropShadow in=\"SourceGraphic\" dx=\"1.4\" dy=\"1.4\" stdDeviation=\"0.7\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.35\" result=\"with-shadow\"/><feDropShadow in=\"SourceGraphic\" dx=\"-0.7\" dy=\"-0.7\" stdDeviation=\"0.49\" flood-color=\"var(--moss-place-light-warm, #fff3d0)\" flood-opacity=\"var(--moss-place-relief-edge-opacity, 0)\" result=\"with-edge\"/><feMerge><feMergeNode in=\"with-shadow\"/><feMergeNode in=\"with-edge\"/></feMerge></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\" filterUnits=\"userSpaceOnUse\" x=\"-12\" y=\"-12\" width=\"744\" height=\"504\"><feDropShadow in=\"SourceGraphic\" dx=\"1.0\" dy=\"1.0\" stdDeviation=\"0.6\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.22\"/></filter>",
+            self.ids.get("shadow-relief"),
+            self.ids.get("shadow-seafloor"),
+        )
+        .expect("writing to String cannot fail");
         self.output.push_str("</defs>");
     }
 
@@ -405,9 +398,9 @@ impl Writer<'_> {
         self.output.push_str("<defs>");
         for (index, feature) in grouped[2].iter().enumerate() {
             let rings: Vec<&[(i32, i32)]> = feature.parts.iter().map(Vec::as_slice).collect();
-            if let Some(path) = serialize_path(&projection.project_feature(&rings, quantisation), true, FINE_PX) {
+            if let Some(path) = serialize_path(&projection.project_feature(&rings, quantisation), true, FINE) {
                 let id = format!("{}-land-{index}", self.ids.base);
-                write!(self.output, "<path id=\"{id}\" d=\"{path}\" fill-rule=\"evenodd\"/>")
+                write!(self.output, "<path id=\"{id}\" d=\"{path}\"/>")
                     .expect("writing to String cannot fail");
                 self.land_paths.push(id);
             }
@@ -430,7 +423,7 @@ impl Writer<'_> {
     }
 
     pub(super) fn land(&mut self) {
-        write!(self.output, "<g id=\"{}\" data-map-layer=\"land\" filter=\"url(#{})\">", self.ids.get("layer-land"), self.ids.get("shadow-land"))
+        write!(self.output, "<g id=\"{}\" data-map-layer=\"land\">", self.ids.get("layer-land"))
             .expect("writing to String cannot fail");
         for id in &self.land_paths {
             write!(self.output, "<use href=\"#{id}\" fill=\"var(--moss-place-land, #d7d5c9)\"/>")
@@ -460,7 +453,7 @@ impl Writer<'_> {
 
     /// Every feature of one layer in a single path: these layers are never
     /// referenced by id, so one element per feature would only add bytes.
-    /// Filled layers keep even-odd holes; line layers (reefs) stay open.
+    /// Filled layers keep their holes; line layers (reefs) stay open.
     fn emit_merged_layer(
         &mut self,
         quantisation: u32,
@@ -483,9 +476,8 @@ impl Writer<'_> {
         }
         write!(self.output, "<g id=\"{}\" data-map-layer=\"{name}\">", self.ids.get(&format!("layer-{name}")))
             .expect("writing to String cannot fail");
-        if let Some(path) = serialize_path(&paths, filled, FINE_PX) {
-            let rule = if filled { " fill-rule=\"evenodd\"" } else { "" };
-            write!(self.output, "<path d=\"{path}\" {paint}{rule}/>").expect("writing to String cannot fail");
+        if let Some(path) = serialize_path(&paths, filled, FINE) {
+            write!(self.output, "<path d=\"{path}\" {paint}/>").expect("writing to String cannot fail");
         }
         self.output.push_str("</g>");
     }
@@ -507,70 +499,72 @@ impl Writer<'_> {
                 a.band.cmp(&b.band)
             }
         });
+        // Project first: a band's tint is stretched to the bands actually on
+        // screen, which only the projected rings can tell.
+        let projected: Vec<(&Feature, Option<String>)> = features
+            .into_iter()
+            .map(|feature| {
+                let rings: Vec<&[(i32, i32)]> = feature.parts.iter().map(Vec::as_slice).collect();
+                // One project_feature call per source feature: all rings
+                // stay in one path, preserving holes through
+                // clipping.
+                let rings = projection.project_feature(&rings, quantisation);
+                let on_screen = rings.iter().any(|ring| on_screen(ring));
+                (feature, on_screen.then(|| serialize_path(&rings, true, BANDS)).flatten())
+            })
+            .filter(|(_, path)| path.is_some())
+            .collect();
+        let mut present: Vec<i16> = projected.iter().map(|(feature, _)| feature.band).collect();
+        present.dedup();
+        // Relief is traced from an elevation grid that does not follow the
+        // Natural Earth shoreline, so about 5% of the lowest band lies over
+        // the sea; the approved design clips relief to the land outline.
+        let clip = if name == "relief" {
+            format!(" clip-path=\"url(#{})\"", self.ids.get("land-clip"))
+        } else {
+            String::new()
+        };
         write!(
             self.output,
-            "<g id=\"{}\" data-map-layer=\"{name}\">",
+            "<g id=\"{}\" data-map-layer=\"{name}\"{clip}>",
             self.ids.get(&format!("layer-{name}"))
         )
         .expect("writing to String cannot fail");
         let mut active_band = None;
-        for (index, feature) in features.into_iter().enumerate() {
+        for (index, (feature, path)) in projected.into_iter().enumerate() {
             if active_band != Some(feature.band) {
                 if active_band.is_some() {
                     self.output.push_str("</g>");
                 }
                 active_band = Some(feature.band);
+                // The tint sits on the group, not on the band paths: the
+                // lighting reuses the relief paths through <use> with a grey
+                // per band, and a path's own fill would override it.
                 write!(
                     self.output,
-                    "<g data-map-band=\"{}\" data-map-fill=\"{}\" filter=\"url(#{})\">",
+                    "<g data-map-band=\"{}\" style=\"fill:{}\" filter=\"url(#{})\">",
                     feature.band,
-                    band_color(name, feature.band),
-                    self.ids.get(&format!("shadow-{name}-{}", feature.band))
+                    band_tint(name, feature.band, &present),
+                    self.ids.get(&format!("shadow-{name}"))
                 )
                 .expect("writing to String cannot fail");
             }
-            self.emit_filled_feature(
-                projection,
-                feature,
-                quantisation,
-                &band_color(name, feature.band),
-                &format!("{}-{name}-{index}", self.ids.base),
-                name == "relief",
-            );
+            let id = format!("{}-{name}-{index}", self.ids.base);
+            write!(
+                self.output,
+                "<path id=\"{id}\" d=\"{}\" data-map-band=\"{}\"/>",
+                path.unwrap_or_default(),
+                feature.band
+            )
+            .expect("writing to String cannot fail");
+            if name == "relief" {
+                self.height_uses.push(format!("{id}|{}", relief_height_grey(feature.band)));
+            }
         }
         if active_band.is_some() {
             self.output.push_str("</g>");
         }
         self.output.push_str("</g>");
-    }
-
-    fn emit_filled_feature(
-        &mut self,
-        projection: &Projection,
-        feature: &Feature,
-        quantisation: u32,
-        color: &str,
-        id: &str,
-        is_relief: bool,
-    ) {
-        let rings: Vec<&[(i32, i32)]> = feature.parts.iter().map(Vec::as_slice).collect();
-        // One project_feature call per source feature is intentional: all
-        // rings stay in one even-odd path, preserving holes and multipart
-        // topology through clipping.
-        let projected = projection.project_feature(&rings, quantisation);
-        let Some(path) = serialize_path(&projected, true, BAND_PX) else {
-            return;
-        };
-        write!(
-            self.output,
-            "<path id=\"{id}\" d=\"{path}\" fill=\"{color}\" fill-rule=\"evenodd\" data-map-band=\"{}\"/>"
-            , feature.band
-        )
-        .expect("writing to String cannot fail");
-        if is_relief {
-            self.height_uses
-                .push(format!("{id}|{}", relief_height_grey(feature.band)));
-        }
     }
 
     fn lighting(&mut self) {
@@ -587,12 +581,11 @@ impl Writer<'_> {
             .expect("writing to String cannot fail");
         }
         self.output.push_str("</clipPath>");
-        // 0.5, not the two-pass diffuse blend weight (0.3, further down)
-        // this was copied from by mistake: the height field's own opacity
-        // is fixed at 0.5, and this opacity is the alpha the filter's
-        // luminanceToAlpha step reads as height, so 0.3 understated every
-        // highlight and shadow tint in both themes.
-        write!(self.output, "<g id=\"{id}\" data-map-layer=\"lighting\" filter=\"url(#{filter})\" clip-path=\"url(#{land_clip})\" aria-hidden=\"true\"><g id=\"{}\" opacity=\"0.5\">", self.ids.get("height-field")).expect("writing to String cannot fail");
+        // The approved design lights the terrain at half strength: the
+        // opacity sits on the filtered group, so it fades the filter's
+        // output. On an element inside the filter it would change nothing,
+        // because luminanceToAlpha reads a pixel's colour, not its alpha.
+        write!(self.output, "<g id=\"{id}\" data-map-layer=\"lighting\" clip-path=\"url(#{land_clip})\" aria-hidden=\"true\"><g id=\"{}\" filter=\"url(#{filter})\" opacity=\"0.5\">", self.ids.get("height-field")).expect("writing to String cannot fail");
         for item in &self.height_uses {
             let (path_id, grey) = item.split_once('|').unwrap_or((item.as_str(), "#f2f2f2"));
             write!(self.output, "<use href=\"#{path_id}\" height=\"100%\" fill=\"{grey}\" fill-opacity=\"1\" data-map-role=\"height-field\"/>").expect("writing to String cannot fail");
@@ -620,13 +613,23 @@ impl Writer<'_> {
                 let Some(point) = place.point().and_then(|point| projection.project(point)) else {
                     continue;
                 };
-                let radius = marker_radius(place.precision);
-                let fill = if matches!(place.precision, Precision::Region | Precision::Country) {
-                    format!("url(#{fade})")
-                } else {
-                    "var(--moss-place-marker, #2d5a2d)".to_string()
-                };
-                write!(self.output, "<circle cx=\"{}\" cy=\"{}\" r=\"{radius:.0}\" fill=\"{fill}\" data-map-marker=\"{}\"/>", snap(point.0), snap(point.1), xml_escape(&place.key)).expect("writing to String cannot fail");
+                let (x, y) = (snap(point.0), snap(point.1));
+                let key = xml_escape(&place.key);
+                match place.precision {
+                    Precision::Exact | Precision::City => {
+                        let radius = marker_radius(place.precision);
+                        write!(self.output, "<circle cx=\"{x}\" cy=\"{y}\" r=\"{:.0}\" fill=\"var(--moss-place-marker-casing, #ffffff)\"/><circle cx=\"{x}\" cy=\"{y}\" r=\"{radius:.0}\" fill=\"var(--moss-place-marker, #2d5a2d)\" data-map-marker=\"{key}\"/>", radius + 1.0).expect("writing to String cannot fail");
+                    }
+                    Precision::Region | Precision::Country => {
+                        let fade_edge = place.point().filter(|_| place.precision == Precision::Region).and_then(|centre| {
+                            ProjectedPoint::new(centre.longitude, (centre.latitude + REGION_FADE_DEGREES).min(89.9))
+                        });
+                        let radius = fade_edge
+                            .and_then(|edge| projection.project(edge))
+                            .map_or(marker_radius(place.precision), |edge| (edge.0 - point.0).hypot(edge.1 - point.1));
+                        write!(self.output, "<circle cx=\"{x}\" cy=\"{y}\" r=\"{radius:.0}\" fill=\"url(#{fade})\" data-map-marker=\"{key}\"/>").expect("writing to String cannot fail");
+                    }
+                }
             }
         }
         self.output.push_str("</g>");
@@ -658,7 +661,7 @@ impl Writer<'_> {
                     for part in &feature.parts {
                         paths.extend(globe_line(part, center, context.pack().header.quantisation));
                     }
-                    if let Some(path) = serialize_path(&paths, false, FINE_PX) {
+                    if let Some(path) = serialize_path(&paths, false, FINE) {
                         write!(self.output, "<path d=\"{path}\" fill=\"none\" stroke=\"var(--moss-place-globe-coast, #f5f6f4)\" stroke-width=\"0.5\" data-globe-feature=\"{index}\"/>").expect("writing to String cannot fail");
                     }
                 } else {
@@ -669,7 +672,7 @@ impl Writer<'_> {
                             globe_rings(part, center, context.pack().header.quantisation)
                         })
                         .collect();
-                    if let Some(path) = serialize_path(&rings, true, FINE_PX) {
+                    if let Some(path) = serialize_path(&rings, true, FINE) {
                         write!(self.output, "<path d=\"{path}\" fill=\"var(--moss-place-globe-land, #d7d5c9)\" fill-rule=\"evenodd\" data-globe-feature=\"{index}\"/>").expect("writing to String cannot fail");
                     }
                 }
@@ -682,10 +685,9 @@ impl Writer<'_> {
             let Some((x, y)) = globe_marker(point, center) else {
                 continue;
             };
-            let radius = (marker_radius(place.precision) * 0.4).max(2.0);
             write!(
                 self.output,
-                "<circle cx=\"{}\" cy=\"{}\" r=\"{radius:.0}\" fill=\"var(--moss-place-marker, #2d5a2d)\" data-map-globe-marker=\"true\" data-map-marker=\"{}\"/>",
+                "<circle cx=\"{}\" cy=\"{}\" r=\"3\" fill=\"var(--moss-place-marker, #2d5a2d)\" data-map-globe-marker=\"true\" data-map-marker=\"{}\"/>",
                 snap(x), snap(y), xml_escape(&place.key)
             )
             .expect("writing to String cannot fail");
@@ -835,25 +837,22 @@ mod tests {
         }
     }
 
-    /// A square whose edges bow 2 px outward at their midpoints: detail land
-    /// keeps at its 1 px tolerance and a band, at 2 px, starts dropping.
-    /// (Which bows survive depends on where Douglas-Peucker splits a closed
-    /// ring, so the band's count is only bounded, not pinned.)
+    /// Band paths go through the area simplifier: a gently curving edge (a
+    /// 5-degree circle, every point within 2 px of a chord more than 70 px
+    /// long) keeps its curve instead of becoming those chords.
     #[test]
-    fn bands_simplify_at_two_px_and_land_at_one() {
+    fn band_edges_keep_their_curves_through_render_time_simplification() {
         let origin = ProjectedPoint::new(0.0, 0.0).unwrap();
         let frame = Frame::from_points(&[origin], [Precision::Exact].into_iter()).unwrap();
         let projection = Projection::new(&frame);
-        // About 70.6 px per degree in this frame: the 0.034 degree bow
-        // lands 2 px off each 141 px edge once snapped to whole pixels.
-        let (edge, bow) = (10_000, 10_340);
-        let ring = vec![
-            (-edge, -edge), (0, -bow), (edge, -edge), (bow, 0),
-            (edge, edge), (0, bow), (-edge, edge), (-bow, 0), (-edge, -edge),
-        ];
-        let feature = Feature { bounds: [-bow, -bow, bow, bow], band: 100, parts: vec![ring] };
+        let ring: Vec<(i32, i32)> = (0..=628)
+            .map(|step| {
+                let angle = f64::from(step) / 100.0;
+                ((50_000.0 * angle.cos()).round() as i32, (50_000.0 * angle.sin()).round() as i32)
+            })
+            .collect();
+        let feature = Feature { bounds: [-50_000, -50_000, 50_000, 50_000], band: 100, parts: vec![ring] };
         let mut grouped: Vec<Vec<&Feature>> = (0..=10).map(|_| Vec::new()).collect();
-        grouped[2].push(&feature);
         grouped[9].push(&feature);
         let ids = Ids::new("p", 0);
         let mut writer = Writer {
@@ -864,23 +863,135 @@ mod tests {
             has_href: false,
             locator_profile: None,
         };
-        let vertices = |svg: &str| {
-            let d = &svg[svg.find(" d=\"").unwrap() + 4..];
-            d[..d.find('"').unwrap()].matches(['m', 'l']).count()
-        };
-        writer.land_defs(10_000, &projection, &grouped);
-        let land = vertices(&writer.output);
-        writer.output.clear();
         writer.emit_band_layer(10_000, &projection, &grouped, 9, "relief", false);
-        let band = vertices(&writer.output);
-        assert_eq!(land, 8, "land at 1 px keeps every bow");
-        assert!(band < land, "a band at 2 px must drop bows land keeps: band {band}, land {land}");
+        let d = &writer.output[writer.output.find(" d=\"").unwrap() + 4..];
+        let mut longest = 0.0_f64;
+        for step in d[..d.find('"').unwrap()].split(['m', 'l']).skip(2) {
+            let mut numbers = step.trim_end_matches('z').split(' ').map(|v| v.parse::<f64>().unwrap());
+            let (dx, dy) = (numbers.next().unwrap(), numbers.next().unwrap());
+            // Edges along the clip rectangle are not band edges.
+            if dx != 0.0 && dy != 0.0 {
+                longest = longest.max(dx.hypot(dy));
+            }
+        }
+        assert!(longest < 50.0, "a curved band edge became a {longest} px chord");
+    }
+
+    /// The approved design's cut-paper shadows: relief bands cast the
+    /// firmer 1.4 px / 35% shadow, sea-floor bands the lighter 1.0 px / 22%
+    /// one, and the land fill casts none.
+    #[test]
+    fn relief_and_sea_floor_cast_their_own_shadows_and_land_casts_none() {
+        let svg = locator_for(35.5, 33.89, Precision::Exact);
+        let base = &svg[svg.find("moss-place-map-").unwrap()..][..79];
+        let filter = |name: &str| {
+            let start = svg.find(&format!("<filter id=\"{base}-shadow-{name}\"")).unwrap_or_else(|| panic!("no {name} shadow"));
+            &svg[start..start + svg[start..].find("</filter>").unwrap()]
+        };
+        assert!(filter("relief").contains("dx=\"1.4\"") && filter("relief").contains("flood-opacity=\"0.35\""));
+        assert!(filter("seafloor").contains("dx=\"1.0\"") && filter("seafloor").contains("flood-opacity=\"0.22\""));
+        for name in ["relief", "seafloor"] {
+            let body = layer_body(&svg, name);
+            let groups = body.matches("<g data-map-band=").count();
+            assert!(groups > 0);
+            assert_eq!(body.matches(&format!("filter=\"url(#{base}-shadow-{name})\"")).count(), groups, "{name}");
+        }
+        let land_open = &svg[svg.find("data-map-layer=\"land\"").unwrap()..];
+        assert!(!land_open[..land_open.find('>').unwrap()].contains("filter"), "the land fill casts a shadow");
+    }
+
+    /// Terrain lighting at the approved half strength. The opacity has to
+    /// fade the filter's output: set on the source inside the filter it is
+    /// discarded, since luminanceToAlpha reads colour and ignores alpha.
+    #[test]
+    fn terrain_lighting_is_faded_after_the_filter_not_before() {
+        let svg = locator_for(100.5, 13.75, Precision::Exact);
+        let lighting = &svg[svg.find("data-map-layer=\"lighting\"").unwrap()..];
+        let lighting = &lighting[..lighting.find("</g></g>").unwrap()];
+        let filtered = lighting.find("-height-filter)\"").expect("the lighting group applies the height filter");
+        let tag = &lighting[lighting[..filtered].rfind('<').unwrap()..];
+        let tag = &tag[..tag.find('>').unwrap()];
+        assert!(tag.contains("opacity=\"0.5\""), "the filtered element is not faded: {tag}");
+        assert_eq!(lighting.matches(" opacity=").count(), 1, "an opacity inside the filter does nothing");
+    }
+
+    #[test]
+    fn relief_is_clipped_to_the_land_outline() {
+        let svg = locator_for(35.5, 33.89, Precision::Exact);
+        let base = &svg[svg.find("moss-place-map-").unwrap()..][..79];
+        let open = &svg[svg.find("data-map-layer=\"relief\"").unwrap()..];
+        assert!(open[..open.find('>').unwrap()].contains(&format!("clip-path=\"url(#{base}-land-clip)\"")));
+        assert!(svg.contains(&format!("<clipPath id=\"{base}-land-clip\">")));
+    }
+
+    /// The lighting draws each relief path again through <use> with a grey
+    /// that encodes its height. A fill on the path itself would override
+    /// the use's grey, so every band would light as its own tint instead.
+    #[test]
+    fn the_height_field_sees_each_band_as_its_grey() {
+        let svg = locator_for(100.5, 13.75, Precision::Exact);
+        let relief = layer_body(&svg, "relief");
+        let paths: Vec<&str> = relief.split("<path ").skip(1).map(|tag| &tag[..tag.find('>').unwrap()]).collect();
+        assert!(!paths.is_empty());
+        for tag in paths {
+            assert!(!tag.contains(" fill=\""), "a relief path fills itself: {tag:.120}");
+        }
+        assert!(relief.contains("<g data-map-band=\"100\" style=\"fill:"), "the band colour belongs on the group");
+    }
+
+    /// The tints stretch to the bands on screen: the highest relief band in
+    /// the frame reaches the palette's top tint and the deepest sea band its
+    /// deepest, however modest the frame's own relief and depths are.
+    #[test]
+    fn band_tints_span_the_whole_ramp_within_each_frame() {
+        let svg = locator_for(100.5, 13.75, Precision::Exact);
+        let last_group = |name: &str| {
+            let from = svg.find(&format!("data-map-layer=\"{name}\"")).unwrap();
+            let body = &svg[from..from + svg[from + 1..].find("data-map-layer=").unwrap()];
+            let start = body.rfind("<g data-map-band=").unwrap();
+            body[start..start + body[start..].find('>').unwrap()].to_string()
+        };
+        let top = last_group("relief");
+        assert!(top.contains("--moss-place-land-high, #f6f1e4) 100%"), "{top}");
+        let deepest = last_group("seafloor");
+        assert!(deepest.contains("--moss-place-sea-deep, #bfd0dc) 100%"), "{deepest}");
+    }
+
+    /// The approved design's markers: an exact or city place is a 4 px dot
+    /// on a 5 px casing; a region is a soft fade from 28% out to 1.1
+    /// degrees of latitude (about 78 px at the 10-degree frame); the globe
+    /// marks either with a 3 px dot.
+    #[test]
+    fn markers_match_the_approved_dot_fade_and_globe_sizes() {
+        let exact = locator_for(35.5, 33.89, Precision::Exact);
+        let marker = layer_body(&exact, "marker");
+        assert!(marker.contains("r=\"5\" fill=\"var(--moss-place-marker-casing, #ffffff)\""), "{marker}");
+        assert!(marker.contains("r=\"4\" fill=\"var(--moss-place-marker, #2d5a2d)\""), "{marker}");
+        let region = locator_for(40.5, 36.0, Precision::Region);
+        let marker = layer_body(&region, "marker");
+        let radius: f64 = marker[marker.find(" r=\"").unwrap() + 4..].split('"').next().unwrap().parse().unwrap();
+        assert!((70.0..=85.0).contains(&radius), "region fade radius {radius}");
+        assert!(region.contains("stop-opacity=\"0.28\""));
+        for svg in [&exact, &region] {
+            assert!(svg.contains("r=\"3\" fill=\"var(--moss-place-marker, #2d5a2d)\" data-map-globe-marker=\"true\""));
+        }
+    }
+
+    /// The pack winds every outer ring one way and every hole the other,
+    /// so fills use the nonzero rule: holes still cut out, and the two
+    /// halves of a ring cut at the antimeridian, which overlap by a pixel,
+    /// fill their overlap instead of cancelling it.
+    #[test]
+    fn main_map_fills_use_the_nonzero_rule() {
+        let svg = locator_for(179.95, -16.85, Precision::Exact);
+        let globe = svg.find("data-map-layer=\"globe\"").unwrap();
+        assert!(!svg[..globe].contains("evenodd"), "a main-map fill uses even-odd");
     }
 
     #[test]
     fn path_serializer_closes_fills_but_not_lines() {
-        let fill = serialize_path(&[vec![(1.2, 2.8), (4.1, 2.8), (4.1, 5.0)]], true, FINE_PX).unwrap();
-        let line = serialize_path(&[vec![(1.2, 2.8), (4.1, 2.8)]], false, FINE_PX).unwrap();
+        let fill = serialize_path(&[vec![(1.2, 2.8), (4.1, 2.8), (4.1, 5.0)]], true, FINE).unwrap();
+        let line = serialize_path(&[vec![(1.2, 2.8), (4.1, 2.8)]], false, FINE).unwrap();
         assert!(fill.ends_with('z'));
         assert!(!line.contains('z'));
         assert!(fill
@@ -889,7 +1000,7 @@ mod tests {
     }
 
     #[test]
-    fn populated_pack_emits_layers_bands_even_odd_paths_and_a_marker() {
+    fn populated_pack_emits_layers_bands_and_a_marker() {
         let context = PlaceMapContext::embedded().unwrap();
         let output = emit_svg(
             &context,
@@ -902,7 +1013,7 @@ mod tests {
         assert!(output.contains("data-map-band=\"100\""));
         assert!(output.contains("fill-rule=\"evenodd\""));
         assert!(output.contains("data-map-layer=\"marker\""));
-        assert!(output.contains("r=\"9\""));
+        assert!(output.contains("r=\"4\""));
         assert!(!output.contains("country-border"));
         let document = scraper::Html::parse_fragment(&output);
         let svg_selector = scraper::Selector::parse("svg").unwrap();
@@ -964,40 +1075,6 @@ mod tests {
                 .any(|grey| lighting.contains(&format!("fill=\"{grey}\""))),
             "expected one of {relief_greys:?} as a height-field fill"
         );
-        let relief_colors: Vec<_> = [
-            100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000,
-        ]
-        .into_iter()
-        .map(|band| band_color("relief", band))
-        .collect();
-        assert_eq!(
-            relief_colors
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len(),
-            relief_colors.len()
-        );
-        let seafloor_colors: Vec<_> = [
-            -10, -20, -30, -50, -100, -200, -1000, -2000, -3000, -4000, -5000, -6000,
-        ]
-        .into_iter()
-        .map(|band| band_color("seafloor", band))
-        .collect();
-        assert_eq!(
-            seafloor_colors
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len(),
-            seafloor_colors.len()
-        );
-        for band in [
-            100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000,
-        ] {
-            assert!(output.contains(&format!("shadow-relief-{band}\"")));
-        }
-        for band in [-10, -20, -30, -50, -100, -200, -1000, -2000, -3000, -4000, -5000, -6000] {
-            assert!(output.contains(&format!("shadow-seafloor-{band}\"")));
-        }
     }
 
     /// The lighting filter's whole point, read off the filter's own
@@ -1037,7 +1114,7 @@ mod tests {
 
     /// Every `--moss-place-*` custom property this emitter can reference
     /// (as a literal `var(--moss-place-NAME, #fallback)` call-site string,
-    /// or as one of `band_color`'s relief/seafloor tokens) must be defined
+    /// here or in the band palette) must be defined
     /// in the shipped stylesheet, in both the light and dark blocks — the
     /// defect this guards was that the emitter used tokens (rivers, ice,
     /// every relief/seafloor band, the globe-* trio...) `site.css` never
@@ -1052,18 +1129,16 @@ mod tests {
     fn every_place_token_the_emitter_can_produce_is_defined_in_site_css() {
         let svg_source = include_str!("svg.rs");
         let locator_source = include_str!("svg/locator.rs");
+        let palette_source = include_str!("svg/palette.rs");
         let css = include_str!("../../assets/css/site.css");
 
-        // Call-site literals: `var(--moss-place-NAME, #hex)`. band_color's
-        // own dynamically-formatted token (`--moss-place-relief-{band}`) has
-        // no such literal in source, so this pass can't accidentally pick up
-        // its dead `_ => ("--moss-place-relief".to_string(), ...)` arm. The
+        // Call-site literals: `var(--moss-place-NAME, #hex)`. The
         // name is cut at the first character outside `[a-z0-9-]` rather than
         // at the next comma, so this can't misfire on this very function's
         // own source text (this file's `include_str!` of itself) the way a
         // bare `find(',')` would.
         let mut tokens: Vec<String> = Vec::new();
-        for source in [svg_source, locator_source] {
+        for source in [svg_source, locator_source, palette_source] {
             let mut rest = source;
             while let Some(start) = rest.find("var(--moss-place-") {
                 let name_start = start + "var(--".len();
@@ -1078,46 +1153,9 @@ mod tests {
             }
         }
 
-        // The two dynamically-named families, generated the same way the
-        // emitter generates them.
-        for band in [
-            100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000,
-        ] {
-            tokens.push(extract_token_name(&band_color("relief", band)));
-        }
-        for band in [-10, -20, -30, -50, -100, -200, -1000, -2000, -3000, -4000, -5000, -6000] {
-            tokens.push(extract_token_name(&band_color("seafloor", band)));
-        }
-
-        // Also every band the checked-in pack actually contains, not just
-        // the fixed lists above: those two lists and band_color's own match
-        // arms are three hand-kept copies of the same set, and a pack
-        // regeneration can add a new band value (as it did 2026-09-28, three
-        // shallow shelf steps and three deep abyssal steps) without any of
-        // the three being told. When band_color doesn't recognise a band it
-        // falls through to an untranslated catch-all token, which still
-        // renders (site.css defines that catch-all token) but silently
-        // ignores the real depth and, for any band between two catch-alls,
-        // can point at the wrong one entirely -- a real render, not a build
-        // error. Scanning the pack directly is what would have caught it.
-        let pack = crate::build::place_map::embedded().expect("checked-in pack must decode");
-        for (layer_id, name) in [(9u8, "relief"), (10u8, "seafloor")] {
-            let bands: std::collections::BTreeSet<i16> = pack
-                .tiers
-                .iter()
-                .flat_map(|tier| tier.layers.iter())
-                .filter(|layer| layer.id == layer_id)
-                .flat_map(|layer| layer.features.iter().map(|feature| feature.band))
-                .collect();
-            assert!(!bands.is_empty(), "pack layer {layer_id} has no bands");
-            for band in bands {
-                tokens.push(extract_token_name(&band_color(name, band)));
-            }
-        }
-
         tokens.sort();
         tokens.dedup();
-        assert!(tokens.len() > 30, "expected a rich token set, got {tokens:?}");
+        assert!(tokens.len() > 20, "expected a rich token set, got {tokens:?}");
 
         let light_block = css_block(css, "\n.moss-place-map {");
         let dark_block = css_block(css, "\n[data-theme=\"dark\"] .moss-place-map {");
@@ -1136,53 +1174,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// Pulls the property name back out of a `band_color`-shaped
-    /// `var(--NAME, #hex)` string — deliberately not spelled with a literal
-    /// `var(--moss-place-` prefix in this comment, so the scan above (which
-    /// reads this very file's source) can't mistake the example for a call
-    /// site.
-    fn extract_token_name(var_call: &str) -> String {
-        let name = var_call.trim_start_matches("var(--");
-        name[..name.find(',').unwrap()].to_string()
-    }
-
-    /// The fallback hex color out of a `var(--token, #hex)` call-site
-    /// string, as opposed to [`extract_token_name`]'s token half.
-    fn extract_fallback(var_call: &str) -> String {
-        let after_comma = &var_call[var_call.find(',').unwrap() + 1..];
-        after_comma.trim_end_matches(')').trim().to_string()
-    }
-
-    /// Regression for a 2026-09-28 defect: band_color's seafloor match only
-    /// recognised the pack's original eight depths, so the four bands a
-    /// pack regeneration added (-20/-30/-50/-200/-3000/-5000, alongside the
-    /// unchanged -10/-100/-1000/-2000/-4000/-6000) all fell through to the
-    /// deepest band's catch-all fallback and were visually indistinguishable
-    /// from -6000. That is invisible to a test asserting the whole
-    /// `var(--token, #fallback)` string is unique per band, because the
-    /// token half (built from the raw, unmatched band value) still differed
-    /// even though the fallback color repeated -- the token and fallback
-    /// were two independently-wrong computations that happened to disagree
-    /// with each other, not just with the truth. Checking the fallback in
-    /// isolation is what catches it.
-    #[test]
-    fn seafloor_bands_use_distinct_fallbacks_not_a_shared_catch_all() {
-        let fallbacks: Vec<String> = [
-            -10, -20, -30, -50, -100, -200, -1000, -2000, -3000, -4000, -5000, -6000,
-        ]
-        .into_iter()
-        .map(|band| extract_fallback(&band_color("seafloor", band)))
-        .collect();
-        assert_eq!(
-            fallbacks
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len(),
-            fallbacks.len(),
-            "expected 12 distinct seafloor fallbacks, got {fallbacks:?}"
-        );
     }
 
     /// The property list of one `selector {`, up to its closing brace. Panics
@@ -1262,9 +1253,8 @@ mod tests {
 
     #[test]
     fn marker_radii_are_fixed_by_precision() {
-        assert_eq!(marker_radius(Precision::Exact), 6.0);
-        assert_eq!(marker_radius(Precision::City), 9.0);
-        assert_eq!(marker_radius(Precision::Region), 14.0);
+        assert_eq!(marker_radius(Precision::Exact), 4.0);
+        assert_eq!(marker_radius(Precision::City), 4.0);
         assert_eq!(marker_radius(Precision::Country), 20.0);
     }
 

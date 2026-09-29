@@ -9,6 +9,8 @@ import test from "node:test";
 import {
   COAST_TOLERANCE,
   encodeFeature,
+  QUANT,
+  featuresFor,
   FINE_PX,
   geometryParts,
   RELIEF_THRESHOLDS,
@@ -19,6 +21,7 @@ import {
   splitDateline,
   tierPayload,
   TOLERANCE,
+  worldReliefBands,
   writePack,
 } from "./generate.mjs";
 
@@ -69,7 +72,16 @@ test("quantised feature encoding is deterministic", () => {
   const first = encodeFeature([[[0, 0], [1, 1], [2, 1]]]);
   const second = encodeFeature([[[0, 0], [1, 1], [2, 1]]]);
   assert.deepEqual(first, second);
-  assert.equal(first.toString("hex"), "0100030000000000a09c01a09c01a09c0100");
+  assert.equal(first.toString("hex"), "0100030000000000d00fd00fd00f00");
+});
+
+test("the coordinate quantum is invisible on a locator and a 2 px step costs a byte per axis", () => {
+  // 1 px of a 10-degree, 720 px locator is FINE_PX degrees.
+  assert.ok(1 / QUANT < FINE_PX / 10, `a quantum of ${1 / QUANT} degrees is a tenth of a pixel or more`);
+  const step = 2 * FINE_PX;
+  const bytes = encodeFeature([[[0, 0], [step, step]]]);
+  // part count u16 + point count u32 + the first point (1 byte per axis) + the 2 px step.
+  assert.equal(bytes.length, 2 + 4 + 2 + 2);
 });
 
 test("simplification retains endpoints and dateline splitting never makes a world-spanning segment", () => {
@@ -199,4 +211,83 @@ test("a band that reaches a pole is clamped onto it instead of leaving WGS84", (
   const band = seaFloor.find((feature) => feature.properties.band === -100);
   const latitudes = band.geometry.coordinates.flat(2).map(([, y]) => y);
   assert.ok(Math.max(...latitudes) <= 90 && Math.min(...latitudes) >= -90, `latitudes ${Math.min(...latitudes)}..${Math.max(...latitudes)}`);
+});
+
+test("a gently curving band edge keeps its curve instead of long straight chords", () => {
+  // A 5-degree-radius circle sampled every 0.05 degrees, like a contour
+  // traced from the 3-arcminute grid. At the locator tolerance a chord only
+  // 0.028 degrees from the arc may span a whole degree (about 70 px), so a
+  // chord-distance simplifier draws it as a polygon of long straight edges.
+  const circle = [];
+  for (let i = 0; i <= 628; i++) circle.push([100 + 5 * Math.cos(i / 100), 15 + 5 * Math.sin(i / 100)]);
+  circle.push(circle[0]);
+  const longestEdge = (layer) => {
+    const [feature] = featuresFor([{ properties: { band: 100 }, geometry: { type: "Polygon", coordinates: [circle] } }], TOLERANCE.fine, 0, layer);
+    const ring = feature.parts[0];
+    let longest = 0;
+    for (let i = 1; i < ring.length; i++) longest = Math.max(longest, Math.hypot(ring[i][0] - ring[i - 1][0], ring[i][1] - ring[i - 1][1]));
+    return longest;
+  };
+  assert.ok(longestEdge("relief") < 0.5, `a relief band's longest edge is ${longestEdge("relief").toFixed(3)} degrees`);
+});
+
+test("the world tier's relief is one smooth band per hill, not grid-cell speckle", () => {
+  // 6-arcminute cells: a hill well above 100 m on a plain that sits just
+  // below it, with cell-to-cell noise lifting every other cell over it.
+  const size = 80; const axis = Array.from({ length: size }, (_, index) => index * 0.1);
+  const z = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const hill = Math.hypot(x - 40, y - 40) < 15 ? 300 : 80;
+    z[y * size + x] = hill + ((x + y) % 2 ? 60 : -60);
+  }
+  const { relief } = worldReliefBands({ z, lon: axis, lat: axis });
+  const rings = relief.filter((feature) => feature.properties.band === 100).flatMap((feature) => feature.geometry.coordinates.flat());
+  assert.equal(rings.length, 1, `${rings.length} rings trace the 100 m band`);
+});
+
+test("the world tier drops relief and sea-floor rings too small to be more than contour noise", () => {
+  const square = (size) => [[[0, 0], [size, 0], [size, size], [0, size], [0, 0]]];
+  const band = (size) => ({ properties: { band: 100 }, geometry: { type: "Polygon", coordinates: square(size) } });
+  const island = { properties: {}, geometry: { type: "Polygon", coordinates: square(1.2) } };
+  const { refs } = tierPayload(new Map([["relief", [band(0.8), band(0.9)]], ["land", [island]]]), "world");
+  assert.deepEqual(refs.map((ref) => ref.name), ["relief", "land"], "a 0.8-degree relief ring is dropped; 0.9-degree relief and a 1.2-degree island are kept");
+});
+
+test("the world tier keeps relief detail at world scale and only the trunk rivers the world map draws", () => {
+  // A 3-degree circle: at the other world layers' 0.98-degree tolerance its
+  // edges would run 12 px and more on the world map.
+  const circle = [];
+  for (let i = 0; i <= 100; i++) circle.push([3 * Math.cos(i / 16), 3 * Math.sin(i / 16)]);
+  circle.push(circle[0]);
+  const band = { properties: { band: 100 }, geometry: { type: "Polygon", coordinates: [circle] } };
+  const river = (rank) => ({ properties: { scalerank: rank }, geometry: { type: "LineString", coordinates: [[0, 0], [1, 1]] } });
+  const { refs, bytes } = tierPayload(new Map([["relief", [band]], ["rivers", [river(1), river(3), river(7)]]]), "world");
+  assert.deepEqual(refs.map((ref) => ref.name), ["relief", "rivers", "rivers"], "rank 7 is not a trunk river");
+  const points = bytes.readUInt32LE(10 + 4 + 16 + 2 + 2);
+  assert.ok(points >= 10, `a 3-degree world relief ring keeps ${points} points`);
+});
+
+test("a band that crosses the antimeridian reaches it from both sides, whatever the source's 180E column holds", () => {
+  // A global 5-degree grid: land around both poles, deep water between.
+  const lon = Array.from({ length: 73 }, (_, i) => -180 + i * 5); const lat = Array.from({ length: 37 }, (_, i) => -90 + i * 5);
+  const z = new Float32Array(lon.length * lat.length);
+  for (let y = 0; y < lat.length; y++) for (let x = 0; x < lon.length; x++) z[y * lon.length + x] = Math.abs(lat[y]) >= 70 ? 100 : -500;
+  // The source tiles' 180E column repeats 90E; here it is high ground.
+  for (let y = 0; y < lat.length; y++) z[y * lon.length + lon.length - 1] = 6000;
+  const { sea_floor: seaFloor } = reliefBands(z, lon, lat, 1, 5, 1.2);
+  const [feature] = featuresFor(seaFloor.filter((f) => f.properties.band === -100), TOLERANCE.world, 0, "sea_floor");
+  const lons = feature.parts.flat().map(([x]) => x);
+  assert.equal(Math.min(...lons), -180);
+  assert.equal(Math.max(...lons), 180);
+  // Covered right up to the antimeridian on both sides, once.
+  const covering = (x, y) => feature.parts.filter((ring) => {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i]; const [xj, yj] = ring[j];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }).length;
+  assert.equal(covering(179.99, 0), 1);
+  assert.equal(covering(-179.99, 0), 1);
 });

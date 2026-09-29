@@ -20,7 +20,12 @@ const CACHE = resolve(process.env.MOSS_PLACE_MAP_SOURCE_DIR ?? "/private/tmp/mos
 // exactly what the app carries.
 const OUT = resolve(ROOT, "crates/moss-build/data/place-map/place-map-v1.bin.br");
 const REPORT = resolve(ROOT, "crates/moss-build/data/place-map/place-map-size.json");
-const QUANT = 10000;
+// Coordinates are stored in thousandths of a degree: 0.07 px on a
+// 10-degree locator, far below anything visible, and a vertex a couple of
+// pixels from the last one encodes as one varint byte per axis instead of
+// two. Ten-thousandths bought nothing on screen and cost about a quarter of
+// the pack.
+const QUANT = 1000;
 const POLE_EPSILON = 1e-9;
 const POLE_CAP = 89.999;
 const MAGIC = Buffer.from("MOSSPLM1", "ascii");
@@ -62,12 +67,28 @@ const RELIEF_FINE_TILES = [
 ];
 const RELIEF_FINE_TILE_POINTS = 1801; // 90deg at 0.05deg (3 arcmin) spacing, gridline-registered.
 const RELIEF_FINE_SPACING = 0.05;
-const RELIEF_WORLD_SPACING = 0.1; // 06m native spacing; world tier keeps its stride-5 (0.5deg) sample.
+const RELIEF_WORLD_SPACING = 0.1; // 06m native spacing.
 const RELIEF_FINE_SIGMA = 1.2; // grid cells; suppresses marching-squares noise before tracing native-res contours.
-const RELIEF_WORLD_STRIDE = 5;
+// The world tier traces the 6-arcminute grid at native resolution, blurred
+// by 3 cells (0.3 degrees, under a pixel of the world map). Sampling every
+// fifth cell unblurred instead aliased the terrain into star-shaped shards
+// and hundreds of pixel-sized islands, drawn as slivers on the world map.
+const RELIEF_WORLD_STRIDE = 1;
+// Wrapped columns added on each side of a global grid before contouring.
+const SEAM_PAD = 2;
+const RELIEF_WORLD_SIGMA = 3;
 // Locator ("fine") frames render about 10 degrees across 720 device px.
 const FINE_PX = 10 / 720;
 const TOLERANCE = { world: 0.98, fine: 2 * FINE_PX };
+// World-tier relief and sea-floor bands are simplified by area at this
+// tolerance squared: about 2 px^2 on the world map, which draws some 2.3 px
+// per degree. The 0.98-degree tolerance the other world layers use means
+// about 5 px^2 there, and left 1,300 relief edges longer than 12 px.
+const WORLD_BAND_TOLERANCE = 0.6;
+// The world tier keeps only the trunk rivers the world map draws
+// (scalerank 0-3; the renderer's WORLD_MAX_RIVER_RANK); the globe inset
+// draws no rivers.
+const WORLD_MAX_RIVER_RANK = 3;
 const COAST_TOLERANCE = { world: 0.98, fine: FINE_PX };
 const BUILT_UP_TOLERANCE = { world: 1.2, fine: 2 * FINE_PX };
 const SEA_FLOOR_THRESHOLDS = [-6000, -5000, -4000, -3000, -2000, -1000, -200, -100, -50, -30, -20, -10];
@@ -126,11 +147,11 @@ function verifyCanonicalSources() {
   if (result.status !== 0) fail(`canonical source verifier exited with status ${result.status}`);
 }
 
-function numberPoint(point) {
+function numberPoint(point, wrapLongitude = true) {
   if (!Array.isArray(point) || point.length < 2 || !Number.isFinite(point[0]) || !Number.isFinite(point[1])) fail(`invalid WGS84 coordinate: ${JSON.stringify(point)}`);
   let lon = point[0];
-  while (lon < -180) lon += 360;
-  while (lon >= 180) lon -= 360;
+  while (wrapLongitude && lon < -180) lon += 360;
+  while (wrapLongitude && lon >= 180) lon -= 360;
   if (point[1] < -90 || point[1] > 90) fail(`geometry latitude outside WGS84: ${point[1]}`);
   // A pole has no unique longitude. Keep a pole-touching ring finite and
   // deterministic by explicitly capping it just inside the pole; values
@@ -145,6 +166,60 @@ function distance(point, a, b) {
   if (dx === 0 && dy === 0) return Math.hypot(x - ax, y - ay);
   const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)));
   return Math.hypot(x - (ax + t * dx), y - (ay + t * dy));
+}
+
+const triangleArea = (a, b, c) => Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2;
+
+// Visvalingam-Whyatt simplification of a closed ring (no repeated end
+// point), the way topojson-simplify does it: repeatedly drop the vertex
+// whose triangle with its neighbours has the smallest area, never letting
+// an effective area fall below one already dropped, until every vertex left
+// spans at least `minArea`. Douglas-Peucker instead keeps only the vertices
+// farthest from a chord, so a contour that meanders within the tolerance of
+// a long chord (a band edge across a flat plain) collapses into one long
+// straight edge; an area criterion keeps a vertex whose small deviation
+// spans a long base, so curves stay curves.
+function visvalingam(ring, minArea) {
+  const n = ring.length;
+  if (n <= 3) return ring.slice();
+  const previous = new Int32Array(n); const next = new Int32Array(n);
+  const area = new Float64Array(n); const alive = new Uint8Array(n).fill(1);
+  for (let i = 0; i < n; i++) { previous[i] = (i - 1 + n) % n; next[i] = (i + 1) % n; }
+  const heap = [];
+  const push = (value, index) => {
+    heap.push([value, index]);
+    for (let k = heap.length - 1; k > 0;) { const parent = (k - 1) >> 1; if (heap[parent][0] <= heap[k][0]) break; [heap[parent], heap[k]] = [heap[k], heap[parent]]; k = parent; }
+  };
+  const pop = () => {
+    const top = heap[0]; const last = heap.pop();
+    if (heap.length) {
+      heap[0] = last;
+      for (let k = 0; ;) {
+        const left = 2 * k + 1; const right = left + 1; let smallest = k;
+        if (left < heap.length && heap[left][0] < heap[smallest][0]) smallest = left;
+        if (right < heap.length && heap[right][0] < heap[smallest][0]) smallest = right;
+        if (smallest === k) break;
+        [heap[smallest], heap[k]] = [heap[k], heap[smallest]]; k = smallest;
+      }
+    }
+    return top;
+  };
+  for (let i = 0; i < n; i++) { area[i] = triangleArea(ring[previous[i]], ring[i], ring[next[i]]); push(area[i], i); }
+  let remaining = n; let floor = 0;
+  while (heap.length && remaining > 3) {
+    const [value, index] = pop();
+    if (!alive[index] || value !== area[index]) continue;
+    if (Math.max(value, floor) >= minArea) break;
+    floor = Math.max(value, floor);
+    alive[index] = 0; remaining--;
+    const before = previous[index]; const after = next[index];
+    next[before] = after; previous[after] = before;
+    for (const neighbour of [before, after]) {
+      area[neighbour] = Math.max(triangleArea(ring[previous[neighbour]], ring[neighbour], ring[next[neighbour]]), floor);
+      push(area[neighbour], neighbour);
+    }
+  }
+  return ring.filter((_, index) => alive[index]);
 }
 
 function rdp(points, tolerance) {
@@ -224,8 +299,11 @@ function cleanRing(points) {
   return unique;
 }
 
-function normalizeRing(coords, tolerance, outer, minArea = 0) {
-  const points = coords.map(numberPoint);
+function normalizeRing(coords, tolerance, outer, minArea = 0, byArea = false, primaryOnly = false) {
+  // A ring traced from a wrapped grid runs continuously past the
+  // antimeridian into the padding, so its longitudes stay as traced and
+  // only the primary window is kept.
+  const points = coords.map((point) => numberPoint(point, !primaryOnly));
   if (points.length < 3) return [];
   const source = points[0][0] === points.at(-1)[0] && points[0][1] === points.at(-1)[1] ? points.slice(0, -1) : points;
   const unwrapped = unwrapRing(source);
@@ -238,12 +316,22 @@ function normalizeRing(coords, tolerance, outer, minArea = 0) {
   const lastWindow = Math.floor((maximum + 180) / 360);
   const output = [];
   for (let window = firstWindow; window <= lastWindow; window++) {
+    // The padding beyond the antimeridian duplicates the other side of the
+    // grid, which has its own contours.
+    if (primaryOnly && window !== 0) continue;
     const west = -180 + window * 360; const east = 180 + window * 360;
     let clipped = clipRing(unwrapped, west, true);
     clipped = clipRing(clipped, east, false);
     clipped = cleanRing(clipped);
     if (clipped.length < 3) continue;
-    const simplified = cleanRing(rdp(clipped, tolerance));
+    // Relief and sea-floor bands are simplified by area at the tolerance
+    // squared. The approved design used half that, which leaves no long
+    // chords at all but carries about 10% more bytes than the pack budget
+    // allows; at the full square a 10-degree frame around Bangkok keeps 2
+    // edges over 30 px (against 69 for Douglas-Peucker). Other layers keep
+    // Douglas-Peucker: a coast or a lake is not traced from a grid, so it
+    // has no meander to collapse.
+    const simplified = cleanRing(byArea ? visvalingam(clipped, tolerance * tolerance) : rdp(clipped, tolerance));
     if (simplified.length < 3) continue;
     const ring = simplified.map(([lon, lat]) => [lon - window * 360, lat]);
     if (ring[0][0] !== ring.at(-1)[0] || ring[0][1] !== ring.at(-1)[1]) ring.push(ring[0]);
@@ -260,10 +348,10 @@ function normalizeRing(coords, tolerance, outer, minArea = 0) {
 // regardless of size, so without this a locator-scale pack ends up carrying
 // thousands of sub-pixel islands, lakes and urban patches at full encoding
 // cost. This mirrors the approved design's ring-weight filtering step.
-function geometryParts(geometry, tolerance, polygon = false, minArea = 0) {
+function geometryParts(geometry, tolerance, polygon = false, minArea = 0, byArea = false, primaryOnly = false) {
   if (!geometry) return [];
-  if (geometry.type === "Polygon") return geometry.coordinates.flatMap((ring, index) => normalizeRing(ring, tolerance, index === 0, minArea));
-  if (geometry.type === "MultiPolygon") return geometry.coordinates.flatMap((polygonRings) => polygonRings.flatMap((ring, index) => normalizeRing(ring, tolerance, index === 0, minArea)));
+  if (geometry.type === "Polygon") return geometry.coordinates.flatMap((ring, index) => normalizeRing(ring, tolerance, index === 0, minArea, byArea, primaryOnly));
+  if (geometry.type === "MultiPolygon") return geometry.coordinates.flatMap((polygonRings) => polygonRings.flatMap((ring, index) => normalizeRing(ring, tolerance, index === 0, minArea, byArea, primaryOnly)));
   const collect = (coords, isPolygon) => {
     if (!coords?.length) return [];
     if (typeof coords[0][0] === "number") {
@@ -320,7 +408,7 @@ function featureBand(layer, properties) {
 function featuresFor(features, tolerance, minArea = 0, layer = null) {
   const output = [];
   for (const feature of features) {
-    const parts = geometryParts(feature.geometry, tolerance, false, minArea);
+    const parts = geometryParts(feature.geometry, tolerance, false, minArea, BAND_LAYERS.has(layer), feature.properties?.wrapped === true);
     if (!parts.length) continue;
     // A loop, not Math.min/max(...spread): a native-resolution relief ring
     // can carry tens of thousands of points before simplification, which
@@ -372,14 +460,33 @@ function reliefBands(z, lon, lat, stride, spacing, smoothSigma = 0) {
   const nx = Math.floor((lon.length - 1) / stride) + 1; const ny = Math.floor((lat.length - 1) / stride) + 1;
   let values = new Float32Array(nx * ny);
   for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) values[y * nx + x] = z[Math.min(y * stride, lat.length - 1) * lon.length + Math.min(x * stride, lon.length - 1)];
+  // A global grid's first and last columns are the same meridian, so it
+  // repeats every nx - 1 columns. The last column is rebuilt from the first
+  // before blurring: in the 3-arcminute GMT tiles it does not hold 180E at
+  // all (each eastern tile's last column repeats its own first column, 90E,
+  // which put a ridge thousands of metres high down the antimeridian), and
+  // the blur spread that ridge into a gap in every band either side of it.
+  const global = lon[lon.length - 1] - lon[0] >= 360 - 1e-6;
+  if (global) for (let y = 0; y < ny; y++) values[y * nx + nx - 1] = values[y * nx];
   if (smoothSigma > 0) values = blurGrid(values, nx, ny, smoothSigma);
-  // d3-contour closes a region that reaches the grid's edge along a virtual
-  // row just outside it, which for a global grid lies past a pole. Deep
-  // water covers the North Pole, so the sea-floor bands reach that row;
-  // it is clamped back onto the pole instead of leaving WGS84.
+  // d3-contour treats everything outside the grid as below every level, so
+  // contours on a global grid close along its edges. The grid is padded
+  // with wrapped columns so contours run through the antimeridian;
+  // normalizeRing then cuts them exactly there and discards the padding's
+  // duplicate copies.
+  const pad = global ? SEAM_PAD : 0;
+  const width = nx + 2 * pad;
+  if (pad) {
+    const padded = new Float32Array(width * ny);
+    for (let y = 0; y < ny; y++) for (let x = 0; x < width; x++) padded[y * width + x] = values[y * nx + (((x - pad) % (nx - 1)) + (nx - 1)) % (nx - 1)];
+    values = padded;
+  }
+  // d3-contour centres the value at index i on coordinate i + 0.5.
+  // Contours reaching a pole close along a virtual row just past it, which
+  // is clamped back onto the pole instead of leaving WGS84.
   const lastLat = lat[lat.length - 1];
-  const project = (geometry) => geometry.map((polygon) => polygon.map((ring) => ring.map(([x, y]) => [lon[0] + x * stride * spacing, Math.max(lat[0], Math.min(lastLat, lat[0] + y * stride * spacing))])));
-  const make = (thresholds, grid, level) => thresholds.flatMap((threshold) => contours().size([nx, ny]).thresholds([level(threshold)])(grid).flatMap((contour) => [{ properties: { band: threshold }, geometry: { type: contour.type, coordinates: project(contour.coordinates) } }]));
+  const project = (geometry) => geometry.map((polygon) => polygon.map((ring) => ring.map(([x, y]) => [lon[0] + (x - 0.5 - pad) * stride * spacing, Math.max(lat[0], Math.min(lastLat, lat[0] + (y - 0.5) * stride * spacing))])));
+  const make = (thresholds, grid, level) => thresholds.flatMap((threshold) => contours().size([width, ny]).thresholds([level(threshold)])(grid).flatMap((contour) => [{ properties: { band: threshold, wrapped: global }, geometry: { type: contour.type, coordinates: project(contour.coordinates) } }]));
   // d3-contour traces the region at or above a level. A relief band wants
   // exactly that (ground at least 100 m up), but a sea-floor band means
   // "at least this deep": contouring the raw grid at -200 would instead
@@ -390,6 +497,10 @@ function reliefBands(z, lon, lat, stride, spacing, smoothSigma = 0) {
   // this layer also carries.
   const negated = values.map((value) => -value);
   return { relief: make(RELIEF_THRESHOLDS, values, (threshold) => threshold), sea_floor: make(SEA_FLOOR_THRESHOLDS, negated, (threshold) => -threshold) };
+}
+
+function worldReliefBands({ z, lon, lat }) {
+  return reliefBands(z, lon, lat, RELIEF_WORLD_STRIDE, RELIEF_WORLD_SPACING, RELIEF_WORLD_SIGMA);
 }
 
 async function readWorldReliefGrid() {
@@ -457,7 +568,7 @@ async function makeLayers() {
     else raw[name] = await readGeoJson(source);
   }
   const worldGrid = await readWorldReliefGrid();
-  const worldBands = reliefBands(worldGrid.z, worldGrid.lon, worldGrid.lat, RELIEF_WORLD_STRIDE, RELIEF_WORLD_SPACING);
+  const worldBands = worldReliefBands(worldGrid);
   const fineGrid = await readFineReliefGrid();
   const fineBands = reliefBands(fineGrid.z, fineGrid.lon, fineGrid.lat, 1, RELIEF_FINE_SPACING, RELIEF_FINE_SIGMA);
 
@@ -474,6 +585,7 @@ async function makeLayers() {
 }
 
 const LINE_LAYERS = new Set(["rivers"]);
+const BAND_LAYERS = new Set(["relief", "sea_floor"]);
 
 function tierPayload(layers, tolerance) {
   const pieces = []; const refs = []; const layerBytes = {}; let featureRef = 0;
@@ -482,17 +594,21 @@ function tierPayload(layers, tolerance) {
     // Land carries coast's own ~1px tolerance, not the ~2px "wide" bands
     // get: its rings are now the only source of the coast stroke (schema 2),
     // so they need to stay as crisp as the old standalone coastline layer.
-    const featureTolerance = tight ? BUILT_UP_TOLERANCE[tolerance] : name === "land" ? COAST_TOLERANCE[tolerance] : TOLERANCE[tolerance];
+    const worldBand = tolerance === "world" && BAND_LAYERS.has(name);
+    const featureTolerance = worldBand ? WORLD_BAND_TOLERANCE : tight ? BUILT_UP_TOLERANCE[tolerance] : name === "land" ? COAST_TOLERANCE[tolerance] : TOLERANCE[tolerance];
     // A ring below this footprint is dropped outright, not just thinned: a
     // point-simplification pass alone keeps every feature no matter how
     // small. The "tight" built-up layer drops only sub-pixel rings; "wide"
     // bands (land included) drop anything under a 2x2-pixel footprint.
-    // World-tier tolerances are calibrated to a whole-globe frame, not the
-    // 10deg/720px locator frame this px-based footprint assumes, so only
-    // the locator tier gets ring-dropping; world keeps point-simplification
-    // only, as before.
-    const minArea = tolerance !== "fine" || LINE_LAYERS.has(name) ? 0 : tight ? featureTolerance * featureTolerance : (2 * featureTolerance) * (2 * featureTolerance);
-    const normalized = featuresFor(features, featureTolerance, minArea, name);
+    // World-tier tolerances are calibrated to a whole-globe frame, where
+    // the same 2x2-pixel footprint would drop real islands and lakes, so
+    // the world tier drops only relief and sea-floor rings, and only under
+    // twice their tolerance squared (about 4 px^2 on the world map): at
+    // that scale a band ring that small is contour noise, drawn as a sliver.
+    const worldBandFloor = worldBand ? 2 * featureTolerance * featureTolerance : 0;
+    const minArea = LINE_LAYERS.has(name) ? 0 : tolerance !== "fine" ? worldBandFloor : tight ? featureTolerance * featureTolerance : (2 * featureTolerance) * (2 * featureTolerance);
+    const kept = tolerance === "world" && name === "rivers" ? features.filter((feature) => (feature.properties?.scalerank ?? 0) <= WORLD_MAX_RIVER_RANK) : features;
+    const normalized = featuresFor(kept, featureTolerance, minArea, name);
     const body = [];
     for (const feature of normalized) {
       body.push(u32(feature.bytes.length), ...feature.bounds.map((x) => i32(Math.round(x * QUANT))), i16(feature.band), feature.bytes);
@@ -574,6 +690,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 export {
   COAST_TOLERANCE,
   encodeFeature,
+  QUANT,
+  featuresFor,
   FINE_PX,
   geometryParts,
   reliefBands,
@@ -585,5 +703,6 @@ export {
   tierPayload,
   tileIndex,
   TOLERANCE,
+  worldReliefBands,
   writePack,
 };

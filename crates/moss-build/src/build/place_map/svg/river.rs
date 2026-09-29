@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
-use super::{serialize_path, Feature, Projection, Writer, FINE_PX};
+use super::{serialize_path, Feature, Projection, Writer, FINE};
 
 /// Stroke width for a river of Natural Earth `scalerank` (the pack keeps it
 /// in the feature's band): 1.6 for the largest rivers, 0.14 thinner per
@@ -31,7 +31,7 @@ impl Writer<'_> {
         write!(self.output, "<g id=\"{}\" data-map-layer=\"rivers\">", self.ids.get("layer-rivers"))
             .expect("writing to String cannot fail");
         for (centi_px, paths) in by_width {
-            if let Some(path) = serialize_path(&paths, false, FINE_PX) {
+            if let Some(path) = serialize_path(&paths, false, FINE) {
                 write!(
                     self.output,
                     "<path d=\"{path}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"{:.2}\" stroke-linecap=\"round\"/>",
