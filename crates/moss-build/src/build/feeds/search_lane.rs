@@ -41,17 +41,26 @@
 //!
 //! # Staleness budget
 //!
-//! Preview search may lag the vault by up to `MAX_DEFER + index_time`. Nothing
-//! else consumes the index, so nothing else observes the lag.
-//! [`settle_for_publish`] is the publish path's sync point, so a deploy never
-//! ships a stale index.
+//! Editors autosave every 5–13 s while typing, so a 2 s `IDLE` window used to
+//! elapse between nearly every pair of saves and re-index on almost all of
+//! them. `IDLE` is now 20 s — longer than the gap between autosaves — so a
+//! typing session collapses to one index pass, roughly `IDLE + index_time`
+//! after the writer stops. `MAX_DEFER` still bounds continuous editing to an
+//! index at least every 2 minutes, so preview search may lag the vault by up
+//! to `MAX_DEFER + index_time` in the worst case. Nothing else consumes the
+//! index, so nothing else observes the lag. [`settle_for_publish`] is the
+//! publish path's sync point, so a deploy never ships a stale index.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+// `Instant`, not `std::time::Instant`: `quiesce`'s `MAX_DEFER` check has to
+// see the same clock its `sleep(IDLE)` races against, or a paused-clock test
+// of the deferral bound would measure real wall time against simulated time.
+use tokio::time::Instant;
 
 use crate::build::feeds::search;
 use crate::build::manifest::{HashBucket, PendingManifest};
@@ -59,12 +68,16 @@ use crate::build::served_path::ServedPath;
 use crate::moss_paths::MossPaths;
 use crate::types::content::SiteHashes;
 
-/// Quiet period a request must survive before the lane indexes.
-const IDLE: Duration = Duration::from_secs(2);
+/// Quiet period a request must survive before the lane indexes. Set longer
+/// than the 5–13 s gap between autosaves, so a typing session collapses to
+/// one index pass after the writer pauses instead of re-indexing after
+/// nearly every save.
+const IDLE: Duration = Duration::from_secs(20);
 
 /// Upper bound on deferral under sustained saving. Without it a vault being
-/// edited continuously would never index at all.
-const MAX_DEFER: Duration = Duration::from_secs(30);
+/// edited continuously would never index at all; continuous editing still
+/// indexes at least this often.
+const MAX_DEFER: Duration = Duration::from_secs(120);
 
 // ---------------------------------------------------------------------------
 // PageSetFp

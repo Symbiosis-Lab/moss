@@ -486,7 +486,7 @@ fn settle_is_inert_when_search_is_disabled() {
 /// A burst of saves must collapse to one index, and a request for a page set
 /// that is already published must run none at all — the no-op save case the
 /// whole of Finding 3 is about.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(start_paused = true)]
 async fn a_burst_of_requests_indexes_once_and_a_no_op_save_indexes_not_at_all() {
     let _serialize = search::lock_index_counter();
     let (_root, mp) = project(PAGE);
@@ -536,6 +536,101 @@ async fn a_burst_of_requests_indexes_once_and_a_no_op_save_indexes_not_at_all() 
     assert!(is_indexing(&mp, "g2"), "the outstanding request stays pinned");
 }
 
+/// Editors autosave every 5–13 s while typing. A typing session's worth of
+/// saves, spaced across that whole range for about a minute, must still
+/// collapse to one index pass — and that pass must not run until the last
+/// save's own `IDLE` quiet period has elapsed, not sooner.
+#[tokio::test(start_paused = true)]
+async fn autosave_cadence_over_a_minute_indexes_once_after_the_last_save() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    let gen = mp.generation_dir("g1");
+    std::fs::create_dir_all(&gen).unwrap();
+    std::fs::write(gen.join("index.html"), PAGE).unwrap();
+    let want = PageSet { fp: PageSetFp(0xa11ce), pages: 1 };
+
+    // Gaps inside the 5-13 s autosave window, summing to about a minute and
+    // each one shorter than `IDLE` — so nothing but the last save's own quiet
+    // period ever lets the debounce complete.
+    let autosave_gaps = [9u64, 11, 7, 13, 5, 8, 7];
+    let before = search::index_build_count();
+    for (i, gap) in autosave_gaps.into_iter().enumerate() {
+        request(&mp, "g1", want);
+        tokio::time::sleep(Duration::from_secs(gap)).await;
+        assert_eq!(
+            search::index_build_count(),
+            before,
+            "save {} inside the autosave cadence must not have triggered an index pass yet",
+            i + 1
+        );
+    }
+    // The last save: nothing else arrives, so its own IDLE window finally runs out.
+    request(&mp, "g1", want);
+    assert_eq!(
+        search::index_build_count(),
+        before,
+        "the last save must not index before its own IDLE window elapses"
+    );
+    tokio::time::sleep(IDLE + Duration::from_secs(2)).await;
+
+    assert_eq!(
+        search::index_build_count() - before,
+        1,
+        "a whole typing session must collapse to exactly one index pass"
+    );
+    let receipt = read_receipt(&mp.index_dir()).expect("the lane published a receipt");
+    assert_eq!(receipt.fp(), want.fp);
+}
+
+/// Continuous editing — a save every 5 s, faster than `IDLE` ever elapses —
+/// must still index no less often than `MAX_DEFER`, or a writer who never
+/// pauses would never see their own edits become searchable.
+#[tokio::test(start_paused = true)]
+async fn continuous_saving_indexes_no_less_often_than_max_defer() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    let gen = mp.generation_dir("g");
+    std::fs::create_dir_all(&gen).unwrap();
+    std::fs::write(gen.join("index.html"), PAGE).unwrap();
+
+    let before = search::index_build_count();
+    let mut last_seen = before;
+    let mut since_last_pass = Instant::now();
+    let mut gaps: Vec<Duration> = Vec::new();
+
+    // 30 saves, 5 s apart: 150 s of continuous editing, each save a real
+    // change (a distinct page-set fingerprint) so a pass that fires has
+    // something new to publish rather than being skipped as already-adopted.
+    for i in 0..30u64 {
+        request(&mp, "g", PageSet { fp: PageSetFp(0xb000 + i), pages: 1 });
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        let seen = search::index_build_count();
+        if seen != last_seen {
+            gaps.push(since_last_pass.elapsed());
+            since_last_pass = Instant::now();
+            last_seen = seen;
+        }
+    }
+
+    assert_eq!(
+        gaps.len(),
+        1,
+        "150 s of continuous saving under a 120 s MAX_DEFER must force exactly one pass, got {:?}",
+        gaps
+    );
+    assert!(
+        gaps[0] <= MAX_DEFER + Duration::from_secs(5),
+        "a pass under continuous saving landed {:?} after the previous one, past what MAX_DEFER allows",
+        gaps[0]
+    );
+    assert!(
+        gaps[0] >= MAX_DEFER - Duration::from_secs(5),
+        "a pass fired at {:?}, well before MAX_DEFER — IDLE must be elapsing on its own",
+        gaps[0]
+    );
+}
+
 /// The lane must **park** between requests. An earlier shape always broke out
 /// of its debounce on the `IDLE` timer and re-read the same request, which on a
 /// healthy folder was a wakeup plus a ~440-entry JSON parse every 2 s for the
@@ -543,7 +638,7 @@ async fn a_burst_of_requests_indexes_once_and_a_no_op_save_indexes_not_at_all() 
 /// pagefind run every ~7 s forever. Both are invisible to a test that counts
 /// index builds, so this counts passes; the failing-index half is covered by
 /// the request below, whose generation does not exist.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(start_paused = true)]
 async fn a_lane_whose_index_cannot_be_published_retries_once_per_request_not_forever() {
     let _serialize = search::lock_index_counter();
     let (_root, mp) = project(PAGE);
