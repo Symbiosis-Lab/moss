@@ -13,7 +13,10 @@
 // Row letters match the desktop file's own numbering, kept for continuity
 // with docs that already cite them:
 //   (a) prod_lines_per_file — files over 800 prod lines (Rust counted
-//                             #[cfg(test)]-aware)
+//                             #[cfg(test)]-aware) need a banded ceiling; any
+//                             file over 1000 additionally needs a written
+//                             disposition in `oversized{}` (same shape as
+//                             row (b)'s, below)
 //   (b) children_per_dir    — direct children per directory (new dirs get a
 //                             <=15 budget; any dir >=30 needs a written
 //                             disposition in `oversized{}`)
@@ -39,6 +42,12 @@
 //                                             row/key that rose between HEAD's
 //                                             and the staged baseline must have
 //                                             a matching trailer in the message
+//   node scripts/ratchet.mjs docs [--check]  regenerate (or, with --check,
+//                                             only verify) ARCHITECTURE.md's
+//                                             Known-debt block from row (a)'s
+//                                             `oversized{}` map; `check` also
+//                                             runs the --check form itself, so
+//                                             an unregenerated block is red
 //
 // `--path` (repeatable) is required by `accept` for a per-path row (a, b): it
 // names exactly which entries the reason covers. A pathless accept that swept
@@ -57,6 +66,20 @@
 // from 276 to ~10,000 lines doing nothing but recording that. The pressure
 // row (a) applies is real (61 files over 800 lines fell to 35 under it); the
 // per-raise JSON bookkeeping was the part not worth its cost.
+//
+// A banded ceiling only ever says "this file may not grow past here" — it
+// never says anyone looked at a file that is already over 1000 lines and
+// judged the size acceptable. That is what `prod_lines_per_file.oversized{}`
+// (self-check 2c, below) is for: a written, one-line reason per file over
+// 1000 prod lines, the same `{path: reason}` shape row (b) already uses for
+// an oversized directory. A file that crosses 1000 with no entry there is
+// red; an entry whose file has since dropped to 1000 lines or under is
+// reported stale (self-check 2c also flags this) until it's removed. This is
+// a disposition tier, not a second ceiling — it never bands and it never
+// raises anything by itself; only a hand-edit of `oversized{}` (reviewed like
+// any other baseline change) adds or removes an entry. ARCHITECTURE.md's
+// "Known debt" list is generated from this map (`docs` command, below) so it
+// reports exactly what the baseline says, never a hand-copied snapshot of it.
 //
 // Baseline: scripts/ratchet-baseline.open.json, next to this script. Its
 // `accepts[]` array is retired as of this comment — git history keeps every
@@ -87,10 +110,20 @@
 //       reason in the baseline's children_per_dir.oversized{} (NORTH-STAR's
 //       "mandatory split" line) — ported because it is row (b)'s own machinery,
 //       not a separate row.
+//   2c. prod_lines_per_file: any file over 1000 prod lines needs a written
+//       reason in the baseline's prod_lines_per_file.oversized{} — ported
+//       from row (b)'s same-shaped check (2b) rather than a fresh one. An
+//       oversized{} entry whose file has dropped to 1000 lines or under, or
+//       no longer exists, is reported stale — fix by deleting the entry.
 //   3. row (a) stale-high: a baseline ceiling >=100 above a file's actual
 //      current lines means banding headroom has drifted into unreviewed
 //      slack — fix with `tighten`. A gap under 100 is ordinary banding
 //      headroom (the ceiling rounds UP to the next hundred), not staleness.
+//   4. ARCHITECTURE.md's generated Known-debt block (see `docs`, above) must
+//      match what prod_lines_per_file.oversized{} says right now — fix with
+//      `node scripts/ratchet.mjs docs`. Skipped when there is no
+//      ARCHITECTURE.md next to this script's repo root (e.g. the test
+//      suite's throwaway trees) — nothing to check against.
 //
 // Counting notes carried over verbatim from the desktop file:
 //   - Rust prod lines = total lines minus brace-matched `#[cfg(test)]`-attributed
@@ -461,6 +494,95 @@ function saveBaseline(baseline) {
 }
 
 // ---------------------------------------------------------------------------
+// ARCHITECTURE.md's generated "Known debt" block — the single reader-facing
+// view of prod_lines_per_file.oversized{}, so the list a stranger reads
+// there can never drift from what the baseline actually disposes (see
+// self-check 4 and the `docs` command). Next to this script's own repo root,
+// same way baselinePath() finds the baseline regardless of --root.
+// ---------------------------------------------------------------------------
+
+function architectureDocPath() {
+  return path.join(SCRIPT_DIR, '..', 'ARCHITECTURE.md');
+}
+
+const KNOWN_DEBT_START = '<!-- ratchet:known-debt:start -->';
+const KNOWN_DEBT_END = '<!-- ratchet:known-debt:end -->';
+
+/**
+ * `{path, lines, reason}` for every prod_lines_per_file.oversized{} entry
+ * whose file is still actually over 1000 lines right now — sorted largest
+ * first, matching the old hand-written list's order. An entry self-check 2c
+ * would flag as stale (file shrank, or is gone) is left out here too: the
+ * doc block and the self-check must agree on what counts as current debt.
+ */
+function knownDebtRows(baseline, current) {
+  const disp = baseline.rows?.prod_lines_per_file?.oversized ?? {};
+  const map = current.prod_lines_per_file?.map ?? {};
+  const rows = [];
+  for (const [p, reason] of Object.entries(disp)) {
+    const n = map[p];
+    if (typeof n !== 'number' || n <= 1000) continue;
+    if (typeof reason !== 'string' || !reason.trim()) continue;
+    rows.push({ path: p, lines: n, reason: reason.trim() });
+  }
+  rows.sort((a, b) => b.lines - a.lines);
+  return rows;
+}
+
+function renderKnownDebtTable(rows) {
+  const lines = ['| File | Prod lines | Disposition |', '|---|---:|---|'];
+  for (const r of rows) lines.push(`| \`${r.path}\` | ${r.lines} | ${r.reason} |`);
+  return lines.join('\n');
+}
+
+/**
+ * ARCHITECTURE.md's text with the block between KNOWN_DEBT_START/END
+ * replaced by a freshly rendered table for `current`'s line counts — or
+ * `null` if `doc` doesn't carry both markers (nothing to splice into).
+ * Used both to write the file (`docs`) and, unmodified, to detect staleness
+ * (self-check 4, `docs --check`): the same render must equal what's on disk.
+ */
+function renderArchitectureDoc(doc, baseline, current) {
+  const startIdx = doc.indexOf(KNOWN_DEBT_START);
+  const endIdx = doc.indexOf(KNOWN_DEBT_END);
+  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return null;
+  const table = renderKnownDebtTable(knownDebtRows(baseline, current));
+  const before = doc.slice(0, startIdx + KNOWN_DEBT_START.length);
+  const after = doc.slice(endIdx);
+  return `${before}\n${table}\n${after}`;
+}
+
+function cmdDocs(root, { check } = {}) {
+  const docPath = architectureDocPath();
+  if (!isFile(docPath)) {
+    console.log(`docs: no ARCHITECTURE.md at ${docPath} — nothing to generate`);
+    return;
+  }
+  const baseline = loadBaseline();
+  const current = collectCurrent(root);
+  const doc = read(docPath);
+  const rendered = renderArchitectureDoc(doc, baseline, current);
+  if (rendered === null) {
+    console.error(`docs: ARCHITECTURE.md is missing the ${KNOWN_DEBT_START} / ${KNOWN_DEBT_END} markers`);
+    process.exit(1);
+  }
+  if (check) {
+    if (rendered !== doc) {
+      console.error("RED ARCHITECTURE.md's Known-debt block is stale — run `node scripts/ratchet.mjs docs` to regenerate it.");
+      process.exit(1);
+    }
+    console.log("OK ARCHITECTURE.md's Known-debt block matches the baseline.");
+    return;
+  }
+  if (rendered === doc) {
+    console.log("ARCHITECTURE.md's Known-debt block is already up to date.");
+    return;
+  }
+  fs.writeFileSync(docPath, rendered);
+  console.log('regenerated ARCHITECTURE.md\'s Known-debt block.');
+}
+
+// ---------------------------------------------------------------------------
 // self-checks
 // ---------------------------------------------------------------------------
 
@@ -517,11 +639,47 @@ function runSelfChecks(root, baseline, current, violations) {
     }
   }
 
+  // 2c. prod_lines_per_file: a file over 1000 prod lines needs a written
+  // disposition in the baseline's prod_lines_per_file.oversized{} — the same
+  // `{path: reason}` shape as row (b)'s oversized{} (2b, above), reused
+  // rather than reinvented. A banded ceiling in `value` only ever says "may
+  // not grow past here"; it is never a signoff that the file is already over
+  // 1000 lines. Weak-reason validation reuses `reasonIsWeak`, the same floor
+  // `accept` holds every ceiling raise to (>=15 chars, not just the row name
+  // or the path being raised) — one validator for what counts as a reason,
+  // not a second one invented for this tier.
+  const pl = baseline.rows?.prod_lines_per_file;
+  if (pl?.armed && current.prod_lines_per_file) {
+    const OVERSIZED_LINE = 1000;
+    const disp = pl.oversized ?? {};
+    for (const [p, n] of Object.entries(current.prod_lines_per_file.map)) {
+      if (n <= OVERSIZED_LINE) continue;
+      const reason = disp[p];
+      if (typeof reason !== 'string' || reasonIsWeak(reason, 'prod_lines_per_file', p)) {
+        violations.push(
+          `(a) prod_lines_per_file: '${p}' has ${n} prod lines > ${OVERSIZED_LINE} — split it, or record why not (and what would retire it) in the baseline's prod_lines_per_file.oversized{}`,
+        );
+      }
+    }
+    for (const p of Object.keys(disp)) {
+      const n = current.prod_lines_per_file.map[p];
+      if (n === undefined) {
+        const abs = path.join(root, ...p.split('/'));
+        violations.push(
+          `self-check(stale): prod_lines_per_file.oversized entry '${p}' is ${fs.existsSync(abs) ? 'now <= 800 prod lines (below row (a)\'s own floor)' : 'gone'} — drop it from oversized{}`,
+        );
+      } else if (n <= OVERSIZED_LINE) {
+        violations.push(
+          `self-check(stale): prod_lines_per_file.oversized entry '${p}' is down to ${n} prod lines (<= ${OVERSIZED_LINE}) — drop it from oversized{}`,
+        );
+      }
+    }
+  }
+
   // 3. row (a) stale-high: a ceiling far above the file's real current size
   // is unreviewed slack, not headroom. A gap under 100 is ordinary banding
   // (the ceiling rounds UP to the next hundred); 100 or more means the file
   // shrank since the ceiling was last set and `tighten` is overdue.
-  const pl = baseline.rows?.prod_lines_per_file;
   if (pl?.armed) {
     for (const [p, ceiling] of Object.entries(pl.value ?? {})) {
       if (typeof ceiling !== 'number') continue; // self-check 1/bad-baseline territory
@@ -533,6 +691,25 @@ function runSelfChecks(root, baseline, current, violations) {
           `self-check(stale-high): prod_lines_per_file '${p}' ceiling ${ceiling} is >=100 above its actual ${lines} lines — run tighten`,
         );
       }
+    }
+  }
+
+  // 4. ARCHITECTURE.md's generated Known-debt block must match what
+  // prod_lines_per_file.oversized{} says right now (see `docs`, below).
+  // Skipped when there is no ARCHITECTURE.md next to this script's repo root
+  // — the test suite's throwaway trees carry no such file, and there is
+  // nothing to check staleness against.
+  const docPath = architectureDocPath();
+  if (isFile(docPath)) {
+    const rendered = renderArchitectureDoc(read(docPath), baseline, current);
+    if (rendered === null) {
+      violations.push(
+        `self-check: ARCHITECTURE.md is missing the ${KNOWN_DEBT_START} / ${KNOWN_DEBT_END} markers — the Known-debt block can't be generated into it`,
+      );
+    } else if (rendered !== read(docPath)) {
+      violations.push(
+        "ARCHITECTURE.md's Known-debt block is stale — run `node scripts/ratchet.mjs docs` to regenerate it from the baseline",
+      );
     }
   }
 }
@@ -1109,6 +1286,7 @@ function main(argv) {
   const only = [];
   let root = process.cwd();
   let range;
+  let checkOnly = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--root') root = path.resolve(args[++i]);
     else if (args[i] === '--path') {
@@ -1118,6 +1296,7 @@ function main(argv) {
       }
       only.push(args[++i]);
     } else if (args[i] === '--range') range = args[++i];
+    else if (args[i] === '--check') checkOnly = true;
     else positional.push(args[i]);
   }
   const cmd = positional[0];
@@ -1127,8 +1306,9 @@ function main(argv) {
   else if (cmd === 'verify-accepts') {
     if (range) cmdVerifyAcceptsRange(root, range);
     else cmdVerifyAccepts(root, positional[1]);
-  } else {
-    console.error('usage: ratchet.mjs <check|tighten|accept|verify-accepts> [args] [--path <file>]... [--range <A>..<B>] [--root <path>]');
+  } else if (cmd === 'docs') cmdDocs(root, { check: checkOnly });
+  else {
+    console.error('usage: ratchet.mjs <check|tighten|accept|verify-accepts|docs> [args] [--path <file>]... [--range <A>..<B>] [--check] [--root <path>]');
     process.exit(1);
   }
 }

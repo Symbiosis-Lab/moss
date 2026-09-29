@@ -543,3 +543,134 @@ describe('verify-accepts --range (item 8)', () => {
     });
   });
 });
+
+// prod_lines_per_file.oversized{} — the 1000-line disposition tier. Same
+// `{path: reason}` shape as children_per_dir.oversized{} (self-check 2b,
+// exercised above under 'row (a) banding' and 'accept --path'), reusing
+// `reasonIsWeak` rather than a second notion of "a real reason".
+
+/** A baseline with a real oversized{} entry for A, for the tests below that
+ *  don't care about its exact wording. */
+const withOversized = (value, oversized) => ({
+  ...fullBaseline(value),
+  prod_lines_per_file: { letter: 'a', disposition: 'permanent', armed: true, value, oversized },
+});
+
+describe('prod_lines_per_file.oversized{} (the 1000-line tier)', () => {
+  it('check is red for a file over 1000 prod lines with no oversized{} entry', () => {
+    within(tree({ [A]: 1001 }, fullBaseline({ [A]: 1100 })), (t) => {
+      const red = t.run('check');
+      assert.notEqual(red.status, 0);
+      assert.match(red.stdout, /'crates\/c\/src\/a\.rs' has 1001 prod lines > 1000/);
+      assert.match(red.stdout, /oversized\{\}/);
+    });
+  });
+
+  it('check is green for the same file once oversized{} carries a real reason', () => {
+    within(
+      tree({ [A]: 1001 }, withOversized({ [A]: 1100 }, { [A]: 'grew past 1000 lines for a real reason, retires once X ships' })),
+      (t) => {
+        const ok = t.run('check');
+        assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+      },
+    );
+  });
+
+  it('a file at exactly 1000 lines needs no oversized{} entry — the tier is strictly over 1000', () => {
+    within(tree({ [A]: 1000 }, fullBaseline({ [A]: 1000 })), (t) => {
+      const ok = t.run('check');
+      assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+    });
+  });
+
+  it('check reuses reasonIsWeak: a weak oversized{} reason counts as no disposition at all', () => {
+    within(tree({ [A]: 1001 }, withOversized({ [A]: 1100 }, { [A]: 'wip' })), (t) => {
+      const red = t.run('check');
+      assert.notEqual(red.status, 0);
+      assert.match(red.stdout, /'crates\/c\/src\/a\.rs' has 1001 prod lines > 1000/);
+    });
+  });
+
+  it('an oversized{} entry whose file dropped back to <=1000 lines is reported stale, not silently kept', () => {
+    within(
+      tree({ [A]: 950 }, withOversized({ [A]: 1000 }, { [A]: 'used to be over 1000; no longer true' })),
+      (t) => {
+        const red = t.run('check');
+        assert.notEqual(red.status, 0);
+        assert.match(red.stdout, /oversized entry 'crates\/c\/src\/a\.rs' is down to 950 prod lines/);
+      },
+    );
+  });
+
+  it('an oversized{} entry for a file that shrank below the 800 floor entirely is also reported stale', () => {
+    within(
+      tree({ [A]: 700 }, withOversized({}, { [A]: 'used to be over 1000; long since rewritten' })),
+      (t) => {
+        const red = t.run('check');
+        assert.notEqual(red.status, 0);
+        assert.match(red.stdout, /oversized entry 'crates\/c\/src\/a\.rs' is now <= 800 prod lines/);
+      },
+    );
+  });
+});
+
+describe('docs — ARCHITECTURE.md Known-debt block', () => {
+  const START = '<!-- ratchet:known-debt:start -->';
+  const END = '<!-- ratchet:known-debt:end -->';
+
+  function withDoc(t) {
+    const p = path.join(t.root, 'ARCHITECTURE.md');
+    fs.writeFileSync(p, `# Architecture\n\n## Known debt\n\n${START}\n${END}\n`);
+    return p;
+  }
+
+  it('docs renders a table row per oversized{} entry that is still actually over 1000', () => {
+    within(
+      tree({ [A]: 1001 }, withOversized({ [A]: 1100 }, { [A]: 'grew past 1000 lines for a real reason, retires once X ships' })),
+      (t) => {
+        const docPath = withDoc(t);
+        const r = t.run('docs');
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        const doc = fs.readFileSync(docPath, 'utf8');
+        assert.match(doc, /crates\/c\/src\/a\.rs/);
+        assert.match(doc, /1001/);
+        assert.match(doc, /grew past 1000 lines for a real reason/);
+      },
+    );
+  });
+
+  it('docs --check reports stale without writing, and check itself fails the same way', () => {
+    within(
+      tree({ [A]: 1001 }, withOversized({ [A]: 1100 }, { [A]: 'grew past 1000 lines for a real reason, retires once X ships' })),
+      (t) => {
+        const docPath = withDoc(t);
+        assert.equal(t.run('docs').status, 0);
+        assert.equal(t.run('check').status, 0, 'block is fresh right after docs, so check must be green');
+
+        // Drift: hand-edit the generated block after the fact, as if the
+        // baseline had changed without anyone re-running `docs`.
+        fs.writeFileSync(docPath, fs.readFileSync(docPath, 'utf8').replace('1001', '1'));
+        const drifted = fs.readFileSync(docPath, 'utf8');
+
+        const checkOnly = t.run('docs', '--check');
+        assert.notEqual(checkOnly.status, 0);
+        assert.match(checkOnly.stderr, /stale/);
+        assert.equal(fs.readFileSync(docPath, 'utf8'), drifted, 'docs --check must not write');
+
+        const red = t.run('check');
+        assert.notEqual(red.status, 0);
+        assert.match(red.stdout, /Known-debt block is stale/);
+      },
+    );
+  });
+
+  it('a repo tree with no ARCHITECTURE.md is not a check failure — nothing to compare against', () => {
+    within(
+      tree({ [A]: 1001 }, withOversized({ [A]: 1100 }, { [A]: 'grew past 1000 lines for a real reason, retires once X ships' })),
+      (t) => {
+        const ok = t.run('check');
+        assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+      },
+    );
+  });
+});
