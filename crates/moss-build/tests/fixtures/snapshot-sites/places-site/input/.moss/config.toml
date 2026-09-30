@@ -2,6 +2,7 @@ schema_version = 6
 
 [site]
 lang = "en"
+locator = "align-right"
 
 [terms.places]
 type = "place"

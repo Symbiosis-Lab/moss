@@ -2,6 +2,22 @@
 
 ---
 
+## evening
+
+# Evening
+
+Declares its own `location:` — keeps it, never the work's.
+
+---
+
+## morning
+
+# Morning
+
+No `location:` of its own — inherits the work's place.
+
+---
+
 ## nara diary
 
 # Nara Diary
@@ -38,6 +54,14 @@ Claims the `places/kyoto` page, so its breadcrumb and children list render here 
 
 ---
 
+## Kyoto Walk
+
+# Kyoto Walk
+
+A self-named work. Its companions in this folder inherit this place unless they declare their own.
+
+---
+
 ## Nara
 
 ---
@@ -69,4 +93,8 @@ A roll-up-only ancestor, reached only through the gazetteer's parent chain:
 ---
 
 ## posts
+
+---
+
+## works
 

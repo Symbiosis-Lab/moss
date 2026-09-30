@@ -10,8 +10,10 @@ Declares one place-typed kind. Kyoto (`kyoto.md`) claims its own term page; Osak
 - Japan's own generated page, created purely by the roll-up, listing both Kyoto and Osaka as children;
 - the automatic place line under the byline on every article that names a place, correctly linked;
 - Osaka's missing `lng` and Nara's invalid `precision` each firing a diagnostic (counted by `cli_output_tests.rs`'s `gazetteer_diagnostics_count_as_cli_problems`) without failing the build, and Osaka's row still getting its breadcrumb and roll-up despite having no coordinates;
-- no `lat`/`lng` digit sequence anywhere in `expected/` — this slice renders no coordinates at all.
+- no raw `lat`/`lng` decimal-degree digit sequence anywhere in `expected/` — a place's precision is its privacy, so nothing here ever prints the exact coordinates a page's `location:` resolves to, on the byline place line or on a rendered locator map alike.
 - the homepage body embeds Osaka's generated term page (`![[/places/osaka/]]`) and Japan's roll-up-only one (`![[/places/japan/]]`) as listings — both are pseudo-folders with no real directory behind them, reached only through `also_in` membership derived at build time, not through a real folder.
+- a work (`works/kyoto-walk/`, home page `kyoto-walk.md`, self-named) declaring `location: Kyoto`: its companion with no `location:` of its own (`morning.md`) inherits Kyoto and shows up on Kyoto's place page, while its companion with its own `location: Osaka` (`evening.md`) keeps Osaka.
+- `[site] locator = "align-right"`: the inherited-Kyoto companion (`morning.md`) renders the same `moss-place-locator` map any authored `location: Kyoto` page would — an inherited place is a real one for every consumer, not a lesser copy. Osaka's own pages (`evening.md`, `posts/osaka-notes.md`) render no locator at all, since Osaka's gazetteer row is missing `lng` (see the diagnostic above) — unrelated to inheritance, the same as any other place with incomplete coordinates.
 
 See `basic-site/README.md` for the regeneration procedure. Regenerate this fixture alone with:
 

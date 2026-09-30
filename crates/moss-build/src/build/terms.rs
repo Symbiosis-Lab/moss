@@ -32,6 +32,9 @@ pub use kinds::{term_kinds, TermKind, BUILTIN_DEFAULT_FIELDS};
 // (what the editor asks for) than derivation does.
 mod editor_read;
 pub use editor_read::{list_vault_terms_in, KindTerms, VaultTerms};
+// Location inheritance for a work's companions — the first thing
+// `derive_terms` does below. Sibling file, same reasoning as `rollup.rs`.
+mod inherit;
 // The gazetteer's `parent` links, attached to place-typed kinds at the
 // config stage — the only place the gazetteer type crosses into the terms
 // machinery. `derive_terms` itself never reads it.
@@ -300,6 +303,8 @@ pub fn claim_field_key(field: &str) -> Option<&'static str> {
 /// Derive term memberships and claims from a build's kinds table. Mutates
 /// documents in place:
 ///
+/// - first, [`inherit::inherit_work_locations`] fills a blank companion
+///   `location:` from its work's self-named home, so what follows sees it;
 /// - every field value of every kind pushes its pseudo-folder key into the
 ///   doc's `also_in` slot (skipping the doc that claims that very term, so a
 ///   term page does not list itself), and records the member's `url_path`
@@ -316,6 +321,7 @@ pub fn claim_field_key(field: &str) -> Option<&'static str> {
 /// author page for someone with no published works yet is valid and lists
 /// nothing).
 pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> TermIndex {
+    inherit::inherit_work_locations(documents);
     let mut index = TermIndex::default();
 
     // Pass 1: claims. Resolve every *_page claim to its term key so pass 2
