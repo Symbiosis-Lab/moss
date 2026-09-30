@@ -461,17 +461,58 @@ fn strip_markdown_inline_handles_underscore_emphasis_without_corrupting_snake_ca
 
 #[test]
 fn test_extract_description_truncates() {
-    // Content longer than 160 chars to ensure truncation
+    // The first sentence alone (148 chars) fits the 160-char budget; the
+    // second does not. The result is the first sentence VERBATIM, with no
+    // added ellipsis — it is a complete sentence, not a cut one. Before
+    // sentence-boundary truncation, this content was hard-cut at char 160,
+    // landing mid-word in the second sentence and always ending "...".
     let content = "This is a very long description that should be truncated at a word boundary to ensure it fits within the maximum length limit for meta descriptions. Adding more text here to exceed the limit.";
 
     let desc = extract_description(content, true);
 
-    assert!(
-        desc.len() <= 163,
-        "Description too long: {} chars",
-        desc.len()
-    ); // 160 + "..."
-    assert!(desc.ends_with("..."), "Should end with ellipsis: {}", desc);
+    assert_eq!(
+        desc,
+        "This is a very long description that should be truncated at a word boundary to ensure it fits within the maximum length limit for meta descriptions."
+    );
+    assert!(!desc.contains('…'), "a whole sentence needs no ellipsis: {}", desc);
+}
+
+#[test]
+fn test_extract_description_keeps_two_sentences_when_both_fit() {
+    let content = "Short one. Also short.";
+    let desc = extract_description(content, true);
+    assert_eq!(desc, "Short one. Also short.");
+}
+
+#[test]
+fn test_extract_description_single_sentence_longer_than_budget_gets_one_ellipsis() {
+    // One sentence, no period until the very end, well over 160 chars: the
+    // "whole sentence" rung never has anything to offer, so this falls back
+    // to a hard cut at the last word boundary within budget plus a single
+    // "…" — never the old three-dot "...".
+    let content = "This is a very long first paragraph that goes on and on with many words to ensure it exceeds the one hundred and sixty character limit that we impose for meta descriptions in summary cards.";
+    let desc = extract_description(content, true);
+    assert!(desc.ends_with('…'), "should end with a single ellipsis: {}", desc);
+    assert!(!desc.ends_with("...."), "never the old three-dot form: {}", desc);
+    assert!(desc.chars().count() <= 161, "too long: {} chars", desc.chars().count());
+}
+
+#[test]
+fn test_extract_description_chinese_sentence_boundary() {
+    // No spaces at all; the first 。-terminated sentence is short and must
+    // come back whole, with the second sentence dropped rather than the
+    // pair being hard-cut mid-character. The second sentence is padded well
+    // past the 160-char budget so the pair as a whole genuinely needs
+    // truncating (a too-short fixture here would make this test pass for
+    // the wrong reason: nothing to truncate at all).
+    let first = "這是第一句話。";
+    let filler = "用來確保如果兩句都放進去會超過一百六十個字的上限";
+    let second = format!("這是第二句比較長的話，{}。", filler.repeat(6));
+    let content = format!("{first}{second}");
+    assert!(content.chars().count() > 160, "fixture must exceed the budget");
+
+    let desc = extract_description(&content, true);
+    assert_eq!(desc, first);
 }
 
 #[test]
@@ -712,9 +753,9 @@ fn test_extract_description_truncates_long_first_paragraph() {
     let long_para = "This is a very long first paragraph that goes on and on with many words to ensure it exceeds the one hundred and sixty character limit that we impose for meta descriptions in summary cards.";
     let content = format!("{}\n\nSecond paragraph.", long_para);
     let desc = extract_description(&content, true);
-    assert!(desc.ends_with("..."), "Should end with ellipsis: {}", desc);
+    assert!(desc.ends_with('…'), "Should end with a single ellipsis: {}", desc);
     assert!(
-        desc.chars().count() <= 163,
+        desc.chars().count() <= 161,
         "Too long: {} chars",
         desc.chars().count()
     );

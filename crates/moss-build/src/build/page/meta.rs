@@ -464,7 +464,7 @@ pub fn build_schema_website(
 /// and deletes characters the published page displays. Same rule, same
 /// reason as `newsletter::footnote_numbers`.
 pub fn extract_description(content: &str, math: bool) -> String {
-    truncate_at_word_boundary(&first_paragraph_excerpt(content, true, math).plain, 160)
+    truncate_at_boundary(&first_paragraph_excerpt(content, true, math).plain, 160)
 }
 
 /// Same selection as [`extract_description`] — the identical first-paragraph
@@ -478,7 +478,7 @@ pub fn extract_description(content: &str, math: bool) -> String {
 /// `render_description_html`'s unmatched-delimiter handling shows it as
 /// literal text rather than breaking.
 pub fn extract_description_markdown(content: &str, math: bool) -> String {
-    truncate_at_word_boundary(&first_paragraph_excerpt(content, true, math).markdown, 160)
+    truncate_at_boundary(&first_paragraph_excerpt(content, true, math).markdown, 160)
 }
 
 /// Extract a page's opening prose from markdown content, both plain (inline
@@ -1359,36 +1359,92 @@ pub fn render_description_html(text: &str) -> String {
 /// block now yields an empty preview instead of leaking `+++`/`:::` into
 /// the `.moss-preview-popup` excerpt.
 pub fn extract_preview(content: &str, max_chars: usize, math: bool) -> String {
-    truncate_at_word_boundary(&first_paragraph_excerpt(content, false, math).plain, max_chars)
+    truncate_at_boundary(&first_paragraph_excerpt(content, false, math).plain, max_chars)
 }
 
-/// Truncate text at word boundary (UTF-8 safe)
-fn truncate_at_word_boundary(text: &str, max_chars: usize) -> String {
-    // Find byte index at max_chars characters (not bytes)
+/// The byte offset right after each sentence-ending mark in `text`, in
+/// order: ASCII `.`/`!`/`?` count only when followed by whitespace or the
+/// end of the text (so "e.g." or "3.14" mid-sentence is not mistaken for a
+/// boundary); the CJK full-width marks `。`/`！`/`？` always count, since CJK
+/// prose does not put a space after them. [`truncate_at_boundary`]'s only
+/// caller for this.
+fn sentence_end_offsets(text: &str) -> Vec<usize> {
+    let mut offsets = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    while let Some((byte_i, ch)) = chars.next() {
+        let is_boundary = match ch {
+            '。' | '！' | '？' => true,
+            '.' | '!' | '?' => chars.peek().is_none_or(|&(_, next)| next.is_whitespace()),
+            _ => false,
+        };
+        if is_boundary {
+            offsets.push(byte_i + ch.len_utf8());
+        }
+    }
+    offsets
+}
+
+/// Cut `text` — already established to be longer than `max_chars` — at the
+/// last word boundary within budget (a space, or, for CJK prose which has
+/// none, a comma-like pause: `，`/`、`/`,`) and mark the cut with a single
+/// "…". Falls back to a bare character cut when no such pause falls at or
+/// past HALF the budget: backing up to a much earlier pause would throw away
+/// most of the excerpt to avoid a mid-word/mid-clause cut, and a hard cut is
+/// the smaller wrong at that point.
+fn cut_with_ellipsis(text: &str, max_chars: usize) -> String {
     let truncate_byte_idx = text
         .char_indices()
         .nth(max_chars)
         .map(|(idx, _)| idx)
         .unwrap_or(text.len());
+    let truncated = text.get(..truncate_byte_idx).unwrap_or(text);
 
-    if truncate_byte_idx >= text.len() {
+    let boundary_end = truncated
+        .rmatch_indices(|c: char| matches!(c, ' ' | '，' | '、' | ','))
+        .next()
+        .map(|(i, m)| i + m.len());
+
+    match boundary_end {
+        Some(i) if truncated[..i].chars().count() * 2 >= max_chars => {
+            format!("{}…", truncated[..i].trim_end())
+        }
+        _ => format!("{}…", truncated.trim_end()),
+    }
+}
+
+/// Truncate `text` at a SENTENCE boundary — the whole first sentence, and
+/// each one after it that still fits, taken verbatim with no added marker —
+/// falling back to [`cut_with_ellipsis`]'s word/pause-boundary hard cut only
+/// when even the first sentence alone is longer than `max_chars`.
+///
+/// Every excerpt-truncating caller in this file shares this one budget-and-
+/// boundary policy: `extract_description`'s fixed 160 chars,
+/// `extract_description_markdown`'s same 160 read off the raw-markdown twin
+/// of the same excerpt, and `extract_preview`'s caller-chosen tooltip
+/// length. Before this, a fixed character cut took everything up to N chars
+/// regardless of where a sentence ended, so a description whose first
+/// sentence was itself well under budget still lost its second sentence
+/// mid-clause and always ended "..." — a real card once read "...as the
+/// city's" instead of quoting its short opening sentence whole.
+fn truncate_at_boundary(text: &str, max_chars: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= max_chars {
         return text.to_string();
     }
-
-    // Find last space before truncation point. `truncate_byte_idx` came from
-    // `char_indices`, so it is a char boundary; `get` says so to the compiler.
-    //
-    // Backing up to a space only avoids cutting a word in half — it must not
-    // cost most of the excerpt. Chinese and Japanese prose carries no spaces
-    // at all, so the nearest space can be the one word of Latin text near the
-    // start (or the join between an opening and the paragraph read on into
-    // above), and honouring it would throw away everything after it. Below
-    // half the budget, take the hard character cut instead: mid-word is a
-    // smaller wrong than mid-sentence.
-    let truncated = text.get(..truncate_byte_idx).unwrap_or(text);
-    match truncated.rsplit_once(' ') {
-        Some((head, _)) if head.chars().count() * 2 >= max_chars => format!("{}...", head),
-        _ => format!("{}...", truncated),
+    let mut chosen_end = None;
+    for end in sentence_end_offsets(text) {
+        if text[..end].chars().count() <= max_chars {
+            chosen_end = Some(end);
+        } else {
+            break;
+        }
+    }
+    match chosen_end {
+        Some(end) => text[..end].trim().to_string(),
+        // No sentence fits whole — including the case where `text` has no
+        // recognized sentence boundary at all, so `chosen_end` never moves
+        // past `None`.
+        None => cut_with_ellipsis(text, max_chars),
     }
 }
 
