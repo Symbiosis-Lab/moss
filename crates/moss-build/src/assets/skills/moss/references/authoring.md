@@ -85,6 +85,8 @@ Example — a warm "lamplight" dark palette:
 }
 ```
 
+A `logo:` image is not exempt from this. Dark ink on a transparent background disappears against a dark `--moss-color-bg`, and moss ships no dark-mode handling of its own for it — the nav logo is a plain `<img class="site-logo">`, so the fix is ordinary CSS scoped to `:root[data-theme="dark"] .site-logo {}`, the same selector pattern as any other dark-mode override. Two ways: point at a second file (`content: url("logo-dark.svg");`), or recolour the one file with a filter (`filter: invert(1);`, right when the mark is a single flat colour on transparency).
+
 ## Quiet chrome
 
 moss splits "accent" in two: `--moss-color-accent` is the content accent (links
@@ -130,6 +132,12 @@ Consequences you can rely on:
 - For JS that needs theme assets, moss injects `window.mossTheme.base` (the
   `/_moss/theme/` URL) before your `.moss/theme/script.js` runs. Resolve assets
   with `new URL("asset.woff2", mossTheme.base)`.
+
+## Site icon
+
+Drop `assets/favicon.svg` (or `.png`/`.ico`) at the project root for the site's own tab icon; without one, moss ships its own default mark rather than leaving the tab blank. An SVG favicon — yours or moss's default — is rasterized automatically into `assets/favicon-16.png`, `assets/favicon-32.png`, and `assets/favicon-180.png` (the last doubles as the apple-touch-icon). A `.png`/`.ico` favicon is not copied byte for byte: it passes through moss's ordinary image optimizer like any other picture on the site, so the served file is often smaller than the one you dropped in — but unlike the SVG path, it is never resized or multiplied into the 16/32/180 icon set, only optimized at its own single size.
+
+The SVG must be pure vector, with no embedded bitmap. moss's SVG renderer ships without raster-image decoding, so an `<image>` element inside the SVG — a logo exported as "SVG" that actually wraps a PNG or JPEG — renders as nothing: the icon comes out blank (or missing whatever part of it was the raster), with only a warning in the build log to say why.
 
 ## A source-owned HTML homepage
 
@@ -207,7 +215,11 @@ Each entry carries `example_markdown`, which is the invocation moss itself tests
 
 `:::hero {.plate}` (2026-09-11) is a moss default, not a per-site class to style: it renders the hero image whole — never cropped, never enlarged past the resolution it was delivered at, shrunk to fit the column instead. Reach for it over a plain hero whenever the image's own shape, not the page layout, should decide how large it appears — an artwork, manuscript page, or photograph reproduction where cropping would cut off part of the object, and especially a wide or tall outlier (a handscroll, a long strip) that a viewport-relative `100vw` sizing would otherwise fetch too small and stretch blurry. A plain `:::hero` (or `:::hero {caption="…"}`, which already avoids cropping but still bounds the frame at the default height cap) stays right for a banner meant to fill its slot.
 
+The same rule extends past physical-object reproductions: any image that carries its own lettering, or whose full frame is the point rather than a subject inside it — a poster, a flyer, a book cover, a chart — is a plate too, because a crop can cut off a headline or an axis exactly as it would a manuscript's edge. Overlay text (written as markdown inside the `:::hero {…} … :::` fence) belongs on a photograph with calm, uncluttered ground for it to sit on; a plate is never cropped, so overlay text lands wherever that particular image's own content happens to fall, and often collides with lettering already there. Give a plate's own text a `caption="…"` instead — moss places it below the image, in the reading column, never over it, the same slot a captioned (non-plate) hero uses. There is no documented way to set a plate beside running text on a wide screen; the caption below it is the only placement moss supports.
+
 `:::grid N {scroll}` (2026-09-21) keeps a grid's row on one line and lets the reader drag it sideways instead of it wrapping — `N` becomes how many cards fit in view at once, with a slice of the next one showing as the cue to keep going. Reach for it on a "related articles" or "more like this" strip where reading order matters more than seeing every card at once; add `label="…"` to give the row an accessible name when the surrounding heading doesn't already say what it is. Skip it when every card must be visible without scrolling and use the plain wrapping grid instead.
+
+A `:::grid` cell holding nothing but a page reference becomes one of two different things depending on the `!`. `![[page.md]]` is a transclusion — it inlines that page's markdown as the cell's own content, same as a partial anywhere else in a body. `[[page]]` or `[[page|Custom Title]]`, alone in the cell, becomes a **card** instead: the page's own cover, title and description, styled the same way a folder listing cards its children. The cover comes from the page's `cover:` frontmatter (an empty box if it has none), the title is the page's own (`|Custom Title` overrides it), and the text is the page's `description:` field only — never an excerpt pulled from the body, so a page with no `description:` set shows a card with no text under its title. A card's cover is cropped to a fixed box by default (`4 / 3`), same as any other photograph; a cover with lettering or a full-frame subject wants to be shown whole instead, which is a scope override (rung 4), not a per-card frontmatter switch — set `--moss-card-cover-ratio` to the image's own ratio and `--moss-card-cover-fit: contain` on `.moss-card-cover` (or a narrower scope) rather than cropping it.
 
 ### Partials
 
@@ -309,11 +321,15 @@ children: "[[2026]]"
 children_limit: 10
 ```
 
-The automatic "More" link only appears on a **cross-folder** feed that
-actually truncated something. A `children_limit` on a page listing its own
-children truncates silently with no "More" link, because linking back to the
-page you are already on is meaningless. So always name the target folder when
-you want the link to appear.
+The automatic "More" link only appears on a **cross-folder** feed that actually truncated something. A `children_limit` on a page listing its own children truncates silently with no "More" link, because linking back to the page you are already on is meaningless. So always name the target folder when you want the link to appear.
+
+### Moved and removed pages
+
+Every page carries a `uid:`, and each build compares that uid's current address against the one recorded at the last deploy — an address that changed gets an automatic redirect, a small page at the old address forwarding to the new one. Never hand-write one of these: it isn't tracked as a redirect, so moss cannot retire it later, and a stray one at the site root gets crawled and can leak into the sitemap. The comparison is against what was actually *deployed*, so a first port with no deploy on record yet gets no redirect for anything renamed before that first publish — only a move made after at least one deploy is caught automatically.
+
+A page you removed, or merged into a section of another, leaves nothing for moss to compare uids against, so add the forwarding link yourself: edit `.moss/data/redirects.json`, a flat JSON object mapping the old address to the new one, neither with a leading slash — `{"old-page/": "new-page/#section"}` (a fragment on the target works). This takes effect on an ordinary local `moss build`; no deploy is required for a hand-written entry to start forwarding. If a real page now exists at the old address, moss leaves it alone — the redirect is dropped rather than overwriting it.
+
+A site kept in git must un-ignore this one file. moss's own `.moss/.gitignore` excludes `.moss/data/` as `data/*`, deliberately the one line in that file spelled so a single file underneath can still be re-included — but nothing adds that exception for you, so add `!data/redirects.json` on its own line beneath `data/*`, or `git add -f` the file once. Left ignored, an ordinary `git add .` silently drops it: a fresh clone then has no redirect history at all, so every earlier hand-declared forward for a removed or merged page is gone — there is no `uid:` for moss to reconstruct it from — while a rename since the last deploy still gets caught fresh, since the deploy record itself is tracked in git.
 
 ## Multilingual sites
 
@@ -343,12 +359,9 @@ second: a `ja/` tree publishes correctly and is dressed in another language's
 chrome. Neither answer is a bug, but reading the first as the second is the way
 to be surprised by the result.
 
-`translationKey:` links two files as translations when their filenames
-differ. Files with matching stems (`about.md` and `about.zh-hans.md`) pair
-automatically without it.
+`translationKey:` links two files as translations when their filenames differ. Files with matching stems (`about.md` and `about.zh-hans.md`) pair automatically without it.
 
-`[site] lang` in `.moss/config.toml` names the **default edition**: the one
-that publishes at `/`, while every other edition publishes under `/<code>/`.
+`[site] lang` in `.moss/config.toml` names the **default edition**: the one that publishes at `/`, while every other edition publishes under `/<code>/`.
 
 Read that as naming the edition, not as choosing which files land at the root.
 Directory structure decides that — anything outside a language-code directory

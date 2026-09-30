@@ -16,10 +16,7 @@ The table is where the desktop app keeps its logs; `moss build` logs to stderr i
 moss build <folder> --no-plugins
 ```
 
-If the problem disappears, a plugin is the cause. There is no CLI switch for
-one plugin at a time — `--no-plugins` is all-or-nothing — so narrow it from the
-build output, which names each plugin as it runs, or turn individual plugins
-off in Settings.
+If the problem disappears, a plugin is the cause. There is no CLI switch for one plugin at a time — `--no-plugins` is all-or-nothing — so narrow it from the build output, which names each plugin as it runs, or turn individual plugins off in Settings. The flag skips plugin hooks only — image and video conversion still run regardless, so a build that's still slow, or still mis-encoding media, with `--no-plugins` on isn't a plugin problem.
 
 ## Viewing the built output
 

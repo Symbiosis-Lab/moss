@@ -33,12 +33,9 @@ Inspect built HTML under `.moss/build.nosync/current/` (the active frozen genera
 the `.css` files under its `_moss/` are minified build output — use
 `moss describe --css <selector>` instead of reading them.
 
-**Check your work.** `moss build` exits 0 even when it reported problems; add
-`--strict` to make warnings fail the build. `moss list [--json]` is the
-inventory of what actually got published — url, kind, date, and the LANG column
-that confirms a new language tree registered. Use `moss rename <old> <new>` for
-renames: it rewrites every `[[wikilink]]` and `[text](link)` project-wide, which
-hand-editing will not.
+**Check your work.** `moss build` exits 0 even when it reported problems; add `--strict` to make warnings fail the build. `moss list [--json]` is the inventory of what actually got published — url, kind, date, and the LANG column that confirms a new language tree registered. Use `moss rename <old> <new>` for renames: it rewrites every `[[wikilink]]` and `[text](link)` project-wide, which hand-editing will not.
+
+**Before a restructure, save a version.** Moving pages, rewriting the theme, or deleting sections is safer with a named snapshot first: `moss history --save "before restructuring the nav"`. Both `--save` and `--restore` build the whole site first — the same build `moss deploy` runs, minus the publish — so a build that fails refuses to save or restore, and a slow build makes either one just as slow. `moss history [--json]` lists what's saved, newest first — every landed publish gets one automatically, `--save` adds one on demand. `moss history <path> --restore --at <id> [--copy]` brings back one page (`--copy` writes it alongside the current file instead of overwriting it); `moss history --restore --at <id> --yes` brings back the whole site (`--yes` is required, since it can move files to the Trash). A restore saves its own version of the current state first, so a restore is itself undoable the same way. `<id>` is a version's id from the timeline (or an unambiguous prefix), and `--json` includes it. This history lives in `.moss/history/` inside the site folder itself, gitignored and not part of the published output — being inside the folder, it travels along with whatever sync the site already uses, the same as `.moss/config.toml`.
 
 ## First, get the live vocabulary
 
@@ -78,12 +75,26 @@ declarations that fight each other.
 
 ## Canonical project shape and naming convention
 
-- **A folder is a site (or a section); its name is the title.** `my-blog/` →
-  "My Blog". Name the folder as you want the title to appear.
+- **A folder is a site (or a section); its name is the title.** Name the
+  folder as you want the title to appear — moss does not case it for you.
+  Add `logo:` on a home page (the site root's, or a language edition's own)
+  to put a mark before that name in the nav — on every page, every
+  language; `logo:` anywhere else in the site is read by nothing.
 - **The filename IS the title** (Obsidian-style). `My First Essay.md` → title
-  "My First Essay". Do **not** also write a body `# Heading` repeating the
-  title, and do **not** add a `title:` frontmatter field — either causes a
-  duplicated or overridden title.
+  "My First Essay". The only transform is hyphens and underscores becoming
+  spaces — nothing is capitalized or reworded, so `about.md` titles "about"
+  and `our-mission.md` titles "our mission", not "About" or "Our Mission" (a
+  folder's own name goes through the same transform: `my-blog/` titles "my
+  blog", not "My Blog"). Add `title:` whenever the title you want differs from
+  that result even slightly; it is redundant, and safe to omit, only when it
+  matches the filename's derived title character for character. Do **not**
+  also write a body `# Heading` repeating the title — it renders as well, so
+  the title would show twice. One exception: a `:::hero` block at the very
+  top of the body takes over the title slot itself, so a heading written
+  inside it does not duplicate anything. Nothing else does this — a
+  `:::grid` or any other block opening the page still leaves the
+  auto-injected title in place, so a heading after it shows the title twice
+  the same as if the grid weren't there.
 - **Name files in their own language; pin a non-ASCII URL.** The
   filename-as-title rule lets a localized name title the page for you —
   `隐私.md` → "隐私". When the name isn't ASCII, add `url:` to keep the public
