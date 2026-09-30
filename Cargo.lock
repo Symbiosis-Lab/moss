@@ -2835,6 +2835,7 @@ dependencies = [
  "core-foundation-sys",
  "dirs",
  "ed25519-dalek",
+ "ego-tree",
  "fast_qr",
  "filetime",
  "flate2",

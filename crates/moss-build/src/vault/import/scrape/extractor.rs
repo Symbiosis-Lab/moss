@@ -22,7 +22,16 @@
 //!    10 * paragraphs + commas + 15 if class hints at content + link-density
 //!    penalty`.
 //!
-//! 3. **Return the highest-scoring element's inner HTML.** Callers feed it
+//! 3. **Resolve empty anchors** directly on the [`scraper`] tree already
+//!    built for step 2 — an `<a href>` whose rendered content is empty (icon
+//!    fonts, CSS background-image thumbnails, JS-filled slots) survives an
+//!    HTML→Markdown pass as a bare `[](url)`. An `aria-label`/`title` on
+//!    such an anchor becomes its visible text instead; otherwise the anchor
+//!    is dropped. A fragment target (`<a id>`/`<a name>`, no `href`) is
+//!    never touched. Deciding this on the already-parsed tree, keyed by
+//!    each anchor's own node id, needs no second pass over the HTML.
+//!
+//! 4. **Return the highest-scoring element's inner HTML.** Callers feed it
 //!    to [`htmd`] for markdown conversion.
 //!
 //! See [defuddle.ts:1139-1171](https://github.com/kepano/defuddle/blob/main/src/defuddle.ts#L1139)
@@ -30,8 +39,10 @@
 //! for `ENTRY_POINT_ELEMENTS`; [removals/scoring.ts](https://github.com/kepano/defuddle/blob/main/src/removals/scoring.ts)
 //! for the scoring rules.
 
+use ego_tree::NodeId;
 use lol_html::{element, HtmlRewriter, Settings};
-use scraper::{ElementRef, Html, Selector};
+use scraper::node::Text;
+use scraper::{ElementRef, Html, Node, Selector};
 
 /// Extract an article's main content from raw HTML and return its inner HTML.
 ///
@@ -39,11 +50,17 @@ use scraper::{ElementRef, Html, Selector};
 /// Feed it to an HTML→Markdown converter (we use [`htmd`]).
 pub fn extract_main_content(html: &str) -> String {
     let cleaned = strip_clutter(html);
-    let doc = Html::parse_document(&cleaned);
-    match best_candidate(&doc) {
-        Some(el) => el.inner_html(),
-        None => cleaned,
-    }
+    let mut doc = Html::parse_document(&cleaned);
+    // Candidate scoring runs on the untouched tree — an anchor's own text is
+    // never enough to swing which container wins, and this keeps scoring
+    // identical to before anchor resolution existed.
+    let Some(candidate_id) = best_candidate(&doc).map(|el| el.id()) else {
+        return cleaned;
+    };
+    resolve_empty_anchors(&mut doc, candidate_id);
+    ElementRef::wrap(doc.tree.get(candidate_id).unwrap())
+        .expect("candidate_id always names the element best_candidate returned")
+        .inner_html()
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +421,98 @@ fn link_text_chars(el: &ElementRef<'_>) -> i64 {
         .sum()
 }
 
+// ---------------------------------------------------------------------------
+// Step 3: resolve anchors whose rendered content is empty.
+// ---------------------------------------------------------------------------
+
+/// Descendant tags that count as visible content inside an anchor even when
+/// it has no text (an image-only link). Selected relative to the anchor
+/// itself (see [`resolve_empty_anchors`]), so this names only the tags, not
+/// `a[href] img` — there is no second document for a compound selector to
+/// re-anchor against.
+const ANCHOR_MEDIA_DESCENDANTS: &str = "img, picture, svg, video";
+
+/// What to do with one `<a href>` once its content is known.
+enum AnchorAction {
+    /// Has text and/or a media descendant — leave it exactly as written.
+    Keep,
+    /// Empty, and named by an `aria-label`/`title` — becomes the anchor's
+    /// visible text so the link survives HTML→Markdown with a label instead
+    /// of vanishing into `[](url)`.
+    Label(String),
+    /// Empty and unnamed — decorative, drop the whole element.
+    Drop,
+}
+
+/// Decide one anchor's fate. `media_selector` is passed in rather than
+/// reparsed per anchor — it never varies.
+fn decide_anchor_action(a: &ElementRef<'_>, media_selector: &Selector) -> AnchorAction {
+    let text: String = a.text().collect();
+    let has_media = a.select(media_selector).next().is_some();
+    if !text.trim().is_empty() || has_media {
+        return AnchorAction::Keep;
+    }
+    let label = a
+        .attr("aria-label")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| a.attr("title").map(str::trim).filter(|s| !s.is_empty()));
+    match label {
+        Some(text) => AnchorAction::Label(text.to_string()),
+        None => AnchorAction::Drop,
+    }
+}
+
+/// Resolve every `<a href>` inside `scope_id`'s subtree, mutating `doc` in
+/// place. Anchors with no `href` (fragment targets like `<a id="…">`) never
+/// match the selector, so they are never touched.
+///
+/// An earlier version of this step ran [`lol_html`] twice over the
+/// serialized HTML instead of touching the tree [`best_candidate`] already
+/// parsed: once read-only to record a decision per anchor in document
+/// order, once more to replay those decisions, because lol_html is a
+/// streaming rewriter that flushes an anchor's start tag before its end tag
+/// (and therefore its content) is known. That replay assumed the two passes
+/// would always walk the same anchors in the same order — true for
+/// well-formed documents, but nothing enforced it, and a silent mismatch
+/// would have dropped or mislabeled a real link rather than a decorative
+/// one. Deciding directly on the tree needs no such assumption: each
+/// decision below is read from, and applied to, the same [`NodeId`] — there
+/// is no second, independent parse for the two to disagree with.
+fn resolve_empty_anchors(doc: &mut Html, scope_id: NodeId) {
+    let anchor_selector = Selector::parse("a[href]").unwrap();
+    let media_selector = Selector::parse(ANCHOR_MEDIA_DESCENDANTS).unwrap();
+
+    let actions: Vec<(NodeId, AnchorAction)> = {
+        let scope = ElementRef::wrap(doc.tree.get(scope_id).unwrap())
+            .expect("scope_id always names the element best_candidate returned");
+        scope
+            .select(&anchor_selector)
+            .map(|a| (a.id(), decide_anchor_action(&a, &media_selector)))
+            .collect()
+    };
+
+    for (id, action) in actions {
+        match action {
+            AnchorAction::Keep => {}
+            AnchorAction::Drop => {
+                doc.tree.get_mut(id).unwrap().detach();
+            }
+            AnchorAction::Label(text) => {
+                let mut node = doc.tree.get_mut(id).unwrap();
+                while let Some(mut child) = node.first_child() {
+                    child.detach();
+                }
+                // A `Node::Text` is HTML-escaped like any other text node
+                // when the tree is serialized below, so a label containing
+                // `&`/`<` reaches the markdown converter as the literal
+                // character rather than as markup.
+                node.append(Node::Text(Text { text: text.into() }));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -655,5 +764,155 @@ mod tests {
         let el = doc.select(&sel).next().unwrap();
         let s = score_element(&el);
         assert!(s > 20, "expected score > 20, got {}", s);
+    }
+
+    // ---- empty anchors -----------------------------------------------
+
+    #[test]
+    fn empty_decorative_anchor_is_dropped() {
+        // A JS-filled thumbnail slot: the image never lands in the static
+        // HTML, so the anchor renders no text and has no img/picture/svg/
+        // video descendant either.
+        let html = r#"<html><body>
+            <article>
+              <a class="event-thumbnail" href="https://example.test/events/1"></a>
+              <p>Event title survives.</p>
+            </article>
+        </body></html>"#;
+        let inner = extract_main_content(html);
+        assert!(
+            !inner.contains("event-thumbnail"),
+            "empty decorative anchor should be dropped: {inner}"
+        );
+        assert!(inner.contains("Event title survives"));
+
+        let md = htmd::convert(&inner).unwrap();
+        assert!(
+            !md.contains("[](https://example.test/events/1)"),
+            "no bare empty link should reach the markdown: {md}"
+        );
+    }
+
+    #[test]
+    fn aria_label_icon_anchor_becomes_labelled_link() {
+        // An icon-font control: no visible text node, but `aria-label`
+        // names what it does. htmd itself never reads `aria-label`, so
+        // without this pass the link becomes bare `[](url)`.
+        let html = r#"<html><body>
+            <article>
+              <p>Some text to satisfy the content scorer here.</p>
+              <a class="icon-search" href="https://example.test/search" aria-label="Search"></a>
+            </article>
+        </body></html>"#;
+        let inner = extract_main_content(html);
+        let md = htmd::convert(&inner).unwrap();
+        assert!(
+            md.contains("[Search](https://example.test/search)"),
+            "got: {md}"
+        );
+    }
+
+    #[test]
+    fn named_fragment_anchor_is_not_turned_into_junk() {
+        // No `href` — a jump target, not a link. Must never be touched by
+        // the empty-anchor pass (it has no href, so it never matches
+        // `a[href]`), and must never turn into stray `[]` markdown.
+        let html = r#"<html><body>
+            <article>
+              <a id="section-2"></a>
+              <p>Section two body text.</p>
+            </article>
+        </body></html>"#;
+        let inner = extract_main_content(html);
+        assert!(
+            inner.contains(r#"id="section-2""#),
+            "fragment target must survive untouched: {inner}"
+        );
+        let md = htmd::convert(&inner).unwrap();
+        assert!(!md.contains("[]"), "got: {md}");
+        assert!(md.contains("Section two body text"));
+    }
+
+    #[test]
+    fn anchor_around_lazy_image_survives_with_its_image() {
+        // The lazy-src promotion in `strip_clutter` runs before the
+        // empty-anchor pass (both are part of `extract_main_content`), so
+        // by the time we check for a media descendant, the `<img>` is
+        // already there regardless of promotion order — but this pins the
+        // end-to-end behavior: the anchor must not be dropped, and the
+        // image must survive with it.
+        let html = r#"<html><body>
+            <article>
+              <p>Gallery page with enough prose for the scorer.</p>
+              <a href="https://example.test/gallery/1">
+                <img data-src="https://example.test/img/1.jpg" alt="Gallery photo">
+              </a>
+            </article>
+        </body></html>"#;
+        let inner = extract_main_content(html);
+        let md = htmd::convert(&inner).unwrap();
+        assert!(
+            md.contains("[![Gallery photo](https://example.test/img/1.jpg)](https://example.test/gallery/1)"),
+            "got: {md}"
+        );
+    }
+
+    #[test]
+    fn aria_label_special_chars_reach_markdown_unescaped() {
+        // The label becomes a `Node::Text`, which html5ever escapes on
+        // serialization like any other text node (`&` -> `&amp;`, etc.).
+        // htmd must decode that back to the literal character rather than
+        // leaving markup or a double-escaped entity in the markdown.
+        let html = r#"<html><body>
+            <article>
+              <p>Some text to satisfy the content scorer here.</p>
+              <a class="icon-tips" href="https://example.test/tips" aria-label="Tips &amp; Tricks &lt;3"></a>
+            </article>
+        </body></html>"#;
+        let inner = extract_main_content(html);
+        let md = htmd::convert(&inner).unwrap();
+        assert!(
+            md.contains("[Tips & Tricks <3](https://example.test/tips)"),
+            "got: {md}"
+        );
+        assert!(!md.contains("&amp;"), "got: {md}");
+    }
+
+    #[test]
+    fn each_anchors_fate_is_independent_of_its_neighbors() {
+        // Five anchors in a row, interleaved Drop/Keep/Label/Keep/Drop, two
+        // of them sharing a class name across a Drop/Label boundary. The
+        // old two-pass design replayed decisions positionally, by the order
+        // a second, independent lol_html parse happened to walk them; a
+        // single off-by-one there would shift every later decision onto the
+        // wrong anchor. Deciding on the parsed tree instead keys each
+        // decision to its own node id, so there is no sequence to shift —
+        // this pins that every anchor still gets exactly its own fate.
+        let html = r#"<html><body>
+            <article>
+              <p>Enough prose for the scorer to pick this container.</p>
+              <a class="icon" href="https://example.test/1"></a>
+              <a href="https://example.test/2">Second link text</a>
+              <a class="icon" href="https://example.test/3" aria-label="Third"></a>
+              <a href="https://example.test/4"><img src="https://example.test/i4.jpg" alt="Fourth"></a>
+              <a class="icon" href="https://example.test/5"></a>
+            </article>
+        </body></html>"#;
+        let inner = extract_main_content(html);
+        let md = htmd::convert(&inner).unwrap();
+        assert!(!md.contains("example.test/1"), "1 should be dropped: {md}");
+        assert!(
+            md.contains("[Second link text](https://example.test/2)"),
+            "2 should keep its own text: {md}"
+        );
+        assert!(
+            md.contains("[Third](https://example.test/3)"),
+            "3 should get its own label: {md}"
+        );
+        assert!(
+            md.contains("[![Fourth](https://example.test/i4.jpg)](https://example.test/4)"),
+            "4 should keep its own image: {md}"
+        );
+        assert!(!md.contains("example.test/5"), "5 should be dropped: {md}");
     }
 }
