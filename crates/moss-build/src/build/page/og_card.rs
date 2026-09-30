@@ -138,14 +138,26 @@ fn card_script(lang: crate::i18n::Language, title: &str) -> Option<CardScript> {
 /// "there is a manifest to look it up in" are the same fact, and splitting them
 /// would let a caller supply a sink with no lookup — the state whose only exit
 /// is a read of `.moss/build.nosync/`.
+///
+/// It also carries the build's filename-convention cover answers, the other
+/// per-build input the og decision reads, so every page of a folder shares
+/// one listing of it.
 pub struct OgSink<'a> {
     previous_files: &'a std::collections::HashMap<String, String>,
+    filename_covers: &'a crate::build::page::cover::FilenameCovers,
     cards: Vec<CardOutput>,
 }
 
 impl<'a> OgSink<'a> {
-    pub fn new(previous_files: &'a std::collections::HashMap<String, String>) -> Self {
-        Self { previous_files, cards: Vec::new() }
+    pub fn new(
+        previous_files: &'a std::collections::HashMap<String, String>,
+        filename_covers: &'a crate::build::page::cover::FilenameCovers,
+    ) -> Self {
+        Self { previous_files, filename_covers, cards: Vec::new() }
+    }
+
+    pub fn filename_covers(&self) -> &'a crate::build::page::cover::FilenameCovers {
+        self.filename_covers
     }
 
     /// Render (or carry) one card and record its receipt, returning the served

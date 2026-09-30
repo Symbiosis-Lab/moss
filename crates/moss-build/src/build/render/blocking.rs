@@ -1396,6 +1396,8 @@ pub fn generate_blocking_content_for_build(
     // Every runtime script's bytes + content hash, from the one registration
     // table that also decides which get written. See `build::emit::scripts`.
     let scripts = crate::build::emit::scripts::ScriptAssets::resolve();
+    // One listing per folder for the filename-cover rung, shared by its pages.
+    let filename_covers = crate::build::page::cover::FilenameCovers::default();
     let js_version = scripts.hash("theme").to_string();
     let share_card_hash = scripts.hash("share-card").to_string();
     let hls_hash = scripts.hash("hls").to_string();
@@ -1897,8 +1899,7 @@ pub fn generate_blocking_content_for_build(
                     crate::build::io_utils::create_output_dir_all(parent)
                         .map_err(|e| format!("Failed to create directory: {}", e))?;
                 }
-                let mut og_outputs =
-                    crate::build::page::og_card::OgSink::new(&previous_hashes.files);
+                let mut og_outputs = crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers);
                 let html_page = generate_html_collect_og(
                     Some(doc),
                     &documents,
@@ -2828,8 +2829,7 @@ pub fn generate_blocking_content_for_build(
             };
             pending.register_hashed(&homepage_index_sp, &entry, HashBucket::Files);
         } else {
-            let mut homepage_og_outputs =
-                crate::build::page::og_card::OgSink::new(&previous_hashes.files);
+            let mut homepage_og_outputs = crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers);
             let rss_href = ServedPath::for_rss("").unwrap().to_relative_url();
             let index_html = if homepage_doc.is_some() {
                 // There's a homepage document - use it as the homepage content

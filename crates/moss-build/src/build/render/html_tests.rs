@@ -6566,7 +6566,8 @@ mod og_url_tests {
                 is_animated: false,
             }];
             let no_previous = std::collections::HashMap::new();
-            let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+            let filename_covers = crate::build::page::cover::FilenameCovers::default();
+            let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
             generate_html_collect_og(
                 Some(&article), &all_docs, &project, &make_layout(), false, None, None,
                 Language::En, None, false, false, None, false, None, None,
@@ -6607,6 +6608,50 @@ mod og_url_tests {
         );
     }
 
+    /// Every page of a folder shares the one listing the build made of it.
+    /// Listing per page was O(pages × siblings) `stat` calls, which a flat
+    /// folder of 2,000 pages turned into most of a build's time.
+    #[test]
+    fn pages_of_one_folder_share_one_listing_for_their_filename_cover() {
+        use super::super::generate_html_collect_og;
+
+        let vault = tempfile::tempdir().expect("tempdir");
+        let items = vault.path().join("items");
+        std::fs::create_dir_all(&items).unwrap();
+        std::fs::write(items.join("Cover.JPG"), b"").unwrap();
+        let out = tempfile::tempdir().expect("tempdir");
+        let no_previous = std::collections::HashMap::new();
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+
+        for i in 0..5 {
+            std::fs::write(items.join(format!("p{i}.md")), b"").unwrap();
+            let mut page = make_doc(&format!("Page {i}"), &format!("items/p{i}/index.html"));
+            page.source_path = Some(format!("items/p{i}.md"));
+            let all_docs = vec![make_doc("Home", "index.html"), page.clone()];
+            let mut og_outputs =
+                crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
+            let html = generate_html_collect_og(
+                Some(&page), &all_docs, &make_project(), &make_layout(), false, None, None,
+                Language::En, None, false, false, None, false, None, None,
+                &std::collections::HashMap::new(),
+                &SiteUrl::parse("https://example.com").unwrap(),
+                true, false, "favicon.svg", false, Some(out.path()), &mut og_outputs,
+                vault.path(),
+                &crate::build::emit::scripts::ScriptAssets::resolve(),
+            )
+            .expect("render");
+            assert!(
+                html.contains(r#"og:image" content="https://example.com/items/Cover.JPG""#),
+                "page {i} should share the folder's cover: {html}"
+            );
+            // Gone from disk after the first page: only the build's one
+            // listing can still name it for the other four.
+            if i == 0 {
+                std::fs::remove_file(items.join("Cover.JPG")).unwrap();
+            }
+        }
+    }
+
     /// A favicon raster trio an earlier default-SVG build left in the output
     /// tree is not this build's: once a vault grows its own `favicon.png`, no
     /// PNG sizes are rasterized, and pages must not link the leftovers
@@ -6625,7 +6670,8 @@ mod og_url_tests {
         let homepage = make_doc("Home", "index.html");
         let all_docs = vec![homepage.clone()];
         let no_previous = std::collections::HashMap::new();
-        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
         let html = generate_html_collect_og(
             Some(&homepage), &all_docs, &make_project(), &make_layout(), true, None, None,
             Language::En, None, false, false, None, false, None, None,
@@ -6659,7 +6705,8 @@ mod og_url_tests {
         let layout = make_layout();
 
         let no_previous = std::collections::HashMap::new();
-        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
         let html = generate_html_collect_og(
             Some(&article),
             &all_docs,
@@ -6739,7 +6786,8 @@ mod og_url_tests {
         let layout = make_layout();
 
         let no_previous = std::collections::HashMap::new();
-        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
         let html = generate_html_collect_og(
             Some(&article),
             &all_docs,
@@ -6805,7 +6853,8 @@ mod og_url_tests {
         let layout = make_layout();
 
         let no_previous = std::collections::HashMap::new();
-        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
         let html = generate_html_collect_og(
             Some(&article),
             &all_docs,
@@ -6865,7 +6914,8 @@ mod og_url_tests {
             let all_docs = vec![homepage, article.clone()];
             let project = make_project();
             let no_previous = std::collections::HashMap::new();
-            let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+            let filename_covers = crate::build::page::cover::FilenameCovers::default();
+            let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
             let html = generate_html_collect_og(
                 Some(&article),
                 &all_docs,
@@ -6925,7 +6975,8 @@ mod og_url_tests {
         let layout = make_layout();
 
         let no_previous = std::collections::HashMap::new();
-        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
         let html = generate_html_collect_og(
             Some(&article),
             &all_docs,
@@ -6997,7 +7048,8 @@ mod og_url_tests {
         let tmp = tempfile::tempdir().expect("tempdir");
 
         let no_previous = std::collections::HashMap::new();
-        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
         let html = super::super::generate_html_collect_og(
             Some(&page),
             &all_docs,
@@ -7155,7 +7207,8 @@ mod listable_page_card_tests {
         let layout = make_layout();
 
         let no_previous = std::collections::HashMap::new();
-        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous);
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
         generate_html_collect_og(
             Some(&page),
             &all_docs,
