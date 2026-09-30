@@ -2721,6 +2721,35 @@ fn test_css_vertical_block_code_stays_horizontal() {
 }
 
 #[test]
+fn test_css_place_map_stays_horizontal_under_vertical_typesetting() {
+    // Every element that carries its own logical `inline-size`/`max-inline-size`
+    // cap in the place-map family needs its own `writing-mode: horizontal-tb`
+    // reset, unconditionally (a no-op under the default horizontal-tb): the
+    // reset does not travel from a wrapper to the map figure it contains, or
+    // from the figure back up to a wrapper around it. Left inheriting
+    // `vertical-rl` from body, each of these three `inline-size` declarations
+    // binds physical HEIGHT instead of width. Measured live on a
+    // vertically-typeset article locator: without `.moss-place-map`'s own
+    // reset, the figure rendered 866px wide at 390px viewport width (the
+    // inner svg's aspect-ratio backing a physical width out of the wrong
+    // axis); without `.moss-place-locator`'s own reset, the wrapper's 22rem
+    // desktop cap was ignored entirely and it rendered 720px wide at 1280px.
+    for (selector, label) in [
+        (".moss-place-map", ".moss-place-map"),
+        (".moss-place-map svg", ".moss-place-map svg"),
+        (".moss-place-locator", ".moss-place-locator"),
+        (".moss-place-map-frame", ".moss-place-map-frame"),
+    ] {
+        let rule = get_css_rule(DEFAULT_CSS, selector)
+            .unwrap_or_else(|| panic!("{label} CSS rule should exist"));
+        assert!(
+            rule.contains("writing-mode: horizontal-tb"),
+            "{label} must reset to horizontal-tb so its own inline-size rules bind width, not height: {rule}"
+        );
+    }
+}
+
+#[test]
 fn test_css_vertical_hides_mobile_menu() {
     let rule = get_css_rule(
         &site_css_with_partials(),

@@ -2724,12 +2724,28 @@ header:has(+ .moss-hero) .main-nav {
   margin-block: var(--moss-space-md);
   margin-inline: 0;
   max-inline-size: 100%;
+  /* Offline cartography: north stays up regardless of the page's own
+     typesetting. Unconditional (not a vertical.css override) because it is a
+     no-op under the default `horizontal-tb`, and this figure's own
+     `max-inline-size` needs it regardless of what wraps it — a bare map (the
+     `/places/` world map, a place term page, a `style:map` embed with no
+     width token) carries no other wrapper to fix this on. Left unset under
+     `vertical-rl`, this same `max-inline-size` binds the figure's physical
+     HEIGHT instead, and the inner svg's `aspect-ratio` backs a physical width
+     out of that height with no relation to the column at all — measured live
+     on a vertically-typeset locator at 390px: the figure rendered 866px wide.
+     `.moss-place-locator`/`.moss-place-map-frame` carry the same reset for
+     the same reason on their OWN `inline-size` caps — a wrapper's cap does
+     not travel down to a child this fixes, any more than a child's travels up
+     to a wrapper this doesn't. */
+  writing-mode: horizontal-tb;
 }
 .moss-place-map svg {
   display: block;
   inline-size: 100%;
   block-size: auto;
   aspect-ratio: 3 / 2;
+  writing-mode: horizontal-tb;
 }
 [data-theme="dark"] .moss-place-map {
   --moss-place-water: #1b242c;
@@ -2761,6 +2777,15 @@ header:has(+ .moss-hero) .main-nav {
 }
 .moss-place-locator {
   inline-size: min(50%, 22rem);
+  /* Unconditional, like `.moss-place-map`'s own reset above: a no-op under
+     the default horizontal-tb, and needed under vertical-rl for a reason the
+     map's own reset doesn't cover. This wrapper carries its OWN `inline-size`
+     cap (this declaration, and the phone collapse below) — inheriting
+     `vertical-rl` from body would bind that cap to the wrapper's physical
+     HEIGHT, not its width, leaving the wrapper's actual width to whatever a
+     floated box with an auto block-size shrinks to fit. Measured live: 720px
+     on a 1280px page, ignoring the 22rem cap entirely, until this line. */
+  writing-mode: horizontal-tb;
 }
 .moss-place-locator .moss-place-map {
   margin-block-start: 0;
@@ -2791,6 +2816,12 @@ header:has(+ .moss-hero) .main-nav {
   article.container > .moss-place-locator:has(+ blockquote) {
     margin-block-start: calc(var(--moss-space-lg) - var(--moss-space-md));
   }
+}
+.moss-place-map-frame {
+  /* Same reason as `.moss-place-locator` just above: this wrapper's own
+     `inline-size: 50%` cap and phone collapse (below) need the wrapper
+     itself on the physical axis, not just the map figure it carries. */
+  writing-mode: horizontal-tb;
 }
 .moss-place-map-frame .moss-place-map {
   margin-block-end: var(--moss-space-xs);
