@@ -8,7 +8,17 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::LazyLock;
 use crate::build::media::cover::html_escape;
+
+// Compiled once per process: `extract_media_items` runs for every page, and
+// compiling these per call cost more than matching them.
+static PHOTO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?s)(<figure[^>]*>.*?<img[^>]+src="([^"]+)"[^>]*>.*?</figure>|<p>\s*<img[^>]+src="([^"]+)"[^>]*>\s*</p>)\s*<!--\s*photography\s*-->"#).unwrap());
+static VIDEO_IMG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?s)<p>\s*<img[^>]+src="([^"]+\.(mov|mp4|webm|MOV|MP4|WEBM))"[^>]*alt="([^"]*)"[^>]*/?\s*>\s*</p>\s*<!--\s*video-meta:?\s*(\w*)?\s*-->"#).unwrap());
+static VIDEO_TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?s)<video[^>]+src="([^"]+\.(mov|mp4|webm|MOV|MP4|WEBM))"[^>]*>.*?</video>\s*<!--\s*video-meta:?\s*(\w*)?\s*-->"#).unwrap());
+static INTERACTIVE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?s)<iframe[^>]+src="([^"]+)"[^>]*>.*?</iframe>\s*<!--\s*interactive-meta:?\s*(\w*)?(?:\s*\|\s*title:\s*([^-]+))?\s*-->"#).unwrap());
+static FIGCAPTION_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<figcaption>([^<]+)</figcaption>"#).unwrap());
+static ALT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"alt="([^"]+)""#).unwrap());
 
 /// Media types supported by moss collection pages.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -71,11 +81,7 @@ pub fn extract_media_items(html: &str, article_url: &str, lang: crate::i18n::Lan
     let mut anchor_counter = 0;
 
     // Pattern 1: Photography - figure or img followed by <!-- photography -->
-    let photo_pattern = Regex::new(
-        r#"(?s)(<figure[^>]*>.*?<img[^>]+src="([^"]+)"[^>]*>.*?</figure>|<p>\s*<img[^>]+src="([^"]+)"[^>]*>\s*</p>)\s*<!--\s*photography\s*-->"#
-    ).unwrap();
-
-    for caps in photo_pattern.captures_iter(html) {
+    for caps in PHOTO_RE.captures_iter(html) {
         let src = caps.get(2).or(caps.get(3)).map(|m| m.as_str()).unwrap_or("");
         anchor_counter += 1;
         items.push(MediaItem {
@@ -89,11 +95,7 @@ pub fn extract_media_items(html: &str, article_url: &str, lang: crate::i18n::Lan
     }
 
     // Pattern 2: Video - img with video extension followed by <!-- video-meta: name -->
-    let video_pattern = Regex::new(
-        r#"(?s)<p>\s*<img[^>]+src="([^"]+\.(mov|mp4|webm|MOV|MP4|WEBM))"[^>]*alt="([^"]*)"[^>]*/?\s*>\s*</p>\s*<!--\s*video-meta:?\s*(\w*)?\s*-->"#
-    ).unwrap();
-
-    for caps in video_pattern.captures_iter(html) {
+    for caps in VIDEO_IMG_RE.captures_iter(html) {
         anchor_counter += 1;
         let collection = caps.get(4).and_then(|m| {
             let s = m.as_str().trim();
@@ -110,11 +112,7 @@ pub fn extract_media_items(html: &str, article_url: &str, lang: crate::i18n::Lan
     }
 
     // Pattern 2b: Video - <video> tag followed by <!-- video-meta: name -->
-    let video_tag_pattern = Regex::new(
-        r#"(?s)<video[^>]+src="([^"]+\.(mov|mp4|webm|MOV|MP4|WEBM))"[^>]*>.*?</video>\s*<!--\s*video-meta:?\s*(\w*)?\s*-->"#
-    ).unwrap();
-
-    for caps in video_tag_pattern.captures_iter(html) {
+    for caps in VIDEO_TAG_RE.captures_iter(html) {
         anchor_counter += 1;
         let collection = caps.get(3).and_then(|m| {
             let s = m.as_str().trim();
@@ -137,11 +135,7 @@ pub fn extract_media_items(html: &str, article_url: &str, lang: crate::i18n::Lan
     }
 
     // Pattern 3: Interactive - iframe followed by <!-- interactive-meta: ... -->
-    let interactive_pattern = Regex::new(
-        r#"(?s)<iframe[^>]+src="([^"]+)"[^>]*>.*?</iframe>\s*<!--\s*interactive-meta:?\s*(\w*)?(?:\s*\|\s*title:\s*([^-]+))?\s*-->"#
-    ).unwrap();
-
-    for caps in interactive_pattern.captures_iter(html) {
+    for caps in INTERACTIVE_RE.captures_iter(html) {
         anchor_counter += 1;
         let title = caps.get(3)
             .map(|m| m.as_str().trim().to_string())
@@ -164,62 +158,14 @@ pub fn extract_media_items(html: &str, article_url: &str, lang: crate::i18n::Lan
 }
 
 
-/// Extracts all video file references from HTML content without requiring markers.
-///
-/// Finds video sources from:
-/// - `<video src="...">` attributes
-/// - `<source src="...">` elements inside video tags
-/// - `<img src="...">` with video file extensions (.mov, .mp4, .webm, etc.)
-///
-/// # Arguments
-/// * `html` - HTML content to scan
-///
-/// # Returns
-/// * `Vec<String>` - List of video source paths found
-#[allow(dead_code)] // Part of video pipeline, for detecting which videos are referenced in HTML
-pub fn extract_video_references(html: &str) -> Vec<String> {
-    let mut refs = Vec::new();
-
-    // Pattern 1: <video src="...">
-    let video_src_re = Regex::new(r#"<video[^>]+src="([^"]+)"[^>]*>"#).unwrap();
-    for caps in video_src_re.captures_iter(html) {
-        refs.push(caps[1].to_string());
-    }
-
-    // Pattern 2: <source src="..."> (inside video tags)
-    let source_re = Regex::new(r#"<source[^>]+src="([^"]+)"[^>]*>"#).unwrap();
-    for caps in source_re.captures_iter(html) {
-        refs.push(caps[1].to_string());
-    }
-
-    // Pattern 3: <img src="..."> with video extension
-    let video_extensions = ["mov", "mp4", "webm", "avi", "mkv"];
-    let img_re = Regex::new(r#"<img[^>]+src="([^"]+)"[^>]*>"#).unwrap();
-    for caps in img_re.captures_iter(html) {
-        let src = &caps[1];
-        let ext = std::path::Path::new(src)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        if video_extensions.contains(&ext.as_str()) {
-            refs.push(caps[1].to_string());
-        }
-    }
-
-    refs
-}
-
 /// Extracts a title from HTML, trying figcaption first, then alt text.
 fn extract_title_from_html(html: &str, lang: crate::i18n::Language) -> String {
     // Try figcaption first
-    let figcaption_re = Regex::new(r#"<figcaption>([^<]+)</figcaption>"#).unwrap();
-    if let Some(caps) = figcaption_re.captures(html) {
+    if let Some(caps) = FIGCAPTION_RE.captures(html) {
         return caps[1].to_string();
     }
     // Fall back to alt text
-    let alt_re = Regex::new(r#"alt="([^"]+)""#).unwrap();
-    if let Some(caps) = alt_re.captures(html) {
+    if let Some(caps) = ALT_RE.captures(html) {
         return caps[1].to_string();
     }
     crate::i18n::t(lang, "untitled").to_string()
@@ -902,79 +848,6 @@ mod tests {
     
     
     
-    // ===========================================
-    // Video Reference Extraction Tests (TDD - no markers)
-    // ===========================================
-
-    #[test]
-    fn test_extract_video_references_from_video_tag() {
-        let html = r#"<video src="./clip.MOV" controls width="100%"></video>"#;
-        let refs = extract_video_references(html);
-
-        assert_eq!(refs.len(), 1);
-        assert_eq!(refs[0], "./clip.MOV");
-    }
-
-    #[test]
-    fn test_extract_video_references_multiple() {
-        let html = r#"
-            <p>First video:</p>
-            <video src="./intro.mp4" controls></video>
-            <p>Second video:</p>
-            <video src="../videos/nature.MOV" controls></video>
-        "#;
-        let refs = extract_video_references(html);
-
-        assert_eq!(refs.len(), 2);
-        assert!(refs.contains(&"./intro.mp4".to_string()));
-        assert!(refs.contains(&"../videos/nature.MOV".to_string()));
-    }
-
-    #[test]
-    fn test_extract_video_references_no_videos() {
-        let html = r#"<p>Just text and <img src="photo.jpg"> images</p>"#;
-        let refs = extract_video_references(html);
-
-        assert!(refs.is_empty());
-    }
-
-    #[test]
-    fn test_extract_video_references_img_with_video_extension() {
-        // Some users embed videos using img tags (converted by browser/JS)
-        let html = r#"<p><img src="./clip.mov" alt="Video"></p>"#;
-        let refs = extract_video_references(html);
-
-        assert_eq!(refs.len(), 1);
-        assert_eq!(refs[0], "./clip.mov");
-    }
-
-    #[test]
-    fn test_extract_video_references_no_marker_required() {
-        // Key test: video should be extracted WITHOUT any marker
-        let html = r#"<video src="./aimeili.MOV" controls width="100%"></video>"#;
-        let refs = extract_video_references(html);
-
-        // Should find the video - no marker needed!
-        assert_eq!(refs.len(), 1, "Should extract video without marker");
-        assert_eq!(refs[0], "./aimeili.MOV");
-    }
-
-    #[test]
-    fn test_extract_video_references_source_element() {
-        // Video with <source> child elements
-        let html = r#"
-            <video controls>
-                <source src="./clip.mp4" type="video/mp4">
-                <source src="./clip.webm" type="video/webm">
-            </video>
-        "#;
-        let refs = extract_video_references(html);
-
-        assert_eq!(refs.len(), 2);
-        assert!(refs.contains(&"./clip.mp4".to_string()));
-        assert!(refs.contains(&"./clip.webm".to_string()));
-    }
-
     #[test]
     fn test_generate_media_page_uses_root_relative_paths() {
         let items = vec![MediaItem {
