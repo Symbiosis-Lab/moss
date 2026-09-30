@@ -23,6 +23,17 @@ use std::fmt;
 
 pub const CURRENT_VERSION: u32 = 6;
 
+/// Current schema version for `.moss/state.toml`'s `[deployment]` block — a
+/// separate version space from [`CURRENT_VERSION`] above, because the two
+/// files are owned and versioned independently (`config.toml` is
+/// hand-edited; `state.toml` is machine-only). state.toml carries no shape
+/// migrations yet, so there is no `MIGRATIONS`-style array or compile-time
+/// length guard for it; this constant exists only to feed [`version_ahead`]'s
+/// guard from [`crate::vault::deployment_state`]'s one write frame. Bump it
+/// by hand, with nothing to remind you, when state.toml's shape changes in a
+/// way an older binary could misread.
+pub const STATE_CURRENT_VERSION: u32 = 1;
+
 #[derive(Debug)]
 pub enum MigrationError {
     InvalidShape(String),
@@ -86,17 +97,19 @@ pub fn declared_version(raw: &toml::Table) -> u32 {
         .unwrap_or(0)
 }
 
-/// `Some(v)` when `raw` declares a schema a newer moss wrote — the one
-/// predicate every version-ahead guard shares, so a schema bump only has to
-/// touch [`CURRENT_VERSION`] once. `None` covers "absent, at, or behind
-/// current", which is every ordinary config `write_managed_toml` is asked to
-/// save. A document with no top-level `schema_version` key (e.g.
-/// `.moss/state.toml`) reads as v0 here, same as [`declared_version`], so
-/// this is safe to run against any managed TOML document, not just
-/// `config.toml`.
-pub fn version_ahead(raw: &toml::Table) -> Option<u32> {
+/// `Some(v)` when `raw` declares a schema newer than `supported` — the one
+/// predicate every version-ahead guard shares, parametrized on `supported` so
+/// a schema bump only has to touch that schema's own current-version constant
+/// ([`CURRENT_VERSION`] for `config.toml`, [`STATE_CURRENT_VERSION`] for
+/// `state.toml`) rather than this function. `None` covers "absent, at, or
+/// behind `supported`", which is every ordinary save `write_managed_toml` is
+/// asked to make. A document with no top-level `schema_version` key (e.g. a
+/// `.moss/state.toml` from before its first stamp) reads as v0 here, same as
+/// [`declared_version`], so this is safe to run against any managed TOML
+/// document, not just `config.toml`.
+pub fn version_ahead(raw: &toml::Table, supported: u32) -> Option<u32> {
     let v = declared_version(raw);
-    (v > CURRENT_VERSION).then_some(v)
+    (v > supported).then_some(v)
 }
 
 fn write_version(raw: &mut toml::Table, v: u32) {

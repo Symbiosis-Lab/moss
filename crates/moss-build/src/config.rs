@@ -108,7 +108,7 @@ impl ConfigFile {
     /// `ConfigFile` (e.g. the pipeline's one-parse-per-build `cfg`) should
     /// call this instead of re-reading and re-parsing the file.
     pub fn schema_version_ahead(&self) -> Option<u32> {
-        crate::config::migrations::version_ahead(&self.root)
+        crate::config::migrations::version_ahead(&self.root, crate::config::migrations::CURRENT_VERSION)
     }
 
     /// A string field under `[site]`, e.g. `lang`, `typesetting`.

@@ -296,25 +296,24 @@ fn nested_root_info(dir: &Path, rel: &Path) -> NestedRootInfo {
     }
 }
 
+/// Routes through the no-wait guarded loader for state.toml
+/// (`build::site_config::read_deployment_state_no_wait`) instead of a second
+/// ad hoc parse, so a version-ahead file is refused there and lands here in
+/// the same "can't confidently tell" bucket as unparseable or unreadable —
+/// never a guess at site_id from a shape this build may not understand, and
+/// never an error that stops the scan. The no-wait door matters here
+/// specifically: this scan visits several candidate folders before a build or
+/// deploy even starts, and the waiting loader's materialize wait, multiplied
+/// across a handful of lazily-materialized nested sites, would turn a
+/// pre-flight check into a minutes-long stall. A genuinely absent state.toml
+/// reads back as a default (no site_id), which is `(Some(false), None)`
+/// below, same as before.
 fn read_publish_state(dir: &Path) -> (Option<bool>, Option<String>) {
-    let state_path = dir.join(".moss").join("state.toml");
-    match std::fs::read_to_string(&state_path) {
-        Ok(text) => match toml::from_str::<toml::Value>(&text) {
-            Ok(value) => {
-                let site_id = value
-                    .get("deployment")
-                    .and_then(|d| d.get("site_id"))
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string);
-                (Some(site_id.is_some()), site_id)
-            }
-            // Unparseable is indistinguishable from a half-synced write.
-            Err(_) => (None, None),
-        },
-        // No state.toml at all: a previewed-but-never-deployed root.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Some(false), None),
-        // Evicted / permission-denied: unknown, never a hang or an error.
+    match crate::build::site_config::read_deployment_state_no_wait(&dir.to_string_lossy()) {
+        Ok(state) => {
+            let site_id = state.site_id.filter(|s| !s.is_empty());
+            (Some(site_id.is_some()), site_id)
+        }
         Err(_) => (None, None),
     }
 }

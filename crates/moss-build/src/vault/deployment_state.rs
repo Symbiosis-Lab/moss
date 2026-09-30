@@ -26,18 +26,53 @@ use std::path::Path;
 /// — [`save_domain_config`] (absorb) and [`update_domain_observation`] — go
 /// through here, so "state.toml has one write frame" is structural rather
 /// than conventional.
+///
+/// Stamps the top-level `schema_version` at
+/// [`crate::config::migrations::STATE_CURRENT_VERSION`] on every save, giving
+/// `state.toml` the same version-ahead guard `config.toml` already has.
+/// `apply_changes` diffs the value tree, so restamping an already-current
+/// file changes nothing and the write is skipped by the byte-identity check;
+/// the very first save under a binary that knows this schema adds exactly the
+/// one `schema_version` line.
+///
+/// The version-ahead check runs here, against the document exactly as
+/// loaded, and refuses before either mutation below. It cannot live only in
+/// `write_managed_toml` (as `config.toml`'s writers rely on): this function
+/// unconditionally overwrites `schema_version` with the current value before
+/// calling it, which would silently erase a newer-than-supported stamp and
+/// make the guard down there never fire, the same failure this feature closes.
 fn update_deployment_state<F>(project_path: &str, mutate: F) -> Result<(), String>
 where
     F: FnOnce(&mut DeploymentState),
 {
     let state_path = Path::new(project_path).join(".moss").join("state.toml");
     let ManagedToml { original, mut root } = load_managed_toml(&state_path)?;
+    if let Some(found) = crate::config::migrations::version_ahead(
+        &root,
+        crate::config::migrations::STATE_CURRENT_VERSION,
+    ) {
+        return Err(format!(
+            "{} is at schema_version {found}, newer than this build of moss supports (up to {}). \
+             Refusing to write — update moss before changing this site's deployment state.",
+            state_path.display(),
+            crate::config::migrations::STATE_CURRENT_VERSION,
+        ));
+    }
     let mut state = DeploymentState::from_toml(root.get("deployment"))?;
     mutate(&mut state);
     let deployment_value = toml::Value::try_from(&state)
         .map_err(|e| format!("Failed to serialize deployment config: {}", e))?;
     root.insert("deployment".to_string(), deployment_value);
-    write_managed_toml(&state_path, &original, &root)
+    root.insert(
+        "schema_version".to_string(),
+        toml::Value::Integer(crate::config::migrations::STATE_CURRENT_VERSION as i64),
+    );
+    write_managed_toml(
+        &state_path,
+        &original,
+        &root,
+        crate::config::migrations::STATE_CURRENT_VERSION,
+    )
 }
 
 /// Update `[deployment].observed` in state.toml — the ONE writer for the
@@ -264,4 +299,111 @@ pub fn set_onion_name(project_path: &str, name: Option<String>) -> Result<(), St
     let mut config = crate::build::site_config::get_domain_config(project_path)?;
     config.onion_name = name;
     save_domain_config(project_path, &config)
+}
+
+#[cfg(test)]
+mod schema_version_tests {
+    use super::*;
+    use crate::config::deployment::DomainDeploymentConfig;
+    use std::fs;
+
+    fn vault_with_state(body: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let moss = dir.path().join(".moss");
+        fs::create_dir_all(&moss).unwrap();
+        fs::write(moss.join("state.toml"), body).unwrap();
+        dir
+    }
+
+    /// The very first save under a binary that knows this schema adds
+    /// exactly the one `schema_version` line — a re-save that changes no
+    /// `[deployment]` field is untouched otherwise, since `apply_changes`
+    /// only touches changed keys.
+    #[test]
+    fn first_save_under_the_new_binary_adds_exactly_one_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+        let config = DomainDeploymentConfig {
+            site_id: Some("blog".to_string()),
+            ..Default::default()
+        };
+
+        // One save to get the canonical `[deployment]` shape for this
+        // config, then strip the stamp to simulate a state.toml a binary
+        // before this guard wrote.
+        save_domain_config(path, &config).unwrap();
+        let state_path = dir.path().join(".moss/state.toml");
+        let stamped = fs::read_to_string(&state_path).unwrap();
+        let pre_existing = stamped
+            .lines()
+            .filter(|l| !l.starts_with("schema_version"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        fs::write(&state_path, &pre_existing).unwrap();
+        let before_lines = pre_existing.lines().count();
+
+        // Re-save the identical config: nothing about `[deployment]`
+        // changes, only the `schema_version` stamp reappears.
+        save_domain_config(path, &config).unwrap();
+
+        let after = fs::read_to_string(&state_path).unwrap();
+        assert_eq!(after.lines().count(), before_lines + 1, "got:\n{after}");
+        assert!(
+            after.contains(&format!(
+                "schema_version = {}",
+                crate::config::migrations::STATE_CURRENT_VERSION
+            )),
+            "got:\n{after}"
+        );
+    }
+
+    /// A no-op save of an already-stamped file must not touch the file at
+    /// all — `write_managed_toml`'s byte-identity guard, exercised through
+    /// state.toml's own writer.
+    #[test]
+    fn a_no_op_save_of_an_already_stamped_file_writes_nothing() {
+        let dir = vault_with_state("");
+        let path = dir.path().to_str().unwrap();
+        record_cdn_status(path, "ok").unwrap();
+        let state_path = dir.path().join(".moss/state.toml");
+        let before = fs::metadata(&state_path).unwrap().modified().unwrap();
+        let before_bytes = fs::read_to_string(&state_path).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        // Re-recording the same status re-derives the identical value tree.
+        record_cdn_status(path, "ok").unwrap();
+
+        let after_bytes = fs::read_to_string(&state_path).unwrap();
+        assert_eq!(after_bytes, before_bytes, "byte-identical re-save must not rewrite");
+        assert_eq!(
+            fs::metadata(&state_path).unwrap().modified().unwrap(),
+            before,
+            "a re-save of the same value must not touch the file"
+        );
+    }
+
+    /// A `state.toml` a newer moss already stamped is refused, not patched —
+    /// the same shape `config.toml`'s writer already enforces. Ablated by
+    /// commenting out the `version_ahead` check in `write_managed_toml`: this
+    /// goes red (the write succeeds and clobbers the file) without it.
+    #[test]
+    fn write_refuses_a_version_ahead_state_toml() {
+        let original = format!(
+            "schema_version = {}\n\n[deployment]\nsite_id = \"from the future\"\n",
+            crate::config::migrations::STATE_CURRENT_VERSION + 1
+        );
+        let dir = vault_with_state(&original);
+        let path = dir.path().to_str().unwrap();
+
+        let err = save_domain_config(path, &DomainDeploymentConfig::default())
+            .expect_err("a write into a version-ahead state.toml must be refused");
+        assert!(
+            err.contains("schema_version") && err.contains("newer"),
+            "error should name the condition: {err}"
+        );
+
+        let after = fs::read_to_string(dir.path().join(".moss/state.toml")).unwrap();
+        assert_eq!(after, original, "the file must be untouched byte-for-byte");
+    }
 }

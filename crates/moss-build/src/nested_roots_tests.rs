@@ -83,6 +83,22 @@ fn unparseable_state_is_unknown_never_an_error() {
 }
 
 #[test]
+fn version_ahead_state_is_unknown_never_a_guessed_site_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_root(
+        &tmp.path().join("from-the-future"),
+        Some(&format!(
+            "schema_version = {}\n\n[deployment]\nsite_id = \"blog\"\n",
+            crate::config::migrations::STATE_CURRENT_VERSION + 1
+        )),
+    );
+
+    let report = find_nested_roots(tmp.path(), None, &limits());
+    assert_eq!(report.nested[0].published, None);
+    assert_eq!(report.nested[0].site_id, None);
+}
+
+#[test]
 #[cfg(unix)]
 fn unreadable_state_is_unknown_never_an_error() {
     use std::os::unix::fs::PermissionsExt;

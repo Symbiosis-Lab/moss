@@ -786,7 +786,12 @@ fn strip_plugin_from_config(config_path: &std::path::Path, plugin_id: &str) -> R
             table.remove("channels");
         }
     }
-    crate::vault::config::write_managed_toml(config_path, &original, &table)
+    crate::vault::config::write_managed_toml(
+        config_path,
+        &original,
+        &table,
+        crate::config::migrations::CURRENT_VERSION,
+    )
 }
 
 #[cfg(test)]
