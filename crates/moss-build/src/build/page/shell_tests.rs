@@ -3716,8 +3716,8 @@ fn long_scroll_indicator_uses_bounded_dynamic_dots() {
         ".moss-scroll-dots[data-indicator=\"dynamic\"] button.is-edge-start::before",
     )
     .expect("dynamic edge-dot CSS rule should exist");
-    assert!(edge.contains("inline-size: 5px"), "got: {edge}");
-    assert!(edge.contains("block-size: 5px"), "got: {edge}");
+    assert!(edge.contains("inline-size: 4px"), "got: {edge}");
+    assert!(edge.contains("block-size: 4px"), "got: {edge}");
     let visible = get_css_rule(
         DEFAULT_CSS,
         ".moss-scroll-dots[data-indicator=\"dynamic\"] button.is-visible::before",
@@ -3729,8 +3729,13 @@ fn long_scroll_indicator_uses_bounded_dynamic_dots() {
         ".moss-scroll-dots[data-indicator=\"dynamic\"] button[aria-current=\"true\"]::before",
     )
     .expect("dynamic current-dot CSS rule should exist");
-    assert!(current.contains("inline-size: 8px"), "got: {current}");
-    assert!(current.contains("block-size: 8px"), "got: {current}");
+    assert!(current.contains("inline-size: 10px"), "got: {current}");
+    assert!(current.contains("block-size: 10px"), "got: {current}");
+    // WebKit rasterizes a scale()d dot at its unscaled size and resamples it,
+    // so small dots came out lumpy on Retina: sizes must be exact, not scaled.
+    for r in [&rule, &edge, &current] {
+        assert!(!r.contains("transform"), "dot sized by transform: {r}");
+    }
 }
 
 #[test]
