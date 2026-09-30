@@ -850,6 +850,7 @@ async fn base_failure_fails_registered_rung_promises() {
         tx: None,
         rung_collisions: Default::default(),
         carried_advisories: Vec::new(),
+        suppressed: Default::default(),
     };
 
     let mut services = BuildServices::headless();
@@ -930,6 +931,7 @@ async fn base_failed_advisory_names_the_full_nested_source_path() {
         tx: None,
         rung_collisions: Default::default(),
         carried_advisories: Vec::new(),
+        suppressed: Default::default(),
     };
 
     let recorder = std::sync::Arc::new(RecordingReporter::default());
@@ -1026,6 +1028,7 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
         tx: None,
         rung_collisions: Default::default(),
         carried_advisories: Vec::new(),
+        suppressed: Default::default(),
     };
 
     let mut services = BuildServices::headless();
@@ -1100,6 +1103,7 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
         tx: Some(tx.clone()),
         rung_collisions,
         carried_advisories: Vec::new(),
+        suppressed: Default::default(),
     };
 
     let services = std::sync::Arc::new(BuildServices::headless());
@@ -3351,6 +3355,92 @@ async fn a_deleted_images_advisory_still_fires_a_tick_with_nothing_to_dispatch()
     );
 }
 
+/// An image the ship-time prune found unreferenced is settled: its `.webp` is
+/// missing because the prune removed it, and the worker would drop it before
+/// encoding. Dispatching it anyway logged a self-heal and queued a worker run
+/// for the same images on every build, forever. The second half is the
+/// reason the skip is safe: once a page references the image, it encodes.
+#[test]
+fn an_unreferenced_image_is_not_redispatched_until_a_page_references_it() {
+    use crate::build::ports::reporter::BuildReporter;
+
+    #[derive(Default)]
+    struct RecordingReporter(std::sync::Mutex<Vec<PipelineEvent>>);
+    impl BuildReporter for RecordingReporter {
+        fn report(&self, event: &PipelineEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+
+    let _guard = image_fingerprint_test_lock().lock();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+
+    // UUID-suffixed: the fingerprint ledger is a process-global keyed by path.
+    let name = format!("orphan-{}.jpg", uuid::Uuid::new_v4());
+    let webp = format!("{}.webp", name.trim_end_matches(".jpg"));
+    make_big_jpeg(&root.join(&name), 400, 300);
+    let cfg = ImageCompressionConfig::default();
+    let fp = compute_image_item_fingerprint(&root.to_string_lossy(), Path::new(&name), &cfg)
+        .expect("source exists and is stat-able");
+    let oid = crate::build::cache::ObjectStore::hash_file(&root.join(&name)).unwrap();
+    // Unchanged since the last build, which pruned its `.webp`: the exact
+    // state that logged "unchanged but its .webp is missing" every build.
+    prime_disk_hash_index(&moss_dir, &name, &fp, &oid);
+    let hashes = SiteHashes {
+        pruned_image_outputs: [webp.clone()].into_iter().collect(),
+        ..SiteHashes::default()
+    };
+    let paths = MossPaths::from_moss_dir(moss_dir.clone());
+    fs::write(paths.hashes(), serde_json::to_string(&hashes).unwrap()).unwrap();
+
+    let ctx = BackgroundContext {
+        image_items: vec![ImageConversionItem {
+            source_path: PathBuf::from(&name),
+            source_oid: String::new(),
+            ext: "jpg".to_string(),
+            dimensions: None,
+            skip: None,
+            fingerprint: None,
+        }],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        ..BackgroundContext::for_test()
+    };
+    let dispatch = || {
+        let recorder = std::sync::Arc::new(RecordingReporter::default());
+        let mut services = BuildServices::headless();
+        services.reporter = recorder.clone();
+        dispatch_image_conversions(Some(&services), &ctx, None);
+        let ran = recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, PipelineEvent::BackgroundProgress { task, .. } if task == "images"));
+        ran
+    };
+
+    assert!(!dispatch(), "an image nothing references must not reach the worker");
+    assert!(!staging.join(&webp).exists());
+
+    fs::write(
+        staging.join("index.html"),
+        format!(r#"<picture><source srcset="/{webp}" type="image/webp"><img src="/{name}"></picture>"#),
+    )
+    .unwrap();
+    assert!(dispatch(), "a page now references it, so it must be dispatched");
+    assert!(staging.join(&webp).exists(), "and encoded");
+}
+
 // =========================================================================
 // Cancel propagation through FolderSession (post-Track A)
 // =========================================================================
@@ -3425,6 +3515,7 @@ async fn test_image_cancel_aborts_image_runner() {
         tx: None,
         rung_collisions: Default::default(),
         carried_advisories: Vec::new(),
+        suppressed: Default::default(),
     };
     // Mirror dispatch's bookkeeping (runner decrements on early-exit).
     services.begin_ui_bound();
@@ -3519,6 +3610,7 @@ async fn test_image_hashes_updated_on_cancellation() {
         tx: Some(tx.clone()),
         rung_collisions: Default::default(),
         carried_advisories: Vec::new(),
+        suppressed: Default::default(),
     };
     for _ in 0..2 {
         services.begin_ui_bound();

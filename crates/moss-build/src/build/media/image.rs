@@ -1545,6 +1545,11 @@ pub(crate) struct ImageRunContext {
     /// advisories the items it actually dispatches produce, so the tick
     /// speaks for the whole item set even though only some of it ran.
     pub carried_advisories: Vec<Advisory>,
+    /// The ship-time prune's verdict as `dispatch_image_conversions` read it
+    /// (`suppressed_variants_for`). The dispatch already left every
+    /// suppressed item out of `items`, so the worker needs the set only to
+    /// keep an expected absence out of its violation report.
+    pub suppressed: std::collections::HashSet<String>,
 }
 
 impl ImageRunContext {
@@ -1559,6 +1564,7 @@ impl ImageRunContext {
             tx: None,
             rung_collisions: ctx.rung_collisions.clone(),
             carried_advisories: Vec::new(),
+            suppressed: std::collections::HashSet::new(),
         }
     }
 
@@ -1647,10 +1653,10 @@ impl Drop for MpPermit<'_> {
 /// The `.webp` keys this build must not put into staging, read from the last
 /// build's ship-time prune rather than derived here.
 ///
-/// Both image producers call this — the encoder below and the fingerprint-skip
-/// self-heal in `dispatch_image_conversions` — which is the point: one
-/// authority, neither re-deriving it from the disk scan. Rationale:
-/// `orphan_prune::suppressed_variants`.
+/// Read once per build, by `dispatch_image_conversions`, which keeps every
+/// suppressed image away from the encoder and hands the set on to it in
+/// `ImageRunContext::suppressed` — one authority, never re-derived from the
+/// disk scan. Rationale: `orphan_prune::suppressed_variants`.
 fn suppressed_variants_for(
     paths: &MossPaths,
     staging_dir: &Path,
@@ -1902,7 +1908,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     });
 
     let moss_paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
-    let suppressed = suppressed_variants_for(&moss_paths, &ctx.staging_dir);
+    let suppressed = &ctx.suppressed;
     let objects = ObjectStore::for_site(&moss_paths);
     let transforms = TransformCache::for_site(&moss_paths);
 
@@ -2050,21 +2056,6 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         } else {
             item.source_oid.clone()
         };
-
-        // Nothing points at this one, and the last COMPLETE reference scan is
-        // what says so. Encoding it writes bytes the ship-time
-        // prune deletes again seconds later. Rungs need no separate test — a
-        // rung only ever appears in a srcset beside its base. The item is
-        // dropped after blocking.rs already ran `set_pending`, so its promise
-        // stays Pending behind the LQIP placeholder, for a URL that — being
-        // unreferenced — no page requests.
-        if suppressed.contains(&relative_webp) {
-            log::trace!(
-                "[image] {} is unreferenced per the last ship-time scan — not re-encoding",
-                relative_webp
-            );
-            return ItemStep::nothing_shipped(Vec::new());
-        }
 
         // Singleflight dedup: if another task is already converting this source_oid,
         // block until it finishes and reuse its result. Only the first caller runs
@@ -2363,7 +2354,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             "Image conversion cancelled ({} converted before cancel)",
             converted_count
         );
-        emit_image_outputs_via_channel(&ctx.tx, &produced_webp_paths, &ctx.staging_dir, &objects, &suppressed, services.assets.as_deref());
+        emit_image_outputs_via_channel(&ctx.tx, &produced_webp_paths, &ctx.staging_dir, &objects, suppressed, services.assets.as_deref());
         return;
     }
 
@@ -2397,7 +2388,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     // `tx.is_none()` fallback to `update_image_hashes` (on-disk
     // hashes.json read+write); that fallback is gone — every caller goes
     // through the coordinator now.
-    emit_image_outputs_via_channel(&ctx.tx, &produced_webp_paths, &ctx.staging_dir, &objects, &suppressed, services.assets.as_deref());
+    emit_image_outputs_via_channel(&ctx.tx, &produced_webp_paths, &ctx.staging_dir, &objects, suppressed, services.assets.as_deref());
 
     // Dual-emit (Step 3 Phase 4): legacy BackgroundProgress + a media child Job
     // under the Build parent. Gated on REAL work (FIX 1b).
@@ -2759,6 +2750,15 @@ pub(crate) fn dispatch_image_conversions(
                 &ctx.dir_overrides,
             );
             let relative_webp = moss_core::asset_paths::to_webp(&mapped);
+            // Nothing points at this image, and the worker drops a suppressed
+            // item before encoding it. Dispatching it anyway found its `.webp`
+            // missing on every build — the prune removed it on purpose — and
+            // queued a self-heal that could never happen. A page that starts
+            // referencing it takes it out of this set, since
+            // `suppressed_variants` re-reads this build's staging.
+            if heal_suppressed.contains(&relative_webp) {
+                continue;
+            }
             let staging_path = ctx.staging_dir.join(&relative_webp);
 
             // A fingerprint that can't be computed (source unreadable) can't
@@ -2827,7 +2827,7 @@ pub(crate) fn dispatch_image_conversions(
                     &staging_path,
                     "image/webp",
                     source_oid,
-                    heal_suppressed.contains(&relative_webp),
+                    false, // a suppressed base never gets here — see the `continue` above
                     &mut healed_count,
                 )
             } else {
@@ -2838,11 +2838,7 @@ pub(crate) fn dispatch_image_conversions(
                 // Re-register every key the encode path delivers for this
                 // image so seal() keeps them. `emit_image_outputs_via_channel`'s
                 // existence check drops any key whose staging file is absent
-                // rather than registering a lie. `verified_webp_oid` is
-                // `None` only for a suppressed (unreferenced) image, which
-                // never reaches deploy either way — `ship-by-OID`'s
-                // fingerprint fallback covers that one, same as before this
-                // fix.
+                // rather than registering a lie.
                 skip_paths.push((relative_webp.clone(), verified_webp_oid));
                 // This image will not re-enter `run_image_conversion` this
                 // round, so it cannot re-raise its own advisory there — carry
@@ -3015,6 +3011,7 @@ pub(crate) fn dispatch_image_conversions(
         // against and so never attempted a skip in headless mode at all.
         let mut run_ctx = ImageRunContext::from_background(ctx, config.clone());
         run_ctx.items = to_dispatch;
+        run_ctx.suppressed = heal_suppressed;
         let run_ctx = run_ctx.with_carried_advisories(carried_advisories);
         let run_ctx = if let Some(t) = tx {
             run_ctx.with_tx(t)
