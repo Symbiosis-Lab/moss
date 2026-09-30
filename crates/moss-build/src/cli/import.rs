@@ -77,6 +77,22 @@ pub fn run(args: &[String]) -> i32 {
                     "  ✓ {} page(s) imported, {} failed, {} skipped (non-HTML), {} duplicate(s) skipped",
                     res.total_pages, res.failed_pages, res.skipped_pages, res.duplicate_pages
                 );
+                // Silent when the site declared no sitemap at all — the
+                // ordinary case, and the one this line must not clutter.
+                if res.sitemap_urls > 0 {
+                    eprintln!(
+                        "  ↳ {} page(s) came from the site's own sitemap (imported regardless \
+                         of the page cap)",
+                        res.sitemap_urls
+                    );
+                }
+                if res.sitemap_truncated {
+                    eprintln!(
+                        "  ⚠ the sitemap itself declared more than {} URLs and was truncated — \
+                         some declared pages may be missing.",
+                        crate::vault::import::scrape::sitemap::MAX_SITEMAP_URLS
+                    );
+                }
                 // A capped crawl is incomplete even when every page it did
                 // reach succeeded — real pages were left out, and before
                 // this fix the only signal was the exit code below. Say so
@@ -320,10 +336,14 @@ fn print_usage() {
     eprintln!("login-gated or JS-heavy pages a plain fetch can't reach.");
     eprintln!();
     eprintln!("By default imports only the URL given. Pass --recursive (-r) to walk");
-    eprintln!("every in-scope page (same host + path prefix), up to {} pages. If more", DEFAULT_MAX_PAGES);
-    eprintln!("are discovered, the crawl stops there; the summary says how many were");
-    eprintln!("left, and you can pass the missing URLs to `--list` (without -r — each");
-    eprintln!("listed URL is fetched directly, not re-crawled) to pick up the rest.");
+    eprintln!("every in-scope page (same host + path prefix), up to {} pages. Before", DEFAULT_MAX_PAGES);
+    eprintln!("walking links, -r also reads the site's own sitemap (from robots.txt's");
+    eprintln!("`Sitemap:` line, else /sitemap.xml): every page it declares is imported");
+    eprintln!("regardless of the page cap, which only limits link-discovered extras. If");
+    eprintln!("more link-discovered pages are found than the cap allows, the crawl stops");
+    eprintln!("there; the summary says how many were left, and you can pass the missing");
+    eprintln!("URLs to `--list` (without -r — each listed URL is fetched directly, not");
+    eprintln!("re-crawled) to pick up the rest.");
     eprintln!("A non-HTML response found while crawling (a PDF, an image, a feed, a");
     eprintln!("calendar file, ...) is skipped, never written as a page. A page whose own");
     eprintln!("canonical URL (or, lacking one, its extracted body) already matches a page");

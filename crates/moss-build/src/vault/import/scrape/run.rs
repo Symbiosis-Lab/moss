@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 use std::sync::LazyLock;
 use tokio::sync::Semaphore;
@@ -68,6 +69,17 @@ pub struct ScrapeResult {
     /// Discovered, in-scope URLs still unvisited when the cap stopped the
     /// crawl (deduplicated). Zero whenever `capped` is false.
     pub remaining_urls: usize,
+    /// In-scope URLs the site's own sitemap declared (after locale-alternate
+    /// collapsing — see `sitemap::collapse_locale_alternates`), for a
+    /// recursive crawl that found one. These are exempt from `max_pages`
+    /// (rule 3: a site's declared page list is always imported) and are
+    /// seeded ahead of link-discovered URLs, so they also win survivor
+    /// choice when a link-discovered duplicate names the same page. Zero
+    /// when the crawl was not recursive or the site declared no sitemap.
+    pub sitemap_urls: usize,
+    /// True when the sitemap itself declared more than
+    /// `sitemap::MAX_SITEMAP_URLS` entries and was truncated.
+    pub sitemap_truncated: bool,
     pub error: Option<String>,
 }
 
@@ -201,20 +213,48 @@ where
     // the SAME path does.
     let mut written_path_bodies: HashMap<String, HashSet<u64>> = HashMap::new();
 
+    // The site's own declared page list — read before the link-following
+    // walk starts, so an unlinked page is queued regardless and, seeded
+    // ahead of every link-discovered URL below, is also the one on disk
+    // when a link-discovered duplicate names the same page (rule 1 compares
+    // only against identities already WRITTEN, so whichever is written
+    // first survives).
+    let sitemap = if config.recursive {
+        super::sitemap::discover(&scope, &config.start_url, &config.user_agent).await
+    } else {
+        super::sitemap::SitemapDiscovery::default()
+    };
+    let declared: HashSet<String> = sitemap.urls.iter().cloned().collect();
+
     queue.push_back(config.start_url.clone());
+    for url in &sitemap.urls {
+        queue.push_back(url.clone());
+    }
+
+    // Pages counted against `max_pages` — a sitemap-declared URL never is
+    // (rule 3: the cap is a safety limit on link-discovered extras only),
+    // so this undercounts `pages_scraped + pages_failed + pages_skipped`
+    // exactly by however many of those were declared, and the cap check
+    // below reads this instead of that sum.
+    let mut capped_progress: usize = 0;
 
     while let Some(url) = queue.pop_front() {
         if visited.contains(&url) {
             continue;
         }
 
-        if let Some(cap) = config.max_pages {
-            if pages_scraped + pages_failed + pages_skipped >= cap {
-                // Popped but never visited or processed: put it back so the
-                // leftover count computed after the loop includes it.
-                queue.push_front(url);
-                capped = true;
-                break;
+        let is_declared = declared.contains(&url);
+
+        if !is_declared {
+            if let Some(cap) = config.max_pages {
+                if capped_progress >= cap {
+                    // Popped but never visited or processed: put it back so
+                    // the leftover count computed after the loop includes
+                    // it.
+                    queue.push_front(url);
+                    capped = true;
+                    break;
+                }
             }
         }
         visited.insert(url.clone());
@@ -256,6 +296,14 @@ where
 
         if config.recursive {
             for link in extract_links(&html, &url) {
+                if super::sitemap::block_if_locale_alternate(
+                    &link,
+                    &sitemap.locale_alternates,
+                    &mut visited,
+                    &mut pages_duplicate,
+                ) {
+                    continue;
+                }
                 if is_within_scope(&scope, &link) && !visited.contains(&link) {
                     queue.push_back(link);
                 }
@@ -263,6 +311,14 @@ where
             // Manifest-declared pages (client-rendered viewers have no
             // server-side anchors to follow).
             for page in crate::vault::import::engine::discover_pages(&html, &url) {
+                if super::sitemap::block_if_locale_alternate(
+                    &page,
+                    &sitemap.locale_alternates,
+                    &mut visited,
+                    &mut pages_duplicate,
+                ) {
+                    continue;
+                }
                 if is_within_scope(&scope, &page) && !visited.contains(&page) {
                     queue.push_back(page);
                 }
@@ -392,17 +448,28 @@ where
                 let relative = rename_for_collision(out_dir, &url_to_file_path(&url, &scope));
                 write_note(out_dir, &relative, &note)?;
                 pages_scraped += 1;
+                if !is_declared {
+                    capped_progress += 1;
+                }
             }
             PageOutcome::Failed(reason) => {
                 let relative = rename_for_collision(out_dir, &url_to_file_path(&url, &scope));
                 write_note(out_dir, &relative, &render_error_markdown(&url, &reason))?;
                 pages_failed += 1;
+                if !is_declared {
+                    capped_progress += 1;
+                }
             }
             // Never written as a `.md` file at all — that is the whole fix.
             PageOutcome::Skipped => {
                 pages_skipped += 1;
+                if !is_declared {
+                    capped_progress += 1;
+                }
             }
             // Also never written — its links were already harvested above.
+            // Never counted against the cap regardless of provenance, same
+            // as before this fix.
             PageOutcome::Duplicate => {
                 pages_duplicate += 1;
             }
@@ -437,6 +504,8 @@ where
         duplicate_pages: pages_duplicate,
         capped,
         remaining_urls,
+        sitemap_urls: sitemap.urls.len(),
+        sitemap_truncated: sitemap.truncated,
         error: None,
     })
 }
@@ -577,6 +646,8 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
         duplicate_pages: 0,
         capped: false,
         remaining_urls: 0,
+        sitemap_urls: 0,
+        sitemap_truncated: false,
         error: None,
     })
 }
@@ -760,22 +831,22 @@ fn fetch_following_redirects(
     Err(refused(&format!("too many redirects (> {MAX_REDIRECT_HOPS})")))
 }
 
-/// `ureq::get` with up to 3 attempts (1 initial + 2 retries) and exponential
-/// backoff (500ms, then 1s) between attempts, for transient failures only
-/// (see [`should_retry_status`]). Permanent failures (4xx other than 429)
-/// return immediately on the first attempt.
+/// `ureq::get` with up to `tries` attempts and exponential backoff (500ms,
+/// then 1s, then 2s, …) between attempts, for transient failures only (see
+/// [`should_retry_status`]). Permanent failures (4xx other than 429) return
+/// immediately regardless of `tries`.
 ///
 /// Note: ureq maps any non-2xx response to `Error::Status` on `.call()`
 /// itself, so this single retry loop also replaces what used to be a
 /// separate manual `status >= 400` check in `fetch_page`.
-fn call_with_retry(
+fn call_with_retry_n(
     url: &str,
     user_agent: &str,
     timeout: std::time::Duration,
+    tries: u32,
 ) -> Result<ureq::Response, String> {
-    const TRIES: u32 = 3;
     let mut last_err = String::new();
-    for attempt in 0..TRIES {
+    for attempt in 0..tries {
         if attempt > 0 {
             std::thread::sleep(std::time::Duration::from_millis(
                 500 * 2u64.pow(attempt - 1),
@@ -805,6 +876,17 @@ fn call_with_retry(
     Err(last_err)
 }
 
+/// [`call_with_retry_n`] with the pipeline's standard 3 attempts (1 initial
+/// + 2 retries) — every page and asset fetch goes through this one.
+fn call_with_retry(
+    url: &str,
+    user_agent: &str,
+    timeout: std::time::Duration,
+) -> Result<ureq::Response, String> {
+    const TRIES: u32 = 3;
+    call_with_retry_n(url, user_agent, timeout, TRIES)
+}
+
 /// Fetch a page's body, alongside its declared Content-Type — the caller
 /// decides whether the response is a page worth importing at all
 /// ([`looks_like_html_page`]) before doing anything else with the body.
@@ -822,6 +904,63 @@ async fn fetch_page(url: &str, user_agent: &str) -> Result<(String, String), Str
     })
     .await
     .map_err(|e| format!("Task error: {}", e))?
+}
+
+/// Bytes read from [`fetch_raw`]/[`fetch_raw_bytes`] beyond this are refused
+/// rather than buffered — mirrors ureq's own `into_string` cap
+/// (`INTO_STRING_LIMIT`, 10 MiB), so reading raw bytes instead of a String
+/// (needed to detect a gzip-compressed sitemap before any lossy UTF-8
+/// decoding happens) doesn't also drop the memory bound that method gave
+/// every other fetch in this file for free. A hostile or misconfigured
+/// sitemap is refused the same way an oversized ordinary page response
+/// already is, rather than buffered without limit.
+const MAX_RAW_FETCH_BYTES: usize = 10 * 1024 * 1024;
+
+/// A URL's raw response bytes, in a single attempt — the primitive
+/// [`fetch_raw`] wraps with a lossy UTF-8 decode, and that a sitemap
+/// document fetch calls directly instead so gzip-compressed bytes (see
+/// `sitemap::decode_sitemap_bytes`) survive to be decompressed before any
+/// text conversion happens. See [`fetch_raw`] for why a single attempt, no
+/// content-type gate, and the same SSRF-revalidating fetch a page fetch
+/// itself uses.
+pub(crate) async fn fetch_raw_bytes(url: &str, user_agent: &str) -> Result<Vec<u8>, String> {
+    let url = url.to_string();
+    let user_agent = user_agent.to_string();
+    tokio::task::spawn_blocking(move || {
+        let response =
+            call_with_retry_n(&url, &user_agent, std::time::Duration::from_secs(15), 1)?;
+        let mut buf = Vec::new();
+        response
+            .into_reader()
+            .take((MAX_RAW_FETCH_BYTES + 1) as u64)
+            .read_to_end(&mut buf)
+            .map_err(|e| format!("Failed to read response: {}", e))?;
+        if buf.len() > MAX_RAW_FETCH_BYTES {
+            return Err(format!(
+                "response body exceeds {MAX_RAW_FETCH_BYTES} bytes"
+            ));
+        }
+        Ok(buf)
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+}
+
+/// A URL's raw body with no content-type gate, decoded as UTF-8 (lossily —
+/// a non-UTF-8 body simply fails whatever the caller does with it next,
+/// same as any other malformed document), in a single attempt — for
+/// `robots.txt`, which is always plain text, unlike a sitemap document
+/// itself (see [`fetch_raw_bytes`], which that fetch uses directly so a
+/// gzip-compressed body isn't corrupted by this function's lossy decode
+/// before decompression runs). Neither `robots.txt` nor a sitemap document
+/// is HTML (so [`looks_like_html_page`] is never asked to judge one) or
+/// worth [`call_with_retry`]'s multi-second backoff: most sites declare no
+/// sitemap at all, so a 404 here is the ordinary, expected case, not a
+/// transient failure worth waiting out before falling through to a
+/// link-only crawl.
+pub(crate) async fn fetch_raw(url: &str, user_agent: &str) -> Result<String, String> {
+    let bytes = fetch_raw_bytes(url, user_agent).await?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 async fn download_asset(
@@ -1785,5 +1924,649 @@ Content-Location: https://img.douban.com/a.png\r\n\
         let agent = no_redirect_test_agent(&start);
         fetch_with_validated_redirects(&agent, &start, "test-agent")
             .expect_err("a chain past MAX_REDIRECT_HOPS must be refused, not followed forever");
+    }
+
+    // ── sitemap discovery (a crawl that only follows links never reaches a
+    // page nothing links to, and stops discovering new pages at all once
+    // the page cap is hit) ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_sitemap_index_followed_by_a_sitemap_seeds_unlinked_pages() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let robots = server
+            .mock("GET", "/robots.txt")
+            .with_status(200)
+            .with_body(format!("User-agent: *\nSitemap: {base}/sitemap-index.xml\n"))
+            .create_async()
+            .await;
+        let sitemap_index = server
+            .mock("GET", "/sitemap-index.xml")
+            .with_status(200)
+            .with_header("content-type", "application/xml")
+            .with_body(format!(
+                "<?xml version=\"1.0\"?>\
+                 <sitemapindex xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\
+                 <sitemap><loc>{base}/sitemap-1.xml</loc></sitemap>\
+                 </sitemapindex>"
+            ))
+            .create_async()
+            .await;
+        let sitemap_leaf = server
+            .mock("GET", "/sitemap-1.xml")
+            .with_status(200)
+            .with_header("content-type", "application/xml")
+            .with_body(format!(
+                "<?xml version=\"1.0\"?>\
+                 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\
+                 <url><loc>{base}/unlinked</loc></url>\
+                 </urlset>"
+            ))
+            .create_async()
+            .await;
+        let index = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>Root page with no link at all to the \
+                 sitemap-only page, long enough to be extracted as content.</p>\
+                 </article></body></html>",
+            )
+            .create_async()
+            .await;
+        let unlinked = server
+            .mock("GET", "/unlinked")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>A page no crawlable link reaches, only the \
+                 sitemap declares it, long enough to be extracted as content.</p>\
+                 </article></body></html>",
+            )
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        robots.assert_async().await;
+        sitemap_index.assert_async().await;
+        sitemap_leaf.assert_async().await;
+        index.assert_async().await;
+        unlinked.assert_async().await;
+
+        assert_eq!(res.total_pages, 2, "the root and the unlinked sitemap page both import");
+        assert_eq!(res.sitemap_urls, 1, "exactly one URL came from the sitemap");
+        assert!(!res.sitemap_truncated);
+
+        let unlinked_md = tmp.path().join("unlinked.md");
+        assert!(unlinked_md.exists(), "the sitemap-only page must be written to disk");
+    }
+
+    #[tokio::test]
+    async fn sitemap_urls_beyond_the_link_cap_are_still_imported() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let robots = server
+            .mock("GET", "/robots.txt")
+            .with_status(200)
+            .with_body(format!("Sitemap: {base}/sitemap.xml\n"))
+            .create_async()
+            .await;
+        let sitemap = server
+            .mock("GET", "/sitemap.xml")
+            .with_status(200)
+            .with_header("content-type", "application/xml")
+            .with_body(format!(
+                "<?xml version=\"1.0\"?>\
+                 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\
+                 <url><loc>{base}/s1</loc></url><url><loc>{base}/s2</loc></url>\
+                 </urlset>"
+            ))
+            .create_async()
+            .await;
+        let index = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><body><article><p>Root page with three discovered-only \
+                 links and no sitemap coverage of its own.</p>\
+                 <a href=\"{base}/d1\">D1</a><a href=\"{base}/d2\">D2</a>\
+                 <a href=\"{base}/d3\">D3</a></article></body></html>"
+            ))
+            .create_async()
+            .await;
+        let s1 = server
+            .mock("GET", "/s1")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>Sitemap-only page one, long enough to be \
+                 extracted as real content for this test.</p></article></body></html>",
+            )
+            .create_async()
+            .await;
+        let s2 = server
+            .mock("GET", "/s2")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>Sitemap-only page two, long enough to be \
+                 extracted as real content for this test.</p></article></body></html>",
+            )
+            .create_async()
+            .await;
+        // None of the three link-discovered-only children may ever be
+        // fetched: the cap of 1 is used up by the root page alone, and a
+        // sitemap-declared URL is never capped, so no cap "room" is ever
+        // freed up for them.
+        let d1 = server.mock("GET", "/d1").expect(0).create_async().await;
+        let d2 = server.mock("GET", "/d2").expect(0).create_async().await;
+        let d3 = server.mock("GET", "/d3").expect(0).create_async().await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        config.max_pages = Some(1);
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        robots.assert_async().await;
+        sitemap.assert_async().await;
+        index.assert_async().await;
+        s1.assert_async().await;
+        s2.assert_async().await;
+        d1.assert_async().await;
+        d2.assert_async().await;
+        d3.assert_async().await;
+
+        assert_eq!(
+            res.total_pages, 3,
+            "root plus both sitemap-declared pages import despite a page cap of 1"
+        );
+        assert!(res.capped, "the link-discovered children are still capped");
+        assert_eq!(res.remaining_urls, 3, "all three discovered-only children are left behind");
+        assert_eq!(res.sitemap_urls, 2);
+    }
+
+    #[tokio::test]
+    async fn a_sitemap_url_wins_survivor_choice_over_a_link_discovered_duplicate() {
+        // The gap this fixes: `/aboutus`, reached only by a link, and
+        // `/about`, reached only via the sitemap, are the SAME page —
+        // `/aboutus` declares `/about` as its own canonical. Before this
+        // fix `/about` was never even queued (nothing links to it), so
+        // `/aboutus` was the only copy ever written. Seeding sitemap URLs
+        // ahead of link-discovered ones means `/about` is written FIRST,
+        // so rule 1 (compares only against identities already WRITTEN)
+        // now correctly makes `/aboutus` the duplicate instead.
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let robots = server
+            .mock("GET", "/robots.txt")
+            .with_status(200)
+            .with_body(format!("Sitemap: {base}/sitemap.xml\n"))
+            .create_async()
+            .await;
+        let sitemap = server
+            .mock("GET", "/sitemap.xml")
+            .with_status(200)
+            .with_header("content-type", "application/xml")
+            .with_body(format!(
+                "<?xml version=\"1.0\"?>\
+                 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\
+                 <url><loc>{base}/about</loc></url>\
+                 </urlset>"
+            ))
+            .create_async()
+            .await;
+        let index = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><body><article><p>Root page linking only to /aboutus, long \
+                 enough to be extracted as content on its own.</p>\
+                 <a href=\"{base}/aboutus\">About us</a></article></body></html>"
+            ))
+            .create_async()
+            .await;
+        let about = server
+            .mock("GET", "/about")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>The real about page, reachable only \
+                 through the sitemap, long enough to be extracted.</p>\
+                 </article></body></html>",
+            )
+            .create_async()
+            .await;
+        let aboutus = server
+            .mock("GET", "/aboutus")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><head><link rel=\"canonical\" href=\"{base}/about\"></head>\
+                 <body><article><p>A link-discovered variant of the about page, \
+                 declaring the sitemap's URL as its own canonical.</p>\
+                 </article></body></html>"
+            ))
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        robots.assert_async().await;
+        sitemap.assert_async().await;
+        index.assert_async().await;
+        about.assert_async().await;
+        aboutus.assert_async().await;
+
+        assert_eq!(res.total_pages, 2, "the root and the sitemap's /about both import");
+        assert_eq!(res.duplicate_pages, 1, "the link-discovered /aboutus is the duplicate");
+
+        assert!(tmp.path().join("about.md").exists(), "the sitemap's own URL must survive");
+        assert!(
+            !tmp.path().join("aboutus.md").exists(),
+            "the link-discovered duplicate must never reach disk"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_sitemap_gives_unchanged_behavior() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let robots = server.mock("GET", "/robots.txt").with_status(404).create_async().await;
+        let sitemap = server.mock("GET", "/sitemap.xml").with_status(404).create_async().await;
+        let index = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><body><article><p>An ordinary root page with one ordinary \
+                 link, long enough to be extracted as content.</p>\
+                 <a href=\"{base}/a\">A</a></article></body></html>"
+            ))
+            .create_async()
+            .await;
+        let a = server
+            .mock("GET", "/a")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>The one linked child page, long enough \
+                 to be extracted as content.</p></article></body></html>",
+            )
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        robots.assert_async().await;
+        sitemap.assert_async().await;
+        index.assert_async().await;
+        a.assert_async().await;
+
+        assert_eq!(res.total_pages, 2, "the root and its one linked child import");
+        assert_eq!(res.sitemap_urls, 0, "no sitemap was found");
+        assert!(!res.sitemap_truncated);
+        assert!(!res.capped);
+        assert_eq!(res.duplicate_pages, 0);
+        assert_eq!(res.failed_pages, 0);
+    }
+
+    /// The sitemap protocol lets a site serve its sitemap gzip-compressed
+    /// (`sitemap.xml.gz`) with no `Content-Encoding` header — ureq itself is
+    /// never built with gzip transfer-encoding support here, so this is the
+    /// only path that ever needs to inflate one. Detected by the gzip magic
+    /// bytes, not the `.gz` suffix, so this also covers a server that names
+    /// the compressed file plain `sitemap.xml`.
+    #[tokio::test]
+    async fn a_gzip_compressed_sitemap_is_still_discovered() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let sitemap_xml = format!(
+            "<?xml version=\"1.0\"?>\
+             <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\
+             <url><loc>{base}/unlinked</loc></url>\
+             </urlset>"
+        );
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(sitemap_xml.as_bytes()).unwrap();
+        let gz_body = encoder.finish().unwrap();
+
+        let robots = server
+            .mock("GET", "/robots.txt")
+            .with_status(200)
+            .with_body(format!("Sitemap: {base}/sitemap.xml.gz\n"))
+            .create_async()
+            .await;
+        let sitemap = server
+            .mock("GET", "/sitemap.xml.gz")
+            .with_status(200)
+            .with_header("content-type", "application/gzip")
+            .with_body(gz_body)
+            .create_async()
+            .await;
+        let index = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>Root page with no link at all to the \
+                 gzip-sitemap-only page, long enough to be extracted as content.</p>\
+                 </article></body></html>",
+            )
+            .create_async()
+            .await;
+        let unlinked = server
+            .mock("GET", "/unlinked")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>A page declared only by the gzip-compressed \
+                 sitemap, long enough to be extracted as content.</p>\
+                 </article></body></html>",
+            )
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        robots.assert_async().await;
+        sitemap.assert_async().await;
+        index.assert_async().await;
+        unlinked.assert_async().await;
+
+        assert_eq!(res.total_pages, 2, "the root and the gzip sitemap's page both import");
+        assert_eq!(res.sitemap_urls, 1);
+        assert!(tmp.path().join("unlinked.md").exists());
+    }
+
+    /// Regression guard: one corpus site's sitemap index lists a per-locale
+    /// sitemap for each UI language, and each `<url>` entry names its
+    /// sibling-locale URL via the sitemap protocol's own `hreflang`
+    /// extension — the exact shape found on a real site while building this
+    /// fix, where `/en/post` is a UI-language toggle over the SAME article
+    /// body as `/post`, each self-canonical (so canonical-identity dedup,
+    /// rule 1, does not collapse them on its own). Seeding both sitemaps'
+    /// URLs unfiltered would double-import the whole site. `/en/post` must
+    /// never even be fetched.
+    #[tokio::test]
+    async fn sitemap_locale_alternates_collapse_to_one_representative() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let robots = server
+            .mock("GET", "/robots.txt")
+            .with_status(200)
+            .with_body(format!("Sitemap: {base}/sitemap-index.xml\n"))
+            .create_async()
+            .await;
+        let sitemap_index = server
+            .mock("GET", "/sitemap-index.xml")
+            .with_status(200)
+            .with_header("content-type", "application/xml")
+            .with_body(format!(
+                "<?xml version=\"1.0\"?>\
+                 <sitemapindex xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\
+                 <sitemap><loc>{base}/zh-sitemap.xml</loc></sitemap>\
+                 <sitemap><loc>{base}/en-sitemap.xml</loc></sitemap>\
+                 </sitemapindex>"
+            ))
+            .create_async()
+            .await;
+        let zh_sitemap = server
+            .mock("GET", "/zh-sitemap.xml")
+            .with_status(200)
+            .with_header("content-type", "application/xml")
+            .with_body(format!(
+                "<?xml version=\"1.0\"?>\
+                 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\" \
+                 xmlns:xhtml=\"http://www.w3.org/1999/xhtml\">\
+                 <url><loc>{base}/post</loc>\
+                 <xhtml:link rel=\"alternate\" hreflang=\"en\" href=\"{base}/en/post\"/>\
+                 </url></urlset>"
+            ))
+            .create_async()
+            .await;
+        let en_sitemap = server
+            .mock("GET", "/en-sitemap.xml")
+            .with_status(200)
+            .with_header("content-type", "application/xml")
+            .with_body(format!(
+                "<?xml version=\"1.0\"?>\
+                 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\" \
+                 xmlns:xhtml=\"http://www.w3.org/1999/xhtml\">\
+                 <url><loc>{base}/en/post</loc>\
+                 <xhtml:link rel=\"alternate\" hreflang=\"zh\" href=\"{base}/post\"/>\
+                 </url></urlset>"
+            ))
+            .create_async()
+            .await;
+        let index = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>Home page, unrelated to the locale-mirrored \
+                 article, long enough to be extracted as content.</p>\
+                 </article></body></html>",
+            )
+            .create_async()
+            .await;
+        let post = server
+            .mock("GET", "/post")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>The article body, in its original \
+                 language, long enough to be extracted as content.</p>\
+                 </article></body></html>",
+            )
+            .create_async()
+            .await;
+        // The UI-language mirror must never be fetched at all — collapsed
+        // away before the crawl's own queue is ever seeded.
+        let en_post = server.mock("GET", "/en/post").expect(0).create_async().await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        robots.assert_async().await;
+        sitemap_index.assert_async().await;
+        zh_sitemap.assert_async().await;
+        en_sitemap.assert_async().await;
+        index.assert_async().await;
+        post.assert_async().await;
+        en_post.assert_async().await;
+
+        assert_eq!(res.total_pages, 2, "the home page and the one representative article");
+        assert_eq!(res.sitemap_urls, 1, "the locale mirror collapses into its sibling");
+        assert!(
+            !tmp.path().join("en/post.md").exists(),
+            "the UI-language mirror must never be written"
+        );
+    }
+
+    /// The regression the collapse alone didn't fix: a UI-language toggle
+    /// link, present on every page of the ORIGINAL locale, discovers the
+    /// same mirror the sitemap already named as an alternate — regardless
+    /// of collapsing the SEED list, a plain link-following crawl reached it
+    /// anyway. It must never be fetched via this path either.
+    #[tokio::test]
+    async fn a_link_discovered_locale_alternate_is_never_fetched() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let robots = server
+            .mock("GET", "/robots.txt")
+            .with_status(200)
+            .with_body(format!("Sitemap: {base}/sitemap.xml\n"))
+            .create_async()
+            .await;
+        let sitemap = server
+            .mock("GET", "/sitemap.xml")
+            .with_status(200)
+            .with_header("content-type", "application/xml")
+            .with_body(format!(
+                "<?xml version=\"1.0\"?>\
+                 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\" \
+                 xmlns:xhtml=\"http://www.w3.org/1999/xhtml\">\
+                 <url><loc>{base}/post</loc>\
+                 <xhtml:link rel=\"alternate\" hreflang=\"en\" href=\"{base}/en/post\"/>\
+                 </url></urlset>"
+            ))
+            .create_async()
+            .await;
+        // The home page carries the same per-page language-toggle link a
+        // real bilingual site puts on every page — an ordinary, in-scope,
+        // crawlable link straight to the mirror the sitemap already named.
+        let index = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><body><article><p>Home page linking to the language \
+                 toggle, long enough to be extracted as content.</p>\
+                 <a href=\"{base}/en/post\">EN</a></article></body></html>"
+            ))
+            .create_async()
+            .await;
+        let post = server
+            .mock("GET", "/post")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>The article body, in its original \
+                 language, long enough to be extracted as content.</p>\
+                 </article></body></html>",
+            )
+            .create_async()
+            .await;
+        // Must never be fetched via the link either, not just unseeded.
+        let en_post = server.mock("GET", "/en/post").expect(0).create_async().await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        robots.assert_async().await;
+        sitemap.assert_async().await;
+        index.assert_async().await;
+        post.assert_async().await;
+        en_post.assert_async().await;
+
+        assert_eq!(res.total_pages, 2, "the home page and the one representative article");
+        assert_eq!(
+            res.duplicate_pages, 1,
+            "the link-discovered mirror counts as a duplicate, once"
+        );
+        assert!(
+            !tmp.path().join("en/post.md").exists(),
+            "the link-discovered mirror must never be written"
+        );
+    }
+
+    /// Negative case: the block list is exactly what the sitemap declares as
+    /// an alternate, never a `/en/`-prefix heuristic. A second English page
+    /// with no declared `zh` counterpart — linked from the same home page
+    /// that links to the real alternate — must still be crawled normally.
+    #[tokio::test]
+    async fn a_link_to_a_non_alternate_page_under_the_same_locale_prefix_is_still_followed() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let robots = server
+            .mock("GET", "/robots.txt")
+            .with_status(200)
+            .with_body(format!("Sitemap: {base}/sitemap.xml\n"))
+            .create_async()
+            .await;
+        let sitemap = server
+            .mock("GET", "/sitemap.xml")
+            .with_status(200)
+            .with_header("content-type", "application/xml")
+            .with_body(format!(
+                "<?xml version=\"1.0\"?>\
+                 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\" \
+                 xmlns:xhtml=\"http://www.w3.org/1999/xhtml\">\
+                 <url><loc>{base}/post</loc>\
+                 <xhtml:link rel=\"alternate\" hreflang=\"en\" href=\"{base}/en/post\"/>\
+                 </url></urlset>"
+            ))
+            .create_async()
+            .await;
+        let index = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><body><article><p>Home page linking to an English-only \
+                 page the sitemap never names as anyone's alternate, long \
+                 enough to be extracted as content.</p>\
+                 <a href=\"{base}/en/other\">English-only page</a></article></body></html>"
+            ))
+            .create_async()
+            .await;
+        let post = server
+            .mock("GET", "/post")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>The article body, in its original \
+                 language, long enough to be extracted as content.</p>\
+                 </article></body></html>",
+            )
+            .create_async()
+            .await;
+        // Same `/en/` prefix as the real alternate, but never declared as
+        // one — must be fetched normally, proving the rule isn't a prefix
+        // heuristic.
+        let en_other = server
+            .mock("GET", "/en/other")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                "<html><body><article><p>An English-only page with no zh \
+                 counterpart in the sitemap, long enough to be extracted.</p>\
+                 </article></body></html>",
+            )
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        robots.assert_async().await;
+        sitemap.assert_async().await;
+        index.assert_async().await;
+        post.assert_async().await;
+        en_other.assert_async().await;
+
+        assert_eq!(res.total_pages, 3, "the home page, the article, and the non-alternate page");
+        assert_eq!(res.duplicate_pages, 0, "nothing here is a declared duplicate");
+        assert!(
+            tmp.path().join("en/other.md").exists(),
+            "a page under the same prefix but not a declared alternate must still import"
+        );
     }
 }

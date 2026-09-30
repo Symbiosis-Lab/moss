@@ -79,6 +79,7 @@ ratex-svg = { version = "=0.1.13", features = ["standalone", "embed-fonts"] }
 rayon = "1.11"
 regex = "1.12.2"
 resvg = { version = "0.42", default-features = false, features = ["text", "system-fonts"] }
+roxmltree = "0.20"
 scraper = "0.20"
 sha2 = "0.10"
 tar = "0.4"
@@ -162,7 +163,6 @@ pathdiff = "0.2"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
-roxmltree = "0.20"
 # vault_root_tests.rs mints unique temp dirs per test.
 uuid = { version = "1.11", features = ["v4"] }
 # The moved build tree's inline tests (M6a).
