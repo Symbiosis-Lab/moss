@@ -438,6 +438,7 @@ impl Restore<'_> {
                 url,
                 title,
                 is_wikilink: _,
+                has_pothole: _,
             } => {
                 let mut changed = self.in_inlines(children);
                 changed |= self.literal_url(url);

@@ -81,9 +81,15 @@ pub(crate) enum GridCell<'a> {
 pub(crate) struct CellLink<'a> {
     pub href: &'a str,
     pub kind: UrlKind,
-    /// The link's text with markup dropped — the card's title when the linked
-    /// page doesn't supply a better one.
+    /// The link's text with markup dropped — the card's title when
+    /// [`Self::has_authored_title`] is true.
     pub text: String,
+    /// False only for a bare wikilink (`[[stem]]`, no `|alias`): pulldown-cmark
+    /// synthesizes the raw target as `text` for display, which is never a
+    /// title the author chose. True for a `[[stem|alias]]` wikilink, a plain
+    /// `[text](url)` markdown link (no synthesized-default concept exists
+    /// there), and a whole-cell `Block::LinkCard`.
+    pub has_authored_title: bool,
     /// The entire cell is the link (a [`Block::LinkCard`]). An INTERNAL
     /// whole-cell link already IS the serializer's final
     /// `<a class="moss-grid-card">` chrome, so a pass that would re-wrap it
@@ -153,6 +159,12 @@ pub(crate) fn classify_cell(blocks: &[Block]) -> GridCell<'_> {
                 href: &r.href,
                 kind: r.kind,
                 text: blocks_text(children),
+                // A LinkCard is always `[inner](url)` — a bracket-and-paren
+                // markdown link spanning block content, detected at the
+                // cell-string level before parsing (see the type's doc
+                // comment). It never comes from `[[wikilink]]` syntax, so its
+                // text is always the author's own.
+                has_authored_title: true,
                 whole_cell: true,
                 cover_image: moss_core::ast::link_card::cover_image_href(children),
             }),
@@ -173,9 +185,13 @@ pub(crate) fn classify_cell(blocks: &[Block]) -> GridCell<'_> {
 /// A paragraph is a link cell when it OPENS with a link and carries nothing
 /// after it but a soft-wrapped plain-text description.
 fn leading_link(inlines: &[Inline]) -> GridCell<'_> {
-    let [Inline::Link { url, children, .. }, tail @ ..] = inlines else {
+    let [Inline::Link { url, children, is_wikilink, has_pothole, .. }, tail @ ..] = inlines else {
         return GridCell::Opaque;
     };
+    // A standard `[text](url)` link has no synthesized-default text, so its
+    // text always came from the author. A `[[wikilink]]` only counts as
+    // authored when it carried an explicit `|alias`.
+    let has_authored_title = !is_wikilink || *has_pothole;
     // A soft break renders as a literal `\n`, which is what made the old
     // scanner's "newline right after `</a>`" test work. `[A](a/) desc` (same
     // line) is deliberately NOT a link cell — the text reads as prose beside a
@@ -190,6 +206,7 @@ fn leading_link(inlines: &[Inline]) -> GridCell<'_> {
             href: &r.href,
             kind: r.kind,
             text: inlines_text(children),
+            has_authored_title,
             whole_cell: false,
             // An ordinary (non-wikilink) image-plus-caption cell reaches this
             // shape rather than `Block::LinkCard` (see
@@ -761,7 +778,7 @@ fn picked_card_props(link: &CellLink<'_>, index: &BuildIndex<'_>) -> Option<Chil
     );
     // An explicit link text wins; otherwise the linked page's own label, which
     // `props_for_document` already filled in.
-    if !link.text.is_empty() {
+    if link.has_authored_title {
         props.title = link.text.clone();
     }
     Some(props)

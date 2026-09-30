@@ -283,6 +283,29 @@ fn folder_links_in_a_grid_become_collection_cards() {
     );
 }
 
+#[test]
+fn a_bare_wikilink_cell_shows_the_linked_pages_title() {
+    // `[[work-b]]` has no `|alias`, so pulldown-cmark synthesizes the raw
+    // target ("work-b") as the link's text. That synthesized text is never
+    // the author's title choice, so the card must show the linked page's
+    // own title instead.
+    let docs = vec![make_doc("Work B", "work-b/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid 1\n[[work-b]]\n:::\n");
+    assert!(html.contains(">Work B<"), "got: {html}");
+    assert!(!html.contains(">work-b<"), "got: {html}");
+}
+
+#[test]
+fn a_wikilink_alias_overrides_the_linked_pages_title() {
+    // `[[work-b|Another Title]]` — the author wrote an explicit alias, which
+    // must win over the linked page's own title.
+    let docs = vec![make_doc("Work B", "work-b/index.html", None)];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid 1\n[[work-b|Another Title]]\n:::\n");
+    assert!(html.contains(">Another Title<"), "got: {html}");
+}
+
 /// The ONE-renderer falsifier for the plain `:::grid` card, the twin of
 /// `summary_cells_render_through_the_summary_card_emitter` below: the expected
 /// markup is the grid-card emitter's own output for the shared props builder's

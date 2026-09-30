@@ -1346,12 +1346,21 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
                 // the renderer can emit `class="wikilink"` and graph
                 // builders can identify wikilink targets.
                 let is_wikilink = matches!(*link_type, pulldown_cmark::LinkType::WikiLink { .. });
+                // `has_pothole` is pulldown-cmark's own name for "the author
+                // wrote `|alias`" — false for a bare `[[target]]`, where the
+                // text a consumer sees is a synthesized copy of the target,
+                // not an authored choice.
+                let has_pothole = matches!(
+                    *link_type,
+                    pulldown_cmark::LinkType::WikiLink { has_pothole: true }
+                );
                 (
                     Some(Inline::Link {
                         url: Url::unresolved(dest_url.to_string()),
                         title: title_opt,
                         children,
                         is_wikilink,
+                        has_pothole,
                     }),
                     end - start + 1,
                 )

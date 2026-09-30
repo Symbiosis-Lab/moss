@@ -97,8 +97,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "history",
-            args: "[<path>] [--json] | --save [<name>] | <path> --restore --at <id> [--copy] | --restore --at <id> --yes",
-            description: "moss's own version history, kept outside the site folder (not git): every landed publish gets a snapshot, and `--save` takes one on demand. With no path, lists the site's timeline newest first: when, whether it was a publish or a named save, a `live` marker on the version currently published, and what changed. With a path, lists that one page's timeline instead, noting when its content was not kept (over the size ceiling, or unreadable at publish time). `--save [<name>]` builds the site and saves a version of it right now. `--restore --at <id>` restores that version — a path restores just that page (`--copy` writes it beside the current file instead of overwriting it); with no path it restores the whole site, which needs `--yes` since it can move files to the Trash. `<id>` is a version's id from the timeline, or an unambiguous prefix of one. This command always operates on the site containing the current directory — it takes no folder argument.",
+            args: "[<path>] [--json] | --save [<name>] [--json] | <path> --restore --at <id> [--copy] | --restore --at <id> --yes",
+            description: "moss's own version history, kept inside the site at `.moss/history` (not git — a git user already has their own history, and this store never adds commits): every landed publish gets a snapshot, and `--save` takes one on demand. With no path, lists the site's timeline newest first: when, whether it was a publish or a named save, a `live` marker on the version currently published, and what changed. With a path, lists that one page's timeline instead, noting when its content was not kept (over the size ceiling, or unreadable at publish time). `--save [<name>]` builds the site and saves a version of it right now, ending with one line naming the version saved; `--save --json` prints that one version as a single JSON object on stdout instead (build progress and warnings still go to stderr), so a script never has to scrape the saved id out of the build log. `--restore --at <id>` restores that version — a path restores just that page (`--copy` writes it beside the current file instead of overwriting it); with no path it restores the whole site, which needs `--yes` since it can move files to the Trash. `<id>` is a version's id from the timeline, or an unambiguous prefix of one. This command always operates on the site containing the current directory — it takes no folder argument.",
         },
     ]
 }
@@ -429,6 +429,26 @@ mod tests {
         let text = help_for("build").expect("build is not self-handled");
         assert!(text.contains("[--serve [--watch]]"), "usage offers --watch on its own: {text}");
         assert!(text.contains("--watch, which only works with --serve"), "help does not say --watch needs --serve: {text}");
+    }
+
+    /// The store lives inside the site, at `.moss/history` — the store's own
+    /// `store_dir()`, which `moss history`'s plain-text timeline prints at the
+    /// end of its own output ("Versions are kept at …"). The help text used to
+    /// say the opposite ("kept outside the site folder"), which sent an agent
+    /// looking for a version store that was never there.
+    #[test]
+    fn history_help_says_versions_live_inside_the_site() {
+        let cmd = cli_commands().into_iter().find(|c| c.name == "history").expect("history is a command");
+        assert!(
+            cmd.description.contains(".moss/history"),
+            "history's --help does not say where versions actually live: {}",
+            cmd.description
+        );
+        assert!(
+            !cmd.description.contains("outside the site folder"),
+            "history's --help still claims versions are kept outside the site: {}",
+            cmd.description
+        );
     }
 
     /// `every_command_answers_help` cannot see a verb that declines rendering

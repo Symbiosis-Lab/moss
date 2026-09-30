@@ -75,6 +75,13 @@ pub fn take_cli_problems() -> usize {
 /// Bumps [`CLI_PROBLEMS`] and then prints exactly the same way
 /// `cli_eprintln!` would — the count and the line are the same event by
 /// construction, so they cannot disagree.
+///
+/// This macro alone never passes through `log` (see [`log_warn_problem!`]'s
+/// doc), which is why the double-print bug happened: a call site that also
+/// wanted the `log` stream hand-wrote a `log::warn!` beside it and printed
+/// the same warning twice. A NEW problem call site almost always wants
+/// `log_warn_problem!` instead — reach for this one only when the log stream
+/// is genuinely not wanted for this warning.
 macro_rules! cli_warn {
     ($($arg:tt)*) => {{
         $crate::build::cli_output::note_cli_problem();
@@ -179,12 +186,92 @@ impl log::Log for HeadlessLogger {
     }
 
     fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            cli_eprintln!("[{}] {}: {}", record.level(), record.target(), record.args());
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        if let Some((line, counts)) = log_line_for(record) {
+            if counts {
+                note_cli_problem();
+            }
+            cli_eprintln!("{}", line);
         }
     }
 
     fn flush(&self) {}
+}
+
+/// What one `log::Record` earns: the line to print (`None` drops it
+/// entirely) and whether it counts toward `--strict`. Pulled out of the
+/// `log::Log` impl so the decision is testable without installing a
+/// process-global logger.
+///
+/// usvg/resvg (the SVG-rasterization crates moss vendors for favicons, OG
+/// cards and math-fallback PNGs) log through this same global `log` facade.
+/// A line like `usvg::parser::units: Invalid 'font-size' value: 'huge'.`
+/// names no moss file on its own — but which of the three call sites fired
+/// it is knowable: [`suppress_renderer_warnings`] is held for the two that
+/// rasterize a SVG moss generated itself (the OG card, a math-fallback PNG),
+/// so a renderer warning arriving while it is held is dropped from both the
+/// printed list and the count (the same call `svg_util::strip_media_queries`
+/// already makes for usvg's `@media` warning specifically), and one arriving
+/// while it is NOT held is exactly `site_meta::favicon::generate_favicons`
+/// rasterizing an author's own SVG — attributed to that file, printed, and
+/// counted, rather than left uncounted like before.
+fn log_line_for(record: &log::Record) -> Option<(String, bool)> {
+    if is_dependency_svg_renderer_warning(record) {
+        if renderer_warnings_suppressed() {
+            return None;
+        }
+        return Some((
+            format!("[{}] assets/favicon.svg: {}", record.level(), record.args()),
+            true,
+        ));
+    }
+    Some((format!("[{}] {}: {}", record.level(), record.target(), record.args()), false))
+}
+
+/// Whether `record` came from usvg or resvg.
+///
+/// A namespace match (`target == dep` or `target` starts with `"dep::"`),
+/// never a substring one — a crate that merely starts with the same letters
+/// (`usvgutil`, say) is a different crate and must not be swept up.
+fn is_dependency_svg_renderer_warning(record: &log::Record) -> bool {
+    const DEPENDENCIES: [&str; 2] = ["usvg", "resvg"];
+    record.level() == log::Level::Warn
+        && DEPENDENCIES.iter().any(|dep| {
+            let target = record.target();
+            target == *dep || target.starts_with(dep) && target[dep.len()..].starts_with("::")
+        })
+}
+
+thread_local! {
+    /// True while rendering one of moss's OWN generated SVGs through
+    /// usvg/resvg (the OG card, a math-fallback PNG) — never while
+    /// rasterizing an author-supplied one. See [`suppress_renderer_warnings`].
+    static SUPPRESS_RENDERER_WARNINGS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn renderer_warnings_suppressed() -> bool {
+    SUPPRESS_RENDERER_WARNINGS.with(std::cell::Cell::get)
+}
+
+/// Silence usvg/resvg warnings for the lifetime of the returned guard —
+/// wrap every call that rasterizes a moss-GENERATED SVG (never an
+/// author-supplied one) in `let _s = suppress_renderer_warnings();`. Such a
+/// warning names no moss file (`HeadlessLogger::log`'s doc explains why), so
+/// it is dropped rather than printed uncounted.
+///
+/// Restores the PREVIOUS value on drop rather than hard-resetting to
+/// `false`, so a nested call (none exist today) cannot un-suppress an outer
+/// one, and drops it even if the wrapped render call panics.
+pub(crate) fn suppress_renderer_warnings() -> impl Drop {
+    struct Guard(bool);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            SUPPRESS_RENDERER_WARNINGS.with(|c| c.set(self.0));
+        }
+    }
+    Guard(SUPPRESS_RENDERER_WARNINGS.with(|c| c.replace(true)))
 }
 
 /// `MOSS_LOG_LEVEL` parsing for the headless path, defaulting to `Warn`.

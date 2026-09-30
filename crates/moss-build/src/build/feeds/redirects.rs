@@ -164,6 +164,29 @@ pub fn pretty_url_to_fs_path(pretty_url: &str) -> String {
     }
 }
 
+/// What to tell the author about a `redirects.json` key that cannot become a
+/// redirect stub — naming what to write instead when there is one obvious fix.
+///
+/// A leading slash is the one shape a person actually types by mistake (a
+/// pasted absolute URL, or old habit from a config file that wants one); the
+/// other two `ServedPath` rejections are outside normal authoring and get
+/// only the underlying reason.
+fn rejected_redirect_message(old_url: &str, err: &crate::build::served_path::ServedPathError) -> String {
+    use crate::build::served_path::ServedPathError;
+    match err {
+        ServedPathError::AbsolutePath => format!(
+            "redirects.json: '{old_url}' has a leading slash — write it as '{}' \
+             instead (a key here is a pretty URL like 'old/page/', never \
+             '/old/page/'); until fixed, this old address will not redirect",
+            old_url.trim_start_matches('/')
+        ),
+        other => format!(
+            "redirects.json: '{old_url}' is not a valid redirect source ({other}) \
+             — this old address will not redirect until the entry is fixed"
+        ),
+    }
+}
+
 /// Build-time entry point: detect renames, emit redirect stubs into `pending`, and persist
 /// `redirects.json`.
 ///
@@ -185,6 +208,7 @@ pub fn emit_redirect_stubs(
     output_dir: &Path,
     pending: &mut crate::build::manifest::PendingManifest,
 ) -> Result<BaselineHealth, String> {
+    use crate::build::cli_output::log_warn_problem;
     use crate::build::context::BuildContext;
     use crate::build::manifest::HashBucket;
     use crate::build::served_path::ServedPath;
@@ -251,8 +275,18 @@ pub fn emit_redirect_stubs(
     for (old_url, new_url) in &merged {
         let fs_path = pretty_url_to_fs_path(old_url);
         let html = generate_redirect_html(new_url);
-        let sp = ServedPath::from_source(&fs_path)
-            .map_err(|e| format!("Invalid redirect stub path '{}': {}", fs_path, e))?;
+        // A rejected entry (a leading slash, a `..` segment, a `.moss`/`_moss`
+        // segment) is the author's mistake, not the build's — it must be
+        // reported as a `--strict`-visible problem and then skipped, never
+        // let it take down every OTHER redirect in the file via `?`. Only a
+        // genuine write failure below is fatal to the whole build.
+        let sp = match ServedPath::from_source(&fs_path) {
+            Ok(sp) => sp,
+            Err(e) => {
+                log_warn_problem!("{}", rejected_redirect_message(old_url, &e));
+                continue;
+            }
+        };
         if unchanged {
             // Same bytes already on disk from a previous build in this
             // session — re-register without rewriting or re-hashing off a

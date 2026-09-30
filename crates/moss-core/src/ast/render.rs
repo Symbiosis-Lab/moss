@@ -809,6 +809,7 @@ fn render_inline<H: RenderHooks + ?Sized>(
             title: _title,
             children,
             is_wikilink,
+            has_pothole: _,
         } => {
             let resolved = match url {
                 Url::Resolved(r) => r,

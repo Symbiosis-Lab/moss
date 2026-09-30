@@ -464,6 +464,7 @@ mod tests {
             title: None,
             children: vec![Inline::Text("t".into())],
             is_wikilink: false,
+            has_pothole: false,
         }])
     }
 
@@ -563,6 +564,7 @@ mod tests {
                 title: None,
                 children: vec![Inline::Text("t".into())],
                 is_wikilink: false,
+                has_pothole: false,
             }],
             id: None,
         }]);
@@ -579,6 +581,7 @@ mod tests {
                 title: None,
                 children: vec![],
                 is_wikilink: false,
+                has_pothole: false,
             }]),
         ])])]);
         let mut count = 0;
@@ -601,6 +604,7 @@ mod tests {
                 wikilink_pothole: None,
             }],
             is_wikilink: false,
+            has_pothole: false,
         }])]);
         let mut seen: Vec<String> = Vec::new();
         visit_urls_mut(&mut doc, |u| match u {
@@ -646,12 +650,14 @@ mod tests {
                 title: None,
                 children: vec![],
                 is_wikilink: false,
+                has_pothole: false,
             }]],
             rows: vec![vec![vec![Inline::Link {
                 url: Url::unresolved("r"),
                 title: None,
                 children: vec![],
                 is_wikilink: false,
+                has_pothole: false,
             }]]],
             alignments: Vec::new(),
             header_source_line: None,
@@ -933,6 +939,7 @@ mod tests {
                 title: None,
                 children: vec![Inline::Text("credit".into())],
                 is_wikilink: false,
+                has_pothole: false,
             }]),
             width: None,
             align: None,

@@ -355,6 +355,203 @@ fn build_result_returns_the_count_it_drained() {
     );
 }
 
+/// A `redirects.json` entry whose key has a leading slash is not a valid
+/// redirect source (`ServedPath::from_source` rejects an absolute path). The
+/// rejection has to reach `--strict` the same way every other build
+/// diagnostic does, and a well-formed entry sitting beside the bad one must
+/// still get its stub — one mistyped line must not silently drop every
+/// redirect after it in the file.
+#[test]
+fn a_redirect_entry_with_a_leading_slash_counts_as_a_cli_problem() {
+    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
+    take_cli_problems();
+
+    let test_tmp = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("target")
+        .join("test-tmp");
+    std::fs::create_dir_all(&test_tmp).unwrap();
+    let tmp = tempfile::TempDir::new_in(&test_tmp).unwrap();
+    let moss_dir = tmp.path().join(".moss");
+    let data_dir = moss_dir.join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::create_dir_all(moss_dir.join("deploy")).unwrap();
+    let output_dir = tmp.path().join("output");
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    // A mistyped entry (leading slash) beside a well-formed one.
+    let mut redirects = std::collections::BTreeMap::new();
+    redirects.insert("/old-page/".to_string(), "new-page/".to_string());
+    redirects.insert("good-page/".to_string(), "new-page/".to_string());
+    crate::build::feeds::redirects::save_redirects(&data_dir, &redirects).unwrap();
+
+    let paths = crate::moss_paths::MossPaths::from_moss_dir(moss_dir);
+    let current_map = crate::build::scan::article_map::ArticleMap::new();
+    let mut pending =
+        crate::build::manifest::PendingManifest::new(crate::types::content::SiteHashes::default());
+
+    crate::build::feeds::redirects::emit_redirect_stubs(
+        &paths,
+        &current_map,
+        &output_dir,
+        &mut pending,
+    )
+    .expect("one bad entry must not abort the whole site's redirects");
+
+    assert_eq!(
+        take_cli_problems(),
+        1,
+        "the leading-slash entry is exactly one --strict problem; the good entry beside it is not"
+    );
+
+    let sealed = pending.seal();
+    assert!(
+        sealed.files().contains_key("good-page/index.html"),
+        "a well-formed entry beside a rejected one must still get its stub: {:?}",
+        sealed.files().keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !sealed.files().keys().any(|k| k.contains("old-page")),
+        "a rejected entry must not silently produce a stub of its own"
+    );
+}
+
+/// `generate_favicons` rasterizes an author-supplied SVG through usvg/resvg
+/// built WITHOUT raster-image decoding (`Cargo.toml`'s `default-features =
+/// false` for both crates) — an embedded `<image>` element parses but never
+/// draws, so the icon renders blank with nothing but resvg's own generic
+/// "decoding was disabled" warning to go on, and that warning would fire once
+/// per rasterized size (three times) if left unsuppressed. Detecting the
+/// cause up front and reporting it once, by name, replaces three uncounted,
+/// unattributed lines with one an author can act on.
+#[test]
+fn a_favicon_with_an_embedded_bitmap_is_one_counted_problem() {
+    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
+    take_cli_problems();
+
+    let dir = tempfile::tempdir().unwrap();
+    let svg_path = dir.path().join("favicon.svg");
+    std::fs::write(
+        &svg_path,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><image href="data:image/png;base64,AAAA" width="10" height="10"/></svg>"#,
+    )
+    .unwrap();
+
+    crate::build::site_meta::favicon::generate_favicons(&svg_path, dir.path())
+        .expect("a blank-rendering favicon is not a build failure");
+
+    assert_eq!(
+        take_cli_problems(),
+        1,
+        "one embedded bitmap must be exactly one --strict problem, not zero, and not one per rasterized size"
+    );
+}
+
+/// The literal `"[warn] "` prefix baked into a `cli_warn!` call site was half
+/// of the double-print bug: pairing it with a preceding `log::warn!` of the
+/// SAME message printed the one warning twice on a real CLI run — once as
+/// `[WARN] module::path: message` (through the installed `HeadlessLogger`)
+/// and once as `[warn] message` (`cli_warn!` writing straight to stderr) —
+/// while only the `cli_warn!` half counted toward `--strict`, so the closing
+/// count never matched the number of lines printed. `log_warn_problem!`
+/// already prints and counts a warning in one call; a site that still
+/// hand-writes `"[warn] "` beside its own `log::warn!` is re-deriving that
+/// formatting by hand and duplicating the line when it does. Confirmed live
+/// with a misplaced `style.css`: the pair printed both lines and the summary
+/// still read "moss: 3 problems", not 4.
+#[test]
+fn no_call_site_hand_writes_a_warn_prefix_for_cli_warn() {
+    let src = include_str!("render/blocking.rs");
+    assert!(
+        !src.contains("cli_warn!(\"[warn] "),
+        "a `cli_warn!(\"[warn] ...\")` call site duplicates whatever `log::warn!` \
+         already printed for the same event — use `log_warn_problem!` instead, \
+         which prints and counts the warning exactly once"
+    );
+}
+
+/// usvg/resvg (the SVG renderer behind favicons, OG cards and math PNGs) log
+/// through the same global `log` facade moss's own code does. Recognizing
+/// their target namespace is the first half of attributing or dropping such
+/// a warning correctly — see the two `log_line_for` tests below for the
+/// policy this feeds.
+#[test]
+fn dependency_svg_renderer_warnings_are_recognized_by_target_namespace() {
+    let usvg_record = log::Record::builder()
+        .level(log::Level::Warn)
+        .target("usvg::parser::units")
+        .args(format_args!("Invalid 'font-size' value: 'huge'."))
+        .build();
+    assert!(is_dependency_svg_renderer_warning(&usvg_record));
+
+    let resvg_record = log::Record::builder()
+        .level(log::Level::Warn)
+        .target("resvg::render")
+        .args(format_args!("some resvg warning"))
+        .build();
+    assert!(is_dependency_svg_renderer_warning(&resvg_record));
+
+    // A moss-sourced warning, even one that happens to be about SVG handling,
+    // must never be swept up by the check — only the DEPENDENCY's own
+    // target namespace matches.
+    let moss_record = log::Record::builder()
+        .level(log::Level::Warn)
+        .target("moss_build::build::render::blocking")
+        .args(format_args!("Found style.css at project root"))
+        .build();
+    assert!(!is_dependency_svg_renderer_warning(&moss_record));
+
+    // A crate whose name merely starts with the same letters (not the exact
+    // dependency, and not a `dep::` submodule of it) must not match — the
+    // check is a namespace match, not a substring one.
+    let lookalike_record = log::Record::builder()
+        .level(log::Level::Warn)
+        .target("usvgutil")
+        .args(format_args!("unrelated warning"))
+        .build();
+    assert!(!is_dependency_svg_renderer_warning(&lookalike_record));
+}
+
+fn usvg_font_size_warning() -> log::Record<'static> {
+    log::Record::builder()
+        .level(log::Level::Warn)
+        .target("usvg::parser::units")
+        .args(format_args!("Invalid 'font-size' value: 'huge'."))
+        .build()
+}
+
+/// A usvg/resvg warning fired while [`suppress_renderer_warnings`] is held —
+/// rendering one of moss's OWN generated SVGs (the OG card, a math-fallback
+/// PNG) — names no moss file, so it must vanish from both the printed list
+/// and the `--strict` count rather than sit there uncounted.
+#[test]
+fn a_renderer_warning_during_moss_own_svg_render_is_dropped() {
+    let _suppress = suppress_renderer_warnings();
+    assert!(
+        log_line_for(&usvg_font_size_warning()).is_none(),
+        "a renderer warning while suppressed must print nothing and count nothing"
+    );
+}
+
+/// The complementary case: the SAME warning, with no suppression in effect —
+/// exactly what happens when `site_meta::favicon::generate_favicons`
+/// rasterizes an author's SVG — is the one usvg/resvg call site that IS
+/// attributable, and must be printed, counted, and named as the favicon.
+#[test]
+fn a_renderer_warning_during_favicon_rasterization_counts_and_is_attributed() {
+    assert!(
+        !renderer_warnings_suppressed(),
+        "no favicon render wraps itself in suppress_renderer_warnings"
+    );
+    let (line, counts) =
+        log_line_for(&usvg_font_size_warning()).expect("an unsuppressed renderer warning must print");
+    assert!(counts, "an unsuppressed renderer warning is exactly a favicon warning, and must count");
+    assert_eq!(line, "[WARN] assets/favicon.svg: Invalid 'font-size' value: 'huge'.");
+}
+
 /// The agent guidance says which level a `moss build` prints at when `MOSS_LOG_LEVEL` is
 /// unset. It said `info` (the desktop app's release level) for as long as nothing tied it
 /// to `headless_log_level`, and an agent that believed it looked for timing lines that only

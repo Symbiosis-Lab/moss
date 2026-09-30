@@ -9,7 +9,7 @@
 //! ```text
 //! moss history [--json]                              site timeline
 //! moss history <path> [--json]                        one page's timeline
-//! moss history --save [<name>]                        save a version now
+//! moss history --save [<name>] [--json]               save a version now
 //! moss history <path> --restore --at <id> [--copy]    restore a page
 //! moss history --restore --at <id> --yes              restore the site
 //! ```
@@ -55,7 +55,7 @@ pub fn run(args: &[String]) -> i32 {
     let root = VaultRoot::containing(Path::new("."));
 
     if parsed.save {
-        return run_save(&root, parsed.path);
+        return run_save(&root, parsed.path, parsed.json);
     }
     if parsed.restore {
         // `--at` is required for either restore shape; checked once here so
@@ -147,7 +147,7 @@ fn usage() -> &'static str {
     "Usage:
   moss history [--json]                              site timeline, newest first
   moss history <path> [--json]                        one page's timeline
-  moss history --save [<name>]                        save a version now
+  moss history --save [<name>] [--json]               save a version now
   moss history <path> --restore --at <id> [--copy]    restore one page
   moss history --restore --at <id> --yes              restore the whole site
 
@@ -251,7 +251,7 @@ fn current_target(root: &VaultRoot) -> String {
 // --save
 // ---------------------------------------------------------------------------
 
-fn run_save(root: &VaultRoot, name: Option<String>) -> i32 {
+fn run_save(root: &VaultRoot, name: Option<String>, json: bool) -> i32 {
     if let Err(msg) = crate::cli::site_guard::guard_cli_open(root.as_str(), "history") {
         eprintln!("error: {msg}");
         return 1;
@@ -262,22 +262,32 @@ fn run_save(root: &VaultRoot, name: Option<String>) -> i32 {
     let sealed = match headless_build_sealed(root) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", build_failure_message(&e));
             return 1;
         }
     };
 
     let target = current_target(root);
     if let Err(e) = store.snapshot_manual(root.path(), &sealed, &target, label) {
-        eprintln!("error: could not save a version: {e}");
+        eprintln!("{}", build_failure_message(&format!("could not save a version: {e}")));
         return 1;
     }
 
     // `list_records` sorts by filename, which sorts chronologically (see its
     // own doc) — the record `snapshot_manual` just wrote is always last.
     match store.list_records().pop() {
-        Some((id, _)) => {
-            println!("{id}");
+        Some((id, record)) => {
+            if json {
+                match saved_json(&id, &record) {
+                    Ok(s) => println!("{s}"),
+                    Err(e) => {
+                        eprintln!("error: could not serialize the saved version: {e}");
+                        return 1;
+                    }
+                }
+            } else {
+                println!("{}", saved_summary_line(&id, record.label.as_deref()));
+            }
             0
         }
         None => {
@@ -287,6 +297,53 @@ fn run_save(root: &VaultRoot, name: Option<String>) -> i32 {
             1
         }
     }
+}
+
+/// The build (or the save write itself) failed, so nothing reached the
+/// version store — the honest complement to [`saved_summary_line`]. Said
+/// plainly rather than left for a caller to infer from a nonzero exit code
+/// alone: a script that only checks the exit status still gets this on
+/// stderr, and a person reading the terminal is not left wondering whether a
+/// half-written version is sitting in `.moss/history`.
+fn build_failure_message(e: &str) -> String {
+    format!("error: {e} — nothing was saved")
+}
+
+/// `--save`'s plain-text ending: what was saved, clearly marked. Before this,
+/// the whole output was the build's own log with the bare id as its last
+/// line and nothing telling a reader that the line WAS the id.
+fn saved_summary_line(id: &str, label: Option<&str>) -> String {
+    match label {
+        Some(l) => format!("Saved \"{l}\" as version {id}."),
+        None => format!("Saved version {id}."),
+    }
+}
+
+/// `--save --json`'s entire stdout: exactly one JSON OBJECT for the version
+/// just saved (never an array — `--save` makes one version, not a timeline),
+/// shaped like a [`print_json`] row so a caller that already parses
+/// `moss history --json` does not need a second schema. Build progress and
+/// warnings never reach stdout in this mode — they go through `log`/
+/// `cli_eprintln!`, which write to stderr — so this is the only line a
+/// caller reading stdout ever sees.
+fn saved_json(id: &str, record: &PublishRecord) -> serde_json::Result<String> {
+    #[derive(serde::Serialize)]
+    struct SavedJson<'a> {
+        id: &'a str,
+        published_at: &'a str,
+        trigger: Trigger,
+        label: Option<&'a str>,
+        target: &'a str,
+        git_head: Option<&'a str>,
+    }
+    serde_json::to_string_pretty(&SavedJson {
+        id,
+        published_at: &record.published_at,
+        trigger: record.trigger,
+        label: record.label.as_deref(),
+        target: &record.target,
+        git_head: record.git_head.as_deref(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -701,6 +758,74 @@ mod tests {
             .unwrap();
         assert!(parsed.save);
         assert_eq!(parsed.path.as_deref(), Some("Before the rewrite"));
+    }
+
+    /// `--save` and `--json` combine — a script that wants the saved id back
+    /// as data, not by scraping the plain-text line.
+    #[test]
+    fn save_accepts_json() {
+        let parsed = ParsedArgs::parse(&["--save".to_string(), "--json".to_string()])
+            .unwrap()
+            .unwrap();
+        assert!(parsed.save);
+        assert!(parsed.json);
+    }
+
+    // -----------------------------------------------------------------
+    // `--save`'s two output shapes
+    // -----------------------------------------------------------------
+
+    /// The plain-text line has to name what happened, not just print a bare
+    /// id a reader has to already know the meaning of.
+    #[test]
+    fn saved_summary_line_names_the_label_and_id() {
+        assert_eq!(
+            saved_summary_line("2026-01-01T00-00-00Z-abc", Some("Before the rewrite")),
+            "Saved \"Before the rewrite\" as version 2026-01-01T00-00-00Z-abc."
+        );
+    }
+
+    #[test]
+    fn saved_summary_line_without_a_label_still_names_the_id() {
+        assert_eq!(
+            saved_summary_line("2026-01-01T00-00-00Z-abc", None),
+            "Saved version 2026-01-01T00-00-00Z-abc."
+        );
+    }
+
+    /// `--save --json` prints exactly one JSON OBJECT (never an array — this
+    /// is one version, not a timeline), with at least `id` and `label`.
+    #[test]
+    fn saved_json_is_one_object_with_id_and_label() {
+        let rec = record("2026-01-01T00-00-00Z-abc", "t");
+        let s = saved_json(&rec.0, &{
+            let mut r = rec.1;
+            r.label = Some("Before the rewrite".to_string());
+            r
+        })
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert!(value.is_object(), "must be a single JSON object, not an array: {s}");
+        assert_eq!(value["id"], "2026-01-01T00-00-00Z-abc");
+        assert_eq!(value["label"], "Before the rewrite");
+    }
+
+    #[test]
+    fn saved_json_label_is_null_when_the_save_was_not_named() {
+        let rec = record("2026-01-01T00-00-00Z-abc", "t");
+        let s = saved_json(&rec.0, &rec.1).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(value["label"], serde_json::Value::Null);
+    }
+
+    /// A build that fails must say plainly that nothing was written to the
+    /// version store — the honest complement to "saved as {id}.", not just
+    /// the raw build error.
+    #[test]
+    fn build_failure_message_says_nothing_was_saved() {
+        let msg = build_failure_message("build failed: boom");
+        assert!(msg.contains("nothing was saved"), "{msg}");
+        assert!(msg.contains("boom"), "{msg}");
     }
 
     /// A page path resolves relative to the SITE, not to the process's

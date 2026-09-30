@@ -51,6 +51,7 @@ fn renders_resolved_link_internal() {
         title: None,
         children: vec![Inline::Text("Docs".into())],
         is_wikilink: false,
+        has_pothole: false,
     }])]);
     assert_eq!(html, "<p><a href=\"docs/\">Docs</a></p>\n");
 }
@@ -64,6 +65,7 @@ fn renders_resolved_link_wikilink_carries_class() {
         title: None,
         children: vec![Inline::Text("Docs".into())],
         is_wikilink: false,
+        has_pothole: false,
     }])]);
     assert!(html.contains(r#"class="wikilink""#), "got: {html}");
 }
@@ -78,6 +80,7 @@ fn renders_link_with_is_wikilink_flag_emits_class() {
         title: None,
         children: vec![Inline::Text("Docs".into())],
         is_wikilink: true,
+        has_pothole: false,
     }])]);
     assert!(
         html.contains(r#"class="wikilink""#),
@@ -872,6 +875,7 @@ fn unresolved_url_in_link_panics_in_debug() {
         title: None,
         children: vec![],
         is_wikilink: false,
+        has_pothole: false,
     }])]);
 }
 

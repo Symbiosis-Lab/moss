@@ -101,14 +101,60 @@ pub fn tighten_default_favicon_viewbox(svg: &str) -> String {
     svg.replacen(DEFAULT_FAVICON_VIEWBOX_ATTR, DEFAULT_FAVICON_TIGHT_VIEWBOX_ATTR, 1)
 }
 
+/// Whether `svg` embeds a raster image via an SVG `<image>` element.
+///
+/// moss's usvg/resvg are built with `default-features = false, features =
+/// ["text", "system-fonts"]` (see `Cargo.toml`) — `resvg`'s default
+/// `raster-images` feature (PNG/JPEG/GIF decoding) is deliberately not one
+/// of them, so an `<image>` element parses but never draws: the icon
+/// rasterizes blank, with only a `usvg::parser::image` warning that
+/// [`crate::build::cli_output`]'s renderer-warning policy would otherwise
+/// have to attribute after the fact. Checked before parsing, the same way
+/// [`crate::build::svg_util::strip_media_queries`] handles the `@media`
+/// case: a known cause reported as itself, rather than a symptom muffled
+/// into "some usvg warning fired somewhere."
+///
+/// A tag-boundary match (`<image` followed by whitespace, `>` or `/`), not a
+/// bare substring one — `<imageSomething>` is not this element, and no real
+/// SVG writes one.
+fn embeds_a_raster_image(svg: &str) -> bool {
+    let mut rest = svg;
+    while let Some(pos) = rest.find("<image") {
+        let after = &rest[pos + "<image".len()..];
+        match after.as_bytes().first() {
+            Some(b) if b.is_ascii_whitespace() || *b == b'>' || *b == b'/' => return true,
+            _ => {}
+        }
+        rest = after;
+    }
+    false
+}
+
 pub fn generate_favicons(source_svg: &Path, output_root: &Path) -> Result<FaviconAssets, FaviconError> {
     let mut paths = Vec::with_capacity(SIZES.len());
     let svg = std::fs::read_to_string(source_svg).map_err(FaviconError::Io)?;
+
+    let embeds_bitmap = embeds_a_raster_image(&svg);
+    if embeds_bitmap {
+        crate::build::cli_output::log_warn_problem!(
+            "assets/favicon.svg embeds a bitmap; moss's SVG renderer cannot \
+             decode it, so the icon renders blank; use a pure-vector SVG or a PNG"
+        );
+    }
 
     let opt = usvg::Options::default();
     let raster_svg = crate::build::svg_util::strip_media_queries(&svg);
     let tree =
         usvg::Tree::from_str(&raster_svg, &opt).map_err(|e| FaviconError::Svg(e.to_string()))?;
+
+    // Already reported above, precisely — resvg's own generic "decoding was
+    // disabled by a build feature" warning would otherwise also fire, once
+    // per rasterized size (three times), for the exact same cause. Any
+    // OTHER renderer warning (an invalid font-size, say) is left
+    // unsuppressed: this SVG is the author's own, so attributing it to this
+    // file — the default when nothing suppresses it, see
+    // `cli_output::log_line_for` — is exact.
+    let _suppress_known_cause = embeds_bitmap.then(crate::build::cli_output::suppress_renderer_warnings);
 
     for &size in SIZES {
         let mut pixmap = tiny_skia::Pixmap::new(size, size)

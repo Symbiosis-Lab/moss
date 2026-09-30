@@ -209,6 +209,10 @@ pub fn email_math_html(tex: &str, display: bool, site_url: &str) -> Option<Strin
 /// guarantees it), so an EMPTY fontdb is fine — proven by `og_card.rs`'s
 /// text-free rendering path and the tests below.
 fn rasterize_png(img: &EmailMathImg) -> Result<Vec<u8>, String> {
+    // The engine's own math SVG, never an author's — a usvg/resvg warning
+    // here names no moss file, so it must not reach the terminal
+    // unattributed. See `cli_output::suppress_renderer_warnings`.
+    let _suppress = crate::build::cli_output::suppress_renderer_warnings();
     let opt = usvg::Options::default();
     let tree = usvg::Tree::from_str(&img.svg, &opt).map_err(|e| format!("math svg parse: {e}"))?;
     let tree_w = tree.size().width() as f64;

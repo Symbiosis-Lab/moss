@@ -7,7 +7,7 @@
 
 use crate::build::cloud_readiness;
 use crate::build::phase::PhaseTrace;
-use crate::build::cli_output::{cli_warn, log_warn_problem};
+use crate::build::cli_output::log_warn_problem;
 use crate::moss_paths::MossPaths;
 use crate::{build::types::ParsedDocument, types::{content::{ProjectStructure, SiteHashes, SiteResult}, services::BackgroundContext}};
 use moss_core::PageKind;
@@ -1030,8 +1030,7 @@ pub fn generate_blocking_content_for_build(
                     ""
                 }
             );
-            log::warn!("{}", line);
-            cli_warn!("[warn] {}", line);
+            log_warn_problem!("{}", line);
         }
         if let Some(event) = crate::build::progress::make_duplicate_uid_advisory(&resolution.reassignments) {
             reporter.report(&event);
@@ -1407,8 +1406,7 @@ pub fn generate_blocking_content_for_build(
     // of the canonical `.moss/theme/` directory. Silently ignoring these files
     // cost a dogfood user ~3 hours of debugging on a real site — surface it.
     for warning in check_misplaced_theme_files(source_path_buf) {
-        log::warn!("{}", warning);
-        cli_warn!("[warn] {}", warning);
+        log_warn_problem!("{}", warning);
     }
 
     // Warn when a language uses BOTH folder-per-language (zh-hans/index.md)
@@ -1422,8 +1420,7 @@ pub fn generate_blocking_content_for_build(
             .map(|f| f.path.clone())
             .collect();
         for warning in check_mixed_multilingual_structure(&md_paths) {
-            log::warn!("{}", warning);
-            cli_warn!("[warn] {}", warning);
+            log_warn_problem!("{}", warning);
         }
     }
 
@@ -1453,8 +1450,7 @@ pub fn generate_blocking_content_for_build(
         // Phase 1 PR-1d: warn when theme references pre-v1 (Retired) class
         // vocabulary. Non-fatal; one warning per retired class found.
         for warning in crate::build::theme_lint::lint_theme_css(content) {
-            log::warn!("{}", warning);
-            cli_warn!("[warn] {}", warning);
+            log_warn_problem!("{}", warning);
         }
         compute_content_hash(content)
     });

@@ -396,6 +396,20 @@ pub enum Inline {
         /// Renderer adds `class="wikilink"` for true.
         #[serde(default)]
         is_wikilink: bool,
+        /// True when a wikilink carried an explicit `|alias` (mirrors
+        /// pulldown-cmark's `LinkType::WikiLink { has_pothole }`). Meaningless
+        /// when `is_wikilink` is false — a standard `[text](url)` link has no
+        /// synthesized default, so `text` is always the author's choice there.
+        ///
+        /// For a bare `[[target]]`, pulldown-cmark synthesizes `target` itself
+        /// as the child text (see `wikilink_has_pothole` in the pulldown-cmark
+        /// fork), which is not something the author wrote — a consumer that
+        /// wants "did the author choose this text" must check this flag
+        /// rather than compare `children`'s text against the target, because
+        /// an alias that happens to equal the target must still count as
+        /// chosen.
+        #[serde(default)]
+        has_pothole: bool,
     },
     /// `![alt](src "title")` or `![[wikilink]]`.
     ///
@@ -650,6 +664,7 @@ mod tests {
             title: None,
             children: vec![text("Documentation")],
             is_wikilink: false,
+            has_pothole: false,
         };
         match i {
             Inline::Link {
@@ -657,6 +672,7 @@ mod tests {
                 title,
                 children,
                 is_wikilink,
+                has_pothole: _,
             } => {
                 assert!(url.is_unresolved());
                 assert!(title.is_none());
@@ -823,6 +839,7 @@ mod tests {
             title: Some("Docs".to_string()),
             children: vec![Inline::Text("see".to_string())],
             is_wikilink: true,
+            has_pothole: false,
         };
         let s = serde_json::to_string(&original).expect("serialize");
         let back: Inline = serde_json::from_str(&s).expect("deserialize");

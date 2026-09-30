@@ -358,6 +358,7 @@ fn parses_link_with_unresolved_url() {
                 title,
                 children,
                 is_wikilink,
+                has_pothole: _,
             } => {
                 assert!(url.is_unresolved());
                 match url {

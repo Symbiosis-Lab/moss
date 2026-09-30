@@ -519,6 +519,10 @@ fn rasterize(
         });
     }
 
+    // This SVG is moss's own generated card markup, never an author's — a
+    // usvg/resvg warning here names no moss file, so it must not reach the
+    // terminal unattributed. See `cli_output::suppress_renderer_warnings`.
+    let _suppress = crate::build::cli_output::suppress_renderer_warnings();
     let tree = usvg::Tree::from_str(svg, &opt).map_err(|e| CardError::Svg(e.to_string()))?;
     let mut pixmap = tiny_skia::Pixmap::new(width, height)
         .ok_or_else(|| CardError::Encode("pixmap allocation failed".into()))?;
