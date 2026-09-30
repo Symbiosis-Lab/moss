@@ -1,19 +1,30 @@
 # Scene 5 loop — footage credits
 
-## Current cut: v5-makers
+## Current cut: v8-press
 
-Selected by the director on 2026-09-18. Source timecodes below refer to the original files linked in `selection.json`, not the short review previews. All clips remain at natural speed and are silent. A fixed black-and-white grade maps each excerpt’s sampled exposure range into the same softened tonal range, avoiding automatic exposure changes during a shot. The September 18 shipping revision fills 16:9 with a centered crop instead of embedded sidebars. The landing page then uses a cover crop to fill the viewport.
+Cut on 2026-10-03 from v7-makers (2026-09-29). The six hands that open v7 open this cut too, each shortened to about two seconds; a burin cutting steel hands the mark to the machines; twelve shots of typesetting machines and presses follow, v7's press feed among them, the shortest a little over a second; the animator's hands close it as before. Twenty shots in a 38-second loop. Timecodes refer to the original files linked in `selection.json`. All clips are silent and at natural speed. Every shot is conformed to one look — monochrome, 24 fps, filling 16:9 around a focus point with no bars, one detail ceiling, measured per-shot levels, one grain and vignette over the whole cut — as described in `selection.json`'s `framing` and `grading`.
 
-| Order | Film | Source in–out | Length | Gesture |
+| Order | Film | Source in–out | Gesture | Rights |
 |---|---|---|---|---|
-| 1 | [Arts And Crafts, Kyoto](https://archive.org/details/USAF-1064), 1946 | 01:01–01:10 | 9 s | Deliberate brush leaves on silk |
-| 2 | [Block Cutting and Printing](https://archive.org/details/blockcuttingandprinting), 1950 | 01:52–02:00 | 8 s | A transferred motif strengthened with pencil |
-| 3 | [The Violin Maker of Cremona](https://archive.org/details/silent-the-violin-maker-of-cremona), 1909 | 05:38–05:45 | 7 s | Lifting, turning, and inspecting the instrument |
-| 4 | [Printing](https://archive.org/details/Printing1947), 1947 | 05:31–05:37.5 | 6.5 s | Feeding and retrieving a sheet at the press |
-| 5 | [The Face of Lincoln](https://archive.org/details/face_of_lincoln), 1954 | 06:54–07:03 | 9 s | Modeling the brow, eye, and nose |
-| 6 | [Fantasmagorie](https://archive.org/details/Fantasmagorie), 1908 | 01:04.5–01:12.5 | 8 s | Live hands arrange the figure, followed by its animated transformation |
+| 1 | [The Face of Lincoln](https://archive.org/details/face_of_lincoln), 1954 (USC Department of Cinema; sculptor Merrell Gage) | 06:54–06:56.6 | A hand at the brow of the clay face | Public domain per the archive.org item page |
+| 2 | [Arts And Crafts, Kyoto](https://archive.org/details/USAF-1064), 1946 (US Army Air Forces) | 01:01.8–01:03.8 | Brush leaves on silk | Public Domain Mark 1.0 |
+| 3 | [A Man Writing Mathematical Equation On A Blackboard](https://www.pexels.com/video/a-man-writing-mathematical-equation-on-a-blackboard-3196292/), 2019 | 00:01.8–00:03.8 | Chalking an equation | Pexels License (not CC; free use and modification, no attribution required) |
+| 4 | [Bits & Pieces BP187 — Glass blowing](https://commons.wikimedia.org/wiki/File:Bits_%26_Pieces_-_BP187_-_Glass_blowing_-_EYE_FLM7639_-_OB_105677.ogv), silent era (Eye Filmmuseum) | 01:02.8–01:04.8 | Winding white-hot glass cane | Public domain (Commons: PD-anon-70-EU) |
+| 5 | [Eerste Nederlandse beiaardschool](https://www.openbeelden.nl/media/1138896), 1979 (Polygoon Hollands Nieuws / Beeld en Geluid) | 02:35.8–02:37.8 | Brushing the relief of a freshly cast bell | **CC BY-SA 3.0 NL** |
+| 6 | [Block Cutting and Printing](https://archive.org/details/blockcuttingandprinting), 1950 (Stout Institute) | 01:54–01:56 | Transferring a design to the block | No explicit licence on the item page; relies on the collection's public-domain presumption |
+| 7 | [Doubtful Dollars](https://archive.org/details/doubtful_dollars), 1945 (Affiliated Aetna Life Companies with the US Secret Service) | 08:04.4–08:06.6 | A burin cuts a line in a steel banknote plate | Public domain per the archive.org item page |
+| 8 | [Typesetting: Linotype](https://archive.org/details/Typesett1960), 1960 (Salesian Vocational Schools / Don Bosco Films) | 15:12.7–15:14.3 | Spacebands flutter down between two steel jaws | Public domain per the archive.org item page |
+| 9 | [Typesetting: Linotype, part II](https://archive.org/details/Typesett1960_2), 1960 (Salesian Vocational Schools / Don Bosco Films) | 01:25.4–01:27.6 | A lever turns like a clock hand inside a steel drum | Public domain per the archive.org item page |
+| 10 | [Typesetting: Linotype, part II](https://archive.org/details/Typesett1960_2), 1960 | 10:30.4–10:32 | Worm screws carry matrices up a stepped channel | Public domain per the archive.org item page |
+| 11 | [Typesetting: Linotype](https://archive.org/details/Typesett1960), 1960 | 08:31–08:33.4 | An animated cam opens and snaps shut over a spoked wheel | Public domain per the archive.org item page |
+| 12 | [Printing](https://archive.org/details/Printing1947), 1947 | 05:32.8–05:34.4 | Feeding a sheet at the press | Public domain per the archive.org item page |
+| 13 | [Tidningstryck](https://commons.wikimedia.org/wiki/File:Tidningstryck_1937.ogv), 1937 (AB Svensk Filmindustri) | 00:56.9–00:58.4 | A curved stereotype plate of a newspaper page turns on the shaving machine | Public domain per the Commons file page (PD-old; no further rationale given) |
+| 14 | [Door toename automatisering in krantenbedrijf verdwijnt het oude zettersvak](https://commons.wikimedia.org/wiki/File:Door_toename_automatisering_in_krantenbedrijf_verdwijnt_het_oude_zettersvak_Weeknummer,_77-14_-_Open_Beelden_-_13160.ogv), 1977 (Polygoon-Profilti / Beeld en Geluid) | 02:40.9–02:42.3 | The printed web runs over the press cylinders | **CC BY-SA 3.0 NL** |
+| 15 | [Tidningstryck](https://commons.wikimedia.org/wiki/File:Tidningstryck_1937.ogv), 1937 (AB Svensk Filmindustri) | 01:38–01:39.8 | The folder's mechanical fingers take each paper | Public domain per the Commons file page (PD-old; no further rationale given) |
+| 16 | [Some of Uncle Sam's Workshops](https://archive.org/details/fc-fc-3146), 1922 (Ford Educational Library; US National Archives 200-FC-3146) | 07:16–07:17.4 | A stamp-perforating cylinder turns | Public domain in the US by age (published 1922); no licence statement on the item page |
+| 17 | [The Treasury Story](https://archive.org/details/gov.archives.arc.11865), 1969 (US Department of the Treasury; US National Archives 11865) | 07:23.4–07:24.6 | Sheets of banknotes stream past on tapes | Public domain (US government work; CC0 mark on the archive.org item page) |
+| 18 | [Trees to Tribunes](https://archive.org/details/0081TreesToTribunes), 1937 (Chicago Tribune) | 14:36.8–14:39.6 | A roll of newsprint rides down a round tunnel until it fills the frame | No explicit licence on the item page; relies on the collection's public-domain presumption |
+| 19 | [Typesetting: Linotype, part II](https://archive.org/details/Typesett1960_2), 1960 | 02:15.3–02:16.9 | A linkage drawn in white line; one lever slides out | Public domain per the archive.org item page |
+| 20 | [La Fantasmagorie](https://commons.wikimedia.org/wiki/File:La_Fantasmagorie_(1908).webm), 1908 (Émile Cohl) | 01:30.6–01:36 | The animator's hands set the figure down; it kicks, vanishes and stands up | Public domain per the Commons file page |
 
-The two longer handmade passages frame a shorter mechanical pulse; the final hand animation gives the close a playful release. Five 0.4-second picture dissolves and a 0.7-second circular dissolve back to the silk painting produce a roughly 44.8-second loop without a repeated black dip. Source and rights notes are recorded in `selection.json`; this framing revision does not change the selected films.
-
-
-Rebuild with `python3 scripts/build-closing-film.py --fetch`, or supply `--sources /path/to/originals`. Source downloads stay outside the repository by default.
+The arc runs face → mark → thought → fire → voice → design → the line cut in steel → type → press → paper → drawing → life, and dissolves from the animation back to the face. The dissolves are 0.15 seconds, so the run of presses reads as cuts. Because shots 5 and 14 are CC BY-SA 3.0 NL, the loop video file `v8-press.mp4` is released under the same licence, [CC BY-SA 3.0 NL](https://creativecommons.org/licenses/by-sa/3.0/nl/), with these credits; its poster is a frame of shot 1, which is in the public domain; the rest of this site is unaffected. The source address, in and out points, framing and rights statement of every shot are recorded in `selection.json`.
