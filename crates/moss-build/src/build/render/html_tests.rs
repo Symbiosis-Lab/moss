@@ -7338,7 +7338,10 @@ mod listable_page_card_tests {
     /// the raw ISO string. Regression guard for a69b13eef, which reverted
     /// `format_article_date` to a `parts.len() >= 3` split that silently
     /// passed any date with fewer than three dash-separated parts straight
-    /// through to the page.
+    /// through to the page. The expected text itself changed with
+    /// `format_article_date`'s move to locale-conventional month names —
+    /// month-precision now reads "May 1809", not the numeric "1809 · 5" this
+    /// guard originally pinned; a raw-ISO regression would still fail it.
     #[test]
     fn article_date_line_formats_a_month_precision_date() {
         let html = render_test_page_with(|d| {
@@ -7352,7 +7355,7 @@ mod listable_page_card_tests {
         let dateline_end = dateline.find("</div></div>").map(|i| i + 12).unwrap_or(dateline.len());
         let dateline = &dateline[..dateline_end];
         assert!(
-            dateline.contains(r#"<span class="date">1809 · 5</span>"#),
+            dateline.contains(r#"<span class="date">May 1809</span>"#),
             "expected formatted month-precision date in date-line:\n{dateline}"
         );
         assert!(

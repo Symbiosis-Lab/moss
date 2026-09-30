@@ -74,34 +74,48 @@ fn month_prefix_and_year_heading_are_chinese_under_vertical_cjk() {
 }
 
 #[test]
-fn test_format_article_date_standard() {
-    assert_eq!(format_article_date("2024-09-22"), "2024 · 9 · 22");
-    assert_eq!(format_article_date("2025-11-17"), "2025 · 11 · 17");
+fn test_format_article_date_standard_en() {
+    // A full date renders in English's own conventional written form, not
+    // raw numbers joined by " · " — that numeric form is
+    // `format_date_string`'s own documented card/listing display, not this
+    // function's.
+    assert_eq!(format_article_date("2024-09-22", Language::En), "September 22, 2024");
+    assert_eq!(format_article_date("2025-11-17", Language::En), "November 17, 2025");
+}
+
+#[test]
+fn test_format_article_date_standard_zh_hant() {
+    assert_eq!(format_article_date("2024-09-22", Language::ZhHant), "2024年9月22日");
+    assert_eq!(format_article_date("1919-04-10", Language::ZhHant), "1919年4月10日");
 }
 
 #[test]
 fn test_format_article_date_iso_format() {
     assert_eq!(
-        format_article_date("2025-09-24T20:49:08.546Z"),
-        "2025 · 9 · 24"
+        format_article_date("2025-09-24T20:49:08.546Z", Language::En),
+        "September 24, 2025"
     );
 }
 
 #[test]
 fn test_format_article_date_removes_leading_zeros() {
-    assert_eq!(format_article_date("2024-01-05"), "2024 · 1 · 5");
-    assert_eq!(format_article_date("2024-09-01"), "2024 · 9 · 1");
+    assert_eq!(format_article_date("2024-01-05", Language::En), "January 5, 2024");
+    assert_eq!(format_article_date("2024-09-01", Language::En), "September 1, 2024");
 }
 
 #[test]
 fn test_format_article_date_invalid_returns_original() {
-    assert_eq!(format_article_date("invalid"), "invalid");
+    assert_eq!(format_article_date("invalid", Language::En), "invalid");
 }
 
 #[test]
 fn test_format_article_date_partial_precision() {
-    assert_eq!(format_article_date("2025-11"), "2025 · 11");
-    assert_eq!(format_article_date("1797"), "1797");
+    // Year+month: month name and year, no day. Year-only: unchanged in
+    // every language — see the function's own doc comment for why.
+    assert_eq!(format_article_date("2025-11", Language::En), "November 2025");
+    assert_eq!(format_article_date("2025-11", Language::ZhHant), "2025年11月");
+    assert_eq!(format_article_date("1797", Language::En), "1797");
+    assert_eq!(format_article_date("1797", Language::ZhHant), "1797");
 }
 
 // Tests for format_date_string

@@ -212,6 +212,24 @@ fn normalize_html(content: &str) -> String {
     let date_month_re = regex::Regex::new(r"\d{4} · \d{1,2}").unwrap();
     normalized = date_month_re.replace_all(&normalized, "[DATE]").to_string();
 
+    // Normalize an article's own date line, which `format_article_date`
+    // renders in the site's language rather than the numeric "YYYY · M · D"
+    // form above (still used, unchanged, by a listing card's compact date —
+    // the two regexes just above this one). English: "Month D, YYYY" /
+    // "Month YYYY"; Chinese (zh-hans/zh-hant): "YYYY年M月D日" / "YYYY年M月". The
+    // day-inclusive pattern runs first so the month-only one can't leave a
+    // stray "日" behind.
+    let month_names = "January|February|March|April|May|June|July|August|September|October|November|December";
+    let date_en_full_re =
+        regex::Regex::new(&format!(r"(?:{month_names}) \d{{1,2}}, \d{{4}}")).unwrap();
+    normalized = date_en_full_re.replace_all(&normalized, "[DATE]").to_string();
+    let date_en_month_re = regex::Regex::new(&format!(r"(?:{month_names}) \d{{4}}")).unwrap();
+    normalized = date_en_month_re.replace_all(&normalized, "[DATE]").to_string();
+    let date_zh_full_re = regex::Regex::new(r"\d{4}年\d{1,2}月\d{1,2}日").unwrap();
+    normalized = date_zh_full_re.replace_all(&normalized, "[DATE]").to_string();
+    let date_zh_month_re = regex::Regex::new(r"\d{4}年\d{1,2}月").unwrap();
+    normalized = date_zh_month_re.replace_all(&normalized, "[DATE]").to_string();
+
     // Normalize year headings in article listings (e.g., <h2>2025</h2>)
     let year_heading_re = regex::Regex::new(r"<h2>(20\d{2})</h2>").unwrap();
     normalized = year_heading_re.replace_all(&normalized, "<h2>[YEAR]</h2>").to_string();
