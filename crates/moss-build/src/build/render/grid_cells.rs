@@ -432,11 +432,27 @@ pub(crate) fn apply_collection_cards(plan: &mut BodyPlan, index: &BuildIndex<'_>
         if grid.no_cards() {
             continue;
         }
+        // Whether ANY internal-page cell in this grid resolves to a cover —
+        // computed once per grid, the same way `render_list_with_typesetting`
+        // computes `has_covers` across an auto-generated listing, so a
+        // coverless cell's own card knows it isn't the row's only shape.
+        // Without this a `:::grid` cell always rendered in isolation and a
+        // coverless page never got the quote-slot upgrade a mixed listing
+        // grid already gives the same case (see `grid_card::render_item`'s
+        // `list_has_covers` doc) — it fell straight to the bare
+        // `.moss-card-no-cover` placeholder instead.
+        let list_has_covers = grid.cells.iter().any(|cell| {
+            let GridCell::Link(link) = classify_cell(&cell.blocks) else {
+                return false;
+            };
+            !link.external()
+                && picked_card_props(&link, index).is_some_and(|p| p.cover.is_some())
+        });
         // The first card with a cover carries the LCP preload hint, matching
         // the bookkeeping the listing-grid renderer does.
         let mut eager_spent = false;
         for cell in &mut grid.cells {
-            if let Some(html) = card_markup(cell, index, &mut eager_spent) {
+            if let Some(html) = card_markup(cell, index, &mut eager_spent, list_has_covers) {
                 cell.replace(html);
             }
         }
@@ -497,6 +513,7 @@ fn card_markup(
     cell: &GridCellEmission,
     index: &BuildIndex<'_>,
     eager_spent: &mut bool,
+    list_has_covers: bool,
 ) -> Option<String> {
     let GridCell::Link(link) = classify_cell(&cell.blocks) else {
         return None;
@@ -518,6 +535,7 @@ fn card_markup(
         index.typesetting,
         index.media_lookup,
         eager,
+        list_has_covers,
     ))
 }
 

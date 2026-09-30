@@ -733,6 +733,7 @@ fn grid_and_summary_folder_cards_carry_the_same_count() {
         None,
         None,
         false,
+        false,
     );
     assert!(summary.contains("4 articles"), "{summary}");
     assert!(grid.contains("4 articles"), "{grid}");

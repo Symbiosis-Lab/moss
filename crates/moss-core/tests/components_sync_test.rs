@@ -203,6 +203,53 @@ fn css_selectors_match_components_table() {
     }
 }
 
+/// `moss-grid`'s `data-columns` description must agree with what site.css
+/// actually does at the mobile breakpoint, not contradict it. The
+/// description used to say "there is no mobile collapse to a single
+/// column", while `@media (max-width: 768px) { .moss-grid[data-columns] {
+/// grid-template-columns: 1fr; } }` has always collapsed a plain grid there
+/// — the sibling `data-fits` attr's own description already said as much
+/// ("the same breakpoint that would otherwise collapse a plain grid to one
+/// column").
+#[test]
+fn moss_grid_data_columns_description_agrees_with_the_stylesheets_mobile_collapse() {
+    let workspace_root = workspace_root();
+    let css_path = workspace_root.join(SITE_CSS_DIR).join("site.css");
+    let css = fs::read_to_string(&css_path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {}", css_path.display(), e));
+
+    assert!(
+        css.contains(
+            "@media (max-width: 768px) {\n  .moss-grid[data-columns] {\n    grid-template-columns: 1fr;"
+        ),
+        "site.css no longer collapses .moss-grid[data-columns] to one column below 768px — this \
+         test and the moss-grid data-columns description in components.rs both assume it does; \
+         update both together if the stylesheet's own behavior changed"
+    );
+
+    let entry = COMPONENTS
+        .iter()
+        .find(|c| c.class == "moss-grid")
+        .expect("moss-grid must be in COMPONENTS");
+    let data_columns = entry
+        .data_attrs
+        .iter()
+        .find(|a| a.name == "data-columns")
+        .expect("moss-grid must declare data-columns");
+
+    assert!(
+        !data_columns.description.contains("no mobile collapse"),
+        "data-columns description still claims no mobile collapse, but the stylesheet collapses \
+         it below 768px: {}",
+        data_columns.description
+    );
+    assert!(
+        data_columns.description.contains("768px"),
+        "data-columns description should name the real mobile-collapse breakpoint: {}",
+        data_columns.description
+    );
+}
+
 fn unescape_quotes(src: &str) -> String {
     src.replace("\\\"", "\"")
 }

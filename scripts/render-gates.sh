@@ -55,6 +55,7 @@ GATES_BUILD=(
   nav-toggle-cluster
   header-hit-areas
   lightbox-github-shapes
+  grid-card-no-cover
   nav-mobile
   grid-mobile-collapse
   card-cover-ratio

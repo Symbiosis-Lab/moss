@@ -377,6 +377,36 @@ impl ContentGraph {
             }
         }
 
+        // 1c. Path-shaped reference (contains a slash) from a language-tree
+        // source: prefer a same-language-tree sibling before falling back to
+        // the exact path — the path-reference twin of step 1b's bare-name
+        // scoping. `[[work/spring-show]]` from a zh-hans page should match
+        // `zh-hans/work/spring-show.md` if it exists, not root `work/spring-show.md`
+        // — step 1b already gave the bare `[[spring-show]]` form that same
+        // preference; a path reference had no equivalent step and fell
+        // straight through to step 2's literal `.md` match on the reference
+        // as written.
+        //
+        // Guarded on the reference not ALREADY naming a language tree
+        // (mirrors step 5a's identical guard for folder notes): an author who
+        // writes `[[en/work/spring-show]]` from a zh-hans page means the English
+        // page specifically, and must never be silently re-scoped onto
+        // `zh-hans/en/work/spring-show.md` even if such a path existed.
+        if norm_ref.contains('/') {
+            if let Some(lang) = from_lang {
+                if crate::home::lang_tree_prefix(&norm_ref).is_none() {
+                    let scoped = format!("{}/{}", lang, norm_ref);
+                    if let Some(&idx) = self.path_index.get(&scoped) {
+                        return Some(self.files[idx].clone());
+                    }
+                    let scoped_md = format!("{}/{}.md", lang, norm_ref);
+                    if let Some(&idx) = self.path_index.get(&scoped_md) {
+                        return Some(self.files[idx].clone());
+                    }
+                }
+            }
+        }
+
         // 2. Exact + .md
         let with_md = format!("{}.md", norm_ref);
         if self.path_index.contains_key(&with_md) {
@@ -831,6 +861,71 @@ mod tests {
         assert_eq!(
             g.resolve_path("docs/", "zh-hans/index.md"),
             Some("docs/index.md".into())
+        );
+    }
+
+    // 1c. A path-shaped reference (contains a slash) from a language-tree
+    // source prefers the same-language sibling over the root — the same
+    // preference step 1b already gives a bare reference. `[[work/spring-show]]`
+    // from a zh-hans page used to resolve straight to the English
+    // `work/spring-show.md` because step 2 (exact + .md against the reference
+    // as written) ran before any language tie-break; the bare `[[spring-show]]`
+    // form from the same page already correctly preferred
+    // `zh-hans/work/spring-show.md` via step 1b.
+    #[test]
+    fn test_path_reference_prefers_same_language_tree() {
+        let g = ContentGraph::from_paths(&[
+            "work/spring-show.md",
+            "zh-hans/work/spring-show.md",
+            "zh-hans/index.md",
+        ]);
+
+        // The bare form already worked before this fix.
+        assert_eq!(
+            g.resolve_path("spring-show", "zh-hans/index.md"),
+            Some("zh-hans/work/spring-show.md".into())
+        );
+
+        // The path form must land on the same page.
+        assert_eq!(
+            g.resolve_path("work/spring-show", "zh-hans/index.md"),
+            Some("zh-hans/work/spring-show.md".into())
+        );
+
+        // From a root page, the path form still resolves to the root page.
+        assert_eq!(
+            g.resolve_path("work/spring-show", "index.md"),
+            Some("work/spring-show.md".into())
+        );
+    }
+
+    // 1c-fallback. When no same-language sibling exists, a language-tree
+    // page's path reference falls back to the exact path rather than failing.
+    #[test]
+    fn test_path_reference_falls_back_to_exact_path_when_no_language_sibling() {
+        let g = ContentGraph::from_paths(&["work/spring-show.md", "zh-hans/index.md"]);
+
+        assert_eq!(
+            g.resolve_path("work/spring-show", "zh-hans/index.md"),
+            Some("work/spring-show.md".into())
+        );
+    }
+
+    // 1c-explicit. An author who names a language tree explicitly in the
+    // reference itself is never re-scoped — [[en/work/spring-show]] from a
+    // zh-hans page must still resolve to the named English page even when an
+    // (adversarial, same-shape) zh-hans sibling exists at that literal path.
+    #[test]
+    fn test_path_reference_with_explicit_language_prefix_is_not_rescoped() {
+        let g = ContentGraph::from_paths(&[
+            "en/work/spring-show.md",
+            "zh-hans/en/work/spring-show.md",
+            "zh-hans/index.md",
+        ]);
+
+        assert_eq!(
+            g.resolve_path("en/work/spring-show", "zh-hans/index.md"),
+            Some("en/work/spring-show.md".into())
         );
     }
 

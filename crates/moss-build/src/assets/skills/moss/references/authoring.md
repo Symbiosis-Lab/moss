@@ -410,6 +410,8 @@ home page is the one that always works.) The ordinary folder-home rule applies,
 so `en/index.md` and `en/en.md` are equally valid; match whatever the site
 already does rather than converting it.
 
+A `[[reference]]` written from a page inside a language tree prefers that reader's own language — bare stem or full path alike. `[[work/spring-show]]` written from a page under `zh-hans/` resolves to `zh-hans/work/spring-show.md` when that file exists, the same way the bare `[[spring-show]]` already prefers `zh-hans/spring-show.md` over a root one; either form only falls back to the un-prefixed path when no same-language copy exists. To link across languages on purpose — a Chinese page pointing at the English original, say — write the full path including the language folder: `[[en/work/spring-show]]`.
+
 ## Live vocabulary: moss describe
 
 `moss describe --json` is the single source of truth for:

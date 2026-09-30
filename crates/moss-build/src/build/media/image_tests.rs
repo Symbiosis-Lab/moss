@@ -24,7 +24,7 @@ fn to_params_contains_encoding_fields() {
     assert_eq!(v["quality"], 75);
     assert_eq!(v["max_edge"], 1600);
     assert_eq!(v["strip_exif"], false);
-    assert_eq!(v["flatten_alpha"], true);
+    assert_eq!(v["alpha_preserved"], true);
     // min_size_kb must NOT be in cache params.
     assert!(v.get("min_size_kb").is_none());
 }
@@ -349,6 +349,69 @@ fn convert_single_image_happy_path() {
     let entry = record.transforms.get("image/webp").unwrap();
     assert_eq!(entry.oid, oid);
     assert_eq!(entry.size, outcome.webp_size);
+}
+
+/// Write an 8×8 RGBA PNG whose (0,0) corner pixel is fully transparent
+/// (alpha 0, red channel set so a white-flatten is distinguishable) and
+/// every other pixel opaque red.
+fn make_corner_transparent_png(path: &Path) {
+    use image::Rgba;
+    let buf: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(8, 8, |x, y| {
+        if x == 0 && y == 0 {
+            Rgba([255, 0, 0, 0])
+        } else {
+            Rgba([255, 0, 0, 255])
+        }
+    });
+    DynamicImage::ImageRgba8(buf)
+        .save_with_format(path, image::ImageFormat::Png)
+        .unwrap();
+}
+
+/// A transparent PNG (a logo, an icon) must come out of the WebP pass with
+/// its alpha channel intact, not flattened to an opaque white box.
+/// `encode_webp` already has an alpha-aware `from_rgba` branch; this pins
+/// that it actually gets alpha data to encode.
+#[test]
+fn convert_single_image_webp_keeps_alpha_on_transparent_png() {
+    let h = harness();
+    let src = h._tmp.path().join("logo.png");
+    make_corner_transparent_png(&src);
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let cfg = ImageCompressionConfig::default();
+
+    let outcome = convert_single_image(
+        &src,
+        &source_oid,
+        "logo.webp",
+        &h.temp,
+        &h.staging,
+        &h.objects,
+        &h.transforms,
+        &cfg,
+        None,
+        None,
+        &HashMap::new(),
+    );
+    assert!(
+        outcome.error.is_none(),
+        "expected no error: {:?}",
+        outcome.error
+    );
+
+    let bytes = fs::read(h.staging.join("logo.webp")).unwrap();
+    let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::WebP)
+        .expect("decode emitted webp");
+    assert!(
+        decoded.color().has_alpha(),
+        "emitted WebP must keep an alpha channel for a transparent PNG source"
+    );
+    let rgba = decoded.to_rgba8();
+    assert_eq!(
+        rgba.get_pixel(0, 0)[3],
+        0,
+        "corner pixel must stay transparent, not flattened to opaque white"
+    );
 }
 
 // ----- Task 5: ladder rung encodes -----

@@ -2078,3 +2078,66 @@ to catch.
     },
   };
 }
+
+// ── :::grid coverless-card quote treatment ───────────────────────────────────
+// A hand-picked `:::grid` cell for a page with no cover, sitting beside
+// siblings that DO have one, must read as a card rather than the bare
+// `.moss-card-cover.moss-card-no-cover` placeholder box — the same upgrade
+// `render_list_with_typesetting` already gives a coverless card in a mixed
+// AUTO-generated listing (see `grid_card.rs::render_item`'s `list_has_covers`
+// doc: the placeholder becomes a `data-cover="quote"` slot carrying the
+// page's description, or its title with none). `apply_collection_cards`
+// (grid_cells.rs) used to render every `:::grid` cell in isolation and never
+// computed that flag, so the mixed-row upgrade never reached a hand-picked
+// grid at all. Three wikilink cells, two covered, one not: the minimal mixed
+// row. Served by playwright/grid-card-no-cover.config.ts.
+const GRID_NO_COVER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300"><rect width="400" height="300" fill="#5577aa"/></svg>
+`;
+
+export const GRID_CARD_NO_COVER_GATE: ScratchSiteSpec = {
+  name: "grid-card-no-cover-gate",
+  files: {
+    "cover.svg": GRID_NO_COVER_SVG,
+    "index.md": `---
+title: Grid No Cover
+uid: "gnc00101"
+---
+
+:::grid 3
+[[Card One]]
++++
+[[Card Two]]
++++
+[[Card Three]]
+:::
+`,
+    "Card One.md": `---
+title: Card One
+uid: "gnc00102"
+cover: cover.svg
+---
+
+Body one.
+`,
+    // The one cell with no cover of its own — filename matches the
+    // `[[wikilink]]` above verbatim (Obsidian-style fuzzy matching,
+    // content_graph.rs), not a lookup against `title:` frontmatter.
+    "Card Two.md": `---
+title: Card Two
+uid: "gnc00103"
+---
+
+Body two, no cover.
+`,
+    "Card Three.md": `---
+title: Card Three
+uid: "gnc00104"
+cover: cover.svg
+---
+
+Body three.
+`,
+    ".moss/config.toml": CONFIG_TOML,
+    ".moss/theme/style.css": null,
+  },
+};

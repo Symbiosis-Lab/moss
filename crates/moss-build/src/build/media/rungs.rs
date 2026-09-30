@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::image::{
-    apply_exif_orientation, encode_webp, flatten_alpha_to_white, read_exif_orientation,
+    apply_exif_orientation, encode_webp, read_exif_orientation,
     validate_webp_output, ImageCompressionConfig,
 };
 
@@ -284,7 +284,11 @@ pub(crate) fn encode_rungs(
         // mul, truncating div, floor at 1).
         let target_h = ((h as u64 * rung as u64 / w as u64) as u32).max(1);
         let resized = img.resize_exact(rung, target_h, image::imageops::FilterType::Lanczos3);
-        let resized = flatten_alpha_to_white(resized);
+        // No alpha flatten: `encode_webp` encodes alpha directly (`from_rgba`);
+        // see `image.rs::flatten_alpha_to_white`'s doc comment for why this
+        // rung pass never needed it. `params` above is `config.to_params()`,
+        // whose cache-key rename (`alpha_preserved`) also forces a cached
+        // pre-fix (flattened) rung blob to re-encode rather than be reused.
         let webp_bytes = match encode_webp(&resized, config.quality, None) {
             Ok(b) => b,
             Err(e) => {

@@ -191,7 +191,10 @@ impl ImageCompressionConfig {
             "quality": self.quality,
             "max_edge": self.max_edge,
             "strip_exif": self.strip_exif,
-            "flatten_alpha": true,
+            // Was `"flatten_alpha": true` unconditionally, which silently
+            // discarded transparency; the key name changed along with the
+            // fix so a cached pre-fix (flattened) blob is never reused.
+            "alpha_preserved": true,
             // Which deploy resize rule produced the cached pixels. 2 =
             // `deployed_long_edge`'s short-edge floor (2026-09); without it a
             // cached 2400×104 handscroll base would outlive the rule change.
@@ -837,9 +840,12 @@ pub(crate) fn read_exif_orientation(path: &Path) -> u32 {
 
 /// Composite an image with alpha against a white background.
 ///
-/// PNG files with transparency are served on the web without a guaranteed
-/// background color. Flattening to white before WebP encode ensures a
-/// consistent, opaque result regardless of the viewer's background.
+/// Used only by the deployed JPEG fallback (`fallback_raster::encode_sized_raster`
+/// / `encode_jpeg`): JPEG has no alpha channel, so a source with transparency
+/// must be composited onto *something* before that encode. The WebP passes
+/// (`image.rs`'s base encode, `rungs.rs`'s ladder encode) do not call this —
+/// `encode_webp` encodes alpha directly via `from_rgba`, and a PNG's own
+/// deployed fallback keeps its alpha too (`encode_sized_png`).
 ///
 /// Non-alpha images are returned unchanged. The returned image always has
 /// color type `Rgb8` when the input had alpha, or the original type otherwise.
@@ -1196,22 +1202,14 @@ pub(crate) fn convert_single_image(
     };
     let final_dims = (resized.width(), resized.height());
 
-    // ---- Step 4b: flatten alpha to white ----
-    if resized.color().has_alpha() {
-        let ext = source_file.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-        if ext == "png" {
-            log::debug!("[image] Flattening alpha channel to white for PNG: {}", filename);
-        } else {
-            log::warn!(
-                "[image] Flattening alpha channel to white for non-PNG source ({}): {}. \
-                 Transparency will be lost. Supply an opaque variant if this is unintended.",
-                ext, filename
-            );
-        }
-    }
-    let resized = flatten_alpha_to_white(resized);
-
     // ---- Step 5: encode WebP ----
+    // `encode_webp` already has an alpha-aware `from_rgba` branch — an image
+    // with an alpha channel (a logo, an icon, a diagram PNG) keeps it; an
+    // opaque source is unchanged. No flatten-to-white here: that used to run
+    // unconditionally and silently turned every transparent PNG into an
+    // opaque white box (see `flatten_alpha_to_white`'s doc comment for where
+    // flattening is still correct — the JPEG-only deployed fallback, which
+    // has no alpha channel to preserve in the first place).
     let webp_bytes = match encode_webp(&resized, config.quality, None) {
         Ok(b) => b,
         Err(e) => {

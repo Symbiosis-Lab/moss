@@ -84,6 +84,7 @@ const GATE_PORT_KEYS = [
   'preview-parity-gate:preview',
   'header-hit-areas',
   'lightbox-github-shapes',
+  'grid-card-no-cover',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

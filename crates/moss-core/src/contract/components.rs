@@ -1343,7 +1343,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-columns",
                 values: &["1", "2", "3", "4"],
                 default: "",
-                description: "How many cards sit on one line of the grid, from `:::grid N`. Same track count at every viewport width — there is no mobile collapse to a single column, so a grid of cards and a grid of short text lines both keep their authored count on a phone. A ratio (`:::grid 2 1:2`) arrives as the custom property `--moss-grid-ratio` on the element, so it stays overridable at every width. Under `data-scroll`, this instead reads as how many cards fit in view at once — the row scrolls rather than wraps.",
+                description: "How many cards sit on one line of the grid, from `:::grid N`. Collapses to a single column below 768px — the default (horizontal) inline axis is viewport width, which shrinks too far for N side-by-side cards to stay readable; vertical typesetting counters this in its own partial, since there the inline axis is height instead. A ratio (`:::grid 2 1:2`) arrives as the custom property `--moss-grid-ratio` on the element, so it stays overridable at every width. Under `data-scroll`, this instead reads as how many cards fit in view at once — the row scrolls rather than wraps, and does not collapse.",
             },
             DataAttr {
                 name: "data-scroll",
@@ -1438,7 +1438,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-columns",
                 values: &[],
                 default: "",
-                description: "Column count, from `:::gallery N` — the author names it rather than moss inferring it. Unlike `:::grid`, which keeps its authored count at every viewport, a gallery uses `auto-fill` below 48rem to keep as many tracks as clear 88px: N becomes a maximum rather than a mandate, and a gallery that already fits stays at its authored count. A wall of thumbnails should thin out on a phone; a grid of cards should not.",
+                description: "Column count, from `:::gallery N` — the author names it rather than moss inferring it. Where `:::grid` collapses to a single column below 48rem, a gallery uses `auto-fill` below 48rem to keep as many tracks as clear 88px: N becomes a maximum rather than a mandate, and a gallery that already fits stays at its authored count. A wall of thumbnails should thin out on a phone; a grid of cards should not.",
             },
         ],
         example_html: r#"<div class="moss-gallery" data-width="page">

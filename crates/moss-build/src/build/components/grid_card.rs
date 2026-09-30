@@ -39,6 +39,14 @@ use crate::build::media::cover::{self, html_escape, CoverType};
 /// the first card with a cover as the LCP candidate. Replaces the prior
 /// `html.insert_str(pos+5, "loading=\"eager\" ")` mutation pattern with a
 /// typed flag so the LCP decision flows through the synthesizer.
+///
+/// `list_has_covers`: whether ANY card in this caller's row/list has a cover
+/// of its own — see the parameter doc on [`render_item`], which this calls
+/// straight through to. A hand-picked `:::grid` cell computes it across its
+/// own siblings the same way [`render_list_with_typesetting`] does
+/// (`build::render::grid_cells::apply_collection_cards`); a caller with no
+/// sibling list to compare against (a lone card, or a context that predates
+/// this parameter) passes `false`.
 pub fn render_item_with_typesetting(
     props: &ChildItemProps,
     root: Option<&Path>,
@@ -46,12 +54,13 @@ pub fn render_item_with_typesetting(
     typesetting: Option<&str>,
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     eager: bool,
+    list_has_covers: bool,
 ) -> String {
-    render_item(props, root, lang, typesetting, media_lookup, eager, false)
+    render_item(props, root, lang, typesetting, media_lookup, eager, list_has_covers)
 }
 
-/// Shared by [`render_item_with_typesetting`] (standalone / `.moss-grid`
-/// cells, where there is no sibling list to compare against) and
+/// Shared by [`render_item_with_typesetting`] (a lone card, or `:::grid`
+/// cells whose caller now computes `list_has_covers` across the row) and
 /// [`render_list_with_typesetting`] (which already knows whether ANY card
 /// in the list has a cover).
 ///

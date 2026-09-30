@@ -306,6 +306,48 @@ fn a_wikilink_alias_overrides_the_linked_pages_title() {
     assert!(html.contains(">Another Title<"), "got: {html}");
 }
 
+/// A coverless cell beside a covered sibling in the SAME `:::grid` must read
+/// as a card, not as the bare `.moss-card-no-cover` placeholder box — the
+/// same upgrade `render_list_with_typesetting` already gives a coverless
+/// card in a mixed AUTO-generated listing (see `render_item`'s
+/// `list_has_covers` doc). Before this, `apply_collection_cards` rendered
+/// every cell in isolation and never knew a sibling had a cover.
+#[test]
+fn a_coverless_cell_in_a_mixed_grid_gets_the_quote_slot_not_the_bare_placeholder() {
+    let docs = vec![
+        make_doc("With Cover", "one/index.html", Some("cover.jpg")),
+        make_doc("No Cover", "two/index.html", None),
+    ];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid 2\n[With Cover](one/)\n+++\n[No Cover](two/)\n:::\n");
+    assert!(
+        html.contains(r#"data-cover="quote""#),
+        "a coverless card beside a covered sibling must get the quote slot: {html}"
+    );
+    assert!(
+        !html.contains("moss-card-no-cover"),
+        "the bare placeholder must not appear once a sibling has a cover: {html}"
+    );
+}
+
+/// The other half of the same rule: when NO cell in the grid has a cover,
+/// every card is the same shape and the plain placeholder stays — mirrors
+/// the "uniformly coverless list" half of `render_item`'s doc.
+#[test]
+fn a_uniformly_coverless_grid_keeps_the_plain_placeholder() {
+    let docs = vec![
+        make_doc("First", "one/index.html", None),
+        make_doc("Second", "two/index.html", None),
+    ];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid 2\n[First](one/)\n+++\n[Second](two/)\n:::\n");
+    assert!(
+        html.contains("moss-card-no-cover"),
+        "when no cell has a cover the plain placeholder stays: {html}"
+    );
+    assert!(!html.contains(r#"data-cover="quote""#), "got: {html}");
+}
+
 /// The ONE-renderer falsifier for the plain `:::grid` card, the twin of
 /// `summary_cells_render_through_the_summary_card_emitter` below: the expected
 /// markup is the grid-card emitter's own output for the shared props builder's
@@ -332,7 +374,11 @@ fn collection_cells_render_through_the_grid_card_emitter() {
         let props = crate::build::components::child_list::props_for_document(
             doc, &docs, "", &overrides, None,
         );
-        let expected = render_item_with_typesetting(&props, None, Language::En, None, None, eager);
+        // `list_has_covers=true`: "Ink Study" has a cover, so "Works" (the
+        // other cell, coverless) must render through the quote-slot branch,
+        // not the bare `.moss-card-no-cover` placeholder — see
+        // `render_item`'s `list_has_covers` doc.
+        let expected = render_item_with_typesetting(&props, None, Language::En, None, None, eager, true);
         // The first card with a cover carries the LCP hint; only one does here.
         eager = false;
         assert!(
