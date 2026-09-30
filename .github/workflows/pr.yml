@@ -311,6 +311,18 @@ jobs:
       - name: Test moss-build site/bridge JS (js-src)
         run: cd crates/moss-build && npx vitest run
 
+      - name: Typecheck obsidian-moss (source + tests)
+        run: cd packages/obsidian-moss && pnpm run typecheck
+
+      - name: Test obsidian-moss
+        run: cd packages/obsidian-moss && npx vitest run
+
+      # main.js is gitignored here and never committed, unlike moss-api's
+      # and moss-syntax's dist/, so there is no freshness diff to check —
+      # this only proves the esbuild bundle still succeeds.
+      - name: Build obsidian-moss
+        run: cd packages/obsidian-moss && npm run build
+
       - name: Verify moss-api API reference is up-to-date
         run: |
           cd packages/moss-api

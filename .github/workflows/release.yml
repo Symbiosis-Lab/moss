@@ -1,6 +1,8 @@
-# Publishes moss-core (crates.io) and moss-api, moss-syntax, obsidian-moss,
-# and moss (npm) once open/ is a repo root — plugins never move to open/, so
-# they are not among these. Lifted from release.yml's `release-plz-release`
+# Publishes moss-core (crates.io) and moss-api, moss-syntax, and moss (npm)
+# once open/ is a repo root — plugins never move to open/, so obsidian-moss
+# is not among these; its release lives in its own tag-triggered workflow
+# (release-obsidian-moss.yml), independent of the `release: published` event
+# this file reacts to. Lifted from release.yml's `release-plz-release`
 # (release.yml:957-979) and `changesets-release` (release.yml:989-1014)
 # verbatim except the trigger: today both fire on
 # `repository_dispatch: moss-release-published`, sent cross-repo by
