@@ -96,6 +96,14 @@ const SCAN_EXTENSIONS: &[&str] = &["html", "xml", "json", "js", "txt", "css", "s
 /// site, so the scan reports its own blindness and the caller fails closed.
 pub struct ReferenceScan {
     pub tails: HashSet<String>,
+    /// Each token resolved against the file it was found in, and nothing
+    /// else: what a reference actually points at. `tails` widens every token
+    /// to all its path suffixes, which is right for deciding what NOT to
+    /// delete and wrong for deciding what is missing — a page at `a/b/` that
+    /// references its own `a/b/assets/x.webp` contributes `assets/x.webp` and
+    /// `x.webp` to `tails`, keys that exist nowhere. Read this set when the
+    /// question is "which references resolve to nothing".
+    pub resolved: HashSet<String>,
     /// Paths the scan could not read. Non-empty means `tails` is a SUBSET of
     /// the truth, so pruning from it would delete referenced files.
     pub unreadable: Vec<std::path::PathBuf>,
@@ -196,6 +204,7 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
         .collect();
 
     let mut referenced = HashSet::new();
+    let mut resolved_refs = HashSet::new();
     let (files, mut unreadable) = walk_files(stage_dir);
     for path in files {
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
@@ -247,7 +256,17 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
             if text.as_bytes()[..m.start()].ends_with(b"//") {
                 continue;
             }
-            let Some(decoded) = decode_reference(m.as_str()) else {
+            // The start class cannot begin a token on `/` or `.`, so a match
+            // never carries its own `/`, `./` or `../` prefix. Taken back here,
+            // or the resolution below reads `/a/b/x.webp` on a page in `a/b/`
+            // as `a/b/a/b/x.webp`, and `../x.webp` as a sibling of the page.
+            // The suffix reading strips the prefix again, so it is unchanged.
+            let prefix = text.as_bytes()[..m.start()]
+                .iter()
+                .rev()
+                .take_while(|b| matches!(b, b'.' | b'/'))
+                .count();
+            let Some(decoded) = decode_reference(&text[m.start() - prefix..m.end()]) else {
                 continue;
             };
             // Two readings of the same token, unioned, because neither alone
@@ -277,12 +296,13 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
                 let resolved =
                     crate::build::markdown::html_post::resolve_to_root_relative(&decoded, doc);
                 if !resolved.is_empty() {
-                    referenced.insert(resolved);
+                    referenced.insert(resolved.clone());
+                    resolved_refs.insert(resolved);
                 }
             }
         }
     }
-    ReferenceScan { tails: referenced, unreadable }
+    ReferenceScan { tails: referenced, resolved: resolved_refs, unreadable }
 }
 
 /// The `.webp` variants a producer must NOT put back into `stage_dir`.

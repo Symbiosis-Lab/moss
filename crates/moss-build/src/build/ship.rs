@@ -946,8 +946,15 @@ pub(crate) fn unregistered_referenced_variants(
             scan.unreadable.len()
         );
     }
+    // `resolved`, not `tails`: the suffix widening that keeps the prune
+    // conservative turns every nested reference into a handful of keys that
+    // exist nowhere, and here each one reads as a missing variant. They could
+    // never strip a live `<source>` — `degrade` matches exact resolved URLs —
+    // but on a real site they numbered in the thousands on every build, so the
+    // HTML repair re-read every page and the log reported a breakage that was
+    // not there.
     let unregistered: std::collections::HashSet<String> = scan
-        .tails
+        .resolved
         .iter()
         .filter(|key| key.ends_with(".webp"))
         .filter(|key| !sealed.files().contains_key(key.as_str()))
@@ -1724,9 +1731,9 @@ mod tests {
         let sealed = pending.seal();
 
         let scan = crate::build::media::orphan_prune::ReferenceScan {
-            tails: [
+            tails: std::collections::HashSet::new(),
+            resolved: [
                 "assets/gone.webp",
-                "gone.webp",
                 "myapp/logo.webp",
                 "assets/stub.webp",
                 "assets/real.webp",
@@ -1742,13 +1749,6 @@ mod tests {
         let strip = unregistered_referenced_variants(&scan, &sealed, stage);
 
         assert!(strip.contains("assets/gone.webp"), "{strip:?}");
-        // `path_suffixes` emits every shorter tail of a token, so the scan
-        // reports `gone.webp` beside `assets/gone.webp`. It is inert rather
-        // than wrong: `degrade` resolves each srcset URL against its own page
-        // before testing membership, so a tail no page resolves to strips
-        // nothing — and one that does resolve names a root-level file that
-        // this same predicate has already found unregistered and absent.
-        assert!(strip.contains("gone.webp"), "{strip:?}");
         assert!(
             !strip.contains("myapp/logo.webp"),
             "a file inside a passthrough subtree ships through the subtree's own \
@@ -1771,6 +1771,66 @@ mod tests {
             "video has no `set_failed` path and an emptied <video> falls through to \
              nothing — widening this scope must be a visible edit: {strip:?}"
         );
+    }
+
+    /// A page below the site root that references its own, present,
+    /// registered variant: nothing is missing, so nothing may be reported.
+    /// The prune's suffix widening turns that one reference into
+    /// `b/assets/x.webp`, `assets/x.webp` and `x.webp`, none of which exist,
+    /// and reading `tails` here reported each as a variant to strip — on
+    /// every build, for every nested reference on the site.
+    #[test]
+    fn a_nested_page_with_every_variant_present_has_nothing_to_strip() {
+        let tmp = tempdir().unwrap();
+        let stage = tmp.path();
+        std::fs::create_dir_all(stage.join("a/b/assets")).unwrap();
+        std::fs::write(
+            stage.join("a/b/index.html"),
+            r#"<picture><source srcset="/a/b/assets/x.webp" type="image/webp"><img src="assets/x.png"></picture>"#,
+        )
+        .unwrap();
+        std::fs::write(stage.join("a/b/assets/x.webp"), b"x").unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.register(
+            &crate::build::served_path::ServedPath::from_source("a/b/assets/x.webp").unwrap(),
+            b"x",
+            HashBucket::ImageVariants,
+        );
+        let sealed = pending.seal();
+
+        let scan = crate::build::media::orphan_prune::extract_referenced_tails(stage);
+        let strip = unregistered_referenced_variants(&scan, &sealed, stage);
+
+        assert!(strip.is_empty(), "{strip:?}");
+    }
+
+    /// The same, for a `../` reference: the prefix the token pattern cannot
+    /// start on has to be taken back, or `../assets/x.webp` on a page in
+    /// `a/b/` resolves beside the page, to a key that does not exist.
+    #[test]
+    fn a_parent_relative_reference_to_a_present_variant_has_nothing_to_strip() {
+        let tmp = tempdir().unwrap();
+        let stage = tmp.path();
+        std::fs::create_dir_all(stage.join("a/b")).unwrap();
+        std::fs::create_dir_all(stage.join("a/assets")).unwrap();
+        std::fs::write(
+            stage.join("a/b/index.html"),
+            r#"<picture><source srcset="../assets/x.webp" type="image/webp"><img src="../assets/x.png"></picture>"#,
+        )
+        .unwrap();
+        std::fs::write(stage.join("a/assets/x.webp"), b"x").unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.register(
+            &crate::build::served_path::ServedPath::from_source("a/assets/x.webp").unwrap(),
+            b"x",
+            HashBucket::ImageVariants,
+        );
+        let sealed = pending.seal();
+
+        let scan = crate::build::media::orphan_prune::extract_referenced_tails(stage);
+        let strip = unregistered_referenced_variants(&scan, &sealed, stage);
+
+        assert!(strip.is_empty(), "{strip:?}");
     }
 
     // ─── Ship-by-OID ────────────────────────────────────
