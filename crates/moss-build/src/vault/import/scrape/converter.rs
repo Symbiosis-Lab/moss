@@ -130,6 +130,11 @@ pub fn extract_article_with_snapshot(
         std::collections::HashMap::new();
     for raw in extract_image_urls_in_markdown(&markdown) {
         if let Some(abs) = resolve_url(&raw, &base) {
+            // Route through the original-media table before it becomes the
+            // dedupe/download key — a CDN row (e.g. Squarespace) collapses
+            // this image's bare, `?format=750w` and `?format=2500w` markdown
+            // references onto one canonical URL, so they download once.
+            let abs = crate::vault::import::media::original_media_url(&abs).unwrap_or(abs);
             if abs != raw {
                 raw_to_resolved.insert(raw.clone(), abs.clone());
             }
@@ -157,6 +162,7 @@ pub fn extract_article_with_snapshot(
     // to normalise trailing slashes, but fall back to inserting it verbatim.
     if let Some(ref og_url) = metadata.og_image {
         let abs = resolve_url(og_url, &base).unwrap_or_else(|| og_url.clone());
+        let abs = crate::vault::import::media::original_media_url(&abs).unwrap_or(abs);
         media_urls.insert(abs.clone());
         // Keep og_image in the resolved form: the cover selection in
         // `scrape::run` uses it as a lookup key into maps keyed by the
@@ -327,6 +333,35 @@ mod tests {
         }
         assert!(urls.contains("https://cdn.example.com/a.png"));
         assert!(urls.contains("https://example.com/img/b.jpg"));
+    }
+
+    /// A page that links one Squarespace-CDN photo twice — once bare, once
+    /// with a size query — must queue it for download exactly once: both
+    /// markdown references route through `original_media_url` onto the same
+    /// canonical URL before landing in `media_urls`.
+    #[test]
+    fn squarespace_bare_and_sized_references_to_one_photo_dedupe() {
+        let html = r#"<article>
+            <p>intro paragraph with enough words for the scorer to like it here</p>
+            <img src="https://images.squarespace-cdn.com/content/v1/a/b/photo.jpg">
+            <img src="https://images.squarespace-cdn.com/content/v1/a/b/photo.jpg?format=2500w">
+        </article>"#;
+        let art = extract_article(html, "https://example.com/gallery");
+        let canonical =
+            "https://images.squarespace-cdn.com/content/v1/a/b/photo.jpg?format=original";
+        assert_eq!(
+            art.media_urls.len(),
+            1,
+            "expected one dedup'd entry, got {:?}",
+            art.media_urls
+        );
+        assert!(art.media_urls.contains(canonical));
+        assert_eq!(
+            art.markdown.matches(canonical).count(),
+            2,
+            "both markdown references should point at the canonical URL: {}",
+            art.markdown
+        );
     }
 
     #[test]

@@ -29,6 +29,57 @@ pub(crate) fn strip_query_transform(url: &str) -> Option<String> {
     Some(stripped.to_string())
 }
 
+/// One row of the "original media" family: a platform CDN whose bare (or
+/// size-hinted) URLs cap resolution, and the query that asks it for the
+/// largest rendition it serves. Keyed on the CDN host, not a site — the
+/// same host backs unrelated sites on this platform.
+struct OriginalMediaRule {
+    host: &'static str,
+    query: &'static str,
+}
+
+/// Squarespace's image CDN (current host `images.squarespace-cdn.com`;
+/// `static1.squarespace.com` for older assets) doesn't take free-form
+/// transform queries — its own `format` key accepts only `100w`…`2500w` or
+/// `original`, and its docs list no bucket past 2500px: a bare URL and
+/// `format=2500w` both return the same 2500px-capped rendition, and
+/// `format=original` is not documented as exceeding that cap either.
+/// Verified against a live corpus image, it doesn't: same 2500px width.
+/// What it does do is skip the CDN's own-format rendition pipeline, which
+/// otherwise auto-transcodes to WebP — `format=original` returns the
+/// uploaded file's actual bytes (JPEG here) at that width, one lossy
+/// re-encode removed. Combined with collapsing every query variant of one
+/// photo (bare, `?format=750w`, `?format=2500w`, …) onto a single
+/// canonical URL — which is what lets the asset pass dedupe by URL and
+/// download once instead of once per variant referenced on the page —
+/// that's this row's real, verified payoff: a cleaner file at the same
+/// resolution, not a resolution increase.
+const ORIGINAL_MEDIA_RULES: &[OriginalMediaRule] = &[
+    OriginalMediaRule {
+        host: "images.squarespace-cdn.com",
+        query: "format=original",
+    },
+    OriginalMediaRule {
+        host: "static1.squarespace.com",
+        query: "format=original",
+    },
+];
+
+/// Rewrite a URL through the original-media table. `None` when the host has
+/// no row (leave the URL alone) or it is already in the row's canonical
+/// form (nothing to rewrite).
+pub(crate) fn original_media_url(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    let host = parsed.host_str()?;
+    let rule = ORIGINAL_MEDIA_RULES.iter().find(|r| r.host == host)?;
+    if parsed.query() == Some(rule.query) {
+        return None;
+    }
+    let mut rewritten = parsed;
+    rewritten.set_query(Some(rule.query));
+    Some(rewritten.to_string())
+}
+
 /// Recover a YouTube watch URL from a lightbox thumbnail
 /// (`i.ytimg.com/vi/{id}/…jpg`). Lightbox players are created by site JS,
 /// so the thumbnail is often the only trace of the video in static HTML.
@@ -111,6 +162,49 @@ mod tests {
             None
         );
         assert_eq!(strip_query_transform("https://cdn.example.com/i.jpg"), None);
+    }
+
+    #[test]
+    fn squarespace_bare_and_sized_urls_both_rewrite_to_original() {
+        assert_eq!(
+            original_media_url(
+                "https://images.squarespace-cdn.com/content/v1/abc/def/photo.jpg"
+            )
+            .as_deref(),
+            Some("https://images.squarespace-cdn.com/content/v1/abc/def/photo.jpg?format=original")
+        );
+        assert_eq!(
+            original_media_url(
+                "https://images.squarespace-cdn.com/content/v1/abc/def/photo.jpg?format=2500w"
+            )
+            .as_deref(),
+            Some("https://images.squarespace-cdn.com/content/v1/abc/def/photo.jpg?format=original")
+        );
+        // Already canonical → nothing to rewrite.
+        assert_eq!(
+            original_media_url(
+                "https://images.squarespace-cdn.com/content/v1/abc/def/photo.jpg?format=original"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn squarespace_static1_host_also_rewrites() {
+        assert_eq!(
+            original_media_url("https://static1.squarespace.com/static/abc/t/def/1234/photo.jpg?format=750w")
+                .as_deref(),
+            Some("https://static1.squarespace.com/static/abc/t/def/1234/photo.jpg?format=original")
+        );
+    }
+
+    #[test]
+    fn original_media_leaves_other_hosts_alone() {
+        assert_eq!(
+            original_media_url("https://cdn.example.com/photo.jpg?format=2500w"),
+            None
+        );
+        assert_eq!(original_media_url("https://cdn.example.com/photo.jpg"), None);
     }
 
     #[test]
