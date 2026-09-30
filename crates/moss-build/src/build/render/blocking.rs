@@ -2769,14 +2769,22 @@ pub fn generate_blocking_content_for_build(
             .find(|d| d.url_path == "index.html")
             .map(|d| d.title.as_str())
             .unwrap_or(crate::i18n::t(site_lang, "site"));
-        let homepage_desc = documents
+        // Plain text: llms.txt's own body is deliberately raw markdown (see
+        // that module's doc comment), but this one line is a one-sentence
+        // site blurb quoted in a header line, not page content — reduced the
+        // same way the SPA/og/twitter description tags are, so `_..._`
+        // doesn't ship its markers into a file whose whole point is to read
+        // cleanly.
+        let homepage_desc: Option<String> = documents
             .iter()
             .find(|d| d.url_path == "index.html")
-            .and_then(|d| d.description.as_deref());
+            .and_then(|d| d.description.as_deref())
+            .map(crate::build::page::meta::strip_markdown_inline)
+            .filter(|s| !s.trim().is_empty());
         let llms_content = crate::build::feeds::llms_txt::generate_llms_txt(
             &documents,
             llms_site_title,
-            homepage_desc,
+            homepage_desc.as_deref(),
         );
         // Site 14 (Pattern A): emit llms.txt.
         BuildContext::for_render(output_dir, pending)
@@ -3512,8 +3520,15 @@ pub fn generate_blocking_content_for_build(
         use crate::build::site_meta::spa_inject::SpaDefaultsOwned;
 
         let homepage_doc = documents.iter().find(|d| d.url_path == "index.html");
+        // Plain text: this feeds SPA default meta/og/twitter description tags
+        // (`SpaDefaultsOwned::description` below), the same surface
+        // `share_card_description_str` serves for an ordinary page — the
+        // frontmatter value is markdown and must be reduced, not printed
+        // verbatim, the way an explicit `description:` used to leak its
+        // `_..._`/`**...**` markers straight into these tags.
         let homepage_description: Option<String> = homepage_doc
-            .and_then(|d| d.description.clone())
+            .and_then(|d| d.description.as_deref())
+            .map(crate::build::page::meta::strip_markdown_inline)
             .filter(|s| !s.trim().is_empty());
         // og:title routes through the SAME structural decision the static
         // `<title>` uses — `home::site_name` keys off the home filename

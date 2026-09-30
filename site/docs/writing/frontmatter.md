@@ -27,7 +27,7 @@ Frontmatter uses a **fixed schema**: moss only recognizes the fields listed on t
 
 Every recognized field is discoverable via `moss describe --json`, which prints the full schema as machine-readable JSON. The human-readable version is at [Reference](/docs/reference/).
 
-`description:` feeds SEO meta tags, Open Graph previews, and sitemap summaries. It is **not** rendered as a visible deck. For a visible subtitle, use a `> blockquote` immediately after the `# H1` — the default theme styles `h1 + blockquote` as a deck.
+`description:` feeds SEO meta tags, Open Graph previews, and list-card summaries; when it's left out, moss extracts one from the page's own opening paragraph instead. The value is inline markdown — `_emphasis_`, `**strong**`, `` `code` ``, and links all work — rendered as real markup on a list card and reduced to plain text in a meta tag or feed, where markup has no meaning; block-level markdown (headings, lists, images) isn't supported and is dropped rather than shown as literal syntax. It is **not** rendered as a visible deck. For a visible subtitle, use a `> blockquote` immediately after the `# H1` — the default theme styles `h1 + blockquote` as a deck.
 
 ## Identity
 

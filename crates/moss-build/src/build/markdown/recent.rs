@@ -207,7 +207,7 @@ pub fn render_html(posts: &[&ParsedDocument]) -> String {
             href = p.url_path.trim_start_matches('/'),
             title = html_escape(&p.title),
             date = date_str,
-            desc = html_escape(p.description.as_deref().unwrap_or("")),
+            desc = crate::build::page::meta::render_description_html(p.description.as_deref().unwrap_or("")),
         ));
     }
     out.push_str("</ul>\n");
@@ -229,7 +229,7 @@ pub fn render_plaintext(posts: &[&ParsedDocument]) -> String {
             title = p.title,
             date = date_str,
             href = p.url_path.trim_start_matches('/'),
-            desc = p.description.as_deref().unwrap_or(""),
+            desc = crate::build::page::meta::strip_markdown_inline(p.description.as_deref().unwrap_or("")),
         ));
     }
     out
@@ -364,6 +364,31 @@ mod tests {
         assert!(text.contains("- Hello (2026-05-01)"));
         assert!(text.contains("/posts/a.html"));
         assert!(text.contains("summary"));
+    }
+
+    #[test]
+    fn render_html_renders_description_markdown_as_safe_inline_html() {
+        // Same bug as the card/listing description: a bare `html_escape`
+        // left `_emphasis_` as literal underscores instead of `<em>`.
+        let d = doc("posts/a.html", "Hello", Some("2026-05-01"), Some("_The Common Reader, 1925._"));
+        let html = render_html(&[&d]);
+        assert!(
+            html.contains(r#"<div class="moss-recent__desc"><em>The Common Reader, 1925.</em></div>"#),
+            "description markdown should render as safe inline HTML: {html}"
+        );
+    }
+
+    #[test]
+    fn render_plaintext_reduces_description_markdown_to_plain_text() {
+        // The email body_text field: markdown has no meaning in plain text,
+        // and used to ship completely unstripped.
+        let d = doc("posts/a.html", "Hello", Some("2026-05-01"), Some("_The Common Reader, 1925._"));
+        let text = render_plaintext(&[&d]);
+        assert!(
+            text.contains("The Common Reader, 1925."),
+            "description markdown should reduce to plain text: {text}"
+        );
+        assert!(!text.contains('_'), "no raw markdown syntax should survive: {text}");
     }
 
     #[test]

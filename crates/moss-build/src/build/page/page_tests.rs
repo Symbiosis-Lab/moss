@@ -869,7 +869,7 @@ fn test_resolve_children_config_mixed_date_presence_uses_list() {
 }
 
 #[test]
-fn test_generate_children_strips_markdown_from_frontmatter_description() {
+fn test_generate_children_renders_frontmatter_description_as_safe_inline_html() {
     let mut doc = make_test_doc("Article", "blog/article/index.html");
     doc.date = Some("2025-01-15".to_string());
     doc.description = Some("A **bold** claim about [something](https://example.com)".to_string());
@@ -894,27 +894,29 @@ fn test_generate_children_strips_markdown_from_frontmatter_description() {
         &Default::default(),
     );
 
-    // Markdown syntax should be stripped from the description
+    // A card is a reader-facing HTML surface: markdown renders as real markup
+    // (`render_description_html`), not plain text with the syntax deleted —
+    // the raw `**`/`[...](...)` source syntax itself must not survive either
+    // way.
     assert!(
         !result.contains("**"),
-        "Should strip bold markdown: {}",
+        "Should not leak raw bold markdown syntax: {}",
         result
     );
     assert!(
         !result.contains("[something]"),
-        "Should strip link markdown: {}",
+        "Should not leak raw link markdown syntax: {}",
         result
     );
-    assert!(!result.contains("]("), "Should strip link URL: {}", result);
     assert!(
-        result.contains("A bold claim about something"),
-        "Should contain plain text description: {}",
+        result.contains(r#"A <strong>bold</strong> claim about <a href="https://example.com">something</a>"#),
+        "Should render as safe inline HTML: {}",
         result
     );
 }
 
 #[test]
-fn test_generate_children_strips_markdown_from_content_extracted_description() {
+fn test_generate_children_renders_content_extracted_description_as_safe_inline_html() {
     let mut doc = make_test_doc("Article", "blog/article/index.html");
     doc.date = Some("2025-01-15".to_string());
     // No frontmatter description — will be extracted from content
@@ -940,15 +942,16 @@ fn test_generate_children_strips_markdown_from_content_extracted_description() {
         &Default::default(),
     );
 
-    // Content-extracted descriptions should also be stripped (already works)
+    // Content-extracted descriptions get the same safe-HTML rendering as an
+    // explicit `description:` (same card, same `render_description_html`).
     assert!(
         !result.contains("**"),
-        "Should strip bold markdown: {}",
+        "Should not leak raw bold markdown syntax: {}",
         result
     );
     assert!(
-        result.contains("This has bold and a link in it"),
-        "Should contain plain text description: {}",
+        result.contains(r#"This has <strong>bold</strong> and a <a href="https://example.com">link</a> in it."#),
+        "Should render as safe inline HTML: {}",
         result
     );
 }

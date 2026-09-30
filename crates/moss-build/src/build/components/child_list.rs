@@ -130,7 +130,10 @@ pub struct ChildItemProps {
     pub date_raw: Option<String>,
     /// Number of articles inside. None for leaf articles
     pub child_count: Option<usize>,
-    /// From frontmatter description or auto-extracted
+    /// From frontmatter description or auto-extracted. Markdown, not plain
+    /// text — a renderer prints it with `page::meta::render_description_html`,
+    /// never a bare escape, the way `child_summary`/`grid_card`/this file's
+    /// own `render_child` already do.
     pub description: Option<String>,
     /// Optional cover image path
     pub cover: Option<String>,
@@ -281,7 +284,8 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
             // Folder WITH description: title + count suffix, description below
             format!(
                 r#"<div class="moss-card moss-folder-item"><a href="{}" class="moss-prefix-link moss-folder-link"><span class="moss-prefix-link-title">{}</span><span class="moss-prefix-link-suffix">{}</span></a><p class="moss-folder-description">{}</p></div>"#,
-                escaped_url, escaped_title, count_text, html_escape(desc)
+                escaped_url, escaped_title, count_text,
+                crate::build::page::meta::render_description_html(desc)
             )
         } else {
             // Folder WITHOUT description: count in prefix slot

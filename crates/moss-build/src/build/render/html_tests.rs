@@ -129,14 +129,27 @@ mod homepage_og_tests {
         assert_eq!(desc.as_deref(), Some("百川汇入大海，昼夜不息。"));
     }
 
-    /// Frontmatter description with markdown should be stripped.
+    /// `resolve_page_description` is the HTML-card resolution path (child
+    /// lists, grid cards): it returns the description's markdown intact, for
+    /// a caller to render with `meta::render_description_html` — it no
+    /// longer pre-strips to plain text itself, since a caller rendering HTML
+    /// needs the real markup, not text with the syntax deleted.
+    /// `resolve_page_description_with_fallbacks` (meta/OG/Twitter) is the
+    /// plain-text path and is unaffected.
     #[test]
-    fn test_description_strips_markdown_from_frontmatter() {
+    fn test_description_resolution_keeps_markdown_for_the_caller_to_render() {
         let frontmatter_desc =
             Some("A **bold** claim about [something](https://example.com)".to_string());
         let content = "Body text.";
         let desc = meta::resolve_page_description(frontmatter_desc.as_deref(), content, true);
-        assert_eq!(desc.as_deref(), Some("A bold claim about something"));
+        assert_eq!(
+            desc.as_deref(),
+            Some("A **bold** claim about [something](https://example.com)")
+        );
+        assert_eq!(
+            meta::render_description_html(&desc.unwrap()),
+            r#"A <strong>bold</strong> claim about <a href="https://example.com">something</a>"#
+        );
     }
 
     /// Empty content with no frontmatter returns None.

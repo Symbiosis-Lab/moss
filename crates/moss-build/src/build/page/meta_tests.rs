@@ -378,6 +378,87 @@ More content here."#;
     assert!(desc.contains("This is bold and italic text"));
 }
 
+// --- render_description_html / plain-text pairing (the moss-card-description
+// / meta-description bug: an auto-derived or explicit description used to
+// leak `_..._`/`**...**` as literal characters everywhere, since the only
+// existing reduction (`strip_markdown_inline`) deletes markup for a
+// plain-text surface and nothing rendered it as real markup for an HTML one.
+
+#[test]
+fn auto_derived_description_renders_em_on_a_card_and_plain_text_in_meta() {
+    let content = "_The Common Reader, 1925._\n\nMore text follows this opening line.";
+
+    // Card/listing surface: the resolved markdown, rendered safely inline.
+    let markdown = extract_description_markdown(content, true);
+    assert_eq!(render_description_html(&markdown), "<em>The Common Reader, 1925.</em>");
+
+    // Meta/OG/Twitter surface: plain text, markers gone.
+    let plain = extract_description(content, true);
+    assert_eq!(plain, "The Common Reader, 1925.");
+}
+
+#[test]
+fn explicit_description_renders_em_on_a_card_and_plain_text_in_meta() {
+    // `resolve_page_description` is the HTML-card path (child lists, grid
+    // cards): it returns the description's MARKDOWN now, for a caller to
+    // render with `render_description_html` — not pre-stripped plain text.
+    let markdown = resolve_page_description(Some("_The Common Reader, 1925._"), "", true)
+        .expect("explicit description resolves");
+    assert_eq!(render_description_html(&markdown), "<em>The Common Reader, 1925.</em>");
+
+    // `resolve_page_description_with_fallbacks` is the meta/OG/Twitter path:
+    // plain text, same underlying `strip_markdown_inline` reduction.
+    let inputs = DescriptionChainInputs {
+        page_description: Some("_The Common Reader, 1925._"),
+        page_hero_overlay_text: None,
+        page_content: "",
+        homepage_description: None,
+        homepage_hero_overlay_text: None,
+        homepage_content: None,
+        math: true,
+    };
+    let plain = resolve_page_description_with_fallbacks(&inputs).expect("resolves");
+    assert_eq!(plain, "The Common Reader, 1925.");
+}
+
+#[test]
+fn render_description_html_neutralises_script_and_raw_html() {
+    let html = render_description_html("before <script>alert(1)</script> after");
+    assert!(!html.contains("<script>"), "raw <script> must not survive: {html}");
+    assert!(html.contains("&lt;script&gt;"), "neutralised as inert text: {html}");
+
+    let html2 = render_description_html(r#"<img src=x onerror="alert(1)">text"#);
+    assert!(!html2.contains("<img"), "raw <img> must not survive: {html2}");
+}
+
+#[test]
+fn render_description_html_keeps_strong_code_and_links() {
+    let html = render_description_html("**bold** and `code` and [a link](https://example.com)");
+    assert_eq!(
+        html,
+        r#"<strong>bold</strong> and <code>code</code> and <a href="https://example.com">a link</a>"#
+    );
+}
+
+#[test]
+fn strip_markdown_inline_handles_underscore_emphasis_without_corrupting_snake_case() {
+    assert_eq!(strip_markdown_inline("_italic_ and __bold__ text"), "italic and bold text");
+    // The bug's exact reported case.
+    assert_eq!(strip_markdown_inline("_The Common Reader, 1925._"), "The Common Reader, 1925.");
+    // Intraword underscores (identifiers, filenames) are prose, not emphasis:
+    // each underscore here sits directly against a letter on BOTH sides, so
+    // there is no space/punctuation edge for a delimiter run to open or
+    // close on.
+    assert_eq!(strip_markdown_inline("see my_file_name.py"), "see my_file_name.py");
+    assert_eq!(strip_markdown_inline("prefix__glued__suffix"), "prefix__glued__suffix");
+    // `__init__` flanked by SPACES on its true outer edges is not intraword
+    // by CommonMark's own rule (the rule looks at the space/punctuation
+    // immediately outside the delimiter run, not at what the wrapped word
+    // looks like) — real Markdown renderers bold this too, which is why
+    // prose about Python dunders is conventionally written in backticks.
+    assert_eq!(strip_markdown_inline("call __init__ once"), "call init once");
+}
+
 #[test]
 fn test_extract_description_truncates() {
     // Content longer than 160 chars to ensure truncation

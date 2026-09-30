@@ -7,6 +7,7 @@
 use super::child_list::ChildItemProps;
 use super::date::extract_year;
 use crate::build::media::cover::{self, html_escape, CoverType};
+use crate::build::page::meta::render_description_html;
 
 /// Renders a child summary as HTML, with the meta slot resolved against the
 /// parent listing's resolved sort axis.
@@ -119,7 +120,7 @@ pub fn render_with_sort(
     // Description: wrapped in an anchor for linkblog cards so it
     // remains a click target now that the outer is `<div>`.
     if let Some(ref desc) = props.description {
-        let desc_inner = format!(r#"<p class="moss-card-description">{}</p>"#, html_escape(desc));
+        let desc_inner = format!(r#"<p class="moss-card-description">{}</p>"#, render_description_html(desc));
         if is_linkblog {
             body.push_str(&format!(
                 r#"<a class="moss-card-description-link" href="{}">{}</a>"#,
