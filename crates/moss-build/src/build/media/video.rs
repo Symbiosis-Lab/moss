@@ -1822,8 +1822,8 @@ impl VideoStore {
                     &staging.join(key),
                     transform,
                 ) {
-                    HealOutcome::AlreadyPresent => {}
-                    HealOutcome::Healed => healed = true,
+                    HealOutcome::AlreadyPresent { .. } => {}
+                    HealOutcome::Healed { .. } => healed = true,
                     HealOutcome::NotCached => missing = true,
                     HealOutcome::Unverified(e) => return StagedVideo::Unverified(e.to_string()),
                 }

@@ -887,17 +887,27 @@ struct BlobPlacement<'a> {
     ext: &'a str,
 }
 
-/// Link the blob into output and, for an image extension, report
-/// `AssetReady` — shared by the main asset walk and the `.moss/theme`
-/// mirror below. `false` (already logged) on a link failure.
+/// Link the blob into output — unless `staged` vouches the file there is
+/// already that blob — and, for an image extension, report `AssetReady`;
+/// shared by the main asset walk and the `.moss/theme` mirror below. `false`
+/// (already logged) on a link failure.
 fn place_blob(
     object_store: &crate::build::cache::ObjectStore,
+    staged: &mut crate::build::lifecycle::cas_heal::StagedLinks,
     placement: BlobPlacement,
     reporter: &dyn crate::build::ports::reporter::BuildReporter,
 ) -> bool {
-    if let Err(e) = object_store.link_to(placement.link_oid, placement.target) {
-        log::warn!("[background-assets] Failed to link {}: {}", placement.log_label, e);
-        return false;
+    use crate::build::lifecycle::cas_heal::Placement;
+    match staged.link(object_store, placement.link_oid, placement.target) {
+        Placement::Held | Placement::Linked => {}
+        Placement::Unverified(e) => {
+            log::warn!("[background-assets] Not linking over unverifiable {}: {}", placement.log_label, e);
+            return false;
+        }
+        Placement::Failed(e) => {
+            log::warn!("[background-assets] Failed to link {}: {}", placement.log_label, e);
+            return false;
+        }
     }
     if is_image_extension(placement.ext) {
         reporter.report(&PipelineEvent::AssetReady {
@@ -985,6 +995,7 @@ pub(crate) fn copy_deferred_assets(
     // file needs no staleness rule — only a cache keyed by oid.
     let manifest_hash_memo =
         crate::build::media::manifest_hash_memo::ManifestHashMemo::load(&deferred_paths.cache_manifest_hash_memo());
+    let mut staged = crate::build::lifecycle::cas_heal::StagedLinks::load(&deferred_paths, "assets", &ctx.staging_dir);
     // Sized-raster-original support (plan 2026-07-06): raster originals
     // (jpg/jpeg/png) are deployed as a sized/optimized raster at the SAME output
     // path instead of the full-resolution source, so no full-res original is
@@ -1406,7 +1417,7 @@ pub(crate) fn copy_deferred_assets(
                 let target = output_dir.join(&mapped_path);
                 let placement =
                     BlobPlacement { link_oid: &link_oid, target: &target, log_label: &mapped_path, report_path: &mapped_path, ext: &ext };
-                if !place_blob(&object_store, placement, reporter) {
+                if !place_blob(&object_store, &mut staged, placement, reporter) {
                     continue;
                 }
 
@@ -1603,7 +1614,7 @@ pub(crate) fn copy_deferred_assets(
                     let log_label = format!(".moss/theme/{}", relative_path);
                     let placement =
                         BlobPlacement { link_oid: &oid, target: &target, log_label: &log_label, report_path: out_path.as_str(), ext: &moss_ext };
-                    if !place_blob(&object_store, placement, reporter) {
+                    if !place_blob(&object_store, &mut staged, placement, reporter) {
                         continue;
                     }
                     let hash =
@@ -1739,6 +1750,7 @@ pub(crate) fn copy_deferred_assets(
         log::warn!("[background-assets] Failed to send sources to coordinator: {}", e);
     }
 
+    staged.save();
     // Persist the oid→xxh3 memo once per build (not once per asset — see
     // `ManifestHashMemo`'s doc comment). Best-effort: a failed save just
     // means the next build starts cold, same as today.

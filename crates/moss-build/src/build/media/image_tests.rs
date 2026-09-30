@@ -4740,13 +4740,161 @@ fn rematerialize_with_oid_overwrites_a_stale_staged_file_never_trusts_its_mere_p
     );
 
     let params = cfg.to_params();
-    let outcome = rematerialize_with_oid(&h.objects, &h.transforms, &params, &staged, "image/webp", &source_oid);
-    assert!(matches!(outcome, HealOutcome::Healed), "must relink over the stale file, got {:?}", outcome);
+    let mut links = staged_links(&h);
+    let outcome = rematerialize_with_oid(&h.objects, &h.transforms, &params, &mut links, &staged, "image/webp", &source_oid);
+    assert!(matches!(outcome, HealOutcome::Healed { .. }), "must relink over the stale file, got {:?}", outcome);
     assert_eq!(
         fs::read(&staged).unwrap(),
         real_bytes,
         "a file already present at the staging path must never be trusted as already correct"
     );
+}
+
+/// The harness's record of staged links, as the next build would load it.
+fn staged_links(h: &TestHarness) -> StagedLinks {
+    StagedLinks::load(&MossPaths::from_moss_dir(h._tmp.path().join(".moss")), "test", &h.staging)
+}
+
+/// One encode of `photo.jpg`, then one heal that records the link, then one
+/// more build's heal that must find the record and leave the file alone.
+/// Returns what a test needs to tamper with the staged variant and heal again.
+fn photo_staged_and_recorded(h: &TestHarness) -> (PathBuf, String, serde_json::Value, Vec<u8>) {
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 400, 300);
+    let cfg = ImageCompressionConfig::default();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let outcome = convert_single_image(
+        &src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &HashMap::new(),
+    );
+    assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
+    let staged = h.staging.join("photo.webp");
+    let params = cfg.to_params();
+    assert!(next_build_relinks(h, &staged, &source_oid, &params), "premise: the first heal links");
+    assert!(!next_build_relinks(h, &staged, &source_oid, &params), "premise: the next heal finds its record");
+    let bytes = fs::read(&staged).unwrap();
+    (staged, source_oid, params, bytes)
+}
+
+/// Heal `staged` the way the next build would, and say whether it relinked.
+fn next_build_relinks(h: &TestHarness, staged: &Path, source_oid: &str, params: &serde_json::Value) -> bool {
+    let mut links = staged_links(h);
+    let outcome = rematerialize_with_oid(&h.objects, &h.transforms, params, &mut links, staged, "image/webp", source_oid);
+    links.save();
+    matches!(outcome, HealOutcome::Healed { .. })
+}
+
+/// A record whose stat still vouches for the staged file names the blob that
+/// file was linked from; once the source changes, the expected blob is a
+/// different one and the file must be relinked, however well its stat matches.
+///
+/// Ablate by dropping the oid comparison from `StagedLinks::holds` and this
+/// goes red: the previous picture's variant stays in place.
+#[test]
+fn a_vouched_staged_variant_of_a_different_blob_is_relinked() {
+    let h = harness();
+    let (staged, _, params, first) = photo_staged_and_recorded(&h);
+    let changed = h._tmp.path().join("changed.jpg");
+    make_big_jpeg(&changed, 320, 240);
+    let changed_oid = crate::build::cache::ObjectStore::hash_file(&changed).unwrap();
+    let outcome = convert_single_image(
+        &changed, &changed_oid, "changed.webp", &h.temp, &h.staging, &h.objects, &h.transforms,
+        &ImageCompressionConfig::default(), None, None, &HashMap::new(),
+    );
+    assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
+    let expected = fs::read(h.staging.join("changed.webp")).unwrap();
+    assert_ne!(expected, first, "precondition: the two encodes differ");
+
+    assert!(next_build_relinks(&h, &staged, &changed_oid, &params), "a vouched file of another blob must be relinked");
+    assert_eq!(fs::read(&staged).unwrap(), expected);
+}
+
+/// Another process renaming its own file onto the staged path between this
+/// link and its stat must not leave a record vouching for that file as this
+/// blob: the stat'd inode is not the one the link wrote, so nothing is
+/// recorded and the next build relinks.
+///
+/// Ablate by dropping the inode comparison in `StagedLinks::link` and this
+/// goes red: the foreign file is recorded, held, and kept.
+#[cfg(unix)]
+#[test]
+fn a_file_renamed_over_a_fresh_link_before_its_stat_is_not_recorded() {
+    use crate::build::lifecycle::cas_heal::AFTER_LINK;
+    let h = harness();
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 400, 300);
+    let cfg = ImageCompressionConfig::default();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let outcome = convert_single_image(
+        &src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &HashMap::new(),
+    );
+    assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
+    let staged = h.staging.join("photo.webp");
+    let real = fs::read(&staged).unwrap();
+    let params = cfg.to_params();
+
+    AFTER_LINK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(|path: &Path| {
+            let beside = path.with_extension("other-build");
+            fs::write(&beside, b"ANOTHER-BUILD-RENAMED-THIS-IN").unwrap();
+            fs::rename(&beside, path).unwrap();
+        }));
+    });
+    let relinked = next_build_relinks(&h, &staged, &source_oid, &params);
+    AFTER_LINK.with(|hook| *hook.borrow_mut() = None);
+    assert!(relinked, "premise: no record yet, so the first heal links");
+
+    assert!(next_build_relinks(&h, &staged, &source_oid, &params), "a file this link did not write must not be held");
+    assert_eq!(fs::read(&staged).unwrap(), real);
+}
+
+/// Same-size bytes with a different mtime — an editor, a sync client, another
+/// tool writing into staging in place, so the inode survives — must not be
+/// trusted on the strength of the record of the file that used to be there.
+///
+/// Ablate by dropping the stat check from `StagedLinks::holds` (keep the oid
+/// comparison) and this goes red.
+#[test]
+fn a_staged_variant_rewritten_in_place_is_relinked() {
+    let h = harness();
+    let (staged, source_oid, params, real) = photo_staged_and_recorded(&h);
+    let before = fs::metadata(&staged).unwrap().modified().unwrap();
+    let mut tampered = real.clone();
+    tampered[real.len() / 2] ^= 0xff;
+    fs::write(&staged, &tampered).unwrap();
+    let later = before + std::time::Duration::from_secs(7);
+    fs::File::options().write(true).open(&staged).unwrap().set_modified(later).unwrap();
+
+    assert!(next_build_relinks(&h, &staged, &source_oid, &params), "a tampered staged file must be relinked");
+    assert_eq!(fs::read(&staged).unwrap(), real);
+}
+
+/// The racy cases: a same-size rewrite stamped inside the recorded second, and
+/// an atomic-save replacement that carries the recorded mtime across exactly.
+/// Only the sub-second mtime tells the first apart and only the inode the
+/// second — each must still be relinked.
+///
+/// Ablate by comparing whole-second mtime and size only in
+/// `StagedLinks::holds` and this goes red.
+#[test]
+fn a_same_tick_replacement_of_a_staged_variant_is_relinked() {
+    let h = harness();
+    let (staged, source_oid, params, real) = photo_staged_and_recorded(&h);
+    let mut tampered = real.clone();
+    tampered[real.len() / 2] ^= 0xff;
+
+    let before = fs::metadata(&staged).unwrap().modified().unwrap();
+    fs::write(&staged, &tampered).unwrap();
+    crate::build::stat::FileStat::stamp_in_the_second_of(&staged, before);
+    assert!(next_build_relinks(&h, &staged, &source_oid, &params), "a same-second rewrite must be relinked");
+    assert_eq!(fs::read(&staged).unwrap(), real);
+
+    assert!(!next_build_relinks(&h, &staged, &source_oid, &params), "premise: the relink was recorded");
+    #[cfg(unix)]
+    {
+        crate::build::stat::FileStat::replace_by_rename_keeping_mtime(&staged, &tampered);
+        assert!(next_build_relinks(&h, &staged, &source_oid, &params), "a replacement keeping the mtime must be relinked");
+        assert_eq!(fs::read(&staged).unwrap(), real);
+    }
 }
 
 /// Rung-kind lookup: the same self-heal must recover a LADDER RUNG from
@@ -5012,6 +5160,7 @@ fn heal_and_verify_variant_never_registers_a_zero_byte_suppressed_rung_as_presen
         &h.objects,
         &h.transforms,
         &serde_json::json!({}),
+        &mut staged_links(&h),
         &staged,
         "image/webp-w800",
         "irrelevant-oid-for-a-suppressed-check",
@@ -6240,6 +6389,40 @@ async fn an_image_a_worker_delivered_is_carried_forward_by_the_next_build() {
         "the second build carried the variant forward and must register the SAME \
          verified CAS oid the first build's worker delivered, not None"
     );
+}
+
+/// A warm rebuild over unchanged images relinks nothing. Every link is a
+/// temp-and-rename onto a fresh inode, so the count of staged variants whose
+/// inode moved is the count of relinks. The first build encodes, the second
+/// carries each variant forward and records the link, the third must find
+/// every record still vouched for — and still register each variant's oid.
+///
+/// Ablate by deleting the `Placement::Held` return in `StagedLinks::link`
+/// and this goes red: all three relink.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_warm_rebuild_over_unchanged_images_relinks_no_staged_variant() {
+    use std::os::unix::fs::MetadataExt;
+    let _guard = image_fingerprint_test_lock().lock();
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.write_named("other.png", [30, 200, 30]);
+    vault.write_named("third.png", [30, 30, 200]);
+    let names = ["pic.png", "other.png", "third.png"];
+    let webps = ["pic.webp", "other.webp", "third.webp"];
+    let inodes = || webps.map(|webp| fs::metadata(vault.moss_dir.join("build/staging").join(webp)).unwrap().ino());
+
+    let first = vault.sealed_rebuild(&names).await;
+    vault.sealed_rebuild(&names).await;
+    let before = inodes();
+    let warm = vault.sealed_rebuild(&names).await;
+
+    let relinked = before.iter().zip(inodes()).filter(|(was, now)| **was != *now).count();
+    assert_eq!(relinked, 0, "a warm rebuild over unchanged images relinked {relinked} staged variant(s)");
+    for webp in webps {
+        assert!(first.staged_oid(webp).is_some(), "premise: the first build delivered {webp}");
+        assert_eq!(warm.staged_oid(webp), first.staged_oid(webp), "{webp} must still register its verified oid");
+    }
 }
 
 /// The core disk-origin-skip property, across a boundary this file's other tests only

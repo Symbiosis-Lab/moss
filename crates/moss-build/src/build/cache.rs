@@ -419,6 +419,13 @@ impl ObjectStore {
     /// here could take a concurrent `link_to`'s temp for the same target
     /// mid-rename.
     pub fn link_to(&self, oid: &str, target: &Path) -> Result<(), String> {
+        self.link_to_inode(oid, target).map(drop)
+    }
+
+    /// [`link_to`](Self::link_to), returning the inode it renamed into place
+    /// where the platform reports one — so a caller recording the target's
+    /// stat can tell its own link from one a concurrent build renamed over it.
+    pub(crate) fn link_to_inode(&self, oid: &str, target: &Path) -> Result<Option<u64>, String> {
         let blob = self.blob_path(oid);
         if !blob.exists() {
             log::warn!("CAS link of {} failed, blob absent: {}", oid, self.failure_context(&blob, None));
@@ -479,8 +486,8 @@ impl ObjectStore {
         }
         // Stat the temp instead of trusting fs::copy's return value — on
         // Windows that's CopyFileEx's progress count, which Wine reports as 0.
-        let copied = match fs::metadata(&tmp) {
-            Ok(m) => m.len(),
+        let (copied, inode) = match fs::metadata(&tmp) {
+            Ok(m) => (m.len(), crate::build::stat::stat_identity(&m).1),
             Err(e) => {
                 // allow:unlink the temp this call minted beside the target; the rename replaces the entry in place
                 let _ = fs::remove_file(&tmp);
@@ -506,7 +513,7 @@ impl ObjectStore {
                 e
             ));
         }
-        Ok(())
+        Ok(inode)
     }
 
     /// Compute the sharded blob path for a given OID, using git's two-level

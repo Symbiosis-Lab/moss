@@ -887,6 +887,54 @@ fn copy_deferred_assets_counts_broken_symlink_in_stats() {
     );
 }
 
+/// A second walk over unchanged assets relinks none of them: each link is a
+/// temp-and-rename onto a fresh inode, so an inode that survives the walk is
+/// a link skipped because its record still vouched for the staged file. A
+/// staged file rewritten in place since is linked again.
+///
+/// Ablate by calling `link_to` directly in `place_blob` and this goes red.
+#[cfg(unix)]
+#[test]
+fn a_second_asset_walk_relinks_no_unchanged_asset() {
+    use std::fs;
+    use std::os::unix::fs::MetadataExt;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = tmp.path().join("source");
+    let moss = tmp.path().join(".moss");
+    let staging = moss.join("build.nosync/staging");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&staging).unwrap();
+    let names = ["notes.txt", "paper.pdf", "track.mp3"];
+    for name in names {
+        fs::write(source.join(name), format!("bytes of {name}")).unwrap();
+    }
+    let ctx = crate::types::services::BackgroundContext {
+        source_path: source.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss.clone(),
+        ..crate::types::services::BackgroundContext::for_test()
+    };
+    let walk = || {
+        let (tx, _rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+        copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+    };
+    let inodes = || names.map(|name| fs::metadata(staging.join(name)).unwrap().ino());
+
+    walk();
+    let before = inodes();
+    walk();
+    let relinked = before.iter().zip(inodes()).filter(|(was, now)| **was != *now).count();
+    assert_eq!(relinked, 0, "a second walk over unchanged assets relinked {relinked} of them");
+
+    let tampered = staging.join("paper.pdf");
+    fs::write(&tampered, b"bytes of paper.PDF").unwrap();
+    fs::File::options().write(true).open(&tampered).unwrap()
+        .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(7)).unwrap();
+    walk();
+    assert_eq!(fs::read(&tampered).unwrap(), b"bytes of paper.pdf", "a staged asset rewritten in place must be relinked");
+}
+
 /// The summary line must name preserved symlinks and resolved
 /// aliases. Counting them in the struct is not enough — the demotion of the
 /// per-item log to DEBUG traded N lines for zero unless the count reaches the

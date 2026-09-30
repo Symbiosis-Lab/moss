@@ -15,10 +15,12 @@ use std::path::Path;
 /// What a heal attempt did.
 #[derive(Debug)]
 pub(crate) enum HealOutcome {
-    /// The staged output is there; nothing was touched.
-    AlreadyPresent,
-    /// The cached blob was linked into staging.
-    Healed,
+    /// The staged output is there; nothing was touched. `oid` is the blob a
+    /// staged-link record vouches the file holds, `None` when only its
+    /// presence was checked.
+    AlreadyPresent { oid: Option<String> },
+    /// The cached blob `oid` was linked into staging.
+    Healed { oid: String },
     /// No cached output could be linked: the source hash is unknown to the
     /// stat index, the store has no record or blob for it, or the link failed.
     NotCached,
@@ -53,7 +55,7 @@ pub(crate) fn rematerialize(
 ) -> HealOutcome {
     use crate::build::io_utils::Presence;
     match crate::build::io_utils::probe_path(staging_path) {
-        Presence::Present => return HealOutcome::AlreadyPresent,
+        Presence::Present => return HealOutcome::AlreadyPresent { oid: None },
         Presence::Unverified(e) => return HealOutcome::Unverified(e),
         Presence::Absent | Presence::Evicted => {}
     }
@@ -68,40 +70,47 @@ pub(crate) fn rematerialize(
 /// e.g. a strict, no-hash-on-miss [`HashIndex::lookup`] the caller ran itself,
 /// against a `FileStat` it already had in hand.
 ///
-/// Deliberately does NOT take [`rematerialize`]'s "present → already correct,
-/// skip the lstat's-worth of work" shortcut: that shortcut is only sound when
-/// the caller reached this file by first confirming its own bytes are
-/// unchanged (the old fingerprint-ledger contract every other caller of
-/// [`rematerialize`] still honors). A stat-index hit proves only what the
-/// SOURCE's current content is, never that the file already sitting at
-/// `staging_path` was encoded from it — staging carries content forward
+/// Deliberately does NOT take [`rematerialize`]'s "present → already correct"
+/// shortcut: that shortcut is only sound when the caller reached this file by
+/// first confirming its own bytes are unchanged. A stat-index hit proves only
+/// what the SOURCE's current content is, never that the file already sitting
+/// at `staging_path` was encoded from it — staging carries content forward
 /// between builds, so a changed source can find its PREVIOUS build's output
 /// still present and, if presence alone were trusted, ship it unchanged. This
-/// always re-verifies the exact oid against the transform cache and relinks
-/// (a COW copy-and-rename, cheap — see [`ObjectStore::link_to`]), so a stale
-/// file is overwritten with the correct bytes and a genuinely-unchanged one
-/// is relinked to itself. Bails early only on `Unverified`: a path this
-/// process cannot even confirm is not safe to overwrite.
+/// always re-verifies the exact oid against the transform cache, then leaves
+/// the placement to [`StagedLinks::link`], which links it unless its record
+/// of the last link still vouches for the file, and never overwrites a path
+/// it cannot verify.
 ///
 /// [`HashIndex::lookup`]: crate::build::cache::HashIndex::lookup
-/// [`ObjectStore::link_to`]: crate::build::cache::ObjectStore::link_to
 pub(crate) fn rematerialize_with_oid(
     objects: &crate::build::cache::ObjectStore,
     transforms: &crate::build::cache::TransformCache,
     params: &serde_json::Value,
+    staged: &mut StagedLinks,
     staging_path: &Path,
     transform: &str,
     source_oid: &str,
 ) -> HealOutcome {
-    use crate::build::io_utils::Presence;
-    if let Presence::Unverified(e) = crate::build::io_utils::probe_path(staging_path) {
-        return HealOutcome::Unverified(e);
+    let Some(oid) = transforms.find_cached_output(source_oid, transform, params) else {
+        return HealOutcome::NotCached;
+    };
+    match staged.link(objects, &oid, staging_path) {
+        Placement::Held => HealOutcome::AlreadyPresent { oid: Some(oid) },
+        Placement::Linked => {
+            log::debug!("[cas-heal] re-materialized {} from CAS ({})", staging_path.display(), oid);
+            HealOutcome::Healed { oid }
+        }
+        Placement::Unverified(e) => HealOutcome::Unverified(e),
+        Placement::Failed(e) => {
+            log::warn!("[cas-heal] re-link failed for {}: {}", staging_path.display(), e);
+            HealOutcome::NotCached
+        }
     }
-    relink_from_cache(objects, transforms, params, staging_path, transform, source_oid)
 }
 
-/// The shared second half of both entry points above: `source_oid` is already
-/// known, so this only has to find its cached transform output and link it in.
+/// [`rematerialize`]'s second half: `source_oid` is already known, so this
+/// only has to find its cached transform output and link it in.
 fn relink_from_cache(
     objects: &crate::build::cache::ObjectStore,
     transforms: &crate::build::cache::TransformCache,
@@ -118,7 +127,7 @@ fn relink_from_cache(
     match objects.link_to(&oid, staging_path) {
         Ok(()) => {
             log::debug!("[cas-heal] re-materialized {} from CAS ({})", staging_path.display(), oid);
-            HealOutcome::Healed
+            HealOutcome::Healed { oid }
         }
         Err(e) => {
             log::warn!("[cas-heal] re-link failed for {}: {}", staging_path.display(), e);
@@ -147,4 +156,131 @@ pub(crate) fn indexed_hash(
 ) -> Option<String> {
     let stat = crate::build::stat::FileStat::of(&std::fs::metadata(source_file).ok()?);
     hash_index.lookup_whole_second(rel_source, stat.size, stat.mtime).map(str::to_string)
+}
+
+/// Which CAS blob each staged output was last linked from, with the stat
+/// record the staged file had right after the link — a [`HashIndex`] keyed by
+/// the path relative to staging, whose content hash is the linked blob's oid,
+/// judged by the same rule as every other stat-keyed fast path
+/// ([`FileStat::vouches_for`]).
+///
+/// A staged file's presence never proves which bytes it holds; this record
+/// does, for as long as the file's stat still vouches for it. Whatever
+/// replaces or edits the file moves that stat: another link (temp-and-rename,
+/// so a new inode), an encode, an editor, a same-size rewrite in the same
+/// second (sub-second mtime, ctime). An evicted or 0-byte file is never
+/// asked: [`link`](Self::link) probes presence first. Where the platform
+/// reports no inode or ctime (Windows), size and the full-resolution mtime
+/// still have to agree — a copy keeps the blob's own mtime there, so two
+/// different blobs would have to share size and mtime to the tick.
+///
+/// Per machine, beside staging: the record is of this machine's inodes. One
+/// file per producer, rewritten whole from what this run linked or found
+/// still held, so a path that left the site leaves the record with it.
+///
+/// [`HashIndex`]: crate::build::cache::HashIndex
+/// [`FileStat::vouches_for`]: crate::build::stat::FileStat::vouches_for
+pub(crate) struct StagedLinks {
+    file: std::path::PathBuf,
+    staging: std::path::PathBuf,
+    previous: crate::build::cache::HashIndex,
+    current: crate::build::cache::HashIndex,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only: called by [`StagedLinks::link`] between its link and the
+    /// stat it records, where another process's write would land.
+    pub(crate) static AFTER_LINK: std::cell::RefCell<Option<Box<dyn FnMut(&Path)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// What [`StagedLinks::link`] did with a staged path.
+#[derive(Debug)]
+pub(crate) enum Placement {
+    /// The file there is still the one linked from this blob; left alone.
+    Held,
+    /// The blob was linked in.
+    Linked,
+    /// The path could not be checked, so nothing was linked over it.
+    Unverified(std::io::Error),
+    /// The link itself failed.
+    Failed(String),
+}
+
+impl StagedLinks {
+    /// The record `producer` left in `paths`' per-machine cache for the
+    /// outputs it links under `staging`, or an empty one (everything relinks
+    /// once) when there is none or it cannot be read.
+    pub(crate) fn load(paths: &crate::moss_paths::MossPaths, producer: &str, staging: &Path) -> Self {
+        let file = paths.cache_dir().join(format!("staged-links-{producer}.json"));
+        let previous = crate::build::cache::HashIndex::load(&file);
+        Self { file, staging: staging.to_path_buf(), previous, current: crate::build::cache::HashIndex::new() }
+    }
+
+    /// Link `oid` into `staging_path` unless the file there is still the one
+    /// this record says was linked from `oid`. The one owner of that decision
+    /// for every staged output a CAS blob backs.
+    pub(crate) fn link(
+        &mut self,
+        objects: &crate::build::cache::ObjectStore,
+        oid: &str,
+        staging_path: &Path,
+    ) -> Placement {
+        use crate::build::io_utils::Presence;
+        let key = staging_path.strip_prefix(&self.staging).ok().map(|rel| rel.to_string_lossy().into_owned());
+        match crate::build::io_utils::probe_path(staging_path) {
+            Presence::Unverified(e) => return Placement::Unverified(e),
+            Presence::Present if key.as_deref().is_some_and(|key| self.holds(key, staging_path, oid)) => {
+                return Placement::Held;
+            }
+            _ => {}
+        }
+        // Sampled before the bytes land, like every other record's clock.
+        let recorded_at = crate::build::stat::recording_clock();
+        let written_inode = match objects.link_to_inode(oid, staging_path) {
+            Ok(inode) => inode,
+            Err(e) => return Placement::Failed(e),
+        };
+        #[cfg(test)]
+        AFTER_LINK.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().as_mut() {
+                hook(staging_path);
+            }
+        });
+        // Recorded only when the file stat'd is the one this link wrote: a
+        // concurrent build could rename its own link in between.
+        let stat = std::fs::symlink_metadata(staging_path).map(|md| crate::build::stat::FileStat::of(&md));
+        if let (Some(key), Ok(stat)) = (key, stat) {
+            if !crate::build::stat::identity_disagrees(written_inode, stat.inode) {
+                let entry = crate::build::cache::HashIndexEntry { stat, recorded_at, content_hash: oid.to_string() };
+                self.current.entries.insert(key, entry);
+            }
+        }
+        Placement::Linked
+    }
+
+    /// Whether the present file at `staging_path` is still the one linked
+    /// from `oid`; carries its record into this run's when it is.
+    fn holds(&mut self, key: &str, staging_path: &Path, oid: &str) -> bool {
+        let Some(entry) = self.previous.entries.get(key) else { return false };
+        let Ok(md) = std::fs::symlink_metadata(staging_path) else { return false };
+        let current = crate::build::stat::FileStat::of(&md);
+        let held = entry.content_hash == oid && entry.stat.vouches_for(&current, entry.recorded_at);
+        if held {
+            self.current.carry_forward(&self.previous, key);
+        }
+        held
+    }
+
+    /// Persist what this run linked or found held. Writes nothing when that
+    /// is exactly what was loaded — the steady state of a warm rebuild.
+    pub(crate) fn save(&self) {
+        if self.current.entries == self.previous.entries {
+            return;
+        }
+        if let Err(e) = self.current.save(&self.file) {
+            log::warn!("[cas-heal] could not save {}: {}", self.file.display(), e);
+        }
+    }
 }

@@ -51,7 +51,7 @@ use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
 
 use crate::build::coordinator::EmitMessage;
-use crate::build::lifecycle::cas_heal::{rematerialize_with_oid, HealOutcome};
+use crate::build::lifecycle::cas_heal::{rematerialize_with_oid, HealOutcome, StagedLinks};
 use crate::build::manifest::HashBucket;
 use crate::advisory::{Action, Advisory, Scope, Severity};
 use crate::build::progress::{format_progress_message, PipelineEvent};
@@ -2635,6 +2635,7 @@ fn heal_and_verify_variant(
     heal_objects: &crate::build::cache::ObjectStore,
     heal_transforms: &crate::build::cache::TransformCache,
     heal_params: &serde_json::Value,
+    staged: &mut StagedLinks,
     staging_path: &Path,
     transform: &str,
     source_oid: &str,
@@ -2644,11 +2645,14 @@ fn heal_and_verify_variant(
     if suppressed {
         (std::fs::metadata(staging_path).is_ok_and(|m| m.len() > 0), None)
     } else {
-        let outcome = rematerialize_with_oid(heal_objects, heal_transforms, heal_params, staging_path, transform, source_oid);
-        let healed = matches!(outcome, HealOutcome::Healed);
-        *healed_count += usize::from(healed);
-        let oid = healed.then(|| heal_transforms.find_cached_output(source_oid, transform, heal_params)).flatten();
-        (healed, oid)
+        match rematerialize_with_oid(heal_objects, heal_transforms, heal_params, staged, staging_path, transform, source_oid) {
+            HealOutcome::Healed { oid } => {
+                *healed_count += 1;
+                (true, Some(oid))
+            }
+            HealOutcome::AlreadyPresent { oid } => (true, oid),
+            HealOutcome::NotCached | HealOutcome::Unverified(_) => (false, None),
+        }
     }
 }
 
@@ -2718,6 +2722,7 @@ pub(crate) fn dispatch_image_conversions(
         let heal_transforms = crate::build::cache::TransformCache::for_site(&heal_paths);
         let heal_params = config.to_params();
         let heal_index = crate::build::cache::HashIndex::load(&heal_paths.cache_hash_index());
+        let mut staged = StagedLinks::load(&heal_paths, "image-variants", &ctx.staging_dir);
 
         // WHAT to heal is the ship-time prune's verdict, not the disk scan
         // this loop walks: `ctx.image_items` is every image
@@ -2799,13 +2804,14 @@ pub(crate) fn dispatch_image_conversions(
             // just-changed source can still find its PREVIOUS build's output
             // physically present. `rematerialize_with_oid` accounts for exactly
             // this: it never trusts presence alone, always re-verifying the
-            // exact oid against the transform cache and relinking (cheap: a COW
-            // copy-and-rename, not a re-encode) — so a stale file left here by
-            // an earlier generation is overwritten with the correct bytes
-            // rather than silently shipped. The source hash itself is never
-            // re-derived here (never hashed on this hot path) — a genuinely
-            // changed image is about to be dispatched and hashed on the worker
-            // anyway, so doing it here first would pay that cost twice.
+            // exact oid against the transform cache and relinking unless its
+            // own record of the last link still vouches for the file — so a
+            // stale file left here by an earlier generation is overwritten
+            // with the correct bytes rather than silently shipped. The source
+            // hash itself is never re-derived here (never hashed on this hot
+            // path) — a genuinely changed image is about to be dispatched and
+            // hashed on the worker anyway, so doing it here first would pay
+            // that cost twice.
             // `verified_webp_oid` is `Some` only when the base webp is BOTH
             // verified present AND backed by a real CAS blob for THIS
             // content — never guessed — so the manifest registration below
@@ -2824,6 +2830,7 @@ pub(crate) fn dispatch_image_conversions(
                     &heal_objects,
                     &heal_transforms,
                     &heal_params,
+                    &mut staged,
                     &staging_path,
                     "image/webp",
                     source_oid,
@@ -2887,6 +2894,7 @@ pub(crate) fn dispatch_image_conversions(
                         &heal_objects,
                         &heal_transforms,
                         &heal_params,
+                        &mut staged,
                         &rung_staging,
                         &rung_transform,
                         source_oid,
@@ -2929,14 +2937,11 @@ pub(crate) fn dispatch_image_conversions(
         // own advisory (if it had one) goes with it — see the `to_dispatch.
         // is_empty()` branch below for why that still needs a tick.
         let dropped_advisory = retain_image_item_fingerprints(&current_paths);
+        staged.save();
 
         // ONE line, not one per file: the per-file form was 96% of an upload.
-        // Fires for every disk-origin skip candidate now, not only a genuine
-        // repair: `rematerialize_with_oid` always re-verifies and relinks
-        // rather than trusting a staged file's mere presence (a stale file
-        // left by an earlier generation must never be shipped as if
-        // unchanged — see its doc), so this count is "carried forward from
-        // CAS", not "was broken and got fixed".
+        // Counts real links only: a staged file still vouched for as the
+        // blob last linked there is left alone (`StagedLinks`).
         if healed_count > 0 {
             log::info!(
                 "[image] carried forward {} staged .webp file(s) from CAS",
