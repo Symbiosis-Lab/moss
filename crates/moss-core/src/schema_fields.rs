@@ -630,6 +630,17 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "map",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        // Frequency=0, Importance=1 → score=96
+        score: 96,
+        description: "Opt out of the term map on a claimed term page or a real folder index at a place namespace root. Shown by default; set false to hide it.",
+        label_key: "chip.map.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "breadcrumb",
         field_type: FieldType::Boolean,
         widget: Widget::Checkbox,

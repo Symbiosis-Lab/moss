@@ -398,6 +398,12 @@ pub struct FrontMatter {
     /// Whether to show comments on this page: default true on an article; default FALSE on a folder-index page (homepage included), which needs explicit `comments: true` to opt in
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub comments: Option<bool>,
+    /// Page-level opt-out for the term map a claimed term page or a real
+    /// folder index at a place-typed term namespace root (`places/index.md`)
+    /// hosts below its own content. `false` hides it; unset or `true`
+    /// renders it when one would otherwise show. No effect elsewhere.
+    #[serde(default, deserialize_with = "deserialize_bool_lenient")]
+    pub map: Option<bool>,
     /// Durable page identity: 8 RANDOM hex chars minted at first build — never derivable, never changed once published
     #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub uid: Option<String>,

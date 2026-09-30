@@ -8,6 +8,17 @@ fn tab_title_rules() {
     assert_eq!(tab_title("Home", "Site", true), "Home"); // homepage bare even if differ
 }
 
+/// The message names the site-relative source file, not a bare filename or
+/// a URL path — the one fact a reader of the build log needs to find the
+/// page that supplied the intro.
+#[test]
+fn namespace_root_map_notice_names_the_source_file() {
+    assert_eq!(
+        super::namespace_root_map_notice("places/index.md"),
+        "places/index.md: supplies this page's intro; the place map composes below it"
+    );
+}
+
 /// Test that non-sidebar pages do NOT inject "No posts yet" content.
 ///
 /// Regression test: The bug was that all non-sidebar homepages showed
@@ -7482,20 +7493,16 @@ mod place_locator_position_tests {
         }
     }
 
-    /// A locator-bearing layout: one gazetteer entry ("Harbor") under the
-    /// "places" namespace, same shape `place_map::context`'s own tests use.
-    fn layout_with_locator() -> LayoutConfig {
+    /// A layout with one gazetteer entry ("Harbor") under the "places"
+    /// namespace, same shape `place_map::context`'s own tests use — the
+    /// locator placement is the caller's, since a bare term-map splice
+    /// (`place_namespace_root_map_tests`) needs no locator at all.
+    pub(super) fn layout_with_locator(placement: LocatorPlacement) -> LayoutConfig {
         let table: toml::value::Table =
             toml::from_str("[\"Harbor\"]\nlat = 35.0\nlng = 135.0\nprecision = \"city\"\n").unwrap();
         let gazetteer = crate::vault::places::parse_gazetteer(&table);
         let maps = PlaceMapContext::embedded().expect("embedded place-map pack");
-        let context = PlaceMapRenderContext::new(
-            maps,
-            gazetteer,
-            "places".to_string(),
-            LocatorPlacement::AlignRight,
-            BTreeMap::new(),
-        );
+        let context = PlaceMapRenderContext::new(maps, gazetteer, "places".to_string(), placement, BTreeMap::new());
         LayoutConfig::new("test-site", Some("Test Site")).with_place_maps(Some(context))
     }
 
@@ -7546,7 +7553,7 @@ mod place_locator_position_tests {
 
         let all_docs = vec![homepage, page.clone()];
         let project = make_project();
-        let layout = layout_with_locator();
+        let layout = layout_with_locator(LocatorPlacement::AlignRight);
 
         generate_html(
             Some(&page),
@@ -7657,7 +7664,7 @@ mod place_locator_position_tests {
 
         let all_docs = vec![page.clone()];
         let project = make_project();
-        let layout = layout_with_locator();
+        let layout = layout_with_locator(LocatorPlacement::AlignRight);
 
         generate_html(
             Some(&page),
@@ -7696,6 +7703,155 @@ mod place_locator_position_tests {
             heading < locator && locator < para,
             "want heading < locator < paragraph, got:\n{html}"
         );
+    }
+}
+
+/// A real folder index at a place-typed namespace root (a real
+/// `places/index.md`, no `place_page:` claim) used to win outright over the
+/// map the unclaimed synthetic root would otherwise have shown:
+/// `render/blocking.rs`'s `folders_with_explicit_index` check skips the
+/// synthetic root whenever a real page already occupies that URL, and the
+/// map splice here fired only for a claimed `term_listing`, which a
+/// namespace root's own index never sets. `is_place_namespace_root` (set by
+/// `terms::derive_terms`) is what tells these two cases apart from a plain
+/// folder index sharing the same shape.
+mod place_namespace_root_map_tests {
+    use super::super::generate_html;
+    use super::place_locator_position_tests::layout_with_locator;
+    use crate::build::place_map::LocatorPlacement;
+    use crate::build::site_url::SiteUrl;
+    use crate::build::types::ParsedDocument;
+    use crate::i18n::Language;
+    use crate::types::content::ProjectStructure;
+    use moss_core::PageKind;
+
+    fn localhost_url() -> SiteUrl {
+        SiteUrl::parse("http://localhost").unwrap()
+    }
+
+    fn make_project() -> ProjectStructure {
+        ProjectStructure {
+            root_path: String::new(),
+            markdown_files: vec![],
+            html_files: vec![],
+            image_files: vec![],
+            video_files: vec![],
+            notebook_files: vec![],
+            other_files: vec![],
+            total_files: 0,
+            homepage_file: Some("index.md".to_string()),
+            ffmpeg_bin_path: None,
+            evicted_count: 0,
+            evicted_paths: Vec::new(),
+            has_content_folders: false,
+            has_language_trees: false,
+            passthrough_roots: std::collections::HashSet::new(),
+            dirs: Vec::new(),
+        }
+    }
+
+    /// A real `places/index.md`: `is_place_namespace_root` is what
+    /// `terms::derive_terms` would have set on it. `location` gives the
+    /// root aggregate something to draw — `PlaceMapRenderContext::aggregate`
+    /// reads every passed-in doc's own `location` for the root key, not only
+    /// a claimed member's.
+    fn root_doc(map: Option<bool>) -> ParsedDocument {
+        ParsedDocument {
+            title: "Places".to_string(),
+            label: "Places".to_string(),
+            url_path: "places/index.html".to_string(),
+            html_content: "<p>Every place this site names, on one map.</p>".to_string(),
+            reading_time: 1,
+            slug: "places".to_string(),
+            permalink: "/places".to_string(), // allow:served-path-url-construct (test fixture)
+            lang: Language::En,
+            kind: PageKind::Folder,
+            is_place_namespace_root: true,
+            map,
+            location: vec!["Harbor".to_string()],
+            ..Default::default()
+        }
+    }
+
+    fn child_doc() -> ParsedDocument {
+        ParsedDocument {
+            title: "Harbor Diary".to_string(),
+            label: "Harbor Diary".to_string(),
+            url_path: "places/harbor-diary/index.html".to_string(),
+            html_content: "<p>Harbor Diary content</p>".to_string(),
+            reading_time: 1,
+            slug: "harbor-diary".to_string(),
+            permalink: "/places/harbor-diary".to_string(), // allow:served-path-url-construct (test fixture)
+            lang: Language::En,
+            kind: PageKind::Article,
+            ..Default::default()
+        }
+    }
+
+    fn render(doc: &ParsedDocument, all_docs: &[ParsedDocument]) -> String {
+        let project = make_project();
+        let layout = layout_with_locator(LocatorPlacement::None);
+        generate_html(
+            Some(doc),
+            all_docs,
+            &project,
+            &layout,
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,
+            std::path::Path::new(""),
+        )
+        .expect("generate_html should succeed")
+    }
+
+    #[test]
+    fn real_index_at_place_root_composes_intro_and_map() {
+        let root = root_doc(None);
+        let all_docs = vec![root.clone(), child_doc()];
+        let html = render(&root, &all_docs);
+        assert!(
+            html.contains("Every place this site names, on one map."),
+            "the page's own intro must still render: {html}"
+        );
+        assert!(
+            html.contains("moss-place-map"),
+            "a real folder index at a place namespace root must still get the term map: {html}"
+        );
+        assert!(html.contains("Harbor Diary"), "the folder's own children must still list: {html}");
+        let intro_pos = html.find("Every place this site names").unwrap();
+        let map_pos = html.find("moss-place-map").unwrap();
+        let children_pos = html.find("Harbor Diary").unwrap();
+        assert!(
+            intro_pos < map_pos && map_pos < children_pos,
+            "map must land below the intro and above the children listing: {html}"
+        );
+    }
+
+    #[test]
+    fn map_false_suppresses_the_map_but_keeps_intro_and_children() {
+        let root = root_doc(Some(false));
+        let all_docs = vec![root.clone(), child_doc()];
+        let html = render(&root, &all_docs);
+        assert!(
+            html.contains("Every place this site names, on one map."),
+            "the intro must still render with map: false: {html}"
+        );
+        assert!(html.contains("Harbor Diary"), "the children listing must still render with map: false: {html}");
+        assert!(!html.contains("moss-place-map"), "map: false must suppress the term map: {html}");
     }
 }
 

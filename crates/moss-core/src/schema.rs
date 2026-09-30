@@ -345,7 +345,9 @@ mod tests {
         // see moss_core::terms and build::terms::places.)
         // (`origin` added 2026-09 — provenance for an imported page's source
         // URL, replacing `moss import`'s prior POSSE-flavored `syndicated:`.)
-        assert_eq!(schema.frontmatter.fields.len(), 49);
+        // (`map` added 2026-09 — opt out of the term map a claimed term page
+        // or a real folder index at a place namespace root hosts.)
+        assert_eq!(schema.frontmatter.fields.len(), 50);
     }
 
     #[test]

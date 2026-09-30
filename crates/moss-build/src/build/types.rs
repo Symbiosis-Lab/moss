@@ -253,6 +253,22 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub place_line: Option<String>,
+    /// True for a real folder-index page sitting exactly at a place-typed
+    /// term namespace root (e.g. a real `places/index.md`, no `place_page:`
+    /// claim) — set once in `build::terms::derive_terms` from
+    /// `TermIndex::place_namespace_roots`, the same "render layer cannot see
+    /// `TermIndex`" reasoning as `term_sections` above. Gates the term-map
+    /// splice in `render/html.rs`: such a page's own intro no longer wins
+    /// outright over the map the unclaimed synthetic root would have shown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[specta(skip)]
+    pub is_place_namespace_root: bool,
+    /// Page-level opt-out for the term map spliced below a claimed term
+    /// page's or a place-namespace-root page's own content (see
+    /// `is_place_namespace_root`). `Some(false)` suppresses it; unset or
+    /// `Some(true)` renders it when one would otherwise show. No effect on
+    /// any other page.
+    pub map: Option<bool>,
     /// Whether to render child pages below content.
     /// Accepts bool or wikilink in frontmatter (e.g. `children: "[[News]]"`).
     /// true = render children, false = hide, None = default to true.

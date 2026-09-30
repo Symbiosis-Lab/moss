@@ -279,7 +279,9 @@ Three fields, all optional: `lat`/`lng` place the pin (missing either one still 
 
 A place page — claimed with `place_page:`, or generated like any other unclaimed term — gets a breadcrumb up its parent chain and a list of its own children, each with how many pages are under it (counting every page anywhere in that child's own subtree, not just its direct members). A page with `location:` set gets one more thing for free: an automatic line under its byline naming every place it declared, each linked to that place's page. There is no frontmatter key to write that line yourself, and no opt-out — leave `location:` unset and the page gets none.
 
-Place pages draw an offline map automatically when at least one relevant gazetteer entry has coordinates. To add the smaller locator map after each authored page's place line, opt in site-wide:
+Place pages draw an offline map automatically when at least one relevant gazetteer entry has coordinates. A real page of your own at a place term's root (`places/index.md`, say, with no `place_page:` claim) keeps its own title and content — the map still draws below them, not instead of them. Set `map: false` in that page's frontmatter to turn the map off; this `map:` is the geographic map on the page, unrelated to `cascade:`'s own key-value map.
+
+To add the smaller locator map after each authored page's place line, opt in site-wide:
 
 ```toml
 [site]

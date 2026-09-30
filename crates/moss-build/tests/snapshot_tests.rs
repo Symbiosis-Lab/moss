@@ -686,6 +686,27 @@ fn place_listing_maps_mark_their_member_places() {
     assert_eq!(markers("places/japan/index.html"), ["places/kyoto"]);
 }
 
+/// `input/places/index.md` is a real page at the "places" namespace root —
+/// the fixture's own intro prose, not the synthetic root `blocking.rs`
+/// generates when no such file exists. A real index at a term namespace
+/// root used to win outright: the synthetic root was skipped and the term
+/// map went with it, because the splice in `render/html.rs` only fired for
+/// a claimed term page, never for the unclaimed root itself. The fix keeps
+/// both — the page's own intro, and the map below it.
+#[test]
+fn real_index_at_a_place_namespace_root_keeps_its_own_map() {
+    let (_cleanup, output) = build_fixture("places-site");
+    let html = fs::read_to_string(output.join("places/index.html")).unwrap();
+    assert!(
+        html.contains("Every place this site names, gathered on one map."),
+        "the real places/index.md's own intro must still render: {html}"
+    );
+    assert!(
+        html.contains("moss-place-map"),
+        "a real folder index at a place namespace root must still get the term map: {html}"
+    );
+}
+
 /// Place maps may use gazetteer coordinates for rendering, but should not
 /// expose the raw coordinate values in generated text assets.
 #[test]

@@ -205,6 +205,7 @@ You can also opt a single child out by setting `series: false` on that article's
 | `review_of` | string | (none) | URL of the work being reviewed |
 | `rating` | integer | (none) | Rating (1–5) for reviews |
 | `comments` | boolean | `true` | Show comments section |
+| `map` | boolean | `true` | Show the place term map on a claimed term page or a real page at a place namespace root — the geographic map, not `cascade`'s key-value map |
 
 ### uid
 

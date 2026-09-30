@@ -1333,6 +1333,7 @@ pub fn process_markdown_file(
     let cascade = frontmatter.cascade.map(|m| m.into_iter().collect());
     let also_in = frontmatter.also_in;
     let comments = frontmatter.comments;
+    let map = frontmatter.map;
 
     // Calculate reading time (200 words per minute)
     let word_count = markdown_content_raw.split_whitespace().count();
@@ -1407,6 +1408,8 @@ pub fn process_markdown_file(
         place_breadcrumb: None,
         place_children: None,
         place_line: None,
+        is_place_namespace_root: false,
+        map,
         children,
         children_source,
         sidebar,

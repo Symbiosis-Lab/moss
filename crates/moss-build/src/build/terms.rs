@@ -235,6 +235,17 @@ impl TermIndex {
             .chain(self.roots_in_use().map(str::to_string))
             .collect()
     }
+
+    /// The bare namespace-root keys among [`Self::synthetic_folder_keys`]
+    /// (no `/`) whose kind is place-typed — every folder a real `index.md`
+    /// can host that kind's term map on, the same map an unclaimed root
+    /// already gets from the synthetic-index path in `render/blocking.rs`.
+    /// An individual place term (`places/kyoto`) is never a member: it is
+    /// reached through a claim (`ParsedDocument::term_listing`) instead, and
+    /// `roots_in_use` already yields bare keys only.
+    pub fn place_namespace_roots(&self) -> impl Iterator<Item = &str> + '_ {
+        self.roots_in_use().filter(|key| self.kinds.iter().any(|k| k.key == *key && k.is_place))
+    }
 }
 
 /// This doc's values for a name-list field (`author`, `tags`, `editor`,
@@ -538,6 +549,10 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
     }
 
     index.kinds = kinds;
+    // Runs last: `TermIndex::place_namespace_roots` reads `index.kinds`,
+    // just set above. See `rollup::flag_place_namespace_roots`'s own doc.
+    rollup::flag_place_namespace_roots(documents, &index);
+
     index
 }
 
@@ -1017,6 +1032,62 @@ mod tests {
         docs[0].author = vec!["Scarly".into()];
         let index = derive_terms(&mut docs, both_kinds());
         assert_eq!(index.synthetic_folder_keys(), vec!["authors/scarly", "authors"]);
+    }
+
+    /// One place kind, one non-place kind, both in use: only the place
+    /// kind's bare root comes back, never the tag root — a namespace root's
+    /// KIND decides whether a real `index.md` there can host a term map, not
+    /// merely whether it is a root at all.
+    #[test]
+    fn place_namespace_roots_are_the_bare_keys_whose_kind_is_place() {
+        let kinds = vec![
+            TermKind {
+                key: "places".to_string(),
+                fields: vec!["location".to_string()],
+                title: "Places".to_string(),
+                is_place: true,
+                parents: Default::default(),
+            },
+            TermKind {
+                key: TAGS_NS.to_string(),
+                fields: vec!["tags".to_string()],
+                title: "Tags".to_string(),
+                is_place: false,
+                parents: Default::default(),
+            },
+        ];
+        let mut docs = vec![doc("posts/a/index.html", "A")];
+        docs[0].location = vec!["Kyoto".into()];
+        docs[0].fm_tags = Some(vec!["城市".into()]);
+        let index = derive_terms(&mut docs, kinds);
+        assert_eq!(index.place_namespace_roots().collect::<Vec<_>>(), vec!["places"]);
+    }
+
+    /// A real folder index at the bare place-kind root gets flagged so
+    /// `render/html.rs` — which cannot see `TermIndex` — knows to splice the
+    /// term map below this page's own content. A real index one level
+    /// DEEPER (`places/kyoto/index.html`, not itself a claim) must NOT get
+    /// it: only the bare root is a namespace root, and an individual place
+    /// term is reached through `term_listing` instead.
+    #[test]
+    fn a_real_index_at_the_place_root_is_flagged_a_deeper_one_is_not() {
+        let kinds = vec![TermKind {
+            key: "places".to_string(),
+            fields: vec!["location".to_string()],
+            title: "Places".to_string(),
+            is_place: true,
+            parents: Default::default(),
+        }];
+        let mut docs = vec![
+            doc("places/index.html", "Places"),
+            doc("places/kyoto/index.html", "Kyoto"),
+            doc("posts/a/index.html", "A"),
+        ];
+        docs[2].location = vec!["Kyoto".into()];
+        derive_terms(&mut docs, kinds);
+        assert!(docs[0].is_place_namespace_root, "the real root index must be flagged");
+        assert!(!docs[1].is_place_namespace_root, "a deeper real index is not a namespace root");
+        assert!(!docs[2].is_place_namespace_root, "an ordinary page is not a namespace root");
     }
 
     #[test]

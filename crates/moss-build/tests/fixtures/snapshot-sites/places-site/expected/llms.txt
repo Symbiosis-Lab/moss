@@ -46,6 +46,12 @@ Claims the `places/kyoto` page, so its breadcrumb and children list render here 
 
 ---
 
+## Places
+
+Every place this site names, gathered on one map.
+
+---
+
 ## Places Site
 
 # Places Site

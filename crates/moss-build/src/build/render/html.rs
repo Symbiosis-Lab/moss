@@ -294,6 +294,16 @@ pub(crate) fn tab_title(page_title: &str, site_title: &str, is_homepage: bool) -
     }
 }
 
+/// The one line the build says when a real folder index at a place
+/// namespace root composes its own intro with the term map below it,
+/// naming the site-relative source file that supplied the intro. Pulled out
+/// of the `log::info!` call site so the message is unit-tested directly —
+/// the same reasoning `cli_output::log_line_for`'s own doc gives for not
+/// installing a process-global logger in a test.
+fn namespace_root_map_notice(source_path: &str) -> String {
+    format!("{source_path}: supplies this page's intro; the place map composes below it")
+}
+
 fn generate_html_inner(
     doc: Option<&ParsedDocument>,
     all_docs: &[ParsedDocument],
@@ -852,11 +862,40 @@ fn generate_html_inner(
                 };
 
                 let show_folder_children = !has_sidebar && doc.children.unwrap_or(true);
-                if let Some(map) = term_listing.and_then(|key| {
+                // A claimed sub-term's map (`term_listing`) and a real folder
+                // index's own place-namespace-root map are the same splice,
+                // under the same page-level `map: false` opt-out. The
+                // namespace-root case is new: a real `places/index.md` used
+                // to win outright over the map the unclaimed synthetic root
+                // would have shown, with no warning (`is_place_namespace_root`
+                // is set once in `terms::derive_terms`, which can see
+                // `TermIndex`; this layer cannot, so it reads the resolved
+                // flag). The two cases can never both apply to one page — a
+                // term claim always resolves to a sub-key, never the bare
+                // namespace root `is_place_namespace_root` marks.
+                let root_map_key = doc.is_place_namespace_root.then(|| folder_path.as_str());
+                let map_key = term_listing.or(root_map_key).filter(|_| doc.map != Some(false));
+                if let Some(map) = map_key.and_then(|key| {
                     layout_config.place_maps.as_ref().and_then(|maps| {
                         maps.render_term_map(key, all_docs.iter(), &doc.url_path, 1)
                     })
                 }) {
+                    if doc.is_place_namespace_root && term_listing.is_none() {
+                        // `log::info!`, not a CLI-visible macro: this names a
+                        // composition, not a problem, so it must never count
+                        // toward `--strict` the way `log_warn_problem!` would.
+                        // A plain `moss build` doesn't print it (the CLI's
+                        // headless logger defaults to `Warn`; `MOSS_LOG_LEVEL=info`
+                        // shows it there) — the desktop app's own logger
+                        // defaults to `Info` in both debug and release builds,
+                        // so its build log shows this line with no override.
+                        log::info!(
+                            "{}",
+                            namespace_root_map_notice(
+                                doc.source_path.as_deref().unwrap_or(doc.url_path.as_str())
+                            )
+                        );
+                    }
                     content.push_str(&map);
                 }
                 if show_folder_children {
