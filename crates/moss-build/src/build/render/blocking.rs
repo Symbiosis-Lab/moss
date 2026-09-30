@@ -1674,14 +1674,13 @@ pub fn generate_blocking_content_for_build(
     // The computation itself lives in `render/incremental/verdict.rs`: it was
     // produced here, logged here, and consumed by exactly one `partition`
     // fifty lines below, so nothing else in the build could learn it.
-    // `RenderVerdict` is a typed value with one owner
-    // and no public constructor from a raw set.
     let verdict = crate::build::render::incremental::verdict::compute(
         &documents,
         &crate::build::render::incremental::verdict::VerdictInputs {
             policy: crate::build::render::incremental::IncrementalPolicy::resolve(&site_config),
             project: project_structure,
             cache_path: &paths.cache_dep_graph(),
+            output_dir,
             asset_versions: &asset_versions,
             dir_overrides: &dir_overrides,
             site_lang,

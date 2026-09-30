@@ -489,12 +489,22 @@ pub struct FacadeCache {
     ///
     /// **Keyed by input**, for the same reason as `global_contributions` and
     /// with a sharper edge: `image_files` and `video_files` are in here, so
-    /// an image arriving or being enriched full-renders the site through this
-    /// branch — which is the exact class of silent whole-site render this
-    /// vault has produced twice. One digest could not say that; eight named
-    /// ones can.
+    /// an image arriving full-renders the site through this branch — which
+    /// is the exact class of silent whole-site render this vault has produced
+    /// twice. One digest could not say that; eight named ones can. An image
+    /// being enriched with its placeholder no longer does; see
+    /// `image_placeholders` below.
     #[serde(default)]
     listing_globals: std::collections::BTreeMap<String, String>,
+    /// Per image, a digest of the placeholder fields `listing_globals` leaves
+    /// out of `image_files` (`render::incremental::listing::image_placeholders`).
+    /// A move re-renders the pages that show the image, not the site.
+    ///
+    /// `serde(default)` gives an empty map for a cache written before this
+    /// existed, so every image reads as moved and every page that shows one
+    /// renders once.
+    #[serde(default)]
+    image_placeholders: std::collections::BTreeMap<String, String>,
     /// Build-global inputs to the nav language switcher and the subscribe-form
     /// language sections (`build::render::lang_roots::lang_switcher_globals`):
     /// `lang_roots`, `lang_multi`, `lang_email_sections`. A mismatch is a
@@ -554,6 +564,20 @@ fn moved_keys(
     moved
 }
 
+/// The seven per-part digest maps `FacadeCache` keeps, one per field of the
+/// same name. They share one shape and one comparison ([`moved_keys`]); they
+/// differ only in what a move obliges the caller to render.
+#[derive(Debug, Clone, Copy)]
+pub enum DigestMap {
+    GlobalContributions,
+    ListingGlobals,
+    ImagePlaceholders,
+    LangGlobals,
+    NavGlobals,
+    HomeTitleGlobals,
+    HomeBreadcrumbGlobals,
+}
+
 impl FacadeCache {
     /// Load a facade cache from a JSON file on disk. Returns an empty cache
     /// if the file doesn't exist or can't be parsed — same fail-open
@@ -592,6 +616,7 @@ impl FacadeCache {
             asset_versions: String::new(),
             listing_groups: std::collections::BTreeMap::new(),
             listing_globals: std::collections::BTreeMap::new(),
+            image_placeholders: std::collections::BTreeMap::new(),
             global_contributions: std::collections::BTreeMap::new(),
             lang_globals: std::collections::BTreeMap::new(),
             nav_globals: std::collections::BTreeMap::new(),
@@ -600,17 +625,15 @@ impl FacadeCache {
         }
     }
 
-    /// Record this build's listing globals and per-group digests. Chained onto
+    /// Record this build's per-group listing digests. Chained onto
     /// `from_facades` alongside `with_asset_versions`.
-    pub fn with_listing(
+    pub fn with_listing_groups(
         mut self,
-        globals: std::collections::BTreeMap<String, String>,
         groups: std::collections::BTreeMap<
             String,
             crate::build::render::incremental::listing::GroupDigest,
         >,
     ) -> Self {
-        self.listing_globals = globals;
         self.listing_groups = groups;
         self
     }
@@ -625,95 +648,36 @@ impl FacadeCache {
         self.listing_groups.get(&key.id())
     }
 
-    /// True when a build-global input to card rendering moved. Callers must
-    /// treat it as a full-render bypass — see the `listing_globals` field docs.
-    pub fn listing_globals_changed(
-        &self,
-        current: &std::collections::BTreeMap<String, String>,
-    ) -> Vec<String> {
-        moved_keys(&self.listing_globals, current)
+    fn digests(&self, which: DigestMap) -> &std::collections::BTreeMap<String, String> {
+        match which {
+            DigestMap::GlobalContributions => &self.global_contributions,
+            DigestMap::ListingGlobals => &self.listing_globals,
+            DigestMap::ImagePlaceholders => &self.image_placeholders,
+            DigestMap::LangGlobals => &self.lang_globals,
+            DigestMap::NavGlobals => &self.nav_globals,
+            DigestMap::HomeTitleGlobals => &self.home_title_globals,
+            DigestMap::HomeBreadcrumbGlobals => &self.home_breadcrumb_globals,
+        }
     }
 
-    /// Record this build's language-switcher globals. Chained onto `from_facades`.
-    pub fn with_lang_globals(
-        mut self,
-        globals: std::collections::BTreeMap<String, String>,
-    ) -> Self {
-        self.lang_globals = globals;
+    /// Record this build's digests for `which`. Chained onto `from_facades`.
+    pub fn with_digests(mut self, which: DigestMap, digests: std::collections::BTreeMap<String, String>) -> Self {
+        *match which {
+            DigestMap::GlobalContributions => &mut self.global_contributions,
+            DigestMap::ListingGlobals => &mut self.listing_globals,
+            DigestMap::ImagePlaceholders => &mut self.image_placeholders,
+            DigestMap::LangGlobals => &mut self.lang_globals,
+            DigestMap::NavGlobals => &mut self.nav_globals,
+            DigestMap::HomeTitleGlobals => &mut self.home_title_globals,
+            DigestMap::HomeBreadcrumbGlobals => &mut self.home_breadcrumb_globals,
+        } = digests;
         self
     }
 
-    /// True when a build-global input to the nav language switcher or the
-    /// subscribe-form language sections moved. Callers must treat it as a
-    /// full-render bypass — see the `lang_globals` field docs.
-    pub fn lang_globals_changed(
-        &self,
-        current: &std::collections::BTreeMap<String, String>,
-    ) -> Vec<String> {
-        moved_keys(&self.lang_globals, current)
-    }
-
-    /// Record this build's nav globals. Chained onto `from_facades`.
-    pub fn with_nav_globals(mut self, globals: std::collections::BTreeMap<String, String>) -> Self {
-        self.nav_globals = globals;
-        self
-    }
-
-    /// The languages whose nav bar moved — callers must render every page of
-    /// that language, not the whole site. See `nav_globals`'s field docs.
-    pub fn nav_globals_changed(&self, current: &std::collections::BTreeMap<String, String>) -> Vec<String> {
-        moved_keys(&self.nav_globals, current)
-    }
-
-    /// Record this build's home-title globals. Chained onto `from_facades`.
-    pub fn with_home_title_globals(mut self, globals: std::collections::BTreeMap<String, String>) -> Self {
-        self.home_title_globals = globals;
-        self
-    }
-
-    /// The languages whose home-page title moved — callers must render every
-    /// page of that language. See `nav_globals`'s field docs.
-    pub fn home_title_globals_changed(
-        &self,
-        current: &std::collections::BTreeMap<String, String>,
-    ) -> Vec<String> {
-        moved_keys(&self.home_title_globals, current)
-    }
-
-    /// Record this build's home-breadcrumb globals. Chained onto `from_facades`.
-    pub fn with_home_breadcrumb_globals(
-        mut self,
-        globals: std::collections::BTreeMap<String, String>,
-    ) -> Self {
-        self.home_breadcrumb_globals = globals;
-        self
-    }
-
-    /// The languages whose home page's `breadcrumb:` toggle moved — callers
-    /// must render every page of that language. See `nav_globals`'s field docs.
-    pub fn home_breadcrumb_globals_changed(
-        &self,
-        current: &std::collections::BTreeMap<String, String>,
-    ) -> Vec<String> {
-        moved_keys(&self.home_breadcrumb_globals, current)
-    }
-
-    /// Record this build's global contributions. Chained onto `from_facades`.
-    pub fn with_global_contributions(
-        mut self,
-        digests: std::collections::BTreeMap<String, String>,
-    ) -> Self {
-        self.global_contributions = digests;
-        self
-    }
-
-    /// True when a body-derived value that other pages read moved. Callers
-    /// must treat it as a full-render bypass — see the field docs.
-    pub fn global_contributions_changed(
-        &self,
-        current: &std::collections::BTreeMap<String, String>,
-    ) -> Vec<String> {
-        moved_keys(&self.global_contributions, current)
+    /// The keys of `which` that moved since the cache-writing build. What a
+    /// move obliges the caller to render is on each field's docs.
+    pub fn digests_moved(&self, which: DigestMap, current: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+        moved_keys(self.digests(which), current)
     }
 
     /// Record this build's asset versions, so the next build can detect one
@@ -917,16 +881,16 @@ mod tests {
     fn a_moved_build_global_names_the_part_that_moved() {
         let before = map(&[("math", "a"), ("image_files", "b"), ("site_lang", "c")]);
         let cache = FacadeCache::from_facades(HashMap::new())
-            .with_listing(before.clone(), std::collections::BTreeMap::new())
-            .with_global_contributions(map(&[("footer.md", "f"), ("index.md", "i")]));
+            .with_digests(DigestMap::ListingGlobals, before.clone())
+            .with_digests(DigestMap::GlobalContributions, map(&[("footer.md", "f"), ("index.md", "i")]));
 
-        assert!(cache.listing_globals_changed(&before).is_empty(), "identical inputs must not fire");
+        assert!(cache.digests_moved(DigestMap::ListingGlobals, &before).is_empty(), "identical inputs must not fire");
         assert_eq!(
-            cache.listing_globals_changed(&map(&[("math", "a"), ("image_files", "MOVED"), ("site_lang", "c")])),
+            cache.digests_moved(DigestMap::ListingGlobals, &map(&[("math", "a"), ("image_files", "MOVED"), ("site_lang", "c")])),
             ["image_files"]
         );
         assert_eq!(
-            cache.global_contributions_changed(&map(&[("footer.md", "CHANGED"), ("index.md", "i")])),
+            cache.digests_moved(DigestMap::GlobalContributions, &map(&[("footer.md", "CHANGED"), ("index.md", "i")])),
             ["footer.md"]
         );
     }
@@ -937,8 +901,8 @@ mod tests {
     #[test]
     fn a_vanished_build_global_part_still_counts_as_moved() {
         let cache = FacadeCache::from_facades(HashMap::new())
-            .with_global_contributions(map(&[("footer.md", "f"), ("index.md", "i")]));
-        assert_eq!(cache.global_contributions_changed(&map(&[("index.md", "i")])), ["footer.md"]);
+            .with_digests(DigestMap::GlobalContributions, map(&[("footer.md", "f"), ("index.md", "i")]));
+        assert_eq!(cache.digests_moved(DigestMap::GlobalContributions, &map(&[("index.md", "i")])), ["footer.md"]);
     }
 
     #[test]

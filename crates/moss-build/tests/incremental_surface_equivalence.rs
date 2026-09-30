@@ -733,3 +733,104 @@ fn nav_weight_edit_verdict_log_shows_a_narrowed_incremental_render() {
         "a classified weight edit must not take the Full fallback, got: {lines:?}"
     );
 }
+
+// ---- a placeholder arriving after the build that rendered without it -------
+
+/// A PNG with a gradient, so its dominant colour and LQIP are its own.
+fn write_png(root: &Path, rel: &str, tint: [u8; 3]) {
+    let path = root.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let img = image::RgbImage::from_fn(64, 48, |x, y| {
+        image::Rgb([tint[0].wrapping_add(x as u8), tint[1].wrapping_add(y as u8), tint[2]])
+    });
+    img.save(&path).unwrap();
+    std::fs::File::open(&path).unwrap().set_modified(fixed_mtime()).unwrap();
+}
+
+/// `write_vault`, plus one image in each place a placeholder reaches HTML:
+/// a listing-card cover (`writings/alpha.md`'s `cover:`, shown on
+/// `writings/index.html` and the homepage's folder embed), a hero and a
+/// hand-built grid cell (`gallery.md`), and a body image on a translated
+/// page (`zh-hans/about.md`).
+fn write_image_vault(root: &Path) {
+    write_vault(root);
+    write_png(root, "writings/cover.png", [200, 40, 40]);
+    write_png(root, "hero.png", [40, 200, 40]);
+    write_png(root, "cell.png", [40, 40, 200]);
+    write_png(root, "zh-hans/photo.png", [200, 200, 40]);
+    edit_frontmatter(root, "writings/alpha.md", "title: Alpha\n", "title: Alpha\ncover: cover.png\n");
+    write(
+        root,
+        "gallery.md",
+        "---\ntitle: Gallery\nuid: gallery\nlang: en\n---\n\n\
+         :::hero {image=\"hero.png\"}\nOverlay copy\n:::\n\n\
+         :::grid\n![](cell.png)\n\nA hand-built cell.\n---\nA second plain cell.\n:::\n",
+    );
+    edit_frontmatter(root, "zh-hans/about.md", "关于这个网站。", "关于这个网站。\n\n![](photo.png)");
+}
+
+/// `build`, as the preview builds: image placeholders are deferred to the
+/// background encoder, which fills them in for the NEXT build to read.
+fn build_deferred(folder_path: &str, trigger: moss_build::build::BuildTrigger) -> Result<String, String> {
+    use moss_build::build::{run_pipeline, PipelineConfig, PluginMode};
+    use moss_build::cli::host::cli_host_ports;
+    use moss_build::vault_root::VaultRoot;
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(run_pipeline(PipelineConfig {
+        root: VaultRoot::resolve(&PathBuf::from(folder_path)),
+        progress: moss_build::build::stdout_sink(),
+        plugins: PluginMode::Skip,
+        watch: false,
+        start_server: false,
+        host: cli_host_ports(folder_path),
+        trigger,
+        exits_after_build: true,
+        site_url_override: None,
+        server_port: Some(1),
+        admission_epoch: None,
+        live_port: None,
+    }))
+}
+
+/// The first edit after a cold start. The cold build rendered every image
+/// without its dominant colour or LQIP; the encoder filled them in; the next
+/// build sees them move with nothing about the images edited. That build is
+/// incremental, and must still serve what a full build of the same state
+/// serves: every page showing one of those images picks up its placeholder,
+/// wherever on the page the image sits.
+///
+/// A body image, a hero, a grid cell and a folder embed are baked into the
+/// page's own parsed body, so their placeholder moves the page's facade. A
+/// listing card's cover is not — it is read from another page at render
+/// time — so `writings/index.html` is the page only the placeholder channel
+/// re-renders, and the one that goes stale without it.
+#[test]
+fn a_placeholder_arriving_after_a_cold_build_reaches_every_page_that_shows_the_image() {
+    let _guard = SEQUENTIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let tmp = tempfile::tempdir().unwrap();
+    let incremental_root = tmp.path().join("incremental");
+    let full_root = tmp.path().join("full");
+    let edit = |root: &Path| edit_frontmatter(root, "contact.md", "Contact us.", "Contact us today.");
+
+    for root in [&incremental_root, &full_root] {
+        write_image_vault(root);
+        let cold = build_deferred(&root.to_string_lossy(), moss_build::build::BuildTrigger::Full);
+        assert!(cold.is_ok(), "cold build failed: {cold:?}");
+        edit(root);
+    }
+    let incremental = build_deferred(
+        &incremental_root.to_string_lossy(),
+        moss_build::build::BuildTrigger::ContentOnly(vec![incremental_root.join("contact.md")]),
+    );
+    assert!(incremental.is_ok(), "incremental rebuild failed: {incremental:?}");
+    let full = build_deferred(&full_root.to_string_lossy(), moss_build::build::BuildTrigger::Full);
+    assert!(full.is_ok(), "full rebuild failed: {full:?}");
+
+    // Guard against a vacuous pass: the placeholders must actually have
+    // arrived between the two builds, or there was nothing to carry stale.
+    let gallery = std::fs::read_to_string(staging_dir(&full_root).join("gallery/index.html")).unwrap();
+    assert!(gallery.contains("data:image/"), "the second build must see the LQIP the encoder wrote");
+
+    assert_trees_byte_identical("placeholder arrival", &incremental_root, &full_root);
+}

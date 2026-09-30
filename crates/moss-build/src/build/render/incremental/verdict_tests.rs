@@ -63,6 +63,7 @@ fn vault() -> Vec<ParsedDocument> {
 struct Harness {
     _dir: tempfile::TempDir,
     cache: std::path::PathBuf,
+    output: std::path::PathBuf,
     project: ProjectStructure,
     overrides: std::collections::HashMap<String, String>,
     skip: bool,
@@ -73,9 +74,11 @@ impl Harness {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("dep-cache.json");
+        let output = dir.path().join("out");
         Self {
             _dir: dir,
             cache,
+            output,
             project: project(),
             overrides: std::collections::HashMap::new(),
             skip: true,
@@ -94,6 +97,7 @@ impl Harness {
                 policy: IncrementalPolicy { skip_unchanged_renders: self.skip },
                 project: &project,
                 cache_path: &self.cache,
+                output_dir: &self.output,
                 asset_versions: "v1",
                 dir_overrides: &self.overrides,
                 site_lang: crate::i18n::Language::En,
@@ -709,4 +713,45 @@ fn an_unclassified_field_edit_still_forces_full() {
     let mut edited = docs.clone();
     edited[1].sidebar = Some("elsewhere".to_string());
     assert_full(&h.run(&edited), FullCause::SurfaceChanged);
+}
+
+/// The first edit after a cold start. A preview scan leaves an image's
+/// dominant colour and LQIP empty and the background encoder fills them in, so
+/// the next build sees them move with nothing about the site edited. That
+/// used to be a `listing globals moved` full render — every page, on a real
+/// site 244 of them, for the handful whose output actually changed. It must
+/// now render exactly the pages whose previous output shows the image.
+#[test]
+fn an_image_gaining_its_placeholder_renders_only_the_pages_that_show_it() {
+    let mut h = Harness::new();
+    let cover = |color: Option<&str>| crate::types::content::MediaMetadata {
+        path: "writings/alpha/cover.png".into(),
+        file_type: "png".into(),
+        dimensions: Some((1200, 800)),
+        dominant_color: color.map(str::to_string),
+        lqip_data_uri: color.map(|_| "data:image/jpeg;base64,AAAA".to_string()),
+        ..Default::default()
+    };
+    let docs = vault();
+    for d in &docs {
+        let page = h.output.join(&d.url_path);
+        std::fs::create_dir_all(page.parent().unwrap()).unwrap();
+        let body = if d.url_path == "writings/index.html" {
+            r#"<div class="moss-grid-card"><img src="/writings/alpha/cover.png" width="1200" height="800"></div>"#
+        } else {
+            "<p>no images</p>"
+        };
+        std::fs::write(page, body).unwrap();
+    }
+    h.project.image_files = vec![cover(None)];
+    h.run(&docs);
+
+    h.project.image_files = vec![cover(Some("#336699"))];
+    let verdict = h.run(&docs);
+
+    assert_incremental(&verdict);
+    assert!(!verdict.may_skip("writings/index.md"), "the listing that shows the cover must pick up its placeholder");
+    for carried in ["index.md", "writings/alpha/index.md", "writings/beta/index.md"] {
+        assert!(verdict.may_skip(carried), "{carried} does not show the image");
+    }
 }

@@ -53,7 +53,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::build::facade::{self, FacadeCache, PageFingerprints};
+use crate::build::facade::{self, DigestMap, FacadeCache, PageFingerprints};
 use crate::build::phase::PhaseTrace;
 use crate::build::types::ParsedDocument;
 use crate::types::content::ProjectStructure;
@@ -114,6 +114,9 @@ pub enum VerdictBasis {
         /// all, and on one whose surface moves were all backlink/listing-
         /// group reachable anyway.
         by_dependents: usize,
+        /// Pages added because an image they show gained or changed its
+        /// dominant colour or LQIP (`listing::image_placeholders`).
+        by_image_placeholder: usize,
     },
 }
 
@@ -161,11 +164,13 @@ impl RenderVerdict {
                 by_listing_group,
                 groups,
                 by_dependents,
+                by_image_placeholder,
             } => log::info!(
                 target: "incremental",
                 "{tracked} tracked pages, {changed} changed ({surface_changed} by surface), \
                  +{by_backlink} by backlink/embed, +{by_listing_group} by listing group \
-                 ({groups} groups), +{by_dependents} by surface dependents, skipping {}",
+                 ({groups} groups), +{by_dependents} by surface dependents, \
+                 +{by_image_placeholder} by image placeholder, skipping {}",
                 self.skip.len(),
             ),
         }
@@ -177,6 +182,9 @@ pub struct VerdictInputs<'a> {
     pub policy: IncrementalPolicy,
     pub project: &'a ProjectStructure,
     pub cache_path: &'a Path,
+    /// Where the previous build's pages are, for finding which of them show
+    /// an image whose placeholder moved.
+    pub output_dir: &'a Path,
     pub asset_versions: &'a str,
     pub dir_overrides: &'a HashMap<String, String>,
     pub site_lang: crate::i18n::Language,
@@ -339,7 +347,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // `home_file_winners` move. If you are bisecting a stale-page report,
     // check both — neither one subsumes the other.
     let contributions = global_contributions(documents, inputs.math);
-    let global_invalidator_changed = previous.global_contributions_changed(&contributions);
+    let global_invalidator_changed = previous.digests_moved(DigestMap::GlobalContributions, &contributions);
 
     // Third whole-build bypass (the SEE ALSO note above counted two): a
     // content-addressed asset moved, so the hashed filename every page
@@ -359,7 +367,9 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
         inputs.typesetting,
         inputs.math,
     );
-    let listing_globals_changed = previous.listing_globals_changed(&listing_globals);
+    let listing_globals_changed = previous.digests_moved(DigestMap::ListingGlobals, &listing_globals);
+    let image_placeholders = listing::image_placeholders(inputs.project);
+    let image_placeholders_changed = previous.digests_moved(DigestMap::ImagePlaceholders, &image_placeholders);
 
     // Fifth: the build-global inputs to the nav language switcher, the
     // nav/footer link lists, and the subscribe-form language sections — see
@@ -370,7 +380,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
         inputs.site_lang,
         inputs.project.has_content_folders,
     );
-    let lang_globals_changed = previous.lang_globals_changed(&lang_globals);
+    let lang_globals_changed = previous.digests_moved(DigestMap::LangGlobals, &lang_globals);
 
     // Sixth, seventh and eighth: the three per-language digests that let a
     // classified nav/title/breadcrumb-enable move narrow to "every page of
@@ -382,12 +392,12 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // bypass: it feeds the per-language widen inside the incremental branch
     // below instead.
     let nav_globals = dependents::nav_globals(documents, inputs.project.has_content_folders);
-    let nav_globals_changed = previous.nav_globals_changed(&nav_globals);
+    let nav_globals_changed = previous.digests_moved(DigestMap::NavGlobals, &nav_globals);
     let home_title_globals = dependents::home_title_globals(documents, inputs.site_lang);
-    let home_title_globals_changed = previous.home_title_globals_changed(&home_title_globals);
+    let home_title_globals_changed = previous.digests_moved(DigestMap::HomeTitleGlobals, &home_title_globals);
     let home_breadcrumb_globals = dependents::home_breadcrumb_globals(documents);
     let home_breadcrumb_globals_changed =
-        previous.home_breadcrumb_globals_changed(&home_breadcrumb_globals);
+        previous.digests_moved(DigestMap::HomeBreadcrumbGlobals, &home_breadcrumb_globals);
     // The languages nav or homepage title disagreed on — deduplicated once,
     // since both widen the render set the same way (every page of that
     // language). The breadcrumb enable/disable toggle is not per-language
@@ -552,6 +562,15 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                 }
             }
 
+            let shows_one = pages_showing(
+                &image_placeholders_changed,
+                documents,
+                &render_set,
+                inputs,
+            );
+            let by_image_placeholder = shows_one.len();
+            render_set.extend(shows_one);
+
             let skip: HashSet<String> = current
                 .keys()
                 .filter(|p| !render_set.contains(*p))
@@ -565,6 +584,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                 by_listing_group,
                 groups: groups.len(),
                 by_dependents,
+                by_image_placeholder,
             };
             (skip, basis)
         }
@@ -572,12 +592,14 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
 
     let new_cache = FacadeCache::from_facades(current)
         .with_asset_versions(inputs.asset_versions.to_string())
-        .with_global_contributions(contributions)
-        .with_listing(listing_globals, groups.into_map())
-        .with_lang_globals(lang_globals)
-        .with_nav_globals(nav_globals)
-        .with_home_title_globals(home_title_globals)
-        .with_home_breadcrumb_globals(home_breadcrumb_globals);
+        .with_listing_groups(groups.into_map())
+        .with_digests(DigestMap::GlobalContributions, contributions)
+        .with_digests(DigestMap::ListingGlobals, listing_globals)
+        .with_digests(DigestMap::ImagePlaceholders, image_placeholders)
+        .with_digests(DigestMap::LangGlobals, lang_globals)
+        .with_digests(DigestMap::NavGlobals, nav_globals)
+        .with_digests(DigestMap::HomeTitleGlobals, home_title_globals)
+        .with_digests(DigestMap::HomeBreadcrumbGlobals, home_breadcrumb_globals);
     if let Err(e) = new_cache.save(inputs.cache_path) {
         log::warn!(target: "incremental", "failed to save facade cache: {e}");
     }
@@ -585,6 +607,55 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     let verdict = RenderVerdict { skip, basis };
     verdict.log();
     verdict
+}
+
+/// The tracked pages outside `render_set` whose previous output shows one of
+/// `images` (source paths, as `image_files` keys them).
+///
+/// The previous output is the only complete record of which page shows which
+/// image: a body image, a listing card's cover and a hero reach HTML
+/// through different code, but each decorates an element that carries
+/// the image's own URL. A page whose output cannot be read is counted as
+/// showing one — the fail-safe direction. Reads nothing when `images` is
+/// empty, which is every build but the one after the encoder fills in
+/// placeholders.
+fn pages_showing(
+    images: &[String],
+    documents: &[ParsedDocument],
+    render_set: &HashSet<String>,
+    inputs: &VerdictInputs<'_>,
+) -> Vec<String> {
+    use rayon::prelude::*;
+    if images.is_empty() {
+        return Vec::new();
+    }
+    // Each image under every URL it can be served at: its own (slugified)
+    // path and its `.webp` variant. Matching the raw source path as well
+    // costs nothing and only ever adds a page.
+    let keys: HashSet<String> = images
+        .iter()
+        .flat_map(|path| {
+            let served = moss_core::resolve::output_url::resolve_path_with_overrides(path, inputs.dir_overrides);
+            let webp = moss_core::asset_paths::to_webp(&served);
+            [path.clone(), served, webp]
+        })
+        .collect();
+    documents
+        .par_iter()
+        .filter_map(|doc| {
+            let source = doc.source_path.as_ref()?;
+            if render_set.contains(source) {
+                return None;
+            }
+            let shows = match std::fs::read_to_string(inputs.output_dir.join(&doc.url_path)) {
+                Ok(html) => crate::build::media::orphan_prune::references_in(&html, &doc.url_path)
+                    .iter()
+                    .any(|r| keys.contains(r)),
+                Err(_) => true,
+            };
+            shows.then(|| source.clone())
+        })
+        .collect()
 }
 
 /// Every body-derived value that reaches another page's HTML, folded in

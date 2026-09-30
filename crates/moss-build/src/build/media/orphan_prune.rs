@@ -190,18 +190,8 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
     // `tests/staged_html_manifest_parity.rs`.
     // Case-insensitive on the extension alternation as defense
     // in depth — moss itself always emits lowercase, but nothing enforces
-    // that on a plugin-authored reference.
-    // Two spellings of the same class, differing only in whether `'` ends a
-    // token. See the discussion above: each alone has a false negative the
-    // other does not, and the union of the two has neither.
-    const TOKEN_PATTERNS: [&str; 2] = [
-        r#"[A-Za-z0-9_%\x{80}-\x{10FFFF}][^\s"'<>():]*\.(?i:webp|png|jpe?g|gif|svg|avif)"#,
-        r#"[A-Za-z0-9_%\x{80}-\x{10FFFF}][^\s"<>():]*\.(?i:webp|png|jpe?g|gif|svg|avif)"#,
-    ];
-    let token_res: Vec<regex::Regex> = TOKEN_PATTERNS
-        .iter()
-        .map(|p| regex::Regex::new(p).expect("static regex"))
-        .collect();
+    // that on a plugin-authored reference. The patterns themselves live in
+    // [`token_regexes`], the per-token work in [`collect_references`].
 
     let mut referenced = HashSet::new();
     let mut resolved_refs = HashSet::new();
@@ -243,66 +233,104 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
             .ok()
             .and_then(|r| r.to_str())
             .map(|r| r.replace('\\', "/"));
-        for m in token_res.iter().flat_map(|re| re.find_iter(&text)) {
-            // The token charset excludes `:`, so an absolute URL's scheme
-            // (`https:`) can never be PART of a match — but the regex still
-            // finds a match starting right after "//", e.g. the
-            // `example.com/x.webp` tail of `https://example.com/x.webp`.
-            // That tail's suffixes would otherwise collide with a same-named
-            // local file's key. Reject any match immediately preceded by
-            // `//` (covers `https://`, `http://`, and protocol-relative
-            // `//`) so an external URL can never falsely protect a local
-            // orphan.
-            if text.as_bytes()[..m.start()].ends_with(b"//") {
-                continue;
-            }
-            // The start class cannot begin a token on `/` or `.`, so a match
-            // never carries its own `/`, `./` or `../` prefix. Taken back here,
-            // or the resolution below reads `/a/b/x.webp` on a page in `a/b/`
-            // as `a/b/a/b/x.webp`, and `../x.webp` as a sibling of the page.
-            // The suffix reading strips the prefix again, so it is unchanged.
-            let prefix = text.as_bytes()[..m.start()]
-                .iter()
-                .rev()
-                .take_while(|b| matches!(b, b'.' | b'/'))
-                .count();
-            let Some(decoded) = decode_reference(&text[m.start() - prefix..m.end()]) else {
-                continue;
-            };
-            // Two readings of the same token, unioned, because neither alone
-            // is complete and invariant 6 only permits erring wide.
-            //
-            // SUFFIXES of the token cover a reference written DEEPER than the
-            // key — a page at `a/b/c/` writing `../../../assets/x.webp` — and
-            // a data file listing site-root-relative keys without a leading
-            // `/`.
-            //
-            // RESOLUTION against the file the token was found in covers the
-            // opposite direction, which suffixes structurally cannot: a
-            // reference written SHALLOWER than the key. That is the ordinary
-            // shape for every non-HTML scanned type, whose URLs are relative
-            // to their own file — `gallery/style.css` with
-            // `url(assets/x.webp)` means `gallery/assets/x.webp`, and by
-            // suffixes alone it reads as `assets/x.webp`, matches no key, and
-            // the live reference is pruned. That used to be a
-            // deletion the next build undid; now the verdict is persisted and
-            // `suppressed_variants` reads it back through this same set, so
-            // the variant would stay missing while a stylesheet still asks
-            // for it. `resolve_to_root_relative` is the canonical resolver
-            // (it already backs frontmatter `cover:`), so this is one call,
-            // not a second implementation.
-            referenced.extend(path_suffixes(&strip_relative_prefixes(&decoded)));
-            if let Some(doc) = doc.as_deref() {
-                let resolved =
-                    crate::build::markdown::html_post::resolve_to_root_relative(&decoded, doc);
-                if !resolved.is_empty() {
-                    referenced.insert(resolved.clone());
-                    resolved_refs.insert(resolved);
-                }
+        collect_references(&text, doc.as_deref(), &mut referenced, &mut resolved_refs);
+    }
+    ReferenceScan { tails: referenced, resolved: resolved_refs, unreadable }
+}
+
+/// The image references in one scanned file's `text`, read both ways
+/// [`extract_referenced_tails`] reads them, and unioned the same way —
+/// suffixes plus resolution against `doc`, the file's site-root-relative
+/// path. For a caller asking whether one page shows an image.
+pub fn references_in(text: &str, doc: &str) -> HashSet<String> {
+    let mut tails = HashSet::new();
+    collect_references(text, Some(doc), &mut tails, &mut HashSet::new());
+    tails
+}
+
+/// Two spellings of the same token class, differing only in whether `'` ends
+/// a token — see the discussion in [`extract_referenced_tails`]: each alone
+/// has a false negative the other does not, and the union of the two has
+/// neither. Compiled once per process.
+fn token_regexes() -> &'static [regex::Regex; 2] {
+    static RES: std::sync::OnceLock<[regex::Regex; 2]> = std::sync::OnceLock::new();
+    RES.get_or_init(|| {
+        [
+            r#"[A-Za-z0-9_%\x{80}-\x{10FFFF}][^\s"'<>():]*\.(?i:webp|png|jpe?g|gif|svg|avif)"#,
+            r#"[A-Za-z0-9_%\x{80}-\x{10FFFF}][^\s"<>():]*\.(?i:webp|png|jpe?g|gif|svg|avif)"#,
+        ]
+        .map(|p| regex::Regex::new(p).expect("static regex"))
+    })
+}
+
+/// One file's share of [`extract_referenced_tails`]: every token in `text`,
+/// into `tails` (suffixes and resolution, unioned) and `resolved`
+/// (resolution only). `doc` is the file's site-root-relative path; without
+/// it only the suffix reading is possible.
+fn collect_references(
+    text: &str,
+    doc: Option<&str>,
+    tails: &mut HashSet<String>,
+    resolved: &mut HashSet<String>,
+) {
+    for m in token_regexes().iter().flat_map(|re| re.find_iter(text)) {
+        // The token charset excludes `:`, so an absolute URL's scheme
+        // (`https:`) can never be PART of a match — but the regex still
+        // finds a match starting right after "//", e.g. the
+        // `example.com/x.webp` tail of `https://example.com/x.webp`.
+        // That tail's suffixes would otherwise collide with a same-named
+        // local file's key. Reject any match immediately preceded by
+        // `//` (covers `https://`, `http://`, and protocol-relative
+        // `//`) so an external URL can never falsely protect a local
+        // orphan.
+        if text.as_bytes()[..m.start()].ends_with(b"//") {
+            continue;
+        }
+        // The start class cannot begin a token on `/` or `.`, so a match
+        // never carries its own `/`, `./` or `../` prefix. Taken back here,
+        // or the resolution below reads `/a/b/x.webp` on a page in `a/b/`
+        // as `a/b/a/b/x.webp`, and `../x.webp` as a sibling of the page.
+        // The suffix reading strips the prefix again, so it is unchanged.
+        let prefix = text.as_bytes()[..m.start()]
+            .iter()
+            .rev()
+            .take_while(|b| matches!(b, b'.' | b'/'))
+            .count();
+        let Some(decoded) = decode_reference(&text[m.start() - prefix..m.end()]) else {
+            continue;
+        };
+        // Two readings of the same token, unioned, because neither alone
+        // is complete and invariant 6 only permits erring wide.
+        //
+        // SUFFIXES of the token cover a reference written DEEPER than the
+        // key — a page at `a/b/c/` writing `../../../assets/x.webp` — and
+        // a data file listing site-root-relative keys without a leading
+        // `/`.
+        //
+        // RESOLUTION against the file the token was found in covers the
+        // opposite direction, which suffixes structurally cannot: a
+        // reference written SHALLOWER than the key. That is the ordinary
+        // shape for every non-HTML scanned type, whose URLs are relative
+        // to their own file — `gallery/style.css` with
+        // `url(assets/x.webp)` means `gallery/assets/x.webp`, and by
+        // suffixes alone it reads as `assets/x.webp`, matches no key, and
+        // the live reference is pruned. That used to be a
+        // deletion the next build undid; now the verdict is persisted and
+        // `suppressed_variants` reads it back through this same set, so
+        // the variant would stay missing while a stylesheet still asks
+        // for it. `resolve_to_root_relative` is the canonical resolver
+        // (it already backs frontmatter `cover:`), so this is one call,
+        // not a second implementation.
+        tails.extend(path_suffixes(&strip_relative_prefixes(&decoded)));
+        if let Some(doc) = doc {
+            let resolved_key =
+                crate::build::markdown::html_post::resolve_to_root_relative(&decoded, doc);
+            if !resolved_key.is_empty() {
+                tails.insert(resolved_key.clone());
+                resolved.insert(resolved_key);
             }
         }
     }
-    ReferenceScan { tails: referenced, resolved: resolved_refs, unreadable }
 }
 
 /// The `.webp` variants a producer must NOT put back into `stage_dir`.

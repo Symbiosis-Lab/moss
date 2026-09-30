@@ -37,7 +37,7 @@ use crate::build::folder_embed::{
     effective_group_for_axis, resolve_children_config, select_children_by_slug,
 };
 use crate::build::types::ParsedDocument;
-use crate::types::content::ProjectStructure;
+use crate::types::content::{MediaMetadata, ProjectStructure};
 
 /// `children_depth`, reduced to the two values the selector branches on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -544,9 +544,10 @@ pub fn listing_globals(
     // One digest PER INPUT rather than one over the tuple. Same verdict —
     // any entry differing is the same bypass the combined hash triggered —
     // but a verdict that can say which of the eight moved. `image_files` is
-    // the one that matters: a cover arriving or being enriched full-renders
-    // the site through this branch, and the combined hash could only report
-    // that as "listing globals moved".
+    // the one that matters: a cover arriving full-renders the site through
+    // this branch, and the combined hash could only report that as "listing
+    // globals moved". A cover being ENRICHED no longer does — see
+    // [`image_placeholders`].
     [
         ("math", debug_hash(&math)),
         ("typesetting", debug_hash(&typesetting)),
@@ -558,12 +559,41 @@ pub fn listing_globals(
         // (width/height/LQIP/dominant colour on every cover `<img>`). The
         // lookup itself is built inside the render loop, so hash the table it
         // is built from.
-        ("image_files", debug_hash(&project.image_files)),
+        ("image_files", debug_hash(&without_placeholders(&project.image_files))),
         ("video_files", debug_hash(&project.video_files)),
     ]
     .into_iter()
     .map(|(name, digest)| (name.to_string(), digest))
     .collect()
+}
+
+/// `image_files` with the two placeholder fields blanked — a clone blanked,
+/// not the other fields listed, so a field added to `MediaMetadata` lands in
+/// the full-render digest by default.
+fn without_placeholders(files: &[MediaMetadata]) -> Vec<MediaMetadata> {
+    files
+        .iter()
+        .map(|m| MediaMetadata { dominant_color: None, lqip_data_uri: None, ..m.clone() })
+        .collect()
+}
+
+/// Per image path, a digest of its dominant colour and LQIP.
+///
+/// These two are filled in LATE by design: a preview scan reads only the
+/// header, and the background encoder writes them once it has decoded the
+/// pixels, so the build after a cold cache is the first to see them. Inside
+/// the `image_files` digest they full-rendered the site on the first edit
+/// after every cold start, when the only pages whose output changed were the
+/// few that show one of those images. Kept apart, a move re-renders exactly
+/// those pages — the verdict finds them in each page's previous output, since
+/// everything that reads these fields decorates an element carrying the
+/// image's own URL.
+pub fn image_placeholders(project: &ProjectStructure) -> BTreeMap<String, String> {
+    project
+        .image_files
+        .iter()
+        .map(|m| (m.path.clone(), debug_hash(&(&m.dominant_color, &m.lqip_data_uri))))
+        .collect()
 }
 
 #[cfg(test)]
