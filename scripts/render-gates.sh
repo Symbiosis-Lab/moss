@@ -53,6 +53,8 @@ GATES_BUILD=(
   pre-paint-dark
   ui-accent-seam
   nav-toggle-cluster
+  header-hit-areas
+  lightbox-github-shapes
   nav-mobile
   grid-mobile-collapse
   card-cover-ratio

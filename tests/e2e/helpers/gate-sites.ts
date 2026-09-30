@@ -443,6 +443,126 @@ search = true
   },
 };
 
+// ── Header hit areas + font-trigger focus ring ───────────────────────────────
+// Five under-44px header icon buttons (`.nav-theme-btn`, `.nav-search-btn`,
+// `.moss-nav-island-sections`, `.font-trigger`, `.mobile-menu-button`) each
+// need an invisible hit area reaching 44px without moving the visible pill,
+// and `.font-trigger`/`.font-pill button` need the same `:focus-visible` ring
+// every other header control gets. This fixture turns all five on at once:
+// `search = true` for the search button, `floating_nav = true` plus a
+// breadcrumb trail plus two `##` sections for the island and its sections
+// button, `nav: true` pages for the hamburger, and a `date:` on the deep
+// article for the reading-size control (`.font-trigger` only renders on an
+// article page with a date — see `article_date_line_html` in
+// build/render/html.rs).
+export const HEADER_HIT_AREAS_GATE: ScratchSiteSpec = {
+  name: "header-hit-areas-gate",
+  files: {
+    // `breadcrumb: true` here is the site-wide enable (see the comment on
+    // NAV_TOGGLE_CLUSTER_GATE above); the deep article below is what gives
+    // it an actual trail to fold.
+    "index.md": `---
+title: Header Hit Areas
+uid: "hha00101"
+breadcrumb: true
+---
+
+# Header Hit Areas
+
+Scratch site for the header hit-area and focus-ring render gate.
+`,
+    // Second language: without it, a single-language site puts
+    // .nav-search-btn and .nav-theme-btn directly adjacent in .nav-icons —
+    // which the gate also has to cover (the worst case for their shared
+    // hit-area split), so this fixture is read with .nav-lang-toggle
+    // PRESENT and the direct-adjacency case is reasoned about from the fixed
+    // 4px .nav-icons gap instead of re-fixturing it.
+    "index.zh-hans.md": `---
+title: 头部命中区域
+uid: "hha00102"
+---
+
+# 头部命中区域
+
+用于头部命中区域与焦点环渲染门测试的测试站点。
+`,
+    // `nav: true` pages populate .nav-links, which is what makes
+    // build/components/nav.rs emit .mobile-menu-button at all (has_nav_items).
+    "About.md": `---
+title: About
+uid: "hha00103"
+nav: true
+---
+
+# About
+`,
+    "Notes.md": `---
+title: Notes
+uid: "hha00104"
+nav: true
+---
+
+# Notes
+`,
+    // Nested under a nav: true-free folder so the breadcrumb trail has a
+    // middle segment, with a date (font-trigger) and two `##` sections (the
+    // island only ever shows on a page with a real contents table).
+    "Field Reports/index.md": `---
+title: Field Reports
+uid: "hha00105"
+---
+
+# Field Reports
+`,
+    "Field Reports/Long Form Dispatch.md": `---
+title: Long Form Dispatch
+uid: "hha00106"
+date: 2026-01-15
+---
+
+# Long Form Dispatch
+
+Enough text that the page's total scrollHeight clears a 900px viewport by
+well over the 400px the gate scrolls down before scrolling back up — nav-
+island.ts only reveals the island on a genuine upward scroll, so a page short
+enough that scrollTo(400) is a no-op never triggers it.
+
+Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+
+Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+
+Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo.
+
+## Section Two
+
+More text, so the sections popover has a second entry worth opening.
+
+Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt. Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur, adipisci velit.
+
+Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam nihil molestiae consequatur.
+
+## Section Three
+
+nav-island.ts (\`It()\`) only builds the sections list from the first heading
+LEVEL that has two or more IDs, and the page's own \`# Long Form Dispatch\`
+title is not one of them — a single \`##\` here reads as a one-entry contents
+table and the island suppresses itself (\`r.length < 2\`, removing
+\`data-shown\` outright rather than ever setting it \`false\`). A third section
+is what makes this fixture's island show at all.
+
+Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo.
+`,
+    ".moss/config.toml": `schema_version = 5
+
+[site]
+lang = "en"
+search = true
+floating_nav = true
+`,
+    ".moss/theme/style.css": null,
+  },
+};
+
 // ── Grid mobile collapse + grid-cell image parity ────────────────────────────
 // Three grids on one page, each answering a question only a laid-out engine
 // can answer:
@@ -1902,3 +2022,59 @@ ${parityFiller(3)}
     ".moss/theme/style.css": null,
   },
 };
+
+// ── Lightbox close/nav ring, GitHub link shape ───────────────────────────────
+// Two controls the first chrome-state audit's fixture never exercised:
+//
+//   - `.lightbox-close`/`.lightbox-nav` had no `:focus-visible` rule of
+//     their own and fell back to the browser default — a bulky
+//     rounded-rectangle box (measured in Chrome) around a bare glyph with no
+//     background or radius of its own, nothing else in the lightbox's own
+//     chrome language. Reaching it needs the real keyboard path: a media
+//     item is a `tabindex="0"` `<figure>`, Enter opens it, and Tab from
+//     there reaches the close button — a mouse click anywhere first (the
+//     obvious shortcut) flips the page's input-modality heuristic and makes
+//     every focus after it, even a programmatic one, resolve `:focus-visible`
+//     false, which is a false negative about the control, not a finding
+//     about it.
+//   - `.github-link` carried no `border-radius`, so its hover fill painted a
+//     hard-cornered square card behind a mark that reads as a circle (the
+//     octocat glyph a real site supplies, mirrored here with a plain
+//     placeholder circle so the fixture carries no third-party mark) — the
+//     state-region-does-not-match-the-control-shape bug this whole audit
+//     was written to catch, on the one header control moss ships as CSS
+//     only (grep confirms no Rust call site emits `.github-link`; a real
+//     site opts in with its own raw HTML, which is what this fixture does).
+//
+// Video-collection marker: an `<video>` embed immediately followed by
+// `<!-- video-meta -->` becomes a media-collection page's own lightbox
+// (media_collection.rs) — `videos/index.html`, served by
+// playwright/lightbox-github-shapes.config.ts.
+export function lightboxGithubShapesGate(): ScratchSiteSpec {
+  return {
+    name: "lightbox-github-shapes-gate",
+    files: {
+      "clip.mp4": syntheticTestClip(640, 360),
+      "index.md": `---
+title: Lightbox GitHub Shapes Gate
+uid: "lgs001a"
+---
+
+# Lightbox / GitHub Link Shapes
+
+A clip for the media-collection lightbox.
+
+![[clip.mp4]]
+<!-- video-meta: dispatch -->
+
+A placeholder mark standing in for a real site's own GitHub logo — round,
+so a square hover fill or focus ring behind it is the bug this gate exists
+to catch.
+
+<a class="github-link" href="https://example.org/repo" aria-label="Project repository"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="9" fill="currentColor"/></svg></a>
+`,
+      ".moss/config.toml": CONFIG_TOML,
+      ".moss/theme/style.css": null,
+    },
+  };
+}

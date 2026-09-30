@@ -40,6 +40,7 @@
    --------------------------------------------------------------------------- */
 
 .nav-search-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -63,6 +64,28 @@
 }
 .nav-search-btn:focus { outline: none; }
 .nav-search-btn:focus-visible { outline: 2px solid var(--moss-color-ui-accent); outline-offset: 2px; }
+
+/* Invisible 44px hit area, no change to the 36px visible pill. .nav-search-btn
+   is the FIRST of the three .nav-icons toggles (search, language, theme) —
+   its own inline-start is free (the group's edge) but its inline-end faces
+   .nav-lang-toggle (or .nav-theme-btn directly, on a single-language site)
+   across the cluster's fixed 4px gap, split with that neighbour's own
+   expansion (site.css, .nav-theme-btn::before) so the two never overlap.
+   Logical, not left/right: site.css's vertical.css rotates this row to run
+   top-to-bottom under vertical typesetting, and inline-start/end still names
+   the right edge either way. */
+.nav-search-btn::before {
+  /* Not folded into site.css's shared `content`/`position` selector even
+     though the other four hit areas are: `search` is a gated partial, and
+     letting core style a `.nav-search-btn*` selector would trip
+     stylesheet_tests::a_partial_only_styles_elements_it_owns, which exists
+     to stop exactly that — appending this partial after core changing which
+     rule wins for a class core also touches. Kept self-contained instead. */
+  content: "";
+  position: absolute;
+  inset-block: -4px;
+  inset-inline: -4px -2px;
+}
 
 .search-icon {
   display: block;

@@ -2276,6 +2276,7 @@ header:has(+ .moss-hero) .main-nav {
    must not differ in height or in resting weight — a bare glyph beside a
    filled disc reads as two unrelated things. */
 .nav-theme-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2296,8 +2297,49 @@ header:has(+ .moss-hero) .main-nav {
   color: var(--moss-color-ui-accent);
   background: color-mix(in srgb, var(--moss-color-ui-accent) 8%, var(--moss-color-surface));
 }
-.nav-theme-btn:focus { outline: none; }
-.nav-theme-btn:focus-visible { outline: 2px solid var(--moss-color-ui-accent); outline-offset: 2px; }
+.nav-theme-btn:focus,
+.font-trigger:focus,
+.font-pill button:focus,
+.github-link:focus { outline: none; }
+.nav-theme-btn:focus-visible,
+.font-trigger:focus-visible,
+.font-pill button:focus-visible,
+.github-link:focus-visible { outline: 2px solid var(--moss-color-ui-accent); outline-offset: 2px; }
+
+/* Every CORE header control's invisible hit area is the same two
+   declarations plus its own `inset` — content/position live once here, and
+   the other three insets follow this one below. `.nav-search-btn::before`
+   (search.css) can't join this group: `search` is a gated partial, and
+   `stylesheet_tests::a_partial_only_styles_elements_it_owns` enforces that
+   core never styles a selector a partial also styles, or appending the
+   partial could change which rule wins — that guard doesn't know a pseudo-
+   element variant is "the same enough" to fold, only that `.nav-search-btn`
+   would stop being a token unique to the partial. It keeps its own,
+   identical two lines instead. */
+.nav-theme-btn::before,
+.nav-lang-link::before,
+.moss-nav-island-sections::before,
+.font-trigger::before,
+.mobile-menu-button::before {
+  content: "";
+  position: absolute;
+}
+
+/* Invisible 44px hit area, no change to the 36px visible pill. .nav-theme-btn
+   is the LAST of the three .nav-icons toggles (search, language, theme — see
+   the cluster-order test) — its own inline-end is free (the group's edge, out
+   toward the container padding) but its inline-start faces .nav-lang-toggle
+   (or, on a single-language site, .nav-search-btn directly) across the
+   cluster's fixed 4px gap. Both of that gap's occupants ask for hit-area
+   here, so it is split down the middle — 2px in, not the 4px a lone edge
+   gets — or the two expansions would overlap by design. Logical (not
+   left/right) because vertical.css rotates this row so the "row" runs
+   top-to-bottom instead: inline-start/end tracks whichever physical edge
+   that actually is. */
+.nav-theme-btn::before {
+  inset-block: -4px;
+  inset-inline: -2px -4px;
+}
 
 
 /* Theme toggle — "classic" animated SVG (https://toggles.dev/classic) */
@@ -2372,6 +2414,7 @@ header:has(+ .moss-hero) .main-nav {
 }
 
 .nav-lang-link {
+  position: relative;
   color: var(--moss-color-text-secondary);
   text-decoration: none;
 }
@@ -2390,6 +2433,32 @@ header:has(+ .moss-hero) .main-nav {
 .nav-lang-link:focus-visible {
   outline: 2px solid var(--moss-color-ui-accent);
   outline-offset: 2px;
+}
+
+/* Invisible 44px hit area. `.nav-lang-link` (the other-language glyph, e.g.
+   "简") is the smallest control in the cluster — 13x22.75px at the default
+   reading size — so both axes need reach, and unlike the other four
+   controls the reach can stay entirely inside `.nav-lang-toggle`'s own
+   58.5x36px box, never touching the shared .nav-icons gaps its neighbours
+   reach into — so neither `.nav-search-btn`'s nor `.nav-theme-btn`'s own
+   inset needs to change for this case, and this rule cannot overlap either
+   one regardless of what they claim.
+
+   Block: `.nav-lang-toggle` is the same 36px tall box as its two button
+   siblings, and `.nav-lang-link` sits centered inside it (6.625px of
+   clearance above and below, half of 36 - 22.75) — -10.625px reaches
+   4px beyond the TOGGLE's own edge, matching how far the siblings' own
+   -4px reaches beyond their identical 36px box.
+
+   Inline is asymmetric because `.nav-lang-link` is the toggle's LAST
+   child. Inline-start crosses `.nav-lang-current` ("EN") and the " / "
+   separator — both inert text, safe to cover — using 35 of the ~37.5px
+   between this link and the toggle's own start edge, well clear of it.
+   Inline-end has far less room before the toggle's own end edge (8px) and
+   needs far less: 7px, through the toggle's own end-padding alone. */
+.nav-lang-link::before {
+  inset-block: -10.625px;
+  inset-inline: -35px -7px;
 }
 
 /* Article Header */
@@ -2743,6 +2812,27 @@ article .moss-place-map-frame:is(.moss-align-left, .moss-align-right):not([data-
 .font-trigger:hover { color: var(--moss-color-text); }
 .font-trigger.hidden { opacity: 0; pointer-events: none; }
 
+/* Invisible 44px hit area over the ~41×29px pill. `.font-trigger` already
+   uses `::after` for its 'Aa'/'字' glyph (below), so the hit area is a
+   `::before` instead — it would otherwise clobber the glyph's `content`.
+   The short axis (height) needs the reach; the trigger sits centered in
+   `.date-line`'s row with 24px clear to the heading above and well over
+   100px to the first paragraph below, so -8px block is well inside that
+   margin. The long axis (width) is already close to 44px, and the space
+   `.font-anchor` reserves for the OPEN pill sits empty on the inline-end
+   side whenever the trigger itself is showing, so -4px inline costs
+   nothing there either. Inline-start reaches toward `.date` — the previous
+   flex item in `.date-line` — but only across part of `.font-anchor`'s own
+   `margin-inline-start: 0.75em` gap to it (13.5px at the anchor's fixed
+   1.125rem font-size): -4px spends under a third of that margin, leaving
+   roughly 9.5px still clear of the date text. When the pill opens, `.hidden`
+   drops this button's
+   `pointer-events` (above) along with everything else on it. */
+.font-trigger::before {
+  inset-block: -8px;
+  inset-inline: -4px;
+}
+
 /* Every size option lives in the same place regardless of which is active
    — see the "Morphing font control" comment above for why. */
 .font-pill {
@@ -2833,7 +2923,13 @@ html.scale-small  { --moss-reading-step: 0.89; }
 html.scale-large  { --moss-reading-step: 1.12; }
 html.scale-xlarge { --moss-reading-step: 1.25; }
 
-/* GitHub Link */
+/* GitHub Link. The mark it carries (an author's own <svg>/<img>, not
+   something moss draws) reads as a circle — GitHub's own octocat glyph does
+   — so the hover fill needs a radius or it paints a square card around a
+   round mark, the state-region-doesn't-match-the-control bug this family of
+   icon buttons exists to avoid everywhere else (.nav-theme-btn and
+   .nav-search-btn two sections up carry the same 18px on a similar small
+   box). */
 .github-link {
   display: inline-flex;
   align-items: center;
@@ -2841,7 +2937,14 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
   padding: 0.375rem;
   color: var(--moss-color-text-secondary);
   border-bottom: none;
-  transition: all 0.2s ease;
+  border-radius: 18px;
+  /* Named properties, not `all`: `all` was also animating `outline-color`/
+     `-width`/`-offset` on focus, which meant a keyboard user's first frame
+     after Tab read the CSS initial outline (currentColor, the browser's
+     ~3px "medium", 0 offset) and only eased into the real 2px accent ring
+     over the next 200ms — the one header control whose ring didn't snap in
+     immediately like every sibling's. */
+  transition: color 0.2s, background-color 0.2s;
 }
 
 .github-link:hover {
@@ -2855,6 +2958,7 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
 
 /* Mobile Menu Button */
 .mobile-menu-button {
+  position: relative;
   display: none;
   background: none;
   border: none;
@@ -2867,6 +2971,16 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
 .mobile-menu-button:hover {
   background: var(--moss-color-surface);
   color: var(--moss-color-text);
+}
+
+/* Invisible 44px hit area over the 32px icon. Only ever shown below the
+   20rem hamburger breakpoint (below), where it sits at least 24px from both
+   .nav-left and .nav-icons (the row's own `gap: var(--moss-space-md)`), so a
+   uniform -6px never reaches a neighbour. Vertical typesetting drops this
+   button entirely (site/vertical.css), so there is no rotated-row case to
+   split for. */
+.mobile-menu-button::before {
+  inset: -6px;
 }
 
 .mobile-menu-button svg {
@@ -3114,6 +3228,7 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
 }
 
 .moss-nav-island-sections {
+  position: relative;
   background: none;
   border: 0;
   padding: 6px;
@@ -3123,6 +3238,15 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
   display: grid;
   place-items: center;
   font-size: var(--moss-size-lg);
+}
+
+/* Invisible 44px hit area over the 32px icon. .moss-nav-island-actions holds
+   this button alone (no neighbour to split with), and the bar's own
+   min-height: 2.75rem (44px, see .moss-nav-island-bar) plus its 6px/8px
+   padding both measure out to exactly 6px of slack around the icon on every
+   side, so a uniform -6px reaches 44px without crossing the bar's own edge. */
+.moss-nav-island-sections::before {
+  inset: -6px;
 }
 
 .moss-nav-island-sections:hover,
@@ -3228,6 +3352,12 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
   height: 2px;
   border-radius: 2px;
   overflow: hidden;
+  /* Decorative only — no click handler ever reads it — but it sits right
+     across .moss-nav-island-sections's bottom edge, and without this it
+     wins that button's expanded hit area (below) for any point in its
+     bottom couple of pixels, exactly the "decorative element swallows a
+     control's click" case. */
+  pointer-events: none;
 }
 
 .moss-nav-island-progress-fill {
@@ -7233,10 +7363,30 @@ main.has-sidebar > .moss-series-nav {
   text-decoration: underline;
 }
 
+/* 48x48 — a square, not the glyph's own narrow inline box (34.7px on this
+   "×" in Chrome, 35.75px in WebKit; the height was already 48 thanks to the
+   explicit line-height:1 below). `display:flex` centering means the glyph
+   lands at the box's own geometric center regardless of engine-specific
+   advance width, so the box can be resized freely; only the POSITION needs
+   to compensate, because `right`/`top` anchor an EDGE, and widening the box
+   from ~35px to 48px while keeping that edge fixed would drag the glyph
+   ~6.5px off its old spot. `right` below is nudged by (old avg width 35.22
+   - new 48) / 2 = -6.39px so the box's new center lands where the old one
+   was (measured, then verified within 1px in Chrome and WebKit at both
+   1440px and 390px — see header-hit-areas... lightbox-github-shapes.spec.ts).
+   `top` needs no such nudge: the old height (48) equals the new one, so the
+   existing top offset already puts the new center where the old one was. */
 .lightbox-close {
   position: absolute;
   top: var(--moss-space-md);
-  right: var(--moss-space-md);
+  right: calc(var(--moss-space-md) - 6.390625px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  box-sizing: border-box;
+  border-radius: 50%;
   background: none;
   border: none;
   color: #fff;
@@ -7245,17 +7395,33 @@ main.has-sidebar > .moss-series-nav {
   opacity: 0.7;
   transition: opacity 0.2s;
   line-height: 1;
-  padding: var(--moss-space-xs);
 }
 
 .lightbox-close:hover {
   opacity: 1;
 }
 
+/* Same 48x48 square and the same reasoning as .lightbox-close above, but
+   both axes need the position nudge here: .lightbox-nav's old box (padding
+   alone, no fixed size) measured ~61-64px wide and ~93-95px tall — already
+   past 44px on both axes, just not SQUARE, which is the actual bug (a
+   200:305 aspect box with border-radius:50% draws an oval). Vertical needs
+   no nudge regardless: `top:50%` + `translateY(-50%)` centers on the
+   lightbox's own mid-height however tall this box is. Horizontal is nudged
+   the same way as .lightbox-close, using each glyph's own measured old
+   width (avg ~62.9px for "‹"/"›" in Chrome/WebKit): (62.9 - 48) / 2 =
+   7.45px, added inward on .lightbox-prev/.lightbox-next below. */
 .lightbox-nav {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  box-sizing: border-box;
+  border-radius: 50%;
   background: none;
   border: none;
   color: #fff;
@@ -7263,19 +7429,37 @@ main.has-sidebar > .moss-series-nav {
   cursor: pointer;
   opacity: 0.7;
   transition: opacity 0.2s;
-  padding: var(--moss-space-md);
 }
 
 .lightbox-nav:hover {
   opacity: 1;
 }
 
+/* Neither button carries a background at rest, so with no rule of its own
+   each fell back to the browser's default focus ring — before the square
+   box above, a bulky rounded-rectangle far larger than the bare glyph it
+   surrounded, and the one shape in the whole lightbox nothing here drew on
+   purpose; now that each button's own box is a true 48px circle, `outline`
+   (which follows `border-radius`) draws a round ring on that circle
+   directly — no separate pseudo-element needed. White, not
+   `--moss-color-ui-accent`: this overlay is `rgba(0,0,0,0.95)` regardless
+   of site theme, the same reasoning the immersive iframe's own
+   fullscreen/new-window buttons (also chrome floating over unpredictable
+   dark content) already used for their ring. */
+.lightbox-close:focus,
+.lightbox-nav:focus { outline: none; }
+.lightbox-close:focus-visible,
+.lightbox-nav:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.6);
+  outline-offset: 2px;
+}
+
 .lightbox-prev {
-  left: var(--moss-space-sm);
+  left: calc(var(--moss-space-sm) + 7.449px);
 }
 
 .lightbox-next {
-  right: var(--moss-space-sm);
+  right: calc(var(--moss-space-sm) + 7.449px);
 }
 
 /* Video figure styling */
