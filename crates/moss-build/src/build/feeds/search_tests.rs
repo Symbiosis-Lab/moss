@@ -260,6 +260,30 @@ fn in_memory_bundle_matches_the_scratch_copy_bundle() {
     );
 }
 
+/// An edit re-segments only the page it touched; every other page replays its
+/// segmentation from the previous build, and the bundle is exactly what a
+/// cold build of the edited tree produces.
+#[test]
+fn an_edit_resegments_only_the_page_that_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    write_bilingual_site(dir.path());
+    let _serialize = lock_index_counter();
+    clear_segment_cache();
+    build_search_index(dir.path()).expect("index should build");
+    assert_eq!(last_index_timing().unwrap().resegmented, SITE_PAGES, "a cold build segments every page");
+
+    let edited = dir.path().join("posts/hello/index.html");
+    let html = std::fs::read_to_string(&edited).unwrap();
+    std::fs::write(&edited, html.replace("</p>", "這是新增的一句話。</p>")).unwrap();
+    let warm = build_search_index(dir.path()).expect("index should build");
+    assert_eq!(last_index_timing().unwrap().resegmented, 1, "only the edited page is segmented again");
+
+    clear_segment_cache();
+    let cold = build_search_index(dir.path()).expect("index should build");
+    assert_eq!(warm.pages, SITE_PAGES);
+    assert_same_bundle(&warm, &cold, "cold build of the edited tree");
+}
+
 /// A newer request arriving while pages are being handed to Pagefind stops the
 /// pass before the next page, rather than after the whole corpus is parsed.
 /// Pagefind parses one page at a time, so that phase is long enough to matter.

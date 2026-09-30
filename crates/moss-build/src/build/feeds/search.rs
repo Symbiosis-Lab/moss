@@ -69,9 +69,10 @@
 //! skipped so code samples and URLs are not corrupted.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use jieba_rs::Jieba;
 use lol_html::html_content::ContentType;
@@ -132,6 +133,8 @@ const SKIP_TEXT_IN: &str = "script,style,code,pre";
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IndexTiming {
     pub pages: usize,
+    /// Pages segmented afresh; every other page replayed [`SEGMENTED`].
+    pub resegmented: usize,
     pub segment_ms: u128,
     pub fossick_ms: u128,
     /// `get_files()` end to end: `build_indexes()` + `write_files_to_memory()`.
@@ -177,6 +180,27 @@ pub(crate) fn lock_index_counter() -> std::sync::MutexGuard<'static, ()> {
 /// one that no per-page cache could ever collapse. It is immutable and `Sync`,
 /// so the segmentation threads share this one.
 static JIEBA: LazyLock<Jieba> = LazyLock::new(Jieba::new);
+
+/// The segmented HTML of every page the most recent index build read, keyed
+/// by the xxh3-128 of the page bytes it was made from.
+///
+/// Segmentation is a pure function of those bytes (the dictionary is
+/// static), so a page that did not change replays its previous output instead
+/// of paying for jieba and a rewrite pass again — on a one-page edit, every
+/// page but one. Keyed by content rather than path, so a hit is sound whatever
+/// tree, generation or folder the bytes were read from.
+///
+/// In-process only, like `build::parse_cache`: the saving exists only in a
+/// long-lived process that re-indexes as the author edits. Each build replaces
+/// the map with exactly the pages it read, so it never holds more than one
+/// corpus; two folders indexed in turn simply miss.
+///
+/// The cost is that corpus, segmented, kept for the life of the process:
+/// 12.3 MiB for a 473-page bilingual site (logged at debug level after every
+/// build). A build adds little on top: its pages share these allocations, a
+/// changed page's old entry is dropped before segmentation starts, and each
+/// page is copied once, one at a time, as Pagefind takes it.
+static SEGMENTED: LazyLock<Mutex<HashMap<u128, Arc<str>>>> = LazyLock::new(Default::default);
 
 /// True for the Han ranges jieba is trained on. Kana and Hangul are
 /// deliberately absent — see the module docs.
@@ -303,7 +327,9 @@ struct SegmentedPage {
     /// exactly as it does for a file it walked to itself, so
     /// `posts/hello/index.html` is still reported as `/posts/hello/`.
     rel_path: String,
-    html: String,
+    /// Content key of the page's unsegmented bytes (see [`SEGMENTED`]).
+    key: u128,
+    html: Arc<str>,
 }
 
 /// Read every `.html` page under `site_dir` and segment it, in walk order.
@@ -329,43 +355,88 @@ struct SegmentedPage {
 /// bundle covers fewer pages than the tree, and only the caller can decide
 /// whether that is publishable.
 ///
-/// The per-page work runs on rayon's global pool, like the markdown-parse and
+/// Pages whose bytes are unchanged since the previous build replay their
+/// segmentation from [`SEGMENTED`]; the third value is how many did not.
+///
+/// Segmentation runs on rayon's global pool, like the markdown-parse and
 /// HTML-render loops in `render/blocking.rs`. It runs to completion *before*
 /// Pagefind is handed the pages, so the two never contend for the pool. Keep
 /// them sequential phases — see `scan/scan.rs` and `media/image.rs`, which
 /// both carry scars from nesting.
-fn segment_pages(site_dir: &Path) -> (Vec<SegmentedPage>, usize) {
-    // Walking is I/O-bound and cheap; collect first so the expensive part
-    // (read → segment, dominated by jieba) is what gets parallelised.
-    let paths: Vec<std::path::PathBuf> = walkdir::WalkDir::new(site_dir)
-        .sort_by_file_name()
+fn segment_pages(site_dir: &Path) -> (Vec<SegmentedPage>, usize, usize) {
+    /// One walked page on its way to Pagefind.
+    enum Slot {
+        Ready(SegmentedPage),
+        Unsegmented { rel_path: String, key: u128, source: String },
+        Skipped,
+    }
+
+    // Taken, not locked for the pass: a concurrent index build finds the map
+    // empty and misses, which costs time and never correctness.
+    let prior = std::mem::take(&mut *SEGMENTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+
+    // Read and key every page on this thread, replaying the ones the cache
+    // has. After an edit that is every page but one, and fanning ~500 small
+    // reads out over the pool cost several times their own CPU in worker
+    // wake-ups and contention.
+    let walk = walkdir::WalkDir::new(site_dir).sort_by_file_name().into_iter().filter_map(Result::ok);
+    let mut slots: Vec<Slot> = walk
+        .filter(|e| e.file_type().is_file() && e.path().extension().and_then(|x| x.to_str()) == Some("html"))
+        .map(|entry| {
+            let Ok(rel) = entry.path().strip_prefix(site_dir) else {
+                return Slot::Skipped;
+            };
+            let source = match std::fs::read_to_string(entry.path()) {
+                Ok(source) => source,
+                Err(e) => {
+                    log::warn!(target: "search", "skipping {:?} for search index: {}", rel, e);
+                    return Slot::Skipped;
+                }
+            };
+            let key = xxhash_rust::xxh3::xxh3_128(source.as_bytes());
+            let rel_path = rel.to_string_lossy().into_owned();
+            match prior.get(&key) {
+                Some(html) => Slot::Ready(SegmentedPage { rel_path, key, html: Arc::clone(html) }),
+                None => Slot::Unsegmented { rel_path, key, source },
+            }
+        })
+        .collect();
+    drop(prior);
+
+    // Segment the rest in parallel — jieba is the expensive part.
+    let resegmented = slots.iter().filter(|s| matches!(s, Slot::Unsegmented { .. })).count();
+    slots.par_iter_mut().for_each(|slot| {
+        if !matches!(slot, Slot::Unsegmented { .. }) {
+            return;
+        }
+        let Slot::Unsegmented { rel_path, key, source } = std::mem::replace(slot, Slot::Skipped) else {
+            return;
+        };
+        match segment_html(&source, &JIEBA) {
+            Ok(html) => *slot = Slot::Ready(SegmentedPage { rel_path, key, html: html.into() }),
+            Err(e) => log::warn!(target: "search", "skipping {:?} for search index: {}", rel_path, e),
+        }
+    });
+
+    let skipped = slots.iter().filter(|s| matches!(s, Slot::Skipped)).count();
+    let pages: Vec<SegmentedPage> = slots
         .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| {
-            e.file_type().is_file()
-                && e.path().extension().and_then(|x| x.to_str()) == Some("html")
-        })
-        .map(|e| e.path().to_path_buf())
-        .collect();
-
-    // `collect` on an indexed parallel iterator keeps the walk order.
-    let segmented: Vec<Option<SegmentedPage>> = paths
-        .par_iter()
-        .map(|path| {
-            let rel = path.strip_prefix(site_dir).ok()?;
-            let html = std::fs::read_to_string(path)
-                .map_err(|e| log::warn!(target: "search", "skipping {:?} for search index: {}", rel, e))
-                .ok()?;
-            let html = segment_html(&html, &JIEBA)
-                .map_err(|e| log::warn!(target: "search", "skipping {:?} for search index: {}", rel, e))
-                .ok()?;
-            Some(SegmentedPage { rel_path: rel.to_string_lossy().into_owned(), html })
+        .filter_map(|slot| match slot {
+            Slot::Ready(page) => Some(page),
+            _ => None,
         })
         .collect();
+    let held: usize = pages.iter().map(|p| p.html.len()).sum();
+    log::debug!(target: "search", "segmentation cache: {} pages, {} KiB", pages.len(), held / 1024);
+    *SEGMENTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+        pages.iter().map(|p| (p.key, Arc::clone(&p.html))).collect();
+    (pages, skipped, resegmented)
+}
 
-    let pages: Vec<SegmentedPage> = segmented.into_iter().flatten().collect();
-    let skipped = paths.len() - pages.len();
-    (pages, skipped)
+/// Forget every cached segmentation, so the next index build is a cold one.
+#[cfg(test)]
+pub(crate) fn clear_segment_cache() {
+    SEGMENTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
 }
 
 /// Build a Pagefind index over a directory of rendered HTML and return the
@@ -411,7 +482,7 @@ pub fn build_search_index_cancellable(
     INDEX_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     let t_segment = std::time::Instant::now();
-    let (pages, skipped) = segment_pages(site_dir);
+    let (pages, skipped, resegmented) = segment_pages(site_dir);
     let readable = pages.len();
     let segment_ms = t_segment.elapsed().as_millis();
     if cancelled() {
@@ -451,7 +522,7 @@ pub fn build_search_index_cancellable(
                     if cancelled() {
                         return Ok(None);
                     }
-                    match index.add_html_file(Some(page.rel_path), None, page.html).await {
+                    match index.add_html_file(Some(page.rel_path), None, page.html.to_string()).await {
                         Ok(_) => page_count += 1,
                         Err(e) => log::warn!(target: "search", "search index skipped a page: {}", e),
                     }
@@ -492,14 +563,16 @@ pub fn build_search_index_cancellable(
 
                 let timing = IndexTiming {
                     pages: page_count,
+                    resegmented,
                     segment_ms,
                     fossick_ms,
                     emit_bundle_ms: t_build.elapsed().as_millis(),
                 };
                 log::info!(
                     target: "timing",
-                    "[search] {} pages: segment {}ms, fossick {}ms, emit_bundle {}ms (index build + gzip)",
+                    "[search] {} pages ({} resegmented): segment {}ms, fossick {}ms, emit_bundle {}ms (index build + gzip)",
                     timing.pages,
+                    timing.resegmented,
                     timing.segment_ms,
                     timing.fossick_ms,
                     timing.emit_bundle_ms,
