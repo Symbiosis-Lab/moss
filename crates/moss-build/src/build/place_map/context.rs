@@ -453,13 +453,6 @@ mod tests {
         assert!(!html.contains("data-map-locator-profile=\"exact-city\""));
     }
 
-    // CLI_PROBLEMS is a process-global static (see cli_output_tests.rs's own
-    // PROBLEMS_TEST_LOCK, which serializes ITS tests against each other for
-    // the same reason). This lock only protects this test against itself; a
-    // concurrent run of a cli_warn!/log_warn_problem! test in a different
-    // module is a pre-existing, accepted hazard this does not solve.
-    static OVERSIZED_WARN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// The safety ceiling stops an oversized locator from shipping, and
     /// dropping it must not be silent: the page has to name itself in a
     /// warning an agent or a --strict build can see. Real geometry no longer
@@ -470,7 +463,6 @@ mod tests {
     #[test]
     fn oversized_locator_is_dropped_with_a_warning_not_silently() {
         const LONG_NAME: usize = super::super::LOCATOR_RAW_SAFETY_LIMIT;
-        let _guard = OVERSIZED_WARN_LOCK.lock().unwrap();
         let table: toml::value::Table = toml::from_str(
             &format!("[\"{}\"]\nlat = 62.0\nlng = 6.0\nprecision = \"city\"\n", "F".repeat(LONG_NAME)),
         )
@@ -483,7 +475,7 @@ mod tests {
             LocatorPlacement::AlignRight,
             BTreeMap::new(),
         );
-        crate::build::cli_output::take_cli_problems(); // drain any count left over from another test
+        crate::build::cli_output::take_cli_problems(); // count only what the render itself reports
         let result =
             context.render_locator(&["F".repeat(LONG_NAME)], "story/oversized.html", 0);
         assert!(result.is_none(), "an oversized locator must be dropped, not shipped");

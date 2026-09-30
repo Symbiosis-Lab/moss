@@ -54,20 +54,43 @@ pub use crate::cli_eprintln;
 /// the only thing that can tell [`print_cli_build_result`] whether the build it
 /// is about to summarize as "complete" actually had any. `Relaxed` is enough:
 /// this is a plain counter, not a synchronization point with other memory.
+#[cfg(not(test))]
 static CLI_PROBLEMS: AtomicUsize = AtomicUsize::new(0);
+
+// Unit tests count per thread instead. The test harness runs every test on its
+// own fresh thread, all in one process, and dozens of tests drive code that
+// logs an intended problem, so a process-wide count let one test's warning land
+// inside another test's assertion. Each counting test calls the code it checks
+// on its own thread, so its thread's count is exactly its own. The one blind
+// spot: a problem logged from a worker thread the test spawned (rayon,
+// `spawn_blocking`) is not seen by that test.
+#[cfg(test)]
+thread_local! {
+    static CLI_PROBLEMS: AtomicUsize = const { AtomicUsize::new(0) };
+}
+
+#[cfg(not(test))]
+fn with_problem_count<R>(f: impl FnOnce(&AtomicUsize) -> R) -> R {
+    f(&CLI_PROBLEMS)
+}
+
+#[cfg(test)]
+fn with_problem_count<R>(f: impl FnOnce(&AtomicUsize) -> R) -> R {
+    CLI_PROBLEMS.with(f)
+}
 
 /// Record that one CLI-visible problem line was printed. Called by
 /// [`cli_warn!`] and [`log_warn_problem!`] — never call this directly and
 /// print separately, or the count can drift from what was actually shown.
 pub fn note_cli_problem() {
-    CLI_PROBLEMS.fetch_add(1, Ordering::Relaxed);
+    with_problem_count(|n| n.fetch_add(1, Ordering::Relaxed));
 }
 
 /// Read and reset the problem count. `swap`, not `load`: each build (and each
 /// `--watch` rebuild) must start counting from zero, or problems from an
 /// earlier build would be double-reported in a later summary.
 pub fn take_cli_problems() -> usize {
-    CLI_PROBLEMS.swap(0, Ordering::Relaxed)
+    with_problem_count(|n| n.swap(0, Ordering::Relaxed))
 }
 
 /// Drop-in for `cli_eprintln!` at call sites that report a build *problem*

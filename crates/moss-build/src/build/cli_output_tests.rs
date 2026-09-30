@@ -1,6 +1,5 @@
 use super::*;
 use std::io::Write;
-use std::sync::Mutex;
 
 /// A writer that fails every operation with `BrokenPipe`, standing in for a
 /// stderr pipe whose reader has closed (`moss build | head`).
@@ -29,16 +28,8 @@ fn write_status_line_writes_formatted_line_to_healthy_sink() {
     assert_eq!(sink, b"Building website from: /x\n");
 }
 
-// CLI_PROBLEMS is a process-global static, so these tests must not run
-// concurrently with each other (or with anything else that calls
-// `cli_warn!`/`note_cli_problem`/`take_cli_problems`). Serialize with a
-// dedicated lock rather than relying on cargo test's default threading.
-static PROBLEMS_TEST_LOCK: Mutex<()> = Mutex::new(());
-
 #[test]
 fn cli_warn_increments_the_problem_counter() {
-    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
-    take_cli_problems(); // drain any count left over from another test
     cli_warn!("unknown shortcode: {}", "foo");
     cli_warn!("dangling link: {}", "bar");
     assert_eq!(take_cli_problems(), 2);
@@ -47,12 +38,9 @@ fn cli_warn_increments_the_problem_counter() {
 /// `link_terms_in_bylines`'s guard 6, first half: a name declared through
 /// two different fields (author: and editor:, both landing in one declared
 /// kind) still links exactly once from a byline row, but warns once too —
-/// this counter is the only thing that can see the warning actually fired,
-/// since `terms.rs`'s own tests can't take `PROBLEMS_TEST_LOCK`.
+/// this counter is the only thing that can see the warning actually fired.
 #[test]
 fn duplicate_name_in_one_row_warns() {
-    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
-    take_cli_problems();
     let kinds = vec![crate::build::terms::TermKind {
         key: "people".to_string(),
         fields: vec!["author".to_string(), "editor".to_string()],
@@ -76,15 +64,13 @@ fn duplicate_name_in_one_row_warns() {
     );
 }
 
-/// Task A8: confirms `vault::places::parse_gazetteer`'s diagnostics go
+/// Confirms `vault::places::parse_gazetteer`'s diagnostics go
 /// through `log_warn_problem!`, the CLI-visible macro, not a bare
 /// `log::warn!` — so a malformed `.moss/places.toml` entry counts toward
 /// `--strict`'s exit code, the same guarantee every other build diagnostic
 /// carries.
 #[test]
 fn gazetteer_diagnostics_count_as_cli_problems() {
-    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
-    take_cli_problems();
     let table: toml::value::Table = toml::from_str(
         "[\"Osaka\"]\nlat = 34.6937\nprecision = \"city\"\n\n[\"Nara\"]\nlat = 34.6851\nlng = 135.8048\nprecision = \"neighborhood\"\n",
     )
@@ -99,14 +85,12 @@ fn gazetteer_diagnostics_count_as_cli_problems() {
     assert_eq!(gaz.get("Nara").unwrap().precision, crate::vault::places::Precision::Country);
 }
 
-/// Task A6: every remaining `log::warn!` in `derive_terms`/`claimed_key`
+/// Every remaining `log::warn!` in `derive_terms`/`claimed_key`
 /// renamed to `log_warn_problem!`, so a claimed term with no member pages
 /// (a likely typo between the claim and the name authors actually wrote)
 /// counts toward `--strict`'s exit code, not just the log stream.
 #[test]
 fn unclaimed_typo_diagnostic_counts_as_a_cli_problem() {
-    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
-    take_cli_problems();
     let kinds = vec![crate::build::terms::TermKind {
         key: "authors".to_string(),
         fields: vec!["author".to_string()],
@@ -128,8 +112,6 @@ fn unclaimed_typo_diagnostic_counts_as_a_cli_problem() {
 /// guard exists for.
 #[test]
 fn declared_name_absent_from_any_byline_row_warns() {
-    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
-    take_cli_problems();
     let kinds = vec![crate::build::terms::TermKind {
         key: "authors".to_string(),
         fields: vec!["author".to_string()],
@@ -160,8 +142,6 @@ fn declared_name_absent_from_any_byline_row_warns() {
 /// count does NOT grow to 2.
 #[test]
 fn place_names_never_warn_or_link_in_bylines() {
-    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
-    take_cli_problems();
     let kinds = vec![
         crate::build::terms::TermKind {
             key: "authors".to_string(),
@@ -207,8 +187,6 @@ fn place_names_never_warn_or_link_in_bylines() {
 /// literal "Kyoto" sitting right next to a linked name stays plain text.
 #[test]
 fn place_name_present_in_a_byline_row_is_left_unlinked() {
-    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
-    take_cli_problems();
     let kinds = vec![
         crate::build::terms::TermKind {
             key: "authors".to_string(),
@@ -247,8 +225,6 @@ fn place_name_present_in_a_byline_row_is_left_unlinked() {
 #[test]
 fn carrier_reporter_counts_a_plugin_needing_connection() {
     use crate::build::ports::reporter::BuildReporter;
-    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
-    take_cli_problems();
     crate::ops::serve::events::CarrierReporter.report(
         &crate::build::progress::PipelineEvent::PluginNeedsConnection {
             plugin: "matters".into(),
@@ -265,8 +241,6 @@ fn carrier_reporter_counts_a_plugin_needing_connection() {
 /// 100ms) exercises the real `Drop` path, not just the pure classifier.
 #[test]
 fn phase_budget_overrun_does_not_count_as_a_cli_problem() {
-    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
-    take_cli_problems();
     {
         let _p = crate::build::phase::PhaseTrace::start("native_process_spawn");
         std::thread::sleep(std::time::Duration::from_millis(250)); // > 2x the 100ms budget
@@ -278,10 +252,18 @@ fn phase_budget_overrun_does_not_count_as_a_cli_problem() {
     );
 }
 
+/// Tests run on parallel threads of one process, and dozens of them drive code
+/// that logs an intended problem. A problem logged on another thread must not
+/// reach this thread's count, or one test's warning lands inside another
+/// test's assertion and fails it at random.
+#[test]
+fn a_problem_logged_on_another_thread_is_not_counted_here() {
+    std::thread::spawn(|| cli_warn!("a problem a concurrent test logged")).join().unwrap();
+    assert_eq!(take_cli_problems(), 0, "another thread's problem leaked into this test's count");
+}
+
 #[test]
 fn take_cli_problems_resets_to_zero() {
-    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
-    take_cli_problems(); // drain any count left over from another test
     cli_warn!("one problem");
     assert_eq!(take_cli_problems(), 1, "first read sees the problem");
     assert_eq!(take_cli_problems(), 0, "second read starts clean, as --watch needs");
@@ -289,8 +271,6 @@ fn take_cli_problems_resets_to_zero() {
 
 #[test]
 fn build_result_summary_is_silent_at_zero_problems() {
-    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
-    take_cli_problems(); // ensure a clean slate before asserting on the count
     assert_eq!(take_cli_problems(), 0, "no problems were reported");
     // A clean build stays silent on BOTH paths — including under --strict,
     // where a spurious summary would be the loudest possible false alarm.
@@ -332,9 +312,6 @@ fn strict_summary_says_why_the_build_is_failing() {
 /// the counter is empty behind it.
 #[test]
 fn build_result_returns_the_count_it_drained() {
-    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
-    take_cli_problems(); // clean slate
-
     cli_warn!("[warn] a retired class");
     cli_warn!("[warn] a foreign frontmatter key");
 
@@ -363,9 +340,6 @@ fn build_result_returns_the_count_it_drained() {
 /// redirect after it in the file.
 #[test]
 fn a_redirect_entry_with_a_leading_slash_counts_as_a_cli_problem() {
-    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
-    take_cli_problems();
-
     let test_tmp = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -429,9 +403,6 @@ fn a_redirect_entry_with_a_leading_slash_counts_as_a_cli_problem() {
 /// unattributed lines with one an author can act on.
 #[test]
 fn a_favicon_with_an_embedded_bitmap_is_one_counted_problem() {
-    let _guard = PROBLEMS_TEST_LOCK.lock().unwrap();
-    take_cli_problems();
-
     let dir = tempfile::tempdir().unwrap();
     let svg_path = dir.path().join("favicon.svg");
     std::fs::write(
