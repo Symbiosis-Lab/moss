@@ -352,9 +352,9 @@ fn print_usage() {
     eprintln!("against the page cap. On filename collisions between two distinct pages,");
     eprintln!("the new file is renamed `name 2.md`, `name 3.md`, etc.");
     eprintln!();
-    eprintln!("The vault copy is canonical; the source URL is recorded in `syndicated`");
-    eprintln!("frontmatter (POSSE), the same field that lets a syndicated comment link");
-    eprintln!("back to its origin. Import is for content you have the right to republish.");
+    eprintln!("The vault copy is canonical; the source URL is recorded in `origin`");
+    eprintln!("frontmatter as provenance, not as a claim that the content also lives");
+    eprintln!("there. Import is for content you have the right to republish.");
     eprintln!();
     eprintln!("Exit codes: 0 every page imported cleanly; 1 nothing was imported at all;");
     eprintln!("2 partial — some pages failed, or a recursive crawl was stopped early by");

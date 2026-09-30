@@ -158,10 +158,10 @@ fn compose_note(
         return None;
     }
 
-    // No "Originally published at …" attribution: an import is the user's own
-    // content (POSSE), so the vault copy is canonical and the source is
-    // recorded as a `syndicated` mirror in frontmatter, not as a linkblog
-    // banner implying the outlet is the origin.
+    // No "Originally published at …" attribution: the vault copy is
+    // canonical, and the source is recorded as `origin` frontmatter
+    // (provenance) rather than a linkblog banner implying the fetched page
+    // is still where the content lives.
     let frontmatter = generate_frontmatter(&article.metadata, source_url);
     Some(format!("{}{}", frontmatter, markdown))
 }
@@ -515,7 +515,7 @@ where
 /// Unlike [`scrape_to_folder`], nothing is fetched over the network. For an
 /// MHTML archive the original page URL and every embedded asset come straight
 /// out of the file; the archive's `Snapshot-Content-Location` becomes the
-/// `syndicated` source. This is the local-file arm of `moss import`, letting
+/// `origin` frontmatter. This is the local-file arm of `moss import`, letting
 /// the user bring in a page they saved from a login-gated or JS-heavy site
 /// (e.g. a douban note saved via "Save Page As").
 pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<ScrapeResult, String> {
@@ -567,8 +567,9 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
         )
     };
 
-    // The archived page URL is a syndication mirror (query/fragment stripped so
-    // tracking params don't leak into frontmatter). Empty when unknown.
+    // The archived page URL becomes the `origin` provenance field
+    // (query/fragment stripped so tracking params don't leak into
+    // frontmatter). Empty when unknown.
     let source_clean = source_url.as_deref().map(strip_query).unwrap_or_default();
     let base_for_urls = source_url.as_deref().unwrap_or("");
 
@@ -653,7 +654,7 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
 }
 
 /// Strip query + fragment from a URL, leaving a clean canonical form for the
-/// `syndicated` frontmatter. Falls back to the input if it doesn't parse.
+/// `origin` frontmatter. Falls back to the input if it doesn't parse.
 fn strip_query(url: &str) -> String {
     match url::Url::parse(url) {
         Ok(mut u) => {
@@ -1055,10 +1056,10 @@ mod tests {
 
     /// End-to-end local import: an MHTML douban-note archive becomes a markdown
     /// note whose body is the note (not douban chrome), whose embedded image is
-    /// written to disk and referenced locally, and whose frontmatter carries a
-    /// `syndicated` link to the archived page — no network access.
+    /// written to disk and referenced locally, and whose frontmatter carries an
+    /// `origin` link to the archived page — no network access.
     #[tokio::test]
-    async fn import_local_mhtml_writes_syndicated_note_with_embedded_asset() {
+    async fn import_local_mhtml_writes_origin_note_with_embedded_asset() {
         let tmp = tempfile::tempdir().unwrap();
         let out = tmp.path();
         let mhtml = format!(
@@ -1102,10 +1103,10 @@ Content-Location: https://img.douban.com/a.png\r\n\
             .expect("a .md note should be written");
         let content = std::fs::read_to_string(&md_path).unwrap();
 
-        // syndicated points at the archived page, with the tracking query stripped.
+        // origin points at the archived page, with the tracking query stripped.
         assert!(
-            content.contains("syndicated:\n  - https://www.douban.com/note/1/\n"),
-            "frontmatter should syndicate to the clean source URL; got:\n{content}"
+            content.contains("origin: \"https://www.douban.com/note/1/\"\n"),
+            "frontmatter should record the clean source URL as origin; got:\n{content}"
         );
         assert!(!content.contains("external_url"), "got:\n{content}");
         // Body is the note, not douban nav chrome.
@@ -1123,8 +1124,8 @@ Content-Location: https://img.douban.com/a.png\r\n\
     }
 
     #[tokio::test]
-    async fn import_local_plain_html_no_source_omits_syndicated() {
-        // The plain-.html arm: no origin URL, so no `syndicated`; body extracted.
+    async fn import_local_plain_html_no_source_omits_origin() {
+        // The plain-.html arm: no source URL, so no `origin`; body extracted.
         let tmp = tempfile::tempdir().unwrap();
         let out = tmp.path();
         let html = "<html><head><title>My Essay</title></head><body><article>\
@@ -1140,7 +1141,8 @@ Content-Location: https://img.douban.com/a.png\r\n\
         assert!(md.exists(), "note named from <title> should exist");
         let content = std::fs::read_to_string(&md).unwrap();
         assert!(content.contains("First paragraph"), "body missing: {content}");
-        assert!(!content.contains("syndicated"), "no source → no syndicated: {content}");
+        assert!(!content.contains("origin"), "no source → no origin: {content}");
+        assert!(!content.contains("syndicated"), "{content}");
         assert!(!content.contains("external_url"), "{content}");
     }
 

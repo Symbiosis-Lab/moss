@@ -552,6 +552,17 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "origin",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=2, Importance=3 → score = 100 - (2*6 + 3*4) = 100 - 24 = 76
+        score: 76,
+        description: "The address this page was imported from. Written automatically by `moss import` as provenance, not a claim that the content is also published there — unlike `external_url`, which points a linkblog post at its off-site home. A site that later declares its former domain(s) can use this field to keep that address's old links working.",
+        label_key: "chip.origin.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "lang",
         field_type: FieldType::String,
         widget: Widget::TextInput,

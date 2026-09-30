@@ -343,7 +343,9 @@ mod tests {
         // built-in namespaces; see moss_core::terms and build::terms.)
         // (`location`/`place_page` added 2026-09 — the geography term kind;
         // see moss_core::terms and build::terms::places.)
-        assert_eq!(schema.frontmatter.fields.len(), 48);
+        // (`origin` added 2026-09 — provenance for an imported page's source
+        // URL, replacing `moss import`'s prior POSSE-flavored `syndicated:`.)
+        assert_eq!(schema.frontmatter.fields.len(), 49);
     }
 
     #[test]

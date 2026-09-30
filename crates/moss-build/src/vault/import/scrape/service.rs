@@ -78,17 +78,13 @@ pub fn generate_frontmatter(metadata: &ArticleMetadata, source_url: &str) -> Str
     push_string(&mut out, "lang", metadata.lang.as_deref());
     push_string(&mut out, "description", metadata.description.as_deref());
     push_string(&mut out, "cover", metadata.cover.as_deref());
-    // An import is the user's own content republished here (POSSE): the vault
-    // copy is canonical and `source_url` is a syndication mirror. Record it in
-    // a `syndicated` list — the same field the comment renderer reads to link a
-    // douban/matters comment back out to its origin (see
-    // `build/features/comment/render.rs::syndicated_link_for_source`). A local
-    // file with no known origin (`source_url` empty) has nothing to syndicate.
-    let source = source_url.trim();
-    if !source.is_empty() {
-        out.push_str("syndicated:\n");
-        out.push_str(&format!("  - {}\n", yaml_scalar(source)));
-    }
+    // `moss import` records provenance, not syndication: the source page's
+    // address becomes `origin` (`moss_core::schema_fields::BUILTIN_FIELDS`),
+    // a single URL. Unlike POSSE `syndicated:` — which means the content also
+    // lives at that URL — `origin` makes no such claim: a site port's old
+    // address is going away, not gaining a mirror. A local file with no known
+    // source (`source_url` empty) has no `origin` at all.
+    push_string(&mut out, "origin", Some(source_url));
     out.push_str("---\n\n");
     out
 }
@@ -109,28 +105,6 @@ fn push_string(out: &mut String, key: &str, value: Option<&str>) {
         // YAML double-quoted: escape \ and "
         let escaped = clean.replace('\\', "\\\\").replace('"', "\\\"");
         out.push_str(&format!("{}: \"{}\"\n", key, escaped));
-    }
-}
-
-/// Render a value as a YAML scalar. A well-formed http(s) URL is a safe plain
-/// scalar and is emitted bare (matching the vault's hand-authored
-/// `syndicated:` lists); anything else — a malformed `source_url` that reached
-/// us (e.g. a crafted MHTML `Snapshot-Content-Location` that `Url::parse`
-/// rejected, so it flows through verbatim) — is double-quoted and escaped so a
-/// `": "`, a leading indicator (`*`, `@`, …), or whitespace can't corrupt or
-/// break the frontmatter.
-fn yaml_scalar(value: &str) -> String {
-    // Strip stray C0/C1 control chars first — same untrusted-input rationale
-    // as `push_string` above (tauri-apps/tauri#10194): `value` here can be a
-    // `source_url` derived from scraped/imported HTML.
-    let value = &moss_core::frontmatter::strip_control_chars_str(value);
-    let safe_plain = (value.starts_with("http://") || value.starts_with("https://"))
-        && !value.contains(": ")
-        && !value.chars().any(|c| c.is_whitespace());
-    if safe_plain {
-        value.to_string()
-    } else {
-        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
     }
 }
 
@@ -234,19 +208,23 @@ mod tests {
     }
 
     #[test]
-    fn frontmatter_emits_syndicated_not_external_url() {
-        // moss import brings in the user's OWN content that was published
-        // elsewhere (POSSE): the vault copy is canonical, the source URL is a
-        // syndication mirror. So the source belongs in a `syndicated` list, not
-        // the linkblog `external_url` field.
+    fn frontmatter_emits_origin_not_external_url() {
+        // moss import records where a page came FROM as provenance, not as a
+        // syndication claim: the vault copy is canonical, and the source URL
+        // is not asserted to also be the content's home (that is what the
+        // linkblog `external_url` field means).
         let meta = ArticleMetadata {
             title: Some("笔记".into()),
             ..Default::default()
         };
         let fm = generate_frontmatter(&meta, "https://book.douban.com/review/8218385/");
         assert!(
-            fm.contains("syndicated:\n  - https://book.douban.com/review/8218385/\n"),
-            "expected a syndicated YAML list pointing at the source; got:\n{fm}"
+            fm.contains("origin: \"https://book.douban.com/review/8218385/\"\n"),
+            "expected an origin field pointing at the source; got:\n{fm}"
+        );
+        assert!(
+            !fm.contains("syndicated"),
+            "import must not write the POSSE syndicated field; got:\n{fm}"
         );
         assert!(
             !fm.contains("external_url"),
@@ -255,10 +233,13 @@ mod tests {
     }
 
     #[test]
-    fn frontmatter_syndicated_escapes_yaml_hostile_source() {
+    fn frontmatter_origin_escapes_yaml_hostile_source() {
         // A malformed source_url (e.g. from a crafted MHTML Snapshot-Content-
         // Location that Url::parse rejected) must not corrupt the frontmatter:
         // a leading `*` is a YAML alias indicator and `": "` opens a mapping.
+        // `push_string` always double-quotes, so this is the same guarantee
+        // every other field gets — no field-specific bare-scalar case to keep
+        // safe.
         let meta = ArticleMetadata {
             title: Some("t".into()),
             ..Default::default()
@@ -267,7 +248,7 @@ mod tests {
             let fm = generate_frontmatter(&meta, hostile);
             let escaped = hostile.replace('\\', "\\\\").replace('"', "\\\"");
             assert!(
-                fm.contains(&format!("  - \"{}\"\n", escaped)),
+                fm.contains(&format!("origin: \"{}\"\n", escaped)),
                 "hostile source must be quoted; got:\n{fm}"
             );
             // And it must parse back to exactly the original string.
@@ -275,22 +256,23 @@ mod tests {
                 serde_yaml::from_str(fm.trim_start_matches("---\n").trim_end_matches("---\n\n"))
                     .expect("frontmatter must be valid YAML");
             assert_eq!(
-                doc["syndicated"][0].as_str(),
+                doc["origin"].as_str(),
                 Some(hostile),
-                "syndicated[0] must round-trip to the original source"
+                "origin must round-trip to the original source"
             );
         }
     }
 
     #[test]
-    fn frontmatter_omits_syndicated_when_no_source() {
-        // A local file with no known origin URL (e.g. a plain .html snapshot)
-        // has nothing to syndicate to — omit the key entirely.
+    fn frontmatter_omits_origin_when_no_source() {
+        // A local file with no known source URL (e.g. a plain .html snapshot)
+        // has no origin to record — omit the key entirely.
         let meta = ArticleMetadata {
             title: Some("T".into()),
             ..Default::default()
         };
         let fm = generate_frontmatter(&meta, "");
+        assert!(!fm.contains("origin"), "got:\n{fm}");
         assert!(!fm.contains("syndicated"), "got:\n{fm}");
         assert!(!fm.contains("external_url"), "got:\n{fm}");
     }
@@ -316,7 +298,7 @@ mod tests {
         assert!(fm.contains("lang: \"en\""));
         assert!(fm.contains("description: \"The new diaspora.\""));
         assert!(fm.contains("cover: \"./assets/imported/abcd.jpg\""));
-        assert!(fm.contains("syndicated:\n  - https://x.example/post\n"));
+        assert!(fm.contains("origin: \"https://x.example/post\"\n"));
     }
 
     #[test]
@@ -420,10 +402,9 @@ mod tests {
     }
 
     #[test]
-    fn yaml_scalar_strips_stray_control_chars() {
-        // Same untrusted-input rationale as above, but for the `syndicated:`
-        // list value, which goes through `yaml_scalar` rather than
-        // `push_string`.
+    fn origin_strips_stray_control_chars() {
+        // Same untrusted-input rationale as above, but for the `origin`
+        // value derived from `source_url`.
         let control = "\u{1D}".repeat(3);
         let hostile_source = format!("https://example.com/post{control}");
         let meta = ArticleMetadata {
@@ -434,7 +415,7 @@ mod tests {
 
         assert!(!fm.contains('\u{1D}'), "control chars must be stripped; got:\n{fm}");
         assert!(
-            fm.contains("syndicated:\n  - https://example.com/post\n"),
+            fm.contains("origin: \"https://example.com/post\"\n"),
             "got:\n{fm}"
         );
     }

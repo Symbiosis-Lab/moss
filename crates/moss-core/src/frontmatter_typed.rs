@@ -288,6 +288,15 @@ pub struct FrontMatter {
     /// `external_url` only. Remove the alias one release after merge.
     #[serde(alias = "source_url")]
     pub external_url: Option<String>,
+    /// The address this page was imported from — provenance, not syndication.
+    /// Written automatically by `moss import`. Unlike `external_url` (a
+    /// manual linkblog pointer meaning "the canonical home is elsewhere"),
+    /// `origin` makes no claim that the content is published anywhere but
+    /// here — a site port's old address is going away, not gaining a
+    /// mirror. A future redirect feature reads a site's declared former
+    /// domain(s) against this field's host to keep old links working across
+    /// a port.
+    pub origin: Option<String>,
     /// Analytics configuration for privacy-focused analytics
     pub analytics: Option<AnalyticsConfig>,
     /// Site logo image path (rendered before site name in nav)

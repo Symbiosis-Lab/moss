@@ -38,11 +38,12 @@ pub enum TemplateKind {
 /// `editor_page` / `jury_page` / `place_page` today; two claimants resolve to
 /// the first `url_path`, so a copy could steal the original's term page),
 /// `translationKey` (a copy
-/// makes the pair "one page's translations" and links them), and
-/// `syndicated` (where the captured page was published, written by the
-/// matters plugin). Every other field — layout, tags, cascade, and anything
-/// else the template carries — is copied verbatim, since that's the point of
-/// templating them.
+/// makes the pair "one page's translations" and links them), `syndicated`
+/// (where the captured page was published, written by the matters plugin),
+/// and `origin` (where the captured page was imported from — provenance of
+/// that one specific page, not of a new page made from its template). Every
+/// other field — layout, tags, cascade, and anything else the template
+/// carries — is copied verbatim, since that's the point of templating them.
 ///
 /// A template without a `date` produces an instance without one (2026-09-05,
 /// user report): the captured page's author chose not to date it, and a
@@ -63,7 +64,7 @@ pub fn instantiate_template_frontmatter(
     // the preview waits on the path-derived URL that never arrives (seen in
     // the 2026-09-05 log: `測試獎.md` sent to /awards/writing-2/).
     frontmatter.remove("url");
-    for claim in schema_fields::term_claim_fields().chain(["translationKey", "syndicated"]) {
+    for claim in schema_fields::term_claim_fields().chain(["translationKey", "syndicated", "origin"]) {
         frontmatter.remove(claim);
     }
     if frontmatter.contains_key("date") {
@@ -89,6 +90,7 @@ mod tests {
             ("jury_page", "kane"),
             ("place_page", "kyoto"),
             ("translationKey", "about"),
+            ("origin", "https://old-site.example/about"),
             ("date", "2020-01-01"),
         ] {
             fm.insert(k.to_string(), Value::String(v.to_string()));
@@ -97,7 +99,7 @@ mod tests {
 
         let out = instantiate_template_frontmatter(fm, "2026-09-03");
 
-        for identity in ["title", "uid", "url", "author_page", "tag_page", "editor_page", "jury_page", "place_page", "translationKey", "syndicated"] {
+        for identity in ["title", "uid", "url", "author_page", "tag_page", "editor_page", "jury_page", "place_page", "translationKey", "syndicated", "origin"] {
             assert_eq!(out.get(identity), None, "`{identity}` names the captured page, not the instance");
         }
         assert_eq!(out.get("date"), Some(&Value::String("2026-09-03".to_string())));
