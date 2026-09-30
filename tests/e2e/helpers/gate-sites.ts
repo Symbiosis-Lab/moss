@@ -2141,3 +2141,71 @@ Body three.
     ".moss/theme/style.css": null,
   },
 };
+
+// ── Footer touch targets: real footer.md vs. the generated fallback ──
+//
+// The default footer link list (`.footer-link`, generated when no footer.md
+// exists) is not what a real site with an authored footer renders. footer.md
+// goes through the ordinary markdown pipeline into plain, classless anchors —
+// a markdown list becomes `<ul><li><a>…</a></li></ul>`, and a sentence
+// becomes an inline `<a>` in running text — so a touch-target rule scoped to
+// `.footer-link` alone reaches the fallback and misses exactly the reported
+// case. Both shapes are exercised here, in one footer.md: a list (the "links
+// inside a list item" case) and a sentence (the "links inside a sentence"
+// case, where the fix must not turn the anchor into a block or force a line
+// break).
+export const TOUCH_TARGETS_FOOTER_MD_GATE: ScratchSiteSpec = {
+  name: "touch-targets-footer-md-gate",
+  files: {
+    "index.md": `---
+title: Footer Touch Targets (footer.md)
+uid: "ttf00101"
+---
+
+# Footer Touch Targets
+
+Scratch site for the footer render gate, with an authored footer.md.
+`,
+    "footer.md": `- [About](/about)
+- [Contact](/contact)
+
+Written by [an editor](/editor) for this scratch site.
+`,
+    ".moss/config.toml": CONFIG_TOML,
+    ".moss/theme/style.css": null,
+  },
+};
+
+// The generated fallback: no footer.md, one page opts into the default
+// footer link list via \`footer: true\` frontmatter (nav.rs's own condition
+// for populating it). Kept as its own site rather than a second case in the
+// footer.md site above, since footer.md's presence — not a toggle — is what
+// selects between the two renderers (footer.rs: an explicit \`slot:
+// footer-left\` file always wins over footer.md, and footer.md is the only
+// reserved name; there is no config flag that picks the fallback on a site
+// that also has a footer.md).
+export const TOUCH_TARGETS_FOOTER_FALLBACK_GATE: ScratchSiteSpec = {
+  name: "touch-targets-footer-fallback-gate",
+  files: {
+    "index.md": `---
+title: Footer Touch Targets (fallback)
+uid: "ttf00201"
+---
+
+# Footer Touch Targets
+
+Scratch site for the footer render gate, with no footer.md — the generated
+default footer link list.
+`,
+    "About.md": `---
+title: About
+uid: "ttf00202"
+footer: true
+---
+
+# About
+`,
+    ".moss/config.toml": CONFIG_TOML,
+    ".moss/theme/style.css": null,
+  },
+};

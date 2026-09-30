@@ -1073,6 +1073,22 @@ footer.container:has(> .moss-subscribe)::before {
   block-size: calc(var(--moss-reading-size, 1.125rem) * 1.75);
 }
 
+/* Touch floor: one reading-size line is 30px at the default 1.125rem — a
+   real WCAG 2.5.8 AA violation as a tap target, measured on a real build.
+   `max()` keeps the one-line-of-text reasoning above as the shape (it
+   already clears 44px past about 1.4rem of reading size) and raises only
+   the common case, rather than a fixed control height that would fight it.
+   Desktop with a mouse is untouched above the same 48rem boundary the hero
+   and place-locator already treat as the mobile/desktop split; `(pointer:
+   coarse)` also reaches a touch device wider than 48rem, e.g. a tablet in
+   landscape. */
+@media (max-width: 48rem), (pointer: coarse) {
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-input,
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-btn {
+    block-size: max(calc(var(--moss-reading-size, 1.125rem) * 1.75), 44px);
+  }
+}
+
 .moss-subscribe-form[data-moss-hosted="true"] .moss-input {
   transition:
     border-color 0.2s ease,
@@ -1315,6 +1331,74 @@ footer.container:has(> .moss-subscribe)::before {
   text-decoration: underline;
   text-decoration-color: var(--moss-color-muted);
   text-underline-offset: 3px;
+}
+
+/* Touch floor: `footer.container a`, not `.footer-link` — the generated
+   fallback list is `.footer-link`, but an author's own `footer.md` renders
+   through the ordinary markdown pipeline into plain, classless anchors
+   (`<ul><li><a>…</a></li></ul>`, or `<a>…</a>` inline in a sentence), so a
+   class-scoped rule reaches only the fallback and misses exactly the
+   reported case — a footer.md link list beside a subscribe form. This reaches
+   every anchor moss can put in a footer, whatever its class or wrapper.
+   Measured 20 to 27px tall on a real build, well under the 44px WCAG 2.5.8
+   AA floor.
+
+   A `::after` sized via `inset`, not `min-block-size` on the anchor itself:
+   the anchor stays exactly the box and flow it already had — an inline link
+   inside a sentence must not become a block or force a line break, and a
+   list item's own line spacing must not shift. `position: relative` on the
+   anchor only changes its stacking/positioning context, not its display type
+   or box size, so this holds for both the `<li>` and the running-text shape.
+
+   A cap alone cannot reach 44px on the block axis against the list's own
+   8px rhythm (`li { margin-bottom: var(--moss-space-xs) }`) — half of 8 is
+   4, giving a 28px hit box against a 20px real one. So the rhythm itself
+   widens here, scoped to the footer's own list (not `li` sitewide, which
+   would loosen every article list too): `footer.container li` reaches
+   `--moss-space-lg` (2rem, 32px), and each link's cap becomes exactly half
+   of that, 16px — a 52px hit box, edge to edge with its neighbor's own cap,
+   never overlapping it. Eight-to-32px is the same honest cost `.nav-links`
+   pays below for the same reason: there is no floor short of it that still
+   clears 44px against a real 20px box. A list's own first and last item have
+   no neighbor on their one outward side, so extending them there is
+   harmless (unlike `.nav-links`, nothing here scrolls) — no first/last
+   exclusion is needed. The same block cap serves a sentence link, whose
+   ordinary case (a short byline, not wrapped) has line-height alone for
+   clearance and is well inside it; a sentence long enough to wrap the link
+   onto an adjacent line of the same paragraph is not defended against here,
+   the same scope limit the original fix accepted.
+
+   The inline axis is NOT extended by this base rule — a sentence link's
+   width must stay exactly its own text, or the reach would spill into the
+   surrounding words and widen what looks clickable mid-sentence. A list
+   link gets its own, more specific rule below instead: list items stack
+   with nothing beside them horizontally (unlike a nav row), so widening is
+   free there, and a short label needs it — "FAQ" at the default reading
+   size is under 30px wide, nowhere near 44, with no neighbor to overlap by
+   reaching for it.
+
+   Desktop with a mouse is untouched; `(pointer: coarse)` also reaches a
+   touch device wider than 48rem (e.g. a tablet in landscape). */
+@media (max-width: 48rem), (pointer: coarse) {
+  footer.container li {
+    margin-bottom: var(--moss-space-lg);
+  }
+  footer.container a {
+    position: relative;
+  }
+  footer.container a::after {
+    content: "";
+    position: absolute;
+    inset-block: -16px;
+    inset-inline: 0;
+  }
+  /* List links only (see above): the inline axis has no neighbor to
+     overlap, so it reaches the same 16px as the block axis on both sides —
+     a short label's real width plus 32px, comfortably past 44px even for
+     a single short word. */
+  footer.container li a::after {
+    inset-inline: -16px;
+  }
 }
 
 .footer-link:hover {
@@ -4868,6 +4952,91 @@ article a:where(:not(.moss-btn)):focus {
 }
 
 /* ==========================================================================
+   12a. Responsive - Touch targets (<=48rem, or any coarse pointer)
+   --------------------------------------------------------------------------
+   Only `.nav-links a` needs a rule here: the theme toggle, language toggle
+   and mobile menu button already got their own 44px invisible hit area from
+   the header-controls audit (`.nav-theme-btn::before` etc., above) — that
+   work covers every OTHER header control in the same `::before` +
+   gap-splitting idiom this follows, so nothing here duplicates it.
+
+   Below the 20rem hamburger threshold `.nav-links` is a hidden overlay panel
+   (12b, below), but from 20rem up to this 48rem mobile/desktop boundary — the
+   same one the hero and place-locator already treat as the split — its links
+   render inline with no padding at all: 39 by 24.5px on a real build, under
+   the 44px WCAG 2.5.8 AA floor.
+
+   An absolutely positioned, invisible `::after` around the link, not a
+   bigger real box. `position: relative` on the link changes only its
+   positioning context — not its own size, not the line-height around it,
+   not the row it sits in — so a link's underline (`.main-nav a.active`'s
+   `border-block-end`) and every other control's rendered box are identical
+   to the base commit's. A first attempt grew `.nav-links a` itself
+   (`min-block-size` + flex), which DID take part in layout: at 390px an
+   eight-link wrapped nav grew from 109 to 163px tall, and an active link's
+   underline ended up ~23px below its label because `border-block-end` sits
+   at the bottom of the now-taller box.
+
+   `(pointer: coarse)` is the OR partner to the width query, not a
+   replacement: a touch device wider than 48rem (a tablet in landscape) still
+   needs this, and a desktop with a mouse at any width, including exactly
+   48rem, matches neither.
+
+   Neither axis reaches 44px on a cap alone against this rule's own gaps
+   (`gap: var(--moss-space-xs) clamp(--moss-space-sm, 2vw, --moss-space-md)`,
+   above): at 390px the column half of that clamp is already past its own
+   2vw preferred value (7.8px) against a 16px floor, so it resolves to the
+   floor, not the ceiling — row 8px, column 16px, not 8 to 24. Half of 8 is
+   4, giving a 25px-tall hit box against a 17px real one on the block axis.
+   Half of 16 is 8, and a short label ("Blog", ~27px real width at 390px)
+   lands at 43px — a single pixel short. No cap can clear 44px on either
+   axis without the gap itself growing to make room. So both gaps grow here,
+   by different amounts for different reasons:
+
+   Row-gap to `--moss-space-lg` (2rem, 32px) — the honest cost, paid only
+   where wrapping actually happens: a single-row nav never renders it at
+   all, so its height is unaffected there. Measured on a real build, an
+   eight-link nav wrapping to two rows at 390px grows from 109 to 135px.
+
+   Column-gap to a flat 19px — not a token, because no token sits usefully
+   between the clamp's own 16px floor and 24px ceiling. The gap only needs
+   to clear the shortest real label's one-pixel shortfall, so it moves by
+   the smallest amount that does: 16 to 19px lets "Blog"'s hit area clear 44
+   with a pixel of headroom against rounding. 20px was tried and rejected:
+   at 390px the extra pixel per gap is enough to push the eight-link case
+   from two wrapped rows to three (135px to 184px) — a second, unwanted
+   wrap this fix must not cause on top of the row-gap's own honest one.
+   19px does not, on any label length measured, and neither does it affect
+   the plain four-link row, which never reaches its own container's width
+   at any column-gap tried here.
+
+   Each link's cap is half its own axis's new gap, rounded down by a pixel
+   on the inline axis for overlap safety — 16px block, 9px inline against a
+   19px gap — so a wrapped row's own hit area, or an adjacent link's, is met
+   edge to edge (block axis) or with a pixel to spare (inline axis) and
+   never overlapped. Applied to every link, first and last included: the
+   outer edge of the whole list reaches into `.nav-content`'s own ambient
+   space (ordinary page background above and to the sides, the content
+   column's own padding below), not a neighbor. */
+@media (max-width: 48rem), (pointer: coarse) {
+  .nav-links {
+    row-gap: var(--moss-space-lg);
+    column-gap: 19px;
+  }
+
+  .nav-links a {
+    position: relative;
+  }
+
+  .nav-links a::after {
+    content: "";
+    position: absolute;
+    inset-block: -16px;
+    inset-inline: -9px;
+  }
+}
+
+/* ==========================================================================
    12b. Responsive - Narrow (<20rem): Hamburger with natural expand
    ========================================================================== */
 
@@ -4945,8 +5114,34 @@ article a:where(:not(.moss-btn)):focus {
   }
 
   .nav-links a {
+    /* Real padding, not just 12a's pseudo-element, because this link is
+       inside the open panel: `position: absolute` on `.nav-links` (above)
+       already takes the whole panel out of flow, so growing a real box here
+       costs nothing outside the panel's own (already unbounded) height —
+       none of 12a's "must not change the row it sits in" reasoning applies.
+       Combined with 12a's ::after, the panel's links clear the 44px floor
+       with room to spare (17px text + 32px padding = 49px real box, before
+       12a's own ±16px cap even applies). */
     padding: var(--moss-space-sm) 0;
     border-bottom: none;
+  }
+
+  /* Cancels 12a's `::after` extension entirely here — not just at the
+     panel's own edges, on every link. Two reasons, both about this panel's
+     own shape: (1) `.nav-links` here is the open panel's own scroll
+     container (`overflow-y: auto`, above), and any descendant box — even an
+     invisible one — that reaches past its content edge counts toward its
+     scrollable overflow, which is exactly the "does it scroll when it
+     should not" failure nav-mobile.spec.ts exists to catch; (2) this same
+     rule sets `gap: 0` between stacked links (a vertical column, "Vertical
+     stack" above), so 12a's row-gap increase does not reach this panel at
+     all — a ±16px cap sized for a 32px gap would overlap a 0px one by
+     32px between every pair of stacked links. Nothing is lost: the real
+     padding just above already gives every link in the panel a 49px box
+     (17px text + 32px padding), comfortably past the 44px floor on its
+     own. */
+  .nav-links a::after {
+    inset-block: 0;
   }
 
   .nav-links a:hover {
@@ -5701,20 +5896,38 @@ article a:where(:not(.moss-btn)):focus {
   color: var(--moss-color-text-secondary);
   margin: 0;
   margin-block-start: 0.25em;
-  /* Was `display: -webkit-box` + `-webkit-box-orient: vertical` +
-     `-webkit-line-clamp: 2`. That legacy flexbox model lays its content out
-     horizontally regardless of the ancestor's own writing mode — inside a
-     vertical-rl card (a `:::grid` cell has no vertical-mode override, unlike
-     the list card below) it forced the description into
-     `writing-mode: horizontal-tb`, rotating the artist's own inscription
-     sideways while the title beside it stayed correctly vertical. The
-     unprefixed standard `line-clamp` property is not yet supported by either
-     shipping engine (Chromium 149 or the WebKit moss ships), so this caps
-     the block-size to two line-heights instead: a logical property, it caps
-     block-progression regardless of which physical axis that is, and plain
-     block layout never touches `writing-mode`. */
+  /* The block-size cap is the ONE clamp every card gets, in every writing
+     mode: a logical property, it caps block-progression regardless of which
+     physical axis that is, and plain block layout never touches
+     `writing-mode`. It is the fallback the rule below still leans on (its
+     own clip has no ellipsis, so a browser that ignored `-webkit-line-clamp`
+     would at least still clip at two lines) and it is also the ONLY clamp a
+     vertical-typesetting site keeps — see site/vertical.css, which undoes the
+     rule below for exactly that reason. */
   overflow: hidden;
   max-block-size: calc(1.5em * 2);
+  /* Ellipsis for the common case: `display: -webkit-box` + `-webkit-box-
+     orient: vertical` + `-webkit-line-clamp: 2` paints the ellipsis natively
+     in both engines, but that legacy multi-line-truncation box lays its
+     content out along the PHYSICAL horizontal axis regardless of the
+     element's own writing-mode — inside a vertical-rl card it forced the
+     description into `writing-mode: horizontal-tb`, rotating the artist's
+     own inscription sideways while the title beside it stayed correctly
+     vertical. Core CSS never references `data-typesetting` (gates_change_-
+     what_ships/gates_are_independent below rely on that being true for every
+     horizontal site, so the string cannot appear here even inside a `:not()`
+     — a horizontal-only build must not carry the substring at all), so the
+     undo lives in site/vertical.css instead, the one file that already knows
+     about vertical typesetting and is the gated partial a horizontal site
+     never even ships. `line-clamp: 2` is set alongside the prefixed property
+     for whichever engine ships the unprefixed standard version first — inert
+     today (Chromium 149 and the WebKit moss ships both ignore it), but it
+     would not need `display: -webkit-box` or vertical.css's undo at all, so
+     it costs nothing to have it ready. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .moss-child-section-divider {
@@ -6432,6 +6645,9 @@ article a:where(:not(.moss-btn)):focus {
    specify `[data-cover-color] .moss-hero-content` and paint dark text on that
    dark band.
 
+   `--moss-hero-tone-color`, not the text token — which is pale in dark mode
+   and would land right back on this same pale image. See custom_props.rs.
+
    Placed after the mobile-overlay block on purpose. Every rule here ties on
    specificity with the overlay rule it replaces — (0,3,0) against (0,3,0) for
    the container, (0,6,1) against (0,6,1) for the headings, which carry the
@@ -6441,7 +6657,7 @@ article a:where(:not(.moss-btn)):focus {
 
 @media (min-width: 48rem) {
   .moss-hero[data-hero-tone="light"] .moss-hero-content {
-    color: var(--moss-color-text);
+    color: var(--moss-hero-tone-color, #2c2825);
     text-shadow: none;
   }
 
@@ -6452,7 +6668,7 @@ article a:where(:not(.moss-btn)):focus {
 
 @media (max-width: 48rem) {
   .moss-hero[data-mobile="overlay"][data-hero-tone="light"] .moss-hero-content {
-    color: var(--moss-color-text);
+    color: var(--moss-hero-tone-color, #2c2825);
     text-shadow: none;
   }
 
@@ -8367,28 +8583,3 @@ body[data-moss-preview] .moss-service-inactive {
 }
 
 } /* @layer shortcodes */
-
-/* Footer file content (footer.md): when the site has a footer file, tighten
-   the spacing to the divider and apply muted attribution typography. Sites
-   without footer content keep their existing spacing — :has() ensures
-   opt-in behavior. Pre-existing top-level @layer base intentionally kept
-   outside @layer shortcodes so its cascade position (base < shortcodes)
-   is preserved. */
-@layer base {
-  .footer-left p {
-    margin: 0;
-    font-size: var(--moss-size-xs);
-    color: var(--moss-color-muted);
-  }
-
-  .footer-left a {
-    color: inherit;
-    text-decoration: underline;
-    text-decoration-color: var(--moss-border-light);
-    text-underline-offset: 0.2em;
-  }
-
-  .footer-left a:hover {
-    text-decoration-color: currentColor;
-  }
-}

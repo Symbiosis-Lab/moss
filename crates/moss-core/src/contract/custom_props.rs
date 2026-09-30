@@ -77,6 +77,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Crop anchor for hero media, which is `object-fit: cover`. The default anchors the top, which suits landscapes; use `center` for portraits and faces.",
     },
     CustomProp {
+        name: "--moss-hero-tone-color",
+        owner: "moss-hero",
+        default: "#2c2825",
+        description: "Text colour over a pale ('light'-toned) hero image, in both overlaid layouts (desktop, and mobile in `data-mobile=\"overlay\"`). Deliberately not `var(--moss-color-text)`: that token is `#2c2825` in light mode but `#d4cbba` in dark, while the photograph underneath does not repaint with the colour scheme, so the token's dark-mode value would put pale text back on the same pale image. Set this to tune the exact shade; it stays fixed across both colour schemes.",
+    },
+    CustomProp {
         name: "--moss-nav-island-display",
         owner: "moss-nav-island",
         default: "block",

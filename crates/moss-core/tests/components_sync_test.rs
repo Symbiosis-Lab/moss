@@ -1,6 +1,6 @@
 //! Source-scanner sync tests for the moss component contract, open half.
 //!
-//! Open-half twin of two checks in the desktop app's
+//! Open-half twin of three checks in the desktop app's
 //! `components_sync_test.rs`:
 //!
 //! 1. `css_selectors_match_components_table` — desktop's version "only
@@ -11,15 +11,24 @@
 //!    independently for class-emission call sites against the same
 //!    `COMPONENTS` table. This is the moss-core half; the desktop half keeps
 //!    scanning its own build tree.
+//! 3. `every_escape_hatch_is_declared` — custom_props.rs's own doc comment
+//!    and the module doc on `components_sync_test.rs` both referred to this
+//!    test as already enforced "in the desktop app's `components_sync_test.rs`",
+//!    but it only reads open files (every shipped `.css` under
+//!    `moss-build/src/assets/css`, `CUSTOM_PROPS`, `tokens.json`) and had
+//!    never actually been written anywhere — a hook nothing declares was
+//!    exactly the failure the table exists to catch, and nothing was
+//!    catching it. Written here rather than assumed present, 2026-09-29.
 //!
 //! Not carried here: `site_js_selectors_match_components_table` (reads
 //! the frontend site tree, a desktop-tree path outside this row's classification),
-//! `every_escape_hatch_is_declared` / `every_declared_custom_prop_is_read` /
-//! `nav_width_is_a_custom_prop_not_a_token` (not named by this row — though
-//! they also only read open files, they are a separate concern this
-//! landing-order step does not cover).
+//! `every_declared_custom_prop_is_read` / `nav_width_is_a_custom_prop_not_a_token`
+//! (not named by this row — though they also only read open files, they are
+//! a separate concern this landing-order step does not cover).
 
 use moss_core::contract::components::{Status, COMPONENTS};
+use moss_core::contract::custom_props::CUSTOM_PROPS;
+use moss_core::contract::tokens::load_tokens;
 use regex::Regex;
 use std::collections::HashSet;
 use std::fs;
@@ -247,6 +256,83 @@ fn moss_grid_data_columns_description_agrees_with_the_stylesheets_mobile_collaps
         data_columns.description.contains("768px"),
         "data-columns description should name the real mobile-collapse breakpoint: {}",
         data_columns.description
+    );
+}
+
+/// A `var(--moss-x, <fallback>)` read is the syntactic shape custom_props.rs's
+/// own doc names as an escape hatch ("read from a stylesheet as
+/// `var(--moss-foo, <fallback>)`"), as opposed to a design token, which a
+/// rule reads bare (`var(--moss-color-text)`) because it is always defined at
+/// `:root`. A read with a fallback that names no `CUSTOM_PROPS` entry is a
+/// hook no agent can find — exactly what the table exists to prevent.
+///
+/// A bare `var(--moss-x)` that names neither a token nor a `CUSTOM_PROPS`
+/// entry is deliberately not scanned for. Unlike the fallback form, a bare
+/// read carries no default value to document, so it is not this table's
+/// "hook no agent can find" failure mode — and two bare reads sampled from
+/// site.css confirm why: `--moss-colophon-lead` and `--moss-ease-subscribe`
+/// are each declared with `--name: value;` earlier in the same file and
+/// consumed bare later, ordinary same-file custom-property plumbing, not a
+/// theme hook. Catching only the undeclared subset of bare reads would need
+/// a second scanner tracking every in-stylesheet `--name:` declaration (and
+/// every build-time-injected inline `style="--name:…"` the Rust renderer
+/// emits, e.g. a per-cover `--moss-cover-color`) to avoid flagging that
+/// entire ordinary category — out of scope for the fallback-hook table this
+/// test polices.
+const CUSTOM_PROP_ALLOWLIST: &[(&str, &str)] = &[];
+
+#[test]
+fn every_escape_hatch_is_declared() {
+    let workspace_root = workspace_root();
+    let css_dir = workspace_root.join(SITE_CSS_DIR);
+    let sheets: Vec<PathBuf> = css_files(&css_dir);
+    assert!(
+        sheets.len() >= 4,
+        "expected at least site.css plus partials under {}, found {}",
+        css_dir.display(),
+        sheets.len()
+    );
+
+    let var_with_fallback = Regex::new(r"var\(\s*(--moss-[A-Za-z0-9_-]+)\s*,").unwrap();
+    let mut read: HashSet<String> = HashSet::new();
+    for path in &sheets {
+        let css = fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("Failed to read {}: {}", path.display(), e));
+        let css = strip_css_comments(&css);
+        for cap in var_with_fallback.captures_iter(&css) {
+            read.insert(cap[1].to_string());
+        }
+    }
+    assert!(!read.is_empty(), "expected at least one var(--moss-x, fallback) read across the shipped stylesheets");
+
+    let declared: HashSet<&str> = CUSTOM_PROPS.iter().map(|p| p.name).collect();
+    let tokens = load_tokens().expect("tokens.json parses");
+    let token_names: HashSet<String> = tokens
+        .groups
+        .iter()
+        .flat_map(|g| g.entries.iter())
+        .map(|e| format!("--{}", e.name))
+        .collect();
+    let allowlisted: HashSet<&str> = CUSTOM_PROP_ALLOWLIST.iter().map(|(k, _)| *k).collect();
+
+    let mut undeclared: Vec<&String> = read
+        .iter()
+        .filter(|name| {
+            !declared.contains(name.as_str())
+                && !token_names.contains(name.as_str())
+                && !allowlisted.contains(name.as_str())
+        })
+        .collect();
+    undeclared.sort();
+
+    assert!(
+        undeclared.is_empty(),
+        "stylesheets read these as var(--x, fallback) (an escape hatch) but no CUSTOM_PROPS \
+         entry or token declares them:\n{}\n\n\
+         Add a CustomProp to src/contract/custom_props.rs with the default copied verbatim \
+         from the call site, or add it to CUSTOM_PROP_ALLOWLIST with a one-line reason if it \
+         is genuinely internal plumbing rather than a theme hook.",
+        undeclared.iter().map(|s| format!("  - {s}")).collect::<Vec<_>>().join("\n")
     );
 }
 

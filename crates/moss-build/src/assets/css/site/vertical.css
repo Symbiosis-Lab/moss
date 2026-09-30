@@ -511,13 +511,42 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   letter-spacing: 0.02em;
   text-orientation: upright;
 }
-/* The horizontal two-line clamp is a valid rotation (it would clamp to two
-   columns), but a vertical card is a column-group whose block length is
-   free: a full description costs columns, not band height, so the clamp is
-   undone deliberately (2026-09-06; base rule no longer forces
-   `display: -webkit-box`, so there is no writing-mode override left to
-   undo here — the base's `max-block-size` two-line cap is what remains to
-   lift). */
+/* `.moss-card-description`'s ellipsis clamp (site.css: `display: -webkit-box`
+   + `-webkit-box-orient: vertical` + `-webkit-line-clamp: 2`) forces
+   `writing-mode: horizontal-tb` on the description regardless of the card's
+   own vertical-rl — the legacy multi-line-truncation box lays out along the
+   PHYSICAL horizontal axis no matter what. Undone here for every card shape
+   that class reaches (:::cards grid and list layouts, :::grid cells), not
+   just list below: core cannot scope the ellipsis away from vertical
+   typesetting itself, because core CSS never references `data-typesetting`
+   at all (gates_change_what_ships/gates_are_independent rely on that for
+   every horizontal site), so the undo has to live in the one file that
+   already knows about vertical typesetting. `display: block` alone already
+   drops the box model; the other two are reset to their initial values for
+   clarity, restoring exactly the plain block clip site.css's own base rule
+   still carries underneath.
+
+   `line-clamp` (the standard, unprefixed property site.css also sets) is
+   NOT reset here on purpose: it is defined to clamp a normal block box
+   without the legacy flexbox model, so it does not force `horizontal-tb` the
+   way the prefixed pair does — nothing to undo, once an engine implements
+   it. It is instead reset below, for list only, alongside that layout's own
+   "no clamp at all" choice. */
+[data-typesetting="vertical"] .moss-card-description {
+  display: block;
+  -webkit-box-orient: horizontal;
+  -webkit-line-clamp: none;
+}
+
+/* The horizontal two-line clamp's SIZE limit — the base rule's
+   `max-block-size`, still in effect after the reset above — is a valid
+   rotation for grid and `:::grid` cells (it clamps to two columns instead of
+   two lines), but a LIST card is a column-group whose block length is free:
+   a full description costs columns, not band height, so the size limit is
+   undone deliberately here, on top of the box-model reset above (2026-09-06).
+   `line-clamp: none` travels with it (not with the box-model reset above)
+   because this is the one layout that wants no clamp at all, not just a
+   correctly-oriented one. */
 [data-typesetting="vertical"] .moss-cards[data-layout="list"] .moss-card-title {
   line-height: 1.8;
   white-space: normal;
@@ -528,6 +557,7 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   line-height: 1.9;
   max-block-size: none;
   overflow: visible;
+  line-clamp: none;
 }
 
 /* ── Folder cover (vertical mode) ── */

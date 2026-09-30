@@ -74,6 +74,7 @@ GATES_BUILD=(
   place-map-tokens
   place-map-align
   preview-parity-gate
+  touch-targets
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads
@@ -87,6 +88,7 @@ GATES_NOBUILD=(
   site-elevation
   card-media-track
   card-cover-fit
+  card-description-clamp
   img-fallback
   vertical-measure
   vertical-sizes
