@@ -60,9 +60,8 @@
 //! replacing each run of Han characters with its `jieba-rs` words joined by
 //! spaces. Pagefind then indexes ordinary whitespace-delimited words.
 //!
-//! The segmented HTML is written to a throwaway [`tempfile::TempDir`] and
-//! Pagefind is pointed at *that*; `site_dir` is the real build output that
-//! gets deployed and is never mutated.
+//! The segmented HTML is handed to Pagefind in memory; `site_dir` is the real
+//! build output that gets deployed and is never written to.
 //!
 //! Scope: Han runs only. Japanese kana and Hangul are left untouched — jieba
 //! is a Chinese dictionary and would mis-split them. Latin/ASCII text is
@@ -95,7 +94,7 @@ pub struct SearchIndexFile {
 ///
 /// The census is not diagnostics: it is what stops a partial index from being
 /// published under the fingerprint of the complete page set. Every page-level
-/// failure in [`segmented_copy`] is a skip-with-a-warning (one malformed page
+/// failure in [`segment_pages`] is a skip-with-a-warning (one malformed page
 /// should cost its own indexing, not the whole site's), and the directory walk
 /// swallows its own errors — so "zero pages" and "this site has no indexable
 /// content" are the same value at this level. Only the caller, which knows how
@@ -111,11 +110,6 @@ pub struct SearchIndex {
     /// means this bundle covers less than the tree it was pointed at.
     pub skipped: usize,
 }
-
-/// Glob Pagefind walks over the site output. Matches Pagefind's own default
-/// (`**/*.{html}`) — spelled out here so a future exclusion (e.g. skipping
-/// `_moss/`) has one place to live.
-const INDEX_GLOB: &str = "**/*.html";
 
 /// Elements whose text is markup, not prose. Segmenting them would insert
 /// spaces into code samples, URLs, JS string literals and CSS.
@@ -303,40 +297,48 @@ fn segment_html(html: &str, jieba: &Jieba) -> Result<String, String> {
     String::from_utf8(output).map_err(|e| e.to_string())
 }
 
-/// Build a throwaway copy of `site_dir`'s HTML tree with Han text segmented,
-/// and return the `TempDir` owning it. Only `.html` files are copied —
-/// `INDEX_GLOB` is the only thing Pagefind reads, and everything else in the
-/// build output (assets, JSON, the bundle itself) is irrelevant to indexing.
+/// One page of the site, segmented and held in memory for Pagefind.
+struct SegmentedPage {
+    /// Path relative to the site root. Pagefind derives the page URL from it
+    /// exactly as it does for a file it walked to itself, so
+    /// `posts/hello/index.html` is still reported as `/posts/hello/`.
+    rel_path: String,
+    html: String,
+}
+
+/// Read every `.html` page under `site_dir` and segment it, in walk order.
+/// Only `.html` files are read — Pagefind's own default glob — and everything
+/// else in the build output (assets, JSON, the bundle itself) is irrelevant to
+/// indexing. A future exclusion (e.g. skipping `_moss/`) belongs in this walk.
 ///
-/// `site_dir` is the deployed build output and is never written to. The
-/// returned `TempDir` deletes the copy on drop, including on the error paths
-/// after it.
+/// Nothing is written anywhere: the pages go to Pagefind through its in-memory
+/// `add_html_file`. They used to be written to a scratch copy of the tree for
+/// Pagefind to walk and read back, and that round trip cost more CPU than
+/// segmentation itself.
+///
+/// **Walk order is output order.** Pagefind numbers pages in the order it
+/// receives them, and those numbers are baked into its index files. The walk
+/// is sorted by file name so the bundle is a function of the pages alone; an
+/// unsorted walk follows the filesystem's directory order, which differs
+/// between filesystems (and, on tmpfs, between runs).
 ///
 /// A file that fails to read or rewrite is skipped with a warning rather than
 /// failing the build: one malformed page should cost its own indexing, not the
-/// whole site's.
+/// whole site's. The second value is how many were skipped — the census
+/// [`SearchIndex`] carries onward. A skip is a *shortfall*, not a detail: the
+/// bundle covers fewer pages than the tree, and only the caller can decide
+/// whether that is publishable.
 ///
 /// The per-page work runs on rayon's global pool, like the markdown-parse and
-/// HTML-render loops in `render/blocking.rs`. It is safe to nest here in a way
-/// it would not be inside those loops: `segmented_copy` runs to completion
-/// *before* Pagefind (itself a rayon user) is handed the directory, so the two
-/// never contend for the pool. Keep them sequential phases — see
-/// `scan/scan.rs` and `media/image.rs`, which both carry scars from nesting.
-///
-/// Returns the scratch dir plus `(pages copied, pages skipped)` — the census
-/// [`SearchIndex`] carries onward. A skip is a *shortfall*, not a detail: the
-/// bundle built from this copy covers fewer pages than the tree it was pointed
-/// at, and only the caller can decide whether that is publishable.
-fn segmented_copy(site_dir: &Path) -> Result<(tempfile::TempDir, usize, usize), String> {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    let temp = tempfile::tempdir()
-        .map_err(|e| format!("failed to create search-index scratch dir: {}", e))?;
-    let copied = AtomicUsize::new(0);
-
+/// HTML-render loops in `render/blocking.rs`. It runs to completion *before*
+/// Pagefind is handed the pages, so the two never contend for the pool. Keep
+/// them sequential phases — see `scan/scan.rs` and `media/image.rs`, which
+/// both carry scars from nesting.
+fn segment_pages(site_dir: &Path) -> (Vec<SegmentedPage>, usize) {
     // Walking is I/O-bound and cheap; collect first so the expensive part
-    // (read → segment → write, dominated by jieba) is what gets parallelised.
-    let pages: Vec<std::path::PathBuf> = walkdir::WalkDir::new(site_dir)
+    // (read → segment, dominated by jieba) is what gets parallelised.
+    let paths: Vec<std::path::PathBuf> = walkdir::WalkDir::new(site_dir)
+        .sort_by_file_name()
         .into_iter()
         .filter_map(Result::ok)
         .filter(|e| {
@@ -346,48 +348,30 @@ fn segmented_copy(site_dir: &Path) -> Result<(tempfile::TempDir, usize, usize), 
         .map(|e| e.path().to_path_buf())
         .collect();
 
-    pages
+    // `collect` on an indexed parallel iterator keeps the walk order.
+    let segmented: Vec<Option<SegmentedPage>> = paths
         .par_iter()
-        .try_for_each(|path| -> Result<(), String> {
-            let Ok(rel) = path.strip_prefix(site_dir) else {
-                return Ok(());
-            };
-            let html = match std::fs::read_to_string(path) {
-                Ok(html) => html,
-                Err(e) => {
-                    log::warn!(target: "search", "skipping {:?} for search index: {}", rel, e);
-                    return Ok(());
-                }
-            };
-            let segmented = match segment_html(&html, &JIEBA) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::warn!(target: "search", "skipping {:?} for search index: {}", rel, e);
-                    return Ok(());
-                }
-            };
-            let dest = temp.path().join(rel);
-            if let Some(parent) = dest.parent() {
-                // Concurrent create_dir_all on the same ancestor is fine —
-                // it treats AlreadyExists as success.
-                // allow:raw_write a tempfile scratch dir, not the build tree
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("failed to write search-index scratch dir: {}", e))?;
-            }
-            std::fs::write(&dest, segmented)  // allow:raw_write scratch TempDir for the pagefind index, never the output tree
-                .map_err(|e| format!("failed to write search-index scratch dir: {}", e))?;
-            copied.fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        })?;
+        .map(|path| {
+            let rel = path.strip_prefix(site_dir).ok()?;
+            let html = std::fs::read_to_string(path)
+                .map_err(|e| log::warn!(target: "search", "skipping {:?} for search index: {}", rel, e))
+                .ok()?;
+            let html = segment_html(&html, &JIEBA)
+                .map_err(|e| log::warn!(target: "search", "skipping {:?} for search index: {}", rel, e))
+                .ok()?;
+            Some(SegmentedPage { rel_path: rel.to_string_lossy().into_owned(), html })
+        })
+        .collect();
 
-    let copied = copied.load(Ordering::Relaxed);
-    Ok((temp, copied, pages.len() - copied))
+    let pages: Vec<SegmentedPage> = segmented.into_iter().flatten().collect();
+    let skipped = paths.len() - pages.len();
+    (pages, skipped)
 }
 
 /// Build a Pagefind index over a directory of rendered HTML and return the
-/// bundle as in-memory files. Reads `site_dir` and writes only into a
-/// temporary segmented copy of it (see [`segmented_copy`]); publishing the
-/// bundle is the caller's job (see [`search_lane`][super::search_lane]).
+/// bundle as in-memory files. Reads `site_dir` and writes nothing (see
+/// [`segment_pages`]); publishing the bundle is the caller's job (see
+/// [`search_lane`][super::search_lane]).
 ///
 /// Uncancellable convenience form of [`build_search_index_cancellable`], for
 /// the publish-path settle and for tests.
@@ -412,9 +396,9 @@ pub fn build_search_index(site_dir: &Path) -> Result<SearchIndex, String> {
 
 /// [`build_search_index`] with cooperative cancellation at phase boundaries.
 ///
-/// `cancelled` is polled after segmentation, after `add_directory` and
-/// immediately before `get_files()` — and nowhere inside them, because none of
-/// the three is interruptible. `get_files()` is the 3–4 s gzip block, so the
+/// `cancelled` is polled after segmentation, before each page is handed to
+/// Pagefind and immediately before `get_files()` — never inside those calls,
+/// because none of them is interruptible. `get_files()` is the 3–4 s gzip block, so the
 /// worst case of a late cancellation is one wasted pass **off the critical
 /// path**; the boundary before it is the one that matters, since a superseded
 /// request usually arrives while the previous one is still fossicking.
@@ -426,15 +410,13 @@ pub fn build_search_index_cancellable(
 ) -> Result<Option<SearchIndex>, String> {
     INDEX_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-    // Held for the whole indexing run; dropped (and deleted) on every exit
-    // path below, including the error ones.
     let t_segment = std::time::Instant::now();
-    let (segmented, copied, skipped) = segmented_copy(site_dir)?;
+    let (pages, skipped) = segment_pages(site_dir);
+    let readable = pages.len();
     let segment_ms = t_segment.elapsed().as_millis();
     if cancelled() {
         return Ok(None);
     }
-    let dir = segmented.path().to_path_buf();
 
     // `std::thread::scope` (not `Builder::spawn` + `join`) so the borrowed
     // `cancelled` predicate can cross into the indexing thread without being
@@ -459,21 +441,28 @@ pub fn build_search_index_cancellable(
                 let mut index = pagefind::api::PagefindIndex::new(None)
                     .map_err(|e| format!("failed to create search index: {}", e))?;
 
+                // One page at a time: Pagefind holds its index lock across
+                // each page's parse, so there is no parallel form of this call.
+                // A page Pagefind cannot parse is left out, as its own
+                // directory walk left it out.
                 let t_fossick = std::time::Instant::now();
-                let page_count = index
-                    .add_directory(
-                        dir.to_string_lossy().into_owned(),
-                        Some(INDEX_GLOB.to_string()),
-                    )
-                    .await
-                    .map_err(|e| format!("failed to read pages for search index: {}", e))?;
+                let mut page_count = 0;
+                for page in pages {
+                    if cancelled() {
+                        return Ok(None);
+                    }
+                    match index.add_html_file(Some(page.rel_path), None, page.html).await {
+                        Ok(_) => page_count += 1,
+                        Err(e) => log::warn!(target: "search", "search index skipped a page: {}", e),
+                    }
+                }
                 let fossick_ms = t_fossick.elapsed().as_millis();
 
                 if page_count == 0 {
                     // Not an error and not necessarily a success — the census
                     // travels so `publish_bundle` can tell "no indexable
                     // content" from "the tree went away".
-                    return Ok(Some(SearchIndex { files: Vec::new(), pages: copied, skipped }));
+                    return Ok(Some(SearchIndex { files: Vec::new(), pages: readable, skipped }));
                 }
                 // The boundary that earns cancellation its keep: everything
                 // after this point is the uncancellable gzip.
@@ -527,7 +516,7 @@ pub fn build_search_index_cancellable(
                             bytes: f.contents,
                         })
                         .collect(),
-                    pages: copied,
+                    pages: readable,
                     skipped,
                 }))
             })

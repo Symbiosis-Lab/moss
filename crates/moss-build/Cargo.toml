@@ -118,8 +118,6 @@ png = "0.18"
 serde_yaml = "0.9"
 ttf-parser = "0.21"
 webp = "0.3"
-# Prod use too: `build::feeds::search` unpacks the pagefind bundle via a tempdir.
-tempfile = "3.0"
 
 # ── The QuickJS plugin engine (open-CLI slice 2) ──────────────────────────────
 # futures⇄ES Promises + drive(); `macro` → #[rquickjs::function] host fns.
@@ -168,6 +166,7 @@ pathdiff = "0.2"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
+tempfile = "3.0"
 # vault_root_tests.rs mints unique temp dirs per test.
 uuid = { version = "1.11", features = ["v4"] }
 # The moved build tree's inline tests (M6a).

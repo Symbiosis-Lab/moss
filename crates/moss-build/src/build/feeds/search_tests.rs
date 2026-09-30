@@ -1,4 +1,5 @@
 use super::*;
+use std::path::Path;
 
 fn segment(html: &str) -> String {
     // The shared dictionary, not a fresh `Jieba::new()` per call — that parses
@@ -113,35 +114,172 @@ fn kana_and_hangul_pass_through() {
     assert_eq!(segment(html), html);
 }
 
-/// The pre-pass writes a mirror tree of segmented HTML and leaves the real
-/// build output — which is what gets deployed — byte-for-byte alone.
-#[test]
-fn segmented_copy_mirrors_html_without_touching_the_source() {
-    let dir = tempfile::tempdir().unwrap();
-    let source = "<html lang=\"zh\"><body><p>这是一段简单的测试文本</p></body></html>";
-    std::fs::create_dir_all(dir.path().join("posts/hello")).unwrap();
-    std::fs::write(dir.path().join("posts/hello/index.html"), source).unwrap();
-    std::fs::write(dir.path().join("style.css"), "body{color:red}").unwrap();
+/// A small bilingual site: Chinese pages (two scripts, nested, one with a code
+/// sample), English pages, a page with no `lang`, and a non-HTML file. Each
+/// language also has a directory of several sibling pages, written in name
+/// order, so a walk that followed directory order rather than name order would
+/// almost surely hand them over in a different order.
+const SITE_PAGES: usize = 14;
 
-    let (temp, copied_n, skipped_n) = segmented_copy(dir.path()).expect("copy should build");
-    assert_eq!((copied_n, skipped_n), (1, 0), "census must count the one page it copied");
+fn write_bilingual_site(root: &Path) {
+    let mut pages = vec![
+        ("index.html".to_string(), "<html lang=\"zh-Hant\"><head><title>首頁</title></head><body><h1>步道</h1><p>這是一段關於山區步道的文字，moss是一個工具。</p></body></html>".to_string()),
+        ("posts/hello/index.html".into(), "<html lang=\"zh-Hant\"><body><h1 id=\"t\">春季筆記</h1><p>春天的步道已經重新開放。</p><pre><code>let 變量 = 值;</code></pre></body></html>".into()),
+        ("posts/second/index.html".into(), "<html lang=\"zh-Hant\"><body><h1>路线说明</h1><p>这是一段简单的测试文本，包含简体字。</p><a href=\"/文章/\">文章</a></body></html>".into()),
+        ("en/index.html".into(), "<html lang=\"en\"><head><title>Home</title></head><body><h1>Trail guide</h1><p>The quick brown fox &amp; the lazy dog.</p></body></html>".into()),
+        ("en/posts/notes/index.html".into(), "<html lang=\"en\"><body><h1>Spring notes</h1><p>The trail reopens in spring, running and jumping.</p></body></html>".into()),
+        ("about.html".into(), "<html><body><h1>About</h1><p>No language attribute on this page.</p></body></html>".into()),
+    ];
+    for (i, name) in ["a", "b", "c", "d"].iter().enumerate() {
+        pages.push((
+            format!("notes/{name}.html"),
+            format!("<html lang=\"zh-Hant\"><body><h1>筆記{i}</h1><p>第{i}段步道在山谷裡。</p></body></html>"),
+        ));
+        pages.push((
+            format!("en/notes/{name}.html"),
+            format!("<html lang=\"en\"><body><h1>Note {i}</h1><p>Trail section {i} follows the valley.</p></body></html>"),
+        ));
+    }
+    assert_eq!(pages.len(), SITE_PAGES);
+    for (rel, html) in pages {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, html).unwrap();
+    }
+    std::fs::write(root.join("style.css"), "body{color:red}").unwrap();
+}
 
-    let copied = std::fs::read_to_string(temp.path().join("posts/hello/index.html")).unwrap();
-    assert!(copied.contains(' '), "copy is not segmented: {}", copied);
-    assert_ne!(copied, source);
+/// A bundle as a sorted list of `(path, bytes)`, so two bundles compare
+/// regardless of the order Pagefind returned the files in.
+fn sorted_files(index: &SearchIndex) -> Vec<(String, Vec<u8>)> {
+    let mut files: Vec<_> = index.files.iter().map(|f| (f.rel_path.clone(), f.bytes.clone())).collect();
+    files.sort();
+    files
+}
+
+/// Assert two bundles hold the same files with the same bytes.
+///
+/// `pagefind-entry.json` is compared as JSON instead: Pagefind lists the
+/// languages in it in hash-map order, which differs between two runs over the
+/// same pages.
+fn assert_same_bundle(got: &SearchIndex, expected: &SearchIndex, reference: &str) {
+    let (got, expected) = (sorted_files(got), sorted_files(expected));
     assert_eq!(
-        std::fs::read_to_string(dir.path().join("posts/hello/index.html")).unwrap(),
-        source,
+        got.iter().map(|(p, _)| p).collect::<Vec<_>>(),
+        expected.iter().map(|(p, _)| p).collect::<Vec<_>>(),
+        "bundle file set differs from the {reference}"
+    );
+    let parse = |b: &[u8]| serde_json::from_slice::<serde_json::Value>(b).unwrap();
+    for ((path, got), (_, expected)) in got.iter().zip(&expected) {
+        if path == "pagefind-entry.json" {
+            assert_eq!(parse(got), parse(expected), "{path} differs from the {reference}");
+        } else {
+            assert!(got == expected, "{path} differs from the {reference}");
+        }
+    }
+}
+
+/// The bundle as it was built before pages were handed to Pagefind in memory:
+/// a segmented copy of the tree in a scratch directory, read back from disk by
+/// Pagefind's own `add_directory`. One difference is deliberate: that build
+/// walked the copy in directory order, which is not reproducible, so here each
+/// page is added by its own exact-path glob in name order. What remains to
+/// differ is only how a page reaches Pagefind — its URL, its parsed content,
+/// its page number.
+fn bundle_via_scratch_copy(site_dir: &Path) -> SearchIndex {
+    let scratch = tempfile::tempdir().unwrap();
+    let mut rels = Vec::new();
+    for entry in walkdir::WalkDir::new(site_dir).sort_by_file_name().into_iter().filter_map(Result::ok) {
+        if !entry.file_type().is_file()
+            || entry.path().extension().and_then(|x| x.to_str()) != Some("html")
+        {
+            continue;
+        }
+        let rel = entry.path().strip_prefix(site_dir).unwrap().to_string_lossy().replace('\\', "/");
+        let html = std::fs::read_to_string(entry.path()).unwrap();
+        let dest = scratch.path().join(&rel);
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::write(dest, segment(&html)).unwrap();
+        rels.push(rel);
+    }
+
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let files = rt.block_on(async {
+        let mut index = pagefind::api::PagefindIndex::new(None).unwrap();
+        for rel in &rels {
+            let added = index
+                .add_directory(scratch.path().to_string_lossy().into_owned(), Some(rel.clone()))
+                .await
+                .unwrap();
+            assert_eq!(added, 1, "the glob {rel} selects exactly its own page");
+        }
+        index.get_files().await.unwrap()
+    });
+    SearchIndex {
+        files: files
+            .into_iter()
+            .map(|f| SearchIndexFile {
+                rel_path: f.filename.to_string_lossy().replace('\\', "/"),
+                bytes: f.contents,
+            })
+            .collect(),
+        pages: rels.len(),
+        skipped: 0,
+    }
+}
+
+/// Handing Pagefind the pages in memory must not change the bundle: same
+/// files, same bytes, same census as the scratch-copy build it replaced — for
+/// Chinese and English pages alike. The byte comparison covers the page URLs
+/// Pagefind derives, the segmented text in every fragment, and the page
+/// numbering in the index files, which follows the order pages arrive in —
+/// so it also fails if the walk stops being in name order.
+#[test]
+fn in_memory_bundle_matches_the_scratch_copy_bundle() {
+    let dir = tempfile::tempdir().unwrap();
+    write_bilingual_site(dir.path());
+    let before = std::fs::read(dir.path().join("index.html")).unwrap();
+
+    let _serialize = lock_index_counter();
+    let expected = bundle_via_scratch_copy(dir.path());
+    let got = build_search_index(dir.path()).expect("index should build");
+
+    assert_eq!((got.pages, got.skipped), (expected.pages, expected.skipped));
+    assert_eq!(got.pages, SITE_PAGES, "every page is indexed");
+    assert_same_bundle(&got, &expected, "scratch-copy build");
+    for lang in ["zh-hant_", "en_"] {
+        assert!(
+            got.files.iter().any(|f| f.rel_path.starts_with(&format!("fragment/{lang}"))),
+            "no {lang} pages indexed"
+        );
+    }
+    assert_eq!(
+        std::fs::read(dir.path().join("index.html")).unwrap(),
+        before,
         "the deployed build output must never be mutated"
     );
-    assert!(
-        !temp.path().join("style.css").exists(),
-        "non-html should not be copied"
-    );
+}
 
-    let path = temp.path().to_path_buf();
-    drop(temp);
-    assert!(!path.exists(), "scratch dir must be deleted on drop");
+/// A newer request arriving while pages are being handed to Pagefind stops the
+/// pass before the next page, rather than after the whole corpus is parsed.
+/// Pagefind parses one page at a time, so that phase is long enough to matter.
+#[test]
+fn a_cancellation_between_pages_stops_before_the_next_page() {
+    let dir = tempfile::tempdir().unwrap();
+    write_bilingual_site(dir.path());
+    let polls = std::sync::atomic::AtomicUsize::new(0);
+    // Poll 1 follows segmentation; polls 2 and 3 precede the first two pages.
+    let cancel_on = 3;
+    let cancelled = || polls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1 >= cancel_on;
+
+    let _serialize = lock_index_counter();
+    let outcome = build_search_index_cancellable(dir.path(), &cancelled).expect("no error");
+    assert!(outcome.is_none(), "a cancelled pass produces nothing");
+    assert_eq!(
+        polls.into_inner(),
+        cancel_on,
+        "the pass stopped at the first poll that said cancelled"
+    );
 }
 
 /// End-to-end proof that the pre-pass reaches Pagefind: a Chinese page
