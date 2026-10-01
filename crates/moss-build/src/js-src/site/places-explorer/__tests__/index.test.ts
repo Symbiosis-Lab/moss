@@ -13,23 +13,29 @@ import { initPlacesExplorer } from "../index";
 const WORLD_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 842.035025 480"></svg>';
 const PLACES_JSON = { works: [], places: [] };
 const TILES_JSON = { k: 4, bleed: 0.1, cells: [] as Array<[number, number]> };
+const LABELS_JSON = { languages: ["en"], en: { cities: [], ranges: [], peaks: [], rivers: [] } };
 
-function handshakeFigure(): string {
+function handshakeFigure(withLabels = false): string {
+  const labelsAttr = withLabels ? ' data-labels="/_moss/map.abc/labels.json"' : "";
   return (
     '<figure class="moss-place-map" data-moss-places-explorer ' +
     'data-world="/_moss/map.abc/world.svg" data-tiles="/_moss/map.abc/tiles.json" ' +
-    'data-places="/_moss/places.def.json" data-scope="places">' +
+    `data-places="/_moss/places.def.json"${labelsAttr} data-scope="places">` +
     '<svg data-static-floor aria-hidden="true"></svg></figure>'
   );
 }
 
-function stubSuccessfulFetch(): void {
+function stubSuccessfulFetch(labelsOutcome: "ok" | "fail" = "ok"): void {
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("world.svg")) return Promise.resolve({ ok: true, text: () => Promise.resolve(WORLD_SVG) } as Response);
       if (url.endsWith("tiles.json")) return Promise.resolve({ ok: true, json: () => Promise.resolve(TILES_JSON) } as Response);
+      if (url.endsWith("labels.json")) {
+        if (labelsOutcome === "fail") return Promise.resolve({ ok: false, status: 404 } as Response);
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(LABELS_JSON) } as Response);
+      }
       if (url.endsWith(".json")) return Promise.resolve({ ok: true, json: () => Promise.resolve(PLACES_JSON) } as Response);
       return Promise.reject(new Error(`unexpected fetch: ${url}`));
     }),
@@ -91,5 +97,30 @@ describe("initPlacesExplorer", () => {
     stubSuccessfulFetch();
     await initPlacesExplorer();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  test("a handshake with no data-labels attribute boots the map without ever fetching labels", async () => {
+    document.body.innerHTML = handshakeFigure(false);
+    stubSuccessfulFetch();
+    const figure = document.querySelector<HTMLElement>("[data-moss-places-explorer]")!;
+    await initPlacesExplorer();
+    expect(figure.getAttribute("data-moss-places-explorer-ready")).toBe("ready");
+    expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("labels.json"), expect.anything());
+  });
+
+  test("a failed labels.json fetch never blocks the map from becoming ready", async () => {
+    document.body.innerHTML = handshakeFigure(true);
+    stubSuccessfulFetch("fail");
+    const figure = document.querySelector<HTMLElement>("[data-moss-places-explorer]")!;
+    await initPlacesExplorer();
+    expect(figure.getAttribute("data-moss-places-explorer-ready")).toBe("ready");
+    expect(figure.querySelector(".moss-places-viewport")).not.toBeNull();
+  });
+
+  test("a present data-labels attribute is fetched alongside the required three", async () => {
+    document.body.innerHTML = handshakeFigure(true);
+    stubSuccessfulFetch("ok");
+    await initPlacesExplorer();
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("labels.json"), expect.anything());
   });
 });

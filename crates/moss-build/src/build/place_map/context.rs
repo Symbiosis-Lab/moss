@@ -228,9 +228,10 @@ impl PlaceMapRenderContext {
             return svg;
         }
         let Some(places_hash) = self.explorer_places_hash.as_deref() else { return svg };
-        let (Ok(world), Ok(tiles)) = (
+        let (Ok(world), Ok(tiles), Ok(labels)) = (
             crate::build::served_path::ServedPath::for_place_map_asset(&self.map_assets_hash, "world.svg"),
             crate::build::served_path::ServedPath::for_place_map_asset(&self.map_assets_hash, "tiles.json"),
+            crate::build::served_path::ServedPath::for_place_map_asset(&self.map_assets_hash, "labels.json"),
         ) else {
             return svg;
         };
@@ -238,10 +239,11 @@ impl PlaceMapRenderContext {
         svg.replacen(
             "<figure class=\"moss-place-map\"",
             &format!(
-                "<figure class=\"moss-place-map\" data-moss-places-explorer data-world=\"{}\" data-tiles=\"{}\" data-places=\"{}\" data-scope=\"{}\"",
+                "<figure class=\"moss-place-map\" data-moss-places-explorer data-world=\"{}\" data-tiles=\"{}\" data-places=\"{}\" data-labels=\"{}\" data-scope=\"{}\"",
                 world.to_relative_url(),
                 tiles.to_relative_url(),
                 places.to_relative_url(),
+                labels.to_relative_url(),
                 self.namespace,
             ),
             1,
@@ -819,6 +821,7 @@ mod tests {
         assert!(html.contains("data-world=\"/_moss/map.abc123/world.svg\""), "{html:.200}");
         assert!(html.contains("data-tiles=\"/_moss/map.abc123/tiles.json\""), "{html:.200}");
         assert!(html.contains("data-places=\"/_moss/places.def456.json\""), "{html:.200}");
+        assert!(html.contains("data-labels=\"/_moss/map.abc123/labels.json\""), "{html:.200}");
         assert!(html.contains("data-scope=\"places\""), "{html:.200}");
     }
 

@@ -183,6 +183,97 @@ header:has(+ main article.container > figure[data-moss-places-explorer]) .nav-co
 }
 
 /* ---------------------------------------------------------------------------
+   Place-name labels: above the map, below the markers. DOM order alone
+   gives that stacking (no z-index on this layer, matching the markers
+   layer's own default z-index: auto base) — `labels.ts` appends
+   `.moss-places-labels` right after `.moss-places-world` and before
+   `.moss-places-markers`.
+   --------------------------------------------------------------------------- */
+
+/* Every `.moss-places-label`/`.moss-places-label-dot` is built once and
+   lives in the DOM for the whole session (`labels.ts`'s own "measure once,
+   reposition every settle" split) — `[hidden]` (the UA default, not a rule
+   this file adds) is what keeps an unplaced one out of layout and
+   hit-testing between settles. */
+.moss-places-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Hidden for the SAME window `.moss-places-world[data-gesture]` promotes
+   the map to its own compositing layer — a label's screen position is only
+   ever recomputed on settle (`map.ts`'s own `applyCamera`), so showing one
+   mid-gesture would read as floating free of the geography it names. The
+   sibling selector reaches across `.moss-places-labels`' own position in
+   the DOM (between `.moss-places-world` and `.moss-places-markers`)
+   without this file needing a second attribute JS has to set and clear in
+   step with the world layer's own. */
+.moss-places-world[data-gesture] ~ .moss-places-labels {
+  opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .moss-places-labels {
+    transition: opacity 150ms ease-out;
+  }
+}
+
+.moss-places-label {
+  position: absolute;
+  white-space: nowrap;
+  font-family: var(--moss-font-body);
+  font-size: 0.8125rem;
+  color: var(--moss-color-text);
+  text-shadow:
+    0 1px 2px var(--moss-color-bg),
+    0 -1px 2px var(--moss-color-bg),
+    1px 0 2px var(--moss-color-bg),
+    -1px 0 2px var(--moss-color-bg);
+}
+
+/* Ranges: letter-spaced small caps read as a region name rather than a
+   point, the quiet cartographic distinction the design asks for — no
+   colour change of its own, so it still reads as "the same map" as a city
+   name beside it. */
+.moss-places-label[data-kind="range"] {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Peaks: the "▲ " prefix is baked into the text at build time
+   (`labels.ts`'s own `buildPoint`), so no CSS content/pseudo-element is
+   needed here — this rule only has to mute it slightly against a plain
+   city name. */
+.moss-places-label[data-kind="peak"] {
+  font-size: 0.75rem;
+  color: var(--moss-color-text-secondary);
+}
+
+/* Rivers: italic, and tinted toward the SAME water blue
+   `.moss-places-viewport`'s own `--moss-place-water` already paints —
+   mixed mostly with the ordinary text colour (not read directly) so it
+   stays legible against land, water and relief alike in both themes
+   without a dedicated token of its own. */
+.moss-places-label[data-kind="river"] {
+  font-style: italic;
+  font-size: 0.75rem;
+  color: color-mix(in oklch, var(--moss-color-text-secondary) 70%, var(--moss-place-water, #e9eff2) 30%);
+}
+
+.moss-places-label-dot {
+  position: absolute;
+  inline-size: 4px;
+  block-size: 4px;
+  margin-inline-start: -2px;
+  margin-block-start: -2px;
+  border-radius: 50%;
+  background: var(--moss-color-text);
+  box-shadow: 0 0 0 1px var(--moss-color-bg);
+}
+
+/* ---------------------------------------------------------------------------
    Markers + the coincident-cluster ring.
    --------------------------------------------------------------------------- */
 

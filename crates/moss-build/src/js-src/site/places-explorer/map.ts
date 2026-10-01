@@ -23,13 +23,14 @@ import {
   worldToScreen,
 } from "./camera";
 import { CardRow, worksForRow } from "./cards";
+import { LabelLayer } from "./labels";
 import { MarkerLayer, pointsForWorks } from "./markers";
 import { project, WORLD_HEIGHT, WORLD_WIDTH } from "./projection";
 import { copyFor } from "./strings";
 import { attachGestures } from "./gestures";
 import { parseMapSvg, TileLayer } from "./tiles";
 import * as urlState from "./state";
-import type { Camera, PlacesData, Place, Point, Scope, Viewport } from "./types";
+import type { Camera, LabelsData, PlacesData, Place, Point, Rect, Scope, Viewport } from "./types";
 
 /** Relief fades to this floor at the detail ceiling — the design's own tuned value, ported from the prototype's `RELIEF_STRENGTH_FLOOR`. */
 const RELIEF_STRENGTH_FLOOR = 0.2;
@@ -56,6 +57,8 @@ export interface MountOptions {
   /** How far, in world units, a tile's own canvas was padded past its nominal cell on every edge (`tiles.json`'s own `bleed`, the build's `TILE_BLEED`) — read off the build for the same reason `tileK` is. */
   tileBleed: number;
   places: PlacesData;
+  /** `labels.json`'s own parsed body — `null`/`undefined` when the handshake carried no `data-labels` or that fetch failed; the label layer then simply never places anything (progressive enhancement, same posture as a missing locator). */
+  labels?: LabelsData | null;
   lang: string;
 }
 
@@ -84,6 +87,14 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   tilesEl.className = "moss-places-tiles";
   worldEl.append(tilesEl);
 
+  // Above the map, below the markers — DOM order alone gives it that
+  // stacking (no z-index needed, matching every sibling layer here), and
+  // places-explorer.css hides the whole layer while `.moss-places-world`
+  // carries `[data-gesture]`, so a stale position is never visible mid-pan.
+  const labelsEl = document.createElement("div");
+  labelsEl.className = "moss-places-labels";
+  labelsEl.setAttribute("aria-hidden", "true");
+
   const markersEl = document.createElement("div");
   markersEl.className = "moss-places-markers";
 
@@ -110,7 +121,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   statusEl.setAttribute("role", "status");
   statusEl.setAttribute("aria-live", "polite");
 
-  viewportEl.append(worldEl, markersEl, controlsEl, cardsEl);
+  viewportEl.append(worldEl, labelsEl, markersEl, controlsEl, cardsEl);
   figure.replaceChildren(viewportEl, statusEl);
 
   // ---- state -----------------------------------------------------------
@@ -173,6 +184,21 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   );
 
   const cardRow = new CardRow(cardsEl, { selectWork }, strings);
+  const labelLayer = new LabelLayer(labelsEl, options.labels, options.lang);
+
+  /** Boxes a label must never cover beyond the markers themselves, in viewport-relative CSS px — the zoom controls, a breadcrumb/scope chip (forward-compatible: nothing emits that class here yet, so the query simply matches nothing today), and the card row. `:empty` card rows collapse to zero size on their own (`places-explorer.css`), so an empty one reserves nothing without a separate check here. */
+  function reservedLabelRects(): Rect[] {
+    const origin = viewportEl.getBoundingClientRect();
+    const relative = (el: Element | null): Rect | null => {
+      if (!el) return null;
+      const box = el.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0) return null;
+      return { x: box.x - origin.x, y: box.y - origin.y, width: box.width, height: box.height };
+    };
+    return [relative(controlsEl), relative(cardsEl), relative(viewportEl.querySelector(".moss-places-scope-chip"))].filter(
+      (rect): rect is Rect => rect != null,
+    );
+  }
 
   function selectWork(id: string | null): void {
     const next = selectedId === id ? null : id;
@@ -270,6 +296,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       const visibleIds = new Set(visiblePoints.map((point) => point.id));
       const rows = worksForRow(options.places.works, visibleIds, scopedIds, selectedId);
       cardRow.render(rows, options.places.places, selectedId);
+      labelLayer.render(visiblePoints, camera, viewport, worksById, placesById, reservedLabelRects());
       urlState.writeCamera(camera);
     }
   }

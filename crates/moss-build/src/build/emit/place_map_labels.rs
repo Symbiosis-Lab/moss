@@ -3,10 +3,11 @@
 //! the SAME `_moss/map.<hash>/` directory `emit::place_map_assets` writes
 //! its world/tile SVGs into.
 //!
-//! Data only. Nothing here places a label on a rendered map — reading this
-//! file to actually draw labels is a separate, later landing. This emitter
+//! Data only. Nothing here places a label on a rendered map — this emitter
 //! only picks which of the pack's two label languages (`en`, `zh-Hant`) the
-//! site gets and writes them out.
+//! site gets and writes them out; the places-explorer's own `labels.ts`
+//! (`crates/moss-build/src/js-src/site/places-explorer/`) reads this file
+//! client-side to actually place one.
 //!
 //! Computing this file is cheap — a few hundred small records read straight
 //! out of the already-decoded, in-memory [`place_map::Labels`], no

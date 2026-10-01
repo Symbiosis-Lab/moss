@@ -59,6 +59,14 @@ export interface Viewport {
   height: number;
 }
 
+/** An axis-aligned screen-space box, in CSS px from the viewport's own top-left — the shape every collision check in this directory (the label layer's own placement, a reserved UI region) compares. */
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /** The map's camera: `x`/`y` are the world-space (projected) point centred in the viewport; `zoom` is a multiplier over the cover baseline (1 = cover, never below it). */
 export interface Camera {
   x: number;
@@ -71,3 +79,32 @@ export type Scope =
   | { kind: "all" }
   | { kind: "article"; id: string }
   | { kind: "place"; id: string };
+
+/** A labeled point (city, mountain range or peak) in `labels.json` — see `emit::place_map_labels::PointLabelJson`. `rank` is Natural Earth's own `scalerank` (0 = most important), lower is more major. */
+export interface LabelPoint {
+  name: string;
+  lat: number;
+  lng: number;
+  rank: number;
+}
+
+/** A labeled river course — see `emit::place_map_labels::RiverLabelJson`. `line` is `[lng, lat]` pairs (lng first) in the river's natural, open (not closed) order. */
+export interface LabelRiver {
+  name: string;
+  rank: number;
+  line: Array<[number, number]>;
+}
+
+/** One language's worth of `labels.json`. */
+export interface LanguageLabels {
+  cities: LabelPoint[];
+  ranges: LabelPoint[];
+  peaks: LabelPoint[];
+  rivers: LabelRiver[];
+}
+
+/** `labels.<hash>.json` itself: `languages` names every other top-level key present — see `emit::place_map_labels::LabelsJson`. */
+export interface LabelsData {
+  languages: string[];
+  [language: string]: LanguageLabels | string[];
+}

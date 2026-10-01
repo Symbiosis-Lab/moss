@@ -4,9 +4,12 @@
  * Finds the handshake element moss-build's `PlaceMapRenderContext::
  * render_term_map` leaves on a place-typed namespace root's static map
  * figure (`data-moss-places-explorer`, carrying `data-world`/`data-tiles`/
- * `data-places`/`data-scope`), fetches the world SVG and the explorer's
- * data file, and — once both are in hand — hands them to `map.ts` to build
- * the interactive layer in place of the figure's static `<svg>` child.
+ * `data-places`/`data-labels`/`data-scope`), fetches the world SVG and the
+ * explorer's data files, and — once the three REQUIRED ones are in hand —
+ * hands them to `map.ts` to build the interactive layer in place of the
+ * figure's static `<svg>` child. `data-labels` is the one optional URL: its
+ * own fetch failing (or the attribute being absent) never blocks the map,
+ * only the decorative place-name layer it feeds.
  *
  * Progressive enhancement is the whole point: the static SVG is the
  * no-JavaScript floor and stays exactly as rendered until the moment both
@@ -16,13 +19,14 @@
  * Classes this directory creates dynamically (none exist in any emitted
  * Rust HTML, so the desktop repo's own class allowlist needs this list by
  * hand): moss-places-viewport, moss-places-world, moss-places-tiles,
+ * moss-places-labels, moss-places-label, moss-places-label-dot,
  * moss-places-markers, moss-places-marker, moss-places-ring-leg,
  * moss-places-ring-dot, moss-places-controls, moss-places-capsule,
  * moss-places-control, moss-places-cards, moss-places-card-select,
  * moss-places-card-detail, moss-places-card-read, moss-places-status.
  */
 import { mountPlacesMap } from "./map";
-import type { PlacesData } from "./types";
+import type { LabelsData, PlacesData } from "./types";
 
 export {};
 
@@ -51,18 +55,34 @@ export async function initPlacesExplorer(root: ParentNode = document): Promise<v
   const worldUrl = figure.dataset.world;
   const tilesUrl = figure.dataset.tiles;
   const placesUrl = figure.dataset.places;
+  const labelsUrl = figure.dataset.labels;
   if (!worldUrl || !tilesUrl || !placesUrl) return;
 
   try {
-    const [worldSvgText, places, tiles] = await Promise.all([
+    // The label layer is decorative, not core reading functionality (the
+    // module doc's own framing): a missing `data-labels` attribute or a
+    // failed fetch for it must never block the map itself, so it is the one
+    // URL fetched outside the `Promise.all` that still gates everything
+    // else — caught on its own, resolving to `null` (no labels) rather than
+    // rejecting the whole boot.
+    const [worldSvgText, places, tiles, labels] = await Promise.all([
       fetchLocal(worldUrl).then((response) => response.text()),
       fetchLocal(placesUrl).then((response) => response.json() as Promise<PlacesData>),
       fetchLocal(tilesUrl).then((response) => response.json() as Promise<TileIndex>),
+      labelsUrl
+        ? fetchLocal(labelsUrl)
+            .then((response) => response.json() as Promise<LabelsData>)
+            .catch((error) => {
+              console.warn("[moss] places explorer labels could not load", error);
+              return null;
+            })
+        : Promise.resolve(null),
     ]);
     const tilesBaseUrl = tilesUrl.slice(0, tilesUrl.lastIndexOf("/") + 1);
     const controller = mountPlacesMap(figure, {
       worldSvgText,
       places,
+      labels,
       tileCells: tiles.cells,
       tileK: tiles.k,
       tileBleed: tiles.bleed,

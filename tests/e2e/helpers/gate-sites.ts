@@ -2386,3 +2386,50 @@ precision = "city"
     ".moss/theme/style.css": null,
   },
 };
+
+// ── Places explorer labels ────────────────────────────────────────────────
+// Two works, each placed at a REAL Natural Earth populated-place coordinate
+// (confirmed against the embedded pack: Tokyo 35.687N 139.749E rank 0, Osaka
+// 34.752N 135.458E rank 1) under its OWN gazetteer name. "Tokyo Shibuya"
+// names the same city Natural Earth's own "Tokyo" label does (own-place
+// rule: a sub-area name still counts as its city) — the positive case.
+// "Namba District" sits at Osaka's own coordinate but names an unrelated
+// place — the negative case the design calls out by name (a marker merely
+// covering a label's point must drop it, never wear its name). The two
+// points are ~400km apart, far enough that a camera centred on either one
+// alone never has the other's marker anywhere near its own label's
+// coincidence radius. Served by playwright/places-explorer-labels.config.ts.
+export const PLACES_EXPLORER_LABELS_GATE: ScratchSiteSpec = {
+  name: "places-explorer-labels-gate",
+  files: {
+    "cover.svg": PLACES_EXPLORER_COVER_SVG,
+    "places/index.md": `---
+title: Places
+---
+
+Every work this site locates, gathered on one map.
+`,
+    "tokyo-crossing.md": placesExplorerWork("pel001aa", "Tokyo Crossing", "Tokyo Shibuya", "2024-06-10"),
+    "kawasaki-waterfront.md": placesExplorerWork("pel002bb", "Kawasaki Waterfront", "Namba District", "2024-05-01"),
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+`,
+    ".moss/places.toml": `["Tokyo Shibuya"]
+lat = 35.687
+lng = 139.749
+precision = "exact"
+
+["Namba District"]
+lat = 34.752
+lng = 135.458
+precision = "exact"
+`,
+    ".moss/theme/style.css": null,
+  },
+};

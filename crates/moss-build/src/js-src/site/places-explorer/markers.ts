@@ -277,8 +277,8 @@ function clusterKey(ids: string[]): string {
   return [...ids].sort().join("|");
 }
 
-/** A cluster's own world-space centroid, from its members' WORLD (unscaled) coordinates — never `ProximityCluster.screen`, which is `clusters.ts`'s zoom-scaled, pan-independent position, meaningful only for distance comparisons, not for placing anything on the actual page. */
-function worldCentroid(members: WorkPoint[]): Point {
+/** A cluster's own world-space centroid, from its members' WORLD (unscaled) coordinates — never `ProximityCluster.screen`, which is `clusters.ts`'s zoom-scaled, pan-independent position, meaningful only for distance comparisons, not for placing anything on the actual page. Exported for `labels.ts`'s own marker-box reservation, which needs the SAME on-screen cluster position this module draws a marker at, not a second computation of it. */
+export function worldCentroid(members: WorkPoint[]): Point {
   if (members.length === 0) return { x: 0, y: 0 };
   const sum = members.reduce((acc, member) => ({ x: acc.x + member.x, y: acc.y + member.y }), { x: 0, y: 0 });
   return { x: sum.x / members.length, y: sum.y / members.length };
