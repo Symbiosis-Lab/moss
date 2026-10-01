@@ -640,6 +640,15 @@ pub async fn start_server(
                 })
             })
             .layer(middleware::from_fn(inject_iframe_bridge))
+            // A navigation — a page, not one of its assets — means someone is
+            // looking (`super::events::viewer_activity`). Inside the trust
+            // boundary, so a refused request is not a viewer.
+            .layer(middleware::from_fn(|request: Request<Body>, next: middleware::Next| async move {
+                if content_wrapper::is_navigation_request(request.headers()) {
+                    super::events::note_activity();
+                }
+                next.run(request).await
+            }))
             // Outermost layer: added last, so it runs FIRST — ahead of routing,
             // ServeDir and bridge injection — and covers every route including
             // the health check. Refuses a Host that is neither loopback nor

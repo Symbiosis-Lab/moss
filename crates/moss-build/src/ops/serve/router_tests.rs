@@ -157,6 +157,7 @@ async fn test_image_file_returns_wrapped_html() {
     // Verify that requesting an image file returns an HTML wrapper with <img> tag,
     // __moss_raw=1 reference, and the injected bridge script.
     use tempfile::TempDir;
+    let _viewers = event_stream_lock();
 
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     // Write a fake PNG file (content doesn't matter for wrapping logic)
@@ -727,6 +728,7 @@ async fn a_rebuild_never_parks_the_preview_on_a_generation_older_than_the_render
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_pdf_file_returns_unsupported_page() {
+    let _viewers = event_stream_lock();
     // Verify that unsupported file types (PDF) get the "open in system viewer" page.
     use tempfile::TempDir;
 
@@ -2714,9 +2716,9 @@ async fn read_carrier_walks_its_own_root_not_a_caller_supplied_one() {
 
 // ── The event carrier (`GET /__moss/events`) ─────────────────────────────────
 
-/// Held by every test that opens `/__moss/events`: each open stream holds a
-/// receiver on the one process-global bus, so a subscriber count is only
-/// meaningful while no sibling can open or close one.
+/// Held by every test that opens `/__moss/events` or navigates to a page:
+/// both move the one process-global viewer-activity signal, so what a test
+/// reads of it is only meaningful while no sibling can move it.
 static EVENT_STREAM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn event_stream_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -2858,17 +2860,18 @@ async fn event_stream_delivers_a_published_event_to_a_browser() {
     let _ = shutdown_tx.send(());
 }
 
-/// `subscriber_count` rises while a browser holds the stream open and falls
-/// once it disconnects — the signal a host reads to tell whether anyone is
-/// watching outside its own window.
+/// An event stream counts while a browser holds it open and stops counting
+/// once it disconnects, and both moments are activity — the signal a host
+/// waits on to tell whether anyone is watching outside its own window.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_subscriber_count_follows_an_open_event_stream() {
+async fn viewer_activity_follows_an_open_event_stream() {
     use crate::ops::serve::events;
     let _streams = event_stream_lock();
 
     let (_parent, _vault_path, site_dir) = confinement_vault();
     let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63430).await;
-    let before = events::subscriber_count();
+    let mut activity = events::viewer_activity();
+    let before = *activity.borrow_and_update();
 
     let url = format!("http://localhost:{port}/__moss/events");
     // Headers arrive only after the handler has subscribed.
@@ -2882,14 +2885,60 @@ async fn the_subscriber_count_follows_an_open_event_stream() {
     })
     .await
     .unwrap();
-    assert_eq!(events::subscriber_count(), before + 1);
+    let opened = *activity.borrow_and_update();
+    assert_eq!(opened.streams, before.streams + 1);
+    assert!(opened.last_activity > before.last_activity, "opening a stream is activity");
 
     drop(stream);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while events::subscriber_count() > before && std::time::Instant::now() < deadline {
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    assert_eq!(events::subscriber_count(), before, "a closed stream must stop counting");
+    let closed = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        activity.wait_for(|a| a.streams == before.streams),
+    )
+    .await
+    .expect("a closed stream must stop counting")
+    .expect("the signal outlives the test");
+    assert!(closed.last_activity > opened.last_activity, "closing a stream is activity");
+
+    let _ = shutdown_tx.send(());
+}
+
+/// A page navigation is activity; one of the page's own assets is not, or a
+/// page with a slow-loading image would read as a viewer for as long as it
+/// loads, and `<img>` re-fetches after a rebuild would keep a hidden app awake.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_page_navigation_is_viewer_activity_and_its_assets_are_not() {
+    use crate::ops::serve::events;
+    let _viewers = event_stream_lock();
+
+    let site = tempfile::TempDir::new().unwrap();
+    std::fs::write(site.path().join("index.html"), "<html><body>home</body></html>").unwrap();
+    std::fs::write(site.path().join("photo.png"), b"PNG").unwrap();
+    let (port, shutdown_tx) = start_server(ServeConfig::new(
+        Arc::new(std::sync::RwLock::new(site.path().to_path_buf())),
+        63440,
+    ))
+    .await
+    .expect("Server should start");
+    let mut activity = events::viewer_activity();
+    activity.borrow_and_update();
+
+    let get = |path: &str, dest: &'static str| {
+        let url = format!("http://localhost:{port}{path}");
+        tokio::task::spawn_blocking(move || {
+            ureq::get(&url)
+                .set("Sec-Fetch-Dest", dest)
+                .timeout(std::time::Duration::from_secs(5))
+                .call()
+                .expect("request succeeds")
+        })
+    };
+
+    get("/photo.png", "image").await.unwrap();
+    assert!(!activity.has_changed().unwrap(), "an asset load is not a viewer");
+
+    get("/", "document").await.unwrap();
+    assert!(activity.has_changed().unwrap(), "a page navigation is a viewer");
+    assert!(activity.borrow_and_update().last_activity.is_some());
 
     let _ = shutdown_tx.send(());
 }

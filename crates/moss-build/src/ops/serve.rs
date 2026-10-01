@@ -71,7 +71,8 @@
 //! - `trust_boundary` — Host/Origin validation (outermost layer)
 //! - `yield_route` — `POST /__moss/yield` handler + contract
 //! - `session_route` — `GET /__moss/session` token→cookie exchange
-//! - `events` — the SSE event carrier + headless announcer/reporter
+//! - `events` — the SSE event carrier + headless announcer/reporter, and the
+//!   viewer-activity signal
 //! - `placeholder` — SVG placeholders for assets still being processed
 //! - `asset_rewriter` / `content_wrapper` / `iframe_bridge` / `comment_stub` —
 //!   the response-transform layers (bridge injection stays a host-mounted layer;

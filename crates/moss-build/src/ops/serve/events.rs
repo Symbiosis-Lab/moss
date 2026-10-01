@@ -46,12 +46,20 @@
 //! `fetch` + a `ReadableStream` reader rather than `EventSource` — `EventSource`
 //! cannot set a request header, and putting the token in the query string
 //! would write it into every access log.
+//!
+//! ## Viewer activity
+//!
+//! [`viewer_activity`] is the server's answer to "is anyone looking": a page
+//! navigation, and an event stream opening or closing, each update it. A host
+//! that pauses background work while nobody watches can wake on it instead of
+//! polling. It lives here because the open streams are this module's
+//! receivers, and it is a process global for the same reason the bus is.
 
 use std::sync::{Arc, OnceLock};
 
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures::stream::{Stream, StreamExt};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 use crate::types::events::{MossEvent, MOSS_EVENT_CHANNEL};
 
@@ -67,12 +75,63 @@ fn bus() -> &'static broadcast::Sender<String> {
     BUS.get_or_init(|| broadcast::channel(CAPACITY).0)
 }
 
-/// How many browsers hold `GET /__moss/events` open right now, one receiver
-/// each. A host can read it to tell whether anyone is watching outside its
-/// own window. A browser that went away still counts until its stream fails a
-/// write, at the next event or keep-alive (about 15 s).
-pub fn subscriber_count() -> usize {
-    bus().receiver_count()
+/// What the preview server has seen of its viewers. Only activity is
+/// reported; how long it keeps the host awake is the host's decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewerActivity {
+    /// The last page navigation, or event stream opening or closing. `None`
+    /// until the first.
+    pub last_activity: Option<std::time::Instant>,
+    /// Browsers holding `GET /__moss/events` open right now. One that went
+    /// away still counts until its stream fails a write, at the next event or
+    /// keep-alive (about 15 s).
+    pub streams: usize,
+}
+
+static ACTIVITY: OnceLock<watch::Sender<ViewerActivity>> = OnceLock::new();
+
+/// Watch the preview's viewers. The first call installs the signal; before
+/// it, a request skips it after one atomic load, so a process that never asks
+/// pays nothing for it.
+pub fn viewer_activity() -> watch::Receiver<ViewerActivity> {
+    ACTIVITY
+        .get_or_init(|| watch::channel(ViewerActivity { last_activity: None, streams: bus().receiver_count() }).0)
+        .subscribe()
+}
+
+/// Record that someone is looking, now.
+pub(crate) fn note_activity() {
+    if let Some(tx) = ACTIVITY.get() {
+        let streams = bus().receiver_count();
+        tx.send_modify(|a| {
+            a.last_activity = Some(std::time::Instant::now());
+            a.streams = streams;
+        });
+    }
+}
+
+/// One open event stream's place on the bus. Opening it and dropping it —
+/// however the stream ends — are both viewer activity.
+struct Subscription(Option<broadcast::Receiver<String>>);
+
+impl Subscription {
+    fn open() -> Self {
+        let rx = bus().subscribe();
+        note_activity();
+        Self(Some(rx))
+    }
+
+    fn rx(&mut self) -> &mut broadcast::Receiver<String> {
+        self.0.as_mut().expect("taken only by drop")
+    }
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        // Leave the bus first, so the count reported no longer has this stream.
+        self.0 = None;
+        note_activity();
+    }
 }
 
 /// Publish one named event. Serialization happens once here, not once per
@@ -109,12 +168,12 @@ pub fn publish(event: &MossEvent) {
 /// disconnecting a slow tab would turn a hiccup into a permanently dead
 /// subscription. The gap is logged so it is not invisible.
 fn event_stream(
-    rx: broadcast::Receiver<String>,
+    sub: Subscription,
 ) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
-    futures::stream::unfold(rx, |mut rx| async move {
+    futures::stream::unfold(sub, |mut sub| async move {
         loop {
-            match rx.recv().await {
-                Ok(json) => return Some((Ok(Event::default().data(json)), rx)),
+            match sub.rx().recv().await {
+                Ok(json) => return Some((Ok(Event::default().data(json)), sub)),
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     log::warn!(target: "preview", "carrier: SSE subscriber lagged, {n} events skipped");
                 }
@@ -137,7 +196,7 @@ pub async fn handle_events(
     // Subscribe BEFORE returning, so an event emitted between the request
     // arriving and the stream being polled is buffered rather than missed.
     // `setup-panel.ts` depends on exactly this ordering on the Tauri side.
-    let stream = event_stream(bus().subscribe()).take_until(session.retired().clone().cancelled_owned());
+    let stream = event_stream(Subscription::open()).take_until(session.retired().clone().cancelled_owned());
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
