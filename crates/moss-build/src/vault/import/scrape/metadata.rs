@@ -402,7 +402,7 @@ fn pick_publisher(
         .or(webpage)
         .and_then(|e| e.get("publisher"));
     if let Some(pf) = publisher_field {
-        if let Some(name) = direct_name(pf) {
+        if let Some(name) = name_from_value(pf) {
             return Some(name);
         }
         if let Some(target_id) = pf.get("@id").and_then(|v| v.as_str()) {
@@ -417,17 +417,6 @@ fn pick_publisher(
         }
     }
     og.get("og:site_name").cloned()
-}
-
-fn direct_name(v: &Value) -> Option<String> {
-    match v {
-        Value::String(s) => Some(s.trim().to_string()),
-        Value::Object(map) => map
-            .get("name")
-            .and_then(|n| n.as_str())
-            .map(|n| n.trim().to_string()),
-        _ => None,
-    }
 }
 
 fn pick_lang(doc: &Html, article: Option<&Value>, webpage: Option<&Value>) -> Option<String> {

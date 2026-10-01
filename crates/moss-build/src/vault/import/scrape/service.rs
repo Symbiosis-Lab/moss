@@ -89,21 +89,43 @@ pub fn generate_frontmatter(metadata: &ArticleMetadata, source_url: &str) -> Str
     out
 }
 
+/// Strip stray C0/C1 control chars and YAML-escape `\`/`"`/newlines for
+/// embedding in a double-quoted scalar. Shared by every hand-rolled
+/// frontmatter field this module writes — `push_string`'s metadata values
+/// and `render_error_markdown`'s error-page fields alike — so no caller can
+/// skip the control-char strip and end up with the weaker of two defenses.
+/// Both sources are untrusted (scraped HTML, remote server error text), and
+/// this is the same write-boundary defense-in-depth applied in
+/// `moss_core::frontmatter::serialize` (macOS Tauri multiwebview arrow-key
+/// bug, tauri-apps/tauri#10194), needed here because this hand-rolled writer
+/// bypasses that path entirely.
+///
+/// `\n`/`\r` are escaped, not just stripped of C0/C1 siblings: the stripper
+/// above keeps them as "legitimate whitespace" for callers writing multi-line
+/// bodies, but a value embedded here that keeps a raw newline turns one
+/// written line into several, and the frontmatter reader that finds the
+/// closing `---` (`moss_core::frontmatter::yaml_span`) does a plain
+/// line-by-line scan with no notion of YAML quoting. A value containing
+/// `"\n---\n"` forged a closing fence from inside the scalar, truncating the
+/// real frontmatter early — confirmed to drop `title` entirely rather than
+/// fail safe. Escaping keeps the whole value on one physical line, so no
+/// line inside it can ever trim down to exactly `---`.
+fn escape_yaml_string(s: &str) -> String {
+    let clean = moss_core::frontmatter::strip_control_chars_str(s);
+    clean
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
 fn push_string(out: &mut String, key: &str, value: Option<&str>) {
     if let Some(v) = value {
         let trimmed = v.trim();
         if trimmed.is_empty() {
             return;
         }
-        // Strip stray C0/C1 control chars before escaping: this metadata comes
-        // from scraped/imported HTML, which is untrusted, and the same
-        // write-boundary defense-in-depth applied in
-        // `moss_core::frontmatter::serialize` (macOS Tauri multiwebview
-        // arrow-key bug, tauri-apps/tauri#10194) must hold here too, since
-        // this hand-rolled writer bypasses that path entirely.
-        let clean = moss_core::frontmatter::strip_control_chars_str(trimmed);
-        // YAML double-quoted: escape \ and "
-        let escaped = clean.replace('\\', "\\\\").replace('"', "\\\"");
+        let escaped = escape_yaml_string(trimmed);
         out.push_str(&format!("{}: \"{}\"\n", key, escaped));
     }
 }
@@ -164,8 +186,8 @@ pub fn generate_error_page(source_url: &str, error: &str) -> String {
 /// pretend to be one. The frontmatter contains only the minimal keys that are
 /// meaningful for an error record: `title`, `external_url`, and `scrape_error`.
 pub fn render_error_markdown(source_url: &str, error: &str) -> String {
-    let escaped_url = source_url.replace('\\', "\\\\").replace('"', "\\\"");
-    let escaped_error = error.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped_url = escape_yaml_string(source_url);
+    let escaped_error = escape_yaml_string(error);
 
     let frontmatter = format!(
         "---\ntitle: \"Page Unavailable\"\nexternal_url: \"{}\"\nscrape_error: \"{}\"\n---\n\n",
@@ -374,6 +396,68 @@ mod tests {
         assert!(
             md.contains(r#"scrape_error: "Server said \"try again\"""#),
             "double-quotes in error must be escaped in YAML"
+        );
+    }
+
+    #[test]
+    fn render_error_markdown_strips_control_chars_in_error() {
+        // Regression: `error` is remote server text (a status line, a reason
+        // phrase) and must get the same C0/C1 strip `push_string` applies to
+        // scraped metadata — not just the quote/backslash escape. Before this
+        // fix the two writers shared the escape but not the strip.
+        let control = "\u{7}".repeat(3); // BEL, a C0 control char
+        let md = render_error_markdown(
+            "https://example.com/page",
+            &format!("Connection reset{control}"),
+        );
+        let frontmatter_end = md.find("---\n\n").expect("frontmatter fence");
+        let frontmatter = &md[..frontmatter_end];
+        assert!(
+            !frontmatter.contains('\u{7}'),
+            "control chars must be stripped from frontmatter; got:\n{md}"
+        );
+        let doc: serde_yaml::Value =
+            serde_yaml::from_str(frontmatter.trim_start_matches("---\n"))
+                .expect("frontmatter must be valid YAML");
+        assert_eq!(doc["scrape_error"].as_str(), Some("Connection reset"));
+    }
+
+    #[test]
+    fn render_error_markdown_escapes_embedded_newline_in_error() {
+        // Regression: the frontmatter boundary finder
+        // (`moss_core::frontmatter::yaml_span`) locates the closing fence by
+        // scanning line-by-line for a line that trims to exactly "---" — it
+        // has no notion of YAML quoting. Before this fix, a raw `\n` reached
+        // the written file (the control-char strip explicitly keeps
+        // LF/CR/TAB as "legitimate whitespace"), so an `error` string
+        // containing "\n---\n" forged a closing fence from inside what was
+        // meant to be one quoted scalar. That truncated the real
+        // frontmatter early — `title` and `external_url` were lost
+        // entirely — and spilled the rest of the (half-escaped) error text
+        // into the page body as literal text, `\"` backslashes and all.
+        let malicious = "Connection reset\n---\ntitle: \"INJECTED\"\nsneaky: \"yes\"";
+        let md = render_error_markdown("https://example.com/page", malicious);
+        let doc = moss_core::frontmatter::parse(&md);
+        assert_eq!(
+            doc.frontmatter.get("title").and_then(|v| v.as_str()),
+            Some("Page Unavailable"),
+            "a forged '---' fence inside the error text must not truncate \
+             the real frontmatter; got:\n{md}"
+        );
+        assert_eq!(
+            doc.frontmatter.get("external_url").and_then(|v| v.as_str()),
+            Some("https://example.com/page")
+        );
+        assert_eq!(
+            doc.frontmatter.get("scrape_error").and_then(|v| v.as_str()),
+            Some(malicious),
+            "the error text must round-trip exactly, as one scalar"
+        );
+        assert_eq!(
+            doc.frontmatter.len(),
+            3,
+            "no extra key (e.g. the forged 'sneaky') may land in frontmatter; got:\n{:#?}",
+            doc.frontmatter
         );
     }
 
