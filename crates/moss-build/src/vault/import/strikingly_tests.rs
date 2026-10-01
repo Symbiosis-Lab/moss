@@ -43,7 +43,7 @@ fn truncated_s_assignment_returns_none() {
 
 // ---- section renderer ----------------------------------------------------
 //
-// Fixture shapes mirror the real $S corpus (河灣/.port/s-corpus): blog
+// Fixture shapes mirror the real $S corpus (the riverbend/河灣 vault): blog
 // sections are `Blog.Section` wrappers with a single `component`; page
 // sections are `Slide`s with a `components` map; ALL prose is `RichText`
 // with HTML in `value` (no Title/SubTitle/Text types exist).

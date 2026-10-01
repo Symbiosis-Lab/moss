@@ -82,10 +82,10 @@ fn pascal_case_component(ty: &str) -> bool {
 }
 
 /// Strikingly's `$S` component tree. Match arms come from the riverbend
-/// corpus census (`河灣/.port/census-summary.txt`): ALL prose is
-/// `RichText.value`; real videos are bare `Video` components; `Media`
-/// wrappers carry a stock placeholder video and select their active child
-/// via `current`; `Background.useImage=false` is an explicit opt-out.
+/// (河灣) corpus census: ALL prose is `RichText.value`; real videos are
+/// bare `Video` components; `Media` wrappers carry a stock placeholder
+/// video and select their active child via `current`;
+/// `Background.useImage=false` is an explicit opt-out.
 pub(crate) static STRIKINGLY: JsonDialect = JsonDialect {
     rules: &[
         (

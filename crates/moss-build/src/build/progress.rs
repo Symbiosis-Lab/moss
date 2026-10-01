@@ -1169,9 +1169,9 @@ fn advisory_event(task: &str, advisories: Vec<Advisory>) -> Option<PipelineEvent
 ///
 /// A build-wide check (symlink-skip, config-version-ahead) used to go silent
 /// the moment its condition cleared, because `advisory_event` returns `None`
-/// for an empty vec and nothing was reported in its place. moss-desktop's
-/// per-task reconciliation (moss#1205) sweeps a task's stored advisories
-/// against the keys THAT TASK'S OWN `completed: true` tick re-raised — so a
+/// for an empty vec and nothing was reported in its place. The desktop app's
+/// per-task reconciliation sweeps a task's stored advisories against the
+/// keys THAT TASK'S OWN `completed: true` tick re-raised — so a
 /// task that never ticks at all is never reconciled, and a fixed-and-rebuilt
 /// advisory sat until the folder was reopened. Emit this whenever the check
 /// actually ran this build and found nothing; never when it could not run at
@@ -1242,7 +1242,7 @@ pub fn report_config_version_ahead(
         // The check ran (config was readable) and found nothing this build:
         // an explicit clear, so the app's per-task sweep can retire a
         // fixed-and-rebuilt advisory instead of waiting for the folder to
-        // reopen — silence is not evidence (moss-desktop's silent-clear gap).
+        // reopen — silence is not evidence (the desktop app's silent-clear gap).
         None => Some(clear_tick("config")),
     };
     let (Some(event), Some(reporter)) = (event, reporter) else {
@@ -1476,7 +1476,7 @@ mod route_tests {
     fn symlink_skip_advisory_zero_emits_an_explicit_clear() {
         // Zero skipped symlinks → the check still ran, so it must say so: a
         // completed:true tick with EMPTY advisories, not the old `None` a
-        // silent build used to leave behind. moss-desktop's per-task sweep
+        // silent build used to leave behind. The desktop app's per-task sweep
         // only reconciles a task on that task's OWN completed tick — a task
         // that never ticks is never reconciled, so a fixed-and-rebuilt
         // symlink advisory sat stuck until the folder was reopened.

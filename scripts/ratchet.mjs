@@ -132,11 +132,10 @@
 //     feature for tripwires (forces a look), not a parser bug.
 //   - children_per_dir ignores dotfiles, __tests__ dirs and *.test.ts files.
 //
-// Row (b)'s append-only-directory exemption (ratchet-spec.md §2) is NOT
-// implemented here: this row only ever scans `crates/*/src` and
-// `packages/*/src` (see the roots below), so this baseline has never held —
-// and cannot hold — a `docs/decisions` or `docs/archive` entry for it to
-// apply to.
+// Row (b)'s append-only-directory exemption is NOT implemented here: this
+// row only ever scans `crates/*/src` and `packages/*/src` (see the roots
+// below), and neither is an append-only directory, so this baseline has
+// never had an entry for the exemption to apply to.
 
 import fs from 'node:fs';
 import path from 'node:path';

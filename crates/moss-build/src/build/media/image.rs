@@ -1490,7 +1490,7 @@ pub(crate) fn image_item_advisories(path: &str) -> Vec<Advisory> {
 /// — a deleted image whose problem the author never saw cleared must not
 /// silently leave its advisory stranded in the app: the caller uses this to
 /// fire a terminal tick even when nothing was dispatched, so the sweep on the
-/// app side (moss-desktop) can drop it.
+/// desktop app side can drop it.
 pub(crate) fn retain_image_item_fingerprints(keep: &std::collections::HashSet<String>) -> bool {
     let mut ledger = image_ledger();
     ledger.pending.retain(|path, _| keep.contains(path));
