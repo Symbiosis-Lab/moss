@@ -17,8 +17,8 @@
 //! `<g data-map-layer="marker">` group `render_svg` always emits is present
 //! but empty here, the same contract a page's own map gives it.
 
-use super::geometry::{tile_x, tile_y, Frame, FrameTier, ProjectedPoint};
-use super::svg::{render_svg, Ids, Writer};
+use super::geometry::{tile_x, tile_y, world_viewbox_width, Frame, FrameTier, ProjectedPoint};
+use super::svg::{render_svg, Ids, Writer, SVG_WIDTH};
 use super::{Pack, PlaceMapContext, PlaceMapTarget};
 use crate::vault::places::Gazetteer;
 
@@ -66,7 +66,7 @@ pub fn emit_world_svg(context: &PlaceMapContext) -> String {
         aggregate_name: None,
     };
     let ids = Ids::for_seed("world");
-    let mut writer = Writer::for_explorer_asset(&ids);
+    let mut writer = Writer::for_explorer_asset(&ids, world_viewbox_width(), true);
     render_svg(&mut writer, context, &target, false);
     writer.output
 }
@@ -82,7 +82,7 @@ pub fn emit_tile_svg(context: &PlaceMapContext, x: i16, y: i16) -> String {
         aggregate_name: None,
     };
     let ids = Ids::for_seed(&format!("tile-{x}-{y}"));
-    let mut writer = Writer::for_explorer_asset(&ids);
+    let mut writer = Writer::for_explorer_asset(&ids, f64::from(SVG_WIDTH), false);
     render_svg(&mut writer, context, &target, false);
     writer.output
 }
@@ -145,7 +145,7 @@ pub fn relevant_tiles(gazetteer: &Gazetteer, pack: &Pack) -> Vec<(i16, i16)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::place_map::geometry::{TileSelection, VIEWBOX_HEIGHT};
+    use crate::build::place_map::geometry::{world_viewbox_width, TileSelection, VIEWBOX_HEIGHT};
     use crate::build::place_map::{ProjectedPoint, Projection};
 
     /// Step 1 of the task: a `FrameTier::World` target already draws the
@@ -355,5 +355,64 @@ mod tests {
                 x_a_edge - x_b_edge
             );
         }
+    }
+
+    // -- Full-extent world projection (places explorer only) ------------
+
+    /// Follow-up to task 3 of the places explorer plan: the per-page
+    /// World-tier map (`geometry`'s `PattersonProjection::new`) fits the
+    /// world to the 480-tall viewBox and crops the sides to a fixed
+    /// 720-wide canvas — right for a page's own static map, wrong for this
+    /// shared world SVG, which a runtime pans and zooms across the whole
+    /// globe. The emitted SVG must instead carry the full, uncropped
+    /// extent: a viewBox as wide as the Patterson projection's own scale
+    /// makes the world, with 180°W at its left edge and 180°E at its
+    /// right.
+    #[test]
+    fn emit_world_svg_carries_the_full_patterson_extent_with_no_crop() {
+        let width = world_viewbox_width();
+        // The emitted viewBox rounds to the thousandth of a pixel the same
+        // way every other coordinate in this crate is serialized
+        // (`svg.rs`'s private `length` helper); replicate that rounding
+        // here rather than reach across modules for it.
+        let rounded_width = (width * 1000.0).round() / 1000.0;
+        let context = PlaceMapContext::embedded().unwrap();
+        let svg = emit_world_svg(&context);
+        let expected_viewbox = format!("viewBox=\"0 0 {rounded_width} {}\"", VIEWBOX_HEIGHT as u32);
+        assert!(svg.contains(&expected_viewbox), "expected {expected_viewbox:?} in the emitted SVG: {:.200}", svg);
+
+        let projection = Projection::new_world_full_extent();
+        let project = |longitude: f64, latitude: f64| {
+            projection.project(ProjectedPoint::new(longitude, latitude).unwrap()).unwrap()
+        };
+        let (west_x, _) = project(-180.0, 0.0);
+        let (east_x, _) = project(180.0 - 1e-9, 0.0);
+        let (center_x, _) = project(0.0, 0.0);
+        let (_, pole_y) = project(0.0, 90.0);
+        assert!(west_x.abs() < 1e-6, "180W should land at x=0, got {west_x}");
+        assert!((east_x - width).abs() < 1e-6, "180E should land at x={width}, got {east_x}");
+        assert!(
+            (center_x - width / 2.0).abs() < 1e-6,
+            "the prime meridian should land at x={}, got {center_x}",
+            width / 2.0
+        );
+        assert!(pole_y.abs() < 1e-6, "the north pole should land at y=0, got {pole_y}");
+    }
+
+    /// Pins the explorer's full-extent projection to literal numbers, to
+    /// six decimals, so the runtime's own tests (which reimplement this
+    /// same projection in TypeScript to pan and zoom the shared world SVG)
+    /// can hardcode the same values instead of re-deriving them.
+    #[test]
+    fn full_extent_projection_matches_pinned_literals_to_six_decimals() {
+        let projection = Projection::new_world_full_extent();
+        let assert_point = |longitude: f64, latitude: f64, expected_x: f64, expected_y: f64| {
+            let (x, y) = projection.project(ProjectedPoint::new(longitude, latitude).unwrap()).unwrap();
+            assert!((x - expected_x).abs() < 1e-6, "lat={latitude} lon={longitude}: x={x}, expected {expected_x}");
+            assert!((y - expected_y).abs() < 1e-6, "lat={latitude} lon={longitude}: y={y}, expected {expected_y}");
+        };
+        assert_point(0.0, 0.0, 421.017513, 240.000000);
+        assert_point(90.0, 45.0, 631.526269, 127.117606);
+        assert_point(-120.0, -30.0, 140.339171, 312.230777);
     }
 }

@@ -676,9 +676,12 @@ fn snapshot_places_site() {
 /// pins the places-root aggregate map: measured at landing (this commit)
 /// and allowed only to shrink without a thermo-reviewed reason for growth.
 ///
-/// Measured at landing, on the `places-site` fixture: world.svg = 83,325
-/// brotli bytes (pinned ceiling 96 KiB, matching the aggregate map's own
-/// budget, since the two emitters share a rendering body); this fixture's
+/// Measured at landing, on the `places-site` fixture: world.svg = 89,077
+/// brotli bytes (up from 83,325 — the explorer's world SVG now carries its
+/// full, uncropped Patterson extent instead of the page map's cropped
+/// 720-wide canvas, about 26 degrees more on each side; still under the
+/// pinned ceiling of 96 KiB, matching the aggregate map's own budget,
+/// since the two emitters share a rendering body); this fixture's
 /// Kansai-region places all fall in one 3x3 neighbourhood, so its 9 tiles
 /// combined = 134,854 brotli bytes (pinned ceiling 512 KiB). Before tiles
 /// were scoped to the gazetteer's own cells, every one of the pack's 648

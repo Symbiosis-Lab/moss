@@ -145,6 +145,8 @@ fn emit_svg_with_mode(
             Precision::Region => LocatorProfile::Region,
             Precision::Country => LocatorProfile::Country,
         }),
+        canvas_width: f64::from(SVG_WIDTH),
+        full_extent: false,
     };
     writer.open_figure(
         target,
@@ -156,6 +158,17 @@ fn emit_svg_with_mode(
     render_svg(&mut writer, context, target, true);
     writer.close_figure();
     writer.output
+}
+
+/// `render_svg`'s projection: the explorer world SVG's full-extent
+/// Patterson for `writer.full_extent`, else the target's own per-frame one
+/// — never inferred from `canvas_width`, which a same-width asset could share.
+fn choose_projection(writer: &Writer<'_>, target: &PlaceMapTarget) -> Option<Projection> {
+    if writer.full_extent {
+        Some(Projection::new_world_full_extent())
+    } else {
+        target.frame.as_ref().map(Projection::new)
+    }
 }
 
 /// Render one complete `<svg width="720" height="480" ...>...</svg>`: defs,
@@ -180,7 +193,7 @@ pub(super) fn render_svg(
     writer.defs();
     writer.water();
 
-    let projection = target.frame.as_ref().map(Projection::new);
+    let projection = choose_projection(writer, target);
     let wide = projection.as_ref().is_some_and(Projection::is_wide);
     let wide_locator = writer.locator_profile.is_some() && wide;
     let grouped = target.frame.as_ref().map(|frame| {
@@ -269,14 +282,26 @@ pub(super) struct Writer<'a> {
     /// scales the render-time simplification.
     pub(super) detail: f64,
     pub(super) locator_profile: Option<LocatorProfile>,
+    /// This figure's own canvas width, in viewBox units: `SVG_WIDTH` for
+    /// every page figure and the explorer's regional tiles, or the wider
+    /// `geometry::world_viewbox_width()` for the explorer's shared world
+    /// SVG — the one asset a reader pans and zooms across the whole globe
+    /// at runtime instead of viewing through a fixed, cropped frame.
+    pub(super) canvas_width: f64,
+    /// Whether `render_svg` draws with the explorer world SVG's full-extent
+    /// Patterson projection rather than the target's own per-frame one. Set
+    /// explicitly by each caller — never inferred from `canvas_width`, which
+    /// is only a width.
+    pub(super) full_extent: bool,
 }
 
 impl<'a> Writer<'a> {
     /// The shared literal for a page-independent places-explorer base-map
     /// asset (`explorer::emit_world_svg`/`emit_tile_svg`): full capacity, no
     /// globe inset, no href, no locator, undetailed (never shown smaller
-    /// than its own viewBox) — the two emitters differ only in `ids`.
-    pub(super) fn for_explorer_asset(ids: &'a Ids) -> Self {
+    /// than its own viewBox) — the two emitters differ only in `ids`,
+    /// `canvas_width`, and `full_extent`.
+    pub(super) fn for_explorer_asset(ids: &'a Ids, canvas_width: f64, full_extent: bool) -> Self {
         Self {
             output: String::with_capacity(32 * 1024),
             ids,
@@ -286,6 +311,8 @@ impl<'a> Writer<'a> {
             effect_scale: 1.0,
             detail: 1.0,
             locator_profile: None,
+            canvas_width,
+            full_extent,
         }
     }
 }
@@ -353,9 +380,12 @@ fn keep_world_scale_layers(grouped: &mut [Vec<&Feature>]) {
     }
 }
 
-/// Whether any part of a projected ring falls inside the 720x480 view,
-/// rather than only in the clip margin around it.
-fn on_screen(ring: &[(f64, f64)]) -> bool {
+/// Whether any part of a projected ring falls inside the view, rather than
+/// only in the clip margin around it. `width` is the figure's own
+/// `canvas_width` (720 for every page figure, wider for the explorer's
+/// full-extent world SVG), not a fixed 720 — a band beyond 720 on that
+/// wider canvas is still on screen and must not be culled here.
+fn on_screen(ring: &[(f64, f64)], width: f64) -> bool {
     let (mut min_x, mut max_x, mut min_y, mut max_y) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
     for &(x, y) in ring {
         min_x = min_x.min(x);
@@ -363,7 +393,7 @@ fn on_screen(ring: &[(f64, f64)]) -> bool {
         min_y = min_y.min(y);
         max_y = max_y.max(y);
     }
-    min_x < f64::from(SVG_WIDTH) && max_x > 0.0 && min_y < f64::from(SVG_HEIGHT) && max_y > 0.0
+    min_x < width && max_x > 0.0 && min_y < f64::from(SVG_HEIGHT) && max_y > 0.0
 }
 
 fn grouped_features<'a>(pack: &'a Pack, selected: &TileSelection) -> Vec<Vec<&'a Feature>> {
@@ -418,9 +448,10 @@ impl Writer<'_> {
     }
 
     fn open_svg(&mut self) {
+        let width = length(self.canvas_width);
         write!(
             self.output,
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{SVG_WIDTH}\" height=\"{SVG_HEIGHT}\" viewBox=\"0 0 {SVG_WIDTH} {SVG_HEIGHT}\" aria-hidden=\"true\" focusable=\"false\">",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{SVG_HEIGHT}\" viewBox=\"0 0 {width} {SVG_HEIGHT}\" aria-hidden=\"true\" focusable=\"false\">",
         )
         .expect("writing to String cannot fail");
     }
@@ -454,9 +485,16 @@ impl Writer<'_> {
         let scale = self.effect_scale;
         let (wide, narrow, smooth) = (length(9.0 * scale), length(4.0 * scale), length(2.0 * scale));
         let (steep, soft, halo_blur) = (length(78.0 * scale), length(34.0 * scale), length(2.4 * scale));
+        // These two filter regions are sized off this figure's own
+        // `canvas_width`, not a fixed 720: on the explorer's wider
+        // full-extent world SVG, a region fixed at the page-map's width
+        // would itself re-clip the relief/seafloor bands and coast halo
+        // the wider ring-clip bounds (geometry.rs) were just fixed to let
+        // through.
+        let halo_width = length(self.canvas_width + 48.0);
         write!(
             self.output,
-            "<defs><filter id=\"{height_filter}\" color-interpolation-filters=\"sRGB\"><feColorMatrix in=\"SourceGraphic\" type=\"luminanceToAlpha\" result=\"height-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"{wide}\" result=\"height-blur-9\"/><feColorMatrix in=\"height-blur-9\" type=\"matrix\" values=\"0 0 0 1 0  0 0 0 1 0  0 0 0 1 0  0 0 0 1 0\" result=\"height-coverage\"/><feDiffuseLighting in=\"height-blur-9\" surfaceScale=\"{steep}\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-steep\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-steep\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-steep-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"{narrow}\" result=\"height-blur-4\"/><feDiffuseLighting in=\"height-blur-4\" surfaceScale=\"{soft}\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-soft\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-soft\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-soft-alpha\"/><feComposite in=\"lit-steep-alpha\" in2=\"lit-soft-alpha\" operator=\"arithmetic\" k1=\"0\" k2=\"0.7\" k3=\"0.3\" k4=\"0\" result=\"lit-mix\"/><feComponentTransfer in=\"lit-mix\" result=\"lit-hi-mask\"><feFuncA type=\"linear\" slope=\"1.877817459305202\" intercept=\"-1.327817459305202\"/></feComponentTransfer><feComponentTransfer in=\"lit-mix\" result=\"lit-lo-mask\"><feFuncA type=\"linear\" slope=\"-0.6363961030678928\" intercept=\"0.45\"/></feComponentTransfer><feFlood flood-color=\"var(--moss-place-light-warm, #fff3d0)\" flood-opacity=\"var(--moss-place-light-warm-strength, 1)\" result=\"lit-hi-flood\"/><feComposite in=\"lit-hi-flood\" in2=\"lit-hi-mask\" operator=\"in\" result=\"lit-hi-tint\"/><feFlood flood-color=\"var(--moss-place-light-cool, #5a6488)\" flood-opacity=\"var(--moss-place-light-cool-strength, 0.8889)\" result=\"lit-lo-flood\"/><feComposite in=\"lit-lo-flood\" in2=\"lit-lo-mask\" operator=\"in\" result=\"lit-lo-tint\"/><feMerge result=\"lit-combined\"><feMergeNode in=\"lit-lo-tint\"/><feMergeNode in=\"lit-hi-tint\"/></feMerge><feGaussianBlur in=\"lit-combined\" stdDeviation=\"{smooth}\" result=\"lit-smooth\"/><feComposite in=\"lit-smooth\" in2=\"height-coverage\" operator=\"arithmetic\" k1=\"1\" k2=\"0\" k3=\"0\" k4=\"0\"/></filter><radialGradient id=\"{marker_gradient}\"><stop offset=\"0\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0.28\"/><stop offset=\"1\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0\"/></radialGradient><clipPath id=\"{globe_clip}\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\"/></clipPath><path id=\"{height_empty}\" d=\"m0 0l0 0\"/><filter id=\"{}\" filterUnits=\"userSpaceOnUse\" x=\"-24\" y=\"-24\" width=\"768\" height=\"528\"><feGaussianBlur stdDeviation=\"{halo_blur}\"/></filter></defs>", self.ids.get("soft"),
+            "<defs><filter id=\"{height_filter}\" color-interpolation-filters=\"sRGB\"><feColorMatrix in=\"SourceGraphic\" type=\"luminanceToAlpha\" result=\"height-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"{wide}\" result=\"height-blur-9\"/><feColorMatrix in=\"height-blur-9\" type=\"matrix\" values=\"0 0 0 1 0  0 0 0 1 0  0 0 0 1 0  0 0 0 1 0\" result=\"height-coverage\"/><feDiffuseLighting in=\"height-blur-9\" surfaceScale=\"{steep}\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-steep\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-steep\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-steep-alpha\"/><feGaussianBlur in=\"height-alpha\" stdDeviation=\"{narrow}\" result=\"height-blur-4\"/><feDiffuseLighting in=\"height-blur-4\" surfaceScale=\"{soft}\" diffuseConstant=\"1\" lighting-color=\"#ffffff\" result=\"lit-soft\"><feDistantLight azimuth=\"240\" elevation=\"45\"/></feDiffuseLighting><feColorMatrix in=\"lit-soft\" type=\"matrix\" values=\"0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0\" result=\"lit-soft-alpha\"/><feComposite in=\"lit-steep-alpha\" in2=\"lit-soft-alpha\" operator=\"arithmetic\" k1=\"0\" k2=\"0.7\" k3=\"0.3\" k4=\"0\" result=\"lit-mix\"/><feComponentTransfer in=\"lit-mix\" result=\"lit-hi-mask\"><feFuncA type=\"linear\" slope=\"1.877817459305202\" intercept=\"-1.327817459305202\"/></feComponentTransfer><feComponentTransfer in=\"lit-mix\" result=\"lit-lo-mask\"><feFuncA type=\"linear\" slope=\"-0.6363961030678928\" intercept=\"0.45\"/></feComponentTransfer><feFlood flood-color=\"var(--moss-place-light-warm, #fff3d0)\" flood-opacity=\"var(--moss-place-light-warm-strength, 1)\" result=\"lit-hi-flood\"/><feComposite in=\"lit-hi-flood\" in2=\"lit-hi-mask\" operator=\"in\" result=\"lit-hi-tint\"/><feFlood flood-color=\"var(--moss-place-light-cool, #5a6488)\" flood-opacity=\"var(--moss-place-light-cool-strength, 0.8889)\" result=\"lit-lo-flood\"/><feComposite in=\"lit-lo-flood\" in2=\"lit-lo-mask\" operator=\"in\" result=\"lit-lo-tint\"/><feMerge result=\"lit-combined\"><feMergeNode in=\"lit-lo-tint\"/><feMergeNode in=\"lit-hi-tint\"/></feMerge><feGaussianBlur in=\"lit-combined\" stdDeviation=\"{smooth}\" result=\"lit-smooth\"/><feComposite in=\"lit-smooth\" in2=\"height-coverage\" operator=\"arithmetic\" k1=\"1\" k2=\"0\" k3=\"0\" k4=\"0\"/></filter><radialGradient id=\"{marker_gradient}\"><stop offset=\"0\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0.28\"/><stop offset=\"1\" stop-color=\"var(--moss-place-marker, #2d5a2d)\" stop-opacity=\"0\"/></radialGradient><clipPath id=\"{globe_clip}\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\"/></clipPath><path id=\"{height_empty}\" d=\"m0 0l0 0\"/><filter id=\"{}\" filterUnits=\"userSpaceOnUse\" x=\"-24\" y=\"-24\" width=\"{halo_width}\" height=\"528\"><feGaussianBlur stdDeviation=\"{halo_blur}\"/></filter></defs>", self.ids.get("soft"),
         )
         .expect("writing to String cannot fail");
         // The approved design's two cut-paper shadows, one per band family,
@@ -466,9 +504,10 @@ impl Writer<'_> {
         let (relief, relief_blur) = (length(1.4 * scale), length(0.7 * scale));
         let (edge, edge_blur) = (length(0.7 * scale), length(0.49 * scale));
         let (sea, sea_blur) = (length(1.0 * scale), length(0.6 * scale));
+        let filter_width = length(self.canvas_width + 24.0);
         write!(
             self.output,
-            "<defs><filter id=\"{}\" color-interpolation-filters=\"sRGB\" filterUnits=\"userSpaceOnUse\" x=\"-12\" y=\"-12\" width=\"744\" height=\"504\"><feDropShadow in=\"SourceGraphic\" dx=\"{relief}\" dy=\"{relief}\" stdDeviation=\"{relief_blur}\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.35\" result=\"with-shadow\"/><feDropShadow in=\"SourceGraphic\" dx=\"-{edge}\" dy=\"-{edge}\" stdDeviation=\"{edge_blur}\" flood-color=\"var(--moss-place-light-warm, #fff3d0)\" flood-opacity=\"var(--moss-place-relief-edge-opacity, 0)\" result=\"with-edge\"/><feMerge><feMergeNode in=\"with-shadow\"/><feMergeNode in=\"with-edge\"/></feMerge></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\" filterUnits=\"userSpaceOnUse\" x=\"-12\" y=\"-12\" width=\"744\" height=\"504\"><feDropShadow in=\"SourceGraphic\" dx=\"{sea}\" dy=\"{sea}\" stdDeviation=\"{sea_blur}\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.22\"/></filter>",
+            "<defs><filter id=\"{}\" color-interpolation-filters=\"sRGB\" filterUnits=\"userSpaceOnUse\" x=\"-12\" y=\"-12\" width=\"{filter_width}\" height=\"504\"><feDropShadow in=\"SourceGraphic\" dx=\"{relief}\" dy=\"{relief}\" stdDeviation=\"{relief_blur}\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.35\" result=\"with-shadow\"/><feDropShadow in=\"SourceGraphic\" dx=\"-{edge}\" dy=\"-{edge}\" stdDeviation=\"{edge_blur}\" flood-color=\"var(--moss-place-light-warm, #fff3d0)\" flood-opacity=\"var(--moss-place-relief-edge-opacity, 0)\" result=\"with-edge\"/><feMerge><feMergeNode in=\"with-shadow\"/><feMergeNode in=\"with-edge\"/></feMerge></filter><filter id=\"{}\" color-interpolation-filters=\"sRGB\" filterUnits=\"userSpaceOnUse\" x=\"-12\" y=\"-12\" width=\"{filter_width}\" height=\"504\"><feDropShadow in=\"SourceGraphic\" dx=\"{sea}\" dy=\"{sea}\" stdDeviation=\"{sea_blur}\" flood-color=\"var(--moss-place-shadow, #5a6488)\" flood-opacity=\"0.22\"/></filter>",
             self.ids.get("shadow-relief"),
             self.ids.get("shadow-seafloor"),
         )
@@ -478,9 +517,10 @@ impl Writer<'_> {
 
     fn water(&mut self) {
         let id = self.ids.get("layer-water");
+        let width = length(self.canvas_width);
         write!(
             self.output,
-            "<g id=\"{id}\" data-map-layer=\"water\"><rect width=\"{SVG_WIDTH}\" height=\"{SVG_HEIGHT}\" fill=\"var(--moss-place-water, #e9eff2)\"/></g>",
+            "<g id=\"{id}\" data-map-layer=\"water\"><rect width=\"{width}\" height=\"{SVG_HEIGHT}\" fill=\"var(--moss-place-water, #e9eff2)\"/></g>",
         )
         .expect("writing to String cannot fail");
     }
@@ -647,7 +687,7 @@ impl Writer<'_> {
                 // stay in one path, preserving holes through
                 // clipping.
                 let rings = projection.project_feature(&rings, quantisation);
-                let on_screen = rings.iter().any(|ring| on_screen(ring));
+                let on_screen = rings.iter().any(|ring| on_screen(ring, self.canvas_width));
                 (feature, on_screen.then(|| serialize_path(&rings, true, BY_AREA.scaled(self.detail))).flatten())
             })
             .filter(|(_, path)| path.is_some())
@@ -862,7 +902,7 @@ impl Writer<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::geometry::{DESIGN_PIXELS_PER_DEGREE, FRAME_PADDING, WIDE_ZOOM};
+    use super::super::geometry::{world_viewbox_width, DESIGN_PIXELS_PER_DEGREE, FRAME_PADDING, WIDE_ZOOM};
     use crate::build::place_map::Frame;
     use std::io::Write;
 
@@ -1027,6 +1067,8 @@ mod tests {
             effect_scale: 1.0,
             detail: 1.0,
             locator_profile: None,
+            canvas_width: f64::from(SVG_WIDTH),
+            full_extent: false,
         };
         writer.emit_band_layer(10_000, &projection, &grouped, 9, "relief", false);
         let d = &writer.output[writer.output.find(" d=\"").unwrap() + 4..];
@@ -1068,6 +1110,8 @@ mod tests {
             effect_scale: 1.0,
             detail: 1.0,
             locator_profile: None,
+            canvas_width: f64::from(SVG_WIDTH),
+            full_extent: false,
         };
         writer.emit_river_layer(10_000, &projection, &grouped, "#5b93bd");
         let d = &writer.output[writer.output.find(" d=\"").unwrap() + 4..];
@@ -1232,6 +1276,52 @@ mod tests {
             assert!(x - reach >= 0.0 && x + reach <= 720.0, "a dot at x={x} reaches {reach} past the side");
             assert!(y - reach >= 0.0 && y + reach <= 480.0, "a dot at y={y} reaches {reach} past the top or bottom");
         }
+    }
+
+    /// A guard for the places explorer's separate full-extent world SVG
+    /// (`explorer::emit_world_svg`, `geometry::world_viewbox_width`): a
+    /// page's own World-tier aggregate map must keep the fixed 720-wide
+    /// viewBox and keep cropping, since it is never panned at runtime the
+    /// way the explorer's shared copy is.
+    #[test]
+    fn world_listing_page_map_keeps_the_fixed_720_viewbox() {
+        let table: toml::value::Table = toml::from_str(
+            "[\"Near Pole\"]\nlat = 89.0\nlng = 0.0\nprecision = \"exact\"\n",
+        )
+        .unwrap();
+        let gazetteer = crate::vault::places::parse_gazetteer(&table);
+        let context = PlaceMapContext::embedded().unwrap();
+        let names: Vec<String> = vec!["Near Pole".to_string()];
+        let target = context.resolve_aggregate("places", &gazetteer, "places", &names);
+        assert_eq!(target.tier(), FrameTier::World);
+        let svg = emit_svg(&context, &target, "places/index.html", 0);
+        assert!(svg.contains("viewBox=\"0 0 720 480\""), "a page's own world map must keep the fixed 720-wide viewBox: {svg:.200}");
+    }
+
+    /// A future explorer asset whose own `canvas_width` happens to equal
+    /// `SVG_WIDTH` must still draw full extent when `Writer::full_extent`
+    /// says so — the flag decides, not a width comparison that a same-width
+    /// asset could pass by accident.
+    #[test]
+    fn full_extent_flag_wins_even_at_the_page_canvas_width() {
+        let ids = Ids::new("p", 0);
+        let writer = Writer {
+            output: String::new(),
+            ids: &ids,
+            height_uses: Vec::new(),
+            land_paths: Vec::new(),
+            has_href: false,
+            effect_scale: 1.0,
+            detail: 1.0,
+            locator_profile: None,
+            canvas_width: f64::from(SVG_WIDTH),
+            full_extent: true,
+        };
+        let target = PlaceMapTarget { places: vec![], frame: world_frame(), aggregate_name: None };
+        let projection = choose_projection(&writer, &target).unwrap();
+        let width = world_viewbox_width();
+        let (east_x, _) = projection.project(ProjectedPoint::new(180.0 - 1e-9, 0.0).unwrap()).unwrap();
+        assert!((east_x - width).abs() < 1e-6, "180E should land at the full-extent width {width:.3}, got {east_x}");
     }
 
     /// The pack winds every outer ring one way and every hole the other,

@@ -241,7 +241,7 @@ impl FlatProjection {
             self.project_unwrapped(longitude, latitude)
         })
         .iter()
-        .flat_map(|screen| clip_polyline(screen))
+        .flat_map(|screen| clip_polyline(screen, CLIP_MIN_X, CLIP_MAX_X))
         .collect()
     }
 }
@@ -270,10 +270,28 @@ fn patterson_y(latitude_radians: f64) -> f64 {
 /// instead, a 3:2 viewBox leaves empty strips above and below. The crop
 /// window slides toward the frame's centre, by at most the width the crop
 /// removes, so places near the antimeridian stay on the map where they can.
+/// The Patterson projection's full-world canvas width at the fixed design
+/// scale (`VIEWBOX_HEIGHT`): every meridian from the antimeridian west to
+/// the antimeridian east, with no crop. Derived from the same scale
+/// `PattersonProjection::new` computes to find how much it must crop away —
+/// not a hand-typed number, so a change to the design scale or the
+/// polynomial keeps both in step. Used only by the places explorer's
+/// shared, runtime-panned world SVG (`explorer::emit_world_svg`), via
+/// `PattersonProjection::full_extent`.
+pub(crate) fn world_viewbox_width() -> f64 {
+    VIEWBOX_HEIGHT * std::f64::consts::PI / patterson_y(std::f64::consts::FRAC_PI_2)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct PattersonProjection {
     scale: f64,
     offset_x: f64,
+    /// This projection's own canvas width, in viewBox units: `VIEWBOX_WIDTH`
+    /// for the cropped per-page map (`new`), or `world_viewbox_width()` for
+    /// the explorer's uncropped copy (`full_extent`). Centres
+    /// `project_unwrapped` and bounds the ring/line clip margin below, so
+    /// one projection formula and one clip routine serve both.
+    canvas_width: f64,
 }
 
 impl PattersonProjection {
@@ -281,7 +299,18 @@ impl PattersonProjection {
         let scale = VIEWBOX_HEIGHT / 2.0 / patterson_y(std::f64::consts::FRAC_PI_2);
         let cropped = (scale * std::f64::consts::PI - VIEWBOX_WIDTH / 2.0).max(0.0);
         let offset_x = (-scale * frame.center_longitude.to_radians()).clamp(-cropped, cropped);
-        Self { scale, offset_x }
+        Self { scale, offset_x, canvas_width: VIEWBOX_WIDTH }
+    }
+
+    /// The whole globe, no crop and no slide toward any frame's centre:
+    /// used only by the places explorer's shared world SVG and its clip
+    /// bounds (`explorer::emit_world_svg`), which a reader pans and zooms
+    /// across the whole globe at runtime — unlike a page's own World-tier
+    /// map (`new`, above), which always stays cropped to the fixed
+    /// `VIEWBOX_WIDTH` canvas.
+    fn full_extent() -> Self {
+        let scale = VIEWBOX_HEIGHT / 2.0 / patterson_y(std::f64::consts::FRAC_PI_2);
+        Self { scale, offset_x: 0.0, canvas_width: world_viewbox_width() }
     }
 
     fn project_point(&self, point: ProjectedPoint) -> (f64, f64) {
@@ -292,19 +321,22 @@ impl PattersonProjection {
         let x = longitude.to_radians();
         let y = patterson_y(latitude.to_radians());
         (
-            VIEWBOX_WIDTH / 2.0 + self.offset_x + self.scale * x,
+            self.canvas_width / 2.0 + self.offset_x + self.scale * x,
             VIEWBOX_HEIGHT / 2.0 - self.scale * y,
         )
     }
 
     /// The world map spans exactly one turn, so each ring is drawn once,
-    /// from its raw coordinates (see `raw_screen_copies`).
+    /// from its raw coordinates (see `raw_screen_copies`). The clip bounds
+    /// follow this projection's own `canvas_width`, not the page-map's
+    /// fixed `CLIP_MIN_X`/`CLIP_MAX_X`, so the explorer's full-extent copy
+    /// clips at its own wider edge instead of the cropped one.
     fn project_ring(&self, points: &[(i32, i32)], quantisation: u32) -> Vec<Vec<(f64, f64)>> {
         raw_screen_copies(points, quantisation, &[0.0], |longitude, latitude| {
             self.project_unwrapped(longitude, latitude)
         })
         .into_iter()
-        .map(|screen| clip_closed_ring(&screen, CLIP_MIN_X, CLIP_MAX_X, CLIP_MIN_Y, CLIP_MAX_Y))
+        .map(|screen| clip_closed_ring(&screen, -CLIP_MARGIN, self.canvas_width + CLIP_MARGIN, CLIP_MIN_Y, CLIP_MAX_Y))
         .filter(|ring| ring.len() >= 4)
         .collect()
     }
@@ -314,7 +346,7 @@ impl PattersonProjection {
             self.project_unwrapped(longitude, latitude)
         })
         .iter()
-        .flat_map(|screen| clip_polyline(screen))
+        .flat_map(|screen| clip_polyline(screen, -CLIP_MARGIN, self.canvas_width + CLIP_MARGIN))
         .collect()
     }
 }
@@ -337,6 +369,12 @@ impl Projection {
             FrameTier::World => Self::Patterson(PattersonProjection::new(frame)),
             FrameTier::Local | FrameTier::Wide => Self::Flat(FlatProjection::new(frame)),
         }
+    }
+
+    /// The full-extent world projection (see `PattersonProjection::full_extent`),
+    /// for the places explorer's shared world SVG only.
+    pub fn new_world_full_extent() -> Self {
+        Self::Patterson(PattersonProjection::full_extent())
     }
 
     /// Whether the map is drawn at or under half the design's zoom.
@@ -527,10 +565,10 @@ fn raw_screen_copies(
 
 const SEAM_OVERLAP: f64 = 0.5;
 
-fn clip_polyline(points: &[(f64, f64)]) -> Vec<Vec<(f64, f64)>> {
+fn clip_polyline(points: &[(f64, f64)], min_x: f64, max_x: f64) -> Vec<Vec<(f64, f64)>> {
     let mut paths: Vec<Vec<(f64, f64)>> = Vec::new();
     for pair in points.windows(2) {
-        let Some((start, end)) = clip_segment(pair[0], pair[1]) else {
+        let Some((start, end)) = clip_segment(pair[0], pair[1], min_x, max_x) else {
             continue;
         };
         if let Some(path) = paths.last_mut() {
@@ -544,13 +582,17 @@ fn clip_polyline(points: &[(f64, f64)]) -> Vec<Vec<(f64, f64)>> {
     paths
 }
 
-fn clip_segment(start: (f64, f64), end: (f64, f64)) -> Option<((f64, f64), (f64, f64))> {
+/// `min_x`/`max_x` let the Patterson full-extent projection clip against
+/// its own wider canvas instead of the page-map's fixed `CLIP_MIN_X`/
+/// `CLIP_MAX_X` (see `PattersonProjection::project_part`); the vertical
+/// bounds never vary, since the viewBox height is fixed either way.
+fn clip_segment(start: (f64, f64), end: (f64, f64), min_x: f64, max_x: f64) -> Option<((f64, f64), (f64, f64))> {
     let dx = end.0 - start.0;
     let dy = end.1 - start.1;
     let mut lower: f64 = 0.0;
     let mut upper: f64 = 1.0;
     for (coordinate, delta, minimum, maximum) in [
-        (start.0, dx, CLIP_MIN_X, CLIP_MAX_X),
+        (start.0, dx, min_x, max_x),
         (start.1, dy, CLIP_MIN_Y, CLIP_MAX_Y),
     ] {
         if delta.abs() < f64::EPSILON {
@@ -1032,6 +1074,32 @@ mod tests {
         assert_eq!(frame.tier, FrameTier::World);
         let (x, _) = Projection::new(&frame).project(points[0]).unwrap();
         assert!((0.0..=VIEWBOX_WIDTH).contains(&x), "a place at 174.8E is cropped off at x={x}");
+    }
+
+    /// A guard for `world_viewbox_width`/`full_extent` (added for the
+    /// places explorer's shared world SVG): a page's own World-tier map's
+    /// drawn RINGS — not a raw, unclipped `project()` point query — must
+    /// keep cropping to the fixed `VIEWBOX_WIDTH` canvas's clip bounds.
+    /// Only `Projection::new_world_full_extent` widens the canvas and its
+    /// clip bounds together.
+    #[test]
+    fn per_page_world_map_still_crops_to_the_fixed_viewbox_width() {
+        let polar = ProjectedPoint::new(0.0, 89.0).unwrap();
+        let frame = Frame::from_points(&[polar], [Precision::Exact].into_iter()).unwrap();
+        assert_eq!(frame.tier, FrameTier::World);
+        let projection = Projection::new(&frame);
+        // A ring reaching the far eastern edge of the world (170E..179.9E):
+        // unclipped it would project well past CLIP_MAX_X.
+        let ring = projection.project_ring(&[(1700, -20), (1799, -20), (1799, 20), (1700, 20), (1700, -20)], 10);
+        let max_x = ring.iter().flatten().map(|point| point.0).fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            max_x <= CLIP_MAX_X + 1e-6,
+            "a page's world map's clipped ring reached x={max_x}, past the fixed CLIP_MAX_X={CLIP_MAX_X}"
+        );
+        assert!(
+            world_viewbox_width() > CLIP_MAX_X + 50.0,
+            "the explorer's full extent should be meaningfully wider than the cropped canvas's clip bound"
+        );
     }
 
     /// The world tier's Antarctic rings reach every longitude: the
