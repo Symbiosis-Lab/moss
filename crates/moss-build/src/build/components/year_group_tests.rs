@@ -22,6 +22,7 @@ fn test_render_single_article() {
         url: "post.html".to_string(),
         title: "Test Article".to_string(),
         url_path: String::new(),
+        place: None,
     }];
     let html = render(&articles, false, crate::i18n::Language::En, None);
 
@@ -38,6 +39,7 @@ fn test_render_minimal_mode() {
         url: "post.html".to_string(),
         title: "Test Article".to_string(),
         url_path: String::new(),
+        place: None,
     }];
 
     // Standard mode - shows "2025 · 11"
@@ -62,6 +64,7 @@ fn test_render_groups_by_year() {
             url: "post1.html".to_string(),
             title: "Post 2025 Nov".to_string(),
             url_path: String::new(),
+            place: None,
         },
         ArticleListItemProps {
             date_display: "2024 · 12".to_string(),
@@ -69,6 +72,7 @@ fn test_render_groups_by_year() {
             url: "post2.html".to_string(),
             title: "Post 2024 Dec".to_string(),
             url_path: String::new(),
+            place: None,
         },
         ArticleListItemProps {
             date_display: "2025 · 01".to_string(),
@@ -76,6 +80,7 @@ fn test_render_groups_by_year() {
             url: "post3.html".to_string(),
             title: "Post 2025 Jan".to_string(),
             url_path: String::new(),
+            place: None,
         },
     ];
     let html = render(&articles, false, crate::i18n::Language::En, None);
@@ -99,6 +104,7 @@ fn test_render_sorts_within_year() {
             url: "jan.html".to_string(),
             title: "January".to_string(),
             url_path: String::new(),
+            place: None,
         },
         ArticleListItemProps {
             date_display: "2025 · 11".to_string(),
@@ -106,6 +112,7 @@ fn test_render_sorts_within_year() {
             url: "nov.html".to_string(),
             title: "November".to_string(),
             url_path: String::new(),
+            place: None,
         },
     ];
     let html = render(&articles, false, crate::i18n::Language::En, None);
@@ -126,6 +133,7 @@ fn test_render_sorts_by_precise_datetime() {
             url: "first.html".to_string(),
             title: "First (Nov 4)".to_string(),
             url_path: String::new(),
+            place: None,
         },
         ArticleListItemProps {
             date_display: "2025 · 11".to_string(),
@@ -133,6 +141,7 @@ fn test_render_sorts_by_precise_datetime() {
             url: "fourth.html".to_string(),
             title: "Fourth (Nov 17)".to_string(),
             url_path: String::new(),
+            place: None,
         },
         ArticleListItemProps {
             date_display: "2025 · 11".to_string(),
@@ -140,6 +149,7 @@ fn test_render_sorts_by_precise_datetime() {
             url: "second.html".to_string(),
             title: "Second (Nov 11)".to_string(),
             url_path: String::new(),
+            place: None,
         },
         ArticleListItemProps {
             date_display: "2025 · 11".to_string(),
@@ -147,6 +157,7 @@ fn test_render_sorts_by_precise_datetime() {
             url: "third.html".to_string(),
             title: "Third (Nov 13)".to_string(),
             url_path: String::new(),
+            place: None,
         },
     ];
     let html = render(&articles, false, crate::i18n::Language::En, None);
@@ -171,6 +182,7 @@ fn test_render_handles_mixed_parseable_and_unparseable_dates() {
             url: "post1.html".to_string(),
             title: "Dated Article".to_string(),
             url_path: String::new(),
+            place: None,
         },
         ArticleListItemProps {
             date_display: "Unknown".to_string(),
@@ -178,6 +190,7 @@ fn test_render_handles_mixed_parseable_and_unparseable_dates() {
             url: "post2.html".to_string(),
             title: "Undated Article".to_string(),
             url_path: String::new(),
+            place: None,
         },
     ];
     let html = render(&articles, false, crate::i18n::Language::En, None);
@@ -204,6 +217,7 @@ fn vertical_cjk_rows_still_group_by_year() {
         url: format!("/{title}/"),
         title: title.to_string(),
         url_path: String::new(),
+        place: None,
     };
     let articles = vec![
         article("一七〇三年十二月", "1703-12-01", "楊柳浴禽圖"),
@@ -237,6 +251,7 @@ fn horizontal_rows_keep_arabic_headings_and_drop_the_bare_year_prefix() {
             url: "/a/".to_string(),
             title: "A".to_string(),
             url_path: String::new(),
+            place: None,
         },
         ArticleListItemProps {
             date_display: "2025".to_string(),
@@ -244,6 +259,7 @@ fn horizontal_rows_keep_arabic_headings_and_drop_the_bare_year_prefix() {
             url: "/b/".to_string(),
             title: "B".to_string(),
             url_path: String::new(),
+            place: None,
         },
     ];
     let html = render(&articles, true, crate::i18n::Language::En, None);

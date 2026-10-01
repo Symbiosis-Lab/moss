@@ -102,6 +102,7 @@ pub fn generate_year_grouped_article_list(
                 // Article listing is chrome; use the plain-text label.
                 title: doc.label.clone(),
                 url_path: doc.url_path.clone(),
+                place: doc.place_names.clone(),
             }
         })
         .collect();

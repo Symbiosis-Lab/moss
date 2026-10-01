@@ -1159,6 +1159,7 @@ fn generate_html_inner(
                         // chrome; plain-text label
                         title: d.label.clone(),
                         url_path: d.url_path.clone(),
+                        place: d.place_names.clone(),
                     }
                 })
                 .collect();

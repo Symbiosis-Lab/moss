@@ -751,21 +751,25 @@ pub fn link_terms_in_bylines(documents: &mut [ParsedDocument], index: &TermIndex
 /// all. A page suppresses its own line only by leaving `location:` unset —
 /// there is no opt-out frontmatter key, since this is generated chrome with
 /// no authored equivalent (coordinator ruling, task A7).
+///
+/// Also sets [`ParsedDocument::place_names`] from the SAME filtered, ordered
+/// name list — a card's meta line reads that field rather than re-deriving
+/// "which declared names actually resolve" a second time, which is what
+/// `place_line` itself already computes here.
 pub fn set_place_lines(documents: &mut [ParsedDocument], index: &TermIndex, lang: crate::i18n::Language) {
     let Some(place_kind) = index.kinds.iter().find(|k| k.is_place) else { return };
     for doc in documents.iter_mut() {
         if doc.location.is_empty() {
             continue;
         }
-        let links: Vec<String> = doc
-            .location
-            .iter()
-            .filter_map(|name| {
-                let name = name.trim();
-                let url = index.term_url(&place_kind.key, name)?;
-                Some(format!("[{}]({})", name, url))
-            })
-            .collect();
+        let mut links: Vec<String> = Vec::new();
+        let mut names: Vec<&str> = Vec::new();
+        for name in &doc.location {
+            let name = name.trim();
+            let Some(url) = index.term_url(&place_kind.key, name) else { continue };
+            links.push(format!("[{}]({})", name, url));
+            names.push(name);
+        }
         if links.is_empty() {
             continue;
         }
@@ -775,6 +779,7 @@ pub fn set_place_lines(documents: &mut [ParsedDocument], index: &TermIndex, lang
             crate::i18n::t(lang, "place_line_separator"),
             links.join(", "),
         ));
+        doc.place_names = Some(names.join(", "));
     }
 }
 
@@ -1495,6 +1500,50 @@ mod tests {
         let index = derive_terms(&mut docs, kinds);
         set_place_lines(&mut docs, &index, crate::i18n::Language::En);
         assert_eq!(docs[0].place_line, None);
+    }
+
+    /// `place_names` is the plain, unlinked reading of the same resolved
+    /// names `place_line` carries — a card's meta line reads this field
+    /// rather than stripping markdown links back out of `place_line`.
+    #[test]
+    fn place_names_joins_resolved_display_names_the_same_way_place_line_does() {
+        let kinds = vec![places_kind_with_parents(&[])];
+        let mut docs = vec![
+            doc("about/kyoto/index.html", "Kyoto"),
+            doc("about/osaka/index.html", "Osaka"),
+            doc("posts/a/index.html", "A"),
+        ];
+        docs[0].place_page = Some(TermClaim::UseTitle);
+        docs[1].place_page = Some(TermClaim::UseTitle);
+        docs[2].location = vec!["Kyoto".to_string(), "Osaka".to_string()];
+        let index = derive_terms(&mut docs, kinds);
+        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
+        assert_eq!(docs[2].place_names.as_deref(), Some("Kyoto, Osaka"));
+    }
+
+    /// A declared name with no resolvable term page (here, punctuation-only
+    /// — see `punctuation_only_names_derive_no_term`) is dropped from
+    /// `place_line` (see its own filter above) and must be dropped from
+    /// `place_names` the same way, not merely from the linked form.
+    #[test]
+    fn place_names_drops_an_unresolvable_name_the_same_way_place_line_does() {
+        let kinds = vec![places_kind_with_parents(&[])];
+        let mut docs =
+            vec![doc("about/kyoto/index.html", "Kyoto"), doc("posts/a/index.html", "A")];
+        docs[0].place_page = Some(TermClaim::UseTitle);
+        docs[1].location = vec!["Kyoto".to_string(), "！！！".to_string()];
+        let index = derive_terms(&mut docs, kinds);
+        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
+        assert_eq!(docs[1].place_names.as_deref(), Some("Kyoto"));
+    }
+
+    #[test]
+    fn place_names_is_absent_when_location_is_unset() {
+        let kinds = vec![places_kind_with_parents(&[])];
+        let mut docs = vec![doc("posts/a/index.html", "A")];
+        let index = derive_terms(&mut docs, kinds);
+        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
+        assert_eq!(docs[0].place_names, None);
     }
 
     #[test]

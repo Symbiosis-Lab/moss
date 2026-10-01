@@ -560,6 +560,7 @@ pub(crate) fn generate_children(
                     url: item.url.clone(),
                     title: item.title.clone(),
                     url_path: item.url_path.clone(),
+                    place: item.place.clone(),
                 })
                 .collect();
             html.push_str(&components::render_year_grouped_list(&article_props, true, lang, typesetting));
@@ -649,6 +650,7 @@ fn render_minimal_year_section(
                 url: a.url.clone(),
                 title: a.title.clone(),
                 url_path: a.url_path.clone(),
+                place: a.place.clone(),
             };
             components::child_list::render(&props, true, false, lang, typesetting)
         })

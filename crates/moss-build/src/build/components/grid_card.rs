@@ -89,6 +89,13 @@ fn render_item(
         Some(count) => i18n::article_count_label(lang, count, typesetting),
         None => props.date_display.clone().unwrap_or_default(),
     };
+    // A leaf's resolved place goes next to its date; a folder's count is not
+    // a date, so it never gets one (`ChildItemProps::leaf_place`). One owner
+    // of this composition across every listing form — see
+    // `child_list::with_place`, which also HTML-escapes the result (this
+    // slot used to print `count_text` unescaped, safe only because it was
+    // always machine-generated text).
+    let count_text = super::child_list::with_place(&count_text, props.leaf_place());
 
     let cover_type = CoverType::resolve(props.cover.as_deref(), props.cover_type);
 

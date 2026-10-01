@@ -14,6 +14,7 @@ fn blank() -> ChildItemProps {
         kicker: None,
         permalink: None,
         url_path: String::new(),
+        place: None,
     }
 }
 
@@ -136,6 +137,44 @@ fn test_render_item_with_subtitle_override() {
     assert!(
         !html.contains("0 articles"),
         "Should not show article count. Got: {}",
+        html
+    );
+}
+
+/// A chronology of located, dated cards (the motivating case: "Cambridge
+/// 1924") shows the place next to the compact date on the grid card too.
+#[test]
+fn grid_card_shows_the_resolved_place_next_to_the_date() {
+    let props = ChildItemProps {
+        title: "Lecture".to_string(),
+        url: "lectures/1924/".to_string(),
+        date_display: Some("1924".to_string()),
+        place: Some("Cambridge".to_string()),
+        ..blank()
+    };
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    assert!(
+        html.contains(r#"<span class="moss-card-meta">1924 · Cambridge</span>"#),
+        "Got: {}",
+        html
+    );
+}
+
+/// A folder's "N articles" count is not a date — its own `location:` must
+/// never leak into the count slot.
+#[test]
+fn grid_card_never_shows_a_place_beside_a_folders_count() {
+    let props = ChildItemProps {
+        title: "Kyoto Walk".to_string(),
+        url: "works/kyoto-walk/".to_string(),
+        child_count: Some(2),
+        place: Some("Kyoto".to_string()),
+        ..blank()
+    };
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    assert!(
+        html.contains(r#"<span class="moss-card-meta">2 articles</span>"#),
+        "the count slot must be the count alone: {}",
         html
     );
 }

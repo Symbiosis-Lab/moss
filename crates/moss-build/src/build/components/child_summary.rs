@@ -4,7 +4,7 @@
 //! The meta slot is sort-driven: it surfaces a date on Date-axis listings
 //! and is omitted entirely on Weight/Title axes (no empty div).
 
-use super::child_list::ChildItemProps;
+use super::child_list::{self, ChildItemProps};
 use super::date::extract_year;
 use crate::build::media::cover::{self, html_escape, CoverType};
 use crate::build::page::meta::render_description_html;
@@ -86,12 +86,25 @@ pub fn render_with_sort(
         // Folder: the count IS the meta, on every sort axis — a folder's
         // own date is not what a reader picks it by.
         (Some(count), _) => Some(crate::i18n::article_count_label(lang, count, typesetting)),
-        (None, moss_core::sort::SortAxis::Date) if date_merged_into_kicker => None,
+        // The kicker already carries the date (`{kicker} · {year}`); the
+        // meta slot's only remaining job is the place, if there is one —
+        // an empty string here, not the date, so `with_place` below prints
+        // the place alone instead of silently dropping it. `None` (no meta
+        // div at all) only when there's no place either, since this module
+        // never emits an empty `.moss-card-meta`.
+        (None, moss_core::sort::SortAxis::Date) if date_merged_into_kicker => {
+            props.place.as_deref().map(|_| String::new())
+        }
         (None, moss_core::sort::SortAxis::Date) => props.date_display.clone(),
         _ => None,
     };
+    // A leaf's resolved place goes next to its date; a folder's count is not
+    // a date, so it never gets one (`ChildItemProps::leaf_place`). One owner
+    // of this composition across every listing form — see
+    // `child_list::with_place`, which also does the HTML-escaping this slot
+    // used to do inline.
     let meta_html = meta_text
-        .map(|t| format!(r#"<div class="moss-card-meta">{}</div>"#, html_escape(&t)))
+        .map(|t| format!(r#"<div class="moss-card-meta">{}</div>"#, child_list::with_place(&t, props.leaf_place())))
         .unwrap_or_default();
 
     // Title: wrapped in an anchor for linkblog cards (so it stays

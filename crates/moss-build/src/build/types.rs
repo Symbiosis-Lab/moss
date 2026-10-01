@@ -253,6 +253,15 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub place_line: Option<String>,
+    /// The same resolved place names `place_line` carries, plain and
+    /// unlinked, joined the same way (", "), with no role label — for a
+    /// card's compact meta line to show next to its date. Set alongside
+    /// `place_line` by `build::terms::set_place_lines`, from the same
+    /// filtered, ordered name list, so the two never drift apart. `None`
+    /// under the same conditions as `place_line`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub place_names: Option<String>,
     /// True for a real folder-index page sitting exactly at a place-typed
     /// term namespace root (e.g. a real `places/index.md`, no `place_page:`
     /// claim) — set once in `build::terms::derive_terms` from

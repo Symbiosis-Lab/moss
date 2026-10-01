@@ -9,6 +9,7 @@ fn make_article(title: &str, date_raw: Option<&str>, url: &str) -> ArticleListIt
         url: url.to_string(),
         title: title.to_string(),
         url_path: String::new(),
+        place: None,
     }
 }
 

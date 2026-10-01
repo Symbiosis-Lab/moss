@@ -31,6 +31,10 @@ pub struct ArticleListItemProps {
     /// The page's own `url_path`, which breaks a tie between two rows on the
     /// same date — the same key the folder's series links use.
     pub url_path: String,
+    /// The page's resolved place, plain and unlinked (`ParsedDocument::place_names`)
+    /// — shown next to the date by [`with_place`]. `None` for a page with no
+    /// resolved `location:`.
+    pub place: Option<String>,
 }
 
 impl ArticleListItemProps {
@@ -100,15 +104,21 @@ pub fn render(
         // Year + month (e.g., "2025 · 11")
         props.date_display.clone()
     };
+    // The page's resolved place next to its date — see `with_place`. Applied
+    // before the empty check below: a bare-year row under a `minimal` month
+    // prefix can have no month text at all, and a place is still worth a row
+    // on its own rather than vanishing alongside the empty date.
+    let date_display = with_place(&date_display, props.place.as_deref());
 
-    // An empty prefix means a year-only date under its own year heading; emit
-    // no span at all rather than one that lays out as a blank column.
+    // An empty prefix means a year-only date under its own year heading, and
+    // no place either; emit no span at all rather than one that lays out as
+    // a blank column.
     let prefix = if date_display.is_empty() {
         String::new()
     } else {
         format!(
             r#"<span class="moss-prefix-link-prefix date">{}</span>"#,
-            html_escape(&date_display)
+            date_display
         )
     };
     format!(
@@ -158,6 +168,11 @@ pub struct ChildItemProps {
     /// directory override changes it, so it is what breaks a tie between two
     /// cards on the same date.
     pub url_path: String,
+    /// The page's resolved place, plain and unlinked (`ParsedDocument::place_names`)
+    /// — shown next to a leaf's date by [`with_place`]; never shown beside a
+    /// folder's count, which is not a date. `None` for a page with no
+    /// resolved `location:`.
+    pub place: Option<String>,
 }
 
 impl ChildItemProps {
@@ -168,6 +183,36 @@ impl ChildItemProps {
             label: &self.title,
             url_path: &self.url_path,
         }
+    }
+
+    /// This card's place, only when it's a leaf — a folder's count is not a
+    /// date, so its own `location:` never shows beside it. One owner for
+    /// `grid_card`/`child_summary`, which each resolved this the same way
+    /// independently before.
+    pub(crate) fn leaf_place(&self) -> Option<&str> {
+        self.child_count.is_none().then(|| self.place.as_deref()).flatten()
+    }
+}
+
+/// The compact meta text for a leaf's date, with its resolved place appended
+/// when the page declares one — the single owner of this composition.
+/// `grid_card::render_item`, `child_summary::render_with_sort` and this
+/// module's own `render`/`render_child` each decided independently whether a
+/// date-or-count string needed anything else beside it; this fold is that
+/// one decision, made once, so a place name (always author-supplied text)
+/// gets escaped exactly once rather than at three call sites with three
+/// different escaping habits — `grid_card`'s `count_text` was interpolated
+/// unescaped before this fold, safe only because it never carried anything
+/// but machine-generated text.
+///
+/// `text` is escaped even with no place to append, so every caller can stop
+/// escaping it separately.
+pub(crate) fn with_place(text: &str, place: Option<&str>) -> String {
+    let text = html_escape(text);
+    match place.map(str::trim).filter(|p| !p.is_empty()) {
+        None => text,
+        Some(p) if text.is_empty() => html_escape(p),
+        Some(p) => format!("{} · {}", text, html_escape(p)),
     }
 }
 
@@ -263,6 +308,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         kicker: crate::build::scan::page_map::publisher(&doc.raw_frontmatter),
         permalink,
         url_path: doc.url_path.clone(),
+        place: doc.place_names.clone(),
     }
 }
 
@@ -298,19 +344,22 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
         // Article with a raw date — full precision, since there is no year
         // heading above this row (unlike the year-grouped rows) to carry it:
         // "year · month" when the date has a month, "year" when that's all
-        // it has. Same compact form grid cards use.
+        // it has. Same compact form grid cards use. The page's resolved
+        // place, if any, goes right next to it — see `with_place`.
         let date = date_formatters::format_compact_date(date_raw, lang, typesetting);
+        let date = with_place(&date, props.place.as_deref());
         format!(
             r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix date">{}</span><span class="moss-prefix-link-title">{}</span></a></div>"#,
-            escaped_url, html_escape(&date), escaped_title
+            escaped_url, date, escaped_title
         )
     } else if let Some(ref date_display) = props.date_display {
         // Article with a display date but no raw date. `date_display` is
         // already the compact "year · month"/"year" form —
         // `props_for_document` formatted it with `format_compact_date`.
+        let date = with_place(date_display, props.place.as_deref());
         format!(
             r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix date">{}</span><span class="moss-prefix-link-title">{}</span></a></div>"#,
-            escaped_url, html_escape(date_display), escaped_title
+            escaped_url, date, escaped_title
         )
     } else {
         // Article without any date

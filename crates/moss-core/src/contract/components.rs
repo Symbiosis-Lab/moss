@@ -471,11 +471,11 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "moss-card",
         data_attrs: &[],
-        example_html: r#"<div class="moss-card-meta">2024-01-15</div>"#,
+        example_html: r#"<div class="moss-card-meta">2024-01-15 · Kyoto</div>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "Type-aware metadata slot (date for articles, count for folders, domain for links). Renders ABOVE the title in horizontal mode — filling the kicker position when the explicit `kicker` slot is unset. To the right of the title in vertical CJK mode (the horizontal kicker position transposed). Meta IS the visual kicker, with the same uppercase overline treatment.",
+        description: "Type-aware metadata slot (date for articles, count for folders, domain for links), with the page's resolved place appended after its date — never after a folder's count — when `location:` names one. Renders ABOVE the title in horizontal mode — filling the kicker position when the explicit `kicker` slot is unset. To the right of the title in vertical CJK mode (the horizontal kicker position transposed). Meta IS the visual kicker, with the same uppercase overline treatment.",
     },
     ComponentEntry {
         class: "moss-card-kicker",

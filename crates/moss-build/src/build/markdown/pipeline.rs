@@ -1408,6 +1408,7 @@ pub fn process_markdown_file(
         place_breadcrumb: None,
         place_children: None,
         place_line: None,
+        place_names: None,
         is_place_namespace_root: false,
         map,
         children,
