@@ -727,6 +727,71 @@ fn places_site_output_does_not_leak_raw_coordinates() {
     }
 }
 
+/// Builds an independent copy of the `places-site` fixture, optionally
+/// mutating its input first, and returns the `_moss/places.<hash>.json`
+/// filename's hash segment.
+fn places_json_hash(mutate: impl FnOnce(&Path)) -> String {
+    let input_dir = fixtures_dir().join("places-site").join("input");
+    let temp_dir = std::env::temp_dir().join(format!("moss_places_hash_test_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir).expect("Failed to create temp directory");
+    let _cleanup = Cleanup(temp_dir.clone());
+    copy_dir_recursive(&input_dir, &temp_dir).expect("Failed to copy input files");
+    mutate(&temp_dir);
+
+    let result = build_sync(&temp_dir.to_string_lossy(), false);
+    assert!(result.is_ok(), "Build failed: {:?}", result);
+
+    let moss_dir = temp_dir.join(".moss/build.nosync/staging/_moss");
+    fs::read_dir(&moss_dir)
+        .expect("_moss dir must exist")
+        .flatten()
+        .find_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            name.strip_prefix("places.").and_then(|rest| rest.strip_suffix(".json")).map(str::to_string)
+        })
+        .expect("_moss/places.<hash>.json must exist")
+}
+
+/// The real-build counterpart to `places_data`'s own
+/// `an_unrelated_page_edit_never_moves_the_output` and
+/// `a_places_toml_edit_that_moves_a_resolved_coordinate_changes_the_output`
+/// unit tests, which exercise `emit_places_data` directly on a hand-built
+/// document slice. Only a real build can see whether the hash the two
+/// pipeline call sites actually write — `places_data::emit`'s own output —
+/// tracks the same contract end to end, through real markdown parsing and
+/// gazetteer loading rather than fixture `ParsedDocument`/`Gazetteer` values
+/// built by hand.
+#[test]
+fn places_json_hash_tracks_resolved_coordinates_not_unrelated_edits() {
+    let before = places_json_hash(|_| {});
+
+    // `index.md` is the home page and carries no `location:` of its own —
+    // editing it must never move the hash.
+    let after_unrelated_edit = places_json_hash(|dir| {
+        let index = dir.join("index.md");
+        let mut content = fs::read_to_string(&index).unwrap();
+        content.push_str("\n\nAn unrelated sentence, added after the baseline build.\n");
+        fs::write(&index, content).unwrap();
+    });
+    assert_eq!(
+        before, after_unrelated_edit,
+        "editing a page with no location must never move the places.json hash"
+    );
+
+    // Moving Kyoto's resolved coordinate must move the hash.
+    let after_coordinate_move = places_json_hash(|dir| {
+        let places_toml = dir.join(".moss/places.toml");
+        let content = fs::read_to_string(&places_toml).unwrap();
+        let moved = content.replace("lat = 35.0116\nlng = 135.7681", "lat = 36.0\nlng = 136.0");
+        assert_ne!(content, moved, "fixture's places.toml no longer has Kyoto's expected lat/lng — update this test");
+        fs::write(&places_toml, moved).unwrap();
+    });
+    assert_ne!(
+        before, after_coordinate_move,
+        "moving a resolved place's coordinate must move the places.json hash"
+    );
+}
+
 /// A site with no home file at the root, and image directories the
 /// `[editor].attachment_folder` setting names as storage.
 ///

@@ -3,6 +3,10 @@
 mod context;
 mod geometry;
 mod globe;
+// The places-explorer data emitter (`places.<hash>.json`). `pub(crate)`,
+// not private: `build/pipeline.rs` calls `places_data::emit` directly once
+// per build, the same way it reaches `build::emit::feature_styles::emit`.
+pub(crate) mod places_data;
 mod simplify;
 mod svg;
 

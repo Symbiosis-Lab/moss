@@ -44,7 +44,7 @@ pub struct PlaceRecord {
 /// parse is a diagnostic plus an empty gazetteer, never a build failure; an
 /// individual bad entry is dropped or coarsened with a diagnostic, never a
 /// crash.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Gazetteer(std::collections::BTreeMap<String, PlaceRecord>);
 
 impl Gazetteer {

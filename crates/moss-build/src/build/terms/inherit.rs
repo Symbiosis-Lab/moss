@@ -54,6 +54,41 @@ use crate::build::types::ParsedDocument;
 /// fills blanks, never overwrites. The home page's own `location:` is never
 /// touched either way.
 pub fn inherit_work_locations(documents: &mut [ParsedDocument]) {
+    for group in group_by_work(documents).into_values() {
+        let home_location = documents[group.home_idx].location.clone();
+        if home_location.is_empty() {
+            continue;
+        }
+        for i in group.companions {
+            if documents[i].location.is_empty() {
+                documents[i].location = home_location.clone();
+            }
+        }
+    }
+}
+
+/// One folder's work grouping: the index (into the caller's `documents`
+/// slice) of the self-named home page, and every other document sharing its
+/// folder — in document order, which is source-path order.
+pub(crate) struct WorkGroup {
+    pub home_idx: usize,
+    pub companions: Vec<usize>,
+}
+
+/// Group `documents` by folder and pick out each folder's work home, using
+/// the design's test verbatim: the folder's real home (`PageKind::Folder`,
+/// the build's own election result) must be self-named to its folder, not
+/// an index-stem winner and not a `home: true` override that landed on a
+/// differently-named file. A folder that fails any of those — including a
+/// lone document with no companion, or no home at all — is simply absent
+/// from the result; every caller's "is this a work" question is answered by
+/// `.contains_key` on the returned map.
+///
+/// The single grouping implementation [`inherit_work_locations`] and the
+/// places-explorer data emitter both build on — see this module's forward
+/// contract above for why the emitter needs the exact same folder/home
+/// election this pass already performs.
+pub(crate) fn group_by_work(documents: &[ParsedDocument]) -> BTreeMap<String, WorkGroup> {
     let mut by_folder: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, doc) in documents.iter().enumerate() {
         let Some(path) = doc.source_path.as_deref() else { continue };
@@ -61,7 +96,8 @@ pub fn inherit_work_locations(documents: &mut [ParsedDocument]) {
         by_folder.entry(folder).or_default().push(i);
     }
 
-    for (folder, indices) in &by_folder {
+    let mut works = BTreeMap::new();
+    for (folder, indices) in by_folder {
         // A lone document has no companion to inherit anything.
         if indices.len() < 2 {
             continue;
@@ -98,17 +134,10 @@ pub fn inherit_work_locations(documents: &mut [ParsedDocument]) {
             continue;
         }
 
-        let home_location = documents[home_idx].location.clone();
-        if home_location.is_empty() {
-            continue;
-        }
-
-        for &i in indices {
-            if i != home_idx && documents[i].location.is_empty() {
-                documents[i].location = home_location.clone();
-            }
-        }
+        let companions = indices.into_iter().filter(|&i| i != home_idx).collect();
+        works.insert(folder, WorkGroup { home_idx, companions });
     }
+    works
 }
 
 #[cfg(test)]
@@ -130,6 +159,23 @@ mod tests {
 
     fn companion(source_path: &str, location: &[&str]) -> ParsedDocument {
         doc(source_path, location, PageKind::Article)
+    }
+
+    #[test]
+    fn group_by_work_finds_the_self_named_home_and_lists_its_companions_in_source_order() {
+        // The home sits in the middle of the folder's three documents, not
+        // first — `group_by_work` must elect it by the self-named test, not
+        // by document position, and `companions` must list the other two in
+        // their original source order with the home excluded.
+        let docs = vec![
+            companion("works/kyoto-walk/evening.md", &[]),
+            home("works/kyoto-walk/kyoto-walk.md", &["Kyoto"]),
+            companion("works/kyoto-walk/morning.md", &[]),
+        ];
+        let works = group_by_work(&docs);
+        let group = works.get("works/kyoto-walk").expect("kyoto-walk is a work");
+        assert_eq!(group.home_idx, 1, "the self-named home, found by election, not by position");
+        assert_eq!(group.companions, vec![0, 2], "companions in source order, home excluded");
     }
 
     #[test]

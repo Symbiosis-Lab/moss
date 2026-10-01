@@ -34,7 +34,11 @@ mod editor_read;
 pub use editor_read::{list_vault_terms_in, KindTerms, VaultTerms};
 // Location inheritance for a work's companions — the first thing
 // `derive_terms` does below. Sibling file, same reasoning as `rollup.rs`.
-mod inherit;
+// `pub(crate)`, not private: the places-explorer data emitter
+// (`build::place_map::places_data`) reuses this module's `group_by_work`,
+// the one folder/self-named-home election this pass already performs, so
+// the two never carry two answers to "is this folder a work".
+pub(crate) mod inherit;
 // The gazetteer's `parent` links, attached to place-typed kinds at the
 // config stage — the only place the gazetteer type crosses into the terms
 // machinery. `derive_terms` itself never reads it.

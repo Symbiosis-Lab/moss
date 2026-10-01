@@ -1303,6 +1303,21 @@ fn build_inner(
                 }
             }
         });
+    // Cloned before `place_maps` moves into `site_config.place_maps` below
+    // — the places-explorer data emitter needs it after the blocking render
+    // returns `documents`, by which point `site_config` is long consumed.
+    // `PlaceMapRenderContext` derives `Clone` and bundles exactly what that
+    // emitter needs (gazetteer, namespace, cycle-repaired parents, the map
+    // pack) behind its own accessors, so this one clone replaces the old
+    // three hand-captured copies plus the emit site's own second
+    // `embedded()` decode.
+    let place_maps_for_places_data = place_maps.clone();
+    // Default-on by key absence, same story as `site_config.math` below is
+    // built from (see that field's own comment) — computed once here so
+    // both the page-rendering config and the places-explorer data emitter,
+    // which needs it again after `site_config` is consumed, read the same
+    // value.
+    let math = site_bool("math").unwrap_or(true);
     // Read site-level config from .moss/config.toml [site] section
     let site_config = crate::build::render::SiteConfig {
         lang: site_lang.clone(),
@@ -1323,8 +1338,10 @@ fn build_inner(
         // `[site].math`, so there is no legacy value to preserve and no
         // migration involved — absence simply means "the author never
         // said", and the answer to that is yes. Explicit
-        // `[site].math = false` is the only way to turn it off.
-        math: site_bool("math").unwrap_or(true),
+        // `[site].math = false` is the only way to turn it off. Computed
+        // once, above, since the places-explorer data emitter reads the
+        // same value again after `site_config` is consumed.
+        math,
         // Default-on by key absence, same story as `math`: nothing has ever
         // written `[site].hard_line_breaks`, so absence means "the author
         // never said" — and the answer is Obsidian's, because that is where
@@ -1404,6 +1421,22 @@ fn build_inner(
     let exits_after_build = matches!(search_freshness, crate::build::feeds::search_lane::Freshness::Now);
     let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build)?;
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
+
+    // Places-explorer data file (`_moss/places.<hash>.json`), gated on the
+    // site declaring a place-typed term kind at all — `place_maps_for_places_data`
+    // is `None` exactly when `place_maps` itself is (no place-typed kind, or
+    // the bundled map pack failed to decode; that failure already logged a
+    // warning when `place_maps` was built). `documents` here already carries
+    // `derive_terms`'s finished location-inheritance pass (a work's
+    // companions have theirs filled in) — the same document set every render
+    // above just used.
+    if let Some(context) = place_maps_for_places_data.as_ref() {
+        if let Err(e) =
+            crate::build::place_map::places_data::emit(&documents, context, math, &stage_dir, &mut pending)
+        {
+            log::warn!("Failed to emit places-explorer data: {e}");
+        }
+    }
 
     // Step 3b: Resolve and inject slots into the marked stage BEFORE hash
     // comparison, ship_phase, or manifest seal. The rendered page loop above

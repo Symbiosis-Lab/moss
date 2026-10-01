@@ -382,6 +382,15 @@ impl ServedPath {
         ServedPath(format!("{}/script.{}.js", THEME_MOUNT, hash))
     }
 
+    /// Places-explorer data file, content-hashed. Output:
+    /// `_moss/places.{hash}.json`. Same shape as
+    /// [`Self::for_default_stylesheet_hashed`]: the hash names the file, so
+    /// no fixed URL exists for callers to guess — the page that links it
+    /// reads the hash off the same build that produced it.
+    pub fn for_places_data_hashed(hash: &str) -> Self {
+        ServedPath(format!("_moss/places.{}.json", hash))
+    }
+
     /// A single file inside the Pagefind search-index bundle.
     ///
     /// `rel` is the path *within* the bundle as Pagefind reports it from
@@ -1056,6 +1065,12 @@ mod tests {
     fn for_custom_script_hashed_embeds_hash() {
         let sp = ServedPath::for_custom_script_hashed("abcd1234ef567890");
         assert_eq!(sp.as_str(), "_moss/theme/script.abcd1234ef567890.js");
+    }
+
+    #[test]
+    fn for_places_data_hashed_embeds_hash() {
+        let sp = ServedPath::for_places_data_hashed("abcd1234ef567890");
+        assert_eq!(sp.as_str(), "_moss/places.abcd1234ef567890.json");
     }
 
     #[test]

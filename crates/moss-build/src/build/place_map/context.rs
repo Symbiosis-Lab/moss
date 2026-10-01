@@ -56,6 +56,27 @@ impl PlaceMapRenderContext {
         key == self.namespace || key.starts_with(&format!("{}/", self.namespace))
     }
 
+    /// The bundled map pack, gazetteer, place-typed namespace key, and
+    /// cycle-repaired parent map this context already bundles — read by
+    /// `place_map::places_data`, the one other caller outside this module
+    /// that needs these fields, rather than threading each one through its
+    /// own parameter the way the pipeline used to hand-capture them.
+    pub(crate) fn maps(&self) -> &PlaceMapContext {
+        &self.maps
+    }
+
+    pub(crate) fn gazetteer(&self) -> &crate::vault::places::Gazetteer {
+        &self.gazetteer
+    }
+
+    pub(crate) fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    pub(crate) fn parents(&self) -> &BTreeMap<String, String> {
+        &self.parents
+    }
+
     pub fn render_locator(&self, names: &[String], page_path: &str, ordinal: usize) -> Option<String> {
         if self.locator == LocatorPlacement::None { return None; }
         let target = self.maps.resolve_locations(&self.namespace, &self.gazetteer, names);
