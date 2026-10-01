@@ -119,6 +119,71 @@ fn sniffs_like_html(body: &str) -> bool {
     head.starts_with("<!doctype html") || head.starts_with("<html")
 }
 
+/// Extension families [`is_non_page_file_url`] refuses a stub for — every
+/// one a real site routinely links to without it ever being a page of its
+/// own. Grouped by kind for readability; the check itself just flattens
+/// them. PDF and audio are not repeated here — they are
+/// [`crate::vault::import::media::PDF_EXTENSIONS`] and
+/// [`crate::vault::import::media::AUDIO_EXTENSIONS`], the same two rows
+/// [`crate::vault::import::media::is_localizable_file_url`] already uses, so
+/// "is this a PDF" has one answer instead of two extension lists that could
+/// drift apart.
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "tiff", "tif", "ico", "avif", "heic", "heif",
+];
+const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mov", "avi", "mkv", "m4v", "wmv", "flv"];
+const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "rar", "7z", "tar", "gz", "tgz", "bz2"];
+const OFFICE_EXTENSIONS: &[&str] = &[
+    "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf",
+];
+const CALENDAR_EXTENSIONS: &[&str] = &["ics"];
+const FEED_DATA_EXTENSIONS: &[&str] = &["xml", "rss", "atom", "json"];
+const STYLE_SCRIPT_EXTENSIONS: &[&str] = &["css", "js", "mjs"];
+
+/// Whether `url`'s own path extension already names a file type that is
+/// never a page — the pre-fetch counterpart to [`looks_like_html_page`] for
+/// the one case that check can never reach: a fetch that failed outright and
+/// so never produced a Content-Type or a body to sniff. A successful fetch
+/// of a `/report.pdf` link is skipped by `looks_like_html_page` once its
+/// response comes back; this answers the same question from the URL alone,
+/// so a FAILED fetch of the same link is never written as a `scrape_error`
+/// stub page just because it didn't get far enough to prove what
+/// `looks_like_html_page` would have found anyway.
+///
+/// Checked on the extension only, never the query string or fragment — a
+/// tracking/cache-busting suffix after `.pdf` is still a PDF. A URL with no
+/// extension, or one not in any list here (including an ordinary
+/// `.html`/`.htm`, `.php`, `.asp`, or `.aspx` — the extensions a page is
+/// actually served at on the CMSes this importer meets), answers `false`:
+/// it is still a page candidate, and a failed fetch of it keeps getting its
+/// stub exactly as before this function existed.
+///
+/// `FEED_DATA_EXTENSIONS` is the one family that can be wrong: a `.json` or
+/// `.xml` URL is almost always a feed or a data endpoint, but a headless
+/// CMS can expose real content at one. Misclassifying such a URL costs
+/// nothing on a successful fetch — `looks_like_html_page` would make the
+/// real call from the response — and on a failed one it trades a garbled
+/// `scrape_error` stub for a silent `unreachable_files` count plus the
+/// `log::warn!` below, the same trade-off `VariantFetchFailed` already
+/// makes for a query-string variant.
+pub fn is_non_page_file_url(url_str: &str) -> bool {
+    let Ok(url) = Url::parse(url_str) else {
+        return false;
+    };
+    let path = url.path().to_ascii_lowercase();
+    crate::vault::import::media::PDF_EXTENSIONS
+        .iter()
+        .chain(crate::vault::import::media::AUDIO_EXTENSIONS)
+        .chain(IMAGE_EXTENSIONS)
+        .chain(VIDEO_EXTENSIONS)
+        .chain(ARCHIVE_EXTENSIONS)
+        .chain(OFFICE_EXTENSIONS)
+        .chain(CALENDAR_EXTENSIONS)
+        .chain(FEED_DATA_EXTENSIONS)
+        .chain(STYLE_SCRIPT_EXTENSIONS)
+        .any(|ext| path.ends_with(&format!(".{ext}")))
+}
+
 /// Normalize a URL for comparison and storage
 ///
 /// - Removes fragment identifiers (#section)
@@ -393,6 +458,43 @@ mod tests {
             !looks_like_html_page("application/octet-stream", "%PDF-1.4 binary bytes here"),
             "generic type with a non-HTML body must still be refused"
         );
+    }
+
+    // ── is_non_page_file_url (the pre-fetch counterpart to
+    // looks_like_html_page, for a fetch that failed before any Content-Type
+    // came back) ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn is_non_page_file_url_matches_one_row_from_each_family() {
+        assert!(is_non_page_file_url("https://example.test/s/doc.pdf"), "pdf");
+        assert!(is_non_page_file_url("https://example.test/audio/track.mp3"), "audio");
+        assert!(is_non_page_file_url("https://example.test/img/photo.jpg"), "image");
+        assert!(is_non_page_file_url("https://example.test/video/clip.mp4"), "video");
+        assert!(is_non_page_file_url("https://example.test/dl/bundle.zip"), "archive");
+        assert!(is_non_page_file_url("https://example.test/files/report.docx"), "office");
+        assert!(is_non_page_file_url("https://example.test/cal/event.ics"), "calendar");
+        assert!(is_non_page_file_url("https://example.test/feed.xml"), "feed/data");
+        assert!(is_non_page_file_url("https://example.test/style.css"), "style/script");
+    }
+
+    #[test]
+    fn is_non_page_file_url_is_case_insensitive_and_ignores_the_query_string() {
+        assert!(is_non_page_file_url("https://example.test/s/DOC.PDF"));
+        assert!(is_non_page_file_url("https://example.test/s/doc.pdf?v=2&cache=bust"));
+    }
+
+    #[test]
+    fn is_non_page_file_url_leaves_a_page_candidate_alone() {
+        assert!(
+            !is_non_page_file_url("https://example.test/about"),
+            "no extension at all is still a page candidate"
+        );
+        assert!(
+            !is_non_page_file_url("https://example.test/page.html"),
+            "an HTML-like extension is still a page candidate"
+        );
+        assert!(!is_non_page_file_url("https://example.test/"));
+        assert!(!is_non_page_file_url("not a url at all"));
     }
 
     // ── extract_canonical_url (the page-identity signal the run loop dedupes

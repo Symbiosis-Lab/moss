@@ -89,6 +89,18 @@ pub fn run(args: &[String]) -> i32 {
                         res.unreachable_variants
                     );
                 }
+                // A failed fetch of a linked PDF/image/archive/etc. is
+                // neither `failed_pages` (it was never a page) nor
+                // `skipped_pages` (that fetch never came back, so nothing
+                // was actually sniffed) — said on its own line for the same
+                // reason as the variant count above.
+                if res.unreachable_files > 0 {
+                    eprintln!(
+                        "  ↳ {} linked file(s) (PDF, image, archive, etc.) could not be \
+                         reached and were not written as pages",
+                        res.unreachable_files
+                    );
+                }
                 // Silent when the site declared no sitemap at all — the
                 // ordinary case, and the one this line must not clutter.
                 if res.sitemap_urls > 0 {
@@ -145,7 +157,7 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     eprintln!(
-        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{}{})",
+        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{}{}{})",
         totals.pages,
         folder.display(),
         totals.failed_pages,
@@ -153,6 +165,11 @@ pub fn run(args: &[String]) -> i32 {
         totals.duplicate_pages,
         if totals.unreachable_variants > 0 {
             format!(", {} variant(s) unreachable", totals.unreachable_variants)
+        } else {
+            String::new()
+        },
+        if totals.unreachable_files > 0 {
+            format!(", {} linked file(s) unreachable", totals.unreachable_files)
         } else {
             String::new()
         },
@@ -178,6 +195,7 @@ struct ImportTotals {
     skipped_pages: usize,
     duplicate_pages: usize,
     unreachable_variants: usize,
+    unreachable_files: usize,
     capped_leftovers: usize,
     hard_errors: usize,
 }
@@ -189,6 +207,7 @@ impl ImportTotals {
         self.skipped_pages += res.skipped_pages;
         self.duplicate_pages += res.duplicate_pages;
         self.unreachable_variants += res.unreachable_variants;
+        self.unreachable_files += res.unreachable_files;
         if res.capped {
             self.capped_leftovers += res.remaining_urls;
         }
@@ -387,7 +406,10 @@ fn print_usage() {
     eprintln!("that never came back is a variant of a page already imported (same path,");
     eprintln!("different query string), it is counted as \"variant(s) unreachable\"");
     eprintln!("instead of getting a failure stub; a genuinely new page that never came");
-    eprintln!("back still gets one.");
+    eprintln!("back still gets one — unless its own extension already names a non-HTML");
+    eprintln!("file (a PDF, an image, ...), in which case it is counted as \"linked");
+    eprintln!("file(s) unreachable\" instead, same as a non-HTML response that was");
+    eprintln!("actually fetched.");
     eprintln!();
     eprintln!("The vault copy is canonical; the source URL is recorded in `origin`");
     eprintln!("frontmatter as provenance, not as a claim that the content also lives");

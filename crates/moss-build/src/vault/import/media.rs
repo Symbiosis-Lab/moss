@@ -142,6 +142,16 @@ pub(crate) fn drive_download_from_preview(url: &str) -> Option<String> {
     }
 }
 
+/// PDF file extensions — named so [`is_localizable_file_url`] and the
+/// crawl's own pre-fetch non-page check (`scrape::crawler::is_non_page_file_url`)
+/// share one list instead of each carrying its own copy of `"pdf"`.
+pub(crate) const PDF_EXTENSIONS: &[&str] = &["pdf"];
+
+/// Audio file extensions — same reasoning as [`PDF_EXTENSIONS`]. Kept to the
+/// four this module already recognized rather than grown with this split, so
+/// [`is_localizable_file_url`]'s behavior is unchanged.
+pub(crate) const AUDIO_EXTENSIONS: &[&str] = &["mp3", "m4a", "wav", "ogg"];
+
 /// Whether a remote URL names a downloadable FILE that the import should
 /// localize into the vault (as opposed to a provider embed, which stays
 /// remote). Drive direct-downloads and bare file-extension URLs qualify.
@@ -158,8 +168,9 @@ pub(crate) fn is_localizable_file_url(url: &str) -> bool {
         return true;
     }
     let path = parsed.path().to_ascii_lowercase();
-    ["mp3", "m4a", "wav", "ogg", "pdf"]
+    PDF_EXTENSIONS
         .iter()
+        .chain(AUDIO_EXTENSIONS)
         .any(|ext| path.ends_with(&format!(".{ext}")))
 }
 

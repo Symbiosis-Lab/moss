@@ -494,6 +494,7 @@ pub(crate) struct Tally {
     skipped: usize,
     duplicate: usize,
     unreachable_variants: usize,
+    unreachable_files: usize,
 }
 
 impl Tally {
@@ -517,6 +518,10 @@ impl Tally {
         self.unreachable_variants
     }
 
+    pub(crate) fn unreachable_files(&self) -> usize {
+        self.unreachable_files
+    }
+
     pub(crate) fn record_scraped(&mut self) {
         self.scraped += 1;
     }
@@ -535,6 +540,10 @@ impl Tally {
 
     pub(crate) fn record_unreachable_variant(&mut self) {
         self.unreachable_variants += 1;
+    }
+
+    pub(crate) fn record_unreachable_file(&mut self) {
+        self.unreachable_files += 1;
     }
 }
 
@@ -908,10 +917,12 @@ mod tests {
         tally.record_skipped();
         tally.record_duplicate();
         tally.record_unreachable_variant();
+        tally.record_unreachable_file();
         assert_eq!(tally.scraped(), 1);
         assert_eq!(tally.failed(), 2);
         assert_eq!(tally.skipped(), 1);
         assert_eq!(tally.duplicate(), 1);
         assert_eq!(tally.unreachable_variants(), 1);
+        assert_eq!(tally.unreachable_files(), 1);
     }
 }

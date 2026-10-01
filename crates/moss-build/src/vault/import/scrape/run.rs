@@ -18,7 +18,9 @@ use tokio::sync::Semaphore;
 
 use super::converter::{extract_article, extract_article_with_snapshot, rewrite_image_links};
 use super::crawl_state::{CrawlState, HostPacer};
-use super::crawler::{extract_canonical_url, extract_links, host_of, looks_like_html_page};
+use super::crawler::{
+    extract_canonical_url, extract_links, host_of, is_non_page_file_url, looks_like_html_page,
+};
 use super::scope::{is_within_scope, UrlScope};
 use super::service::{generate_frontmatter, render_error_markdown, rewrite_links, ScrapeConfig};
 use super::writer::{rename_for_collision, sanitize_filename, url_to_file_path};
@@ -79,6 +81,18 @@ pub struct ScrapeResult {
     /// `failed_pages` gets, and — like `duplicate_pages` — never counted
     /// against `max_pages`.
     pub unreachable_variants: usize,
+    /// A URL whose fetch failed outright but whose own path extension
+    /// already names a file that is never a page (a PDF, an image, an
+    /// archive, an Office document, `.ics`, a feed/data format, a
+    /// stylesheet or script — see
+    /// [`is_non_page_file_url`](super::crawler::is_non_page_file_url)). A
+    /// successful fetch of the same URL would have been skipped by
+    /// `skipped_pages` once its response came back; this is that same
+    /// verdict reached from the URL alone, for a fetch that never got that
+    /// far. Never written as the `scrape_error` stub `failed_pages` gets,
+    /// and — like `skipped_pages` — never counted against `max_pages`: the
+    /// URL was never a page candidate to begin with, fetch or no fetch.
+    pub unreachable_files: usize,
     /// True when `max_pages` stopped a recursive crawl before every
     /// discovered in-scope URL had been visited — distinct from a crawl that
     /// finished because its queue simply ran out.
@@ -150,6 +164,15 @@ enum PageOutcome {
     /// folded into either `Failed` or `Duplicate`, since it is neither — a
     /// duplicate that could not be confirmed.
     VariantFetchFailed,
+    /// The fetch itself failed, but the URL's own path extension already
+    /// names a file that is never a page (see [`is_non_page_file_url`]) — a
+    /// successful fetch of the same URL would have been [`Skipped`](Self::Skipped)
+    /// once its Content-Type came back, so a failed one must not become a
+    /// `scrape_error` stub just because it never got that far. Counted on
+    /// its own (`unreachable_files`) rather than folded into `Skipped`,
+    /// since unlike a real `Skipped` outcome nothing was actually fetched or
+    /// sniffed here — the verdict comes from the URL alone.
+    UnreachableFile,
 }
 
 /// A short, stable name for a media URL, so the same image fetched twice
@@ -292,6 +315,21 @@ where
         let (html, content_type) = match page_result {
             Ok(v) => v,
             Err(e) => {
+                // A URL whose own path extension already names a file that
+                // is never a page (a PDF, an image, …) would have been
+                // skipped once its Content-Type came back — see
+                // `is_non_page_file_url`. A failed fetch of it must not
+                // become a `scrape_error` stub just because it never got
+                // far enough to prove that itself. Checked first: this URL
+                // was never a page candidate regardless of the dedupe state
+                // the check below reads.
+                if is_non_page_file_url(&url) {
+                    log::warn!(
+                        "import: fetch failed for a URL whose extension already names a \
+                         non-page file, skipping the stub: {url}: {e}"
+                    );
+                    break 'page PageOutcome::UnreachableFile;
+                }
                 // A failed fetch on a path this crawl has already
                 // CONFIRMED produces duplicates is a query-string variant
                 // that couldn't be reconfirmed, not a page gone missing —
@@ -482,6 +520,14 @@ where
             PageOutcome::VariantFetchFailed => {
                 state.tally.record_unreachable_variant();
             }
+            // Never written as a `.md` stub — the fetch never even reached
+            // the point of proving the URL wasn't a page; the extension
+            // already did. Not counted against the cap, same as
+            // `VariantFetchFailed`: this URL was never a real additional
+            // page to begin with.
+            PageOutcome::UnreachableFile => {
+                state.tally.record_unreachable_file();
+            }
         }
     }
 
@@ -511,6 +557,7 @@ where
         skipped_pages: state.tally.skipped(),
         duplicate_pages: state.tally.duplicate(),
         unreachable_variants: state.tally.unreachable_variants(),
+        unreachable_files: state.tally.unreachable_files(),
         capped: state.cap.capped(),
         remaining_urls,
         sitemap_urls: sitemap.urls.len(),
@@ -656,6 +703,7 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
         skipped_pages: 0,
         duplicate_pages: 0,
         unreachable_variants: 0,
+        unreachable_files: 0,
         capped: false,
         remaining_urls: 0,
         sitemap_urls: 0,
@@ -1924,6 +1972,100 @@ Content-Location: https://img.douban.com/a.png\r\n\
             written.len(),
             1,
             "no .md should be written for any of the skipped responses"
+        );
+    }
+
+    /// Gap: a failed fetch used to write a `scrape_error` stub for ANY URL,
+    /// including one whose own extension already names a file a successful
+    /// fetch would have skipped as non-HTML (see
+    /// `non_html_responses_are_skipped_not_written_as_pages`) — on at least
+    /// one real corpus site, a flaky run produced six stub pages for a PDF
+    /// alone. A file this crawl would never have written as a page must not
+    /// become a stub page just because its fetch failed. `/s/doc.pdf`
+    /// proves that; `/about` and `/page.html` (no extension, and an
+    /// HTML-like one) prove the fix is scoped to non-page extensions only —
+    /// an ordinary failing link still gets its stub exactly as before.
+    #[tokio::test]
+    async fn a_failed_fetch_of_a_non_page_extension_is_not_stubbed_but_an_ordinary_failure_still_is()
+    {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+
+        let index = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(format!(
+                "<html><body><article><p>Real page body, long enough to be extracted \
+                 as content.</p>\
+                 <a href=\"{base}/s/doc.pdf\">PDF</a>\
+                 <a href=\"{base}/about\">About</a>\
+                 <a href=\"{base}/page.html\">Page</a>\
+                 </article></body></html>"
+            ))
+            .create_async()
+            .await;
+        // 404s (permanent, never retried) — a transient 429/503 would have
+        // proven the same thing after outlasting its retries, but 404 keeps
+        // the test to one request per URL.
+        let pdf = server.mock("GET", "/s/doc.pdf").with_status(404).create_async().await;
+        let about = server.mock("GET", "/about").with_status(404).create_async().await;
+        let page_html = server.mock("GET", "/page.html").with_status(404).create_async().await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+        config.recursive = true;
+        let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+        index.assert_async().await;
+        pdf.assert_async().await;
+        about.assert_async().await;
+        page_html.assert_async().await;
+
+        assert_eq!(res.total_pages, 1, "only the real HTML page is imported");
+        assert_eq!(
+            res.failed_pages, 2,
+            "/about and /page.html are ordinary failed fetches and still count as failed"
+        );
+        assert_eq!(
+            res.unreachable_files, 1,
+            "/s/doc.pdf's own extension already answers the non-HTML question the fetch \
+             never got to ask"
+        );
+
+        let written: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+            .collect();
+        assert_eq!(
+            written.len(),
+            3,
+            "the real page plus two failure stubs (/about, /page.html) — nothing for the PDF: \
+             {written:?}"
+        );
+        // Relative PATHS, not content — the real page's own body legitimately
+        // mentions `doc.pdf` (its link to it got rewritten the same as any
+        // other in-scope URL), so a content grep for "doc.pdf" would catch
+        // that innocent reference instead of proving anything about a stub.
+        let relative_paths: Vec<String> = written
+            .iter()
+            .map(|p| p.strip_prefix(tmp.path()).unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            relative_paths.iter().any(|p| p.contains("about")),
+            "an ordinary failing link with no extension must still get its stub: \
+             {relative_paths:?}"
+        );
+        assert!(
+            relative_paths.iter().any(|p| p.contains("page")),
+            "an ordinary failing link with an HTML-like extension must still get its stub: \
+             {relative_paths:?}"
+        );
+        assert!(
+            !relative_paths.iter().any(|p| p.contains("doc")),
+            "a failed fetch of a non-page extension must never produce a stub file: \
+             {relative_paths:?}"
         );
     }
 
