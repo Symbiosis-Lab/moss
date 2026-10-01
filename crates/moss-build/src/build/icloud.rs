@@ -52,26 +52,13 @@ use std::path::Path;
 #[cfg(target_os = "macos")]
 const SF_DATALESS: u32 = 0x40000000;
 
-/// Check whether a file is evicted (cloud-only) on iCloud Drive.
-///
-/// Uses `symlink_metadata()` (lstat) which reads inode metadata without
-/// triggering a download of the file's data extents.
-///
-/// Returns `false` for non-existent files, directories, or on non-macOS platforms.
+/// Whether `meta`, a file's `symlink_metadata` (lstat, which reads inode
+/// metadata without triggering a download), says iCloud Drive has evicted it.
+/// `false` for directories and symlinks.
 #[cfg(target_os = "macos")]
-fn is_evicted_on_disk(path: &Path) -> bool {
+fn evicted_meta(meta: &std::fs::Metadata) -> bool {
     use std::os::darwin::fs::MetadataExt;
-
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) => {
-            // Only check regular files (not directories or symlinks)
-            if !meta.is_file() {
-                return false;
-            }
-            (meta.st_flags() & SF_DATALESS) != 0
-        }
-        Err(_) => false,
-    }
+    meta.is_file() && (meta.st_flags() & SF_DATALESS) != 0
 }
 
 /// Windows placeholder-file attribute bits (`<winnt.h>`), set by Files-On-
@@ -81,41 +68,43 @@ const FILE_ATTRIBUTE_OFFLINE: u32 = 0x1000;
 #[cfg(target_os = "windows")]
 const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x40_0000;
 
-/// Check whether a file is a cloud-only placeholder on Windows.
-///
-/// Uses `symlink_metadata()` (lstat-equivalent) — reads directory-entry
-/// attributes without triggering a download.
+/// Whether `meta`, a file's `symlink_metadata` (directory-entry attributes,
+/// read without triggering a download), marks a cloud-only placeholder on
+/// Windows.
 #[cfg(target_os = "windows")]
-fn is_evicted_on_disk(path: &Path) -> bool {
+fn evicted_meta(meta: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
-
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) => {
-            if !meta.is_file() {
-                return false;
-            }
-            (meta.file_attributes()
-                & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS))
-                != 0
-        }
-        Err(_) => false,
-    }
+    meta.is_file()
+        && (meta.file_attributes() & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)) != 0
 }
 
 /// Non-macOS, non-Windows stub: always returns false.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn is_evicted_on_disk(_path: &Path) -> bool {
+fn evicted_meta(_meta: &std::fs::Metadata) -> bool {
     false
 }
 
 /// Is `path` a cloud-only placeholder right now? One `lstat`, never a read — the
-/// platform check is the three `is_evicted_on_disk` variants above.
+/// platform check is the three `evicted_meta` variants above.
 pub fn is_evicted(path: &Path) -> bool {
-    #[cfg(test)]
-    if pretend::marked(path) {
-        return true;
-    }
-    is_evicted_on_disk(path)
+    pretended(path) || std::fs::symlink_metadata(path).is_ok_and(|meta| evicted_meta(&meta))
+}
+
+/// [`is_evicted`] for a caller already holding `meta`, `path`'s own
+/// `symlink_metadata`: no second `lstat`.
+pub fn is_evicted_stat(path: &Path, meta: &std::fs::Metadata) -> bool {
+    pretended(path) || evicted_meta(meta)
+}
+
+/// Whether a test marked `path` cloud-only — see [`pretend`].
+#[cfg(test)]
+fn pretended(path: &Path) -> bool {
+    pretend::marked(path)
+}
+
+#[cfg(not(test))]
+fn pretended(_path: &Path) -> bool {
+    false
 }
 
 /// Test seam for everything that branches on a file being in the cloud.

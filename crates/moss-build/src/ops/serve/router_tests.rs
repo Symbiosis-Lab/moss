@@ -715,7 +715,7 @@ async fn a_rebuild_never_parks_the_preview_on_a_generation_older_than_the_render
     }
     let sealed = pending.seal();
     let promotion =
-        materialize_and_promote(&sealed, &mp, &stage, None, next_promotion_epoch(), Some(r2), ShipVerdict::Ship);
+        materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), Some(r2), ShipVerdict::Ship);
     assert_eq!(promotion, Ok(Promotion::Promoted));
 
     assert!(lifecycle::park_for_rebuild(&mp, false, Default::default()).is_some(), "caught up, the next rebuild may sweep");

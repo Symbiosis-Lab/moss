@@ -260,6 +260,32 @@ pub fn copy_output(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
+/// Whether [`clone_output_dir`] can ever succeed on this platform.
+pub const CLONES_DIRS: bool = cfg!(target_os = "macos");
+
+/// Clone the whole tree at `src` to `dst`, which must not exist, in one
+/// copy-on-write `clonefile(2)`: every file in `dst` is an independent inode
+/// sharing `src`'s extents, the same thing [`copy_output`] makes one file at a
+/// time. `ENOTSUP` off APFS, and `Unsupported` off macOS, where no single call
+/// clones a directory. Symlinks inside the tree are cloned as links.
+#[cfg(target_os = "macos")]
+pub fn clone_output_dir(src: &Path, dst: &Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    // `CLONE_NOFOLLOW` from <sys/clonefile.h>, which `libc` does not export.
+    const CLONE_NOFOLLOW: u32 = 0x0001;
+    let src = std::ffi::CString::new(src.as_os_str().as_bytes())?;
+    let dst = std::ffi::CString::new(dst.as_os_str().as_bytes())?;
+    match unsafe { libc::clonefile(src.as_ptr(), dst.as_ptr(), CLONE_NOFOLLOW) } {
+        0 => Ok(()),
+        _ => Err(io::Error::last_os_error()),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn clone_output_dir(_src: &Path, _dst: &Path) -> io::Result<()> {
+    Err(io::ErrorKind::Unsupported.into())
+}
+
 /// Writes `bytes` to `path` only if the current file content differs.
 ///
 /// Returns `Ok(true)` if the file was written, `Ok(false)` if it was already
@@ -383,11 +409,21 @@ fn probe_error(path: &Path, err: io::Error) -> Presence {
 /// forgot this arm would unlink every preserved symlink.
 pub fn probe_path(path: &Path) -> Presence {
     match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => Presence::Present,
-        Ok(meta) if !meta.is_file() => Presence::Absent,
-        Ok(meta) if meta.len() == 0 || crate::build::icloud::is_evicted(path) => Presence::Evicted,
-        Ok(_) => Presence::Present,
+        Ok(meta) => probe_stat(path, &meta),
         Err(e) => probe_error(path, e),
+    }
+}
+
+/// [`probe_path`] given `meta`, `path`'s own `symlink_metadata`.
+fn probe_stat(path: &Path, meta: &fs::Metadata) -> Presence {
+    if meta.file_type().is_symlink() {
+        Presence::Present
+    } else if !meta.is_file() {
+        Presence::Absent
+    } else if meta.len() == 0 || crate::build::icloud::is_evicted_stat(path, meta) {
+        Presence::Evicted
+    } else {
+        Presence::Present
     }
 }
 
@@ -398,11 +434,22 @@ pub fn probe_path(path: &Path) -> Presence {
 /// standing where a file entry expects bytes would otherwise be called present
 /// and then fail the copy in `ship_phase`.
 pub fn probe_output(path: &Path, mode: &str) -> Presence {
-    if mode == crate::types::content::MODE_SYMLINK {
-        return probe_path(path);
-    }
-    match fs::canonicalize(path) {
-        Ok(real) => probe_path(&real),
+    probe_output_stat(path, mode, fs::symlink_metadata(path))
+}
+
+/// [`probe_output`] given `stat`, `path`'s own `symlink_metadata`, for a
+/// caller that already took it. One `lstat` answers unless the leaf is a link
+/// a file entry reads through; only then is the path resolved. The `lstat`
+/// itself already follows every ancestor.
+pub fn probe_output_stat(path: &Path, mode: &str, stat: io::Result<fs::Metadata>) -> Presence {
+    match stat {
+        Ok(meta) if meta.file_type().is_symlink() && mode != crate::types::content::MODE_SYMLINK => {
+            match fs::canonicalize(path) {
+                Ok(real) => probe_path(&real),
+                Err(e) => probe_error(path, e),
+            }
+        }
+        Ok(meta) => probe_stat(path, &meta),
         Err(e) => probe_error(path, e),
     }
 }

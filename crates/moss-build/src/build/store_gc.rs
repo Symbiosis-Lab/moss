@@ -1,4 +1,6 @@
-//! Retention and garbage collection for the local build store (`.moss/build.nosync/`).
+//! Retention and garbage collection for the local build store (`.moss/build.nosync/`),
+//! and the generation-directory bookkeeping both share: the write lock, and
+//! what a directory holds against its manifest.
 //!
 //! **Pure I/O, no `tauri`, no app-side singletons** — every entry point takes
 //! plain paths and plain data, so this module moves into `crates/moss-build`
@@ -184,8 +186,9 @@ enum Take {
     Locked(GenerationWriteLock),
     /// Another handle holds the lock.
     Busy,
-    /// The file exists but this filesystem cannot lock at all.
-    Unlockable(GenerationWriteLock),
+    /// The file exists but this filesystem cannot lock at all; `true` when
+    /// this call created it.
+    Unlockable(GenerationWriteLock, bool),
 }
 
 impl GenerationWriteLock {
@@ -197,7 +200,7 @@ impl GenerationWriteLock {
     pub fn acquire(generations_dir: &Path, gen_id: &str) -> std::io::Result<Self> {
         crate::build::io_utils::create_output_dir_all(generations_dir)?;
         match Self::take(generations_dir, gen_id, true)? {
-            Take::Locked(lock) | Take::Unlockable(lock) => Ok(lock),
+            Take::Locked(lock) | Take::Unlockable(lock, _) => Ok(lock),
             Take::Busy => Err(std::io::Error::other("generation lock reported busy on a blocking lock")),
         }
     }
@@ -241,7 +244,7 @@ impl GenerationWriteLock {
                 Err(e) if wait && !cannot_lock_here(&e) => return Err(e),
                 Err(e) => {
                     log::warn!("generation {gen_id}: cannot lock {}: {e}", path.display());
-                    return Ok(Take::Unlockable(Self { handle, path, fresh: false }));
+                    return Ok(Take::Unlockable(Self { handle, path, fresh: false }, created));
                 }
             }
             if same_file::Handle::from_path(&path).is_ok_and(|at_path| at_path == handle) {
@@ -276,6 +279,42 @@ impl GenerationWriteLock {
         self.fresh && dir_holds(gen_dir, files, cfg!(windows))
     }
 
+    /// Seed this lock's generation directory `gen_dir`, still absent, with a
+    /// copy-on-write clone of `base`, a finished generation beside it, so the
+    /// copy that follows writes only the entries the two do not share. One
+    /// `clonefile(2)` replaces one copy per file, which on a site of a few
+    /// thousand outputs is most of what sealing a one-page edit costs.
+    ///
+    /// The base's lock must be free and its lock file one this call made, so
+    /// no copy of it is running or was cut off or drifted, and it must still be the directory `base` recorded, not one
+    /// another process removed and copied again under the same id. Its lock is
+    /// taken without waiting and held across the check and the clone, so no GC
+    /// removes it meanwhile. Returns whether `gen_dir` now holds the clone; a
+    /// failed clone may leave part of one, which [`prune_to_manifest`] and a
+    /// full copy then put right.
+    pub fn seed_from(&self, gen_dir: &Path, base: &WholeGeneration) -> bool {
+        let Some(generations_dir) = gen_dir.parent() else { return false };
+        let base_dir = generations_dir.join(&base.id);
+        if base_dir == gen_dir || std::fs::symlink_metadata(gen_dir).is_ok() {
+            return false;
+        }
+        let lock = match Self::take(generations_dir, &base.id, false) {
+            Ok(Take::Locked(lock)) if lock.fresh() => lock,
+            // Left behind, a file this call made would mark the base abandoned.
+            Ok(Take::Unlockable(lock, true)) => {
+                lock.finish();
+                return false;
+            }
+            _ => return false,
+        };
+        let cloned = dir_identity(&base_dir).is_some_and(|dir| dir == base.dir)
+            && crate::build::io_utils::clone_output_dir(&base_dir, gen_dir)
+                .inspect_err(|e| log::debug!("generation {}: not cloned into {}: {e}", base.id, gen_dir.display()))
+                .is_ok();
+        lock.finish();
+        cloned
+    }
+
     /// Done with the generation: remove the lock file while still holding
     /// it, then release. For a writer this marks the copy complete.
     pub fn finish(self) {
@@ -299,6 +338,112 @@ fn dir_holds(gen_dir: &Path, files: &std::collections::HashMap<String, String>, 
             !(copies_link_targets && mode == crate::types::content::MODE_SYMLINK)
                 && crate::build::io_utils::entry_output_present(&gen_dir.join(rel_path), mode)
         })
+}
+
+/// A generation as it was when a copy of it finished: what a later copy may be
+/// seeded from. Nothing stops another process, or a person, from changing a
+/// generation's files after that, so its directory's identity and each file's
+/// size and mtime are kept, and a seed that no longer matches is not trusted.
+pub struct WholeGeneration {
+    id: String,
+    dir: DirIdentity,
+    files: std::collections::HashMap<String, Finished>,
+}
+
+/// One file of a [`WholeGeneration`]: its manifest entry, and its file's stat.
+struct Finished {
+    entry: String,
+    size: u64,
+    mtime: Option<std::time::SystemTime>,
+}
+
+impl WholeGeneration {
+    /// Stat every file of `gen_id`, a whole generation at `gen_dir` whose
+    /// manifest entries are `files`. An entry with no file — the `_moss/math/`
+    /// exemption — is left out, so it is never taken as held. `None` where the
+    /// directory has no identity to check, so no copy is seeded from it.
+    pub fn record(gen_dir: &Path, gen_id: &str, files: &std::collections::HashMap<String, String>) -> Option<Self> {
+        let files = files
+            .iter()
+            .filter_map(|(rel, entry)| {
+                let meta = std::fs::symlink_metadata(gen_dir.join(rel)).ok()?;
+                Some((rel.clone(), Finished { entry: entry.clone(), size: meta.len(), mtime: meta.modified().ok() }))
+            })
+            .collect();
+        Some(Self { id: gen_id.to_string(), dir: dir_identity(gen_dir)?, files })
+    }
+
+    /// Whether `path`, the seeded copy of `rel_path`, still holds `entry`'s
+    /// bytes: this generation finished `rel_path` as `entry`, and the file is
+    /// present with the size and mtime it had then (a clone keeps both). An
+    /// edit since, or a dataless or evicted file, is shipped again. Presence is
+    /// the one predicate every generation check asks, given the stat taken
+    /// here; every ancestor of `path` is a real directory, because
+    /// [`prune_to_manifest`] removes any link that is not itself an entry.
+    pub fn still_holds(&self, rel_path: &str, entry: &str, path: &Path) -> bool {
+        let Some(finished) = self.files.get(rel_path) else { return false };
+        let stat = std::fs::symlink_metadata(path);
+        finished.entry == entry
+            && stat.as_ref().is_ok_and(|meta| meta.len() == finished.size && meta.modified().ok() == finished.mtime)
+            && crate::build::io_utils::probe_output_stat(path, crate::types::content::parse_entry(entry).0, stat)
+                .is_present()
+    }
+}
+
+/// A directory's device and inode: a directory removed and made again under
+/// the same name has a different one.
+#[derive(PartialEq)]
+struct DirIdentity {
+    device: u64,
+    inode: u64,
+}
+
+/// `None` off unix, where nothing is seeded.
+#[cfg(unix)]
+fn dir_identity(dir: &Path) -> Option<DirIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(dir).ok().map(|meta| DirIdentity { device: meta.dev(), inode: meta.ino() })
+}
+
+#[cfg(not(unix))]
+fn dir_identity(_dir: &Path) -> Option<DirIdentity> {
+    None
+}
+
+/// Remove from `gen_dir` every file and link `files` does not name, and every
+/// directory that leaves empty, so a promoted generation holds exactly its
+/// manifest. A seeded directory holds its base's outputs, and a copy cut off
+/// after seeding leaves them for the next copy of the same id.
+pub fn prune_to_manifest(gen_dir: &Path, files: &std::collections::HashMap<String, String>) -> std::io::Result<()> {
+    prune_dir(gen_dir, "", files).map(|_| ())
+}
+
+/// [`prune_to_manifest`] below `dir`, whose manifest path is `rel`. Returns
+/// whether `dir` is empty afterwards.
+fn prune_dir(dir: &Path, rel: &str, files: &std::collections::HashMap<String, String>) -> std::io::Result<bool> {
+    let mut empty = true;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let child = match rel {
+            "" => name.to_string_lossy().into_owned(),
+            _ => format!("{rel}/{}", name.to_string_lossy()),
+        };
+        if entry.file_type()?.is_dir() {
+            if !prune_dir(&entry.path(), &child, files)? {
+                empty = false;
+            } else {
+                // allow:unlink a generation directory emptied of outputs its manifest does not name
+                std::fs::remove_dir(entry.path())?;
+            }
+        } else if files.contains_key(&child) {
+            empty = false;
+        } else {
+            // allow:unlink an output this generation's manifest does not name, before promote
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(empty)
 }
 
 /// Whether `e` means this filesystem has no working locks at all (a network
@@ -393,7 +538,7 @@ pub fn gc_old_generations(
                 continue;
             }
             Ok(Take::Locked(lock)) => lock,
-            Ok(Take::Busy | Take::Unlockable(_)) | Err(_) => continue, // copying, or cannot tell
+            Ok(Take::Busy | Take::Unlockable(..)) | Err(_) => continue, // copying, or cannot tell
         };
         // Under the lock no copy of this id is running and none can start.
         match std::fs::read_to_string(current_marker) {

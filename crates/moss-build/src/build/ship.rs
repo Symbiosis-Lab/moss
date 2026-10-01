@@ -12,8 +12,10 @@
 //! - [`ship_phase`], which walks the sealed entries and derives each generation
 //!   file from its staged bytes (apply transform, or recreate a symlink);
 //! - [`materialize_and_promote`], which runs the above into a fresh
-//!   generation dir (or finds it already whole on disk) and repoints
-//!   `current`, and [`gc_old_generations`].
+//!   generation dir — seeded, where the platform can clone a directory, from
+//!   the last whole one, so only the entries that differ are written — or
+//!   finds it already whole on disk, and repoints `current`. Generation GC is
+//!   `store_gc`'s.
 //!
 //! The manifest is the input, not the directory: a file in staging that no
 //! entry names — a sync client's conflicted copy, a stale output from an
@@ -57,15 +59,6 @@ static STRIP_PREVIEW_ATTR: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r#"\s+data-moss-preview(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*))?(\s|>)"#)
         .unwrap()
 });
-
-// The `<!--moss:no-preview-->` comment markers that used to wrap deploy-only
-// scripts (the pageview beacon, the site-wide analytics tag) are gone. They
-// were removed by ship, keeping the wrapped script for deploy — but that
-// meant a page served by the preview router from a generation this pass had
-// already run on carried an unmarked, un-strippable script (see
-// `ops::serve::iframe_bridge::strip_preview_only_scripts`). Deploy-only
-// scripts now carry a `data-moss-deploy-only` attribute directly instead,
-// which this transform deliberately leaves alone — see `apply_transform`.
 
 // ---------------------------------------------------------------------------
 // apply_transform
@@ -112,13 +105,6 @@ pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
         }
     }
 }
-
-// `unlink_if_hardlinked_to` used to live here: it removed a `site_path` that
-// shared an inode with `stage_path`, so that `fs::copy`'s `O_TRUNC` open could
-// not zero the source out from under the read. `io_utils::copy_output` and
-// `io_utils::write_output` never open the destination at all — they populate a
-// temp sibling and `rename(2)` it into place — so the hazard is closed by
-// construction and the helper had no callers left.
 
 // ---------------------------------------------------------------------------
 // Ship-by-OID: read from an immutable CAS blob instead of the mutable stage
@@ -261,9 +247,9 @@ fn verify_ship_integrity(
 /// does not hide the rest, and a non-zero count returns `Err` so the
 /// generation is never promoted.
 ///
-/// `cancel` is checked between entries. When fired (folder switch / window
-/// close) this returns `Ok`, matching the cancellation semantics of the
-/// `copy_dir_all` it replaced.
+/// `seeded` is the whole generation `site_dir` was cloned from, if any: an
+/// entry it still holds unchanged is not written again — see
+/// [`crate::build::store_gc::WholeGeneration::still_holds`].
 ///
 /// `Ok` carries how many entries shipped bytes other than the ones their
 /// manifest hash names — see [`verify_ship_integrity`].
@@ -272,7 +258,7 @@ pub fn ship_phase(
     site_dir: &Path,
     sealed: &SealedManifest,
     object_store: Option<&crate::build::cache::ObjectStore>,
-    cancel: Option<&tokio_util::sync::CancellationToken>,
+    seeded: Option<&crate::build::store_gc::WholeGeneration>,
 ) -> std::io::Result<usize> {
     // Count per-file faults so a PARTIAL materialize reports failure (Err),
     // not success. Fix B's mat_ok gate relies on this: a partial generation
@@ -281,15 +267,11 @@ pub fn ship_phase(
     let mut drifted = 0;
 
     for (rel_path, entry) in sealed.files() {
-        if let Some(c) = cancel {
-            if c.is_cancelled() {
-                log::info!("ship_phase cancelled (folder closed)");
-                return Ok(drifted);
-            }
-        }
-
         let stage_path = stage_dir.join(rel_path);
         let site_path = site_dir.join(rel_path);
+        if seeded.is_some_and(|base| base.still_holds(rel_path, entry, &site_path)) {
+            continue;
+        }
         // The ONE source every check and read below uses. Held bytes are
         // themselves; a live `staged_oid` resolves to its immutable CAS blob;
         // everything else resolves to `stage_path` unchanged. See
@@ -617,7 +599,6 @@ pub fn materialize_and_promote(
     sealed: &crate::build::manifest::SealedManifest,
     mp: &crate::moss_paths::MossPaths,
     stage_dir: &std::path::Path,
-    cancel: Option<&tokio_util::sync::CancellationToken>,
     epoch: u64,
     render: Option<u64>,
     verdict: ShipVerdict,
@@ -661,14 +642,19 @@ pub fn materialize_and_promote(
     let mut drifted = 0;
     let copied = !write_lock.holds(&gen_dir, sealed.files());
     if copied {
+        // Seeded from the last whole generation by one copy-on-write clone
+        // where the platform has one, so only the entries that differ are
+        // written; otherwise every entry is copied.
+        let base = crate::build::lifecycle::whole_generation(mp).filter(|base| write_lock.seed_from(&gen_dir, base));
         crate::build::io_utils::create_output_dir_all(&gen_dir)
-            .map_err(|e| format!("Failed to create generation dir: {}", e))?;
+            .and_then(|()| crate::build::store_gc::prune_to_manifest(&gen_dir, sealed.files()))
+            .map_err(|e| format!("Failed to prepare generation dir: {}", e))?;
         // Ship-by-OID: read a `staged_oid` entry from its
         // immutable CAS blob instead of the mutable `stage_dir` copy. Depends on
         // the entry's CAS blob surviving a concurrent build's GC across this
         // whole call — see `CacheWriteLease` at this function's own call sites.
         let object_store = crate::build::cache::ObjectStore::new(mp.cache_objects());
-        drifted = ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), cancel)
+        drifted = ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), base.as_deref())
             .map_err(|e| format!("Failed to materialize generation {}: {}", sealed.generation_id(), e))?;
     } else {
         log::info!("generation {} is already on disk — promoting it without a copy", sealed.generation_id());
@@ -679,6 +665,7 @@ pub fn materialize_and_promote(
     // so the next seal of this id copies it again instead of reusing it.
     if drifted == 0 {
         write_lock.finish();
+        crate::build::lifecycle::remember_whole(mp, &gen_dir, sealed);
     }
     Ok(if promoted { Promotion::Promoted } else { Promotion::Superseded })
 }
@@ -977,10 +964,6 @@ pub(crate) fn unregistered_referenced_variants(
 }
 
 // ---------------------------------------------------------------------------
-// Generation GC
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -988,6 +971,7 @@ pub(crate) fn unregistered_referenced_variants(
 mod tests {
     use super::*;
     use crate::build::manifest::{HashBucket, PendingManifest};
+    use crate::build::store_gc::{GenerationWriteLock, WholeGeneration};
     use crate::types::content::SiteHashes;
     use tempfile::tempdir;
 
@@ -1114,30 +1098,6 @@ mod tests {
         let html = b"<p data-source-line=\"5\">text</p>";
         let result = apply_transform(ShipTransform::StripPreviewAttrs, html);
         assert_eq!(result, b"<p>text</p>".to_vec());
-    }
-
-    /// A folder switch mid-ship must copy nothing, not a partial generation.
-    /// `ship_phase` inherited the cancellation contract from the `sync_dir` it
-    /// replaced, and it is the one behaviour of that helper the other ship tests
-    /// do not cover.
-    #[test]
-    fn ship_phase_respects_a_pre_set_cancel() {
-        let tmp = tempfile::tempdir().unwrap();
-        let src = tmp.path().join("src");
-        let dst = tmp.path().join("dst");
-        std::fs::create_dir_all(&src).unwrap();
-        for i in 0..5 {
-            std::fs::write(src.join(format!("f{}.txt", i)), b"x").unwrap();
-        }
-        let cancel = tokio_util::sync::CancellationToken::new();
-        cancel.cancel();
-        let names: Vec<String> = (0..5).map(|i| format!("f{}.txt", i)).collect();
-        let sealed = manifest_of(&names.iter().map(|n| (n.as_str(), &b"x"[..])).collect::<Vec<_>>());
-        ship_phase(&src, &dst, &sealed, None, Some(&cancel)).unwrap();
-        assert!(
-            !dst.exists() || std::fs::read_dir(&dst).unwrap().next().is_none(),
-            "no files should be copied when cancel is pre-set"
-        );
     }
 
     /// Fail closed, end to end: one unreadable page and the prune condemns
@@ -1555,7 +1515,6 @@ mod tests {
             &sealed,
             &mp,
             &stage,
-            None,
             next_promotion_epoch(),
             None,
             ShipVerdict::Withhold(WithholdReason::SourcesDownloading),
@@ -1600,7 +1559,7 @@ mod tests {
             std::collections::HashSet::new(),
         );
         let promotion =
-            materialize_and_promote(&sealed, &mp, &stage, None, next_promotion_epoch(), None, verdict)
+            materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), None, verdict)
                 .unwrap();
         (mp, sealed, promotion)
     }
@@ -1648,7 +1607,7 @@ mod tests {
         std::fs::write(stage.join("index.html"), b"<h1>home</h1>").unwrap();
         let sealed = manifest_of(&[("index.html", b"<h1>home</h1>")]);
         let promote = || {
-            materialize_and_promote(&sealed, &mp, &stage, None, next_promotion_epoch(), None, ShipVerdict::Ship).unwrap()
+            materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), None, ShipVerdict::Ship).unwrap()
         };
         assert_eq!(promote(), Promotion::Promoted);
 
@@ -1674,7 +1633,7 @@ mod tests {
         sealed.stamp_all_ship_fingerprints(&stage);
         let shipped = mp.generation_dir(sealed.generation_id()).join("page.html");
         let promote = |sealed: &SealedManifest| {
-            materialize_and_promote(sealed, &mp, &stage, None, next_promotion_epoch(), None, ShipVerdict::Ship).unwrap()
+            materialize_and_promote(sealed, &mp, &stage, next_promotion_epoch(), None, ShipVerdict::Ship).unwrap()
         };
 
         std::fs::write(stage.join("page.html"), b"<h1>RACED</h1>").unwrap();
@@ -1695,6 +1654,271 @@ mod tests {
         assert_eq!(std::fs::read(mp.current_ptr().join("page.html")).unwrap(), b"<h1>original</h1>");
         #[cfg(unix)]
         assert_ne!(pointer(), pointer_before, "a re-copied generation must be repointed");
+    }
+
+    // ─── Seeding a generation from the last whole one ────────────
+
+    /// A generation, and the edit after it: a changed page, an unchanged
+    /// stylesheet, a removed file and a removed directory, and a file that
+    /// becomes a directory and a directory that becomes a file.
+    const SEED_BASE: &[(&str, &[u8])] = &[
+        ("index.html", b"<h1>home v1</h1>"),
+        ("kept.css", b"body{}"),
+        ("gone.txt", b"bye"),
+        ("old/page.html", b"<p>old</p>"),
+        ("flip", b"a file, then a directory"),
+        ("dir2/x.txt", b"a directory, then a file"),
+    ];
+    const SEED_NEXT: &[(&str, &[u8])] = &[
+        ("index.html", b"<h1>home v2</h1>"),
+        ("kept.css", b"body{}"),
+        ("new/added.html", b"<p>new</p>"),
+        ("flip/index.html", b"<p>now a directory</p>"),
+        ("dir2", b"now a file"),
+    ];
+
+    /// Stage `entries` and seal a manifest naming exactly them.
+    fn stage_and_seal(mp: &crate::moss_paths::MossPaths, entries: &[(&str, &[u8])]) -> SealedManifest {
+        for (rel, bytes) in entries {
+            let path = mp.staging_dir().join(rel);
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path).unwrap();
+            }
+            if path.parent().unwrap().is_file() {
+                std::fs::remove_file(path.parent().unwrap()).unwrap();
+            }
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+        manifest_of(entries)
+    }
+
+    fn promote_sealed(mp: &crate::moss_paths::MossPaths, sealed: &SealedManifest) {
+        let promotion =
+            materialize_and_promote(sealed, mp, &mp.staging_dir(), next_promotion_epoch(), None, ShipVerdict::Ship);
+        assert_eq!(promotion, Ok(Promotion::Promoted));
+    }
+
+    /// Every path under `root`, directories included, with each file's bytes.
+    fn tree(root: &Path) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut dirs = vec![root.to_path_buf()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                let rel = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                if path.is_dir() {
+                    dirs.push(path);
+                    out.insert(rel, None);
+                } else {
+                    out.insert(rel, Some(std::fs::read(&path).unwrap()));
+                }
+            }
+        }
+        out
+    }
+
+    /// The tree a full copy of `sealed` produces from the current staging.
+    fn full_copy(mp: &crate::moss_paths::MossPaths, sealed: &SealedManifest) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
+        let reference = tempdir().unwrap();
+        ship_phase(&mp.staging_dir(), reference.path(), sealed, None, None).unwrap();
+        tree(reference.path())
+    }
+
+    fn lock_file(mp: &crate::moss_paths::MossPaths, gen_id: &str) -> PathBuf {
+        mp.generations_dir().join(format!(".{gen_id}.writing"))
+    }
+
+    /// Seeding writes only what differs, and the tree it leaves is the one a
+    /// full copy would: what the edit removed is gone, including directories
+    /// it emptied and a path that changed between file and directory.
+    #[test]
+    fn a_generation_seeded_from_the_last_whole_one_is_the_tree_a_full_copy_makes() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        // Held so a parallel test's folder lookup cannot evict this folder's record.
+        let _record = crate::build::lifecycle::lock_for(&mp);
+        let base = stage_and_seal(&mp, SEED_BASE);
+        promote_sealed(&mp, &base);
+        // A seeded copy keeps the base's file, mtime and all; a full copy
+        // writes it anew from staging, whose copy is marked with another mtime.
+        let marked = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        let staged = mp.staging_dir().join("kept.css");
+        std::fs::File::options().write(true).open(&staged).unwrap().set_modified(marked).unwrap();
+        let base_mtime = |p: &Path| std::fs::metadata(p.join("kept.css")).unwrap().modified().unwrap();
+        let in_base = base_mtime(&mp.generation_dir(base.generation_id()));
+
+        let next = stage_and_seal(&mp, SEED_NEXT);
+        promote_sealed(&mp, &next);
+
+        let gen_dir = mp.generation_dir(next.generation_id());
+        assert_eq!(tree(&gen_dir), full_copy(&mp, &next));
+        assert!(!lock_file(&mp, next.generation_id()).exists(), "the seeded copy finished");
+        let seeded = base_mtime(&gen_dir) == in_base;
+        assert_eq!(seeded, crate::build::io_utils::CLONES_DIRS, "seeded exactly where a directory can be cloned");
+    }
+
+    /// A copy cut off right after its seed leaves the base's outputs under the
+    /// new id. Its lock file stays, so `current` never moves to it and the
+    /// next seal of the id copies it again, to the exact tree.
+    #[test]
+    fn a_copy_cut_off_after_its_seed_is_never_promoted_and_is_copied_again() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let base = stage_and_seal(&mp, SEED_BASE);
+        promote_sealed(&mp, &base);
+        let next = stage_and_seal(&mp, SEED_NEXT);
+        let gen_dir = mp.generation_dir(next.generation_id());
+
+        let lock = crate::build::store_gc::GenerationWriteLock::acquire(&mp.generations_dir(), next.generation_id())
+            .unwrap();
+        assert_eq!(whole(&mp, &base).is_some_and(|whole| lock.seed_from(&gen_dir, &whole)), crate::build::io_utils::CLONES_DIRS);
+        drop(lock); // the process exits mid-copy
+        assert!(lock_file(&mp, next.generation_id()).exists());
+        assert_eq!(served_generation(&mp), base.generation_id());
+
+        promote_sealed(&mp, &next);
+        assert_eq!(tree(&gen_dir), full_copy(&mp, &next));
+        assert!(!lock_file(&mp, next.generation_id()).exists());
+    }
+
+    /// Seed `generation`, on disk, as it would be recorded for the next copy.
+    fn whole(mp: &crate::moss_paths::MossPaths, sealed: &SealedManifest) -> Option<WholeGeneration> {
+        WholeGeneration::record(&mp.generation_dir(sealed.generation_id()), sealed.generation_id(), sealed.files())
+    }
+
+    /// A file edited inside the seed after it finished — by a person, or by
+    /// another process — is carried by the clone, and must be written again.
+    #[test]
+    fn a_file_edited_in_the_seed_is_shipped_again() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let _record = crate::build::lifecycle::lock_for(&mp);
+        let base = stage_and_seal(&mp, SEED_BASE);
+        promote_sealed(&mp, &base);
+        std::fs::write(mp.generation_dir(base.generation_id()).join("kept.css"), b"BODY{}").unwrap();
+
+        let next = stage_and_seal(&mp, SEED_NEXT);
+        promote_sealed(&mp, &next);
+        assert_eq!(tree(&mp.generation_dir(next.generation_id())), full_copy(&mp, &next));
+    }
+
+    /// A seed another process removed and copied again under the same id is
+    /// not the one recorded, even where a file's size and mtime still match.
+    #[test]
+    fn a_seed_copied_again_under_its_id_is_not_seeded_from() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let _record = crate::build::lifecycle::lock_for(&mp);
+        let base = stage_and_seal(&mp, SEED_BASE);
+        promote_sealed(&mp, &base);
+        let base_dir = mp.generation_dir(base.generation_id());
+        let moved = tmp.path().join("moved");
+        std::fs::rename(&base_dir, &moved).unwrap();
+        for (rel, _) in SEED_BASE {
+            let (from, to) = (moved.join(rel), base_dir.join(rel));
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::copy(&from, &to).unwrap();
+            let mtime = std::fs::metadata(&from).unwrap().modified().unwrap();
+            if *rel == "kept.css" {
+                std::fs::write(&to, b"BODY{}").unwrap();
+            }
+            std::fs::File::options().write(true).open(&to).unwrap().set_modified(mtime).unwrap();
+        }
+
+        let next = stage_and_seal(&mp, SEED_NEXT);
+        promote_sealed(&mp, &next);
+        assert_eq!(tree(&mp.generation_dir(next.generation_id())), full_copy(&mp, &next));
+    }
+
+    /// A seed file the cloud provider has evicted keeps its size and mtime,
+    /// but its bytes are not there to clone: it is not held.
+    #[test]
+    fn an_evicted_seed_file_is_not_held() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let base = stage_and_seal(&mp, SEED_BASE);
+        promote_sealed(&mp, &base);
+        let Some(whole) = whole(&mp, &base) else { return };
+        let kept = mp.generation_dir(base.generation_id()).join("kept.css");
+        let entry = &base.files()["kept.css"];
+        assert!(whole.still_holds("kept.css", entry, &kept), "sanity: held while on disk");
+        let _cloud = crate::build::icloud::pretend::evicted(&kept);
+        assert!(!whole.still_holds("kept.css", entry, &kept));
+    }
+
+    /// A seed whose lock another writer holds is not waited for.
+    #[test]
+    fn a_seed_whose_lock_is_held_is_not_seeded_from() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let base = stage_and_seal(&mp, SEED_BASE);
+        promote_sealed(&mp, &base);
+        let next = stage_and_seal(&mp, SEED_NEXT);
+        let Some(whole) = whole(&mp, &base) else { return };
+        let _held = GenerationWriteLock::acquire(&mp.generations_dir(), base.generation_id()).unwrap();
+        let lock = GenerationWriteLock::acquire(&mp.generations_dir(), next.generation_id()).unwrap();
+        assert!(!lock.seed_from(&mp.generation_dir(next.generation_id()), &whole));
+        assert!(!mp.generation_dir(next.generation_id()).exists());
+    }
+
+    /// A math PNG the seed lacks — its bytes were evicted when the seed
+    /// shipped — is shipped once they are back, though its entry is unchanged.
+    #[test]
+    fn a_seeded_copy_ships_an_unchanged_entry_its_seed_lacks() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let _record = crate::build::lifecycle::lock_for(&mp);
+        let math = crate::build::served_path::ServedPath::for_math_png("87ba30f2b3c09ca9").unwrap();
+        let with_math = |page: &[u8]| {
+            let mut pending = PendingManifest::new(SiteHashes::default());
+            let sp = crate::build::served_path::ServedPath::from_source("index.html").unwrap();
+            pending.register(&sp, page, HashBucket::Files);
+            pending.register_hashed(&math, &crate::types::content::file_entry("cccc"), HashBucket::Files);
+            std::fs::write(mp.staging_dir().join("index.html"), page).unwrap();
+            pending.seal()
+        };
+        std::fs::create_dir_all(mp.staging_dir()).unwrap();
+        let base = with_math(b"<h1>v1</h1>");
+        promote_sealed(&mp, &base);
+        let shipped = |sealed: &SealedManifest| mp.generation_dir(sealed.generation_id()).join(math.as_str());
+        assert!(!shipped(&base).exists(), "sanity: the evicted PNG was skipped");
+
+        let staged = mp.staging_dir().join(math.as_str());
+        std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        std::fs::write(&staged, b"png").unwrap();
+        let next = with_math(b"<h1>v2</h1>");
+        promote_sealed(&mp, &next);
+        assert_eq!(std::fs::read(shipped(&next)).unwrap(), b"png");
+    }
+
+    /// The last whole generation is no seed once a copy of it was cut off or
+    /// drifted (its lock file is back) or once it is gone: every entry is
+    /// copied, and none of its bytes reach the new generation.
+    #[test]
+    fn a_copy_without_a_usable_seed_copies_every_entry() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let _record = crate::build::lifecycle::lock_for(&mp);
+        let base = stage_and_seal(&mp, SEED_BASE);
+        promote_sealed(&mp, &base);
+        // Same size and mtime, so only the lock file tells.
+        let kept = mp.generation_dir(base.generation_id()).join("kept.css");
+        let mtime = std::fs::metadata(&kept).unwrap().modified().unwrap();
+        std::fs::write(&kept, b"BODY{}").unwrap();
+        std::fs::File::options().write(true).open(&kept).unwrap().set_modified(mtime).unwrap();
+        std::fs::write(lock_file(&mp, base.generation_id()), b"").unwrap();
+
+        let next = stage_and_seal(&mp, SEED_NEXT);
+        promote_sealed(&mp, &next);
+        assert_eq!(tree(&mp.generation_dir(next.generation_id())), full_copy(&mp, &next));
+
+        std::fs::remove_dir_all(mp.generation_dir(next.generation_id())).unwrap();
+        let mut last = SEED_NEXT.to_vec();
+        last.push(("later.html", b"<p>later</p>"));
+        let last = stage_and_seal(&mp, &last);
+        promote_sealed(&mp, &last);
+        assert_eq!(tree(&mp.generation_dir(last.generation_id())), full_copy(&mp, &last));
     }
 
     /// One row per way a referenced `.webp` can fail to be gone, over a single

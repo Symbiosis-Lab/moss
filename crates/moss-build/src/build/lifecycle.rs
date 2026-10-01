@@ -40,6 +40,9 @@ struct FolderLifecycle {
     current_render: Option<u64>,
     /// Highest promotion epoch that reached `current`.
     promoted_epoch: u64,
+    /// The generation this process last left whole on disk: what the next
+    /// copy may be seeded from ([`whole_generation`]).
+    whole: Option<Arc<crate::build::store_gc::WholeGeneration>>,
     /// Open [`CacheWriteLease`]s: builds between `run_pipeline` entry and the
     /// end of the seal tail's `materialize_and_promote`.
     build_writers: usize,
@@ -353,6 +356,24 @@ pub(crate) fn promote(
     st.promoted_epoch = epoch;
     st.current_render = render;
     Ok(true)
+}
+
+/// Record `sealed`'s generation, at `gen_dir`, as whole on disk: every entry
+/// present, and no copy of it cut off or drifted. Only where a copy can be
+/// seeded from it at all, since recording stats every file.
+pub(crate) fn remember_whole(mp: &MossPaths, gen_dir: &Path, sealed: &crate::build::manifest::SealedManifest) {
+    if !crate::build::io_utils::CLONES_DIRS {
+        return;
+    }
+    let whole = crate::build::store_gc::WholeGeneration::record(gen_dir, sealed.generation_id(), sealed.files());
+    lock_for(mp).state().whole = whole.map(Arc::new);
+}
+
+/// The generation [`remember_whole`] last recorded. Nothing here says it is
+/// still on disk, or unchanged: `GenerationWriteLock::seed_from` and
+/// `WholeGeneration::still_holds` check that.
+pub(crate) fn whole_generation(mp: &MossPaths) -> Option<Arc<crate::build::store_gc::WholeGeneration>> {
+    lock_for(mp).state().whole.clone()
 }
 
 /// Whether a promotion must rewrite `current`. Re-promoting what it already

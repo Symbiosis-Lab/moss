@@ -272,7 +272,6 @@ async fn run_materialize_phase(req: PendingSeal) {
                 &sealed,
                 &mp,
                 &stage_dir,
-                None,
                 promotion_epoch,
                 render_seq,
                 verdict,
